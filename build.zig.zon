@@ -5,8 +5,8 @@
     .fingerprint = 0x2f146abfbb7f6400,
     .dependencies = .{
         .stdx = .{
-            .url = "https://github.com/trevorswan11/stdx/archive/refs/tags/v1.4.5.tar.gz",
-            .hash = "stdx-1.4.5-dNitg0HHCACfUO2f7ESnJEz5fgURKAJGqV_IXn_9JSt1",
+            .url = "https://github.com/trevorswan11/stdx/archive/refs/tags/v1.5.3.tar.gz",
+            .hash = "stdx-1.5.3-dNitg8nRCABFn6GrNLFJ9ddGi3-6Pcm3PXhidRwzTTPO",
         },
         .cli11 = .{
             .url = "https://github.com/CLIUtils/CLI11/archive/refs/tags/v2.6.2.tar.gz",
