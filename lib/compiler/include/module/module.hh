@@ -164,8 +164,6 @@ struct Module {
     }
 };
 
-#undef MAKE_MODULE_DIAGNOSTIC_UNPACKER
-
 class ModuleManager {
   public:
     explicit ModuleManager(SourceLoader& loader) noexcept : loader_{loader} {}
