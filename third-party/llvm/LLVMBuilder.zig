@@ -669,6 +669,7 @@ fn createConfigHeaders(self: *const Self, target: std.Target) ConfigHeaders {
     const is_darwin = target.os.tag.isDarwin();
     const is_windows = target.os.tag == .windows;
     const is_linux = target.os.tag == .linux;
+    const is_musl_libc = target.isMuslLibC();
 
     // https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/llvm/include/llvm/Config/config.h.cmake
     const config = b.addConfigHeader(.{
@@ -704,7 +705,9 @@ fn createConfigHeaders(self: *const Self, target: std.Target) ConfigHeaders {
         .HAVE_SYSCONF = @intFromBool(!is_windows),
         .HAVE_SIGALTSTACK = @intFromBool(!is_windows),
         .HAVE_DLOPEN = @intFromBool(!is_windows),
-        .HAVE_BACKTRACE = @intFromBool(!is_windows),
+        .HAVE_BACKTRACE = @intFromBool(!is_windows and
+            // musl libc does not have backtrace
+            !is_musl_libc),
         .HAVE_SBRK = @intFromBool(!is_windows),
 
         // Darwin Specific
@@ -723,7 +726,9 @@ fn createConfigHeaders(self: *const Self, target: std.Target) ConfigHeaders {
         .strdup = if (is_windows) "_strdup" else "strdup",
 
         // Allocation & Threading
-        .HAVE_MALLINFO = @intFromBool(is_linux),
+        .HAVE_MALLINFO = @intFromBool(is_linux and
+            // musl libc does not have mallinfo
+            !is_musl_libc),
         .HAVE_MALLINFO2 = @intFromBool(is_linux and blk: {
             if (target.os.versionRange().gnuLibCVersion()) |semver| {
                 const order = semver.order(.{
