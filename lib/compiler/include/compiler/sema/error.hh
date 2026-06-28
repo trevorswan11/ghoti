@@ -36,6 +36,8 @@ enum class error : u8 {
     DUPLICATE_ENUMERATION,
     UNKNOWN_ENUMERATION,
     ILLEGAL_MATCH_PATTERN,
+    AUTO_WITHOUT_INITIALIZER,
+    ILLEGAL_AUTO_USAGE,
 };
 
 using diagnostic  = diagnostic<error>;

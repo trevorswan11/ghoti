@@ -63,6 +63,19 @@ class type_resolver {
     using named_test_map_t =
         ankerl::unordered_dense::map<std::string_view, ast::handle<ast::node_kind::TEST_STATEMENT>>;
 
+    // Tracks collected return types within function bodies for auto return type inference
+    struct return_tracker {
+        std::vector<gsl::not_null<type*>> return_types{};
+        bool                              is_auto_return{false};
+
+        auto               add_return(type& t) -> void { return_types.emplace_back(&t); }
+        [[nodiscard]] auto has_returns() const noexcept -> bool { return !return_types.empty(); }
+        [[nodiscard]] auto deduced_return_type(context& ctx) const noexcept -> type& {
+            if (return_types.empty()) { return ctx.get_builtin_resolved_type(type_kind::VOID); }
+            return *return_types.front();
+        }
+    };
+
     // A flag for helper functions to indicate if their resolution was poisoned
     enum class resolve_result : u8 {
         OK,
@@ -271,8 +284,9 @@ class type_resolver {
     structural_validator enum_validator_;
     structural_validator union_validator_;
 
-    context&            ctx_;
-    stdx::option<type&> last_type_;
+    context&                    ctx_;
+    stdx::option<type&>         last_type_;
+    std::vector<return_tracker> return_trackers_;
 };
 
 } // namespace ghoti::sema
