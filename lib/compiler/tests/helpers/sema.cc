@@ -12,34 +12,34 @@
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
-#include "ast/handle.hh"
-#include "ast/primitive.hh"
-#include "ast/statement.hh"
+#include "compiler/ast/handle.hh"
+#include "compiler/ast/primitive.hh"
+#include "compiler/ast/statement.hh"
+#include "compiler/module/memory_loader.hh"
+#include "compiler/module/module.hh"
+#include "compiler/sema/error.hh"
+#include "compiler/sema/symbol.hh"
+#include "compiler/sema/type.hh"
+#include "compiler/syntax/error.hh"
 #include "helpers/common.hh"
-#include "module/memory_loader.hh"
-#include "module/module.hh"
-#include "sema/error.hh"
-#include "sema/symbol.hh"
-#include "sema/type.hh"
-#include "syntax/error.hh"
 
 namespace ghoti::tests::helpers {
 
-auto test_common_decl_collection(const sema::SymbolTableRegistry& registry,
-                                 const mod::Module&               module,
-                                 usize                            idx,
-                                 std::string_view                 name) -> void {
+auto test_common_decl_collection(const sema::symbol_table_registry& registry,
+                                 const mod::module&                 module,
+                                 usize                              idx,
+                                 std::string_view                   name) -> void {
     const auto& symbol{unwrap(registry.get_from_opt(idx, name))};
-    const auto& node{unwrap(symbol.get_data().as_opt<sema::symbols::Node>())};
+    const auto& node{unwrap(symbol.get_data().as_opt<sema::symbols::node_t>())};
     CHECK_FALSE(symbol.is_public(module));
-    CHECK(node.is<ast::DeclStatement>());
+    CHECK(node.is<ast::decl_stmt>());
 }
 
-SemaTestContext::SemaTestContext(const std::vector<MockFile>& imports,
-                                 const std::filesystem::path& root_path,
-                                 std::string_view             input,
-                                 std::ostream&                error_stream)
-    : loader{stdx::make_box<mod::MemoryLoader>()}, manager{*loader},
+sema_test_context::sema_test_context(const std::vector<mock_file>& imports,
+                                     const std::filesystem::path&  root_path,
+                                     std::string_view              input,
+                                     std::ostream&                 error_stream)
+    : loader{stdx::make_box<mod::memory_loader>()}, manager{*loader},
       analyzer{manager, error_stream, false}, root_mod{[&] -> auto& {
           loader->add(root_path, std::string{input});
           for (const auto& mock : imports) {
@@ -50,11 +50,11 @@ SemaTestContext::SemaTestContext(const std::vector<MockFile>& imports,
           return *unwrap(manager.try_get_file_module(root_path));
       }()} {}
 
-auto SemaTestContext::verify_registry_resolved() -> void {
+auto sema_test_context::verify_registry_resolved() -> void {
     for (usize i{0}; const auto& table : analyzer.get_registry()) {
         for (const auto& [name, proxy] : table) {
-            CHECK(proxy.symbol.get_status() == sema::SymbolStatus::RESOLVED);
-            if (proxy.symbol.get_status() != sema::SymbolStatus::RESOLVED) {
+            CHECK(proxy.symbol.get_status() == sema::symbol_status::RESOLVED);
+            if (proxy.symbol.get_status() != sema::symbol_status::RESOLVED) {
                 FAIL(name << " was not resolved in table idx " << i);
             }
         }
@@ -62,57 +62,59 @@ auto SemaTestContext::verify_registry_resolved() -> void {
     }
 }
 
-auto SemaTestContext::test_common_decl_collection(usize idx, std::string_view name) -> void {
+auto sema_test_context::test_common_decl_collection(usize idx, std::string_view name) -> void {
     const auto& registry{analyzer.get_registry()};
     helpers::test_common_decl_collection(registry, root_mod, idx, name);
 }
 
-auto SemaTestContext::check_poisoned(const sema::Symbol& sym) -> void {
-    CHECK(sym.get_kind_opt() == sema::SymbolKind::POISONED);
-    CHECK(sym.get_status() == sema::SymbolStatus::RESOLVED);
+auto sema_test_context::check_poisoned(const sema::symbol& sym) -> void {
+    CHECK(sym.get_kind_opt() == sema::symbol_kind::POISONED);
+    CHECK(sym.get_status() == sema::symbol_status::RESOLVED);
 }
 
-auto SemaTestContext::check_poisoned(const sema::Type& type) -> void {
+auto sema_test_context::check_poisoned(const sema::type& type) -> void {
     CHECK(type.is_poison());
-    CHECK(type == get_type(sema::TypeKind::POISON));
-    CHECK(type.get_data().as_opt<sema::types::Poison>());
+    CHECK(type == get_type(sema::type_kind::POISON));
+    CHECK(type.get_data().as_opt<sema::types::poison>());
 }
 
-auto SemaTestContext::check_poisoned(const sema::Symbol& sym, const sema::Type& type) -> void {
+auto sema_test_context::check_poisoned(const sema::symbol& sym, const sema::type& type) -> void {
     check_poisoned(sym);
     check_poisoned(type);
 }
 
-auto SemaTestContext::get_string_literal_size(ast::ExpressionHandle      handle,
-                                              stdx::option<mod::Module&> enclosing_mod) -> usize {
+auto sema_test_context::get_string_literal_size(ast::expr_handle           handle,
+                                                stdx::option<mod::module&> enclosing_mod) -> usize {
     const auto& module{enclosing_mod.value_or(root_mod)};
-    const auto& str_expr{helpers::unwrap(module.ast.get_as_opt<ast::StringExpression>(handle))};
+    const auto& str_expr{helpers::unwrap(module.ast.get_as_opt<ast::string_expr>(handle))};
     return str_expr.value.size() + 1;
 }
 
-auto collect(std::string_view input, const std::vector<MockFile>& imports) -> CtxIdxPair {
-    auto ctx{stdx::make_box<SemaTestContext>(imports, TEST_FILENAME, input)};
-    check_errors<syntax::Diagnostics>(ctx->root_mod);
+auto collect(std::string_view input, const std::vector<mock_file>& imports) -> ctx_idx_pair {
+    auto ctx{stdx::make_box<sema_test_context>(imports, TEST_FILENAME, input)};
+    check_errors<syntax::diagnostics>(ctx->root_mod);
     ctx->analyzer.collect_symbols(ctx->root_mod);
     usize idx{helpers::unwrap(ctx->root_mod.root_table_idx)};
     return {std::move(ctx), idx};
 }
 
-auto collect_and_check(std::string_view input, const std::vector<MockFile>& imports) -> CtxIdxPair {
+auto collect_and_check(std::string_view input, const std::vector<mock_file>& imports)
+    -> ctx_idx_pair {
     auto [ctx, idx]{collect(input, imports)};
-    check_errors<sema::Diagnostics>(ctx->root_mod);
+    check_errors<sema::diagnostics>(ctx->root_mod);
     return {std::move(ctx), idx};
 }
 
-auto resolve(std::string_view input, const std::vector<MockFile>& imports) -> CtxIdxPair {
+auto resolve(std::string_view input, const std::vector<mock_file>& imports) -> ctx_idx_pair {
     auto [ctx, idx]{collect(input, imports)};
     ctx->analyzer.resolve_types(ctx->root_mod);
     return {std::move(ctx), idx};
 }
 
-auto resolve_and_check(std::string_view input, const std::vector<MockFile>& imports) -> CtxIdxPair {
+auto resolve_and_check(std::string_view input, const std::vector<mock_file>& imports)
+    -> ctx_idx_pair {
     auto [ctx, idx]{resolve(input, imports)};
-    check_errors<sema::Diagnostics>(ctx->root_mod);
+    check_errors<sema::diagnostics>(ctx->root_mod);
     ctx->verify_registry_resolved();
 
     return {std::move(ctx), idx};

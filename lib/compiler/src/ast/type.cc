@@ -1,4 +1,4 @@
-#include "ast/type.hh"
+#include "compiler/ast/type.hh"
 
 #include <utility>
 #include <vector>
@@ -7,109 +7,109 @@
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
 
-#include "ast/expression.hh"
-#include "ast/handle.hh"
-#include "ast/id.hh"
-#include "ast/kind.hh"
-#include "syntax/error.hh"
-#include "syntax/parser.hh"
-#include "syntax/precedence.hh"
-#include "syntax/token_type.hh"
+#include "compiler/ast/expression.hh"
+#include "compiler/ast/handle.hh"
+#include "compiler/ast/id.hh"
+#include "compiler/ast/kind.hh"
+#include "compiler/syntax/error.hh"
+#include "compiler/syntax/parser.hh"
+#include "compiler/syntax/precedence.hh"
+#include "compiler/syntax/token_type.hh"
 
 namespace ghoti::ast {
 
-auto ExplicitFunctionType::parse(syntax::Parser& parser)
-    -> stdx::result<ExplicitFunctionType, syntax::Diagnostic> {
+auto explicit_function_type::parse(syntax::parser& parser)
+    -> stdx::result<explicit_function_type, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
-    TRY(parser.expect_peek(syntax::TokenType::LPAREN));
+    TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
 
     // Parse the definition now that we're at the fn token
-    std::vector<ExplicitTypeID> parameter_types;
-    bool                        variadic{false};
-    if (parser.peek_token_is(syntax::TokenType::RPAREN)) {
+    std::vector<explicit_type_id> parameter_types;
+    bool                          variadic{false};
+    if (parser.peek_token_is(syntax::token_type_t::RPAREN)) {
         parser.advance();
     } else {
         // There is no self parameter for types
-        while (!parser.peek_token_is(syntax::TokenType::RPAREN) &&
-               !parser.peek_token_is(syntax::TokenType::END)) {
+        while (!parser.peek_token_is(syntax::token_type_t::RPAREN) &&
+               !parser.peek_token_is(syntax::token_type_t::END)) {
             if (TRY(try_parse_variadic_fn(parser))) {
                 variadic = true;
                 break;
             }
 
             // There are no default values for parameters, and they must be explicitly typed
-            auto type{TRY(ExplicitType::parse(parser))};
-            if (type.is<IdentifierExpression>()) {
+            auto type{TRY(explicit_type::parse(parser))};
+            if (type.is<identifier_expr>()) {
                 // noreturn is not allowed for parameters
-                if (type.get_token_type() == syntax::TokenType::NORETURN) {
+                if (type.get_token_type() == syntax::token_type_t::NORETURN) {
                     return make_syntax_err("Function parameter types may not be marked `noreturn`",
-                                           syntax::Error::FN_PARAMETER_IS_NORETURN,
+                                           syntax::error::FN_PARAMETER_IS_NORETURN,
                                            parser.get_location_of(type));
                 }
             }
 
             parameter_types.emplace_back(type);
-            if (!parser.peek_token_is(syntax::TokenType::RPAREN)) {
-                TRY(parser.expect_peek(syntax::TokenType::COMMA));
+            if (!parser.peek_token_is(syntax::token_type_t::RPAREN)) {
+                TRY(parser.expect_peek(syntax::token_type_t::COMMA));
             }
         }
-        TRY(parser.expect_peek(syntax::TokenType::RPAREN));
+        TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
     }
 
     // There must be a return type but there cannot be a block
-    TRY(parser.expect_peek(syntax::TokenType::COLON));
-    const auto return_type{TRY(ExplicitType::parse(parser))};
-    if (parser.peek_token_is(syntax::TokenType::LBRACE)) {
+    TRY(parser.expect_peek(syntax::token_type_t::COLON));
+    const auto return_type{TRY(explicit_type::parse(parser))};
+    if (parser.peek_token_is(syntax::token_type_t::LBRACE)) {
         return make_syntax_err("Function types may not have a body",
-                               syntax::Error::EXPLICIT_FN_TYPE_HAS_BODY,
+                               syntax::error::EXPLICIT_FN_TYPE_HAS_BODY,
                                start_token);
     }
 
-    return ExplicitFunctionType{.parameter_types      = std::move(parameter_types),
-                                .variadic             = variadic,
-                                .explicit_return_type = return_type};
+    return explicit_function_type{.parameter_types      = std::move(parameter_types),
+                                  .variadic             = variadic,
+                                  .explicit_return_type = return_type};
 }
 
-auto ExplicitType::parse(syntax::Parser& parser)
-    -> stdx::result<ExplicitTypeID, syntax::Diagnostic> {
+auto explicit_type::parse(syntax::parser& parser)
+    -> stdx::result<explicit_type_id, syntax::diagnostic> {
     // Always check for a modifier and advance past it if present
     PROFILE_FUNCTION();
-    const auto         modifier_token{parser.get_peek_token()};
-    const TypeModifier modifier{modifier_token};
+    const auto          modifier_token{parser.get_peek_token()};
+    const type_modifier modifier{modifier_token};
     if (!modifier.is_value()) { parser.advance(); }
 
     // The array dimension of a type are only present conditionally
-    if (parser.peek_token_is(syntax::TokenType::LBRACKET)) {
+    if (parser.peek_token_is(syntax::token_type_t::LBRACKET)) {
         parser.advance();
 
-        auto                           null_terminated{false};
-        stdx::option<ExpressionHandle> dimension;
-        if (parser.peek_token_is(syntax::TokenType::NULL_TERMINATED)) {
+        auto                      null_terminated{false};
+        stdx::option<expr_handle> dimension;
+        if (parser.peek_token_is(syntax::token_type_t::NULL_TERMINATED)) {
             parser.advance();
             null_terminated = true;
-        } else if (!parser.peek_token_is(syntax::TokenType::RBRACKET)) {
+        } else if (!parser.peek_token_is(syntax::token_type_t::RBRACKET)) {
             parser.advance();
             dimension.emplace(TRY(parser.parse_expression()));
 
             // The null terminated marker comes after the size for explicitly sized types
-            if (parser.peek_token_is(syntax::TokenType::NULL_TERMINATED)) {
+            if (parser.peek_token_is(syntax::token_type_t::NULL_TERMINATED)) {
                 parser.advance();
                 null_terminated = true;
             }
         }
-        TRY(parser.expect_peek(syntax::TokenType::RBRACKET));
+        TRY(parser.expect_peek(syntax::token_type_t::RBRACKET));
 
         // Arrays are recursively defined
-        const auto inner{TRY(ExplicitType::parse(parser))};
-        return parser.add_type<ExplicitArrayType>(
+        const auto inner{TRY(explicit_type::parse(parser))};
+        return parser.add_type<explicit_array_type>(
             modifier_token, modifier, dimension, null_terminated, inner);
     }
 
-    if (!TypeModifier{parser.get_peek_token()}.is_value()) {
+    if (!type_modifier{parser.get_peek_token()}.is_value()) {
         // Don't advance since the parser does it implicitly here (costs two modifier queries)
-        const auto inner{TRY(ExplicitType::parse(parser))};
-        return parser.add_type<ExplicitTypeID>(modifier_token, modifier, inner);
+        const auto inner{TRY(explicit_type::parse(parser))};
+        return parser.add_type<explicit_type_id>(modifier_token, modifier, inner);
     }
 
     // Otherwise the type has to be a 'simple' function or ident
@@ -118,17 +118,17 @@ auto ExplicitType::parse(syntax::Parser& parser)
         // It's trivial to catch these syntactic errors here
         if (!modifier.is_value()) {
             switch (peek_token.type) {
-            case syntax::TokenType::TYPE_TYPE:
+            case syntax::token_type_t::TYPE_TYPE:
                 return make_syntax_err("Explicit `type` type cannot have a modifier",
-                                       syntax::Error::ILLEGAL_TYPE_TYPE_MODIFIER,
+                                       syntax::error::ILLEGAL_TYPE_TYPE_MODIFIER,
                                        modifier_token);
-            case syntax::TokenType::VOID_TYPE:
+            case syntax::token_type_t::VOID_TYPE:
                 return make_syntax_err("Explicit `void` type cannot have a modifier",
-                                       syntax::Error::ILLEGAL_VOID_TYPE_MODIFIER,
+                                       syntax::error::ILLEGAL_VOID_TYPE_MODIFIER,
                                        modifier_token);
-            case syntax::TokenType::NORETURN:
+            case syntax::token_type_t::NORETURN:
                 return make_syntax_err("Explicit `noreturn` type cannot have a modifier",
-                                       syntax::Error::ILLEGAL_NORETURN_TYPE_MODIFIER,
+                                       syntax::error::ILLEGAL_NORETURN_TYPE_MODIFIER,
                                        modifier_token);
             default: break;
             }
@@ -136,67 +136,67 @@ auto ExplicitType::parse(syntax::Parser& parser)
 
         parser.advance();
         // Manually dispatch to prevent weird consumption
-        if (parser.peek_token_is(syntax::TokenType::COLON_COLON) ||
-            parser.peek_token_is(syntax::TokenType::LPAREN)) {
-            const auto parsed{TRY(parser.parse_expression(syntax::Precedence::TYPE))};
-            if (parsed.is<ModuleAccessExpression>()) {
-                return parser.add_type<ModuleAccessExpression>(
-                    modifier_token, modifier, parser.get_node<ModuleAccessExpression>(*parsed));
+        if (parser.peek_token_is(syntax::token_type_t::COLON_COLON) ||
+            parser.peek_token_is(syntax::token_type_t::LPAREN)) {
+            const auto parsed{TRY(parser.parse_expression(syntax::bind_precedence::TYPE))};
+            if (parsed.is<module_access_expr>()) {
+                return parser.add_type<module_access_expr>(
+                    modifier_token, modifier, parser.get_node<module_access_expr>(*parsed));
             }
 
-            if (parsed.is<DotExpression>()) {
-                return parser.add_type<DotExpression>(
-                    modifier_token, modifier, parser.get_node<DotExpression>(*parsed));
+            if (parsed.is<dot_expr>()) {
+                return parser.add_type<dot_expr>(
+                    modifier_token, modifier, parser.get_node<dot_expr>(*parsed));
             }
 
-            if (parsed.is<CallExpression>()) {
-                return parser.add_type<CallExpression>(
-                    modifier_token, modifier, parser.get_node<CallExpression>(*parsed));
+            if (parsed.is<call_expr>()) {
+                return parser.add_type<call_expr>(
+                    modifier_token, modifier, parser.get_node<call_expr>(*parsed));
             }
 
-            return make_syntax_err(syntax::Error::ILLEGAL_EXPLICIT_TYPE,
+            return make_syntax_err(syntax::error::ILLEGAL_EXPLICIT_TYPE,
                                    parser.get_location_of(*parsed));
         }
 
-        const auto ident{TRY(IdentifierExpression::parse(parser))};
-        return parser.add_type<IdentifierExpression>(
-            modifier_token, modifier, parser.get_node<IdentifierExpression>(*ident));
+        const auto ident{TRY(identifier_expr::parse(parser))};
+        return parser.add_type<identifier_expr>(
+            modifier_token, modifier, parser.get_node<identifier_expr>(*ident));
     }
 
     // The inner type is limited to functions and user-defined types
     const auto type_start{parser.get_current_token()};
-    if (parser.peek_token_is(syntax::TokenType::FUNCTION)) {
+    if (parser.peek_token_is(syntax::token_type_t::FUNCTION)) {
         parser.advance();
-        const auto fn_type{TRY(ExplicitFunctionType::parse(parser))};
+        const auto fn_type{TRY(explicit_function_type::parse(parser))};
         if (!(modifier.is_value() || modifier.is_ptr())) {
             return make_syntax_err("Functions types may only be values or pointers",
-                                   syntax::Error::ILLEGAL_FUNCTION_TYPE_MODIFIER,
+                                   syntax::error::ILLEGAL_FUNCTION_TYPE_MODIFIER,
                                    type_start);
         }
 
         // Function types cannot have bodies
-        return parser.add_type<ExplicitFunctionType>(modifier_token, modifier, fn_type);
+        return parser.add_type<explicit_function_type>(modifier_token, modifier, fn_type);
     }
 
     // The user-defined types can be handled by parsing any expression and verifying it
     parser.advance();
-    if (parser.current_token_is(syntax::TokenType::END)) {
-        return make_syntax_err(syntax::Error::MISSING_EXPLICIT_TYPE, type_start);
+    if (parser.current_token_is(syntax::token_type_t::END)) {
+        return make_syntax_err(syntax::error::MISSING_EXPLICIT_TYPE, type_start);
     }
 
-    stdx::option<ExplicitTypeID> id;
+    stdx::option<explicit_type_id> id;
     switch (const auto user{TRY(parser.parse_expression())}; user->get_kind()) {
-    case NodeKind::STRUCT_EXPRESSION:
-        id.emplace(parser.add_type<StructExpression>(
-            modifier_token, modifier, parser.get_node<StructExpression>(*user)));
+    case node_kind::STRUCT_EXPRESSION:
+        id.emplace(parser.add_type<struct_expr>(
+            modifier_token, modifier, parser.get_node<struct_expr>(*user)));
         break;
-    case NodeKind::ENUM_EXPRESSION:
-        id.emplace(parser.add_type<EnumExpression>(
-            modifier_token, modifier, parser.get_node<EnumExpression>(*user)));
+    case node_kind::ENUM_EXPRESSION:
+        id.emplace(parser.add_type<enum_expr>(
+            modifier_token, modifier, parser.get_node<enum_expr>(*user)));
         break;
-    case NodeKind::UNION_EXPRESSION:
-        id.emplace(parser.add_type<UnionExpression>(
-            modifier_token, modifier, parser.get_node<UnionExpression>(*user)));
+    case node_kind::UNION_EXPRESSION:
+        id.emplace(parser.add_type<union_expr>(
+            modifier_token, modifier, parser.get_node<union_expr>(*user)));
         break;
     default: break;
     }
@@ -205,41 +205,41 @@ auto ExplicitType::parse(syntax::Parser& parser)
         if (!modifier.is_value()) {
             return make_syntax_err(
                 "User-defined types can only be defined with non-modified aliases",
-                syntax::Error::ILLEGAL_USING_ALIAS_WITH_MODIFIERS,
+                syntax::error::ILLEGAL_USING_ALIAS_WITH_MODIFIERS,
                 type_start);
         }
         return *id;
     }
-    return make_syntax_err(syntax::Error::ILLEGAL_EXPLICIT_TYPE, type_start);
+    return make_syntax_err(syntax::error::ILLEGAL_EXPLICIT_TYPE, type_start);
 }
 
 namespace {
 
 // Parses the explicit type if present and checks for an upcoming assignment for init
-[[nodiscard]] auto parse_type_and_initializer(syntax::Parser& parser)
-    -> stdx::result<std::pair<stdx::option<ExplicitTypeID>, bool>, syntax::Diagnostic> {
-    if (parser.peek_token_is(syntax::TokenType::WALRUS)) {
+[[nodiscard]] auto parse_type_and_initializer(syntax::parser& parser)
+    -> stdx::result<std::pair<stdx::option<explicit_type_id>, bool>, syntax::diagnostic> {
+    if (parser.peek_token_is(syntax::token_type_t::WALRUS)) {
         parser.advance();
         return std::pair{stdx::none, true};
     }
 
-    if (parser.peek_token_is(syntax::TokenType::COLON)) {
+    if (parser.peek_token_is(syntax::token_type_t::COLON)) {
         parser.advance();
-        const auto explicit_type{TRY(ExplicitType::parse(parser))};
-        if (parser.peek_token_is(syntax::TokenType::ASSIGN)) {
+        const auto explicit_type{TRY(explicit_type::parse(parser))};
+        if (parser.peek_token_is(syntax::token_type_t::ASSIGN)) {
             parser.advance();
             return std::pair{explicit_type, true};
         }
         return std::pair{explicit_type, false};
     }
 
-    return stdx::err{parser.peek_error(syntax::TokenType::COLON)};
+    return stdx::err{parser.peek_error(syntax::token_type_t::COLON)};
 }
 
 } // namespace
 
-auto ExplicitType::parse_opt_init(syntax::Parser& parser)
-    -> stdx::result<std::pair<stdx::option<ExplicitTypeID>, bool>, syntax::Diagnostic> {
+auto explicit_type::parse_opt_init(syntax::parser& parser)
+    -> stdx::result<std::pair<stdx::option<explicit_type_id>, bool>, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto [type, initialized]{TRY(parse_type_and_initializer(parser))};
 

@@ -3,110 +3,110 @@
 #include <catch2/catch_test_macros.hpp>
 #include <stdx/types.hh>
 
+#include "compiler/syntax/error.hh"
 #include "helpers/ast.hh"
-#include "syntax/error.hh"
 
 namespace ghoti::tests {
 
 TEST_CASE("Array size token requirement") {
     helpers::test_parser_fail(
         "[]i32{2};",
-        syntax::Diagnostic{"Array literals must be initialized with an implicit or explicit size",
-                           syntax::Error::MISSING_ARRAY_SIZE_TOKEN,
+        syntax::diagnostic{"Array literals must be initialized with an implicit or explicit size",
+                           syntax::error::MISSING_ARRAY_SIZE_TOKEN,
                            std::pair{0UZ, 0UZ}});
 }
 
 TEST_CASE("No arguments with comma") {
     helpers::test_parser_fail("func(,)",
-                              syntax::Diagnostic{"A comma implies an argument but none were found",
-                                                 syntax::Error::COMMA_WITH_MISSING_CALL_ARGUMENT,
+                              syntax::diagnostic{"A comma implies an argument but none were found",
+                                                 syntax::error::COMMA_WITH_MISSING_CALL_ARGUMENT,
                                                  std::pair{0UZ, 5UZ}});
 }
 
 TEST_CASE("Non-comma separated arguments") {
     helpers::test_parser_fail(
         "func(1 2)",
-        syntax::Diagnostic{
-            "Expected token COMMA, found INT_10", syntax::Error::UNEXPECTED_TOKEN, 0, 7});
+        syntax::diagnostic{
+            "Expected token COMMA, found INT_10", syntax::error::UNEXPECTED_TOKEN, 0, 7});
 }
 
 TEST_CASE("Non-terminated identifier") {
     helpers::test_parser_fail(
         "foobar",
-        syntax::Diagnostic{
-            "Expected token SEMICOLON, found END", syntax::Error::UNEXPECTED_TOKEN, 0, 6});
+        syntax::diagnostic{
+            "Expected token SEMICOLON, found END", syntax::error::UNEXPECTED_TOKEN, 0, 6});
 }
 
 TEST_CASE("No index") {
     helpers::test_parser_fail(
         "arr[]",
-        syntax::Diagnostic{"Cannot index into an array without an index expression",
-                           syntax::Error::INDEX_MISSING_EXPRESSION,
+        syntax::diagnostic{"Cannot index into an array without an index expression",
+                           syntax::error::INDEX_MISSING_EXPRESSION,
                            std::pair{0UZ, 3UZ}});
 }
 
 TEST_CASE("Illegal infix node") {
     helpers::test_parser_fail(
         "a and import std;",
-        syntax::Diagnostic{"No prefix parse function for IMPORT(import) found",
-                           syntax::Error::MISSING_PREFIX_PARSER,
+        syntax::diagnostic{"No prefix parse function for IMPORT(import) found",
+                           syntax::error::MISSING_PREFIX_PARSER,
                            std::pair{0UZ, 6UZ}});
 }
 
 TEST_CASE("Non-terminated infix") {
     helpers::test_parser_fail("a and;",
-                              syntax::Diagnostic{"No prefix parse function for SEMICOLON(;) found",
-                                                 syntax::Error::MISSING_PREFIX_PARSER,
+                              syntax::diagnostic{"No prefix parse function for SEMICOLON(;) found",
+                                                 syntax::error::MISSING_PREFIX_PARSER,
                                                  std::pair{0UZ, 5UZ}});
 
     helpers::test_parser_fail("a and",
-                              syntax::Diagnostic{"Infix expressions require a right-hand operand",
-                                                 syntax::Error::INFIX_MISSING_RHS,
+                              syntax::diagnostic{"Infix expressions require a right-hand operand",
+                                                 syntax::error::INFIX_MISSING_RHS,
                                                  std::pair{0UZ, 2UZ}});
 }
 
 TEST_CASE("Unclosed implicit initializer") {
     helpers::test_parser_fail(".{",
-                              syntax::Diagnostic{"Expected token RBRACE, found END",
-                                                 syntax::Error::UNEXPECTED_TOKEN,
+                              syntax::diagnostic{"Expected token RBRACE, found END",
+                                                 syntax::error::UNEXPECTED_TOKEN,
                                                  std::pair{0UZ, 2UZ}});
 
     helpers::test_parser_fail(".{ .a = 2",
-                              syntax::Diagnostic{"Expected token COMMA, found END",
-                                                 syntax::Error::UNEXPECTED_TOKEN,
+                              syntax::diagnostic{"Expected token COMMA, found END",
+                                                 syntax::error::UNEXPECTED_TOKEN,
                                                  std::pair{0UZ, 9UZ}});
 }
 
 TEST_CASE("Unclosed explicit initializer") {
     helpers::test_parser_fail("T{",
-                              syntax::Diagnostic{"Expected token RBRACE, found END",
-                                                 syntax::Error::UNEXPECTED_TOKEN,
+                              syntax::diagnostic{"Expected token RBRACE, found END",
+                                                 syntax::error::UNEXPECTED_TOKEN,
                                                  std::pair{0UZ, 2UZ}});
 
     helpers::test_parser_fail("T{ .a = 2",
-                              syntax::Diagnostic{"Expected token COMMA, found END",
-                                                 syntax::Error::UNEXPECTED_TOKEN,
+                              syntax::diagnostic{"Expected token COMMA, found END",
+                                                 syntax::error::UNEXPECTED_TOKEN,
                                                  std::pair{0UZ, 9UZ}});
 }
 
 TEST_CASE("Malformed initializer key-value") {
     helpers::test_parser_fail("T{ .a = };",
-                              syntax::Diagnostic{"No prefix parse function for RBRACE(}) found",
-                                                 syntax::Error::MISSING_PREFIX_PARSER,
+                              syntax::diagnostic{"No prefix parse function for RBRACE(}) found",
+                                                 syntax::error::MISSING_PREFIX_PARSER,
                                                  std::pair{0UZ, 8UZ}});
 }
 
 TEST_CASE("Non-ident label") {
     helpers::test_parser_fail("2: {};",
-                              syntax::Diagnostic{"Labels may only be identifiers",
-                                                 syntax::Error::ILLEGAL_LABEL,
+                              syntax::diagnostic{"Labels may only be identifiers",
+                                                 syntax::error::ILLEGAL_LABEL,
                                                  std::pair{0UZ, 1UZ}});
 }
 
 TEST_CASE("Illegal label expressions") {
-    const auto expected_diag = [](usize ln = 0UZ, usize col = 3UZ) -> syntax::Diagnostic {
+    const auto expected_diag = [](usize ln = 0UZ, usize col = 3UZ) -> syntax::diagnostic {
         return {"Labeled expressions may only be conditionals or loops",
-                syntax::Error::ILLEGAL_LABEL_EXPRESSION,
+                syntax::error::ILLEGAL_LABEL_EXPRESSION,
                 std::pair{ln, col}};
     };
 
@@ -117,9 +117,9 @@ TEST_CASE("Illegal label expressions") {
 }
 
 TEST_CASE("Illegal label statements") {
-    const auto expected_diag = [] -> syntax::Diagnostic {
+    const auto expected_diag = [] -> syntax::diagnostic {
         return {"Labeled statements may only be blocks",
-                syntax::Error::ILLEGAL_LABEL_STATEMENT,
+                syntax::error::ILLEGAL_LABEL_STATEMENT,
                 std::pair{0UZ, 3UZ}};
     };
 
@@ -129,64 +129,64 @@ TEST_CASE("Illegal label statements") {
 
 TEST_CASE("Illegal implicit access operand") {
     helpers::test_parser_fail(".a::b",
-                              syntax::Diagnostic{"Implicitly accessed names must be identifiers",
-                                                 syntax::Error::ILLEGAL_IMPLICIT_ACCESS_OPERAND,
+                              syntax::diagnostic{"Implicitly accessed names must be identifiers",
+                                                 syntax::error::ILLEGAL_IMPLICIT_ACCESS_OPERAND,
                                                  std::pair{0UZ, 2UZ}});
 }
 
 TEST_CASE("Prefix without operand") {
     helpers::test_parser_fail(".",
-                              syntax::Diagnostic{"Prefix expressions require an operand",
-                                                 syntax::Error::PREFIX_MISSING_OPERAND,
+                              syntax::diagnostic{"Prefix expressions require an operand",
+                                                 syntax::error::PREFIX_MISSING_OPERAND,
                                                  std::pair{0UZ, 0UZ}});
 
     helpers::test_parser_fail("!;",
-                              syntax::Diagnostic{"No prefix parse function for SEMICOLON(;) found",
-                                                 syntax::Error::MISSING_PREFIX_PARSER,
+                              syntax::diagnostic{"No prefix parse function for SEMICOLON(;) found",
+                                                 syntax::error::MISSING_PREFIX_PARSER,
                                                  std::pair{0UZ, 1UZ}});
 }
 
 TEST_CASE("Missing inner scope of resolution expression") {
     helpers::test_parser_fail(
         "A:: ;",
-        syntax::Diagnostic{
-            "Expected token IDENT, found SEMICOLON", syntax::Error::UNEXPECTED_TOKEN, 0, 4});
+        syntax::diagnostic{
+            "Expected token IDENT, found SEMICOLON", syntax::error::UNEXPECTED_TOKEN, 0, 4});
 }
 
 TEST_CASE("Illegal inner scope of resolution expression") {
     helpers::test_parser_fail(
         "A::2;",
-        syntax::Diagnostic{
-            "Expected token IDENT, found INT_10", syntax::Error::UNEXPECTED_TOKEN, 0, 3});
+        syntax::diagnostic{
+            "Expected token IDENT, found INT_10", syntax::error::UNEXPECTED_TOKEN, 0, 3});
 }
 
 TEST_CASE("Illegal outer scope of resolution expression") {
     helpers::test_parser_fail(
         "2::A;",
-        syntax::Diagnostic{"Module access expressions must have outer accessors or identifiers",
-                           syntax::Error::ILLEGAL_OUTER_ACCESSOR_TYPE,
+        syntax::diagnostic{"Module access expressions must have outer accessors or identifiers",
+                           syntax::error::ILLEGAL_OUTER_ACCESSOR_TYPE,
                            std::pair{0UZ, 0UZ}});
 }
 
 TEST_CASE("Missing inner member of dot expression") {
     helpers::test_parser_fail(
         "A. ;",
-        syntax::Diagnostic{
-            "Expected token IDENT, found SEMICOLON", syntax::Error::UNEXPECTED_TOKEN, 0, 3});
+        syntax::diagnostic{
+            "Expected token IDENT, found SEMICOLON", syntax::error::UNEXPECTED_TOKEN, 0, 3});
 }
 
 TEST_CASE("Illegal inner member of dot expression") {
     helpers::test_parser_fail(
         "A.2;",
-        syntax::Diagnostic{
-            "Expected token IDENT, found INT_10", syntax::Error::UNEXPECTED_TOKEN, 0, 2});
+        syntax::diagnostic{
+            "Expected token IDENT, found INT_10", syntax::error::UNEXPECTED_TOKEN, 0, 2});
 }
 
 TEST_CASE("Illegal outer object of dot expression") {
     helpers::test_parser_fail(
         "fn():i32{}.a;",
-        syntax::Diagnostic{"Dot expressions must have outer accessors or identifiers",
-                           syntax::Error::ILLEGAL_OUTER_ACCESSOR_TYPE,
+        syntax::diagnostic{"Dot expressions must have outer accessors or identifiers",
+                           syntax::error::ILLEGAL_OUTER_ACCESSOR_TYPE,
                            std::pair{0UZ, 0UZ}});
 }
 

@@ -1,4 +1,4 @@
-#include "syntax/token_type.hh"
+#include "compiler/syntax/token_type.hh"
 
 #include <algorithm>
 #include <array>
@@ -9,116 +9,116 @@
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
-#include "syntax/builtins.hh"
-#include "syntax/keywords.hh"
+#include "compiler/syntax/builtins.hh"
+#include "compiler/syntax/keywords.hh"
 
 namespace ghoti::syntax {
 
-auto base_idx(Base base) noexcept -> i32 {
+auto base_idx(numeric_base base) noexcept -> i32 {
     switch (base) {
-    case Base::BINARY:      return 0;
-    case Base::OCTAL:       return 1;
-    case Base::DECIMAL:     return 2;
-    case Base::HEXADECIMAL: return 3;
+    case numeric_base::BINARY:      return 0;
+    case numeric_base::OCTAL:       return 1;
+    case numeric_base::DECIMAL:     return 2;
+    case numeric_base::HEXADECIMAL: return 3;
     }
 }
 
-auto digit_in_base(char c, Base base) noexcept -> bool {
+auto digit_in_base(char c, numeric_base base) noexcept -> bool {
     switch (base) {
-    case Base::BINARY:      return c == '0' || c == '1';
-    case Base::OCTAL:       return c >= '0' && c <= '7';
-    case Base::DECIMAL:     return std::isdigit(c);
-    case Base::HEXADECIMAL: return std::isxdigit(c);
-    default:                UNREACHABLE("Unknown base");
+    case numeric_base::BINARY:      return c == '0' || c == '1';
+    case numeric_base::OCTAL:       return c >= '0' && c <= '7';
+    case numeric_base::DECIMAL:     return std::isdigit(c);
+    case numeric_base::HEXADECIMAL: return std::isxdigit(c);
+    default:                        UNREACHABLE("Unknown base");
     }
 }
 
 namespace token_type {
 
-auto to_base(TokenType tt) noexcept -> stdx::option<Base> {
+auto to_base(token_type_t tt) noexcept -> stdx::option<numeric_base> {
     switch (tt) {
-    case TokenType::INT_2:
-    case TokenType::LINT_2:
-    case TokenType::ZINT_2:
-    case TokenType::UINT_2:
-    case TokenType::ULINT_2:
-    case TokenType::UZINT_2:  return Base::BINARY;
-    case TokenType::INT_8:
-    case TokenType::LINT_8:
-    case TokenType::ZINT_8:
-    case TokenType::UINT_8:
-    case TokenType::ULINT_8:
-    case TokenType::UZINT_8:  return Base::OCTAL;
-    case TokenType::INT_10:
-    case TokenType::LINT_10:
-    case TokenType::ZINT_10:
-    case TokenType::UINT_10:
-    case TokenType::ULINT_10:
-    case TokenType::UZINT_10: return Base::DECIMAL;
-    case TokenType::INT_16:
-    case TokenType::LINT_16:
-    case TokenType::ZINT_16:
-    case TokenType::UINT_16:
-    case TokenType::ULINT_16:
-    case TokenType::UZINT_16: return Base::HEXADECIMAL;
-    default:                  return stdx::none;
+    case token_type_t::INT_2:
+    case token_type_t::LINT_2:
+    case token_type_t::ZINT_2:
+    case token_type_t::UINT_2:
+    case token_type_t::ULINT_2:
+    case token_type_t::UZINT_2:  return numeric_base::BINARY;
+    case token_type_t::INT_8:
+    case token_type_t::LINT_8:
+    case token_type_t::ZINT_8:
+    case token_type_t::UINT_8:
+    case token_type_t::ULINT_8:
+    case token_type_t::UZINT_8:  return numeric_base::OCTAL;
+    case token_type_t::INT_10:
+    case token_type_t::LINT_10:
+    case token_type_t::ZINT_10:
+    case token_type_t::UINT_10:
+    case token_type_t::ULINT_10:
+    case token_type_t::UZINT_10: return numeric_base::DECIMAL;
+    case token_type_t::INT_16:
+    case token_type_t::LINT_16:
+    case token_type_t::ZINT_16:
+    case token_type_t::UINT_16:
+    case token_type_t::ULINT_16:
+    case token_type_t::UZINT_16: return numeric_base::HEXADECIMAL;
+    default:                     return stdx::none;
     }
 }
 
-auto misc_from_char(char c) noexcept -> stdx::option<TokenType> {
+auto misc_from_char(char c) noexcept -> stdx::option<token_type_t> {
     switch (c) {
-    case ',': return TokenType::COMMA;
-    case ':': return TokenType::COLON;
-    case ';': return TokenType::SEMICOLON;
-    case '(': return TokenType::LPAREN;
-    case ')': return TokenType::RPAREN;
-    case '{': return TokenType::LBRACE;
-    case '}': return TokenType::RBRACE;
-    case '[': return TokenType::LBRACKET;
-    case ']': return TokenType::RBRACKET;
-    case '_': return TokenType::UNDERSCORE;
+    case ',': return token_type_t::COMMA;
+    case ':': return token_type_t::COLON;
+    case ';': return token_type_t::SEMICOLON;
+    case '(': return token_type_t::LPAREN;
+    case ')': return token_type_t::RPAREN;
+    case '{': return token_type_t::LBRACE;
+    case '}': return token_type_t::RBRACE;
+    case '[': return token_type_t::LBRACKET;
+    case ']': return token_type_t::RBRACKET;
+    case '_': return token_type_t::UNDERSCORE;
     default:  return stdx::none;
     }
 }
 
-auto is_primitive(TokenType type) noexcept -> bool {
+auto is_primitive(token_type_t type) noexcept -> bool {
     return std::ranges::contains(ALL_PRIMITIVES, type);
 }
 
-auto is_valid_ident(TokenType type) noexcept -> bool {
+auto is_valid_ident(token_type_t type) noexcept -> bool {
     switch (type) {
-    case TokenType::IDENT:
-    case TokenType::NORETURN:
-    case TokenType::TYPE_TYPE:
-    case TokenType::AUTO_TYPE:
-    case TokenType::OPAQUE_TYPE: return true;
-    default:                     return is_primitive(type) || get_builtin_opt(type);
+    case token_type_t::IDENT:
+    case token_type_t::NORETURN:
+    case token_type_t::TYPE_TYPE:
+    case token_type_t::AUTO_TYPE:
+    case token_type_t::OPAQUE_TYPE: return true;
+    default:                        return is_primitive(type) || get_builtin_opt(type);
     }
 }
 
 namespace {
 
-using SuffixMapping = std::pair<bool (*)(TokenType), usize>;
+using suffix_mapping = std::pair<bool (*)(token_type_t), usize>;
 constexpr std::array INT_SUFFIX_MAPPINGS{
-    SuffixMapping{is_i32, 0},
-    SuffixMapping{is_i64, 1},
-    SuffixMapping{is_isize_int, 1},
-    SuffixMapping{is_u32, 1},
-    SuffixMapping{is_u64, 2},
-    SuffixMapping{is_usize_int, 2},
+    suffix_mapping{is_i32, 0},
+    suffix_mapping{is_i64, 1},
+    suffix_mapping{is_isize_int, 1},
+    suffix_mapping{is_u32, 1},
+    suffix_mapping{is_u64, 2},
+    suffix_mapping{is_usize_int, 2},
 };
 
 } // namespace
 
-auto suffix_length(TokenType tt) noexcept -> usize {
-    if (tt == TokenType::F32) { return 1; }
-    if (tt < TokenType::INT_2 || tt > TokenType::UZINT_16) { return 0; }
+auto suffix_length(token_type_t tt) noexcept -> usize {
+    if (tt == token_type_t::F32) { return 1; }
+    if (tt < token_type_t::INT_2 || tt > token_type_t::UZINT_16) { return 0; }
 
     // Returns the suffix (second of pair) for the first range that returns true
     return std::ranges::find_if(
                INT_SUFFIX_MAPPINGS,
                [tt](auto* in_range) -> bool { return in_range(tt); },
-               &SuffixMapping::first)
+               &suffix_mapping::first)
         ->second;
 }
 

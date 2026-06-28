@@ -6,15 +6,15 @@
 #include <fmt/format.h>
 #include <stdx/types.hh>
 
+#include "compiler/sema/error.hh"
+#include "compiler/sema/symbol.hh"
+#include "compiler/sema/type.hh"
 #include "helpers/common.hh"
 #include "helpers/sema.hh"
-#include "sema/error.hh"
-#include "sema/symbol.hh"
-#include "sema/type.hh"
 
 namespace ghoti::tests {
 
-using helpers::MockFile;
+using helpers::mock_file;
 namespace syms = sema::symbols;
 
 namespace {
@@ -39,33 +39,33 @@ pub const BarS := struct {
 };
 )"};
 
-[[nodiscard]] auto setup_access_test(std::string_view input) -> helpers::CtxIdxPair {
+[[nodiscard]] auto setup_access_test(std::string_view input) -> helpers::ctx_idx_pair {
     return helpers::resolve_and_check(
         fmt::format(R"(import "other.gh" as other; {})", input),
-        helpers::make_vector<MockFile>(MockFile{.path = "other.gh", .source = other_gh}));
+        helpers::make_vector<mock_file>(mock_file{.path = "other.gh", .source = other_gh}));
 }
 
-[[nodiscard]] auto u8_slice_type(helpers::SemaTestContext& ctx) -> sema::Type& {
-    return ctx.get_type(sema::TypeKind::SLICE, false, ctx.get_type(sema::TypeKind::U8));
+[[nodiscard]] auto u8_slice_type(helpers::sema_test_context& ctx) -> sema::type& {
+    return ctx.get_type(sema::type_kind::SLICE, false, ctx.get_type(sema::type_kind::U8));
 }
 
-[[nodiscard]] auto bar_fn_type(helpers::SemaTestContext& ctx, usize table_idx) -> sema::Type& {
-    return ctx.get_type(sema::TypeKind::FUNCTION, table_idx);
+[[nodiscard]] auto bar_fn_type(helpers::sema_test_context& ctx, usize table_idx) -> sema::type& {
+    return ctx.get_type(sema::type_kind::FUNCTION, table_idx);
 }
 
-auto check_access_decl(helpers::SemaTestContext& ctx,
-                       usize                     idx,
-                       std::string_view          symbol_name,
-                       const sema::Type&         expected_type) -> void {
-    const auto [sym, data, type]{ctx.get_type_sym_info<syms::Node>(symbol_name, idx)};
+auto check_access_decl(helpers::sema_test_context& ctx,
+                       usize                       idx,
+                       std::string_view            symbol_name,
+                       const sema::type&           expected_type) -> void {
+    const auto [sym, data, type]{ctx.get_type_sym_info<syms::node_t>(symbol_name, idx)};
     CHECK(expected_type == type);
 }
 
-template <std::same_as<sema::Diagnostic>... Ds>
+template <std::same_as<sema::diagnostic>... Ds>
 auto test_access_fail(std::string_view input, Ds&&... diagnostics) -> void {
     helpers::test_resolver_fail(
         fmt::format(R"(import "other.gh" as other; {})", input),
-        helpers::make_vector<MockFile>(MockFile{.path = "other.gh", .source = other_gh}),
+        helpers::make_vector<mock_file>(mock_file{.path = "other.gh", .source = other_gh}),
         std::forward<Ds>(diagnostics)...);
 }
 
@@ -85,7 +85,7 @@ const e3 := e1.bar('a');
 const func := other::BarE.bar;
 )")};
 
-    const auto& enum_type{ctx->get_type(sema::TypeKind::ENUM, 3)};
+    const auto& enum_type{ctx->get_type(sema::type_kind::ENUM, 3)};
     check_access_decl(*ctx, idx, "e1", enum_type);
     check_access_decl(*ctx, idx, "e2", enum_type);
     check_access_decl(*ctx, idx, "e3", u8_slice_type(*ctx));
@@ -101,7 +101,7 @@ const u3 := u1.bar('a');
 const func := other::BarU.bar;
 )")};
 
-    const auto& union_type{ctx->get_type(sema::TypeKind::UNION, 5)};
+    const auto& union_type{ctx->get_type(sema::type_kind::UNION, 5)};
     check_access_decl(*ctx, idx, "u1", union_type);
     check_access_decl(*ctx, idx, "u2", union_type);
     check_access_decl(*ctx, idx, "u3", u8_slice_type(*ctx));
@@ -119,8 +119,8 @@ const member := other::BarS.baz;
 const func := other::BarS.bar;
 )")};
 
-    const auto& struct_type{ctx->get_type(sema::TypeKind::STRUCT, 7)};
-    const auto& member_type{ctx->get_type(sema::TypeKind::I32)};
+    const auto& struct_type{ctx->get_type(sema::type_kind::STRUCT, 7)};
+    const auto& member_type{ctx->get_type(sema::type_kind::I32)};
 
     check_access_decl(*ctx, idx, "s1", struct_type);
     check_access_decl(*ctx, idx, "s2", struct_type);
@@ -151,23 +151,23 @@ TEST_CASE("Legal circular module-based access resolution") {
 
     helpers::resolve_and_check(
         R"(import "a.gh" as a;)",
-        helpers::make_vector<MockFile>(MockFile{.path = "a.gh", .source = a_gh},
-                                       MockFile{.path = "b.gh", .source = b_gh}));
+        helpers::make_vector<mock_file>(mock_file{.path = "a.gh", .source = a_gh},
+                                        mock_file{.path = "b.gh", .source = b_gh}));
 }
 
 TEST_CASE("Access through non-user-type types") {
     test_access_fail(
         "var a: i32 = .z;",
-        sema::Diagnostic{
+        sema::diagnostic{
             "Can only access inner objects inside of structs, unions, and enums; found 'i32'",
-            sema::Error::TYPE_MISMATCH,
+            sema::error::TYPE_MISMATCH,
             std::pair{0UZ, 41UZ}});
 }
 
 TEST_CASE("Implicitly accessing unknown user-type fields/members") {
-    const auto expected_diag = [] -> sema::Diagnostic {
+    const auto expected_diag = [] -> sema::diagnostic {
         return {"Type has no field named 'z'",
-                sema::Error::UNDECLARED_IDENTIFIER,
+                sema::error::UNDECLARED_IDENTIFIER,
                 std::pair{0UZ, 50UZ}};
     };
 
@@ -177,9 +177,9 @@ TEST_CASE("Implicitly accessing unknown user-type fields/members") {
 }
 
 TEST_CASE("Dot-accessing unknown user-type fields/members") {
-    const auto expected_diag = [](std::string_view type_name) -> sema::Diagnostic {
+    const auto expected_diag = [](std::string_view type_name) -> sema::diagnostic {
         return {fmt::format("Type '{}' has no field named 'z'", type_name),
-                sema::Error::UNDECLARED_IDENTIFIER,
+                sema::error::UNDECLARED_IDENTIFIER,
                 std::pair{0UZ, 49UZ}};
     };
 
@@ -189,11 +189,11 @@ TEST_CASE("Dot-accessing unknown user-type fields/members") {
 }
 
 TEST_CASE("Illegal module access targets") {
-    const auto expected_diag = [](std::string_view type_name) -> sema::Diagnostic {
+    const auto expected_diag = [](std::string_view type_name) -> sema::diagnostic {
         return {
             fmt::format("Use the dot operator '.' to access {} fields; found module access '::'",
                         type_name),
-            sema::Error::TYPE_MISMATCH,
+            sema::error::TYPE_MISMATCH,
             std::pair{0UZ, 42UZ}};
     };
 
@@ -203,22 +203,22 @@ TEST_CASE("Illegal module access targets") {
 
     helpers::test_resolver_fail(
         "var a := i32::a;",
-        sema::Diagnostic{"Module access operator '::' can only be applied to modules; found 'i32'",
-                         sema::Error::TYPE_MISMATCH,
+        sema::diagnostic{"Module access operator '::' can only be applied to modules; found 'i32'",
+                         sema::error::TYPE_MISMATCH,
                          std::pair{0UZ, 9UZ}});
 }
 
 TEST_CASE("Unknown member lookup in module") {
     test_access_fail("var a := other::BarF;",
-                     sema::Diagnostic{"Module 'other' has no member named 'BarF'",
-                                      sema::Error::UNDECLARED_IDENTIFIER,
+                     sema::diagnostic{"Module 'other' has no member named 'BarF'",
+                                      sema::error::UNDECLARED_IDENTIFIER,
                                       std::pair{0UZ, 44UZ}});
 }
 
 TEST_CASE("Incomplete type used during resolution") {
-    const auto expected_diag = [](usize col) -> sema::Diagnostic {
+    const auto expected_diag = [](usize col) -> sema::diagnostic {
         return {"Field 'a' has an incomplete type; creates an infinite size cycle",
-                sema::Error::CYCLIC_DEPENDENCY,
+                sema::error::CYCLIC_DEPENDENCY,
                 std::pair{0UZ, col}};
     };
 
@@ -243,26 +243,26 @@ TEST_CASE("Illegal circular module-based access resolution") {
     constexpr std::string_view b_gh{
         R"(import "a.gh" as a; pub const B := struct { field: a::A, };)"};
 
-    auto [ctx, idx]{
-        helpers::resolve(R"(import "a.gh" as a; using A = a::A;)",
-                         helpers::make_vector<MockFile>(MockFile{.path = "a.gh", .source = a_gh},
-                                                        MockFile{.path = "b.gh", .source = b_gh}))};
+    auto [ctx, idx]{helpers::resolve(
+        R"(import "a.gh" as a; using A = a::A;)",
+        helpers::make_vector<mock_file>(mock_file{.path = "a.gh", .source = a_gh},
+                                        mock_file{.path = "b.gh", .source = b_gh}))};
     auto& test_module{*helpers::unwrap(ctx->manager.try_get_file_module("test.gh"))};
     auto& a_module{*helpers::unwrap(ctx->manager.try_get_file_module("a.gh"))};
     auto& b_module{*helpers::unwrap(ctx->manager.try_get_file_module("b.gh"))};
 
-    helpers::check_errors_against<sema::Diagnostics>(
+    helpers::check_errors_against<sema::diagnostics>(
         b_module,
-        sema::Diagnostic{"Cross-module cyclic dependency detected while resolving symbol 'B'",
-                         sema::Error::CYCLIC_DEPENDENCY,
+        sema::diagnostic{"Cross-module cyclic dependency detected while resolving symbol 'B'",
+                         sema::error::CYCLIC_DEPENDENCY,
                          std::pair{0UZ, 54UZ}});
 
-    ctx->check_poisoned<syms::Node>("A", idx, test_module);
-    ctx->check_poisoned<syms::Node>("A", 1, a_module);
-    ctx->check_poisoned<syms::Node>("B", 2, b_module);
+    ctx->check_poisoned<syms::node_t>("A", idx, test_module);
+    ctx->check_poisoned<syms::node_t>("A", 1, a_module);
+    ctx->check_poisoned<syms::node_t>("B", 2, b_module);
 
     // Errors dont get bubbled up to simplify handling, so only one module is poisoned
-    const auto [sym, _]{ctx->get_symbol<syms::Node>("b", 1)};
+    const auto [sym, _]{ctx->get_symbol<syms::node_t>("b", 1)};
     ctx->check_poisoned(sym);
 }
 
@@ -270,23 +270,23 @@ TEST_CASE("Initializer expression in various resolution contexts") {
     SECTION("Out of place access-related expressions") {
         helpers::test_resolver_fail(
             ".{};",
-            sema::Diagnostic{
+            sema::diagnostic{
                 "Initializer expression requires a known type; provide an explicit type "
                 "or use in a typed context",
-                sema::Error::TYPE_MISMATCH,
+                sema::error::TYPE_MISMATCH,
                 std::pair{0UZ, 1UZ}});
 
         helpers::test_resolver_fail(
             "const a := .f;",
-            sema::Diagnostic{"Implicit access expression used outside of a typed context",
-                             sema::Error::TYPE_MISMATCH,
+            sema::diagnostic{"Implicit access expression used outside of a typed context",
+                             sema::error::TYPE_MISMATCH,
                              std::pair{0UZ, 11UZ}});
     }
 
     SECTION("Initializer with incomplete type") {
-        const auto expected_diag = [](usize col) -> sema::Diagnostic {
+        const auto expected_diag = [](usize col) -> sema::diagnostic {
             return {"Cannot initialize an incomplete type",
-                    sema::Error::CYCLIC_DEPENDENCY,
+                    sema::error::CYCLIC_DEPENDENCY,
                     std::pair{0UZ, col}};
         };
 
@@ -297,15 +297,15 @@ TEST_CASE("Initializer expression in various resolution contexts") {
     SECTION("Union & enum type restrictions") {
         helpers::test_resolver_fail(
             "const U := union { A: i32, B: i32, }; const u := U{ .A = 1, .B = 2 };",
-            sema::Diagnostic{"Union initializer lists must list exactly one field; found 2",
-                             sema::Error::ARITY_MISMATCH,
+            sema::diagnostic{"Union initializer lists must list exactly one field; found 2",
+                             sema::error::ARITY_MISMATCH,
                              std::pair{0UZ, 50UZ}});
 
         helpers::test_resolver_fail(
             "const E := enum { A, }; const e := E{};",
-            sema::Diagnostic{"Enums cannot be initialized with an initializer expression as they "
+            sema::diagnostic{"Enums cannot be initialized with an initializer expression as they "
                              "lack member variables",
-                             sema::Error::ARITY_MISMATCH,
+                             sema::error::ARITY_MISMATCH,
                              std::pair{0UZ, 36UZ}});
     }
 
@@ -316,30 +316,30 @@ TEST_CASE("Initializer expression in various resolution contexts") {
 
         helpers::test_resolver_fail(
             fmt::format("{} const a: S = .{{.a = 2, .b = 3, .c = false, .c = true, }};", input),
-            sema::Diagnostic{"Struct initializer contains duplicate field: c",
-                             sema::Error::DUPLICATE_FIELD,
+            sema::diagnostic{"Struct initializer contains duplicate field: c",
+                             sema::error::DUPLICATE_FIELD,
                              std::pair{0UZ, 65UZ}});
         helpers::test_resolver_fail(
             fmt::format("{} const a: S = .{{.a = 2, .b = 3, .c = false, .c = true, .a = 34 }};",
                         input),
-            sema::Diagnostic{"Struct initializer contains duplicate fields: c, a",
-                             sema::Error::DUPLICATE_FIELD,
+            sema::diagnostic{"Struct initializer contains duplicate fields: c, a",
+                             sema::error::DUPLICATE_FIELD,
                              std::pair{0UZ, 65UZ}});
 
         helpers::test_resolver_fail(fmt::format("{} const a: S = .{{ .a = 2, }};", input),
-                                    sema::Diagnostic{"Struct initializer missing required field: c",
-                                                     sema::Error::MISSING_FIELD,
+                                    sema::diagnostic{"Struct initializer missing required field: c",
+                                                     sema::error::MISSING_FIELD,
                                                      std::pair{0UZ, 65UZ}});
         helpers::test_resolver_fail(
             fmt::format("{} const a: S = .{{ .b = 2, }};", input),
-            sema::Diagnostic{"Struct initializer missing required fields: a, c",
-                             sema::Error::MISSING_FIELD,
+            sema::diagnostic{"Struct initializer missing required fields: a, c",
+                             sema::error::MISSING_FIELD,
                              std::pair{0UZ, 65UZ}});
 
         helpers::test_resolver_fail(
             fmt::format("{} const a: S = .{{ .a = 2, .c = true, .d = 2 }};", input),
-            sema::Diagnostic{"Struct initializer contains unknown field: d",
-                             sema::Error::UNKNOWN_FIELD,
+            sema::diagnostic{"Struct initializer contains unknown field: d",
+                             sema::error::UNKNOWN_FIELD,
                              std::pair{0UZ, 65UZ}});
     }
 }

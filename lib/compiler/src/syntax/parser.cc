@@ -1,4 +1,4 @@
-#include "syntax/parser.hh"
+#include "compiler/syntax/parser.hh"
 
 #include <string_view>
 #include <utility>
@@ -12,30 +12,29 @@
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
-#include "ast/expression.hh"
-#include "ast/handle.hh"
-#include "ast/id.hh"
-#include "ast/primitive.hh"
-#include "ast/statement.hh"
-#include "syntax/builtins.hh"
-#include "syntax/error.hh"
-#include "syntax/keywords.hh"
-#include "syntax/precedence.hh"
-#include "syntax/token.hh"
-#include "syntax/token_type.hh"
-
-#include <diagnostic.hh>
+#include "compiler/ast/expression.hh"
+#include "compiler/ast/handle.hh"
+#include "compiler/ast/id.hh"
+#include "compiler/ast/primitive.hh"
+#include "compiler/ast/statement.hh"
+#include "compiler/syntax/builtins.hh"
+#include "compiler/syntax/error.hh"
+#include "compiler/syntax/keywords.hh"
+#include "compiler/syntax/precedence.hh"
+#include "compiler/syntax/token.hh"
+#include "compiler/syntax/token_type.hh"
+#include "support/diagnostic.hh"
 
 namespace ghoti::syntax {
 
-auto Parser::reset(std::string_view input) noexcept -> void {
+auto parser::reset(std::string_view input) noexcept -> void {
     ast_.reset();
     input_ = input;
     lexer_.reset(input);
     advance(2);
 }
 
-auto Parser::advance(u8 times) noexcept -> const Token& {
+auto parser::advance(u8 times) noexcept -> const token_t& {
     for (u8 i = 0; i < times; ++i) {
         current_token_ = peek_token_;
         peek_token_    = lexer_.advance();
@@ -43,22 +42,22 @@ auto Parser::advance(u8 times) noexcept -> const Token& {
     return current_token_;
 }
 
-auto Parser::consume(ast::AST& ast) -> Diagnostics {
+auto parser::consume(ast::AST& ast) -> diagnostics {
     PROFILE_FUNCTION();
     reset(input_);
     ast.clear();
     ast_.emplace(ast);
 
-    Diagnostics diagnostics;
+    diagnostics diagnostics;
 
-    while (!current_token_is(TokenType::END)) {
+    while (!current_token_is(token_type_t::END)) {
         // Advance through any amount of semicolons
-        const auto skip = [](TokenType tt) -> bool { return tt == TokenType::SEMICOLON; };
+        const auto skip = [](token_type_t tt) -> bool { return tt == token_type_t::SEMICOLON; };
         if (skip(current_token_.type)) { while (skip(advance().type)); } // NOLINT
-        if (current_token_is(TokenType::END)) { break; }
+        if (current_token_is(token_type_t::END)) { break; }
 
         // Comments are entirely discarded from the tree
-        if (!current_token_is(TokenType::COMMENT)) {
+        if (!current_token_is(token_type_t::COMMENT)) {
             auto stmt{parse_statement()};
             if (stmt) {
                 ast.add_root(**stmt);
@@ -66,12 +65,12 @@ auto Parser::consume(ast::AST& ast) -> Diagnostics {
                 diagnostics.emplace_back(std::move(stmt.error()));
 
                 // Errors should advance up to next logical end to prevent useless errors
-                const auto stop_condition = [](TokenType tt) -> bool {
+                const auto stop_condition = [](token_type_t tt) -> bool {
                     switch (tt) {
-                    case TokenType::RBRACE:
-                    case TokenType::SEMICOLON:
-                    case TokenType::END:       return true;
-                    default:                   return false;
+                    case token_type_t::RBRACE:
+                    case token_type_t::SEMICOLON:
+                    case token_type_t::END:       return true;
+                    default:                      return false;
                     }
                 };
                 while (!stop_condition(advance().type)); // NOLINT
@@ -83,7 +82,7 @@ auto Parser::consume(ast::AST& ast) -> Diagnostics {
     return diagnostics;
 }
 
-auto Parser::expect_peek(TokenType expected) -> stdx::result<void, Diagnostic> {
+auto parser::expect_peek(token_type_t expected) -> stdx::result<void, diagnostic> {
     if (peek_token_is(expected)) {
         advance();
         return {};
@@ -91,70 +90,69 @@ auto Parser::expect_peek(TokenType expected) -> stdx::result<void, Diagnostic> {
     return stdx::err{peek_error(expected)};
 }
 
-auto Parser::expect_semicolon() -> stdx::result<void, Diagnostic> {
-    using TokenType::SEMICOLON;
+auto parser::expect_semicolon() -> stdx::result<void, diagnostic> {
+    using token_type_t::SEMICOLON;
     if (current_token_is(SEMICOLON)) { return {}; }
     return expect_peek(SEMICOLON);
 }
 
-auto Parser::peek_error(TokenType expected) -> Diagnostic {
-    return Diagnostic{fmt::format("Expected token {}, found {}",
+auto parser::peek_error(token_type_t expected) -> diagnostic {
+    return diagnostic{fmt::format("Expected token {}, found {}",
                                   magic_enum::enum_name(expected),
                                   magic_enum::enum_name(peek_token_.type)),
-                      Error::UNEXPECTED_TOKEN,
+                      error::UNEXPECTED_TOKEN,
                       peek_token_};
 }
 
-auto Parser::get_current_precedence() const noexcept
-    -> std::pair<Precedence, stdx::option<Binding>> {
-    return Binding::try_get_from(current_token_.type)
-        .transform([](const auto& binding) -> auto {
-            return std::pair{binding.precedence, stdx::option<Binding>{binding}};
-        })
-        .value_or(std::pair{Precedence::LOWEST, stdx::none});
+auto parser::get_current_precedence() const noexcept
+    -> std::pair<bind_precedence, stdx::option<binding>> {
+    return binding::try_get_from(current_token_.type)
+        .transform(
+            [](const auto& b) -> auto { return std::pair{b.precedence, stdx::option<binding>{b}}; })
+        .value_or(std::pair{bind_precedence::LOWEST, stdx::none});
 }
 
-auto Parser::get_peek_precedence() const noexcept -> std::pair<Precedence, stdx::option<Binding>> {
-    return Binding::try_get_from(peek_token_.type)
-        .transform([](const auto& binding) -> auto {
-            return std::pair{binding.precedence, stdx::option<Binding>{binding}};
-        })
-        .value_or(std::pair{Precedence::LOWEST, stdx::none});
+auto parser::get_peek_precedence() const noexcept
+    -> std::pair<bind_precedence, stdx::option<binding>> {
+    return binding::try_get_from(peek_token_.type)
+        .transform(
+            [](const auto& b) -> auto { return std::pair{b.precedence, stdx::option<binding>{b}}; })
+        .value_or(std::pair{bind_precedence::LOWEST, stdx::none});
 }
 
-auto Parser::parse_statement(SemicolonBehavior behavior)
-    -> stdx::result<ast::StatementHandle, Diagnostic> {
+auto parser::parse_statement(semicolon_behavior behavior)
+    -> stdx::result<ast::stmt_handle, diagnostic> {
     // Not all decls are public so the condition needs to be rechecked
     PROFILE_FUNCTION();
-    if (current_token_.type == TokenType::PUBLIC) {
+    if (current_token_.type == token_type_t::PUBLIC) {
         switch (peek_token_.type) {
-        case TokenType::IMPORT: return ast::ImportStatement::parse(*this);
-        case TokenType::USING:  return ast::UsingStatement::parse(*this);
-        default:                return ast::DeclStatement::parse(*this);
+        case token_type_t::IMPORT: return ast::import_stmt::parse(*this);
+        case token_type_t::USING:  return ast::using_stmt::parse(*this);
+        default:                   return ast::decl_stmt::parse(*this);
         }
     } else if (current_token_.is_decl_token()) {
-        return ast::DeclStatement::parse(*this);
+        return ast::decl_stmt::parse(*this);
     }
 
     switch (current_token_.type) {
-    case TokenType::LBRACE:     return ast::BlockStatement::parse(*this);
-    case TokenType::BREAK:      return ast::BreakStatement::parse(*this);
-    case TokenType::CONTINUE:   return ast::ContinueStatement::parse(*this);
-    case TokenType::DEFER:      return ast::DeferStatement::parse(*this);
-    case TokenType::UNDERSCORE: return ast::DiscardStatement::parse(*this);
-    case TokenType::IMPORT:     return ast::ImportStatement::parse(*this);
-    case TokenType::RETURN:     return ast::ReturnStatement::parse(*this);
-    case TokenType::TEST:       return ast::TestStatement::parse(*this);
-    case TokenType::USING:      return ast::UsingStatement::parse(*this);
-    default:                    return ast::ExpressionStatement::parse(*this, behavior);
+    case token_type_t::LBRACE:     return ast::block_stmt::parse(*this);
+    case token_type_t::BREAK:      return ast::break_stmt::parse(*this);
+    case token_type_t::CONTINUE:   return ast::continue_stmt::parse(*this);
+    case token_type_t::DEFER:      return ast::defer_stmt::parse(*this);
+    case token_type_t::UNDERSCORE: return ast::discard_stmt::parse(*this);
+    case token_type_t::IMPORT:     return ast::import_stmt::parse(*this);
+    case token_type_t::RETURN:     return ast::return_stmt::parse(*this);
+    case token_type_t::TEST:       return ast::test_stmt::parse(*this);
+    case token_type_t::USING:      return ast::using_stmt::parse(*this);
+    default:                       return ast::expr_stmt::parse(*this, behavior);
     }
 }
 
-auto Parser::parse_expression(Precedence precedence)
-    -> stdx::result<ast::ExpressionHandle, Diagnostic> {
+auto parser::parse_expression(bind_precedence precedence)
+    -> stdx::result<ast::expr_handle, diagnostic> {
     PROFILE_FUNCTION();
-    if (current_token_is(TokenType::END)) {
-        return make_syntax_err(Error::END_OF_TOKEN_STREAM, current_token_);
+    if (current_token_is(token_type_t::END)) {
+        return make_syntax_err(error::END_OF_TOKEN_STREAM, current_token_);
     }
 
     const auto prefix{get_prefix_fn_opt(current_token_.type)};
@@ -162,12 +160,12 @@ auto Parser::parse_expression(Precedence precedence)
         return make_syntax_err(fmt::format("No prefix parse function for {}({}) found",
                                            magic_enum::enum_name(current_token_.type),
                                            current_token_.slice),
-                               Error::MISSING_PREFIX_PARSER,
+                               error::MISSING_PREFIX_PARSER,
                                current_token_);
     }
     auto lhs_expression{TRY((*prefix)(*this))};
 
-    while (!peek_token_is(TokenType::SEMICOLON) && precedence < get_peek_precedence().first) {
+    while (!peek_token_is(token_type_t::SEMICOLON) && precedence < get_peek_precedence().first) {
         const auto infix{get_poll_infix_fn_opt(peek_token_.type)};
         if (!infix) { break; }
         advance();
@@ -177,24 +175,24 @@ auto Parser::parse_expression(Precedence precedence)
     return lhs_expression;
 }
 
-[[nodiscard]] auto Parser::parse_restricted_statement(Error error, SemicolonBehavior behavior)
-    -> stdx::result<ast::StatementHandle, Diagnostic> {
+[[nodiscard]] auto parser::parse_restricted_statement(error error, semicolon_behavior behavior)
+    -> stdx::result<ast::stmt_handle, diagnostic> {
     auto clause{TRY(parse_statement(behavior))};
 
     // The clause can only be a jump, block, or expression statement
-    if (!clause.any<ast::ExpressionStatement,
-                    ast::BreakStatement,
-                    ast::ContinueStatement,
-                    ast::ReturnStatement,
-                    ast::BlockStatement>()) {
+    if (!clause.any<ast::expr_stmt,
+                    ast::break_stmt,
+                    ast::continue_stmt,
+                    ast::return_stmt,
+                    ast::block_stmt>()) {
         return make_syntax_err(error, ast_->location_of(*clause));
     }
     return clause;
 }
 
-[[nodiscard]] auto Parser::try_parse_restricted_alternate(Error error, SemicolonBehavior behavior)
-    -> stdx::result<stdx::option<ast::StatementHandle>, Diagnostic> {
-    if (peek_token_is(TokenType::ELSE)) {
+[[nodiscard]] auto parser::try_parse_restricted_alternate(error error, semicolon_behavior behavior)
+    -> stdx::result<stdx::option<ast::stmt_handle>, diagnostic> {
+    if (peek_token_is(token_type_t::ELSE)) {
         // Advance twice to actually look at the statement's first token
         advance(2);
         return TRY(parse_restricted_statement(error, behavior));
@@ -205,117 +203,117 @@ auto Parser::parse_expression(Precedence precedence)
 namespace {
 
 constexpr auto PREFIX_FNS = [] -> auto {
-    stdx::fixed::enum_map<TokenType, Parser::PrefixFn> fns;
+    stdx::fixed::enum_map<token_type_t, parser::prefix_fn> fns;
 
-    fns[TokenType::IDENT]            = ast::IdentifierExpression::parse;
-    fns[TokenType::U8]               = ast::U8Expression::parse;
-    fns[TokenType::F32]              = ast::F32Expression::parse;
-    fns[TokenType::F64]              = ast::F64Expression::parse;
-    fns[TokenType::BANG]             = ast::UnaryExpression::parse;
-    fns[TokenType::NOT]              = ast::UnaryExpression::parse;
-    fns[TokenType::MINUS]            = ast::UnaryExpression::parse;
-    fns[TokenType::PLUS]             = ast::UnaryExpression::parse;
-    fns[TokenType::STAR]             = ast::DereferenceExpression::parse;
-    fns[TokenType::BW_AND]           = ast::ReferenceExpression::parse;
-    fns[TokenType::AND_MUT]          = ast::ReferenceExpression::parse;
-    fns[TokenType::CARET]            = ast::AddressOfExpression::parse;
-    fns[TokenType::CARET_MUT]        = ast::AddressOfExpression::parse;
-    fns[TokenType::DOT]              = ast::ImplicitAccessExpression::parse;
-    fns[TokenType::BOOLEAN_TRUE]     = ast::BoolExpression::parse;
-    fns[TokenType::BOOLEAN_FALSE]    = ast::BoolExpression::parse;
-    fns[TokenType::UNDEFINED]        = ast::UndefinedExpression::parse;
-    fns[TokenType::LBRACE]           = ast::VoidExpression::parse;
-    fns[TokenType::STRING]           = ast::StringExpression::parse;
-    fns[TokenType::MULTILINE_STRING] = ast::StringExpression::parse;
-    fns[TokenType::LPAREN]           = ast::GroupedExpression::parse;
-    fns[TokenType::IF]               = ast::IfExpression::parse;
-    fns[TokenType::FUNCTION]         = ast::FunctionExpression::parse;
-    fns[TokenType::STRUCT]           = ast::StructExpression::parse;
-    fns[TokenType::UNION]            = ast::UnionExpression::parse;
-    fns[TokenType::ENUM]             = ast::EnumExpression::parse;
-    fns[TokenType::MATCH]            = ast::MatchExpression::parse;
-    fns[TokenType::LBRACKET]         = ast::ArrayExpression::parse;
-    fns[TokenType::FOR]              = ast::ForLoopExpression::parse;
-    fns[TokenType::WHILE]            = ast::WhileLoopExpression::parse;
-    fns[TokenType::DO]               = ast::DoWhileLoopExpression::parse;
-    fns[TokenType::LOOP]             = ast::InfiniteLoopExpression::parse;
+    fns[token_type_t::IDENT]            = ast::identifier_expr::parse;
+    fns[token_type_t::U8]               = ast::u8_expr::parse;
+    fns[token_type_t::F32]              = ast::f32_expr::parse;
+    fns[token_type_t::F64]              = ast::f64_expr::parse;
+    fns[token_type_t::BANG]             = ast::unary_expr::parse;
+    fns[token_type_t::NOT]              = ast::unary_expr::parse;
+    fns[token_type_t::MINUS]            = ast::unary_expr::parse;
+    fns[token_type_t::PLUS]             = ast::unary_expr::parse;
+    fns[token_type_t::STAR]             = ast::dereference_expr::parse;
+    fns[token_type_t::BW_AND]           = ast::reference_expr::parse;
+    fns[token_type_t::AND_MUT]          = ast::reference_expr::parse;
+    fns[token_type_t::CARET]            = ast::address_of_expr::parse;
+    fns[token_type_t::CARET_MUT]        = ast::address_of_expr::parse;
+    fns[token_type_t::DOT]              = ast::implicit_access_expr::parse;
+    fns[token_type_t::BOOLEAN_TRUE]     = ast::bool_expr::parse;
+    fns[token_type_t::BOOLEAN_FALSE]    = ast::bool_expr::parse;
+    fns[token_type_t::UNDEFINED]        = ast::undefined_expr::parse;
+    fns[token_type_t::LBRACE]           = ast::void_expr::parse;
+    fns[token_type_t::STRING]           = ast::string_expr::parse;
+    fns[token_type_t::MULTILINE_STRING] = ast::string_expr::parse;
+    fns[token_type_t::LPAREN]           = ast::grouped_expr::parse;
+    fns[token_type_t::IF]               = ast::if_expr::parse;
+    fns[token_type_t::FUNCTION]         = ast::function_expr::parse;
+    fns[token_type_t::STRUCT]           = ast::struct_expr::parse;
+    fns[token_type_t::UNION]            = ast::union_expr::parse;
+    fns[token_type_t::ENUM]             = ast::enum_expr::parse;
+    fns[token_type_t::MATCH]            = ast::match_expr::parse;
+    fns[token_type_t::LBRACKET]         = ast::array_expr::parse;
+    fns[token_type_t::FOR]              = ast::for_loop_expr::parse;
+    fns[token_type_t::WHILE]            = ast::while_loop_expr::parse;
+    fns[token_type_t::DO]               = ast::do_while_loop_expr::parse;
+    fns[token_type_t::LOOP]             = ast::infinite_loop_expr::parse;
 
-    for (const auto tt : stdx::enum_range<TokenType::INT_2, TokenType::UZINT_16>()) {
-        using token_type::IntegerCategory;
+    for (const auto tt : stdx::enum_range<token_type_t::INT_2, token_type_t::UZINT_16>()) {
+        using token_type::integer_category;
         switch (token_type::to_int_category(tt)) {
-        case IntegerCategory::SIGNED_BASE:   fns[tt] = ast::I32Expression::parse; break;
-        case IntegerCategory::SIGNED_WIDE:   fns[tt] = ast::I64Expression::parse; break;
-        case IntegerCategory::SIGNED_SIZE:   fns[tt] = ast::ISizeExpression::parse; break;
-        case IntegerCategory::UNSIGNED_BASE: fns[tt] = ast::U32Expression::parse; break;
-        case IntegerCategory::UNSIGNED_WIDE: fns[tt] = ast::U64Expression::parse; break;
-        case IntegerCategory::UNSIGNED_SIZE: fns[tt] = ast::USizeExpression::parse; break;
+        case integer_category::SIGNED_BASE:   fns[tt] = ast::i32_expr::parse; break;
+        case integer_category::SIGNED_WIDE:   fns[tt] = ast::i64_expr::parse; break;
+        case integer_category::SIGNED_SIZE:   fns[tt] = ast::isize_expr::parse; break;
+        case integer_category::UNSIGNED_BASE: fns[tt] = ast::u32_expr::parse; break;
+        case integer_category::UNSIGNED_WIDE: fns[tt] = ast::u64_expr::parse; break;
+        case integer_category::UNSIGNED_SIZE: fns[tt] = ast::usize_expr::parse; break;
         }
     }
 
-    for (const auto tt : ALL_PRIMITIVES) { fns[tt] = ast::IdentifierExpression::parse; }
-    for (const auto tt : builtins::ALL_TOKEN_TYPES) { fns[tt] = ast::IdentifierExpression::parse; }
+    for (const auto tt : ALL_PRIMITIVES) { fns[tt] = ast::identifier_expr::parse; }
+    for (const auto tt : builtins::ALL_TOKEN_TYPES) { fns[tt] = ast::identifier_expr::parse; }
 
     return fns;
 }();
 
 constexpr auto INFIX_FNS = [] -> auto {
-    stdx::fixed::enum_map<TokenType, Parser::InfixFn> fns;
+    stdx::fixed::enum_map<token_type_t, parser::infix_fn> fns;
 
-    fns[TokenType::PLUS]           = ast::BinaryExpression::parse;
-    fns[TokenType::MINUS]          = ast::BinaryExpression::parse;
-    fns[TokenType::STAR]           = ast::BinaryExpression::parse;
-    fns[TokenType::SLASH]          = ast::BinaryExpression::parse;
-    fns[TokenType::PERCENT]        = ast::BinaryExpression::parse;
-    fns[TokenType::LT]             = ast::BinaryExpression::parse;
-    fns[TokenType::LT_EQ]          = ast::BinaryExpression::parse;
-    fns[TokenType::GT]             = ast::BinaryExpression::parse;
-    fns[TokenType::GT_EQ]          = ast::BinaryExpression::parse;
-    fns[TokenType::EQ]             = ast::BinaryExpression::parse;
-    fns[TokenType::NEQ]            = ast::BinaryExpression::parse;
-    fns[TokenType::BOOLEAN_AND]    = ast::BinaryExpression::parse;
-    fns[TokenType::BOOLEAN_OR]     = ast::BinaryExpression::parse;
-    fns[TokenType::BW_AND]         = ast::BinaryExpression::parse;
-    fns[TokenType::BW_OR]          = ast::BinaryExpression::parse;
-    fns[TokenType::CARET]          = ast::BinaryExpression::parse;
-    fns[TokenType::SHR]            = ast::BinaryExpression::parse;
-    fns[TokenType::SHL]            = ast::BinaryExpression::parse;
-    fns[TokenType::DOT]            = ast::DotExpression::parse;
-    fns[TokenType::DOT_DOT]        = ast::RangeExpression::parse;
-    fns[TokenType::DOT_DOT_EQ]     = ast::RangeExpression::parse;
-    fns[TokenType::LPAREN]         = ast::CallExpression::parse;
-    fns[TokenType::LBRACKET]       = ast::IndexExpression::parse;
-    fns[TokenType::LBRACE]         = ast::InitializerExpression::parse;
-    fns[TokenType::ASSIGN]         = ast::AssignmentExpression::parse;
-    fns[TokenType::PLUS_ASSIGN]    = ast::AssignmentExpression::parse;
-    fns[TokenType::MINUS_ASSIGN]   = ast::AssignmentExpression::parse;
-    fns[TokenType::STAR_ASSIGN]    = ast::AssignmentExpression::parse;
-    fns[TokenType::SLASH_ASSIGN]   = ast::AssignmentExpression::parse;
-    fns[TokenType::PERCENT_ASSIGN] = ast::AssignmentExpression::parse;
-    fns[TokenType::BW_AND_ASSIGN]  = ast::AssignmentExpression::parse;
-    fns[TokenType::BW_OR_ASSIGN]   = ast::AssignmentExpression::parse;
-    fns[TokenType::SHL_ASSIGN]     = ast::AssignmentExpression::parse;
-    fns[TokenType::SHR_ASSIGN]     = ast::AssignmentExpression::parse;
-    fns[TokenType::NOT_ASSIGN]     = ast::AssignmentExpression::parse;
-    fns[TokenType::XOR_ASSIGN]     = ast::AssignmentExpression::parse;
-    fns[TokenType::COLON_COLON]    = ast::ModuleAccessExpression::parse;
-    fns[TokenType::COLON]          = ast::LabelExpression::parse;
+    fns[token_type_t::PLUS]           = ast::binary_expr::parse;
+    fns[token_type_t::MINUS]          = ast::binary_expr::parse;
+    fns[token_type_t::STAR]           = ast::binary_expr::parse;
+    fns[token_type_t::SLASH]          = ast::binary_expr::parse;
+    fns[token_type_t::PERCENT]        = ast::binary_expr::parse;
+    fns[token_type_t::LT]             = ast::binary_expr::parse;
+    fns[token_type_t::LT_EQ]          = ast::binary_expr::parse;
+    fns[token_type_t::GT]             = ast::binary_expr::parse;
+    fns[token_type_t::GT_EQ]          = ast::binary_expr::parse;
+    fns[token_type_t::EQ]             = ast::binary_expr::parse;
+    fns[token_type_t::NEQ]            = ast::binary_expr::parse;
+    fns[token_type_t::BOOLEAN_AND]    = ast::binary_expr::parse;
+    fns[token_type_t::BOOLEAN_OR]     = ast::binary_expr::parse;
+    fns[token_type_t::BW_AND]         = ast::binary_expr::parse;
+    fns[token_type_t::BW_OR]          = ast::binary_expr::parse;
+    fns[token_type_t::CARET]          = ast::binary_expr::parse;
+    fns[token_type_t::SHR]            = ast::binary_expr::parse;
+    fns[token_type_t::SHL]            = ast::binary_expr::parse;
+    fns[token_type_t::DOT]            = ast::dot_expr::parse;
+    fns[token_type_t::DOT_DOT]        = ast::range_expr::parse;
+    fns[token_type_t::DOT_DOT_EQ]     = ast::range_expr::parse;
+    fns[token_type_t::LPAREN]         = ast::call_expr::parse;
+    fns[token_type_t::LBRACKET]       = ast::index_expr::parse;
+    fns[token_type_t::LBRACE]         = ast::initializer_expr::parse;
+    fns[token_type_t::ASSIGN]         = ast::assignment_expr::parse;
+    fns[token_type_t::PLUS_ASSIGN]    = ast::assignment_expr::parse;
+    fns[token_type_t::MINUS_ASSIGN]   = ast::assignment_expr::parse;
+    fns[token_type_t::STAR_ASSIGN]    = ast::assignment_expr::parse;
+    fns[token_type_t::SLASH_ASSIGN]   = ast::assignment_expr::parse;
+    fns[token_type_t::PERCENT_ASSIGN] = ast::assignment_expr::parse;
+    fns[token_type_t::BW_AND_ASSIGN]  = ast::assignment_expr::parse;
+    fns[token_type_t::BW_OR_ASSIGN]   = ast::assignment_expr::parse;
+    fns[token_type_t::SHL_ASSIGN]     = ast::assignment_expr::parse;
+    fns[token_type_t::SHR_ASSIGN]     = ast::assignment_expr::parse;
+    fns[token_type_t::NOT_ASSIGN]     = ast::assignment_expr::parse;
+    fns[token_type_t::XOR_ASSIGN]     = ast::assignment_expr::parse;
+    fns[token_type_t::COLON_COLON]    = ast::module_access_expr::parse;
+    fns[token_type_t::COLON]          = ast::label_expr::parse;
 
     return fns;
 }();
 
 } // namespace
 
-auto Parser::get_prefix_fn_opt(TokenType tt) noexcept -> stdx::option<PrefixFn> {
+auto parser::get_prefix_fn_opt(token_type_t tt) noexcept -> stdx::option<prefix_fn> {
     return PREFIX_FNS.get_opt(tt);
 }
 
-auto Parser::get_poll_infix_fn_opt(TokenType tt) noexcept -> stdx::option<InfixFn> {
+auto parser::get_poll_infix_fn_opt(token_type_t tt) noexcept -> stdx::option<infix_fn> {
     return INFIX_FNS.get_opt(tt);
 }
 
-auto Parser::get_location_of(ast::NodeID id) -> SourceLocation { return ast_->location_of(id); }
+auto parser::get_location_of(ast::node_id id) -> source_location { return ast_->location_of(id); }
 
-auto Parser::get_location_of(ast::ExplicitTypeID id) -> SourceLocation {
+auto parser::get_location_of(ast::explicit_type_id id) -> source_location {
     return ast_->location_of(id);
 }
 

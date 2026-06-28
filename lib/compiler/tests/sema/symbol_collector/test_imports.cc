@@ -4,23 +4,23 @@
 #include <catch2/catch_test_macros.hpp>
 #include <stdx/types.hh>
 
+#include "compiler/sema/error.hh"
+#include "compiler/sema/symbol.hh"
+#include "compiler/sema/type.hh"
+#include "compiler/syntax/error.hh"
 #include "helpers/common.hh"
 #include "helpers/sema.hh"
-#include "sema/error.hh"
-#include "sema/symbol.hh"
-#include "sema/type.hh"
-#include "syntax/error.hh"
 
 namespace ghoti::tests {
 
-using helpers::MockFile;
+using helpers::mock_file;
 
 TEST_CASE("Import aliases correctly used") {
     auto [ctx, idx]{helpers::collect_and_check(
         R"(import foo as A; import "f.gh" as F; const foo := bar;)",
-        helpers::make_vector<MockFile>(
-            MockFile{.path = "foo.gh", .source = "const foo := bar;", .name = "foo"},
-            MockFile{.path = "f.gh", .source = "const foo := bar;"}))};
+        helpers::make_vector<mock_file>(
+            mock_file{.path = "foo.gh", .source = "const foo := bar;", .name = "foo"},
+            mock_file{.path = "f.gh", .source = "const foo := bar;"}))};
 
     const auto& registry{ctx->analyzer.get_registry()};
     REQUIRE(registry.size() == 3);
@@ -28,11 +28,11 @@ TEST_CASE("Import aliases correctly used") {
 
     const auto test_import_inner = [&](std::string_view import_name, usize inner_idx) -> void {
         const auto [sym, sym_data, type, type_data]{
-            ctx->get_full_type_sym_info<sema::symbols::Node, sema::types::Module>(import_name,
-                                                                                  idx)};
-        CHECK(sym.get_kind_opt() == sema::SymbolKind::MODULE);
+            ctx->get_full_type_sym_info<sema::symbols::node_t, sema::types::module>(import_name,
+                                                                                    idx)};
+        CHECK(sym.get_kind_opt() == sema::symbol_kind::MODULE);
 
-        CHECK(type == ctx->get_type(sema::TypeKind::MODULE, inner_idx));
+        CHECK(type == ctx->get_type(sema::type_kind::MODULE, inner_idx));
         helpers::test_common_decl_collection(registry, type_data.imported, inner_idx);
     };
 
@@ -43,7 +43,7 @@ TEST_CASE("Import aliases correctly used") {
 TEST_CASE("Public import query") {
     auto [ctx, idx]{
         helpers::collect_and_check("pub import std;",
-                                   helpers::make_vector<MockFile>(MockFile{
+                                   helpers::make_vector<mock_file>(mock_file{
                                        .path = "std.gh", .source = "var a: i32;", .name = "std"}))};
 
     auto&       table{helpers::unwrap(ctx->analyzer.get_table_opt(idx))};
@@ -60,7 +60,7 @@ constexpr std::string_view b_gh{R"(pub import "a.gh" as a;)"};
 
 TEST_CASE("Circular imports") {
     auto [ctx, _]{helpers::collect_and_check(
-        a_gh, helpers::make_vector<MockFile>(MockFile{.path = "b.gh", .source = b_gh}))};
+        a_gh, helpers::make_vector<mock_file>(mock_file{.path = "b.gh", .source = b_gh}))};
     const auto& registry{ctx->analyzer.get_registry()};
     REQUIRE(registry.size() == 2);
 
@@ -83,10 +83,10 @@ constexpr std::string_view std_gh{R"(pub import "io.gh" as io;)"};
 TEST_CASE("Diamond dependencies") {
     auto [ctx, _]{helpers::collect_and_check(
         importer_gh,
-        helpers::make_vector<MockFile>(
-            MockFile{.path = "a.gh", .source = diamond},
-            MockFile{.path = "b.gh", .source = diamond},
-            MockFile{.path = "std.gh", .source = std_gh, .name = "std"}))};
+        helpers::make_vector<mock_file>(
+            mock_file{.path = "a.gh", .source = diamond},
+            mock_file{.path = "b.gh", .source = diamond},
+            mock_file{.path = "std.gh", .source = std_gh, .name = "std"}))};
     const auto& registry{ctx->analyzer.get_registry()};
     REQUIRE(registry.size() == 4);
 
@@ -98,10 +98,10 @@ TEST_CASE("Diamond dependencies") {
 }
 
 TEST_CASE("Self import") {
-    helpers::SemaTestContext ctx{{}, "self.gh", R"(import "self.gh" as self;)"};
-    helpers::check_errors<syntax::Diagnostics>(ctx.root_mod);
+    helpers::sema_test_context ctx{{}, "self.gh", R"(import "self.gh" as self;)"};
+    helpers::check_errors<syntax::diagnostics>(ctx.root_mod);
     ctx.analyzer.collect_symbols(ctx.root_mod);
-    helpers::check_errors<sema::Diagnostics>(ctx.root_mod);
+    helpers::check_errors<sema::diagnostics>(ctx.root_mod);
     const auto& registry{ctx.analyzer.get_registry()};
     REQUIRE(registry.size() == 1);
     CHECK(registry.get_from_opt(0, "self"));
@@ -110,7 +110,7 @@ TEST_CASE("Self import") {
 TEST_CASE("Unknown file module") {
     std::stringstream ss;
     auto              ctx{helpers::analyze(helpers::TEST_FILENAME, ss, R"(import "a.gh" as a;)")};
-    REQUIRE(ctx->root_mod.diagnostics.as_opt<sema::Diagnostics>());
+    REQUIRE(ctx->root_mod.diagnostics.as_opt<sema::diagnostics>());
 
     constexpr std::string_view expected{
         R"(test.gh:1:8: error: Could not find path 'a.gh' in virtual file system

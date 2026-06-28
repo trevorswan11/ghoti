@@ -3,10 +3,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "ast/dumper.hh"
+#include "compiler/ast/dumper.hh"
+#include "compiler/syntax/error.hh"
+#include "compiler/syntax/parser.hh"
 #include "helpers/common.hh"
-#include "syntax/error.hh"
-#include "syntax/parser.hh"
 
 namespace ghoti::tests {
 
@@ -74,13 +74,13 @@ constexpr std::string_view expected{
 };
 
 TEST_CASE("Comprehensive dump") {
-    syntax::Parser p{input};
+    syntax::parser p{input};
     ast::AST       ast;
     auto           errors{p.consume(ast)};
-    helpers::check_errors<syntax::Diagnostic>(errors);
+    helpers::check_errors<syntax::diagnostic>(errors);
 
     std::ostringstream oss;
-    ast::Dumper        dumper{ast, oss};
+    ast::dumper        dumper{ast, oss};
     for (const auto& node : ast) { dumper.dump(node); }
     CHECK(expected == oss.view());
 }

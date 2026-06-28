@@ -2,13 +2,13 @@
 #include <catch2/catch_test_macros.hpp>
 #include <stdx/memory.hh>
 
-#include "clap/formatter.hh"
+#include "driver/clap/formatter.hh"
 
 namespace ghoti::tests {
 
 TEST_CASE("Formatter provides output") {
     CLI::App app;
-    auto     formatter{stdx::make_rc<clap::Fmt>()};
+    auto     formatter{stdx::make_rc<clap::formatter>()};
     app.formatter(formatter);
     REQUIRE(app.add_subcommand("nothing"));
 

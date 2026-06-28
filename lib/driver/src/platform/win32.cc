@@ -1,4 +1,4 @@
-#include "platform/win32.hh"
+#include "driver/platform/win32.hh"
 
 // "Abandon hope, all ye who enter here"
 #if GHOTI_WINDOWS
@@ -27,7 +27,7 @@ DWORD            original_stderr_mode{0};
 
 } // namespace
 
-RichConsole::RichConsole() noexcept {
+rich_console::rich_console() noexcept {
     PROFILE_FUNCTION();
     if (ref_count.fetch_add(1) > 0) { return; }
     original_code_page = GetConsoleOutputCP();
@@ -44,7 +44,7 @@ RichConsole::RichConsole() noexcept {
     }
 }
 
-RichConsole::~RichConsole() {
+rich_console::~rich_console() {
     PROFILE_FUNCTION();
     if (ref_count.fetch_sub(1) != 1) { return; }
     SetConsoleOutputCP(original_code_page);

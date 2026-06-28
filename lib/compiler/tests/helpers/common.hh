@@ -15,7 +15,7 @@
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
-#include "module/module.hh"
+#include "compiler/module/module.hh"
 
 namespace ghoti::tests::helpers {
 
@@ -54,7 +54,7 @@ template <typename E> auto check_errors(gsl::span<const E> errors) {
 }
 
 // Checks if the error list is empty, dumping the list's contents otherwise.
-template <typename DiagList> auto check_errors(const mod::Module& module) {
+template <typename DiagList> auto check_errors(const mod::module& module) {
     if (const auto diags{module.diagnostics.as_opt<DiagList>()}) {
         check_errors<typename DiagList::value_type>(*diags);
     }
@@ -81,7 +81,7 @@ auto check_errors_against(gsl::span<const E> errors, Es&&... expected_errors) {
 }
 
 template <typename DiagList, std::same_as<typename DiagList::value_type>... Es>
-auto check_errors_against(const mod::Module& module, Es&&... expected_errors) {
+auto check_errors_against(const mod::module& module, Es&&... expected_errors) {
     const auto& diags{unwrap(module.diagnostics.as_opt<DiagList>())};
     check_errors_against<typename DiagList::value_type>(diags,
                                                         std::forward<Es>(expected_errors)...);

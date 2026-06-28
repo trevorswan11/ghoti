@@ -7,15 +7,15 @@
 #include <fmt/ostream.h>
 #include <stdx/types.hh>
 
+#include "compiler/sema/error.hh"
+#include "compiler/sema/symbol.hh"
+#include "compiler/sema/type.hh"
 #include "helpers/common.hh"
 #include "helpers/sema.hh"
-#include "sema/error.hh"
-#include "sema/symbol.hh"
-#include "sema/type.hh"
 
 namespace ghoti::tests {
 
-using MockFile = helpers::MockFile;
+using mock_file = helpers::mock_file;
 
 TEST_CASE("Resolving well-formed enum matching") {
     helpers::resolve_and_check("using E = enum { a }; match (E) { .a => 5 };");
@@ -39,22 +39,23 @@ TEST_CASE("Resolving capturing match arms") {
                                      auto&&           expected_type_fn) -> void {
         auto [ctx, _]{helpers::resolve_and_check(input)};
         auto [sym, data, actual_data]{
-            ctx->get_type_sym_info<sema::symbols::MatchCapture>(capture_name, capture_idx)};
+            ctx->get_type_sym_info<sema::symbols::match_capture>(capture_name, capture_idx)};
         CHECK(actual_data == expected_type_fn(*ctx));
     };
 
     test_arm_capture("using E = enum { a }; match (E) { .a => |a| 5 };",
                      "a",
                      2,
-                     [](helpers::SemaTestContext& ctx) -> auto& {
-                         return ctx.get_type(sema::TypeKind::ENUM, 1);
+                     [](helpers::sema_test_context& ctx) -> auto& {
+                         return ctx.get_type(sema::type_kind::ENUM, 1);
                      });
 
-    test_arm_capture(
-        "using U = union { a: i32 }; match (U) { .a => |a| 5 };",
-        "a",
-        2,
-        [](helpers::SemaTestContext& ctx) -> auto& { return ctx.get_type(sema::TypeKind::I32); });
+    test_arm_capture("using U = union { a: i32 }; match (U) { .a => |a| 5 };",
+                     "a",
+                     2,
+                     [](helpers::sema_test_context& ctx) -> auto& {
+                         return ctx.get_type(sema::type_kind::I32);
+                     });
 }
 
 TEST_CASE("Resolving well-formed builtin-type matching") {
@@ -76,18 +77,18 @@ TEST_CASE("Illegal resolved enum matcher type") {
     SECTION("Non-exhaustive") {
         helpers::test_resolver_fail(
             "using E = enum { a, _ }; match (E) { 3 => 5 };",
-            sema::Diagnostic{
+            sema::diagnostic{
                 "Match expressions over non-exhaustive enums must have a catch all arm",
-                sema::Error::ILLEGAL_MATCH_PATTERN,
+                sema::error::ILLEGAL_MATCH_PATTERN,
                 std::pair{0UZ, 25UZ},
             });
     }
 
     SECTION("Duplicate enumerations") {
-        const auto expected_diag = [](std::string_view suffix, usize col) -> sema::Diagnostic {
+        const auto expected_diag = [](std::string_view suffix, usize col) -> sema::diagnostic {
             return {
                 fmt::format("Match expression contains duplicate enumeration{}", suffix),
-                sema::Error::DUPLICATE_ENUMERATION,
+                sema::error::DUPLICATE_ENUMERATION,
                 std::pair{0UZ, col},
             };
         };
@@ -100,10 +101,10 @@ TEST_CASE("Illegal resolved enum matcher type") {
     }
 
     SECTION("Unknown enumerations") {
-        const auto expected_diag = [](std::string_view suffix) -> sema::Diagnostic {
+        const auto expected_diag = [](std::string_view suffix) -> sema::diagnostic {
             return {
                 fmt::format("Match expression contains unknown enumeration{}", suffix),
-                sema::Error::UNKNOWN_ENUMERATION,
+                sema::error::UNKNOWN_ENUMERATION,
                 std::pair{0UZ, 22UZ},
             };
         };
@@ -120,18 +121,18 @@ TEST_CASE("Illegal resolved union matcher type") {
     SECTION("Pattern ast node restriction") {
         helpers::test_resolver_fail(
             "using U = union { a: i32 }; match (U) { 3 => 5 };",
-            sema::Diagnostic{
+            sema::diagnostic{
                 "Match arm may only have an implicit access pattern in this context",
-                sema::Error::ILLEGAL_MATCH_PATTERN,
+                sema::error::ILLEGAL_MATCH_PATTERN,
                 std::pair{0UZ, 40UZ},
             });
     }
 
     SECTION("Duplicate fields") {
-        const auto expected_diag = [](std::string_view suffix, usize col) -> sema::Diagnostic {
+        const auto expected_diag = [](std::string_view suffix, usize col) -> sema::diagnostic {
             return {
                 fmt::format("Match expression contains duplicate union field{}", suffix),
-                sema::Error::DUPLICATE_FIELD,
+                sema::error::DUPLICATE_FIELD,
                 std::pair{0UZ, col},
             };
         };
@@ -144,10 +145,10 @@ TEST_CASE("Illegal resolved union matcher type") {
     }
 
     SECTION("Missing fields") {
-        const auto expected_diag = [](std::string_view suffix, usize col) -> sema::Diagnostic {
+        const auto expected_diag = [](std::string_view suffix, usize col) -> sema::diagnostic {
             return {
                 fmt::format("Match expression is non-exhaustive; missing union field{}", suffix),
-                sema::Error::MISSING_FIELD,
+                sema::error::MISSING_FIELD,
                 std::pair{0UZ, col},
             };
         };
@@ -160,10 +161,10 @@ TEST_CASE("Illegal resolved union matcher type") {
     }
 
     SECTION("Unknown fields") {
-        const auto expected_diag = [](std::string_view suffix) -> sema::Diagnostic {
+        const auto expected_diag = [](std::string_view suffix) -> sema::diagnostic {
             return {
                 fmt::format("Match expression contains unknown union field{}", suffix),
-                sema::Error::UNKNOWN_FIELD,
+                sema::error::UNKNOWN_FIELD,
                 std::pair{0UZ, 28UZ},
             };
         };
@@ -178,11 +179,11 @@ TEST_CASE("Illegal resolved union matcher type") {
 
 TEST_CASE("Illegal match arms with primitives") {
     SECTION("Required catch-all") {
-        const auto expected_diag = [](std::string_view kind) -> sema::Diagnostic {
+        const auto expected_diag = [](std::string_view kind) -> sema::diagnostic {
             return {
                 fmt::format("Matching on type '{}' requires a catch all arm with a pattern of '_'",
                             kind),
-                sema::Error::TYPE_MISMATCH,
+                sema::error::TYPE_MISMATCH,
                 std::pair{0UZ, 7UZ},
             };
         };
@@ -197,13 +198,13 @@ TEST_CASE("Illegal match arms with primitives") {
 
     SECTION("Optional catch-all") {
         const auto expected_diag = [](std::string_view kind,
-                                      usize            required_arms) -> sema::Diagnostic {
+                                      usize            required_arms) -> sema::diagnostic {
             return {
                 fmt::format("Matching on type '{}' requires a catch all arm with "
                             "a pattern of '_' or exactly {} patterned arms",
                             kind,
                             required_arms),
-                sema::Error::TYPE_MISMATCH,
+                sema::error::TYPE_MISMATCH,
                 std::pair{0UZ, 7UZ},
             };
         };
@@ -215,11 +216,11 @@ TEST_CASE("Illegal match arms with primitives") {
 
 TEST_CASE("Illegal resolved builtin matcher type") {
     SECTION("Floats") {
-        const auto expected_diag = [] -> sema::Diagnostic {
+        const auto expected_diag = [] -> sema::diagnostic {
             return {
                 "Cannot match on floats due to precision; use an if statement with explicit "
                 "precision handling",
-                sema::Error::TYPE_MISMATCH,
+                sema::error::TYPE_MISMATCH,
                 std::pair{0UZ, 7UZ},
             };
         };
@@ -229,10 +230,10 @@ TEST_CASE("Illegal resolved builtin matcher type") {
     }
 
     SECTION("Empty types") {
-        const auto expected_diag = [] -> sema::Diagnostic {
+        const auto expected_diag = [] -> sema::diagnostic {
             return {
                 "Empty types cannot be matched on",
-                sema::Error::TYPE_MISMATCH,
+                sema::error::TYPE_MISMATCH,
                 std::pair{0UZ, 7UZ},
             };
         };
@@ -244,20 +245,20 @@ TEST_CASE("Illegal resolved builtin matcher type") {
     SECTION("Other illegal builtin types") {
         helpers::test_resolver_fail(
             "using A = opaque; match (A) { 3 => 5 };",
-            sema::Diagnostic{
+            sema::diagnostic{
                 "Can only match on integers, bytes, and booleans; found 'opaque'",
-                sema::Error::TYPE_MISMATCH,
+                sema::error::TYPE_MISMATCH,
                 std::pair{0UZ, 25UZ},
             });
     }
 }
 
 TEST_CASE("Illegal resolved arbitrary matcher type") {
-    const auto expected_diag = [](std::string_view kind, usize col) -> sema::Diagnostic {
+    const auto expected_diag = [](std::string_view kind, usize col) -> sema::diagnostic {
         return {
             fmt::format("Can only match on enums, unions, and certain primitive types; found '{}'",
                         kind),
-            sema::Error::TYPE_MISMATCH,
+            sema::error::TYPE_MISMATCH,
             std::pair{0UZ, col},
         };
     };
@@ -269,7 +270,7 @@ TEST_CASE("Illegal resolved arbitrary matcher type") {
                                 expected_diag("function", 26));
     helpers::test_resolver_fail(
         "import std; match (std) { 3 => 5 };",
-        helpers::make_vector<MockFile>(MockFile{"std.gh", "pub extern var a: i32;", "std"}),
+        helpers::make_vector<mock_file>(mock_file{"std.gh", "pub extern var a: i32;", "std"}),
         expected_diag("module", 19));
 }
 

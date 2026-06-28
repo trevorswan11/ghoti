@@ -1,4 +1,4 @@
-#include "sema/symbol.hh"
+#include "compiler/sema/symbol.hh"
 
 #include <ranges>
 #include <string_view>
@@ -9,80 +9,80 @@
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
-#include "ast/kind.hh"
-#include "ast/statement.hh"
-#include "module/module.hh"
-#include "sema/error.hh"
-#include "syntax/token_type.hh"
-
-#include <diagnostic.hh>
+#include "compiler/ast/kind.hh"
+#include "compiler/ast/statement.hh"
+#include "compiler/module/module.hh"
+#include "compiler/sema/error.hh"
+#include "compiler/syntax/token_type.hh"
+#include "support/diagnostic.hh"
 
 namespace ghoti::sema {
 
-auto symbols::Label::from(Symbol& symbol) -> Label& {
-    auto label_data{symbol.get_data().as_opt<symbols::Label>()};
+auto symbols::label::from(symbol& symbol) -> label& {
+    auto label_data{symbol.get_data().as_opt<symbols::label>()};
     ASSERT(label_data, "Label is not linked to a symbolic label");
     return *label_data;
 }
 
 namespace {
 
-[[nodiscard]] auto symbol_location_of(const mod::Module& module, const Symbol::Data& data) noexcept
-    -> SourceLocation {
+[[nodiscard]] auto symbol_location_of(const mod::module&    module,
+                                      const symbol::data_t& data) noexcept -> source_location {
     PROFILE_FUNCTION();
     return data.visit(
-        [](const symbols::Builtin&) -> SourceLocation { return SourceLocation{0, 0}; },
-        [&module](const auto& handle) -> SourceLocation { return module.ast.location_of(handle); },
-        [&module](const symbols::Label& label) -> SourceLocation {
+        [](const symbols::builtin&) -> source_location { return source_location{0, 0}; },
+        [&module](const auto& handle) -> source_location { return module.ast.location_of(handle); },
+        [&module](const symbols::label& label) -> source_location {
             return module.ast.location_of(label.get_definition());
         },
-        [&module](const symbols::StructField& inner) -> SourceLocation {
+        [&module](const symbols::struct_field& inner) -> source_location {
             return module.ast.location_of(inner.name);
         },
-        [&module](const symbols::UnionField& inner) -> SourceLocation {
+        [&module](const symbols::union_field& inner) -> source_location {
             return module.ast.location_of(inner.name);
         },
-        [&module](const symbols::Enumeration& inner) -> SourceLocation {
+        [&module](const symbols::enumeration& inner) -> source_location {
             return module.ast.location_of(inner.name);
         },
-        [&module](const symbols::SelfParameter& inner) -> SourceLocation {
+        [&module](const symbols::self_parameter& inner) -> source_location {
             return module.ast.location_of(inner.name);
         },
-        [&module](const symbols::Parameter& inner) -> SourceLocation {
+        [&module](const symbols::parameter& inner) -> source_location {
             return module.ast.location_of(inner.name);
         },
-        [&module](const symbols::ForLoopCapture& inner) -> SourceLocation {
+        [&module](const symbols::for_loop_capture& inner) -> source_location {
             return module.ast.location_of(inner.payload);
         });
 }
 
 } // namespace
 
-auto Symbol::get_symbol_location(const mod::Module& module) const noexcept -> SourceLocation {
+auto symbol::get_symbol_location(const mod::module& module) const noexcept -> source_location {
     return symbol_location_of(module, data_);
 }
 
-auto Symbol::is_public(const mod::Module& module) const noexcept -> bool {
+auto symbol::is_public(const mod::module& module) const noexcept -> bool {
     return data_.visit(
-        [&module](const symbols::Node& node) -> bool {
+        [&module](const symbols::node_t& node) -> bool {
             switch (node->get_kind()) {
-            case ast::NodeKind::DECL_STATEMENT:
-                return module.ast.get_as<ast::DeclStatement>(*node).has_modifier(
-                    ast::DeclModifiers::PUBLIC);
-            case ast::NodeKind::USING_STATEMENT:
-            case ast::NodeKind::IMPORT_STATEMENT:
-                return node->get_token_type() == syntax::TokenType::PUBLIC;
+            case ast::node_kind::DECL_STATEMENT:
+                return module.ast.get_as<ast::decl_stmt>(*node).has_modifier(
+                    ast::decl_modifiers::PUBLIC);
+            case ast::node_kind::USING_STATEMENT:
+            case ast::node_kind::IMPORT_STATEMENT:
+                return node->get_token_type() == syntax::token_type_t::PUBLIC;
             default: return false;
             }
         },
         [](const auto&) -> bool { return false; });
 }
 
-auto SymbolTable::insert(std::string_view name, const mod::Module& module, const Symbol::Data& data)
-    -> stdx::result<void, Diagnostic> {
+auto symbol_table::insert(std::string_view      name,
+                          const mod::module&    module,
+                          const symbol::data_t& data) -> stdx::result<void, diagnostic> {
     // Reserved identifier use is impossible due to a parser invariant
     PROFILE_FUNCTION();
-    auto [it, inserted]{symbols_.try_emplace(name, Symbol{name, data}, symbols_.size())};
+    auto [it, inserted]{symbols_.try_emplace(name, symbol{name, data}, symbols_.size())};
 
     // Check for redeclaration since there's no shadowing
     if (!inserted) {
@@ -90,32 +90,33 @@ auto SymbolTable::insert(std::string_view name, const mod::Module& module, const
             fmt::format("Redeclaration of symbol '{}'; previous declaration here: {}",
                         name,
                         it->second.symbol.get_symbol_location(module)),
-            Error::IDENTIFIER_REDECLARATION,
+            error::IDENTIFIER_REDECLARATION,
             symbol_location_of(module, data));
     }
     return {};
 }
 
-auto SymbolTable::insert_unchecked(std::string_view name, const Symbol::Data& data) -> void {
+auto symbol_table::insert_unchecked(std::string_view name, const symbol::data_t& data) -> void {
     // Reserved identifier use is impossible due to a parser invariant
     PROFILE_FUNCTION();
-    auto [_, inserted]{symbols_.try_emplace(name, Symbol{name, data}, symbols_.size())};
+    auto [_, inserted]{symbols_.try_emplace(name, symbol{name, data}, symbols_.size())};
     ASSERT(inserted, "Duplicate symbol injected");
 }
 
-auto SymbolTableRegistry::insert_into(usize               table_idx,
-                                      const mod::Module&  module,
-                                      std::string_view    name,
-                                      const Symbol::Data& data) -> stdx::result<void, Diagnostic> {
+auto symbol_table_registry::insert_into(usize                 table_idx,
+                                        const mod::module&    module,
+                                        std::string_view      name,
+                                        const symbol::data_t& data)
+    -> stdx::result<void, diagnostic> {
     if (auto table{get_opt(table_idx)}) { return table->insert(name, module, data); }
-    return make_sema_err(Error::INVALID_TABLE_IDX);
+    return make_sema_err(error::INVALID_TABLE_IDX);
 }
 
-[[nodiscard]] auto SymbolTableRegistry::is_shadowing(const SymbolTableStack& stack,
-                                                     const mod::Module&      module,
-                                                     std::string_view        name,
-                                                     const Symbol::Data&     data) noexcept
-    -> stdx::result<void, Diagnostic> {
+[[nodiscard]] auto symbol_table_registry::is_shadowing(const symbol_table_stack& stack,
+                                                       const mod::module&        module,
+                                                       std::string_view          name,
+                                                       const symbol::data_t&     data) noexcept
+    -> stdx::result<void, diagnostic> {
     PROFILE_FUNCTION();
     for (const auto idx : stack | std::views::take(stack.size() - 1)) {
         if (const auto symbol{get(idx).get_opt(name)}) {
@@ -123,7 +124,7 @@ auto SymbolTableRegistry::insert_into(usize               table_idx,
                 fmt::format("Attempt to shadow identifier '{}'; previous declaration here: {}",
                             name,
                             symbol_location_of(module, symbol->get_data())),
-                Error::SHADOWING_DECLARATION,
+                error::SHADOWING_DECLARATION,
                 symbol_location_of(module, data));
         }
     }

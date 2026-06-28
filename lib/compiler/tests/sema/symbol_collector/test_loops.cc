@@ -6,29 +6,29 @@
 #include <stdx/memory.hh>
 #include <stdx/types.hh>
 
-#include "ast/statement.hh"
+#include "compiler/ast/statement.hh"
+#include "compiler/sema/error.hh"
+#include "compiler/sema/symbol.hh"
+#include "compiler/sema/type.hh"
 #include "helpers/common.hh"
 #include "helpers/sema.hh"
-#include "sema/error.hh"
-#include "sema/symbol.hh"
-#include "sema/type.hh"
 
 namespace ghoti::tests {
 
 namespace {
 
 [[nodiscard]] auto test_loop(std::string_view input, usize expected_reg_count, usize loop_block_idx)
-    -> stdx::box<helpers::SemaTestContext> {
+    -> stdx::box<helpers::sema_test_context> {
     auto [ctx, idx]{helpers::collect_and_check(input)};
 
     const auto& registry{ctx->analyzer.get_registry()};
     REQUIRE(registry.size() == expected_reg_count);
     const auto [sym, sym_data, node_data]{
-        ctx->get_ast_sym_info<sema::symbols::Node, ast::DeclStatement>("a", 0)};
+        ctx->get_ast_sym_info<sema::symbols::node_t, ast::decl_stmt>("a", 0)};
     CHECK_FALSE(sym.has_kind());
 
     const auto& actual_type{helpers::unwrap(ctx->root_mod.get_sema_type_opt(*node_data.value))};
-    CHECK(actual_type == ctx->get_type(sema::TypeKind::BLOCK, loop_block_idx));
+    CHECK(actual_type == ctx->get_type(sema::type_kind::BLOCK, loop_block_idx));
     return std::move(ctx);
 }
 
@@ -49,9 +49,9 @@ TEST_CASE("For loop collection") {
 
     const auto& loop_table{ctx->analyzer.get_table(3)};
     const auto& i_symbol{helpers::unwrap(loop_table.get_opt("i"))};
-    CHECK(i_symbol.get_data().as_opt<sema::symbols::ForLoopCapture>());
+    CHECK(i_symbol.get_data().as_opt<sema::symbols::for_loop_capture>());
     const auto& j_symbol{helpers::unwrap(loop_table.get_opt("i"))};
-    CHECK(j_symbol.get_data().as_opt<sema::symbols::ForLoopCapture>());
+    CHECK(j_symbol.get_data().as_opt<sema::symbols::for_loop_capture>());
 
     ctx->test_common_decl_collection(2);
     ctx->test_common_decl_collection(3);
@@ -107,40 +107,40 @@ TEST_CASE("Non-break collected as separate scope") {
 TEST_CASE("Non-break collection shadowing") {
     helpers::test_collector_fail(
         "const a := for (0..5) |i| { const foo := bar; } else { var a: i32; };",
-        sema::Diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:1",
-                         sema::Error::SHADOWING_DECLARATION,
+        sema::diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:1",
+                         sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 55UZ}});
 
     helpers::test_collector_fail(
         "const a := while (true) : (i += 1) { const foo := bar; } else { var a: i32; };",
-        sema::Diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:1",
-                         sema::Error::SHADOWING_DECLARATION,
+        sema::diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:1",
+                         sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 64UZ}});
 }
 
 TEST_CASE("Shadowing in loops") {
     helpers::test_collector_fail(
         "const a := for (0..5) |i| { var a: i32; };",
-        sema::Diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:1",
-                         sema::Error::SHADOWING_DECLARATION,
+        sema::diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:1",
+                         sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 28UZ}});
 
     helpers::test_collector_fail(
         "const a := for (0..5) |i| { var i: i32; };",
-        sema::Diagnostic{"Redeclaration of symbol 'i'; previous declaration here: 1:24",
-                         sema::Error::IDENTIFIER_REDECLARATION,
+        sema::diagnostic{"Redeclaration of symbol 'i'; previous declaration here: 1:24",
+                         sema::error::IDENTIFIER_REDECLARATION,
                          std::pair{0UZ, 28UZ}});
 
     helpers::test_collector_fail(
         "const a := loop { var a: i32; };",
-        sema::Diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:1",
-                         sema::Error::SHADOWING_DECLARATION,
+        sema::diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:1",
+                         sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 18UZ}});
 
     helpers::test_collector_fail(
         "const a := while (true) { var a: i32; };",
-        sema::Diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:1",
-                         sema::Error::SHADOWING_DECLARATION,
+        sema::diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:1",
+                         sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 26UZ}});
 }
 

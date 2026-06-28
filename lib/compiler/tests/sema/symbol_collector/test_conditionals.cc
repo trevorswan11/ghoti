@@ -5,19 +5,19 @@
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
+#include "compiler/sema/error.hh"
+#include "compiler/sema/symbol.hh"
 #include "helpers/common.hh"
 #include "helpers/sema.hh"
-#include "sema/error.hh"
-#include "sema/symbol.hh"
 
 namespace ghoti::tests {
 
 namespace {
 
-[[nodiscard]] auto to_table_size(const sema::SymbolTable& table) -> usize { return table.size(); }
+[[nodiscard]] auto to_table_size(const sema::symbol_table& table) -> usize { return table.size(); }
 
 // Checks that the scope has the foo-bar decl
-auto test_conditional_scope(helpers::SemaTestContext& ctx, usize idx) {
+auto test_conditional_scope(helpers::sema_test_context& ctx, usize idx) {
     auto& registry{ctx.analyzer.get_registry()};
     CHECK(registry.get_opt(idx).transform(to_table_size) == 1);
     ctx.test_common_decl_collection(idx);
@@ -66,9 +66,9 @@ TEST_CASE("Flat match collection") {
 
 namespace {
 
-[[nodiscard]] auto expected_diag(usize col) -> sema::Diagnostic {
+[[nodiscard]] auto expected_diag(usize col) -> sema::diagnostic {
     return {"Attempt to shadow identifier 'a'; previous declaration here: 1:1",
-            sema::Error::SHADOWING_DECLARATION,
+            sema::error::SHADOWING_DECLARATION,
             std::pair{0UZ, col}};
 }
 
@@ -91,8 +91,8 @@ TEST_CASE("Match shadowing assignee") {
 TEST_CASE("Match dispatch shadowing") {
     helpers::test_collector_fail(
         "const a := match (c) { b => |c| { var c: i32; } };",
-        sema::Diagnostic{"Attempt to shadow identifier 'c'; previous declaration here: 1:30",
-                         sema::Error::SHADOWING_DECLARATION,
+        sema::diagnostic{"Attempt to shadow identifier 'c'; previous declaration here: 1:30",
+                         sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 34UZ}});
 }
 

@@ -6,8 +6,8 @@
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
-#include "diagnostic.hh"
-#include "source_file.hh"
+#include "support/diagnostic.hh"
+#include "support/source_file.hh"
 
 namespace ghoti::tests {
 
@@ -21,10 +21,10 @@ This is line 2
 
 namespace {
 
-auto test_diag_strings(const SourceLocation&          t,
+auto test_diag_strings(const source_location&         t,
                        std::string_view               expected_line,
                        stdx::option<std::string_view> expected_caret) {
-    const SourceFile file{source};
+    const source_file file{source};
     const auto [ln, caret]{file.get_diagnostic_strings(t)};
 
     CHECK(ln == expected_line);
@@ -39,7 +39,7 @@ auto test_diag_strings(const SourceLocation&          t,
 } // namespace
 
 TEST_CASE("Offset generation") {
-    LineOffsets offsets{source};
+    line_offsets offsets{source};
     CHECK(offsets.size() == 4);
 
     constexpr std::array expected_mappings{0UZ, 15UZ, 30UZ, 73UZ};

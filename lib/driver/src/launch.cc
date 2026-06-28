@@ -1,20 +1,20 @@
-#include "launch.hh"
+#include "driver/launch.hh"
 
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
-#include "clap/parser.hh"
-#include "cmd/dispatcher.hh"
+#include "driver/clap/parser.hh"
+#include "driver/cmd/dispatcher.hh"
 
 namespace ghoti::driver {
 
 auto launch(i32 argc, char** argv) -> stdx::result<void, i32> {
     stdx::profiler profiler{argv[0]};
-    clap::Parser   parser{argc, argv};
+    clap::parser   parser{argc, argv};
     TRY(parser.parse());
 
-    cmd::Dispatcher dispatcher;
+    cmd::dispatcher dispatcher;
     return parser.get_parsed().visit(dispatcher).error_or(0);
 }
 

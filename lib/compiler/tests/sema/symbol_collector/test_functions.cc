@@ -2,12 +2,12 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "ast/statement.hh"
+#include "compiler/ast/statement.hh"
+#include "compiler/sema/error.hh"
+#include "compiler/sema/symbol.hh"
+#include "compiler/sema/type.hh"
 #include "helpers/common.hh"
 #include "helpers/sema.hh"
-#include "sema/error.hh"
-#include "sema/symbol.hh"
-#include "sema/type.hh"
 
 namespace ghoti::tests {
 
@@ -20,15 +20,16 @@ TEST_CASE("Function hollow types") {
     REQUIRE(registry.size() == 2);
 
     const auto [sym, sym_data, node_data]{
-        ctx->get_ast_sym_info<syms::Node, ast::DeclStatement>("a", idx)};
-    CHECK(sym.get_kind_opt() == sema::SymbolKind::CALLABLE);
+        ctx->get_ast_sym_info<syms::node_t, ast::decl_stmt>("a", idx)};
+    CHECK(sym.get_kind_opt() == sema::symbol_kind::CALLABLE);
 
     const auto& fn_type{helpers::unwrap(ctx->root_mod.get_sema_type_opt(*node_data.value))};
-    CHECK(fn_type == ctx->get_type(sema::TypeKind::FUNCTION, 1));
+    CHECK(fn_type == ctx->get_type(sema::type_kind::FUNCTION, 1));
 
-    REQUIRE(
-        helpers::unwrap(registry.get_from_opt(1, "self")).get_data().as_opt<syms::SelfParameter>());
-    REQUIRE(helpers::unwrap(registry.get_from_opt(1, "c")).get_data().as_opt<syms::Parameter>());
+    REQUIRE(helpers::unwrap(registry.get_from_opt(1, "self"))
+                .get_data()
+                .as_opt<syms::self_parameter>());
+    REQUIRE(helpers::unwrap(registry.get_from_opt(1, "c")).get_data().as_opt<syms::parameter>());
     ctx->test_common_decl_collection(1);
 }
 
@@ -45,40 +46,40 @@ TEST_CASE("Constexpr function declaration") {
 TEST_CASE("Defer statements respect identifier collection rules") {
     helpers::test_collector_fail(
         "pub const main := fn(args: [][:0]u8): i32 { defer { var main: i32; } };",
-        sema::Diagnostic{"Attempt to shadow identifier 'main'; previous declaration here: 1:1",
-                         sema::Error::SHADOWING_DECLARATION,
+        sema::diagnostic{"Attempt to shadow identifier 'main'; previous declaration here: 1:1",
+                         sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 52UZ}});
 }
 
 TEST_CASE("Function basic param redeclaration") {
     helpers::test_collector_fail(
         "const f := fn(f: bool): void {};",
-        sema::Diagnostic{"Attempt to shadow identifier 'f'; previous declaration here: 1:1",
-                         sema::Error::SHADOWING_DECLARATION,
+        sema::diagnostic{"Attempt to shadow identifier 'f'; previous declaration here: 1:1",
+                         sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 14UZ}});
 }
 
 TEST_CASE("Function self param redeclaration") {
     helpers::test_collector_fail(
         "const f := fn(f): void {};",
-        sema::Diagnostic{"Attempt to shadow identifier 'f'; previous declaration here: 1:1",
-                         sema::Error::SHADOWING_DECLARATION,
+        sema::diagnostic{"Attempt to shadow identifier 'f'; previous declaration here: 1:1",
+                         sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 14UZ}});
 }
 
 TEST_CASE("Function local param redeclaration") {
     helpers::test_collector_fail(
         "const f := fn(a, a: bool): void {};",
-        sema::Diagnostic{"Redeclaration of symbol 'a'; previous declaration here: 1:15",
-                         sema::Error::IDENTIFIER_REDECLARATION,
+        sema::diagnostic{"Redeclaration of symbol 'a'; previous declaration here: 1:15",
+                         sema::error::IDENTIFIER_REDECLARATION,
                          std::pair{0UZ, 17UZ}});
 }
 
 TEST_CASE("Function block shadowing") {
     helpers::test_collector_fail(
         "const f := fn(): void { var f := 3; };",
-        sema::Diagnostic{"Attempt to shadow identifier 'f'; previous declaration here: 1:1",
-                         sema::Error::SHADOWING_DECLARATION,
+        sema::diagnostic{"Attempt to shadow identifier 'f'; previous declaration here: 1:1",
+                         sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 24UZ}});
 }
 

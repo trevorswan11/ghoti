@@ -1,4 +1,4 @@
-#include "clap/parser.hh"
+#include "driver/clap/parser.hh"
 
 #include <iostream>
 
@@ -13,23 +13,22 @@
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
-#include "clap/formatter.hh"
-#include "cmd/debug.hh"
-
-#include <ghoti/config.h>
-#include <style.hh>
+#include "driver/clap/formatter.hh"
+#include "driver/cmd/debug.hh"
+#include "ghoti/config.h"
+#include "support/style.hh"
 
 namespace ghoti::clap {
 
-Parser::Parser(i32 argc, char** argv, std::ostream& os, bool ensure_utf8) noexcept
+parser::parser(i32 argc, char** argv, std::ostream& os, bool ensure_utf8) noexcept
     : argc_{argc}, os_{os} {
     PROFILE_FUNCTION();
     VERIFY(argc > 0, "The program name must be present");
-    app_.formatter(stdx::make_rc<Fmt>());
+    app_.formatter(stdx::make_rc<formatter>());
     argv_ = ensure_utf8 ? app_.ensure_utf8(argv) : argv;
 }
 
-auto Parser::parse() -> stdx::result<void, i32> {
+auto parser::parse() -> stdx::result<void, i32> {
     PROFILE_FUNCTION();
     app_.usage("Usage: ghoti [command] [options]");
     app_.set_version_flag("-v,--version",
@@ -49,7 +48,7 @@ auto Parser::parse() -> stdx::result<void, i32> {
     try {
         app_.parse(argc_, argv_);
     } catch (const CLI::ParseError& e) { return stdx::err{app_.exit(e)}; };
-    if (ast_app->parsed()) { parsed_.emplace<cmd::Debug>(); }
+    if (ast_app->parsed()) { parsed_.emplace<cmd::debug>(); }
 
     return {};
 }

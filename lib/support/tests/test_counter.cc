@@ -1,24 +1,24 @@
 #include <catch2/catch_test_macros.hpp>
 #include <stdx/types.hh>
 
-#include "counter.hh"
+#include "support/counter.hh"
 
 namespace ghoti::tests {
 
 TEST_CASE("Default counter") {
-    DefaultCounter c;
+    default_counter c;
 
     CHECK(c == 0);
     SECTION("Single guard") {
-        const auto g{c.guard()};
+        const default_counter::guard g{c};
         CHECK(c == 1);
     }
     CHECK(c == 0);
 
     SECTION("Nested guards") {
-        const auto g1{c.guard()};
+        const default_counter::guard g1{c};
         {
-            const auto g2{c.guard()};
+            const default_counter::guard g2{c};
             CHECK(c == 2);
         }
         CHECK(c == 1);
@@ -27,7 +27,7 @@ TEST_CASE("Default counter") {
 }
 
 TEST_CASE("Counter operators") {
-    Counter<i32> c;
+    counter<i32> c;
     CHECK(c == 0);
     CHECK(c <= 0);
     CHECK(c <= 10);
@@ -35,7 +35,7 @@ TEST_CASE("Counter operators") {
     CHECK(c >= -10);
 
     CHECK_FALSE(c);
-    const auto g{c.guard()};
+    const counter<i32>::guard g{c};
     CHECK(c);
 }
 

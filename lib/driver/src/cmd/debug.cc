@@ -1,4 +1,4 @@
-#include "cmd/debug.hh"
+#include "driver/cmd/debug.hh"
 
 #include <filesystem>
 #include <iostream>
@@ -13,14 +13,14 @@
 #include <stdx/string.hh>
 #include <stdx/types.hh>
 
-#include <ast/dumper.hh>
-#include <module/memory_loader.hh>
-#include <module/module.hh>
-#include <sema/analyzer.hh>
+#include "compiler/ast/dumper.hh"
+#include "compiler/module/memory_loader.hh"
+#include "compiler/module/module.hh"
+#include "compiler/sema/analyzer.hh"
 
 namespace ghoti::cmd {
 
-auto Debug::run() -> void {
+auto debug::run() -> void {
     PROFILE_FUNCTION();
     const std::filesystem::path stdin_path = "stdin.gh";
     while (true) {
@@ -32,11 +32,11 @@ auto Debug::run() -> void {
         if (trimmed == "exit") { break; }
         if (trimmed.empty()) { continue; }
 
-        mod::MemoryLoader  loader;
-        mod::ModuleManager manager{loader};
+        mod::memory_loader  loader;
+        mod::module_manager manager{loader};
         loader.add(stdin_path, std::string{trimmed});
 
-        sema::Analyzer analyzer{manager, std::cerr, true};
+        sema::analyzer analyzer{manager, std::cerr, true};
         if (!analyzer.analyze(stdin_path)) {
             fmt::println(std::cerr, "Failed to load input from stdin");
             break;
@@ -46,7 +46,7 @@ auto Debug::run() -> void {
         const auto stdin_mod{*manager.try_get_file_module(stdin_path)};
         if (stdin_mod->is_errored()) { continue; }
 
-        ast::Dumper dumper{stdin_mod->ast, std::cout};
+        ast::dumper dumper{stdin_mod->ast, std::cout};
         for (const auto& node : stdin_mod->ast) { dumper.dump(node); }
         if (stdin_mod->is_poisoned()) { continue; }
 

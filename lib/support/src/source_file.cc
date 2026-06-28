@@ -1,4 +1,4 @@
-#include "source_file.hh"
+#include "support/source_file.hh"
 
 #include <cctype>
 #include <string>
@@ -10,11 +10,11 @@
 #include <stdx/string.hh>
 #include <stdx/types.hh>
 
-#include "diagnostic.hh"
+#include "support/diagnostic.hh"
 
 namespace ghoti {
 
-LineOffsets::LineOffsets(std::string_view input) {
+line_offsets::line_offsets(std::string_view input) {
     PROFILE_FUNCTION();
     offsets_.emplace_back(0);
     for (usize i{0}; i < input.size(); ++i) {
@@ -22,7 +22,7 @@ LineOffsets::LineOffsets(std::string_view input) {
     }
 }
 
-auto SourceFile::get_diagnostic_strings_at(const SourceLocation& loc) const
+auto source_file::get_diagnostic_strings_at(const source_location& loc) const
     -> std::pair<std::string_view, stdx::option<std::string>> {
     PROFILE_FUNCTION();
     if (loc.line > offsets_.size()) { return {"<invalid line>", stdx::none}; }

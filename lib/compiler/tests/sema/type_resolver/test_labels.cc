@@ -6,11 +6,11 @@
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
-#include "ast/expression.hh"
+#include "compiler/ast/expression.hh"
+#include "compiler/sema/error.hh"
+#include "compiler/sema/symbol.hh"
+#include "compiler/sema/type.hh"
 #include "helpers/sema.hh"
-#include "sema/error.hh"
-#include "sema/symbol.hh"
-#include "sema/type.hh"
 
 namespace ghoti::tests {
 
@@ -29,20 +29,20 @@ TEST_CASE("Labeled for loop resolution") {
     )")};
     CHECK(ctx->analyzer.get_registry().size() == 9);
 
-    const auto& i32_type{ctx->get_type(sema::TypeKind::I32)};
-    const auto [a_sym, a_sym_data, a_type]{ctx->get_type_sym_info<syms::Node>("a", idx)};
+    const auto& i32_type{ctx->get_type(sema::type_kind::I32)};
+    const auto [a_sym, a_sym_data, a_type]{ctx->get_type_sym_info<syms::node_t>("a", idx)};
     CHECK(a_type == i32_type);
 
     {
         const auto [sym, sym_data, node_data, type]{
-            ctx->get_ast_type_sym_info<syms::Label, ast::LabelExpression>(
-                "outer", idx + 1, stdx::none, &syms::Label::get_definition)};
+            ctx->get_ast_type_sym_info<syms::label, ast::label_expr>(
+                "outer", idx + 1, stdx::none, &syms::label::get_definition)};
         CHECK(ctx->root_mod.get_sema_type(node_data.name) == i32_type);
     }
 
     const auto check_capture = [&](std::string_view name) -> void {
-        const auto [sym, sym_data, type]{ctx->get_type_sym_info<syms::ForLoopCapture>(
-            name, 4, stdx::none, &syms::ForLoopCapture::payload)};
+        const auto [sym, sym_data, type]{ctx->get_type_sym_info<syms::for_loop_capture>(
+            name, 4, stdx::none, &syms::for_loop_capture::payload)};
         CHECK(type == i32_type);
     };
     check_capture("i");
@@ -75,14 +75,14 @@ blk: {
     break :blk;
 };)")};
 
-        const auto [_, data]{ctx->get_symbol<syms::Label>("blk", idx + 1)};
+        const auto [_, data]{ctx->get_symbol<syms::label>("blk", idx + 1)};
         const auto yield_types{data.get_yield_types()};
         CHECK(yield_types.size() == 4);
-        CHECK(*yield_types[0] == ctx->get_type(sema::TypeKind::I32));
-        CHECK(*yield_types[1] == ctx->get_type(sema::TypeKind::BOOL));
+        CHECK(*yield_types[0] == ctx->get_type(sema::type_kind::I32));
+        CHECK(*yield_types[1] == ctx->get_type(sema::type_kind::BOOL));
         CHECK(*yield_types[2] ==
-              ctx->get_type(sema::TypeKind::ARRAY, true, 4, ctx->get_type(sema::TypeKind::U8)));
-        CHECK(*yield_types[3] == ctx->get_type(sema::TypeKind::VOID));
+              ctx->get_type(sema::type_kind::ARRAY, true, 4, ctx->get_type(sema::type_kind::U8)));
+        CHECK(*yield_types[3] == ctx->get_type(sema::type_kind::VOID));
     }
 
     SECTION("Only continue") {
@@ -93,10 +93,10 @@ loop {
     };
 })")};
 
-        const auto [_, data]{ctx->get_symbol<syms::Label>("blk", idx + 2)};
+        const auto [_, data]{ctx->get_symbol<syms::label>("blk", idx + 2)};
         const auto yield_types{data.get_yield_types()};
         CHECK(yield_types.size() == 1);
-        CHECK(*yield_types[0] == ctx->get_type(sema::TypeKind::VOID));
+        CHECK(*yield_types[0] == ctx->get_type(sema::type_kind::VOID));
     }
 }
 
@@ -104,9 +104,9 @@ TEST_CASE("Unknown labels resolved") {
     const auto test_unknown_label = [](std::string_view name, usize col) -> void {
         helpers::test_resolver_fail(
             fmt::format("for (0..2) |_| {{ {} :blk; }}", name),
-            sema::Diagnostic{
+            sema::diagnostic{
                 fmt::format("Labeled {} statements must be used with a known label", name),
-                sema::Error::ILLEGAL_CONTROL_FLOW,
+                sema::error::ILLEGAL_CONTROL_FLOW,
                 std::pair{0UZ, col}});
     };
 

@@ -1,4 +1,4 @@
-#include "module/memory_loader.hh"
+#include "compiler/module/memory_loader.hh"
 
 #include <filesystem>
 #include <string>
@@ -9,19 +9,19 @@
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
 
-#include "module/error.hh"
+#include "compiler/module/error.hh"
 
 namespace ghoti::mod {
 
-auto MemoryLoader::add(const std::filesystem::path& path, const std::string& content) -> void {
+auto memory_loader::add(const std::filesystem::path& path, const std::string& content) -> void {
     PROFILE_FUNCTION();
     const auto normalized{normalize(path)};
     ASSERT(normalized);
     files_[*normalized] = content;
 }
 
-auto MemoryLoader::load(const std::filesystem::path& path)
-    -> stdx::result<std::string, Diagnostic> {
+auto memory_loader::load(const std::filesystem::path& path)
+    -> stdx::result<std::string, diagnostic> {
     PROFILE_FUNCTION();
     auto normalized{normalize(path)};
     ASSERT(normalized);
@@ -29,7 +29,7 @@ auto MemoryLoader::load(const std::filesystem::path& path)
     if (it == files_.end()) {
         return make_mod_err(
             fmt::format("Could not find path '{}' in virtual file system", path.string()),
-            Error::PATH_DOES_NOT_EXIST);
+            error::PATH_DOES_NOT_EXIST);
     }
     return it->second;
 }

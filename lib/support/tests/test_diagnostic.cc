@@ -4,69 +4,69 @@
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
-#include "diagnostic.hh"
+#include "support/diagnostic.hh"
 
 namespace ghoti {
 
-struct SomethingLocationed {};
-struct SomethingElseLocationed {};
+struct something_location {};
+struct something_else_location {};
 
-template <> struct SourceInfo<SomethingLocationed> {
-    static auto get(const SomethingLocationed&) noexcept -> SourceLocation { return {0, 42}; }
+template <> struct source_info<something_location> {
+    static auto get(const something_location&) noexcept -> source_location { return {0, 42}; }
 };
 
-template <> struct SourceInfo<SomethingElseLocationed> {
-    static auto get(const SomethingElseLocationed&) noexcept -> SourceLocation { return {42, 0}; }
+template <> struct source_info<something_else_location> {
+    static auto get(const something_else_location&) noexcept -> source_location { return {42, 0}; }
 };
 
 namespace tests {
 
-enum class TestEnum : u8 {
+enum class test_enum : u8 {
     SAD,
     MAD,
 };
 
 TEST_CASE("Diagnostic traits") {
-    STATIC_CHECK(DiagnosticType<Diagnostic<TestEnum>>);
-    STATIC_CHECK_FALSE(DiagnosticType<TestEnum>);
+    STATIC_CHECK(Diagnostic<diagnostic<test_enum>>);
+    STATIC_CHECK_FALSE(Diagnostic<test_enum>);
 }
 
 TEST_CASE("Location and error only") {
-    SomethingLocationed  l;
-    Diagnostic<TestEnum> d{TestEnum::SAD, l};
+    something_location    l;
+    diagnostic<test_enum> d{test_enum::SAD, l};
     CHECK("error: SAD 1:43" == d.to_string(stdx::none, false));
 }
 
 TEST_CASE("Custom locateable") {
-    SomethingLocationed  l;
-    Diagnostic<TestEnum> d{"message", TestEnum::SAD, l};
+    something_location    l;
+    diagnostic<test_enum> d{"message", test_enum::SAD, l};
     CHECK("error: message 1:43" == d.to_string(stdx::none, false));
 }
 
 TEST_CASE("Error messages with associated files") {
-    Diagnostic<TestEnum> d{"message", TestEnum::SAD};
+    diagnostic<test_enum> d{"message", test_enum::SAD};
     CHECK("foo.gh: error: message" == d.to_string("foo.gh", false));
 }
 
 TEST_CASE("Locateable Error messages with associated files") {
-    SomethingLocationed  l;
-    Diagnostic<TestEnum> d{"message", TestEnum::SAD, l};
+    something_location    l;
+    diagnostic<test_enum> d{"message", test_enum::SAD, l};
     CHECK("foo.gh:1:43: error: message" == d.to_string("foo.gh", false));
 }
 
 TEST_CASE("Move constructor with new error") {
-    SomethingLocationed  l;
-    Diagnostic<TestEnum> d1{"message", TestEnum::SAD, l};
-    Diagnostic<TestEnum> d2{std::move(d1), TestEnum::MAD};
+    something_location    l;
+    diagnostic<test_enum> d1{"message", test_enum::SAD, l};
+    diagnostic<test_enum> d2{std::move(d1), test_enum::MAD};
     CHECK("error: message 1:43" == d2.to_string(stdx::none, false));
 }
 
 TEST_CASE("Move constructor with new location") {
-    SomethingLocationed  l;
-    Diagnostic<TestEnum> d1{"message", TestEnum::SAD, l};
+    something_location    l;
+    diagnostic<test_enum> d1{"message", test_enum::SAD, l};
 
-    SomethingElseLocationed e;
-    Diagnostic<TestEnum>    d2{std::move(d1), e};
+    something_else_location e;
+    diagnostic<test_enum>   d2{std::move(d1), e};
     CHECK("error: message 43:1" == d2.to_string(stdx::none, false));
 }
 

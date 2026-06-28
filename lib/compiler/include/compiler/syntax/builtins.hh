@@ -1,0 +1,65 @@
+#pragma once
+
+#include <string_view>
+
+#include <stdx/enum.hh>
+#include <stdx/option.hh>
+
+#include "compiler/syntax/token_type.hh"
+
+namespace ghoti::syntax {
+
+using builtin_t = typed_identifier;
+
+namespace builtins {
+
+constexpr builtin_t ALIGN_CAST{"@alignCast", token_type_t::BUILTIN_ALIGN_CAST};
+constexpr builtin_t PTR_CAST{"@ptrCast", token_type_t::BUILTIN_PTR_CAST};
+constexpr builtin_t BIT_CAST{"@bitCast", token_type_t::BUILTIN_BIT_CAST};
+constexpr builtin_t CONST_CAST{"@constCast", token_type_t::BUILTIN_CONST_CAST};
+constexpr builtin_t VOLATILE_CAST{"@volatileCast", token_type_t::BUILTIN_VOLATILE_CAST};
+constexpr builtin_t AS{"@as", token_type_t::BUILTIN_AS};
+
+constexpr builtin_t INT_FROM_PTR{"@intFromPtr", token_type_t::BUILTIN_INT_FROM_PTR};
+constexpr builtin_t PTR_FROM_INT{"@ptrFromInt", token_type_t::BUILTIN_PTR_FROM_INT};
+constexpr builtin_t PTR_FROM_ARRAY{"@ptrFromArray", token_type_t::BUILTIN_PTR_FROM_ARRAY};
+constexpr builtin_t SLICE_FROM_PTR{"@sliceFromPtr", token_type_t::BUILTIN_SLICE_FROM_PTR};
+
+constexpr builtin_t ALIGN_OF{"@alignOf", token_type_t::BUILTIN_ALIGN_OF};
+constexpr builtin_t SIZE_OF{"@sizeOf", token_type_t::BUILTIN_SIZE_OF};
+constexpr builtin_t TYPE_OF{"@typeOf", token_type_t::BUILTIN_TYPE_OF};
+constexpr builtin_t THIS{"@this", token_type_t::BUILTIN_THIS};
+constexpr builtin_t TAG_NAME{"@tagName", token_type_t::BUILTIN_TAG_NAME};
+
+constexpr builtin_t MEMCPY{"@memcpy", token_type_t::BUILTIN_MEMCPY};
+constexpr builtin_t MEMSET{"@memset", token_type_t::BUILTIN_MEMSET};
+constexpr builtin_t MEMMOVE{"@memmove", token_type_t::BUILTIN_MEMMOVE};
+
+constexpr builtin_t MUL_ADD{"@mulAdd", token_type_t::BUILTIN_MUL_ADD};
+constexpr builtin_t CLZ{"@clz", token_type_t::BUILTIN_CLZ};
+constexpr builtin_t CTZ{"@ctz", token_type_t::BUILTIN_CTZ};
+constexpr builtin_t POP_COUNT{"@popCount", token_type_t::BUILTIN_POP_COUNT};
+constexpr builtin_t SQRT{"@sqrt", token_type_t::BUILTIN_SQRT};
+constexpr builtin_t SIN{"@sin", token_type_t::BUILTIN_SIN};
+constexpr builtin_t COS{"@cos", token_type_t::BUILTIN_COS};
+constexpr builtin_t TAN{"@tan", token_type_t::BUILTIN_TAN};
+constexpr builtin_t EXP{"@exp", token_type_t::BUILTIN_EXP};
+constexpr builtin_t EXP2{"@exp2", token_type_t::BUILTIN_EXP2};
+constexpr builtin_t LOG{"@log", token_type_t::BUILTIN_LOG};
+constexpr builtin_t LOG2{"@log2", token_type_t::BUILTIN_LOG2};
+constexpr builtin_t LOG10{"@log10", token_type_t::BUILTIN_LOG10};
+constexpr builtin_t ABS{"@abs", token_type_t::BUILTIN_ABS};
+constexpr builtin_t FLOOR{"@floor", token_type_t::BUILTIN_FLOOR};
+constexpr builtin_t CEIL{"@ceil", token_type_t::BUILTIN_CEIL};
+
+constexpr builtin_t PANIC{"@panic", token_type_t::BUILTIN_PANIC};
+
+constexpr auto ALL_TOKEN_TYPES{
+    stdx::enum_range<token_type_t::BUILTIN_ALIGN_CAST, token_type_t::BUILTIN_PANIC>()};
+
+} // namespace builtins
+
+[[nodiscard]] auto get_builtin_opt(token_type_t tt) noexcept -> stdx::option<std::string_view>;
+[[nodiscard]] auto get_builtin_opt(std::string_view sv) noexcept -> stdx::option<token_type_t>;
+
+} // namespace ghoti::syntax

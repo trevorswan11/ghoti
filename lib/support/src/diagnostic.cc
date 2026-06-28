@@ -1,4 +1,4 @@
-#include "diagnostic.hh"
+#include "support/diagnostic.hh"
 
 #include <ostream>
 #include <string>
@@ -9,12 +9,12 @@
 #include <stdx/option.hh>
 #include <stdx/utility.hh>
 
-#include "style.hh"
+#include "support/style.hh"
 
 namespace ghoti::detail {
 
 auto format_diagnostic(std::ostream&                    os,
-                       const FormattableDiagnostic&     diag,
+                       const formattable_diagnostic&    diag,
                        const stdx::option<std::string>& source_path,
                        stdx::option<bool>               in_terminal) -> std::ostream& {
     const auto tty{in_terminal.value_or(stdx::is_tty())};

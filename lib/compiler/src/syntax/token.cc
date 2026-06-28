@@ -1,4 +1,4 @@
-#include "syntax/token.hh"
+#include "compiler/syntax/token.hh"
 
 #include <cctype>
 #include <string>
@@ -6,15 +6,15 @@
 #include <stdx/assert.hh>
 #include <stdx/types.hh>
 
-#include "syntax/token_type.hh"
+#include "compiler/syntax/token_type.hh"
 
 namespace ghoti::syntax {
 
-auto Token::materialize_string() const -> std::string {
-    ASSERT(type == TokenType::STRING || type == TokenType::MULTILINE_STRING);
+auto token_t::materialize_string() const -> std::string {
+    ASSERT(type == token_type_t::STRING || type == token_type_t::MULTILINE_STRING);
 
     // Here we can just trim off the start and finish of the string
-    if (type == TokenType::STRING) { return std::string{slice.begin() + 1, slice.end() - 1}; }
+    if (type == token_type_t::STRING) { return std::string{slice.begin() + 1, slice.end() - 1}; }
 
     std::string builder{};
     builder.reserve(slice.size());
@@ -39,23 +39,23 @@ auto Token::materialize_string() const -> std::string {
     return builder;
 }
 
-auto Token::is_decl_token() const noexcept -> bool {
+auto token_t::is_decl_token() const noexcept -> bool {
     switch (type) {
-    case TokenType::VAR:
-    case TokenType::CONSTANT:
-    case TokenType::CONSTEXPR:
-    case TokenType::PUBLIC:
-    case TokenType::EXTERN:
-    case TokenType::EXPORT:    return true;
-    default:                   return false;
+    case token_type_t::VAR:
+    case token_type_t::CONSTANT:
+    case token_type_t::CONSTEXPR:
+    case token_type_t::PUBLIC:
+    case token_type_t::EXTERN:
+    case token_type_t::EXPORT:    return true;
+    default:                      return false;
     }
 }
 
-auto Token::is_member_token() const noexcept -> bool {
+auto token_t::is_member_token() const noexcept -> bool {
     switch (type) {
-    case TokenType::IMPORT:
-    case TokenType::USING:  return true;
-    default:                return is_decl_token();
+    case token_type_t::IMPORT:
+    case token_type_t::USING:  return true;
+    default:                   return is_decl_token();
     }
 }
 

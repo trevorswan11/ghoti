@@ -1,4 +1,4 @@
-#include "module/module.hh"
+#include "compiler/module/module.hh"
 
 #include <filesystem>
 #include <ostream>
@@ -17,21 +17,20 @@
 #include <stdx/utility.hh>
 #include <stdx/variant.hh>
 
-#include "ast/expression.hh"
-#include "module/error.hh"
-#include "sema/side_tables.hh"
-#include "source_file.hh"
-#include "syntax/parser.hh"
-
-#include <diagnostic.hh>
-#include <style.hh>
+#include "compiler/ast/expression.hh"
+#include "compiler/module/error.hh"
+#include "compiler/sema/side_tables.hh"
+#include "compiler/syntax/parser.hh"
+#include "support/diagnostic.hh"
+#include "support/source_file.hh"
+#include "support/style.hh"
 
 namespace ghoti::mod {
 
-auto format_module_diagnostic(std::ostream&                        os, // NOLINT
-                              const detail::FormattableDiagnostic& diag,
-                              stdx::option<const mod::Module&>     module,
-                              stdx::option<bool>                   in_terminal) -> std::ostream& {
+auto format_module_diagnostic(std::ostream&                         os, // NOLINT
+                              const detail::formattable_diagnostic& diag,
+                              stdx::option<const mod::module&>      module,
+                              stdx::option<bool>                    in_terminal) -> std::ostream& {
     const auto tty{in_terminal.value_or(stdx::is_tty())};
 
     // Without a module, there is no source path and formatting is done trivially
@@ -48,7 +47,7 @@ auto format_module_diagnostic(std::ostream&                        os, // NOLINT
     return os;
 }
 
-auto Module::print_diagnostics(std::ostream& os) const -> void {
+auto module::print_diagnostics(std::ostream& os) const -> void {
     PROFILE_FUNCTION();
     if (is_ok()) { return; }
     diagnostics.visit(
@@ -64,15 +63,15 @@ auto Module::print_diagnostics(std::ostream& os) const -> void {
         });
 }
 
-auto ModuleManager::try_get_file_module(const std::filesystem::path& path,
-                                        const std::filesystem::path& parent_path)
-    -> stdx::result<gsl::not_null<Module*>, Diagnostic> {
+auto module_manager::try_get_file_module(const std::filesystem::path& path,
+                                         const std::filesystem::path& parent_path)
+    -> stdx::result<gsl::not_null<module*>, diagnostic> {
     PROFILE_FUNCTION();
     ASSERT((parent_path.empty() || parent_path.is_absolute()) &&
            "Parent path must be absolute or empty");
     if (!path.is_relative()) {
         return make_mod_err(fmt::format("Requested file '{}' is absolute", path.string()),
-                            Error::MODULE_PATH_NOT_RELATIVE);
+                            error::MODULE_PATH_NOT_RELATIVE);
     };
 
     const auto normalized{loader_.normalize(parent_path.empty() ? path : parent_path / path)};
@@ -80,18 +79,18 @@ auto ModuleManager::try_get_file_module(const std::filesystem::path& path,
     return try_get(*normalized);
 }
 
-auto ModuleManager::try_get_library_module(std::string_view name)
-    -> stdx::result<gsl::not_null<Module*>, Diagnostic> {
+auto module_manager::try_get_library_module(std::string_view name)
+    -> stdx::result<gsl::not_null<module*>, diagnostic> {
     PROFILE_FUNCTION();
     auto it{module_lut_.find(name)};
     if (it == module_lut_.end()) {
-        return make_mod_err(fmt::format("Unknown module '{}'", name), Error::MODULE_DOES_NOT_EXIST);
+        return make_mod_err(fmt::format("Unknown module '{}'", name), error::MODULE_DOES_NOT_EXIST);
     }
     return try_get(it->second);
 }
 
-auto ModuleManager::add_library_module(std::string_view name, const std::filesystem::path& path)
-    -> stdx::result<void, Diagnostic> {
+auto module_manager::add_library_module(std::string_view name, const std::filesystem::path& path)
+    -> stdx::result<void, diagnostic> {
     PROFILE_FUNCTION();
     const auto normalized{loader_.normalize(path)};
     if (!normalized) { return make_mod_err(normalized.error()); }
@@ -103,26 +102,26 @@ auto ModuleManager::add_library_module(std::string_view name, const std::filesys
                                         name,
                                         path.string(),
                                         it->second.string()),
-                            Error::MODULE_ALREADY_EXISTS);
+                            error::MODULE_ALREADY_EXISTS);
     }
 
     module_lut_.emplace(name, *normalized);
     return {};
 }
 
-auto ModuleManager::try_get(const std::filesystem::path& path)
-    -> stdx::result<gsl::not_null<Module*>, Diagnostic> {
+auto module_manager::try_get(const std::filesystem::path& path)
+    -> stdx::result<gsl::not_null<module*>, diagnostic> {
     // Prevent re-parsing by checking the map, safe as pointers are stable
     PROFILE_FUNCTION();
     if (auto it{modules_.find(path)}; it != modules_.end()) { return it->second.get(); }
     auto source{TRY(loader_.load(path))};
 
-    auto mod{stdx::make_box<Module>(path, path.parent_path(), SourceFile{std::move(source)})};
-    syntax::Parser p{mod->source};
+    auto mod{stdx::make_box<module>(path, path.parent_path(), source_file{std::move(source)})};
+    syntax::parser p{mod->source};
     auto           diagnostics{p.consume(mod->ast)};
 
     mod->sema_side_tables.resize(mod->ast.get_pool_sizes());
-    mod->state       = diagnostics.empty() ? ModuleState::PARSED : ModuleState::ERRORED;
+    mod->state       = diagnostics.empty() ? module_state::PARSED : module_state::ERRORED;
     mod->diagnostics = std::move(diagnostics);
 
     auto* ptr = mod.get();

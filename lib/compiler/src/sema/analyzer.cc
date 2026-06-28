@@ -1,4 +1,4 @@
-#include "sema/analyzer.hh"
+#include "compiler/sema/analyzer.hh"
 
 #include <filesystem>
 #include <utility>
@@ -6,24 +6,24 @@
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
 
-#include "module/module.hh"
-#include "sema/error.hh"
-#include "sema/passes/symbol_collector.hh"
-#include "sema/passes/type_resolver.hh"
-#include "syntax/error.hh"
+#include "compiler/module/module.hh"
+#include "compiler/sema/error.hh"
+#include "compiler/sema/passes/symbol_collector.hh"
+#include "compiler/sema/passes/type_resolver.hh"
+#include "compiler/syntax/error.hh"
 
 namespace ghoti::sema {
 
-auto Analyzer::analyze(const std::filesystem::path& entry_path) -> stdx::result<void, Diagnostic> {
+auto analyzer::analyze(const std::filesystem::path& entry_path) -> stdx::result<void, diagnostic> {
     PROFILE_FUNCTION();
     auto module_result{modules_.try_get_file_module(entry_path)};
     if (!module_result) {
         return make_sema_err(std::move(module_result.error()).get_message(),
-                             Error::MODULE_LOAD_ERROR);
+                             error::MODULE_LOAD_ERROR);
     }
 
     auto module{*module_result};
-    if (module->diagnostics.is<syntax::Diagnostics>()) { module->print_diagnostics(error_stream_); }
+    if (module->diagnostics.is<syntax::diagnostics>()) { module->print_diagnostics(error_stream_); }
 
     collect_symbols(*module);
     resolve_types(*module);
@@ -33,12 +33,12 @@ auto Analyzer::analyze(const std::filesystem::path& entry_path) -> stdx::result<
     return {};
 }
 
-auto Analyzer::collect_symbols(mod::Module& module) -> mod::ModuleState {
-    return SymbolCollector::collect_symbols(module, ctx_);
+auto analyzer::collect_symbols(mod::module& module) -> mod::module_state {
+    return symbol_collector::collect_symbols(module, ctx_);
 }
 
-auto Analyzer::resolve_types(mod::Module& module) -> mod::ModuleState {
-    return TypeResolver::resolve_types(module, ctx_);
+auto analyzer::resolve_types(mod::module& module) -> mod::module_state {
+    return type_resolver::resolve_types(module, ctx_);
 }
 
 } // namespace ghoti::sema

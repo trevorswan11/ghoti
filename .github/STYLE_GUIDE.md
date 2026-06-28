@@ -1,24 +1,25 @@
 # Style Guide
 
-Ghoti adheres to a somewhat strict style guide to enhance readability.
+Cairn adheres to a somewhat strict style guide to enhance readability.
 
 ## Formatting
-`clang-format` is used for code formatting all C++ code, while Zig's builtin formatter is used for formatting all Zig code. While the latter of the two comes for free with a proper Zig installation, the former can be quite involved. In order to invoke the tool automatically, ghoti's build system exposes a step executed with `zig build fmt`. This is incredibly resource intensive, building the entire `clang-format` tool from scratch (though it does cache the binary). If you do not have the compute to front this cost, that is perfectly acceptable. A maintainer will be more than happy to format your changes on your behalf using their system, eliminating any worry of PR rejection.
+`clang-format` is used for code formatting all C++ code, while Zig's builtin formatter is used for formatting all Zig code. You must use `clang-format` version 21.1.8 for consistent project-wide formatting
 
 Upon PR creation and workflow approval, GitHub actions will run `zig build fmt-check`, an equally-intensive step that performs a dry run of `clang-format` on the codebase. This can also be invoked on your machine if you are interested in confirming the state of your local version of the codebase.
-
-## General Naming Conventions
-- **Files**: `snake_case.cc`, `snake_case.hh`, `snake_case.zig`
-- **Functions & Variables**: snake_case
-- **Types (Classes, Structs, Enums)**: PascalCase
-- **Type Traits**: snake_case (e.g. stdx::is_box)
-- **Template Parameters**: PascalCase (e.g., template <typename TValue, bool Real>)
-- **Constants & Macros**: SCREAMING_SNAKE_CASE
-- **Private/Internal Members**: Suffix with an underscore (e.g. member_variable_)
 
 ## Language-Specific Conventions
 
 ### C++
+#### Naming
+- **Files**: `snake_case.cc`, `snake_case.hh`
+- **Functions & Variables**: snake_case
+- **Types (Classes, Structs, Enums)**: snake_case
+- **Type Traits**: snake_case (e.g. stdx::is_box)
+- **Concepts & Template Parameters**: PascalCase (e.g., template <typename TValue, Option O, bool Real>)
+- **Enumerations, Constants & Macros**: SCREAMING_SNAKE_CASE
+- **Private/Internal Members**: Suffix with an underscore (e.g. member_variable_)
+
+#### General
 - Use `.hh` for headers and `.cc` for source files
 - Avoid `using namespace ...;` in headers
 - Prefer enum class over standard enum
@@ -36,6 +37,13 @@ Upon PR creation and workflow approval, GitHub actions will run `zig build fmt-c
     - This group should include config headers when applicable
 
 ### Zig
+#### Naming
+- **Files**: `snake_case.cc`, `snake_case.hh`
+- Follow the [Zig Standard Library style](https://ziglang.org/documentation/0.16.0/#Style-Guide)
+
+#### General
 - Use PascalCase for functions that return a type
 - Use PascalCase for files that should be treated as types
-- Follow the [Zig Standard Library style](https://ziglang.org/documentation/0.16.0/#Style-Guide)
+
+## Commits & PRs
+Commits to cairn should use [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/) whenever possible. When possible, try to rebase over merge to prevent messy merge commits from leaking into the commit history.

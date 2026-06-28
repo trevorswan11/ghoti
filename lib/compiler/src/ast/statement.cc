@@ -1,4 +1,4 @@
-#include "ast/statement.hh"
+#include "compiler/ast/statement.hh"
 
 #include <bit>
 #include <string>
@@ -11,118 +11,115 @@
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
 
-#include "ast/ast.hh"
-#include "ast/expression.hh"
-#include "ast/handle.hh"
-#include "ast/kind.hh"
-#include "ast/primitive.hh"
-#include "ast/type.hh"
-#include "syntax/error.hh"
-#include "syntax/parser.hh"
-#include "syntax/token_type.hh"
+#include "compiler/ast/ast.hh"
+#include "compiler/ast/expression.hh"
+#include "compiler/ast/handle.hh"
+#include "compiler/ast/kind.hh"
+#include "compiler/ast/primitive.hh"
+#include "compiler/ast/type.hh"
+#include "compiler/syntax/error.hh"
+#include "compiler/syntax/parser.hh"
+#include "compiler/syntax/token_type.hh"
 
 namespace ghoti::ast {
 
-auto BlockStatement::parse(syntax::Parser& parser)
-    -> stdx::result<StatementHandle, syntax::Diagnostic> {
+auto block_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
 
-    Statements statements;
-    while (!parser.peek_token_is(syntax::TokenType::RBRACE) &&
-           !parser.peek_token_is(syntax::TokenType::END)) {
+    statements_t statements;
+    while (!parser.peek_token_is(syntax::token_type_t::RBRACE) &&
+           !parser.peek_token_is(syntax::token_type_t::END)) {
         parser.advance();
         statements.emplace_back(TRY(parser.parse_statement()));
     }
-    TRY(parser.expect_peek(syntax::TokenType::RBRACE));
+    TRY(parser.expect_peek(syntax::token_type_t::RBRACE));
 
-    return parser.add_stmt<BlockStatement>(start_token, std::move(statements));
+    return parser.add_stmt<block_stmt>(start_token, std::move(statements));
 }
 
-auto BreakStatement::parse(syntax::Parser& parser)
-    -> stdx::result<StatementHandle, syntax::Diagnostic> {
+auto break_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
 
     // Labels are optional
-    stdx::option<IdentifierHandle> label;
-    if (parser.peek_token_is(syntax::TokenType::COLON)) {
+    stdx::option<identifier_handle> label;
+    if (parser.peek_token_is(syntax::token_type_t::COLON)) {
         parser.advance();
-        TRY(parser.expect_peek(syntax::TokenType::IDENT));
-        label.emplace(TRY(IdentifierExpression::parse(parser)));
+        TRY(parser.expect_peek(syntax::token_type_t::IDENT));
+        label.emplace(TRY(identifier_expr::parse(parser)));
     }
 
     // Values can be present but must be associated with a label
-    stdx::option<ExpressionHandle> value;
-    if (!parser.peek_token_is(syntax::TokenType::END) &&
-        !parser.peek_token_is(syntax::TokenType::SEMICOLON)) {
+    stdx::option<expr_handle> value;
+    if (!parser.peek_token_is(syntax::token_type_t::END) &&
+        !parser.peek_token_is(syntax::token_type_t::SEMICOLON)) {
         parser.advance();
         value.emplace(TRY(parser.parse_expression()));
     }
 
     if (value && !label) {
         return make_syntax_err("Valued break statements must be labeled",
-                               syntax::Error::VALUED_BREAK_MISSING_LABEL,
+                               syntax::error::VALUED_BREAK_MISSING_LABEL,
                                start_token);
     }
     TRY(parser.expect_semicolon());
-    return parser.add_stmt<BreakStatement>(start_token, label, value);
+    return parser.add_stmt<break_stmt>(start_token, label, value);
 }
 
-auto ContinueStatement::parse(syntax::Parser& parser)
-    -> stdx::result<StatementHandle, syntax::Diagnostic> {
+auto continue_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
 
     // Labels are optional
-    stdx::option<IdentifierHandle> label;
-    if (parser.peek_token_is(syntax::TokenType::COLON)) {
+    stdx::option<identifier_handle> label;
+    if (parser.peek_token_is(syntax::token_type_t::COLON)) {
         parser.advance();
-        TRY(parser.expect_peek(syntax::TokenType::IDENT));
-        label.emplace(TRY(IdentifierExpression::parse(parser)));
+        TRY(parser.expect_peek(syntax::token_type_t::IDENT));
+        label.emplace(TRY(identifier_expr::parse(parser)));
     }
 
     // Values can never be present in a continue
-    if (!parser.peek_token_is(syntax::TokenType::END) &&
-        !parser.peek_token_is(syntax::TokenType::SEMICOLON)) {
+    if (!parser.peek_token_is(syntax::token_type_t::END) &&
+        !parser.peek_token_is(syntax::token_type_t::SEMICOLON)) {
         return make_syntax_err("Continue statements may only contain labels",
-                               syntax::Error::VALUED_CONTINUE,
+                               syntax::error::VALUED_CONTINUE,
                                start_token);
     }
 
-    TRY(parser.expect_peek(syntax::TokenType::SEMICOLON));
-    return parser.add_stmt<ContinueStatement>(start_token, label);
+    TRY(parser.expect_peek(syntax::token_type_t::SEMICOLON));
+    return parser.add_stmt<continue_stmt>(start_token, label);
 }
 
 namespace {
 
-using ModifierMapping = std::pair<syntax::TokenType, DeclModifiers>;
+using modifier_mapping = std::pair<syntax::token_type_t, decl_modifiers>;
 constexpr auto LEGAL_MODIFIERS{
-    stdx::fixed::enum_map<syntax::TokenType, stdx::option<DeclModifiers>>::from(
+    stdx::fixed::enum_map<syntax::token_type_t, stdx::option<decl_modifiers>>::from(
         stdx::none,
-        ModifierMapping{syntax::TokenType::VAR, DeclModifiers::VARIABLE},
-        ModifierMapping{syntax::TokenType::CONSTANT, DeclModifiers::CONSTANT},
-        ModifierMapping{syntax::TokenType::CONSTEXPR, DeclModifiers::CONSTEXPR},
-        ModifierMapping{syntax::TokenType::PUBLIC, DeclModifiers::PUBLIC},
-        ModifierMapping{syntax::TokenType::EXTERN, DeclModifiers::EXTERN},
-        ModifierMapping{syntax::TokenType::EXPORT, DeclModifiers::EXPORT})};
+        modifier_mapping{syntax::token_type_t::VAR, decl_modifiers::VARIABLE},
+        modifier_mapping{syntax::token_type_t::CONSTANT, decl_modifiers::CONSTANT},
+        modifier_mapping{syntax::token_type_t::CONSTEXPR, decl_modifiers::CONSTEXPR},
+        modifier_mapping{syntax::token_type_t::PUBLIC, decl_modifiers::PUBLIC},
+        modifier_mapping{syntax::token_type_t::EXTERN, decl_modifiers::EXTERN},
+        modifier_mapping{syntax::token_type_t::EXPORT, decl_modifiers::EXPORT})};
 
-[[nodiscard]] constexpr auto validate_modifiers(DeclModifiers modifiers) noexcept
+[[nodiscard]] constexpr auto validate_modifiers(decl_modifiers modifiers) noexcept
     -> stdx::option<std::string> {
     const auto mut_count{std::popcount(
-        std::to_underlying(modifiers & (DeclModifiers::VARIABLE | DeclModifiers::CONSTANT |
-                                        DeclModifiers::CONSTEXPR)))};
+        std::to_underlying(modifiers & (decl_modifiers::VARIABLE | decl_modifiers::CONSTANT |
+                                        decl_modifiers::CONSTEXPR)))};
     if (mut_count != 1) {
         return fmt::format("Exactly one mutability modifier may be used; found {}", mut_count);
     }
 
     const auto valid_constexpr{
-        std::popcount(std::to_underlying(modifiers &
-                                         (DeclModifiers::EXTERN | DeclModifiers::CONSTEXPR))) <= 1};
+        std::popcount(std::to_underlying(
+            modifiers & (decl_modifiers::EXTERN | decl_modifiers::CONSTEXPR))) <= 1};
     if (!valid_constexpr) { return "Extern values cannot be known at compile time"; }
 
     const auto abi_count{std::popcount(
-        std::to_underlying(modifiers & (DeclModifiers::EXTERN | DeclModifiers::EXPORT)))};
+        std::to_underlying(modifiers & (decl_modifiers::EXTERN | decl_modifiers::EXPORT)))};
     if (abi_count > 1) {
         return fmt::format("At most one ABI-related modifier may be used; found {}", abi_count);
     }
@@ -131,18 +128,17 @@ constexpr auto LEGAL_MODIFIERS{
 
 } // namespace
 
-auto DeclStatement::parse(syntax::Parser& parser)
-    -> stdx::result<StatementHandle, syntax::Diagnostic> {
+auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
     auto       modifiers{LEGAL_MODIFIERS[start_token.type].value()};
 
-    stdx::option<DeclModifiers> current_modifier;
+    stdx::option<decl_modifiers> current_modifier;
     while ((current_modifier = LEGAL_MODIFIERS[parser.get_peek_token().type])) {
         parser.advance();
         if (modifiers_has(modifiers, *current_modifier)) {
             return make_syntax_err("Declaration modifiers may only be used once in any order",
-                                   syntax::Error::DUPLICATE_DECL_MODIFIER,
+                                   syntax::error::DUPLICATE_DECL_MODIFIER,
                                    parser.get_current_token());
         }
         modifiers |= *current_modifier;
@@ -150,68 +146,66 @@ auto DeclStatement::parse(syntax::Parser& parser)
 
     if (auto msg{validate_modifiers(modifiers)}) {
         return make_syntax_err(
-            std::move(msg).value(), syntax::Error::ILLEGAL_DECL_MODIFIERS, start_token);
+            std::move(msg).value(), syntax::error::ILLEGAL_DECL_MODIFIERS, start_token);
     }
 
-    TRY(parser.expect_peek(syntax::TokenType::IDENT));
-    const IdentifierHandle decl_name{TRY(IdentifierExpression::parse(parser))};
-    const auto [decl_type, value_initialized]{TRY(ExplicitType::parse_opt_init(parser))};
+    TRY(parser.expect_peek(syntax::token_type_t::IDENT));
+    const identifier_handle decl_name{TRY(identifier_expr::parse(parser))};
+    const auto [decl_type, value_initialized]{TRY(explicit_type::parse_opt_init(parser))};
 
-    stdx::option<ExpressionHandle> decl_value;
+    stdx::option<expr_handle> decl_value;
     if (value_initialized) {
         decl_value.emplace(TRY(parser.parse_expression()));
 
         // If there is a value, then there cannot be an extern due to a contradiction
-        if (modifiers_has(modifiers, DeclModifiers::EXTERN)) {
+        if (modifiers_has(modifiers, decl_modifiers::EXTERN)) {
             return make_syntax_err("Extern declarations may not be value-initialized",
-                                   syntax::Error::EXTERN_VALUE_INITIALIZED,
+                                   syntax::error::EXTERN_VALUE_INITIALIZED,
                                    start_token);
         }
-    } else if ((modifiers_has(modifiers, DeclModifiers::CONSTANT) &&
-                !modifiers_has(modifiers, DeclModifiers::EXTERN)) ||
-               modifiers_has(modifiers, DeclModifiers::CONSTEXPR)) {
+    } else if ((modifiers_has(modifiers, decl_modifiers::CONSTANT) &&
+                !modifiers_has(modifiers, decl_modifiers::EXTERN)) ||
+               modifiers_has(modifiers, decl_modifiers::CONSTEXPR)) {
         // Constant decls must be declared with a value unless they are extern
         return make_syntax_err("Constant non-extern declarations must have an associated value",
-                               syntax::Error::CONST_DECL_MISSING_VALUE,
+                               syntax::error::CONST_DECL_MISSING_VALUE,
                                start_token);
     }
 
     TRY(parser.expect_semicolon());
-    return parser.add_stmt<DeclStatement>(start_token, decl_name, decl_type, decl_value, modifiers);
+    return parser.add_stmt<decl_stmt>(start_token, decl_name, decl_type, decl_value, modifiers);
 }
 
-auto DeferStatement::parse(syntax::Parser& parser)
-    -> stdx::result<StatementHandle, syntax::Diagnostic> {
+auto defer_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
-    if (parser.peek_token_is(syntax::TokenType::END) ||
-        parser.peek_token_is(syntax::TokenType::SEMICOLON)) {
+    if (parser.peek_token_is(syntax::token_type_t::END) ||
+        parser.peek_token_is(syntax::token_type_t::SEMICOLON)) {
         return make_syntax_err("Defer statements require an statement to defer",
-                               syntax::Error::DEFER_MISSING_DEFERREE,
+                               syntax::error::DEFER_MISSING_DEFERREE,
                                start_token);
     }
     parser.advance();
     const auto stmt{TRY(parser.parse_statement())};
 
     // The statement has different restrictions from expression alternates
-    if (!stmt.any<ExpressionStatement, DiscardStatement, BlockStatement>()) {
+    if (!stmt.any<expr_stmt, discard_stmt, block_stmt>()) {
         return make_syntax_err("Deferred statements must be expressions, discards, or blocks",
-                               syntax::Error::ILLEGAL_DEFERRED_STATEMENT,
+                               syntax::error::ILLEGAL_DEFERRED_STATEMENT,
                                parser.get_location_of(*stmt));
     }
-    return parser.add_stmt<DeferStatement>(start_token, stmt);
+    return parser.add_stmt<defer_stmt>(start_token, stmt);
 }
 
-auto DiscardStatement::parse(syntax::Parser& parser)
-    -> stdx::result<StatementHandle, syntax::Diagnostic> {
+auto discard_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
 
-    TRY(parser.expect_peek(syntax::TokenType::ASSIGN));
-    if (parser.peek_token_is(syntax::TokenType::END) ||
-        parser.peek_token_is(syntax::TokenType::SEMICOLON)) {
+    TRY(parser.expect_peek(syntax::token_type_t::ASSIGN));
+    if (parser.peek_token_is(syntax::token_type_t::END) ||
+        parser.peek_token_is(syntax::token_type_t::SEMICOLON)) {
         return make_syntax_err("Discarded statements must have a statement to discard",
-                               syntax::Error::DISCARD_MISSING_DISCARDEE,
+                               syntax::error::DISCARD_MISSING_DISCARDEE,
                                parser.get_current_token());
     }
 
@@ -219,24 +213,24 @@ auto DiscardStatement::parse(syntax::Parser& parser)
     const auto expr{TRY(parser.parse_expression())};
 
     TRY(parser.expect_semicolon());
-    return parser.add_stmt<DiscardStatement>(start_token, expr);
+    return parser.add_stmt<discard_stmt>(start_token, expr);
 }
 
-auto ExpressionStatement::parse(syntax::Parser& parser, syntax::SemicolonBehavior behavior)
-    -> stdx::result<StatementHandle, syntax::Diagnostic> {
+auto expr_stmt::parse(syntax::parser& parser, syntax::semicolon_behavior behavior)
+    -> stdx::result<stmt_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
     const auto expr{TRY(parser.parse_expression())};
 
-    using Behavior = syntax::SemicolonBehavior;
-    const auto has_semicolon{parser.current_token_is(syntax::TokenType::SEMICOLON)};
-    const auto at_block_end{parser.current_token_is(syntax::TokenType::RBRACE)};
+    using behavior_t = syntax::semicolon_behavior;
+    const auto has_semicolon{parser.current_token_is(syntax::token_type_t::SEMICOLON)};
+    const auto at_block_end{parser.current_token_is(syntax::token_type_t::RBRACE)};
 
-    const auto check_illegal_semicolon = [&] -> stdx::option<stdx::err<syntax::Diagnostic>> {
+    const auto check_illegal_semicolon = [&] -> stdx::option<stdx::err<syntax::diagnostic>> {
         const auto semicolon{parser.advance()};
-        if (behavior == Behavior::DISALLOW) {
+        if (behavior == behavior_t::DISALLOW) {
             return syntax::make_syntax_err("Semicolon is not allowed in this context",
-                                           syntax::Error::UNEXPECTED_TOKEN,
+                                           syntax::error::UNEXPECTED_TOKEN,
                                            semicolon);
         }
         return stdx::none;
@@ -244,138 +238,134 @@ auto ExpressionStatement::parse(syntax::Parser& parser, syntax::SemicolonBehavio
 
     // RBRACE would mean we're at the end of a block and a semicolon is never required
     if (at_block_end) {
-        if (parser.peek_token_is(syntax::TokenType::SEMICOLON)) {
+        if (parser.peek_token_is(syntax::token_type_t::SEMICOLON)) {
             if (auto err{check_illegal_semicolon()}) { return std::move(*err); }
         }
     } else if (!has_semicolon) {
-        if (parser.peek_token_is(syntax::TokenType::SEMICOLON)) {
+        if (parser.peek_token_is(syntax::token_type_t::SEMICOLON)) {
             if (auto err{check_illegal_semicolon()}) { return std::move(*err); }
-        } else if (behavior == Behavior::REQUIRE) {
-            TRY(parser.expect_peek(syntax::TokenType::SEMICOLON));
+        } else if (behavior == behavior_t::REQUIRE) {
+            TRY(parser.expect_peek(syntax::token_type_t::SEMICOLON));
         }
     }
-    return parser.add_stmt<ExpressionStatement>(start_token, expr);
+    return parser.add_stmt<expr_stmt>(start_token, expr);
 }
 
 namespace {
 
-[[nodiscard]] auto parse_import_payload(syntax::Parser& parser)
-    -> stdx::result<ImportPayloadHandle, syntax::Diagnostic> {
-    if (parser.peek_token_is(syntax::TokenType::IDENT)) {
-        TRY(parser.expect_peek(syntax::TokenType::IDENT));
-        return TRY(IdentifierExpression::parse(parser));
+[[nodiscard]] auto parse_import_payload(syntax::parser& parser)
+    -> stdx::result<import_payload_handle, syntax::diagnostic> {
+    if (parser.peek_token_is(syntax::token_type_t::IDENT)) {
+        TRY(parser.expect_peek(syntax::token_type_t::IDENT));
+        return TRY(identifier_expr::parse(parser));
     }
 
-    if (parser.peek_token_is(syntax::TokenType::STRING)) {
-        TRY(parser.expect_peek(syntax::TokenType::STRING));
-        const StringHandle string{TRY(StringExpression::parse(parser))};
+    if (parser.peek_token_is(syntax::token_type_t::STRING)) {
+        TRY(parser.expect_peek(syntax::token_type_t::STRING));
+        const string_handle string{TRY(string_expr::parse(parser))};
 
-        if (parser.get_node<StringExpression>(*string).value.empty()) {
+        if (parser.get_node<string_expr>(*string).value.empty()) {
             return make_syntax_err("File import names cannot be empty",
-                                   syntax::Error::EMPTY_FILE_IMPORT,
+                                   syntax::error::EMPTY_FILE_IMPORT,
                                    parser.get_location_of(*string));
         }
         return string;
     }
 
     return make_syntax_err("Imported payloads may only be filename strings or module identifiers",
-                           syntax::Error::ILLEGAL_IMPORT_TYPE,
+                           syntax::error::ILLEGAL_IMPORT_TYPE,
                            parser.get_peek_token());
 }
 
 } // namespace
 
-auto ImportStatement::parse(syntax::Parser& parser)
-    -> stdx::result<StatementHandle, syntax::Diagnostic> {
+auto import_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
     // A start token of public is guaranteed to be followed by an import
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
-    if (parser.current_token_is(syntax::TokenType::PUBLIC)) { parser.advance(); }
+    if (parser.current_token_is(syntax::token_type_t::PUBLIC)) { parser.advance(); }
     auto imported_core{TRY(parse_import_payload(parser))};
 
-    stdx::option<IdentifierHandle> imported_alias;
-    if (parser.peek_token_is(syntax::TokenType::AS)) {
+    stdx::option<identifier_handle> imported_alias;
+    if (parser.peek_token_is(syntax::token_type_t::AS)) {
         parser.advance();
-        TRY(parser.expect_peek(syntax::TokenType::IDENT));
+        TRY(parser.expect_peek(syntax::token_type_t::IDENT));
 
-        imported_alias.emplace(TRY(IdentifierExpression::parse(parser)));
-    } else if (imported_core->get_kind() == NodeKind::STRING_EXPRESSION) {
+        imported_alias.emplace(TRY(identifier_expr::parse(parser)));
+    } else if (imported_core->get_kind() == node_kind::STRING_EXPRESSION) {
         return make_syntax_err("All file imports must be aliased to an identifier",
-                               syntax::Error::FILE_IMPORT_MISSING_ALIAS,
+                               syntax::error::FILE_IMPORT_MISSING_ALIAS,
                                start_token);
     }
 
     TRY(parser.expect_semicolon());
-    return parser.add_stmt<ImportStatement>(start_token, imported_core, imported_alias);
+    return parser.add_stmt<import_stmt>(start_token, imported_core, imported_alias);
 }
 
-auto ImportStatement::get_name(const AST& tree) const noexcept
-    -> std::pair<ast::IdentifierHandle, std::string_view> {
+auto import_stmt::get_name(const AST& tree) const noexcept
+    -> std::pair<ast::identifier_handle, std::string_view> {
     if (alias) {
         const auto  handle{*alias};
-        const auto& ident{tree.get_as<ast::IdentifierExpression>(handle)};
+        const auto& ident{tree.get_as<ast::identifier_expr>(handle)};
         return {handle, ident.name};
     }
 
     // This must be an ident as all strings have an alias
-    const auto& ident{tree.get_as<ast::IdentifierExpression>(payload)};
+    const auto& ident{tree.get_as<ast::identifier_expr>(payload)};
     return {payload, ident.name};
 }
 
-auto ReturnStatement::parse(syntax::Parser& parser)
-    -> stdx::result<StatementHandle, syntax::Diagnostic> {
+auto return_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
 
-    stdx::option<ExpressionHandle> value;
-    if (!parser.peek_token_is(syntax::TokenType::END) &&
-        !parser.peek_token_is(syntax::TokenType::SEMICOLON)) {
+    stdx::option<expr_handle> value;
+    if (!parser.peek_token_is(syntax::token_type_t::END) &&
+        !parser.peek_token_is(syntax::token_type_t::SEMICOLON)) {
         parser.advance();
         value.emplace(TRY(parser.parse_expression()));
     }
 
     TRY(parser.expect_semicolon());
-    return parser.add_stmt<ReturnStatement>(start_token, value);
+    return parser.add_stmt<return_stmt>(start_token, value);
 }
 
-auto TestStatement::parse(syntax::Parser& parser)
-    -> stdx::result<StatementHandle, syntax::Diagnostic> {
+auto test_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
 
-    stdx::option<StringHandle> description;
-    if (parser.peek_token_is(syntax::TokenType::STRING)) {
+    stdx::option<string_handle> description;
+    if (parser.peek_token_is(syntax::token_type_t::STRING)) {
         parser.advance();
-        description.emplace(TRY(StringExpression::parse(parser)));
+        description.emplace(TRY(string_expr::parse(parser)));
 
         // Empty strings aren't supported since one should just use no description
-        if (parser.get_node<StringExpression>(**description).value.empty()) {
+        if (parser.get_node<string_expr>(**description).value.empty()) {
             return make_syntax_err("Test descriptions may not be empty when present",
-                                   syntax::Error::EMPTY_TEST_DESCRIPTION,
+                                   syntax::error::EMPTY_TEST_DESCRIPTION,
                                    parser.get_location_of(**description));
         }
     }
 
-    TRY(parser.expect_peek(syntax::TokenType::LBRACE));
-    const BlockHandle block{TRY(BlockStatement::parse(parser))};
-    return parser.add_stmt<TestStatement>(start_token, description, block);
+    TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
+    const block_handle block{TRY(block_stmt::parse(parser))};
+    return parser.add_stmt<test_stmt>(start_token, description, block);
 }
 
-auto UsingStatement::parse(syntax::Parser& parser)
-    -> stdx::result<StatementHandle, syntax::Diagnostic> {
+auto using_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
     // A start token of public is guaranteed to be followed by an import
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
-    if (parser.current_token_is(syntax::TokenType::PUBLIC)) { parser.advance(); }
+    if (parser.current_token_is(syntax::token_type_t::PUBLIC)) { parser.advance(); }
 
-    TRY(parser.expect_peek(syntax::TokenType::IDENT));
-    const IdentifierHandle alias{TRY(IdentifierExpression::parse(parser))};
+    TRY(parser.expect_peek(syntax::token_type_t::IDENT));
+    const identifier_handle alias{TRY(identifier_expr::parse(parser))};
 
-    TRY(parser.expect_peek(syntax::TokenType::ASSIGN));
-    const auto type{TRY(ExplicitType::parse(parser))};
+    TRY(parser.expect_peek(syntax::token_type_t::ASSIGN));
+    const auto type{TRY(explicit_type::parse(parser))};
 
-    TRY(parser.expect_peek(syntax::TokenType::SEMICOLON));
-    return parser.add_stmt<UsingStatement>(start_token, alias, type);
+    TRY(parser.expect_peek(syntax::token_type_t::SEMICOLON));
+    return parser.add_stmt<using_stmt>(start_token, alias, type);
 }
 
 } // namespace ghoti::ast

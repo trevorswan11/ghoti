@@ -1,4 +1,4 @@
-#include "syntax/lexer.hh"
+#include "compiler/syntax/lexer.hh"
 
 #include <cctype>
 #include <string_view>
@@ -10,29 +10,31 @@
 #include <stdx/string.hh>
 #include <stdx/types.hh>
 
-#include "syntax/builtins.hh"
-#include "syntax/keywords.hh"
-#include "syntax/operators.hh"
-#include "syntax/token.hh"
-#include "syntax/token_type.hh"
+#include "compiler/syntax/builtins.hh"
+#include "compiler/syntax/keywords.hh"
+#include "compiler/syntax/operators.hh"
+#include "compiler/syntax/token.hh"
+#include "compiler/syntax/token_type.hh"
 
 namespace ghoti::syntax {
 
-auto Lexer::reset(std::string_view input) noexcept -> void { *this = Lexer{input}; }
+auto lexer::reset(std::string_view input) noexcept -> void { *this = lexer{input}; }
 
-auto Lexer::advance() noexcept -> Token {
+auto lexer::advance() noexcept -> token_t {
     PROFILE_FUNCTION();
     skip_whitespace();
 
-    Token      token{{}, {}, line_no_, col_no_};
+    token_t    token{{}, {}, line_no_, col_no_};
     const auto maybe_operator{read_operator()};
 
     if (maybe_operator) {
-        if (maybe_operator->type == TokenType::END) { return *maybe_operator; }
+        if (maybe_operator->type == token_type_t::END) { return *maybe_operator; }
         for (usize i{0}; i < maybe_operator->slice.size(); ++i) { read_character(); }
 
-        if (maybe_operator->type == TokenType::COMMENT) { return read_comment(); }
-        if (maybe_operator->type == TokenType::MULTILINE_STRING) { return read_multiline_string(); }
+        if (maybe_operator->type == token_type_t::COMMENT) { return read_comment(); }
+        if (maybe_operator->type == token_type_t::MULTILINE_STRING) {
+            return read_multiline_string();
+        }
 
         return *maybe_operator;
     }
@@ -57,35 +59,35 @@ auto Lexer::advance() noexcept -> Token {
         return read_byte_literal();
     } else {
         token.slice = stdx::string::substr(input_, pos_, 1);
-        token.type  = TokenType::ILLEGAL;
+        token.type  = token_type_t::ILLEGAL;
     }
 
     read_character();
     return token;
 }
 
-auto Lexer::consume() -> std::vector<Token> {
+auto lexer::consume() -> std::vector<token_t> {
     reset(input_);
 
-    std::vector<Token> tokens;
-    do { tokens.emplace_back(advance()); } while (tokens.back().type != TokenType::END);
+    std::vector<token_t> tokens;
+    do { tokens.emplace_back(advance()); } while (tokens.back().type != token_type_t::END);
 
     return tokens;
 }
 
-auto Lexer::skip_whitespace() noexcept -> void {
+auto lexer::skip_whitespace() noexcept -> void {
     while (std::isspace(current_byte_)) { read_character(); }
 }
 
-auto Lexer::lu_builtin(std::string_view ident) noexcept -> TokenType {
-    return get_builtin_opt(ident).value_or(TokenType::ILLEGAL);
+auto lexer::lu_builtin(std::string_view ident) noexcept -> token_type_t {
+    return get_builtin_opt(ident).value_or(token_type_t::ILLEGAL);
 }
 
-auto Lexer::lu_ident(std::string_view ident) noexcept -> TokenType {
-    return get_keyword_opt(ident).value_or(TokenType::IDENT);
+auto lexer::lu_ident(std::string_view ident) noexcept -> token_type_t {
+    return get_keyword_opt(ident).value_or(token_type_t::IDENT);
 }
 
-auto Lexer::read_character(u8 n) noexcept -> void {
+auto lexer::read_character(u8 n) noexcept -> void {
     for (u8 i = 0; i < n; ++i) {
         if (peek_pos_ >= input_.size()) {
             current_byte_ = '\0';
@@ -105,14 +107,14 @@ auto Lexer::read_character(u8 n) noexcept -> void {
     }
 }
 
-auto Lexer::read_operator() const noexcept -> stdx::option<Token> {
+auto lexer::read_operator() const noexcept -> stdx::option<token_t> {
     const auto start_line{line_no_};
     const auto start_col{col_no_};
 
-    if (current_byte_ == '\0') { return Token{TokenType::END, {}, start_line, start_col}; }
+    if (current_byte_ == '\0') { return token_t{token_type_t::END, {}, start_line, start_col}; }
 
     usize max_len{0};
-    auto  matched_type{TokenType::ILLEGAL};
+    auto  matched_type{token_type_t::ILLEGAL};
 
     // Try extending from length 1 up to the max operator size
     for (usize len{1}; len <= max_operator_length() && pos_ + len <= input_.size(); ++len) {
@@ -124,10 +126,11 @@ auto Lexer::read_operator() const noexcept -> stdx::option<Token> {
 
     // We cannot greedily consume the lexer here since the next token instruction handles that
     if (max_len == 0) { return stdx::none; }
-    return Token{matched_type, stdx::string::substr(input_, pos_, max_len), start_line, start_col};
+    return token_t{
+        matched_type, stdx::string::substr(input_, pos_, max_len), start_line, start_col};
 }
 
-auto Lexer::read_ident(bool builtin) noexcept -> std::string_view {
+auto lexer::read_ident(bool builtin) noexcept -> std::string_view {
     const auto start{pos_};
 
     auto passed_first{false};
@@ -140,7 +143,7 @@ auto Lexer::read_ident(bool builtin) noexcept -> std::string_view {
     return stdx::string::substr(input_, start, pos_ - start);
 }
 
-enum class NumberSuffix : u8 {
+enum class number_suffix : u8 {
     UNSIGNED = 1 << 0,
     WIDE     = 1 << 1,
     SIZE     = 2 << 2,
@@ -148,40 +151,40 @@ enum class NumberSuffix : u8 {
 
 namespace {
 
-constexpr auto operator|=(NumberSuffix& lhs, NumberSuffix rhs) noexcept -> NumberSuffix& {
-    lhs = static_cast<NumberSuffix>(std::to_underlying(lhs) | std::to_underlying(rhs));
+constexpr auto operator|=(number_suffix& lhs, number_suffix rhs) noexcept -> number_suffix& {
+    lhs = static_cast<number_suffix>(std::to_underlying(lhs) | std::to_underlying(rhs));
     return lhs;
 }
 
-constexpr auto operator&(NumberSuffix lhs, NumberSuffix rhs) noexcept -> NumberSuffix {
-    return static_cast<NumberSuffix>(std::to_underlying(lhs) & std::to_underlying(rhs));
+constexpr auto operator&(number_suffix lhs, number_suffix rhs) noexcept -> number_suffix {
+    return static_cast<number_suffix>(std::to_underlying(lhs) & std::to_underlying(rhs));
 }
 
-constexpr auto suffix_has(NumberSuffix suffix, NumberSuffix flag) noexcept -> bool {
+constexpr auto suffix_has(number_suffix suffix, number_suffix flag) noexcept -> bool {
     return static_cast<bool>(suffix & flag);
 }
 
 } // namespace
 
-auto Lexer::read_number() noexcept -> Token {
+auto lexer::read_number() noexcept -> token_t {
     const auto start{pos_};
     const auto start_line{line_no_};
     const auto start_col{col_no_};
     auto       passed_decimal{false};
     auto       passed_exponent{false};
-    auto       base{Base::DECIMAL};
+    auto       base{numeric_base::DECIMAL};
 
     // Detect numeric prefix
     if (current_byte_ == '0' && peek_pos_ < input_.size()) {
         const auto next{input_[peek_pos_]};
         if (next == 'x' || next == 'X') {
-            base = Base::HEXADECIMAL;
+            base = numeric_base::HEXADECIMAL;
             read_character(2);
         } else if (next == 'b' || next == 'B') {
-            base = Base::BINARY;
+            base = numeric_base::BINARY;
             read_character(2);
         } else if (next == 'o' || next == 'O') {
-            base = Base::OCTAL;
+            base = numeric_base::OCTAL;
             read_character(2);
         }
     }
@@ -192,7 +195,7 @@ auto Lexer::read_number() noexcept -> Token {
         const auto c{current_byte_};
 
         // Exponent handling defaults to floats for simplicity
-        if (base == Base::DECIMAL && !passed_exponent && (c == 'e' || c == 'E')) {
+        if (base == numeric_base::DECIMAL && !passed_exponent && (c == 'e' || c == 'E')) {
             auto p{peek_pos_};
             if (p >= input_.size()) { break; }
 
@@ -215,7 +218,7 @@ auto Lexer::read_number() noexcept -> Token {
         }
 
         // Fractional part
-        if (base == Base::DECIMAL && c == '.') {
+        if (base == numeric_base::DECIMAL && c == '.') {
             if (peek_pos_ < input_.size() && input_[peek_pos_] == '.') { break; }
             if (passed_decimal) { break; }
 
@@ -229,7 +232,7 @@ auto Lexer::read_number() noexcept -> Token {
         if (c == '_' && last_was_digit) {
             read_character();
             if (!digit_in_base(current_byte_, base)) {
-                return {TokenType::ILLEGAL,
+                return {token_type_t::ILLEGAL,
                         stdx::string::substr(input_, start, pos_ - start),
                         start_line,
                         start_col};
@@ -249,15 +252,15 @@ auto Lexer::read_number() noexcept -> Token {
     }
 
     // Quick non-base-10 length validation
-    if (base != Base::DECIMAL && pos_ - start <= 2) {
-        return {TokenType::ILLEGAL,
+    if (base != numeric_base::DECIMAL && pos_ - start <= 2) {
+        return {token_type_t::ILLEGAL,
                 stdx::string::substr(input_, start, pos_ - start),
                 start_line,
                 start_col};
     }
 
-    NumberSuffix suffix{};
-    auto         forced_float{false};
+    number_suffix suffix{};
+    auto          forced_float{false};
     if (pos_ < input_.size()) {
         auto c{current_byte_};
         if (c == 'f' || c == 'F') {
@@ -265,16 +268,16 @@ auto Lexer::read_number() noexcept -> Token {
             read_character();
         } else if (!(passed_decimal || passed_exponent)) {
             if (c == 'u' || c == 'U') {
-                suffix |= NumberSuffix::UNSIGNED;
+                suffix |= number_suffix::UNSIGNED;
                 read_character();
             }
 
             c = current_byte_;
             if (c == 'z' || c == 'Z') {
-                suffix |= NumberSuffix::SIZE;
+                suffix |= number_suffix::SIZE;
                 read_character();
             } else if (c == 'l' || c == 'L') {
-                suffix |= NumberSuffix::WIDE;
+                suffix |= number_suffix::WIDE;
                 read_character();
             }
         }
@@ -282,7 +285,7 @@ auto Lexer::read_number() noexcept -> Token {
 
     // Total validation
     const auto length{pos_ - start};
-    auto       type{TokenType::ILLEGAL};
+    auto       type{token_type_t::ILLEGAL};
     if (length == 0) {
         return {type, stdx::string::substr(input_, start, 1), start_line, start_col};
     }
@@ -291,43 +294,43 @@ auto Lexer::read_number() noexcept -> Token {
         return {type, stdx::string::substr(input_, start, length), start_line, start_col};
     }
 
-    if (passed_decimal && (base != Base::DECIMAL)) {
+    if (passed_decimal && (base != numeric_base::DECIMAL)) {
         return {type, stdx::string::substr(input_, start, length), start_line, start_col};
     }
 
     // Determine the input type
     if (passed_decimal || passed_exponent || forced_float) {
-        if (base != Base::DECIMAL) {
+        if (base != numeric_base::DECIMAL) {
             return {type, stdx::string::substr(input_, start, length), start_line, start_col};
         }
-        type = forced_float ? TokenType::F32 : TokenType::F64;
+        type = forced_float ? token_type_t::F32 : token_type_t::F64;
     } else {
         // Use an offset to increment the actual token type based on its base and width
         auto offset{base_idx(base)};
         if (std::to_underlying(suffix) == 0) {
-            type = TokenType::INT_2;
+            type = token_type_t::INT_2;
         } else {
-            if (suffix_has(suffix, NumberSuffix::WIDE)) {
-                type = TokenType::LINT_2;
-            } else if (suffix_has(suffix, NumberSuffix::SIZE)) {
-                type = TokenType::ZINT_2;
+            if (suffix_has(suffix, number_suffix::WIDE)) {
+                type = token_type_t::LINT_2;
+            } else if (suffix_has(suffix, number_suffix::SIZE)) {
+                type = token_type_t::ZINT_2;
             } else {
-                type = TokenType::INT_2;
+                type = token_type_t::INT_2;
             }
 
             // We can just bump the offset for unsigned
-            if (suffix_has(suffix, NumberSuffix::UNSIGNED)) {
-                offset +=
-                    std::to_underlying(TokenType::UINT_2) - std::to_underlying(TokenType::INT_2);
+            if (suffix_has(suffix, number_suffix::UNSIGNED)) {
+                offset += std::to_underlying(token_type_t::UINT_2) -
+                          std::to_underlying(token_type_t::INT_2);
             }
         }
-        type = static_cast<TokenType>(std::to_underlying(type) + offset);
+        type = static_cast<token_type_t>(std::to_underlying(type) + offset);
     }
 
     return {type, stdx::string::substr(input_, start, length), start_line, start_col};
 }
 
-auto Lexer::read_escape() noexcept -> char {
+auto lexer::read_escape() noexcept -> char {
     read_character();
 
     switch (current_byte_) {
@@ -342,7 +345,7 @@ auto Lexer::read_escape() noexcept -> char {
     }
 }
 
-auto Lexer::read_string() noexcept -> Token {
+auto lexer::read_string() noexcept -> token_t {
     const auto start{pos_};
     const auto start_line{line_no_};
     const auto start_col{col_no_};
@@ -355,7 +358,7 @@ auto Lexer::read_string() noexcept -> Token {
 
     if (current_byte_ == '\0') {
         return {
-            TokenType::ILLEGAL,
+            token_type_t::ILLEGAL,
             stdx::string::substr(input_, start, pos_ - start),
             start_line,
             start_col,
@@ -363,14 +366,14 @@ auto Lexer::read_string() noexcept -> Token {
     }
     read_character();
 
-    return {TokenType::STRING,
+    return {token_type_t::STRING,
             stdx::string::substr(input_, start, pos_ - start),
             start_line,
             start_col};
 }
 
 // Reads a multiline string from the token, assuming the '\\' operator has been consumed
-auto Lexer::read_multiline_string() noexcept -> Token {
+auto lexer::read_multiline_string() noexcept -> token_t {
     const auto start{pos_};
     const auto start_line{line_no_};
     const auto start_col{col_no_};
@@ -411,7 +414,7 @@ auto Lexer::read_multiline_string() noexcept -> Token {
     }
 
     return {
-        TokenType::MULTILINE_STRING,
+        token_type_t::MULTILINE_STRING,
         stdx::string::substr(input_, start, end_pos - start),
         start_line,
         start_col,
@@ -421,7 +424,7 @@ auto Lexer::read_multiline_string() noexcept -> Token {
 // Reads a byte literal returning an illegal token for malformed literals.
 //
 // Assumes that the surrounding single quotes have not been consumed.
-auto Lexer::read_byte_literal() noexcept -> Token {
+auto lexer::read_byte_literal() noexcept -> token_t {
     const auto start{pos_};
     const auto start_line{line_no_};
     const auto start_col{col_no_};
@@ -434,7 +437,7 @@ auto Lexer::read_byte_literal() noexcept -> Token {
     } else if (current_byte_ != '\'' && current_byte_ != '\n' && current_byte_ != '\r') {
         read_character();
     } else {
-        return {TokenType::ILLEGAL,
+        return {token_type_t::ILLEGAL,
                 stdx::string::substr(input_, start, pos_ - start),
                 start_line,
                 start_col};
@@ -455,7 +458,7 @@ auto Lexer::read_byte_literal() noexcept -> Token {
         }
 
         return {
-            TokenType::ILLEGAL,
+            token_type_t::ILLEGAL,
             stdx::string::substr(input_, start, illegal_end - start),
             start_line,
             start_col,
@@ -464,17 +467,17 @@ auto Lexer::read_byte_literal() noexcept -> Token {
     read_character();
 
     return {
-        TokenType::U8, stdx::string::substr(input_, start, pos_ - start), start_line, start_col};
+        token_type_t::U8, stdx::string::substr(input_, start, pos_ - start), start_line, start_col};
 }
 
 // Reads a comment from the token, assuming the '//' operator has been consumed
-auto Lexer::read_comment() noexcept -> Token {
+auto lexer::read_comment() noexcept -> token_t {
     const auto start{pos_};
     const auto start_line{line_no_};
     const auto start_col{col_no_};
     while (current_byte_ != '\n' && current_byte_ != '\0') { read_character(); }
 
-    return {TokenType::COMMENT,
+    return {token_type_t::COMMENT,
             stdx::string::substr(input_, start, pos_ - start),
             start_line,
             start_col};
