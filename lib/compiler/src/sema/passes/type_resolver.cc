@@ -597,10 +597,19 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     auto& return_type{*last_type_.take()};
     ASSERT(!fn_type.is_resolved(), "Valued function must not be resolved");
 
-    // This function type MUST be unique so the self-ness is guaranteed to be accurate
-    fn_type.resolve<types::function>(fn.self.has_value(), param_types, return_type);
+    const auto is_auto_return{return_type.get_kind() == type_kind::AUTO};
+    return_trackers_.emplace_back(
+        return_tracker{.return_types = {}, .is_auto_return = is_auto_return});
+
     const auto& block{resolving_.ast.get_as<ast::block_stmt>(fn.body)};
     for (const auto& stmt : block) { TRY_RESOLVE(stmt); }
+
+    auto tracker{std::move(return_trackers_.back())};
+    return_trackers_.pop_back();
+
+    auto& deduced_return_type{is_auto_return ? tracker.deduced_return_type(ctx_) : return_type};
+    fn_type.resolve<types::function>(fn.self.has_value(), param_types, deduced_return_type);
+    if (is_auto_return) { resolving_.set_sema_type(fn.explicit_return_type, deduced_return_type); }
     last_type_.emplace(fn_type);
 }
 
@@ -1648,6 +1657,14 @@ namespace {
         location};
 }
 
+[[nodiscard]] auto illegal_auto_field(std::string_view       kind,
+                                      std::string_view       name,
+                                      const source_location& location) -> diagnostic {
+    return diagnostic{fmt::format("{} field '{}' cannot have type 'auto'", kind, name),
+                      error::ILLEGAL_AUTO_USAGE,
+                      location};
+}
+
 } // namespace
 
 template <ast::IndexableID ID>
@@ -1664,24 +1681,41 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
         if (!sym) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
 
         TRY_RESOLVE(field.explicit_type);
-        auto& field_type{*last_type_.take()};
+        auto* field_type{last_type_.take()};
 
-        if (field.default_value) {
-            const structural_guard inner_g{implicit_type_stack_, field_type};
+        if (field_type->get_kind() == type_kind::AUTO) {
+            if (!field.default_value) {
+                return last_type_.emplace(ctx_.poison_node(
+                    resolving_,
+                    id,
+                    illegal_auto_field(
+                        "Struct", ident.name, resolving_.ast.location_of(field.explicit_type))));
+            }
+            TRY_RESOLVE(*field.default_value);
+            field_type = last_type_.take();
+            if (field_type->get_kind() == type_kind::AUTO) {
+                return last_type_.emplace(ctx_.poison_node(
+                    resolving_,
+                    id,
+                    illegal_auto_field(
+                        "Struct", ident.name, resolving_.ast.location_of(field.explicit_type))));
+            }
+        } else if (field.default_value) {
+            const structural_guard inner_g{implicit_type_stack_, *field_type};
             TRY_RESOLVE(*field.default_value);
         }
 
-        if (!field_type.is_resolved()) {
+        if (!field_type->is_resolved()) {
             return last_type_.emplace(ctx_.poison_node(
                 resolving_,
                 id,
                 incomplete_field(ident.name, resolving_.ast.location_of(field.explicit_type))));
         }
 
-        resolving_.set_sema_type(field.name, field_type);
+        resolving_.set_sema_type(field.name, *field_type);
         sym->set_kind(symbol_kind::VALUE);
         sym->set_status(symbol_status::RESOLVED);
-        field_types[i++] = &field_type;
+        field_types[i++] = field_type;
     }
 
     auto member_types{ctx_.pool.get_many_unsafe(struct_expr.members.size())};
@@ -1712,6 +1746,14 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
 
         TRY_RESOLVE(field.explicit_type);
         auto& field_type{*last_type_.take()};
+
+        if (field_type.get_kind() == type_kind::AUTO) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                illegal_auto_field(
+                    "Union", ident.name, resolving_.ast.location_of(field.explicit_type))));
+        }
 
         if (!field_type.is_resolved()) {
             return last_type_.emplace(ctx_.poison_node(
@@ -1850,8 +1892,19 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             resolve(*decl.explicit_type);
             if (last_type_->is_poison()) { return poison_out(); }
             auto& explicit_type{*last_type_.take()};
-            type_guard.emplace(implicit_type_stack_, explicit_type);
-            resolving_.set_sema_type(id, explicit_type);
+            if (explicit_type.get_kind() == type_kind::AUTO) {
+                if (!decl.value) {
+                    ctx_.poison_symbol(sym,
+                                       "Type 'auto' requires an initializer expression",
+                                       error::AUTO_WITHOUT_INITIALIZER,
+                                       resolving_.ast.location_of(id));
+                    resolving_.set_sema_type(decl.name, ctx_.get_poison());
+                    return last_type_.emplace(ctx_.poison_node(resolving_, id));
+                }
+            } else {
+                type_guard.emplace(implicit_type_stack_, explicit_type);
+                resolving_.set_sema_type(id, explicit_type);
+            }
         }
 
         // Only update the decl value type if it hasn't been set
@@ -1931,7 +1984,16 @@ auto type_resolver::visit(ast::node_id id, const ast::import_stmt& import_stmt) 
 
 auto type_resolver::visit(ast::node_id id, const ast::return_stmt& return_stmt) -> void {
     PROFILE_FUNCTION();
-    if (return_stmt.expression) { TRY_RESOLVE(*return_stmt.expression); }
+    if (return_stmt.expression) {
+        TRY_RESOLVE(*return_stmt.expression);
+        auto& return_expr_type{*last_type_.take()};
+        resolving_.set_sema_type(id, return_expr_type);
+        if (!return_trackers_.empty()) { return_trackers_.back().add_return(return_expr_type); }
+    } else {
+        auto& void_type{ctx_.get_builtin_resolved_type(type_kind::VOID)};
+        resolving_.set_sema_type(id, void_type);
+        if (!return_trackers_.empty()) { return_trackers_.back().add_return(void_type); }
+    }
     last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::NORETURN));
 }
 
@@ -1983,7 +2045,16 @@ auto type_resolver::visit(ast::node_id id, const ast::using_stmt& using_stmt) ->
     sym->set_status(symbol_status::RESOLVING);
     resolve(using_stmt.explicit_type);
     if (last_type_->is_poison()) { return poison_out(); }
-    resolving_.set_sema_type(id, *last_type_.take());
+    auto& explicit_type{*last_type_.take()};
+    if (explicit_type.get_kind() == type_kind::AUTO) {
+        last_type_.emplace(ctx_.poison_node(resolving_,
+                                            id,
+                                            "Type aliases cannot be 'auto'",
+                                            error::ILLEGAL_AUTO_USAGE,
+                                            resolving_.ast.location_of(using_stmt.explicit_type)));
+        return poison_out();
+    }
+    resolving_.set_sema_type(id, explicit_type);
 
     sym->set_status(symbol_status::RESOLVED);
     resolve(using_stmt.alias);
@@ -2074,12 +2145,28 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_function
     for (usize i{0}; const auto& param : fn.parameter_types) {
         TRY_RESOLVE(param);
         auto& param_type{*last_type_.take()};
+        if (param_type.get_kind() == type_kind::AUTO) {
+            return last_type_.emplace(
+                ctx_.poison_node(resolving_,
+                                 id,
+                                 "Function types cannot have 'auto' parameter types",
+                                 error::ILLEGAL_AUTO_USAGE,
+                                 resolving_.ast.location_of(param)));
+        }
         fn_key.imprint(param_type);
         param_types[i++] = &param_type;
     }
 
     TRY_RESOLVE(fn.explicit_return_type);
     auto& return_type{*last_type_.take()};
+    if (return_type.get_kind() == type_kind::AUTO) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             "Function types cannot have 'auto' return type",
+                             error::ILLEGAL_AUTO_USAGE,
+                             resolving_.ast.location_of(fn.explicit_return_type)));
+    }
     fn_key.imprint(return_type);
 
     auto& resolved_fn{*ctx_.pool[fn_key]};
@@ -2102,6 +2189,15 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_array_ty
     PROFILE_FUNCTION();
     TRY_RESOLVE(array.inner_explicit_type);
     auto& item_type{*last_type_.take()};
+
+    if (item_type.get_kind() == type_kind::AUTO) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             "Array elements cannot have type 'auto'",
+                             error::ILLEGAL_AUTO_USAGE,
+                             resolving_.ast.location_of(array.inner_explicit_type)));
+    }
 
     const auto null_terminated{array.null_terminated};
     if (array.dimension) {
