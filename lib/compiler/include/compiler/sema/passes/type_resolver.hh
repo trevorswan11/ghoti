@@ -266,12 +266,9 @@ class type_resolver {
     auto resolve_symbol_info(ast::identifier_handle handle, stdx::option<symbol_kind> kind)
         -> stdx::option<symbol&>;
 
-    template <ast::IndexableID ID>
-    auto instantiate_generic(ID                                    call_id,
-                             type&                                 callee_type,
-                             const generic_function_info&          fn_info,
-                             gsl::span<const gsl::not_null<type*>> concrete_args)
-        -> stdx::option<gsl::not_null<type*>>;
+    auto instantiate_generic(type&                        callee_type,
+                             const generic_function_info& fn_info,
+                             gsl::span<type*> concrete_args) -> stdx::option<gsl::not_null<type*>>;
 
     type_resolver(mod::module& resolving, context& ctx)
         : resolving_{resolving}, table_idx_{*resolving.root_table_idx}, ctx_{ctx} {

@@ -3,7 +3,6 @@
 #include <string>
 #include <string_view>
 #include <utility>
-#include <vector>
 
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
@@ -71,12 +70,15 @@ class generic_function_registry {
 };
 
 struct generic_instantiation_key {
-    gsl::not_null<type*>              generic_fn_type;
-    std::vector<gsl::not_null<type*>> arg_types;
+    gsl::not_null<type*> generic_fn_type;
+    gsl::span<type*>     arg_types;
 
     [[nodiscard]] auto hash() const noexcept -> u64 {
         stdx::hasher h{reinterpret_cast<u64>(generic_fn_type.get())};
-        for (const auto& arg : arg_types) { h.combine(reinterpret_cast<u64>(arg.get())); }
+        for (const auto& arg : arg_types) {
+            VERIFY(arg, "Null argument leaked from resolution");
+            h.combine(reinterpret_cast<u64>(arg));
+        }
         return h.finalize();
     }
 
@@ -95,11 +97,11 @@ template <> struct ankerl::unordered_dense::hash<ghoti::sema::generic_instantiat
 namespace ghoti::sema {
 
 struct generic_instantiation_request {
-    gsl::not_null<type*>              generic_fn_type;
-    std::vector<gsl::not_null<type*>> arg_types;
-    gsl::not_null<type*>              return_type;
-    std::string                       mangled_name;
-    ast::node_id                      fn_node_id;
+    gsl::not_null<type*> generic_fn_type;
+    gsl::span<type*>     arg_types;
+    gsl::not_null<type*> return_type;
+    std::string          mangled_name;
+    ast::node_id         fn_node_id;
 };
 
 class generic_instantiation_cache {

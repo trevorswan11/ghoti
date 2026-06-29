@@ -1,9 +1,11 @@
 #include "compiler/sema/passes/type_resolver.hh"
 
+#include <algorithm>
 #include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <fmt/format.h>
 #include <fmt/ranges.h>
@@ -30,6 +32,7 @@
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/sema/generic.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
@@ -309,6 +312,14 @@ auto type_resolver::get_call_arg_location(const ast::call_expr::argument& arg) -
     return arg.visit([this](auto id) -> source_location { return resolving_.ast.location_of(id); });
 }
 
+namespace {
+
+[[nodiscard]] auto any_param_generic(auto&& params) noexcept -> bool {
+    return std::ranges::contains(params, type_kind::AUTO, &type::get_kind);
+}
+
+} // namespace
+
 template <ast::IndexableID ID>
 auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
     // The call can only yield a non-poison type if the function is valid
@@ -340,12 +351,55 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 resolving_.ast.location_of(call.function)));
         }
 
+        if (any_param_generic(params)) {
+            auto concrete_arg_types{ctx_.pool.get_many_unsafe(call.arguments.size())};
+            bool any_arg_poison{false};
+            for (usize i{0}; auto [param_type, arg] :
+                             std::views::zip(params.subspan(param_offset), call.arguments)) {
+                stdx::option<structural_guard> g;
+                if (param_type->get_kind() != type_kind::AUTO) {
+                    g.emplace(implicit_type_stack_, *param_type);
+                }
+
+                auto result_arg_type = arg.visit([this](auto arg_id) -> stdx::option<type&> {
+                    resolve(arg_id);
+                    auto* arg_type{last_type_.take()};
+                    if (arg_type->is_poison()) { return stdx::none; }
+                    return arg_type;
+                });
+                if (!result_arg_type) { any_arg_poison = true; }
+                concrete_arg_types[i++] = result_arg_type.take();
+            }
+            if (any_arg_poison) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
+
+            generic_instantiation_key key{
+                .generic_fn_type = &callee_type,
+                .arg_types       = concrete_arg_types,
+            };
+
+            if (const auto cached_return_type{ctx_.instantiation_cache.find(key)}) {
+                resolving_.set_sema_type(id, *cached_return_type);
+                return last_type_.emplace(*cached_return_type);
+            }
+
+            const auto fn_info_opt{ctx_.generic_functions.get_opt(callee_type)};
+            if (!fn_info_opt) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
+
+            auto inst_res{instantiate_generic(callee_type, *fn_info_opt, concrete_arg_types)};
+            if (!inst_res) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
+
+            auto& return_type{*inst_res.value()};
+            ctx_.instantiation_cache.insert(std::move(key), return_type);
+            resolving_.set_sema_type(id, return_type);
+            return last_type_.emplace(return_type);
+        }
+
         bool any_arg_poison{false};
         for (auto [param_type, arg] :
              std::views::zip(function_type->params.subspan(param_offset), call.arguments)) {
             const structural_guard g{implicit_type_stack_, *param_type};
-            any_arg_poison |= arg.visit([this](auto id) -> bool {
-                resolve(id);
+            any_arg_poison |= arg.visit([this](auto arg_id) -> bool {
+                resolve(arg_id);
                 return last_type_.take()->is_poison();
             });
         }
@@ -597,6 +651,12 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     auto& return_type{*last_type_.take()};
     ASSERT(!fn_type.is_resolved(), "Valued function must not be resolved");
 
+    if (any_param_generic(param_types)) {
+        fn_type.resolve<types::function>(fn.self.has_value(), param_types, return_type);
+        ctx_.generic_functions.register_function(fn_type, resolving_, id, fn);
+        return last_type_.emplace(fn_type);
+    }
+
     const auto is_auto_return{return_type.get_kind() == type_kind::AUTO};
     return_trackers_.emplace_back(
         return_tracker{.return_types = {}, .is_auto_return = is_auto_return});
@@ -671,7 +731,7 @@ template <ast::IndexableID ID> auto type_resolver::resolve_symbol(ID id, symbol&
     switch (sym.get_status()) {
     case symbol_status::RESOLVED:
         // Identifier handles are not unique in the tree, but their symbol can be used to find root
-        resolving_.set_sema_type_if(
+        resolving_.set_sema_type(
             id,
             symbol_data.visit(
                 [](symbols::builtin& builtin) -> type& { return builtin.get_type(); },
@@ -688,7 +748,9 @@ template <ast::IndexableID ID> auto type_resolver::resolve_symbol(ID id, symbol&
                 [this](HasBothNameAndType auto& sym) -> type& {
                     ASSERT(resolving_.has_sema_type(sym.name), "Symbol was never typed");
                     auto& type{resolving_.get_sema_type(sym.name)};
-                    ASSERT(type == resolving_.get_sema_type_opt(sym.explicit_type),
+                    ASSERT(type == resolving_.get_sema_type_opt(sym.explicit_type) ||
+                               resolving_.get_sema_type_opt(sym.explicit_type)->get_kind() ==
+                                   type_kind::AUTO,
                            "Symbol was resolved with mismatched type");
                     return type;
                 },
@@ -1920,17 +1982,24 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
     const auto& type_data{resolved_type.get_data()};
     if (resolved_type.is_poison()) {
         sym.set_kind(symbol_kind::POISONED);
-    } else if (!sym.has_kind()) {
-        if (type_data.is<types::builtin_function>() || type_data.is<types::function>()) {
-            sym.set_kind(symbol_kind::CALLABLE);
-        } else if (type_data.is<types::enum_t>() || type_data.is<types::struct_t>() ||
-                   type_data.is<types::union_t>() ||
-                   resolved_type == ctx_.get_builtin_resolved_type(type_kind::TYPE)) {
-            sym.set_kind(symbol_kind::TYPE);
-        } else if (type_data.is<types::module>()) {
-            sym.set_kind(symbol_kind::MODULE);
-        } else {
-            sym.set_kind(symbol_kind::VALUE);
+    } else {
+        if (!sym.has_kind()) {
+            if (type_data.is<types::builtin_function>() || type_data.is<types::function>()) {
+                sym.set_kind(symbol_kind::CALLABLE);
+            } else if (type_data.is<types::enum_t>() || type_data.is<types::struct_t>() ||
+                       type_data.is<types::union_t>() ||
+                       resolved_type == ctx_.get_builtin_resolved_type(type_kind::TYPE)) {
+                sym.set_kind(symbol_kind::TYPE);
+            } else if (type_data.is<types::module>()) {
+                sym.set_kind(symbol_kind::MODULE);
+            } else {
+                sym.set_kind(symbol_kind::VALUE);
+            }
+        }
+
+        if (type_data.is<types::function>()) {
+            const auto& decl_ident{resolving_.ast.get_as<ast::identifier_expr>(decl.name)};
+            ctx_.generic_functions.set_function_name(resolved_type, decl_ident.name);
         }
     }
 
@@ -2219,6 +2288,70 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_array_ty
     auto& final_type{apply_explicit_modifiers(id, *last_type_.take())};
     resolving_.set_sema_type(id, final_type);
     last_type_.emplace(final_type);
+}
+
+auto type_resolver::instantiate_generic(type&                        callee_type,
+                                        const generic_function_info& fn_info,
+                                        gsl::span<type*>             concrete_args)
+    -> stdx::option<gsl::not_null<type*>> {
+    mod::module& fn_mod{*fn_info.module};
+    const auto&  fn_expr{*fn_info.fn_expr};
+    const auto   fn_type{fn_info.fn_type};
+    const auto   fn_table_idx{fn_type->get_symbol_table_idx()};
+
+    symbol_table_stack inst_stack;
+    inst_stack.push(*ctx_.prelude_index);
+    if (fn_mod.root_table_idx) { inst_stack.push(*fn_mod.root_table_idx); }
+    inst_stack.push(fn_table_idx);
+
+    ASSERT(fn_expr.parameters.size() == concrete_args.size(),
+           "Arity should be validated in resolve_call");
+    for (const auto& [arg_type, param] : std::views::zip(concrete_args, fn_expr.parameters)) {
+        fn_mod.set_sema_type(param.name, *arg_type);
+        const auto& ident{fn_mod.ast.get_as<ast::identifier_expr>(param.name)};
+        if (auto sym{ctx_.registry.get_from_opt(fn_table_idx, ident.name)}) {
+            sym->set_kind(symbol_kind::VALUE);
+            sym->set_status(symbol_status::RESOLVED);
+        }
+    }
+
+    type_resolver inst_resolver{fn_mod, ctx_, fn_table_idx, std::move(inst_stack)};
+    inst_resolver.resolve(fn_expr.explicit_return_type);
+    if (inst_resolver.last_type_->is_poison()) { return stdx::none; }
+    auto&      return_type{*inst_resolver.last_type_.take()};
+    const auto is_auto_return{return_type.get_kind() == type_kind::AUTO};
+    inst_resolver.return_trackers_.emplace_back(return_tracker{
+        .return_types   = {},
+        .is_auto_return = is_auto_return,
+    });
+
+    const auto  diags_before{ctx_.diags.size()};
+    const auto& block{fn_mod.ast.get_as<ast::block_stmt>(fn_expr.body)};
+    bool        resolved_poison{false};
+    for (const auto& stmt : block) {
+        inst_resolver.resolve(stmt);
+        if (inst_resolver.last_type_->is_poison()) { resolved_poison = true; }
+    }
+    if (ctx_.diags.size() > diags_before || resolved_poison) { return stdx::none; }
+
+    auto tracker{std::move(inst_resolver.return_trackers_.back())};
+    inst_resolver.return_trackers_.pop_back();
+    auto& deduced_return_type{is_auto_return ? tracker.deduced_return_type(ctx_) : return_type};
+
+    fn_mod.generic_instantiations.emplace_back(generic_instantiation_request{
+        .generic_fn_type = &callee_type,
+        .arg_types       = concrete_args,
+        .return_type     = &deduced_return_type,
+        .mangled_name =
+            fmt::format("{}__{}",
+                        fn_info.name.value_or("fn"),
+                        fmt::join(concrete_args | std::views::transform([](const auto& arg) {
+                                      return type_kind_display_name(arg->get_kind());
+                                  }),
+                                  "_")),
+        .fn_node_id = fn_info.node_id,
+    });
+    return &deduced_return_type;
 }
 
 } // namespace ghoti::sema
