@@ -241,7 +241,7 @@ namespace ghoti::sema {
 // A semantic type that is entirely owned by an arena of types
 class type {
   public:
-    static constexpr auto TYPE_ARENA_BLOCK_SIZE{64 * 1'024};
+    static constexpr auto TYPE_ARENA_BLOCK_SIZE{stdx::sizes::kib(64UZ)};
 
   public:
     using data_t = stdx::variant<types::unresolved,
