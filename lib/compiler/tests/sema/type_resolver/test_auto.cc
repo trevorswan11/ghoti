@@ -318,4 +318,97 @@ TEST_CASE("Generic function instantiation error handling") {
     }
 }
 
+TEST_CASE("Cross-module generic function instantiation") {
+    constexpr std::string_view math_gh{R"(
+        pub const identity := fn(val: auto): auto {
+            return val;
+        };
+        pub const double_val := fn(x: auto): auto {
+            return x + x;
+        };
+    )"};
+
+    auto [ctx, idx]{helpers::resolve_and_check(
+        R"(
+            import "math.gh" as math;
+            const a := math::identity(42);
+            const b := math::identity(true);
+            const c := math::double_val(100l);
+        )",
+        helpers::make_vector<helpers::mock_file>(
+            helpers::mock_file{.path = "math.gh", .source = math_gh}))};
+
+    const auto [a_sym, a_sym_data, a_node, a_type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("a", idx)};
+    CHECK(a_type == ctx->get_type(sema::type_kind::I32));
+
+    const auto [b_sym, b_sym_data, b_node, b_type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("b", idx)};
+    CHECK(b_type == ctx->get_type(sema::type_kind::BOOL));
+
+    const auto [c_sym, c_sym_data, c_node, c_type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("c", idx)};
+    CHECK(c_type == ctx->get_type(sema::type_kind::I64));
+}
+
+TEST_CASE("Generic functions with complex types and chaining") {
+    SECTION("Generic function accepting struct parameter") {
+        auto [ctx, idx]{helpers::resolve_and_check(R"(
+            const Point := struct { x: i32, y: i32, };
+            const get_x := fn(p: auto): auto {
+                return p.x;
+            };
+            const pt := Point{ .x = 10, .y = 20 };
+            const px := get_x(pt);
+        )")};
+
+        const auto [px_sym, px_sym_data, px_node, px_type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("px", idx)};
+        CHECK(px_type == ctx->get_type(sema::type_kind::I32));
+    }
+
+    SECTION("Generic function indexing slice/array") {
+        auto [ctx, idx]{helpers::resolve_and_check(R"(
+            const first := fn(arr: auto): auto {
+                return arr[0];
+            };
+            const s := "hello";
+            const c := first(s);
+        )")};
+
+        const auto [c_sym, c_sym_data, c_node, c_type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("c", idx)};
+        CHECK(c_type == ctx->get_type(sema::type_kind::U8));
+    }
+
+    SECTION("Generic function with explicit non-auto return type") {
+        auto [ctx, idx]{helpers::resolve_and_check(R"(
+            const is_positive := fn(x: auto): bool {
+                return x > 0;
+            };
+            const r := is_positive(10);
+        )")};
+
+        const auto [r_sym, r_sym_data, r_node, r_type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("r", idx)};
+        CHECK(r_type == ctx->get_type(sema::type_kind::BOOL));
+    }
+
+    SECTION("Chained generic function calls") {
+        auto [ctx, idx]{helpers::resolve_and_check(R"(
+            const inner := fn(x: auto): auto {
+                return x;
+            };
+            const outer := fn(y: auto): auto {
+                return inner(y);
+            };
+            const res := outer(42);
+        )")};
+
+        const auto [res_sym, res_sym_data, res_node, res_type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("res", idx)};
+        CHECK(res_type == ctx->get_type(sema::type_kind::I32));
+    }
+}
+
 } // namespace ghoti::tests
