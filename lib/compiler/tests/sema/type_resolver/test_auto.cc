@@ -219,4 +219,103 @@ TEST_CASE("Function return type auto inference") {
     }
 }
 
+TEST_CASE("Generic function instantiation and deduplication") {
+    SECTION("Instantiates generic function with different parameter types") {
+        auto [ctx, idx]{helpers::resolve_and_check(R"(
+            const id := fn(x: auto): auto {
+                return x;
+            };
+            const r1 := id(42);
+            const r2 := id(true);
+        )")};
+
+        const auto [r1_sym, r1_sym_data, r1_node, r1_type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("r1", idx)};
+        CHECK(r1_type == ctx->get_type(sema::type_kind::I32));
+
+        const auto [r2_sym, r2_sym_data, r2_node, r2_type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("r2", idx)};
+        CHECK(r2_type == ctx->get_type(sema::type_kind::BOOL));
+
+        CHECK(ctx->root_mod.generic_instantiations.size() == 2);
+        CHECK(ctx->root_mod.generic_instantiations[0].mangled_name == "id__i32");
+        CHECK(ctx->root_mod.generic_instantiations[1].mangled_name == "id__bool");
+    }
+
+    SECTION("Deduplicates multiple calls with identical argument types") {
+        auto [ctx, idx]{helpers::resolve_and_check(R"(
+            const id := fn(x: auto): auto {
+                return x;
+            };
+            const a := id(10);
+            const b := id(20);
+        )")};
+
+        const auto [a_sym, a_sym_data, a_node, a_type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("a", idx)};
+        CHECK(a_type == ctx->get_type(sema::type_kind::I32));
+
+        const auto [b_sym, b_sym_data, b_node, b_type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("b", idx)};
+        CHECK(b_type == ctx->get_type(sema::type_kind::I32));
+
+        CHECK(ctx->root_mod.generic_instantiations.size() == 1);
+        CHECK(ctx->root_mod.generic_instantiations[0].mangled_name == "id__i32");
+    }
+
+    SECTION("Instantiates generic function with multiple auto parameters") {
+        auto [ctx, idx]{helpers::resolve_and_check(R"(
+            const add := fn(a: auto, b: auto): auto {
+                return a + b;
+            };
+            const r1 := add(1, 2);
+            const r2 := add(10l, 20l);
+        )")};
+
+        const auto [r1_sym, r1_sym_data, r1_node, r1_type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("r1", idx)};
+        CHECK(r1_type == ctx->get_type(sema::type_kind::I32));
+
+        const auto [r2_sym, r2_sym_data, r2_node, r2_type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("r2", idx)};
+        CHECK(r2_type == ctx->get_type(sema::type_kind::I64));
+
+        CHECK(ctx->root_mod.generic_instantiations.size() == 2);
+        CHECK(ctx->root_mod.generic_instantiations[0].mangled_name == "add__i32_i32");
+        CHECK(ctx->root_mod.generic_instantiations[1].mangled_name == "add__i64_i64");
+    }
+
+    SECTION("Instantiates generic function with mixed concrete and auto parameters") {
+        auto [ctx, idx]{helpers::resolve_and_check(R"(
+            const choose := fn(flag: bool, x: auto): auto {
+                return x;
+            };
+            const r := choose(true, 99);
+        )")};
+
+        const auto [r_sym, r_sym_data, r_node, r_type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("r", idx)};
+        CHECK(r_type == ctx->get_type(sema::type_kind::I32));
+
+        CHECK(ctx->root_mod.generic_instantiations.size() == 1);
+        CHECK(ctx->root_mod.generic_instantiations[0].mangled_name == "choose__bool_i32");
+    }
+}
+
+TEST_CASE("Generic function instantiation error handling") {
+    SECTION("Type error inside generic function body poisons call site") {
+        helpers::test_resolver_fail(
+            R"(
+            const bad := fn(x: auto): auto {
+                return x.non_existent_field;
+            };
+            const res := bad(42);
+        )",
+            sema::diagnostic{
+                "Can only access inner objects inside of structs, unions, and enums; found 'i32'",
+                sema::error::TYPE_MISMATCH,
+                std::pair{2UZ, 24UZ}});
+    }
+}
+
 } // namespace ghoti::tests
