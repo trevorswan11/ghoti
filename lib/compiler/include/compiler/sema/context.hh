@@ -11,6 +11,7 @@
 #include "compiler/ast/traits.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/sema/generic.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 
@@ -20,27 +21,34 @@ namespace ghoti::sema {
 //
 // Owns its own diagnostic list
 struct context {
-    mod::module_manager&   modules;
-    symbol_table_registry& registry;
-    type_pool&             pool;
-    diagnostics            diags;
-    std::ostream&          error_stream;
-    stdx::opt_size         prelude_index;
+    mod::module_manager&         modules;
+    symbol_table_registry&       registry;
+    type_pool&                   pool;
+    generic_function_registry&   generic_functions;
+    generic_instantiation_cache& instantiation_cache;
 
-    context(mod::module_manager&   modules,
-            symbol_table_registry& registry,
-            type_pool&             pool,
-            diagnostics            diags,
-            std::ostream&          error_stream) noexcept
-        : modules{modules}, registry{registry}, pool{pool}, diags{std::move(diags)},
+    diagnostics    diags;
+    std::ostream&  error_stream;
+    stdx::opt_size prelude_index;
+
+    context(mod::module_manager&         modules,
+            symbol_table_registry&       registry,
+            type_pool&                   pool,
+            generic_function_registry&   generic_functions,
+            generic_instantiation_cache& instantiation_cache,
+            diagnostics                  diags,
+            std::ostream&                error_stream) noexcept
+        : modules{modules}, registry{registry}, pool{pool}, generic_functions{generic_functions},
+          instantiation_cache{instantiation_cache}, diags{std::move(diags)},
           error_stream{error_stream} {}
     ~context() = default;
 
     // Creates a copy with identical data but a new diagnostic list
     context(const context& other)
         : modules{other.modules}, registry{other.registry}, pool{other.pool},
-          diags{other.diags.create_new()}, error_stream{other.error_stream},
-          prelude_index{other.prelude_index} {}
+          generic_functions{other.generic_functions},
+          instantiation_cache{other.instantiation_cache}, diags{other.diags.create_new()},
+          error_stream{other.error_stream}, prelude_index{other.prelude_index} {}
 
     auto operator=(const context& other) -> context& = delete;
     context(context&&) noexcept                      = default;

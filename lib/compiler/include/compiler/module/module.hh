@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <vector>
 
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
@@ -24,6 +25,7 @@
 #include "compiler/module/error.hh"
 #include "compiler/module/source_loader.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/sema/generic.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/syntax/error.hh"
 #include "support/source_file.hh"
@@ -48,13 +50,14 @@ using diagnotic_list_variant =
     stdx::variant<stdx::monostate, syntax::diagnostics, sema::diagnostics>;
 
 struct module {
-    std::filesystem::path path;
-    std::filesystem::path parent_path;
-    source_file           source;
-    ast::AST              ast;
-    sema::side_tables     sema_side_tables;
-    stdx::opt_size        root_table_idx;
-    module_state          state{module_state::PARSED};
+    std::filesystem::path                            path;
+    std::filesystem::path                            parent_path;
+    source_file                                      source;
+    ast::AST                                         ast;
+    sema::side_tables                                sema_side_tables;
+    stdx::opt_size                                   root_table_idx;
+    module_state                                     state{module_state::PARSED};
+    std::vector<sema::generic_instantiation_request> generic_instantiations;
 
     diagnotic_list_variant diagnostics{stdx::monostate{}};
 

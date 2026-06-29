@@ -25,6 +25,7 @@
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/sema/generic.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "support/diagnostic.hh"
@@ -265,11 +266,27 @@ class type_resolver {
     auto resolve_symbol_info(ast::identifier_handle handle, stdx::option<symbol_kind> kind)
         -> stdx::option<symbol&>;
 
+    template <ast::IndexableID ID>
+    auto instantiate_generic(ID                                    call_id,
+                             type&                                 callee_type,
+                             const generic_function_info&          fn_info,
+                             gsl::span<const gsl::not_null<type*>> concrete_args)
+        -> stdx::option<gsl::not_null<type*>>;
+
     type_resolver(mod::module& resolving, context& ctx)
         : resolving_{resolving}, table_idx_{*resolving.root_table_idx}, ctx_{ctx} {
         VERIFY(ctx.prelude_index, "TypeResolver must be used after prelude-injection");
         table_stack_.push(*ctx_.prelude_index);
         table_stack_.push(table_idx_);
+    }
+
+    type_resolver(mod::module&       resolving,
+                  context&           ctx,
+                  usize              table_idx,
+                  symbol_table_stack table_stack)
+        : resolving_{resolving}, table_idx_{table_idx}, table_stack_{std::move(table_stack)},
+          ctx_{ctx} {
+        VERIFY(ctx.prelude_index, "TypeResolver must be used after prelude-injection");
     }
 
   private:
