@@ -29,8 +29,8 @@ auto test_common_decl_collection(const sema::symbol_table_registry& registry,
                                  const mod::module&                 module,
                                  usize                              idx,
                                  std::string_view                   name) -> void {
-    const auto& symbol{unwrap(registry.get_from_opt(idx, name))};
-    const auto& node{unwrap(symbol.get_data().as_opt<sema::symbols::node_t>())};
+    const auto& symbol{UNWRAP(registry.get_from_opt(idx, name))};
+    const auto& node{UNWRAP(symbol.get_data().as_opt<sema::symbols::node_t>())};
     CHECK_FALSE(symbol.is_public(module));
     CHECK(node.is<ast::decl_stmt>());
 }
@@ -47,7 +47,7 @@ sema_test_context::sema_test_context(const std::vector<mock_file>& imports,
               if (mock.name) { REQUIRE(manager.add_library_module(*mock.name, mock.path)); }
           }
 
-          return *unwrap(manager.try_get_file_module(root_path));
+          return *UNWRAP(manager.try_get_file_module(root_path));
       }()} {}
 
 auto sema_test_context::verify_registry_resolved() -> void {
@@ -86,7 +86,7 @@ auto sema_test_context::check_poisoned(const sema::symbol& sym, const sema::type
 auto sema_test_context::get_string_literal_size(ast::expr_handle           handle,
                                                 stdx::option<mod::module&> enclosing_mod) -> usize {
     const auto& module{enclosing_mod.value_or(root_mod)};
-    const auto& str_expr{helpers::unwrap(module.ast.get_as_opt<ast::string_expr>(handle))};
+    const auto& str_expr{UNWRAP(module.ast.get_as_opt<ast::string_expr>(handle))};
     return str_expr.value.size() + 1;
 }
 
@@ -94,7 +94,7 @@ auto collect(std::string_view input, const std::vector<mock_file>& imports) -> c
     auto ctx{stdx::make_box<sema_test_context>(imports, TEST_FILENAME, input)};
     check_errors<syntax::diagnostics>(ctx->root_mod);
     ctx->analyzer.collect_symbols(ctx->root_mod);
-    usize idx{helpers::unwrap(ctx->root_mod.root_table_idx)};
+    usize idx{UNWRAP(ctx->root_mod.root_table_idx)};
     return {std::move(ctx), idx};
 }
 

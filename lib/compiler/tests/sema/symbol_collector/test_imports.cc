@@ -46,8 +46,8 @@ TEST_CASE("Public import query") {
                                    helpers::make_vector<mock_file>(mock_file{
                                        .path = "std.gh", .source = "var a: i32;", .name = "std"}))};
 
-    auto&       table{helpers::unwrap(ctx->analyzer.get_table_opt(idx))};
-    const auto& std_import{helpers::unwrap(table.get_opt("std"))};
+    auto&       table{UNWRAP(ctx->analyzer.get_table_opt(idx))};
+    const auto& std_import{UNWRAP(table.get_opt("std"))};
     CHECK(std_import.is_public(ctx->root_mod));
 }
 

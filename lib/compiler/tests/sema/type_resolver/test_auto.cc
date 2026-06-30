@@ -83,7 +83,7 @@ TEST_CASE("Illegal auto usage in structural types") {
         const auto [s_sym, s_sym_data, s_node_data, s_type]{
             ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("S", idx)};
         CHECK(s_sym.get_kind_opt() == sema::symbol_kind::TYPE);
-        const auto struct_idx{helpers::unwrap(s_type.get_symbol_table_idx_opt(), 1UZ)};
+        const auto struct_idx{UNWRAP(s_type.get_symbol_table_idx_opt(), 1UZ)};
 
         const auto [a_sym, a_sym_data, a_type]{ctx->get_type_sym_info<syms::struct_field>(
             "a", struct_idx, stdx::none, &syms::struct_field::name)};

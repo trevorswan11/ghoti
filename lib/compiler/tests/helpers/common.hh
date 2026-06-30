@@ -8,12 +8,14 @@
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/base.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <gsl/span>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
+#include <string_view>
 
 #include "compiler/module/module.hh"
 
@@ -24,20 +26,34 @@ concept Unwrappable = stdx::Option<std::remove_cvref_t<T>> ||
                       stdx::Result<std::remove_cvref_t<T>> || stdx::OptSize<std::remove_cvref_t<T>>;
 
 // Unpacks the value in the option or result and returns its value if present
-template <Unwrappable U> [[nodiscard]] auto unwrap(U&& u) -> decltype(auto) {
+template <Unwrappable U>
+[[nodiscard]] auto unwrap(U&& u, std::string_view expr, std::string_view file, i32 line)
+    -> decltype(auto) {
+    if (!u) { fmt::println("unwrap called on disengaged value ({}): {}:{}", expr, file, line); }
     REQUIRE(u);
-    return *u;
+    return *std::forward<U>(u);
 }
 
 // Unpacks the value in the option or result and returns its value if present and equal to expected
 template <Unwrappable U, typename E>
-[[nodiscard]] auto unwrap(U&& u, E&& expected_value) -> decltype(auto) {
-    REQUIRE(u);
-    REQUIRE(*u == std::forward<E>(expected_value));
-    return *u;
+[[nodiscard]] auto
+unwrap(U&& u, E&& expected_value, std::string_view expr, std::string_view file, i32 line)
+    -> decltype(auto) {
+    decltype(auto) unwrapped{unwrap(std::forward<U>(u), expr, file, line)};
+    REQUIRE(unwrapped == std::forward<E>(expected_value));
+    return unwrapped;
 }
 
-template <Unwrappable U> auto unwrap_err(U&& u) -> decltype(auto) {
+#define UNWRAP_1(expr) ::ghoti::tests::helpers::unwrap((expr), #expr, __FILE__, __LINE__)
+#define UNWRAP_2(expr, expected) \
+    ::ghoti::tests::helpers::unwrap((expr), (expected), #expr, __FILE__, __LINE__)
+
+#define UNWRAP_MACRO(_1, _2, NAME, ...) NAME
+#define UNWRAP(...) UNWRAP_MACRO(__VA_ARGS__, UNWRAP_2, UNWRAP_1)(__VA_ARGS__)
+
+template <Unwrappable U>
+auto unwrap_err(U&& u, std::string_view expr, std::string_view file, int line) -> decltype(auto) {
+    if (u) { fmt::println("unwrap_err called on engaged value ({}): {}:{}", expr, file, line); }
     using T = std::remove_cvref_t<U>;
     if constexpr (stdx::Option<T>) {
         REQUIRE_FALSE(u);
@@ -46,6 +62,8 @@ template <Unwrappable U> auto unwrap_err(U&& u) -> decltype(auto) {
         return u.error();
     }
 }
+
+#define UNWRAP_ERR(expr) ::ghoti::tests::helpers::unwrap_err((expr), #expr, __FILE__, __LINE__)
 
 // Checks if the error list is empty, dumping the list's contents otherwise.
 template <typename E> auto check_errors(gsl::span<const E> errors) {
@@ -82,7 +100,7 @@ auto check_errors_against(gsl::span<const E> errors, Es&&... expected_errors) {
 
 template <typename DiagList, std::same_as<typename DiagList::value_type>... Es>
 auto check_errors_against(const mod::module& module, Es&&... expected_errors) {
-    const auto& diags{unwrap(module.diagnostics.as_opt<DiagList>())};
+    const auto& diags{UNWRAP(module.diagnostics.as_opt<DiagList>())};
     check_errors_against<typename DiagList::value_type>(diags,
                                                         std::forward<Es>(expected_errors)...);
 }

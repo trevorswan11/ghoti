@@ -31,7 +31,7 @@ TEST_CASE("If expression collection") {
 
     auto& analyzer{ctx->analyzer};
     CHECK(analyzer.get_registry().size() == 3);
-    const auto& actual{helpers::unwrap(analyzer.get_table_opt(idx))};
+    const auto& actual{UNWRAP(analyzer.get_table_opt(idx))};
     CHECK(actual.size() == 1);
     REQUIRE(actual.get_opt("a"));
 
@@ -48,7 +48,7 @@ TEST_CASE("Match expression collection") {
 
     auto& registry{ctx->analyzer.get_registry()};
     CHECK(registry.size() == 7);
-    const auto& actual{helpers::unwrap(registry.get_opt(idx))};
+    const auto& actual{UNWRAP(registry.get_opt(idx))};
     CHECK(actual.size() == 1);
     REQUIRE(actual.get_opt("a"));
 

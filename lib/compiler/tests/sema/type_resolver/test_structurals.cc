@@ -247,9 +247,9 @@ TEST_CASE("Illegal circular module-based access resolution") {
         R"(import "a.gh" as a; using A = a::A;)",
         helpers::make_vector<mock_file>(mock_file{.path = "a.gh", .source = a_gh},
                                         mock_file{.path = "b.gh", .source = b_gh}))};
-    auto& test_module{*helpers::unwrap(ctx->manager.try_get_file_module("test.gh"))};
-    auto& a_module{*helpers::unwrap(ctx->manager.try_get_file_module("a.gh"))};
-    auto& b_module{*helpers::unwrap(ctx->manager.try_get_file_module("b.gh"))};
+    auto& test_module{*UNWRAP(ctx->manager.try_get_file_module("test.gh"))};
+    auto& a_module{*UNWRAP(ctx->manager.try_get_file_module("a.gh"))};
+    auto& b_module{*UNWRAP(ctx->manager.try_get_file_module("b.gh"))};
 
     helpers::check_errors_against<sema::diagnostics>(
         b_module,

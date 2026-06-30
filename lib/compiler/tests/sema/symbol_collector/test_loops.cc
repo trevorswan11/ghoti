@@ -27,7 +27,7 @@ namespace {
         ctx->get_ast_sym_info<sema::symbols::node_t, ast::decl_stmt>("a", 0)};
     CHECK_FALSE(sym.has_kind());
 
-    const auto& actual_type{helpers::unwrap(ctx->root_mod.get_sema_type_opt(*node_data.value))};
+    const auto& actual_type{UNWRAP(ctx->root_mod.get_sema_type_opt(*node_data.value))};
     CHECK(actual_type == ctx->get_type(sema::type_kind::BLOCK, loop_block_idx));
     return std::move(ctx);
 }
@@ -48,9 +48,9 @@ TEST_CASE("For loop collection") {
                        3)};
 
     const auto& loop_table{ctx->analyzer.get_table(3)};
-    const auto& i_symbol{helpers::unwrap(loop_table.get_opt("i"))};
+    const auto& i_symbol{UNWRAP(loop_table.get_opt("i"))};
     CHECK(i_symbol.get_data().as_opt<sema::symbols::for_loop_capture>());
-    const auto& j_symbol{helpers::unwrap(loop_table.get_opt("i"))};
+    const auto& j_symbol{UNWRAP(loop_table.get_opt("i"))};
     CHECK(j_symbol.get_data().as_opt<sema::symbols::for_loop_capture>());
 
     ctx->test_common_decl_collection(2);

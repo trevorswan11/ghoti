@@ -30,7 +30,7 @@ auto test_builtin_resolve(const syntax::builtin_t& builtin,
 
     // Quickly check to make sure the prelude table has the builtin
     const auto [builtin_sym, builtin_sym_data]{ctx->get_symbol<syms::builtin>(
-        builtin.name, helpers::unwrap(ctx->analyzer.get_prelude_index_opt()))};
+        builtin.name, UNWRAP(ctx->analyzer.get_prelude_index_opt()))};
     CHECK(builtin_sym.get_kind_opt() == sema::symbol_kind::CALLABLE);
     const auto& builtin_type{builtin_sym_data.get_type()};
     CHECK(builtin_type.get_data().as_opt<sema::types::builtin_function>());
@@ -41,9 +41,8 @@ auto test_builtin_resolve(const syntax::builtin_t& builtin,
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("foo", idx)};
     CHECK(expected_type == decl_type);
 
-    const auto& call =
-        helpers::unwrap(ctx->root_mod.ast.get_as_opt<ast::call_expr>(*decl_node_data.value));
-    const auto& call_type{helpers::unwrap(ctx->root_mod.get_sema_type_opt(call.function))};
+    const auto& call = UNWRAP(ctx->root_mod.ast.get_as_opt<ast::call_expr>(*decl_node_data.value));
+    const auto& call_type{UNWRAP(ctx->root_mod.get_sema_type_opt(call.function))};
     CHECK(builtin_type == call_type);
 }
 
@@ -106,9 +105,9 @@ TEST_CASE("Deferred return type from typeOf") {
         ctx->get_ast_type_sym_info<syms::node_t, ast::using_stmt>("B", idx)};
 
     const auto& call =
-        helpers::unwrap(ctx->root_mod.ast.get_as_opt<ast::call_expr>(node_data.explicit_type));
+        UNWRAP(ctx->root_mod.ast.get_as_opt<ast::call_expr>(node_data.explicit_type));
     CHECK(type == ctx->get_type(sema::type_kind::TYPE, &call));
-    CHECK(&call == &helpers::unwrap(type.get_data().as_opt<sema::types::deferred_call>()).call);
+    CHECK(&call == &UNWRAP(type.get_data().as_opt<sema::types::deferred_call>()).call);
 }
 
 TEST_CASE("Builtin pointer conversions") {

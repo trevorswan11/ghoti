@@ -83,9 +83,9 @@ TEST_CASE("Full sema pipeline") {
         CHECK(main_sym.is_public(root_module));
         CHECK(main_sym.get_kind_opt() == sema::symbol_kind::CALLABLE);
         const auto& fn_expr{
-            helpers::unwrap(root_module.ast.get_as_opt<ast::function_expr>(*main_node_data.value))};
+            UNWRAP(root_module.ast.get_as_opt<ast::function_expr>(*main_node_data.value))};
 
-        const auto fn_idx{helpers::unwrap(main_type.get_symbol_table_idx_opt(), 4UZ)};
+        const auto fn_idx{UNWRAP(main_type.get_symbol_table_idx_opt(), 4UZ)};
         CHECK(main_type == ctx->get_type(sema::type_kind::FUNCTION, fn_idx));
         CHECK(main_type_data.params.size() == 1);
 
@@ -104,7 +104,7 @@ TEST_CASE("Full sema pipeline") {
             CHECK(param_type == u8_slice_slice_type);
 
             const auto& args_param_explicit_type =
-                helpers::unwrap(root_module.get_sema_type_opt(param_sym_data.explicit_type));
+                UNWRAP(root_module.get_sema_type_opt(param_sym_data.explicit_type));
             CHECK(args_param_explicit_type == u8_slice_slice_type);
             CHECK(*main_type_data.params[0] == u8_slice_slice_type);
         }
@@ -127,29 +127,25 @@ TEST_CASE("Full sema pipeline") {
             CHECK(msg_type == ctx->get_type(sema::type_kind::ARRAY, true, msg_size, u8_type));
 
             const auto& call_expr{helpers::lookup_expression<ast::call_expr>(
-                helpers::unwrap(root_module.ast.get_as_opt<ast::block_stmt>(fn_expr.body)),
-                root_module)};
+                UNWRAP(root_module.ast.get_as_opt<ast::block_stmt>(fn_expr.body)), root_module)};
 
             CHECK(call_expr.arguments.size() == 1);
-            const auto arg{helpers::unwrap(call_expr.arguments[0].as_opt<ast::expr_handle>())};
-            auto&      arg_type{helpers::unwrap(ctx->root_mod.get_sema_type_opt(arg))};
+            const auto arg{UNWRAP(call_expr.arguments[0].as_opt<ast::expr_handle>())};
+            auto&      arg_type{UNWRAP(ctx->root_mod.get_sema_type_opt(arg))};
             CHECK(arg_type == msg_type);
 
-            const auto& access_expr{helpers::unwrap(
-                root_module.ast.get_as_opt<ast::module_access_expr>(call_expr.function))};
-            const auto& println_fn_type =
-                helpers::unwrap(root_module.get_sema_type_opt(access_expr.inner));
+            const auto& access_expr{
+                UNWRAP(root_module.ast.get_as_opt<ast::module_access_expr>(call_expr.function))};
+            const auto& println_fn_type = UNWRAP(root_module.get_sema_type_opt(access_expr.inner));
             CHECK(println_fn_type == ctx->get_type(sema::type_kind::FUNCTION, 3));
 
             // The outer part of resolution should be two modules
-            const auto& access_outer{helpers::unwrap(
-                root_module.ast.get_as_opt<ast::module_access_expr>(access_expr.outer))};
-            const auto& access_std_expr =
-                helpers::unwrap(root_module.get_sema_type_opt(access_outer.outer));
+            const auto& access_outer{
+                UNWRAP(root_module.ast.get_as_opt<ast::module_access_expr>(access_expr.outer))};
+            const auto& access_std_expr = UNWRAP(root_module.get_sema_type_opt(access_outer.outer));
             CHECK(access_std_expr == std_module_type);
 
-            const auto& access_io_expr =
-                helpers::unwrap(root_module.get_sema_type_opt(access_outer.inner));
+            const auto& access_io_expr = UNWRAP(root_module.get_sema_type_opt(access_outer.inner));
             CHECK(access_io_expr == io_module_type);
         }
     }
@@ -165,7 +161,7 @@ TEST_CASE("Full sema pipeline") {
         CHECK(println_sym.is_public(io_module));
         CHECK(println_sym.get_kind_opt() == sema::symbol_kind::CALLABLE);
 
-        const auto fn_idx{helpers::unwrap(println_type.get_symbol_table_idx_opt(), 3UZ)};
+        const auto fn_idx{UNWRAP(println_type.get_symbol_table_idx_opt(), 3UZ)};
         CHECK(println_type == ctx->get_type(sema::type_kind::FUNCTION, fn_idx));
         CHECK(println_type_data.params.size() == 1);
 
@@ -182,7 +178,7 @@ TEST_CASE("Full sema pipeline") {
             CHECK(param_type == u8_slice_type);
 
             const auto& str_param_explicit_type =
-                helpers::unwrap(io_module.get_sema_type_opt(param_sym_data.explicit_type));
+                UNWRAP(io_module.get_sema_type_opt(param_sym_data.explicit_type));
             CHECK(str_param_explicit_type == u8_slice_type);
             CHECK(*println_type_data.params[0] == u8_slice_type);
         }

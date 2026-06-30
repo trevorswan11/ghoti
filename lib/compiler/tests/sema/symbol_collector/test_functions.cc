@@ -23,13 +23,11 @@ TEST_CASE("Function hollow types") {
         ctx->get_ast_sym_info<syms::node_t, ast::decl_stmt>("a", idx)};
     CHECK(sym.get_kind_opt() == sema::symbol_kind::CALLABLE);
 
-    const auto& fn_type{helpers::unwrap(ctx->root_mod.get_sema_type_opt(*node_data.value))};
+    const auto& fn_type{UNWRAP(ctx->root_mod.get_sema_type_opt(*node_data.value))};
     CHECK(fn_type == ctx->get_type(sema::type_kind::FUNCTION, 1));
 
-    REQUIRE(helpers::unwrap(registry.get_from_opt(1, "self"))
-                .get_data()
-                .as_opt<syms::self_parameter>());
-    REQUIRE(helpers::unwrap(registry.get_from_opt(1, "c")).get_data().as_opt<syms::parameter>());
+    REQUIRE(UNWRAP(registry.get_from_opt(1, "self")).get_data().as_opt<syms::self_parameter>());
+    REQUIRE(UNWRAP(registry.get_from_opt(1, "c")).get_data().as_opt<syms::parameter>());
     ctx->test_common_decl_collection(1);
 }
 

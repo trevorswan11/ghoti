@@ -95,8 +95,8 @@ struct sema_test_context {
     // Contains [symbol, symbol data]
     template <typename SymbolData>
     [[nodiscard]] auto get_symbol(std::string_view name, usize table_idx) {
-        const auto& symbol{helpers::unwrap(analyzer.get_registry().get_from_opt(table_idx, name))};
-        const auto& symbol_data{helpers::unwrap(symbol.get_data().as_opt<SymbolData>())};
+        const auto& symbol{UNWRAP(analyzer.get_registry().get_from_opt(table_idx, name))};
+        const auto& symbol_data{UNWRAP(symbol.get_data().as_opt<SymbolData>())};
         return std::tie(symbol, symbol_data);
     }
 
@@ -109,7 +109,7 @@ struct sema_test_context {
         auto        info{get_symbol<SymbolData>(name, table_idx)};
         auto&       enclosing{module.value_or(root_mod)};
         const auto& type =
-            helpers::unwrap(enclosing.get_sema_type_opt(std::invoke(proj, std::get<1>(info))));
+            UNWRAP(enclosing.get_sema_type_opt(std::invoke(proj, std::get<1>(info))));
         return std::tuple_cat(info, std::forward_as_tuple(type));
     }
 
@@ -120,8 +120,7 @@ struct sema_test_context {
                                               stdx::option<mod::module&> module = stdx::none,
                                               Proj                       proj   = {}) {
         auto        info{get_type_sym_info<SymbolData>(name, table_idx, module, proj)};
-        const auto& type_data =
-            helpers::unwrap(std::get<2>(info).get_data().template as_opt<TypeData>());
+        const auto& type_data = UNWRAP(std::get<2>(info).get_data().template as_opt<TypeData>());
         return std::tuple_cat(info, std::forward_as_tuple(type_data));
     }
 
@@ -133,8 +132,8 @@ struct sema_test_context {
                                         Proj                       proj   = {}) {
         auto        info{get_symbol<SymbolData>(name, table_idx)};
         auto&       enclosing{module.value_or(root_mod)};
-        const auto& node_data{helpers::unwrap(
-            enclosing.ast.get_as_opt<TreeData>(std::invoke(proj, std::get<1>(info))))};
+        const auto& node_data{
+            UNWRAP(enclosing.ast.get_as_opt<TreeData>(std::invoke(proj, std::get<1>(info))))};
         return std::tuple_cat(info, std::forward_as_tuple(node_data));
     }
 
@@ -147,7 +146,7 @@ struct sema_test_context {
         auto        info{get_ast_sym_info<SymbolData, TreeData>(name, table_idx, module, proj)};
         auto&       enclosing{module.value_or(root_mod)};
         const auto& type =
-            helpers::unwrap(enclosing.get_sema_type_opt(std::invoke(proj, std::get<1>(info))));
+            UNWRAP(enclosing.get_sema_type_opt(std::invoke(proj, std::get<1>(info))));
         return std::tuple_cat(info, std::forward_as_tuple(type));
     }
 
@@ -157,8 +156,7 @@ struct sema_test_context {
                                          usize                      table_idx,
                                          stdx::option<mod::module&> module = stdx::none) {
         auto        info{get_ast_type_sym_info<SymbolData, TreeData>(name, table_idx, module)};
-        const auto& type_data =
-            helpers::unwrap(std::get<3>(info).get_data().template as_opt<TypeData>());
+        const auto& type_data = UNWRAP(std::get<3>(info).get_data().template as_opt<TypeData>());
         return std::tuple_cat(info, std::forward_as_tuple(type_data));
     }
 
@@ -232,8 +230,7 @@ template <ast::NodeData Node, typename NodeIterable>
     for (const auto& body_id : nodes) {
         if (const auto& expr_stmt{module.ast.get_as_opt<ast::expr_stmt>(body_id)}) {
             if (expr_stmt->expression.template is<ast::call_expr>()) {
-                return helpers::unwrap(
-                    module.ast.get_as_opt<ast::call_expr>(expr_stmt->expression));
+                return UNWRAP(module.ast.get_as_opt<ast::call_expr>(expr_stmt->expression));
             }
         }
     }

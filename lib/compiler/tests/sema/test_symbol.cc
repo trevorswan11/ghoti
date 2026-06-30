@@ -44,10 +44,10 @@ TEST_CASE("Basic table operations") {
     CHECK_FALSE(table.empty());
 
     CHECK(table.has("a"));
-    const auto& retrieved{helpers::unwrap(table.get_opt("a"))};
+    const auto& retrieved{UNWRAP(table.get_opt("a"))};
     CHECK(retrieved.get_name() == "a");
 
-    const auto symbolic_node{helpers::unwrap(retrieved.get_data().as_opt<sema::symbols::node_t>())};
+    const auto symbolic_node{UNWRAP(retrieved.get_data().as_opt<sema::symbols::node_t>())};
     CHECK(symbolic_node->is<ast::import_stmt>());
 }
 
@@ -62,8 +62,8 @@ TEST_CASE("Duplicate table inserts") {
 TEST_CASE("Illegal registry insert") {
     const auto [module, import_handle, memory]{setup_basic_import()};
     sema::symbol_table_registry registry;
-    const auto                  actual{helpers::unwrap_err(
-        registry.insert_into<sema::symbols::node_t>(0, *module, "a", import_handle))};
+    const auto                  actual{
+        UNWRAP_ERR(registry.insert_into<sema::symbols::node_t>(0, *module, "a", import_handle))};
     CHECK(actual == sema::diagnostic{sema::error::INVALID_TABLE_IDX});
 }
 

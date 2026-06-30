@@ -13,7 +13,7 @@ TEST_CASE("Correct add/load cycle") {
     mod::memory_loader loader;
     loader.add("mock", expected_content);
 
-    const auto content{helpers::unwrap(loader.load("mock"))};
+    const auto content{UNWRAP(loader.load("mock"))};
     CHECK(content == expected_content);
 }
 
@@ -24,13 +24,13 @@ TEST_CASE("Overwriting entries in the VFS") {
     const std::string expected_content = "This is the good content";
     loader.add("mock", expected_content);
 
-    const auto content{helpers::unwrap(loader.load("mock"))};
+    const auto content{UNWRAP(loader.load("mock"))};
     CHECK(content == expected_content);
 }
 
 TEST_CASE("Missing path in VFS") {
     mod::memory_loader loader;
-    const auto         actual{helpers::unwrap_err(loader.load("mock"))};
+    const auto         actual{UNWRAP_ERR(loader.load("mock"))};
 
     const mod::diagnostic expected{"Could not find path 'mock' in virtual file system",
                                    mod::error::PATH_DOES_NOT_EXIST};
