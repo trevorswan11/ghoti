@@ -38,6 +38,9 @@ enum class error : u8 {
     ILLEGAL_MATCH_PATTERN,
     AUTO_WITHOUT_INITIALIZER,
     ILLEGAL_AUTO_USAGE,
+    CONSTEXPR_EVALUATION_FAILED,
+    CONSTEXPR_RECURSION_LIMIT_EXCEEDED,
+    GIR_FORBIDDEN_TYPE,
 };
 
 using diagnostic  = diagnostic<error>;

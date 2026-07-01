@@ -49,6 +49,7 @@ class analyzer {
     MAKE_DEDUCING_GETTER(pool);
     MAKE_DEDUCING_GETTER(generic_functions);
     MAKE_DEDUCING_GETTER(instantiation_cache);
+    MAKE_DEDUCING_GETTER(ctx);
 
     [[nodiscard]] auto get_prelude_index_opt() const noexcept -> stdx::opt_size {
         return ctx_.prelude_index;
