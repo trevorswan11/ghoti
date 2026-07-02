@@ -60,6 +60,13 @@ class const_eval {
 
     auto eval_node(ast::node_id id) -> stdx::option<const_value>;
     auto eval_binary(ast::node_id id, const ast::binary_expr& binary) -> stdx::option<const_value>;
+    auto eval_assignment(ast::node_id                id,
+                         const ast::assignment_expr& assign,
+                         syntax::token_type_t        op_type) -> stdx::option<const_value>;
+    auto fold_binary_values(syntax::token_type_t op_type,
+                            const const_value&   lhs,
+                            const const_value&   rhs,
+                            ast::node_id         id) -> stdx::option<const_value>;
     auto eval_unary(ast::node_id id, const ast::unary_expr& unary) -> stdx::option<const_value>;
     auto eval_ident(ast::node_id id, const ast::identifier_expr& ident)
         -> stdx::option<const_value>;
@@ -74,8 +81,13 @@ class const_eval {
     auto eval_decl(ast::node_id id, const ast::decl_stmt& decl) -> stdx::option<const_value>;
     auto eval_block(ast::node_id id, const ast::block_stmt& block) -> stdx::option<const_value>;
     auto eval_if(ast::node_id id, const ast::if_expr& if_expr) -> stdx::option<const_value>;
+    auto eval_while(ast::node_id id, const ast::while_loop_expr& loop) -> stdx::option<const_value>;
+    auto eval_do_while(ast::node_id id, const ast::do_while_loop_expr& loop)
+        -> stdx::option<const_value>;
+    auto eval_for(ast::node_id id, const ast::for_loop_expr& loop) -> stdx::option<const_value>;
 
     auto lookup_local_binding(std::string_view name) const noexcept -> stdx::option<const_value>;
+    auto mutate_local_binding(std::string_view name, const_value val) -> bool;
 
   private:
     usize                                            max_recursion_depth_{256};

@@ -6,6 +6,7 @@
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -13,6 +14,7 @@
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
@@ -34,12 +36,85 @@
 
 namespace ghoti::gir {
 
+namespace {
+
+[[nodiscard]] constexpr auto get_compound_base_op(syntax::token_type_t tok) noexcept
+    -> stdx::option<syntax::token_type_t> {
+    switch (tok) {
+    case syntax::token_type_t::PLUS_ASSIGN:    return syntax::token_type_t::PLUS;
+    case syntax::token_type_t::MINUS_ASSIGN:   return syntax::token_type_t::MINUS;
+    case syntax::token_type_t::STAR_ASSIGN:    return syntax::token_type_t::STAR;
+    case syntax::token_type_t::SLASH_ASSIGN:   return syntax::token_type_t::SLASH;
+    case syntax::token_type_t::PERCENT_ASSIGN: return syntax::token_type_t::PERCENT;
+    case syntax::token_type_t::BW_AND_ASSIGN:  return syntax::token_type_t::BW_AND;
+    case syntax::token_type_t::BW_OR_ASSIGN:   return syntax::token_type_t::BW_OR;
+    case syntax::token_type_t::XOR_ASSIGN:     return syntax::token_type_t::CARET;
+    case syntax::token_type_t::SHL_ASSIGN:     return syntax::token_type_t::SHL;
+    case syntax::token_type_t::SHR_ASSIGN:     return syntax::token_type_t::SHR;
+    default:                                   return stdx::none;
+    }
+}
+
+template <typename T>
+[[nodiscard]] auto fold_binary_arithmetic(syntax::token_type_t      op_type,
+                                          T                         l,
+                                          T                         r,
+                                          stdx::option<sema::type&> res_type,
+                                          sema::type&               bool_type,
+                                          auto&& on_div_zero) -> stdx::option<const_value> {
+    switch (op_type) {
+    case syntax::token_type_t::PLUS:  return const_value{l + r, res_type};
+    case syntax::token_type_t::MINUS: return const_value{l - r, res_type};
+    case syntax::token_type_t::STAR:  return const_value{l * r, res_type};
+    case syntax::token_type_t::SLASH:
+        if (r == 0) { return on_div_zero("Division by zero in compile-time constant expression"); }
+        return const_value{l / r, res_type};
+    case syntax::token_type_t::PERCENT:
+        if constexpr (std::is_integral_v<T>) {
+            if (r == 0) {
+                return on_div_zero("Modulo by zero in compile-time constant expression");
+            }
+            return const_value{l % r, res_type};
+        } else {
+            return stdx::none;
+        }
+    case syntax::token_type_t::BW_AND:
+        if constexpr (std::is_integral_v<T>) { return const_value{l & r, res_type}; }
+        return stdx::none;
+    case syntax::token_type_t::BW_OR:
+        if constexpr (std::is_integral_v<T>) { return const_value{l | r, res_type}; }
+        return stdx::none;
+    case syntax::token_type_t::CARET:
+        if constexpr (std::is_integral_v<T>) { return const_value{l ^ r, res_type}; }
+        return stdx::none;
+    case syntax::token_type_t::SHL:
+        if constexpr (std::is_integral_v<T>) { return const_value{l << r, res_type}; }
+        return stdx::none;
+    case syntax::token_type_t::SHR:
+        if constexpr (std::is_integral_v<T>) { return const_value{l >> r, res_type}; }
+        return stdx::none;
+    case syntax::token_type_t::EQ:    return const_value{l == r, bool_type};
+    case syntax::token_type_t::NEQ:   return const_value{l != r, bool_type};
+    case syntax::token_type_t::LT:    return const_value{l < r, bool_type};
+    case syntax::token_type_t::LT_EQ: return const_value{l <= r, bool_type};
+    case syntax::token_type_t::GT:    return const_value{l > r, bool_type};
+    case syntax::token_type_t::GT_EQ: return const_value{l >= r, bool_type};
+    default:                          return stdx::none;
+    }
+}
+
+} // namespace
+
 auto const_eval::try_eval(ast::node_id id) -> stdx::option<const_value> {
     const auto key{id.get_index()};
-    if (auto cached{memo_cache_.find(key)}; cached != memo_cache_.end()) { return cached->second; }
+    if (call_stack_.empty()) {
+        if (auto cached{memo_cache_.find(key)}; cached != memo_cache_.end()) {
+            return cached->second;
+        }
+    }
 
     auto res{eval_node(id)};
-    if (res) { memo_cache_.emplace(key, *res); }
+    if (res && call_stack_.empty()) { memo_cache_.emplace(key, *res); }
     return res;
 }
 
@@ -227,6 +302,16 @@ auto const_eval::lookup_local_binding(std::string_view name) const noexcept
     return stdx::none;
 }
 
+auto const_eval::mutate_local_binding(std::string_view name, const_value val) -> bool {
+    for (auto& frame : std::views::reverse(call_stack_)) {
+        if (auto it{frame.bindings.find(name)}; it != frame.bindings.end()) {
+            it->second = std::move(val);
+            return true;
+        }
+    }
+    return false;
+}
+
 auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
     if (!id.is_valid()) { return stdx::none; }
 
@@ -280,12 +365,95 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
             return const_value{undefined_val{},
                                ctx_.get_builtin_resolved_type(sema::type_kind::UNDEFINED)};
         },
+        [&](const ast::assignment_expr& data) {
+            return eval_assignment(id, data, id.get_token_type());
+        },
         [&](const ast::binary_expr& data) { return eval_binary(id, data); },
         [&](const ast::unary_expr& data) { return eval_unary(id, data); },
         [&](const ast::identifier_expr& data) { return eval_ident(id, data); },
         [&](const ast::call_expr& data) { return eval_call(id, data); },
         [&](const ast::if_expr& data) { return eval_if(id, data); },
+        [&](const ast::while_loop_expr& data) { return eval_while(id, data); },
+        [&](const ast::do_while_loop_expr& data) { return eval_do_while(id, data); },
+        [&](const ast::for_loop_expr& data) { return eval_for(id, data); },
         [&](ast::grouped_expr) { return try_eval(id); });
+}
+
+auto const_eval::eval_assignment(ast::node_id                id,
+                                 const ast::assignment_expr& assign,
+                                 syntax::token_type_t        op_type) -> stdx::option<const_value> {
+    const auto ident{module_.ast.get_as_opt<ast::identifier_expr>(assign.lhs)};
+    if (!ident) { return stdx::none; }
+
+    if (op_type == syntax::token_type_t::ASSIGN) {
+        const auto rhs{try_eval(assign.rhs)};
+        if (!rhs) { return stdx::none; }
+        if (!mutate_local_binding(ident->name, *rhs)) { return stdx::none; }
+        return rhs;
+    }
+
+    if (const auto base_op{get_compound_base_op(op_type)}) {
+        const auto lhs_val{try_eval(assign.lhs)};
+        const auto rhs_val{try_eval(assign.rhs)};
+        if (!lhs_val || !rhs_val) { return stdx::none; }
+
+        const auto folded{fold_binary_values(*base_op, *lhs_val, *rhs_val, id)};
+        if (!folded) { return stdx::none; }
+
+        if (!mutate_local_binding(ident->name, *folded)) { return stdx::none; }
+        return folded;
+    }
+
+    return stdx::none;
+}
+
+auto const_eval::fold_binary_values(syntax::token_type_t op_type,
+                                    const const_value&   lhs,
+                                    const const_value&   rhs,
+                                    ast::node_id         id) -> stdx::option<const_value> {
+    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+
+    const auto on_div_zero = [&](std::string_view msg) -> const_value {
+        ctx_.diags.emplace_back(std::string{msg},
+                                sema::error::CONSTEXPR_EVALUATION_FAILED,
+                                module_.ast.location_of(id));
+        return const_value::make_poison();
+    };
+
+    if (lhs.is<f64>() || rhs.is<f64>()) {
+        const auto l{lhs.is<f64>() ? lhs.as<f64>()
+                                   : (lhs.is<i64>() ? static_cast<f64>(lhs.as<i64>())
+                                                    : static_cast<f64>(lhs.as<u64>()))};
+        const auto r{rhs.is<f64>() ? rhs.as<f64>()
+                                   : (rhs.is<i64>() ? static_cast<f64>(rhs.as<i64>())
+                                                    : static_cast<f64>(rhs.as<u64>()))};
+        const auto res_type{lhs.get_type() ? lhs.get_type() : rhs.get_type()};
+        return fold_binary_arithmetic(op_type, l, r, res_type, bool_type, on_div_zero);
+    }
+
+    const auto is_unsigned{(lhs.is<u64>() || rhs.is<u64>()) && !lhs.is<i64>()};
+    if (is_unsigned) {
+        const auto l{lhs.is<u64>() ? lhs.as<u64>() : static_cast<u64>(lhs.as<i64>())};
+        const auto r{rhs.is<u64>() ? rhs.as<u64>() : static_cast<u64>(rhs.as<i64>())};
+        const auto res_type{lhs.get_type() ? lhs.get_type() : rhs.get_type()};
+        return fold_binary_arithmetic(op_type, l, r, res_type, bool_type, on_div_zero);
+    }
+
+    if ((lhs.is<i64>() || lhs.is<u64>()) && (rhs.is<i64>() || rhs.is<u64>())) {
+        const auto l{lhs.is<i64>() ? lhs.as<i64>() : static_cast<i64>(lhs.as<u64>())};
+        const auto r{rhs.is<i64>() ? rhs.as<i64>() : static_cast<i64>(rhs.as<u64>())};
+        const auto res_type{lhs.get_type() ? lhs.get_type() : rhs.get_type()};
+        return fold_binary_arithmetic(op_type, l, r, res_type, bool_type, on_div_zero);
+    }
+
+    if (lhs.is<bool>() && rhs.is<bool>()) {
+        const auto l{lhs.as<bool>()};
+        const auto r{rhs.as<bool>()};
+        if (op_type == syntax::token_type_t::EQ) { return const_value{l == r, bool_type}; }
+        if (op_type == syntax::token_type_t::NEQ) { return const_value{l != r, bool_type}; }
+    }
+
+    return stdx::none;
 }
 
 auto const_eval::eval_binary(ast::node_id id, const ast::binary_expr& binary)
@@ -318,137 +486,8 @@ auto const_eval::eval_binary(ast::node_id id, const ast::binary_expr& binary)
     const auto lhs{try_eval(binary.lhs)};
     const auto rhs{try_eval(binary.rhs)};
     if (!lhs || !rhs) { return stdx::none; }
-    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
 
-    // Float operations
-    const auto lhs_is_f64{lhs->is<f64>()};
-    const auto rhs_is_f64{rhs->is<f64>()};
-    if (lhs_is_f64 || rhs_is_f64) {
-        const auto l{lhs_is_f64 ? lhs->as<f64>()
-                                : (lhs->is<i64>() ? static_cast<f64>(lhs->as<i64>())
-                                                  : static_cast<f64>(lhs->as<u64>()))};
-        const auto r{rhs_is_f64 ? rhs->as<f64>()
-                                : (rhs->is<i64>() ? static_cast<f64>(rhs->as<i64>())
-                                                  : static_cast<f64>(rhs->as<u64>()))};
-        const auto res_type{lhs->get_type() ? lhs->get_type() : rhs->get_type()};
-
-        switch (op_type) {
-        case syntax::token_type_t::PLUS:  return const_value{l + r, res_type};
-        case syntax::token_type_t::MINUS: return const_value{l - r, res_type};
-        case syntax::token_type_t::STAR:  return const_value{l * r, res_type};
-        case syntax::token_type_t::SLASH:
-            if (r == 0.0) {
-                ctx_.diags.emplace_back("Division by zero in compile-time constant expression",
-                                        sema::error::CONSTEXPR_EVALUATION_FAILED,
-                                        module_.ast.location_of(id));
-                return const_value::make_poison();
-            }
-            return const_value{l / r, res_type};
-        case syntax::token_type_t::EQ:    return const_value{l == r, bool_type};
-        case syntax::token_type_t::NEQ:   return const_value{l != r, bool_type};
-        case syntax::token_type_t::LT:    return const_value{l < r, bool_type};
-        case syntax::token_type_t::LT_EQ: return const_value{l <= r, bool_type};
-        case syntax::token_type_t::GT:    return const_value{l > r, bool_type};
-        case syntax::token_type_t::GT_EQ: return const_value{l >= r, bool_type};
-        default:                          return stdx::none;
-        }
-    }
-
-    // Unsigned integer operations
-    const auto is_unsigned{(lhs->is<u64>() || rhs->is<u64>()) && !lhs->is<i64>()};
-    if (is_unsigned) {
-        const auto l{lhs->is<u64>() ? lhs->as<u64>() : static_cast<u64>(lhs->as<i64>())};
-        const auto r{rhs->is<u64>() ? rhs->as<u64>() : static_cast<u64>(rhs->as<i64>())};
-        const auto res_type{lhs->get_type() ? lhs->get_type() : rhs->get_type()};
-
-        switch (op_type) {
-        case syntax::token_type_t::PLUS:  return const_value{l + r, res_type};
-        case syntax::token_type_t::MINUS: return const_value{l - r, res_type};
-        case syntax::token_type_t::STAR:  return const_value{l * r, res_type};
-        case syntax::token_type_t::SLASH:
-            if (r == 0) {
-                ctx_.diags.emplace_back("Division by zero in compile-time constant expression",
-                                        sema::error::CONSTEXPR_EVALUATION_FAILED,
-                                        module_.ast.location_of(id));
-                return const_value::make_poison();
-            }
-            return const_value{l / r, res_type};
-        case syntax::token_type_t::PERCENT:
-            if (r == 0) {
-                ctx_.diags.emplace_back("Modulo by zero in compile-time constant expression",
-                                        sema::error::CONSTEXPR_EVALUATION_FAILED,
-                                        module_.ast.location_of(id));
-                return const_value::make_poison();
-            }
-            return const_value{l % r, res_type};
-        case syntax::token_type_t::BW_AND: return const_value{l & r, res_type};
-        case syntax::token_type_t::BW_OR:  return const_value{l | r, res_type};
-        case syntax::token_type_t::CARET:  return const_value{l ^ r, res_type};
-        case syntax::token_type_t::SHL:    return const_value{l << r, res_type};
-        case syntax::token_type_t::SHR:    return const_value{l >> r, res_type};
-        case syntax::token_type_t::EQ:     return const_value{l == r, bool_type};
-        case syntax::token_type_t::NEQ:    return const_value{l != r, bool_type};
-        case syntax::token_type_t::LT:     return const_value{l < r, bool_type};
-        case syntax::token_type_t::LT_EQ:  return const_value{l <= r, bool_type};
-        case syntax::token_type_t::GT:     return const_value{l > r, bool_type};
-        case syntax::token_type_t::GT_EQ:  return const_value{l >= r, bool_type};
-        default:                           return stdx::none;
-        }
-    }
-
-    // Signed integer operations
-    const auto is_signed{lhs->is<i64>() || rhs->is<i64>()};
-    if (is_signed && (lhs->is<i64>() || lhs->is<u64>()) && (rhs->is<i64>() || rhs->is<u64>())) {
-        const auto l{lhs->is<i64>() ? lhs->as<i64>() : static_cast<i64>(lhs->as<u64>())};
-        const auto r{rhs->is<i64>() ? rhs->as<i64>() : static_cast<i64>(rhs->as<u64>())};
-        const auto res_type{lhs->get_type() ? lhs->get_type() : rhs->get_type()};
-
-        switch (op_type) {
-        case syntax::token_type_t::PLUS:  return const_value{l + r, res_type};
-        case syntax::token_type_t::MINUS: return const_value{l - r, res_type};
-        case syntax::token_type_t::STAR:  return const_value{l * r, res_type};
-        case syntax::token_type_t::SLASH:
-            if (r == 0) {
-                ctx_.diags.emplace_back("Division by zero in compile-time constant expression",
-                                        sema::error::CONSTEXPR_EVALUATION_FAILED,
-                                        module_.ast.location_of(id));
-                return const_value::make_poison();
-            }
-            return const_value{l / r, res_type};
-        case syntax::token_type_t::PERCENT:
-            if (r == 0) {
-                ctx_.diags.emplace_back("Modulo by zero in compile-time constant expression",
-                                        sema::error::CONSTEXPR_EVALUATION_FAILED,
-                                        module_.ast.location_of(id));
-                return const_value::make_poison();
-            }
-            return const_value{l % r, res_type};
-        case syntax::token_type_t::BW_AND: return const_value{l & r, res_type};
-        case syntax::token_type_t::BW_OR:  return const_value{l | r, res_type};
-        case syntax::token_type_t::CARET:  return const_value{l ^ r, res_type};
-        case syntax::token_type_t::SHL:    return const_value{l << r, res_type};
-        case syntax::token_type_t::SHR:    return const_value{l >> r, res_type};
-        case syntax::token_type_t::EQ:     return const_value{l == r, bool_type};
-        case syntax::token_type_t::NEQ:    return const_value{l != r, bool_type};
-        case syntax::token_type_t::LT:     return const_value{l < r, bool_type};
-        case syntax::token_type_t::LT_EQ:  return const_value{l <= r, bool_type};
-        case syntax::token_type_t::GT:     return const_value{l > r, bool_type};
-        case syntax::token_type_t::GT_EQ:  return const_value{l >= r, bool_type};
-        default:                           return stdx::none;
-        }
-    }
-
-    if (lhs->is<bool>() && rhs->is<bool>()) {
-        const auto l{lhs->as<bool>()};
-        const auto r{rhs->as<bool>()};
-        switch (op_type) {
-        case syntax::token_type_t::EQ:  return const_value{l == r, bool_type};
-        case syntax::token_type_t::NEQ: return const_value{l != r, bool_type};
-        default:                        return stdx::none;
-        }
-    }
-
-    return stdx::none;
+    return fold_binary_values(op_type, *lhs, *rhs, id);
 }
 
 auto const_eval::eval_unary(ast::node_id id, const ast::unary_expr& unary)
@@ -696,9 +735,14 @@ auto const_eval::eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_v
             return const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID)};
         },
         [&](const ast::expr_stmt& data) -> stdx::option<const_value> {
-            if (module_.ast[data.expression].template is<ast::if_expr>()) {
-                return try_eval(data.expression);
+            const auto expr_id{data.expression};
+            if (module_.ast[expr_id].template is<ast::if_expr>() ||
+                module_.ast[expr_id].template is<ast::while_loop_expr>() ||
+                module_.ast[expr_id].template is<ast::do_while_loop_expr>() ||
+                module_.ast[expr_id].template is<ast::for_loop_expr>()) {
+                return try_eval(expr_id);
             }
+            DISCARD(try_eval(expr_id));
             return stdx::none;
         });
 }
@@ -715,7 +759,7 @@ auto const_eval::eval_decl(ast::node_id, const ast::decl_stmt& decl) -> stdx::op
     if (decl.value && !call_stack_.empty()) {
         if (const auto val{try_eval(*decl.value)}) {
             const auto& ident{module_.ast.get_as<ast::identifier_expr>(decl.name)};
-            call_stack_.back().bindings.emplace(ident.name, *val);
+            call_stack_.back().bindings.insert_or_assign(ident.name, *val);
         }
     }
     return stdx::none;
@@ -730,6 +774,98 @@ auto const_eval::eval_if(ast::node_id, const ast::if_expr& if_expr) -> stdx::opt
     } else if (if_expr.alternate) {
         return eval_stmt(*if_expr.alternate);
     }
+    return stdx::none;
+}
+
+auto const_eval::eval_while(ast::node_id, const ast::while_loop_expr& loop)
+    -> stdx::option<const_value> {
+    while (true) {
+        const auto cond{try_eval(loop.condition)};
+        if (!cond || !cond->is<bool>()) { return stdx::none; }
+        if (!cond->as<bool>()) { break; }
+        if (const auto body_res{eval_stmt(loop.block)}) { return body_res; }
+        if (loop.continuation) { DISCARD(try_eval(*loop.continuation)); }
+    }
+    return stdx::none;
+}
+
+auto const_eval::eval_do_while(ast::node_id, const ast::do_while_loop_expr& loop)
+    -> stdx::option<const_value> {
+    while (true) {
+        if (const auto body_res{eval_stmt(loop.block)}) { return body_res; }
+        const auto cond{try_eval(loop.condition)};
+        if (!cond || !cond->is<bool>()) { return stdx::none; }
+        if (!cond->as<bool>()) { break; }
+    }
+    return stdx::none;
+}
+
+auto const_eval::eval_for(ast::node_id, const ast::for_loop_expr& loop)
+    -> stdx::option<const_value> {
+    if (loop.iterables.size() != loop.captures.size() || loop.iterables.empty()) {
+        return stdx::none;
+    }
+
+    std::vector<std::vector<const_value>> iterable_sequences;
+    iterable_sequences.reserve(loop.iterables.size());
+
+    for (const auto& iterable_handle : loop.iterables) {
+        std::vector<const_value> sequence;
+        const auto               iterable_id{*iterable_handle};
+
+        if (const auto range{module_.ast.get_as_opt<ast::range_expr>(iterable_id)}) {
+            const auto start_val{try_eval(range->lhs)};
+            const auto end_val{try_eval(range->rhs)};
+            if (!start_val || !end_val) { return stdx::none; }
+
+            const auto start_opt{start_val->as_int_opt()};
+            const auto end_opt{end_val->as_int_opt()};
+            if (!start_opt || !end_opt) { return stdx::none; }
+
+            const auto start{*start_opt};
+            const auto end{*end_opt};
+            const auto target_type{start_val->get_type()};
+
+            for (auto i{start}; i < end; ++i) {
+                if (start_val->is<u64>()) {
+                    sequence.emplace_back(static_cast<u64>(i), target_type);
+                } else {
+                    sequence.emplace_back(static_cast<i64>(i), target_type);
+                }
+            }
+        } else if (const auto array{module_.ast.get_as_opt<ast::array_expr>(iterable_id)}) {
+            for (const auto& item_h : array->items) {
+                const auto item_val{try_eval(item_h)};
+                if (!item_val) { return stdx::none; }
+                sequence.emplace_back(*item_val);
+            }
+        } else {
+            return stdx::none;
+        }
+
+        iterable_sequences.emplace_back(std::move(sequence));
+    }
+
+    usize iter_count{iterable_sequences.front().size()};
+    for (const auto& seq : iterable_sequences) { iter_count = std::min(iter_count, seq.size()); }
+
+    for (usize step{0}; step < iter_count; ++step) {
+        for (usize idx{0}; idx < loop.captures.size(); ++idx) {
+            const auto& capture{loop.captures[idx]};
+            if (capture.payload.template is<ast::identifier_expr>()) {
+                const auto& ident{module_.ast.get_as<ast::identifier_expr>(capture.payload)};
+                if (!call_stack_.empty()) {
+                    call_stack_.back().bindings.insert_or_assign(ident.name,
+                                                                 iterable_sequences[idx][step]);
+                }
+            }
+        }
+
+        if (const auto body_res{eval_stmt(loop.block)}) { return body_res; }
+    }
+
+    if (loop.non_break) { return eval_stmt(*loop.non_break); }
+
     return stdx::none;
 }
 
