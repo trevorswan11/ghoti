@@ -20,13 +20,11 @@
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/token_type.hh"
+#include "support/counter.hh"
 
 namespace ghoti::gir {
 
 class const_eval {
-  public:
-    static constexpr usize MAX_RECURSION_DEPTH{256};
-
   public:
     explicit const_eval(sema::context& ctx, mod::module& module) noexcept
         : ctx_{ctx}, module_{module} {}
@@ -42,18 +40,23 @@ class const_eval {
     // Evaluates an expression as a non-negative integer dimension for array sizing
     [[nodiscard]] auto eval_type_dim(ast::node_id id) -> stdx::option<usize>;
 
-    auto resolve_deferred_array(ast::explicit_type_id           id,
-                                const ast::explicit_array_type& array,
-                                sema::type&                     item_type) -> sema::type&;
     auto resolve_all_deferred_arrays() -> void;
 
-    [[nodiscard]] static auto type_size_of(const sema::type& type) -> usize;
     [[nodiscard]] static auto type_align_of(const sema::type& type) -> usize;
+    [[nodiscard]] static auto type_size_of(const sema::type& type) -> usize;
+
+    constexpr auto set_max_recursion_depth(usize depth) noexcept -> void {
+        max_recursion_depth_ = depth;
+    }
 
   private:
     struct call_frame {
         ankerl::unordered_dense::map<std::string_view, const_value> bindings;
     };
+
+  private:
+    auto resolve_deferred_array(const ast::explicit_array_type& array, sema::type& item_type)
+        -> sema::type&;
 
     auto eval_node(ast::node_id id) -> stdx::option<const_value>;
     auto eval_binary(ast::node_id id, const ast::binary_expr& binary) -> stdx::option<const_value>;
@@ -61,11 +64,9 @@ class const_eval {
     auto eval_ident(ast::node_id id, const ast::identifier_expr& ident)
         -> stdx::option<const_value>;
     auto eval_call(ast::node_id id, const ast::call_expr& call) -> stdx::option<const_value>;
-    auto eval_builtin(ast::node_id          id,
-                      const ast::call_expr& call,
-                      syntax::token_type_t  builtin_type) -> stdx::option<const_value>;
+    auto eval_builtin(const ast::call_expr& call, syntax::token_type_t builtin_type)
+        -> stdx::option<const_value>;
     auto eval_constexpr_fn(ast::node_id                    call_id,
-                           const sema::symbol&             sym,
                            const ast::function_expr&       fn_expr,
                            const std::vector<const_value>& args) -> stdx::option<const_value>;
 
@@ -77,10 +78,11 @@ class const_eval {
     auto lookup_local_binding(std::string_view name) const noexcept -> stdx::option<const_value>;
 
   private:
+    usize                                            max_recursion_depth_{256};
     sema::context&                                   ctx_;
     mod::module&                                     module_;
     std::vector<call_frame>                          call_stack_;
-    usize                                            recursion_depth_{0};
+    default_counter                                  recursion_depth_;
     ankerl::unordered_dense::map<usize, const_value> memo_cache_;
 };
 
