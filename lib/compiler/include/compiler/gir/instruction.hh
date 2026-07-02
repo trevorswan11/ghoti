@@ -164,31 +164,43 @@ struct undefined_val {
 };
 
 struct value {
-    using data_t = stdx::
-        variant<local_id, i64, u64, f64, bool, std::string, sema::type*, void_val, undefined_val>;
+    using data_t = stdx::variant<local_id,
+                                 i64,
+                                 u64,
+                                 f64,
+                                 bool,
+                                 std::string,
+                                 stdx::option<sema::type&>,
+                                 void_val,
+                                 undefined_val>;
 
-    data_t      data{void_val{}};
-    sema::type* type{nullptr};
+    data_t                    data{void_val{}};
+    stdx::option<sema::type&> type{stdx::none};
 
-    value() noexcept = default;
-    value(data_t val, sema::type* t = nullptr) noexcept : data{std::move(val)}, type{t} {}
+    constexpr value() noexcept = default;
+    constexpr value(data_t val, stdx::option<sema::type&> t = stdx::none) noexcept
+        : data{std::move(val)}, type{t} {}
 
-    [[nodiscard]] auto is_local() const noexcept -> bool { return data.is<local_id>(); }
-    [[nodiscard]] auto as_local() const noexcept -> local_id { return data.as<local_id>(); }
-
-    [[nodiscard]] auto is_const_int() const noexcept -> bool {
-        return data.is<i64>() || data.is<u64>();
+    template <typename T> [[nodiscard]] constexpr auto is() const noexcept -> bool {
+        return data.is<T>();
     }
-    [[nodiscard]] auto is_const_float() const noexcept -> bool { return data.is<f64>(); }
-    [[nodiscard]] auto is_const_bool() const noexcept -> bool { return data.is<bool>(); }
-    [[nodiscard]] auto is_const_str() const noexcept -> bool { return data.is<std::string>(); }
 
-    [[nodiscard]] auto operator==(const value& other) const noexcept -> bool = default;
+    template <typename T, typename Self>
+    [[nodiscard]] constexpr auto as(this Self&& self) noexcept -> decltype(auto) {
+        return std::forward<Self>(self).data.template as<T>();
+    }
+
+    template <typename T>
+    [[nodiscard]] constexpr auto as_opt(this auto& self) noexcept -> decltype(auto) {
+        return self.data.template as_opt<T>();
+    }
+
+    [[nodiscard]] constexpr auto operator==(const value& other) const noexcept -> bool = default;
 };
 
 struct instruction {
     instruction_kind              kind{instruction_kind::UNREACHABLE};
-    sema::type*                   type{nullptr};
+    stdx::option<sema::type&>     type{stdx::none};
     stdx::option<local_id>        result{stdx::none};
     std::vector<value>            operands{};
     stdx::option<usize>           target_segment{stdx::none};

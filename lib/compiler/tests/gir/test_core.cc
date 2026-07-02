@@ -67,35 +67,35 @@ TEST_CASE("GIR value types and operations") {
 
     const auto  loc{local_id::make_temp(42)};
     const value v_loc{loc};
-    CHECK(v_loc.is_local());
-    CHECK(v_loc.as_local() == loc);
-    CHECK_FALSE(v_loc.is_const_int());
+    CHECK(v_loc.is<local_id>());
+    CHECK(v_loc.as<local_id>() == loc);
+    CHECK_FALSE(v_loc.is<i64>());
 
     const value v_i64{123ll};
-    CHECK(v_i64.is_const_int());
-    CHECK(UNWRAP(v_i64.data.as_opt<i64>()) == 123);
+    CHECK(v_i64.is<i64>());
+    CHECK(UNWRAP(v_i64.as_opt<i64>()) == 123);
 
     const value v_u64{456ull};
-    CHECK(v_u64.is_const_int());
-    CHECK(UNWRAP(v_u64.data.as_opt<u64>()) == 456);
+    CHECK(v_u64.is<u64>());
+    CHECK(UNWRAP(v_u64.as_opt<u64>()) == 456);
 
     const value v_f64{3.14};
-    CHECK(v_f64.is_const_float());
-    CHECK(UNWRAP(v_f64.data.as_opt<f64>()) == 3.14);
+    CHECK(v_f64.is<f64>());
+    CHECK(UNWRAP(v_f64.as_opt<f64>()) == 3.14);
 
     const value v_bool{true};
-    CHECK(v_bool.is_const_bool());
-    CHECK(UNWRAP(v_bool.data.as_opt<bool>()) == true);
+    CHECK(v_bool.is<bool>());
+    CHECK(UNWRAP(v_bool.as_opt<bool>()) == true);
 
     const value v_str{std::string{"hello"}};
-    CHECK(v_str.is_const_str());
-    CHECK(UNWRAP(v_str.data.as_opt<std::string>()) == "hello");
+    CHECK(v_str.is<std::string>());
+    CHECK(UNWRAP(v_str.as_opt<std::string>()) == "hello");
 
     const value v_void{void_val{}};
-    CHECK(v_void.data.is<void_val>());
+    CHECK(v_void.is<void_val>());
 
     const value v_undef{undefined_val{}};
-    CHECK(v_undef.data.is<undefined_val>());
+    CHECK(v_undef.is<undefined_val>());
 }
 
 TEST_CASE("GIR segment terminator invariants") {

@@ -7,6 +7,7 @@
 #include <fmt/ostream.h>
 #include <fmt/ranges.h>
 #include <stdx/assert.hh>
+#include <stdx/option.hh>
 #include <stdx/types.hh>
 
 #include "compiler/gir/function.hh"
@@ -52,7 +53,7 @@ auto format_value(const value& val) -> std::string {
             }
         },
         [](const std::string& str) { return fmt::format("\"{}\"", str); },
-        [](sema::type* t) { return t ? format_type(*t) : "<null_type>"; },
+        [](stdx::option<sema::type&> t) { return t ? format_type(*t) : "<null_type>"; },
         [](void_val) { return "void"; },
         [](undefined_val) { return "undefined"; },
         [](auto v) { return fmt::format("{}", v); });
