@@ -41,6 +41,8 @@ class const_eval {
     [[nodiscard]] auto eval_type_dim(ast::node_id id) -> stdx::option<usize>;
 
     auto resolve_all_deferred_arrays() -> void;
+    auto resolve_all_deferred_calls() -> void;
+    auto resolve_all_deferred_types() -> void;
 
     [[nodiscard]] static auto type_align_of(const sema::type& type) -> usize;
     [[nodiscard]] static auto type_size_of(const sema::type& type) -> usize;
@@ -57,6 +59,7 @@ class const_eval {
   private:
     auto resolve_deferred_array(const ast::explicit_array_type& array, sema::type& item_type)
         -> sema::type&;
+    auto resolve_deferred_call(const ast::call_expr& call) -> sema::type&;
 
     auto eval_node(ast::node_id id) -> stdx::option<const_value>;
     auto eval_binary(ast::node_id id, const ast::binary_expr& binary) -> stdx::option<const_value>;

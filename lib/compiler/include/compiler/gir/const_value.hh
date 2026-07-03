@@ -69,6 +69,8 @@ class const_value {
 
   public:
     constexpr const_value() noexcept = default;
+    constexpr explicit const_value(sema::type& t) noexcept
+        : data_{stdx::option<sema::type&>{t}}, type_{t} {}
     constexpr explicit const_value(data_t val, stdx::option<sema::type&> t = stdx::none) noexcept
         : data_{std::move(val)}, type_{t} {}
 

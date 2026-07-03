@@ -414,6 +414,39 @@ TEST_CASE("Match constant eval expression evaluation") {
     CHECK(val_b->as_int_opt() == 30);
 }
 
+TEST_CASE("ConstEval: resolve deferred call returning type") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const choose_type := fn(is_64: bool): type {
+            if (is_64) {
+                return i64;
+            } else {
+                return i32;
+            }
+        };
+        using TypeA = choose_type(true);
+        using TypeB = choose_type(false);
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym_a, _a, node_a, type_a]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::using_stmt>("TypeA", idx)};
+    CHECK(type_a.get_data().is<sema::types::deferred_call>());
+
+    const auto [sym_b, _b, node_b, type_b]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::using_stmt>("TypeB", idx)};
+    CHECK(type_b.get_data().is<sema::types::deferred_call>());
+
+    evaluator.resolve_all_deferred_types();
+
+    const auto resolved_a{ctx->root_mod.get_sema_type_opt(node_a.explicit_type)};
+    REQUIRE(resolved_a.has_value());
+    CHECK(resolved_a->get_kind() == sema::type_kind::I64);
+
+    const auto resolved_b{ctx->root_mod.get_sema_type_opt(node_b.explicit_type)};
+    REQUIRE(resolved_b.has_value());
+    CHECK(resolved_b->get_kind() == sema::type_kind::I32);
+}
+
 TEST_CASE("Division by zero failure handling in constant eval") {
     auto [ctx, idx]{helpers::resolve_and_check("const bad := 10 / 0;")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
