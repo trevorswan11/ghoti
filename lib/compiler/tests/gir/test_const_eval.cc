@@ -293,6 +293,127 @@ TEST_CASE("Constexpr for loops over ranges and arrays") {
     CHECK(val_a->as_int_opt() == 60);
 }
 
+TEST_CASE("Array constant eval indexing") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const arr := [_]i32{10, 20, 30, 40};
+        const elem0 := arr[0];
+        const elem2 := arr[2];
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym_0, _0, decl_0, type_0]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("elem0", idx)};
+    const auto val_0{evaluator.try_eval(*decl_0.value)};
+    REQUIRE(val_0.has_value());
+    CHECK(val_0->as_int_opt() == 10);
+
+    const auto [sym_2, _2, decl_2, type_2]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("elem2", idx)};
+    const auto val_2{evaluator.try_eval(*decl_2.value)};
+    REQUIRE(val_2.has_value());
+    CHECK(val_2->as_int_opt() == 30);
+}
+
+TEST_CASE("Struct member constant eval access") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const Point := struct { x: i32, y: i32 };
+        const pt := Point{ .x = 15, .y = 25 };
+        const px := pt.x;
+        const py := pt.y;
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym_x, _x, decl_x, type_x]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("px", idx)};
+    const auto val_x{evaluator.try_eval(*decl_x.value)};
+    REQUIRE(val_x.has_value());
+    CHECK(val_x->as_int_opt() == 15);
+
+    const auto [sym_y, _y, decl_y, type_y]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("py", idx)};
+    const auto val_y{evaluator.try_eval(*decl_y.value)};
+    REQUIRE(val_y.has_value());
+    CHECK(val_y->as_int_opt() == 25);
+}
+
+TEST_CASE("Union constant eval active and inactive member access") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const Payload := union { int_val: i32, float_val: f64 };
+        const u := Payload{ .int_val = 42 };
+        const active_val := u.int_val;
+        const inactive_val := u.float_val;
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym_a, _a, decl_a, type_a]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("active_val", idx)};
+    const auto val_a{evaluator.try_eval(*decl_a.value)};
+    REQUIRE(val_a.has_value());
+    CHECK(val_a->as_int_opt() == 42);
+
+    const auto [sym_i, _i, decl_i, type_i]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("inactive_val", idx)};
+    const auto val_i{evaluator.eval(*decl_i.value)};
+    CHECK(val_i.is_poison());
+    CHECK_FALSE(ctx->analyzer.get_ctx().diags.empty());
+}
+
+TEST_CASE("Match constant eval expression evaluation") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        constexpr classify := fn(x: i32): i32 {
+            return match (x) {
+                0 => 100,
+                1 => 200,
+                _ => 300,
+            };
+        };
+        const Color := enum { RED, GREEN, BLUE };
+        constexpr color_code := fn(c: Color): i32 {
+            return match (c) {
+                .RED => 10,
+                .GREEN => 20,
+                .BLUE => 30,
+            };
+        };
+        const c0 := classify(0);
+        const c1 := classify(1);
+        const c99 := classify(99);
+        const code_red := color_code(Color.RED);
+        const code_blue := color_code(.BLUE);
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym_0, _0, decl_0, type_0]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("c0", idx)};
+    const auto val_0{evaluator.try_eval(*decl_0.value)};
+    REQUIRE(val_0.has_value());
+    CHECK(val_0->as_int_opt() == 100);
+
+    const auto [sym_1, _1, decl_1, type_1]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("c1", idx)};
+    const auto val_1{evaluator.try_eval(*decl_1.value)};
+    REQUIRE(val_1.has_value());
+    CHECK(val_1->as_int_opt() == 200);
+
+    const auto [sym_99, _99, decl_99, type_99]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("c99", idx)};
+    const auto val_99{evaluator.try_eval(*decl_99.value)};
+    REQUIRE(val_99.has_value());
+    CHECK(val_99->as_int_opt() == 300);
+
+    const auto [sym_r, _r, decl_r, type_r]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("code_red", idx)};
+    const auto val_r{evaluator.try_eval(*decl_r.value)};
+    REQUIRE(val_r.has_value());
+    CHECK(val_r->as_int_opt() == 10);
+
+    const auto [sym_b, _b, decl_b, type_b]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("code_blue", idx)};
+    const auto val_b{evaluator.try_eval(*decl_b.value)};
+    REQUIRE(val_b.has_value());
+    CHECK(val_b->as_int_opt() == 30);
+}
+
 TEST_CASE("Division by zero failure handling in constant eval") {
     auto [ctx, idx]{helpers::resolve_and_check("const bad := 10 / 0;")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};

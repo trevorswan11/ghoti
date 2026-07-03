@@ -86,6 +86,20 @@ class const_eval {
         -> stdx::option<const_value>;
     auto eval_for(ast::node_id id, const ast::for_loop_expr& loop) -> stdx::option<const_value>;
 
+    auto eval_array(ast::node_id id, const ast::array_expr& array) -> stdx::option<const_value>;
+    auto eval_index(ast::node_id id, const ast::index_expr& index_expr)
+        -> stdx::option<const_value>;
+    auto eval_initializer(ast::node_id id, const ast::initializer_expr& init)
+        -> stdx::option<const_value>;
+    auto eval_dot(ast::node_id id, const ast::dot_expr& dot) -> stdx::option<const_value>;
+    auto eval_implicit_access(ast::node_id id, const ast::implicit_access_expr& implicit)
+        -> stdx::option<const_value>;
+    auto eval_module_access(ast::node_id id, const ast::module_access_expr& mod_access)
+        -> stdx::option<const_value>;
+    auto eval_match(ast::node_id id, const ast::match_expr& match) -> stdx::option<const_value>;
+    auto match_pattern(const ast::match_pattern_handle& pattern_h, const const_value& target)
+        -> bool;
+
     auto lookup_local_binding(std::string_view name) const noexcept -> stdx::option<const_value>;
     auto mutate_local_binding(std::string_view name, const_value val) -> bool;
 

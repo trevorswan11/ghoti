@@ -1,8 +1,13 @@
 #pragma once
 
+#include <functional>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
+#include <ankerl/unordered_dense.h>
+#include <stdx/hash.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
@@ -13,8 +18,37 @@
 
 namespace ghoti::gir {
 
+class const_value;
+
 struct poison_val {
     [[nodiscard]] constexpr auto operator==(const poison_val&) const noexcept -> bool = default;
+};
+
+struct const_array {
+    std::vector<const_value> elements;
+    [[nodiscard]] auto       operator==(const const_array& other) const noexcept -> bool;
+};
+
+struct const_struct {
+    using fields_map_t = ankerl::unordered_dense::
+        map<std::string, const_value, stdx::string_transparent_hash, std::equal_to<>>;
+
+    fields_map_t       fields;
+    [[nodiscard]] auto get_field_opt(std::string_view name) const noexcept
+        -> stdx::option<const const_value&>;
+    [[nodiscard]] auto operator==(const const_struct& other) const noexcept -> bool;
+};
+
+struct const_enum {
+    std::string        name;
+    i64                value{0};
+    [[nodiscard]] auto operator==(const const_enum&) const noexcept -> bool = default;
+};
+
+struct const_union {
+    std::string              active_field;
+    std::vector<const_value> payload;
+    [[nodiscard]] auto       operator==(const const_union& other) const noexcept -> bool;
 };
 
 class const_value {
@@ -25,6 +59,10 @@ class const_value {
                                  bool,
                                  std::string,
                                  stdx::option<sema::type&>,
+                                 const_array,
+                                 const_struct,
+                                 const_enum,
+                                 const_union,
                                  void_val,
                                  undefined_val,
                                  poison_val>;
@@ -57,6 +95,7 @@ class const_value {
     [[nodiscard]] constexpr auto as_int_opt() const noexcept -> stdx::option<i64> {
         if (is<i64>()) { return as<i64>(); }
         if (is<u64>()) { return static_cast<i64>(as<u64>()); }
+        if (is<const_enum>()) { return as<const_enum>().value; }
         return stdx::none;
     }
 
@@ -64,6 +103,9 @@ class const_value {
         if (is<u64>()) { return as<u64>(); }
         if (is<i64>()) {
             if (const auto val{as<i64>()}; val >= 0) { return static_cast<u64>(val); }
+        }
+        if (const auto en{as_opt<const_enum>()}) {
+            if (en->value >= 0) { return static_cast<u64>(en->value); }
         }
         return stdx::none;
     }
@@ -76,10 +118,22 @@ class const_value {
     [[nodiscard]] auto to_gir_value() const noexcept -> value {
         return data_.visit(
             [this](const poison_val&) -> value { return value{undefined_val{}, type_}; },
+            [this](const const_array&) -> value { return value{void_val{}, type_}; },
+            [this](const const_struct&) -> value { return value{void_val{}, type_}; },
+            [this](const const_enum& e) -> value { return value{e.value, type_}; },
+            [this](const const_union&) -> value { return value{void_val{}, type_}; },
             [this](const auto& v) -> value { return value{v, type_}; });
     }
 
-    [[nodiscard]] auto operator==(const const_value& other) const noexcept -> bool = default;
+    [[nodiscard]] auto operator==(const const_value& other) const noexcept -> bool {
+        if (data_.index() != other.data_.index()) {
+            const auto l_int{as_int_opt()};
+            const auto r_int{other.as_int_opt()};
+            if (l_int && r_int) { return *l_int == *r_int; }
+            return false;
+        }
+        return data_ == other.data_;
+    }
 
   private:
     data_t                    data_{poison_val{}};
