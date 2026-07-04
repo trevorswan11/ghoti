@@ -149,7 +149,25 @@ auto const_eval::eval_type_dim(ast::node_id id) -> stdx::option<usize> {
     return stdx::none;
 }
 
+auto const_eval::resolve_all_deferred_calls() -> void {
+    for (auto& type_opt : module_.sema_side_tables.explicit_types.values) {
+        if (!type_opt) { continue; }
+        if (const auto def{type_opt->get_data().as_opt<sema::types::deferred_call>()}) {
+            type_opt.emplace(resolve_deferred_call(def->call));
+        }
+    }
+
+    for (auto& type_opt : module_.sema_side_tables.node_types.values) {
+        if (!type_opt) { continue; }
+        if (const auto def{type_opt->get_data().as_opt<sema::types::deferred_call>()}) {
+            type_opt.emplace(resolve_deferred_call(def->call));
+        }
+    }
+}
+
 auto const_eval::resolve_all_deferred_arrays() -> void {
+    resolve_all_deferred_calls();
+
     for (auto& type_opt : module_.sema_side_tables.explicit_types.values) {
         if (!type_opt) { continue; }
         if (const auto def{type_opt->get_data().as_opt<sema::types::deferred_array>()}) {
@@ -164,6 +182,8 @@ auto const_eval::resolve_all_deferred_arrays() -> void {
         }
     }
 }
+
+auto const_eval::resolve_all_deferred_types() -> void { resolve_all_deferred_arrays(); }
 
 auto const_eval::type_align_of(const sema::type& type) -> usize {
     switch (type.get_kind()) {
@@ -291,6 +311,27 @@ auto const_eval::resolve_deferred_array(const ast::explicit_array_type& array,
         return concrete_array;
     }
     return item_type;
+}
+
+auto const_eval::resolve_deferred_call(const ast::call_expr& call) -> sema::type& {
+    const auto val{eval_call(ast::node_id::make_invalid(), call)};
+    if (val) {
+        if (const auto type_opt{val->as_opt<stdx::option<sema::type&>>()}) {
+            if (*type_opt) { return **type_opt; }
+        }
+        if (const auto sema_type{val->get_type()}) {
+            if (sema_type->get_kind() == sema::type_kind::TYPE) {
+                if (const auto meta{sema_type->get_data().as_opt<sema::types::meta_type>()}) {
+                    return meta->instance;
+                }
+            }
+            return *sema_type;
+        }
+    }
+    ctx_.diags.emplace_back("Failed to evaluate compile-time type constructor function",
+                            sema::error::CONSTEXPR_EVALUATION_FAILED,
+                            module_.ast.location_of(call.function));
+    return ctx_.get_poison();
 }
 
 auto const_eval::lookup_local_binding(std::string_view name) const noexcept
@@ -828,15 +869,63 @@ auto const_eval::eval_unary(ast::node_id id, const ast::unary_expr& unary)
     return stdx::none;
 }
 
-auto const_eval::eval_ident(ast::node_id, const ast::identifier_expr& ident)
+auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
     -> stdx::option<const_value> {
     if (auto local_val{lookup_local_binding(ident.name)}) { return local_val; }
+
+    if (id.is_valid()) {
+        if (const auto sema_type{module_.get_sema_type_opt(id)}) {
+            if (sema_type->get_kind() == sema::type_kind::TYPE) {
+                if (const auto meta{sema_type->get_data().as_opt<sema::types::meta_type>()}) {
+                    return const_value{meta->instance};
+                }
+                return const_value{*sema_type};
+            }
+        }
+    }
 
     if (!module_.root_table_idx) { return stdx::none; }
     const auto& table{ctx_.registry.get(*module_.root_table_idx)};
     const auto  sym_opt{table.get_opt(ident.name)};
-    if (!sym_opt) { return stdx::none; }
+    if (!sym_opt) {
+        if (ctx_.prelude_index) {
+            const auto& prelude{ctx_.registry.get(*ctx_.prelude_index)};
+            if (const auto p_sym{prelude.get_opt(ident.name)}) {
+                if (p_sym->get_kind() == sema::symbol_kind::TYPE) {
+                    if (const auto builtin{p_sym->get_data().as_opt<sema::symbols::builtin>()}) {
+                        return const_value{builtin->get_type()};
+                    }
+                }
+            }
+        }
+        return stdx::none;
+    }
     const auto& sym{*sym_opt};
+
+    if (sym.get_kind() == sema::symbol_kind::TYPE) {
+        if (const auto builtin_sym{sym.get_data().as_opt<sema::symbols::builtin>()}) {
+            return const_value{builtin_sym->get_type()};
+        }
+        if (const auto node{sym.get_data().as_opt<sema::symbols::node_t>()}) {
+            if (const auto using_stmt{module_.ast.get_as_opt<ast::using_stmt>(*node)}) {
+                if (const auto sema_type{module_.get_sema_type_opt(using_stmt->explicit_type)}) {
+                    return const_value{*sema_type};
+                }
+            }
+            if (const auto decl{module_.ast.get_as_opt<ast::decl_stmt>(*node)}) {
+                if (decl->value) {
+                    const auto& node_data{module_.ast[*decl->value]};
+                    if (node_data.is<ast::struct_expr>() || node_data.is<ast::enum_expr>() ||
+                        node_data.is<ast::union_expr>()) {
+                        if (const auto sema_type{module_.get_sema_type_opt(*decl->value)}) {
+                            return const_value{*sema_type};
+                        }
+                    }
+                    return try_eval(*decl->value);
+                }
+            }
+        }
+    }
 
     if (const auto node{sym.get_data().as_opt<sema::symbols::node_t>()}) {
         if (const auto decl{module_.ast.get_as_opt<ast::decl_stmt>(*node)}) {
@@ -866,7 +955,9 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
         const auto decl{module_.ast.get_as_opt<ast::decl_stmt>(*node)};
         if (!decl) { return stdx::none; }
 
-        if (decl->has_modifier(ast::decl_modifiers::CONSTEXPR) && decl->value) {
+        if ((decl->has_modifier(ast::decl_modifiers::CONSTEXPR) ||
+             decl->has_modifier(ast::decl_modifiers::CONSTANT)) &&
+            decl->value) {
             if (const auto fn_expr{module_.ast.get_as_opt<ast::function_expr>(*decl->value)}) {
                 std::vector<const_value> args;
                 for (const auto& arg : call.arguments) {
@@ -1018,9 +1109,11 @@ auto const_eval::eval_constexpr_fn(ast::node_id                    call_id,
                                    const std::vector<const_value>& args)
     -> stdx::option<const_value> {
     if (recursion_depth_ >= max_recursion_depth_) {
+        const auto loc{call_id.is_valid() ? module_.ast.location_of(call_id)
+                                          : module_.ast.location_of(fn_expr.body)};
         ctx_.diags.emplace_back("Constexpr function recursion limit exceeded",
                                 sema::error::CONSTEXPR_RECURSION_LIMIT_EXCEEDED,
-                                module_.ast.location_of(call_id));
+                                loc);
         return const_value::make_poison();
     }
 
