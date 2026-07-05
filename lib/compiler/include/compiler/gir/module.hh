@@ -30,9 +30,6 @@ struct type_decl {
 
 class module {
   public:
-    static constexpr usize GIR_ARENA_BLOCK_SIZE{stdx::sizes::kib(64UZ)};
-
-  public:
     explicit module(const mod::module& ast_mod) noexcept : ast_module_{ast_mod} {}
     ~module() = default;
     MAKE_MOVE_CONSTRUCTABLE_ONLY(module);
@@ -57,9 +54,9 @@ class module {
   private:
     const mod::module&                ast_module_;
     stdx::arena<GIR_ARENA_BLOCK_SIZE> arena_;
-    std::vector<type_decl>            types_;
-    std::vector<global_decl>          globals_;
-    std::vector<function>             functions_;
+    std::vector<type_decl*>           types_;
+    std::vector<global_decl*>         globals_;
+    std::vector<function*>            functions_;
     std::vector<usize>                tests_;
 };
 

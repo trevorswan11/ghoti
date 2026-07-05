@@ -3,7 +3,9 @@
 #include <string>
 #include <vector>
 
+#include <stdx/arena.hh>
 #include <stdx/assert.hh>
+#include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
@@ -13,6 +15,8 @@
 #include "compiler/sema/type.hh"
 
 namespace ghoti::gir {
+
+inline constexpr usize GIR_ARENA_BLOCK_SIZE{stdx::sizes::kib(64UZ)};
 
 struct parameter {
     std::string name;
@@ -37,8 +41,10 @@ class function {
     MAKE_DEDUCING_GETTER(params);
     MAKE_DEDUCING_GETTER(segments);
 
-    auto add_param(std::string name, sema::type& param_type) -> parameter&;
-    auto add_segment() -> segment&;
+    auto add_param(stdx::arena<GIR_ARENA_BLOCK_SIZE>& arena,
+                   std::string                        name,
+                   sema::type&                        param_type) -> parameter&;
+    auto add_segment(stdx::arena<GIR_ARENA_BLOCK_SIZE>& arena) -> segment&;
 
     [[nodiscard]] auto get_segment(this auto&& self, usize id) -> auto& {
         ASSERT(id < self.segments_.size(), "Segment index out of bounds");
@@ -57,13 +63,13 @@ class function {
     [[nodiscard]] auto local_count() const noexcept -> usize { return next_local_index_; }
 
   private:
-    std::string            name_;
-    sema::type&            type_;
-    std::vector<parameter> params_;
-    std::vector<segment>   segments_;
-    bool                   is_test_{false};
-    bool                   is_constexpr_{false};
-    usize                  next_local_index_{0};
+    std::string             name_;
+    sema::type&             type_;
+    std::vector<parameter*> params_;
+    std::vector<segment*>   segments_;
+    bool                    is_test_{false};
+    bool                    is_constexpr_{false};
+    usize                   next_local_index_{0};
 };
 
 } // namespace ghoti::gir

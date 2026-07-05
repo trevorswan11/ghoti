@@ -2,6 +2,7 @@
 #include <string>
 
 #include <catch2/catch_test_macros.hpp>
+#include <stdx/arena.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
@@ -21,13 +22,14 @@ TEST_CASE("GIR dumper formatting") {
     auto&           i32_type{*pool[{sema::type_kind::I32, sema::types::mut::CONSTANT}]};
     auto&           bool_type{*pool[{sema::type_kind::BOOL, sema::types::mut::CONSTANT}]};
     auto&           fn_type{*pool[{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT}]};
+    stdx::arena<GIR_ARENA_BLOCK_SIZE> arena;
 
     SECTION("Dump linear function") {
         gir::function fn{"add", fn_type};
-        fn.add_param("a", i32_type);
-        fn.add_param("b", i32_type);
+        fn.add_param(arena, "a", i32_type);
+        fn.add_param(arena, "b", i32_type);
 
-        auto& seg{fn.add_segment()};
+        auto& seg{fn.add_segment(arena)};
         seg.append({
             .kind     = instruction_kind::LOAD,
             .type     = &i32_type,
@@ -57,7 +59,7 @@ TEST_CASE("GIR dumper formatting") {
         dumper            d{ss};
         d.dump(fn);
 
-        const auto output{ss.str()};
+        const auto output{ss.view()};
         CHECK(output.contains("fn add(a: i32, b: i32)"));
         CHECK(output.contains("seg 0:"));
         CHECK(output.contains("%0 = load param.0"));
@@ -68,10 +70,10 @@ TEST_CASE("GIR dumper formatting") {
 
     SECTION("Dump control flow function") {
         function fn{"abs", fn_type};
-        fn.add_param("x", i32_type);
+        fn.add_param(arena, "x", i32_type);
 
         // seg 0
-        auto& seg0{fn.add_segment()};
+        auto& seg0{fn.add_segment(arena)};
         seg0.append({
             .kind     = instruction_kind::LOAD,
             .type     = &i32_type,
@@ -100,7 +102,7 @@ TEST_CASE("GIR dumper formatting") {
         });
 
         // seg 1
-        auto& seg1{fn.add_segment()};
+        auto& seg1{fn.add_segment(arena)};
         seg1.append({
             .kind     = instruction_kind::NEG,
             .type     = &i32_type,
@@ -115,7 +117,7 @@ TEST_CASE("GIR dumper formatting") {
         });
 
         // seg 2
-        auto& seg2{fn.add_segment()};
+        auto& seg2{fn.add_segment(arena)};
         seg2.append({
             .kind     = instruction_kind::RET,
             .type     = &i32_type,

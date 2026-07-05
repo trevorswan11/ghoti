@@ -1,6 +1,7 @@
 #include <string>
 
 #include <catch2/catch_test_macros.hpp>
+#include <stdx/arena.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
@@ -136,19 +137,20 @@ TEST_CASE("GIR function management and local ID allocation") {
     sema::type_pool pool{};
     auto&           i32_type{*pool[{sema::type_kind::I32, sema::types::mut::CONSTANT}]};
     auto&           fn_type{*pool[{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT}]};
+    stdx::arena<GIR_ARENA_BLOCK_SIZE> arena;
 
     function fn{"compute", fn_type};
     CHECK(fn.get_name() == "compute");
     CHECK_FALSE(fn.get_is_test());
     CHECK_FALSE(fn.get_is_constexpr());
 
-    fn.add_param("a", i32_type);
-    fn.add_param("b", i32_type);
+    fn.add_param(arena, "a", i32_type);
+    fn.add_param(arena, "b", i32_type);
     REQUIRE(fn.get_params().size() == 2);
-    CHECK(fn.get_params()[0].name == "a");
-    CHECK(fn.get_params()[0].id == local_id::make_param(0));
-    CHECK(fn.get_params()[1].name == "b");
-    CHECK(fn.get_params()[1].id == local_id::make_param(1));
+    CHECK(fn.get_params()[0]->name == "a");
+    CHECK(fn.get_params()[0]->id == local_id::make_param(0));
+    CHECK(fn.get_params()[1]->name == "b");
+    CHECK(fn.get_params()[1]->id == local_id::make_param(1));
 
     const auto loc0{fn.next_local_id()};
     const auto loc1{fn.next_local_id()};
@@ -156,13 +158,13 @@ TEST_CASE("GIR function management and local ID allocation") {
     CHECK(loc1.get_index() == 1);
     CHECK(fn.local_count() == 2);
 
-    fn.add_segment();
-    fn.add_segment();
+    fn.add_segment(arena);
+    fn.add_segment(arena);
     REQUIRE(fn.get_segments().size() == 2);
-    CHECK(fn.get_segments()[0].get_id() == 0);
-    CHECK(fn.get_segments()[1].get_id() == 1);
-    CHECK(fn.get_segment(0).get_id() == 0);
-    CHECK(fn.get_segment(1).get_id() == 1);
+    CHECK(fn.get_segments()[0]->get_id() == 0);
+    CHECK(fn.get_segments()[1]->get_id() == 1);
+    CHECK(fn.get_segment(0)->get_id() == 0);
+    CHECK(fn.get_segment(1)->get_id() == 1);
 }
 
 TEST_CASE("GIR module container and arena allocation") {
@@ -178,8 +180,8 @@ TEST_CASE("GIR module container and arena allocation") {
     // Add global
     gir_mod.add_global("my_global", i32_type, true, value{static_cast<i64>(42), &i32_type});
     CHECK(gir_mod.get_globals().size() == 1);
-    CHECK(gir_mod.get_globals()[0].name == "my_global");
-    CHECK(gir_mod.get_globals()[0].is_constant);
+    CHECK(gir_mod.get_globals()[0]->name == "my_global");
+    CHECK(gir_mod.get_globals()[0]->is_constant);
 
     // Add function
     gir_mod.add_function("main", fn_type);

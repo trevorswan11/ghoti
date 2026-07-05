@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -65,6 +66,7 @@ class emitter {
     auto emit_function(ast::node_id              id,
                        const ast::decl_stmt&     decl,
                        const ast::function_expr& fn_expr) -> void;
+    auto emit_anonymous_function(ast::node_id id, const ast::function_expr& fn_expr) -> std::string;
 
     auto emit_stmt(const ast::stmt_handle& stmt) -> void;
     auto emit_block(const ast::block_stmt& block) -> void;

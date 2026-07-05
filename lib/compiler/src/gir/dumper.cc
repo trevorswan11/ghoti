@@ -152,37 +152,37 @@ auto dumper::dump(const function& fn) -> void {
         fmt::println(out_,
                      "fn {}({}) -> {}",
                      fn.get_name(),
-                     fmt::join(fn.get_params() | std::views::transform([](const parameter& p) {
-                                   return fmt::format("{}: {}", p.name, format_type(p.type));
+                     fmt::join(fn.get_params() | std::views::transform([](const parameter* p) {
+                                   return fmt::format("{}: {}", p->name, format_type(p->type));
                                }),
                                ", "),
                      return_str);
     }
 
-    for (const auto& seg : fn.get_segments()) { dump(seg); }
+    for (const auto& seg : fn.get_segments()) { dump(*seg); }
 }
 
 auto dumper::dump(const module& mod) -> void {
     for (const auto& type_decl : mod.get_types()) {
-        fmt::println(out_, "type {} = {}", type_decl.name, format_type(type_decl.type));
+        fmt::println(out_, "type {} = {}", type_decl->name, format_type(type_decl->type));
     }
 
     for (const auto& global : mod.get_globals()) {
-        const auto kw{global.is_constant ? "const" : "var"};
-        if (global.init_value) {
+        const auto kw{global->is_constant ? "const" : "var"};
+        if (global->init_value) {
             fmt::println(out_,
                          "{} {}: {} = {}",
                          kw,
-                         global.name,
-                         format_type(global.type),
-                         format_value(*global.init_value));
+                         global->name,
+                         format_type(global->type),
+                         format_value(*global->init_value));
         } else {
-            fmt::println(out_, "{} {}: {}", kw, global.name, format_type(global.type));
+            fmt::println(out_, "{} {}: {}", kw, global->name, format_type(global->type));
         }
     }
 
     for (const auto& fn : mod.get_functions()) {
-        dump(fn);
+        dump(*fn);
         fmt::println(out_, "");
     }
 }

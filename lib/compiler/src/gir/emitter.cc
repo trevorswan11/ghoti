@@ -90,10 +90,12 @@ auto emitter::emit_top_level_test(ast::node_id, const ast::test_stmt& test) -> v
                              .transform([&](ast::string_handle h) {
                                  return ast_module_.ast.get_as<ast::string_expr>(h).value;
                              })
-                             .value_or(fmt::format("anonymous_test{}", anon_test_counter_++))};
+                             .or_else([this] -> stdx::option<std::string> {
+                                 return fmt::format("anonymous_test{}", anon_test_counter_++);
+                             })};
 
-    auto& fn{gir_module_.add_function(test_name, void_type, true, false)};
-    auto& entry{fn.add_segment()};
+    auto& fn{gir_module_.add_function(*test_name, void_type, true, false)};
+    auto& entry{fn.add_segment(gir_module_.arena())};
     builder_.set_insert_point(fn, entry);
 
     const scope_guard g{scopes_};
@@ -114,7 +116,7 @@ auto emitter::emit_function(ast::node_id              id,
     auto&      fn{
         gir_module_.add_function(std::string{name_ident.name}, *sema_type, false, is_constexpr)};
 
-    auto& entry{fn.add_segment()};
+    auto& entry{fn.add_segment(gir_module_.arena())};
     builder_.set_insert_point(fn, entry);
     const scope_guard g{scopes_};
 
@@ -124,7 +126,7 @@ auto emitter::emit_function(ast::node_id              id,
         const auto  p_type{ast_module_.get_sema_type_opt(param.name)};
         if (!p_type) { continue; }
 
-        auto& p_slot{fn.add_param(std::string{p_name}, *p_type)};
+        auto& p_slot{fn.add_param(gir_module_.arena(), std::string{p_name}, *p_type)};
         scopes_.back().bindings.emplace(p_name,
                                         local_binding{p_slot.id, *p_type, false, stdx::none});
     }
@@ -143,6 +145,53 @@ auto emitter::emit_function(ast::node_id              id,
             }
         }
     }
+}
+
+auto emitter::emit_anonymous_function(ast::node_id id, const ast::function_expr& fn_expr)
+    -> std::string {
+    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    auto&      fn_type{sema_type ? *sema_type
+                                 : ctx_.get_builtin_resolved_type(sema::type_kind::FUNCTION)};
+    const auto anon_name{fmt::format("anonymous_fn{}", anon_fn_counter_++)};
+
+    auto&      fn{gir_module_.add_function(anon_name, fn_type, false, false)};
+    const auto prev_fn{builder_.get_function()};
+    const auto prev_seg{builder_.get_segment()};
+
+    auto& entry{fn.add_segment(gir_module_.arena())};
+    builder_.set_insert_point(fn, entry);
+
+    {
+        const scope_guard g{scopes_};
+        for (const auto& param : fn_expr.parameters) {
+            const auto& p_ident{ast_module_.ast.get_as<ast::identifier_expr>(param.name)};
+            const auto  p_name{p_ident.name};
+            const auto  p_type{ast_module_.get_sema_type_opt(param.name)};
+            if (!p_type) { continue; }
+
+            auto& p_slot{fn.add_param(gir_module_.arena(), std::string{p_name}, *p_type)};
+            scopes_.back().bindings.emplace(p_name,
+                                            local_binding{p_slot.id, *p_type, false, stdx::none});
+        }
+
+        emit_block(ast_module_.ast.get_as<ast::block_stmt>(fn_expr.body));
+        if (const auto cur_seg{builder_.get_segment()}) {
+            if (!cur_seg->has_terminator()) {
+                if (const auto fn_data{fn_type.get_data().as_opt<sema::types::function>()}) {
+                    if (fn_data->return_type.get_kind() == sema::type_kind::VOID) {
+                        builder_.emit_return();
+                    } else {
+                        builder_.emit_return(value{undefined_val{}, fn_data->return_type});
+                    }
+                } else {
+                    builder_.emit_return();
+                }
+            }
+        }
+    }
+
+    if (prev_fn && prev_seg) { builder_.set_insert_point(*prev_fn, *prev_seg); }
+    return anon_name;
 }
 
 auto emitter::emit_stmt(const ast::stmt_handle& stmt) -> void {
@@ -178,11 +227,15 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
             return;
         }
 
-        if (const auto val{emit_expression(*decl.value)}; val.is<local_id>()) {
-            scopes_.back().bindings.emplace(
-                name, local_binding{val.as<local_id>(), *sema_type, false, stdx::none});
+        const auto val{emit_expression(*decl.value)};
+        if (const auto lid{val.as_opt<local_id>()}) {
+            scopes_.back().bindings.emplace(name,
+                                            local_binding{*lid, *sema_type, false, stdx::none});
             return;
         }
+        scopes_.back().bindings.emplace(
+            name, local_binding{local_id{0, local_kind::TEMPORARY}, *sema_type, false, val});
+        return;
     }
 
     const auto slot{builder_.emit_alloca(*sema_type, name)};
@@ -253,6 +306,10 @@ auto emitter::emit_expression_id(ast::node_id id) -> value {
                          ctx_.get_builtin_resolved_type(sema::type_kind::UNDEFINED)};
         },
         [&](const ast::identifier_expr& data) -> value { return emit_ident(id, data); },
+        [&](const ast::function_expr& data) -> value {
+            const auto anon_name{emit_anonymous_function(id, data)};
+            return value{anon_name, ast_module_.get_sema_type_opt(id)};
+        },
         [&](const ast::binary_expr& data) -> value { return emit_binary(id, data); },
         [&](const ast::unary_expr& data) -> value { return emit_unary(id, data); },
         [&](const ast::assignment_expr& data) -> value { return emit_assignment(id, data); },
@@ -342,9 +399,22 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
 }
 
 auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
-    const auto ident{ast_module_.ast.get_as_opt<ast::identifier_expr>(call.function)};
-    auto       callee_name{ident.transform([](auto i) { return i.name; })
-                         .value_or(fmt::format("anonymous_fn{}", anon_fn_counter_++))};
+    std::string callee_name;
+    if (const auto ident{ast_module_.ast.get_as_opt<ast::identifier_expr>(call.function)}) {
+        if (const auto binding{lookup_binding(ident->name)}) {
+            if (binding->const_val && binding->const_val->template is<std::string>()) {
+                callee_name = binding->const_val->template as<std::string>();
+            } else {
+                callee_name = std::string{ident->name};
+            }
+        } else {
+            callee_name = std::string{ident->name};
+        }
+    } else if (const auto fn_expr{ast_module_.ast.get_as_opt<ast::function_expr>(call.function)}) {
+        callee_name = emit_anonymous_function(*call.function, *fn_expr);
+    } else {
+        callee_name = fmt::format("anonymous_fn{}", anon_fn_counter_++);
+    }
 
     std::vector<value> args;
     args.reserve(call.arguments.size());
