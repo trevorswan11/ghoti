@@ -304,6 +304,23 @@ enum class integer_category : u8 {
 
 auto suffix_length(token_type_t tt) noexcept -> usize;
 
+[[nodiscard]] constexpr auto get_compound_base_op(syntax::token_type_t tok) noexcept
+    -> stdx::option<syntax::token_type_t> {
+    switch (tok) {
+    case syntax::token_type_t::PLUS_ASSIGN:    return syntax::token_type_t::PLUS;
+    case syntax::token_type_t::MINUS_ASSIGN:   return syntax::token_type_t::MINUS;
+    case syntax::token_type_t::STAR_ASSIGN:    return syntax::token_type_t::STAR;
+    case syntax::token_type_t::SLASH_ASSIGN:   return syntax::token_type_t::SLASH;
+    case syntax::token_type_t::PERCENT_ASSIGN: return syntax::token_type_t::PERCENT;
+    case syntax::token_type_t::BW_AND_ASSIGN:  return syntax::token_type_t::BW_AND;
+    case syntax::token_type_t::BW_OR_ASSIGN:   return syntax::token_type_t::BW_OR;
+    case syntax::token_type_t::XOR_ASSIGN:     return syntax::token_type_t::CARET;
+    case syntax::token_type_t::SHL_ASSIGN:     return syntax::token_type_t::SHL;
+    case syntax::token_type_t::SHR_ASSIGN:     return syntax::token_type_t::SHR;
+    default:                                   return stdx::none;
+    }
+}
+
 } // namespace token_type
 
 struct typed_identifier {
