@@ -7,11 +7,8 @@
 
 namespace ghoti {
 
-template <typename T>
-concept Countable = std::integral<T> && !std::same_as<T, bool>;
-
 // A simple counter that with RAII-based up/down counting
-template <Countable Underlying> class counter {
+template <stdx::NumericIntegral Underlying> class counter {
   public:
     class guard {
       public:

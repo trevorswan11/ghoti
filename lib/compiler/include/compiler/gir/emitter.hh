@@ -21,6 +21,7 @@
 #include "compiler/sema/context.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/token_type.hh"
+#include "support/counter.hh"
 
 namespace ghoti::gir {
 
@@ -40,6 +41,13 @@ class emitter {
         sema::type&         type;
         bool                is_alloca{false};
         stdx::option<value> const_val;
+    };
+
+    struct loop_context {
+        stdx::option<std::string_view> label;
+        segment_id                     break_target{0};
+        segment_id                     continue_target{0};
+        stdx::option<local_id>         result_slot;
     };
 
     struct scope_frame {
@@ -72,12 +80,35 @@ class emitter {
     auto emit_block(const ast::block_stmt& block) -> void;
     auto emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> void;
     auto emit_return_stmt(ast::node_id id, const ast::return_stmt& ret) -> void;
+    auto emit_break(ast::node_id id, const ast::break_stmt& brk) -> void;
+    auto emit_continue(ast::node_id id, const ast::continue_stmt& cnt) -> void;
+    auto emit_stmt_as_value(const ast::stmt_handle& stmt) -> value;
 
     auto emit_expression(const ast::expr_handle& expr) -> value {
         return emit_expression_id(*expr);
     }
     auto emit_expression_id(ast::node_id id) -> value;
+    auto emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value;
+    auto emit_while(ast::node_id                   id,
+                    const ast::while_loop_expr&    while_loop,
+                    stdx::option<std::string_view> label    = stdx::none,
+                    stdx::option<local_id>         res_slot = stdx::none) -> value;
+    auto emit_do_while(ast::node_id                   id,
+                       const ast::do_while_loop_expr& do_while,
+                       stdx::option<std::string_view> label    = stdx::none,
+                       stdx::option<local_id>         res_slot = stdx::none) -> value;
+    auto emit_infinite_loop(ast::node_id                   id,
+                            const ast::infinite_loop_expr& loop,
+                            stdx::option<std::string_view> label    = stdx::none,
+                            stdx::option<local_id>         res_slot = stdx::none) -> value;
+    auto emit_for(ast::node_id                   id,
+                  const ast::for_loop_expr&      for_loop,
+                  stdx::option<std::string_view> label    = stdx::none,
+                  stdx::option<local_id>         res_slot = stdx::none) -> value;
+    auto emit_label(ast::node_id id, const ast::label_expr& label) -> value;
     auto emit_binary(ast::node_id id, const ast::binary_expr& binary) -> value;
+    auto emit_logical_and(ast::node_id id, const ast::binary_expr& binary) -> value;
+    auto emit_logical_or(ast::node_id id, const ast::binary_expr& binary) -> value;
     auto emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value;
     auto emit_assignment(ast::node_id id, const ast::assignment_expr& assign) -> value;
     auto emit_call(ast::node_id id, const ast::call_expr& call) -> value;
@@ -119,14 +150,15 @@ class emitter {
     }
 
   private:
-    sema::context&           ctx_;
-    mod::module&             ast_module_;
-    const_eval               const_eval_;
-    builder                  builder_;
-    module                   gir_module_;
-    std::vector<scope_frame> scopes_;
-    usize                    anon_test_counter_{0};
-    usize                    anon_fn_counter_{0};
+    sema::context&            ctx_;
+    mod::module&              ast_module_;
+    const_eval                const_eval_;
+    builder                   builder_;
+    module                    gir_module_;
+    std::vector<scope_frame>  scopes_;
+    std::vector<loop_context> loop_stack_;
+    default_counter           anon_test_counter_;
+    default_counter           anon_fn_counter_;
 };
 
 } // namespace ghoti::gir
