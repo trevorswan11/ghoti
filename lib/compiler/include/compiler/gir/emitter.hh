@@ -50,6 +50,15 @@ class emitter {
         stdx::option<local_id>         result_slot;
     };
 
+    struct iterable_info {
+        bool                           is_range{false};
+        bool                           is_inclusive{false};
+        local_id                       var_slot;
+        stdx::option<sema::type&>      elem_type;
+        value                          end_val{};
+        stdx::option<std::string_view> capture_name;
+    };
+
     struct scope_frame {
         ankerl::unordered_dense::map<std::string_view, local_binding> bindings;
     };
@@ -64,6 +73,19 @@ class emitter {
 
       private:
         std::vector<scope_frame>& scopes_;
+    };
+
+    class loop_context_guard {
+      public:
+        loop_context_guard(std::vector<loop_context>& ctxs, loop_context&& ctx) noexcept
+            : ctxs_{ctxs} {
+            ctxs_.emplace_back(std::move(ctx));
+        }
+        ~loop_context_guard() { ctxs_.pop_back(); }
+        MAKE_PINNED(loop_context_guard);
+
+      private:
+        std::vector<loop_context>& ctxs_;
     };
 
   private:

@@ -33,7 +33,7 @@ class function {
         : arena_{arena}, name_{std::move(name)}, type_{type}, is_test_{is_test},
           is_constexpr_{is_constexpr} {}
     ~function() = default;
-    MAKE_MOVE_CONSTRUCTABLE_ONLY(function);
+    MAKE_PINNED(function);
 
     MAKE_GETTER(name, const std::string&);
     MAKE_GETTER(type, sema::type&);
