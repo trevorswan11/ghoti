@@ -15,9 +15,9 @@ template <Countable Underlying> class counter {
   public:
     class guard {
       public:
-        constexpr explicit guard(counter& c) : c_{&c} { c_->increment(); }
+        constexpr explicit guard(counter& c) : c_{&c} { c_->operator++(); }
         ~guard() {
-            if (c_) { c_->decrement(); }
+            if (c_) { c_->operator--(); }
         }
 
         guard(const guard&)                    = delete;
@@ -31,8 +31,10 @@ template <Countable Underlying> class counter {
     };
 
   public:
-    constexpr auto increment() noexcept -> void { count_ += static_cast<Underlying>(1); }
-    constexpr auto decrement() noexcept -> void { count_ -= static_cast<Underlying>(1); }
+    constexpr auto operator++() noexcept -> Underlying { return ++count_; }
+    constexpr auto operator++(i32) noexcept -> Underlying { return count_++; }
+    constexpr auto operator--() noexcept -> Underlying { return --count_; }
+    constexpr auto operator--(i32) noexcept -> Underlying { return count_--; }
 
     constexpr operator bool() noexcept { return count_ != static_cast<Underlying>(0); }
     constexpr operator Underlying() noexcept { return count_; }

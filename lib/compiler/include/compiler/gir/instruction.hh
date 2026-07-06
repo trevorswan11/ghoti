@@ -10,6 +10,7 @@
 #include <stdx/assert.hh>
 #include <stdx/enum.hh>
 #include <stdx/fixed/enum_map.hh>
+#include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/string.hh>
 #include <stdx/types.hh>
@@ -20,6 +21,8 @@
 #include "support/string_utils.hh"
 
 namespace ghoti::gir {
+
+inline constexpr usize GIR_ARENA_BLOCK_SIZE{stdx::sizes::kib(64UZ)};
 
 enum class instruction_kind : u8 {
     // Memory
@@ -198,14 +201,16 @@ struct value {
     [[nodiscard]] constexpr auto operator==(const value& other) const noexcept -> bool = default;
 };
 
+enum class segment_id : usize {};
+
 struct instruction {
     instruction_kind              kind{instruction_kind::UNREACHABLE};
     stdx::option<sema::type&>     type{stdx::none};
     stdx::option<local_id>        result{stdx::none};
     std::vector<value>            operands{};
-    stdx::option<usize>           target_segment{stdx::none};
-    stdx::option<usize>           true_segment{stdx::none};
-    stdx::option<usize>           false_segment{stdx::none};
+    stdx::option<segment_id>      target_segment{stdx::none};
+    stdx::option<segment_id>      true_segment{stdx::none};
+    stdx::option<segment_id>      false_segment{stdx::none};
     stdx::option<std::string>     callee_name{stdx::none};
     stdx::option<source_location> location{stdx::none};
 

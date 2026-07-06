@@ -1,4 +1,5 @@
 #include <string>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <stdx/arena.hh>
@@ -101,9 +102,10 @@ TEST_CASE("GIR value types and operations") {
 
 TEST_CASE("GIR segment terminator invariants") {
     using namespace gir;
+    stdx::arena<GIR_ARENA_BLOCK_SIZE> arena;
 
-    segment seg{0};
-    CHECK(seg.get_id() == 0);
+    segment seg{arena, segment_id{0}};
+    CHECK(seg.get_id() == segment_id{0});
     CHECK(seg.empty());
     CHECK(seg.size() == 0);
     CHECK_FALSE(seg.has_terminator());
@@ -139,13 +141,13 @@ TEST_CASE("GIR function management and local ID allocation") {
     auto&           fn_type{*pool[{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT}]};
     stdx::arena<GIR_ARENA_BLOCK_SIZE> arena;
 
-    function fn{"compute", fn_type};
+    function fn{arena, "compute", fn_type};
     CHECK(fn.get_name() == "compute");
     CHECK_FALSE(fn.get_is_test());
     CHECK_FALSE(fn.get_is_constexpr());
 
-    fn.add_param(arena, "a", i32_type);
-    fn.add_param(arena, "b", i32_type);
+    fn.add_param("a", i32_type);
+    fn.add_param("b", i32_type);
     REQUIRE(fn.get_params().size() == 2);
     CHECK(fn.get_params()[0]->name == "a");
     CHECK(fn.get_params()[0]->id == local_id::make_param(0));
@@ -158,13 +160,13 @@ TEST_CASE("GIR function management and local ID allocation") {
     CHECK(loc1.get_index() == 1);
     CHECK(fn.local_count() == 2);
 
-    fn.add_segment(arena);
-    fn.add_segment(arena);
+    fn.add_segment();
+    fn.add_segment();
     REQUIRE(fn.get_segments().size() == 2);
-    CHECK(fn.get_segments()[0]->get_id() == 0);
-    CHECK(fn.get_segments()[1]->get_id() == 1);
-    CHECK(fn.get_segment(0)->get_id() == 0);
-    CHECK(fn.get_segment(1)->get_id() == 1);
+    CHECK(fn.get_segments()[0]->get_id() == segment_id{0});
+    CHECK(fn.get_segments()[1]->get_id() == segment_id{1});
+    CHECK(fn.get_segment(segment_id{0})->get_id() == segment_id{0});
+    CHECK(fn.get_segment(segment_id{1})->get_id() == segment_id{1});
 }
 
 TEST_CASE("GIR module container and arena allocation") {

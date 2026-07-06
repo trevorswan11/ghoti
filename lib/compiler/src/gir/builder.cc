@@ -7,6 +7,7 @@
 
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
+#include <stdx/types.hh>
 
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
@@ -131,6 +132,29 @@ auto builder::emit_return(stdx::option<value> val) -> instruction& {
         .type     = stdx::none,
         .result   = stdx::none,
         .operands = {},
+    });
+}
+
+auto builder::emit_goto(segment_id target_segment) -> instruction& {
+    return emit_instruction({
+        .kind           = instruction_kind::GOTO,
+        .target_segment = target_segment,
+    });
+}
+
+auto builder::emit_cond_goto(value cond, segment_id true_segment, segment_id false_segment)
+    -> instruction& {
+    return emit_instruction({
+        .kind          = instruction_kind::COND_GOTO,
+        .operands      = {std::move(cond)},
+        .true_segment  = true_segment,
+        .false_segment = false_segment,
+    });
+}
+
+auto builder::emit_unreachable() -> instruction& {
+    return emit_instruction({
+        .kind = instruction_kind::UNREACHABLE,
     });
 }
 

@@ -44,6 +44,10 @@ class builder {
     auto emit_call(std::string_view callee, std::vector<value> args, sema::type& return_type)
         -> stdx::option<local_id>;
     auto emit_return(stdx::option<value> val = stdx::none) -> instruction&;
+    auto emit_goto(segment_id target_segment) -> instruction&;
+    auto emit_cond_goto(value cond, segment_id true_segment, segment_id false_segment)
+        -> instruction&;
+    auto emit_unreachable() -> instruction&;
 
   private:
     stdx::option<function&> function_;

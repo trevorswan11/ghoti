@@ -67,7 +67,7 @@ TEST_CASE("Emitter linear function with binary arithmetic") {
     REQUIRE(entry.get_instructions().size() == 2);
 
     // Instruction 0: %0: i32 = add param.0, param.1
-    const auto& inst0{entry.get_instructions()[0]};
+    const auto& inst0{*entry.get_instructions()[0]};
     CHECK(inst0.kind == gir::instruction_kind::ADD);
     CHECK(UNWRAP(inst0.result).is_temp());
     REQUIRE(inst0.operands.size() == 2);
@@ -77,7 +77,7 @@ TEST_CASE("Emitter linear function with binary arithmetic") {
     CHECK(inst0.operands[1].as<gir::local_id>().is_param());
 
     // Instruction 1: ret %0
-    const auto& inst1{entry.get_instructions()[1]};
+    const auto& inst1{*entry.get_instructions()[1]};
     CHECK(inst1.kind == gir::instruction_kind::RET);
     REQUIRE(inst1.operands.size() == 1);
     CHECK(inst1.operands[0].is<gir::local_id>());
@@ -114,14 +114,16 @@ TEST_CASE("Emitter local variable alloca, store, load, and compound assignment")
 
     REQUIRE(entry.get_instructions().size() >= 6);
 
-    CHECK(entry.get_instructions()[0].kind == gir::instruction_kind::ALLOCA); // alloca slot.0: i32
-    CHECK(entry.get_instructions()[1].kind ==
-          gir::instruction_kind::STORE);                                    // store slot.0, param.0
-    CHECK(entry.get_instructions()[2].kind == gir::instruction_kind::LOAD); // %1: i32 = load slot.0
-    CHECK(entry.get_instructions()[3].kind == gir::instruction_kind::ADD);  // %2: i32 = add %1, 5
-    CHECK(entry.get_instructions()[4].kind == gir::instruction_kind::STORE); // store slot.0, %2
-    CHECK(entry.get_instructions()[5].kind == gir::instruction_kind::LOAD); // %3: i32 = load slot.0
-    CHECK(entry.get_instructions()[6].kind == gir::instruction_kind::RET);  // ret %3
+    CHECK(entry.get_instructions()[0]->kind == gir::instruction_kind::ALLOCA); // alloca slot.0: i32
+    CHECK(entry.get_instructions()[1]->kind ==
+          gir::instruction_kind::STORE); // store slot.0, param.0
+    CHECK(entry.get_instructions()[2]->kind ==
+          gir::instruction_kind::LOAD);                                     // %1: i32 = load slot.0
+    CHECK(entry.get_instructions()[3]->kind == gir::instruction_kind::ADD); // %2: i32 = add %1, 5
+    CHECK(entry.get_instructions()[4]->kind == gir::instruction_kind::STORE); // store slot.0, %2
+    CHECK(entry.get_instructions()[5]->kind ==
+          gir::instruction_kind::LOAD);                                     // %3: i32 = load slot.0
+    CHECK(entry.get_instructions()[6]->kind == gir::instruction_kind::RET); // ret %3
 }
 
 TEST_CASE("Emitter unary operations and comparisons") {
@@ -144,16 +146,16 @@ TEST_CASE("Emitter unary operations and comparisons") {
     REQUIRE(fn0.get_segments().size() == 1);
     const auto& seg0{*fn0.get_segments()[0]};
     REQUIRE(seg0.get_instructions().size() == 2);
-    CHECK(seg0.get_instructions()[0].kind == gir::instruction_kind::LT);
-    CHECK(seg0.get_instructions()[1].kind == gir::instruction_kind::RET);
+    CHECK(seg0.get_instructions()[0]->kind == gir::instruction_kind::LT);
+    CHECK(seg0.get_instructions()[1]->kind == gir::instruction_kind::RET);
 
     const auto& fn1{*gir_mod.get_functions()[1]};
     CHECK(fn1.get_name() == "negate_val");
     REQUIRE(fn1.get_segments().size() == 1);
     const auto& seg1{*fn1.get_segments()[0]};
     REQUIRE(seg1.get_instructions().size() == 2);
-    CHECK(seg1.get_instructions()[0].kind == gir::instruction_kind::NEG);
-    CHECK(seg1.get_instructions()[1].kind == gir::instruction_kind::RET);
+    CHECK(seg1.get_instructions()[0]->kind == gir::instruction_kind::NEG);
+    CHECK(seg1.get_instructions()[1]->kind == gir::instruction_kind::RET);
 }
 
 TEST_CASE("Emitter function calls") {
@@ -177,9 +179,9 @@ TEST_CASE("Emitter function calls") {
 
     // Inner call, outer call, return
     REQUIRE(seg.get_instructions().size() == 3);
-    CHECK(seg.get_instructions()[0].kind == gir::instruction_kind::CALL);
-    CHECK(seg.get_instructions()[1].kind == gir::instruction_kind::CALL);
-    CHECK(seg.get_instructions()[2].kind == gir::instruction_kind::RET);
+    CHECK(seg.get_instructions()[0]->kind == gir::instruction_kind::CALL);
+    CHECK(seg.get_instructions()[1]->kind == gir::instruction_kind::CALL);
+    CHECK(seg.get_instructions()[2]->kind == gir::instruction_kind::RET);
 }
 
 TEST_CASE("Emitter test blocks") {
@@ -232,8 +234,8 @@ TEST_CASE("Anonymous function expression and local lambda binding") {
     const auto& run_seg{*fn0.get_segments()[0]};
     REQUIRE(run_seg.get_instructions().size() >= 2);
     const auto& call_inst{run_seg.get_instructions()[0]};
-    CHECK(call_inst.kind == gir::instruction_kind::CALL);
-    CHECK(call_inst.callee_name == "anonymous_fn0");
+    CHECK(call_inst->kind == gir::instruction_kind::CALL);
+    CHECK(call_inst->callee_name == "anonymous_fn0");
 }
 
 TEST_CASE("Immediate anonymous function invocation in expression position") {
@@ -259,8 +261,8 @@ TEST_CASE("Immediate anonymous function invocation in expression position") {
     const auto& calc_seg{*fn0.get_segments()[0]};
     REQUIRE(calc_seg.get_instructions().size() >= 2);
     const auto& call_inst{calc_seg.get_instructions()[0]};
-    CHECK(call_inst.kind == gir::instruction_kind::CALL);
-    CHECK(call_inst.callee_name == "anonymous_fn0");
+    CHECK(call_inst->kind == gir::instruction_kind::CALL);
+    CHECK(call_inst->callee_name == "anonymous_fn0");
 }
 
 } // namespace ghoti::tests

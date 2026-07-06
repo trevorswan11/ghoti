@@ -2,6 +2,7 @@
 
 #include <ranges>
 #include <string>
+#include <utility>
 
 #include <fmt/format.h>
 #include <fmt/ostream.h>
@@ -70,13 +71,17 @@ auto format_instruction(const instruction& inst) -> std::string {
             return fmt::format("ret {} {}", type_str, format_value(inst.operands[0]));
         }
         return fmt::format("ret {}", format_value(inst.operands[0]));
-    case instruction_kind::GOTO: return fmt::format("goto seg {}", inst.target_segment.value_or(0));
+    case instruction_kind::GOTO:
+        return fmt::format(
+            "goto seg {}",
+            inst.target_segment.transform([](auto s) { return std::to_underlying(s); })
+                .value_or(0));
     case instruction_kind::COND_GOTO:
-        return fmt::format("cond_goto {} seg {}, seg {}",
-                           !inst.operands.empty() ? format_value(inst.operands[0])
-                                                  : "<missing_cond>",
-                           inst.true_segment.value_or(0),
-                           inst.false_segment.value_or(0));
+        return fmt::format(
+            "cond_goto {} seg {}, seg {}",
+            !inst.operands.empty() ? format_value(inst.operands[0]) : "<missing_cond>",
+            inst.true_segment.transform([](auto s) { return std::to_underlying(s); }).value_or(0),
+            inst.false_segment.transform([](auto s) { return std::to_underlying(s); }).value_or(0));
     case instruction_kind::UNREACHABLE: return "unreachable";
     case instruction_kind::STORE:
         return fmt::format(
@@ -134,8 +139,8 @@ auto dumper::dump(const instruction& inst) -> void {
 }
 
 auto dumper::dump(const segment& seg) -> void {
-    fmt::println(out_, "  seg {}:", seg.get_id());
-    for (const auto& inst : seg.get_instructions()) { dump(inst); }
+    fmt::println(out_, "  seg {}:", std::to_underlying(seg.get_id()));
+    for (const auto& inst : seg.get_instructions()) { dump(*inst); }
 }
 
 auto dumper::dump(const function& fn) -> void {

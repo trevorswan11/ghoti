@@ -25,11 +25,11 @@ TEST_CASE("GIR dumper formatting") {
     stdx::arena<GIR_ARENA_BLOCK_SIZE> arena;
 
     SECTION("Dump linear function") {
-        gir::function fn{"add", fn_type};
-        fn.add_param(arena, "a", i32_type);
-        fn.add_param(arena, "b", i32_type);
+        gir::function fn{arena, "add", fn_type};
+        fn.add_param("a", i32_type);
+        fn.add_param("b", i32_type);
 
-        auto& seg{fn.add_segment(arena)};
+        auto& seg{fn.add_segment()};
         seg.append({
             .kind     = instruction_kind::LOAD,
             .type     = &i32_type,
@@ -69,11 +69,11 @@ TEST_CASE("GIR dumper formatting") {
     }
 
     SECTION("Dump control flow function") {
-        function fn{"abs", fn_type};
-        fn.add_param(arena, "x", i32_type);
+        function fn{arena, "abs", fn_type};
+        fn.add_param("x", i32_type);
 
         // seg 0
-        auto& seg0{fn.add_segment(arena)};
+        auto& seg0{fn.add_segment()};
         seg0.append({
             .kind     = instruction_kind::LOAD,
             .type     = &i32_type,
@@ -97,12 +97,12 @@ TEST_CASE("GIR dumper formatting") {
             .type          = nullptr,
             .result        = stdx::none,
             .operands      = helpers::make_vector<value>(local_id::make_temp(2)),
-            .true_segment  = 1,
-            .false_segment = 2,
+            .true_segment  = segment_id{1},
+            .false_segment = segment_id{2},
         });
 
         // seg 1
-        auto& seg1{fn.add_segment(arena)};
+        auto& seg1{fn.add_segment()};
         seg1.append({
             .kind     = instruction_kind::NEG,
             .type     = &i32_type,
@@ -117,7 +117,7 @@ TEST_CASE("GIR dumper formatting") {
         });
 
         // seg 2
-        auto& seg2{fn.add_segment(arena)};
+        auto& seg2{fn.add_segment()};
         seg2.append({
             .kind     = instruction_kind::RET,
             .type     = &i32_type,
