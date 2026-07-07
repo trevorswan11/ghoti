@@ -130,6 +130,7 @@ template <stdx::ScopedEnum E> class diagnostic {
     }
 
     MAKE_GETTER(message, const stdx::option<std::string>&)
+    MAKE_GETTER(error, E)
     [[nodiscard]] auto to_formattable() const noexcept -> detail::formattable_diagnostic {
         return {message_, loc_, magic_enum::enum_name(error_), level_};
     }
@@ -162,6 +163,10 @@ template <Diagnostic D> class diagnostic_list {
     ~diagnostic_list() = default;
 
     MAKE_MOVE_ONLY(diagnostic_list)
+
+    [[nodiscard]] auto operator[](usize idx) const noexcept -> const D& {
+        return diagnostics_[idx];
+    }
 
     auto push_back(const D& d) -> void { diagnostics_.push_back(d); }
 

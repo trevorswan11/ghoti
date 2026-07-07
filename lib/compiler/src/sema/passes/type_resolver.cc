@@ -991,6 +991,26 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
         return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(result).error()));
     }
 
+    if (const auto struct_type{object_type.get_data().as_opt<types::struct_t>()}) {
+        const auto& table{ctx_.registry.get(object_type.get_symbol_table_idx())};
+        const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(dot.member)};
+        if (auto proxy = table.get_proxy_opt(member_ident.name)) {
+            const auto& [member_symbol, member_idx] = *proxy;
+            if (&struct_type->enclosing != &resolving_ &&
+                member_idx < struct_type->ast_fields.size() &&
+                !struct_type->ast_fields[member_idx].is_public()) {
+                return last_type_.emplace(
+                    ctx_.poison_node(resolving_,
+                                     id,
+                                     fmt::format("Field '{}' of struct '{}' is private",
+                                                 member_ident.name,
+                                                 get_rightmost_name(dot.object)),
+                                     error::ILLEGAL_PRIVATE_ACCESS,
+                                     resolving_.ast.location_of(dot.member)));
+            }
+        }
+    }
+
     // The structural resolver returns poisoned types in error conditions which can be bubbled here
     auto& member_type{*result.value()};
     resolving_.set_sema_type(dot.member, member_type);
@@ -1637,6 +1657,17 @@ auto type_resolver::resolve_module_access(ID id, const ast::module_access_expr& 
 
         const auto symbol_node{sym->get_data().as_opt<symbols::node_t>()};
         if (!symbol_node) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
+
+        if (&inner_mod != &resolving_ && !sym->is_public(inner_mod)) {
+            return last_type_.emplace(
+                ctx_.poison_node(resolving_,
+                                 id,
+                                 fmt::format("Symbol '{}' is private to module '{}'",
+                                             inner_ident.name,
+                                             get_rightmost_name(access.outer)),
+                                 error::ILLEGAL_PRIVATE_ACCESS,
+                                 resolving_.ast.location_of(access.inner)));
+        }
 
         stdx::option<ast::type_modifier> mod;
         if constexpr (ast::IndexableExplicitTypeID<ID>) { mod = id.get_modifier(); }

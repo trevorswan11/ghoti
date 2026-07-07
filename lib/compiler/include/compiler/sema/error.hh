@@ -41,6 +41,7 @@ enum class error : u8 {
     CONSTEXPR_EVALUATION_FAILED,
     CONSTEXPR_RECURSION_LIMIT_EXCEEDED,
     GIR_FORBIDDEN_TYPE,
+    ILLEGAL_PRIVATE_ACCESS,
 };
 
 using diagnostic  = diagnostic<error>;
