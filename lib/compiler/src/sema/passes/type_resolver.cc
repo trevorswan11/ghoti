@@ -992,21 +992,70 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
     }
 
     if (const auto struct_type{object_type.get_data().as_opt<types::struct_t>()}) {
-        const auto& table{ctx_.registry.get(object_type.get_symbol_table_idx())};
-        const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(dot.member)};
-        if (auto proxy = table.get_proxy_opt(member_ident.name)) {
-            const auto& [member_symbol, member_idx] = *proxy;
-            if (&struct_type->enclosing != &resolving_ &&
-                member_idx < struct_type->ast_fields.size() &&
-                !struct_type->ast_fields[member_idx].is_public()) {
-                return last_type_.emplace(
-                    ctx_.poison_node(resolving_,
-                                     id,
-                                     fmt::format("Field '{}' of struct '{}' is private",
-                                                 member_ident.name,
-                                                 get_rightmost_name(dot.object)),
-                                     error::ILLEGAL_PRIVATE_ACCESS,
-                                     resolving_.ast.location_of(dot.member)));
+        if (&struct_type->enclosing != &resolving_) {
+            const auto& table{ctx_.registry.get(object_type.get_symbol_table_idx())};
+            const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(dot.member)};
+            if (auto proxy = table.get_proxy_opt(member_ident.name)) {
+                const auto& [member_symbol, member_idx] = *proxy;
+                if (member_idx < struct_type->ast_fields.size()) {
+                    if (!struct_type->ast_fields[member_idx].is_public()) {
+                        return last_type_.emplace(
+                            ctx_.poison_node(resolving_,
+                                             id,
+                                             fmt::format("Field '{}' of struct '{}' is private",
+                                                         member_ident.name,
+                                                         get_rightmost_name(dot.object)),
+                                             error::ILLEGAL_PRIVATE_ACCESS,
+                                             resolving_.ast.location_of(dot.member)));
+                    }
+                } else if (!member_symbol.is_public(struct_type->enclosing)) {
+                    return last_type_.emplace(
+                        ctx_.poison_node(resolving_,
+                                         id,
+                                         fmt::format("Member '{}' of struct '{}' is private",
+                                                     member_ident.name,
+                                                     get_rightmost_name(dot.object)),
+                                         error::ILLEGAL_PRIVATE_ACCESS,
+                                         resolving_.ast.location_of(dot.member)));
+                }
+            }
+        }
+    } else if (const auto enum_type{object_type.get_data().as_opt<types::enum_t>()}) {
+        if (&enum_type->enclosing != &resolving_) {
+            const auto& table{ctx_.registry.get(object_type.get_symbol_table_idx())};
+            const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(dot.member)};
+            if (auto proxy = table.get_proxy_opt(member_ident.name)) {
+                const auto& [member_symbol, member_idx] = *proxy;
+                if (member_idx >= enum_type->ast_enumerations.size() &&
+                    !member_symbol.is_public(enum_type->enclosing)) {
+                    return last_type_.emplace(
+                        ctx_.poison_node(resolving_,
+                                         id,
+                                         fmt::format("Member '{}' of enum '{}' is private",
+                                                     member_ident.name,
+                                                     get_rightmost_name(dot.object)),
+                                         error::ILLEGAL_PRIVATE_ACCESS,
+                                         resolving_.ast.location_of(dot.member)));
+                }
+            }
+        }
+    } else if (const auto union_type{object_type.get_data().as_opt<types::union_t>()}) {
+        if (&union_type->enclosing != &resolving_) {
+            const auto& table{ctx_.registry.get(object_type.get_symbol_table_idx())};
+            const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(dot.member)};
+            if (auto proxy = table.get_proxy_opt(member_ident.name)) {
+                const auto& [member_symbol, member_idx] = *proxy;
+                if (member_idx >= union_type->ast_fields.size() &&
+                    !member_symbol.is_public(union_type->enclosing)) {
+                    return last_type_.emplace(
+                        ctx_.poison_node(resolving_,
+                                         id,
+                                         fmt::format("Member '{}' of union '{}' is private",
+                                                     member_ident.name,
+                                                     get_rightmost_name(dot.object)),
+                                         error::ILLEGAL_PRIVATE_ACCESS,
+                                         resolving_.ast.location_of(dot.member)));
+                }
             }
         }
     }

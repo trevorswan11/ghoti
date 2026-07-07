@@ -35,22 +35,25 @@ TEST_CASE("Cross-module public vs private declaration access") {
     }
 }
 
-TEST_CASE("Cross-module public vs private struct field access") {
+TEST_CASE("Cross-module public vs private struct field and member access") {
     constexpr std::string_view point_gh{R"(
         pub const Point := struct {
             pub x: i32,
             y: i32,
+            pub const get_origin := fn(): i32 { return 0; };
+            const secret_helper := fn(): i32 { return -1; };
         };
         pub const make_point := fn(): Point {
             return Point{ .x = 10, .y = 20 };
         };
     )"};
 
-    SECTION("Public field access succeeds") {
+    SECTION("Public field and member access succeeds") {
         auto [ctx, idx]{helpers::resolve_and_check(
             R"(import "point.gh" as point;
                const p := point::make_point();
-               const px := p.x;)",
+               const px := p.x;
+               const zero_fn := point::Point.get_origin;)",
             {mock_file{.path = "point.gh", .source = point_gh}})};
         ctx->verify_registry_resolved();
     }
@@ -65,6 +68,77 @@ TEST_CASE("Cross-module public vs private struct field access") {
                 "Field 'y' of struct 'p' is private",
                 sema::error::ILLEGAL_PRIVATE_ACCESS,
                 std::pair{2UZ, 15UZ},
+            });
+    }
+
+    SECTION("Private struct member access across modules fails") {
+        helpers::test_resolver_fail(
+            R"(import "point.gh" as point; const p := point::Point.secret_helper;)",
+            {mock_file{.path = "point.gh", .source = point_gh}},
+            sema::diagnostic{
+                "Member 'secret_helper' of struct 'Point' is private",
+                sema::error::ILLEGAL_PRIVATE_ACCESS,
+                std::pair{1UZ, 25UZ},
+            });
+    }
+}
+
+TEST_CASE("Cross-module public vs private enum member access") {
+    constexpr std::string_view color_gh{R"(
+        pub const Color := enum {
+            RED,
+            GREEN,
+            BLUE,
+            pub const get_default := fn(): Color { return Color.RED; };
+            const secret_code := fn(): i32 { return 42; };
+        };
+    )"};
+
+    SECTION("Public enum member access succeeds") {
+        auto [ctx, idx]{helpers::resolve_and_check(
+            R"(import "color.gh" as color;
+               const c := color::Color.get_default;
+               const r := color::Color.RED;)",
+            {mock_file{.path = "color.gh", .source = color_gh}})};
+        ctx->verify_registry_resolved();
+    }
+
+    SECTION("Private enum member access across modules fails") {
+        helpers::test_resolver_fail(
+            R"(import "color.gh" as color; const code := color::Color.secret_code;)",
+            {mock_file{.path = "color.gh", .source = color_gh}},
+            sema::diagnostic{
+                "Member 'secret_code' of enum 'Color' is private",
+                sema::error::ILLEGAL_PRIVATE_ACCESS,
+                std::pair{1UZ, 28UZ},
+            });
+    }
+}
+
+TEST_CASE("Cross-module public vs private union member access") {
+    constexpr std::string_view data_gh{R"(
+        pub const Value := union {
+            int_val: i32,
+            pub const get_zero := fn(): i32 { return 0; };
+            const secret_tag := fn(): i32 { return 99; };
+        };
+    )"};
+
+    SECTION("Public union member access succeeds") {
+        auto [ctx, idx]{helpers::resolve_and_check(
+            R"(import "data.gh" as data; const z := data::Value.get_zero;)",
+            {mock_file{.path = "data.gh", .source = data_gh}})};
+        ctx->verify_registry_resolved();
+    }
+
+    SECTION("Private union member access across modules fails") {
+        helpers::test_resolver_fail(
+            R"(import "data.gh" as data; const t := data::Value.secret_tag;)",
+            {mock_file{.path = "data.gh", .source = data_gh}},
+            sema::diagnostic{
+                "Member 'secret_tag' of union 'Value' is private",
+                sema::error::ILLEGAL_PRIVATE_ACCESS,
+                std::pair{1UZ, 24UZ},
             });
     }
 }

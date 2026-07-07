@@ -74,6 +74,7 @@ auto symbol::is_public(const mod::module& module) const noexcept -> bool {
             default: return false;
             }
         },
+        [](const symbols::struct_field& field) -> bool { return field.is_public(); },
         [](const auto&) -> bool { return false; });
 }
 
