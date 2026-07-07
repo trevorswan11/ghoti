@@ -24,6 +24,7 @@
 #include "compiler/gir/segment.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
+#include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/token_type.hh"
 
@@ -521,21 +522,31 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
 
     // Comptime / constexpr condition evaluation
     if (if_expr.constexpr_condition) {
-        if (const auto cond_cv{const_eval_.try_eval(if_expr.condition)}) {
-            if (const auto eval{cond_cv->as_opt<bool>()}) {
-                if (*eval) {
-                    return yields_value
-                               ? emit_stmt_as_value(if_expr.consequence)
-                               : (emit_stmt(if_expr.consequence), value{void_val{}, sema_type});
-                }
-                if (if_expr.alternate) {
-                    return yields_value
-                               ? emit_stmt_as_value(*if_expr.alternate)
-                               : (emit_stmt(*if_expr.alternate), value{void_val{}, sema_type});
-                }
-                return value{void_val{}, sema_type};
-            }
+        const auto cond_cv{const_eval_.try_eval(if_expr.condition)};
+        if (!cond_cv) {
+            ctx_.diags.emplace_back("Constexpr if condition could not be evaluated at compile time",
+                                    sema::error::CONSTEXPR_EVALUATION_FAILED,
+                                    ast_module_.ast.location_of(if_expr.condition));
+            return value{undefined_val{}, sema_type};
         }
+
+        const auto eval{cond_cv->as_opt<bool>()};
+        if (!eval) {
+            ctx_.diags.emplace_back("Constexpr if condition must evaluate to a boolean",
+                                    sema::error::TYPE_MISMATCH,
+                                    ast_module_.ast.location_of(if_expr.condition));
+            return value{undefined_val{}, sema_type};
+        }
+
+        if (*eval) {
+            return yields_value ? emit_stmt_as_value(if_expr.consequence)
+                                : (emit_stmt(if_expr.consequence), value{void_val{}, sema_type});
+        }
+        if (if_expr.alternate) {
+            return yields_value ? emit_stmt_as_value(*if_expr.alternate)
+                                : (emit_stmt(*if_expr.alternate), value{void_val{}, sema_type});
+        }
+        return value{void_val{}, sema_type};
     }
 
     auto fn_opt{builder_.get_function()};
