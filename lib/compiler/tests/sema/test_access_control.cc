@@ -30,7 +30,7 @@ TEST_CASE("Cross-module public vs private declaration access") {
                                     sema::diagnostic{
                                         "Symbol 'secret' is private to module 'math'",
                                         sema::error::ILLEGAL_PRIVATE_ACCESS,
-                                        std::pair{1UZ, 20UZ},
+                                        std::pair{0UZ, 45UZ},
                                     });
     }
 }
@@ -67,7 +67,7 @@ TEST_CASE("Cross-module public vs private struct field and member access") {
             sema::diagnostic{
                 "Field 'y' of struct 'p' is private",
                 sema::error::ILLEGAL_PRIVATE_ACCESS,
-                std::pair{2UZ, 15UZ},
+                std::pair{2UZ, 30UZ},
             });
     }
 
@@ -78,7 +78,7 @@ TEST_CASE("Cross-module public vs private struct field and member access") {
             sema::diagnostic{
                 "Member 'secret_helper' of struct 'Point' is private",
                 sema::error::ILLEGAL_PRIVATE_ACCESS,
-                std::pair{1UZ, 25UZ},
+                std::pair{0UZ, 52UZ},
             });
     }
 }
@@ -110,7 +110,7 @@ TEST_CASE("Cross-module public vs private enum member access") {
             sema::diagnostic{
                 "Member 'secret_code' of enum 'Color' is private",
                 sema::error::ILLEGAL_PRIVATE_ACCESS,
-                std::pair{1UZ, 28UZ},
+                std::pair{0UZ, 55UZ},
             });
     }
 }
@@ -138,7 +138,7 @@ TEST_CASE("Cross-module public vs private union member access") {
             sema::diagnostic{
                 "Member 'secret_tag' of union 'Value' is private",
                 sema::error::ILLEGAL_PRIVATE_ACCESS,
-                std::pair{1UZ, 24UZ},
+                std::pair{0UZ, 49UZ},
             });
     }
 }
@@ -171,7 +171,7 @@ TEST_CASE("Cross-module re-exported symbol access") {
                                     sema::diagnostic{
                                         "Symbol 'io' is private to module 'std'",
                                         sema::error::ILLEGAL_PRIVATE_ACCESS,
-                                        std::pair{1UZ, 17UZ},
+                                        std::pair{0UZ, 40UZ},
                                     });
     }
 }
