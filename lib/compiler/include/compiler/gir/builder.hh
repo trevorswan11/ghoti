@@ -37,7 +37,13 @@ class builder {
     auto emit_instruction(instruction inst) -> instruction&;
     auto emit_alloca(sema::type& type, std::string_view name = {}) -> local_id;
     auto emit_load(local_id src, sema::type& type) -> local_id;
+    auto emit_load(value src, sema::type& type) -> local_id;
     auto emit_store(local_id dest, value val) -> instruction&;
+    auto emit_store(value dest, value val) -> instruction&;
+    auto emit_get_element_ptr(value base, std::vector<value> indices, sema::type& result_type)
+        -> local_id;
+    auto emit_address_of(value target, sema::type& result_type) -> local_id;
+    auto emit_deref(value ptr, sema::type& result_type) -> local_id;
     auto emit_binary(instruction_kind kind, value lhs, value rhs, sema::type& type) -> local_id;
     auto emit_unary(instruction_kind kind, value operand, sema::type& type) -> local_id;
     auto emit_cast(instruction_kind kind, value operand, sema::type& target_type) -> local_id;

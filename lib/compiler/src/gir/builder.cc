@@ -45,6 +45,18 @@ auto builder::emit_load(local_id src, sema::type& type) -> local_id {
     return dest;
 }
 
+auto builder::emit_load(value src, sema::type& type) -> local_id {
+    ASSERT(function_, "Cannot emit load without an active function");
+    const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
+    emit_instruction({
+        .kind     = instruction_kind::LOAD,
+        .type     = type,
+        .result   = dest,
+        .operands = {std::move(src)},
+    });
+    return dest;
+}
+
 auto builder::emit_store(local_id dest, value val) -> instruction& {
     const auto val_type{val.type};
     return emit_instruction({
@@ -53,6 +65,65 @@ auto builder::emit_store(local_id dest, value val) -> instruction& {
         .result   = dest,
         .operands = {std::move(val)},
     });
+}
+
+auto builder::emit_store(value dest, value val) -> instruction& {
+    const auto val_type{val.type};
+    if (const auto dest_local{dest.as_opt<local_id>()}) {
+        return emit_instruction({
+            .kind     = instruction_kind::STORE,
+            .type     = val_type,
+            .result   = *dest_local,
+            .operands = {std::move(val)},
+        });
+    }
+    return emit_instruction({
+        .kind     = instruction_kind::STORE,
+        .type     = val_type,
+        .result   = stdx::none,
+        .operands = {std::move(dest), std::move(val)},
+    });
+}
+
+auto builder::emit_get_element_ptr(value base, std::vector<value> indices, sema::type& result_type)
+    -> local_id {
+    ASSERT(function_, "Cannot emit GEP instruction without an active function");
+    const auto         dest{function_->next_local_id(local_kind::TEMPORARY)};
+    std::vector<value> operands;
+    operands.reserve(1 + indices.size());
+    operands.emplace_back(std::move(base));
+    for (auto&& idx : indices) { operands.emplace_back(std::move(idx)); }
+    emit_instruction({
+        .kind     = instruction_kind::GET_ELEMENT_PTR,
+        .type     = result_type,
+        .result   = dest,
+        .operands = std::move(operands),
+    });
+    return dest;
+}
+
+auto builder::emit_address_of(value target, sema::type& result_type) -> local_id {
+    ASSERT(function_, "Cannot emit address_of instruction without an active function");
+    const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
+    emit_instruction({
+        .kind     = instruction_kind::ADDRESS_OF,
+        .type     = result_type,
+        .result   = dest,
+        .operands = {std::move(target)},
+    });
+    return dest;
+}
+
+auto builder::emit_deref(value ptr, sema::type& result_type) -> local_id {
+    ASSERT(function_, "Cannot emit deref instruction without an active function");
+    const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
+    emit_instruction({
+        .kind     = instruction_kind::DEREF,
+        .type     = result_type,
+        .result   = dest,
+        .operands = {std::move(ptr)},
+    });
+    return dest;
 }
 
 auto builder::emit_binary(instruction_kind kind, value lhs, value rhs, sema::type& type)

@@ -84,10 +84,17 @@ auto format_instruction(const instruction& inst) -> std::string {
             inst.false_segment.transform([](auto s) { return std::to_underlying(s); }).value_or(0));
     case instruction_kind::UNREACHABLE: return "unreachable";
     case instruction_kind::STORE:
-        return fmt::format(
-            "store {}, {}",
-            inst.operands.size() > 0 ? format_value(inst.operands[0]) : "<missing_src>",
-            inst.operands.size() > 1 ? format_value(inst.operands[1]) : "<missing_dst>");
+        if (inst.operands.size() >= 2) {
+            return fmt::format(
+                "store {}, {}", format_value(inst.operands[0]), format_value(inst.operands[1]));
+        } else if (inst.operands.size() == 1 && inst.result) {
+            return fmt::format(
+                "store {}, %{}", format_value(inst.operands[0]), inst.result->get_index());
+        }
+        return fmt::format("store {}, {}",
+                           inst.operands.size() > 0 ? format_value(inst.operands[0])
+                                                    : "<missing_src>",
+                           "<missing_dst>");
     case instruction_kind::ALLOCA:
         return fmt::format("{}{} {}", prefix, instruction_kind_name(inst.kind), type_str);
     case instruction_kind::LOAD:
