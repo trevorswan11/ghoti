@@ -625,7 +625,7 @@ auto emitter::emit_while(ast::node_id                   id,
     const auto continue_target{continuation_seg ? continuation_seg->get_id() : cond_seg.get_id()};
     {
         const loop_context_guard g{loop_stack_,
-                                   {
+                                   loop_context{
                                        .label           = label,
                                        .break_target    = exit_seg.get_id(),
                                        .continue_target = continue_target,
@@ -701,7 +701,7 @@ auto emitter::emit_do_while(ast::node_id                   id,
 
     {
         const loop_context_guard g{loop_stack_,
-                                   {
+                                   loop_context{
                                        .label           = label,
                                        .break_target    = exit_seg.get_id(),
                                        .continue_target = cond_seg.get_id(),
@@ -752,7 +752,7 @@ auto emitter::emit_infinite_loop(ast::node_id                   id,
 
     {
         const loop_context_guard g{loop_stack_,
-                                   {
+                                   loop_context{
                                        .label           = label,
                                        .break_target    = exit_seg.get_id(),
                                        .continue_target = body_seg.get_id(),
@@ -862,7 +862,7 @@ auto emitter::emit_for(ast::node_id                   id,
 
     {
         const loop_context_guard ctx_g{loop_stack_,
-                                       {
+                                       loop_context{
                                            .label           = label,
                                            .break_target    = exit_seg.get_id(),
                                            .continue_target = step_seg.get_id(),
@@ -979,7 +979,7 @@ auto emitter::emit_label(ast::node_id id, const ast::label_expr& label) -> value
             auto& exit_seg{fn.add_segment()};
             {
                 const loop_context_guard ctx_g{loop_stack_,
-                                               {
+                                               loop_context{
                                                    .label           = label_name,
                                                    .break_target    = exit_seg.get_id(),
                                                    .continue_target = exit_seg.get_id(),
@@ -1020,7 +1020,7 @@ auto emitter::emit_label(ast::node_id id, const ast::label_expr& label) -> value
             auto& exit_seg{fn.add_segment()};
             {
                 const loop_context_guard g{loop_stack_,
-                                           {
+                                           loop_context{
                                                .label           = label_name,
                                                .break_target    = exit_seg.get_id(),
                                                .continue_target = exit_seg.get_id(),

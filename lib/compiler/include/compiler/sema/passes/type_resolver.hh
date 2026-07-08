@@ -29,6 +29,7 @@
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "support/diagnostic.hh"
+#include "support/scope_guard.hh"
 
 namespace ghoti::sema {
 
@@ -86,14 +87,7 @@ class type_resolver {
     // A guarded stack that manages the current user-types for function self parameters
     class structural_type_stack {
       public:
-        class guard {
-          public:
-            guard(structural_type_stack& s, type& type) noexcept : stack_{s} { stack_.push(type); }
-            ~guard() { stack_.pop(); }
-
-          private:
-            structural_type_stack& stack_;
-        };
+        using guard = scope_guard<structural_type_stack>;
 
       public:
         structural_type_stack() noexcept = default;

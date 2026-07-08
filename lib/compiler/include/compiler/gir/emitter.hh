@@ -22,6 +22,7 @@
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
+#include "support/scope_guard.hh"
 
 namespace ghoti::gir {
 
@@ -63,30 +64,8 @@ class emitter {
         ankerl::unordered_dense::map<std::string_view, local_binding> bindings;
     };
 
-    class scope_guard {
-      public:
-        scope_guard(std::vector<scope_frame>& scopes) noexcept : scopes_{scopes} {
-            scopes_.emplace_back();
-        }
-        ~scope_guard() { scopes_.pop_back(); }
-        MAKE_PINNED(scope_guard);
-
-      private:
-        std::vector<scope_frame>& scopes_;
-    };
-
-    class loop_context_guard {
-      public:
-        loop_context_guard(std::vector<loop_context>& ctxs, loop_context&& ctx) noexcept
-            : ctxs_{ctxs} {
-            ctxs_.emplace_back(std::move(ctx));
-        }
-        ~loop_context_guard() { ctxs_.pop_back(); }
-        MAKE_PINNED(loop_context_guard);
-
-      private:
-        std::vector<loop_context>& ctxs_;
-    };
+    using scope_guard        = ghoti::scope_guard<std::vector<scope_frame>>;
+    using loop_context_guard = ghoti::scope_guard<std::vector<loop_context>>;
 
   private:
     auto emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -> void;

@@ -5,6 +5,8 @@
 #include <string_view>
 #include <vector>
 
+#include "support/scope_guard.hh"
+
 namespace ghoti {
 
 namespace symbols {
@@ -18,14 +20,7 @@ constexpr std::string_view EMPTY{"    "};
 
 class indent {
   public:
-    class guard {
-      public:
-        constexpr guard(indent& i, bool last) : indent_{i} { indent_.push(last); }
-        ~guard() { indent_.pop(); }
-
-      private:
-        indent& indent_;
-    };
+    using guard = scope_guard<indent>;
 
   public:
     constexpr auto push(bool last) -> void { levels_.push_back(last); }

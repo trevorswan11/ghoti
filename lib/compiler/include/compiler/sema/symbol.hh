@@ -26,6 +26,7 @@
 #include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/diagnostic.hh"
+#include "support/scope_guard.hh"
 
 namespace ghoti::sema {
 
@@ -223,14 +224,7 @@ class symbol_table {
 class symbol_table_stack {
   public:
     // A basic push/pop RAII guard, see `Scope`
-    class guard {
-      public:
-        guard(symbol_table_stack& s, usize idx) noexcept : stack_{s} { stack_.push(idx); }
-        ~guard() { stack_.pop(); }
-
-      private:
-        symbol_table_stack& stack_;
-    };
+    using guard = scope_guard<symbol_table_stack>;
 
     // An extension of `Guard` that also resets the old index upon destruction
     class scope {
