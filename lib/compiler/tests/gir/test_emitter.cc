@@ -87,7 +87,7 @@ TEST_CASE("Emitter linear function with binary arithmetic") {
     std::ostringstream ss;
     gir::dumper        dumper{ss};
     dumper.dump(gir_mod);
-    const auto dump_text{ss.str()};
+    const auto dump_text{ss.view()};
     CHECK(dump_text.find("fn add(a: i32, b: i32) -> i32") != std::string::npos);
     CHECK(dump_text.find("%0 = add i32 param.0, param.1") != std::string::npos);
     CHECK(dump_text.find("ret i32 %0") != std::string::npos);

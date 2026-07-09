@@ -80,7 +80,7 @@ TEST_CASE("GIR Control Flow: if expression yielding value") {
     std::ostringstream ss;
     gir::dumper        dumper{ss};
     dumper.dump(gir_mod);
-    const auto dump_text{ss.str()};
+    const auto dump_text{ss.view()};
 
     CHECK(dump_text.contains("cond_goto param.0 seg 1, seg 2"));
     CHECK(dump_text.contains("goto seg 3"));
@@ -174,7 +174,7 @@ TEST_CASE("GIR Control Flow: while loop with condition, body, and break") {
     std::ostringstream ss;
     gir::dumper        dumper{ss};
     dumper.dump(gir_mod);
-    const auto dump_text{ss.str()};
+    const auto dump_text{ss.view()};
 
     CHECK(dump_text.contains("cond_goto"));
     CHECK(dump_text.contains("goto seg"));
@@ -205,7 +205,7 @@ TEST_CASE("GIR Control Flow: while loop with continuation and else non_break") {
     std::ostringstream ss;
     gir::dumper        dumper{ss};
     dumper.dump(gir_mod);
-    const auto dump_text{ss.str()};
+    const auto dump_text{ss.view()};
 
     CHECK(dump_text.contains("cond_goto"));
 }
@@ -231,7 +231,7 @@ TEST_CASE("GIR Control Flow: do-while loop") {
     std::ostringstream ss;
     gir::dumper        dumper{ss};
     dumper.dump(gir_mod);
-    const auto dump_text{ss.str()};
+    const auto dump_text{ss.view()};
 
     // Body segment (1) is entered first, then cond_seg (2) jumps back to 1 or exits (3)
     CHECK(dump_text.contains("goto seg 1"));
@@ -265,7 +265,7 @@ TEST_CASE("GIR Control Flow: infinite loop with break and continue") {
     std::ostringstream ss;
     gir::dumper        dumper{ss};
     dumper.dump(gir_mod);
-    const auto dump_text{ss.str()};
+    const auto dump_text{ss.view()};
 
     CHECK(dump_text.contains("goto seg 1"));
     CHECK(dump_text.contains("ret i32"));
@@ -303,7 +303,7 @@ TEST_CASE("GIR Control Flow: for loop over range iterables") {
     std::ostringstream ss;
     gir::dumper        dumper{ss};
     dumper.dump(gir_mod);
-    const auto dump_text{ss.str()};
+    const auto dump_text{ss.view()};
 
     // Both should contain comparisons (LT for .. and LE for ..=), step increments, and branch jumps
     CHECK(dump_text.contains("lt bool"));
@@ -334,7 +334,7 @@ TEST_CASE("GIR Control Flow: labeled block yielding value via break") {
     std::ostringstream ss;
     gir::dumper        dumper{ss};
     dumper.dump(gir_mod);
-    const auto dump_text{ss.str()};
+    const auto dump_text{ss.view()};
 
     CHECK(dump_text.contains("store 100"));
     CHECK(dump_text.contains("store 200"));
@@ -370,7 +370,7 @@ TEST_CASE("GIR Control Flow: labeled nested loop break and continue") {
     std::ostringstream ss;
     gir::dumper        dumper{ss};
     dumper.dump(gir_mod);
-    const auto dump_text{ss.str()};
+    const auto dump_text{ss.view()};
 
     CHECK(dump_text.contains("fn nested_loops() -> i32"));
 }
@@ -399,7 +399,7 @@ TEST_CASE("GIR Control Flow: short-circuit boolean and / or expressions") {
     std::ostringstream ss;
     gir::dumper        dumper{ss};
     dumper.dump(gir_mod);
-    const auto dump_text{ss.str()};
+    const auto dump_text{ss.view()};
 
     CHECK(dump_text.contains("fn test_and(a: bool, b: bool) -> bool"));
     CHECK(dump_text.contains("fn test_or(a: bool, b: bool) -> bool"));

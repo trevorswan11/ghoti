@@ -129,7 +129,7 @@ TEST_CASE("GIR dumper formatting") {
         dumper            d{ss};
         d.dump(fn);
 
-        const auto output{ss.str()};
+        const auto output{ss.view()};
         CHECK(output.contains("fn abs(x: i32)"));
         CHECK(output.contains("seg 0:"));
         CHECK(output.contains("%0 = load param.0"));
