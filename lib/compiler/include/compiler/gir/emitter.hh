@@ -62,6 +62,7 @@ class emitter {
 
     struct scope_frame {
         ankerl::unordered_dense::map<std::string_view, local_binding> bindings;
+        std::vector<ast::stmt_handle>                                 defers;
     };
 
     using scope_guard        = ghoti::scope_guard<std::vector<scope_frame>>;
@@ -81,15 +82,29 @@ class emitter {
     auto emit_block(const ast::block_stmt& block) -> void;
     auto emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> void;
     auto emit_return_stmt(ast::node_id id, const ast::return_stmt& ret) -> void;
+    auto emit_defer_stmt(ast::node_id id, const ast::defer_stmt& def) -> void;
     auto emit_break(ast::node_id id, const ast::break_stmt& brk) -> void;
     auto emit_continue(ast::node_id id, const ast::continue_stmt& cnt) -> void;
     auto emit_stmt_as_value(const ast::stmt_handle& stmt) -> value;
+
+    auto emit_defers_for_scope(usize scope_idx) -> void;
+    auto emit_defers_up_to(usize target_depth) -> void;
+    auto emit_lvalue(ast::node_id id) -> value;
 
     auto emit_expression(const ast::expr_handle& expr) -> value {
         return emit_expression_id(*expr);
     }
     auto emit_expression_id(ast::node_id id) -> value;
     auto emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value;
+    auto emit_match(ast::node_id id, const ast::match_expr& match) -> value;
+    auto emit_initializer(ast::node_id id, const ast::initializer_expr& init) -> value;
+    auto emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value;
+    auto emit_index(ast::node_id id, const ast::index_expr& index) -> value;
+    auto emit_address_of(ast::node_id id, const ast::address_of_expr& addr) -> value;
+    auto emit_dereference(ast::node_id id, const ast::dereference_expr& deref) -> value;
+    auto emit_reference(ast::node_id id, const ast::reference_expr& ref) -> value;
+    auto emit_implicit_access(ast::node_id id, const ast::implicit_access_expr& imp) -> value;
+    auto emit_module_access(ast::node_id id, const ast::module_access_expr& mod_access) -> value;
     auto emit_while(ast::node_id                   id,
                     const ast::while_loop_expr&    while_loop,
                     stdx::option<std::string_view> label    = stdx::none,

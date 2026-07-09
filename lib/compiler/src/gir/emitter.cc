@@ -204,6 +204,7 @@ auto emitter::emit_stmt(const ast::stmt_handle& stmt) -> void {
         [&](const ast::block_stmt& block) { emit_block(block); },
         [&](const ast::decl_stmt& decl) { emit_decl_stmt(stmt_id, decl); },
         [&](const ast::return_stmt& ret) { emit_return_stmt(stmt_id, ret); },
+        [&](const ast::defer_stmt& def) { emit_defer_stmt(stmt_id, def); },
         [&](const ast::expr_stmt& expr_st) { emit_expression_id(expr_st.expression); },
         [&](const ast::break_stmt& brk) { emit_break(stmt_id, brk); },
         [&](const ast::continue_stmt& cnt) { emit_continue(stmt_id, cnt); },
@@ -225,6 +226,21 @@ auto emitter::emit_stmt_as_value(const ast::stmt_handle& stmt) -> value {
         });
 }
 
+auto emitter::emit_defers_for_scope(usize scope_idx) -> void {
+    if (scope_idx >= scopes_.size()) { return; }
+    const auto defers{scopes_[scope_idx].defers};
+    for (const auto& def_stmt : std::views::reverse(defers)) { emit_stmt(def_stmt); }
+}
+
+auto emitter::emit_defers_up_to(usize target_depth) -> void {
+    if (scopes_.empty()) { return; }
+    for (usize i{scopes_.size()}; i > target_depth; --i) { emit_defers_for_scope(i - 1); }
+}
+
+auto emitter::emit_defer_stmt(ast::node_id, const ast::defer_stmt& def) -> void {
+    if (!scopes_.empty()) { scopes_.back().defers.emplace_back(def.deferred); }
+}
+
 auto emitter::emit_break(ast::node_id, const ast::break_stmt& brk) -> void {
     if (loop_stack_.empty()) { return; }
 
@@ -234,12 +250,13 @@ auto emitter::emit_break(ast::node_id, const ast::break_stmt& brk) -> void {
         target_label.emplace(ident.name);
     }
 
-    for (const auto& [label, break_target, continue_target, result_slot] :
-         std::views::reverse(loop_stack_)) {
+    for (usize idx{loop_stack_.size()}; idx > 0; --idx) {
+        const auto& [label, break_target, continue_target, result_slot] = loop_stack_[idx - 1];
         if (!target_label || label == *target_label) {
             if (brk.expression && result_slot) {
                 builder_.emit_store(*result_slot, emit_expression(*brk.expression));
             }
+            emit_defers_up_to(idx);
             builder_.emit_goto(break_target);
             return;
         }
@@ -255,9 +272,10 @@ auto emitter::emit_continue(ast::node_id, const ast::continue_stmt& cnt) -> void
         target_label.emplace(ident.name);
     }
 
-    for (const auto& [label, break_target, continue_target, result_slot] :
-         std::views::reverse(loop_stack_)) {
+    for (usize idx{loop_stack_.size()}; idx > 0; --idx) {
+        const auto& [label, break_target, continue_target, result_slot]{loop_stack_[idx - 1]};
         if (!target_label || label == *target_label) {
+            emit_defers_up_to(idx);
             builder_.emit_goto(continue_target);
             return;
         }
@@ -267,6 +285,7 @@ auto emitter::emit_continue(ast::node_id, const ast::continue_stmt& cnt) -> void
 auto emitter::emit_block(const ast::block_stmt& block) -> void {
     const scope_guard g{scopes_};
     for (const auto& stmt : block.statements) { emit_stmt(stmt); }
+    emit_defers_for_scope(scopes_.size() - 1);
 }
 
 auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> void {
@@ -307,7 +326,10 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
 }
 
 auto emitter::emit_return_stmt(ast::node_id, const ast::return_stmt& ret) -> void {
-    builder_.emit_return(ret.expression.transform([this](auto h) { return emit_expression(h); }));
+    stdx::option<value> ret_val;
+    if (ret.expression) { ret_val.emplace(emit_expression(*ret.expression)); }
+    emit_defers_up_to(0);
+    builder_.emit_return(ret_val);
 }
 
 auto emitter::emit_expression_id(ast::node_id id) -> value {
@@ -371,6 +393,17 @@ auto emitter::emit_expression_id(ast::node_id id) -> value {
             return value{anon_name, ast_module_.get_sema_type_opt(id)};
         },
         [&](const ast::if_expr& data) -> value { return emit_if(id, data); },
+        [&](const ast::match_expr& data) -> value { return emit_match(id, data); },
+        [&](const ast::initializer_expr& data) -> value { return emit_initializer(id, data); },
+        [&](const ast::dot_expr& data) -> value { return emit_dot(id, data); },
+        [&](const ast::index_expr& data) -> value { return emit_index(id, data); },
+        [&](const ast::address_of_expr& data) -> value { return emit_address_of(id, data); },
+        [&](const ast::dereference_expr& data) -> value { return emit_dereference(id, data); },
+        [&](const ast::reference_expr& data) -> value { return emit_reference(id, data); },
+        [&](const ast::implicit_access_expr& data) -> value {
+            return emit_implicit_access(id, data);
+        },
+        [&](const ast::module_access_expr& data) -> value { return emit_module_access(id, data); },
         [&](const ast::while_loop_expr& data) -> value { return emit_while(id, data); },
         [&](const ast::do_while_loop_expr& data) -> value { return emit_do_while(id, data); },
         [&](const ast::infinite_loop_expr& data) -> value { return emit_infinite_loop(id, data); },
@@ -429,15 +462,13 @@ auto emitter::emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value
 }
 
 auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assign) -> value {
-    const auto ident{ast_module_.ast.get_as_opt<ast::identifier_expr>(assign.lhs)};
-    if (!ident) { return value{undefined_val{}, stdx::none}; }
-    const auto binding{lookup_binding(ident->name)};
-    if (!binding) { return value{undefined_val{}, stdx::none}; }
-
     const auto op_type{id.get_token_type()};
+    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto lhs_lval{emit_lvalue(assign.lhs)};
+
     if (op_type == syntax::token_type_t::ASSIGN) {
         const auto rhs{emit_expression(assign.rhs)};
-        builder_.emit_store(binding->id, rhs);
+        builder_.emit_store(lhs_lval, rhs);
         return rhs;
     }
 
@@ -453,18 +484,19 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
     case syntax::token_type_t::SHL_ASSIGN:
     case syntax::token_type_t::SHR_ASSIGN:     {
         const auto base_kind{map_binary_op(op_type).value_or(instruction_kind::ADD)};
-        const auto loaded{builder_.emit_load(binding->id, binding->type)};
+        auto&      target_type{lhs_lval.type ? *lhs_lval.type : *sema_type};
+        const auto loaded{builder_.emit_load(lhs_lval, target_type)};
         const auto rhs{emit_expression(assign.rhs)};
         const auto res_val{
-            value{builder_.emit_binary(base_kind, value{loaded, binding->type}, rhs, binding->type),
-                  binding->type}};
-        builder_.emit_store(binding->id, res_val);
+            value{builder_.emit_binary(base_kind, value{loaded, target_type}, rhs, target_type),
+                  target_type}};
+        builder_.emit_store(lhs_lval, res_val);
         return res_val;
     }
     default: break;
     }
 
-    return value{undefined_val{}, stdx::none};
+    return value{undefined_val{}, sema_type};
 }
 
 auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
@@ -1095,6 +1127,257 @@ auto emitter::emit_logical_or(ast::node_id, const ast::binary_expr& binary) -> v
     builder_.set_segment(merge_seg);
     const auto loaded{builder_.emit_load(res_slot, bool_type)};
     return value{loaded, bool_type};
+}
+
+auto emitter::emit_lvalue(ast::node_id id) -> value {
+    if (!id.is_valid()) { return value{undefined_val{}, stdx::none}; }
+
+    return ast_module_.ast[id].visit(
+        [&](const auto&) -> value { return emit_expression_id(id); },
+        [&](const ast::identifier_expr& ident) -> value {
+            if (const auto binding{lookup_binding(ident.name)}) {
+                return value{binding->id, binding->type};
+            }
+            return value{undefined_val{}, ast_module_.get_sema_type_opt(id)};
+        },
+        [&](const ast::dot_expr& dot) -> value {
+            const auto base_lval{emit_lvalue(dot.object)};
+            const auto obj_type{ast_module_.get_sema_type_opt(dot.object)};
+            if (!obj_type) { return base_lval; }
+
+            const auto& member_ident{ast_module_.ast.get_as<ast::identifier_expr>(dot.member)};
+            const auto& table{ctx_.registry.get(obj_type->get_symbol_table_idx())};
+            const auto  proxy{table.get_proxy_opt(member_ident.name)};
+            if (!proxy) { return base_lval; }
+
+            const auto [sym, member_idx]{*proxy};
+            auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+            auto& field_type{ast_module_.get_sema_type_opt(dot.member).value_or(*obj_type)};
+
+            const auto field_ptr{builder_.emit_get_element_ptr(
+                base_lval, {value{static_cast<u64>(member_idx), usize_type}}, field_type)};
+            return value{field_ptr, field_type};
+        },
+        [&](const ast::index_expr& index) -> value {
+            const auto base_lval{emit_lvalue(index.array)};
+            const auto idx_val{emit_expression(index.index)};
+            auto&      elem_type{ast_module_.get_sema_type_opt(id).value_or(
+                ctx_.get_builtin_resolved_type(sema::type_kind::I32))};
+
+            const auto elem_ptr{builder_.emit_get_element_ptr(base_lval, {idx_val}, elem_type)};
+            return value{elem_ptr, elem_type};
+        },
+        [&](const ast::dereference_expr& deref) -> value { return emit_expression(deref.rhs); });
+}
+
+auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value {
+    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID};
+
+    if (const auto cv{const_eval_.try_eval(id)}) {
+        if (const auto i{cv->as_int_opt()}) { return value{*i, sema_type}; }
+        if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
+        if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
+    }
+
+    auto fn_opt{builder_.get_function()};
+    if (!fn_opt) { return value{undefined_val{}, sema_type}; }
+    auto& fn{*fn_opt};
+
+    stdx::option<local_id> res_slot;
+    if (yields_value) { res_slot.emplace(builder_.emit_alloca(*sema_type)); }
+
+    const auto matcher_val{emit_expression(match.matcher)};
+    auto&      bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto&      merge_seg{fn.add_segment()};
+
+    for (const auto& arm : match.arms) {
+        auto& arm_body_seg{fn.add_segment()};
+        auto& next_arm_seg{fn.add_segment()};
+
+        if (arm.pattern.is<ast::discarded>()) {
+            builder_.emit_goto(arm_body_seg.get_id());
+        } else if (const auto range{ast_module_.ast.get_as_opt<ast::range_expr>(*arm.pattern)}) {
+            const auto start_val{emit_expression(range->lhs)};
+            const auto end_val{emit_expression(range->rhs)};
+
+            const auto is_inclusive{arm.pattern->get_token_type() ==
+                                    syntax::token_type_t::DOT_DOT_EQ};
+            const auto cmp1{
+                builder_.emit_binary(instruction_kind::GE, matcher_val, start_val, bool_type)};
+            const auto cmp2_kind{is_inclusive ? instruction_kind::LE : instruction_kind::LT};
+            const auto cmp2{builder_.emit_binary(cmp2_kind, matcher_val, end_val, bool_type)};
+            const auto both_cmp{builder_.emit_binary(
+                instruction_kind::AND, value{cmp1, bool_type}, value{cmp2, bool_type}, bool_type)};
+            builder_.emit_cond_goto(
+                value{both_cmp, bool_type}, arm_body_seg.get_id(), next_arm_seg.get_id());
+        } else {
+            const auto pat_val{emit_expression_id(*arm.pattern)};
+            const auto is_match{
+                builder_.emit_binary(instruction_kind::EQ, matcher_val, pat_val, bool_type)};
+            builder_.emit_cond_goto(
+                value{is_match, bool_type}, arm_body_seg.get_id(), next_arm_seg.get_id());
+        }
+
+        // Arm body
+        builder_.set_segment(arm_body_seg);
+        {
+            const scope_guard g{scopes_};
+            if (arm.capture && arm.capture->template is<ast::identifier_expr>()) {
+                const auto& ident{ast_module_.ast.get_as<ast::identifier_expr>(*arm.capture)};
+                auto&       m_type{matcher_val.type ? *matcher_val.type : bool_type};
+                if (const auto loc{matcher_val.as_opt<local_id>()}) {
+                    scopes_.back().bindings.emplace(ident.name,
+                                                    local_binding{*loc, m_type, false, stdx::none});
+                }
+            }
+
+            if (yields_value && res_slot) {
+                builder_.emit_store(*res_slot, emit_stmt_as_value(arm.dispatch));
+            } else {
+                emit_stmt(arm.dispatch);
+            }
+            emit_defers_for_scope(scopes_.size() - 1);
+        }
+
+        if (const auto cur_seg{builder_.get_segment()}; cur_seg && !cur_seg->has_terminator()) {
+            builder_.emit_goto(merge_seg.get_id());
+        }
+        builder_.set_segment(next_arm_seg);
+    }
+
+    if (const auto cur_seg{builder_.get_segment()}; cur_seg && !cur_seg->has_terminator()) {
+        builder_.emit_unreachable();
+    }
+
+    builder_.set_segment(merge_seg);
+    if (yields_value && res_slot) {
+        const auto loaded{builder_.emit_load(*res_slot, *sema_type)};
+        return value{loaded, sema_type};
+    }
+    return value{void_val{}, sema_type};
+}
+
+auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& init) -> value {
+    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    if (!sema_type) { return value{undefined_val{}, stdx::none}; }
+
+    const auto struct_slot{builder_.emit_alloca(*sema_type)};
+    auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+
+    if (const auto st{sema_type->get_data().as_opt<sema::types::struct_t>()}) {
+        const auto& table{ctx_.registry.get(sema_type->get_symbol_table_idx())};
+        for (const auto& [accessor, val_expr] : init.initializers) {
+            const auto& imp{ast_module_.ast.get_as<ast::implicit_access_expr>(*accessor)};
+            const auto& name{ast_module_.ast.get_as<ast::identifier_expr>(imp.member).name};
+            if (const auto proxy{table.get_proxy_opt(name)}) {
+                const auto [sym, field_idx]{*proxy};
+                auto& field_type{ast_module_.get_sema_type_opt(*val_expr).value_or(*sema_type)};
+                const auto field_ptr{
+                    builder_.emit_get_element_ptr(value{struct_slot, *sema_type},
+                                                  {value{static_cast<u64>(field_idx), usize_type}},
+                                                  field_type)};
+                const auto val{emit_expression(val_expr)};
+                builder_.emit_store(value{field_ptr, field_type}, val);
+            }
+        }
+    }
+
+    return value{struct_slot, sema_type};
+}
+
+auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
+    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto obj_type{ast_module_.get_sema_type_opt(dot.object)};
+    if (!obj_type) { return value{undefined_val{}, sema_type}; }
+
+    const auto& member_ident{ast_module_.ast.get_as<ast::identifier_expr>(dot.member)};
+    const auto& table{ctx_.registry.get(obj_type->get_symbol_table_idx())};
+    const auto  proxy{table.get_proxy_opt(member_ident.name)};
+
+    if (proxy) {
+        const auto [sym, member_idx]{*proxy};
+        if (const auto st{obj_type->get_data().as_opt<sema::types::struct_t>()}) {
+            if (member_idx < st->ast_fields.size()) {
+                const auto base_lval{emit_lvalue(dot.object)};
+                auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+                auto&      field_type{sema_type ? *sema_type : *obj_type};
+                const auto field_ptr{builder_.emit_get_element_ptr(
+                    base_lval, {value{static_cast<u64>(member_idx), usize_type}}, field_type)};
+                const auto loaded{builder_.emit_load(value{field_ptr, field_type}, field_type)};
+                return value{loaded, field_type};
+            }
+        } else if (const auto en{obj_type->get_data().as_opt<sema::types::enum_t>()}) {
+            if (member_idx < en->ast_enumerations.size()) {
+                return value{static_cast<i64>(member_idx), sema_type};
+            }
+        }
+    }
+
+    if (const auto cv{const_eval_.try_eval(id)}) {
+        if (const auto i{cv->as_int_opt()}) { return value{*i, sema_type}; }
+        if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
+        if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
+    }
+
+    return value{std::string{member_ident.name}, sema_type};
+}
+
+auto emitter::emit_index(ast::node_id id, const ast::index_expr& index) -> value {
+    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto base_lval{emit_lvalue(index.array)};
+    const auto idx_val{emit_expression(index.index)};
+    auto& elem_type{sema_type ? *sema_type : ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
+
+    const auto elem_ptr{builder_.emit_get_element_ptr(base_lval, {idx_val}, elem_type)};
+    const auto loaded{builder_.emit_load(value{elem_ptr, elem_type}, elem_type)};
+    return value{loaded, elem_type};
+}
+
+auto emitter::emit_address_of(ast::node_id id, const ast::address_of_expr& addr) -> value {
+    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto target{emit_lvalue(addr.rhs)};
+    auto& res_type{sema_type ? *sema_type : ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    const auto ptr{builder_.emit_address_of(target, res_type)};
+    return value{ptr, sema_type};
+}
+
+auto emitter::emit_dereference(ast::node_id id, const ast::dereference_expr& deref) -> value {
+    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto ptr_val{emit_expression(deref.rhs)};
+    auto& elem_type{sema_type ? *sema_type : ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
+    const auto loaded{builder_.emit_load(ptr_val, elem_type)};
+    return value{loaded, sema_type};
+}
+
+auto emitter::emit_reference(ast::node_id id, const ast::reference_expr& ref) -> value {
+    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto target{emit_lvalue(ref.rhs)};
+    auto& res_type{sema_type ? *sema_type : ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    const auto ptr{builder_.emit_address_of(target, res_type)};
+    return value{ptr, sema_type};
+}
+
+auto emitter::emit_implicit_access(ast::node_id id, const ast::implicit_access_expr& imp) -> value {
+    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    if (const auto cv{const_eval_.try_eval(id)}) {
+        if (const auto i{cv->as_int_opt()}) { return value{*i, sema_type}; }
+        if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
+    }
+    const auto& ident{ast_module_.ast.get_as<ast::identifier_expr>(imp.member)};
+    return value{std::string{ident.name}, sema_type};
+}
+
+auto emitter::emit_module_access(ast::node_id id, const ast::module_access_expr& mod_access)
+    -> value {
+    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    if (const auto cv{const_eval_.try_eval(id)}) {
+        if (const auto i{cv->as_int_opt()}) { return value{*i, sema_type}; }
+        if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
+        if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
+    }
+    const auto& inner_ident{ast_module_.ast.get_as<ast::identifier_expr>(mod_access.inner)};
+    return value{std::string{inner_ident.name}, sema_type};
 }
 
 } // namespace ghoti::gir
