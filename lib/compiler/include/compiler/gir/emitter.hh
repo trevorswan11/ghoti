@@ -94,6 +94,8 @@ class emitter {
     auto emit_expression(const ast::expr_handle& expr) -> value {
         return emit_expression_id(*expr);
     }
+    auto emit_array(ast::node_id id, const ast::array_expr& array) -> value;
+    auto emit_generic_instantiation(const sema::generic_instantiation_request& req) -> void;
     auto emit_expression_id(ast::node_id id) -> value;
     auto emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value;
     auto emit_match(ast::node_id id, const ast::match_expr& match) -> value;

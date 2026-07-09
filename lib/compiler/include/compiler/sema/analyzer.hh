@@ -15,6 +15,8 @@
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 
+namespace ghoti::gir { class module; } // namespace ghoti::gir
+
 namespace ghoti::sema {
 
 // The manager for all steps of semantic analysis.
@@ -57,6 +59,7 @@ class analyzer {
 
     auto collect_symbols(mod::module& module) -> mod::module_state;
     auto resolve_types(mod::module& module) -> mod::module_state;
+    auto emit_gir(mod::module& module) -> gir::module;
 
   private:
     mod::module_manager&        modules_;

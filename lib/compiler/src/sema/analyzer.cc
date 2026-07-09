@@ -6,6 +6,8 @@
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
 
+#include "compiler/gir/emitter.hh"
+#include "compiler/gir/module.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/passes/symbol_collector.hh"
@@ -29,7 +31,12 @@ auto analyzer::analyze(const std::filesystem::path& entry_path) -> stdx::result<
     resolve_types(*module);
 
     // Perform a final diagnostic flush if poisoned
-    if (module->is_poisoned()) { module->print_diagnostics(error_stream_); }
+    if (module->is_poisoned()) {
+        module->print_diagnostics(error_stream_);
+        return {};
+    }
+
+    emit_gir(*module);
     return {};
 }
 
@@ -39,6 +46,11 @@ auto analyzer::collect_symbols(mod::module& module) -> mod::module_state {
 
 auto analyzer::resolve_types(mod::module& module) -> mod::module_state {
     return type_resolver::resolve_types(module, ctx_);
+}
+
+auto analyzer::emit_gir(mod::module& module) -> gir::module {
+    gir::emitter emitter{ctx_, module};
+    return emitter.emit();
 }
 
 } // namespace ghoti::sema
