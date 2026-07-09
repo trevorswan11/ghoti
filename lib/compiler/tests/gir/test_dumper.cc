@@ -55,8 +55,8 @@ TEST_CASE("GIR dumper formatting") {
             .operands = helpers::make_vector<value>(local_id::make_temp(2)),
         });
 
-        std::stringstream ss;
-        dumper            d{ss};
+        std::ostringstream ss;
+        dumper             d{ss};
         d.dump(fn);
 
         const auto output{ss.view()};
@@ -125,8 +125,8 @@ TEST_CASE("GIR dumper formatting") {
             .operands = helpers::make_vector<value>(local_id::make_temp(0)),
         });
 
-        std::stringstream ss;
-        dumper            d{ss};
+        std::ostringstream ss;
+        dumper             d{ss};
         d.dump(fn);
 
         const auto output{ss.view()};

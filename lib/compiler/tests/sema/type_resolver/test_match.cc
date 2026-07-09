@@ -65,7 +65,7 @@ TEST_CASE("Resolving well-formed builtin-type matching") {
     }
 
     SECTION("Bytes") {
-        std::stringstream arms;
+        std::ostringstream arms;
         for (usize i{0}; i < 256; ++i) { fmt::print(arms, "{} => 0,", i); }
         const auto input{fmt::format("match('0') {{ {} }};", arms.view())};
         helpers::resolve_and_check(input);

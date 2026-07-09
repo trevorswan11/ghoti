@@ -19,7 +19,7 @@ auto formatter::make_subcommands(const CLI::App* app, CLI::AppFormatMode) const 
     auto subcmds{app->get_subcommands({})};
     if (subcmds.empty()) { return ""; }
 
-    std::stringstream ss;
+    std::ostringstream ss;
     fmt::println(ss, "\n{}:\n", get_label("Commands"));
     for (const auto* sub : subcmds) {
         if (sub->get_disabled_by_default()) { continue; }
@@ -33,7 +33,7 @@ auto formatter::make_subcommands(const CLI::App* app, CLI::AppFormatMode) const 
                                          std::vector<const CLI::Option*> opts) const
     -> std::string {
     PROFILE_FUNCTION();
-    std::stringstream ss;
+    std::ostringstream ss;
 
     // The group name is altered to clean up help output
     if (group == "OPTIONS") {
@@ -49,7 +49,7 @@ auto formatter::make_subcommands(const CLI::App* app, CLI::AppFormatMode) const 
 auto formatter::make_help(const CLI::App* app, std::string name, CLI::AppFormatMode mode) const
     -> std::string {
     PROFILE_FUNCTION();
-    std::stringstream ss;
+    std::ostringstream ss;
 
     // Trim the second newline (final character) to prevent weird formatting
     const auto usage{make_usage(app, name)};

@@ -30,7 +30,7 @@ namespace {
 auto test_decl_fail(std::initializer_list<syntax::keyword_t> modifiers,
                     syntax::diagnostic&&                     expected_error,
                     std::string_view                         init = "a := 2;") -> void {
-    std::stringstream ss;
+    std::ostringstream ss;
     for (const auto& keyword : modifiers) { ss << keyword.name << " "; }
     ss << init;
     helpers::test_parser_fail(ss.view(), std::move(expected_error));

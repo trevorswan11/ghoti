@@ -108,8 +108,8 @@ TEST_CASE("Self import") {
 }
 
 TEST_CASE("Unknown file module") {
-    std::stringstream ss;
-    auto              ctx{helpers::analyze(helpers::TEST_FILENAME, ss, R"(import "a.gh" as a;)")};
+    std::ostringstream ss;
+    auto               ctx{helpers::analyze(helpers::TEST_FILENAME, ss, R"(import "a.gh" as a;)")};
     REQUIRE(ctx->root_mod.diagnostics.as_opt<sema::diagnostics>());
 
     constexpr std::string_view expected{

@@ -32,7 +32,7 @@ auto file_loader::load(const std::filesystem::path& path) -> stdx::result<std::s
         return make_mod_err(fmt::format("Failed to open file at path: '{}'", path.string()),
                             error::FAILED_TO_OPEN_FILE);
     }
-    std::stringstream buf;
+    std::ostringstream buf;
     buf << file.rdbuf();
     return buf.str();
 }

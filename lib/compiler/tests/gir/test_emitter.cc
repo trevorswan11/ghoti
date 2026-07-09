@@ -88,9 +88,9 @@ TEST_CASE("Emitter linear function with binary arithmetic") {
     gir::dumper        dumper{ss};
     dumper.dump(gir_mod);
     const auto dump_text{ss.view()};
-    CHECK(dump_text.find("fn add(a: i32, b: i32) -> i32") != std::string::npos);
-    CHECK(dump_text.find("%0 = add i32 param.0, param.1") != std::string::npos);
-    CHECK(dump_text.find("ret i32 %0") != std::string::npos);
+    CHECK(dump_text.contains("fn add(a: i32, b: i32) -> i32"));
+    CHECK(dump_text.contains("%0 = add i32 param.0, param.1"));
+    CHECK(dump_text.contains("ret i32 %0"));
 }
 
 TEST_CASE("Emitter local variable alloca, store, load, and compound assignment") {

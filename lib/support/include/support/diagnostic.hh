@@ -119,7 +119,7 @@ template <stdx::ScopedEnum E> class diagnostic {
 
     [[nodiscard]] auto to_string(const stdx::option<std::string>& source_path = stdx::none,
                                  stdx::option<bool> in_terminal = stdx::none) const -> std::string {
-        std::stringstream ss;
+        std::ostringstream ss;
         detail::format_diagnostic(ss, to_formattable(), source_path, in_terminal);
         return ss.str();
     }
