@@ -10,7 +10,7 @@
 
 namespace ghoti::tests {
 
-constexpr std::string_view input{R"(
+constexpr std::string_view golden_input{R"(
     [_:0]^N{a, b, c, d, e, 3, "54" };
     a <= b or c == d and e;
     a or b[3uz] == !c;
@@ -74,7 +74,7 @@ constexpr std::string_view expected{
 };
 
 TEST_CASE("Comprehensive dump") {
-    syntax::parser p{input};
+    syntax::parser p{golden_input};
     ast::AST       ast;
     auto           errors{p.consume(ast)};
     helpers::check_errors<syntax::diagnostic>(errors);

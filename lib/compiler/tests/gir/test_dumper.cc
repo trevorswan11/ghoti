@@ -5,13 +5,16 @@
 #include <stdx/arena.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
+#include <string_view>
 
 #include "compiler/gir/dumper.hh"
+#include "compiler/gir/emitter.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/segment.hh"
 #include "compiler/sema/type.hh"
 #include "helpers/common.hh"
+#include "helpers/sema.hh"
 
 namespace ghoti::tests {
 
@@ -142,6 +145,75 @@ TEST_CASE("GIR dumper formatting") {
         CHECK(output.contains("seg 2:"));
         CHECK(output.contains("ret i32 %0"));
     }
+}
+
+constexpr std::string_view golden_input{R"(
+    using Real = f64;
+    const MAX_SIZE := 100uz;
+
+    const Point := struct {
+        x: i32,
+        y: i32,
+    };
+
+    const Color := enum {
+        RED,
+        GREEN,
+        BLUE,
+    };
+
+    const clamp := fn(val: auto, min_val: auto, max_val: auto): auto {
+        if (val < min_val) {
+            return min_val;
+        }
+        if (val > max_val) {
+            return max_val;
+        }
+        return val;
+    };
+
+    const compute_point := fn(p: Point): i32 {
+        var acc: i32 = 0;
+        defer acc = acc + 1;
+
+        const clamped := clamp(p.x, 0, 50);
+        var i: i32 = 0;
+        while (i < 3) {
+            acc += clamped;
+            i += 1;
+        }
+        return acc + p.y;
+    };
+
+    const match_color := fn(c: Color): i32 {
+        return match (c) {
+            .RED => 1,
+            .GREEN => 2,
+            .BLUE => 3,
+        };
+    };
+
+    test "golden_run" {
+        const p := Point{ .x = 25, .y = 10 };
+        const ans := compute_point(p);
+        const code := match_color(.RED);
+    }
+)"};
+
+constexpr std::string_view expected_gir{
+#include "gir/dump.inc"
+};
+
+TEST_CASE("GIR Comprehensive golden dump") {
+    auto [ctx, idx]{helpers::resolve_and_check(golden_input)};
+
+    gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
+    const auto   gir_mod{emitter.emit()};
+
+    std::ostringstream ss;
+    gir::dumper        dumper{ss};
+    dumper.dump(gir_mod);
+    CHECK(ss.view() == expected_gir);
 }
 
 } // namespace ghoti::tests
