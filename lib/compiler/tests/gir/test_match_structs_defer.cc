@@ -10,7 +10,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("GIR Match: literal patterns and value yield") {
+TEST_CASE("GIR match literal patterns and value yield") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const test_match := fn(x: i32): i32 {
             return match (x) {
@@ -38,7 +38,7 @@ TEST_CASE("GIR Match: literal patterns and value yield") {
     CHECK(dump_text.contains("ret"));
 }
 
-TEST_CASE("GIR Match: enum patterns") {
+TEST_CASE("GIR match enum patterns") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const Color := enum {
             RED,
@@ -71,7 +71,7 @@ TEST_CASE("GIR Match: enum patterns") {
     CHECK(dump_text.contains("ret"));
 }
 
-TEST_CASE("GIR Match: arm capture") {
+TEST_CASE("GIR match arm capture") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const UnionVal := union {
             int_val: i32,
@@ -100,7 +100,7 @@ TEST_CASE("GIR Match: arm capture") {
     CHECK(dump_text.contains("ret"));
 }
 
-TEST_CASE("GIR Structs: initialization and field access") {
+TEST_CASE("GIR struct initialization and field access") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const Point := struct {
             x: i32,
@@ -132,7 +132,7 @@ TEST_CASE("GIR Structs: initialization and field access") {
     CHECK(dump_text.contains("add i32"));
 }
 
-TEST_CASE("GIR Structs: field assignment and compound assignment") {
+TEST_CASE("GIR struct field assignment and compound assignment") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const Point := struct {
             x: i32,
@@ -163,7 +163,7 @@ TEST_CASE("GIR Structs: field assignment and compound assignment") {
     CHECK(dump_text.contains("add i32"));
 }
 
-TEST_CASE("GIR Array: index expression and assignment") {
+TEST_CASE("GIR array index expression and assignment") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const test_array := fn(arr: [4]i32, i: usize): i32 {
             return arr[i];
@@ -186,7 +186,7 @@ TEST_CASE("GIR Array: index expression and assignment") {
     CHECK(dump_text.contains("ret"));
 }
 
-TEST_CASE("GIR Pointers: address_of and dereference") {
+TEST_CASE("GIR address_of and dereference") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const test_ptr := fn(x: i32): i32 {
             var a: i32 = x;
@@ -213,7 +213,7 @@ TEST_CASE("GIR Pointers: address_of and dereference") {
     CHECK(dump_text.contains("ret"));
 }
 
-TEST_CASE("GIR Defer: block exit LIFO execution") {
+TEST_CASE("GIR defer at block exit with LIFO execution") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const test_defer := fn(): i32 {
             var a: i32 = 0;
@@ -245,7 +245,7 @@ TEST_CASE("GIR Defer: block exit LIFO execution") {
     CHECK(plus_pos < mul_pos);
 }
 
-TEST_CASE("GIR Defer: early return triggers unwinding") {
+TEST_CASE("GIR defer at early return triggers unwinding") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const test_defer_return := fn(x: i32): i32 {
             var a: i32 = 0;
@@ -272,7 +272,7 @@ TEST_CASE("GIR Defer: early return triggers unwinding") {
     CHECK(dump_text.contains("store 100"));
 }
 
-TEST_CASE("GIR Defer: loop break and continue unwinding") {
+TEST_CASE("GIR defer at loop break and continue unwinding") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const test_defer_loop := fn(): i32 {
             var sum: i32 = 0;
@@ -308,7 +308,7 @@ TEST_CASE("GIR Defer: loop break and continue unwinding") {
     CHECK(dump_text.contains("ret"));
 }
 
-TEST_CASE("GIR Match: boolean patterns") {
+TEST_CASE("GIR match on boolean patterns") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const test_match_bool := fn(flag: bool): i32 {
             return match (flag) {
@@ -334,7 +334,7 @@ TEST_CASE("GIR Match: boolean patterns") {
     CHECK(dump_text.contains("ret"));
 }
 
-TEST_CASE("GIR Structs: nested struct field access") {
+TEST_CASE("GIR structs with nested struct field access") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const Inner := struct {
             val: i32,

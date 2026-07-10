@@ -186,7 +186,7 @@ TEST_CASE("Array dimension resolution constant eval") {
     CHECK(arr_data->underlying.get_kind() == sema::type_kind::U8);
 }
 
-TEST_CASE("Constexpr function evaluation") {
+TEST_CASE("Const eval function evaluation") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         constexpr add := fn(a: i32, b: i32): i32 {
             const sum := a + b;
@@ -217,7 +217,7 @@ TEST_CASE("Constexpr function evaluation") {
     CHECK(val_m->as_int_opt() == 100);
 }
 
-TEST_CASE("Constexpr variable mutation and loops") {
+TEST_CASE("Const eval variable mutation and loops") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         constexpr loop_sum := fn(n: i32): i32 {
             var i := 1;
@@ -259,7 +259,7 @@ TEST_CASE("Constexpr variable mutation and loops") {
     CHECK(val_c->as_int_opt() == 8);
 }
 
-TEST_CASE("Constexpr for loops over ranges and arrays") {
+TEST_CASE("Const eval for loops over ranges and arrays") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         constexpr range_sum := fn(n: i32): i32 {
             var sum := 0;
@@ -414,7 +414,7 @@ TEST_CASE("Match constant eval expression evaluation") {
     CHECK(val_b->as_int_opt() == 30);
 }
 
-TEST_CASE("ConstEval: resolve deferred call returning type") {
+TEST_CASE("Resolve deferred call returning type") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const choose_type := fn(is_64: bool): type {
             if (is_64) {
@@ -458,7 +458,7 @@ TEST_CASE("Division by zero failure handling in constant eval") {
     CHECK_FALSE(ctx->analyzer.get_ctx().diags.empty());
 }
 
-TEST_CASE("ConstEval: builtin @this and 0-argument/1-argument builtins") {
+TEST_CASE("Builtin const eval @this") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const Node := struct {
             val: i32,

@@ -204,7 +204,7 @@ constexpr std::string_view expected_gir{
 #include "gir/dump.inc"
 };
 
-TEST_CASE("GIR Comprehensive golden dump") {
+TEST_CASE("GIR comprehensive golden dump") {
     auto [ctx, idx]{helpers::resolve_and_check(golden_input)};
 
     gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};

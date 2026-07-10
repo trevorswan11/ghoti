@@ -1,3 +1,4 @@
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -6,6 +7,8 @@
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
+#include "compiler/gir/dumper.hh"
+#include "compiler/gir/emitter.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/module.hh"
@@ -195,6 +198,59 @@ TEST_CASE("GIR module container and arena allocation") {
     CHECK(gir_mod.get_functions().size() == 2);
     CHECK(gir_mod.get_tests().size() == 1);
     CHECK(gir_mod.get_tests()[0] == 1);
+}
+
+TEST_CASE("Comprehensive program lowering") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const Point := struct {
+            x: i32,
+            y: i32,
+        };
+
+        const max := fn(a: auto, b: auto): auto {
+            if (a > b) {
+                return a;
+            }
+            return b;
+        };
+
+        const transform := fn(p: Point): i32 {
+            var res: i32 = 0;
+            defer res = res + 100;
+
+            const mx := max(p.x, p.y);
+            var i: i32 = 0;
+            while (i < 3) {
+                res += mx;
+                i += 1;
+            }
+
+            return res;
+        };
+
+        test "run_transform" {
+            const p := Point{ .x = 10, .y = 20 };
+            const ans := transform(p);
+        }
+    )")};
+
+    gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
+    const auto   gir_mod{emitter.emit()};
+
+    std::ostringstream ss;
+    gir::dumper        dumper{ss};
+    dumper.dump(gir_mod);
+    const auto dump_text{ss.view()};
+
+    CHECK(dump_text.contains("fn max__i32_i32"));
+    CHECK(dump_text.contains("fn transform"));
+    CHECK(dump_text.contains("test \"run_transform\""));
+    CHECK(dump_text.contains("alloca"));
+    CHECK(dump_text.contains("store"));
+    CHECK(dump_text.contains("load"));
+    CHECK(dump_text.contains("cond_goto"));
+    CHECK(dump_text.contains("call @max__i32_i32"));
+    CHECK(dump_text.contains("call @transform"));
 }
 
 } // namespace ghoti::tests

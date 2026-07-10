@@ -12,7 +12,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("GIR Control Flow: if statement and if-else branching") {
+TEST_CASE("GIR if statement and if-else branching") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const test_if := fn(x: i32): i32 {
             var res: i32 = 0;
@@ -63,7 +63,7 @@ TEST_CASE("GIR Control Flow: if statement and if-else branching") {
     CHECK(term3.kind == gir::instruction_kind::RET);
 }
 
-TEST_CASE("GIR Control Flow: if expression yielding value") {
+TEST_CASE("GIR if expression yielding value") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const choose := fn(c: bool, a: i32, b: i32): i32 {
             return if (c) a else b;
@@ -87,7 +87,7 @@ TEST_CASE("GIR Control Flow: if expression yielding value") {
     CHECK(dump_text.contains("ret i32"));
 }
 
-TEST_CASE("GIR Control Flow: comptime constexpr if branching") {
+TEST_CASE("GIR constexpr if branching") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const test_constexpr_if := fn(): i32 {
             if constexpr (true) {
@@ -111,7 +111,7 @@ TEST_CASE("GIR Control Flow: comptime constexpr if branching") {
     CHECK(seg.get_instructions().back()->kind == gir::instruction_kind::RET);
 }
 
-TEST_CASE("GIR Control Flow: comptime constexpr if error handling") {
+TEST_CASE("GIR constexpr if error handling") {
     SECTION("Non-constant condition fails with CONSTEXPR_EVALUATION_FAILED") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
             const test_dyn_constexpr_if := fn(param: bool): i32 {
@@ -150,7 +150,7 @@ TEST_CASE("GIR Control Flow: comptime constexpr if error handling") {
     }
 }
 
-TEST_CASE("GIR Control Flow: while loop with condition, body, and break") {
+TEST_CASE("GIR while loop with condition, body, and break") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const count_up := fn(max: i32): i32 {
             var i: i32 = 0;
@@ -181,7 +181,7 @@ TEST_CASE("GIR Control Flow: while loop with condition, body, and break") {
     CHECK(dump_text.contains("ret i32"));
 }
 
-TEST_CASE("GIR Control Flow: while loop with continuation and else non_break") {
+TEST_CASE("GIR while loop with continuation and else non_break") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const while_full := fn(limit: i32): i32 {
             var count: i32 = 0;
@@ -210,7 +210,7 @@ TEST_CASE("GIR Control Flow: while loop with continuation and else non_break") {
     CHECK(dump_text.contains("cond_goto"));
 }
 
-TEST_CASE("GIR Control Flow: do-while loop") {
+TEST_CASE("GIR do-while loop") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const test_do_while := fn(): i32 {
             var x: i32 = 0;
@@ -238,7 +238,7 @@ TEST_CASE("GIR Control Flow: do-while loop") {
     CHECK(dump_text.contains("cond_goto"));
 }
 
-TEST_CASE("GIR Control Flow: infinite loop with break and continue") {
+TEST_CASE("GIR infinite loop with break and continue") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const test_infinite := fn(): i32 {
             var count: i32 = 0;
@@ -271,7 +271,7 @@ TEST_CASE("GIR Control Flow: infinite loop with break and continue") {
     CHECK(dump_text.contains("ret i32"));
 }
 
-TEST_CASE("GIR Control Flow: for loop over range iterables") {
+TEST_CASE("GIR for loop over range iterables") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const sum_range := fn(): i32 {
             var total: i32 = 0;
@@ -311,7 +311,7 @@ TEST_CASE("GIR Control Flow: for loop over range iterables") {
     CHECK(dump_text.contains("add i32"));
 }
 
-TEST_CASE("GIR Control Flow: labeled block yielding value via break") {
+TEST_CASE("Labeled GIR block yielding value via break") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const compute_labeled := fn(x: i32): i32 {
             const val := blk: {
@@ -341,7 +341,7 @@ TEST_CASE("GIR Control Flow: labeled block yielding value via break") {
     CHECK(dump_text.contains("ret i32"));
 }
 
-TEST_CASE("GIR Control Flow: labeled nested loop break and continue") {
+TEST_CASE("Labeled GIR nested loop break and continue") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const nested_loops := fn(): i32 {
             var count: i32 = 0;
@@ -375,7 +375,7 @@ TEST_CASE("GIR Control Flow: labeled nested loop break and continue") {
     CHECK(dump_text.contains("fn nested_loops() -> i32"));
 }
 
-TEST_CASE("GIR Control Flow: short-circuit boolean and / or expressions") {
+TEST_CASE("Short-circuit GIR boolean and / or expressions") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const test_and := fn(a: bool, b: bool): bool {
             return a and b;
