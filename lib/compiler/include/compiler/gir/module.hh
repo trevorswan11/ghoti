@@ -30,7 +30,8 @@ struct type_decl {
 
 class module {
   public:
-    explicit module(const mod::module& ast_mod) noexcept : ast_module_{ast_mod} {}
+    explicit module(const mod::module& ast_mod, sema::arena_alloc& arena) noexcept
+        : ast_module_{ast_mod}, arena_{arena} {}
     ~module() = default;
     MAKE_MOVE_CONSTRUCTABLE_ONLY(module);
 
@@ -52,12 +53,12 @@ class module {
                       bool        is_constexpr = false) -> function&;
 
   private:
-    const mod::module&                ast_module_;
-    stdx::arena<GIR_ARENA_BLOCK_SIZE> arena_;
-    std::vector<type_decl*>           types_;
-    std::vector<global_decl*>         globals_;
-    std::vector<function*>            functions_;
-    std::vector<usize>                tests_;
+    const mod::module&        ast_module_;
+    sema::arena_alloc&        arena_;
+    std::vector<type_decl*>   types_;
+    std::vector<global_decl*> globals_;
+    std::vector<function*>    functions_;
+    std::vector<usize>        tests_;
 };
 
 } // namespace ghoti::gir

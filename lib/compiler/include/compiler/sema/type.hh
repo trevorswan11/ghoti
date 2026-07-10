@@ -238,11 +238,10 @@ template <> struct ankerl::unordered_dense::hash<ghoti::sema::types::key_t> {
 
 namespace ghoti::sema {
 
+using arena_alloc = stdx::arena<stdx::sizes::kib(64UZ)>;
+
 // A semantic type that is entirely owned by an arena of types
 class type {
-  public:
-    static constexpr auto TYPE_ARENA_BLOCK_SIZE{stdx::sizes::kib(64UZ)};
-
   public:
     using data_t = stdx::variant<types::unresolved,
                                  types::poison,
@@ -335,7 +334,7 @@ class type {
     data_t         data_;
 
     // Initialization is restricted to the pool's arena exclusively
-    friend class stdx::arena<TYPE_ARENA_BLOCK_SIZE>;
+    friend arena_alloc;
 };
 
 static_assert(stdx::TriviallyDestructible<type>);
@@ -343,10 +342,12 @@ static_assert(stdx::TriviallyDestructible<type>);
 // All associated type lifetimes are tied to the pool
 class type_pool {
   public:
-    type_pool() noexcept = default;
-    ~type_pool()         = default;
+    explicit type_pool(arena_alloc& arena) noexcept : arena_{arena} {}
+    ~type_pool() = default;
 
     MAKE_MOVE_CONSTRUCTABLE_ONLY(type_pool)
+
+    [[nodiscard]] auto arena() noexcept -> auto& { return arena_; }
 
     // Gets a type by its key or emplace's it into the internal cache
     [[nodiscard]] auto operator[](const types::key_t& key) -> gsl::not_null<type*> {
@@ -380,7 +381,7 @@ class type_pool {
     auto get_or_emplace(const types::key_t& key) -> gsl::not_null<type*>;
 
   private:
-    stdx::arena<type::TYPE_ARENA_BLOCK_SIZE>          arena_;
+    arena_alloc&                                      arena_;
     ankerl::unordered_dense::map<types::key_t, type*> cache_;
 };
 

@@ -102,7 +102,7 @@ TEST_CASE("GIR value types and operations") {
 
 TEST_CASE("GIR segment terminator invariants") {
     using namespace gir;
-    stdx::arena<GIR_ARENA_BLOCK_SIZE> arena;
+    sema::arena_alloc arena;
 
     segment seg{arena, segment_id{0}};
     CHECK(seg.get_id() == segment_id{0});
@@ -136,10 +136,10 @@ TEST_CASE("GIR segment terminator invariants") {
 TEST_CASE("GIR function management and local ID allocation") {
     using namespace gir;
 
-    sema::type_pool pool{};
-    auto&           i32_type{*pool[{sema::type_kind::I32, sema::types::mut::CONSTANT}]};
-    auto&           fn_type{*pool[{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT}]};
-    stdx::arena<GIR_ARENA_BLOCK_SIZE> arena;
+    sema::arena_alloc arena;
+    sema::type_pool   pool{arena};
+    auto&             i32_type{*pool[{sema::type_kind::I32, sema::types::mut::CONSTANT}]};
+    auto&             fn_type{*pool[{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT}]};
 
     function fn{arena, "compute", fn_type};
     CHECK(fn.get_name() == "compute");
@@ -173,7 +173,7 @@ TEST_CASE("GIR module container and arena allocation") {
     using namespace gir;
 
     auto [ctx, idx]{helpers::resolve_and_check("const a: i32 = 42;")};
-    gir::module gir_mod{ctx->root_mod};
+    gir::module gir_mod{ctx->root_mod, ctx->analyzer.get_arena()};
 
     auto& i32_type{*ctx->analyzer.get_pool()[{sema::type_kind::I32, sema::types::mut::CONSTANT}]};
     auto& fn_type{

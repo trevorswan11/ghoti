@@ -287,13 +287,11 @@ auto const_eval::type_size_of(const sema::type& type) -> usize {
 
 auto const_eval::resolve_deferred_array(const ast::explicit_array_type& array,
                                         sema::type&                     item_type) -> sema::type& {
-    if (array.dimension) {
-        const auto len{eval_type_dim(*array.dimension).value_or(0)};
-        auto&      concrete_array{
-            ctx_.get_array(sema::types::mut::CONSTANT, array.null_terminated, len, item_type)};
-        return concrete_array;
-    }
-    return item_type;
+    ASSERT(array.dimension.has_value(), "Deferred array type must have a dimension");
+    const auto len{eval_type_dim(*array.dimension).value_or(0)};
+    auto&      concrete_array{
+        ctx_.get_array(sema::types::mut::CONSTANT, array.null_terminated, len, item_type)};
+    return concrete_array;
 }
 
 auto const_eval::resolve_deferred_call(const ast::call_expr& call) -> sema::type& {
@@ -963,8 +961,14 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
     auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
 
     switch (builtin_type) {
+    case syntax::token_type_t::BUILTIN_THIS: {
+        if (const auto target_type{module_.get_sema_type_opt(call.function)}) {
+            return const_value{target_type};
+        }
+        return stdx::none;
+    }
     case syntax::token_type_t::BUILTIN_SIZE_OF: {
-        if (call.arguments.empty()) { return stdx::none; }
+        VERIFY(!call.arguments.empty(), "@sizeOf argument count must be at least 1");
         const auto&               arg{call.arguments.front()};
         stdx::option<sema::type&> target_type;
         if (const auto type_id{arg.as_opt<ast::explicit_type_id>()}) {
@@ -991,7 +995,7 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         return const_value{static_cast<u64>(sz), usize_type};
     }
     case syntax::token_type_t::BUILTIN_ALIGN_OF: {
-        if (call.arguments.empty()) { return stdx::none; }
+        VERIFY(!call.arguments.empty(), "@alignOf argument count must be at least 1");
         const auto&               arg{call.arguments.front()};
         stdx::option<sema::type&> target_type;
         if (const auto type_id = arg.as_opt<ast::explicit_type_id>()) {
@@ -1008,7 +1012,7 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         return const_value{static_cast<u64>(al), usize_type};
     }
     case syntax::token_type_t::BUILTIN_TYPE_OF: {
-        if (call.arguments.empty()) { return stdx::none; }
+        VERIFY(!call.arguments.empty(), "@typeOf argument count must be at least 1");
         const auto& arg{call.arguments.front()};
         if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
             const auto target_type{module_.get_sema_type_opt(*expr_h)};
@@ -1017,7 +1021,7 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         return stdx::none;
     }
     case syntax::token_type_t::BUILTIN_ABS: {
-        if (call.arguments.empty()) { return stdx::none; }
+        VERIFY(!call.arguments.empty(), "@abs argument count must be at least 1");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
         if (!expr_h) { return stdx::none; }
         const auto arg{try_eval(*expr_h)};
@@ -1030,7 +1034,7 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         return arg;
     }
     case syntax::token_type_t::BUILTIN_SQRT: {
-        if (call.arguments.empty()) { return stdx::none; }
+        VERIFY(!call.arguments.empty(), "@sqrt argument count must be at least 1");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
         if (!expr_h) { return stdx::none; }
         const auto arg{try_eval(*expr_h)};
@@ -1038,7 +1042,7 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         return const_value{std::sqrt(arg->as<f64>()), arg->get_type()};
     }
     case syntax::token_type_t::BUILTIN_FLOOR: {
-        if (call.arguments.empty()) { return stdx::none; }
+        VERIFY(!call.arguments.empty(), "@floor argument count must be at least 1");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
         if (!expr_h) { return stdx::none; }
         const auto arg{try_eval(*expr_h)};
@@ -1046,7 +1050,7 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         return const_value{std::floor(arg->as<f64>()), arg->get_type()};
     }
     case syntax::token_type_t::BUILTIN_CEIL: {
-        if (call.arguments.empty()) { return stdx::none; }
+        VERIFY(!call.arguments.empty(), "@ceil argument count must be at least 1");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
         if (!expr_h) { return stdx::none; }
         const auto arg{try_eval(*expr_h)};
@@ -1054,7 +1058,7 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         return const_value{std::ceil(arg->as<f64>()), arg->get_type()};
     }
     case syntax::token_type_t::BUILTIN_CLZ: {
-        if (call.arguments.empty()) { return stdx::none; }
+        VERIFY(!call.arguments.empty(), "@clz argument count must be at least 1");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
         if (!expr_h) { return stdx::none; }
         const auto arg{try_eval(*expr_h)};
@@ -1064,7 +1068,7 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         return const_value{static_cast<u64>(std::countl_zero(v)), usize_type};
     }
     case syntax::token_type_t::BUILTIN_CTZ: {
-        if (call.arguments.empty()) { return stdx::none; }
+        VERIFY(!call.arguments.empty(), "@ctz argument count must be at least 1");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
         if (!expr_h) { return stdx::none; }
         const auto arg{try_eval(*expr_h)};
@@ -1074,7 +1078,7 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         return const_value{static_cast<u64>(std::countr_zero(v)), usize_type};
     }
     case syntax::token_type_t::BUILTIN_POP_COUNT: {
-        if (call.arguments.empty()) { return stdx::none; }
+        VERIFY(!call.arguments.empty(), "@popCount argument count must be at least 1");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
         if (!expr_h) { return stdx::none; }
         const auto arg{try_eval(*expr_h)};
@@ -1091,6 +1095,9 @@ auto const_eval::eval_constexpr_fn(ast::node_id                    call_id,
                                    const ast::function_expr&       fn_expr,
                                    const std::vector<const_value>& args)
     -> stdx::option<const_value> {
+    VERIFY(fn_expr.parameters.size() == args.size(),
+           "Constexpr function args count must match parameters count");
+
     if (recursion_depth_ >= max_recursion_depth_) {
         const auto loc{call_id.is_valid() ? module_.ast.location_of(call_id)
                                           : module_.ast.location_of(fn_expr.body)};
@@ -1194,9 +1201,9 @@ auto const_eval::eval_do_while(ast::node_id, const ast::do_while_loop_expr& loop
 
 auto const_eval::eval_for(ast::node_id, const ast::for_loop_expr& loop)
     -> stdx::option<const_value> {
-    if (loop.iterables.size() != loop.captures.size() || loop.iterables.empty()) {
-        return stdx::none;
-    }
+    VERIFY(loop.iterables.size() == loop.captures.size(),
+           "For loop iterables and captures must match in count");
+    if (loop.iterables.empty()) { return stdx::none; }
 
     std::vector<std::vector<const_value>> iterable_sequences;
     iterable_sequences.reserve(loop.iterables.size());

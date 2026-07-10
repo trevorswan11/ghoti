@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <ostream>
 
+#include <stdx/arena.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
@@ -25,12 +26,13 @@ class analyzer {
     explicit analyzer(mod::module_manager& modules,
                       std::ostream&        error_stream,
                       stdx::option<bool>   in_terminal) noexcept
-        : modules_{modules}, error_stream_{error_stream}, in_terminal_{in_terminal},
+        : modules_{modules}, pool_{arena_}, error_stream_{error_stream}, in_terminal_{in_terminal},
           ctx_{modules_,
                registry_,
                pool_,
                generic_functions_,
                instantiation_cache_,
+               arena_,
                diagnostics{in_terminal_},
                error_stream_} {}
     ~analyzer() = default;
@@ -47,6 +49,7 @@ class analyzer {
         return self.registry_.get_opt(idx);
     }
 
+    MAKE_DEDUCING_GETTER(arena);
     MAKE_DEDUCING_GETTER(registry);
     MAKE_DEDUCING_GETTER(pool);
     MAKE_DEDUCING_GETTER(generic_functions);
@@ -63,6 +66,7 @@ class analyzer {
 
   private:
     mod::module_manager&        modules_;
+    arena_alloc                 arena_;
     symbol_table_registry       registry_;
     type_pool                   pool_;
     generic_function_registry   generic_functions_;

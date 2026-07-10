@@ -4,6 +4,7 @@
 #include <utility>
 
 #include <gsl/pointers>
+#include <stdx/arena.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
@@ -26,6 +27,7 @@ struct context {
     type_pool&                   pool;
     generic_function_registry&   generic_functions;
     generic_instantiation_cache& instantiation_cache;
+    arena_alloc&                 arena;
 
     diagnostics    diags;
     std::ostream&  error_stream;
@@ -36,10 +38,11 @@ struct context {
             type_pool&                   pool,
             generic_function_registry&   generic_functions,
             generic_instantiation_cache& instantiation_cache,
+            arena_alloc&                 arena,
             diagnostics                  diags,
             std::ostream&                error_stream) noexcept
         : modules{modules}, registry{registry}, pool{pool}, generic_functions{generic_functions},
-          instantiation_cache{instantiation_cache}, diags{std::move(diags)},
+          instantiation_cache{instantiation_cache}, arena{arena}, diags{std::move(diags)},
           error_stream{error_stream} {}
     ~context() = default;
 
@@ -47,8 +50,9 @@ struct context {
     context(const context& other)
         : modules{other.modules}, registry{other.registry}, pool{other.pool},
           generic_functions{other.generic_functions},
-          instantiation_cache{other.instantiation_cache}, diags{other.diags.create_new()},
-          error_stream{other.error_stream}, prelude_index{other.prelude_index} {}
+          instantiation_cache{other.instantiation_cache}, arena{other.arena},
+          diags{other.diags.create_new()}, error_stream{other.error_stream},
+          prelude_index{other.prelude_index} {}
 
     auto operator=(const context& other) -> context& = delete;
     context(context&&) noexcept                      = default;

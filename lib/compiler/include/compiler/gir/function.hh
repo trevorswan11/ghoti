@@ -25,11 +25,11 @@ struct parameter {
 
 class function {
   public:
-    function(stdx::arena<GIR_ARENA_BLOCK_SIZE>& arena,
-             std::string                        name,
-             sema::type&                        type,
-             bool                               is_test      = false,
-             bool                               is_constexpr = false) noexcept
+    function(sema::arena_alloc& arena,
+             std::string        name,
+             sema::type&        type,
+             bool               is_test      = false,
+             bool               is_constexpr = false) noexcept
         : arena_{arena}, name_{std::move(name)}, type_{type}, is_test_{is_test},
           is_constexpr_{is_constexpr} {}
     ~function() = default;
@@ -64,14 +64,14 @@ class function {
     [[nodiscard]] auto local_count() const noexcept -> usize { return next_local_index_; }
 
   private:
-    stdx::arena<GIR_ARENA_BLOCK_SIZE>& arena_;
-    std::string                        name_;
-    sema::type&                        type_;
-    std::vector<parameter*>            params_;
-    std::vector<segment*>              segments_;
-    usize                              next_local_index_{0};
-    bool                               is_test_{false};
-    bool                               is_constexpr_{false};
+    sema::arena_alloc&      arena_;
+    std::string             name_;
+    sema::type&             type_;
+    std::vector<parameter*> params_;
+    std::vector<segment*>   segments_;
+    usize                   next_local_index_{0};
+    bool                    is_test_{false};
+    bool                    is_constexpr_{false};
 };
 
 } // namespace ghoti::gir

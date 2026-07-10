@@ -22,8 +22,6 @@
 
 namespace ghoti::gir {
 
-inline constexpr usize GIR_ARENA_BLOCK_SIZE{stdx::sizes::kib(64UZ)};
-
 enum class instruction_kind : u8 {
     // Memory
     ALLOCA,

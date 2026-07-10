@@ -458,4 +458,30 @@ TEST_CASE("Division by zero failure handling in constant eval") {
     CHECK_FALSE(ctx->analyzer.get_ctx().diags.empty());
 }
 
+TEST_CASE("ConstEval: builtin @this and 0-argument/1-argument builtins") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const Node := struct {
+            val: i32,
+
+            using Self = @this();
+            pub const bar := fn(s: &Self): i32 { return 0; };
+        };
+        const sz := @sizeOf(Node);
+        const al := @alignOf(Node);
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym_sz, _sz, decl_sz, type_sz]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("sz", idx)};
+    const auto val_sz{evaluator.try_eval(*decl_sz.value)};
+    REQUIRE(val_sz.has_value());
+    CHECK(val_sz->as_int_opt() == 4);
+
+    const auto [sym_al, _al, decl_al, type_al]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("al", idx)};
+    const auto val_al{evaluator.try_eval(*decl_al.value)};
+    REQUIRE(val_al.has_value());
+    CHECK(val_al->as_int_opt() == 4);
+}
+
 } // namespace ghoti::tests
