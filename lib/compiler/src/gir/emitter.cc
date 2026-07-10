@@ -1,6 +1,8 @@
 #include "compiler/gir/emitter.hh"
 
+#include <algorithm>
 #include <ranges>
+#include <stdx/assert.hh>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -25,7 +27,9 @@
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/sema/generic.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
 
 namespace ghoti::gir {
@@ -40,7 +44,47 @@ auto emitter::emit() -> module {
             [&](const ast::using_stmt& using_stmt) { emit_top_level_using(root_id, using_stmt); },
             [&](const ast::test_stmt& test) { emit_top_level_test(root_id, test); });
     }
+
+    for (const auto& req : ast_module_.generic_instantiations) { emit_generic_instantiation(req); }
     return std::move(gir_module_);
+}
+
+auto emitter::emit_generic_instantiation(const sema::generic_instantiation_request& req) -> void {
+    const auto fn_expr_opt = ast_module_.ast[req.fn_node_id].visit(
+        [&](const auto&) -> stdx::option<const ast::function_expr&> { return stdx::none; },
+        [&](const ast::decl_stmt& decl) -> stdx::option<const ast::function_expr&> {
+            if (decl.value) { return ast_module_.ast.get_as_opt<ast::function_expr>(*decl.value); }
+            return stdx::none;
+        },
+        [&](const ast::function_expr& fn_expr) -> stdx::option<const ast::function_expr&> {
+            return fn_expr;
+        });
+
+    if (!fn_expr_opt) { return; }
+    const auto& fn_expr{*fn_expr_opt};
+
+    auto& fn{gir_module_.add_function(req.mangled_name, *req.return_type, false, false)};
+    auto& entry{fn.add_segment()};
+    builder_.set_insert_point(fn, entry);
+
+    const scope_guard g{scopes_};
+    for (const auto& [param, arg_type] : std::views::zip(fn_expr.parameters, req.arg_types)) {
+        const auto& p_ident{ast_module_.ast.get_as<ast::identifier_expr>(param.name)};
+        const auto  p_name{p_ident.name};
+
+        auto& p_slot{fn.add_param(std::string{p_name}, *arg_type)};
+        scopes_.back().bindings.emplace(p_name,
+                                        local_binding{p_slot.id, *arg_type, false, stdx::none});
+    }
+
+    emit_block(ast_module_.ast.get_as<ast::block_stmt>(fn_expr.body));
+    if (const auto cur_seg{builder_.get_segment()}; !cur_seg->has_terminator()) {
+        if (req.return_type->get_kind() == sema::type_kind::VOID) {
+            builder_.emit_return();
+        } else {
+            builder_.emit_return(value{undefined_val{}, *req.return_type});
+        }
+    }
 }
 
 auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -> void {
@@ -51,6 +95,13 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
 
     if (decl.value) {
         if (const auto fn_expr{ast_module_.ast.get_as_opt<ast::function_expr>(*decl.value)}) {
+            if (const auto fn_data{sema_type->get_data().as_opt<sema::types::function>()}) {
+                // Generic templates will be emitted via monomorphized instantiations
+                if (std::ranges::contains(
+                        fn_data->params, sema::type_kind::AUTO, &sema::type::get_kind)) {
+                    return;
+                }
+            }
             return emit_function(id, decl, *fn_expr);
         }
     }
@@ -413,7 +464,29 @@ auto emitter::emit_expression_id(ast::node_id id) -> value {
         [&](const ast::unary_expr& data) -> value { return emit_unary(id, data); },
         [&](const ast::assignment_expr& data) -> value { return emit_assignment(id, data); },
         [&](const ast::call_expr& data) -> value { return emit_call(id, data); },
+        [&](const ast::array_expr& data) -> value { return emit_array(id, data); },
         [&](ast::grouped_expr) -> value { return emit_expression_id(id); });
+}
+
+auto emitter::emit_array(ast::node_id id, const ast::array_expr& arr) -> value {
+    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    if (!sema_type) { return value{undefined_val{}, stdx::none}; }
+
+    if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+    const auto array_slot{builder_.emit_alloca(*sema_type)};
+    auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+
+    if (const auto arr_data{sema_type->get_data().as_opt<sema::types::array>()}) {
+        auto& elem_type{arr_data->underlying};
+        for (u64 i{0}; const auto& item : arr.items) {
+            const auto elem_ptr{builder_.emit_get_element_ptr(
+                value{array_slot, *sema_type}, {value{i++, usize_type}}, elem_type)};
+            const auto val{emit_expression(item)};
+            builder_.emit_store(value{elem_ptr, elem_type}, val);
+        }
+    }
+
+    return value{array_slot, sema_type};
 }
 
 auto emitter::emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> value {
@@ -500,6 +573,57 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
 }
 
 auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
+    auto& ret_type{ast_module_.get_sema_type_opt(id).value_or(
+        ctx_.get_builtin_resolved_type(sema::type_kind::VOID))};
+
+    // Builtin call handling
+    const auto fn_token{call.function->get_token_type()};
+    if (syntax::get_builtin_opt(fn_token)) {
+        switch (fn_token) {
+        case syntax::token_type_t::BUILTIN_AS:
+        case syntax::token_type_t::BUILTIN_BIT_CAST:
+        case syntax::token_type_t::BUILTIN_PTR_CAST:
+        case syntax::token_type_t::BUILTIN_ALIGN_CAST: {
+            if (call.arguments.size() >= 2) {
+                if (const auto op_expr{call.arguments[1].as_opt<ast::expr_handle>()}) {
+                    const auto operand{emit_expression(*op_expr)};
+                    auto       cast_kind{instruction_kind::WIDEN_CAST};
+                    if (fn_token == syntax::token_type_t::BUILTIN_BIT_CAST) {
+                        cast_kind = instruction_kind::BIT_CAST;
+                    } else if (fn_token == syntax::token_type_t::BUILTIN_PTR_CAST ||
+                               fn_token == syntax::token_type_t::BUILTIN_ALIGN_CAST) {
+                        cast_kind = instruction_kind::PTR_CAST;
+                    }
+                    const auto dest{builder_.emit_cast(cast_kind, operand, ret_type)};
+                    return value{dest, ret_type};
+                }
+            }
+            break;
+        }
+        case syntax::token_type_t::BUILTIN_INT_FROM_PTR: {
+            if (!call.arguments.empty()) {
+                if (const auto op_expr{call.arguments[0].as_opt<ast::expr_handle>()}) {
+                    const auto operand{emit_expression(*op_expr)};
+                    const auto dest{
+                        builder_.emit_cast(instruction_kind::INT_FROM_PTR, operand, ret_type)};
+                    return value{dest, ret_type};
+                }
+            }
+            break;
+        }
+        case syntax::token_type_t::BUILTIN_SIZE_OF:
+        case syntax::token_type_t::BUILTIN_ALIGN_OF:
+        case syntax::token_type_t::BUILTIN_TYPE_OF:  {
+            if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+            break;
+        }
+        default: {
+            if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+            break;
+        }
+        }
+    }
+
     std::string callee_name;
     if (const auto ident{ast_module_.ast.get_as_opt<ast::identifier_expr>(call.function)}) {
         if (const auto binding{lookup_binding(ident->name)}) {
@@ -525,8 +649,33 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         }
     }
 
-    auto& ret_type{ast_module_.get_sema_type_opt(id).value_or(
-        ctx_.get_builtin_resolved_type(sema::type_kind::VOID))};
+    // Check if callee targets a generic instantiation
+    const auto fn_type_opt{ast_module_.get_sema_type_opt(call.function)};
+    for (const auto& req : ast_module_.generic_instantiations) {
+        bool fn_match{false};
+        if (fn_type_opt && *req.generic_fn_type == *fn_type_opt) {
+            fn_match = true;
+        } else if (const auto info{ctx_.generic_functions.get_opt(*req.generic_fn_type)};
+                   info && info->name && *info->name == callee_name) {
+            fn_match = true;
+        }
+
+        if (fn_match) {
+            VERIFY(req.arg_types.size() == args.size(), "Generic arg types do not match arity");
+            bool args_match{true};
+            for (const auto& [arg, arg_type] : std::views::zip(args, req.arg_types)) {
+                if (arg.type && *arg_type != *arg.type) {
+                    args_match = false;
+                    break;
+                }
+            }
+            if (args_match) {
+                callee_name = req.mangled_name;
+                break;
+            }
+        }
+    }
+
     if (const auto dest{builder_.emit_call(callee_name, std::move(args), ret_type)}) {
         return value{*dest, ret_type};
     }
@@ -1164,6 +1313,29 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             auto&      elem_type{ast_module_.get_sema_type_opt(id).value_or(
                 ctx_.get_builtin_resolved_type(sema::type_kind::I32))};
 
+            if (const auto obj_type{ast_module_.get_sema_type_opt(index.array)}) {
+                if (const auto arr_data{obj_type->get_data().as_opt<sema::types::array>()}) {
+                    auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+                    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+
+                    const auto bound_val{value{static_cast<u64>(arr_data->len), usize_type}};
+                    const auto is_in_bounds{
+                        builder_.emit_binary(instruction_kind::LT, idx_val, bound_val, bool_type)};
+
+                    if (auto fn_opt{builder_.get_function()}) {
+                        auto& valid_seg{fn_opt->add_segment()};
+                        auto& oob_seg{fn_opt->add_segment()};
+
+                        builder_.emit_cond_goto(
+                            value{is_in_bounds, bool_type}, valid_seg.get_id(), oob_seg.get_id());
+
+                        builder_.set_segment(oob_seg);
+                        builder_.emit_unreachable();
+                        builder_.set_segment(valid_seg);
+                    }
+                }
+            }
+
             const auto elem_ptr{builder_.emit_get_element_ptr(base_lval, {idx_val}, elem_type)};
             return value{elem_ptr, elem_type};
         },
@@ -1195,45 +1367,52 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
         auto& arm_body_seg{fn.add_segment()};
         auto& next_arm_seg{fn.add_segment()};
 
-        if (arm.pattern.is<ast::discarded>()) {
+        const auto pattern_node_id{*arm.pattern};
+        const auto is_discard{pattern_node_id.get_token_type() ==
+                                  syntax::token_type_t::UNDERSCORE ||
+                              ast_module_.ast[pattern_node_id].template is<ast::discarded>()};
+
+        if (is_discard) {
             builder_.emit_goto(arm_body_seg.get_id());
-        } else if (const auto range{ast_module_.ast.get_as_opt<ast::range_expr>(*arm.pattern)}) {
+        } else if (const auto range{ast_module_.ast.get_as_opt<ast::range_expr>(pattern_node_id)}) {
             const auto start_val{emit_expression(range->lhs)};
             const auto end_val{emit_expression(range->rhs)};
 
-            const auto is_inclusive{arm.pattern->get_token_type() ==
-                                    syntax::token_type_t::DOT_DOT_EQ};
-            const auto cmp1{
+            const auto ge_cond{
                 builder_.emit_binary(instruction_kind::GE, matcher_val, start_val, bool_type)};
-            const auto cmp2_kind{is_inclusive ? instruction_kind::LE : instruction_kind::LT};
-            const auto cmp2{builder_.emit_binary(cmp2_kind, matcher_val, end_val, bool_type)};
-            const auto both_cmp{builder_.emit_binary(
-                instruction_kind::AND, value{cmp1, bool_type}, value{cmp2, bool_type}, bool_type)};
+            const auto is_inclusive{pattern_node_id.get_token_type() ==
+                                    syntax::token_type_t::DOT_DOT_EQ};
+            const auto le_kind{is_inclusive ? instruction_kind::LE : instruction_kind::LT};
+            const auto le_cond{builder_.emit_binary(le_kind, matcher_val, end_val, bool_type)};
+            const auto in_range{builder_.emit_binary(instruction_kind::AND,
+                                                     value{ge_cond, bool_type},
+                                                     value{le_cond, bool_type},
+                                                     bool_type)};
             builder_.emit_cond_goto(
-                value{both_cmp, bool_type}, arm_body_seg.get_id(), next_arm_seg.get_id());
+                value{in_range, bool_type}, arm_body_seg.get_id(), next_arm_seg.get_id());
         } else {
-            const auto pat_val{emit_expression_id(*arm.pattern)};
-            const auto is_match{
+            const auto pat_val{emit_expression_id(pattern_node_id)};
+            const auto is_eq{
                 builder_.emit_binary(instruction_kind::EQ, matcher_val, pat_val, bool_type)};
             builder_.emit_cond_goto(
-                value{is_match, bool_type}, arm_body_seg.get_id(), next_arm_seg.get_id());
+                value{is_eq, bool_type}, arm_body_seg.get_id(), next_arm_seg.get_id());
         }
 
-        // Arm body
         builder_.set_segment(arm_body_seg);
         {
-            const scope_guard g{scopes_};
-            if (arm.capture && arm.capture->template is<ast::identifier_expr>()) {
-                const auto& ident{ast_module_.ast.get_as<ast::identifier_expr>(*arm.capture)};
-                auto&       m_type{matcher_val.type ? *matcher_val.type : bool_type};
-                if (const auto loc{matcher_val.as_opt<local_id>()}) {
-                    scopes_.back().bindings.emplace(ident.name,
-                                                    local_binding{*loc, m_type, false, stdx::none});
-                }
+            const scope_guard arm_guard{scopes_};
+            if (arm.capture) {
+                const auto& cap_ident{ast_module_.ast.get_as<ast::identifier_expr>(*arm.capture)};
+                auto&       cap_type{ast_module_.get_sema_type_opt(*arm.capture)
+                                   .value_or(ctx_.get_builtin_resolved_type(sema::type_kind::I32))};
+                scopes_.back().bindings.emplace(
+                    cap_ident.name,
+                    local_binding{matcher_val.data.as<local_id>(), cap_type, false, stdx::none});
             }
 
             if (yields_value && res_slot) {
-                builder_.emit_store(*res_slot, emit_stmt_as_value(arm.dispatch));
+                const auto arm_val{emit_stmt_as_value(arm.dispatch)};
+                builder_.emit_store(*res_slot, arm_val);
             } else {
                 emit_stmt(arm.dispatch);
             }
@@ -1243,6 +1422,7 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
         if (const auto cur_seg{builder_.get_segment()}; cur_seg && !cur_seg->has_terminator()) {
             builder_.emit_goto(merge_seg.get_id());
         }
+
         builder_.set_segment(next_arm_seg);
     }
 
@@ -1261,6 +1441,12 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
 auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& init) -> value {
     const auto sema_type{ast_module_.get_sema_type_opt(id)};
     if (!sema_type) { return value{undefined_val{}, stdx::none}; }
+
+    if (const auto cv{const_eval_.try_eval(id)}) {
+        if (const auto i{cv->as_int_opt()}) { return value{*i, sema_type}; }
+        if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
+        if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
+    }
 
     const auto struct_slot{builder_.emit_alloca(*sema_type)};
     auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
@@ -1289,27 +1475,21 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
 auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
     const auto sema_type{ast_module_.get_sema_type_opt(id)};
     const auto obj_type{ast_module_.get_sema_type_opt(dot.object)};
-    if (!obj_type) { return value{undefined_val{}, sema_type}; }
+    const auto member_ident{ast_module_.ast.get_as<ast::identifier_expr>(dot.member)};
 
-    const auto& member_ident{ast_module_.ast.get_as<ast::identifier_expr>(dot.member)};
-    const auto& table{ctx_.registry.get(obj_type->get_symbol_table_idx())};
-    const auto  proxy{table.get_proxy_opt(member_ident.name)};
+    if (obj_type) {
+        const auto& table{ctx_.registry.get(obj_type->get_symbol_table_idx())};
+        if (const auto proxy{table.get_proxy_opt(member_ident.name)}) {
+            const auto [sym, member_idx]{*proxy};
+            auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
 
-    if (proxy) {
-        const auto [sym, member_idx]{*proxy};
-        if (const auto st{obj_type->get_data().as_opt<sema::types::struct_t>()}) {
-            if (member_idx < st->ast_fields.size()) {
-                const auto base_lval{emit_lvalue(dot.object)};
-                auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+            if (const auto st{obj_type->get_data().as_opt<sema::types::struct_t>()}) {
                 auto&      field_type{sema_type ? *sema_type : *obj_type};
+                const auto base_lval{emit_lvalue(dot.object)};
                 const auto field_ptr{builder_.emit_get_element_ptr(
                     base_lval, {value{static_cast<u64>(member_idx), usize_type}}, field_type)};
                 const auto loaded{builder_.emit_load(value{field_ptr, field_type}, field_type)};
                 return value{loaded, field_type};
-            }
-        } else if (const auto en{obj_type->get_data().as_opt<sema::types::enum_t>()}) {
-            if (member_idx < en->ast_enumerations.size()) {
-                return value{static_cast<i64>(member_idx), sema_type};
             }
         }
     }
@@ -1328,6 +1508,30 @@ auto emitter::emit_index(ast::node_id id, const ast::index_expr& index) -> value
     const auto base_lval{emit_lvalue(index.array)};
     const auto idx_val{emit_expression(index.index)};
     auto& elem_type{sema_type ? *sema_type : ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
+
+    if (const auto obj_type{ast_module_.get_sema_type_opt(index.array)}) {
+        if (const auto arr_data{obj_type->get_data().as_opt<sema::types::array>()}) {
+            auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+            auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+
+            const auto bound_val{value{static_cast<u64>(arr_data->len), usize_type}};
+            const auto is_in_bounds{
+                builder_.emit_binary(instruction_kind::LT, idx_val, bound_val, bool_type)};
+
+            if (auto fn_opt{builder_.get_function()}) {
+                auto& valid_seg{fn_opt->add_segment()};
+                auto& oob_seg{fn_opt->add_segment()};
+
+                builder_.emit_cond_goto(
+                    value{is_in_bounds, bool_type}, valid_seg.get_id(), oob_seg.get_id());
+
+                builder_.set_segment(oob_seg);
+                builder_.emit_unreachable();
+
+                builder_.set_segment(valid_seg);
+            }
+        }
+    }
 
     const auto elem_ptr{builder_.emit_get_element_ptr(base_lval, {idx_val}, elem_type)};
     const auto loaded{builder_.emit_load(value{elem_ptr, elem_type}, elem_type)};
