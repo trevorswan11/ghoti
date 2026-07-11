@@ -99,6 +99,8 @@ template <stdx::ScopedEnum E> class diagnostic {
     diagnostic(E err, usize line, usize column) noexcept : loc_{{line, column}}, error_{err} {}
     diagnostic(stdx::option<std::string> msg, E err, usize line, usize column) noexcept
         : message_{std::move(msg)}, loc_{{line, column}}, error_{err} {}
+    diagnostic(stdx::option<std::string> msg, E err, stdx::option<source_location> loc) noexcept
+        : message_{std::move(msg)}, loc_{std::move(loc)}, error_{err} {}
     diagnostic(stdx::option<std::string> msg, E err) noexcept
         : message_{std::move(msg)}, error_{err} {}
 
