@@ -245,6 +245,7 @@ auto emitter::emit_anonymous_function(ast::node_id id, const ast::function_expr&
 
 auto emitter::emit_stmt(const ast::stmt_handle& stmt) -> void {
     const auto stmt_id{*stmt};
+    builder_.set_location(ast_module_.ast.location_of(stmt_id));
     ast_module_.ast[stmt_id].visit(
         [&](const auto&) { UNREACHABLE("Unhandled statement node variant in emit_stmt"); },
         [&](const ast::block_stmt& block) { emit_block(block); },
@@ -381,6 +382,7 @@ auto emitter::emit_return_stmt(ast::node_id, const ast::return_stmt& ret) -> voi
 
 auto emitter::emit_expression_id(ast::node_id id) -> value {
     ASSERT(id.is_valid(), "Valid node ID expected in emit_expression_id");
+    builder_.set_location(ast_module_.ast.location_of(id));
 
     return ast_module_.ast[id].visit(
         [&](const auto&) -> value {
@@ -693,7 +695,7 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
             if (expr_type->get_kind() != sema::type_kind::VOID) { sema_type = expr_type; }
         }
     }
-    const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID};
+    const bool yields_value{if_expr.alternate && sema_type && is_value_type(sema_type->get_kind())};
 
     // Comptime / constexpr condition evaluation
     if (if_expr.constexpr_condition) {

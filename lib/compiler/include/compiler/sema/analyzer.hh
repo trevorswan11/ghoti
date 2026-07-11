@@ -63,6 +63,7 @@ class analyzer {
     auto collect_symbols(mod::module& module) -> mod::module_state;
     auto resolve_types(mod::module& module) -> mod::module_state;
     auto emit_gir(mod::module& module) -> gir::module;
+    auto check_types(gir::module& gir_module, mod::module& ast_module) -> mod::module_state;
 
   private:
     mod::module_manager&        modules_;

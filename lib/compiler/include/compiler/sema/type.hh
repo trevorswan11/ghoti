@@ -59,7 +59,79 @@ enum class type_kind : u8 {
 
 [[nodiscard]] auto type_kind_display_name(type_kind kind) noexcept -> std::string_view;
 
+[[nodiscard]] constexpr auto is_integer(type_kind kind) noexcept -> bool {
+    switch (kind) {
+    case type_kind::I32:
+    case type_kind::I64:
+    case type_kind::ISIZE:
+    case type_kind::U32:
+    case type_kind::U64:
+    case type_kind::USIZE:
+    case type_kind::U8:    return true;
+    default:               return false;
+    }
+}
+
+[[nodiscard]] constexpr auto is_signed_integer(type_kind kind) noexcept -> bool {
+    switch (kind) {
+    case type_kind::I32:
+    case type_kind::I64:
+    case type_kind::ISIZE: return true;
+    default:               return false;
+    }
+}
+
+[[nodiscard]] constexpr auto is_unsigned_integer(type_kind kind) noexcept -> bool {
+    switch (kind) {
+    case type_kind::U32:
+    case type_kind::U64:
+    case type_kind::USIZE:
+    case type_kind::U8:    return true;
+    default:               return false;
+    }
+}
+
+[[nodiscard]] constexpr auto is_float(type_kind kind) noexcept -> bool {
+    switch (kind) {
+    case type_kind::F32:
+    case type_kind::F64: return true;
+    default:             return false;
+    }
+}
+
+[[nodiscard]] constexpr auto is_numeric(type_kind kind) noexcept -> bool {
+    return is_integer(kind) || is_float(kind);
+}
+
+[[nodiscard]] constexpr auto is_implicit_widenable(type_kind from, type_kind to) noexcept -> bool {
+    switch (from) {
+    case type_kind::U8:
+        return to == type_kind::U32 || to == type_kind::U64 || to == type_kind::USIZE;
+    case type_kind::U32: return to == type_kind::U64 || to == type_kind::USIZE;
+    case type_kind::I32: return to == type_kind::I64 || to == type_kind::ISIZE;
+    case type_kind::F32: return to == type_kind::F64;
+    default:             return false;
+    }
+}
+
+[[nodiscard]] constexpr auto is_value_type(type_kind kind) noexcept -> bool {
+    switch (kind) {
+    case type_kind::VOID:
+    case type_kind::NORETURN:
+    case type_kind::BLOCK:
+    case type_kind::MODULE:
+    case type_kind::LABEL:
+    case type_kind::MATCH_ARM:
+    case type_kind::POISON:
+    case type_kind::UNDEFINED: return false;
+    default:                   return true;
+    }
+}
+
 class type;
+
+[[nodiscard]] auto is_same_unqualified(const type& a, const type& b) noexcept -> bool;
+[[nodiscard]] auto is_assignable(const type& src, const type& dest) noexcept -> bool;
 
 namespace types {
 

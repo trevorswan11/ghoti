@@ -904,6 +904,21 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
     PROFILE_FUNCTION();
     TRY_RESOLVE(binary.lhs);
     TRY_RESOLVE(binary.rhs);
+
+    switch (id.get_token_type()) {
+    case syntax::token_type_t::LT:
+    case syntax::token_type_t::LT_EQ:
+    case syntax::token_type_t::GT:
+    case syntax::token_type_t::GT_EQ:
+    case syntax::token_type_t::EQ:
+    case syntax::token_type_t::NEQ:
+    case syntax::token_type_t::BOOLEAN_AND:
+    case syntax::token_type_t::BOOLEAN_OR:
+        last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::BOOL));
+        break;
+    default: break;
+    }
+
     resolving_.set_sema_type(id, *last_type_);
 }
 
@@ -1584,6 +1599,9 @@ auto type_resolver::visit(ast::node_id id, const ast::dereference_expr& deref) -
 auto type_resolver::visit(ast::node_id id, const ast::unary_expr& node) -> void {
     PROFILE_FUNCTION();
     TRY_RESOLVE(node.rhs);
+    if (id.get_token_type() == syntax::token_type_t::BANG) {
+        last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::BOOL));
+    }
     resolving_.set_sema_type(id, *last_type_);
 }
 

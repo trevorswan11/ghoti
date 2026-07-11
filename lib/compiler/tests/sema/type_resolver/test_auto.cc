@@ -24,11 +24,14 @@ TEST_CASE("Declaration auto type inference") {
         const b: auto = true;
         var c := 100l;
         const d := false;
+        var s := "hello";
     )")};
 
     const auto& i32_type{ctx->get_type(sema::type_kind::I32)};
     const auto& i64_type{ctx->get_type(sema::type_kind::I64)};
     const auto& bool_type{ctx->get_type(sema::type_kind::BOOL)};
+    const auto& u8_type{ctx->get_type(sema::type_kind::U8)};
+    const auto& str_type{ctx->get_type(sema::type_kind::ARRAY, true, 6UZ, u8_type)};
 
     SECTION("Explicit auto variable declaration adopts value type") {
         const auto [sym, data, node, type]{
@@ -60,6 +63,14 @@ TEST_CASE("Declaration auto type inference") {
         CHECK(sym.get_kind_opt() == sema::symbol_kind::VALUE);
         CHECK(type == bool_type);
         CHECK(ctx->root_mod.get_sema_type(node.name) == bool_type);
+    }
+
+    SECTION("Walrus string declaration adopts string literal array type") {
+        const auto [sym, data, node, type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("s", idx)};
+        CHECK(sym.get_kind_opt() == sema::symbol_kind::VALUE);
+        CHECK(type == str_type);
+        CHECK(ctx->root_mod.get_sema_type(node.name) == str_type);
     }
 }
 
@@ -216,6 +227,22 @@ TEST_CASE("Function return type auto inference") {
         const auto [r_sym, r_sym_data, r_node, r_type]{
             ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("result", idx)};
         CHECK(r_type == ctx->get_type(sema::type_kind::I64));
+    }
+
+    SECTION("Infers return type from constexpr conditional branches") {
+        auto [ctx, idx]{helpers::resolve_and_check(R"(
+            const f := fn(): auto {
+                if constexpr (true) {
+                    return 42;
+                } else {
+                    return 100;
+                }
+            };
+        )")};
+
+        const auto [f_sym, f_sym_data, f_node, f_type, f_type_data]{
+            ctx->get_full_sym_info<syms::node_t, ast::decl_stmt, sema::types::function>("f", idx)};
+        CHECK(f_type_data.return_type == ctx->get_type(sema::type_kind::I32));
     }
 }
 

@@ -87,7 +87,7 @@ pub fn build(b: *std.Build) !void {
 
     if (stdx.KcovBuilder.allowedTarget(b.graph.host)) {
         if (artifacts.tests) |tests| try stdx.steps.addCoverage(b, .{
-            .curl = stdx_dep.artifact("curl"),
+            .curl = stdx_dep.artifact("execurl"),
             .kcov = stdx_dep.artifact("kcov"),
             .run_configs = &.{
                 .{

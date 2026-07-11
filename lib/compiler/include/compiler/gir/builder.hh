@@ -13,6 +13,7 @@
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/segment.hh"
 #include "compiler/sema/type.hh"
+#include "support/diagnostic.hh"
 
 namespace ghoti::gir {
 
@@ -26,6 +27,7 @@ class builder {
 
     MAKE_GETTER(function, stdx::option<function&>);
     MAKE_GETTER(segment, stdx::option<segment&>);
+    MAKE_GETTER(location, stdx::option<source_location>);
 
     constexpr auto set_insert_point(function& fn, segment& seg) noexcept -> void {
         function_.emplace(fn);
@@ -33,6 +35,9 @@ class builder {
     }
 
     constexpr auto set_segment(segment& seg) noexcept -> void { segment_.emplace(seg); }
+    constexpr auto set_location(stdx::option<source_location> loc) noexcept -> void {
+        location_ = loc;
+    }
 
     auto emit_instruction(instruction inst) -> instruction&;
     auto emit_alloca(sema::type& type, std::string_view name = {}) -> local_id;
@@ -56,8 +61,9 @@ class builder {
     auto emit_unreachable() -> instruction&;
 
   private:
-    stdx::option<function&> function_;
-    stdx::option<segment&>  segment_;
+    stdx::option<function&>       function_;
+    stdx::option<segment&>        segment_;
+    stdx::option<source_location> location_;
 };
 
 } // namespace ghoti::gir

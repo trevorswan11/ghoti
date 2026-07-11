@@ -15,7 +15,7 @@ fn compute_point(p: struct) -> i32
     goto seg 1
   seg 1:
     %6 = load %4
-    %7 = lt i32 %6, 3
+    %7 = lt bool %6, 3
     cond_goto %7 seg 2, seg 3
   seg 2:
     %8 = load %0
@@ -68,24 +68,16 @@ test "golden_run"
 
 fn clamp__i32_i32_i32(val: i32, min_val: i32, max_val: i32) -> i32
   seg 0:
-    %0 = alloca block
-    %1 = lt i32 param.0, param.1
-    cond_goto %1 seg 1, seg 2
+    %0 = lt bool param.0, param.1
+    cond_goto %0 seg 1, seg 2
   seg 1:
     ret i32 param.1
-    store void, %0
-    goto seg 2
   seg 2:
-    %2 = load %0
-    %3 = alloca block
-    %4 = gt i32 param.0, param.2
-    cond_goto %4 seg 3, seg 4
+    %1 = gt bool param.0, param.2
+    cond_goto %1 seg 3, seg 4
   seg 3:
     ret i32 param.2
-    store void, %3
-    goto seg 4
   seg 4:
-    %5 = load %3
     ret i32 param.0
 
 )"
