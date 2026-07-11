@@ -15,6 +15,7 @@
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/primitive.hh"
 #include "compiler/ast/statement.hh"
+#include "compiler/gir/module.hh" // IWYU pragma: keep
 #include "compiler/module/memory_loader.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/error.hh"
@@ -117,6 +118,22 @@ auto resolve_and_check(std::string_view input, const std::vector<mock_file>& imp
     check_errors<sema::diagnostics>(ctx->root_mod);
     ctx->verify_registry_resolved();
 
+    return {std::move(ctx), idx};
+}
+
+auto type_check(std::string_view input, const std::vector<mock_file>& imports) -> ctx_idx_pair {
+    auto [ctx, idx]{resolve(input, imports)};
+    if (!ctx->root_mod.is_poisoned()) {
+        auto gir_mod{ctx->analyzer.emit_gir(ctx->root_mod)};
+        if (!ctx->root_mod.is_poisoned()) { ctx->analyzer.check_types(gir_mod, ctx->root_mod); }
+    }
+    return {std::move(ctx), idx};
+}
+
+auto type_check_and_verify(std::string_view input, const std::vector<mock_file>& imports)
+    -> ctx_idx_pair {
+    auto [ctx, idx]{type_check(input, imports)};
+    check_errors<sema::diagnostics>(ctx->root_mod);
     return {std::move(ctx), idx};
 }
 

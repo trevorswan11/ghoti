@@ -254,4 +254,25 @@ auto test_resolver_fail(std::string_view failing, Ds&&... expected_diagnostics) 
     return test_resolver_fail(failing, {}, std::forward<Ds>(expected_diagnostics)...);
 }
 
+auto type_check(std::string_view input, const std::vector<mock_file>& imports = {}) -> ctx_idx_pair;
+
+auto type_check_and_verify(std::string_view input, const std::vector<mock_file>& imports = {})
+    -> ctx_idx_pair;
+
+// Tests a type-checking failing input against expected diagnostics
+template <std::same_as<sema::diagnostic>... Ds>
+auto test_checker_fail(std::string_view              failing,
+                       const std::vector<mock_file>& imports,
+                       Ds&&... expected_diagnostics) -> ctx_idx_pair {
+    auto [ctx, idx]{type_check(failing, imports)};
+    check_errors_against<sema::diagnostics>(ctx->root_mod,
+                                            std::forward<Ds>(expected_diagnostics)...);
+    return {std::move(ctx), idx};
+}
+
+template <std::same_as<sema::diagnostic>... Ds>
+auto test_checker_fail(std::string_view failing, Ds&&... expected_diagnostics) {
+    return test_checker_fail(failing, {}, std::forward<Ds>(expected_diagnostics)...);
+}
+
 } // namespace ghoti::tests::helpers

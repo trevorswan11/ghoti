@@ -5,11 +5,13 @@
 #include <utility>
 #include <vector>
 
+#include <ankerl/unordered_dense.h>
 #include <fmt/format.h>
 #include <magic_enum/magic_enum.hpp>
 #include <stdx/assert.hh>
 #include <stdx/enum.hh>
 #include <stdx/fixed/enum_map.hh>
+#include <stdx/hash.hh>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/string.hh>
@@ -217,3 +219,11 @@ struct instruction {
 };
 
 } // namespace ghoti::gir
+
+template <> struct ankerl::unordered_dense::hash<ghoti::gir::local_id> {
+    using is_avalanching = void;
+    using local_id       = ghoti::gir::local_id;
+    [[nodiscard]] auto operator()(const local_id& id) const noexcept {
+        return stdx::hasher{id.get_index()}.combine(id.get_kind()).finalize();
+    }
+};

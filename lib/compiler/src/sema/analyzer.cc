@@ -11,6 +11,7 @@
 #include "compiler/module/module.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/passes/symbol_collector.hh"
+#include "compiler/sema/passes/type_checker.hh"
 #include "compiler/sema/passes/type_resolver.hh"
 #include "compiler/syntax/error.hh"
 
@@ -30,13 +31,23 @@ auto analyzer::analyze(const std::filesystem::path& entry_path) -> stdx::result<
     collect_symbols(*module);
     resolve_types(*module);
 
-    // Perform a final diagnostic flush if poisoned
     if (module->is_poisoned()) {
         module->print_diagnostics(error_stream_);
         return {};
     }
 
-    emit_gir(*module);
+    auto gir_mod{emit_gir(*module)};
+    if (module->is_poisoned()) {
+        module->print_diagnostics(error_stream_);
+        return {};
+    }
+
+    check_types(gir_mod, *module);
+    if (module->is_poisoned()) {
+        module->print_diagnostics(error_stream_);
+        return {};
+    }
+
     return {};
 }
 
@@ -51,6 +62,10 @@ auto analyzer::resolve_types(mod::module& module) -> mod::module_state {
 auto analyzer::emit_gir(mod::module& module) -> gir::module {
     gir::emitter emitter{ctx_, module};
     return emitter.emit();
+}
+
+auto analyzer::check_types(gir::module& gir_module, mod::module& ast_module) -> mod::module_state {
+    return type_checker::check_types(gir_module, ast_module, ctx_);
 }
 
 } // namespace ghoti::sema
