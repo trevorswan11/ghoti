@@ -76,11 +76,11 @@ TEST_CASE("GIR value types and operations") {
     CHECK(v_loc.as<local_id>() == loc);
     CHECK_FALSE(v_loc.is<i64>());
 
-    const value v_i64{123ll};
+    const value v_i64{i64{123}};
     CHECK(v_i64.is<i64>());
     CHECK(UNWRAP(v_i64.as_opt<i64>()) == 123);
 
-    const value v_u64{456ull};
+    const value v_u64{u64{456}};
     CHECK(v_u64.is<u64>());
     CHECK(UNWRAP(v_u64.as_opt<u64>()) == 456);
 
