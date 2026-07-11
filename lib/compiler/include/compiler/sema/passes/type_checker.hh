@@ -37,8 +37,8 @@ class type_checker {
 
     auto check_function(gir::function& fn) -> void;
     auto check_segment(gir::function& fn, gir::segment& seg) -> void;
-    auto check_instruction(gir::function& fn, gir::segment& seg, const gir::instruction& inst)
-        -> void;
+    auto check_instruction(gir::function& fn, const gir::instruction& inst) -> void;
+    auto check_store(const gir::instruction& inst) -> void;
 
     auto emit_diagnostic(std::string_view message, error err, stdx::option<source_location> loc)
         -> void;
