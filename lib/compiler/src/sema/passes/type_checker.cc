@@ -69,7 +69,13 @@ auto type_checker::check_function(gir::function& fn) -> void {
 
 auto type_checker::check_segment(gir::function& fn, gir::segment& seg) -> void {
     PROFILE_FUNCTION();
-    for (const auto* inst : seg.get_instructions()) { check_instruction(fn, seg, *inst); }
+    for (const auto* inst : seg.get_instructions()) { check_instruction(fn, *inst); }
 }
+
+auto type_checker::check_instruction(gir::function&, const gir::instruction&) -> void {
+    PROFILE_FUNCTION();
+}
+
+auto type_checker::check_store(const gir::instruction&) -> void {}
 
 } // namespace ghoti::sema
