@@ -60,6 +60,29 @@ TEST_CASE("Function call type checking") {
                              sema::error::TYPE_MISMATCH,
                              std::pair{5UZ, 32UZ}});
     }
+
+    SECTION("Valid call to extern function succeeds") {
+        helpers::type_check_and_verify(R"(
+            extern const puts: fn(^u8): i32;
+            const f := fn(msg: ^u8): i32 {
+                return puts(msg);
+            };
+        )");
+    }
+
+    SECTION("Call to extern function with wrong argument type fails") {
+        helpers::test_checker_fail(
+            R"(
+            extern const puts: fn(^u8): i32;
+            const f := fn(): i32 {
+                return puts(42);
+            };
+        )",
+            sema::diagnostic{"Argument 1 of type 'i32' is not assignable to parameter type "
+                             "'pointer' in call to 'puts'",
+                             sema::error::TYPE_MISMATCH,
+                             std::pair{3UZ, 29UZ}});
+    }
 }
 
 } // namespace ghoti::tests

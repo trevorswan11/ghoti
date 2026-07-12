@@ -108,6 +108,14 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
             }
             return emit_function(id, decl, *fn_expr);
         }
+    } else if (decl.has_modifier(ast::decl_modifiers::EXTERN)) {
+        if (const auto fn_data{sema_type->get_data().as_opt<sema::types::function>()}) {
+            auto& fn{gir_module_.add_function(std::string{name}, *sema_type, false, false)};
+            for (usize i{0}; const auto& param : fn_data->params) {
+                fn.add_param(fmt::format("param.{}", i++), *param);
+            }
+            return;
+        }
     }
 
     const auto is_const{decl.has_modifier(ast::decl_modifiers::CONSTANT) ||
