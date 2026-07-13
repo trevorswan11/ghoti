@@ -141,6 +141,58 @@ TEST_CASE("Function call type checking") {
             };
         )");
     }
+
+    SECTION("Indirect function pointer call succeeds") {
+        helpers::type_check_and_verify(R"(
+            const target := fn(x: i32): i32 {
+                return x + 1;
+            };
+            const f := fn(): i32 {
+                var fptr: ^fn(i32): i32 = target;
+                return fptr(42);
+            };
+        )");
+    }
+
+    SECTION("Indirect function pointer call with wrong arity fails") {
+        helpers::test_checker_fail(
+            R"(
+            const target := fn(x: i32): i32 {
+                return x + 1;
+            };
+            const f := fn(): i32 {
+                var fptr: ^fn(i32): i32 = target;
+                return fptr();
+            };
+        )",
+            sema::diagnostic{"Expected 1 arguments, found 0",
+                             sema::error::ARITY_MISMATCH,
+                             std::pair{6UZ, 24UZ}});
+    }
+
+    SECTION("Passing array to slice parameter succeeds") {
+        helpers::type_check_and_verify(R"(
+            const sum := fn(s: []i32): i32 {
+                return s[0];
+            };
+            const f := fn(): i32 {
+                const arr: [3]i32 = [3]i32{1, 2, 3};
+                return sum(arr);
+            };
+        )");
+    }
+
+    SECTION("Slice and pointer builtins type check successfully") {
+        helpers::type_check_and_verify(R"(
+            const f := fn(p: ^i32): void {
+                const p2: ^i32 = @ptrFromInt(^i32, 0x1000UZ);
+                const arr: [3]i32 = [3]i32{1, 2, 3};
+                const p3: ^i32 = @ptrFromArray(arr);
+                const s: []i32 = @sliceFromPtr(p, 10UZ);
+                @panic("error");
+            };
+        )");
+    }
 }
 
 } // namespace ghoti::tests

@@ -434,6 +434,73 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                     }
                 }
             }
+        } else if (!inst.operands.empty()) {
+            const auto callee_t{get_operand_type(inst.operands[0])};
+            if (callee_t && !callee_t->is_poison()) {
+                stdx::option<const types::function&> fn_data;
+                if (const auto ptr_data{callee_t->get_data().as_opt<types::pointer>()}) {
+                    fn_data = ptr_data->underlying.get_data().as_opt<types::function>();
+                } else {
+                    fn_data = callee_t->get_data().as_opt<types::function>();
+                }
+
+                if (fn_data) {
+                    const auto expected_args{fn_data->params.size()};
+                    const auto provided_args{inst.operands.size() - 1};
+
+                    if (fn_data->is_variadic) {
+                        if (provided_args < expected_args) {
+                            emit_diagnostic(
+                                fmt::format("Indirect function call expects at least {} arguments "
+                                            "but {} were provided",
+                                            expected_args,
+                                            provided_args),
+                                error::ARITY_MISMATCH,
+                                inst.location);
+                        } else {
+                            for (usize i{0}; i < expected_args; ++i) {
+                                const auto arg_t{get_operand_type(inst.operands[i + 1])};
+                                if (arg_t && !arg_t->is_poison() &&
+                                    !is_assignable(*arg_t, *fn_data->params[i])) {
+                                    emit_diagnostic(
+                                        fmt::format(
+                                            "Argument {} of type '{}' is not assignable to "
+                                            "parameter type '{}' in indirect call",
+                                            i + 1,
+                                            type_kind_display_name(arg_t->get_kind()),
+                                            type_kind_display_name(fn_data->params[i]->get_kind())),
+                                        error::TYPE_MISMATCH,
+                                        inst.location);
+                                }
+                            }
+                        }
+                    } else if (provided_args != expected_args) {
+                        emit_diagnostic(
+                            fmt::format("Indirect function call expects {} arguments but {} were "
+                                        "provided",
+                                        expected_args,
+                                        provided_args),
+                            error::ARITY_MISMATCH,
+                            inst.location);
+                    } else {
+                        for (usize i{0}; i < expected_args; ++i) {
+                            const auto arg_t{get_operand_type(inst.operands[i + 1])};
+                            if (arg_t && !arg_t->is_poison() &&
+                                !is_assignable(*arg_t, *fn_data->params[i])) {
+                                emit_diagnostic(
+                                    fmt::format(
+                                        "Argument {} of type '{}' is not assignable to "
+                                        "parameter type '{}' in indirect call",
+                                        i + 1,
+                                        type_kind_display_name(arg_t->get_kind()),
+                                        type_kind_display_name(fn_data->params[i]->get_kind())),
+                                    error::TYPE_MISMATCH,
+                                    inst.location);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         if (inst.result && inst.type) {
@@ -541,43 +608,7 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
         // Case A: Storing to a local_id alloca slot or param
         if (auto it{locals_.find(*inst.result)}; it != locals_.end()) {
             const auto val_t{get_operand_type(inst.operands[0])};
-            // If it's a pointer, check whether storing to pointer or through pointer
-            if (it->second.type->get_kind() == type_kind::POINTER) {
-                const auto ptr_data{it->second.type->get_data().as_opt<types::pointer>()};
-                const bool ptr_is_const{it->second.type->is_constant()};
-                if (val_t && ptr_data && is_assignable(*val_t, ptr_data->underlying)) {
-                    // Storing through pointer *p = val
-                    if (ptr_is_const) {
-                        emit_diagnostic("Cannot assign to constant memory through pointer",
-                                        error::ASSIGNMENT_TO_CONST,
-                                        inst.location);
-                        return;
-                    }
-                } else if (val_t && is_assignable(*val_t, *it->second.type)) {
-                    // Storing pointer variable p = q
-                    if (it->second.is_const) {
-                        emit_diagnostic("Cannot assign to constant variable",
-                                        error::ASSIGNMENT_TO_CONST,
-                                        inst.location);
-                        return;
-                    }
-                } else {
-                    if (ptr_is_const) {
-                        emit_diagnostic("Cannot assign to constant memory through pointer",
-                                        error::ASSIGNMENT_TO_CONST,
-                                        inst.location);
-                    } else {
-                        emit_diagnostic(
-                            fmt::format(
-                                "Type mismatch in store: cannot assign '{}' to '{}'",
-                                val_t ? type_kind_display_name(val_t->get_kind()) : "unknown",
-                                ptr_data ? type_kind_display_name(ptr_data->underlying.get_kind())
-                                         : type_kind_display_name(it->second.type->get_kind())),
-                            error::TYPE_MISMATCH,
-                            inst.location);
-                    }
-                }
-            } else {
+            if (it->second.is_alloca) {
                 if (it->second.is_const) {
                     emit_diagnostic("Cannot assign to constant variable",
                                     error::ASSIGNMENT_TO_CONST,
@@ -593,6 +624,62 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
                         error::TYPE_MISMATCH,
                         inst.location);
                 }
+                return;
+            }
+
+            if (it->second.type->get_kind() == type_kind::POINTER) {
+                const auto ptr_data{it->second.type->get_data().as_opt<types::pointer>()};
+                if (val_t && is_assignable(*val_t, *it->second.type)) {
+                    // Storing pointer value into pointer variable or field: p = q
+                    if (it->second.is_const) {
+                        emit_diagnostic("Cannot assign to constant variable",
+                                        error::ASSIGNMENT_TO_CONST,
+                                        inst.location);
+                        return;
+                    }
+                    return;
+                }
+                if (ptr_data && val_t && is_assignable(*val_t, ptr_data->underlying)) {
+                    // Storing through pointer: *p = val
+                    if (it->second.type->is_constant()) {
+                        emit_diagnostic("Cannot assign to constant memory through pointer",
+                                        error::ASSIGNMENT_TO_CONST,
+                                        inst.location);
+                        return;
+                    }
+                    return;
+                } else {
+                    if (it->second.type->is_constant()) {
+                        emit_diagnostic("Cannot assign to constant memory through pointer",
+                                        error::ASSIGNMENT_TO_CONST,
+                                        inst.location);
+                    } else {
+                        emit_diagnostic(
+                            fmt::format(
+                                "Type mismatch in store: cannot assign '{}' to '{}'",
+                                val_t ? type_kind_display_name(val_t->get_kind()) : "unknown",
+                                ptr_data ? type_kind_display_name(ptr_data->underlying.get_kind())
+                                         : type_kind_display_name(it->second.type->get_kind())),
+                            error::TYPE_MISMATCH,
+                            inst.location);
+                    }
+                }
+                return;
+            }
+
+            if (it->second.is_const) {
+                emit_diagnostic("Cannot assign to constant variable",
+                                error::ASSIGNMENT_TO_CONST,
+                                inst.location);
+                return;
+            }
+
+            if (val_t && !is_assignable(*val_t, *it->second.type)) {
+                emit_diagnostic(fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
+                                            type_kind_display_name(val_t->get_kind()),
+                                            type_kind_display_name(it->second.type->get_kind())),
+                                error::TYPE_MISMATCH,
+                                inst.location);
             }
         }
     } else if (inst.operands.size() >= 2) {
