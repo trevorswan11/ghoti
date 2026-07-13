@@ -108,6 +108,13 @@ inline constexpr auto INSTRUCTION_KIND_NAMES{make_instruction_kind_names()};
     }
 }
 
+enum class linkage : u8 {
+    INTERNAL,
+    PUBLIC,
+    EXPORT,
+    EXTERN,
+};
+
 enum class local_kind : u8 {
     TEMPORARY,
     PARAMETER,

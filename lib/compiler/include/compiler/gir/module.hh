@@ -21,6 +21,7 @@ struct global_decl {
     sema::type&         type;
     bool                is_constant{false};
     stdx::option<value> init_value;
+    gir::linkage        linkage{linkage::INTERNAL};
 };
 
 struct type_decl {
@@ -46,12 +47,14 @@ class module {
     auto add_global(std::string         name,
                     sema::type&         type,
                     bool                is_const,
-                    stdx::option<value> init = stdx::none) -> global_decl&;
-    auto add_function(std::string name,
-                      sema::type& type,
-                      bool        is_test      = false,
-                      bool        is_constexpr = false,
-                      bool        is_variadic  = false) -> function&;
+                    stdx::option<value> init    = stdx::none,
+                    gir::linkage        linkage = linkage::INTERNAL) -> global_decl&;
+    auto add_function(std::string  name,
+                      sema::type&  type,
+                      bool         is_test      = false,
+                      bool         is_constexpr = false,
+                      bool         is_variadic  = false,
+                      gir::linkage linkage      = linkage::INTERNAL) -> function&;
 
   private:
     const mod::module&        ast_module_;

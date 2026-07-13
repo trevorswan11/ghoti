@@ -19,6 +19,7 @@
 #include "compiler/gir/module.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
+#include "compiler/sema/generic.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
@@ -96,6 +97,7 @@ class emitter {
         return emit_expression_id(*expr);
     }
     auto emit_array(ast::node_id id, const ast::array_expr& array) -> value;
+    auto emit_slice_from_array(value arr_lval, const sema::types::array& arr_data) -> value;
     auto emit_generic_instantiation(const sema::generic_instantiation_request& req) -> void;
     auto emit_expression_id(ast::node_id id) -> value;
     auto emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value;

@@ -119,11 +119,27 @@ auto format_instruction(const instruction& inst) -> std::string {
         return fmt::format("{}{} {}", prefix, instruction_kind_name(inst.kind), val);
     }
     case instruction_kind::CALL:
+        if (inst.callee_name) {
+            return fmt::format(
+                "{}{} @{}({})",
+                prefix,
+                instruction_kind_name(inst.kind),
+                *inst.callee_name,
+                fmt::join(inst.operands | std::views::transform(format_value), ", "));
+        }
+
+        return fmt::format(
+            "{}{} {}({})",
+            prefix,
+            instruction_kind_name(inst.kind),
+            !inst.operands.empty() ? format_value(inst.operands[0]) : "<missing_callee>",
+            fmt::join(inst.operands | std::views::drop(1) | std::views::transform(format_value),
+                      ", "));
     case instruction_kind::BUILTIN_CALL:
         return fmt::format("{}{} @{}({})",
                            prefix,
                            instruction_kind_name(inst.kind),
-                           inst.callee_name.value_or("fn"),
+                           inst.callee_name.value_or("builtin"),
                            fmt::join(inst.operands | std::views::transform(format_value), ", "));
     default: break;
     }

@@ -1,5 +1,6 @@
 #include "compiler/sema/type.hh"
 
+#include <ranges>
 #include <string_view>
 
 #include <gsl/pointers>
@@ -135,8 +136,19 @@ auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {
         return arr_a->len == arr_b->len && arr_a->null_terminated == arr_b->null_terminated &&
                is_same_unqualified(arr_a->underlying, arr_b->underlying);
     }
-    case type_kind::FUNCTION: return a == b;
-    default:                  return is_numeric(kind);
+    case type_kind::FUNCTION: {
+        const auto f_a{a.get_data().as_opt<types::function>()};
+        const auto f_b{b.get_data().as_opt<types::function>()};
+        if (!f_a || !f_b) { return a == b; }
+        if (f_a->is_variadic != f_b->is_variadic || f_a->params.size() != f_b->params.size()) {
+            return false;
+        }
+        for (const auto& [param_a, param_b] : std::views::zip(f_a->params, f_b->params)) {
+            if (!is_same_unqualified(*param_a, *param_b)) { return false; }
+        }
+        return is_same_unqualified(f_a->return_type, f_b->return_type);
+    }
+    default: return is_numeric(kind);
     }
 }
 
@@ -218,6 +230,15 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
         if (s_dest->null_terminated && !a_src->null_terminated) { return false; }
         if (a_src->underlying.is_constant() && !s_dest->underlying.is_constant()) { return false; }
         return is_same_unqualified(a_src->underlying, s_dest->underlying);
+    }
+
+    // Function to Function Pointer coercion: fn(...) -> ^fn(...) / ^mut fn(...)
+    if (src_kind == type_kind::FUNCTION && dest_kind == type_kind::POINTER) {
+        if (const auto p_dest{dest.get_data().as_opt<types::pointer>()}) {
+            if (p_dest->underlying.get_kind() == type_kind::FUNCTION) {
+                return is_same_unqualified(src, p_dest->underlying);
+            }
+        }
     }
 
     return false;

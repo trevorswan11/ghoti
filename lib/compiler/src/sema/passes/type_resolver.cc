@@ -343,8 +343,17 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
     resolving_.set_sema_type(call.function, callee_type);
 
     // Verify that the type in the function is callable and store the return type
-    auto& callee_data{callee_type.get_data()};
-    if (const auto function_type{callee_data.as_opt<types::function>()}) {
+    auto&                                callee_data{callee_type.get_data()};
+    stdx::option<const types::function&> function_type;
+    if (const auto ft{callee_data.as_opt<types::function>()}) {
+        function_type = ft;
+    } else if (const auto ptr{callee_data.as_opt<types::pointer>()}) {
+        function_type = ptr->underlying.get_data().as_opt<types::function>();
+    } else if (const auto ref{callee_data.as_opt<types::reference>()}) {
+        function_type = ref->underlying.get_data().as_opt<types::function>();
+    }
+
+    if (function_type) {
         const auto has_implicit_self{function_type->has_self &&
                                      resolving_.ast.get_as_opt<ast::dot_expr>(call.function)};
 

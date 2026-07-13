@@ -15,20 +15,24 @@ auto module::add_type(std::string name, sema::type& type) -> type_decl& {
     return *types_.emplace_back(arena_.make<type_decl>(std::move(name), type));
 }
 
-auto module::add_global(std::string name, sema::type& type, bool is_const, stdx::option<value> init)
-    -> global_decl& {
+auto module::add_global(std::string         name,
+                        sema::type&         type,
+                        bool                is_const,
+                        stdx::option<value> init,
+                        gir::linkage        linkage) -> global_decl& {
     return *globals_.emplace_back(
-        arena_.make<global_decl>(std::move(name), type, is_const, std::move(init)));
+        arena_.make<global_decl>(std::move(name), type, is_const, std::move(init), linkage));
 }
 
-auto module::add_function(std::string name,
-                          sema::type& type,
-                          bool        is_test,
-                          bool        is_constexpr,
-                          bool        is_variadic) -> function& {
+auto module::add_function(std::string  name,
+                          sema::type&  type,
+                          bool         is_test,
+                          bool         is_constexpr,
+                          bool         is_variadic,
+                          gir::linkage linkage) -> function& {
     const auto idx{functions_.size()};
-    functions_.emplace_back(
-        arena_.make<function>(arena_, std::move(name), type, is_test, is_constexpr, is_variadic));
+    functions_.emplace_back(arena_.make<function>(
+        arena_, std::move(name), type, is_test, is_constexpr, is_variadic, linkage));
     if (is_test) { tests_.emplace_back(idx); }
     return *functions_.back();
 }

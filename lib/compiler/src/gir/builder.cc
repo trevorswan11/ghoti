@@ -189,6 +189,32 @@ auto builder::emit_call(std::string_view callee, std::vector<value> args, sema::
     return stdx::none;
 }
 
+auto builder::emit_indirect_call(value callee, std::vector<value> args, sema::type& return_type)
+    -> stdx::option<local_id> {
+    ASSERT(function_, "Cannot emit indirect call instruction without an active function");
+    args.insert(args.begin(), std::move(callee));
+    if (return_type.get_kind() != sema::type_kind::VOID) {
+        const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
+        emit_instruction({
+            .kind        = instruction_kind::CALL,
+            .type        = return_type,
+            .result      = dest,
+            .operands    = std::move(args),
+            .callee_name = stdx::none,
+        });
+        return dest;
+    }
+
+    emit_instruction({
+        .kind        = instruction_kind::CALL,
+        .type        = return_type,
+        .result      = stdx::none,
+        .operands    = std::move(args),
+        .callee_name = stdx::none,
+    });
+    return stdx::none;
+}
+
 auto builder::emit_return(stdx::option<value> val) -> instruction& {
     if (val) {
         const auto val_type{val->type};
