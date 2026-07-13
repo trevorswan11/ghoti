@@ -110,7 +110,8 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
         }
     } else if (decl.has_modifier(ast::decl_modifiers::EXTERN)) {
         if (const auto fn_data{sema_type->get_data().as_opt<sema::types::function>()}) {
-            auto& fn{gir_module_.add_function(std::string{name}, *sema_type, false, false)};
+            auto& fn{gir_module_.add_function(
+                std::string{name}, *sema_type, false, false, fn_data->is_variadic)};
             for (usize i{0}; const auto& param : fn_data->params) {
                 fn.add_param(fmt::format("param.{}", i++), *param);
             }
@@ -181,8 +182,8 @@ auto emitter::emit_function(ast::node_id              id,
     ASSERT(sema_type, "Function declaration must have a resolved sema type");
 
     const auto is_constexpr{decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
-    auto&      fn{
-        gir_module_.add_function(std::string{name_ident.name}, *sema_type, false, is_constexpr)};
+    auto&      fn{gir_module_.add_function(
+        std::string{name_ident.name}, *sema_type, false, is_constexpr, fn_expr.variadic)};
 
     auto& entry{fn.add_segment()};
     builder_.set_insert_point(fn, entry);
@@ -221,7 +222,7 @@ auto emitter::emit_anonymous_function(ast::node_id id, const ast::function_expr&
     auto&      fn_type{*sema_type};
     const auto anon_name{fmt::format("anonymous_fn{}", anon_fn_counter_++)};
 
-    auto&      fn{gir_module_.add_function(anon_name, fn_type, false, false)};
+    auto&      fn{gir_module_.add_function(anon_name, fn_type, false, false, fn_expr.variadic)};
     const auto prev_fn{builder_.get_function()};
     const auto prev_seg{builder_.get_segment()};
 
@@ -464,6 +465,11 @@ auto emitter::emit_expression_id(ast::node_id id) -> value {
         [&](ast::undefined_expr) -> value {
             return value{undefined_val{},
                          ctx_.get_builtin_resolved_type(sema::type_kind::UNDEFINED)};
+        },
+        [&](ast::unreachable_expr) -> value {
+            builder_.emit_unreachable();
+            return value{undefined_val{},
+                         ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN)};
         },
         [&](const ast::identifier_expr& data) -> value { return emit_ident(id, data); },
         [&](const ast::function_expr& data) -> value {

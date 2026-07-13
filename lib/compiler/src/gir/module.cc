@@ -21,11 +21,14 @@ auto module::add_global(std::string name, sema::type& type, bool is_const, stdx:
         arena_.make<global_decl>(std::move(name), type, is_const, std::move(init)));
 }
 
-auto module::add_function(std::string name, sema::type& type, bool is_test, bool is_constexpr)
-    -> function& {
+auto module::add_function(std::string name,
+                          sema::type& type,
+                          bool        is_test,
+                          bool        is_constexpr,
+                          bool        is_variadic) -> function& {
     const auto idx{functions_.size()};
     functions_.emplace_back(
-        arena_.make<function>(arena_, std::move(name), type, is_test, is_constexpr));
+        arena_.make<function>(arena_, std::move(name), type, is_test, is_constexpr, is_variadic));
     if (is_test) { tests_.emplace_back(idx); }
     return *functions_.back();
 }

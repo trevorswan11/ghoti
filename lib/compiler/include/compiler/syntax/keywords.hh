@@ -59,6 +59,7 @@ constexpr keyword_t NULLPTR{"nullptr", token_type_t::NULLPTR};
 constexpr keyword_t USING{"using", token_type_t::USING};
 constexpr keyword_t TEST{"test", token_type_t::TEST};
 constexpr keyword_t UNDEFINED{"undefined", token_type_t::UNDEFINED};
+constexpr keyword_t UNREACHABLE{"unreachable", token_type_t::UNREACHABLE};
 
 } // namespace keywords
 

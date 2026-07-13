@@ -52,6 +52,11 @@ constexpr builtin_t ABS{"@abs", token_type_t::BUILTIN_ABS};
 constexpr builtin_t FLOOR{"@floor", token_type_t::BUILTIN_FLOOR};
 constexpr builtin_t CEIL{"@ceil", token_type_t::BUILTIN_CEIL};
 
+constexpr builtin_t C_VA_START{"@cVaStart", token_type_t::BUILTIN_C_VA_START};
+constexpr builtin_t C_VA_ARG{"@cVaArg", token_type_t::BUILTIN_C_VA_ARG};
+constexpr builtin_t C_VA_COPY{"@cVaCopy", token_type_t::BUILTIN_C_VA_COPY};
+constexpr builtin_t C_VA_END{"@cVaEnd", token_type_t::BUILTIN_C_VA_END};
+
 constexpr builtin_t PANIC{"@panic", token_type_t::BUILTIN_PANIC};
 
 constexpr auto ALL_TOKEN_TYPES{

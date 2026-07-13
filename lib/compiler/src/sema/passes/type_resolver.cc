@@ -253,6 +253,17 @@ template <ast::IndexableID ID>
         return_type = get_resolved_call_arg_type(call.arguments[0]);
         break;
     }
+    case token_type_t::BUILTIN_C_VA_START:
+    case token_type_t::BUILTIN_C_VA_COPY:
+    case token_type_t::BUILTIN_C_VA_END:   {
+        ASSERT(builtin.return_type.get_kind() == type_kind::VOID);
+        return_type = &builtin.return_type;
+        break;
+    }
+    case token_type_t::BUILTIN_C_VA_ARG: {
+        return_type = get_resolved_call_arg_type(call.arguments[1]);
+        break;
+    }
     case token_type_t::BUILTIN_PANIC: {
         ASSERT(builtin.return_type.get_kind() == type_kind::NORETURN);
         return_type = &builtin.return_type;
@@ -341,7 +352,18 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
         const auto& params{function_type->params};
         const usize param_offset{has_implicit_self ? 1UZ : 0UZ};
         const auto  expected_arity{params.size() - param_offset};
-        if (call.arguments.size() != expected_arity) {
+        if (function_type->is_variadic) {
+            if (call.arguments.size() < expected_arity) {
+                return last_type_.emplace(
+                    ctx_.poison_node(resolving_,
+                                     id,
+                                     fmt::format("Expected at least {} arguments, found {}",
+                                                 expected_arity,
+                                                 call.arguments.size()),
+                                     error::ARITY_MISMATCH,
+                                     resolving_.ast.location_of(call.function)));
+            }
+        } else if (call.arguments.size() != expected_arity) {
             return last_type_.emplace(ctx_.poison_node(
                 resolving_,
                 id,
@@ -395,13 +417,16 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
         }
 
         bool any_arg_poison{false};
-        for (auto [param_type, arg] :
-             std::views::zip(function_type->params.subspan(param_offset), call.arguments)) {
-            const structural_guard g{implicit_type_stack_, *param_type};
+        for (usize i{0}; const auto& arg : call.arguments) {
+            stdx::option<structural_guard> g;
+            if (i < expected_arity) {
+                g.emplace(implicit_type_stack_, *function_type->params[i + param_offset]);
+            }
             any_arg_poison |= arg.visit([this](auto arg_id) -> bool {
                 resolve(arg_id);
                 return last_type_.take()->is_poison();
             });
+            ++i;
         }
         if (any_arg_poison) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
 
@@ -652,7 +677,8 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     ASSERT(!fn_type.is_resolved(), "Valued function must not be resolved");
 
     if (any_param_generic(param_types)) {
-        fn_type.resolve<types::function>(fn.self.has_value(), param_types, return_type);
+        fn_type.resolve<types::function>(
+            fn.self.has_value(), param_types, return_type, fn.variadic);
         ctx_.generic_functions.register_function(fn_type, resolving_, id, fn);
         return last_type_.emplace(fn_type);
     }
@@ -668,7 +694,8 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     return_trackers_.pop_back();
 
     auto& deduced_return_type{is_auto_return ? tracker.deduced_return_type(ctx_) : return_type};
-    fn_type.resolve<types::function>(fn.self.has_value(), param_types, deduced_return_type);
+    fn_type.resolve<types::function>(
+        fn.self.has_value(), param_types, deduced_return_type, fn.variadic);
     if (is_auto_return) { resolving_.set_sema_type(fn.explicit_return_type, deduced_return_type); }
     last_type_.emplace(fn_type);
 }
@@ -1663,6 +1690,7 @@ MAKE_PRIMITIVE_RESOLVER(u8_expr, U8)
 MAKE_PRIMITIVE_RESOLVER(bool_expr, BOOL)
 MAKE_PRIMITIVE_RESOLVER(void_expr, VOID)
 MAKE_PRIMITIVE_RESOLVER(undefined_expr, UNDEFINED)
+MAKE_PRIMITIVE_RESOLVER(unreachable_expr, NORETURN)
 MAKE_PRIMITIVE_RESOLVER(f32_expr, F32)
 MAKE_PRIMITIVE_RESOLVER(f64_expr, F64)
 
@@ -2312,9 +2340,10 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_function
                              resolving_.ast.location_of(fn.explicit_return_type)));
     }
     fn_key.imprint(return_type);
+    if (fn.variadic) { fn_key.imprint(fn.variadic); }
 
     auto& resolved_fn{*ctx_.pool[fn_key]};
-    resolved_fn.resolve_if<types::function>(false, param_types, return_type);
+    resolved_fn.resolve_if<types::function>(false, param_types, return_type, fn.variadic);
 
     auto& final_type{apply_explicit_modifiers(id, resolved_fn)};
     resolving_.set_sema_type(id, final_type);

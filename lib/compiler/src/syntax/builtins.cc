@@ -48,6 +48,10 @@ constexpr auto ALL_BUILTINS_BY_SV{make_typed_ident_map(builtins::ALIGN_CAST,
                                                        builtins::ABS,
                                                        builtins::FLOOR,
                                                        builtins::CEIL,
+                                                       builtins::C_VA_START,
+                                                       builtins::C_VA_ARG,
+                                                       builtins::C_VA_COPY,
+                                                       builtins::C_VA_END,
                                                        builtins::PANIC)};
 
 constexpr auto ALL_BUILTINS_BY_TT{[] -> auto {

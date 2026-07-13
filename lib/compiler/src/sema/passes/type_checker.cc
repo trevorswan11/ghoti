@@ -77,6 +77,11 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
 
     switch (inst.kind) {
     case gir::instruction_kind::ALLOCA: {
+        if (inst.type && inst.type->get_kind() == type_kind::OPAQUE) {
+            emit_diagnostic("Cannot allocate variable of opaque type",
+                            error::ILLEGAL_OPAQUE_TYPE,
+                            inst.location);
+        }
         if (inst.result && inst.type) {
             locals_.insert_or_assign(*inst.result,
                                      local_info{
@@ -376,7 +381,34 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
         if (inst.callee_name) {
             if (const auto callee{find_function(*inst.callee_name)}) {
                 const auto& params{callee->get_params()};
-                if (params.size() != inst.operands.size()) {
+                if (callee->get_is_variadic()) {
+                    if (inst.operands.size() < params.size()) {
+                        emit_diagnostic(
+                            fmt::format(
+                                "Function '{}' expects at least {} arguments but {} were provided",
+                                *inst.callee_name,
+                                params.size(),
+                                inst.operands.size()),
+                            error::ARITY_MISMATCH,
+                            inst.location);
+                    } else {
+                        for (usize i{0}; i < params.size(); ++i) {
+                            const auto arg_t{get_operand_type(inst.operands[i])};
+                            if (arg_t && !arg_t->is_poison() &&
+                                !is_assignable(*arg_t, params[i]->type)) {
+                                emit_diagnostic(
+                                    fmt::format("Argument {} of type '{}' is not assignable to "
+                                                "parameter type '{}' in call to '{}'",
+                                                i + 1,
+                                                type_kind_display_name(arg_t->get_kind()),
+                                                type_kind_display_name(params[i]->type.get_kind()),
+                                                *inst.callee_name),
+                                    error::TYPE_MISMATCH,
+                                    inst.location);
+                            }
+                        }
+                    }
+                } else if (params.size() != inst.operands.size()) {
                     emit_diagnostic(
                         fmt::format("Function '{}' expects {} arguments but {} were provided",
                                     *inst.callee_name,

@@ -104,6 +104,7 @@ auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {
     case type_kind::UNDEFINED:
     case type_kind::TYPE:
     case type_kind::NORETURN:
+    case type_kind::OPAQUE:
     case type_kind::POISON:    return true;
     case type_kind::STRUCT:
     case type_kind::UNION:

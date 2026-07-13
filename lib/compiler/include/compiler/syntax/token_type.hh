@@ -164,6 +164,7 @@ enum class token_type_t : u8 {
     MUT_VOLATILE,
     NORETURN,
     NULLPTR,
+    UNREACHABLE,
 
     BUILTIN_ALIGN_CAST,
     BUILTIN_PTR_CAST,
@@ -199,6 +200,10 @@ enum class token_type_t : u8 {
     BUILTIN_ABS,
     BUILTIN_FLOOR,
     BUILTIN_CEIL,
+    BUILTIN_C_VA_START,
+    BUILTIN_C_VA_ARG,
+    BUILTIN_C_VA_COPY,
+    BUILTIN_C_VA_END,
 
     BUILTIN_PANIC,
 

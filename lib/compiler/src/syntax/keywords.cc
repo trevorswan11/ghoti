@@ -57,7 +57,8 @@ constexpr auto ALL_KEYWORDS{make_typed_ident_map(keywords::FN,
                                                  keywords::NULLPTR,
                                                  keywords::USING,
                                                  keywords::TEST,
-                                                 keywords::UNDEFINED)};
+                                                 keywords::UNDEFINED,
+                                                 keywords::UNREACHABLE)};
 
 } // namespace
 

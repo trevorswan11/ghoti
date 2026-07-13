@@ -118,6 +118,7 @@ enum class type_kind : u8 {
     switch (kind) {
     case type_kind::VOID:
     case type_kind::NORETURN:
+    case type_kind::OPAQUE:
     case type_kind::BLOCK:
     case type_kind::MODULE:
     case type_kind::LABEL:
@@ -207,6 +208,7 @@ struct function {
     bool             has_self;
     gsl::span<type*> params;
     type&            return_type;
+    bool             is_variadic{false};
 };
 
 struct module {

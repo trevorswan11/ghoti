@@ -167,6 +167,11 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::FLOOR, params(t_auto), t_auto);
     inject_function(bis::CEIL, params(t_auto), t_auto);
 
+    inject_function(bis::C_VA_START, params(t_auto), t_void);
+    inject_function(bis::C_VA_ARG, params(t_auto, t_type), t_auto);
+    inject_function(bis::C_VA_COPY, params(t_auto, t_auto), t_void);
+    inject_function(bis::C_VA_END, params(t_auto), t_void);
+
     inject_function(bis::PANIC, params(t_c_str), t_noreturn);
 }
 

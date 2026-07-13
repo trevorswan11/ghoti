@@ -67,6 +67,7 @@ class dumper {
     auto visit(node_id, const bool_expr&) -> void;
     auto visit(node_id, const void_expr&) -> void;
     auto visit(node_id, const undefined_expr&) -> void;
+    auto visit(node_id, const unreachable_expr&) -> void;
     auto visit(node_id, const module_access_expr&) -> void;
     auto visit(node_id, const struct_expr&) -> void;
     auto visit(node_id, const union_expr&) -> void;

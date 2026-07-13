@@ -468,6 +468,11 @@ auto dumper::visit(node_id, const undefined_expr&) -> void {
     fmt::println(out_, "UndefinedExpression");
 }
 
+auto dumper::visit(node_id, const unreachable_expr&) -> void {
+    PROFILE_FUNCTION();
+    fmt::println(out_, "UnreachableExpression");
+}
+
 // Safe to call with invalid ID in type dispatch
 auto dumper::visit(node_id, const module_access_expr& module_access) -> void {
     PROFILE_FUNCTION();

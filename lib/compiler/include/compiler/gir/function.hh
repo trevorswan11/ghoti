@@ -29,9 +29,10 @@ class function {
              std::string        name,
              sema::type&        type,
              bool               is_test      = false,
-             bool               is_constexpr = false) noexcept
+             bool               is_constexpr = false,
+             bool               is_variadic  = false) noexcept
         : arena_{arena}, name_{std::move(name)}, type_{type}, is_test_{is_test},
-          is_constexpr_{is_constexpr} {}
+          is_constexpr_{is_constexpr}, is_variadic_{is_variadic} {}
     ~function() = default;
     MAKE_PINNED(function);
 
@@ -39,6 +40,7 @@ class function {
     MAKE_GETTER(type, sema::type&);
     MAKE_GETTER(is_test, bool);
     MAKE_GETTER(is_constexpr, bool);
+    MAKE_GETTER(is_variadic, bool);
     MAKE_DEDUCING_GETTER(params);
     MAKE_DEDUCING_GETTER(segments);
 
@@ -72,6 +74,7 @@ class function {
     usize                   next_local_index_{0};
     bool                    is_test_{false};
     bool                    is_constexpr_{false};
+    bool                    is_variadic_{false};
 };
 
 } // namespace ghoti::gir

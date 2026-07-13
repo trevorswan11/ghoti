@@ -30,12 +30,19 @@ auto format_type(const sema::type& type) -> std::string {
             return fmt::format("[{}]{}", arr.len, format_type(arr.underlying));
         },
         [](sema::types::function fn) {
-            return fmt::format("fn({}) -> {}",
-                               fmt::join(fn.params | std::views::transform([](sema::type* param) {
+            auto params_str{
+                fmt::to_string(fmt::join(fn.params | std::views::transform([](sema::type* param) {
                                              return format_type(*param);
                                          }),
-                                         ", "),
-                               format_type(fn.return_type));
+                                         ", "))};
+            if (fn.is_variadic) {
+                if (!params_str.empty()) {
+                    params_str += ", ...";
+                } else {
+                    params_str = "...";
+                }
+            }
+            return fmt::format("fn({}) -> {}", params_str, format_type(fn.return_type));
         },
         [&type](const auto&) {
             return std::string{sema::type_kind_display_name(type.get_kind())};
@@ -161,14 +168,20 @@ auto dumper::dump(const function& fn) -> void {
             return_str = format_type(fn.get_type());
         }
 
-        fmt::println(out_,
-                     "fn {}({}) -> {}",
-                     fn.get_name(),
-                     fmt::join(fn.get_params() | std::views::transform([](const parameter* p) {
-                                   return fmt::format("{}: {}", p->name, format_type(p->type));
-                               }),
-                               ", "),
-                     return_str);
+        auto params_str{fmt::to_string(
+            fmt::join(fn.get_params() | std::views::transform([](const parameter* p) {
+                          return fmt::format("{}: {}", p->name, format_type(p->type));
+                      }),
+                      ", "))};
+        if (fn.get_is_variadic()) {
+            if (!params_str.empty()) {
+                params_str += ", ...";
+            } else {
+                params_str = "...";
+            }
+        }
+
+        fmt::println(out_, "fn {}({}) -> {}", fn.get_name(), params_str, return_str);
     }
 
     for (const auto& seg : fn.get_segments()) { dump(*seg); }

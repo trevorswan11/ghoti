@@ -386,6 +386,10 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
             return const_value{undefined_val{},
                                ctx_.get_builtin_resolved_type(sema::type_kind::UNDEFINED)};
         },
+        [&](ast::unreachable_expr) {
+            return const_value{undefined_val{},
+                               ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN)};
+        },
         [&](const ast::array_expr& data) { return eval_array(id, data); },
         [&](const ast::index_expr& data) { return eval_index(id, data); },
         [&](const ast::initializer_expr& data) { return eval_initializer(id, data); },

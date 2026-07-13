@@ -50,7 +50,8 @@ class module {
     auto add_function(std::string name,
                       sema::type& type,
                       bool        is_test      = false,
-                      bool        is_constexpr = false) -> function&;
+                      bool        is_constexpr = false,
+                      bool        is_variadic  = false) -> function&;
 
   private:
     const mod::module&        ast_module_;

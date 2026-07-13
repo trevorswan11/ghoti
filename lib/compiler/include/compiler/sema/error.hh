@@ -47,6 +47,7 @@ enum class error : u8 {
     OPERATOR_TYPE_MISMATCH,
     RETURN_TYPE_MISMATCH,
     AUTO_RETURN_TYPE_CONFLICT,
+    ILLEGAL_OPAQUE_TYPE,
 };
 
 using diagnostic  = diagnostic<error>;
