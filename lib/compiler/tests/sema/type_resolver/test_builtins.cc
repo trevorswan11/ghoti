@@ -214,4 +214,38 @@ TEST_CASE("Illegal @this usage") {
                          std::pair{0UZ, 5UZ}});
 }
 
+TEST_CASE("Builtin C va builtins resolution") {
+    test_builtin_resolve(
+        bis::C_VA_START,
+        "ap",
+        [](helpers::sema_test_context& ctx) -> sema::type& {
+            return ctx.get_type(sema::type_kind::VOID);
+        },
+        "const ap: ^mut opaque = undefined;");
+
+    test_builtin_resolve(
+        bis::C_VA_ARG,
+        "ap, i32",
+        [](helpers::sema_test_context& ctx) -> sema::type& {
+            return ctx.get_type(sema::type_kind::I32);
+        },
+        "const ap: ^mut opaque = undefined;");
+
+    test_builtin_resolve(
+        bis::C_VA_COPY,
+        "dest, src",
+        [](helpers::sema_test_context& ctx) -> sema::type& {
+            return ctx.get_type(sema::type_kind::VOID);
+        },
+        "const dest: ^mut opaque = undefined; const src: ^mut opaque = undefined;");
+
+    test_builtin_resolve(
+        bis::C_VA_END,
+        "ap",
+        [](helpers::sema_test_context& ctx) -> sema::type& {
+            return ctx.get_type(sema::type_kind::VOID);
+        },
+        "const ap: ^mut opaque = undefined;");
+}
+
 } // namespace ghoti::tests

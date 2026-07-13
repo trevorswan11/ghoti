@@ -83,6 +83,64 @@ TEST_CASE("Function call type checking") {
                              sema::error::TYPE_MISMATCH,
                              std::pair{3UZ, 29UZ}});
     }
+
+    SECTION("Valid variadic function call with additional arguments succeeds") {
+        helpers::type_check_and_verify(R"(
+            const printf := fn(fmt: ^u8, ...): i32 {
+                return 0;
+            };
+            const f := fn(msg: ^u8): i32 {
+                return printf(msg, 1, 2, true);
+            };
+        )");
+    }
+
+    SECTION("Valid extern variadic function call succeeds") {
+        helpers::type_check_and_verify(R"(
+            extern const printf: fn(^u8, ...): i32;
+            const f := fn(msg: ^u8): i32 {
+                return printf(msg, 42, 3.14);
+            };
+        )");
+    }
+
+    SECTION("Variadic function call with too few arguments fails with ARITY_MISMATCH") {
+        helpers::test_checker_fail(
+            R"(
+            extern const printf: fn(^u8, ...): i32;
+            const f := fn(): i32 {
+                return printf();
+            };
+        )",
+            sema::diagnostic{"Expected at least 1 arguments, found 0",
+                             sema::error::ARITY_MISMATCH,
+                             std::pair{3UZ, 24UZ}});
+    }
+
+    SECTION("Variadic function call with incompatible fixed argument fails") {
+        helpers::test_checker_fail(
+            R"(
+            extern const printf: fn(^u8, ...): i32;
+            const f := fn(): i32 {
+                return printf(123, 456);
+            };
+        )",
+            sema::diagnostic{"Argument 1 of type 'i32' is not assignable to parameter type "
+                             "'pointer' in call to 'printf'",
+                             sema::error::TYPE_MISMATCH,
+                             std::pair{3UZ, 36UZ}});
+    }
+
+    SECTION("Valid C va builtins type check successfully") {
+        helpers::type_check_and_verify(R"(
+            const f := fn(ap: ^mut opaque, dest: ^mut opaque): void {
+                @cVaStart(ap);
+                const val: i32 = @cVaArg(ap, i32);
+                @cVaCopy(dest, ap);
+                @cVaEnd(ap);
+            };
+        )");
+    }
 }
 
 } // namespace ghoti::tests

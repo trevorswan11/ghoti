@@ -85,6 +85,26 @@ TEST_CASE("Return statement type checking") {
             };
         )");
     }
+
+    SECTION("Unreachable expression in function body succeeds") {
+        helpers::type_check_and_verify(R"(
+            const f := fn(x: i32): i32 {
+                if (x > 0) {
+                    return x;
+                }
+                unreachable;
+            };
+        )");
+    }
+
+    SECTION("Unreachable assigned to typed variable succeeds") {
+        helpers::type_check_and_verify(R"(
+            const f := fn(): i32 {
+                const x: i32 = unreachable;
+                return x;
+            };
+        )");
+    }
 }
 
 } // namespace ghoti::tests

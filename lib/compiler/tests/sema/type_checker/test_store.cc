@@ -61,6 +61,18 @@ TEST_CASE("Type checker - store and assignment validation") {
                              sema::error::TYPE_MISMATCH,
                              std::pair{2UZ, 22UZ}});
     }
+
+    SECTION("Allocating opaque variable fails with ILLEGAL_OPAQUE_TYPE") {
+        helpers::test_checker_fail(
+            R"(
+            const f := fn(): void {
+                var x: opaque = undefined;
+            };
+        )",
+            sema::diagnostic{"Cannot allocate variable of opaque type",
+                             sema::error::ILLEGAL_OPAQUE_TYPE,
+                             std::pair{2UZ, 17UZ}});
+    }
 }
 
 } // namespace ghoti::tests
