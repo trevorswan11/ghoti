@@ -287,6 +287,9 @@ fn addArtifacts(b: *std.Build, config: struct {
     });
 
     // The compiler's implementation & static library
+    const llvm_includes = config.llvm.allIncludePaths();
+    const llvm_artifacts = config.llvm.allTargetArtifacts();
+
     const libcompiler = b.addLibrary(.{
         .name = "compiler",
         .root_module = stdx.utils.createModule(b, .{
@@ -304,6 +307,9 @@ fn addArtifacts(b: *std.Build, config: struct {
             },
         }),
     });
+    for (llvm_includes.includes) |inc| libcompiler.root_module.addSystemIncludePath(inc);
+    for (llvm_includes.config_headers) |header| libcompiler.root_module.addConfigHeader(header);
+    for (llvm_artifacts) |artifact| libcompiler.root_module.linkLibrary(artifact);
     if (config.auto_install) b.installArtifact(libcompiler);
     if (config.cdb_steps) |cdb_steps| cdb_steps.append(&libcompiler.step);
 
@@ -416,6 +422,9 @@ fn addArtifacts(b: *std.Build, config: struct {
                 },
             },
         });
+        for (llvm_includes.includes) |inc| compiler_tests.root_module.addSystemIncludePath(inc);
+        for (llvm_includes.config_headers) |header| compiler_tests.root_module.addConfigHeader(header);
+        for (llvm_artifacts) |artifact| compiler_tests.root_module.linkLibrary(artifact);
 
         const driver_tests = stdx.builders.strappedTest(b, .{
             .target = target,
