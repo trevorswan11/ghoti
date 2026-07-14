@@ -2,20 +2,12 @@
 
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
+#include <llvm/IR/DerivedTypes.h>
+#include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/Type.h>
 #include <stdx/utility.hh>
 
 #include "compiler/sema/type.hh"
-
-namespace llvm {
-
-class LLVMContext;
-class FunctionType;
-class Type;
-class StructType;
-class IntegerType;
-class PointerType;
-
-} // namespace llvm
 
 namespace ghoti::codegen {
 
