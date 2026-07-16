@@ -4,6 +4,7 @@
 #include <ostream>
 
 #include <stdx/arena.hh>
+#include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
@@ -15,6 +16,13 @@
 #include "compiler/sema/generic.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
+
+namespace llvm {
+
+class LLVMContext;
+class Module;
+
+} // namespace llvm
 
 namespace ghoti::gir { class module; } // namespace ghoti::gir
 
@@ -64,6 +72,8 @@ class analyzer {
     auto resolve_types(mod::module& module) -> mod::module_state;
     auto emit_gir(mod::module& module) -> gir::module;
     auto check_types(gir::module& gir_module, mod::module& ast_module) -> mod::module_state;
+    auto emit_llvm(gir::module& gir_module, llvm::LLVMContext& context)
+        -> stdx::result<stdx::box<llvm::Module>, diagnostic>;
 
   private:
     mod::module_manager&        modules_;

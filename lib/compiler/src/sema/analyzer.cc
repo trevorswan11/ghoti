@@ -1,11 +1,18 @@
 #include "compiler/sema/analyzer.hh"
 
 #include <filesystem>
+#include <string>
 #include <utility>
 
+#include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/Module.h>
+#include <llvm/IR/Verifier.h>
+#include <llvm/Support/raw_ostream.h>
+#include <stdx/memory.hh>
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
 
+#include "compiler/codegen/llvm_lowering.hh"
 #include "compiler/gir/emitter.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/module/module.hh"
@@ -66,6 +73,20 @@ auto analyzer::emit_gir(mod::module& module) -> gir::module {
 
 auto analyzer::check_types(gir::module& gir_module, mod::module& ast_module) -> mod::module_state {
     return type_checker::check_types(gir_module, ast_module, ctx_);
+}
+
+auto analyzer::emit_llvm(gir::module& gir_module, llvm::LLVMContext& context)
+    -> stdx::result<stdx::box<llvm::Module>, diagnostic> {
+    PROFILE_FUNCTION();
+    codegen::llvm_lowering lowering{context, gir_module.get_ast_module().path.string()};
+    auto                   llvm_mod{lowering.lower(gir_module)};
+
+    std::string              err_str;
+    llvm::raw_string_ostream os{err_str};
+    if (llvm::verifyModule(*llvm_mod, &os)) {
+        return make_sema_err(err_str, error::CODEGEN_VERIFICATION_FAILED);
+    }
+    return llvm_mod;
 }
 
 } // namespace ghoti::sema

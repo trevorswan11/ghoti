@@ -258,6 +258,11 @@ auto llvm_lowering::emit_load(const gir::instruction& inst) -> llvm::Value* {
         return nullptr;
     }
 
+    if (!ptr->getType()->isPointerTy()) {
+        if (inst.result) { set_local(*inst.result, ptr); }
+        return ptr;
+    }
+
     auto* loaded{builder_.CreateLoad(elem_ty, ptr, "loadtmp")};
     if (inst.result) { set_local(*inst.result, loaded); }
     return loaded;
@@ -267,12 +272,18 @@ auto llvm_lowering::emit_store(const gir::instruction& inst) -> void {
     if (inst.operands.size() >= 2) {
         auto* dest_ptr{lower_value(inst.operands[0])};
         auto* val{lower_value(inst.operands[1], inst.type ? &*inst.type : nullptr)};
-        if (!dest_ptr || !val || val->getType()->isVoidTy()) { return; }
+        if (!dest_ptr || !dest_ptr->getType()->isPointerTy() || !val ||
+            val->getType()->isVoidTy()) {
+            return;
+        }
         builder_.CreateStore(val, dest_ptr);
     } else if (inst.result && !inst.operands.empty()) {
         auto* dest_ptr{lower_value(gir::value{*inst.result})};
         auto* val{lower_value(inst.operands[0], inst.type ? &*inst.type : nullptr)};
-        if (!dest_ptr || !val || val->getType()->isVoidTy()) { return; }
+        if (!dest_ptr || !dest_ptr->getType()->isPointerTy() || !val ||
+            val->getType()->isVoidTy()) {
+            return;
+        }
         builder_.CreateStore(val, dest_ptr);
     }
 }
@@ -281,6 +292,19 @@ auto llvm_lowering::emit_get_element_ptr(const gir::instruction& inst) -> llvm::
     ASSERT(inst.operands.size() >= 2, "GEP requires base and at least one index");
     auto* base_ptr{lower_value(inst.operands[0])};
     ASSERT(base_ptr, "GEP base pointer must be non-null");
+
+    if (!base_ptr->getType()->isPointerTy()) {
+        std::vector<u32> extract_indices;
+        for (const auto& operand : inst.operands | std::views::drop(1)) {
+            auto* idx{lower_value(operand)};
+            if (auto* ci{llvm::dyn_cast_or_null<llvm::ConstantInt>(idx)}) {
+                extract_indices.push_back(static_cast<u32>(ci->getZExtValue()));
+            }
+        }
+        auto* extracted{builder_.CreateExtractValue(base_ptr, extract_indices, "extval")};
+        if (inst.result) { set_local(*inst.result, extracted); }
+        return extracted;
+    }
 
     llvm::Type*               source_elem_ty{nullptr};
     std::vector<llvm::Value*> indices;
@@ -572,14 +596,28 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
 auto llvm_lowering::emit_ret(const gir::instruction& inst) -> void {
     if (inst.operands.empty() || (inst.type && inst.type->get_kind() == sema::type_kind::VOID)) {
         builder_.CreateRetVoid();
-    } else {
-        auto* val{lower_value(inst.operands[0])};
-        if (!val || val->getType()->isVoidTy()) {
-            builder_.CreateRetVoid();
-        } else {
-            builder_.CreateRet(val);
+        return;
+    }
+
+    auto* val{lower_value(inst.operands[0])};
+    if (!val || val->getType()->isVoidTy()) {
+        builder_.CreateRetVoid();
+        return;
+    }
+
+    auto* fn{builder_.GetInsertBlock() ? builder_.GetInsertBlock()->getParent() : nullptr};
+    auto* ret_ty{fn ? fn->getReturnType()
+                    : (inst.type ? types_.translate(*inst.type) : val->getType())};
+
+    if (val->getType() != ret_ty) {
+        if (val->getType()->isPointerTy() && !ret_ty->isPointerTy()) {
+            val = builder_.CreateLoad(ret_ty, val, "retval");
+        } else if (val->getType()->isIntegerTy() && ret_ty->isIntegerTy()) {
+            val = builder_.CreateIntCast(val, ret_ty, is_signed_type(inst));
         }
     }
+
+    builder_.CreateRet(val);
 }
 
 auto llvm_lowering::emit_goto(const gir::instruction& inst) -> void {
