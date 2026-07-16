@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <concepts>
+#include <stdx/type_traits.hh>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -22,8 +23,9 @@
 namespace ghoti::tests::helpers {
 
 template <typename T>
-concept Unwrappable = stdx::Option<std::remove_cvref_t<T>> ||
-                      stdx::Result<std::remove_cvref_t<T>> || stdx::OptSize<std::remove_cvref_t<T>>;
+concept Unwrappable =
+    stdx::Option<std::remove_cvref_t<T>> || stdx::Result<std::remove_cvref_t<T>> ||
+    stdx::OptSize<std::remove_cvref_t<T>> || stdx::Pointer<std::remove_cvref_t<T>>;
 
 // Unpacks the value in the option or result and returns its value if present
 template <Unwrappable U>
