@@ -8,31 +8,12 @@
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 
-#include "compiler/gir/module.hh" // IWYU pragma: keep
 #include "compiler/sema/analyzer.hh"
-#include "compiler/sema/error.hh"
+#include "helpers/codegen.hh"
 #include "helpers/common.hh"
 #include "helpers/sema.hh"
 
 namespace ghoti::tests {
-
-namespace {
-
-auto emit_llvm(helpers::sema_test_context& test_ctx, llvm::LLVMContext& context)
-    -> stdx::result<stdx::box<llvm::Module>, sema::diagnostic> {
-    if (test_ctx.root_mod.is_poisoned()) {
-        return make_sema_err("Module is poisoned", sema::error::MODULE_LOAD_ERROR);
-    }
-
-    auto gir_mod{test_ctx.analyzer.emit_gir(test_ctx.root_mod)};
-    if (test_ctx.root_mod.is_poisoned()) {
-        return make_sema_err("Module is poisoned during GIR emission",
-                             sema::error::MODULE_LOAD_ERROR);
-    }
-    return test_ctx.analyzer.emit_llvm(gir_mod, context);
-}
-
-} // namespace
 
 TEST_CASE("E2E LLVM Emission: Arithmetic, Loops and Multi-Function Calls") {
     llvm::LLVMContext context;
@@ -53,7 +34,7 @@ TEST_CASE("E2E LLVM Emission: Arithmetic, Loops and Multi-Function Calls") {
         };
     )")};
 
-    auto llvm_mod{UNWRAP(emit_llvm(*ctx, context))};
+    auto llvm_mod{UNWRAP(helpers::emit_llvm(*ctx, context))};
     CHECK_FALSE(llvm::verifyModule(*llvm_mod));
 
     auto& fn_add{UNWRAP(llvm_mod->getFunction("add"))};
@@ -86,7 +67,7 @@ TEST_CASE("E2E LLVM Emission: Struct Operations and Nested Aggregates") {
         };
     )")};
 
-    auto llvm_mod{UNWRAP(emit_llvm(*ctx, context))};
+    auto llvm_mod{UNWRAP(helpers::emit_llvm(*ctx, context))};
     CHECK_FALSE(llvm::verifyModule(*llvm_mod));
     CHECK(llvm_mod->getFunction("add_vectors"));
     CHECK(llvm_mod->getFunction("dot_product"));
@@ -114,10 +95,10 @@ TEST_CASE("E2E LLVM Emission: Array Manipulation, Mutation & Pointers") {
         };
     )")};
 
-    auto llvm_mod{UNWRAP(emit_llvm(*ctx, context))};
+    auto llvm_mod{UNWRAP(helpers::emit_llvm(*ctx, context))};
     CHECK_FALSE(llvm::verifyModule(*llvm_mod));
-    CHECK(llvm_mod->getFunction("swap") != nullptr);
-    CHECK(llvm_mod->getFunction("sum_array") != nullptr);
+    CHECK(llvm_mod->getFunction("swap"));
+    CHECK(llvm_mod->getFunction("sum_array"));
 }
 
 } // namespace ghoti::tests

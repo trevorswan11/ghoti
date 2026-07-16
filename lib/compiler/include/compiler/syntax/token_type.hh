@@ -2,7 +2,6 @@
 
 #include <array>
 #include <cstddef>
-#include <functional>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -341,18 +340,6 @@ template <std::size_t I>
     } else if constexpr (I == 1) {
         return typed.type;
     }
-}
-
-template <usize Size>
-using typed_ident_map_t =
-    stdx::fixed::hash_map<std::string_view, token_type_t, Size, stdx::crc::hash, std::equal_to<>>;
-
-template <typename... Entries>
-[[nodiscard]] constexpr auto make_typed_ident_map(Entries&&... entries) {
-    typed_ident_map_t<sizeof...(Entries)> map;
-    using std::get;
-    (map.emplace(get<0>(entries), get<1>(entries)), ...);
-    return map;
 }
 
 } // namespace ghoti::syntax

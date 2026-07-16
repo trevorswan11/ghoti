@@ -7,6 +7,7 @@
 
 #include <stdx/assert.hh>
 #include <stdx/fixed/vector.hh>
+#include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
@@ -22,13 +23,13 @@ namespace ghoti::ast {
 
 namespace {
 
-// A global buffer for storing underscore-cleaned numeric tokens for `std::from_chars`
-constinit stdx::fixed::vector<char, 1'024> numeric_buffer;
-
 // Parses the requested value from the string, asserting the from_chars result if requested
 template <typename ValueType>
 [[nodiscard]] auto parse_primitive_value(std::string_view slice, syntax::token_type_t type) noexcept
     -> stdx::option<ValueType> {
+    using namespace stdx::size_literals;
+    static thread_local stdx::fixed::vector<char, 1_KiB> numeric_buffer;
+
     const auto base{syntax::token_type::to_base(type)};
     {
         // This is narrowly scoped to allow the first and last pointer names to be reused

@@ -12,7 +12,9 @@
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
+#include <string>
 
+#include "compiler/codegen/opt_level.hh"
 #include "driver/clap/formatter.hh"
 #include "driver/cmd/debug.hh"
 #include "ghoti/config.h"
@@ -33,6 +35,13 @@ auto parser::parse() -> stdx::result<void, i32> {
     app_.usage("Usage: ghoti [command] [options]");
     app_.set_version_flag("-v,--version",
                           fmt::format("ghoti v{} ({})", GHOTI_VERSION_STR, GHOTI_GIT_INFO));
+    std::string opt_level_str;
+    app_.add_option("-O,--opt-level", opt_level_str, "Optimization level (0, 1, 2, 3, s, z)");
+    app_.add_flag("--release", is_release_, "Build in release mode (defaults to -O2)");
+    app_.add_flag("--debug-passes",
+                  opt_options_.debug_logging,
+                  "Enable debug logging and IR printing after passes");
+    app_.add_flag("--time-passes", opt_options_.time_passes, "Enable pass execution timing report");
     app_.require_subcommand(1);
 
     const auto* ast_app{app_.add_subcommand("debug", "Run the CLI interactive debugger")};
@@ -48,6 +57,21 @@ auto parser::parse() -> stdx::result<void, i32> {
     try {
         app_.parse(argc_, argv_);
     } catch (const CLI::ParseError& e) { return stdx::err{app_.exit(e)}; };
+
+    if (!opt_level_str.empty()) {
+        if (auto level{codegen::parse_opt_level(opt_level_str)}) {
+            opt_options_.level = *level;
+        } else {
+            os_ << fmt::format(style::RED_BOLD, "error");
+            fmt::println(os_, ": invalid optimization level '{}'", opt_level_str);
+            return stdx::err{1};
+        }
+    } else if (is_release_) {
+        opt_options_.level = codegen::opt_level::O2;
+    } else {
+        opt_options_.level = codegen::opt_level::O0;
+    }
+
     if (ast_app->parsed()) { parsed_.emplace<cmd::debug>(); }
 
     return {};

@@ -24,9 +24,12 @@ class Module;
 
 } // namespace llvm
 
-namespace ghoti::gir { class module; } // namespace ghoti::gir
+namespace ghoti {
 
-namespace ghoti::sema {
+namespace gir { class module; }                 // namespace gir
+namespace codegen { struct optimizer_options; } // namespace codegen
+
+namespace sema {
 
 // The manager for all steps of semantic analysis.
 class analyzer {
@@ -72,8 +75,14 @@ class analyzer {
     auto resolve_types(mod::module& module) -> mod::module_state;
     auto emit_gir(mod::module& module) -> gir::module;
     auto check_types(gir::module& gir_module, mod::module& ast_module) -> mod::module_state;
-    auto emit_llvm(gir::module& gir_module, llvm::LLVMContext& context)
+    auto emit_llvm(gir::module&                      gir_module,
+                   llvm::LLVMContext&                context,
+                   const codegen::optimizer_options& options)
         -> stdx::result<stdx::box<llvm::Module>, diagnostic>;
+
+  private:
+    auto optimize_llvm(llvm::Module& module, const codegen::optimizer_options& options)
+        -> stdx::result<void, diagnostic>;
 
   private:
     mod::module_manager&        modules_;
@@ -88,4 +97,6 @@ class analyzer {
     context ctx_;
 };
 
-} // namespace ghoti::sema
+} // namespace sema
+
+} // namespace ghoti

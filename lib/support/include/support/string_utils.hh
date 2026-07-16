@@ -1,6 +1,9 @@
 #pragma once
 
 #include <array>
+#include <functional>
+#include <stdx/fixed/hash_table.hh>
+#include <stdx/hash.hh>
 #include <string_view>
 
 #include <stdx/assert.hh>
@@ -24,5 +27,17 @@ template <usize MaxLen = 32> struct lowercase_str {
     }
     [[nodiscard]] constexpr operator std::string_view() const noexcept { return view(); }
 };
+
+template <typename Value, usize Size>
+using constexpr_map_t =
+    stdx::fixed::hash_map<std::string_view, Value, Size, stdx::crc::hash, std::equal_to<>>;
+
+template <typename Value, typename... Entries>
+[[nodiscard]] constexpr auto make_constexpr_map(Entries&&... entries) {
+    constexpr_map_t<Value, sizeof...(Entries)> map;
+    using std::get;
+    (map.emplace(get<0>(entries), get<1>(entries)), ...);
+    return map;
+}
 
 } // namespace ghoti::string_utils

@@ -13,6 +13,8 @@
 #include <stdx/result.hh>
 
 #include "compiler/codegen/llvm_lowering.hh"
+#include "compiler/codegen/llvm_optimizer.hh"
+#include "compiler/codegen/opt_level.hh"
 #include "compiler/gir/emitter.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/module/module.hh"
@@ -75,7 +77,9 @@ auto analyzer::check_types(gir::module& gir_module, mod::module& ast_module) -> 
     return type_checker::check_types(gir_module, ast_module, ctx_);
 }
 
-auto analyzer::emit_llvm(gir::module& gir_module, llvm::LLVMContext& context)
+auto analyzer::emit_llvm(gir::module&                      gir_module,
+                         llvm::LLVMContext&                context,
+                         const codegen::optimizer_options& options)
     -> stdx::result<stdx::box<llvm::Module>, diagnostic> {
     PROFILE_FUNCTION();
     codegen::llvm_lowering lowering{context, gir_module.get_ast_module().path.string()};
@@ -86,6 +90,12 @@ auto analyzer::emit_llvm(gir::module& gir_module, llvm::LLVMContext& context)
     if (llvm::verifyModule(*llvm_mod, &os)) {
         return make_sema_err(err_str, error::CODEGEN_VERIFICATION_FAILED);
     }
+
+    if (options.level != codegen::opt_level::O0 || options.debug_logging || options.time_passes) {
+        codegen::llvm_optimizer optimizer{llvm_mod->getContext()};
+        TRY(optimizer.optimize(*llvm_mod, options));
+    }
+
     return llvm_mod;
 }
 
