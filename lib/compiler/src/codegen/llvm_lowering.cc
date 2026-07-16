@@ -1,5 +1,6 @@
 #include "compiler/codegen/llvm_lowering.hh"
 
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -291,7 +292,7 @@ auto llvm_lowering::emit_get_element_ptr(const gir::instruction& inst) -> llvm::
         case sema::type_kind::UNION:
             source_elem_ty = types_.translate(base_type);
             indices.emplace_back(builder_.getInt32(0));
-            for (const auto& operand : inst.operands) {
+            for (const auto& operand : inst.operands | std::views::drop(1)) {
                 auto* idx{lower_value(operand)};
                 if (idx && idx->getType()->isIntegerTy(64)) {
                     idx = builder_.CreateIntCast(idx, types_.get_int32_ty(), false);
@@ -302,14 +303,14 @@ auto llvm_lowering::emit_get_element_ptr(const gir::instruction& inst) -> llvm::
         case sema::type_kind::ARRAY:
             source_elem_ty = types_.translate(base_type);
             indices.emplace_back(builder_.getInt64(0));
-            for (const auto& operand : inst.operands) {
+            for (const auto& operand : inst.operands | std::views::drop(1)) {
                 indices.emplace_back(lower_value(operand));
             }
             break;
         case sema::type_kind::SLICE:
             source_elem_ty = types_.translate_slice_type();
             indices.emplace_back(builder_.getInt32(0));
-            for (const auto& operand : inst.operands) {
+            for (const auto& operand : inst.operands | std::views::drop(1)) {
                 auto* idx{lower_value(operand)};
                 if (idx && idx->getType()->isIntegerTy(64)) {
                     idx = builder_.CreateIntCast(idx, types_.get_int32_ty(), false);
@@ -324,7 +325,7 @@ auto llvm_lowering::emit_get_element_ptr(const gir::instruction& inst) -> llvm::
                 source_elem_ty = types_.get_int8_ty();
             }
 
-            for (const auto& operand : inst.operands) {
+            for (const auto& operand : inst.operands | std::views::drop(1)) {
                 indices.emplace_back(lower_value(operand));
             }
             break;
@@ -336,7 +337,7 @@ auto llvm_lowering::emit_get_element_ptr(const gir::instruction& inst) -> llvm::
                 source_elem_ty = types_.get_int8_ty();
             }
 
-            for (const auto& operand : inst.operands) {
+            for (const auto& operand : inst.operands | std::views::drop(1)) {
                 indices.emplace_back(lower_value(operand));
             }
             break;
@@ -348,17 +349,21 @@ auto llvm_lowering::emit_get_element_ptr(const gir::instruction& inst) -> llvm::
                 source_elem_ty = types_.get_int8_ty();
             }
 
-            for (const auto& operand : inst.operands) {
+            for (const auto& operand : inst.operands | std::views::drop(1)) {
                 indices.emplace_back(lower_value(operand));
             }
             break;
         }
     } else if (inst.type) {
         source_elem_ty = types_.translate(*inst.type);
-        for (const auto& operand : inst.operands) { indices.emplace_back(lower_value(operand)); }
+        for (const auto& operand : inst.operands | std::views::drop(1)) {
+            indices.emplace_back(lower_value(operand));
+        }
     } else {
         source_elem_ty = types_.get_int8_ty();
-        for (const auto& operand : inst.operands) { indices.emplace_back(lower_value(operand)); }
+        for (const auto& operand : inst.operands | std::views::drop(1)) {
+            indices.emplace_back(lower_value(operand));
+        }
     }
 
     auto* gep{builder_.CreateInBoundsGEP(source_elem_ty, base_ptr, indices, "geptmp")};
