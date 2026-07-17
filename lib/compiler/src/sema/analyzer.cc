@@ -16,6 +16,7 @@
 #include "compiler/codegen/llvm_lowering.hh"
 #include "compiler/codegen/llvm_optimizer.hh"
 #include "compiler/codegen/opt_level.hh"
+#include "compiler/codegen/target.hh"
 #include "compiler/gir/emitter.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/module/module.hh"
@@ -78,13 +79,18 @@ auto analyzer::check_types(gir::module& gir_module, mod::module& ast_module) -> 
     return type_checker::check_types(gir_module, ast_module, ctx_);
 }
 
-auto analyzer::emit_llvm(gir::module&                      gir_module,
+auto analyzer::emit_llvm_ir(gir::module&                      gir_module,
                          llvm::LLVMContext&                context,
                          const codegen::optimizer_options& options)
     -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic> {
     PROFILE_FUNCTION();
     codegen::llvm_lowering lowering{context, gir_module.get_ast_module().path.string()};
     auto                   llvm_mod{lowering.lower(gir_module)};
+
+    if (options.target_machine) {
+        llvm_mod->setDataLayout(options.target_machine->createDataLayout());
+        llvm_mod->setTargetTriple(options.target_machine->getTargetTriple());
+    }
 
     std::string              err_str;
     llvm::raw_string_ostream os{err_str};
@@ -98,6 +104,25 @@ auto analyzer::emit_llvm(gir::module&                      gir_module,
     }
 
     return llvm_mod;
+}
+
+auto analyzer::emit_object(gir::module&                      gir_module,
+                           llvm::LLVMContext&                context,
+                           const codegen::target_options&    target_opts,
+                           const codegen::optimizer_options& opt_options,
+                           const std::filesystem::path&      output_path)
+    -> stdx::result<void, codegen::diagnostic> {
+    PROFILE_FUNCTION();
+    auto target_machine{TRY(codegen::create_target_machine(target_opts))};
+
+    codegen::optimizer_options opts{opt_options};
+    opts.target_machine = target_machine.get();
+    if (opts.level == codegen::opt_level::O0 && target_opts.level != codegen::opt_level::O0) {
+        opts.level = target_opts.level;
+    }
+
+    auto llvm_mod{TRY(emit_llvm_ir(gir_module, context, opts))};
+    return codegen::emit_object_file(*llvm_mod, *target_machine, output_path);
 }
 
 } // namespace ghoti::sema

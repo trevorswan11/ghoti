@@ -27,8 +27,14 @@ class Module;
 
 namespace ghoti {
 
-namespace gir { class module; }                 // namespace gir
-namespace codegen { struct optimizer_options; } // namespace codegen
+namespace gir { class module; } // namespace gir
+
+namespace codegen {
+
+struct optimizer_options;
+struct target_options;
+
+} // namespace codegen
 
 namespace sema {
 
@@ -76,10 +82,16 @@ class analyzer {
     auto resolve_types(mod::module& module) -> mod::module_state;
     auto emit_gir(mod::module& module) -> gir::module;
     auto check_types(gir::module& gir_module, mod::module& ast_module) -> mod::module_state;
-    auto emit_llvm(gir::module&                      gir_module,
+    auto emit_llvm_ir(gir::module&                      gir_module,
                    llvm::LLVMContext&                context,
                    const codegen::optimizer_options& options)
         -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic>;
+    auto emit_object(gir::module&                      gir_module,
+                     llvm::LLVMContext&                context,
+                     const codegen::target_options&    target_opts,
+                     const codegen::optimizer_options& opt_options,
+                     const std::filesystem::path&      output_path)
+        -> stdx::result<void, codegen::diagnostic>;
 
   private:
     auto optimize_llvm(llvm::Module& module, const codegen::optimizer_options& options)
