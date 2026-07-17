@@ -10,8 +10,8 @@
 
 #include "compiler/sema/analyzer.hh"
 #include "helpers/codegen.hh"
-#include "helpers/common.hh"
 #include "helpers/sema.hh"
+#include "support/test.hh"
 
 namespace ghoti::tests {
 

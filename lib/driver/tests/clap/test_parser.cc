@@ -8,6 +8,7 @@
 #include "driver/clap/parser.hh"
 #include "driver/cmd/debug.hh"
 #include "helpers/argv.hh"
+#include "support/test.hh"
 
 namespace ghoti::tests {
 
@@ -15,9 +16,7 @@ TEST_CASE("Error with no args") {
     auto               args{helpers::mock_argv{"ghoti"}};
     std::ostringstream error_ss;
     clap::parser       parser{args.argc(), args.argv(), error_ss, false};
-    const auto         result{parser.parse()};
-    REQUIRE_FALSE(result);
-    CHECK(result.error() == 1);
+    CHECK(UNWRAP_ERR(parser.parse()) == 1);
     CHECK_FALSE(error_ss.view().empty());
 }
 
@@ -71,9 +70,7 @@ TEST_CASE("Optimization flag parser") {
         auto               args{helpers::mock_argv{"ghoti", "-Oinvalid", "debug"}};
         std::ostringstream error_ss;
         clap::parser       parser{args.argc(), args.argv(), error_ss, false};
-        const auto         result{parser.parse()};
-        REQUIRE_FALSE(result);
-        CHECK(result.error() == 1);
+        CHECK(UNWRAP_ERR(parser.parse()) == 1);
         CHECK_FALSE(error_ss.view().empty());
     }
 }

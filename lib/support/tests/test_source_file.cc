@@ -8,6 +8,7 @@
 
 #include "support/diagnostic.hh"
 #include "support/source_file.hh"
+#include "support/test.hh"
 
 namespace ghoti::tests {
 
@@ -29,8 +30,7 @@ auto test_diag_strings(const source_location&         t,
 
     CHECK(ln == expected_line);
     if (expected_caret) {
-        REQUIRE(caret);
-        CHECK(*caret == *expected_caret);
+        CHECK(UNWRAP(caret) == *expected_caret);
     } else {
         CHECK_FALSE(caret);
     }
