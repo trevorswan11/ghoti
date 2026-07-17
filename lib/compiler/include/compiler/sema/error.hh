@@ -48,7 +48,6 @@ enum class error : u8 {
     RETURN_TYPE_MISMATCH,
     AUTO_RETURN_TYPE_CONFLICT,
     ILLEGAL_OPAQUE_TYPE,
-    CODEGEN_VERIFICATION_FAILED,
 };
 
 using diagnostic  = diagnostic<error>;

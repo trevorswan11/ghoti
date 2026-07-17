@@ -18,8 +18,8 @@
 #include <stdx/result.hh>
 #include <string_view>
 
+#include "compiler/codegen/error.hh"
 #include "compiler/codegen/opt_level.hh"
-#include "compiler/sema/error.hh"
 
 namespace ghoti::codegen {
 
@@ -39,13 +39,13 @@ namespace {
 }
 
 [[nodiscard]] auto verify_mod(llvm::Module& module, std::string_view phase)
-    -> stdx::result<void, sema::diagnostic> {
+    -> stdx::result<void, diagnostic> {
     std::string              err_str;
     llvm::raw_string_ostream os{err_str};
     if (llvm::verifyModule(module, &os)) {
-        return sema::make_sema_err(
+        return make_codegen_err(
             fmt::format("{}-optimization module verification failed: {}", phase, err_str),
-            sema::error::CODEGEN_VERIFICATION_FAILED);
+            error::VERIFICATION_FAILED);
     }
     return {};
 }
@@ -53,7 +53,7 @@ namespace {
 } // namespace
 
 auto llvm_optimizer::optimize(llvm::Module& module, const optimizer_options& options)
-    -> stdx::result<void, sema::diagnostic> {
+    -> stdx::result<void, diagnostic> {
     PROFILE_FUNCTION();
 
     if (options.verify_each) { TRY(verify_mod(module, "Pre")); }

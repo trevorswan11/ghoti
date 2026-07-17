@@ -4,9 +4,9 @@
 #include <stdx/result.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/codegen/error.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/sema/analyzer.hh"
-#include "compiler/sema/error.hh"
 #include "helpers/sema.hh"
 
 namespace ghoti::tests::helpers {
@@ -20,6 +20,6 @@ struct llvm_test_scope {
 auto emit_llvm(helpers::sema_test_context&       test_ctx,
                llvm::LLVMContext&                context,
                const codegen::optimizer_options& options = {})
-    -> stdx::result<stdx::box<llvm::Module>, sema::diagnostic>;
+    -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic>;
 
 } // namespace ghoti::tests::helpers

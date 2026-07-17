@@ -12,6 +12,7 @@
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
 
+#include "compiler/codegen/error.hh"
 #include "compiler/codegen/llvm_lowering.hh"
 #include "compiler/codegen/llvm_optimizer.hh"
 #include "compiler/codegen/opt_level.hh"
@@ -80,7 +81,7 @@ auto analyzer::check_types(gir::module& gir_module, mod::module& ast_module) -> 
 auto analyzer::emit_llvm(gir::module&                      gir_module,
                          llvm::LLVMContext&                context,
                          const codegen::optimizer_options& options)
-    -> stdx::result<stdx::box<llvm::Module>, diagnostic> {
+    -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic> {
     PROFILE_FUNCTION();
     codegen::llvm_lowering lowering{context, gir_module.get_ast_module().path.string()};
     auto                   llvm_mod{lowering.lower(gir_module)};
@@ -88,7 +89,7 @@ auto analyzer::emit_llvm(gir::module&                      gir_module,
     std::string              err_str;
     llvm::raw_string_ostream os{err_str};
     if (llvm::verifyModule(*llvm_mod, &os)) {
-        return make_sema_err(err_str, error::CODEGEN_VERIFICATION_FAILED);
+        return codegen::make_codegen_err(err_str, codegen::error::VERIFICATION_FAILED);
     }
 
     if (options.level != codegen::opt_level::O0 || options.debug_logging || options.time_passes) {

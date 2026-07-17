@@ -8,8 +8,8 @@
 #include <stdx/result.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/codegen/error.hh"
 #include "compiler/codegen/opt_level.hh"
-#include "compiler/sema/error.hh"
 
 namespace ghoti::codegen {
 
@@ -20,7 +20,7 @@ class llvm_optimizer {
     MAKE_PINNED(llvm_optimizer);
 
     auto optimize(llvm::Module& module, const optimizer_options& options)
-        -> stdx::result<void, sema::diagnostic>;
+        -> stdx::result<void, diagnostic>;
 
   private:
     llvm::LLVMContext& context_;

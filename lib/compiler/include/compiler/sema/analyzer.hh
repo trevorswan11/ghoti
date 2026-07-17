@@ -10,6 +10,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/codegen/error.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
@@ -78,11 +79,11 @@ class analyzer {
     auto emit_llvm(gir::module&                      gir_module,
                    llvm::LLVMContext&                context,
                    const codegen::optimizer_options& options)
-        -> stdx::result<stdx::box<llvm::Module>, diagnostic>;
+        -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic>;
 
   private:
     auto optimize_llvm(llvm::Module& module, const codegen::optimizer_options& options)
-        -> stdx::result<void, diagnostic>;
+        -> stdx::result<void, codegen::diagnostic>;
 
   private:
     mod::module_manager&        modules_;
