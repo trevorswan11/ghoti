@@ -34,7 +34,7 @@ TEST_CASE("E2E LLVM Emission: Arithmetic, Loops and Multi-Function Calls") {
         };
     )")};
 
-    auto llvm_mod{UNWRAP(helpers::emit_llvm(*ctx, context))};
+    auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
     CHECK_FALSE(llvm::verifyModule(*llvm_mod));
 
     auto& fn_add{UNWRAP(llvm_mod->getFunction("add"))};
@@ -67,7 +67,7 @@ TEST_CASE("E2E LLVM Emission: Struct Operations and Nested Aggregates") {
         };
     )")};
 
-    auto llvm_mod{UNWRAP(helpers::emit_llvm(*ctx, context))};
+    auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
     CHECK_FALSE(llvm::verifyModule(*llvm_mod));
     CHECK(llvm_mod->getFunction("add_vectors"));
     CHECK(llvm_mod->getFunction("dot_product"));
@@ -95,7 +95,7 @@ TEST_CASE("E2E LLVM Emission: Array Manipulation, Mutation & Pointers") {
         };
     )")};
 
-    auto llvm_mod{UNWRAP(helpers::emit_llvm(*ctx, context))};
+    auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
     CHECK_FALSE(llvm::verifyModule(*llvm_mod));
     CHECK(llvm_mod->getFunction("swap"));
     CHECK(llvm_mod->getFunction("sum_array"));

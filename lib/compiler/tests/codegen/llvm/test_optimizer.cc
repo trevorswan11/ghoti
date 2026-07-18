@@ -44,7 +44,7 @@ TEST_CASE("Optimizer over non trivial function at all levels") {
                 .verify_each = true,
             };
 
-            auto llvm_mod{UNWRAP(helpers::emit_llvm(*ctx, context, options))};
+            auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context, options))};
             CHECK_FALSE(llvm::verifyModule(*llvm_mod));
             auto& fn{UNWRAP(llvm_mod->getFunction("calc"))};
             CHECK_FALSE(fn.empty());
@@ -66,7 +66,7 @@ TEST_CASE("Optimizing, folding, and propagating constants") {
 
     SECTION("O0 preserves instructions") {
         codegen::optimizer_options options{.level = codegen::opt_level::O0};
-        auto                       llvm_mod{UNWRAP(helpers::emit_llvm(*ctx, context, options))};
+        auto                       llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context, options))};
         CHECK_FALSE(llvm::verifyModule(*llvm_mod));
 
         // At O0, there should be multiple instructions (alloca, stores, loads, binary ops)
@@ -78,7 +78,7 @@ TEST_CASE("Optimizing, folding, and propagating constants") {
 
     SECTION("O2 folds to constant 42") {
         codegen::optimizer_options options{.level = codegen::opt_level::O2};
-        auto                       llvm_mod{UNWRAP(helpers::emit_llvm(*ctx, context, options))};
+        auto                       llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context, options))};
         CHECK_FALSE(llvm::verifyModule(*llvm_mod));
 
         auto& fn{UNWRAP(llvm_mod->getFunction("fold_me"))};
@@ -105,7 +105,7 @@ TEST_CASE("Mem2Reg and Alloca elimination") {
 
     SECTION("O0 has allocas") {
         codegen::optimizer_options options{.level = codegen::opt_level::O0};
-        auto                       llvm_mod{UNWRAP(helpers::emit_llvm(*ctx, context, options))};
+        auto                       llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context, options))};
         auto&                      fn{UNWRAP(llvm_mod->getFunction("add_vars"))};
 
         usize alloca_count{0};
@@ -119,7 +119,7 @@ TEST_CASE("Mem2Reg and Alloca elimination") {
 
     SECTION("O2 eliminates all allocas") {
         codegen::optimizer_options options{.level = codegen::opt_level::O2};
-        auto                       llvm_mod{UNWRAP(helpers::emit_llvm(*ctx, context, options))};
+        auto                       llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context, options))};
         auto&                      fn{UNWRAP(llvm_mod->getFunction("add_vars"))};
 
         usize alloca_count{0};
@@ -144,7 +144,7 @@ TEST_CASE("Dead code elimination") {
     )")};
 
     codegen::optimizer_options options{.level = codegen::opt_level::O2};
-    auto                       llvm_mod{UNWRAP(helpers::emit_llvm(*ctx, context, options))};
+    auto                       llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context, options))};
     auto&                      fn{UNWRAP(llvm_mod->getFunction("dead_calc"))};
 
     // In O2, unused computation is eliminated and function simply returns parameter 'a'
@@ -169,7 +169,7 @@ TEST_CASE("Function inlining") {
 
     SECTION("O0 contains call to helper") {
         codegen::optimizer_options options{.level = codegen::opt_level::O0};
-        auto                       llvm_mod{UNWRAP(helpers::emit_llvm(*ctx, context, options))};
+        auto                       llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context, options))};
         auto&                      fn{UNWRAP(llvm_mod->getFunction("caller"))};
 
         bool has_call{false};
@@ -183,7 +183,7 @@ TEST_CASE("Function inlining") {
 
     SECTION("O2 inlines helper into caller") {
         codegen::optimizer_options options{.level = codegen::opt_level::O2};
-        auto                       llvm_mod{UNWRAP(helpers::emit_llvm(*ctx, context, options))};
+        auto                       llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context, options))};
         auto&                      fn{UNWRAP(llvm_mod->getFunction("caller"))};
 
         bool has_call{false};
@@ -213,7 +213,7 @@ TEST_CASE("Optimizer with debug and timing flags") {
         .time_passes   = true,
     };
 
-    auto result{UNWRAP(helpers::emit_llvm(*ctx, context, options))};
+    auto result{UNWRAP(helpers::emit_llvm_ir(*ctx, context, options))};
     CHECK_FALSE(llvm::verifyModule(*result));
 }
 
