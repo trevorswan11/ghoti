@@ -1,6 +1,5 @@
 #include "driver/launch.hh"
 
-#include <stdx/profiler.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
@@ -9,8 +8,7 @@
 namespace ghoti::driver {
 
 auto launch(i32 argc, char** argv) -> i32 {
-    stdx::profiler profiler{argv[0]};
-    clap::parser   parser{argc, argv};
+    clap::parser parser{argc, argv};
 
     const auto command{parser.parse().transform_error([](auto e) { return static_cast<i32>(e); })};
     if (command) {

@@ -21,8 +21,8 @@ struct llvm_test_scope {
 };
 
 auto emit_llvm_ir(helpers::sema_test_context&       test_ctx,
-               llvm::LLVMContext&                context,
-               const codegen::optimizer_options& options = {})
+                  llvm::LLVMContext&                context,
+                  const codegen::optimizer_options& options = {})
     -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic>;
 
 auto emit_object(helpers::sema_test_context&       test_ctx,

@@ -1,4 +1,9 @@
-#include "driver/launch.hh"
+#include <stdx/profiler.hh>
 #include <stdx/types.hh>
 
-auto main(i32 argc, char** argv) -> i32 { return ghoti::driver::launch(argc, argv); }
+#include "driver/launch.hh"
+
+auto main(i32 argc, char** argv) -> i32 {
+    stdx::profiler profiler{argv[0]};
+    return ghoti::driver::launch(argc, argv);
+}

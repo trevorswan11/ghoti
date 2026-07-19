@@ -80,8 +80,8 @@ llvm_global_target_init llvm_target_init_;
 llvm_test_scope::~llvm_test_scope() { llvm::llvm_shutdown(); }
 
 auto emit_llvm_ir(helpers::sema_test_context&       test_ctx,
-               llvm::LLVMContext&                context,
-               const codegen::optimizer_options& options)
+                  llvm::LLVMContext&                context,
+                  const codegen::optimizer_options& options)
     -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic> {
     if (test_ctx.root_mod.is_poisoned()) {
         return codegen::make_codegen_err("Module is poisoned", codegen::error::MODULE_LOAD_ERROR);

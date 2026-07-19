@@ -5,12 +5,12 @@
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
-#include "driver/cmd/command.hh"
 #include "driver/clap/error.hh"
+#include "driver/cmd/command.hh"
 
 namespace ghoti::cmd {
 
-class debug final : public command {
+class repl final : public command {
   public:
     auto execute() -> stdx::result<void, clap::error> override;
 

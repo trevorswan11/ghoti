@@ -80,8 +80,8 @@ auto analyzer::check_types(gir::module& gir_module, mod::module& ast_module) -> 
 }
 
 auto analyzer::emit_llvm_ir(gir::module&                      gir_module,
-                         llvm::LLVMContext&                context,
-                         const codegen::optimizer_options& options)
+                            llvm::LLVMContext&                context,
+                            const codegen::optimizer_options& options)
     -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic> {
     PROFILE_FUNCTION();
     codegen::llvm_lowering lowering{context, gir_module.get_ast_module().path.string()};

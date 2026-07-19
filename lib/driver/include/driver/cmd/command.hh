@@ -9,7 +9,7 @@ namespace ghoti::cmd {
 
 class command {
   public:
-    virtual ~command()                                = default;
+    virtual ~command()                                                      = default;
     [[nodiscard]] virtual auto execute() -> stdx::result<void, clap::error> = 0;
 };
 

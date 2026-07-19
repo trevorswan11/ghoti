@@ -83,8 +83,8 @@ class analyzer {
     auto emit_gir(mod::module& module) -> gir::module;
     auto check_types(gir::module& gir_module, mod::module& ast_module) -> mod::module_state;
     auto emit_llvm_ir(gir::module&                      gir_module,
-                   llvm::LLVMContext&                context,
-                   const codegen::optimizer_options& options)
+                      llvm::LLVMContext&                context,
+                      const codegen::optimizer_options& options)
         -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic>;
     auto emit_object(gir::module&                      gir_module,
                      llvm::LLVMContext&                context,

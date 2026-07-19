@@ -1,4 +1,4 @@
-#include "driver/cmd/debug.hh"
+#include "driver/cmd/repl.hh"
 
 #include <filesystem>
 #include <iostream>
@@ -22,7 +22,7 @@
 
 namespace ghoti::cmd {
 
-auto debug::execute() -> stdx::result<void, clap::error> {
+auto repl::execute() -> stdx::result<void, clap::error> {
     PROFILE_FUNCTION();
     const std::filesystem::path stdin_path = "stdin.gh";
     while (true) {
