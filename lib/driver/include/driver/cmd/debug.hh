@@ -2,11 +2,17 @@
 
 #include <string>
 
+#include <stdx/result.hh>
+#include <stdx/types.hh>
+
+#include "driver/cmd/command.hh"
+#include "driver/clap/error.hh"
+
 namespace ghoti::cmd {
 
-class debug {
+class debug final : public command {
   public:
-    auto run() -> void;
+    auto execute() -> stdx::result<void, clap::error> override;
 
   private:
     std::string line_;

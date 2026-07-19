@@ -5,17 +5,19 @@
 #include <stdx/types.hh>
 
 #include "driver/clap/parser.hh"
-#include "driver/cmd/dispatcher.hh"
 
 namespace ghoti::driver {
 
-auto launch(i32 argc, char** argv) -> stdx::result<void, i32> {
+auto launch(i32 argc, char** argv) -> i32 {
     stdx::profiler profiler{argv[0]};
     clap::parser   parser{argc, argv};
-    TRY(parser.parse());
 
-    cmd::dispatcher dispatcher;
-    return parser.get_parsed().visit(dispatcher).error_or(0);
+    const auto command{parser.parse().transform_error([](auto e) { return static_cast<i32>(e); })};
+    if (command) {
+        const auto exec_res{(*command)->execute()};
+        return exec_res ? 0 : static_cast<i32>(exec_res.error());
+    }
+    return command.error();
 }
 
 } // namespace ghoti::driver

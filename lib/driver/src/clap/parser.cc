@@ -15,7 +15,9 @@
 #include <string>
 
 #include "compiler/codegen/opt_level.hh"
+#include "driver/clap/error.hh"
 #include "driver/clap/formatter.hh"
+#include "driver/cmd/command.hh"
 #include "driver/cmd/debug.hh"
 #include "ghoti/config.h"
 #include "support/style.hh"
@@ -30,7 +32,7 @@ parser::parser(i32 argc, char** argv, std::ostream& os, bool ensure_utf8) noexce
     argv_ = ensure_utf8 ? app_.ensure_utf8(argv) : argv;
 }
 
-auto parser::parse() -> stdx::result<void, i32> {
+auto parser::parse() -> stdx::result<stdx::box<cmd::command>, error> {
     PROFILE_FUNCTION();
     app_.usage("Usage: ghoti [command] [options]");
     app_.set_version_flag("-v,--version",
@@ -44,19 +46,19 @@ auto parser::parse() -> stdx::result<void, i32> {
     app_.add_flag("--time-passes", opt_options_.time_passes, "Enable pass execution timing report");
     app_.require_subcommand(1);
 
-    const auto* ast_app{app_.add_subcommand("debug", "Run the CLI interactive debugger")};
+    const auto* debug{app_.add_subcommand("debug", "Run the CLI interactive debugger")};
 
     // No arguments should be handled by printing help an exiting
     if (argc_ == 1) {
         fmt::println(os_, "{}", app_.help());
         os_ << fmt::format(style::RED_BOLD, "error");
         fmt::println(os_, ": expected command argument");
-        return stdx::err{1};
+        return stdx::err{error::MISSING_SUBCOMMAND};
     }
 
     try {
         app_.parse(argc_, argv_);
-    } catch (const CLI::ParseError& e) { return stdx::err{app_.exit(e)}; };
+    } catch (const CLI::ParseError& e) { return stdx::err{static_cast<error>(app_.exit(e))}; };
 
     if (!opt_level_str.empty()) {
         if (auto level{codegen::parse_opt_level(opt_level_str)}) {
@@ -64,7 +66,7 @@ auto parser::parse() -> stdx::result<void, i32> {
         } else {
             os_ << fmt::format(style::RED_BOLD, "error");
             fmt::println(os_, ": invalid optimization level '{}'", opt_level_str);
-            return stdx::err{1};
+            return stdx::err{error::INVALID_OPTIMIZATION};
         }
     } else if (is_release_) {
         opt_options_.level = codegen::opt_level::O2;
@@ -72,9 +74,8 @@ auto parser::parse() -> stdx::result<void, i32> {
         opt_options_.level = codegen::opt_level::O0;
     }
 
-    if (ast_app->parsed()) { parsed_.emplace<cmd::debug>(); }
-
-    return {};
+    if (debug->parsed()) { return stdx::make_box<cmd::debug>(); }
+    return stdx::err{error::INVALID_OPTIMIZATION};
 }
 
 } // namespace ghoti::clap

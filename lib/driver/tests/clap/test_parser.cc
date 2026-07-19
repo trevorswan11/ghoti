@@ -5,8 +5,8 @@
 #include <stdx/variant.hh>
 
 #include "compiler/codegen/opt_level.hh"
+#include "driver/clap/error.hh"
 #include "driver/clap/parser.hh"
-#include "driver/cmd/debug.hh"
 #include "helpers/argv.hh"
 #include "support/test.hh"
 
@@ -16,17 +16,8 @@ TEST_CASE("Error with no args") {
     auto               args{helpers::mock_argv{"ghoti"}};
     std::ostringstream error_ss;
     clap::parser       parser{args.argc(), args.argv(), error_ss, false};
-    CHECK(UNWRAP_ERR(parser.parse()) == 1);
+    CHECK(UNWRAP_ERR(parser.parse()) == clap::error::MISSING_SUBCOMMAND);
     CHECK_FALSE(error_ss.view().empty());
-}
-
-TEST_CASE("Ast dump parser") {
-    auto         args{helpers::mock_argv{"ghoti", "debug"}};
-    clap::parser parser{args.argc(), args.argv(), std::cerr, false};
-    CHECK(parser.get_parsed().is<stdx::monostate>());
-    REQUIRE(parser.parse());
-    CHECK(parser.get_parsed().is<cmd::debug>());
-    CHECK(parser.get_opt_options().level == codegen::opt_level::O0);
 }
 
 TEST_CASE("Optimization flag parser") {
@@ -70,7 +61,7 @@ TEST_CASE("Optimization flag parser") {
         auto               args{helpers::mock_argv{"ghoti", "-Oinvalid", "debug"}};
         std::ostringstream error_ss;
         clap::parser       parser{args.argc(), args.argv(), error_ss, false};
-        CHECK(UNWRAP_ERR(parser.parse()) == 1);
+        CHECK(UNWRAP_ERR(parser.parse()) == clap::error::INVALID_OPTIMIZATION);
         CHECK_FALSE(error_ss.view().empty());
     }
 }

@@ -10,6 +10,7 @@
 #include <fmt/ranges.h>
 #include <magic_enum/magic_enum.hpp>
 #include <stdx/profiler.hh>
+#include <stdx/result.hh>
 #include <stdx/string.hh>
 #include <stdx/types.hh>
 
@@ -17,10 +18,11 @@
 #include "compiler/module/memory_loader.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/analyzer.hh"
+#include "driver/clap/error.hh"
 
 namespace ghoti::cmd {
 
-auto debug::run() -> void {
+auto debug::execute() -> stdx::result<void, clap::error> {
     PROFILE_FUNCTION();
     const std::filesystem::path stdin_path = "stdin.gh";
     while (true) {
@@ -66,6 +68,8 @@ auto debug::run() -> void {
             i += 1;
         }
     }
+
+    return {};
 }
 
 } // namespace ghoti::cmd
