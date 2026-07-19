@@ -55,16 +55,18 @@ TEST_CASE("Target initialization and triple resolution") {
         CHECK(arm_triple_str.contains("aarch64"));
     }
 
-    SECTION("Windows triples normalize to MinGW / GNU environment") {
-        const auto   win_msvc{codegen::resolve_target_triple("x86_64-pc-windows-msvc")};
-        llvm::Triple triple_msvc{win_msvc};
-        CHECK(triple_msvc.isOSWindows());
-        CHECK(triple_msvc.isGNUEnvironment());
+    SECTION("Windows triples default to GNU unless MSVC is explicitly requested") {
+        const auto win_plain{codegen::resolve_target_triple("x86_64-windows")};
+        CHECK(win_plain.isOSWindows());
+        CHECK(win_plain.isGNUEnvironment());
 
-        const auto   win_plain{codegen::resolve_target_triple("x86_64-windows")};
-        llvm::Triple triple_plain{win_plain};
-        CHECK(triple_plain.isOSWindows());
-        CHECK(triple_plain.isGNUEnvironment());
+        const auto win_gnu{codegen::resolve_target_triple("x86_64-w64-windows-gnu")};
+        CHECK(win_gnu.isOSWindows());
+        CHECK(win_gnu.isGNUEnvironment());
+
+        const auto win_msvc{codegen::resolve_target_triple("x86_64-pc-windows-msvc")};
+        CHECK(win_msvc.isOSWindows());
+        CHECK(win_msvc.getEnvironment() == llvm::Triple::MSVC);
     }
 }
 

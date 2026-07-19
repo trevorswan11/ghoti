@@ -37,17 +37,18 @@ auto initialize_all_targets() noexcept -> void {
 }
 
 auto resolve_target_triple(stdx::option<std::string_view> triple_str) -> llvm::Triple {
-    const auto raw_triple{triple_str
-                              .and_then([](std::string_view view) -> stdx::option<std::string> {
-                                  if (view.empty()) { return stdx::none; }
-                                  return std::string{view};
-                              })
-                              .value_or(llvm::sys::getDefaultTargetTriple())};
+    const bool is_explicit{triple_str.has_value() && !triple_str->empty()};
+    const auto raw_triple{is_explicit ? std::string{*triple_str}
+                                      : llvm::sys::getDefaultTargetTriple()};
 
     llvm::Triple triple{llvm::Triple::normalize(raw_triple)};
-    if (triple.isOSWindows() && (triple.getEnvironment() == llvm::Triple::MSVC ||
-                                 triple.getEnvironment() == llvm::Triple::UnknownEnvironment)) {
-        triple.setEnvironment(llvm::Triple::GNU);
+    if (triple.isOSWindows()) {
+        const bool explicit_msvc{is_explicit &&
+                                 llvm::StringRef{*triple_str}.contains_insensitive("msvc")};
+        if (!explicit_msvc && (triple.getEnvironment() == llvm::Triple::MSVC ||
+                               triple.getEnvironment() == llvm::Triple::UnknownEnvironment)) {
+            triple.setEnvironment(llvm::Triple::GNU);
+        }
     }
     return triple;
 }
