@@ -11,6 +11,7 @@
 #include <stdx/utility.hh>
 
 #include "compiler/codegen/error.hh"
+#include "compiler/gir/module.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
@@ -26,8 +27,6 @@ class Module;
 } // namespace llvm
 
 namespace ghoti {
-
-namespace gir { class module; } // namespace gir
 
 namespace codegen {
 
@@ -86,6 +85,11 @@ class analyzer {
                       llvm::LLVMContext&                context,
                       const codegen::optimizer_options& options)
         -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic>;
+    auto emit_object(gir::module&                      gir_module,
+                     const codegen::target_options&    target_opts,
+                     const codegen::optimizer_options& opt_options,
+                     const std::filesystem::path&      output_path)
+        -> stdx::result<void, codegen::diagnostic>;
     auto emit_object(gir::module&                      gir_module,
                      llvm::LLVMContext&                context,
                      const codegen::target_options&    target_opts,

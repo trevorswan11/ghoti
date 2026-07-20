@@ -107,6 +107,15 @@ auto analyzer::emit_llvm_ir(gir::module&                      gir_module,
 }
 
 auto analyzer::emit_object(gir::module&                      gir_module,
+                           const codegen::target_options&    target_opts,
+                           const codegen::optimizer_options& opt_options,
+                           const std::filesystem::path&      output_path)
+    -> stdx::result<void, codegen::diagnostic> {
+    llvm::LLVMContext context;
+    return emit_object(gir_module, context, target_opts, opt_options, output_path);
+}
+
+auto analyzer::emit_object(gir::module&                      gir_module,
                            llvm::LLVMContext&                context,
                            const codegen::target_options&    target_opts,
                            const codegen::optimizer_options& opt_options,

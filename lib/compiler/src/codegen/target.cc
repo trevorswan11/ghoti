@@ -1,13 +1,17 @@
 #include "compiler/codegen/target.hh"
 
+#include <array>
 #include <filesystem>
 #include <string>
 #include <string_view>
 #include <system_error>
 
 #include <fmt/format.h>
+#include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/Type.h>
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/Support/CodeGen.h>
 #include <llvm/Support/FileSystem.h>
@@ -16,6 +20,7 @@
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Target/TargetOptions.h>
 #include <llvm/TargetParser/Host.h>
+#include <llvm/TargetParser/SubtargetFeature.h>
 #include <llvm/TargetParser/Triple.h>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
@@ -26,6 +31,43 @@
 #include "compiler/codegen/opt_level.hh"
 
 namespace ghoti::codegen {
+
+auto to_llvm_codegen_opt_level(opt_level level) noexcept -> llvm::CodeGenOptLevel {
+    switch (level) {
+    case opt_level::O0: return llvm::CodeGenOptLevel::None;
+    case opt_level::O1: return llvm::CodeGenOptLevel::Less;
+    case opt_level::O2: return llvm::CodeGenOptLevel::Default;
+    case opt_level::O3: return llvm::CodeGenOptLevel::Aggressive;
+    case opt_level::Os: return llvm::CodeGenOptLevel::Default;
+    case opt_level::Oz: return llvm::CodeGenOptLevel::Default;
+    default:            return llvm::CodeGenOptLevel::None;
+    }
+}
+
+namespace {
+
+auto to_llvm_reloc_model(reloc_model model) noexcept -> llvm::Reloc::Model {
+    switch (model) {
+    case reloc_model::STATIC:         return llvm::Reloc::Static;
+    case reloc_model::PIC:            return llvm::Reloc::PIC_;
+    case reloc_model::DYNAMIC_NO_PIC: return llvm::Reloc::DynamicNoPIC;
+    case reloc_model::ROPI:           return llvm::Reloc::ROPI;
+    case reloc_model::RWPI:           return llvm::Reloc::RWPI;
+    case reloc_model::ROPI_RWPI:      return llvm::Reloc::ROPI_RWPI;
+    }
+}
+
+auto to_llvm_code_model(code_model model) noexcept -> llvm::CodeModel::Model {
+    switch (model) {
+    case code_model::TINY:   return llvm::CodeModel::Tiny;
+    case code_model::SMALL:  return llvm::CodeModel::Small;
+    case code_model::KERNEL: return llvm::CodeModel::Kernel;
+    case code_model::MEDIUM: return llvm::CodeModel::Medium;
+    case code_model::LARGE:  return llvm::CodeModel::Large;
+    }
+}
+
+} // namespace
 
 auto initialize_all_targets() noexcept -> void {
     // All of these are able to be called more than once
@@ -71,14 +113,14 @@ auto create_target_machine(const target_options& options)
     llvm::TargetOptions target_opts;
     const auto          codegen_opt_level{to_llvm_codegen_opt_level(options.level)};
 
+    stdx::option<llvm::Reloc::Model> reloc;
+    if (options.reloc) { reloc.emplace(to_llvm_reloc_model(*options.reloc)); }
+
+    stdx::option<llvm::CodeModel::Model> code;
+    if (options.code) { code.emplace(to_llvm_code_model(*options.code)); }
+
     auto target_machine{target->createTargetMachine(
-        triple,
-        options.cpu,
-        options.features,
-        target_opts,
-        options.reloc_model ? *options.reloc_model : stdx::option<llvm::Reloc::Model>{},
-        options.code_model ? *options.code_model : stdx::option<llvm::CodeModel::Model>{},
-        codegen_opt_level)};
+        triple, options.cpu, options.features, target_opts, reloc, code, codegen_opt_level)};
 
     if (!target_machine) {
         return make_codegen_err(
@@ -121,6 +163,44 @@ auto emit_object_file(llvm::Module&                module,
         dest.flush();
     }
     return {};
+}
+
+llvm_global_target_init::llvm_global_target_init() {
+    codegen::initialize_all_targets();
+    using namespace std::string_view_literals;
+    constexpr static std::array warmup_triples{
+        ""sv,
+        "x86_64-unknown-linux-gnu"sv,
+        "x86_64-w64-windows-gnu"sv,
+        "aarch64-unknown-linux-gnu"sv,
+    };
+
+    for (const auto triple : warmup_triples) {
+        for (const auto level : {codegen::opt_level::O1, codegen::opt_level::O2}) {
+            codegen::target_options opts{.level = level};
+            if (!triple.empty()) { opts.triple_str = std::string{triple}; }
+            if (auto tm{*codegen::create_target_machine(opts)}) {
+                llvm::LLVMContext ctx;
+                llvm::Module      mod{"warmup", ctx};
+                mod.setDataLayout(tm->createDataLayout());
+                mod.setTargetTriple(tm->getTargetTriple());
+
+                auto*             fn_ty{llvm::FunctionType::get(
+                    llvm::Type::getInt64Ty(ctx), {llvm::Type::getInt64Ty(ctx)}, false)};
+                auto*             fn{llvm::Function::Create(
+                    fn_ty, llvm::Function::ExternalLinkage, "warmup_fn", mod)};
+                llvm::IRBuilder<> builder{llvm::BasicBlock::Create(ctx, "entry", fn)};
+                builder.CreateRet(fn->getArg(0));
+
+                llvm::legacy::PassManager pm;
+                llvm::raw_null_ostream    null_os;
+                if (!tm->addPassesToEmitFile(
+                        pm, null_os, nullptr, llvm::CodeGenFileType::ObjectFile)) {
+                    pm.run(mod);
+                }
+            }
+        }
+    }
 }
 
 } // namespace ghoti::codegen
