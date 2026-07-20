@@ -14,6 +14,7 @@ enum class error : u8 {
     MISSING_INPUT_FILE,
     FILE_NOT_FOUND,
     COMPILATION_FAILED,
+    STDIN_LOAD_FAILED,
 };
 
 [[nodiscard]] auto fatal_error(std::ostream& os, std::string message, error code)

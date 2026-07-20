@@ -1,7 +1,4 @@
-#include <array>
 #include <filesystem>
-#include <fstream>
-#include <ios>
 #include <string>
 #include <string_view>
 
@@ -31,6 +28,7 @@
 #include "compiler/codegen/target.hh"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
+#include "support/bin_utils.hh"
 #include "support/tempfile.hh"
 #include "support/test.hh"
 
@@ -149,15 +147,7 @@ TEST_CASE("Object file emission") {
         REQUIRE(helpers::emit_object(*ctx, context, f.path, target_opts));
         CHECK(std::filesystem::exists(f.path));
         CHECK(std::filesystem::file_size(f.path) > 0);
-
-        // Verify ELF magic number '\x7fELF'
-        std::ifstream       file{f.path, std::ios::binary};
-        std::array<char, 4> header{};
-        file.read(header.data(), 4);
-        CHECK(header[0] == 0x7f);
-        CHECK(header[1] == 'E');
-        CHECK(header[2] == 'L');
-        CHECK(header[3] == 'F');
+        CHECK(bin_utils::check_elf_header(f.path));
     }
 
     SECTION("Emit cross-target object file for Windows x86_64 MinGW") {

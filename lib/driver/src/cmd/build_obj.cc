@@ -1,7 +1,7 @@
 #include "driver/cmd/build_obj.hh"
 
 #include <filesystem>
-#include <iostream>
+#include <system_error>
 
 #include <fmt/base.h>
 #include <fmt/format.h>
@@ -19,23 +19,29 @@ auto build_obj::execute() -> stdx::result<void, clap::error> {
     PROFILE_FUNCTION();
 
     if (!std::filesystem::exists(input_path_)) {
-        return clap::fatal_error(std::cerr,
+        return clap::fatal_error(error_stream_,
                                  fmt::format("file '{}' not found", input_path_.string()),
                                  clap::error::FILE_NOT_FOUND);
+    }
+
+    std::filesystem::path entry_path{input_path_};
+    if (entry_path.is_absolute()) {
+        std::error_code ec;
+        auto            rel{std::filesystem::relative(entry_path, ec)};
+        if (!ec && !rel.empty()) { entry_path = rel; }
     }
 
     mod::file_loader    loader;
     mod::module_manager manager{loader};
 
-    sema::analyzer analyzer{manager, std::cerr, true};
-    if (!analyzer.analyze(input_path_)) { return stdx::err{clap::error::COMPILATION_FAILED}; }
+    sema::analyzer analyzer{manager, error_stream_, true};
+    if (!analyzer.analyze(entry_path)) { return stdx::err{clap::error::COMPILATION_FAILED}; }
 
-    auto module_result{manager.try_get_file_module(input_path_)};
+    auto module_result{manager.try_get_file_module(entry_path)};
     if (!module_result) {
-        return clap::fatal_error(
-            std::cerr,
-            fmt::format("failed to retrieve module '{}'", input_path_.string()),
-            clap::error::COMPILATION_FAILED);
+        return clap::fatal_error(error_stream_,
+                                 fmt::format("failed to retrieve module '{}'", entry_path.string()),
+                                 clap::error::COMPILATION_FAILED);
     }
 
     auto module{*module_result};
@@ -49,7 +55,7 @@ auto build_obj::execute() -> stdx::result<void, clap::error> {
     auto emit_res{analyzer.emit_object(gir_mod, target_opts_, opt_opts_, output_path_)};
     if (!emit_res) {
         return clap::fatal_error(
-            std::cerr,
+            error_stream_,
             emit_res.error().get_message().value_or("i don't know what went wrong"),
             clap::error::COMPILATION_FAILED);
     }

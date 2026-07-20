@@ -29,8 +29,8 @@
 
 namespace ghoti::clap {
 
-parser::parser(i32 argc, char** argv, std::ostream& os, bool ensure_utf8) noexcept
-    : argc_{argc}, os_{os} {
+parser::parser(i32 argc, char** argv, std::ostream& error_stream, bool ensure_utf8) noexcept
+    : argc_{argc}, error_stream_{error_stream} {
     PROFILE_FUNCTION();
     VERIFY(argc > 0, "The program name must be present");
     app_.formatter(stdx::make_rc<formatter>());
@@ -49,15 +49,15 @@ auto parser::parse() -> stdx::result<stdx::box<cmd::command>, error> {
 
     // No arguments should be handled by printing help and exiting
     if (argc_ == 1) {
-        fmt::println(os_, "{}", app_.help());
-        return fatal_error(os_, "expected command argument", error::MISSING_SUBCOMMAND);
+        fmt::println(error_stream_, "{}", app_.help());
+        return fatal_error(error_stream_, "expected command argument", error::MISSING_SUBCOMMAND);
     }
 
     try {
         app_.parse(argc_, argv_);
     } catch (const CLI::ParseError& e) { return stdx::err{static_cast<error>(app_.exit(e))}; };
 
-    if (repl_cmd->parsed()) { return stdx::make_box<cmd::repl>(); }
+    if (repl_cmd->parsed()) { return stdx::make_box<cmd::repl>(error_stream_); }
 
     if (build_obj_cmd->parsed()) {
         codegen::optimizer_options opt_opts;
@@ -69,7 +69,7 @@ auto parser::parse() -> stdx::result<stdx::box<cmd::command>, error> {
                 opt_opts.level = *level;
             } else {
                 return fatal_error(
-                    os_,
+                    error_stream_,
                     fmt::format("invalid optimization level '{}'", build_obj_opts_.opt_level_str),
                     error::INVALID_OPTIMIZATION);
             }
@@ -100,10 +100,11 @@ auto parser::parse() -> stdx::result<stdx::box<cmd::command>, error> {
         return stdx::make_box<cmd::build_obj>(std::move(input_path),
                                               std::move(output_path),
                                               std::move(target_opts),
-                                              std::move(opt_opts));
+                                              std::move(opt_opts),
+                                              error_stream_);
     }
 
-    return fatal_error(os_, "expected command argument", error::MISSING_SUBCOMMAND);
+    return fatal_error(error_stream_, "expected command argument", error::MISSING_SUBCOMMAND);
 }
 
 auto parser::setup_repl_subcmd() -> gsl::not_null<CLI::App*> {

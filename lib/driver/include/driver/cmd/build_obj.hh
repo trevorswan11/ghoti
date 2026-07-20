@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <iostream>
 #include <string>
 
 #include <stdx/result.hh>
@@ -31,9 +32,11 @@ class build_obj final : public command {
     build_obj(std::filesystem::path      input_path,
               std::filesystem::path      output_path,
               codegen::target_options    target_opts,
-              codegen::optimizer_options opt_opts)
-        : input_path_{std::move(input_path)}, output_path_{std::move(output_path)},
-          target_opts_{std::move(target_opts)}, opt_opts_{std::move(opt_opts)} {}
+              codegen::optimizer_options opt_opts,
+              std::ostream&              error_stream = std::cerr)
+        : command{error_stream}, input_path_{std::move(input_path)},
+          output_path_{std::move(output_path)}, target_opts_{std::move(target_opts)},
+          opt_opts_{std::move(opt_opts)} {}
 
     auto execute() -> stdx::result<void, clap::error> override;
 

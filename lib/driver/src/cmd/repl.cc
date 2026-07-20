@@ -38,10 +38,10 @@ auto repl::execute() -> stdx::result<void, clap::error> {
         mod::module_manager manager{loader};
         loader.add(stdin_path, std::string{trimmed});
 
-        sema::analyzer analyzer{manager, std::cerr, true};
+        sema::analyzer analyzer{manager, error_stream_, true};
         if (!analyzer.analyze(stdin_path)) {
-            fmt::println(std::cerr, "Failed to load input from stdin");
-            break;
+            return clap::fatal_error(
+                error_stream_, "failed to load input from stdin", clap::error::STDIN_LOAD_FAILED);
         }
 
         // Print debug information from each stage

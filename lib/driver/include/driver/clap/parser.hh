@@ -19,7 +19,10 @@ namespace ghoti::clap {
 
 class parser {
   public:
-    parser(i32 argc, char** argv, std::ostream& os = std::cerr, bool ensure_utf8 = true) noexcept;
+    parser(i32           argc,
+           char**        argv,
+           std::ostream& error_stream = std::cerr,
+           bool          ensure_utf8  = true) noexcept;
 
     auto parse() -> stdx::result<stdx::box<cmd::command>, error>;
 
@@ -30,7 +33,7 @@ class parser {
   private:
     i32           argc_;
     char**        argv_;
-    std::ostream& os_;
+    std::ostream& error_stream_;
 
     CLI::App            app_;
     cmd::build_obj_opts build_obj_opts_;
