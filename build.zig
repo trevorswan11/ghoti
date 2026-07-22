@@ -159,6 +159,7 @@ pub const ProjectPaths = struct {
     }
 
     const stdlib = "lib/std/";
+    pub const stdlib_entry = "lib/std/std.gh";
     pub const site = "site/";
     const third_party = "third-party/";
 };
@@ -195,13 +196,15 @@ const TestArtifacts = struct {
 
         const test_step = b.step("test", "Run all unit tests");
         for (artifacts) |artifact| {
-            _ = stdx.utils.ExecutableBehavior.installArtifact(
+            if (stdx.utils.ExecutableBehavior.installArtifact(
                 b,
                 artifact,
                 test_step,
                 install_dir,
                 install_only,
-            );
+            )) |run| {
+                run.setEnvironmentVariable("GHOTI_STDLIB", b.pathFromRoot(ProjectPaths.stdlib_entry));
+            }
         }
 
         if (self.webserver_tests) |webserver_tests| {
@@ -243,6 +246,11 @@ fn addArtifacts(b: *std.Build, config: struct {
         .GHOTI_VERSION_MINOR = @as(i64, version.minor),
         .GHOTI_VERSION_PATCH = @as(i64, version.patch),
         .GHOTI_VERSION_PRE = version.pre orelse "",
+        .GHOTI_STDLIB_ENV = "GHOTI_STDLIB",
+        .GHOTI_UNKNOWN_ERROR =
+        \\Something went worng interally that isn't reported through an error message.
+        \\Submit a bug report by opening an issue at https://github.com/trevorswan11/ghoti/issues/new/choose
+        ,
         .GHOTI_GIT_INFO = stdx.utils.getGitInfo(b),
         .GHOTI_WINDOWS = target.result.os.tag == .windows,
         .GHOTI_LINUX = target.result.os.tag == .linux,

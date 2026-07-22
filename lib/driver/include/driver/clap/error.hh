@@ -15,6 +15,7 @@ enum class error : u8 {
     FILE_NOT_FOUND,
     COMPILATION_FAILED,
     STDIN_LOAD_FAILED,
+    INVALID_MODULE_SPEC,
 };
 
 [[nodiscard]] auto fatal_error(std::ostream& os, std::string message, error code)
