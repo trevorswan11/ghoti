@@ -1,9 +1,12 @@
 #include <filesystem>
-#include <fmt/base.h>
 #include <fstream>
+#include <utility>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/base.h>
 #include <fmt/ostream.h>
+#include <gsl/util>
 
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
@@ -84,6 +87,92 @@ TEST_CASE("build_obj command execution") {
 
         cmd::build_obj cmd{src_file.path, obj_file.path, {}, {}};
         CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::COMPILATION_FAILED);
+    }
+
+    SECTION("Multi-file compilation with relative file import on disk") {
+        // Place helper in the same directory as main
+        const auto parent_dir{std::filesystem::temp_directory_path()};
+        const auto helper_path{parent_dir / "ghoti_test_helper.gh"};
+        const auto main_path{parent_dir / "ghoti_test_main.gh"};
+        const auto path_cleanup{gsl::finally([&] {
+            std::filesystem::remove(helper_path);
+            std::filesystem::remove(main_path);
+        })};
+
+        tempfile obj_file{"test_multi_out.o"};
+        {
+            std::ofstream helper_out{helper_path};
+            fmt::print(helper_out, R"(
+                pub const multiply := fn(a: i64, b: i64): i64 {{
+                    return a * b;
+                }};
+            )");
+
+            std::ofstream main_out{main_path};
+            fmt::print(main_out, R"(
+                pub import "ghoti_test_helper.gh" as helper;
+
+                pub const calc := fn(x: i64): i64 {{
+                    return helper::multiply(x, 2l);
+                }};
+            )");
+        }
+
+        cmd::build_obj cmd{main_path, obj_file.path, {}, {}};
+        REQUIRE(cmd.execute());
+        CHECK(std::filesystem::exists(obj_file.path));
+        CHECK(std::filesystem::file_size(obj_file.path) > 0);
+    }
+
+    SECTION("Standard library import on disk (import std;)") {
+        tempfile src_file{"test_std_import.gh"};
+        tempfile obj_file{"test_std_output.o"};
+
+        {
+            std::ofstream out{src_file.path};
+            fmt::print(out, R"(
+                pub import std;
+
+                pub const pick_min := fn(a: i64, b: i64): i64 {{
+                    return std::min(a, b);
+                }};
+            )");
+        }
+
+        cmd::build_obj cmd{src_file.path, obj_file.path, {}, {}};
+        REQUIRE(cmd.execute());
+        CHECK(std::filesystem::exists(obj_file.path));
+        CHECK(std::filesystem::file_size(obj_file.path) > 0);
+    }
+
+    SECTION("Custom library module import via -m on disk") {
+        tempfile custom_lib{"test_custom_lib.gh"};
+        tempfile src_file{"test_custom_import.gh"};
+        tempfile obj_file{"test_custom_output.o"};
+
+        {
+            std::ofstream lib_out{custom_lib.path};
+            fmt::print(lib_out, R"(
+                pub const custom_fn := fn(x: i64): i64 {{
+                    return x + 100l;
+                }};
+            )");
+
+            std::ofstream src_out{src_file.path};
+            fmt::print(src_out, R"(
+                pub import mylib;
+
+                pub const run_custom := fn(v: i64): i64 {{
+                    return mylib::custom_fn(v);
+                }};
+            )");
+        }
+
+        std::vector<cmd::module_binding> modules{{"mylib", custom_lib.path}};
+        cmd::build_obj cmd{src_file.path, obj_file.path, {}, {}, std::move(modules)};
+        REQUIRE(cmd.execute());
+        CHECK(std::filesystem::exists(obj_file.path));
+        CHECK(std::filesystem::file_size(obj_file.path) > 0);
     }
 }
 
