@@ -170,16 +170,24 @@ class emitter {
         }
     }
 
+    [[nodiscard]] auto active_mod(this auto&& self) noexcept -> auto& {
+        return *self.active_module_;
+    }
+    [[nodiscard]] auto active_ast(this auto&& self) noexcept -> auto& {
+        return self.active_module_->ast;
+    }
+
   private:
-    sema::context&            ctx_;
-    mod::module&              ast_module_;
-    const_eval                const_eval_;
-    builder                   builder_;
-    module                    gir_module_;
-    std::vector<scope_frame>  scopes_;
-    std::vector<loop_context> loop_stack_;
-    default_counter           anon_test_counter_;
-    default_counter           anon_fn_counter_;
+    sema::context&             ctx_;
+    mod::module&               ast_module_;
+    stdx::option<mod::module&> active_module_{ast_module_};
+    const_eval                 const_eval_;
+    builder                    builder_;
+    module                     gir_module_;
+    std::vector<scope_frame>   scopes_;
+    std::vector<loop_context>  loop_stack_;
+    default_counter            anon_test_counter_;
+    default_counter            anon_fn_counter_;
 };
 
 } // namespace ghoti::gir

@@ -1,6 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <stdx/arena.hh>
@@ -42,6 +44,11 @@ class module {
     MAKE_DEDUCING_GETTER(functions);
     MAKE_DEDUCING_GETTER(tests);
     [[nodiscard]] auto arena() noexcept -> auto& { return arena_; }
+
+    [[nodiscard]] auto has_function(std::string_view name) const noexcept -> bool {
+        return std::ranges::any_of(functions_,
+                                   [&](const auto* fn) { return fn->get_name() == name; });
+    }
 
     auto add_type(std::string name, sema::type& type) -> type_decl&;
     auto add_global(std::string         name,

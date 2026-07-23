@@ -133,6 +133,23 @@ struct module {
         return *self.get_sema_type_opt(id);
     }
 
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto get_generic_call_target_opt(ID id) const noexcept
+        -> stdx::option<std::string_view> {
+        if constexpr (ast::IndexableNodeID<ID>) {
+            if (const auto& target{sema_side_tables.generic_call_targets[id]}) {
+                return std::string_view{*target};
+            }
+        }
+        return stdx::none;
+    }
+
+    template <ast::IndexableID ID> auto set_generic_call_target(ID id, std::string target) -> void {
+        if constexpr (ast::IndexableNodeID<ID>) {
+            sema_side_tables.generic_call_targets[id].emplace(std::move(target));
+        }
+    }
+
     [[nodiscard]] auto get_sema_type_opt(this auto&&                 self,
                                          const ast::match_expr::arm& arm) noexcept {
         return self.sema_side_tables.match_arm_types[arm.pattern];

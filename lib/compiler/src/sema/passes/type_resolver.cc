@@ -408,9 +408,10 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 .arg_types       = concrete_arg_types,
             };
 
-            if (const auto cached_return_type{ctx_.instantiation_cache.find(key)}) {
-                resolving_.set_sema_type(id, *cached_return_type);
-                return last_type_.emplace(*cached_return_type);
+            if (const auto cached{ctx_.instantiation_cache.find(key)}) {
+                resolving_.set_generic_call_target(id, cached->mangled_name);
+                resolving_.set_sema_type(id, *cached->return_type);
+                return last_type_.emplace(*cached->return_type);
             }
 
             const auto fn_info_opt{ctx_.generic_functions.get_opt(callee_type)};
@@ -419,8 +420,10 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
             auto inst_res{instantiate_generic(callee_type, *fn_info_opt, concrete_arg_types)};
             if (!inst_res) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
 
-            auto& return_type{*inst_res.value()};
-            ctx_.instantiation_cache.insert(std::move(key), return_type);
+            auto& return_type{*inst_res->return_type};
+            auto  mangled_name{inst_res->mangled_name};
+            ctx_.instantiation_cache.insert(std::move(key), return_type, mangled_name);
+            resolving_.set_generic_call_target(id, mangled_name);
             resolving_.set_sema_type(id, return_type);
             return last_type_.emplace(return_type);
         }
@@ -865,11 +868,25 @@ auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void 
     TRY_RESOLVE(if_expr.condition);
     TRY_RESOLVE(if_expr.consequence);
 
-    // There can only be a non-void type with an alternate but this is for pass 3
-    auto& branch_type{*last_type_.take()};
-    if (if_expr.alternate) { TRY_RESOLVE(*if_expr.alternate); }
-    resolving_.set_sema_type(id, branch_type);
-    last_type_.emplace(branch_type);
+    auto* branch_type{last_type_.take()};
+    if (if_expr.alternate) {
+        TRY_RESOLVE(*if_expr.alternate);
+        if (const auto cons_expr{resolving_.ast.get_as_opt<ast::expr_stmt>(if_expr.consequence)}) {
+            if (const auto alt_expr{
+                    resolving_.ast.get_as_opt<ast::expr_stmt>(*if_expr.alternate)}) {
+                if (const auto cons_type{resolving_.get_sema_type_opt(cons_expr->expression)}) {
+                    if (const auto alt_type{resolving_.get_sema_type_opt(alt_expr->expression)}) {
+                        if (!cons_type->is_poison() && !alt_type->is_poison() &&
+                            cons_type->get_kind() != type_kind::VOID) {
+                            branch_type = &cons_type.value();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    resolving_.set_sema_type(id, *branch_type);
+    last_type_.emplace(*branch_type);
 }
 
 auto type_resolver::visit(ast::node_id id, const ast::index_expr& index) -> void {
@@ -2406,7 +2423,7 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_array_ty
 auto type_resolver::instantiate_generic(type&                        callee_type,
                                         const generic_function_info& fn_info,
                                         gsl::span<type*>             concrete_args)
-    -> stdx::option<gsl::not_null<type*>> {
+    -> stdx::option<generic_instantiation_entry> {
     mod::module& fn_mod{*fn_info.module};
     const auto&  fn_expr{*fn_info.fn_expr};
     const auto   fn_type{fn_info.fn_type};
@@ -2451,20 +2468,30 @@ auto type_resolver::instantiate_generic(type&                        callee_type
     inst_resolver.return_trackers_.pop_back();
     auto& deduced_return_type{is_auto_return ? tracker.deduced_return_type(ctx_) : return_type};
 
-    fn_mod.generic_instantiations.emplace_back(generic_instantiation_request{
+    auto mangled_name =
+        fmt::format("{}__{}",
+                    fn_info.name.value_or("fn"),
+                    fmt::join(concrete_args | std::views::transform([](const auto& arg) {
+                                  return type_kind_display_name(arg->get_kind());
+                              }),
+                              "_"));
+
+    generic_instantiation_request req{
         .generic_fn_type = &callee_type,
         .arg_types       = concrete_args,
         .return_type     = &deduced_return_type,
-        .mangled_name =
-            fmt::format("{}__{}",
-                        fn_info.name.value_or("fn"),
-                        fmt::join(concrete_args | std::views::transform([](const auto& arg) {
-                                      return type_kind_display_name(arg->get_kind());
-                                  }),
-                                  "_")),
-        .fn_node_id = fn_info.node_id,
-    });
-    return &deduced_return_type;
+        .mangled_name    = mangled_name,
+        .fn_node_id      = fn_info.node_id,
+        .module          = &fn_mod,
+    };
+
+    fn_mod.generic_instantiations.emplace_back(req);
+    if (&resolving_ != &fn_mod) { resolving_.generic_instantiations.emplace_back(req); }
+
+    return generic_instantiation_entry{
+        .return_type  = &deduced_return_type,
+        .mangled_name = std::move(mangled_name),
+    };
 }
 
 } // namespace ghoti::sema

@@ -47,47 +47,63 @@ auto emitter::emit() -> module {
             [&](const ast::test_stmt& test) { emit_top_level_test(root_id, test); });
     }
 
-    for (const auto& req : ast_module_.generic_instantiations) { emit_generic_instantiation(req); }
+    for (const auto& inst : ast_module_.generic_instantiations) {
+        emit_generic_instantiation(inst);
+    }
     return std::move(gir_module_);
 }
 
 auto emitter::emit_generic_instantiation(const sema::generic_instantiation_request& req) -> void {
     PROFILE_FUNCTION();
-    const auto fn_expr_opt = ast_module_.ast[req.fn_node_id].visit(
+    if (gir_module_.has_function(req.mangled_name)) { return; }
+
+    mod::module& fn_mod{*req.module};
+    const auto   fn_expr_opt{fn_mod.ast[req.fn_node_id].visit(
         [&](const auto&) -> stdx::option<const ast::function_expr&> { return stdx::none; },
         [&](const ast::decl_stmt& decl) -> stdx::option<const ast::function_expr&> {
-            if (decl.value) { return ast_module_.ast.get_as_opt<ast::function_expr>(*decl.value); }
+            if (decl.value) { return fn_mod.ast.get_as_opt<ast::function_expr>(*decl.value); }
             return stdx::none;
         },
         [&](const ast::function_expr& fn_expr) -> stdx::option<const ast::function_expr&> {
             return fn_expr;
-        });
+        })};
 
     VERIFY(fn_expr_opt, "Generic instantiation must reference a valid function expression");
     const auto& fn_expr{*fn_expr_opt};
 
-    auto& fn{gir_module_.add_function(req.mangled_name, *req.return_type, false, false)};
+    sema::types::key_t fn_key{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT};
+    for (const auto& param_type : req.arg_types) { fn_key.imprint(*param_type); }
+    fn_key.imprint(*req.return_type);
+    auto& fn_type{*ctx_.pool[fn_key]};
+    fn_type.resolve_if<sema::types::function>(false, req.arg_types, *req.return_type, false);
+
+    auto& fn{gir_module_.add_function(req.mangled_name, fn_type, false, false)};
     auto& entry{fn.add_segment()};
     builder_.set_insert_point(fn, entry);
 
-    const scope_guard g{scopes_};
-    for (const auto& [param, arg_type] : std::views::zip(fn_expr.parameters, req.arg_types)) {
-        const auto& p_ident{ast_module_.ast.get_as<ast::identifier_expr>(param.name)};
-        const auto  p_name{p_ident.name};
+    auto prev_module{std::exchange(active_module_, &fn_mod)};
+    {
+        const scope_guard g{scopes_};
+        for (const auto& [param, arg_type] : std::views::zip(fn_expr.parameters, req.arg_types)) {
+            const auto& p_ident{fn_mod.ast.get_as<ast::identifier_expr>(param.name)};
+            const auto  p_name{p_ident.name};
 
-        auto& p_slot{fn.add_param(std::string{p_name}, *arg_type)};
-        scopes_.back().bindings.emplace(p_name,
-                                        local_binding{p_slot.id, *arg_type, false, stdx::none});
-    }
+            auto& p_slot{fn.add_param(std::string{p_name}, *arg_type)};
+            scopes_.back().bindings.emplace(p_name,
+                                            local_binding{p_slot.id, *arg_type, false, stdx::none});
+        }
 
-    emit_block(ast_module_.ast.get_as<ast::block_stmt>(fn_expr.body));
-    if (const auto cur_seg{builder_.get_segment()}; !cur_seg->has_terminator()) {
-        if (req.return_type->get_kind() == sema::type_kind::VOID) {
-            builder_.emit_return();
-        } else {
-            builder_.emit_return(value{undefined_val{}, *req.return_type});
+        emit_block(fn_mod.ast.get_as<ast::block_stmt>(fn_expr.body));
+        if (const auto cur_seg{builder_.get_segment()}; cur_seg && !cur_seg->has_terminator()) {
+            if (req.return_type->get_kind() == sema::type_kind::VOID) {
+                builder_.emit_return();
+            } else {
+                builder_.emit_return(value{undefined_val{}, *req.return_type});
+            }
         }
     }
+
+    active_module_ = prev_module;
 }
 
 namespace {
@@ -130,14 +146,14 @@ auto emitter::emit_slice_from_array(value arr_lval, const sema::types::array& ar
 
 auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -> void {
     PROFILE_FUNCTION();
-    const auto& name_ident{ast_module_.ast.get_as<ast::identifier_expr>(decl.name)};
+    const auto& name_ident{active_ast().get_as<ast::identifier_expr>(decl.name)};
     const auto  name{name_ident.name};
-    const auto  sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto  sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Top-level declaration must have a resolved sema type");
     const auto linkage{get_decl_linkage(decl)};
 
     if (decl.value) {
-        if (const auto fn_expr{ast_module_.ast.get_as_opt<ast::function_expr>(*decl.value)}) {
+        if (const auto fn_expr{active_ast().get_as_opt<ast::function_expr>(*decl.value)}) {
             if (const auto fn_data{sema_type->get_data().as_opt<sema::types::function>()}) {
                 // Generic templates will be emitted via monomorphized instantiations
                 if (std::ranges::contains(
@@ -188,8 +204,8 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
 
 auto emitter::emit_top_level_using(ast::node_id, const ast::using_stmt& using_stmt) -> void {
     PROFILE_FUNCTION();
-    const auto& name_ident{ast_module_.ast.get_as<ast::identifier_expr>(using_stmt.alias)};
-    const auto  sema_type{ast_module_.get_sema_type_opt(using_stmt.explicit_type)};
+    const auto& name_ident{active_ast().get_as<ast::identifier_expr>(using_stmt.alias)};
+    const auto  sema_type{active_mod().get_sema_type_opt(using_stmt.explicit_type)};
     ASSERT(sema_type, "Using statement explicit type must be resolved");
     gir_module_.add_type(std::string{name_ident.name}, *sema_type);
 }
@@ -199,7 +215,7 @@ auto emitter::emit_top_level_test(ast::node_id, const ast::test_stmt& test) -> v
     auto&      void_type{ctx_.get_builtin_resolved_type(sema::type_kind::VOID)};
     const auto test_name{test.description
                              .transform([&](ast::string_handle h) {
-                                 return ast_module_.ast.get_as<ast::string_expr>(h).value;
+                                 return active_ast().get_as<ast::string_expr>(h).value;
                              })
                              .or_else([this] -> stdx::option<std::string> {
                                  return fmt::format("anonymous_test{}", anon_test_counter_++);
@@ -210,7 +226,7 @@ auto emitter::emit_top_level_test(ast::node_id, const ast::test_stmt& test) -> v
     builder_.set_insert_point(fn, entry);
 
     const scope_guard g{scopes_};
-    emit_block(ast_module_.ast.get_as<ast::block_stmt>(test.block));
+    emit_block(active_ast().get_as<ast::block_stmt>(test.block));
     if (const auto cur_seg{builder_.get_segment()}) {
         if (!cur_seg->has_terminator()) { builder_.emit_return(); }
     }
@@ -220,8 +236,8 @@ auto emitter::emit_function(ast::node_id              id,
                             const ast::decl_stmt&     decl,
                             const ast::function_expr& fn_expr) -> void {
     PROFILE_FUNCTION();
-    const auto& name_ident{ast_module_.ast.get_as<ast::identifier_expr>(decl.name)};
-    const auto  sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto& name_ident{active_ast().get_as<ast::identifier_expr>(decl.name)};
+    const auto  sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Function declaration must have a resolved sema type");
 
     const auto is_constexpr{decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
@@ -237,9 +253,9 @@ auto emitter::emit_function(ast::node_id              id,
     const scope_guard g{scopes_};
 
     for (const auto& param : fn_expr.parameters) {
-        const auto& p_ident{ast_module_.ast.get_as<ast::identifier_expr>(param.name)};
+        const auto& p_ident{active_ast().get_as<ast::identifier_expr>(param.name)};
         const auto  p_name{p_ident.name};
-        const auto  p_type{ast_module_.get_sema_type_opt(param.name)};
+        const auto  p_type{active_mod().get_sema_type_opt(param.name)};
         ASSERT(p_type, "Function parameter must have a resolved sema type");
 
         auto& p_slot{fn.add_param(std::string{p_name}, *p_type)};
@@ -247,7 +263,7 @@ auto emitter::emit_function(ast::node_id              id,
                                         local_binding{p_slot.id, *p_type, false, stdx::none});
     }
 
-    emit_block(ast_module_.ast.get_as<ast::block_stmt>(fn_expr.body));
+    emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
     if (const auto cur_seg{builder_.get_segment()}) {
         if (!cur_seg->has_terminator()) {
             const auto fn_data{sema_type->get_data().as_opt<sema::types::function>()};
@@ -264,7 +280,7 @@ auto emitter::emit_function(ast::node_id              id,
 auto emitter::emit_anonymous_function(ast::node_id id, const ast::function_expr& fn_expr)
     -> std::string {
     PROFILE_FUNCTION();
-    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Anonymous function must have a resolved sema type");
     auto&      fn_type{*sema_type};
     const auto anon_name{fmt::format("anonymous_fn{}", anon_fn_counter_++)};
@@ -279,9 +295,9 @@ auto emitter::emit_anonymous_function(ast::node_id id, const ast::function_expr&
     {
         const scope_guard g{scopes_};
         for (const auto& param : fn_expr.parameters) {
-            const auto& p_ident{ast_module_.ast.get_as<ast::identifier_expr>(param.name)};
+            const auto& p_ident{active_ast().get_as<ast::identifier_expr>(param.name)};
             const auto  p_name{p_ident.name};
-            const auto  p_type{ast_module_.get_sema_type_opt(param.name)};
+            const auto  p_type{active_mod().get_sema_type_opt(param.name)};
             ASSERT(p_type, "Anonymous function parameter must have a resolved sema type");
 
             auto& p_slot{fn.add_param(std::string{p_name}, *p_type)};
@@ -289,7 +305,7 @@ auto emitter::emit_anonymous_function(ast::node_id id, const ast::function_expr&
                                             local_binding{p_slot.id, *p_type, false, stdx::none});
         }
 
-        emit_block(ast_module_.ast.get_as<ast::block_stmt>(fn_expr.body));
+        emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
         if (const auto cur_seg{builder_.get_segment()}) {
             if (!cur_seg->has_terminator()) {
                 const auto fn_data{fn_type.get_data().as_opt<sema::types::function>()};
@@ -310,8 +326,8 @@ auto emitter::emit_anonymous_function(ast::node_id id, const ast::function_expr&
 auto emitter::emit_stmt(const ast::stmt_handle& stmt) -> void {
     PROFILE_FUNCTION();
     const auto stmt_id{*stmt};
-    builder_.set_location(ast_module_.ast.location_of(stmt_id));
-    ast_module_.ast[stmt_id].visit(
+    builder_.set_location(active_ast().location_of(stmt_id));
+    active_ast()[stmt_id].visit(
         [&](const auto&) { UNREACHABLE("Unhandled statement node variant in emit_stmt"); },
         [&](const ast::block_stmt& block) { emit_block(block); },
         [&](const ast::decl_stmt& decl) { emit_decl_stmt(stmt_id, decl); },
@@ -325,7 +341,7 @@ auto emitter::emit_stmt(const ast::stmt_handle& stmt) -> void {
 
 auto emitter::emit_stmt_as_value(const ast::stmt_handle& stmt) -> value {
     PROFILE_FUNCTION();
-    return ast_module_.ast[stmt].visit(
+    return active_ast()[stmt].visit(
         [&](const auto&) -> value {
             emit_stmt(stmt);
             return value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID)};
@@ -364,7 +380,7 @@ auto emitter::emit_break(ast::node_id, const ast::break_stmt& brk) -> void {
 
     stdx::option<std::string_view> target_label;
     if (brk.label) {
-        const auto& ident{ast_module_.ast.get_as<ast::identifier_expr>(*brk.label)};
+        const auto& ident{active_ast().get_as<ast::identifier_expr>(*brk.label)};
         target_label.emplace(ident.name);
     }
 
@@ -387,7 +403,7 @@ auto emitter::emit_continue(ast::node_id, const ast::continue_stmt& cnt) -> void
 
     stdx::option<std::string_view> target_label;
     if (cnt.label) {
-        const auto& ident{ast_module_.ast.get_as<ast::identifier_expr>(*cnt.label)};
+        const auto& ident{active_ast().get_as<ast::identifier_expr>(*cnt.label)};
         target_label.emplace(ident.name);
     }
 
@@ -410,9 +426,9 @@ auto emitter::emit_block(const ast::block_stmt& block) -> void {
 
 auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> void {
     PROFILE_FUNCTION();
-    const auto& name_ident{ast_module_.ast.get_as<ast::identifier_expr>(decl.name)};
+    const auto& name_ident{active_ast().get_as<ast::identifier_expr>(decl.name)};
     const auto  name{name_ident.name};
-    const auto  sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto  sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Local declaration must have a resolved sema type");
 
     const auto is_const{decl.has_modifier(ast::decl_modifiers::CONSTANT) ||
@@ -429,7 +445,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
 
         value val;
         if (sema_type->get_kind() == sema::type_kind::SLICE) {
-            if (const auto rhs_type{ast_module_.get_sema_type_opt(*decl.value)}) {
+            if (const auto rhs_type{active_mod().get_sema_type_opt(*decl.value)}) {
                 if (const auto arr_data{rhs_type->get_data().as_opt<sema::types::array>()}) {
                     val = emit_slice_from_array(emit_lvalue(*decl.value), *arr_data);
                 }
@@ -451,7 +467,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
     if (decl.value) {
         value val;
         if (sema_type->get_kind() == sema::type_kind::SLICE) {
-            if (const auto rhs_type{ast_module_.get_sema_type_opt(*decl.value)}) {
+            if (const auto rhs_type{active_mod().get_sema_type_opt(*decl.value)}) {
                 if (const auto arr_data{rhs_type->get_data().as_opt<sema::types::array>()}) {
                     val = emit_slice_from_array(emit_lvalue(*decl.value), *arr_data);
                 }
@@ -471,7 +487,7 @@ auto emitter::emit_return_stmt(ast::node_id, const ast::return_stmt& ret) -> voi
         const auto fn_data{fn_opt ? fn_opt->get_type().get_data().as_opt<sema::types::function>()
                                   : nullptr};
         if (fn_data && fn_data->return_type.get_kind() == sema::type_kind::SLICE) {
-            if (const auto rhs_type{ast_module_.get_sema_type_opt(*ret.expression)}) {
+            if (const auto rhs_type{active_mod().get_sema_type_opt(*ret.expression)}) {
                 if (const auto arr_data{rhs_type->get_data().as_opt<sema::types::array>()}) {
                     ret_val.emplace(emit_slice_from_array(emit_lvalue(*ret.expression), *arr_data));
                 }
@@ -486,9 +502,9 @@ auto emitter::emit_return_stmt(ast::node_id, const ast::return_stmt& ret) -> voi
 auto emitter::emit_expression_id(ast::node_id id) -> value {
     PROFILE_FUNCTION();
     ASSERT(id.is_valid(), "Valid node ID expected in emit_expression_id");
-    builder_.set_location(ast_module_.ast.location_of(id));
+    builder_.set_location(active_ast().location_of(id));
 
-    return ast_module_.ast[id].visit(
+    return active_ast()[id].visit(
         [&](const auto&) -> value {
             UNREACHABLE("Unhandled expression node variant in emit_expression_id");
         },
@@ -533,7 +549,7 @@ auto emitter::emit_expression_id(ast::node_id id) -> value {
                          ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
         },
         [&](const ast::string_expr& data) -> value {
-            return value{std::string{data.value}, ast_module_.get_sema_type_opt(id)};
+            return value{std::string{data.value}, active_mod().get_sema_type_opt(id)};
         },
         [&](ast::void_expr) -> value {
             return value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID)};
@@ -550,7 +566,7 @@ auto emitter::emit_expression_id(ast::node_id id) -> value {
         [&](const ast::identifier_expr& data) -> value { return emit_ident(id, data); },
         [&](const ast::function_expr& data) -> value {
             const auto anon_name{emit_anonymous_function(id, data)};
-            return value{anon_name, ast_module_.get_sema_type_opt(id)};
+            return value{anon_name, active_mod().get_sema_type_opt(id)};
         },
         [&](const ast::if_expr& data) -> value { return emit_if(id, data); },
         [&](const ast::match_expr& data) -> value { return emit_match(id, data); },
@@ -579,7 +595,7 @@ auto emitter::emit_expression_id(ast::node_id id) -> value {
 
 auto emitter::emit_array(ast::node_id id, const ast::array_expr& arr) -> value {
     PROFILE_FUNCTION();
-    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Array expression must have a resolved sema type");
 
     if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
@@ -610,7 +626,7 @@ auto emitter::emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> 
         return value{binding->id, binding->type};
     }
 
-    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto sema_type{active_mod().get_sema_type_opt(id)};
     return value{undefined_val{}, sema_type};
 }
 
@@ -621,7 +637,7 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
     if (op_type == syntax::token_type_t::BOOLEAN_OR) { return emit_logical_or(id, binary); }
 
     const auto kind_opt{map_binary_op(op_type)};
-    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(kind_opt.has_value(), "Binary operator must be mapped to instruction kind");
     ASSERT(sema_type.has_value(), "Binary expression must have a resolved sema type");
 
@@ -634,7 +650,7 @@ auto emitter::emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value
     PROFILE_FUNCTION();
     const auto op_type{id.get_token_type()};
     const auto kind_opt{map_unary_op(op_type)};
-    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(kind_opt.has_value(), "Unary operator must be mapped to instruction kind");
     ASSERT(sema_type.has_value(), "Unary expression must have a resolved sema type");
 
@@ -646,7 +662,7 @@ auto emitter::emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value
 auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assign) -> value {
     PROFILE_FUNCTION();
     const auto op_type{id.get_token_type()};
-    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type.has_value(), "Assignment expression must have a resolved sema type");
     const auto lhs_lval{emit_lvalue(assign.lhs)};
     ASSERT(lhs_lval.type.has_value(), "Assignment LHS must have a resolved type");
@@ -654,7 +670,7 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
     if (op_type == syntax::token_type_t::ASSIGN) {
         value rhs;
         if (lhs_lval.type->get_kind() == sema::type_kind::SLICE) {
-            if (const auto rhs_type{ast_module_.get_sema_type_opt(assign.rhs)}) {
+            if (const auto rhs_type{active_mod().get_sema_type_opt(assign.rhs)}) {
                 if (const auto arr_data{rhs_type->get_data().as_opt<sema::types::array>()}) {
                     rhs = emit_slice_from_array(emit_lvalue(assign.rhs), *arr_data);
                 }
@@ -692,7 +708,7 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
 
 auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
     PROFILE_FUNCTION();
-    auto& ret_type{ast_module_.get_sema_type_opt(id).value_or(
+    auto& ret_type{active_mod().get_sema_type_opt(id).value_or(
         ctx_.get_builtin_resolved_type(sema::type_kind::VOID))};
 
     // Builtin call handling
@@ -815,7 +831,9 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
     stdx::option<std::string> callee_name;
     stdx::option<value>       indirect_callee;
 
-    if (const auto ident{ast_module_.ast.get_as_opt<ast::identifier_expr>(call.function)}) {
+    if (const auto generic_target{active_mod().get_generic_call_target_opt(id)}) {
+        callee_name.emplace(*generic_target);
+    } else if (const auto ident{active_ast().get_as_opt<ast::identifier_expr>(call.function)}) {
         if (const auto binding{lookup_binding(ident->name)}) {
             if (binding->type.get_kind() == sema::type_kind::POINTER &&
                 binding->type.get_data().as_opt<sema::types::pointer>() &&
@@ -836,7 +854,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         } else {
             callee_name.emplace(std::string{ident->name});
         }
-    } else if (const auto fn_expr{ast_module_.ast.get_as_opt<ast::function_expr>(call.function)}) {
+    } else if (const auto fn_expr{active_ast().get_as_opt<ast::function_expr>(call.function)}) {
         callee_name.emplace(emit_anonymous_function(*call.function, *fn_expr));
     } else {
         const auto callee_val{emit_expression(call.function)};
@@ -848,7 +866,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         }
     }
 
-    const auto fn_type_opt{ast_module_.get_sema_type_opt(call.function)};
+    const auto fn_type_opt{active_mod().get_sema_type_opt(call.function)};
     stdx::option<const sema::types::function&> fn_data;
     if (fn_type_opt) {
         if (const auto ptr_data{fn_type_opt->get_data().as_opt<sema::types::pointer>()}) {
@@ -862,7 +880,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
     args.reserve(call.arguments.size());
     for (usize i{0}; const auto& arg : call.arguments) {
         if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
-            const auto arg_type_opt{ast_module_.get_sema_type_opt(*expr_h)};
+            const auto arg_type_opt{active_mod().get_sema_type_opt(*expr_h)};
             if (fn_data && i < fn_data->params.size() &&
                 fn_data->params[i]->get_kind() == sema::type_kind::SLICE && arg_type_opt &&
                 arg_type_opt->get_kind() == sema::type_kind::ARRAY) {
@@ -928,11 +946,11 @@ auto emitter::lookup_binding(std::string_view name) const noexcept
 
 auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
     PROFILE_FUNCTION();
-    auto sema_type{ast_module_.get_sema_type_opt(id)};
+    auto sema_type{active_mod().get_sema_type_opt(id)};
     if (if_expr.alternate &&
         if_expr.consequence->get_kind() == ast::node_kind::EXPRESSION_STATEMENT) {
-        const auto& expr_st{ast_module_.ast.get_as<ast::expr_stmt>(*if_expr.consequence)};
-        if (const auto expr_type = ast_module_.get_sema_type_opt(expr_st.expression)) {
+        const auto& expr_st{active_ast().get_as<ast::expr_stmt>(*if_expr.consequence)};
+        if (const auto expr_type = active_mod().get_sema_type_opt(expr_st.expression)) {
             if (expr_type->get_kind() != sema::type_kind::VOID) { sema_type = expr_type; }
         }
     }
@@ -944,7 +962,7 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
         if (!cond_cv) {
             ctx_.diags.emplace_back("Constexpr if condition could not be evaluated at compile time",
                                     sema::error::CONSTEXPR_EVALUATION_FAILED,
-                                    ast_module_.ast.location_of(if_expr.condition));
+                                    active_ast().location_of(if_expr.condition));
             return value{undefined_val{}, sema_type};
         }
 
@@ -952,7 +970,7 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
         if (!eval) {
             ctx_.diags.emplace_back("Constexpr if condition must evaluate to a boolean",
                                     sema::error::TYPE_MISMATCH,
-                                    ast_module_.ast.location_of(if_expr.condition));
+                                    active_ast().location_of(if_expr.condition));
             return value{undefined_val{}, sema_type};
         }
 
@@ -1021,7 +1039,7 @@ auto emitter::emit_while(ast::node_id                   id,
                          stdx::option<std::string_view> label,
                          stdx::option<local_id>         res_slot) -> value {
     PROFILE_FUNCTION();
-    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto sema_type{active_mod().get_sema_type_opt(id)};
     const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID};
 
     auto fn_opt{builder_.get_function()};
@@ -1059,7 +1077,7 @@ auto emitter::emit_while(ast::node_id                   id,
 
         // Body segment
         builder_.set_segment(body_seg);
-        emit_block(ast_module_.ast.get_as<ast::block_stmt>(while_loop.block));
+        emit_block(active_ast().get_as<ast::block_stmt>(while_loop.block));
         if (const auto cur_seg{builder_.get_segment()}; cur_seg && !cur_seg->has_terminator()) {
             builder_.emit_goto(continue_target);
         }
@@ -1103,7 +1121,7 @@ auto emitter::emit_do_while(ast::node_id                   id,
                             stdx::option<std::string_view> label,
                             stdx::option<local_id>         res_slot) -> value {
     PROFILE_FUNCTION();
-    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto sema_type{active_mod().get_sema_type_opt(id)};
     const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID};
 
     auto fn_opt{builder_.get_function()};
@@ -1130,7 +1148,7 @@ auto emitter::emit_do_while(ast::node_id                   id,
 
         // Body segment
         builder_.set_segment(body_seg);
-        emit_block(ast_module_.ast.get_as<ast::block_stmt>(do_while.block));
+        emit_block(active_ast().get_as<ast::block_stmt>(do_while.block));
         if (const auto cur_seg{builder_.get_segment()}; cur_seg && !cur_seg->has_terminator()) {
             builder_.emit_goto(cond_seg.get_id());
         }
@@ -1155,7 +1173,7 @@ auto emitter::emit_infinite_loop(ast::node_id                   id,
                                  stdx::option<std::string_view> label,
                                  stdx::option<local_id>         res_slot) -> value {
     PROFILE_FUNCTION();
-    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto sema_type{active_mod().get_sema_type_opt(id)};
     const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID};
 
     auto fn_opt{builder_.get_function()};
@@ -1182,7 +1200,7 @@ auto emitter::emit_infinite_loop(ast::node_id                   id,
 
         // Body segment
         builder_.set_segment(body_seg);
-        emit_block(ast_module_.ast.get_as<ast::block_stmt>(loop.block));
+        emit_block(active_ast().get_as<ast::block_stmt>(loop.block));
         if (const auto cur_seg{builder_.get_segment()}; cur_seg && !cur_seg->has_terminator()) {
             builder_.emit_goto(body_seg.get_id());
         }
@@ -1202,7 +1220,7 @@ auto emitter::emit_for(ast::node_id                   id,
                        stdx::option<std::string_view> label,
                        stdx::option<local_id>         res_slot) -> value {
     PROFILE_FUNCTION();
-    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto sema_type{active_mod().get_sema_type_opt(id)};
     const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID};
 
     auto fn_opt{builder_.get_function()};
@@ -1217,11 +1235,11 @@ auto emitter::emit_for(ast::node_id                   id,
          std::views::zip(for_loop.iterables, for_loop.captures)) {
         stdx::option<std::string_view> cap_name;
         if (capture.payload.is<ast::identifier_expr>()) {
-            cap_name.emplace(ast_module_.ast.get_as<ast::identifier_expr>(capture.payload).name);
+            cap_name.emplace(active_ast().get_as<ast::identifier_expr>(capture.payload).name);
         }
 
         const auto iter_id{*iter_handle};
-        if (const auto range{ast_module_.ast.get_as_opt<ast::range_expr>(iter_id)}) {
+        if (const auto range{active_ast().get_as_opt<ast::range_expr>(iter_id)}) {
             const bool inclusive{iter_id.get_token_type() == syntax::token_type_t::DOT_DOT_EQ};
 
             const auto start_val{emit_expression(range->lhs)};
@@ -1327,7 +1345,7 @@ auto emitter::emit_for(ast::node_id                   id,
                         local_binding{info.var_slot, *info.elem_type, true, stdx::none});
                 }
             }
-            emit_block(ast_module_.ast.get_as<ast::block_stmt>(for_loop.block));
+            emit_block(active_ast().get_as<ast::block_stmt>(for_loop.block));
         }
         if (const auto cur_seg{builder_.get_segment()}; cur_seg && !cur_seg->has_terminator()) {
             builder_.emit_goto(step_seg.get_id());
@@ -1384,16 +1402,16 @@ auto emitter::emit_for(ast::node_id                   id,
 
 auto emitter::emit_label(ast::node_id id, const ast::label_expr& label) -> value {
     PROFILE_FUNCTION();
-    const auto  sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto  sema_type{active_mod().get_sema_type_opt(id)};
     const bool  yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID};
-    const auto& name_ident{ast_module_.ast.get_as<ast::identifier_expr>(label.name)};
+    const auto& name_ident{active_ast().get_as<ast::identifier_expr>(label.name)};
     const auto  label_name{name_ident.name};
 
     stdx::option<local_id> res_slot;
     if (yields_value) { res_slot = builder_.emit_alloca(*sema_type); }
 
     const auto body_id{*label.body};
-    return ast_module_.ast[body_id].visit(
+    return active_ast()[body_id].visit(
         [&](const auto&) -> value {
             auto fn_opt{builder_.get_function()};
             ASSERT(fn_opt, "Label expression must be within an active function");
@@ -1526,7 +1544,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
     PROFILE_FUNCTION();
     ASSERT(id.is_valid(), "Valid node ID expected in emit_lvalue");
 
-    return ast_module_.ast[id].visit(
+    return active_ast()[id].visit(
         [&](const auto&) -> value { return emit_expression_id(id); },
         [&](const ast::identifier_expr& ident) -> value {
             const auto binding{lookup_binding(ident.name)};
@@ -1535,17 +1553,17 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
         },
         [&](const ast::dot_expr& dot) -> value {
             const auto base_lval{emit_lvalue(dot.object)};
-            const auto obj_type{ast_module_.get_sema_type_opt(dot.object)};
+            const auto obj_type{active_mod().get_sema_type_opt(dot.object)};
             ASSERT(obj_type, "Dot expression object must have a resolved type");
 
-            const auto& member_ident{ast_module_.ast.get_as<ast::identifier_expr>(dot.member)};
+            const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
             const auto& table{ctx_.registry.get(obj_type->get_symbol_table_idx())};
             const auto  proxy{table.get_proxy_opt(member_ident.name)};
             ASSERT(proxy, "Member must exist in struct symbol table");
 
             const auto [sym, member_idx]{*proxy};
             auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
-            auto& field_type{ast_module_.get_sema_type_opt(dot.member).value_or(*obj_type)};
+            auto& field_type{active_mod().get_sema_type_opt(dot.member).value_or(*obj_type)};
 
             const auto field_ptr{builder_.emit_get_element_ptr(
                 base_lval, {value{static_cast<u64>(member_idx), usize_type}}, field_type)};
@@ -1554,11 +1572,11 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
         [&](const ast::index_expr& index) -> value {
             const auto base_lval{emit_lvalue(index.array)};
             const auto idx_val{emit_expression(index.index)};
-            const auto elem_type_opt{ast_module_.get_sema_type_opt(id)};
+            const auto elem_type_opt{active_mod().get_sema_type_opt(id)};
             ASSERT(elem_type_opt, "Index expression must have a resolved element type");
             auto& elem_type{*elem_type_opt};
 
-            const auto obj_type{ast_module_.get_sema_type_opt(index.array)};
+            const auto obj_type{active_mod().get_sema_type_opt(index.array)};
             ASSERT(obj_type, "Index array operand must have a resolved type");
             if (const auto arr_data{obj_type->get_data().as_opt<sema::types::array>()}) {
                 auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
@@ -1661,7 +1679,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
 
 auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value {
     PROFILE_FUNCTION();
-    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Match expression must have a resolved sema type");
     const bool yields_value{sema_type->get_kind() != sema::type_kind::VOID};
 
@@ -1689,11 +1707,11 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
         const auto pattern_node_id{*arm.pattern};
         const auto is_discard{pattern_node_id.get_token_type() ==
                                   syntax::token_type_t::UNDERSCORE ||
-                              ast_module_.ast[pattern_node_id].template is<ast::discarded>()};
+                              active_ast()[pattern_node_id].template is<ast::discarded>()};
 
         if (is_discard) {
             builder_.emit_goto(arm_body_seg.get_id());
-        } else if (const auto range{ast_module_.ast.get_as_opt<ast::range_expr>(pattern_node_id)}) {
+        } else if (const auto range{active_ast().get_as_opt<ast::range_expr>(pattern_node_id)}) {
             const auto start_val{emit_expression(range->lhs)};
             const auto end_val{emit_expression(range->rhs)};
 
@@ -1721,8 +1739,9 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
         {
             const scope_guard arm_guard{scopes_};
             if (arm.capture) {
-                const auto& cap_ident{ast_module_.ast.get_as<ast::identifier_expr>(*arm.capture)};
-                auto&       cap_type{ast_module_.get_sema_type_opt(*arm.capture)
+                const auto& cap_ident{active_ast().get_as<ast::identifier_expr>(*arm.capture)};
+                auto&       cap_type{active_mod()
+                                   .get_sema_type_opt(*arm.capture)
                                    .value_or(ctx_.get_builtin_resolved_type(sema::type_kind::I32))};
                 scopes_.back().bindings.emplace(
                     cap_ident.name,
@@ -1759,7 +1778,7 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
 
 auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& init) -> value {
     PROFILE_FUNCTION();
-    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Initializer expression must have a resolved sema type");
 
     if (const auto cv{const_eval_.try_eval(id)}) {
@@ -1775,12 +1794,12 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
     ASSERT(st, "Initializer target must be a struct type");
     const auto& table{ctx_.registry.get(sema_type->get_symbol_table_idx())};
     for (const auto& [accessor, val_expr] : init.initializers) {
-        const auto& imp{ast_module_.ast.get_as<ast::implicit_access_expr>(*accessor)};
-        const auto& name{ast_module_.ast.get_as<ast::identifier_expr>(imp.member).name};
+        const auto& imp{active_ast().get_as<ast::implicit_access_expr>(*accessor)};
+        const auto& name{active_ast().get_as<ast::identifier_expr>(imp.member).name};
         const auto  proxy{table.get_proxy_opt(name)};
         ASSERT(proxy, "Member must exist in struct symbol table");
         const auto [sym, field_idx]{*proxy};
-        auto&      field_type{ast_module_.get_sema_type_opt(*val_expr).value_or(*sema_type)};
+        auto&      field_type{active_mod().get_sema_type_opt(*val_expr).value_or(*sema_type)};
         const auto field_ptr{
             builder_.emit_get_element_ptr(value{struct_slot, *sema_type},
                                           {value{static_cast<u64>(field_idx), usize_type}},
@@ -1794,10 +1813,10 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
 
 auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
     PROFILE_FUNCTION();
-    const auto sema_type{ast_module_.get_sema_type_opt(id)};
-    const auto obj_type{ast_module_.get_sema_type_opt(dot.object)};
+    const auto sema_type{active_mod().get_sema_type_opt(id)};
+    const auto obj_type{active_mod().get_sema_type_opt(dot.object)};
     ASSERT(obj_type, "Dot expression object must have a resolved type");
-    const auto member_ident{ast_module_.ast.get_as<ast::identifier_expr>(dot.member)};
+    const auto member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
 
     const auto& table{ctx_.registry.get(obj_type->get_symbol_table_idx())};
     if (const auto proxy{table.get_proxy_opt(member_ident.name)}) {
@@ -1825,7 +1844,7 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
 
 auto emitter::emit_index(ast::node_id id, const ast::index_expr&) -> value {
     PROFILE_FUNCTION();
-    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Index expression must have a resolved sema type");
     const auto elem_lval{emit_lvalue(id)};
     const auto loaded{builder_.emit_load(elem_lval, *sema_type)};
@@ -1834,7 +1853,7 @@ auto emitter::emit_index(ast::node_id id, const ast::index_expr&) -> value {
 
 auto emitter::emit_address_of(ast::node_id id, const ast::address_of_expr& addr) -> value {
     PROFILE_FUNCTION();
-    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Address of expression must have a resolved sema type");
     const auto target{emit_lvalue(addr.rhs)};
     auto&      res_type{*sema_type};
@@ -1844,7 +1863,7 @@ auto emitter::emit_address_of(ast::node_id id, const ast::address_of_expr& addr)
 
 auto emitter::emit_dereference(ast::node_id id, const ast::dereference_expr& deref) -> value {
     PROFILE_FUNCTION();
-    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Dereference expression must have a resolved sema type");
     const auto ptr_val{emit_expression(deref.rhs)};
     auto&      elem_type{*sema_type};
@@ -1854,7 +1873,7 @@ auto emitter::emit_dereference(ast::node_id id, const ast::dereference_expr& der
 
 auto emitter::emit_reference(ast::node_id id, const ast::reference_expr& ref) -> value {
     PROFILE_FUNCTION();
-    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Reference expression must have a resolved sema type");
     const auto target{emit_lvalue(ref.rhs)};
     auto&      res_type{*sema_type};
@@ -1864,25 +1883,25 @@ auto emitter::emit_reference(ast::node_id id, const ast::reference_expr& ref) ->
 
 auto emitter::emit_implicit_access(ast::node_id id, const ast::implicit_access_expr& imp) -> value {
     PROFILE_FUNCTION();
-    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto sema_type{active_mod().get_sema_type_opt(id)};
     if (const auto cv{const_eval_.try_eval(id)}) {
         if (const auto i{cv->as_int_opt()}) { return value{*i, sema_type}; }
         if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
     }
-    const auto& ident{ast_module_.ast.get_as<ast::identifier_expr>(imp.member)};
+    const auto& ident{active_ast().get_as<ast::identifier_expr>(imp.member)};
     return value{std::string{ident.name}, sema_type};
 }
 
 auto emitter::emit_module_access(ast::node_id id, const ast::module_access_expr& mod_access)
     -> value {
     PROFILE_FUNCTION();
-    const auto sema_type{ast_module_.get_sema_type_opt(id)};
+    const auto sema_type{active_mod().get_sema_type_opt(id)};
     if (const auto cv{const_eval_.try_eval(id)}) {
         if (const auto i{cv->as_int_opt()}) { return value{*i, sema_type}; }
         if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
         if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
     }
-    const auto& inner_ident{ast_module_.ast.get_as<ast::identifier_expr>(mod_access.inner)};
+    const auto& inner_ident{active_ast().get_as<ast::identifier_expr>(mod_access.inner)};
     return value{std::string{inner_ident.name}, sema_type};
 }
 

@@ -97,11 +97,17 @@ template <> struct ankerl::unordered_dense::hash<ghoti::sema::generic_instantiat
 namespace ghoti::sema {
 
 struct generic_instantiation_request {
-    gsl::not_null<type*> generic_fn_type;
-    gsl::span<type*>     arg_types;
+    gsl::not_null<type*>        generic_fn_type;
+    gsl::span<type*>            arg_types;
+    gsl::not_null<type*>        return_type;
+    std::string                 mangled_name;
+    ast::node_id                fn_node_id;
+    gsl::not_null<mod::module*> module;
+};
+
+struct generic_instantiation_entry {
     gsl::not_null<type*> return_type;
     std::string          mangled_name;
-    ast::node_id         fn_node_id;
 };
 
 class generic_instantiation_cache {
@@ -111,17 +117,22 @@ class generic_instantiation_cache {
     MAKE_MOVE_CONSTRUCTABLE_ONLY(generic_instantiation_cache);
 
     [[nodiscard]] auto find(const generic_instantiation_key& key) const noexcept
-        -> stdx::option<type&> {
-        if (auto it{cache_.find(key)}; it != cache_.end()) { return *it->second; }
+        -> stdx::option<const generic_instantiation_entry&> {
+        if (auto it{cache_.find(key)}; it != cache_.end()) { return it->second; }
         return stdx::none;
     }
 
-    auto insert(generic_instantiation_key key, type& return_type) -> void {
-        cache_.emplace(std::move(key), &return_type);
+    auto insert(generic_instantiation_key key, type& return_type, std::string mangled_name)
+        -> void {
+        cache_.emplace(std::move(key),
+                       generic_instantiation_entry{
+                           .return_type  = &return_type,
+                           .mangled_name = std::move(mangled_name),
+                       });
     }
 
   private:
-    ankerl::unordered_dense::map<generic_instantiation_key, type*> cache_;
+    ankerl::unordered_dense::map<generic_instantiation_key, generic_instantiation_entry> cache_;
 };
 
 } // namespace ghoti::sema

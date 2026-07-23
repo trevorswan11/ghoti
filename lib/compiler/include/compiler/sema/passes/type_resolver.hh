@@ -263,7 +263,8 @@ class type_resolver {
 
     auto instantiate_generic(type&                        callee_type,
                              const generic_function_info& fn_info,
-                             gsl::span<type*> concrete_args) -> stdx::option<gsl::not_null<type*>>;
+                             gsl::span<type*>             concrete_args)
+        -> stdx::option<generic_instantiation_entry>;
 
     type_resolver(mod::module& resolving, context& ctx)
         : resolving_{resolving}, table_idx_{*resolving.root_table_idx}, ctx_{ctx} {

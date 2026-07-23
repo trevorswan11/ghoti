@@ -124,7 +124,7 @@ TEST_CASE("build_obj command execution") {
         CHECK(std::filesystem::file_size(obj_file.path) > 0);
     }
 
-    SECTION("Standard library import on disk (import std;)") {
+    SECTION("Standard library import on disk with generic functions") {
         tempfile src_file{"test_std_import.gh"};
         tempfile obj_file{"test_std_output.o"};
 
@@ -135,6 +135,10 @@ TEST_CASE("build_obj command execution") {
 
                 pub const pick_min := fn(a: i64, b: i64): i64 {{
                     return std::min(a, b);
+                }};
+
+                pub const pick_max := fn(a: i64, b: i64): i64 {{
+                    return std::max(a, b);
                 }};
             )");
         }
@@ -169,6 +173,42 @@ TEST_CASE("build_obj command execution") {
         }
 
         std::vector<cmd::module_binding> modules{{"mylib", custom_lib.path}};
+        cmd::build_obj cmd{src_file.path, obj_file.path, {}, {}, std::move(modules)};
+        REQUIRE(cmd.execute());
+        CHECK(std::filesystem::exists(obj_file.path));
+        CHECK(std::filesystem::file_size(obj_file.path) > 0);
+    }
+
+    SECTION("Custom generic library module import via -m on disk") {
+        tempfile custom_lib{"test_custom_generic_lib.gh"};
+        tempfile src_file{"test_custom_generic_import.gh"};
+        tempfile obj_file{"test_custom_generic_output.o"};
+
+        {
+            std::ofstream lib_out{custom_lib.path};
+            fmt::print(lib_out, R"(
+                pub const clamp := fn(val: auto, low: auto, high: auto): auto {{
+                    if (val < low) {{
+                        return low;
+                    }}
+                    if (val > high) {{
+                        return high;
+                    }}
+                    return val;
+                }};
+            )");
+
+            std::ofstream src_out{src_file.path};
+            fmt::print(src_out, R"(
+                pub import math;
+
+                pub const clamp_int := fn(v: i64): i64 {{
+                    return math::clamp(v, 0l, 100l);
+                }};
+            )");
+        }
+
+        std::vector<cmd::module_binding> modules{{"math", custom_lib.path}};
         cmd::build_obj cmd{src_file.path, obj_file.path, {}, {}, std::move(modules)};
         REQUIRE(cmd.execute());
         CHECK(std::filesystem::exists(obj_file.path));

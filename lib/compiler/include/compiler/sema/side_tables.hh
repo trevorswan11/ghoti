@@ -10,12 +10,14 @@
 #include "compiler/ast/id.hh"
 #include "compiler/ast/traits.hh"
 
+#include <string>
+
 namespace ghoti::sema {
 
 namespace detail {
 
 // An ID-indexable side table containing attached data
-template <ast::IndexableID ID, stdx::Option T> struct side_table {
+template <ast::IndexableID ID, typename T> struct side_table {
     std::vector<T> values;
 
     // Allows a handle wrapper of a node to be used for raw ID-based tables
@@ -38,11 +40,15 @@ struct side_tables {
     // Indexed by the match arms' pattern
     detail::side_table<ast::node_id, stdx::option<sema::type&>> match_arm_types;
 
+    // Call expression to monomorphized generic symbol name
+    detail::side_table<ast::node_id, stdx::option<std::string>> generic_call_targets;
+
     // Allocates `size` slots in all backing vectors
     constexpr auto resize(const ast::AST::data_pool_sizes& sizes) -> void {
         node_types.values.resize(sizes.nodes_size);
         explicit_types.values.resize(sizes.types_size);
         match_arm_types.values.resize(sizes.nodes_size);
+        generic_call_targets.values.resize(sizes.nodes_size);
     }
 };
 

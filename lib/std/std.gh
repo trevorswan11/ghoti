@@ -1,15 +1,9 @@
 pub const version := "0.0.1";
 
-pub const min := fn(a: i64, b: i64): i64 {
-    if (a < b) {
-        return a;
-    }
-    return b;
+pub const min := fn(a: auto, b: auto): auto {
+    return if (a < b) a else b;
 };
 
-pub const max := fn(a: i64, b: i64): i64 {
-    if (a > b) {
-        return a;
-    }
-    return b;
+pub const max := fn(a: auto, b: auto): auto {
+    return if (a > b) a else b;
 };

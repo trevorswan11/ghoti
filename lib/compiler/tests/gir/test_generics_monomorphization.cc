@@ -30,7 +30,8 @@ TEST_CASE("GIR single monomorphized instantiation") {
         if (fn->get_name() == "identity__i32") {
             has_identity_i32 = true;
             CHECK(fn->get_params().size() == 1);
-            CHECK(fn->get_type().get_kind() == sema::type_kind::I32);
+            CHECK(fn->get_type().get_data().as<sema::types::function>().return_type.get_kind() ==
+                  sema::type_kind::I32);
         } else if (fn->get_name() == "test_fn") {
             has_test_fn = true;
             std::ostringstream ss;
@@ -66,11 +67,13 @@ TEST_CASE("GIR multiple instantiations with diverse types") {
         if (fn->get_name() == "add__i32_i32") {
             has_add_i32 = true;
             CHECK(fn->get_params().size() == 2);
-            CHECK(fn->get_type().get_kind() == sema::type_kind::I32);
+            CHECK(fn->get_type().get_data().as<sema::types::function>().return_type.get_kind() ==
+                  sema::type_kind::I32);
         } else if (fn->get_name() == "add__f64_f64") {
             has_add_f64 = true;
             CHECK(fn->get_params().size() == 2);
-            CHECK(fn->get_type().get_kind() == sema::type_kind::F64);
+            CHECK(fn->get_type().get_data().as<sema::types::function>().return_type.get_kind() ==
+                  sema::type_kind::F64);
         } else if (fn->get_name() == "test_multi") {
             has_test_multi = true;
             std::ostringstream ss;
