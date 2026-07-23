@@ -572,7 +572,9 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
 
     std::vector<llvm::Value*> args;
     args.reserve(inst.operands.size() - 1);
-    for (const auto& operand : inst.operands) { args.emplace_back(lower_value(operand)); }
+    for (const auto& operand : inst.operands | std::views::drop(1)) {
+        args.emplace_back(lower_value(operand));
+    }
 
     const bool is_void{!inst.type || inst.type->get_kind() == sema::type_kind::VOID};
     auto*      call_inst{builder_.CreateCall(fn_ty, callee_val, args, is_void ? "" : "calltmp")};

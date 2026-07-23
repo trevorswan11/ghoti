@@ -17,6 +17,7 @@
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
+#include <vector>
 
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
@@ -97,10 +98,25 @@ auto parser::parse() -> stdx::result<stdx::box<cmd::command>, error> {
             .level      = opt_opts.level,
         };
 
+        std::vector<cmd::module_binding> modules;
+        for (const auto& raw : build_obj_opts_.module_raw_args) {
+            const auto comma_pos{raw.find(',')};
+            if (comma_pos == std::string::npos || comma_pos == 0 || comma_pos + 1 >= raw.size()) {
+                return fatal_error(
+                    error_stream_,
+                    fmt::format("invalid module format '{}', expected '<name>,<path>'", raw),
+                    error::INVALID_MODULE_SPEC);
+            }
+            auto name{raw.substr(0, comma_pos)};
+            auto mod_path{raw.substr(comma_pos + 1)};
+            modules.emplace_back(std::move(name), std::filesystem::path{std::move(mod_path)});
+        }
+
         return stdx::make_box<cmd::build_obj>(std::move(input_path),
                                               std::move(output_path),
                                               std::move(target_opts),
                                               std::move(opt_opts),
+                                              std::move(modules),
                                               error_stream_);
     }
 
@@ -117,6 +133,9 @@ auto parser::setup_build_obj_subcmd() -> gsl::not_null<CLI::App*> {
         ->required();
     build_obj_cmd->add_option(
         "-o,--output", build_obj_opts_.output, "Output object file (.o / .obj)");
+    build_obj_cmd->add_option("-m,--module",
+                              build_obj_opts_.module_raw_args,
+                              "Register a library module (format: <name>,<path>)");
     build_obj_cmd->add_option("--target", build_obj_opts_.target, "Target triple");
     build_obj_cmd->add_option(
         "--cpu", build_obj_opts_.cpu, "Target CPU architecture (default: generic)");

@@ -122,6 +122,48 @@ TEST_CASE("build-obj subcommand parser") {
             CHECK_FALSE(error_ss.view().empty());
         }
     }
+
+    SECTION("Module argument parsing (-m / --module)") {
+        SECTION("Single module argument") {
+            auto args{
+                helpers::mock_argv{"ghoti", "build-obj", "-m", "math,src/math.gh", "main.gh"}};
+            clap::parser parser{args.argc(), args.argv(), std::cerr, false};
+            auto         cmd{UNWRAP(parser.parse())};
+            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+            const auto&  mods{build_cmd.get_modules()};
+            REQUIRE(mods.size() == 1);
+            CHECK(mods[0].name == "math");
+            CHECK(mods[0].path == "src/math.gh");
+        }
+
+        SECTION("Multiple module arguments") {
+            auto         args{helpers::mock_argv{"ghoti",
+                                         "build-obj",
+                                         "-m",
+                                         "math,src/math.gh",
+                                         "--module",
+                                         "io,src/io.gh",
+                                         "main.gh"}};
+            clap::parser parser{args.argc(), args.argv(), std::cerr, false};
+            auto         cmd{UNWRAP(parser.parse())};
+            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+            const auto&  mods{build_cmd.get_modules()};
+            REQUIRE(mods.size() == 2);
+            CHECK(mods[0].name == "math");
+            CHECK(mods[0].path == "src/math.gh");
+            CHECK(mods[1].name == "io");
+            CHECK(mods[1].path == "src/io.gh");
+        }
+
+        SECTION("Invalid module specification returns error") {
+            auto args{
+                helpers::mock_argv{"ghoti", "build-obj", "-m", "invalid_no_comma", "main.gh"}};
+            std::ostringstream error_ss;
+            clap::parser       parser{args.argc(), args.argv(), error_ss, false};
+            CHECK(UNWRAP_ERR(parser.parse()) == clap::error::INVALID_MODULE_SPEC);
+            CHECK_FALSE(error_ss.view().empty());
+        }
+    }
 }
 
 } // namespace ghoti::tests
