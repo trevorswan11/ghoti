@@ -1,6 +1,5 @@
 #include "compiler/codegen/target.hh"
 
-#include <array>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -163,44 +162,6 @@ auto emit_object_file(llvm::Module&                module,
         dest.flush();
     }
     return {};
-}
-
-llvm_global_target_init::llvm_global_target_init() {
-    codegen::initialize_all_targets();
-    using namespace std::string_view_literals;
-    constexpr static std::array warmup_triples{
-        ""sv,
-        "x86_64-unknown-linux-gnu"sv,
-        "x86_64-w64-windows-gnu"sv,
-        "aarch64-unknown-linux-gnu"sv,
-    };
-
-    for (const auto triple : warmup_triples) {
-        for (const auto level : {codegen::opt_level::O1, codegen::opt_level::O2}) {
-            codegen::target_options opts{.level = level};
-            if (!triple.empty()) { opts.triple_str = std::string{triple}; }
-            if (auto tm{*codegen::create_target_machine(opts)}) {
-                llvm::LLVMContext ctx;
-                llvm::Module      mod{"warmup", ctx};
-                mod.setDataLayout(tm->createDataLayout());
-                mod.setTargetTriple(tm->getTargetTriple());
-
-                auto*             fn_ty{llvm::FunctionType::get(
-                    llvm::Type::getInt64Ty(ctx), {llvm::Type::getInt64Ty(ctx)}, false)};
-                auto*             fn{llvm::Function::Create(
-                    fn_ty, llvm::Function::ExternalLinkage, "warmup_fn", mod)};
-                llvm::IRBuilder<> builder{llvm::BasicBlock::Create(ctx, "entry", fn)};
-                builder.CreateRet(fn->getArg(0));
-
-                llvm::legacy::PassManager pm;
-                llvm::raw_null_ostream    null_os;
-                if (!tm->addPassesToEmitFile(
-                        pm, null_os, nullptr, llvm::CodeGenFileType::ObjectFile)) {
-                    pm.run(mod);
-                }
-            }
-        }
-    }
 }
 
 } // namespace ghoti::codegen

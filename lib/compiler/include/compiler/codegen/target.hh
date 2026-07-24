@@ -63,9 +63,4 @@ auto emit_object_file(llvm::Module&                module,
                       llvm::TargetMachine&         target_machine,
                       const std::filesystem::path& output_path) -> stdx::result<void, diagnostic>;
 
-// Meant to be initialized from tests to ensure llvm objects hide from stdx alloc hooks
-struct llvm_global_target_init {
-    llvm_global_target_init();
-};
-
 } // namespace ghoti::codegen

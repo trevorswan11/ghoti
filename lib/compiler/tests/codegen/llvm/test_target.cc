@@ -24,6 +24,7 @@
 #include <stdx/types.hh>
 
 #include "compiler/codegen/error.hh"
+#include "compiler/codegen/llvm_scope.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
 #include "helpers/codegen.hh"
@@ -35,7 +36,7 @@
 namespace ghoti::tests {
 
 TEST_CASE("Target initialization and triple resolution") {
-    helpers::llvm_test_scope scope;
+    codegen::llvm_scope scope;
 
     SECTION("Default triple resolves to host") {
         const auto default_triple{codegen::resolve_target_triple()};
@@ -69,7 +70,7 @@ TEST_CASE("Target initialization and triple resolution") {
 }
 
 TEST_CASE("Target machine creation across architectures") {
-    helpers::llvm_test_scope scope;
+    codegen::llvm_scope scope;
     codegen::initialize_all_targets();
 
     SECTION("Host target machine creation") {
@@ -120,7 +121,7 @@ TEST_CASE("Object file emission") {
     )";
 
     SECTION("Emit host object file") {
-        helpers::llvm_test_scope scope;
+        codegen::llvm_scope scope;
         llvm::LLVMContext        context;
         auto [ctx, idx]{helpers::resolve_and_check(input)};
 
@@ -134,7 +135,7 @@ TEST_CASE("Object file emission") {
     }
 
     SECTION("Emit cross-target object file for Linux x86_64") {
-        helpers::llvm_test_scope scope;
+        codegen::llvm_scope scope;
         llvm::LLVMContext        context;
         auto [ctx, idx]{helpers::resolve_and_check(input)};
 
@@ -151,7 +152,7 @@ TEST_CASE("Object file emission") {
     }
 
     SECTION("Emit cross-target object file for Windows x86_64 MinGW") {
-        helpers::llvm_test_scope scope;
+        codegen::llvm_scope scope;
         llvm::LLVMContext        context;
         auto [ctx, idx]{helpers::resolve_and_check(input)};
 

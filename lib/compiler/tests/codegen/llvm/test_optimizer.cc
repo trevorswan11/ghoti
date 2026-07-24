@@ -13,6 +13,7 @@
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
+#include "compiler/codegen/llvm_scope.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/sema/analyzer.hh"
 #include "helpers/codegen.hh"
@@ -22,7 +23,7 @@
 namespace ghoti::tests {
 
 TEST_CASE("Optimizer over non trivial function at all levels") {
-    helpers::llvm_test_scope scope;
+    codegen::llvm_scope scope;
     llvm::LLVMContext        context;
 
     for (const auto level : stdx::enum_range<codegen::opt_level>()) {
@@ -53,7 +54,7 @@ TEST_CASE("Optimizer over non trivial function at all levels") {
 }
 
 TEST_CASE("Optimizing, folding, and propagating constants") {
-    helpers::llvm_test_scope scope;
+    codegen::llvm_scope scope;
     llvm::LLVMContext        context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -92,7 +93,7 @@ TEST_CASE("Optimizing, folding, and propagating constants") {
 }
 
 TEST_CASE("Mem2Reg and Alloca elimination") {
-    helpers::llvm_test_scope scope;
+    codegen::llvm_scope scope;
     llvm::LLVMContext        context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -133,7 +134,7 @@ TEST_CASE("Mem2Reg and Alloca elimination") {
 }
 
 TEST_CASE("Dead code elimination") {
-    helpers::llvm_test_scope scope;
+    codegen::llvm_scope scope;
     llvm::LLVMContext        context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -154,7 +155,7 @@ TEST_CASE("Dead code elimination") {
 }
 
 TEST_CASE("Function inlining") {
-    helpers::llvm_test_scope scope;
+    codegen::llvm_scope scope;
     llvm::LLVMContext        context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -197,7 +198,7 @@ TEST_CASE("Function inlining") {
 }
 
 TEST_CASE("Optimizer with debug and timing flags") {
-    helpers::llvm_test_scope scope;
+    codegen::llvm_scope scope;
     llvm::LLVMContext        context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
