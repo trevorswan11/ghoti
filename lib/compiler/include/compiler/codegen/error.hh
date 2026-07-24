@@ -17,6 +17,7 @@ enum class error : u8 {
     TARGET_MACHINE_CREATION_FAILED,
     OBJECT_EMISSION_FAILED,
     LINKING_FAILED,
+    PERMISSIONS_ERROR,
 };
 
 using diagnostic  = diagnostic<error>;
