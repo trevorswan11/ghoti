@@ -30,6 +30,10 @@ class llvm_lowering {
     MAKE_PINNED(llvm_lowering);
 
     auto lower(const gir::module& gir_mod) -> stdx::box<llvm::Module>;
+    auto lower_executable(const gir::module& gir_mod,
+                          std::string_view   user_main_name = "main")
+        -> stdx::box<llvm::Module>;
+    auto emit_main_entry_wrapper(std::string_view user_main_name = "main") -> llvm::Function*;
 
     [[nodiscard]] auto context(this auto&& self) noexcept -> auto& { return self.context_; }
     [[nodiscard]] auto module(this auto&& self) noexcept -> auto& { return *self.llvm_module_; }
@@ -86,6 +90,8 @@ class llvm_lowering {
     ankerl::unordered_dense::map<gir::local_id, llvm::Value*>          locals_;
     ankerl::unordered_dense::map<gir::segment_id, llvm::BasicBlock*>   segment_blocks_;
     ankerl::unordered_dense::map<std::string_view, llvm::GlobalValue*> globals_;
+    bool                                                               is_executable_{false};
+    std::string                                                        user_main_name_{"main"};
 };
 
 } // namespace ghoti::codegen

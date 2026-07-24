@@ -61,6 +61,115 @@ auto llvm_lowering::lower(const gir::module& gir_mod) -> stdx::box<llvm::Module>
     return std::move(llvm_module_);
 }
 
+auto llvm_lowering::lower_executable(const gir::module& gir_mod, std::string_view user_main_name)
+    -> stdx::box<llvm::Module> {
+    is_executable_  = true;
+    user_main_name_ = user_main_name;
+    for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
+    for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
+    for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
+    emit_main_entry_wrapper(user_main_name_);
+    return std::move(llvm_module_);
+}
+
+auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> llvm::Function* {
+    auto* user_fn{llvm_module_->getFunction("_ghoti_main")};
+    if (!user_fn) { user_fn = llvm_module_->getFunction(user_main_name); }
+    ASSERT(user_fn, "User main function not found in LLVM module");
+
+    auto* main_fn_ty{llvm::FunctionType::get(
+        types_.get_int32_ty(), {types_.get_int32_ty(), types_.get_ptr_ty()}, false)};
+    auto* main_fn{llvm::Function::Create(
+        main_fn_ty, llvm::Function::ExternalLinkage, "main", llvm_module_.get())};
+
+    auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", main_fn)};
+    builder_.SetInsertPoint(entry_bb);
+
+    auto* argc{main_fn->getArg(0)};
+    argc->setName("argc");
+    auto* argv{main_fn->getArg(1)};
+    argv->setName("argv");
+
+    auto* argc_i64{builder_.CreateSExt(argc, types_.get_int64_ty(), "argc.i64")};
+    auto* slice_ty{types_.translate_slice_type()};
+
+    // Allocate stack buffer for argc slice elements
+    auto* slice_array{builder_.CreateAlloca(slice_ty, argc_i64, "args.array")};
+
+    auto* loop_cond{llvm::BasicBlock::Create(context_, "loop.cond", main_fn)};
+    auto* loop_body{llvm::BasicBlock::Create(context_, "loop.body", main_fn)};
+    auto* loop_inc{llvm::BasicBlock::Create(context_, "loop.inc", main_fn)};
+    auto* loop_end{llvm::BasicBlock::Create(context_, "loop.end", main_fn)};
+
+    auto* i_var{builder_.CreateAlloca(types_.get_int64_ty(), nullptr, "i")};
+    builder_.CreateStore(builder_.getInt64(0), i_var);
+    builder_.CreateBr(loop_cond);
+
+    // Loop condition: i < argc_i64
+    builder_.SetInsertPoint(loop_cond);
+    auto* cur_i{builder_.CreateLoad(types_.get_int64_ty(), i_var, "cur.i")};
+    auto* cmp{builder_.CreateICmpSLT(cur_i, argc_i64, "cmp")};
+    builder_.CreateCondBr(cmp, loop_body, loop_end);
+
+    // Loop body: measure strlen(argv[i]) and store into slice_array[i]
+    builder_.SetInsertPoint(loop_body);
+    auto* argv_elem_ptr{builder_.CreateGEP(types_.get_ptr_ty(), argv, {cur_i}, "argv.elem.ptr")};
+    auto* str_ptr{builder_.CreateLoad(types_.get_ptr_ty(), argv_elem_ptr, "str.ptr")};
+
+    // Calculate strlen(str_ptr) via a sub-loop
+    auto* str_len_cond{llvm::BasicBlock::Create(context_, "strlen.cond", main_fn)};
+    auto* str_len_body{llvm::BasicBlock::Create(context_, "strlen.body", main_fn)};
+    auto* str_len_end{llvm::BasicBlock::Create(context_, "strlen.end", main_fn)};
+
+    auto* len_var{builder_.CreateAlloca(types_.get_int64_ty(), nullptr, "str.len")};
+    builder_.CreateStore(builder_.getInt64(0), len_var);
+    builder_.CreateBr(str_len_cond);
+
+    builder_.SetInsertPoint(str_len_cond);
+    auto* cur_len{builder_.CreateLoad(types_.get_int64_ty(), len_var, "cur.len")};
+    auto* char_ptr{builder_.CreateGEP(types_.get_int8_ty(), str_ptr, {cur_len}, "char.ptr")};
+    auto* char_val{builder_.CreateLoad(types_.get_int8_ty(), char_ptr, "char.val")};
+    auto* is_not_null{builder_.CreateICmpNE(char_val, builder_.getInt8(0), "not.null")};
+    builder_.CreateCondBr(is_not_null, str_len_body, str_len_end);
+
+    builder_.SetInsertPoint(str_len_body);
+    auto* next_len{builder_.CreateAdd(cur_len, builder_.getInt64(1), "next.len")};
+    builder_.CreateStore(next_len, len_var);
+    builder_.CreateBr(str_len_cond);
+
+    builder_.SetInsertPoint(str_len_end);
+    auto* final_len{builder_.CreateLoad(types_.get_int64_ty(), len_var, "final.len")};
+
+    // Store { str_ptr, final_len } into slice_array[cur_i]
+    auto* dest_slice_ptr{builder_.CreateGEP(slice_ty, slice_array, {cur_i}, "dest.slice.ptr")};
+    auto* dest_data_field{builder_.CreateStructGEP(slice_ty, dest_slice_ptr, 0, "dest.data")};
+    auto* dest_len_field{builder_.CreateStructGEP(slice_ty, dest_slice_ptr, 1, "dest.len")};
+    builder_.CreateStore(str_ptr, dest_data_field);
+    builder_.CreateStore(final_len, dest_len_field);
+    builder_.CreateBr(loop_inc);
+
+    // Loop increment: i++
+    builder_.SetInsertPoint(loop_inc);
+    auto* inc_i{builder_.CreateAdd(cur_i, builder_.getInt64(1), "inc.i")};
+    builder_.CreateStore(inc_i, i_var);
+    builder_.CreateBr(loop_cond);
+
+    // Loop end: construct outer slice [][:0]u8 and call user_fn
+    builder_.SetInsertPoint(loop_end);
+    auto* outer_slice{builder_.CreateAlloca(slice_ty, nullptr, "outer.slice")};
+    auto* outer_data{builder_.CreateStructGEP(slice_ty, outer_slice, 0, "outer.data")};
+    auto* outer_len{builder_.CreateStructGEP(slice_ty, outer_slice, 1, "outer.len")};
+    builder_.CreateStore(slice_array, outer_data);
+    builder_.CreateStore(argc_i64, outer_len);
+    auto* outer_val{builder_.CreateLoad(slice_ty, outer_slice, "outer.val")};
+
+    // Call user main
+    builder_.CreateCall(user_fn, {outer_val});
+    builder_.CreateRet(builder_.getInt32(0));
+
+    return main_fn;
+}
+
 auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVariable* {
     if (auto* existing{llvm_module_->getGlobalVariable(g.name)}) { return existing; }
 
@@ -86,16 +195,27 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
 }
 
 auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function* {
-    if (auto* existing = llvm_module_->getFunction(fn.get_name())) { return existing; }
+    if (const auto it{globals_.find(fn.get_name())}; it != globals_.end()) {
+        if (auto* existing{llvm::dyn_cast<llvm::Function>(it->second)}) { return existing; }
+    }
 
-    auto* fn_ty{
-        types_.translate_function_type(fn.get_type().get_data().as<sema::types::function>())};
-    auto g_linkage{llvm::GlobalValue::ExternalLinkage};
+    std::string fn_name{fn.get_name()};
+    auto        g_linkage{llvm::GlobalValue::ExternalLinkage};
     if (fn.get_linkage() == gir::linkage::INTERNAL) {
         g_linkage = llvm::GlobalValue::InternalLinkage;
     }
 
-    auto* llvm_fn{llvm::Function::Create(fn_ty, g_linkage, fn.get_name(), llvm_module_.get())};
+    if (is_executable_ && fn_name == user_main_name_) {
+        fn_name   = "_ghoti_main";
+        g_linkage = llvm::GlobalValue::InternalLinkage;
+    }
+
+    if (auto* existing = llvm_module_->getFunction(fn_name)) { return existing; }
+
+    auto* fn_ty{
+        types_.translate_function_type(fn.get_type().get_data().as<sema::types::function>())};
+
+    auto* llvm_fn{llvm::Function::Create(fn_ty, g_linkage, fn_name, llvm_module_.get())};
     for (usize i{0}; const auto& param : fn.get_params()) {
         auto* arg{llvm_fn->getArg(static_cast<u32>(i++))};
         arg->setName(param->name);
