@@ -31,6 +31,7 @@ pub fn build(b: *std.Build) !void {
     });
 
     const llvm: *LLVMBuilder = .init(b);
+    const lld: *LLDBuilder = .init(llvm);
     const clang: *ClangBuilder = .init(llvm);
     const cdb_gen: *CDBGenerator = .init(b);
 
@@ -61,6 +62,7 @@ pub fn build(b: *std.Build) !void {
     const artifacts = try addArtifacts(b, .{
         .optimize = optimize,
         .llvm = llvm,
+        .lld = lld,
         .cxx_flags = compiler_flags.wrapped.items,
         .cdb_steps = &cdb_steps,
         .install_tests_only = install_tests_only,
@@ -223,6 +225,7 @@ fn addArtifacts(b: *std.Build, config: struct {
     target: ?std.Build.ResolvedTarget = null,
     optimize: std.builtin.OptimizeMode,
     llvm: *LLVMBuilder,
+    lld: *LLDBuilder,
     cxx_flags: []const []const u8,
     cdb_steps: ?*stdx.ArrayList(*std.Build.Step),
     behavior: ?stdx.utils.ExecutableBehavior = null,
@@ -293,10 +296,13 @@ fn addArtifacts(b: *std.Build, config: struct {
         else
             .{ .allow_kaleidoscope = config.auto_install },
     });
+    config.lld.build();
 
     // The compiler's implementation & static library
     const llvm_includes = config.llvm.allIncludePaths();
     const llvm_artifacts = config.llvm.allTargetArtifacts();
+    const lld_includes = config.lld.allIncludePaths();
+    const lld_artifacts = config.lld.allArtifacts();
 
     const libcompiler = b.addLibrary(.{
         .name = "compiler",
@@ -318,6 +324,9 @@ fn addArtifacts(b: *std.Build, config: struct {
     for (llvm_includes.includes) |inc| libcompiler.root_module.addSystemIncludePath(inc);
     for (llvm_includes.config_headers) |header| libcompiler.root_module.addConfigHeader(header);
     for (llvm_artifacts) |artifact| libcompiler.root_module.linkLibrary(artifact);
+    for (lld_includes.includes) |inc| libcompiler.root_module.addSystemIncludePath(inc);
+    for (lld_includes.config_headers) |header| libcompiler.root_module.addConfigHeader(header);
+    for (lld_artifacts) |artifact| libcompiler.root_module.linkLibrary(artifact);
     if (config.auto_install) b.installArtifact(libcompiler);
     if (config.cdb_steps) |cdb_steps| cdb_steps.append(&libcompiler.step);
 
@@ -433,6 +442,9 @@ fn addArtifacts(b: *std.Build, config: struct {
         for (llvm_includes.includes) |inc| compiler_tests.root_module.addSystemIncludePath(inc);
         for (llvm_includes.config_headers) |header| compiler_tests.root_module.addConfigHeader(header);
         for (llvm_artifacts) |artifact| compiler_tests.root_module.linkLibrary(artifact);
+        for (lld_includes.includes) |inc| compiler_tests.root_module.addSystemIncludePath(inc);
+        for (lld_includes.config_headers) |header| compiler_tests.root_module.addConfigHeader(header);
+        for (lld_artifacts) |artifact| compiler_tests.root_module.linkLibrary(artifact);
 
         const driver_tests = stdx.builders.strappedTest(b, .{
             .target = target,
@@ -598,6 +610,7 @@ fn addPackageStep(b: *std.Build, config: struct {
             .target = target,
             .optimize = .ReleaseFast,
             .llvm = config.llvm.clone(),
+            .lld = LLDBuilder.init(config.llvm),
             .cxx_flags = config.cxx_flags,
             .cdb_steps = null,
             .behavior = .standalone,
