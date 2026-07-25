@@ -25,7 +25,7 @@ line_offsets::line_offsets(std::string_view input) {
 auto source_file::get_diagnostic_strings_at(const source_location& loc) const
     -> std::pair<std::string_view, stdx::option<std::string>> {
     PROFILE_FUNCTION();
-    if (loc.line > offsets_.size()) { return {"<invalid line>", stdx::none}; }
+    if (loc.line >= offsets_.size()) { return {"<invalid line>", stdx::none}; }
 
     const auto start{offsets_[loc.line]};
     const auto end{loc.line + 1 < offsets_.size() ? offsets_[loc.line + 1] : source_.size()};

@@ -985,6 +985,27 @@ auto type_resolver::resolve_structural_access(type&                          obj
     const auto enum_type{object_data.as_opt<types::enum_t>()};
     const auto struct_type{object_data.as_opt<types::struct_t>()};
     const auto union_type{object_data.as_opt<types::union_t>()};
+    const auto slice_type{object_data.as_opt<types::slice>()};
+
+    if (slice_type) {
+        const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(member)};
+        if (member_ident.name == "ptr") {
+            return &ctx_.get_pointer(object_type.get_key().get_mut(), slice_type->underlying);
+        }
+        if (member_ident.name == "len") {
+            return &ctx_.get_builtin_resolved_type(type_kind::USIZE);
+        }
+        return make_sema_err(
+            object_name
+                .transform([&](std::string_view name) -> std::string {
+                    return fmt::format(
+                        "Type '{}' has no field named '{}'", name, member_ident.name);
+                })
+                .value_or(fmt::format("Type 'slice' has no field named '{}'", member_ident.name)),
+            error::UNDECLARED_IDENTIFIER,
+            resolving_.ast.location_of(member));
+    }
+
     if (!enum_type && !struct_type && !union_type) {
         return make_sema_err(
             fmt::format(
@@ -1057,6 +1078,11 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
                                           get_rightmost_name(dot.object))};
     if (!result) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(result).error()));
+    }
+
+    if (object_type.get_kind() == type_kind::SLICE) {
+        resolving_.set_sema_type(dot.member, **result);
+        return last_type_.emplace(*result);
     }
 
     const auto check_access = [&](const mod::module& enclosing,

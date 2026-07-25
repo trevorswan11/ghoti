@@ -342,6 +342,20 @@ TEST_CASE("Initializer expression in various resolution contexts") {
                              sema::error::UNKNOWN_FIELD,
                              std::pair{0UZ, 65UZ}});
     }
+
+    SECTION("Slice field access") {
+        const auto [ctx, idx]{helpers::resolve_and_check(R"(
+            const s: []u8 = @sliceFromPtr(^1, 10UZ);
+            const p := s.ptr;
+            const l := s.len;
+        )")};
+        check_access_decl(
+            *ctx,
+            idx,
+            "p",
+            ctx->get_type(sema::type_kind::POINTER, ctx->get_type(sema::type_kind::U8)));
+        check_access_decl(*ctx, idx, "l", ctx->get_type(sema::type_kind::USIZE));
+    }
 }
 
 } // namespace ghoti::tests

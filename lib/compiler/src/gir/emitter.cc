@@ -1557,16 +1557,21 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             ASSERT(obj_type, "Dot expression object must have a resolved type");
 
             const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
-            const auto& table{ctx_.registry.get(obj_type->get_symbol_table_idx())};
-            const auto  proxy{table.get_proxy_opt(member_ident.name)};
-            ASSERT(proxy, "Member must exist in struct symbol table");
+            u64         member_idx{0};
+            if (obj_type->get_kind() == sema::type_kind::SLICE) {
+                member_idx = member_ident.name == "ptr" ? 0 : 1;
+            } else {
+                const auto& table{ctx_.registry.get(obj_type->get_symbol_table_idx())};
+                const auto  proxy{table.get_proxy_opt(member_ident.name)};
+                ASSERT(proxy, "Member must exist in struct symbol table");
+                member_idx = proxy->index;
+            }
 
-            const auto [sym, member_idx]{*proxy};
             auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
             auto& field_type{active_mod().get_sema_type_opt(dot.member).value_or(*obj_type)};
 
             const auto field_ptr{builder_.emit_get_element_ptr(
-                base_lval, {value{static_cast<u64>(member_idx), usize_type}}, field_type)};
+                base_lval, {value{member_idx, usize_type}}, field_type)};
             return value{field_ptr, field_type};
         },
         [&](const ast::index_expr& index) -> value {
@@ -1817,6 +1822,17 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
     const auto obj_type{active_mod().get_sema_type_opt(dot.object)};
     ASSERT(obj_type, "Dot expression object must have a resolved type");
     const auto member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
+
+    if (obj_type->get_kind() == sema::type_kind::SLICE) {
+        const u64  member_idx{member_ident.name == "ptr" ? 0ULL : 1ULL};
+        auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+        auto&      field_type{sema_type ? *sema_type : *obj_type};
+        const auto base_lval{emit_lvalue(dot.object)};
+        const auto field_ptr{
+            builder_.emit_get_element_ptr(base_lval, {value{member_idx, usize_type}}, field_type)};
+        const auto loaded{builder_.emit_load(value{field_ptr, field_type}, field_type)};
+        return value{loaded, field_type};
+    }
 
     const auto& table{ctx_.registry.get(obj_type->get_symbol_table_idx())};
     if (const auto proxy{table.get_proxy_opt(member_ident.name)}) {
