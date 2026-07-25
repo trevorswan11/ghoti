@@ -1,7 +1,9 @@
 #include "helpers/codegen.hh"
 
 #include <filesystem>
+#include <string_view>
 
+#include <lld/Common/CommonLinkerContext.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LegacyPassManager.h>
@@ -15,6 +17,7 @@
 #include <stdx/result.hh>
 
 #include "compiler/codegen/error.hh"
+#include "compiler/codegen/llvm_scope.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/sema/analyzer.hh"
@@ -22,9 +25,7 @@
 
 namespace ghoti::tests::helpers {
 
-namespace { codegen::llvm_global_target_init llvm_target_init_; } // namespace
-
-llvm_test_scope::~llvm_test_scope() { llvm::llvm_shutdown(); }
+namespace { codegen::llvm_global_target_init init_; } // namespace
 
 auto emit_llvm_ir(helpers::sema_test_context&       test_ctx,
                   llvm::LLVMContext&                context,
@@ -40,6 +41,23 @@ auto emit_llvm_ir(helpers::sema_test_context&       test_ctx,
                                          codegen::error::MODULE_LOAD_ERROR);
     }
     return test_ctx.analyzer.emit_llvm_ir(gir_mod, context, options);
+}
+
+auto emit_llvm_ir_executable(helpers::sema_test_context&       test_ctx,
+                             llvm::LLVMContext&                context,
+                             const codegen::optimizer_options& options,
+                             std::string_view                  user_main_name)
+    -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic> {
+    if (test_ctx.root_mod.is_poisoned()) {
+        return codegen::make_codegen_err("Module is poisoned", codegen::error::MODULE_LOAD_ERROR);
+    }
+
+    auto gir_mod{test_ctx.analyzer.emit_gir(test_ctx.root_mod)};
+    if (test_ctx.root_mod.is_poisoned()) {
+        return codegen::make_codegen_err("Module is poisoned during GIR emission",
+                                         codegen::error::MODULE_LOAD_ERROR);
+    }
+    return test_ctx.analyzer.emit_llvm_ir_executable(gir_mod, context, options, user_main_name);
 }
 
 auto emit_object(helpers::sema_test_context&       test_ctx,
@@ -58,6 +76,25 @@ auto emit_object(helpers::sema_test_context&       test_ctx,
                                          codegen::error::MODULE_LOAD_ERROR);
     }
     return test_ctx.analyzer.emit_object(gir_mod, context, target_opts, opt_options, output_path);
+}
+
+auto emit_executable(helpers::sema_test_context&       test_ctx,
+                     llvm::LLVMContext&                context,
+                     const std::filesystem::path&      output_path,
+                     const codegen::target_options&    target_opts,
+                     const codegen::optimizer_options& opt_options)
+    -> stdx::result<void, codegen::diagnostic> {
+    if (test_ctx.root_mod.is_poisoned()) {
+        return codegen::make_codegen_err("Module is poisoned", codegen::error::MODULE_LOAD_ERROR);
+    }
+
+    auto gir_mod{test_ctx.analyzer.emit_gir(test_ctx.root_mod)};
+    if (test_ctx.root_mod.is_poisoned()) {
+        return codegen::make_codegen_err("Module is poisoned during GIR emission",
+                                         codegen::error::MODULE_LOAD_ERROR);
+    }
+    return test_ctx.analyzer.emit_executable(
+        gir_mod, context, target_opts, opt_options, output_path);
 }
 
 } // namespace ghoti::tests::helpers

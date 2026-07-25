@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <ostream>
+#include <string_view>
 
 #include <stdx/arena.hh>
 #include <stdx/memory.hh>
@@ -11,6 +12,7 @@
 #include <stdx/utility.hh>
 
 #include "compiler/codegen/error.hh"
+#include "compiler/codegen/linker.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
@@ -81,9 +83,15 @@ class analyzer {
     auto resolve_types(mod::module& module) -> mod::module_state;
     auto emit_gir(mod::module& module) -> gir::module;
     auto check_types(gir::module& gir_module, mod::module& ast_module) -> mod::module_state;
+    auto validate_main_entry(const mod::module& root_module) const -> stdx::result<void, diagnostic>;
     auto emit_llvm_ir(gir::module&                      gir_module,
                       llvm::LLVMContext&                context,
                       const codegen::optimizer_options& options)
+        -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic>;
+    auto emit_llvm_ir_executable(gir::module&                      gir_module,
+                                 llvm::LLVMContext&                context,
+                                 const codegen::optimizer_options& options,
+                                 std::string_view                  user_main_name = "main")
         -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic>;
     auto emit_object(gir::module&                      gir_module,
                      const codegen::target_options&    target_opts,
@@ -95,6 +103,19 @@ class analyzer {
                      const codegen::target_options&    target_opts,
                      const codegen::optimizer_options& opt_options,
                      const std::filesystem::path&      output_path)
+        -> stdx::result<void, codegen::diagnostic>;
+    auto emit_executable(gir::module&                      gir_module,
+                         const codegen::target_options&    target_opts,
+                         const codegen::optimizer_options& opt_options,
+                         const std::filesystem::path&      output_path,
+                         const codegen::extra_linker_options& linker_opts = {})
+        -> stdx::result<void, codegen::diagnostic>;
+    auto emit_executable(gir::module&                      gir_module,
+                         llvm::LLVMContext&                context,
+                         const codegen::target_options&    target_opts,
+                         const codegen::optimizer_options& opt_options,
+                         const std::filesystem::path&      output_path,
+                         const codegen::extra_linker_options& linker_opts = {})
         -> stdx::result<void, codegen::diagnostic>;
 
   private:
