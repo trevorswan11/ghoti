@@ -8,6 +8,7 @@
 #include <fmt/ostream.h>
 #include <gsl/util>
 
+#include "compiler/codegen/llvm_scope.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
 #include "driver/clap/error.hh"
@@ -20,13 +21,15 @@ namespace ghoti::tests {
 
 TEST_CASE("build_obj command execution") {
     SECTION("Non-existent input file returns FILE_NOT_FOUND") {
-        cmd::build_obj cmd{"non_existent_file_12345.gh", "out.o", {}, {}};
+        codegen::llvm_scope scope;
+        cmd::build_obj      cmd{"non_existent_file_12345.gh", "out.o", {}, {}};
         CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::FILE_NOT_FOUND);
     }
 
     SECTION("Valid source file compiles and emits object file") {
-        tempfile src_file{"test_source.gh"};
-        tempfile obj_file{"test_output.o"};
+        codegen::llvm_scope scope;
+        tempfile            src_file{"test_source.gh"};
+        tempfile            obj_file{"test_output.o"};
 
         {
             std::ofstream out{src_file.path};
@@ -51,8 +54,9 @@ TEST_CASE("build_obj command execution") {
     }
 
     SECTION("Cross-target compilation for Linux x86_64 emits ELF binary") {
-        tempfile src_file{"test_linux_source.gh"};
-        tempfile obj_file{"test_linux_output.o"};
+        codegen::llvm_scope scope;
+        tempfile            src_file{"test_linux_source.gh"};
+        tempfile            obj_file{"test_linux_output.o"};
 
         {
             std::ofstream out{src_file.path};
@@ -77,8 +81,9 @@ TEST_CASE("build_obj command execution") {
     }
 
     SECTION("Invalid syntax returns COMPILATION_FAILED") {
-        tempfile src_file{"test_invalid.gh"};
-        tempfile obj_file{"test_invalid.o"};
+        codegen::llvm_scope scope;
+        tempfile            src_file{"test_invalid.gh"};
+        tempfile            obj_file{"test_invalid.o"};
 
         {
             std::ofstream out{src_file.path};
@@ -90,6 +95,7 @@ TEST_CASE("build_obj command execution") {
     }
 
     SECTION("Multi-file compilation with relative file import on disk") {
+        codegen::llvm_scope scope;
         // Place helper in the same directory as main
         const auto parent_dir{std::filesystem::temp_directory_path()};
         const auto helper_path{parent_dir / "ghoti_test_helper.gh"};
@@ -125,8 +131,9 @@ TEST_CASE("build_obj command execution") {
     }
 
     SECTION("Standard library import on disk with generic functions") {
-        tempfile src_file{"test_std_import.gh"};
-        tempfile obj_file{"test_std_output.o"};
+        codegen::llvm_scope scope;
+        tempfile            src_file{"test_std_import.gh"};
+        tempfile            obj_file{"test_std_output.o"};
 
         {
             std::ofstream out{src_file.path};
@@ -150,9 +157,10 @@ TEST_CASE("build_obj command execution") {
     }
 
     SECTION("Custom library module import via -m on disk") {
-        tempfile custom_lib{"test_custom_lib.gh"};
-        tempfile src_file{"test_custom_import.gh"};
-        tempfile obj_file{"test_custom_output.o"};
+        codegen::llvm_scope scope;
+        tempfile            custom_lib{"test_custom_lib.gh"};
+        tempfile            src_file{"test_custom_import.gh"};
+        tempfile            obj_file{"test_custom_output.o"};
 
         {
             std::ofstream lib_out{custom_lib.path};
@@ -180,9 +188,10 @@ TEST_CASE("build_obj command execution") {
     }
 
     SECTION("Custom generic library module import via -m on disk") {
-        tempfile custom_lib{"test_custom_generic_lib.gh"};
-        tempfile src_file{"test_custom_generic_import.gh"};
-        tempfile obj_file{"test_custom_generic_output.o"};
+        codegen::llvm_scope scope;
+        tempfile            custom_lib{"test_custom_generic_lib.gh"};
+        tempfile            src_file{"test_custom_generic_import.gh"};
+        tempfile            obj_file{"test_custom_generic_output.o"};
 
         {
             std::ofstream lib_out{custom_lib.path};

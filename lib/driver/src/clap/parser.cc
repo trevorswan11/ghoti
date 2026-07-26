@@ -1,8 +1,8 @@
 #include "driver/clap/parser.hh"
 
-#include <filesystem>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <CLI/CLI.hpp>
@@ -17,13 +17,12 @@
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
-#include <vector>
 
-#include "compiler/codegen/opt_level.hh"
-#include "compiler/codegen/target.hh"
 #include "driver/clap/error.hh"
 #include "driver/clap/formatter.hh"
+#include "driver/cmd/build_exe.hh"
 #include "driver/cmd/build_obj.hh"
+#include "driver/cmd/build_options.hh"
 #include "driver/cmd/command.hh"
 #include "driver/cmd/repl.hh"
 #include "ghoti/config.h"
@@ -47,6 +46,7 @@ auto parser::parse() -> stdx::result<stdx::box<cmd::command>, error> {
 
     const auto repl_cmd{setup_repl_subcmd()};
     const auto build_obj_cmd{setup_build_obj_subcmd()};
+    const auto build_exe_cmd{setup_build_exe_subcmd()};
 
     // No arguments should be handled by printing help and exiting
     if (argc_ == 1) {
@@ -61,63 +61,17 @@ auto parser::parse() -> stdx::result<stdx::box<cmd::command>, error> {
     if (repl_cmd->parsed()) { return stdx::make_box<cmd::repl>(error_stream_); }
 
     if (build_obj_cmd->parsed()) {
-        codegen::optimizer_options opt_opts;
-        opt_opts.debug_logging = build_obj_opts_.debug_passes;
-        opt_opts.time_passes   = build_obj_opts_.time_passes;
+        auto opts{cmd::build_options_base::process_raw(build_obj_opts_, ".o", error_stream_)};
+        if (!opts) { return stdx::err{opts.error()}; }
+        return stdx::make_box<cmd::build_obj>(std::move(*opts), error_stream_);
+    }
 
-        if (!build_obj_opts_.opt_level_str.empty()) {
-            if (auto level{codegen::parse_opt_level(build_obj_opts_.opt_level_str)}) {
-                opt_opts.level = *level;
-            } else {
-                return fatal_error(
-                    error_stream_,
-                    fmt::format("invalid optimization level '{}'", build_obj_opts_.opt_level_str),
-                    error::INVALID_OPTIMIZATION);
-            }
-        } else if (build_obj_opts_.release) {
-            opt_opts.level = codegen::opt_level::O2;
-        } else {
-            opt_opts.level = codegen::opt_level::O0;
-        }
-
-        std::filesystem::path input_path{build_obj_opts_.input};
-        std::filesystem::path output_path;
-        if (build_obj_opts_.output.empty()) {
-            output_path = input_path;
-            output_path.replace_extension(".o");
-        } else {
-            output_path = build_obj_opts_.output;
-        }
-
-        codegen::target_options target_opts{
-            .triple_str = build_obj_opts_.target.empty()
-                              ? stdx::none
-                              : stdx::option<std::string>{build_obj_opts_.target},
-            .cpu        = build_obj_opts_.cpu.empty() ? "generic" : build_obj_opts_.cpu,
-            .features   = build_obj_opts_.features,
-            .level      = opt_opts.level,
-        };
-
-        std::vector<cmd::module_binding> modules;
-        for (const auto& raw : build_obj_opts_.module_raw_args) {
-            const auto comma_pos{raw.find(',')};
-            if (comma_pos == std::string::npos || comma_pos == 0 || comma_pos + 1 >= raw.size()) {
-                return fatal_error(
-                    error_stream_,
-                    fmt::format("invalid module format '{}', expected '<name>,<path>'", raw),
-                    error::INVALID_MODULE_SPEC);
-            }
-            auto name{raw.substr(0, comma_pos)};
-            auto mod_path{raw.substr(comma_pos + 1)};
-            modules.emplace_back(std::move(name), std::filesystem::path{std::move(mod_path)});
-        }
-
-        return stdx::make_box<cmd::build_obj>(std::move(input_path),
-                                              std::move(output_path),
-                                              std::move(target_opts),
-                                              std::move(opt_opts),
-                                              std::move(modules),
-                                              error_stream_);
+    if (build_exe_cmd->parsed()) {
+        constexpr std::string_view default_ext{GHOTI_WINDOWS ? ".exe" : ""};
+        auto                       opts{
+            cmd::build_options_base::process_raw(build_exe_opts_, default_ext, error_stream_)};
+        if (!opts) { return stdx::err{opts.error()}; }
+        return stdx::make_box<cmd::build_exe>(std::move(*opts), error_stream_);
     }
 
     return fatal_error(error_stream_, "expected command argument", error::MISSING_SUBCOMMAND);
@@ -131,25 +85,16 @@ auto parser::setup_build_obj_subcmd() -> gsl::not_null<CLI::App*> {
     auto* build_obj_cmd{app_.add_subcommand("build-obj", "Build an object file from source")};
     build_obj_cmd->add_option("input_file", build_obj_opts_.input, "Input source file (.gh)")
         ->required();
-    build_obj_cmd->add_option(
-        "-o,--output", build_obj_opts_.output, "Output object file (.o / .obj)");
-    build_obj_cmd->add_option("-m,--module",
-                              build_obj_opts_.module_raw_args,
-                              "Register a library module (format: <name>,<path>)");
-    build_obj_cmd->add_option("--target", build_obj_opts_.target, "Target triple");
-    build_obj_cmd->add_option(
-        "--cpu", build_obj_opts_.cpu, "Target CPU architecture (default: generic)");
-    build_obj_cmd->add_option("--features", build_obj_opts_.features, "Target CPU features");
-    build_obj_cmd->add_option(
-        "-O,--opt-level", build_obj_opts_.opt_level_str, "Optimization level (0, 1, 2, 3, s, z)");
-    build_obj_cmd->add_flag(
-        "--release", build_obj_opts_.release, "Build in release mode (defaults to -O2)");
-    build_obj_cmd->add_flag("--debug-passes",
-                            build_obj_opts_.debug_passes,
-                            "Enable debug logging and IR printing after passes");
-    build_obj_cmd->add_flag(
-        "--time-passes", build_obj_opts_.time_passes, "Enable pass execution timing report");
+    setup_build_options_flags(build_obj_cmd, build_obj_opts_, "Output object file (.o / .obj)");
     return build_obj_cmd;
+}
+
+auto parser::setup_build_exe_subcmd() -> gsl::not_null<CLI::App*> {
+    auto* build_exe_cmd{app_.add_subcommand("build-exe", "Build an executable binary from source")};
+    build_exe_cmd->add_option("input_file", build_exe_opts_.input, "Input source file (.gh)")
+        ->required();
+    setup_build_options_flags(build_exe_cmd, build_exe_opts_, "Output executable binary");
+    return build_exe_cmd;
 }
 
 } // namespace ghoti::clap

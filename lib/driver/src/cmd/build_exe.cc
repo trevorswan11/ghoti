@@ -1,4 +1,4 @@
-#include "driver/cmd/build_obj.hh"
+#include "driver/cmd/build_exe.hh"
 
 #include <filesystem>
 
@@ -15,7 +15,7 @@
 
 namespace ghoti::cmd {
 
-auto build_obj::execute() -> stdx::result<void, clap::error> {
+auto build_exe::execute() -> stdx::result<void, clap::error> {
     PROFILE_FUNCTION();
 
     if (!std::filesystem::exists(opts_.input_path)) {
@@ -32,11 +32,24 @@ auto build_obj::execute() -> stdx::result<void, clap::error> {
     sema::analyzer analyzer{manager, error_stream_, true};
     auto           module{TRY(opts_.analyze(analyzer, manager, error_stream_))};
 
+    // Validate that root module contains valid 'pub const main := fn(args: [][:0]u8): void'
+    if (auto val_res{analyzer.validate_main_entry(*module)}; !val_res) {
+        return clap::fatal_error(
+            error_stream_, val_res.error().to_string(), clap::error::COMPILATION_FAILED);
+    }
+
     auto gir_mod{analyzer.emit_gir(*module)};
     if (module->is_poisoned()) { return stdx::err{clap::error::COMPILATION_FAILED}; }
 
-    auto emit_res{
-        analyzer.emit_object(gir_mod, opts_.target_opts, opts_.opt_opts, opts_.output_path)};
+    auto emit_res{analyzer.emit_executable(gir_mod,
+                                           opts_.target_opts,
+                                           opts_.opt_opts,
+                                           opts_.output_path,
+                                           {
+                                               .objects       = opts_.extra_objects,
+                                               .library_paths = opts_.library_paths,
+                                               .libraries     = opts_.libraries,
+                                           })};
     if (!emit_res) {
         return clap::fatal_error(error_stream_,
                                  emit_res.error().get_message().value_or(GHOTI_UNKNOWN_ERROR),

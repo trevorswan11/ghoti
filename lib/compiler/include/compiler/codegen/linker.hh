@@ -2,10 +2,10 @@
 
 #include <filesystem>
 #include <string>
-#include <vector>
 
 #include <stdx/result.hh>
 #include <stdx/types.hh>
+#include <gsl/span>
 
 #include "compiler/codegen/error.hh"
 #include "compiler/codegen/target.hh"
@@ -13,9 +13,9 @@
 namespace ghoti::codegen {
 
 struct extra_linker_options {
-    std::vector<std::filesystem::path> objects{};
-    std::vector<std::filesystem::path> library_paths{};
-    std::vector<std::string>           libraries{};
+    gsl::span<std::filesystem::path> objects{};
+    gsl::span<std::filesystem::path> library_paths{};
+    gsl::span<std::string>           libraries{};
 };
 
 [[nodiscard]] auto link_executable(const std::filesystem::path& object_file,

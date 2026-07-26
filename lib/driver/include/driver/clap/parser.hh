@@ -11,7 +11,7 @@
 #include <stdx/utility.hh>
 
 #include "driver/clap/error.hh"
-#include "driver/cmd/build_obj.hh"
+#include "driver/cmd/build_options.hh"
 #include "driver/cmd/command.hh"
 #include "driver/platform/win32.hh"
 
@@ -29,6 +29,7 @@ class parser {
   private:
     [[nodiscard]] auto setup_repl_subcmd() -> gsl::not_null<CLI::App*>;
     [[nodiscard]] auto setup_build_obj_subcmd() -> gsl::not_null<CLI::App*>;
+    [[nodiscard]] auto setup_build_exe_subcmd() -> gsl::not_null<CLI::App*>;
 
   private:
     i32           argc_;
@@ -37,6 +38,7 @@ class parser {
 
     CLI::App            app_;
     cmd::build_obj_opts build_obj_opts_;
+    cmd::build_exe_opts build_exe_opts_;
 
 #if GHOTI_WINDOWS
     win32::rich_console console_;

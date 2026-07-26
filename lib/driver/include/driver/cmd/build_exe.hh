@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <iostream>
+#include <string>
 #include <vector>
 
 #include <stdx/result.hh>
@@ -16,12 +17,12 @@
 
 namespace ghoti::cmd {
 
-class build_obj final : public command {
+class build_exe final : public command {
   public:
-    explicit build_obj(build_options_base opts, std::ostream& error_stream = std::cerr)
+    explicit build_exe(build_options_base opts, std::ostream& error_stream = std::cerr)
         : command{error_stream}, opts_{std::move(opts)} {}
 
-    build_obj(std::filesystem::path              input_path,
+    build_exe(std::filesystem::path              input_path,
               std::filesystem::path              output_path,
               codegen::target_options            target_opts,
               codegen::optimizer_options         opt_opts,
@@ -30,14 +31,16 @@ class build_obj final : public command {
               std::vector<std::filesystem::path> library_paths = {},
               std::vector<std::string>           libraries     = {},
               std::ostream&                      error_stream  = std::cerr)
-        : command{error_stream}, opts_{.input_path    = std::move(input_path),
-                                       .output_path   = std::move(output_path),
-                                       .target_opts   = std::move(target_opts),
-                                       .opt_opts      = std::move(opt_opts),
-                                       .modules       = std::move(modules),
-                                       .extra_objects = std::move(extra_objects),
-                                       .library_paths = std::move(library_paths),
-                                       .libraries     = std::move(libraries)} {}
+        : command{error_stream}, opts_{
+                                     .input_path    = std::move(input_path),
+                                     .output_path   = std::move(output_path),
+                                     .target_opts   = std::move(target_opts),
+                                     .opt_opts      = std::move(opt_opts),
+                                     .modules       = std::move(modules),
+                                     .extra_objects = std::move(extra_objects),
+                                     .library_paths = std::move(library_paths),
+                                     .libraries     = std::move(libraries),
+                                 } {}
 
     auto execute() -> stdx::result<void, clap::error> override;
 
