@@ -3,10 +3,12 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "compiler/codegen/llvm_scope.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
 #include "driver/clap/error.hh"
 #include "driver/clap/parser.hh"
+#include "driver/cmd/build_exe.hh"
 #include "driver/cmd/build_obj.hh"
 #include "driver/cmd/repl.hh"
 #include "helpers/argv.hh"
@@ -14,7 +16,7 @@
 
 namespace ghoti::tests {
 
-namespace { codegen::llvm_global_target_init llvm_target_init_; } // namespace
+namespace { codegen::llvm_global_target_init init_; } // namespace
 
 TEST_CASE("Error with no args") {
     auto               args{helpers::mock_argv{"ghoti"}};
@@ -37,9 +39,11 @@ TEST_CASE("build-obj subcommand parser") {
         clap::parser parser{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(parser.parse())};
         auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
-        CHECK(build_cmd.get_input_path() == "src/main.gh");
-        CHECK(build_cmd.get_output_path() == "src/main.o");
-        CHECK(build_cmd.get_opt_opts().level == codegen::opt_level::O0);
+
+        const auto& opts{build_cmd.get_opts()};
+        CHECK(opts.input_path == "src/main.gh");
+        CHECK(opts.output_path == "src/main.o");
+        CHECK(opts.opt_opts.level == codegen::opt_level::O0);
     }
 
     SECTION("Explicit output path") {
@@ -47,8 +51,10 @@ TEST_CASE("build-obj subcommand parser") {
         clap::parser parser{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(parser.parse())};
         auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
-        CHECK(build_cmd.get_input_path() == "main.gh");
-        CHECK(build_cmd.get_output_path() == "bin/out.o");
+
+        const auto& opts{build_cmd.get_opts()};
+        CHECK(opts.input_path == "main.gh");
+        CHECK(opts.output_path == "bin/out.o");
     }
 
     SECTION("Target options parsing") {
@@ -64,7 +70,7 @@ TEST_CASE("build-obj subcommand parser") {
         clap::parser parser{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(parser.parse())};
         auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
-        const auto&  target_opts{build_cmd.get_target_opts()};
+        const auto&  target_opts{build_cmd.get_opts().target_opts};
         REQUIRE(target_opts.triple_str.has_value());
         CHECK(*target_opts.triple_str == "x86_64-unknown-linux-gnu");
         CHECK(target_opts.cpu == "skylake");
@@ -77,7 +83,8 @@ TEST_CASE("build-obj subcommand parser") {
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
             auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
-            CHECK(build_cmd.get_opt_opts().level == codegen::opt_level::O0);
+            const auto&  opts{build_cmd.get_opts()};
+            CHECK(opts.opt_opts.level == codegen::opt_level::O0);
         }
 
         SECTION("Release flag sets O2 default") {
@@ -85,7 +92,8 @@ TEST_CASE("build-obj subcommand parser") {
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
             auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
-            CHECK(build_cmd.get_opt_opts().level == codegen::opt_level::O2);
+            const auto&  opts{build_cmd.get_opts()};
+            CHECK(opts.opt_opts.level == codegen::opt_level::O2);
         }
 
         SECTION("Explicit -O flags override default") {
@@ -93,7 +101,8 @@ TEST_CASE("build-obj subcommand parser") {
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
             auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
-            CHECK(build_cmd.get_opt_opts().level == codegen::opt_level::O3);
+            const auto&  opts{build_cmd.get_opts()};
+            CHECK(opts.opt_opts.level == codegen::opt_level::O3);
         }
 
         SECTION("Explicit -Os and -Oz flags") {
@@ -101,7 +110,8 @@ TEST_CASE("build-obj subcommand parser") {
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
             auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
-            CHECK(build_cmd.get_opt_opts().level == codegen::opt_level::Os);
+            const auto&  opts{build_cmd.get_opts()};
+            CHECK(opts.opt_opts.level == codegen::opt_level::Os);
         }
 
         SECTION("Pass debugging and timing flags") {
@@ -110,8 +120,9 @@ TEST_CASE("build-obj subcommand parser") {
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
             auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
-            CHECK(build_cmd.get_opt_opts().debug_logging);
-            CHECK(build_cmd.get_opt_opts().time_passes);
+            const auto&  opts{build_cmd.get_opts()};
+            CHECK(opts.opt_opts.debug_logging);
+            CHECK(opts.opt_opts.time_passes);
         }
 
         SECTION("Invalid optimization level returns error") {
@@ -130,7 +141,7 @@ TEST_CASE("build-obj subcommand parser") {
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
             auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
-            const auto&  mods{build_cmd.get_modules()};
+            const auto&  mods{build_cmd.get_opts().modules};
             REQUIRE(mods.size() == 1);
             CHECK(mods[0].name == "math");
             CHECK(mods[0].path == "src/math.gh");
@@ -147,7 +158,7 @@ TEST_CASE("build-obj subcommand parser") {
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
             auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
-            const auto&  mods{build_cmd.get_modules()};
+            const auto&  mods{build_cmd.get_opts().modules};
             REQUIRE(mods.size() == 2);
             CHECK(mods[0].name == "math");
             CHECK(mods[0].path == "src/math.gh");
@@ -163,6 +174,20 @@ TEST_CASE("build-obj subcommand parser") {
             CHECK(UNWRAP_ERR(parser.parse()) == clap::error::INVALID_MODULE_SPEC);
             CHECK_FALSE(error_ss.view().empty());
         }
+    }
+}
+
+TEST_CASE("build-exe subcommand parser") {
+    SECTION("Basic positional input file with options") {
+        auto args{helpers::mock_argv{"ghoti", "build-exe", "-o", "bin/myprog", "src/main.gh"}};
+        clap::parser parser{args.argc(), args.argv(), std::cerr, false};
+        auto         cmd{UNWRAP(parser.parse())};
+        auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_exe*>(cmd.get()))};
+
+        const auto& opts{build_cmd.get_opts()};
+        CHECK(opts.input_path == "src/main.gh");
+        CHECK(opts.output_path == "bin/myprog");
+        CHECK(opts.opt_opts.level == codegen::opt_level::O0);
     }
 }
 
