@@ -1081,8 +1081,10 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
     }
 
     if (object_type.get_kind() == type_kind::SLICE) {
-        resolving_.set_sema_type(dot.member, **result);
-        return last_type_.emplace(*result);
+        auto& member_type{**result};
+        resolving_.set_sema_type(dot.member, member_type);
+        resolving_.set_sema_type(id, member_type);
+        return last_type_.emplace(member_type);
     }
 
     const auto check_access = [&](const mod::module& enclosing,

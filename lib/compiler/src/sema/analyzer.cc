@@ -220,8 +220,9 @@ auto analyzer::validate_main_entry(const mod::module& root_module) const
                              main_sym.get_symbol_location(root_module));
     }
 
-    if (fn_data.return_type.get_kind() != type_kind::VOID) {
-        return make_sema_err("'main' return type must be 'void'",
+    const auto ret_kind{fn_data.return_type.get_kind()};
+    if (ret_kind != type_kind::VOID && ret_kind != type_kind::I32) {
+        return make_sema_err("'main' return type must be 'void' or 'i32'",
                              error::TYPE_MISMATCH,
                              main_sym.get_symbol_location(root_module));
     }

@@ -24,7 +24,7 @@ namespace ghoti::tests {
 
 TEST_CASE("Optimizer over non trivial function at all levels") {
     codegen::llvm_scope scope;
-    llvm::LLVMContext        context;
+    llvm::LLVMContext   context;
 
     for (const auto level : stdx::enum_range<codegen::opt_level>()) {
         DYNAMIC_SECTION("Level " << magic_enum::enum_name(level)) {
@@ -55,7 +55,7 @@ TEST_CASE("Optimizer over non trivial function at all levels") {
 
 TEST_CASE("Optimizing, folding, and propagating constants") {
     codegen::llvm_scope scope;
-    llvm::LLVMContext        context;
+    llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         pub const fold_me := fn(x: i64): i64 {
@@ -94,7 +94,7 @@ TEST_CASE("Optimizing, folding, and propagating constants") {
 
 TEST_CASE("Mem2Reg and Alloca elimination") {
     codegen::llvm_scope scope;
-    llvm::LLVMContext        context;
+    llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         pub const add_vars := fn(a: i64, b: i64): i64 {
@@ -135,7 +135,7 @@ TEST_CASE("Mem2Reg and Alloca elimination") {
 
 TEST_CASE("Dead code elimination") {
     codegen::llvm_scope scope;
-    llvm::LLVMContext        context;
+    llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         pub const dead_calc := fn(a: i64): i64 {
@@ -156,7 +156,7 @@ TEST_CASE("Dead code elimination") {
 
 TEST_CASE("Function inlining") {
     codegen::llvm_scope scope;
-    llvm::LLVMContext        context;
+    llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const helper := fn(x: i64): i64 {
@@ -199,7 +199,7 @@ TEST_CASE("Function inlining") {
 
 TEST_CASE("Optimizer with debug and timing flags") {
     codegen::llvm_scope scope;
-    llvm::LLVMContext        context;
+    llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         pub const test_fn := fn(x: i32): i32 {

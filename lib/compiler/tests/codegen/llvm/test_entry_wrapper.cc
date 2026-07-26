@@ -57,14 +57,24 @@ TEST_CASE("Main function entry validation") {
         CHECK_FALSE(ctx->analyzer.validate_main_entry(ctx->root_mod));
     }
 
-    SECTION("Main with non-void return returns error") {
+    SECTION("Main with non-void and non-i32 return returns error") {
+        constexpr auto input = R"(
+            pub const main := fn(args: [][:0]u8): bool {
+                return true;
+            };
+        )";
+        auto [ctx, idx]{helpers::resolve_and_check(input)};
+        CHECK_FALSE(ctx->analyzer.validate_main_entry(ctx->root_mod));
+    }
+
+    SECTION("Main with i32 return is valid") {
         constexpr auto input = R"(
             pub const main := fn(args: [][:0]u8): i32 {
                 return 0;
             };
         )";
         auto [ctx, idx]{helpers::resolve_and_check(input)};
-        CHECK_FALSE(ctx->analyzer.validate_main_entry(ctx->root_mod));
+        CHECK(ctx->analyzer.validate_main_entry(ctx->root_mod));
     }
 
     SECTION("Main with incorrect param type returns error") {

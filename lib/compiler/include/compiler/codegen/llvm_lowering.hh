@@ -30,8 +30,7 @@ class llvm_lowering {
     MAKE_PINNED(llvm_lowering);
 
     auto lower(const gir::module& gir_mod) -> stdx::box<llvm::Module>;
-    auto lower_executable(const gir::module& gir_mod,
-                          std::string_view   user_main_name = "main")
+    auto lower_executable(const gir::module& gir_mod, std::string_view user_main_name = "main")
         -> stdx::box<llvm::Module>;
     auto emit_main_entry_wrapper(std::string_view user_main_name = "main") -> llvm::Function*;
 

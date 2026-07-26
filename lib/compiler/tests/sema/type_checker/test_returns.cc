@@ -32,6 +32,14 @@ TEST_CASE("Return statement type checking") {
         )");
     }
 
+    SECTION("Returning slice len succeeds") {
+        helpers::type_check_and_verify(R"(
+            const f := fn(s: []u8): usize {
+                return s.len;
+            };
+        )");
+    }
+
     SECTION("Returning value from void function fails") {
         helpers::test_checker_fail(
             R"(

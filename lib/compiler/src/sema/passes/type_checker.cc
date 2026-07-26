@@ -549,11 +549,14 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             const auto src_t{get_operand_type(inst.operands[0])};
             const auto dest_t{inst.type};
             if (src_t && dest_t && !src_t->is_poison() && !dest_t->is_poison()) {
-                if (!is_implicit_widenable(src_t->get_kind(), dest_t->get_kind()) &&
-                    !is_same_unqualified(*src_t, *dest_t)) {
-                    emit_diagnostic(fmt::format("Cannot implicitly widen type '{}' to '{}'",
-                                                type_kind_display_name(src_t->get_kind()),
-                                                type_kind_display_name(dest_t->get_kind())),
+                const auto src_k{src_t->get_kind()};
+                const auto dest_k{dest_t->get_kind()};
+                const bool is_num_cast{sema::is_numeric(src_k) && sema::is_numeric(dest_k)};
+                if (!is_implicit_widenable(src_k, dest_k) &&
+                    !is_same_unqualified(*src_t, *dest_t) && !is_num_cast) {
+                    emit_diagnostic(fmt::format("Cannot cast type '{}' to '{}'",
+                                                type_kind_display_name(src_k),
+                                                type_kind_display_name(dest_k)),
                                     error::TYPE_MISMATCH,
                                     inst.location);
                 }

@@ -164,8 +164,14 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
     auto* outer_val{builder_.CreateLoad(slice_ty, outer_slice, "outer.val")};
 
     // Call user main
-    builder_.CreateCall(user_fn, {outer_val});
-    builder_.CreateRet(builder_.getInt32(0));
+    if (user_fn->getReturnType()->isVoidTy()) {
+        builder_.CreateCall(user_fn, {outer_val});
+        builder_.CreateRet(builder_.getInt32(0));
+    } else {
+        auto* ret_val{builder_.CreateCall(user_fn, {outer_val}, "main.res")};
+        auto* ret_i32{builder_.CreateIntCast(ret_val, types_.get_int32_ty(), true, "main.res.i32")};
+        builder_.CreateRet(ret_i32);
+    }
 
     return main_fn;
 }
@@ -640,7 +646,7 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
         const bool src_is_flt{src_ty->isFloatingPointTy()};
         const bool dst_is_flt{target_ty->isFloatingPointTy()};
 
-        if (src_is_flt && dst_is_flt) { return builder_.CreateFPExt(val, target_ty, "fpext"); }
+        if (src_is_flt && dst_is_flt) { return builder_.CreateFPCast(val, target_ty, "fpcast"); }
         if (!src_is_flt && dst_is_flt) {
             return is_signed_type(inst) ? builder_.CreateSIToFP(val, target_ty, "sitofp")
                                         : builder_.CreateUIToFP(val, target_ty, "uitofp");
@@ -650,8 +656,7 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
             return dst_is_sgn ? builder_.CreateFPToSI(val, target_ty, "fptosi")
                               : builder_.CreateFPToUI(val, target_ty, "fptoui");
         }
-        return is_signed_type(inst) ? builder_.CreateSExt(val, target_ty, "sext")
-                                    : builder_.CreateZExt(val, target_ty, "zext");
+        return builder_.CreateIntCast(val, target_ty, is_signed_type(inst));
     }
     case gir::instruction_kind::BIT_CAST: return builder_.CreateBitCast(val, target_ty, "bitcast");
     case gir::instruction_kind::PTR_CAST:

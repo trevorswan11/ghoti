@@ -83,7 +83,8 @@ class analyzer {
     auto resolve_types(mod::module& module) -> mod::module_state;
     auto emit_gir(mod::module& module) -> gir::module;
     auto check_types(gir::module& gir_module, mod::module& ast_module) -> mod::module_state;
-    auto validate_main_entry(const mod::module& root_module) const -> stdx::result<void, diagnostic>;
+    auto validate_main_entry(const mod::module& root_module) const
+        -> stdx::result<void, diagnostic>;
     auto emit_llvm_ir(gir::module&                      gir_module,
                       llvm::LLVMContext&                context,
                       const codegen::optimizer_options& options)
@@ -104,17 +105,17 @@ class analyzer {
                      const codegen::optimizer_options& opt_options,
                      const std::filesystem::path&      output_path)
         -> stdx::result<void, codegen::diagnostic>;
-    auto emit_executable(gir::module&                      gir_module,
-                         const codegen::target_options&    target_opts,
-                         const codegen::optimizer_options& opt_options,
-                         const std::filesystem::path&      output_path,
+    auto emit_executable(gir::module&                         gir_module,
+                         const codegen::target_options&       target_opts,
+                         const codegen::optimizer_options&    opt_options,
+                         const std::filesystem::path&         output_path,
                          const codegen::extra_linker_options& linker_opts = {})
         -> stdx::result<void, codegen::diagnostic>;
-    auto emit_executable(gir::module&                      gir_module,
-                         llvm::LLVMContext&                context,
-                         const codegen::target_options&    target_opts,
-                         const codegen::optimizer_options& opt_options,
-                         const std::filesystem::path&      output_path,
+    auto emit_executable(gir::module&                         gir_module,
+                         llvm::LLVMContext&                   context,
+                         const codegen::target_options&       target_opts,
+                         const codegen::optimizer_options&    opt_options,
+                         const std::filesystem::path&         output_path,
                          const codegen::extra_linker_options& linker_opts = {})
         -> stdx::result<void, codegen::diagnostic>;
 

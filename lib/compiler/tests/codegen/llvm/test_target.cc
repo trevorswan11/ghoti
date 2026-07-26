@@ -122,7 +122,7 @@ TEST_CASE("Object file emission") {
 
     SECTION("Emit host object file") {
         codegen::llvm_scope scope;
-        llvm::LLVMContext        context;
+        llvm::LLVMContext   context;
         auto [ctx, idx]{helpers::resolve_and_check(input)};
 
         tempfile                   f{"test_output_host.o"};
@@ -136,7 +136,7 @@ TEST_CASE("Object file emission") {
 
     SECTION("Emit cross-target object file for Linux x86_64") {
         codegen::llvm_scope scope;
-        llvm::LLVMContext        context;
+        llvm::LLVMContext   context;
         auto [ctx, idx]{helpers::resolve_and_check(input)};
 
         tempfile                f{"test_output_linux_x86_64.o"};
@@ -153,7 +153,7 @@ TEST_CASE("Object file emission") {
 
     SECTION("Emit cross-target object file for Windows x86_64 MinGW") {
         codegen::llvm_scope scope;
-        llvm::LLVMContext        context;
+        llvm::LLVMContext   context;
         auto [ctx, idx]{helpers::resolve_and_check(input)};
 
         tempfile                f{"test_output_windows_x86_64.o"};
