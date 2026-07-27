@@ -61,11 +61,7 @@ class lexer {
 
   public:
     lexer() noexcept = default;
-    explicit lexer(std::string_view input) noexcept : input_{input} {
-        // `read_character` advances the column but it isn't consuming here so we reset it
-        read_character();
-        col_no_ = 0;
-    }
+    explicit lexer(std::string_view input) noexcept : input_{input} { read_character(); }
 
     auto               reset(std::string_view input = {}) noexcept -> void;
     auto               advance() noexcept -> token_t;

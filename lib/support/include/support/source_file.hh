@@ -37,9 +37,9 @@ class line_offsets {
 class source_file {
   public:
     explicit source_file(std::string source) noexcept
-        : source_{std::move(source)}, offsets_{source} {}
+        : source_{std::move(source)}, offsets_{source_} {}
     explicit source_file(std::string_view source)
-        : source_{std::string{source}}, offsets_{source} {}
+        : source_{std::string{source}}, offsets_{source_} {}
     ~source_file() = default;
     MAKE_MOVE_ONLY(source_file);
 

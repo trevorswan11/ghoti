@@ -341,7 +341,7 @@ TEST_CASE("Generic function instantiation error handling") {
             sema::diagnostic{
                 "Can only access inner objects inside of structs, unions, and enums; found 'i32'",
                 sema::error::TYPE_MISMATCH,
-                std::pair{2UZ, 24UZ}});
+                std::pair{2UZ, 23UZ}});
     }
 }
 

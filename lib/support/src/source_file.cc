@@ -18,7 +18,16 @@ line_offsets::line_offsets(std::string_view input) {
     PROFILE_FUNCTION();
     offsets_.emplace_back(0);
     for (usize i{0}; i < input.size(); ++i) {
-        if (input[i] == '\n') { offsets_.emplace_back(i + 1); }
+        if (input[i] == '\n') {
+            offsets_.emplace_back(i + 1);
+        } else if (input[i] == '\r') {
+            if (i + 1 < input.size() && input[i + 1] == '\n') {
+                offsets_.emplace_back(i + 2);
+                ++i;
+            } else {
+                offsets_.emplace_back(i + 1);
+            }
+        }
     }
 }
 
@@ -53,7 +62,7 @@ auto source_file::get_diagnostic_strings_at(const source_location& loc) const
     std::string caret_line;
     caret_line.reserve(true_col + 1);
     for (usize i{0}; i < true_col; ++i) {
-        if (substr[i] == '\t') {
+        if (i < substr.size() && substr[i] == '\t') {
             caret_line += '\t';
         } else {
             caret_line += ' ';

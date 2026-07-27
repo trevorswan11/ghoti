@@ -25,7 +25,7 @@ TEST_CASE("Operator type checking") {
         )",
             sema::diagnostic{"Operator 'add' cannot be applied to types 'bool' and 'bool'",
                              sema::error::OPERATOR_TYPE_MISMATCH,
-                             std::pair{2UZ, 32UZ}});
+                             std::pair{2UZ, 31UZ}});
     }
 
     SECTION("Mismatched numeric types in addition without cast fails") {
@@ -37,7 +37,7 @@ TEST_CASE("Operator type checking") {
         )",
             sema::diagnostic{"Operator 'add' cannot be applied to types 'i32' and 'f32'",
                              sema::error::OPERATOR_TYPE_MISMATCH,
-                             std::pair{2UZ, 32UZ}});
+                             std::pair{2UZ, 31UZ}});
     }
 
     SECTION("Logical negation on non-boolean fails") {
@@ -49,7 +49,7 @@ TEST_CASE("Operator type checking") {
         )",
             sema::diagnostic{"Logical negation '!' requires a boolean operand",
                              sema::error::OPERATOR_TYPE_MISMATCH,
-                             std::pair{2UZ, 29UZ}});
+                             std::pair{2UZ, 28UZ}});
     }
 
     SECTION("Unary negation on unsigned integer fails") {
@@ -61,7 +61,7 @@ TEST_CASE("Operator type checking") {
         )",
             sema::diagnostic{"Unary negation '-' requires a signed integer or float operand",
                              sema::error::OPERATOR_TYPE_MISMATCH,
-                             std::pair{2UZ, 29UZ}});
+                             std::pair{2UZ, 28UZ}});
     }
 
     SECTION("Bitwise negation on float fails") {
@@ -73,7 +73,7 @@ TEST_CASE("Operator type checking") {
         )",
             sema::diagnostic{"Bitwise negation '~' requires an integer operand",
                              sema::error::OPERATOR_TYPE_MISMATCH,
-                             std::pair{2UZ, 29UZ}});
+                             std::pair{2UZ, 28UZ}});
     }
 }
 

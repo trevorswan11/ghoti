@@ -479,7 +479,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
     scopes_.back().bindings.emplace(name, local_binding{slot, *sema_type, true, stdx::none});
 }
 
-auto emitter::emit_return_stmt(ast::node_id, const ast::return_stmt& ret) -> void {
+auto emitter::emit_return_stmt(ast::node_id stmt_id, const ast::return_stmt& ret) -> void {
     PROFILE_FUNCTION();
     stdx::option<value> ret_val;
     if (ret.expression) {
@@ -496,6 +496,7 @@ auto emitter::emit_return_stmt(ast::node_id, const ast::return_stmt& ret) -> voi
         if (!ret_val) { ret_val.emplace(emit_expression(*ret.expression)); }
     }
     emit_defers_up_to(0);
+    builder_.set_location(active_ast().location_of(stmt_id));
     builder_.emit_return(ret_val);
 }
 

@@ -33,7 +33,7 @@ TEST_CASE("Cast type checking") {
         )",
             sema::diagnostic{"Cannot cast away const from pointer without @constCast",
                              sema::error::ILLEGAL_CONST_CAST,
-                             std::pair{2UZ, 43UZ}});
+                             std::pair{2UZ, 42UZ}});
     }
 
     SECTION("Casting between typed pointer and opaque pointer succeeds") {
@@ -56,7 +56,7 @@ TEST_CASE("Cast type checking") {
         )",
             sema::diagnostic{"Cannot cast away const from pointer without @constCast",
                              sema::error::ILLEGAL_CONST_CAST,
-                             std::pair{2UZ, 43UZ}});
+                             std::pair{2UZ, 42UZ}});
     }
 }
 

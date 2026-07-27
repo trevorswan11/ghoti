@@ -42,7 +42,7 @@ TEST_CASE("Function call type checking") {
         )",
             sema::diagnostic{"Expected 2 arguments, found 1",
                              sema::error::ARITY_MISMATCH,
-                             std::pair{5UZ, 24UZ}});
+                             std::pair{5UZ, 23UZ}});
     }
 
     SECTION("Call with incompatible argument type fails with TYPE_MISMATCH") {
@@ -58,7 +58,7 @@ TEST_CASE("Function call type checking") {
             sema::diagnostic{"Argument 2 of type 'bool' is not assignable to parameter type 'i32' "
                              "in call to 'add'",
                              sema::error::TYPE_MISMATCH,
-                             std::pair{5UZ, 32UZ}});
+                             std::pair{5UZ, 31UZ}});
     }
 
     SECTION("Valid call to extern function succeeds") {
@@ -81,7 +81,7 @@ TEST_CASE("Function call type checking") {
             sema::diagnostic{"Argument 1 of type 'i32' is not assignable to parameter type "
                              "'pointer' in call to 'puts'",
                              sema::error::TYPE_MISMATCH,
-                             std::pair{3UZ, 29UZ}});
+                             std::pair{3UZ, 28UZ}});
     }
 
     SECTION("Valid variadic function call with additional arguments succeeds") {
@@ -114,7 +114,7 @@ TEST_CASE("Function call type checking") {
         )",
             sema::diagnostic{"Expected at least 1 arguments, found 0",
                              sema::error::ARITY_MISMATCH,
-                             std::pair{3UZ, 24UZ}});
+                             std::pair{3UZ, 23UZ}});
     }
 
     SECTION("Variadic function call with incompatible fixed argument fails") {
@@ -128,7 +128,7 @@ TEST_CASE("Function call type checking") {
             sema::diagnostic{"Argument 1 of type 'i32' is not assignable to parameter type "
                              "'pointer' in call to 'printf'",
                              sema::error::TYPE_MISMATCH,
-                             std::pair{3UZ, 36UZ}});
+                             std::pair{3UZ, 35UZ}});
     }
 
     SECTION("Valid C va builtins type check successfully") {
@@ -167,7 +167,7 @@ TEST_CASE("Function call type checking") {
         )",
             sema::diagnostic{"Expected 1 arguments, found 0",
                              sema::error::ARITY_MISMATCH,
-                             std::pair{6UZ, 24UZ}});
+                             std::pair{6UZ, 23UZ}});
     }
 
     SECTION("Passing array to slice parameter succeeds") {

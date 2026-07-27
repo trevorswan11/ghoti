@@ -67,7 +67,7 @@ TEST_CASE("Cross-module public vs private struct field and member access") {
             sema::diagnostic{
                 "Field 'y' of struct 'p' is private",
                 sema::error::ILLEGAL_PRIVATE_ACCESS,
-                std::pair{2UZ, 30UZ},
+                std::pair{2UZ, 29UZ},
             });
     }
 

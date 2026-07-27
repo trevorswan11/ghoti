@@ -27,7 +27,7 @@ TEST_CASE("Type checker - store and assignment validation") {
         )",
             sema::diagnostic{"Type mismatch in store: cannot assign 'bool' to 'i32'",
                              sema::error::TYPE_MISMATCH,
-                             std::pair{3UZ, 21UZ}});
+                             std::pair{3UZ, 20UZ}});
     }
 
     SECTION("Store through mutable pointer succeeds") {
@@ -47,7 +47,7 @@ TEST_CASE("Type checker - store and assignment validation") {
         )",
             sema::diagnostic{"Cannot assign to constant memory through pointer",
                              sema::error::ASSIGNMENT_TO_CONST,
-                             std::pair{2UZ, 22UZ}});
+                             std::pair{2UZ, 21UZ}});
     }
 
     SECTION("Store incompatible type through pointer fails") {
@@ -59,7 +59,7 @@ TEST_CASE("Type checker - store and assignment validation") {
         )",
             sema::diagnostic{"Type mismatch in store: cannot assign 'bool' to 'i32'",
                              sema::error::TYPE_MISMATCH,
-                             std::pair{2UZ, 22UZ}});
+                             std::pair{2UZ, 21UZ}});
     }
 
     SECTION("Allocating opaque variable fails with ILLEGAL_OPAQUE_TYPE") {
@@ -71,7 +71,7 @@ TEST_CASE("Type checker - store and assignment validation") {
         )",
             sema::diagnostic{"Cannot allocate variable of opaque type",
                              sema::error::ILLEGAL_OPAQUE_TYPE,
-                             std::pair{2UZ, 17UZ}});
+                             std::pair{2UZ, 16UZ}});
     }
 }
 

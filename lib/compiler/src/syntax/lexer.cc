@@ -89,17 +89,21 @@ auto lexer::lu_ident(std::string_view ident) noexcept -> token_type_t {
 
 auto lexer::read_character(u8 n) noexcept -> void {
     for (u8 i = 0; i < n; ++i) {
+        if (current_byte_ == '\n') {
+            line_no_ += 1;
+            col_no_ = 0;
+        } else if (current_byte_ == '\r' &&
+                   (peek_pos_ >= input_.size() || input_[peek_pos_] != '\n')) {
+            line_no_ += 1;
+            col_no_ = 0;
+        } else if (pos_ != 0 || peek_pos_ != 0) {
+            col_no_ += 1;
+        }
+
         if (peek_pos_ >= input_.size()) {
             current_byte_ = '\0';
         } else {
             current_byte_ = input_[peek_pos_];
-        }
-
-        if (current_byte_ == '\n') {
-            line_no_ += 1;
-            col_no_ = 0;
-        } else {
-            col_no_ += 1;
         }
 
         pos_ = peek_pos_;

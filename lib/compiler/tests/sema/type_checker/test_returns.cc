@@ -49,7 +49,7 @@ TEST_CASE("Return statement type checking") {
         )",
             sema::diagnostic{"Cannot return a value from a function returning void",
                              sema::error::RETURN_TYPE_MISMATCH,
-                             std::pair{2UZ, 24UZ}});
+                             std::pair{2UZ, 16UZ}});
     }
 
     SECTION("Returning wrong type from typed function fails") {
@@ -62,7 +62,7 @@ TEST_CASE("Return statement type checking") {
             sema::diagnostic{
                 "Return value of type 'bool' is not assignable to function return type 'i32'",
                 sema::error::RETURN_TYPE_MISMATCH,
-                std::pair{2UZ, 24UZ}});
+                std::pair{2UZ, 16UZ}});
     }
 
     SECTION("Conflicting return types in auto function runtime branches fails in Pass 4") {
@@ -79,7 +79,7 @@ TEST_CASE("Return statement type checking") {
             sema::diagnostic{
                 "Return value of type 'bool' is not assignable to function return type 'i32'",
                 sema::error::RETURN_TYPE_MISMATCH,
-                std::pair{5UZ, 28UZ}});
+                std::pair{5UZ, 20UZ}});
     }
 
     SECTION("Constexpr multi-type if branches succeed") {
