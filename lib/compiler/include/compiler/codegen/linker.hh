@@ -3,9 +3,9 @@
 #include <filesystem>
 #include <string>
 
+#include <gsl/span>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
-#include <gsl/span>
 
 #include "compiler/codegen/error.hh"
 #include "compiler/codegen/target.hh"
