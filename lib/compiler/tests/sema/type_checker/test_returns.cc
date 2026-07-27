@@ -113,6 +113,29 @@ TEST_CASE("Return statement type checking") {
             };
         )");
     }
+
+    SECTION("Function missing return on code path fails") {
+        helpers::test_checker_fail(
+            "const f := fn(): i32 {};",
+            sema::diagnostic{
+                "Function expecting return type 'i32' does not return a value on all code paths",
+                sema::error::RETURN_TYPE_MISMATCH});
+    }
+
+    SECTION("Function if-branch missing return on code path fails") {
+        helpers::test_checker_fail(
+            R"(
+            const f := fn(cond: bool): i32 {
+                if (cond) {
+                    return 1;
+                }
+            };
+        )",
+            sema::diagnostic{
+                "Function expecting return type 'i32' does not return a value on all code paths",
+                sema::error::RETURN_TYPE_MISMATCH,
+                std::pair{3UZ, 20UZ}});
+    }
 }
 
 } // namespace ghoti::tests

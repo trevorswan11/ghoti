@@ -8,6 +8,7 @@
 #include <stdx/assert.hh>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
+#include <stdx/type_traits.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
@@ -55,10 +56,12 @@ class function {
         return self.segments_[idx];
     }
 
-    [[nodiscard]] auto get_segment_opt(this auto&& self, segment_id id) noexcept {
+    template <typename Self>
+    [[nodiscard]] auto get_segment_opt(this Self&& self, segment_id id) noexcept
+        -> stdx::option<stdx::const_dispatch_t<Self, segment>*> {
         const auto idx{std::to_underlying(id)};
         if (idx >= self.segments_.size()) { return stdx::none; }
-        return stdx::option<decltype(self.segments_[idx])>{self.segments_[idx]};
+        return self.segments_[idx];
     }
 
     auto next_local_id(local_kind kind = local_kind::TEMPORARY) noexcept -> local_id {

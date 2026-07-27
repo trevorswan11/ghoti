@@ -155,7 +155,8 @@ auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {
 auto is_assignable(const type& src, const type& dest) noexcept -> bool {
     if (src == dest) { return true; }
     if (src.is_poison() || dest.is_poison()) { return true; }
-    if (src.get_kind() == type_kind::UNDEFINED || src.get_kind() == type_kind::NORETURN) {
+    if (src.get_kind() == type_kind::UNDEFINED || src.get_kind() == type_kind::NORETURN ||
+        src.get_kind() == type_kind::AUTO || dest.get_kind() == type_kind::AUTO) {
         return true;
     }
 

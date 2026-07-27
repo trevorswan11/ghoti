@@ -42,21 +42,26 @@ fn compute_point(p: struct) -> i32
 
 fn match_color(c: enum) -> i32
   seg 0:
-    %0 = eq bool param.0, 0
-    cond_goto %0 seg 2, seg 3
+    %0 = alloca i32
+    %1 = eq bool param.0, 0
+    cond_goto %1 seg 2, seg 3
   seg 1:
-    ret void void
+    %4 = load %0
+    ret i32 %4
   seg 2:
+    store 1, %0
     goto seg 1
   seg 3:
-    %1 = eq bool param.0, 1
-    cond_goto %1 seg 4, seg 5
+    %2 = eq bool param.0, 1
+    cond_goto %2 seg 4, seg 5
   seg 4:
+    store 2, %0
     goto seg 1
   seg 5:
-    %2 = eq bool param.0, 2
-    cond_goto %2 seg 6, seg 7
+    %3 = eq bool param.0, 2
+    cond_goto %3 seg 6, seg 7
   seg 6:
+    store 3, %0
     goto seg 1
   seg 7:
     unreachable

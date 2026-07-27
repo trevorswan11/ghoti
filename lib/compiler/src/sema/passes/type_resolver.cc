@@ -1479,13 +1479,6 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
 
     // The expression must resolve to a single type on pass 3
     stdx::option<type&> first_type;
-    const auto          try_set_first_type = [&] -> void {
-        if (!first_type) {
-            first_type = last_type_.take();
-        } else {
-            last_type_.reset();
-        }
-    };
 
     // Rip through the arms once to validate structural arm rules
     const auto& matcher_data{matcher_type.get_data()};
@@ -1578,8 +1571,8 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
     // Each arm was assigned a new scope index on the first pass
     for (const auto& arm : match.arms) {
         // Tabled types have prefilled types that should be pushed on the table stack
-        auto&       arm_type{resolving_.get_sema_type(arm)};
-        const scope scope{table_stack_, arm_type.get_symbol_table_idx(), table_idx_};
+        auto&       arm_table_type{resolving_.get_sema_type(arm)};
+        const scope scope{table_stack_, arm_table_type.get_symbol_table_idx(), table_idx_};
 
         if (arm.capture && arm.capture->is<ast::identifier_expr>()) {
             // Unions implicitly unpack the value since the field is guaranteed to be valid
@@ -1604,17 +1597,24 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
         if (!arm.pattern.is<ast::discarded>()) { TRY_RESOLVE(arm.pattern); }
         TRY_RESOLVE(arm.dispatch);
 
-        // Set the arms type to the dispatch only if its not occupied by a tabled type
-        try_set_first_type();
+        stdx::option<type&> arm_dispatch_type{last_type_.take()};
+        if (const auto expr_stmt_node{resolving_.ast.get_as_opt<ast::expr_stmt>(arm.dispatch)}) {
+            if (const auto inner_type{resolving_.get_sema_type_opt(expr_stmt_node->expression)}) {
+                if (!inner_type->is_poison() && inner_type->get_kind() != type_kind::VOID) {
+                    arm_dispatch_type = inner_type;
+                }
+            }
+        }
+
+        if (arm_dispatch_type && (!first_type || first_type->get_kind() == type_kind::VOID) &&
+            arm_dispatch_type->get_kind() != type_kind::VOID) {
+            first_type = arm_dispatch_type;
+        }
     }
 
-    // In the rare case that a type could not be found we have to poison
-    if (first_type) {
-        resolving_.set_sema_type(id, *first_type);
-        last_type_.emplace(*first_type);
-    } else {
-        last_type_.emplace(ctx_.poison_node(resolving_, id));
-    }
+    if (!first_type) { first_type.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID)); }
+    resolving_.set_sema_type(id, *first_type);
+    last_type_.emplace(*first_type);
 }
 
 namespace {

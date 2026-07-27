@@ -3,6 +3,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <fmt/format.h>
 #include <stdx/assert.hh>
@@ -64,7 +65,53 @@ auto type_checker::check_function(gir::function& fn) -> void {
                         local_info{.type = &param->type, .is_alloca = false, .is_const = false});
     }
 
-    for (const auto& seg : fn.get_segments()) { check_segment(fn, *seg); }
+    const auto&       segments{fn.get_segments()};
+    std::vector<bool> reachable(segments.size(), false);
+    if (!segments.empty()) {
+        std::vector<gir::segment_id> worklist;
+        reachable[0] = true;
+        worklist.emplace_back(segments[0]->get_id());
+
+        while (!worklist.empty()) {
+            const auto curr_id{worklist.back()};
+            worklist.pop_back();
+
+            const auto curr_seg_opt{fn.get_segment_opt(curr_id)};
+            if (!curr_seg_opt) { continue; }
+
+            for (const auto* inst : (*curr_seg_opt)->get_instructions()) {
+                if (inst->target_segment) {
+                    const auto target_idx{std::to_underlying(*inst->target_segment)};
+                    if (target_idx < segments.size() && !reachable[target_idx]) {
+                        reachable[target_idx] = true;
+                        worklist.emplace_back(*inst->target_segment);
+                    }
+                }
+
+                if (inst->true_segment) {
+                    const auto target_idx{std::to_underlying(*inst->true_segment)};
+                    if (target_idx < segments.size() && !reachable[target_idx]) {
+                        reachable[target_idx] = true;
+                        worklist.emplace_back(*inst->true_segment);
+                    }
+                }
+
+                if (inst->false_segment) {
+                    const auto target_idx{std::to_underlying(*inst->false_segment)};
+                    if (target_idx < segments.size() && !reachable[target_idx]) {
+                        reachable[target_idx] = true;
+                        worklist.emplace_back(*inst->false_segment);
+                    }
+                }
+            }
+        }
+    }
+
+    for (const auto& seg : segments) {
+        const auto idx{std::to_underlying(seg->get_id())};
+        if (idx < reachable.size() && !reachable[idx]) { continue; }
+        check_segment(fn, *seg);
+    }
 }
 
 auto type_checker::check_segment(gir::function& fn, gir::segment& seg) -> void {
@@ -361,6 +408,15 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                                             type_kind_display_name(expected_ret_t.get_kind())),
                                 error::RETURN_TYPE_MISMATCH,
                                 inst.location);
+            } else if (inst.operands[0].data.is<gir::undefined_val>()) {
+                const auto ret_t{get_operand_type(inst.operands[0])};
+                if (!ret_t || ret_t->get_kind() != type_kind::NORETURN) {
+                    emit_diagnostic(fmt::format("Function expecting return type '{}' does not "
+                                                "return a value on all code paths",
+                                                type_kind_display_name(expected_ret_t.get_kind())),
+                                    error::RETURN_TYPE_MISMATCH,
+                                    inst.location);
+                }
             } else {
                 const auto ret_t{get_operand_type(inst.operands[0])};
                 if (ret_t && !ret_t->is_poison() && !is_assignable(*ret_t, expected_ret_t)) {
