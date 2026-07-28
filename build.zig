@@ -30,7 +30,7 @@ pub fn build(b: *std.Build) !void {
         .run_cdb_gen = false,
     });
 
-    const llvm: *LLVMBuilder = .init(b);
+    const llvm: *LLVMBuilder = .init(b, .{});
     const lld: *LLDBuilder = .init(llvm);
     const clang: *ClangBuilder = .init(llvm);
     const cdb_gen: *CDBGenerator = .init(b);
@@ -606,11 +606,12 @@ fn addPackageStep(b: *std.Build, config: struct {
             .packaging = true,
         });
 
+        const llvm = config.llvm.clone(.{ .optimize = .ReleaseFast });
         const artifacts = try addArtifacts(b, .{
             .target = target,
             .optimize = .ReleaseFast,
-            .llvm = config.llvm.clone(),
-            .lld = LLDBuilder.init(config.llvm),
+            .llvm = llvm,
+            .lld = LLDBuilder.init(llvm),
             .cxx_flags = config.cxx_flags,
             .cdb_steps = null,
             .behavior = .standalone,
@@ -626,6 +627,7 @@ fn addPackageStep(b: *std.Build, config: struct {
             .{ .source = b.path("LICENSE"), .destination = "LICENSE" },
             .{ .source = b.path("README.md"), .destination = "README.md" },
             .{ .source = b.path(".github/CHANGELOG.md"), .destination = "CHANGELOG.md" },
+            .{ .source = b.path(ProjectPaths.stdlib), .destination = "lib", .kind = .dir },
         };
 
         packager.addArchives(.{

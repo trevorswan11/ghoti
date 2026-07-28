@@ -35,6 +35,10 @@ const zlib = parent_build.zlib;
 
 pub const default_optimize: std.builtin.OptimizeMode = .ReleaseSafe;
 
+pub const Options = struct {
+    optimize: ?std.builtin.OptimizeMode = null,
+};
+
 const ThirdPartyDeps = struct {
     zlib: Dependency = undefined,
     libxml2: Dependency = undefined,
@@ -254,6 +258,7 @@ const LLVMTargetArtifacts = struct {
 };
 
 const Metadata = struct {
+    optimize: std.builtin.OptimizeMode = default_optimize,
     upstream: *std.Build.Dependency,
     root: std.Build.LazyPath,
     llvm_include: std.Build.LazyPath,
@@ -314,7 +319,7 @@ complete: bool = false,
 /// Creates a new LLVM builder with no preconfigured artifacts.
 ///
 /// Do not mark `pub`, will provide a very fun footgun :)
-fn create(b: *std.Build, config: union(enum) {
+fn create(b: *std.Build, options: Options, config: union(enum) {
     from_existing: struct {
         metadata: Metadata,
         configure_phase_artifacts: *ConfigurePhaseArtifacts,
@@ -344,9 +349,15 @@ fn create(b: *std.Build, config: union(enum) {
         },
     };
 
+    const optimize = options.optimize orelse switch (config) {
+        .from_existing => |other| other.metadata.optimize,
+        .fresh => default_optimize,
+    };
+
     self.* = .{
         .b = b,
         .metadata = .{
+            .optimize = optimize,
             .upstream = upstream,
             .root = upstream.path("."),
             .llvm_include = upstream.path("llvm/include"),
@@ -359,8 +370,8 @@ fn create(b: *std.Build, config: union(enum) {
 }
 
 /// Creates a new LLVM builder with the Host artifacts preconfigured.
-pub fn init(b: *std.Build) *Self {
-    const self = create(b, .fresh);
+pub fn init(b: *std.Build, options: Options) *Self {
+    const self = create(b, options, .fresh);
     self.buildConfigurePhase();
     return self;
 }
@@ -420,8 +431,8 @@ pub fn build(self: *Self, config: struct {
 }
 
 /// Produces a clone that shares all configure phase artifacts with the parent.
-pub fn clone(self: *Self) *Self {
-    return create(self.b, .{
+pub fn clone(self: *Self, options: Options) *Self {
+    return create(self.b, options, .{
         .from_existing = .{
             .metadata = self.metadata,
             .configure_phase_artifacts = self.configure_phase_artifacts,
@@ -555,7 +566,7 @@ fn buildTargetLLVM(self: *Self) void {
 fn createHostModule(self: *const Self) *std.Build.Module {
     return self.b.createModule(.{
         .target = self.b.graph.host,
-        .optimize = default_optimize,
+        .optimize = self.metadata.optimize,
         .link_libc = true,
         .link_libcpp = true,
     });
@@ -564,7 +575,7 @@ fn createHostModule(self: *const Self) *std.Build.Module {
 fn createTargetModule(self: *const Self) *std.Build.Module {
     return self.b.createModule(.{
         .target = self.target,
-        .optimize = default_optimize,
+        .optimize = self.metadata.optimize,
         .link_libc = true,
         .link_libcpp = true,
     });
@@ -4249,15 +4260,21 @@ fn buildDeps(self: *const Self, platform: Platform) ThirdPartyDeps {
         .target => self.target,
     };
 
-    const zlib_dep = zlib.build(b, .{ .target = target, .optimize = default_optimize });
+    const zlib_dep = zlib.build(b, .{
+        .target = target,
+        .optimize = self.metadata.optimize,
+    });
     const libxml2_dep = libxml2.build(b, .{
         .opts = .{
             .target = target,
-            .optimize = default_optimize,
+            .optimize = self.metadata.optimize,
         },
         .zlib = zlib_dep,
     });
-    const zstd_dep = zstd.build(b, .{ .target = target, .optimize = default_optimize });
+    const zstd_dep = zstd.build(b, .{
+        .target = target,
+        .optimize = self.metadata.optimize,
+    });
 
     return .{
         .zlib = zlib_dep,
