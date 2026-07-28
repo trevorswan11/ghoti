@@ -3,7 +3,6 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "compiler/codegen/llvm_scope.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
 #include "driver/clap/error.hh"
@@ -15,8 +14,6 @@
 #include "support/test.hh"
 
 namespace ghoti::tests {
-
-namespace { codegen::llvm_global_target_init init_; } // namespace
 
 TEST_CASE("Error with no args") {
     auto               args{helpers::mock_argv{"ghoti"}};

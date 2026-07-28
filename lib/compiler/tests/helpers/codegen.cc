@@ -13,8 +13,10 @@
 #include <llvm/Support/ManagedStatic.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
+#include <stdx/harness/hooks.hh>
 #include <stdx/memory.hh>
 #include <stdx/result.hh>
+#include <stdx/types.hh>
 
 #include "compiler/codegen/error.hh"
 #include "compiler/codegen/llvm_scope.hh"
@@ -23,9 +25,12 @@
 #include "compiler/sema/analyzer.hh"
 #include "helpers/sema.hh"
 
-namespace ghoti::tests::helpers {
+extern "C" {
+auto harness_pre_main(i32, char**) -> void { ghoti::codegen::llvm_init_warmup(); }
+auto harness_post_main(i32) -> void { ghoti::codegen::llvm_shutdown(); }
+}
 
-namespace { codegen::llvm_global_target_init init_; } // namespace
+namespace ghoti::tests::helpers {
 
 auto emit_llvm_ir(helpers::sema_test_context&       test_ctx,
                   llvm::LLVMContext&                context,

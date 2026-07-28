@@ -71,7 +71,6 @@ TEST_CASE("Target initialization and triple resolution") {
 
 TEST_CASE("Target machine creation across architectures") {
     codegen::llvm_scope scope;
-    codegen::initialize_all_targets();
 
     SECTION("Host target machine creation") {
         codegen::target_options opts;

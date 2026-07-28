@@ -5,12 +5,8 @@
 // Utilities for testing to prevent linking llvm/lld directly against non libcompiler libraries
 namespace ghoti::codegen {
 
-// Meant to be initialized statically to ensure llvm objects hide from stdx alloc hooks
-struct llvm_global_target_init {
-    llvm_global_target_init();
-    ~llvm_global_target_init() = default;
-    MAKE_PINNED(llvm_global_target_init);
-};
+auto llvm_init_warmup() -> void;
+auto llvm_shutdown() -> void;
 
 // An RAII shutdown scope for testing purposes to ensure memory doesn't leak
 struct llvm_scope {

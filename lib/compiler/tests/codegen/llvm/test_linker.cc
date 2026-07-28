@@ -17,7 +17,6 @@ namespace ghoti::tests {
 
 TEST_CASE("In-process LLD linker execution") {
     codegen::llvm_scope scope;
-    codegen::initialize_all_targets();
 
     constexpr auto input = R"(
         pub const main := fn(args: [][:0]u8): void {

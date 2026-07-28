@@ -17,6 +17,7 @@
 #include <llvm/Support/ManagedStatic.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
+#include <stdx/harness/hooks.hh>
 #include <stdx/utility.hh>
 
 #include "compiler/codegen/linker.hh"
@@ -26,7 +27,8 @@
 
 namespace ghoti::codegen {
 
-llvm_global_target_init::llvm_global_target_init() {
+auto llvm_init_warmup() -> void {
+    stdx::untracked_scope untracked_guard;
     codegen::initialize_all_targets();
     using namespace std::string_view_literals;
     constexpr static std::array warmup_triples{
@@ -108,9 +110,13 @@ llvm_global_target_init::llvm_global_target_init() {
     }
 }
 
-llvm_scope::~llvm_scope() {
+auto llvm_shutdown() -> void {
     if (lld::hasContext()) { lld::CommonLinkerContext::destroy(); }
     llvm::llvm_shutdown();
+}
+
+llvm_scope::~llvm_scope() {
+    if (lld::hasContext()) { lld::CommonLinkerContext::destroy(); }
 }
 
 } // namespace ghoti::codegen
