@@ -30,7 +30,7 @@ TEST_CASE("Builtin type resolution") {
     check_bi_type("1UZ", tk::USIZE);
     check_bi_type("'1'", tk::U8);
     check_bi_type("true", tk::BOOL);
-    check_bi_type("{}", tk::VOID);
+    check_bi_type("{}", tk::VOID_);
     check_bi_type("undefined", tk::UNDEFINED);
     check_bi_type("unreachable", tk::NORETURN);
     check_bi_type("1.0f", tk::F32);

@@ -31,15 +31,19 @@ pub fn build(b: *std.Build, config: struct {
     mod.addConfigHeader(configs.config);
     mod.addConfigHeader(configs.xmlversion);
 
+    mod.addCMacro("LIBXML_STATIC", "1");
     mod.addCSourceFiles(.{
         .root = upstream.path("."),
         .files = &libxml2.sources,
-        .flags = &.{ "-std=c11", "-D_REENTRANT" },
+        .flags = &.{ "-std=c11", "-D_REENTRANT", "-DLIBXML_STATIC" },
     });
     mod.addIncludePath(upstream.path("include"));
     mod.addIncludePath(config.zlib.upstream.path("."));
 
     mod.linkLibrary(config.zlib.artifact);
+    if (target.result.os.tag == .windows) {
+        mod.linkSystemLibrary("bcrypt", .{});
+    }
 
     const lib = b.addLibrary(.{
         .name = "xml2",

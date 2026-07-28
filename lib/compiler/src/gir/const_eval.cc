@@ -221,7 +221,7 @@ auto const_eval::type_align_of(const sema::type& type) -> usize {
 
 auto const_eval::type_size_of(const sema::type& type) -> usize {
     switch (type.get_kind()) {
-    case sema::type_kind::VOID:      return 0;
+    case sema::type_kind::VOID_:     return 0;
     case sema::type_kind::U8:
     case sema::type_kind::BOOL:      return 1;
     case sema::type_kind::I32:
@@ -380,7 +380,7 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
         },
         [&](const ast::string_expr& data) { return const_value{std::string{data.value}}; },
         [&](ast::void_expr) {
-            return const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID)};
+            return const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
         },
         [&](ast::undefined_expr) {
             return const_value{undefined_val{},
@@ -1131,7 +1131,7 @@ auto const_eval::eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_v
         [&](const ast::decl_stmt& data) { return eval_decl(*stmt, data); },
         [&](const ast::return_stmt& data) -> stdx::option<const_value> {
             if (data.expression) { return try_eval(*data.expression); }
-            return const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID)};
+            return const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
         },
         [&](const ast::expr_stmt& data) -> stdx::option<const_value> {
             const auto expr_id{data.expression};

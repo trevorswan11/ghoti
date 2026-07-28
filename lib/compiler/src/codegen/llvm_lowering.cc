@@ -257,7 +257,7 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
         for (const auto* inst : seg->get_instructions()) { lower_instruction(*inst); }
         if (bb->getTerminator() == nullptr) {
             if (fn.get_type().get_data().as<sema::types::function>().return_type.get_kind() ==
-                sema::type_kind::VOID) {
+                sema::type_kind::VOID_) {
                 builder_.CreateRetVoid();
             } else {
                 builder_.CreateUnreachable();
@@ -319,7 +319,7 @@ auto llvm_lowering::lower_instruction(const gir::instruction& inst) -> void {
     case gir::instruction_kind::GET_ELEMENT_PTR: result_val = emit_get_element_ptr(inst); break;
     case gir::instruction_kind::ADDRESS_OF:      result_val = emit_address_of(inst); break;
     case gir::instruction_kind::DEREF:           result_val = emit_deref(inst); break;
-    case gir::instruction_kind::CONST:           result_val = emit_const(inst); break;
+    case gir::instruction_kind::CONSTANT:        result_val = emit_const(inst); break;
     case gir::instruction_kind::ADD:
     case gir::instruction_kind::SUB:
     case gir::instruction_kind::MUL:
@@ -683,7 +683,7 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
         std::vector<llvm::Value*> args;
         args.reserve(inst.operands.size());
         for (const auto& op : inst.operands) { args.emplace_back(lower_value(op)); }
-        const bool is_void{!inst.type || inst.type->get_kind() == sema::type_kind::VOID};
+        const bool is_void{!inst.type || inst.type->get_kind() == sema::type_kind::VOID_};
         auto*      call_inst{builder_.CreateCall(callee_fn, args, is_void ? "" : "calltmp")};
         if (inst.result && !is_void) { set_local(*inst.result, call_inst); }
         return call_inst;
@@ -701,7 +701,7 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
         args.emplace_back(lower_value(operand));
     }
 
-    const bool is_void{!inst.type || inst.type->get_kind() == sema::type_kind::VOID};
+    const bool is_void{!inst.type || inst.type->get_kind() == sema::type_kind::VOID_};
     auto*      call_inst{builder_.CreateCall(fn_ty, callee_val, args, is_void ? "" : "calltmp")};
     if (inst.result && !is_void) { set_local(*inst.result, call_inst); }
     return call_inst;
@@ -721,7 +721,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
 }
 
 auto llvm_lowering::emit_ret(const gir::instruction& inst) -> void {
-    if (inst.operands.empty() || (inst.type && inst.type->get_kind() == sema::type_kind::VOID)) {
+    if (inst.operands.empty() || (inst.type && inst.type->get_kind() == sema::type_kind::VOID_)) {
         builder_.CreateRetVoid();
         return;
     }

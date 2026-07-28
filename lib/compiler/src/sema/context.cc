@@ -79,7 +79,7 @@ auto inject_types(symbol_table& prelude, type_pool& pool) -> void {
     inject_type(kws::F64, type_kind::F64);
     inject_type(kws::U8, type_kind::U8);
     inject_type(kws::BOOL, type_kind::BOOL);
-    inject_type(kws::VOID, type_kind::VOID);
+    inject_type(kws::VOID, type_kind::VOID_);
 
     // Special types
     inject_type(kws::TYPE, type_kind::TYPE);
@@ -117,7 +117,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     };
 
     // Common types
-    auto& t_void{*pool[{type_kind::VOID, types::mut::CONSTANT}]};
+    auto& t_void{*pool[{type_kind::VOID_, types::mut::CONSTANT}]};
     auto& t_type{*pool[{type_kind::TYPE, types::mut::CONSTANT}]};
     auto& t_usize{*pool[{type_kind::USIZE, types::mut::CONSTANT}]};
     auto& t_auto{*pool[{type_kind::AUTO, types::mut::CONSTANT}]};

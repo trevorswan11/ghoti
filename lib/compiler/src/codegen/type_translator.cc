@@ -26,7 +26,7 @@ auto type_translator::translate(const sema::type& type) -> llvm::Type* {
     case sema::type_kind::BOOL:      return get_int1_ty();
     case sema::type_kind::F32:       return get_float_ty();
     case sema::type_kind::F64:       return get_double_ty();
-    case sema::type_kind::VOID:
+    case sema::type_kind::VOID_:
     case sema::type_kind::NORETURN:  return get_void_ty();
     case sema::type_kind::POINTER:
     case sema::type_kind::REFERENCE: return get_ptr_ty();
@@ -134,7 +134,7 @@ auto type_translator::translate_union(const sema::types::union_t& u, const sema:
 
     llvm::DataLayout dl;
     for (const auto* field : u.fields) {
-        if (field->get_kind() == sema::type_kind::VOID) { continue; }
+        if (field->get_kind() == sema::type_kind::VOID_) { continue; }
         auto* field_ty{translate(*field)};
         if (field_ty && !field_ty->isVoidTy()) {
             max_size = std::max(max_size, dl.getTypeAllocSize(field_ty).getFixedValue());

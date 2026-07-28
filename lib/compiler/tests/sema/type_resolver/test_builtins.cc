@@ -136,7 +136,7 @@ TEST_CASE("Builtins memory operation") {
         bi,
         "a, b",
         [](helpers::sema_test_context& ctx) -> sema::type& {
-            return ctx.get_type(sema::type_kind::VOID);
+            return ctx.get_type(sema::type_kind::VOID_);
         },
         "var a: i32; var b: i32;");
 }
@@ -219,7 +219,7 @@ TEST_CASE("Builtin C va builtins resolution") {
         bis::C_VA_START,
         "ap",
         [](helpers::sema_test_context& ctx) -> sema::type& {
-            return ctx.get_type(sema::type_kind::VOID);
+            return ctx.get_type(sema::type_kind::VOID_);
         },
         "const ap: ^mut opaque = undefined;");
 
@@ -235,7 +235,7 @@ TEST_CASE("Builtin C va builtins resolution") {
         bis::C_VA_COPY,
         "dest, src",
         [](helpers::sema_test_context& ctx) -> sema::type& {
-            return ctx.get_type(sema::type_kind::VOID);
+            return ctx.get_type(sema::type_kind::VOID_);
         },
         "const dest: ^mut opaque = undefined; const src: ^mut opaque = undefined;");
 
@@ -243,7 +243,7 @@ TEST_CASE("Builtin C va builtins resolution") {
         bis::C_VA_END,
         "ap",
         [](helpers::sema_test_context& ctx) -> sema::type& {
-            return ctx.get_type(sema::type_kind::VOID);
+            return ctx.get_type(sema::type_kind::VOID_);
         },
         "const ap: ^mut opaque = undefined;");
 }

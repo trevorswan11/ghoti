@@ -186,7 +186,7 @@ TEST_CASE("Full sema pipeline") {
         // Verify the return type
         {
             const auto& return_type{println_type_data.return_type};
-            const auto& void_type{ctx->get_type(sema::type_kind::VOID)};
+            const auto& void_type{ctx->get_type(sema::type_kind::VOID_)};
             CHECK(return_type == void_type);
         }
     }

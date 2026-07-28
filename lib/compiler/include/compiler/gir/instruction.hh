@@ -70,7 +70,7 @@ enum class instruction_kind : u8 {
     BUILTIN_CALL,
 
     // Constants
-    CONST,
+    CONSTANT,
 
     // Terminators
     RET,

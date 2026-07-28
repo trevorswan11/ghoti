@@ -392,11 +392,11 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
         if (!fn_data) { break; }
 
         auto& expected_ret_t{fn_data->return_type};
-        if (expected_ret_t.get_kind() == type_kind::VOID) {
+        if (expected_ret_t.get_kind() == type_kind::VOID_) {
             if (!inst.operands.empty()) {
                 // Returning from the void is fine (jason turner moment)
                 const auto ret_t{get_operand_type(inst.operands[0])};
-                if (ret_t && ret_t->get_kind() != type_kind::VOID && !ret_t->is_poison()) {
+                if (ret_t && ret_t->get_kind() != type_kind::VOID_ && !ret_t->is_poison()) {
                     emit_diagnostic("Cannot return a value from a function returning void",
                                     error::RETURN_TYPE_MISMATCH,
                                     inst.location);
@@ -629,7 +629,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
         }
         break;
     }
-    case gir::instruction_kind::COND_GOTO: {
+    case gir::instruction_kind::COND_GOTO:
         if (!inst.operands.empty()) {
             const auto cond_t{get_operand_type(inst.operands[0])};
             if (cond_t && !cond_t->is_poison() && cond_t->get_kind() != type_kind::BOOL) {
@@ -639,24 +639,22 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             }
         }
         break;
-    }
     case gir::instruction_kind::GET_ELEMENT_PTR:
     case gir::instruction_kind::ADDRESS_OF:
     case gir::instruction_kind::DEREF:
     case gir::instruction_kind::INT_FROM_PTR:
     case gir::instruction_kind::PTR_FROM_INT:
     case gir::instruction_kind::BIT_CAST:
-    case gir::instruction_kind::CONST:           {
+    case gir::instruction_kind::CONSTANT:
         if (inst.result && inst.type) {
             locals_.insert_or_assign(*inst.result,
                                      local_info{
                                          .type      = inst.type.get(),
                                          .is_alloca = false,
-                                         .is_const  = inst.kind == gir::instruction_kind::CONST,
+                                         .is_const  = inst.kind == gir::instruction_kind::CONSTANT,
                                      });
         }
         break;
-    }
     case gir::instruction_kind::GOTO:
     case gir::instruction_kind::UNREACHABLE: break;
     }

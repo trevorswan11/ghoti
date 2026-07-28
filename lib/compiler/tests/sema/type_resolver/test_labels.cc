@@ -82,7 +82,7 @@ blk: {
         CHECK(*yield_types[1] == ctx->get_type(sema::type_kind::BOOL));
         CHECK(*yield_types[2] ==
               ctx->get_type(sema::type_kind::ARRAY, true, 4, ctx->get_type(sema::type_kind::U8)));
-        CHECK(*yield_types[3] == ctx->get_type(sema::type_kind::VOID));
+        CHECK(*yield_types[3] == ctx->get_type(sema::type_kind::VOID_));
     }
 
     SECTION("Only continue") {
@@ -96,7 +96,7 @@ loop {
         const auto [_, data]{ctx->get_symbol<syms::label>("blk", idx + 2)};
         const auto yield_types{data.get_yield_types()};
         CHECK(yield_types.size() == 1);
-        CHECK(*yield_types[0] == ctx->get_type(sema::type_kind::VOID));
+        CHECK(*yield_types[0] == ctx->get_type(sema::type_kind::VOID_));
     }
 }
 

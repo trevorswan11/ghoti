@@ -211,7 +211,7 @@ enum class token_type_t : u8 {
 
 enum class semicolon_behavior : u8 {
     REQUIRE,
-    OPTIONAL,
+    ALLOWED,
     DISALLOW,
 };
 

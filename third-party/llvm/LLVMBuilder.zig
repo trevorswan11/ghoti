@@ -285,6 +285,7 @@ pub const common_llvm_cxx_flags = [_][]const u8{
     "-std=c++17",
     "-fno-exceptions",
     "-fno-rtti",
+    "-DLIBXML_STATIC",
 };
 
 pub const enabled_targets = &[_][]const u8{
@@ -573,12 +574,14 @@ fn createHostModule(self: *const Self) *std.Build.Module {
 }
 
 fn createTargetModule(self: *const Self) *std.Build.Module {
-    return self.b.createModule(.{
+    const mod = self.b.createModule(.{
         .target = self.target,
         .optimize = self.metadata.optimize,
         .link_libc = true,
         .link_libcpp = true,
     });
+    mod.addCMacro("LIBXML_STATIC", "1");
+    return mod;
 }
 
 const AddCSourceFileOptions = struct {
@@ -1054,6 +1057,7 @@ fn buildSupport(self: *const Self, config: struct {
         mod.linkSystemLibrary("advapi32", link_options);
         mod.linkSystemLibrary("ws2_32", link_options);
         mod.linkSystemLibrary("ntdll", link_options);
+        mod.linkSystemLibrary("bcrypt", link_options);
     } else {
         if (target_result.os.tag == .linux) {
             mod.linkSystemLibrary("rt", link_options);

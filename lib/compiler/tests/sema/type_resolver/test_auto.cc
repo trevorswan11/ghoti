@@ -173,11 +173,11 @@ TEST_CASE("Function return type auto inference") {
 
         const auto [f_sym, f_sym_data, f_node, f_type, f_type_data]{
             ctx->get_full_sym_info<syms::node_t, ast::decl_stmt, sema::types::function>("f", idx)};
-        CHECK(f_type_data.return_type == ctx->get_type(sema::type_kind::VOID));
+        CHECK(f_type_data.return_type == ctx->get_type(sema::type_kind::VOID_));
 
         const auto [r_sym, r_sym_data, r_node, r_type]{
             ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("result", idx)};
-        CHECK(r_type == ctx->get_type(sema::type_kind::VOID));
+        CHECK(r_type == ctx->get_type(sema::type_kind::VOID_));
     }
 
     SECTION("Infers void when function returns without expression") {
@@ -189,7 +189,7 @@ TEST_CASE("Function return type auto inference") {
 
         const auto [f_sym, f_sym_data, f_node, f_type, f_type_data]{
             ctx->get_full_sym_info<syms::node_t, ast::decl_stmt, sema::types::function>("f", idx)};
-        CHECK(f_type_data.return_type == ctx->get_type(sema::type_kind::VOID));
+        CHECK(f_type_data.return_type == ctx->get_type(sema::type_kind::VOID_));
     }
 
     SECTION("Infers return type from conditional branches") {

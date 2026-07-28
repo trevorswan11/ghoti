@@ -9,8 +9,7 @@
 #include "ghoti/config.h"
 
 #if GHOTI_WINDOWS
-#    define WIN32_LEAN_AND_MEAN
-#    include <processenv.h>
+#    include <sec_api/stdlib_s.h>
 #else
 #    include <stdlib.h>
 #endif
@@ -19,7 +18,7 @@ namespace ghoti {
 
 auto set_env(const std::string& name, const std::string& value) -> void {
 #if GHOTI_WINDOWS
-    ::SetEnvironmentVariableA(name.c_str(), value.c_str());
+    ::_putenv_s(name.c_str(), value.c_str());
 #else
     ::setenv(name.c_str(), value.c_str(), 1);
 #endif

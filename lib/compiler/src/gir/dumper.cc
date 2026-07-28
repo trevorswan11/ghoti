@@ -110,7 +110,7 @@ auto format_instruction(const instruction& inst) -> std::string {
                            instruction_kind_name(inst.kind),
                            !inst.operands.empty() ? format_value(inst.operands[0])
                                                   : "<missing_src>");
-    case instruction_kind::CONST: {
+    case instruction_kind::CONSTANT: {
         const auto val{!inst.operands.empty() ? format_value(inst.operands[0]) : "<missing_val>"};
         if (!type_str.empty()) {
             return fmt::format(

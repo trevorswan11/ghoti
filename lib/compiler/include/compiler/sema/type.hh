@@ -36,7 +36,7 @@ enum class type_kind : u8 {
     BOOL,
     F32,
     F64,
-    VOID,
+    VOID_,
     UNDEFINED,
     TYPE,
     SLICE,
@@ -116,7 +116,7 @@ enum class type_kind : u8 {
 
 [[nodiscard]] constexpr auto is_value_type(type_kind kind) noexcept -> bool {
     switch (kind) {
-    case type_kind::VOID:
+    case type_kind::VOID_:
     case type_kind::NORETURN:
     case type_kind::OPAQUE:
     case type_kind::BLOCK:

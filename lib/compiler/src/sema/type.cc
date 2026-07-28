@@ -27,7 +27,7 @@ constexpr auto TYPE_KIND_NAMES{stdx::fixed::enum_map<type_kind, std::string_view
     type_mapping{type_kind::BOOL, "bool"},
     type_mapping{type_kind::F32, "f32"},
     type_mapping{type_kind::F64, "f64"},
-    type_mapping{type_kind::VOID, "void"},
+    type_mapping{type_kind::VOID_, "void"},
     type_mapping{type_kind::UNDEFINED, "undefined"},
     type_mapping{type_kind::TYPE, "type"},
     type_mapping{type_kind::SLICE, "slice"},
@@ -101,7 +101,7 @@ auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {
     const auto kind{a.get_kind()};
     switch (kind) {
     case type_kind::BOOL:
-    case type_kind::VOID:
+    case type_kind::VOID_:
     case type_kind::UNDEFINED:
     case type_kind::TYPE:
     case type_kind::NORETURN:
@@ -168,7 +168,7 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
         if (is_numeric(src_kind)) { return is_same_unqualified(src, dest); }
         switch (src_kind) {
         case type_kind::BOOL:
-        case type_kind::VOID:
+        case type_kind::VOID_:
         case type_kind::STRUCT:
         case type_kind::UNION:
         case type_kind::ENUM:

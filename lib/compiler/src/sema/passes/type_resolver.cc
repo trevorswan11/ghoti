@@ -232,7 +232,7 @@ template <ast::IndexableID ID>
     case token_type_t::BUILTIN_MEMCPY:
     case token_type_t::BUILTIN_MEMSET:
     case token_type_t::BUILTIN_MEMMOVE: {
-        ASSERT(builtin.return_type.get_kind() == type_kind::VOID);
+        ASSERT(builtin.return_type.get_kind() == type_kind::VOID_);
         return_type = &builtin.return_type;
         break;
     }
@@ -256,7 +256,7 @@ template <ast::IndexableID ID>
     case token_type_t::BUILTIN_C_VA_START:
     case token_type_t::BUILTIN_C_VA_COPY:
     case token_type_t::BUILTIN_C_VA_END:   {
-        ASSERT(builtin.return_type.get_kind() == type_kind::VOID);
+        ASSERT(builtin.return_type.get_kind() == type_kind::VOID_);
         return_type = &builtin.return_type;
         break;
     }
@@ -877,7 +877,7 @@ auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void 
                 if (const auto cons_type{resolving_.get_sema_type_opt(cons_expr->expression)}) {
                     if (const auto alt_type{resolving_.get_sema_type_opt(alt_expr->expression)}) {
                         if (!cons_type->is_poison() && !alt_type->is_poison() &&
-                            cons_type->get_kind() != type_kind::VOID) {
+                            cons_type->get_kind() != type_kind::VOID_) {
                             branch_type = &cons_type.value();
                         }
                     }
@@ -1332,7 +1332,7 @@ auto type_resolver::visit(ast::node_id id, const ast::label_expr& label) -> void
 
     // Labels may not be used outside of continues which don't push void
     if (!label_data.has_yield_types()) {
-        label_data.add_yield_type(ctx_.get_builtin_resolved_type(type_kind::VOID));
+        label_data.add_yield_type(ctx_.get_builtin_resolved_type(type_kind::VOID_));
     }
 
     // The last type inherits the result type to help propagation of poison
@@ -1511,7 +1511,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                                  "with explicit precision handling",
                                  sema::error::TYPE_MISMATCH,
                                  resolving_.ast.location_of(match.matcher)));
-        case type_kind::VOID:
+        case type_kind::VOID_:
         case type_kind::UNDEFINED:
             return last_type_.emplace(ctx_.poison_node(resolving_,
                                                        id,
@@ -1600,19 +1600,19 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
         stdx::option<type&> arm_dispatch_type{last_type_.take()};
         if (const auto expr_stmt_node{resolving_.ast.get_as_opt<ast::expr_stmt>(arm.dispatch)}) {
             if (const auto inner_type{resolving_.get_sema_type_opt(expr_stmt_node->expression)}) {
-                if (!inner_type->is_poison() && inner_type->get_kind() != type_kind::VOID) {
+                if (!inner_type->is_poison() && inner_type->get_kind() != type_kind::VOID_) {
                     arm_dispatch_type = inner_type;
                 }
             }
         }
 
-        if (arm_dispatch_type && (!first_type || first_type->get_kind() == type_kind::VOID) &&
-            arm_dispatch_type->get_kind() != type_kind::VOID) {
+        if (arm_dispatch_type && (!first_type || first_type->get_kind() == type_kind::VOID_) &&
+            arm_dispatch_type->get_kind() != type_kind::VOID_) {
             first_type = arm_dispatch_type;
         }
     }
 
-    if (!first_type) { first_type.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID)); }
+    if (!first_type) { first_type.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_)); }
     resolving_.set_sema_type(id, *first_type);
     last_type_.emplace(*first_type);
 }
@@ -1742,7 +1742,7 @@ MAKE_PRIMITIVE_RESOLVER(u64_expr, U64)
 MAKE_PRIMITIVE_RESOLVER(usize_expr, USIZE)
 MAKE_PRIMITIVE_RESOLVER(u8_expr, U8)
 MAKE_PRIMITIVE_RESOLVER(bool_expr, BOOL)
-MAKE_PRIMITIVE_RESOLVER(void_expr, VOID)
+MAKE_PRIMITIVE_RESOLVER(void_expr, VOID_)
 MAKE_PRIMITIVE_RESOLVER(undefined_expr, UNDEFINED)
 MAKE_PRIMITIVE_RESOLVER(unreachable_expr, NORETURN)
 MAKE_PRIMITIVE_RESOLVER(f32_expr, F32)
@@ -2061,12 +2061,12 @@ auto type_resolver::visit(ast::node_id id, const ast::break_stmt& break_stmt) ->
             label_data.add_yield_type(expression_type);
             resolving_.set_sema_type(id, expression_type);
         } else {
-            auto& void_type{ctx_.get_builtin_resolved_type(type_kind::VOID)};
+            auto& void_type{ctx_.get_builtin_resolved_type(type_kind::VOID_)};
             label_data.add_yield_type(void_type);
             resolving_.set_sema_type(id, void_type);
         }
     } else {
-        resolving_.set_sema_type(id, ctx_.get_builtin_resolved_type(type_kind::VOID));
+        resolving_.set_sema_type(id, ctx_.get_builtin_resolved_type(type_kind::VOID_));
     }
 
     last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::NORETURN));
@@ -2079,7 +2079,7 @@ auto type_resolver::visit(ast::node_id id, const ast::continue_stmt& continue_st
         return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(result).error()));
     }
 
-    resolving_.set_sema_type(id, ctx_.get_builtin_resolved_type(type_kind::VOID));
+    resolving_.set_sema_type(id, ctx_.get_builtin_resolved_type(type_kind::VOID_));
     last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::NORETURN));
 }
 
@@ -2093,7 +2093,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
     // Breaking out early is possible due to out of order semantics
     if (sym.get_status() == symbol_status::RESOLVED) {
         ASSERT(resolving_.has_sema_type(id), "Resolved decl has no type");
-        return last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID));
+        return last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
     }
     sym.set_status(symbol_status::RESOLVING);
 
@@ -2162,26 +2162,26 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
 
     resolving_.set_sema_type_if(decl.name, resolved_type);
     sym.set_status(symbol_status::RESOLVED);
-    last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID));
+    last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
 }
 
 auto type_resolver::visit(ast::node_id id, const ast::defer_stmt& defer) -> void {
     PROFILE_FUNCTION();
     TRY_RESOLVE(defer.deferred);
-    last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID));
+    last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
 }
 
 auto type_resolver::visit(ast::node_id id, const ast::discard_stmt& discard) -> void {
     PROFILE_FUNCTION();
     TRY_RESOLVE(discard.discarded);
-    last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID));
+    last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
 }
 
 auto type_resolver::visit(ast::node_id id, const ast::expr_stmt& expr) -> void {
     PROFILE_FUNCTION();
     TRY_RESOLVE(expr.expression);
     resolving_.set_sema_type(expr.expression, *last_type_.take());
-    last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID));
+    last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
 }
 
 auto type_resolver::visit(ast::node_id id, const ast::import_stmt& import_stmt) -> void {
@@ -2205,7 +2205,7 @@ auto type_resolver::visit(ast::node_id id, const ast::import_stmt& import_stmt) 
     context new_ctx{ctx_};
     resolve_types(module.imported, new_ctx);
     if (module.imported.is_poisoned()) { return poison_out(); }
-    last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID));
+    last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
 }
 
 auto type_resolver::visit(ast::node_id id, const ast::return_stmt& return_stmt) -> void {
@@ -2216,7 +2216,7 @@ auto type_resolver::visit(ast::node_id id, const ast::return_stmt& return_stmt) 
         resolving_.set_sema_type(id, return_expr_type);
         if (!return_trackers_.empty()) { return_trackers_.back().add_return(return_expr_type); }
     } else {
-        auto& void_type{ctx_.get_builtin_resolved_type(type_kind::VOID)};
+        auto& void_type{ctx_.get_builtin_resolved_type(type_kind::VOID_)};
         resolving_.set_sema_type(id, void_type);
         if (!return_trackers_.empty()) { return_trackers_.back().add_return(void_type); }
     }
@@ -2248,7 +2248,7 @@ auto type_resolver::visit(ast::node_id id, const ast::test_stmt& test) -> void {
 
     const auto& block{resolving_.ast.get_as<ast::block_stmt>(test.block)};
     for (const auto& stmt : block) { TRY_RESOLVE(stmt); }
-    last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID));
+    last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
 }
 
 auto type_resolver::visit(ast::node_id id, const ast::using_stmt& using_stmt) -> void {
@@ -2258,7 +2258,7 @@ auto type_resolver::visit(ast::node_id id, const ast::using_stmt& using_stmt) ->
     if (!sym) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
     if (sym->get_status() == symbol_status::RESOLVED) {
         ASSERT(resolving_.has_sema_type(id), "Resolved alias has no type");
-        return last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID));
+        return last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
     }
 
     const auto poison_out = [&] -> void {
@@ -2285,7 +2285,7 @@ auto type_resolver::visit(ast::node_id id, const ast::using_stmt& using_stmt) ->
     sym->set_status(symbol_status::RESOLVED);
     resolve(using_stmt.alias);
     if (last_type_->is_poison()) { return poison_out(); }
-    last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID));
+    last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
 }
 
 // Without a modifier or with poison the result should be the same as the node

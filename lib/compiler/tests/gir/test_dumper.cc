@@ -84,7 +84,7 @@ TEST_CASE("GIR dumper formatting") {
             .operands = helpers::make_vector<value>(local_id::make_param(0)),
         });
         seg0.append({
-            .kind     = instruction_kind::CONST,
+            .kind     = instruction_kind::CONSTANT,
             .type     = &i32_type,
             .result   = local_id::make_temp(1),
             .operands = helpers::make_vector<value>(value{static_cast<i64>(0), &i32_type}),
@@ -136,7 +136,7 @@ TEST_CASE("GIR dumper formatting") {
         CHECK(output.contains("fn abs(x: i32)"));
         CHECK(output.contains("seg 0:"));
         CHECK(output.contains("%0 = load param.0"));
-        CHECK(output.contains("%1 = const i32 0"));
+        CHECK(output.contains("%1 = constant i32 0"));
         CHECK(output.contains("%2 = lt bool %0, %1"));
         CHECK(output.contains("cond_goto %2 seg 1, seg 2"));
         CHECK(output.contains("seg 1:"));

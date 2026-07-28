@@ -29,7 +29,7 @@ TEST_CASE("Type translate primitive types") {
     auto& f32_t{*pool[{sema::type_kind::F32, sema::types::mut::CONSTANT}]};
     auto& f64_t{*pool[{sema::type_kind::F64, sema::types::mut::CONSTANT}]};
     auto& bool_t{*pool[{sema::type_kind::BOOL, sema::types::mut::CONSTANT}]};
-    auto& void_t{*pool[{sema::type_kind::VOID, sema::types::mut::CONSTANT}]};
+    auto& void_t{*pool[{sema::type_kind::VOID_, sema::types::mut::CONSTANT}]};
 
     CHECK(translator.translate(i32_t) == llvm::Type::getInt32Ty(context));
     CHECK(translator.translate(i64_t) == llvm::Type::getInt64Ty(context));

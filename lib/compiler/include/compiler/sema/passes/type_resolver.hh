@@ -73,7 +73,7 @@ class type_resolver {
         auto               add_return(type& t) -> void { return_types.emplace_back(&t); }
         [[nodiscard]] auto has_returns() const noexcept -> bool { return !return_types.empty(); }
         [[nodiscard]] auto deduced_return_type(context& ctx) const noexcept -> type& {
-            if (return_types.empty()) { return ctx.get_builtin_resolved_type(type_kind::VOID); }
+            if (return_types.empty()) { return ctx.get_builtin_resolved_type(type_kind::VOID_); }
             return *return_types.front();
         }
     };

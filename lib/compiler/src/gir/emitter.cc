@@ -95,7 +95,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
 
         emit_block(fn_mod.ast.get_as<ast::block_stmt>(fn_expr.body));
         if (const auto cur_seg{builder_.get_segment()}; cur_seg && !cur_seg->has_terminator()) {
-            if (req.return_type->get_kind() == sema::type_kind::VOID) {
+            if (req.return_type->get_kind() == sema::type_kind::VOID_) {
                 builder_.emit_return();
             } else {
                 builder_.emit_return(value{undefined_val{}, *req.return_type});
@@ -212,7 +212,7 @@ auto emitter::emit_top_level_using(ast::node_id, const ast::using_stmt& using_st
 
 auto emitter::emit_top_level_test(ast::node_id, const ast::test_stmt& test) -> void {
     PROFILE_FUNCTION();
-    auto&      void_type{ctx_.get_builtin_resolved_type(sema::type_kind::VOID)};
+    auto&      void_type{ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
     const auto test_name{test.description
                              .transform([&](ast::string_handle h) {
                                  return active_ast().get_as<ast::string_expr>(h).value;
@@ -268,7 +268,7 @@ auto emitter::emit_function(ast::node_id              id,
         if (!cur_seg->has_terminator()) {
             const auto fn_data{sema_type->get_data().as_opt<sema::types::function>()};
             ASSERT(fn_data, "Function sema type must contain function type data");
-            if (fn_data->return_type.get_kind() == sema::type_kind::VOID) {
+            if (fn_data->return_type.get_kind() == sema::type_kind::VOID_) {
                 builder_.emit_return();
             } else {
                 builder_.emit_return(value{undefined_val{}, fn_data->return_type});
@@ -310,7 +310,7 @@ auto emitter::emit_anonymous_function(ast::node_id id, const ast::function_expr&
             if (!cur_seg->has_terminator()) {
                 const auto fn_data{fn_type.get_data().as_opt<sema::types::function>()};
                 ASSERT(fn_data, "Function type must contain function type data");
-                if (fn_data->return_type.get_kind() == sema::type_kind::VOID) {
+                if (fn_data->return_type.get_kind() == sema::type_kind::VOID_) {
                     builder_.emit_return();
                 } else {
                     builder_.emit_return(value{undefined_val{}, fn_data->return_type});
@@ -344,14 +344,14 @@ auto emitter::emit_stmt_as_value(const ast::stmt_handle& stmt) -> value {
     return active_ast()[stmt].visit(
         [&](const auto&) -> value {
             emit_stmt(stmt);
-            return value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID)};
+            return value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
         },
         [&](const ast::expr_stmt& expr_st) -> value {
             return emit_expression_id(expr_st.expression);
         },
         [&](const ast::block_stmt& block) -> value {
             emit_block(block);
-            return value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID)};
+            return value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
         });
 }
 
@@ -553,7 +553,7 @@ auto emitter::emit_expression_id(ast::node_id id) -> value {
             return value{std::string{data.value}, active_mod().get_sema_type_opt(id)};
         },
         [&](ast::void_expr) -> value {
-            return value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID)};
+            return value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
         },
         [&](ast::undefined_expr) -> value {
             return value{undefined_val{},
@@ -710,7 +710,7 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
 auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
     PROFILE_FUNCTION();
     auto& ret_type{active_mod().get_sema_type_opt(id).value_or(
-        ctx_.get_builtin_resolved_type(sema::type_kind::VOID))};
+        ctx_.get_builtin_resolved_type(sema::type_kind::VOID_))};
 
     // Builtin call handling
     const auto fn_token{call.function->get_token_type()};
@@ -952,7 +952,7 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
         if_expr.consequence->get_kind() == ast::node_kind::EXPRESSION_STATEMENT) {
         const auto& expr_st{active_ast().get_as<ast::expr_stmt>(*if_expr.consequence)};
         if (const auto expr_type = active_mod().get_sema_type_opt(expr_st.expression)) {
-            if (expr_type->get_kind() != sema::type_kind::VOID) { sema_type = expr_type; }
+            if (expr_type->get_kind() != sema::type_kind::VOID_) { sema_type = expr_type; }
         }
     }
     const bool yields_value{if_expr.alternate && sema_type && is_value_type(sema_type->get_kind())};
@@ -1041,7 +1041,7 @@ auto emitter::emit_while(ast::node_id                   id,
                          stdx::option<local_id>         res_slot) -> value {
     PROFILE_FUNCTION();
     const auto sema_type{active_mod().get_sema_type_opt(id)};
-    const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID};
+    const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
 
     auto fn_opt{builder_.get_function()};
     ASSERT(fn_opt, "While loop must be within an active function");
@@ -1123,7 +1123,7 @@ auto emitter::emit_do_while(ast::node_id                   id,
                             stdx::option<local_id>         res_slot) -> value {
     PROFILE_FUNCTION();
     const auto sema_type{active_mod().get_sema_type_opt(id)};
-    const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID};
+    const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
 
     auto fn_opt{builder_.get_function()};
     ASSERT(fn_opt, "Do-while loop must be within an active function");
@@ -1175,7 +1175,7 @@ auto emitter::emit_infinite_loop(ast::node_id                   id,
                                  stdx::option<local_id>         res_slot) -> value {
     PROFILE_FUNCTION();
     const auto sema_type{active_mod().get_sema_type_opt(id)};
-    const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID};
+    const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
 
     auto fn_opt{builder_.get_function()};
     ASSERT(fn_opt, "Infinite loop must be within an active function");
@@ -1222,7 +1222,7 @@ auto emitter::emit_for(ast::node_id                   id,
                        stdx::option<local_id>         res_slot) -> value {
     PROFILE_FUNCTION();
     const auto sema_type{active_mod().get_sema_type_opt(id)};
-    const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID};
+    const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
 
     auto fn_opt{builder_.get_function()};
     ASSERT(fn_opt, "For loop must be within an active function");
@@ -1404,7 +1404,7 @@ auto emitter::emit_for(ast::node_id                   id,
 auto emitter::emit_label(ast::node_id id, const ast::label_expr& label) -> value {
     PROFILE_FUNCTION();
     const auto  sema_type{active_mod().get_sema_type_opt(id)};
-    const bool  yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID};
+    const bool  yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
     const auto& name_ident{active_ast().get_as<ast::identifier_expr>(label.name)};
     const auto  label_name{name_ident.name};
 
@@ -1687,7 +1687,7 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
     PROFILE_FUNCTION();
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Match expression must have a resolved sema type");
-    const bool yields_value{sema_type->get_kind() != sema::type_kind::VOID};
+    const bool yields_value{sema_type->get_kind() != sema::type_kind::VOID_};
 
     if (const auto cv{const_eval_.try_eval(id)}) {
         if (const auto i{cv->as_int_opt()}) { return value{*i, sema_type}; }

@@ -486,9 +486,9 @@ auto if_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax:
     // The consequence and alternate are trivially handled by restricted statement parsers
     parser.advance();
     const auto consequence{TRY(parser.parse_restricted_statement(
-        syntax::error::ILLEGAL_IF_BRANCH, syntax::semicolon_behavior::OPTIONAL))};
+        syntax::error::ILLEGAL_IF_BRANCH, syntax::semicolon_behavior::ALLOWED))};
     const auto alternate{TRY(parser.try_parse_restricted_alternate(
-        syntax::error::ILLEGAL_IF_BRANCH, syntax::semicolon_behavior::OPTIONAL))};
+        syntax::error::ILLEGAL_IF_BRANCH, syntax::semicolon_behavior::ALLOWED))};
 
     return parser.add_expr<if_expr>(
         start_token, constexpr_condition, condition, consequence, alternate);
