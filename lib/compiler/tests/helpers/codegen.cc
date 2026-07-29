@@ -22,6 +22,7 @@
 #include "compiler/codegen/llvm_scope.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
+#include "compiler/gir/module.hh"
 #include "compiler/sema/analyzer.hh"
 #include "helpers/sema.hh"
 
@@ -32,10 +33,10 @@ auto harness_post_main(i32) -> void { ghoti::codegen::llvm_shutdown(); }
 
 namespace ghoti::tests::helpers {
 
-auto emit_llvm_ir(helpers::sema_test_context&       test_ctx,
-                  llvm::LLVMContext&                context,
-                  const codegen::optimizer_options& options)
-    -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic> {
+namespace {
+
+[[nodiscard]] auto emit_preamble(helpers::sema_test_context& test_ctx)
+    -> stdx::result<gir::module, codegen::diagnostic> {
     if (test_ctx.root_mod.is_poisoned()) {
         return codegen::make_codegen_err("Module is poisoned", codegen::error::MODULE_LOAD_ERROR);
     }
@@ -45,6 +46,16 @@ auto emit_llvm_ir(helpers::sema_test_context&       test_ctx,
         return codegen::make_codegen_err("Module is poisoned during GIR emission",
                                          codegen::error::MODULE_LOAD_ERROR);
     }
+    return gir_mod;
+}
+
+} // namespace
+
+auto emit_llvm_ir(helpers::sema_test_context&       test_ctx,
+                  llvm::LLVMContext&                context,
+                  const codegen::optimizer_options& options)
+    -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic> {
+    auto gir_mod{TRY(emit_preamble(test_ctx))};
     return test_ctx.analyzer.emit_llvm_ir(gir_mod, context, options);
 }
 
@@ -53,15 +64,7 @@ auto emit_llvm_ir_executable(helpers::sema_test_context&       test_ctx,
                              const codegen::optimizer_options& options,
                              std::string_view                  user_main_name)
     -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic> {
-    if (test_ctx.root_mod.is_poisoned()) {
-        return codegen::make_codegen_err("Module is poisoned", codegen::error::MODULE_LOAD_ERROR);
-    }
-
-    auto gir_mod{test_ctx.analyzer.emit_gir(test_ctx.root_mod)};
-    if (test_ctx.root_mod.is_poisoned()) {
-        return codegen::make_codegen_err("Module is poisoned during GIR emission",
-                                         codegen::error::MODULE_LOAD_ERROR);
-    }
+    auto gir_mod{TRY(emit_preamble(test_ctx))};
     return test_ctx.analyzer.emit_llvm_ir_executable(gir_mod, context, options, user_main_name);
 }
 
@@ -71,15 +74,7 @@ auto emit_object(helpers::sema_test_context&       test_ctx,
                  const codegen::target_options&    target_opts,
                  const codegen::optimizer_options& opt_options)
     -> stdx::result<void, codegen::diagnostic> {
-    if (test_ctx.root_mod.is_poisoned()) {
-        return codegen::make_codegen_err("Module is poisoned", codegen::error::MODULE_LOAD_ERROR);
-    }
-
-    auto gir_mod{test_ctx.analyzer.emit_gir(test_ctx.root_mod)};
-    if (test_ctx.root_mod.is_poisoned()) {
-        return codegen::make_codegen_err("Module is poisoned during GIR emission",
-                                         codegen::error::MODULE_LOAD_ERROR);
-    }
+    auto gir_mod{TRY(emit_preamble(test_ctx))};
     return test_ctx.analyzer.emit_object(gir_mod, context, target_opts, opt_options, output_path);
 }
 
@@ -89,16 +84,19 @@ auto emit_executable(helpers::sema_test_context&       test_ctx,
                      const codegen::target_options&    target_opts,
                      const codegen::optimizer_options& opt_options)
     -> stdx::result<void, codegen::diagnostic> {
-    if (test_ctx.root_mod.is_poisoned()) {
-        return codegen::make_codegen_err("Module is poisoned", codegen::error::MODULE_LOAD_ERROR);
-    }
-
-    auto gir_mod{test_ctx.analyzer.emit_gir(test_ctx.root_mod)};
-    if (test_ctx.root_mod.is_poisoned()) {
-        return codegen::make_codegen_err("Module is poisoned during GIR emission",
-                                         codegen::error::MODULE_LOAD_ERROR);
-    }
+    auto gir_mod{TRY(emit_preamble(test_ctx))};
     return test_ctx.analyzer.emit_executable(
+        gir_mod, context, target_opts, opt_options, output_path);
+}
+
+auto emit_static_lib(helpers::sema_test_context&       test_ctx,
+                     llvm::LLVMContext&                context,
+                     const std::filesystem::path&      output_path,
+                     const codegen::target_options&    target_opts,
+                     const codegen::optimizer_options& opt_options)
+    -> stdx::result<void, codegen::diagnostic> {
+    auto gir_mod{TRY(emit_preamble(test_ctx))};
+    return test_ctx.analyzer.emit_static_library(
         gir_mod, context, target_opts, opt_options, output_path);
 }
 

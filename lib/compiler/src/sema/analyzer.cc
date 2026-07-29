@@ -3,9 +3,10 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <utility>
+#include <vector>
 
+#include <fmt/format.h>
 #include <gsl/util>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -31,8 +32,19 @@
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/error.hh"
+#include "support/tempfile.hh"
 
 namespace ghoti::sema {
+
+namespace {
+
+[[nodiscard]] auto make_tmp_obj(const std::filesystem::path& path) -> tempfile {
+    auto temp_obj_path{path};
+    temp_obj_path.replace_extension(".tmp.o");
+    return tempfile{std::in_place, temp_obj_path};
+}
+
+} // namespace
 
 auto analyzer::analyze(const std::filesystem::path& entry_path) -> stdx::result<void, diagnostic> {
     PROFILE_FUNCTION();
@@ -110,34 +122,6 @@ auto analyzer::emit_llvm_ir(gir::module&                      gir_module,
     }
 
     return llvm_mod;
-}
-
-auto analyzer::emit_object(gir::module&                      gir_module,
-                           const codegen::target_options&    target_opts,
-                           const codegen::optimizer_options& opt_options,
-                           const std::filesystem::path&      output_path)
-    -> stdx::result<void, codegen::diagnostic> {
-    llvm::LLVMContext context;
-    return emit_object(gir_module, context, target_opts, opt_options, output_path);
-}
-
-auto analyzer::emit_object(gir::module&                      gir_module,
-                           llvm::LLVMContext&                context,
-                           const codegen::target_options&    target_opts,
-                           const codegen::optimizer_options& opt_options,
-                           const std::filesystem::path&      output_path)
-    -> stdx::result<void, codegen::diagnostic> {
-    PROFILE_FUNCTION();
-    auto target_machine{TRY(codegen::create_target_machine(target_opts))};
-
-    codegen::optimizer_options opts{opt_options};
-    opts.target_machine = target_machine.get();
-    if (opts.level == codegen::opt_level::O0 && target_opts.level != codegen::opt_level::O0) {
-        opts.level = target_opts.level;
-    }
-
-    auto llvm_mod{TRY(emit_llvm_ir(gir_module, context, opts))};
-    return codegen::emit_object_file(*llvm_mod, *target_machine, output_path);
 }
 
 auto analyzer::validate_main_entry(const mod::module& root_module) const
@@ -230,6 +214,34 @@ auto analyzer::validate_main_entry(const mod::module& root_module) const
     return {};
 }
 
+auto analyzer::emit_object(gir::module&                      gir_module,
+                           const codegen::target_options&    target_opts,
+                           const codegen::optimizer_options& opt_options,
+                           const std::filesystem::path&      output_path)
+    -> stdx::result<void, codegen::diagnostic> {
+    llvm::LLVMContext context;
+    return emit_object(gir_module, context, target_opts, opt_options, output_path);
+}
+
+auto analyzer::emit_object(gir::module&                      gir_module,
+                           llvm::LLVMContext&                context,
+                           const codegen::target_options&    target_opts,
+                           const codegen::optimizer_options& opt_options,
+                           const std::filesystem::path&      output_path)
+    -> stdx::result<void, codegen::diagnostic> {
+    PROFILE_FUNCTION();
+    auto target_machine{TRY(codegen::create_target_machine(target_opts))};
+
+    codegen::optimizer_options opts{opt_options};
+    opts.target_machine = target_machine.get();
+    if (opts.level == codegen::opt_level::O0 && target_opts.level != codegen::opt_level::O0) {
+        opts.level = target_opts.level;
+    }
+
+    auto llvm_mod{TRY(emit_llvm_ir(gir_module, context, opts))};
+    return codegen::emit_object_file(*llvm_mod, *target_machine, output_path);
+}
+
 auto analyzer::emit_llvm_ir_executable(gir::module&                      gir_module,
                                        llvm::LLVMContext&                context,
                                        const codegen::optimizer_options& options,
@@ -285,16 +297,48 @@ auto analyzer::emit_executable(gir::module&                         gir_module,
     }
 
     auto llvm_mod{TRY(emit_llvm_ir_executable(gir_module, context, opts))};
-
-    auto temp_obj_path{output_path};
-    temp_obj_path.replace_extension(".tmp.o");
-    const auto cleanup{gsl::finally([&] {
-        std::error_code ec;
-        std::filesystem::remove(temp_obj_path, ec);
-    })};
-
+    auto temp_obj_path{make_tmp_obj(output_path)};
     TRY(codegen::emit_object_file(*llvm_mod, *target_machine, temp_obj_path));
     return codegen::link_executable(temp_obj_path, output_path, target_opts, linker_opts);
+}
+
+auto analyzer::emit_static_library(gir::module&                         gir_module,
+                                   const codegen::target_options&       target_opts,
+                                   const codegen::optimizer_options&    opt_options,
+                                   const std::filesystem::path&         output_path,
+                                   const codegen::extra_linker_options& linker_opts)
+    -> stdx::result<void, codegen::diagnostic> {
+    llvm::LLVMContext context;
+    return emit_static_library(
+        gir_module, context, target_opts, opt_options, output_path, linker_opts);
+}
+
+auto analyzer::emit_static_library(gir::module&                         gir_module,
+                                   llvm::LLVMContext&                   context,
+                                   const codegen::target_options&       target_opts,
+                                   const codegen::optimizer_options&    opt_options,
+                                   const std::filesystem::path&         output_path,
+                                   const codegen::extra_linker_options& linker_opts)
+    -> stdx::result<void, codegen::diagnostic> {
+    PROFILE_FUNCTION();
+    auto target_machine{TRY(codegen::create_target_machine(target_opts))};
+
+    codegen::optimizer_options opts{opt_options};
+    opts.target_machine = target_machine.get();
+    if (opts.level == codegen::opt_level::O0 && target_opts.level != codegen::opt_level::O0) {
+        opts.level = target_opts.level;
+    }
+
+    auto temp_obj_path{make_tmp_obj(output_path)};
+    auto llvm_mod{TRY(emit_llvm_ir(gir_module, context, opts))};
+    TRY(codegen::emit_object_file(*llvm_mod, *target_machine, temp_obj_path));
+
+    std::vector<std::filesystem::path> objects;
+    objects.reserve(linker_opts.objects.size() + 1);
+
+    objects.emplace_back(temp_obj_path);
+    for (const auto& obj : linker_opts.objects) { objects.emplace_back(obj); }
+    return codegen::create_static_library(output_path, objects, target_opts);
 }
 
 } // namespace ghoti::sema

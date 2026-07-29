@@ -85,6 +85,7 @@ class analyzer {
     auto check_types(gir::module& gir_module, mod::module& ast_module) -> mod::module_state;
     auto validate_main_entry(const mod::module& root_module) const
         -> stdx::result<void, diagnostic>;
+
     auto emit_llvm_ir(gir::module&                      gir_module,
                       llvm::LLVMContext&                context,
                       const codegen::optimizer_options& options)
@@ -94,6 +95,7 @@ class analyzer {
                                  const codegen::optimizer_options& options,
                                  std::string_view                  user_main_name = "main")
         -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic>;
+
     auto emit_object(gir::module&                      gir_module,
                      const codegen::target_options&    target_opts,
                      const codegen::optimizer_options& opt_options,
@@ -105,6 +107,7 @@ class analyzer {
                      const codegen::optimizer_options& opt_options,
                      const std::filesystem::path&      output_path)
         -> stdx::result<void, codegen::diagnostic>;
+
     auto emit_executable(gir::module&                         gir_module,
                          const codegen::target_options&       target_opts,
                          const codegen::optimizer_options&    opt_options,
@@ -117,6 +120,20 @@ class analyzer {
                          const codegen::optimizer_options&    opt_options,
                          const std::filesystem::path&         output_path,
                          const codegen::extra_linker_options& linker_opts = {})
+        -> stdx::result<void, codegen::diagnostic>;
+
+    auto emit_static_library(gir::module&                         gir_module,
+                             const codegen::target_options&       target_opts,
+                             const codegen::optimizer_options&    opt_options,
+                             const std::filesystem::path&         output_path,
+                             const codegen::extra_linker_options& linker_opts = {})
+        -> stdx::result<void, codegen::diagnostic>;
+    auto emit_static_library(gir::module&                         gir_module,
+                             llvm::LLVMContext&                   context,
+                             const codegen::target_options&       target_opts,
+                             const codegen::optimizer_options&    opt_options,
+                             const std::filesystem::path&         output_path,
+                             const codegen::extra_linker_options& linker_opts = {})
         -> stdx::result<void, codegen::diagnostic>;
 
   private:
