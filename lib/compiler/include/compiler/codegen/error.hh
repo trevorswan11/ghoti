@@ -18,6 +18,9 @@ enum class error : u8 {
     OBJECT_EMISSION_FAILED,
     LINKING_FAILED,
     PERMISSIONS_ERROR,
+    OBJECT_READ_FAILED,
+    DIRECTORY_CREATION_FAILED,
+    ARCHIVING_FAILED,
 };
 
 using diagnostic  = diagnostic<error>;

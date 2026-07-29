@@ -24,4 +24,9 @@ struct extra_linker_options {
                                    const extra_linker_options&  linker_opts = {})
     -> stdx::result<void, diagnostic>;
 
+[[nodiscard]] auto create_static_library(const std::filesystem::path&           output_file,
+                                         gsl::span<const std::filesystem::path> object_files,
+                                         const target_options&                  target_opts)
+    -> stdx::result<void, diagnostic>;
+
 } // namespace ghoti::codegen

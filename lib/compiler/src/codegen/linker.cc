@@ -5,12 +5,17 @@
 #include <string>
 #include <system_error>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <fmt/format.h>
 #include <lld/Common/CommonLinkerContext.h>
 #include <lld/Common/Driver.h>
+#include <llvm/Object/Archive.h>
+#include <llvm/Object/ArchiveWriter.h>
+#include <llvm/Support/Error.h>
 #include <llvm/Support/ManagedStatic.h>
+#include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/TargetParser/Triple.h>
 #include <stdx/profiler.hh>
@@ -232,6 +237,49 @@ auto link_executable(const std::filesystem::path& object_file,
         return make_codegen_err(
             fmt::format("Failed to edit executable permissions:\n{}", ec.message()),
             error::PERMISSIONS_ERROR);
+    }
+    return {};
+}
+
+auto create_static_library(const std::filesystem::path&           output_file,
+                           gsl::span<const std::filesystem::path> object_files,
+                           const target_options& target_opts) -> stdx::result<void, diagnostic> {
+    const auto triple{resolve_target_triple(target_opts.triple_str)};
+    const auto kind{llvm::object::Archive::getDefaultKindForTriple(triple)};
+
+    std::vector<llvm::NewArchiveMember> members;
+    members.reserve(object_files.size());
+    for (const auto& obj_path : object_files) {
+        auto member{llvm::NewArchiveMember::getFile(obj_path.string(), false)};
+        if (!member) {
+            return make_codegen_err(fmt::format("Failed to read object file '{}' for archiving: {}",
+                                                obj_path.string(),
+                                                llvm::toString(member.takeError())),
+                                    error::OBJECT_READ_FAILED);
+        }
+        members.emplace_back(std::move(*member));
+    }
+
+    // Make parent directories to prevent creation error
+    if (output_file.has_parent_path()) {
+        std::error_code ec;
+
+        std::filesystem::create_directories(output_file.parent_path(), ec);
+        if (ec) {
+            return make_codegen_err(fmt::format("Failed to create parent directories for file '{}'",
+                                                output_file.string()),
+                                    error::DIRECTORY_CREATION_FAILED);
+        }
+    }
+
+    // Write out the archive
+    auto write_err{llvm::writeArchive(
+        output_file.string(), members, llvm::SymtabWritingMode::NormalSymtab, kind, true, false)};
+    if (write_err) {
+        return make_codegen_err(fmt::format("Failed to create static archive '{}': {}",
+                                            output_file.string(),
+                                            llvm::toString(std::move(write_err))),
+                                error::ARCHIVING_FAILED);
     }
     return {};
 }
