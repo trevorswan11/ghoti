@@ -30,6 +30,7 @@ class parser {
     [[nodiscard]] auto setup_repl_subcmd() -> gsl::not_null<CLI::App*>;
     [[nodiscard]] auto setup_build_obj_subcmd() -> gsl::not_null<CLI::App*>;
     [[nodiscard]] auto setup_build_exe_subcmd() -> gsl::not_null<CLI::App*>;
+    [[nodiscard]] auto setup_build_lib_subcmd() -> gsl::not_null<CLI::App*>;
 
   private:
     i32           argc_;
@@ -39,6 +40,7 @@ class parser {
     CLI::App            app_;
     cmd::build_obj_opts build_obj_opts_;
     cmd::build_exe_opts build_exe_opts_;
+    cmd::build_lib_opts build_lib_opts_;
 
 #if GHOTI_WINDOWS
     win32::rich_console console_;

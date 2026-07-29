@@ -167,14 +167,17 @@ auto build_options_base::analyze(sema::analyzer&      analyzer,
 
 auto setup_build_options_flags(CLI::App*          subcmd,
                                build_options_raw& opts,
-                               std::string_view   output_desc) -> void {
+                               std::string_view   output_desc,
+                               bool               omit_lib_linking) -> void {
     subcmd->add_option("-o,--output", opts.output, std::string{output_desc});
     subcmd->add_option(
         "-m,--module", opts.module_raw_args, "Register a library module (format: <name>,<path>)");
     subcmd->add_option("--object", opts.extra_objects, "Link precompiled object file or library");
-    subcmd->add_option(
-        "-L,--library-path", opts.library_paths, "Add directory to library search paths");
-    subcmd->add_option("-l,--library", opts.libraries, "Link against library name");
+    if (!omit_lib_linking) {
+        subcmd->add_option(
+            "-L,--library-path", opts.library_paths, "Add directory to library search paths");
+        subcmd->add_option("-l,--library", opts.libraries, "Link against library name");
+    }
     subcmd->add_option("--target", opts.target, "Target triple");
     subcmd->add_option("--cpu", opts.cpu, "Target CPU architecture (default: generic)");
     subcmd->add_option("--features", opts.features, "Target CPU features");

@@ -1,5 +1,6 @@
 #include <iostream>
 #include <sstream>
+#include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -8,8 +9,10 @@
 #include "driver/clap/error.hh"
 #include "driver/clap/parser.hh"
 #include "driver/cmd/build_exe.hh"
+#include "driver/cmd/build_lib.hh"
 #include "driver/cmd/build_obj.hh"
 #include "driver/cmd/repl.hh"
+#include "ghoti/config.h"
 #include "helpers/argv.hh"
 #include "support/test.hh"
 
@@ -185,6 +188,32 @@ TEST_CASE("build-exe subcommand parser") {
         CHECK(opts.input_path == "src/main.gh");
         CHECK(opts.output_path == "bin/myprog");
         CHECK(opts.opt_opts.level == codegen::opt_level::O0);
+    }
+}
+
+TEST_CASE("build-lib subcommand parser") {
+    SECTION("Basic positional input file with default output path") {
+        auto         args{helpers::mock_argv{"ghoti", "build-lib", "src/lib.gh"}};
+        clap::parser parser{args.argc(), args.argv(), std::cerr, false};
+        auto         cmd{UNWRAP(parser.parse())};
+        auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_lib*>(cmd.get()))};
+
+        const auto& opts{build_cmd.get_opts()};
+        CHECK(opts.input_path == "src/lib.gh");
+        constexpr std::string_view expected_default{GHOTI_WINDOWS ? "src/lib.lib" : "src/lib.a"};
+        CHECK(opts.output_path == expected_default);
+        CHECK(opts.opt_opts.level == codegen::opt_level::O0);
+    }
+
+    SECTION("Explicit output path") {
+        auto         args{helpers::mock_argv{"ghoti", "build-lib", "-o", "lib/mylib.a", "lib.gh"}};
+        clap::parser parser{args.argc(), args.argv(), std::cerr, false};
+        auto         cmd{UNWRAP(parser.parse())};
+        auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_lib*>(cmd.get()))};
+
+        const auto& opts{build_cmd.get_opts()};
+        CHECK(opts.input_path == "lib.gh");
+        CHECK(opts.output_path == "lib/mylib.a");
     }
 }
 

@@ -99,8 +99,8 @@ TEST_CASE("build_obj command execution") {
         codegen::llvm_scope scope;
         // Place helper in the same directory as main
         const auto parent_dir{std::filesystem::temp_directory_path()};
-        tempfile helper_path{std::in_place, parent_dir / "ghoti_test_helper.gh"};
-        tempfile main_path{std::in_place, parent_dir / "ghoti_test_main.gh"};
+        tempfile   helper_path{std::in_place, parent_dir / "ghoti_test_helper.gh"};
+        tempfile   main_path{std::in_place, parent_dir / "ghoti_test_main.gh"};
 
         tempfile obj_file{"test_multi_out.o"};
         {
@@ -178,7 +178,7 @@ TEST_CASE("build_obj command execution") {
         }
 
         std::vector<cmd::module_binding> modules{{"mylib", custom_lib}};
-        cmd::build_obj cmd{src_file, obj_file, {}, {}, std::move(modules)};
+        cmd::build_obj                   cmd{src_file, obj_file, {}, {}, std::move(modules)};
         REQUIRE(cmd.execute());
         CHECK(std::filesystem::exists(obj_file));
         CHECK(std::filesystem::file_size(obj_file) > 0);
@@ -215,7 +215,7 @@ TEST_CASE("build_obj command execution") {
         }
 
         std::vector<cmd::module_binding> modules{{"math", custom_lib}};
-        cmd::build_obj cmd{src_file, obj_file, {}, {}, std::move(modules)};
+        cmd::build_obj                   cmd{src_file, obj_file, {}, {}, std::move(modules)};
         REQUIRE(cmd.execute());
         CHECK(std::filesystem::exists(obj_file));
         CHECK(std::filesystem::file_size(obj_file) > 0);

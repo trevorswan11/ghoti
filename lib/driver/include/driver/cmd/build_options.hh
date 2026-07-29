@@ -71,10 +71,12 @@ struct build_options_base {
 
 struct build_obj_opts : public build_options_raw {};
 struct build_exe_opts : public build_options_raw {};
+struct build_lib_opts : public build_options_raw {};
 
 // Helper to register standard build options into CLI subcommands
 auto setup_build_options_flags(CLI::App*          subcmd,
                                build_options_raw& opts,
-                               std::string_view   output_desc) -> void;
+                               std::string_view   output_desc,
+                               bool omit_lib_linking = false) -> void;
 
 } // namespace ghoti::cmd

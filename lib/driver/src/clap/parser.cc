@@ -21,6 +21,7 @@
 #include "driver/clap/error.hh"
 #include "driver/clap/formatter.hh"
 #include "driver/cmd/build_exe.hh"
+#include "driver/cmd/build_lib.hh"
 #include "driver/cmd/build_obj.hh"
 #include "driver/cmd/build_options.hh"
 #include "driver/cmd/command.hh"
@@ -47,6 +48,7 @@ auto parser::parse() -> stdx::result<stdx::box<cmd::command>, error> {
     const auto repl_cmd{setup_repl_subcmd()};
     const auto build_obj_cmd{setup_build_obj_subcmd()};
     const auto build_exe_cmd{setup_build_exe_subcmd()};
+    const auto build_lib_cmd{setup_build_lib_subcmd()};
 
     // No arguments should be handled by printing help and exiting
     if (argc_ == 1) {
@@ -74,6 +76,14 @@ auto parser::parse() -> stdx::result<stdx::box<cmd::command>, error> {
         return stdx::make_box<cmd::build_exe>(std::move(*opts), error_stream_);
     }
 
+    if (build_lib_cmd->parsed()) {
+        constexpr std::string_view default_ext{GHOTI_WINDOWS ? ".lib" : ".a"};
+        auto                       opts{
+            cmd::build_options_base::process_raw(build_lib_opts_, default_ext, error_stream_)};
+        if (!opts) { return stdx::err{opts.error()}; }
+        return stdx::make_box<cmd::build_lib>(std::move(*opts), error_stream_);
+    }
+
     return fatal_error(error_stream_, "expected command argument", error::MISSING_SUBCOMMAND);
 }
 
@@ -95,6 +105,15 @@ auto parser::setup_build_exe_subcmd() -> gsl::not_null<CLI::App*> {
         ->required();
     setup_build_options_flags(build_exe_cmd, build_exe_opts_, "Output executable binary");
     return build_exe_cmd;
+}
+
+auto parser::setup_build_lib_subcmd() -> gsl::not_null<CLI::App*> {
+    auto* build_lib_cmd{app_.add_subcommand("build-lib", "Build a static library from source")};
+    build_lib_cmd->add_option("input_file", build_lib_opts_.input, "Input source file (.gh)")
+        ->required();
+    setup_build_options_flags(
+        build_lib_cmd, build_lib_opts_, "Output static library (.a / .lib)", true);
+    return build_lib_cmd;
 }
 
 } // namespace ghoti::clap
