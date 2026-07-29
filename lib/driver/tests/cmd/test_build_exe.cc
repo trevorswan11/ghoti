@@ -42,10 +42,10 @@ TEST_CASE("build_exe command execution") {
                                                .level      = codegen::opt_level::O2};
         codegen::optimizer_options opt_opts{.level = codegen::opt_level::O2};
 
-        cmd::build_exe cmd{src_file.path, exe_file.path, target_opts, opt_opts};
+        cmd::build_exe cmd{src_file, exe_file, target_opts, opt_opts};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(exe_file.path));
-        CHECK(std::filesystem::file_size(exe_file.path) > 0);
+        CHECK(std::filesystem::exists(exe_file));
+        CHECK(std::filesystem::file_size(exe_file) > 0);
     }
 
     SECTION("Valid main returning i32 directly with @as(i32, args.len) compiles and emits "
@@ -67,10 +67,10 @@ TEST_CASE("build_exe command execution") {
                                                .level      = codegen::opt_level::O2};
         codegen::optimizer_options opt_opts{.level = codegen::opt_level::O2};
 
-        cmd::build_exe cmd{src_file.path, exe_file.path, target_opts, opt_opts};
+        cmd::build_exe cmd{src_file, exe_file, target_opts, opt_opts};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(exe_file.path));
-        CHECK(std::filesystem::file_size(exe_file.path) > 0);
+        CHECK(std::filesystem::exists(exe_file));
+        CHECK(std::filesystem::file_size(exe_file) > 0);
     }
 
     SECTION("Cross-target executable compilation for Linux x86_64 emits ELF binary") {
@@ -93,11 +93,11 @@ TEST_CASE("build_exe command execution") {
         };
         codegen::optimizer_options opt_opts{.level = codegen::opt_level::O2};
 
-        cmd::build_exe cmd{src_file.path, exe_file.path, target_opts, opt_opts};
+        cmd::build_exe cmd{src_file, exe_file, target_opts, opt_opts};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(exe_file.path));
-        CHECK(std::filesystem::file_size(exe_file.path) > 0);
-        CHECK(bin_utils::check_elf_header(exe_file.path));
+        CHECK(std::filesystem::exists(exe_file));
+        CHECK(std::filesystem::file_size(exe_file) > 0);
+        CHECK(bin_utils::check_elf_header(exe_file));
     }
 
     SECTION("Private main function (not pub) returns COMPILATION_FAILED") {
@@ -114,7 +114,7 @@ TEST_CASE("build_exe command execution") {
             )";
         }
 
-        cmd::build_exe cmd{src_file.path, exe_file.path, {}, {}};
+        cmd::build_exe cmd{src_file, exe_file, {}, {}};
         CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::COMPILATION_FAILED);
     }
 
@@ -132,7 +132,7 @@ TEST_CASE("build_exe command execution") {
             )";
         }
 
-        cmd::build_exe cmd{src_file.path, exe_file.path, {}, {}};
+        cmd::build_exe cmd{src_file, exe_file, {}, {}};
         CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::COMPILATION_FAILED);
     }
 
@@ -158,15 +158,15 @@ TEST_CASE("build_exe command execution") {
         }
 
         cmd::build_options_base opts{
-            .input_path  = src_file.path,
-            .output_path = exe_file.path,
+            .input_path  = src_file,
+            .output_path = exe_file,
             .target_opts =
                 {
                     .triple_str = "x86_64-unknown-linux-gnu",
                     .level      = codegen::opt_level::O2,
                 },
             .opt_opts      = {.level = codegen::opt_level::O2},
-            .extra_objects = {extra_obj.path},
+            .extra_objects = {extra_obj},
             .library_paths = {std::filesystem::path{"/usr/lib"}, std::filesystem::path{"/lib"}},
             .libraries     = {"m", "c"},
         };

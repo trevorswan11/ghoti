@@ -20,7 +20,7 @@ TEST_CASE("Stdlib discovery via GHOTI_STDLIB env var") {
     set_env("GHOTI_STDLIB", tmp_std.path.string());
     const auto found{mod::find_stdlib()};
     REQUIRE(found.has_value());
-    CHECK(*found == tmp_std.path);
+    CHECK(*found == tmp_std);
 }
 
 TEST_CASE("Stdlib discovery via directory hierarchy search") {

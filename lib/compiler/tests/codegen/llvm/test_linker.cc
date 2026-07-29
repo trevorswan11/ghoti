@@ -35,10 +35,10 @@ TEST_CASE("In-process LLD linker execution") {
             .level      = codegen::opt_level::O2,
         };
 
-        CHECK(helpers::emit_executable(*ctx, context, out_file.path, target_opts));
-        CHECK(std::filesystem::exists(out_file.path));
-        CHECK(std::filesystem::file_size(out_file.path) > 0);
-        CHECK(bin_utils::check_elf_header(out_file.path));
+        CHECK(helpers::emit_executable(*ctx, context, out_file, target_opts));
+        CHECK(std::filesystem::exists(out_file));
+        CHECK(std::filesystem::file_size(out_file) > 0);
+        CHECK(bin_utils::check_elf_header(out_file));
     }
 }
 

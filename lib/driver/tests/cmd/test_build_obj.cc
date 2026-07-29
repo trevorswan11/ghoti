@@ -13,6 +13,7 @@
 #include "compiler/codegen/target.hh"
 #include "driver/clap/error.hh"
 #include "driver/cmd/build_obj.hh"
+#include "driver/cmd/build_options.hh"
 #include "support/bin_utils.hh"
 #include "support/tempfile.hh"
 #include "support/test.hh"
@@ -47,10 +48,10 @@ TEST_CASE("build_obj command execution") {
         codegen::target_options    target_opts{.level = codegen::opt_level::O2};
         codegen::optimizer_options opt_opts{.level = codegen::opt_level::O2};
 
-        cmd::build_obj cmd{src_file.path, obj_file.path, target_opts, opt_opts};
+        cmd::build_obj cmd{src_file, obj_file, target_opts, opt_opts};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(obj_file.path));
-        CHECK(std::filesystem::file_size(obj_file.path) > 0);
+        CHECK(std::filesystem::exists(obj_file));
+        CHECK(std::filesystem::file_size(obj_file) > 0);
     }
 
     SECTION("Cross-target compilation for Linux x86_64 emits ELF binary") {
@@ -73,11 +74,11 @@ TEST_CASE("build_obj command execution") {
         };
         codegen::optimizer_options opt_opts{.level = codegen::opt_level::O2};
 
-        cmd::build_obj cmd{src_file.path, obj_file.path, target_opts, opt_opts};
+        cmd::build_obj cmd{src_file, obj_file, target_opts, opt_opts};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(obj_file.path));
-        CHECK(std::filesystem::file_size(obj_file.path) > 0);
-        CHECK(bin_utils::check_elf_header(obj_file.path));
+        CHECK(std::filesystem::exists(obj_file));
+        CHECK(std::filesystem::file_size(obj_file) > 0);
+        CHECK(bin_utils::check_elf_header(obj_file));
     }
 
     SECTION("Invalid syntax returns COMPILATION_FAILED") {
@@ -90,7 +91,7 @@ TEST_CASE("build_obj command execution") {
             fmt::print(out, "pub const invalid_syntax := ;;;");
         }
 
-        cmd::build_obj cmd{src_file.path, obj_file.path, {}, {}};
+        cmd::build_obj cmd{src_file, obj_file, {}, {}};
         CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::COMPILATION_FAILED);
     }
 
@@ -98,23 +99,19 @@ TEST_CASE("build_obj command execution") {
         codegen::llvm_scope scope;
         // Place helper in the same directory as main
         const auto parent_dir{std::filesystem::temp_directory_path()};
-        const auto helper_path{parent_dir / "ghoti_test_helper.gh"};
-        const auto main_path{parent_dir / "ghoti_test_main.gh"};
-        const auto path_cleanup{gsl::finally([&] {
-            std::filesystem::remove(helper_path);
-            std::filesystem::remove(main_path);
-        })};
+        tempfile helper_path{std::in_place, parent_dir / "ghoti_test_helper.gh"};
+        tempfile main_path{std::in_place, parent_dir / "ghoti_test_main.gh"};
 
         tempfile obj_file{"test_multi_out.o"};
         {
-            std::ofstream helper_out{helper_path};
+            std::ofstream helper_out{helper_path.path};
             fmt::print(helper_out, R"(
                 pub const multiply := fn(a: i64, b: i64): i64 {{
                     return a * b;
                 }};
             )");
 
-            std::ofstream main_out{main_path};
+            std::ofstream main_out{main_path.path};
             fmt::print(main_out, R"(
                 pub import "ghoti_test_helper.gh" as helper;
 
@@ -124,10 +121,10 @@ TEST_CASE("build_obj command execution") {
             )");
         }
 
-        cmd::build_obj cmd{main_path, obj_file.path, {}, {}};
+        cmd::build_obj cmd{main_path, obj_file, {}, {}};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(obj_file.path));
-        CHECK(std::filesystem::file_size(obj_file.path) > 0);
+        CHECK(std::filesystem::exists(obj_file));
+        CHECK(std::filesystem::file_size(obj_file) > 0);
     }
 
     SECTION("Standard library import on disk with generic functions") {
@@ -150,10 +147,10 @@ TEST_CASE("build_obj command execution") {
             )");
         }
 
-        cmd::build_obj cmd{src_file.path, obj_file.path, {}, {}};
+        cmd::build_obj cmd{src_file, obj_file, {}, {}};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(obj_file.path));
-        CHECK(std::filesystem::file_size(obj_file.path) > 0);
+        CHECK(std::filesystem::exists(obj_file));
+        CHECK(std::filesystem::file_size(obj_file) > 0);
     }
 
     SECTION("Custom library module import via -m on disk") {
@@ -180,11 +177,11 @@ TEST_CASE("build_obj command execution") {
             )");
         }
 
-        std::vector<cmd::module_binding> modules{{"mylib", custom_lib.path}};
-        cmd::build_obj cmd{src_file.path, obj_file.path, {}, {}, std::move(modules)};
+        std::vector<cmd::module_binding> modules{{"mylib", custom_lib}};
+        cmd::build_obj cmd{src_file, obj_file, {}, {}, std::move(modules)};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(obj_file.path));
-        CHECK(std::filesystem::file_size(obj_file.path) > 0);
+        CHECK(std::filesystem::exists(obj_file));
+        CHECK(std::filesystem::file_size(obj_file) > 0);
     }
 
     SECTION("Custom generic library module import via -m on disk") {
@@ -217,11 +214,11 @@ TEST_CASE("build_obj command execution") {
             )");
         }
 
-        std::vector<cmd::module_binding> modules{{"math", custom_lib.path}};
-        cmd::build_obj cmd{src_file.path, obj_file.path, {}, {}, std::move(modules)};
+        std::vector<cmd::module_binding> modules{{"math", custom_lib}};
+        cmd::build_obj cmd{src_file, obj_file, {}, {}, std::move(modules)};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(obj_file.path));
-        CHECK(std::filesystem::file_size(obj_file.path) > 0);
+        CHECK(std::filesystem::exists(obj_file));
+        CHECK(std::filesystem::file_size(obj_file) > 0);
     }
 }
 

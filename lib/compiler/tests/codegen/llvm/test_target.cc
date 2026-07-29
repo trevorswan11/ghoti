@@ -128,9 +128,9 @@ TEST_CASE("Object file emission") {
         codegen::target_options    target_opts{.level = codegen::opt_level::O2};
         codegen::optimizer_options opt_opts{.level = codegen::opt_level::O2};
 
-        REQUIRE(helpers::emit_object(*ctx, context, f.path, target_opts, opt_opts));
-        CHECK(std::filesystem::exists(f.path));
-        CHECK(std::filesystem::file_size(f.path) > 0);
+        REQUIRE(helpers::emit_object(*ctx, context, f, target_opts, opt_opts));
+        CHECK(std::filesystem::exists(f));
+        CHECK(std::filesystem::file_size(f) > 0);
     }
 
     SECTION("Emit cross-target object file for Linux x86_64") {
@@ -144,10 +144,10 @@ TEST_CASE("Object file emission") {
             .level      = codegen::opt_level::O2,
         };
 
-        REQUIRE(helpers::emit_object(*ctx, context, f.path, target_opts));
-        CHECK(std::filesystem::exists(f.path));
-        CHECK(std::filesystem::file_size(f.path) > 0);
-        CHECK(bin_utils::check_elf_header(f.path));
+        REQUIRE(helpers::emit_object(*ctx, context, f, target_opts));
+        CHECK(std::filesystem::exists(f));
+        CHECK(std::filesystem::file_size(f) > 0);
+        CHECK(bin_utils::check_elf_header(f));
     }
 
     SECTION("Emit cross-target object file for Windows x86_64 MinGW") {
@@ -161,9 +161,9 @@ TEST_CASE("Object file emission") {
             .level      = codegen::opt_level::O1,
         };
 
-        REQUIRE(helpers::emit_object(*ctx, context, f.path, target_opts));
-        CHECK(std::filesystem::exists(f.path));
-        CHECK(std::filesystem::file_size(f.path) > 0);
+        REQUIRE(helpers::emit_object(*ctx, context, f, target_opts));
+        CHECK(std::filesystem::exists(f));
+        CHECK(std::filesystem::file_size(f) > 0);
     }
 }
 
