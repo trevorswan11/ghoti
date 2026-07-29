@@ -29,4 +29,10 @@ struct extra_linker_options {
                                          const target_options&                  target_opts)
     -> stdx::result<void, diagnostic>;
 
+[[nodiscard]] auto link_dynamic_library(const std::filesystem::path& object_file,
+                                        const std::filesystem::path& output_file,
+                                        const target_options&        target_opts,
+                                        const extra_linker_options&  linker_opts = {})
+    -> stdx::result<void, diagnostic>;
+
 } // namespace ghoti::codegen
