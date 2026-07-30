@@ -676,6 +676,10 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
 
     // Every parameter contributes to the resolution but not the type key due to unique idx
     for (const auto& param : fn.parameters) {
+        const auto& ident{resolving_.ast.get_as<ast::identifier_expr>(param.name)};
+        if (auto sym{ctx_.registry.get_from_opt(table_idx_, ident.name)}) {
+            sym->set_status(symbol_status::RESOLVING);
+        }
         TRY_RESOLVE(param.explicit_type);
 
         auto& param_type{*last_type_.take()};
@@ -823,7 +827,15 @@ template <ast::IndexableID ID> auto type_resolver::resolve_symbol(ID id, symbol&
 
         // All other symbol data kinds are independently resolved
         const auto node{symbol_data.as_opt<symbols::node_t>()};
-        ASSERT(node, "Unresolved symbol is not AST-associated");
+        if (!node) {
+            ctx_.poison_symbol(sym);
+            return last_type_.emplace(
+                ctx_.poison_node(resolving_,
+                                 id,
+                                 fmt::format("'{}' is used during its own resolution", sym.get_name()),
+                                 error::CYCLIC_DEPENDENCY,
+                                 resolving_.ast.location_of(id)));
+        }
         resolve(*node);
         resolving_.set_sema_type(id, *last_type_.take());
         break;
@@ -1899,6 +1911,7 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
         auto        sym{ctx_.registry.get_from_opt(table_idx_, ident.name)};
         if (!sym) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
 
+        sym->set_status(symbol_status::RESOLVING);
         TRY_RESOLVE(field.explicit_type);
         auto* field_type{last_type_.take()};
 
@@ -1963,6 +1976,7 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
         auto        sym{ctx_.registry.get_from_opt(table_idx_, ident.name)};
         if (!sym) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
 
+        sym->set_status(symbol_status::RESOLVING);
         TRY_RESOLVE(field.explicit_type);
         auto& field_type{*last_type_.take()};
 
