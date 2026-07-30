@@ -7,6 +7,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <llvm/IR/Attributes.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Instructions.h>
@@ -15,6 +16,8 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Value.h>
 #include <llvm/Support/Casting.h>
+#include <llvm/TargetParser/Triple.h>
+#include <llvm/Transforms/Utils/ModuleUtils.h>
 #include <stdx/assert.hh>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
@@ -81,6 +84,21 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
         types_.get_int32_ty(), {types_.get_int32_ty(), types_.get_ptr_ty()}, false)};
     auto* main_fn{llvm::Function::Create(
         main_fn_ty, llvm::Function::ExternalLinkage, "main", llvm_module_.get())};
+    main_fn->addFnAttr(llvm::Attribute::NoBuiltin);
+    main_fn->addFnAttr("no-builtins");
+    main_fn->addFnAttr("no-stack-arg-probe", "true");
+
+    const llvm::Triple triple{llvm_module_->getTargetTriple()};
+    if (triple.isWindowsGNUEnvironment() && !llvm_module_->getFunction("__main")) {
+        auto*             void_ty{llvm::Type::getVoidTy(context_)};
+        auto*             dummy_main_ty{llvm::FunctionType::get(void_ty, false)};
+        auto*             dummy_main{llvm::Function::Create(
+            dummy_main_ty, llvm::Function::ExternalLinkage, "__main", llvm_module_.get())};
+        auto*             dummy_bb{llvm::BasicBlock::Create(context_, "entry", dummy_main)};
+        llvm::IRBuilder<> dummy_builder{dummy_bb};
+        dummy_builder.CreateRetVoid();
+        llvm::appendToUsed(*llvm_module_, {dummy_main});
+    }
 
     auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", main_fn)};
     builder_.SetInsertPoint(entry_bb);
@@ -222,6 +240,8 @@ auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function*
         types_.translate_function_type(fn.get_type().get_data().as<sema::types::function>())};
 
     auto* llvm_fn{llvm::Function::Create(fn_ty, g_linkage, fn_name, llvm_module_.get())};
+    llvm_fn->addFnAttr(llvm::Attribute::NoBuiltin);
+    llvm_fn->addFnAttr("no-stack-arg-probe", "true");
     for (usize i{0}; const auto& param : fn.get_params()) {
         auto* arg{llvm_fn->getArg(static_cast<u32>(i++))};
         arg->setName(param->name);

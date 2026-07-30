@@ -84,8 +84,8 @@ auto add_darwin_args(std::vector<std::string>&   args,
     if (const auto sdkroot{get_env("SDKROOT")}) {
         args.emplace_back("-syslibroot");
         args.emplace_back(*sdkroot);
+        args.emplace_back("-lSystem");
     }
-    args.emplace_back("-lSystem");
     for (const auto& lib : linker_opts.libraries) { args.emplace_back(fmt::format("-l{}", lib)); }
 }
 
@@ -96,8 +96,7 @@ auto add_mingw_args(std::vector<std::string>&   args,
                     const std::string&          out_path_str,
                     const extra_linker_options& linker_opts,
                     bool                        is_dylib) -> void {
-    args.emplace_back("lld-link");
-    args.emplace_back("-lldmingw");
+    args.emplace_back("lld");
     if (is_dylib) { args.emplace_back("-shared"); }
     const std::string emulation{
         triple.getArch() == llvm::Triple::x86_64
@@ -116,6 +115,8 @@ auto add_mingw_args(std::vector<std::string>&   args,
     if (!is_dylib) {
         args.emplace_back("-e");
         args.emplace_back("main");
+        args.emplace_back("--subsystem");
+        args.emplace_back("console");
     }
 }
 

@@ -829,12 +829,12 @@ template <ast::IndexableID ID> auto type_resolver::resolve_symbol(ID id, symbol&
         const auto node{symbol_data.as_opt<symbols::node_t>()};
         if (!node) {
             ctx_.poison_symbol(sym);
-            return last_type_.emplace(
-                ctx_.poison_node(resolving_,
-                                 id,
-                                 fmt::format("'{}' is used during its own resolution", sym.get_name()),
-                                 error::CYCLIC_DEPENDENCY,
-                                 resolving_.ast.location_of(id)));
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("'{}' is used during its own resolution", sym.get_name()),
+                error::CYCLIC_DEPENDENCY,
+                resolving_.ast.location_of(id)));
         }
         resolve(*node);
         resolving_.set_sema_type(id, *last_type_.take());

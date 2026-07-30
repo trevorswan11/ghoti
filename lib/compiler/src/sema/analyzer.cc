@@ -103,12 +103,11 @@ auto analyzer::emit_llvm_ir(gir::module&                      gir_module,
     -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic> {
     PROFILE_FUNCTION();
     codegen::llvm_lowering lowering{context, gir_module.get_ast_module().path.string()};
-    auto                   llvm_mod{lowering.lower(gir_module)};
-
     if (options.target_machine) {
-        llvm_mod->setDataLayout(options.target_machine->createDataLayout());
-        llvm_mod->setTargetTriple(options.target_machine->getTargetTriple());
+        lowering.module().setDataLayout(options.target_machine->createDataLayout());
+        lowering.module().setTargetTriple(options.target_machine->getTargetTriple());
     }
+    auto llvm_mod{lowering.lower(gir_module)};
 
     std::string              err_str;
     llvm::raw_string_ostream os{err_str};
@@ -249,12 +248,11 @@ auto analyzer::emit_llvm_ir_executable(gir::module&                      gir_mod
     -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic> {
     PROFILE_FUNCTION();
     codegen::llvm_lowering lowering{context, gir_module.get_ast_module().path.string()};
-    auto                   llvm_mod{lowering.lower_executable(gir_module, user_main_name)};
-
     if (options.target_machine) {
-        llvm_mod->setDataLayout(options.target_machine->createDataLayout());
-        llvm_mod->setTargetTriple(options.target_machine->getTargetTriple());
+        lowering.module().setDataLayout(options.target_machine->createDataLayout());
+        lowering.module().setTargetTriple(options.target_machine->getTargetTriple());
     }
+    auto llvm_mod{lowering.lower_executable(gir_module, user_main_name)};
 
     std::string              err_str;
     llvm::raw_string_ostream os{err_str};
