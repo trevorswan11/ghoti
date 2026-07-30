@@ -21,6 +21,7 @@ enum class error : u8 {
     OBJECT_READ_FAILED,
     DIRECTORY_CREATION_FAILED,
     ARCHIVING_FAILED,
+    ILLEGAL_DYLIB_RELOC_MODE,
 };
 
 using diagnostic  = diagnostic<error>;

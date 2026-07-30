@@ -341,4 +341,41 @@ auto analyzer::emit_static_library(gir::module&                         gir_modu
     return codegen::create_static_library(output_path, objects, target_opts);
 }
 
+auto analyzer::emit_dynamic_library(gir::module&                         gir_module,
+                                    const codegen::target_options&       target_opts,
+                                    const codegen::optimizer_options&    opt_options,
+                                    const std::filesystem::path&         output_path,
+                                    const codegen::extra_linker_options& linker_opts)
+    -> stdx::result<void, codegen::diagnostic> {
+    llvm::LLVMContext context;
+    return emit_dynamic_library(
+        gir_module, context, target_opts, opt_options, output_path, linker_opts);
+}
+
+auto analyzer::emit_dynamic_library(gir::module&                         gir_module,
+                                    llvm::LLVMContext&                   context,
+                                    const codegen::target_options&       target_opts,
+                                    const codegen::optimizer_options&    opt_options,
+                                    const std::filesystem::path&         output_path,
+                                    const codegen::extra_linker_options& linker_opts)
+    -> stdx::result<void, codegen::diagnostic> {
+    PROFILE_FUNCTION();
+    if (target_opts.reloc != codegen::reloc_model::PIC_) {
+        return codegen::make_codegen_err("Dynamic libraries require PIC relocation mode enabled",
+                                         codegen::error::ILLEGAL_DYLIB_RELOC_MODE);
+    }
+    auto target_machine{TRY(codegen::create_target_machine(target_opts))};
+
+    codegen::optimizer_options opts{opt_options};
+    opts.target_machine = target_machine.get();
+    if (opts.level == codegen::opt_level::O0 && target_opts.level != codegen::opt_level::O0) {
+        opts.level = target_opts.level;
+    }
+
+    auto temp_obj_path{make_tmp_obj(output_path)};
+    auto llvm_mod{TRY(emit_llvm_ir(gir_module, context, opts))};
+    TRY(codegen::emit_object_file(*llvm_mod, *target_machine, temp_obj_path));
+    return codegen::link_dynamic_library(temp_obj_path, output_path, target_opts, linker_opts);
+}
+
 } // namespace ghoti::sema
