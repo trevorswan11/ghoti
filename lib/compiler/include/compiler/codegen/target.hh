@@ -25,7 +25,7 @@ namespace ghoti::codegen {
 
 enum class reloc_model : u8 {
     STATIC,
-    PIC,
+    PIC_,
     DYNAMIC_NO_PIC,
     ROPI,
     RWPI,
@@ -45,7 +45,7 @@ struct target_options {
     std::string               cpu{"generic"};
     std::string               features{};
     opt_level                 level{opt_level::O0};
-    stdx::option<reloc_model> reloc{reloc_model::PIC};
+    stdx::option<reloc_model> reloc{reloc_model::PIC_};
     stdx::option<code_model>  code{};
 };
 

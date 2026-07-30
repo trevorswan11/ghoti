@@ -48,7 +48,7 @@ namespace {
 auto to_llvm_reloc_model(reloc_model model) noexcept -> llvm::Reloc::Model {
     switch (model) {
     case reloc_model::STATIC:         return llvm::Reloc::Static;
-    case reloc_model::PIC:            return llvm::Reloc::PIC_;
+    case reloc_model::PIC_:           return llvm::Reloc::PIC_;
     case reloc_model::DYNAMIC_NO_PIC: return llvm::Reloc::DynamicNoPIC;
     case reloc_model::ROPI:           return llvm::Reloc::ROPI;
     case reloc_model::RWPI:           return llvm::Reloc::RWPI;
