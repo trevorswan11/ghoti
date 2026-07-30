@@ -3,6 +3,7 @@
 #include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/format.h>
 
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
@@ -12,7 +13,6 @@
 #include "driver/cmd/build_lib.hh"
 #include "driver/cmd/build_obj.hh"
 #include "driver/cmd/repl.hh"
-#include "ghoti/config.h"
 #include "helpers/argv.hh"
 #include "support/test.hh"
 
@@ -42,7 +42,9 @@ TEST_CASE("build-obj subcommand parser") {
 
         const auto& opts{build_cmd.get_opts()};
         CHECK(opts.input_path == "src/main.gh");
-        CHECK(opts.output_path == "src/main.o");
+        const auto expected_default{fmt::format(
+            "src/main{}", codegen::get_default_output_extension(codegen::output_type::OBJECT))};
+        CHECK(opts.output_path == expected_default);
         CHECK(opts.opt_opts.level == codegen::opt_level::O0);
     }
 
@@ -200,9 +202,12 @@ TEST_CASE("build-lib subcommand parser") {
 
         const auto& opts{build_cmd.get_opts()};
         CHECK(opts.input_path == "src/lib.gh");
-        constexpr std::string_view expected_default{GHOTI_WINDOWS ? "src/lib.lib" : "src/lib.a"};
+        const auto expected_default{fmt::format(
+            "src/lib{}",
+            codegen::get_default_output_extension(codegen::output_type::STATIC_LIBRARY))};
         CHECK(opts.output_path == expected_default);
         CHECK(opts.opt_opts.level == codegen::opt_level::O0);
+        CHECK_FALSE(opts.dynamic);
     }
 
     SECTION("Explicit output path") {
@@ -214,6 +219,17 @@ TEST_CASE("build-lib subcommand parser") {
         const auto& opts{build_cmd.get_opts()};
         CHECK(opts.input_path == "lib.gh");
         CHECK(opts.output_path == "lib/mylib.a");
+    }
+
+    SECTION("Dynamic library flag parsing (--dynamic / --shared)") {
+        auto         args{helpers::mock_argv{"ghoti", "build-lib", "--dynamic", "src/lib.gh"}};
+        clap::parser parser{args.argc(), args.argv(), std::cerr, false};
+        auto         cmd{UNWRAP(parser.parse())};
+        auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_lib*>(cmd.get()))};
+
+        const auto& opts{build_cmd.get_opts()};
+        CHECK(opts.input_path == "src/lib.gh");
+        CHECK(opts.dynamic);
     }
 }
 

@@ -37,10 +37,10 @@ class parser {
     char**        argv_;
     std::ostream& error_stream_;
 
-    CLI::App            app_;
-    cmd::build_obj_opts build_obj_opts_;
-    cmd::build_exe_opts build_exe_opts_;
-    cmd::build_lib_opts build_lib_opts_;
+    CLI::App               app_;
+    cmd::raw_build_options build_obj_opts_;
+    cmd::raw_build_options build_exe_opts_;
+    cmd::raw_build_options build_lib_opts_;
 
 #if GHOTI_WINDOWS
     win32::rich_console console_;

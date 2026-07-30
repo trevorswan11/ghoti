@@ -78,7 +78,7 @@ auto initialize_all_targets() noexcept -> void {
 }
 
 auto resolve_target_triple(stdx::option<std::string_view> triple_str) -> llvm::Triple {
-    const bool is_explicit{triple_str.has_value() && !triple_str->empty()};
+    const bool is_explicit{triple_str && !triple_str->empty()};
     const auto raw_triple{is_explicit ? std::string{*triple_str}
                                       : llvm::sys::getDefaultTargetTriple()};
 
@@ -92,6 +92,28 @@ auto resolve_target_triple(stdx::option<std::string_view> triple_str) -> llvm::T
         }
     }
     return triple;
+}
+
+auto get_default_output_extension(output_type type, stdx::option<std::string_view> triple_str)
+    -> std::string_view {
+    const auto triple{resolve_target_triple(triple_str)};
+    switch (type) {
+    case output_type::OBJECT:
+        if (triple.isOSWindows() && !triple.isWindowsGNUEnvironment()) { return ".obj"; }
+        return ".o";
+    case output_type::EXECUTABLE:
+        if (triple.isOSWindows()) { return ".exe"; }
+        if (triple.isWasm()) { return ".wasm"; }
+        return "";
+    case output_type::STATIC_LIBRARY:
+        if (triple.isOSWindows() && !triple.isWindowsGNUEnvironment()) { return ".lib"; }
+        return ".a";
+    case output_type::DYNAMIC_LIBRARY:
+        if (triple.isOSDarwin()) { return ".dylib"; }
+        if (triple.isOSWindows()) { return ".dll"; }
+        return ".so";
+    default: return "";
+    }
 }
 
 auto create_target_machine(const target_options& options)

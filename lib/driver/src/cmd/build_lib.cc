@@ -35,11 +35,25 @@ auto build_lib::execute() -> stdx::result<void, clap::error> {
     auto gir_mod{analyzer.emit_gir(*module)};
     if (module->is_poisoned()) { return stdx::err{clap::error::COMPILATION_FAILED}; }
 
-    auto emit_res{analyzer.emit_static_library(gir_mod,
-                                               opts_.target_opts,
-                                               opts_.opt_opts,
-                                               opts_.output_path,
-                                               {.objects = opts_.extra_objects})};
+    stdx::result<void, codegen::diagnostic> emit_res;
+    if (opts_.dynamic) {
+        emit_res = analyzer.emit_dynamic_library(gir_mod,
+                                                 opts_.target_opts,
+                                                 opts_.opt_opts,
+                                                 opts_.output_path,
+                                                 {
+                                                     .objects       = opts_.extra_objects,
+                                                     .library_paths = opts_.library_paths,
+                                                     .libraries     = opts_.libraries,
+                                                 });
+    } else {
+        emit_res = analyzer.emit_static_library(gir_mod,
+                                                opts_.target_opts,
+                                                opts_.opt_opts,
+                                                opts_.output_path,
+                                                {.objects = opts_.extra_objects});
+    }
+
     if (!emit_res) {
         return clap::fatal_error(error_stream_,
                                  emit_res.error().get_message().value_or(GHOTI_UNKNOWN_ERROR),

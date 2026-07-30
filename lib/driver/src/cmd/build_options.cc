@@ -25,10 +25,10 @@
 
 namespace ghoti::cmd {
 
-auto build_options_base::process_raw(const build_options_raw& raw,
-                                     std::string_view         default_ext,
-                                     std::ostream&            error_stream)
-    -> stdx::result<build_options_base, clap::error> {
+auto build_options::process_raw(const raw_build_options& raw,
+                                codegen::output_type     type,
+                                std::ostream&            error_stream)
+    -> stdx::result<build_options, clap::error> {
     codegen::optimizer_options opt_opts{
         .debug_logging = raw.debug_passes,
         .time_passes   = raw.time_passes,
@@ -53,6 +53,8 @@ auto build_options_base::process_raw(const build_options_raw& raw,
     std::filesystem::path output_path;
     if (raw.output.empty()) {
         output_path = input_path;
+        const auto default_ext{codegen::get_default_output_extension(
+            type, raw.target.empty() ? stdx::none : stdx::option<std::string_view>{raw.target})};
         if (default_ext.empty()) {
             output_path.replace_extension("");
         } else {
@@ -91,7 +93,7 @@ auto build_options_base::process_raw(const build_options_raw& raw,
     library_paths.reserve(raw.library_paths.size());
     for (const auto& dir : raw.library_paths) { library_paths.emplace_back(dir); }
 
-    return build_options_base{
+    return build_options{
         .input_path    = std::move(input_path),
         .output_path   = std::move(output_path),
         .target_opts   = std::move(target_opts),
@@ -100,10 +102,11 @@ auto build_options_base::process_raw(const build_options_raw& raw,
         .extra_objects = std::move(extra_objects),
         .library_paths = std::move(library_paths),
         .libraries     = raw.libraries,
+        .dynamic       = raw.dynamic,
     };
 }
 
-auto build_options_base::normalize_input_path() -> void {
+auto build_options::normalize_input_path() -> void {
     if (input_path.is_absolute()) {
         std::error_code ec;
         auto            rel{std::filesystem::relative(input_path, ec)};
@@ -111,8 +114,7 @@ auto build_options_base::normalize_input_path() -> void {
     }
 }
 
-auto build_options_base::setup_module_manager(mod::module_manager& manager,
-                                              std::ostream&        error_stream)
+auto build_options::setup_module_manager(mod::module_manager& manager, std::ostream& error_stream)
     -> stdx::result<void, clap::error> {
     if (const auto stdlib_path{mod::find_stdlib()}) {
         if (auto res{manager.add_library_module("std", *stdlib_path)}; !res) {
@@ -145,9 +147,9 @@ auto build_options_base::setup_module_manager(mod::module_manager& manager,
     return {};
 }
 
-auto build_options_base::analyze(sema::analyzer&      analyzer,
-                                 mod::module_manager& manager,
-                                 std::ostream&        error_stream)
+auto build_options::analyze(sema::analyzer&      analyzer,
+                            mod::module_manager& manager,
+                            std::ostream&        error_stream)
     -> stdx::result<gsl::not_null<ghoti::mod::module*>, clap::error> {
     if (!analyzer.analyze(input_path)) { return stdx::err{clap::error::COMPILATION_FAILED}; }
 
@@ -166,18 +168,15 @@ auto build_options_base::analyze(sema::analyzer&      analyzer,
 }
 
 auto setup_build_options_flags(CLI::App*          subcmd,
-                               build_options_raw& opts,
-                               std::string_view   output_desc,
-                               bool               omit_lib_linking) -> void {
+                               raw_build_options& opts,
+                               std::string_view   output_desc) -> void {
     subcmd->add_option("-o,--output", opts.output, std::string{output_desc});
     subcmd->add_option(
         "-m,--module", opts.module_raw_args, "Register a library module (format: <name>,<path>)");
     subcmd->add_option("--object", opts.extra_objects, "Link precompiled object file or library");
-    if (!omit_lib_linking) {
-        subcmd->add_option(
-            "-L,--library-path", opts.library_paths, "Add directory to library search paths");
-        subcmd->add_option("-l,--library", opts.libraries, "Link against library name");
-    }
+    subcmd->add_option(
+        "-L,--library-path", opts.library_paths, "Add directory to library search paths");
+    subcmd->add_option("-l,--library", opts.libraries, "Link against library name");
     subcmd->add_option("--target", opts.target, "Target triple");
     subcmd->add_option("--cpu", opts.cpu, "Target CPU architecture (default: generic)");
     subcmd->add_option("--features", opts.features, "Target CPU features");

@@ -40,6 +40,13 @@ enum class code_model : u8 {
     LARGE,
 };
 
+enum class output_type : u8 {
+    OBJECT,
+    EXECUTABLE,
+    STATIC_LIBRARY,
+    DYNAMIC_LIBRARY,
+};
+
 struct target_options {
     stdx::option<std::string> triple_str{};
     std::string               cpu{"generic"};
@@ -53,6 +60,9 @@ struct target_options {
 auto               initialize_all_targets() noexcept -> void;
 [[nodiscard]] auto resolve_target_triple(stdx::option<std::string_view> triple_str = stdx::none)
     -> llvm::Triple;
+
+[[nodiscard]] auto get_default_output_extension(
+    output_type type, stdx::option<std::string_view> triple_str = stdx::none) -> std::string_view;
 
 [[nodiscard]] auto to_llvm_codegen_opt_level(opt_level level) noexcept -> llvm::CodeGenOptLevel;
 

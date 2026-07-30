@@ -23,7 +23,10 @@ namespace ghoti::tests {
 TEST_CASE("build_obj command execution") {
     SECTION("Non-existent input file returns FILE_NOT_FOUND") {
         codegen::llvm_scope scope;
-        cmd::build_obj      cmd{"non_existent_file_12345.gh", "out.o", {}, {}};
+        cmd::build_obj      cmd{{
+                 .input_path  = "non_existent_file_12345.gh",
+                 .output_path = "out.o",
+        }};
         CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::FILE_NOT_FOUND);
     }
 
@@ -48,7 +51,12 @@ TEST_CASE("build_obj command execution") {
         codegen::target_options    target_opts{.level = codegen::opt_level::O2};
         codegen::optimizer_options opt_opts{.level = codegen::opt_level::O2};
 
-        cmd::build_obj cmd{src_file, obj_file, target_opts, opt_opts};
+        cmd::build_obj cmd{{
+            .input_path  = src_file,
+            .output_path = obj_file,
+            .target_opts = target_opts,
+            .opt_opts    = opt_opts,
+        }};
         REQUIRE(cmd.execute());
         CHECK(std::filesystem::exists(obj_file));
         CHECK(std::filesystem::file_size(obj_file) > 0);
@@ -74,7 +82,12 @@ TEST_CASE("build_obj command execution") {
         };
         codegen::optimizer_options opt_opts{.level = codegen::opt_level::O2};
 
-        cmd::build_obj cmd{src_file, obj_file, target_opts, opt_opts};
+        cmd::build_obj cmd{{
+            .input_path  = src_file,
+            .output_path = obj_file,
+            .target_opts = target_opts,
+            .opt_opts    = opt_opts,
+        }};
         REQUIRE(cmd.execute());
         CHECK(std::filesystem::exists(obj_file));
         CHECK(std::filesystem::file_size(obj_file) > 0);
@@ -91,7 +104,7 @@ TEST_CASE("build_obj command execution") {
             fmt::print(out, "pub const invalid_syntax := ;;;");
         }
 
-        cmd::build_obj cmd{src_file, obj_file, {}, {}};
+        cmd::build_obj cmd{{.input_path = src_file, .output_path = obj_file}};
         CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::COMPILATION_FAILED);
     }
 
@@ -121,7 +134,7 @@ TEST_CASE("build_obj command execution") {
             )");
         }
 
-        cmd::build_obj cmd{main_path, obj_file, {}, {}};
+        cmd::build_obj cmd{{.input_path = main_path, .output_path = obj_file}};
         REQUIRE(cmd.execute());
         CHECK(std::filesystem::exists(obj_file));
         CHECK(std::filesystem::file_size(obj_file) > 0);
@@ -147,7 +160,7 @@ TEST_CASE("build_obj command execution") {
             )");
         }
 
-        cmd::build_obj cmd{src_file, obj_file, {}, {}};
+        cmd::build_obj cmd{{.input_path = src_file, .output_path = obj_file}};
         REQUIRE(cmd.execute());
         CHECK(std::filesystem::exists(obj_file));
         CHECK(std::filesystem::file_size(obj_file) > 0);
@@ -178,7 +191,11 @@ TEST_CASE("build_obj command execution") {
         }
 
         std::vector<cmd::module_binding> modules{{"mylib", custom_lib}};
-        cmd::build_obj                   cmd{src_file, obj_file, {}, {}, std::move(modules)};
+        cmd::build_obj                   cmd{{
+                              .input_path  = src_file,
+                              .output_path = obj_file,
+                              .modules     = std::move(modules),
+        }};
         REQUIRE(cmd.execute());
         CHECK(std::filesystem::exists(obj_file));
         CHECK(std::filesystem::file_size(obj_file) > 0);
@@ -215,7 +232,11 @@ TEST_CASE("build_obj command execution") {
         }
 
         std::vector<cmd::module_binding> modules{{"math", custom_lib}};
-        cmd::build_obj                   cmd{src_file, obj_file, {}, {}, std::move(modules)};
+        cmd::build_obj                   cmd{{
+                              .input_path  = src_file,
+                              .output_path = obj_file,
+                              .modules     = std::move(modules),
+        }};
         REQUIRE(cmd.execute());
         CHECK(std::filesystem::exists(obj_file));
         CHECK(std::filesystem::file_size(obj_file) > 0);

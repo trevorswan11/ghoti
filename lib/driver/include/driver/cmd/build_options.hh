@@ -27,7 +27,7 @@ struct module_binding {
 };
 
 // Raw options populated directly by CLI parser
-struct build_options_raw {
+struct raw_build_options {
     std::string              input;
     std::string              output;
     std::string              target;
@@ -41,9 +41,10 @@ struct build_options_raw {
     bool                     release{false};
     bool                     debug_passes{false};
     bool                     time_passes{false};
+    bool                     dynamic{false};
 };
 
-struct build_options_base {
+struct build_options {
     std::filesystem::path              input_path{};
     std::filesystem::path              output_path{};
     codegen::target_options            target_opts{};
@@ -52,11 +53,11 @@ struct build_options_base {
     std::vector<std::filesystem::path> extra_objects{};
     std::vector<std::filesystem::path> library_paths{};
     std::vector<std::string>           libraries{};
+    bool                               dynamic{false};
 
-    static auto process_raw(const build_options_raw& raw,
-                            std::string_view         default_ext,
-                            std::ostream&            error_stream)
-        -> stdx::result<build_options_base, clap::error>;
+    static auto process_raw(const raw_build_options& raw,
+                            codegen::output_type     type,
+                            std::ostream& error_stream) -> stdx::result<build_options, clap::error>;
 
     // Converts the input path from absolute to relative if needed
     auto normalize_input_path() -> void;
@@ -69,14 +70,9 @@ struct build_options_base {
         -> stdx::result<gsl::not_null<ghoti::mod::module*>, clap::error>;
 };
 
-struct build_obj_opts : public build_options_raw {};
-struct build_exe_opts : public build_options_raw {};
-struct build_lib_opts : public build_options_raw {};
-
 // Helper to register standard build options into CLI subcommands
 auto setup_build_options_flags(CLI::App*          subcmd,
-                               build_options_raw& opts,
-                               std::string_view   output_desc,
-                               bool omit_lib_linking = false) -> void;
+                               raw_build_options& opts,
+                               std::string_view   output_desc) -> void;
 
 } // namespace ghoti::cmd

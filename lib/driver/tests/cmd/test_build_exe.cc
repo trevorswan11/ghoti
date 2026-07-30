@@ -1,9 +1,9 @@
 #include <filesystem>
 #include <fstream>
-#include <utility>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/ostream.h>
 
 #include "compiler/codegen/llvm_scope.hh"
 #include "compiler/codegen/opt_level.hh"
@@ -20,7 +20,10 @@ namespace ghoti::tests {
 TEST_CASE("build_exe command execution") {
     SECTION("Non-existent input file returns FILE_NOT_FOUND") {
         codegen::llvm_scope scope;
-        cmd::build_exe      cmd{"non_existent_file_12345.gh", "out_exe", {}, {}};
+        cmd::build_exe      cmd{{
+                 .input_path  = "non_existent_file_12345.gh",
+                 .output_path = "out_exe",
+        }};
         CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::FILE_NOT_FOUND);
     }
 
@@ -31,18 +34,23 @@ TEST_CASE("build_exe command execution") {
 
         {
             std::ofstream out{src_file.path};
-            out << R"(
-                pub const main := fn(args: [][:0]u8): void {
+            fmt::print(out, R"(
+                pub const main := fn(args: [][:0]u8): void {{
                     return;
-                };
-            )";
+                }};
+            )");
         }
 
         codegen::target_options    target_opts{.triple_str = "x86_64-unknown-linux-gnu",
                                                .level      = codegen::opt_level::O2};
         codegen::optimizer_options opt_opts{.level = codegen::opt_level::O2};
 
-        cmd::build_exe cmd{src_file, exe_file, target_opts, opt_opts};
+        cmd::build_exe cmd{{
+            .input_path  = src_file,
+            .output_path = exe_file,
+            .target_opts = target_opts,
+            .opt_opts    = opt_opts,
+        }};
         REQUIRE(cmd.execute());
         CHECK(std::filesystem::exists(exe_file));
         CHECK(std::filesystem::file_size(exe_file) > 0);
@@ -56,18 +64,23 @@ TEST_CASE("build_exe command execution") {
 
         {
             std::ofstream out{src_file.path};
-            out << R"(
-                pub const main := fn(args: [][:0]u8): i32 {
+            fmt::print(out, R"(
+                pub const main := fn(args: [][:0]u8): i32 {{
                     return @as(i32, args.len);
-                };
-            )";
+                }};
+            )");
         }
 
         codegen::target_options    target_opts{.triple_str = "x86_64-unknown-linux-gnu",
                                                .level      = codegen::opt_level::O2};
         codegen::optimizer_options opt_opts{.level = codegen::opt_level::O2};
 
-        cmd::build_exe cmd{src_file, exe_file, target_opts, opt_opts};
+        cmd::build_exe cmd{{
+            .input_path  = src_file,
+            .output_path = exe_file,
+            .target_opts = target_opts,
+            .opt_opts    = opt_opts,
+        }};
         REQUIRE(cmd.execute());
         CHECK(std::filesystem::exists(exe_file));
         CHECK(std::filesystem::file_size(exe_file) > 0);
@@ -80,11 +93,11 @@ TEST_CASE("build_exe command execution") {
 
         {
             std::ofstream out{src_file.path};
-            out << R"(
-                pub const main := fn(args: [][:0]u8): void {
+            fmt::print(out, R"(
+                pub const main := fn(args: [][:0]u8): void {{
                     return;
-                };
-            )";
+                }};
+            )");
         }
 
         codegen::target_options target_opts{
@@ -93,7 +106,12 @@ TEST_CASE("build_exe command execution") {
         };
         codegen::optimizer_options opt_opts{.level = codegen::opt_level::O2};
 
-        cmd::build_exe cmd{src_file, exe_file, target_opts, opt_opts};
+        cmd::build_exe cmd{{
+            .input_path  = src_file,
+            .output_path = exe_file,
+            .target_opts = target_opts,
+            .opt_opts    = opt_opts,
+        }};
         REQUIRE(cmd.execute());
         CHECK(std::filesystem::exists(exe_file));
         CHECK(std::filesystem::file_size(exe_file) > 0);
@@ -107,14 +125,17 @@ TEST_CASE("build_exe command execution") {
 
         {
             std::ofstream out{src_file.path};
-            out << R"(
-                const main := fn(args: [][:0]u8): void {
+            fmt::print(out, R"(
+                const main := fn(args: [][:0]u8): void {{
                     return;
-                };
-            )";
+                }};
+            )");
         }
 
-        cmd::build_exe cmd{src_file, exe_file, {}, {}};
+        cmd::build_exe cmd{{
+            .input_path  = src_file,
+            .output_path = exe_file,
+        }};
         CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::COMPILATION_FAILED);
     }
 
@@ -125,14 +146,17 @@ TEST_CASE("build_exe command execution") {
 
         {
             std::ofstream out{src_file.path};
-            out << R"(
-                pub const main := fn(): i32 {
+            fmt::print(out, R"(
+                pub const main := fn(): i32 {{
                     return 0;
-                };
-            )";
+                }};
+            )");
         }
 
-        cmd::build_exe cmd{src_file, exe_file, {}, {}};
+        cmd::build_exe cmd{{
+            .input_path  = src_file,
+            .output_path = exe_file,
+        }};
         CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::COMPILATION_FAILED);
     }
 
@@ -144,20 +168,20 @@ TEST_CASE("build_exe command execution") {
 
         {
             std::ofstream out{src_file.path};
-            out << R"(
-                pub const main := fn(args: [][:0]u8): void {
+            fmt::print(out, R"(
+                pub const main := fn(args: [][:0]u8): void {{
                     return;
-                };
-            )";
+                }};
+            )");
         }
 
         // Create a dummy extra object file
         {
             std::ofstream out{extra_obj.path};
-            out << "dummy object content";
+            fmt::print(out, "dummy object content");
         }
 
-        cmd::build_options_base opts{
+        cmd::build_exe cmd{{
             .input_path  = src_file,
             .output_path = exe_file,
             .target_opts =
@@ -169,9 +193,7 @@ TEST_CASE("build_exe command execution") {
             .extra_objects = {extra_obj},
             .library_paths = {std::filesystem::path{"/usr/lib"}, std::filesystem::path{"/lib"}},
             .libraries     = {"m", "c"},
-        };
-
-        cmd::build_exe cmd{std::move(opts)};
+        }};
         CHECK(cmd.get_opts().extra_objects.size() == 1);
         CHECK(cmd.get_opts().library_paths.size() == 2);
         CHECK(cmd.get_opts().libraries.size() == 2);
