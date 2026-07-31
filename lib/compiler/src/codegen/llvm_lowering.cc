@@ -103,16 +103,49 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
     auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", main_fn)};
     builder_.SetInsertPoint(entry_bb);
 
+    auto* slice_ty{types_.translate_slice_type()};
+
+    // Windows raw PE entry point
+    if (triple.isOSWindows()) {
+        // BaseThreadInitThunk calls entry point without C (argc, argv)
+        // Construct empty slice [][:0]u8 (args.len = 0) to avoid dereferencing invalid registers
+        auto* outer_slice{builder_.CreateAlloca(slice_ty, nullptr, "outer.slice")};
+        auto* outer_data{builder_.CreateStructGEP(slice_ty, outer_slice, 0, "outer.data")};
+        auto* outer_len{builder_.CreateStructGEP(slice_ty, outer_slice, 1, "outer.len")};
+        builder_.CreateStore(llvm::ConstantPointerNull::get(types_.get_ptr_ty()), outer_data);
+        builder_.CreateStore(builder_.getInt64(0), outer_len);
+        auto* outer_val{builder_.CreateLoad(slice_ty, outer_slice, "outer.val")};
+
+        const bool takes_arg{user_fn->getFunctionType()->getNumParams() == 1};
+        if (user_fn->getReturnType()->isVoidTy()) {
+            if (takes_arg) {
+                builder_.CreateCall(user_fn, {outer_val});
+            } else {
+                builder_.CreateCall(user_fn, {});
+            }
+            builder_.CreateRet(builder_.getInt32(0));
+        } else {
+            auto* ret_val{takes_arg ? builder_.CreateCall(user_fn, {outer_val}, "main.res")
+                                    : builder_.CreateCall(user_fn, {}, "main.res")};
+            auto* ret_i32{
+                builder_.CreateIntCast(ret_val, types_.get_int32_ty(), true, "main.res.i32")};
+            builder_.CreateRet(ret_i32);
+        }
+        return main_fn;
+    }
+
     auto* argc{main_fn->getArg(0)};
     argc->setName("argc");
     auto* argv{main_fn->getArg(1)};
     argv->setName("argv");
 
-    auto* argc_i64{builder_.CreateSExt(argc, types_.get_int64_ty(), "argc.i64")};
-    auto* slice_ty{types_.translate_slice_type()};
+    auto* raw_argc_i64{builder_.CreateSExt(argc, types_.get_int64_ty(), "argc.i64")};
 
-    // Allocate stack buffer for argc slice elements
-    auto* slice_array{builder_.CreateAlloca(slice_ty, argc_i64, "args.array")};
+    // Use a fixed 16-element stack buffer to avoid dynamic stack allocation and stack probe issues
+    auto* max_args{builder_.getInt64(16)};
+    auto* slice_array{builder_.CreateAlloca(slice_ty, max_args, "args.array")};
+    auto* argc_i64{builder_.CreateSelect(
+        builder_.CreateICmpSLT(raw_argc_i64, max_args), raw_argc_i64, max_args, "argc.bounded")};
 
     auto* loop_cond{llvm::BasicBlock::Create(context_, "loop.cond", main_fn)};
     auto* loop_body{llvm::BasicBlock::Create(context_, "loop.body", main_fn)};
@@ -172,7 +205,6 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
     builder_.CreateStore(inc_i, i_var);
     builder_.CreateBr(loop_cond);
 
-    // Loop end: construct outer slice [][:0]u8 and call user_fn
     builder_.SetInsertPoint(loop_end);
     auto* outer_slice{builder_.CreateAlloca(slice_ty, nullptr, "outer.slice")};
     auto* outer_data{builder_.CreateStructGEP(slice_ty, outer_slice, 0, "outer.data")};
@@ -182,11 +214,17 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
     auto* outer_val{builder_.CreateLoad(slice_ty, outer_slice, "outer.val")};
 
     // Call user main
+    const bool takes_arg{user_fn->getFunctionType()->getNumParams() == 1};
     if (user_fn->getReturnType()->isVoidTy()) {
-        builder_.CreateCall(user_fn, {outer_val});
+        if (takes_arg) {
+            builder_.CreateCall(user_fn, {outer_val});
+        } else {
+            builder_.CreateCall(user_fn, {});
+        }
         builder_.CreateRet(builder_.getInt32(0));
     } else {
-        auto* ret_val{builder_.CreateCall(user_fn, {outer_val}, "main.res")};
+        auto* ret_val{takes_arg ? builder_.CreateCall(user_fn, {outer_val}, "main.res")
+                                : builder_.CreateCall(user_fn, {}, "main.res")};
         auto* ret_i32{builder_.CreateIntCast(ret_val, types_.get_int32_ty(), true, "main.res.i32")};
         builder_.CreateRet(ret_i32);
     }

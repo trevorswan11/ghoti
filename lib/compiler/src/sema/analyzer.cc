@@ -174,31 +174,30 @@ auto analyzer::validate_main_entry(const mod::module& root_module) const
     }
 
     const auto& fn_data{sema_type.get_data().as<types::function>()};
-    if (fn_data.params.size() != 1) {
-        return make_sema_err(
-            fmt::format(
-                "'main' function must have exactly 1 parameter of type '[][:0]u8', found {}",
-                fn_data.params.size()),
-            error::TYPE_MISMATCH,
-            main_sym.get_symbol_location(root_module));
-    }
-
-    const auto* param_type{fn_data.params.front()};
-    bool        valid_param{false};
-    if (param_type && param_type->get_kind() == type_kind::SLICE) {
-        const auto outer_slice{param_type->get_data().as_opt<types::slice>()};
-        if (outer_slice && !outer_slice->null_terminated &&
-            outer_slice->underlying.get_kind() == type_kind::SLICE) {
-            const auto inner_slice{outer_slice->underlying.get_data().as_opt<types::slice>()};
-            if (inner_slice->null_terminated &&
-                inner_slice->underlying.get_kind() == type_kind::U8) {
-                valid_param = true;
+    if (fn_data.params.size() == 1) {
+        const auto* param_type{fn_data.params.front()};
+        bool        valid_param{false};
+        if (param_type && param_type->get_kind() == type_kind::SLICE) {
+            const auto outer_slice{param_type->get_data().as_opt<types::slice>()};
+            if (outer_slice && !outer_slice->null_terminated &&
+                outer_slice->underlying.get_kind() == type_kind::SLICE) {
+                const auto inner_slice{outer_slice->underlying.get_data().as_opt<types::slice>()};
+                if (inner_slice->null_terminated &&
+                    inner_slice->underlying.get_kind() == type_kind::U8) {
+                    valid_param = true;
+                }
             }
         }
-    }
 
-    if (!valid_param) {
-        return make_sema_err("'main' parameter must have type '[][:0]u8'",
+        if (!valid_param) {
+            return make_sema_err("'main' parameter must have type '[][:0]u8'",
+                                 error::TYPE_MISMATCH,
+                                 main_sym.get_symbol_location(root_module));
+        }
+    } else if (fn_data.params.size() > 1) {
+        return make_sema_err(fmt::format("'main' function must have 0 parameters or 1 parameter of "
+                                         "type '[][:0]u8', found {}",
+                                         fn_data.params.size()),
                              error::TYPE_MISMATCH,
                              main_sym.get_symbol_location(root_module));
     }

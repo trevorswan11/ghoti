@@ -47,14 +47,24 @@ TEST_CASE("Main function entry validation") {
         CHECK_FALSE(ctx->analyzer.validate_main_entry(ctx->root_mod));
     }
 
-    SECTION("Main with 0 params returns error") {
+    SECTION("Main with 0 params is valid") {
         constexpr auto input = R"(
             pub const main := fn(): void {
                 return;
             };
         )";
         auto [ctx, idx]{helpers::resolve_and_check(input)};
-        CHECK_FALSE(ctx->analyzer.validate_main_entry(ctx->root_mod));
+        CHECK(ctx->analyzer.validate_main_entry(ctx->root_mod));
+    }
+
+    SECTION("Main with 0 params and i32 return is valid") {
+        constexpr auto input = R"(
+            pub const main := fn(): i32 {
+                return 0;
+            };
+        )";
+        auto [ctx, idx]{helpers::resolve_and_check(input)};
+        CHECK(ctx->analyzer.validate_main_entry(ctx->root_mod));
     }
 
     SECTION("Main with non-void and non-i32 return returns error") {
@@ -111,6 +121,26 @@ TEST_CASE("Executable LLVM IR lowering with entry wrapper") {
     auto& ghoti_main_fn{UNWRAP(llvm_mod->getFunction("_ghoti_main"))};
     CHECK(ghoti_main_fn.getReturnType()->isVoidTy());
     CHECK(ghoti_main_fn.arg_size() == 1);
+
+    SECTION("Parameterless main function lowering") {
+        constexpr auto input2 = R"(
+            pub const main := fn(): i32 {
+                return 42;
+            };
+        )";
+
+        auto [ctx2, idx2]{helpers::resolve_and_check(input2)};
+        REQUIRE(ctx2->analyzer.validate_main_entry(ctx2->root_mod));
+        auto llvm_mod2{UNWRAP(helpers::emit_llvm_ir_executable(*ctx2, context))};
+
+        std::string              err_str2;
+        llvm::raw_string_ostream os2{err_str2};
+        CHECK_FALSE(llvm::verifyModule(*llvm_mod2, &os2));
+
+        auto& ghoti_main_fn2{UNWRAP(llvm_mod2->getFunction("_ghoti_main"))};
+        CHECK(ghoti_main_fn2.getReturnType()->isIntegerTy(32));
+        CHECK(ghoti_main_fn2.arg_size() == 0);
+    }
 
     // Verify C entry wrapper main(i32, ptr) was generated
     auto& c_main_fn{UNWRAP(llvm_mod->getFunction("main"))};

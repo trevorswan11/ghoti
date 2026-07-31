@@ -86,6 +86,29 @@ TEST_CASE("build_exe command execution") {
         CHECK(std::filesystem::file_size(exe_file) > 0);
     }
 
+    SECTION("Valid parameterless main function compiles and links executable") {
+        codegen::llvm_scope scope;
+        tempfile            src_file{"test_no_args_main.gh"};
+        tempfile            exe_file{"test_no_args_main_out"};
+
+        {
+            std::ofstream out{src_file.path};
+            fmt::print(out, R"(
+                pub const main := fn(): i32 {{
+                    return 42;
+                }};
+            )");
+        }
+
+        cmd::build_exe cmd{{
+            .input_path  = src_file,
+            .output_path = exe_file,
+        }};
+        REQUIRE(cmd.execute());
+        CHECK(std::filesystem::exists(exe_file));
+        CHECK(std::filesystem::file_size(exe_file) > 0);
+    }
+
     SECTION("Cross-target executable compilation for Linux x86_64 emits ELF binary") {
         codegen::llvm_scope scope;
         tempfile            src_file{"test_linux_exe_source.gh"};
@@ -147,8 +170,8 @@ TEST_CASE("build_exe command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const main := fn(): i32 {{
-                    return 0;
+                pub const main := fn(): bool {{
+                    return true;
                 }};
             )");
         }
