@@ -161,10 +161,12 @@ enum class token_type_t : u8 {
     EXPORT,
     VOLATILE,
     MUT_VOLATILE,
+    PACKED,
     NORETURN,
     NULLPTR,
     UNREACHABLE,
 
+    BUILTIN_ALIGNAS,
     BUILTIN_ALIGN_CAST,
     BUILTIN_PTR_CAST,
     BUILTIN_BIT_CAST,

@@ -827,7 +827,25 @@ auto module_access_expr::parse(syntax::parser& parser, expr_handle outer)
     return parser.add_expr<module_access_expr>(start_token, outer, inner);
 }
 
-auto struct_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
+namespace {
+
+[[nodiscard]] auto try_parse_alignment(syntax::parser& parser)
+    -> stdx::result<stdx::option<expr_handle>, syntax::diagnostic> {
+    stdx::option<expr_handle> explicit_alignment;
+    if (parser.peek_token_is(syntax::token_type_t::BUILTIN_ALIGNAS)) {
+        parser.advance();
+        TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
+        parser.advance();
+        explicit_alignment.emplace(TRY(parser.parse_expression()));
+        TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
+    }
+    return explicit_alignment;
+}
+
+} // namespace
+
+auto struct_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
+    -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
@@ -835,6 +853,7 @@ auto struct_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syn
     while (!parser.peek_token_is(syntax::token_type_t::RBRACE) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
         bool is_public{false};
+        auto explicit_alignment{TRY(try_parse_alignment(parser))};
 
         if (parser.peek_token_is(syntax::token_type_t::PUBLIC)) {
             // Use a transaction to preserve the public modifier
@@ -857,7 +876,9 @@ auto struct_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syn
 
         identifier_handle ident{TRY(identifier_expr::parse(parser))};
         TRY(parser.expect_peek(syntax::token_type_t::COLON));
+        if (!explicit_alignment) { explicit_alignment = TRY(try_parse_alignment(parser)); }
         const auto type{TRY(explicit_type::parse(parser))};
+        if (!explicit_alignment) { explicit_alignment = TRY(try_parse_alignment(parser)); }
 
         stdx::option<expr_handle> value;
         if (parser.peek_token_is(syntax::token_type_t::ASSIGN)) {
@@ -867,7 +888,7 @@ auto struct_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syn
 
         // The identifier holds public information to save space in the field
         if (is_public) { ident->set_token_type(syntax::token_type_t::PUBLIC); }
-        fields.emplace_back(ident, type, value);
+        fields.emplace_back(ident, type, value, explicit_alignment);
 
         // No comma means that its the end or that there is a decl list starting
         if (!parser.peek_token_is(syntax::token_type_t::COMMA)) { break; }
@@ -876,26 +897,30 @@ auto struct_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syn
 
     auto members{TRY(parse_members(parser))};
     TRY(parser.expect_peek(syntax::token_type_t::RBRACE));
-    return parser.add_expr<struct_expr>(start_token, std::move(fields), std::move(members));
+    return parser.add_expr<struct_expr>(
+        start_token, std::move(fields), std::move(members), is_extern, is_packed);
 }
 
-auto union_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
+auto union_expr::parse(syntax::parser& parser, bool is_extern)
+    -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
-
     std::vector<field> fields;
     while (!parser.peek_token_is(syntax::token_type_t::RBRACE) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
         if (parser.get_peek_token().is_member_token()) { break; }
 
+        auto explicit_alignment{TRY(try_parse_alignment(parser))};
         TRY(parser.expect_peek(syntax::token_type_t::IDENT));
         const identifier_handle ident{TRY(identifier_expr::parse(parser))};
 
         TRY(parser.expect_peek(syntax::token_type_t::COLON));
+        if (!explicit_alignment) { explicit_alignment = TRY(try_parse_alignment(parser)); }
         const auto type{TRY(explicit_type::parse(parser))};
+        if (!explicit_alignment) { explicit_alignment = TRY(try_parse_alignment(parser)); }
 
-        fields.emplace_back(ident, type);
+        fields.emplace_back(ident, type, explicit_alignment);
 
         // No comma means that its the end or that there is a decl list starting
         if (!parser.peek_token_is(syntax::token_type_t::COMMA)) { break; }
@@ -911,7 +936,52 @@ auto union_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
                                syntax::error::EMPTY_UNION,
                                start_token);
     }
-    return parser.add_expr<union_expr>(start_token, std::move(fields), std::move(members));
+    return parser.add_expr<union_expr>(
+        start_token, std::move(fields), std::move(members), is_extern);
+}
+
+auto parse_modified_struct_or_union(syntax::parser& parser)
+    -> stdx::result<expr_handle, syntax::diagnostic> {
+    const auto start_token{parser.get_current_token()};
+    bool       is_extern{false};
+    bool       is_packed{false};
+
+    while (true) {
+        const auto current_tt{parser.get_current_token().type};
+        if (current_tt == syntax::token_type_t::EXTERN) {
+            is_extern = true;
+        } else if (current_tt == syntax::token_type_t::PACKED) {
+            is_packed = true;
+        } else {
+            break;
+        }
+
+        if (parser.peek_token_is(syntax::token_type_t::EXTERN) ||
+            parser.peek_token_is(syntax::token_type_t::PACKED)) {
+            parser.advance();
+        } else {
+            break;
+        }
+    }
+
+    if (parser.peek_token_is(syntax::token_type_t::STRUCT)) {
+        parser.advance();
+        return struct_expr::parse(parser, is_extern, is_packed);
+    }
+
+    if (parser.peek_token_is(syntax::token_type_t::UNION)) {
+        parser.advance();
+        if (is_packed) {
+            return make_syntax_err("Unions cannot be declared with `packed`",
+                                   syntax::error::ILLEGAL_EXPLICIT_TYPE,
+                                   start_token);
+        }
+        return union_expr::parse(parser, is_extern);
+    }
+
+    return make_syntax_err("Expected `struct` or `union` after declaration modifiers",
+                           syntax::error::ILLEGAL_EXPLICIT_TYPE,
+                           start_token);
 }
 
 auto while_loop_expr::parse(syntax::parser& parser)

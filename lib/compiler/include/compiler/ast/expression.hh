@@ -264,6 +264,7 @@ struct struct_expr {
         identifier_handle         name;
         explicit_type_id          explicit_type;
         stdx::option<expr_handle> default_value;
+        stdx::option<expr_handle> explicit_alignment;
 
         [[nodiscard]] constexpr auto is_public() const noexcept -> bool {
             return name->get_token_type() == syntax::token_type_t::PUBLIC;
@@ -272,23 +273,38 @@ struct struct_expr {
 
     std::vector<field> fields;
     member_list        members;
+    bool               is_extern{false};
+    bool               is_packed{false};
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
+        -> stdx::result<expr_handle, syntax::diagnostic> {
+        return parse(parser, false, false);
+    }
+    [[nodiscard]] static auto parse(syntax::parser& parser, bool is_extern, bool is_packed)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
 struct union_expr {
     struct field {
-        identifier_handle name;
-        explicit_type_id  explicit_type;
+        identifier_handle         name;
+        explicit_type_id          explicit_type;
+        stdx::option<expr_handle> explicit_alignment;
     };
 
     std::vector<field> fields;
     member_list        members;
+    bool               is_extern{false};
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
+        -> stdx::result<expr_handle, syntax::diagnostic> {
+        return parse(parser, false);
+    }
+    [[nodiscard]] static auto parse(syntax::parser& parser, bool is_extern)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
+
+[[nodiscard]] auto parse_modified_struct_or_union(syntax::parser& parser)
+    -> stdx::result<expr_handle, syntax::diagnostic>;
 
 struct while_loop_expr {
     expr_handle               condition;
