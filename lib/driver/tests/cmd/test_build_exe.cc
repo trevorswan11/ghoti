@@ -103,6 +103,11 @@ TEST_CASE("build_exe command execution") {
         cmd::build_exe cmd{{
             .input_path  = src_file,
             .output_path = exe_file,
+            .target_opts =
+                {
+                    .triple_str = "x86_64-unknown-linux-gnu",
+                    .level      = codegen::opt_level::O2,
+                },
         }};
         REQUIRE(cmd.execute());
         CHECK(std::filesystem::exists(exe_file));

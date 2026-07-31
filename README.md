@@ -85,18 +85,21 @@ The language's website is written with [Go](https://go.dev/), [HTMX](https://htm
 - [x] Lexical analysis
 - [x] Pratt parsing
     - [x] Syntax documentation
-- [ ] Multi-pass Semantic Analysis (to support order independent declarations)
+- [x] Multi-pass Semantic Analysis (to support order independent declarations)
     - [x] Symbol registration pass
     - [x] Type resolution pass
-    - [ ] GIR Emission & Constant Evaluation
-    - [ ] Type checking pass
+    - [x] GIR Emission & Constant Evaluation
+    - [x] Type checking pass
 - [ ] LLVM Integration
     - [ ] Build system integration
         - [x] Compilation rules for Clang, LLD, and LLVM
         - [x] In-house clang-format
         - [x] Kaleidoscope examples
         - [ ] Test parity through the build system
-    - [ ] Compiler backend integration
+    - [x] Compiler backend integration
+- [ ] Tooling (available through subcommands)
+    - [ ] LSP
+    - [ ] Formatter
 
 See the [open issues](https://github.com/trevorswan11/ghoti/issues) for a full list of proposed features (and known issues).
 
