@@ -118,7 +118,7 @@ auto type_translator::translate_struct(const sema::types::struct_t& s, const sem
     std::vector<llvm::Type*> element_types;
     element_types.reserve(s.fields.size());
     for (const auto* field : s.fields) { element_types.push_back(translate(*field)); }
-    struct_ty->setBody(element_types);
+    struct_ty->setBody(element_types, s.is_packed);
     return struct_ty;
 }
 
@@ -126,6 +126,21 @@ auto type_translator::translate_union(const sema::types::union_t& u, const sema:
     -> llvm::Type* {
     if (const auto it{union_cache_.find(&original)}; it != union_cache_.end()) {
         return it->second;
+    }
+
+    if (u.is_untagged) {
+        u64              max_size{0};
+        llvm::DataLayout dl;
+        for (const auto* field : u.fields) {
+            if (field->get_kind() == sema::type_kind::VOID_) { continue; }
+            auto* field_ty{translate(*field)};
+            if (field_ty && !field_ty->isVoidTy()) {
+                max_size = std::max(max_size, dl.getTypeAllocSize(field_ty).getFixedValue());
+            }
+        }
+        auto* arr_ty{llvm::ArrayType::get(get_int8_ty(), std::max(max_size, u64{1}))};
+        union_cache_[&original] = arr_ty;
+        return arr_ty;
     }
 
     auto* union_ty{llvm::StructType::create(context_)};

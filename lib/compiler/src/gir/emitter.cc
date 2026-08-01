@@ -1571,6 +1571,10 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
             auto& field_type{active_mod().get_sema_type_opt(dot.member).value_or(*obj_type)};
 
+            if (const auto ut{obj_type->get_data().as_opt<sema::types::union_t>()}) {
+                if (ut->is_untagged) { return value{base_lval.data, field_type}; }
+            }
+
             const auto field_ptr{builder_.emit_get_element_ptr(
                 base_lval, {value{member_idx, usize_type}}, field_type)};
             return value{field_ptr, field_type};
@@ -1796,6 +1800,18 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
     const auto struct_slot{builder_.emit_alloca(*sema_type)};
     auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
 
+    if (const auto ut{sema_type->get_data().as_opt<sema::types::union_t>()}) {
+        if (ut->is_untagged) {
+            for (const auto& [accessor, val_expr] : init.initializers) {
+                auto& field_type{active_mod().get_sema_type_opt(*val_expr).value_or(*sema_type)};
+                const auto val{emit_expression(val_expr)};
+                builder_.emit_store(value{struct_slot, field_type}, val);
+            }
+            const auto loaded{builder_.emit_load(value{struct_slot, *sema_type}, *sema_type)};
+            return value{loaded, sema_type};
+        }
+    }
+
     const auto st{sema_type->get_data().as_opt<sema::types::struct_t>()};
     ASSERT(st, "Initializer target must be a struct type");
     const auto& table{ctx_.registry.get(sema_type->get_symbol_table_idx())};
@@ -1814,7 +1830,8 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
         builder_.emit_store(value{field_ptr, field_type}, val);
     }
 
-    return value{struct_slot, sema_type};
+    const auto loaded{builder_.emit_load(value{struct_slot, *sema_type}, *sema_type)};
+    return value{loaded, sema_type};
 }
 
 auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
@@ -1847,6 +1864,16 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
                 base_lval, {value{static_cast<u64>(member_idx), usize_type}}, field_type)};
             const auto loaded{builder_.emit_load(value{field_ptr, field_type}, field_type)};
             return value{loaded, field_type};
+        }
+
+        if (const auto ut{obj_type->get_data().as_opt<sema::types::union_t>()}) {
+            auto&      field_type{sema_type ? *sema_type : *obj_type};
+            const auto base_lval{emit_lvalue(dot.object)};
+            if (ut->is_untagged) {
+                const auto loaded{
+                    builder_.emit_load(value{base_lval.data, field_type}, field_type)};
+                return value{loaded, field_type};
+            }
         }
     }
 

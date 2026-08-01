@@ -447,12 +447,13 @@ auto llvm_lowering::emit_load(const gir::instruction& inst) -> llvm::Value* {
         return ptr;
     }
 
-    auto* loaded{builder_.CreateLoad(elem_ty, ptr, "loadtmp")};
+    auto* loaded{builder_.CreateLoad(elem_ty, ptr, inst.is_volatile(), "loadtmp")};
     if (inst.result) { set_local(*inst.result, loaded); }
     return loaded;
 }
 
 auto llvm_lowering::emit_store(const gir::instruction& inst) -> void {
+    const auto is_volatile{inst.is_volatile()};
     if (inst.operands.size() >= 2) {
         auto* dest_ptr{lower_value(inst.operands[0])};
         auto* val{lower_value(inst.operands[1], inst.type ? &*inst.type : nullptr)};
@@ -460,7 +461,7 @@ auto llvm_lowering::emit_store(const gir::instruction& inst) -> void {
             val->getType()->isVoidTy()) {
             return;
         }
-        builder_.CreateStore(val, dest_ptr);
+        builder_.CreateStore(val, dest_ptr, is_volatile);
     } else if (inst.result && !inst.operands.empty()) {
         auto* dest_ptr{lower_value(gir::value{*inst.result})};
         auto* val{lower_value(inst.operands[0], inst.type ? &*inst.type : nullptr)};
@@ -468,7 +469,7 @@ auto llvm_lowering::emit_store(const gir::instruction& inst) -> void {
             val->getType()->isVoidTy()) {
             return;
         }
-        builder_.CreateStore(val, dest_ptr);
+        builder_.CreateStore(val, dest_ptr, is_volatile);
     }
 }
 
@@ -740,7 +741,17 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
         ASSERT(callee_fn, "Callee function not found in module");
         std::vector<llvm::Value*> args;
         args.reserve(inst.operands.size());
-        for (const auto& op : inst.operands) { args.emplace_back(lower_value(op)); }
+        for (const auto& op : inst.operands) {
+            auto* arg_val{lower_value(op)};
+            if (op.type &&
+                (op.type->get_kind() == sema::type_kind::STRUCT ||
+                 op.type->get_kind() == sema::type_kind::UNION) &&
+                arg_val && arg_val->getType()->isPointerTy()) {
+                auto* llvm_struct_ty{types_.translate(*op.type)};
+                arg_val = builder_.CreateLoad(llvm_struct_ty, arg_val, "struct_arg");
+            }
+            args.emplace_back(arg_val);
+        }
         const bool is_void{!inst.type || inst.type->get_kind() == sema::type_kind::VOID_};
         auto*      call_inst{builder_.CreateCall(callee_fn, args, is_void ? "" : "calltmp")};
         if (inst.result && !is_void) { set_local(*inst.result, call_inst); }
@@ -756,7 +767,15 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
     std::vector<llvm::Value*> args;
     args.reserve(inst.operands.size() - 1);
     for (const auto& operand : inst.operands | std::views::drop(1)) {
-        args.emplace_back(lower_value(operand));
+        auto* arg_val{lower_value(operand)};
+        if (operand.type &&
+            (operand.type->get_kind() == sema::type_kind::STRUCT ||
+             operand.type->get_kind() == sema::type_kind::UNION) &&
+            arg_val && arg_val->getType()->isPointerTy()) {
+            auto* llvm_struct_ty{types_.translate(*operand.type)};
+            arg_val = builder_.CreateLoad(llvm_struct_ty, arg_val, "struct_arg");
+        }
+        args.emplace_back(arg_val);
     }
 
     const bool is_void{!inst.type || inst.type->get_kind() == sema::type_kind::VOID_};
