@@ -88,6 +88,9 @@ template <typename T>
 } // namespace
 
 auto const_eval::try_eval(ast::node_id id) -> stdx::option<const_value> {
+    if (const auto sema_ty{module_.get_sema_type_opt(id)}) {
+        if (sema_ty->is_volatile()) { return stdx::none; }
+    }
     const auto key{id.get_index()};
     if (call_stack_.empty()) {
         if (auto cached{memo_cache_.find(key)}; cached != memo_cache_.end()) {

@@ -164,6 +164,14 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
     const auto src_kind{src.get_kind()};
     const auto dest_kind{dest.get_kind()};
 
+    if (const auto ut{dest.get_data().as_opt<types::union_t>()}) {
+        if (ut->is_untagged) {
+            for (const auto* field : ut->fields) {
+                if (is_assignable(src, *field)) { return true; }
+            }
+        }
+    }
+
     if (src_kind == dest_kind) {
         if (is_numeric(src_kind)) { return is_same_unqualified(src, dest); }
         switch (src_kind) {

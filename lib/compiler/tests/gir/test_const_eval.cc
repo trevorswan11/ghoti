@@ -484,4 +484,17 @@ TEST_CASE("Builtin const eval @this") {
     CHECK(val_al->as_int_opt() == 4);
 }
 
+TEST_CASE("Volatile variables refuse constant folding in const eval") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const v: volatile i32 = 42;
+        const read_v := v;
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym_rv, _rv, decl_rv, type_rv]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("read_v", idx)};
+    const auto val_rv{evaluator.try_eval(*decl_rv.value)};
+    CHECK_FALSE(val_rv.has_value());
+}
+
 } // namespace ghoti::tests

@@ -181,6 +181,7 @@ struct union_t {
     gsl::span<const ast::union_expr::field> ast_fields;
     gsl::span<type*>                        members;
     const mod::module&                      enclosing;
+    bool                                    is_untagged{false};
 
     // The index location entirely depends on the number of fields which always come first
     [[nodiscard]] auto type_at(usize idx) const noexcept -> type& {
@@ -195,6 +196,9 @@ struct struct_t {
     gsl::span<const ast::struct_expr::field> ast_fields;
     gsl::span<type*>                         members;
     const mod::module&                       enclosing;
+    bool                                     is_c_abi{false};
+    bool                                     is_packed{false};
+    gsl::span<u64>                           field_alignments;
 
     // The index location entirely depends on the number of fields which always come first
     [[nodiscard]] auto type_at(usize idx) const noexcept -> type& {

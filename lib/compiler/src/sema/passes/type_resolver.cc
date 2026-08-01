@@ -29,6 +29,7 @@
 #include "compiler/ast/traits.hh"
 #include "compiler/ast/type.hh"
 #include "compiler/ast/visitor.hh"
+#include "compiler/gir/const_eval.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
@@ -1208,7 +1209,7 @@ auto type_resolver::validate_struct_initializer(ast::node_id                 ini
 
     // Check for missing fields
     const auto& enclosing{struct_data.enclosing};
-    for (const auto& [ident, _, default_value] : struct_data.ast_fields) {
+    for (const auto& [ident, _1, default_value, _2] : struct_data.ast_fields) {
         const auto& field_node{enclosing.ast.get_as<ast::identifier_expr>(ident)};
         if (!default_value && !struct_validator_.seen.contains(field_node.name)) {
             struct_validator_.missings.emplace_back(field_node.name);
@@ -1449,7 +1450,7 @@ auto type_resolver::validate_union_arms(ast::node_id           match_id,
     // Check for missing fields only if there's a missing catch all
     if (!match.catch_all_idx) {
         const auto& enclosing{union_data.enclosing};
-        for (const auto& [ident, _] : union_data.ast_fields) {
+        for (const auto& [ident, _1, _2] : union_data.ast_fields) {
             const auto& field_node{enclosing.ast.get_as<ast::identifier_expr>(ident)};
             if (!union_validator_.seen.contains(field_node.name)) {
                 union_validator_.missings.emplace_back(field_node.name);
@@ -1951,8 +1952,30 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
     }
 
     auto member_types{ctx_.pool.get_many_unsafe(struct_expr.members.size())};
-    committable_resolution<types::struct_t> resolution{
-        struct_type, field_types, struct_expr.fields, member_types, resolving_};
+    auto field_alignments{ctx_.arena.make_span<u64>(struct_expr.fields.size())};
+    for (usize i{0}; const auto& field : struct_expr.fields) {
+        u64 align_val{0};
+        if (field.explicit_alignment) {
+            gir::const_eval ce{ctx_, resolving_};
+            const auto      cv{ce.try_eval(*field.explicit_alignment)};
+            if (cv) {
+                if (const auto val{cv->as_opt<u64>()}) {
+                    align_val = *val;
+                } else if (const auto sval{cv->as_opt<i64>()}) {
+                    if (*sval > 0) { align_val = static_cast<u64>(*sval); }
+                }
+            }
+        }
+        field_alignments[i++] = align_val;
+    }
+    committable_resolution<types::struct_t> resolution{struct_type,
+                                                       field_types,
+                                                       struct_expr.fields,
+                                                       member_types,
+                                                       resolving_,
+                                                       struct_expr.is_extern,
+                                                       struct_expr.is_packed,
+                                                       field_alignments};
     if (!resolve_members(member_types, struct_expr.members)) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id));
     }
@@ -2003,7 +2026,7 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
 
     auto member_types{ctx_.pool.get_many_unsafe(union_expr.members.size())};
     committable_resolution<types::union_t> resolution{
-        union_type, field_types, union_expr.fields, member_types, resolving_};
+        union_type, field_types, union_expr.fields, member_types, resolving_, union_expr.is_extern};
     if (!resolve_members(member_types, union_expr.members)) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id));
     }
