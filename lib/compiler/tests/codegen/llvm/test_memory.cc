@@ -1,6 +1,9 @@
+#include <string>
+
 #include <catch2/catch_test_macros.hpp>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/Support/raw_ostream.h>
 
 #include "compiler/codegen/llvm_lowering.hh"
 #include "compiler/gir/emitter.hh"
@@ -24,8 +27,6 @@ TEST_CASE("LLVM lowering alloca, store, load, addressOf, deref from source") {
 
     codegen::llvm_lowering lowering{context, "test_memory"};
     auto                   llvm_mod{lowering.lower(gir_mod)};
-    REQUIRE(llvm_mod);
-
     CHECK_FALSE(llvm::verifyModule(*llvm_mod));
     CHECK(llvm_mod->getFunction("test_pointers"));
 }
@@ -55,11 +56,32 @@ TEST_CASE("LLVM lowering struct and array indexing") {
 
     codegen::llvm_lowering lowering{context, "test_gep"};
     auto                   llvm_mod{lowering.lower(gir_mod)};
-    REQUIRE(llvm_mod);
-
     CHECK_FALSE(llvm::verifyModule(*llvm_mod));
     CHECK(llvm_mod->getFunction("get_elem"));
     CHECK(llvm_mod->getFunction("get_point_y"));
+}
+
+TEST_CASE("LLVM lowering volatile load and store") {
+    llvm::LLVMContext context;
+
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        pub const test_volatile := fn(): i32 {
+            var v: mut_volatile i32 = 42;
+            v = v + 1;
+            return v;
+        };
+    )")};
+
+    gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
+    const auto   gir_mod{emitter.emit()};
+
+    codegen::llvm_lowering lowering{context, "test_volatile"};
+    auto                   llvm_mod{lowering.lower(gir_mod)};
+    CHECK_FALSE(llvm::verifyModule(*llvm_mod));
+    std::string              ir_str;
+    llvm::raw_string_ostream os{ir_str};
+    llvm_mod->print(os, nullptr);
+    CHECK(ir_str.contains("volatile"));
 }
 
 } // namespace ghoti::tests
