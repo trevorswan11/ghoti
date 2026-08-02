@@ -13,7 +13,7 @@ namespace ghoti::cmd {
 class repl final : public command {
   public:
     using command::command;
-    auto execute() -> stdx::result<void, clap::error> override;
+    [[nodiscard]] auto execute() -> stdx::result<void, clap::error> override;
 
   private:
     std::string line_;

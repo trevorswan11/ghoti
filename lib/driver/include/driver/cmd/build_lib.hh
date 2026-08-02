@@ -17,7 +17,7 @@ class build_lib final : public command {
     explicit build_lib(build_options opts, std::ostream& error_stream = std::cerr)
         : command{error_stream}, opts_{std::move(opts)} {}
 
-    auto execute() -> stdx::result<void, clap::error> override;
+    [[nodiscard]] auto execute() -> stdx::result<void, clap::error> override;
 
     MAKE_GETTER(opts, const build_options&)
 

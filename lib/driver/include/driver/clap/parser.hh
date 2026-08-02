@@ -13,6 +13,7 @@
 #include "driver/clap/error.hh"
 #include "driver/cmd/build_options.hh"
 #include "driver/cmd/command.hh"
+#include "driver/cmd/format.hh"
 #include "driver/platform/win32.hh"
 
 namespace ghoti::clap {
@@ -31,6 +32,7 @@ class parser {
     [[nodiscard]] auto setup_build_obj_subcmd() -> gsl::not_null<CLI::App*>;
     [[nodiscard]] auto setup_build_exe_subcmd() -> gsl::not_null<CLI::App*>;
     [[nodiscard]] auto setup_build_lib_subcmd() -> gsl::not_null<CLI::App*>;
+    [[nodiscard]] auto setup_fmt_subcmd() -> gsl::not_null<CLI::App*>;
 
   private:
     i32           argc_;
@@ -41,6 +43,7 @@ class parser {
     cmd::raw_build_options build_obj_opts_;
     cmd::raw_build_options build_exe_opts_;
     cmd::raw_build_options build_lib_opts_;
+    cmd::raw_fmt_options   fmt_opts_;
 
 #if GHOTI_WINDOWS
     win32::rich_console console_;

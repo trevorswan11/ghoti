@@ -14,6 +14,7 @@
 #include <gsl/pointers>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
+#include <stdx/string.hh>
 
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
@@ -80,8 +81,8 @@ auto build_options::process_raw(const raw_build_options& raw,
                 fmt::format("invalid module format '{}', expected '<name>,<path>'", raw_mod),
                 clap::error::INVALID_MODULE_SPEC);
         }
-        auto name{raw_mod.substr(0, comma_pos)};
-        auto mod_path{raw_mod.substr(comma_pos + 1)};
+        std::string name{stdx::string::substr(raw_mod, 0, comma_pos)};
+        std::string mod_path{stdx::string::substr(raw_mod, comma_pos + 1)};
         modules.emplace_back(std::move(name), std::filesystem::path{std::move(mod_path)});
     }
 
