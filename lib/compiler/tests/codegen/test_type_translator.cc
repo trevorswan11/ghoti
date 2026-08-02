@@ -182,4 +182,46 @@ TEST_CASE("Type translate tagged union types from parsed programs") {
     CHECK(payload_arr->getElementType()->isIntegerTy(8));
 }
 
+TEST_CASE("Type translate untagged extern union types") {
+    llvm::LLVMContext        context;
+    codegen::type_translator translator{context};
+
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const RawUnion := extern union {
+            i: i32,
+            f: f64,
+        };
+    )")};
+
+    const auto [union_sym, union_data, union_type]{
+        ctx->get_type_sym_info<sema::symbols::node_t>("RawUnion", idx)};
+    auto* union_llvm{translator.translate(union_type)};
+    REQUIRE(union_llvm->isArrayTy());
+    auto* arr_ty{llvm::cast<llvm::ArrayType>(union_llvm)};
+    CHECK(arr_ty->getNumElements() == 8);
+    CHECK(arr_ty->getElementType()->isIntegerTy(8));
+}
+
+TEST_CASE("Type translate packed struct types") {
+    llvm::LLVMContext        context;
+    codegen::type_translator translator{context};
+
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const PackedHeader := packed struct {
+            flag: u8,
+            val: u32,
+        };
+    )")};
+
+    const auto [packed_sym, packed_data, packed_type]{
+        ctx->get_type_sym_info<sema::symbols::node_t>("PackedHeader", idx)};
+    auto* packed_llvm{translator.translate(packed_type)};
+    REQUIRE(packed_llvm->isStructTy());
+    auto* struct_ty{llvm::cast<llvm::StructType>(packed_llvm)};
+    CHECK(struct_ty->isPacked());
+    REQUIRE(struct_ty->getNumElements() == 2);
+    CHECK(struct_ty->getElementType(0)->isIntegerTy(8));
+    CHECK(struct_ty->getElementType(1)->isIntegerTy(32));
+}
+
 } // namespace ghoti::tests

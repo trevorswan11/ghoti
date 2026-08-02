@@ -193,6 +193,30 @@ TEST_CASE("Function call type checking") {
             };
         )");
     }
+
+    SECTION("Extern union field selection type checks successfully") {
+        helpers::type_check_and_verify(R"(
+            const RawData := extern union {
+                val: i32,
+                raw: f64,
+            };
+            const f := fn(u: RawData): i32 {
+                return u.val;
+            };
+        )");
+    }
+
+    SECTION("Packed extern struct type checks successfully") {
+        helpers::type_check_and_verify(R"(
+            const CPacked := extern packed struct {
+                tag: u8,
+                data: @alignas(4) i32,
+            };
+            const f := fn(p: CPacked): i32 {
+                return p.data;
+            };
+        )");
+    }
 }
 
 } // namespace ghoti::tests
