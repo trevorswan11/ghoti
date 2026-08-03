@@ -29,6 +29,7 @@
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
+#include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
@@ -162,6 +163,24 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                 }
             }
             return emit_function(id, decl, *fn_expr);
+        } else if (const auto struct_expr{active_ast().get_as_opt<ast::struct_expr>(*decl.value)}) {
+            for (const auto& member : struct_expr->members) {
+                if (const auto member_decl{active_ast().get_as_opt<ast::decl_stmt>(*member)}) {
+                    emit_top_level_decl(*member, *member_decl);
+                }
+            }
+        } else if (const auto union_expr{active_ast().get_as_opt<ast::union_expr>(*decl.value)}) {
+            for (const auto& member : union_expr->members) {
+                if (const auto member_decl{active_ast().get_as_opt<ast::decl_stmt>(*member)}) {
+                    emit_top_level_decl(*member, *member_decl);
+                }
+            }
+        } else if (const auto enum_expr{active_ast().get_as_opt<ast::enum_expr>(*decl.value)}) {
+            for (const auto& member : enum_expr->members) {
+                if (const auto member_decl{active_ast().get_as_opt<ast::decl_stmt>(*member)}) {
+                    emit_top_level_decl(*member, *member_decl);
+                }
+            }
         }
     } else if (decl.has_modifier(ast::decl_modifiers::EXTERN)) {
         if (const auto fn_data{sema_type->get_data().as_opt<sema::types::function>()}) {
@@ -251,6 +270,17 @@ auto emitter::emit_function(ast::node_id              id,
     auto& entry{fn.add_segment()};
     builder_.set_insert_point(fn, entry);
     const scope_guard g{scopes_};
+
+    if (fn_expr.self) {
+        const auto& self_ident{active_ast().get_as<ast::identifier_expr>(fn_expr.self->name)};
+        const auto  self_name{self_ident.name};
+        const auto  self_type{active_mod().get_sema_type_opt(fn_expr.self->name)};
+        ASSERT(self_type, "Self parameter must have a resolved sema type");
+
+        auto& self_slot{fn.add_param(std::string{self_name}, *self_type)};
+        scopes_.back().bindings.emplace(self_name,
+                                        local_binding{self_slot.id, *self_type, false, stdx::none});
+    }
 
     for (const auto& param : fn_expr.parameters) {
         const auto& p_ident{active_ast().get_as<ast::identifier_expr>(param.name)};
@@ -834,6 +864,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
 
     stdx::option<std::string> callee_name;
     stdx::option<value>       indirect_callee;
+    const auto                dot_call{active_ast().get_as_opt<ast::dot_expr>(call.function)};
 
     if (const auto generic_target{active_mod().get_generic_call_target_opt(id)}) {
         callee_name.emplace(*generic_target);
@@ -858,6 +889,9 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         } else {
             callee_name.emplace(std::string{ident->name});
         }
+    } else if (dot_call) {
+        const auto member_ident{active_ast().get_as<ast::identifier_expr>(dot_call->member)};
+        callee_name.emplace(std::string{member_ident.name});
     } else if (const auto fn_expr{active_ast().get_as_opt<ast::function_expr>(call.function)}) {
         callee_name.emplace(emit_anonymous_function(*call.function, *fn_expr));
     } else {
@@ -880,13 +914,70 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         }
     }
 
+    bool is_obj_instance{false};
+    if (dot_call) {
+        bool       is_type{false};
+        const auto target_obj{dot_call->object};
+        if (const auto ident{active_ast().get_as_opt<ast::identifier_expr>(target_obj)}) {
+            if (const auto root_table{active_mod().root_table_idx}) {
+                if (const auto sym{ctx_.registry.get_from_opt(*root_table, ident->name)}) {
+                    if (sym->has_kind() && sym->get_kind() == sema::symbol_kind::TYPE) {
+                        is_type = true;
+                    }
+                }
+            }
+        } else if (const auto mac{active_ast().get_as_opt<ast::module_access_expr>(target_obj)}) {
+            if (const auto mod_type{active_mod().get_sema_type_opt(mac->outer)}) {
+                if (const auto m_data{mod_type->get_data().as_opt<sema::types::module>()}) {
+                    const auto& inner_mod{m_data->imported};
+                    if (inner_mod.root_table_idx) {
+                        const auto& inner_ident{
+                            active_ast().get_as<ast::identifier_expr>(mac->inner)};
+                        if (const auto sym{ctx_.registry.get_from_opt(*inner_mod.root_table_idx,
+                                                                      inner_ident.name)}) {
+                            if (sym->has_kind() && sym->get_kind() == sema::symbol_kind::TYPE) {
+                                is_type = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (!is_type) { is_obj_instance = true; }
+    }
+
     std::vector<value> args;
-    args.reserve(call.arguments.size());
+    const bool         has_implicit_self{fn_data && fn_data->has_self && is_obj_instance};
+    args.reserve(call.arguments.size() + (has_implicit_self ? 1 : 0));
+
+    if (has_implicit_self && !fn_data->params.empty()) {
+        const auto& self_param_type{*fn_data->params[0]};
+        const auto  obj_expr_h{dot_call->object};
+        const auto  obj_type{active_mod().get_sema_type_opt(obj_expr_h)};
+
+        if (self_param_type.get_kind() == sema::type_kind::POINTER ||
+            self_param_type.get_kind() == sema::type_kind::REFERENCE) {
+            if (obj_type && (obj_type->get_kind() == sema::type_kind::POINTER ||
+                             obj_type->get_kind() == sema::type_kind::REFERENCE)) {
+                args.emplace_back(emit_expression(obj_expr_h));
+            } else {
+                const auto obj_lval{emit_lvalue(obj_expr_h)};
+                const auto addr{
+                    builder_.emit_address_of(obj_lval, const_cast<sema::type&>(self_param_type))};
+                args.emplace_back(value{addr, const_cast<sema::type&>(self_param_type)});
+            }
+        } else {
+            args.emplace_back(emit_expression(obj_expr_h));
+        }
+    }
+
+    const usize param_offset{has_implicit_self ? 1UZ : 0UZ};
     for (usize i{0}; const auto& arg : call.arguments) {
+        const usize param_idx{i + param_offset};
         if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
             const auto arg_type_opt{active_mod().get_sema_type_opt(*expr_h)};
-            if (fn_data && i < fn_data->params.size() &&
-                fn_data->params[i]->get_kind() == sema::type_kind::SLICE && arg_type_opt &&
+            if (fn_data && param_idx < fn_data->params.size() &&
+                fn_data->params[param_idx]->get_kind() == sema::type_kind::SLICE && arg_type_opt &&
                 arg_type_opt->get_kind() == sema::type_kind::ARRAY) {
                 if (const auto arr_data{arg_type_opt->get_data().as_opt<sema::types::array>()}) {
                     args.emplace_back(emit_slice_from_array(emit_lvalue(*expr_h), *arr_data));
@@ -1840,8 +1931,15 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
 auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
     PROFILE_FUNCTION();
     const auto sema_type{active_mod().get_sema_type_opt(id)};
-    const auto obj_type{active_mod().get_sema_type_opt(dot.object)};
-    ASSERT(obj_type, "Dot expression object must have a resolved type");
+    const auto raw_obj_type{active_mod().get_sema_type_opt(dot.object)};
+    ASSERT(raw_obj_type, "Dot expression object must have a resolved type");
+    auto* obj_type{raw_obj_type.get()};
+    if (const auto ptr_data{obj_type->get_data().as_opt<sema::types::pointer>()}) {
+        obj_type = &ptr_data->underlying;
+    } else if (const auto ref_data{obj_type->get_data().as_opt<sema::types::reference>()}) {
+        obj_type = &ref_data->underlying;
+    }
+
     const auto member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
 
     if (obj_type->get_kind() == sema::type_kind::SLICE) {

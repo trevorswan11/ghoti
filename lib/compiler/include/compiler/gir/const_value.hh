@@ -118,7 +118,7 @@ class const_value {
     MAKE_GETTER(type, stdx::option<sema::type&>);
     MAKE_DEDUCING_GETTER(data);
 
-    constexpr auto set_type(stdx::option<sema::type&> t) noexcept -> void { type_ = t; }
+    constexpr auto     set_type(stdx::option<sema::type&> t) noexcept -> void { type_ = t; }
     [[nodiscard]] auto to_gir_value() const noexcept -> value;
     [[nodiscard]] auto operator==(const const_value& other) const noexcept -> bool;
 

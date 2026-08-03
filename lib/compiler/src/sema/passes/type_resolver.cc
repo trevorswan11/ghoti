@@ -358,8 +358,37 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
     }
 
     if (function_type) {
-        const auto has_implicit_self{function_type->has_self &&
-                                     resolving_.ast.get_as_opt<ast::dot_expr>(call.function)};
+        const auto dot_call{resolving_.ast.get_as_opt<ast::dot_expr>(call.function)};
+        bool       is_obj_instance{false};
+        if (dot_call) {
+            bool       is_type{false};
+            const auto target_obj{dot_call->object};
+            if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(target_obj)}) {
+                if (const auto sym{ctx_.registry.lookup(table_stack_, ident->name)}) {
+                    if (sym->has_kind() && sym->get_kind() == symbol_kind::TYPE) { is_type = true; }
+                }
+            } else if (const auto mac{
+                           resolving_.ast.get_as_opt<ast::module_access_expr>(target_obj)}) {
+                if (const auto mod_type{resolving_.get_sema_type_opt(mac->outer)}) {
+                    if (const auto m_data{mod_type->get_data().as_opt<types::module>()}) {
+                        const auto& inner_mod{m_data->imported};
+                        if (inner_mod.root_table_idx) {
+                            const auto& inner_ident{
+                                resolving_.ast.get_as<ast::identifier_expr>(mac->inner)};
+                            if (const auto sym{ctx_.registry.get_from_opt(*inner_mod.root_table_idx,
+                                                                          inner_ident.name)}) {
+                                if (sym->has_kind() && sym->get_kind() == symbol_kind::TYPE) {
+                                    is_type = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!is_type) { is_obj_instance = true; }
+        }
+        const auto has_implicit_self{function_type->has_self && is_obj_instance};
 
         // Check the arity of the function against params before resetting last type
         const auto& params{function_type->params};
@@ -996,8 +1025,14 @@ auto type_resolver::resolve_structural_access(type&                          obj
                                               source_location                object_location,
                                               stdx::option<std::string_view> object_name)
     -> stdx::result<gsl::not_null<type*>, diagnostic> {
-    // Early validation to simplify error handling
-    auto&      object_data{object_type.get_data()};
+    auto* target_type{&object_type};
+    if (const auto ptr_data{target_type->get_data().as_opt<types::pointer>()}) {
+        target_type = &ptr_data->underlying;
+    } else if (const auto ref_data{target_type->get_data().as_opt<types::reference>()}) {
+        target_type = &ref_data->underlying;
+    }
+
+    auto&      object_data{target_type->get_data()};
     const auto enum_type{object_data.as_opt<types::enum_t>()};
     const auto struct_type{object_data.as_opt<types::struct_t>()};
     const auto union_type{object_data.as_opt<types::union_t>()};
@@ -1006,7 +1041,7 @@ auto type_resolver::resolve_structural_access(type&                          obj
     if (slice_type) {
         const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(member)};
         if (member_ident.name == "ptr") {
-            return &ctx_.get_pointer(object_type.get_key().get_mut(), slice_type->underlying);
+            return &ctx_.get_pointer(target_type->get_key().get_mut(), slice_type->underlying);
         }
         if (member_ident.name == "len") {
             return &ctx_.get_builtin_resolved_type(type_kind::USIZE);
@@ -1026,13 +1061,13 @@ auto type_resolver::resolve_structural_access(type&                          obj
         return make_sema_err(
             fmt::format(
                 "Can only access inner objects inside of structs, unions, and enums; found '{}'",
-                type_kind_display_name(object_type.get_kind())),
+                type_kind_display_name(target_type->get_kind())),
             error::TYPE_MISMATCH,
             object_location);
     }
 
-    ASSERT(object_type.has_symbol_table_idx(), "Structural should have a resolved table index");
-    const auto table_idx{object_type.get_symbol_table_idx()};
+    ASSERT(target_type->has_symbol_table_idx(), "Structural should have a resolved table index");
+    const auto table_idx{target_type->get_symbol_table_idx()};
     auto&      table{ctx_.registry.get(table_idx)};
 
     const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(member)};
@@ -2183,9 +2218,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
         if (!sym.has_kind()) {
             if (type_data.is<types::builtin_function>() || type_data.is<types::function>()) {
                 sym.set_kind(symbol_kind::CALLABLE);
-            } else if (type_data.is<types::enum_t>() || type_data.is<types::struct_t>() ||
-                       type_data.is<types::union_t>() ||
-                       resolved_type == ctx_.get_builtin_resolved_type(type_kind::TYPE)) {
+            } else if (resolved_type == ctx_.get_builtin_resolved_type(type_kind::TYPE)) {
                 sym.set_kind(symbol_kind::TYPE);
             } else if (type_data.is<types::module>()) {
                 sym.set_kind(symbol_kind::MODULE);

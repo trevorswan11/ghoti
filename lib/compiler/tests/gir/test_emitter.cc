@@ -265,4 +265,69 @@ TEST_CASE("Immediate anonymous function invocation in expression position") {
     CHECK(call_inst->callee_name == "anonymous_fn0");
 }
 
+TEST_CASE("Emitter struct method call with self parameter") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const Point := struct {
+            x: i32,
+            y: i32,
+            pub const get_x := fn(&self): i32 {
+                return self.x;
+            };
+        };
+        const test_method := fn(p: Point): i32 {
+            return p.get_x();
+        };
+    )")};
+
+    gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
+    const auto   gir_mod{emitter.emit()};
+
+    REQUIRE(gir_mod.get_functions().size() >= 2);
+    const auto& get_x_fn{*gir_mod.get_functions()[0]};
+    CHECK(get_x_fn.get_name() == "get_x");
+    REQUIRE(get_x_fn.get_params().size() == 1);
+    CHECK(get_x_fn.get_params()[0]->name == "self");
+
+    const auto& test_fn{*gir_mod.get_functions()[1]};
+    CHECK(test_fn.get_name() == "test_method");
+
+    const auto& seg{*test_fn.get_segments()[0]};
+    REQUIRE(seg.get_instructions().size() >= 2);
+
+    const auto& call_inst{seg.get_instructions()[1]};
+    CHECK(call_inst->kind == gir::instruction_kind::CALL);
+    CHECK(call_inst->callee_name == "get_x");
+    REQUIRE(call_inst->operands.size() == 1);
+}
+
+TEST_CASE("Emitter struct method call with explicit self parameter") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const Point := struct {
+            x: i32,
+            y: i32,
+            pub const get_x := fn(&self): i32 {
+                return self.x;
+            };
+        };
+        const test_explicit := fn(p: Point): i32 {
+            return Point.get_x(&p);
+        };
+    )")};
+
+    gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
+    const auto   gir_mod{emitter.emit()};
+
+    REQUIRE(gir_mod.get_functions().size() >= 2);
+    const auto& test_fn{*gir_mod.get_functions()[1]};
+    CHECK(test_fn.get_name() == "test_explicit");
+
+    const auto& seg{*test_fn.get_segments()[0]};
+    REQUIRE(seg.get_instructions().size() >= 2);
+
+    const auto& call_inst{seg.get_instructions()[1]};
+    CHECK(call_inst->kind == gir::instruction_kind::CALL);
+    CHECK(call_inst->callee_name == "get_x");
+    REQUIRE(call_inst->operands.size() == 1);
+}
+
 } // namespace ghoti::tests
