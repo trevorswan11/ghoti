@@ -4,6 +4,7 @@
 
 #include <fmt/base.h>
 #include <fmt/format.h>
+#include <fmt/ostream.h>
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
 
@@ -34,8 +35,8 @@ auto build_exe::execute() -> stdx::result<void, clap::error> {
 
     // Validate that root module contains valid 'pub const main := fn(args: [][:0]u8): void'
     if (auto val_res{analyzer.validate_main_entry(*module)}; !val_res) {
-        return clap::fatal_error(
-            error_stream_, val_res.error().to_string(), clap::error::COMPILATION_FAILED);
+        fmt::println(error_stream_, "{}", val_res.error());
+        return stdx::err{clap::error::COMPILATION_FAILED};
     }
 
     auto gir_mod{analyzer.emit_gir(*module)};

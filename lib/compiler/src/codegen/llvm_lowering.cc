@@ -15,6 +15,7 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Value.h>
+#include <llvm/Support/Alignment.h>
 #include <llvm/Support/Casting.h>
 #include <llvm/TargetParser/Triple.h>
 #include <llvm/Transforms/Utils/ModuleUtils.h>
@@ -29,6 +30,8 @@
 #include "compiler/gir/module.hh"
 #include "compiler/gir/segment.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/syntax/builtins.hh"
+#include "compiler/syntax/token_type.hh"
 
 namespace ghoti::codegen {
 
@@ -785,24 +788,266 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
 }
 
 auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Value* {
+    stdx::option<syntax::token_type_t> builtin_tok;
     if (inst.callee_name) {
-        const auto& name{*inst.callee_name};
-        if (name == "@panic" || name == "panic") {
+        builtin_tok = syntax::get_builtin_opt(*inst.callee_name);
+        if (!builtin_tok && !inst.callee_name->starts_with('@')) {
+            const auto at_name{fmt::format("@{}", *inst.callee_name)};
+            builtin_tok = syntax::get_builtin_opt(at_name);
+        }
+    }
+
+    if (builtin_tok) {
+        switch (*builtin_tok) {
+        case syntax::token_type_t::BUILTIN_PANIC: {
             auto* trap_fn{
                 llvm::Intrinsic::getOrInsertDeclaration(llvm_module_.get(), llvm::Intrinsic::trap)};
             builder_.CreateCall(trap_fn, {});
             builder_.CreateUnreachable();
             return nullptr;
-        } else if (name == "@targetOs" || name == "targetOs") {
+        }
+        case syntax::token_type_t::BUILTIN_TARGET_OS: {
             const llvm::Triple triple{llvm_module_->getTargetTriple()};
             return lower_value(gir::value{std::string{triple.getOSName()}, inst.type});
-        } else if (name == "@targetArch" || name == "targetArch") {
+        }
+        case syntax::token_type_t::BUILTIN_TARGET_ARCH: {
             const llvm::Triple triple{llvm_module_->getTargetTriple()};
             return lower_value(gir::value{
                 std::string{llvm::Triple::getArchTypeName(triple.getArch())}, inst.type});
-        } else if (name == "@targetTriple" || name == "targetTriple") {
+        }
+        case syntax::token_type_t::BUILTIN_TARGET_TRIPLE: {
             const llvm::Triple triple{llvm_module_->getTargetTriple()};
             return lower_value(gir::value{triple.str(), inst.type});
+        }
+
+        // Memory operations
+        case syntax::token_type_t::BUILTIN_MEMCPY: {
+            VERIFY(inst.operands.size() >= 3, "Arity mismatch not verified during resolution");
+            auto* dest{lower_value(inst.operands[0])};
+            auto* src{lower_value(inst.operands[1])};
+            auto* len{lower_value(inst.operands[2])};
+            if (dest && src && len) {
+                builder_.CreateMemCpy(dest, llvm::MaybeAlign(), src, llvm::MaybeAlign(), len);
+            }
+            return nullptr;
+        }
+        case syntax::token_type_t::BUILTIN_MEMSET: {
+            VERIFY(inst.operands.size() >= 3, "Arity mismatch not verified during resolution");
+            auto* dest{lower_value(inst.operands[0])};
+            auto* val{lower_value(inst.operands[1])};
+            auto* len{lower_value(inst.operands[2])};
+            if (dest && val && len) { builder_.CreateMemSet(dest, val, len, llvm::MaybeAlign()); }
+            return nullptr;
+        }
+        case syntax::token_type_t::BUILTIN_MEMMOVE: {
+            VERIFY(inst.operands.size() >= 3, "Arity mismatch not verified during resolution");
+            auto* dest{lower_value(inst.operands[0])};
+            auto* src{lower_value(inst.operands[1])};
+            auto* len{lower_value(inst.operands[2])};
+            if (dest && src && len) {
+                builder_.CreateMemMove(dest, llvm::MaybeAlign(), src, llvm::MaybeAlign(), len);
+            }
+            return nullptr;
+        }
+
+        // C Varargs
+        case syntax::token_type_t::BUILTIN_C_VA_START: {
+            VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
+            if (auto* list{lower_value(inst.operands[0])}) {
+                auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
+                    llvm_module_.get(), llvm::Intrinsic::vastart, {list->getType()})};
+                builder_.CreateCall(fn, {list});
+            }
+            return nullptr;
+        }
+        case syntax::token_type_t::BUILTIN_C_VA_COPY: {
+            VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
+            auto* dest{lower_value(inst.operands[0])};
+            auto* src{lower_value(inst.operands[1])};
+            if (dest && src) {
+                auto* fn{
+                    llvm::Intrinsic::getOrInsertDeclaration(llvm_module_.get(),
+                                                            llvm::Intrinsic::vacopy,
+                                                            {dest->getType(), src->getType()})};
+                builder_.CreateCall(fn, {dest, src});
+            }
+            return nullptr;
+        }
+        case syntax::token_type_t::BUILTIN_C_VA_END: {
+            VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
+            if (auto* list{lower_value(inst.operands[0])}) {
+                auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
+                    llvm_module_.get(), llvm::Intrinsic::vaend, {list->getType()})};
+                builder_.CreateCall(fn, {list});
+            }
+            return nullptr;
+        }
+        case syntax::token_type_t::BUILTIN_C_VA_ARG: {
+            VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
+            if (auto* list{lower_value(inst.operands[0])}; list && inst.type) {
+                if (auto* ty{types_.translate(*inst.type)}) {
+                    return builder_.CreateVAArg(list, ty, "vaarg");
+                }
+            }
+            return nullptr;
+        }
+
+        // Bit operations
+        case syntax::token_type_t::BUILTIN_CLZ: {
+            VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
+            if (auto* val{lower_value(inst.operands[0])}) {
+                auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
+                    llvm_module_.get(), llvm::Intrinsic::ctlz, {val->getType()})};
+                return builder_.CreateCall(fn, {val, builder_.getInt1(false)});
+            }
+            return nullptr;
+        }
+        case syntax::token_type_t::BUILTIN_CTZ: {
+            VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
+            if (auto* val{lower_value(inst.operands[0])}) {
+                auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
+                    llvm_module_.get(), llvm::Intrinsic::cttz, {val->getType()})};
+                return builder_.CreateCall(fn, {val, builder_.getInt1(false)});
+            }
+            return nullptr;
+        }
+        case syntax::token_type_t::BUILTIN_POP_COUNT: {
+            VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
+            if (auto* val{lower_value(inst.operands[0])}) {
+                auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
+                    llvm_module_.get(), llvm::Intrinsic::ctpop, {val->getType()})};
+                return builder_.CreateCall(fn, {val});
+            }
+            return nullptr;
+        }
+
+        // Fused multiply add
+        case syntax::token_type_t::BUILTIN_MUL_ADD: {
+            VERIFY(inst.operands.size() >= 3, "Arity mismatch not verified during resolution");
+            const usize base_idx{inst.operands.size() >= 4 ? 1u : 0u};
+            auto*       a{lower_value(inst.operands[base_idx])};
+            auto*       b{lower_value(inst.operands[base_idx + 1])};
+            auto*       c{lower_value(inst.operands[base_idx + 2])};
+            if (a && b && c) {
+                if (a->getType()->isFloatingPointTy()) {
+                    auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
+                        llvm_module_.get(), llvm::Intrinsic::fmuladd, {a->getType()})};
+                    return builder_.CreateCall(fn, {a, b, c});
+                }
+                auto* mul{builder_.CreateMul(a, b, "mul")};
+                return builder_.CreateAdd(mul, c, "add");
+            }
+            return nullptr;
+        }
+
+        // Math intrinsics
+        case syntax::token_type_t::BUILTIN_SQRT: {
+            VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
+            if (auto* val{lower_value(inst.operands[0])}) {
+                auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
+                    llvm_module_.get(), llvm::Intrinsic::sqrt, {val->getType()})};
+                return builder_.CreateCall(fn, {val});
+            }
+            return nullptr;
+        }
+        case syntax::token_type_t::BUILTIN_SIN: {
+            VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
+            if (auto* val{lower_value(inst.operands[0])}) {
+                auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
+                    llvm_module_.get(), llvm::Intrinsic::sin, {val->getType()})};
+                return builder_.CreateCall(fn, {val});
+            }
+            return nullptr;
+        }
+        case syntax::token_type_t::BUILTIN_COS: {
+            VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
+            if (auto* val{lower_value(inst.operands[0])}) {
+                auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
+                    llvm_module_.get(), llvm::Intrinsic::cos, {val->getType()})};
+                return builder_.CreateCall(fn, {val});
+            }
+            return nullptr;
+        }
+        case syntax::token_type_t::BUILTIN_EXP: {
+            VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
+            if (auto* val{lower_value(inst.operands[0])}) {
+                auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
+                    llvm_module_.get(), llvm::Intrinsic::exp, {val->getType()})};
+                return builder_.CreateCall(fn, {val});
+            }
+            return nullptr;
+        }
+        case syntax::token_type_t::BUILTIN_EXP2: {
+            VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
+            if (auto* val{lower_value(inst.operands[0])}) {
+                auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
+                    llvm_module_.get(), llvm::Intrinsic::exp2, {val->getType()})};
+                return builder_.CreateCall(fn, {val});
+            }
+            return nullptr;
+        }
+        case syntax::token_type_t::BUILTIN_LOG: {
+            VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
+            if (auto* val{lower_value(inst.operands[0])}) {
+                auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
+                    llvm_module_.get(), llvm::Intrinsic::log, {val->getType()})};
+                return builder_.CreateCall(fn, {val});
+            }
+            return nullptr;
+        }
+        case syntax::token_type_t::BUILTIN_LOG2: {
+            VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
+            if (auto* val{lower_value(inst.operands[0])}) {
+                auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
+                    llvm_module_.get(), llvm::Intrinsic::log2, {val->getType()})};
+                return builder_.CreateCall(fn, {val});
+            }
+            return nullptr;
+        }
+        case syntax::token_type_t::BUILTIN_LOG10: {
+            VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
+            if (auto* val{lower_value(inst.operands[0])}) {
+                auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
+                    llvm_module_.get(), llvm::Intrinsic::log10, {val->getType()})};
+                return builder_.CreateCall(fn, {val});
+            }
+            return nullptr;
+        }
+        case syntax::token_type_t::BUILTIN_FLOOR: {
+            VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
+            if (auto* val{lower_value(inst.operands[0])}) {
+                auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
+                    llvm_module_.get(), llvm::Intrinsic::floor, {val->getType()})};
+                return builder_.CreateCall(fn, {val});
+            }
+            return nullptr;
+        }
+        case syntax::token_type_t::BUILTIN_CEIL: {
+            VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
+            if (auto* val{lower_value(inst.operands[0])}) {
+                auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
+                    llvm_module_.get(), llvm::Intrinsic::ceil, {val->getType()})};
+                return builder_.CreateCall(fn, {val});
+            }
+            return nullptr;
+        }
+        case syntax::token_type_t::BUILTIN_ABS: {
+            VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
+            if (auto* val{lower_value(inst.operands[0])}) {
+                if (val->getType()->isFloatingPointTy()) {
+                    auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
+                        llvm_module_.get(), llvm::Intrinsic::fabs, {val->getType()})};
+                    return builder_.CreateCall(fn, {val});
+                }
+                if (val->getType()->isIntegerTy()) {
+                    auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
+                        llvm_module_.get(), llvm::Intrinsic::abs, {val->getType()})};
+                    return builder_.CreateCall(fn, {val, builder_.getInt1(false)});
+                }
+            }
+            return nullptr;
+        }
+        default: break;
         }
     }
     return emit_call(inst);

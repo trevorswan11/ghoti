@@ -167,6 +167,29 @@ TEST_CASE("Target builtins constant eval") {
     check_str("triple_name");
 }
 
+TEST_CASE("MulAdd and TagName constant eval") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const v_mul_add := @mulAdd(i32, 2, 3, 4);
+        const Color := enum { RED, GREEN, BLUE };
+        const tag := @tagName(Color.GREEN);
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym_ma, _, decl_ma, type_ma]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("v_mul_add", idx)};
+    const auto val_ma{evaluator.try_eval(*decl_ma.value)};
+    REQUIRE(val_ma.has_value());
+    CHECK(val_ma->as_int_opt() == 10);
+
+    const auto [sym_tag, _t, decl_tag, type_tag]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("tag", idx)};
+    const auto val_tag{evaluator.try_eval(*decl_tag.value)};
+    REQUIRE(val_tag.has_value());
+    const auto str_tag{val_tag->as_opt<std::string>()};
+    REQUIRE(str_tag.has_value());
+    CHECK(*str_tag == "GREEN");
+}
+
 TEST_CASE("Const symbol reference propagation constant eval") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const N := 4;

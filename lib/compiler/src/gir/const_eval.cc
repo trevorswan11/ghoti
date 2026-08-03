@@ -4,6 +4,7 @@
 #include <bit>
 #include <cmath>
 #include <ranges>
+#include <stdx/type_traits.hh>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -977,7 +978,7 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         return stdx::none;
     }
     case syntax::token_type_t::BUILTIN_SIZE_OF: {
-        VERIFY(!call.arguments.empty(), "@sizeOf argument count must be at least 1");
+        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto&               arg{call.arguments.front()};
         stdx::option<sema::type&> target_type;
         if (const auto type_id{arg.as_opt<ast::explicit_type_id>()}) {
@@ -1004,7 +1005,7 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         return const_value{static_cast<u64>(sz), usize_type};
     }
     case syntax::token_type_t::BUILTIN_ALIGN_OF: {
-        VERIFY(!call.arguments.empty(), "@alignOf argument count must be at least 1");
+        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto&               arg{call.arguments.front()};
         stdx::option<sema::type&> target_type;
         if (const auto type_id = arg.as_opt<ast::explicit_type_id>()) {
@@ -1021,7 +1022,7 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         return const_value{static_cast<u64>(al), usize_type};
     }
     case syntax::token_type_t::BUILTIN_TYPE_OF: {
-        VERIFY(!call.arguments.empty(), "@typeOf argument count must be at least 1");
+        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto& arg{call.arguments.front()};
         if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
             const auto target_type{module_.get_sema_type_opt(*expr_h)};
@@ -1030,7 +1031,7 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         return stdx::none;
     }
     case syntax::token_type_t::BUILTIN_ABS: {
-        VERIFY(!call.arguments.empty(), "@abs argument count must be at least 1");
+        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
         if (!expr_h) { return stdx::none; }
         const auto arg{try_eval(*expr_h)};
@@ -1043,7 +1044,7 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         return arg;
     }
     case syntax::token_type_t::BUILTIN_SQRT: {
-        VERIFY(!call.arguments.empty(), "@sqrt argument count must be at least 1");
+        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
         if (!expr_h) { return stdx::none; }
         const auto arg{try_eval(*expr_h)};
@@ -1051,7 +1052,7 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         return const_value{std::sqrt(arg->as<f64>()), arg->get_type()};
     }
     case syntax::token_type_t::BUILTIN_FLOOR: {
-        VERIFY(!call.arguments.empty(), "@floor argument count must be at least 1");
+        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
         if (!expr_h) { return stdx::none; }
         const auto arg{try_eval(*expr_h)};
@@ -1059,7 +1060,7 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         return const_value{std::floor(arg->as<f64>()), arg->get_type()};
     }
     case syntax::token_type_t::BUILTIN_CEIL: {
-        VERIFY(!call.arguments.empty(), "@ceil argument count must be at least 1");
+        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
         if (!expr_h) { return stdx::none; }
         const auto arg{try_eval(*expr_h)};
@@ -1067,7 +1068,7 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         return const_value{std::ceil(arg->as<f64>()), arg->get_type()};
     }
     case syntax::token_type_t::BUILTIN_CLZ: {
-        VERIFY(!call.arguments.empty(), "@clz argument count must be at least 1");
+        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
         if (!expr_h) { return stdx::none; }
         const auto arg{try_eval(*expr_h)};
@@ -1077,7 +1078,7 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         return const_value{static_cast<u64>(std::countl_zero(v)), usize_type};
     }
     case syntax::token_type_t::BUILTIN_CTZ: {
-        VERIFY(!call.arguments.empty(), "@ctz argument count must be at least 1");
+        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
         if (!expr_h) { return stdx::none; }
         const auto arg{try_eval(*expr_h)};
@@ -1087,7 +1088,7 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         return const_value{static_cast<u64>(std::countr_zero(v)), usize_type};
     }
     case syntax::token_type_t::BUILTIN_POP_COUNT: {
-        VERIFY(!call.arguments.empty(), "@popCount argument count must be at least 1");
+        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
         if (!expr_h) { return stdx::none; }
         const auto arg{try_eval(*expr_h)};
@@ -1096,15 +1097,52 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         const auto v{arg->is<u64>() ? arg->as<u64>() : static_cast<u64>(arg->as<i64>())};
         return const_value{static_cast<u64>(std::popcount(v)), usize_type};
     }
+    case syntax::token_type_t::BUILTIN_MUL_ADD: {
+        VERIFY(call.arguments.size() >= 4, "Arity mismatch not verified during resolution");
+        const auto a_h{call.arguments[1].as_opt<ast::expr_handle>()};
+        const auto b_h{call.arguments[2].as_opt<ast::expr_handle>()};
+        const auto c_h{call.arguments[3].as_opt<ast::expr_handle>()};
+        if (a_h && b_h && c_h) {
+            const auto a{try_eval(*a_h)};
+            const auto b{try_eval(*b_h)};
+            const auto c{try_eval(*c_h)};
+            if (a && b && c) {
+                if (a->is<f64>() && b->is<f64>() && c->is<f64>()) {
+                    return const_value{std::fma(a->as<f64>(), b->as<f64>(), c->as<f64>()),
+                                       a->get_type()};
+                }
+                if (a->is<i64>() && b->is<i64>() && c->is<i64>()) {
+                    return const_value{(a->as<i64>() * b->as<i64>()) + c->as<i64>(), a->get_type()};
+                }
+                if (a->is<u64>() && b->is<u64>() && c->is<u64>()) {
+                    return const_value{(a->as<u64>() * b->as<u64>()) + c->as<u64>(), a->get_type()};
+                }
+            }
+        }
+        return stdx::none;
+    }
+    case syntax::token_type_t::BUILTIN_TAG_NAME: {
+        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
+        if (const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()}) {
+            if (const auto val{try_eval(*expr_h)}) {
+                if (const auto e_val{val->as_opt<const_enum>()}) {
+                    return const_value::make_string(ctx_, e_val->name);
+                }
+                if (const auto u_val{val->as_opt<const_union>()}) {
+                    return const_value::make_string(ctx_, u_val->active_field);
+                }
+            }
+        }
+        return stdx::none;
+    }
     case syntax::token_type_t::BUILTIN_TARGET_OS: {
         const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
-        const auto os_name{triple.getOSName()};
-        return const_value::make_string(ctx_, std::string{os_name});
+        return const_value::make_string(ctx_, std::string{triple.getOSName()});
     }
     case syntax::token_type_t::BUILTIN_TARGET_ARCH: {
         const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
-        const auto arch_name{llvm::Triple::getArchTypeName(triple.getArch())};
-        return const_value::make_string(ctx_, std::string{arch_name});
+        return const_value::make_string(
+            ctx_, std::string{llvm::Triple::getArchTypeName(triple.getArch())});
     }
     case syntax::token_type_t::BUILTIN_TARGET_TRIPLE: {
         const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
