@@ -131,7 +131,7 @@ auto parser::setup_fmt_subcmd() -> gsl::not_null<CLI::App*> {
                     fmt_opts_.stdin_filepath,
                     "Virtual file path when reading from stdin");
     sub->add_option(
-        "-w,--max-width", fmt_opts_.max_width, "Maximum column line width (default: 100)");
+        "-m,--max-width", fmt_opts_.max_width, "Maximum column line width (default: 100)");
     sub->add_option("-i,--indent-spaces",
                     fmt_opts_.indent_spaces,
                     "Number of spaces to use for indenting (default: 4)");

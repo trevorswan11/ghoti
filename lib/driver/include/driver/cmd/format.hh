@@ -30,6 +30,7 @@ struct fmt_options {
     std::vector<std::filesystem::path>  input_paths{};
     bool                                write_in_place{false};
     bool                                check_only{false};
+    bool                                reading_stdin{false};
     stdx::option<std::filesystem::path> stdin_filepath;
     u32                                 max_width{100};
     u32                                 indent_spaces{4};
