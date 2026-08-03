@@ -225,7 +225,10 @@ template <ast::IndexableID ID>
                              error::TYPE_MISMATCH,
                              get_call_arg_location(call.arguments[0]));
     }
-    case token_type_t::BUILTIN_TAG_NAME: {
+    case token_type_t::BUILTIN_TAG_NAME:
+    case token_type_t::BUILTIN_TARGET_OS:
+    case token_type_t::BUILTIN_TARGET_ARCH:
+    case token_type_t::BUILTIN_TARGET_TRIPLE: {
         ASSERT(builtin.return_type.get_kind() == type_kind::SLICE);
         return_type = &builtin.return_type;
         break;

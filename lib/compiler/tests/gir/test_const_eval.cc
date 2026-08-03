@@ -144,6 +144,29 @@ TEST_CASE("Compile-time builtins constant eval") {
     check_u64("v_pop", 3);
 }
 
+TEST_CASE("Target builtins constant eval") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const os_name := @targetOs();
+        const arch_name := @targetArch();
+        const triple_name := @targetTriple();
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto check_str = [&](std::string_view name) {
+        const auto [sym, _, decl, type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>(name, idx)};
+        const auto val{evaluator.try_eval(*decl.value)};
+        REQUIRE(val.has_value());
+        const auto str_opt{val->as_opt<std::string>()};
+        REQUIRE(str_opt.has_value());
+        CHECK(!str_opt->empty());
+    };
+
+    check_str("os_name");
+    check_str("arch_name");
+    check_str("triple_name");
+}
+
 TEST_CASE("Const symbol reference propagation constant eval") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const N := 4;

@@ -14,6 +14,7 @@
 #include <stdx/variant.hh>
 
 #include "compiler/gir/instruction.hh"
+#include "compiler/sema/context.hh"
 #include "compiler/sema/type.hh"
 
 namespace ghoti::gir {
@@ -78,6 +79,8 @@ class const_value {
         return const_value{poison_val{}};
     }
 
+    [[nodiscard]] static auto make_string(sema::context& ctx, std::string str) -> const_value;
+
     template <typename T> [[nodiscard]] constexpr auto is() const noexcept -> bool {
         return data_.is<T>();
     }
@@ -116,26 +119,8 @@ class const_value {
     MAKE_DEDUCING_GETTER(data);
 
     constexpr auto set_type(stdx::option<sema::type&> t) noexcept -> void { type_ = t; }
-
-    [[nodiscard]] auto to_gir_value() const noexcept -> value {
-        return data_.visit(
-            [this](const poison_val&) -> value { return value{undefined_val{}, type_}; },
-            [this](const const_array&) -> value { return value{void_val{}, type_}; },
-            [this](const const_struct&) -> value { return value{void_val{}, type_}; },
-            [this](const const_enum& e) -> value { return value{e.value, type_}; },
-            [this](const const_union&) -> value { return value{void_val{}, type_}; },
-            [this](const auto& v) -> value { return value{v, type_}; });
-    }
-
-    [[nodiscard]] auto operator==(const const_value& other) const noexcept -> bool {
-        if (data_.index() != other.data_.index()) {
-            const auto l_int{as_int_opt()};
-            const auto r_int{other.as_int_opt()};
-            if (l_int && r_int) { return *l_int == *r_int; }
-            return false;
-        }
-        return data_ == other.data_;
-    }
+    [[nodiscard]] auto to_gir_value() const noexcept -> value;
+    [[nodiscard]] auto operator==(const const_value& other) const noexcept -> bool;
 
   private:
     data_t                    data_{poison_val{}};

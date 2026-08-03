@@ -29,7 +29,7 @@ auto build_obj::execute() -> stdx::result<void, clap::error> {
     mod::module_manager manager{loader};
     TRY(opts_.setup_module_manager(manager, error_stream_));
 
-    sema::analyzer analyzer{manager, error_stream_, true};
+    sema::analyzer analyzer{manager, error_stream_, true, opts_.target_opts};
     auto           module{TRY(opts_.analyze(analyzer, manager, error_stream_))};
 
     auto gir_mod{analyzer.emit_gir(*module)};

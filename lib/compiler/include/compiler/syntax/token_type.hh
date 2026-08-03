@@ -166,7 +166,6 @@ enum class token_type_t : u8 {
     NULLPTR,
     UNREACHABLE,
 
-    BUILTIN_ALIGNAS,
     BUILTIN_ALIGN_CAST,
     BUILTIN_PTR_CAST,
     BUILTIN_BIT_CAST,
@@ -205,6 +204,10 @@ enum class token_type_t : u8 {
     BUILTIN_C_VA_ARG,
     BUILTIN_C_VA_COPY,
     BUILTIN_C_VA_END,
+    BUILTIN_ALIGNAS,
+    BUILTIN_TARGET_OS,
+    BUILTIN_TARGET_ARCH,
+    BUILTIN_TARGET_TRIPLE,
 
     BUILTIN_PANIC,
 

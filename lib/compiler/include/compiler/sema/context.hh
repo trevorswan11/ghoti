@@ -10,6 +10,7 @@
 #include <stdx/types.hh>
 
 #include "compiler/ast/traits.hh"
+#include "compiler/codegen/target.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
@@ -29,9 +30,10 @@ struct context {
     generic_instantiation_cache& instantiation_cache;
     arena_alloc&                 arena;
 
-    diagnostics    diags;
-    std::ostream&  error_stream;
-    stdx::opt_size prelude_index;
+    diagnostics             diags;
+    std::ostream&           error_stream;
+    stdx::opt_size          prelude_index;
+    codegen::target_options target_opts;
 
     context(mod::module_manager&         modules,
             symbol_table_registry&       registry,
@@ -40,10 +42,11 @@ struct context {
             generic_instantiation_cache& instantiation_cache,
             arena_alloc&                 arena,
             diagnostics                  diags,
-            std::ostream&                error_stream) noexcept
+            std::ostream&                error_stream,
+            codegen::target_options      target_opts = {}) noexcept
         : modules{modules}, registry{registry}, pool{pool}, generic_functions{generic_functions},
           instantiation_cache{instantiation_cache}, arena{arena}, diags{std::move(diags)},
-          error_stream{error_stream} {}
+          error_stream{error_stream}, target_opts{std::move(target_opts)} {}
     ~context() = default;
 
     // Creates a copy with identical data but a new diagnostic list
@@ -52,7 +55,7 @@ struct context {
           generic_functions{other.generic_functions},
           instantiation_cache{other.instantiation_cache}, arena{other.arena},
           diags{other.diags.create_new()}, error_stream{other.error_stream},
-          prelude_index{other.prelude_index} {}
+          prelude_index{other.prelude_index}, target_opts{other.target_opts} {}
 
     auto operator=(const context& other) -> context& = delete;
     context(context&&) noexcept                      = default;

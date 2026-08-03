@@ -42,9 +42,10 @@ namespace sema {
 // The manager for all steps of semantic analysis.
 class analyzer {
   public:
-    explicit analyzer(mod::module_manager& modules,
-                      std::ostream&        error_stream,
-                      stdx::option<bool>   in_terminal) noexcept
+    explicit analyzer(mod::module_manager&    modules,
+                      std::ostream&           error_stream,
+                      stdx::option<bool>      in_terminal,
+                      codegen::target_options target_opts = {}) noexcept
         : modules_{modules}, pool_{arena_}, error_stream_{error_stream}, in_terminal_{in_terminal},
           ctx_{modules_,
                registry_,
@@ -53,7 +54,8 @@ class analyzer {
                instantiation_cache_,
                arena_,
                diagnostics{in_terminal_},
-               error_stream_} {}
+               error_stream_,
+               std::move(target_opts)} {}
     ~analyzer() = default;
     MAKE_MOVE_CONSTRUCTABLE_ONLY(analyzer);
 

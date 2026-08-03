@@ -58,6 +58,10 @@ constexpr builtin_t C_VA_COPY{"@cVaCopy", token_type_t::BUILTIN_C_VA_COPY};
 constexpr builtin_t C_VA_END{"@cVaEnd", token_type_t::BUILTIN_C_VA_END};
 constexpr builtin_t ALIGNAS{"@alignas", token_type_t::BUILTIN_ALIGNAS};
 
+constexpr builtin_t TARGET_OS{"@targetOs", token_type_t::BUILTIN_TARGET_OS};
+constexpr builtin_t TARGET_ARCH{"@targetArch", token_type_t::BUILTIN_TARGET_ARCH};
+constexpr builtin_t TARGET_TRIPLE{"@targetTriple", token_type_t::BUILTIN_TARGET_TRIPLE};
+
 constexpr builtin_t PANIC{"@panic", token_type_t::BUILTIN_PANIC};
 
 constexpr auto ALL_TOKEN_TYPES{

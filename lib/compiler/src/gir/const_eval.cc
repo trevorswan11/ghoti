@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <llvm/TargetParser/Triple.h>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
@@ -22,6 +23,7 @@
 #include "compiler/ast/primitive.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/ast/type.hh"
+#include "compiler/codegen/target.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/module/module.hh"
@@ -1093,6 +1095,20 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         if (!arg->is<u64>() && !arg->is<i64>()) { return stdx::none; }
         const auto v{arg->is<u64>() ? arg->as<u64>() : static_cast<u64>(arg->as<i64>())};
         return const_value{static_cast<u64>(std::popcount(v)), usize_type};
+    }
+    case syntax::token_type_t::BUILTIN_TARGET_OS: {
+        const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
+        const auto os_name{triple.getOSName()};
+        return const_value::make_string(ctx_, std::string{os_name});
+    }
+    case syntax::token_type_t::BUILTIN_TARGET_ARCH: {
+        const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
+        const auto arch_name{llvm::Triple::getArchTypeName(triple.getArch())};
+        return const_value::make_string(ctx_, std::string{arch_name});
+    }
+    case syntax::token_type_t::BUILTIN_TARGET_TRIPLE: {
+        const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
+        return const_value::make_string(ctx_, triple.str());
     }
     default: return stdx::none;
     }

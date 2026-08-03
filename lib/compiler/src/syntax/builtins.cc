@@ -55,6 +55,9 @@ constexpr auto ALL_BUILTINS_BY_SV{
                                                    builtins::C_VA_COPY,
                                                    builtins::C_VA_END,
                                                    builtins::ALIGNAS,
+                                                   builtins::TARGET_OS,
+                                                   builtins::TARGET_ARCH,
+                                                   builtins::TARGET_TRIPLE,
                                                    builtins::PANIC)};
 
 constexpr auto ALL_BUILTINS_BY_TT{[] -> auto {

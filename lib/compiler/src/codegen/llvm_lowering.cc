@@ -786,12 +786,23 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
 
 auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Value* {
     if (inst.callee_name) {
-        if (*inst.callee_name == "@panic" || *inst.callee_name == "panic") {
+        const auto& name{*inst.callee_name};
+        if (name == "@panic" || name == "panic") {
             auto* trap_fn{
                 llvm::Intrinsic::getOrInsertDeclaration(llvm_module_.get(), llvm::Intrinsic::trap)};
             builder_.CreateCall(trap_fn, {});
             builder_.CreateUnreachable();
             return nullptr;
+        } else if (name == "@targetOs" || name == "targetOs") {
+            const llvm::Triple triple{llvm_module_->getTargetTriple()};
+            return lower_value(gir::value{std::string{triple.getOSName()}, inst.type});
+        } else if (name == "@targetArch" || name == "targetArch") {
+            const llvm::Triple triple{llvm_module_->getTargetTriple()};
+            return lower_value(gir::value{
+                std::string{llvm::Triple::getArchTypeName(triple.getArch())}, inst.type});
+        } else if (name == "@targetTriple" || name == "targetTriple") {
+            const llvm::Triple triple{llvm_module_->getTargetTriple()};
+            return lower_value(gir::value{triple.str(), inst.type});
         }
     }
     return emit_call(inst);
