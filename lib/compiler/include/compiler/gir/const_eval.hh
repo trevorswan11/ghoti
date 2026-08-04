@@ -47,10 +47,6 @@ class const_eval {
     [[nodiscard]] static auto type_align_of(const sema::type& type) -> usize;
     [[nodiscard]] static auto type_size_of(const sema::type& type) -> usize;
 
-    constexpr auto set_max_recursion_depth(usize depth) noexcept -> void {
-        max_recursion_depth_ = depth;
-    }
-
   private:
     struct call_frame {
         ankerl::unordered_dense::map<std::string_view, const_value> bindings;
@@ -108,6 +104,7 @@ class const_eval {
 
   private:
     usize                                            max_recursion_depth_{256};
+    std::vector<usize>                               recursion_limit_stack_;
     sema::context&                                   ctx_;
     mod::module&                                     module_;
     std::vector<call_frame>                          call_stack_;

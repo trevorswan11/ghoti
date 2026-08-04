@@ -240,6 +240,29 @@ template <ast::IndexableID ID>
         return_type = &builtin.return_type;
         break;
     }
+    case token_type_t::BUILTIN_SET_EVAL_RECURSION_LIMIT: {
+        if (return_trackers_.empty()) {
+            return make_sema_err("@setEvalRecursionLimit can only be used within a function scope",
+                                 error::TYPE_MISMATCH,
+                                 resolving_.ast.location_of(call.function));
+        }
+        return_type = &ctx_.get_builtin_resolved_type(type_kind::VOID_);
+        break;
+    }
+    case token_type_t::BUILTIN_SET_MAIN_SYMBOL: {
+        if (const auto expr_h{call.arguments[0].as_opt<ast::expr_handle>()}) {
+            if (const auto str_expr{resolving_.ast.get_as_opt<ast::string_expr>(*expr_h)}) {
+                ctx_.user_main_name = std::string{str_expr->value};
+            } else {
+                gir::const_eval evaluator{ctx_, resolving_};
+                if (const auto val{evaluator.try_eval(*expr_h)}) {
+                    if (const auto str{val->as_opt<std::string>()}) { ctx_.user_main_name = *str; }
+                }
+            }
+        }
+        return_type = &ctx_.get_builtin_resolved_type(type_kind::VOID_);
+        break;
+    }
     // Many of these return @typeOf(expression) which is trivial
     case token_type_t::BUILTIN_MUL_ADD:
     case token_type_t::BUILTIN_SQRT:
@@ -1713,9 +1736,12 @@ auto type_resolver::visit(ast::node_id id, const ast::dereference_expr& deref) -
     TRY_RESOLVE(deref.rhs);
     auto& rhs_type{*last_type_.take()};
 
-    // Check for a pointer and update to the underlying type to enforce dereference semantics
+    // Check for a pointer or reference and update to the underlying type to enforce dereference
+    // semantics
     if (const auto pointer{rhs_type.get_data().as_opt<types::pointer>()}) {
         last_type_.emplace(pointer->underlying);
+    } else if (const auto ref{rhs_type.get_data().as_opt<types::reference>()}) {
+        last_type_.emplace(ref->underlying);
     } else {
         return last_type_.emplace(
             ctx_.poison_node(resolving_,

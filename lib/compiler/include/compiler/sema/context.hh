@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ostream>
+#include <string>
 #include <utility>
 
 #include <gsl/pointers>
@@ -34,6 +35,7 @@ struct context {
     std::ostream&           error_stream;
     stdx::opt_size          prelude_index;
     codegen::target_options target_opts;
+    std::string             user_main_name{"main"};
 
     context(mod::module_manager&         modules,
             symbol_table_registry&       registry,
@@ -55,7 +57,8 @@ struct context {
           generic_functions{other.generic_functions},
           instantiation_cache{other.instantiation_cache}, arena{other.arena},
           diags{other.diags.create_new()}, error_stream{other.error_stream},
-          prelude_index{other.prelude_index}, target_opts{other.target_opts} {}
+          prelude_index{other.prelude_index}, target_opts{other.target_opts},
+          user_main_name{other.user_main_name} {}
 
     auto operator=(const context& other) -> context& = delete;
     context(context&&) noexcept                      = default;

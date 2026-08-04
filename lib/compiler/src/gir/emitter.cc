@@ -145,6 +145,28 @@ auto emitter::emit_slice_from_array(value arr_lval, const sema::types::array& ar
     return value{slice_slot, slice_type};
 }
 
+auto emitter::emit_coerced_expr(ast::expr_handle expr_id, const sema::type& dest_type) -> value {
+    PROFILE_FUNCTION();
+    if (dest_type.get_kind() == sema::type_kind::SLICE) {
+        if (const auto rhs_type{active_mod().get_sema_type_opt(expr_id)}) {
+            if (const auto arr_data{rhs_type->get_data().as_opt<sema::types::array>()}) {
+                return emit_slice_from_array(emit_lvalue(expr_id), *arr_data);
+            }
+        }
+    }
+    if (dest_type.get_kind() == sema::type_kind::REFERENCE) {
+        if (const auto rhs_type{active_mod().get_sema_type_opt(expr_id)}) {
+            if (rhs_type->get_kind() != sema::type_kind::REFERENCE &&
+                rhs_type->get_kind() != sema::type_kind::POINTER) {
+                const auto lval{emit_lvalue(expr_id)};
+                const auto addr{builder_.emit_address_of(lval, const_cast<sema::type&>(dest_type))};
+                return value{addr, const_cast<sema::type&>(dest_type)};
+            }
+        }
+    }
+    return emit_expression(expr_id);
+}
+
 auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -> void {
     PROFILE_FUNCTION();
     const auto& name_ident{active_ast().get_as<ast::identifier_expr>(decl.name)};
@@ -495,15 +517,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
 
     const auto slot{builder_.emit_alloca(*sema_type, name)};
     if (decl.value) {
-        value val;
-        if (sema_type->get_kind() == sema::type_kind::SLICE) {
-            if (const auto rhs_type{active_mod().get_sema_type_opt(*decl.value)}) {
-                if (const auto arr_data{rhs_type->get_data().as_opt<sema::types::array>()}) {
-                    val = emit_slice_from_array(emit_lvalue(*decl.value), *arr_data);
-                }
-            }
-        }
-        if (val.data.is<void_val>()) { val = emit_expression(*decl.value); }
+        const value val{emit_coerced_expr(*decl.value, *sema_type)};
         builder_.emit_store(slot, val);
     }
     scopes_.back().bindings.emplace(name, local_binding{slot, *sema_type, true, stdx::none});
@@ -516,14 +530,11 @@ auto emitter::emit_return_stmt(ast::node_id stmt_id, const ast::return_stmt& ret
         const auto fn_opt{builder_.get_function()};
         const auto fn_data{fn_opt ? fn_opt->get_type().get_data().as_opt<sema::types::function>()
                                   : nullptr};
-        if (fn_data && fn_data->return_type.get_kind() == sema::type_kind::SLICE) {
-            if (const auto rhs_type{active_mod().get_sema_type_opt(*ret.expression)}) {
-                if (const auto arr_data{rhs_type->get_data().as_opt<sema::types::array>()}) {
-                    ret_val.emplace(emit_slice_from_array(emit_lvalue(*ret.expression), *arr_data));
-                }
-            }
+        if (fn_data) {
+            ret_val.emplace(emit_coerced_expr(*ret.expression, fn_data->return_type));
+        } else {
+            ret_val.emplace(emit_expression(*ret.expression));
         }
-        if (!ret_val) { ret_val.emplace(emit_expression(*ret.expression)); }
     }
     emit_defers_up_to(0);
     builder_.set_location(active_ast().location_of(stmt_id));
@@ -699,15 +710,7 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
     ASSERT(lhs_lval.type.has_value(), "Assignment LHS must have a resolved type");
 
     if (op_type == syntax::token_type_t::ASSIGN) {
-        value rhs;
-        if (lhs_lval.type->get_kind() == sema::type_kind::SLICE) {
-            if (const auto rhs_type{active_mod().get_sema_type_opt(assign.rhs)}) {
-                if (const auto arr_data{rhs_type->get_data().as_opt<sema::types::array>()}) {
-                    rhs = emit_slice_from_array(emit_lvalue(assign.rhs), *arr_data);
-                }
-            }
-        }
-        if (rhs.data.is<void_val>()) { rhs = emit_expression(assign.rhs); }
+        const value rhs{emit_coerced_expr(assign.rhs, *lhs_lval.type)};
         builder_.emit_store(lhs_lval, rhs);
         return rhs;
     }
@@ -975,17 +978,11 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
     for (usize i{0}; const auto& arg : call.arguments) {
         const usize param_idx{i + param_offset};
         if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
-            const auto arg_type_opt{active_mod().get_sema_type_opt(*expr_h)};
-            if (fn_data && param_idx < fn_data->params.size() &&
-                fn_data->params[param_idx]->get_kind() == sema::type_kind::SLICE && arg_type_opt &&
-                arg_type_opt->get_kind() == sema::type_kind::ARRAY) {
-                if (const auto arr_data{arg_type_opt->get_data().as_opt<sema::types::array>()}) {
-                    args.emplace_back(emit_slice_from_array(emit_lvalue(*expr_h), *arr_data));
-                    i++;
-                    continue;
-                }
+            if (fn_data && param_idx < fn_data->params.size()) {
+                args.emplace_back(emit_coerced_expr(*expr_h, *fn_data->params[param_idx]));
+            } else {
+                args.emplace_back(emit_expression(*expr_h));
             }
-            args.emplace_back(emit_expression(*expr_h));
             i++;
         }
     }

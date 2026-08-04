@@ -16,6 +16,7 @@
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
@@ -417,6 +418,9 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
         [&](const ast::struct_expr&) { return const_value{module_.get_sema_type_opt(id)}; },
         [&](const ast::enum_expr&) { return const_value{module_.get_sema_type_opt(id)}; },
         [&](const ast::union_expr&) { return const_value{module_.get_sema_type_opt(id)}; },
+        [&](const ast::dereference_expr& data) { return try_eval(data.rhs); },
+        [&](const ast::reference_expr& data) { return try_eval(data.rhs); },
+        [&](const ast::address_of_expr& data) { return try_eval(data.rhs); },
         [&](ast::grouped_expr) { return try_eval(id); });
 }
 
@@ -801,6 +805,20 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
         if (op_type == syntax::token_type_t::NEQ) { return const_value{l != r, bool_type}; }
     }
 
+    if (lhs.is<std::string>() && rhs.is<std::string>()) {
+        const auto& l{lhs.as<std::string>()};
+        const auto& r{rhs.as<std::string>()};
+        if (op_type == syntax::token_type_t::PLUS) {
+            return const_value::make_string(ctx_, l + r);
+        }
+        if (op_type == syntax::token_type_t::EQ) { return const_value{l == r, bool_type}; }
+        if (op_type == syntax::token_type_t::NEQ) { return const_value{l != r, bool_type}; }
+        if (op_type == syntax::token_type_t::LT) { return const_value{l < r, bool_type}; }
+        if (op_type == syntax::token_type_t::LT_EQ) { return const_value{l <= r, bool_type}; }
+        if (op_type == syntax::token_type_t::GT) { return const_value{l > r, bool_type}; }
+        if (op_type == syntax::token_type_t::GT_EQ) { return const_value{l >= r, bool_type}; }
+    }
+
     return stdx::none;
 }
 
@@ -1148,6 +1166,33 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
         return const_value::make_string(ctx_, triple.str());
     }
+    case syntax::token_type_t::BUILTIN_SET_EVAL_RECURSION_LIMIT: {
+        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
+        const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
+        if (expr_h) {
+            if (const auto val{try_eval(*expr_h)}) {
+                if (const auto limit{val->as_int_opt()}) {
+                    if (*limit > 0) {
+                        recursion_limit_stack_.emplace_back(max_recursion_depth_);
+                        max_recursion_depth_ = static_cast<usize>(*limit);
+                    }
+                }
+            }
+        }
+        return const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+    }
+    case syntax::token_type_t::BUILTIN_SET_MAIN_SYMBOL: {
+        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
+        const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
+        if (expr_h) {
+            if (const auto val{try_eval(*expr_h)}) {
+                if (const auto str{val->as_opt<std::string>()}) {
+                    ctx_.user_main_name = *str;
+                }
+            }
+        }
+        return const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+    }
     default: return stdx::none;
     }
 }
@@ -1174,10 +1219,15 @@ auto const_eval::eval_constexpr_fn(ast::node_id                    call_id,
         frame.bindings.emplace(ident.name, arg);
     }
 
+    const usize prev_stack_size{recursion_limit_stack_.size()};
     call_stack_.emplace_back(std::move(frame));
     const default_counter::guard g{recursion_depth_};
     const auto                   block_res{eval_stmt(fn_expr.body)};
     call_stack_.pop_back();
+    while (recursion_limit_stack_.size() > prev_stack_size) {
+        max_recursion_depth_ = recursion_limit_stack_.back();
+        recursion_limit_stack_.pop_back();
+    }
     return block_res;
 }
 
@@ -1189,6 +1239,17 @@ auto const_eval::eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_v
         [&](const ast::return_stmt& data) -> stdx::option<const_value> {
             if (data.expression) { return try_eval(*data.expression); }
             return const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+        },
+        [&](const ast::discard_stmt& data) -> stdx::option<const_value> {
+            if (module_.ast[data.discarded].template is<ast::if_expr>() ||
+                module_.ast[data.discarded].template is<ast::while_loop_expr>() ||
+                module_.ast[data.discarded].template is<ast::do_while_loop_expr>() ||
+                module_.ast[data.discarded].template is<ast::for_loop_expr>() ||
+                module_.ast[data.discarded].template is<ast::match_expr>()) {
+                return try_eval(data.discarded);
+            }
+            DISCARD(try_eval(data.discarded));
+            return stdx::none;
         },
         [&](const ast::expr_stmt& data) -> stdx::option<const_value> {
             const auto expr_id{data.expression};

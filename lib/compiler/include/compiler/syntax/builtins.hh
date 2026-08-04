@@ -62,6 +62,10 @@ constexpr builtin_t TARGET_OS{"@targetOs", token_type_t::BUILTIN_TARGET_OS};
 constexpr builtin_t TARGET_ARCH{"@targetArch", token_type_t::BUILTIN_TARGET_ARCH};
 constexpr builtin_t TARGET_TRIPLE{"@targetTriple", token_type_t::BUILTIN_TARGET_TRIPLE};
 
+constexpr builtin_t SET_EVAL_RECURSION_LIMIT{"@setEvalRecursionLimit",
+                                             token_type_t::BUILTIN_SET_EVAL_RECURSION_LIMIT};
+constexpr builtin_t SET_MAIN_SYMBOL{"@setMainSymbol", token_type_t::BUILTIN_SET_MAIN_SYMBOL};
+
 constexpr builtin_t PANIC{"@panic", token_type_t::BUILTIN_PANIC};
 
 constexpr auto ALL_TOKEN_TYPES{

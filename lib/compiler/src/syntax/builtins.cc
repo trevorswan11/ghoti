@@ -58,6 +58,8 @@ constexpr auto ALL_BUILTINS_BY_SV{
                                                    builtins::TARGET_OS,
                                                    builtins::TARGET_ARCH,
                                                    builtins::TARGET_TRIPLE,
+                                                   builtins::SET_EVAL_RECURSION_LIMIT,
+                                                   builtins::SET_MAIN_SYMBOL,
                                                    builtins::PANIC)};
 
 constexpr auto ALL_BUILTINS_BY_TT{[] -> auto {

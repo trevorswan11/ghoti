@@ -98,6 +98,7 @@ class emitter {
     }
     auto emit_array(ast::node_id id, const ast::array_expr& array) -> value;
     auto emit_slice_from_array(value arr_lval, const sema::types::array& arr_data) -> value;
+    auto emit_coerced_expr(ast::expr_handle expr_id, const sema::type& dest_type) -> value;
     auto emit_generic_instantiation(const sema::generic_instantiation_request& req) -> void;
     auto emit_expression_id(ast::node_id id) -> value;
     auto emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value;

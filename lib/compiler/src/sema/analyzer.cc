@@ -126,16 +126,16 @@ auto analyzer::emit_llvm_ir(gir::module&                      gir_module,
 auto analyzer::validate_main_entry(const mod::module& root_module) const
     -> stdx::result<void, diagnostic> {
     if (!root_module.root_table_idx) {
-        return make_sema_err(
-            "missing required 'main' function with signature 'fn(args: [][:0]u8): void'",
-            error::TYPE_MISMATCH);
+        return make_sema_err("missing root module", error::MODULE_LOAD_ERROR);
     }
 
-    const auto& root_table{registry_.get(*root_module.root_table_idx)};
-    const auto  main_sym_opt{root_table.get_opt("main")};
+    const std::string_view main_name{ctx_.user_main_name};
+    const auto&            root_table{registry_.get(*root_module.root_table_idx)};
+    const auto             main_sym_opt{root_table.get_opt(main_name)};
     if (!main_sym_opt) {
         return make_sema_err(
-            "missing required 'main' function with signature 'fn(args: [][:0]u8): void'",
+            fmt::format("missing required '{}' function with signature 'fn(args: [][:0]u8): void'",
+                        main_name),
             error::TYPE_MISMATCH);
     }
 
@@ -246,12 +246,15 @@ auto analyzer::emit_llvm_ir_executable(gir::module&                      gir_mod
                                        std::string_view                  user_main_name)
     -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic> {
     PROFILE_FUNCTION();
+    const auto effective_main_name{user_main_name == "main" && ctx_.user_main_name != "main"
+                                       ? std::string_view{ctx_.user_main_name}
+                                       : user_main_name};
     codegen::llvm_lowering lowering{context, gir_module.get_ast_module().path.string()};
     if (options.target_machine) {
         lowering.module().setDataLayout(options.target_machine->createDataLayout());
         lowering.module().setTargetTriple(options.target_machine->getTargetTriple());
     }
-    auto llvm_mod{lowering.lower_executable(gir_module, user_main_name)};
+    auto llvm_mod{lowering.lower_executable(gir_module, effective_main_name)};
 
     std::string              err_str;
     llvm::raw_string_ostream os{err_str};
