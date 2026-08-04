@@ -80,6 +80,16 @@ TEST_CASE("Lexing symbols") {
                });
 }
 
+TEST_CASE("Lexing identifiers with leading underscores") {
+    test_lexer("_foo __bar _123 _",
+               {
+                   {token_type_t::IDENT, "_foo"},
+                   {token_type_t::IDENT, "__bar"},
+                   {token_type_t::IDENT, "_123"},
+                   {token_type_t::UNDERSCORE, "_"},
+               });
+}
+
 TEST_CASE("Lexing basic language snippet") {
     test_lexer("const five := 5;\n"
                "var ten := 10;\n\n"
@@ -220,8 +230,7 @@ TEST_CASE("Lexing illegal underscored numbers") {
                    {token_type_t::DOT, "."},
                    {token_type_t::INT_10, "1"},
                    {token_type_t::ILLEGAL, "121.3_"},
-                   {token_type_t::UNDERSCORE, "_"},
-                   {token_type_t::INT_10, "12"},
+                   {token_type_t::IDENT, "_12"},
                });
 }
 

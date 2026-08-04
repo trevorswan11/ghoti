@@ -251,13 +251,26 @@ template <ast::IndexableID ID>
     }
     case token_type_t::BUILTIN_SET_MAIN_SYMBOL: {
         if (const auto expr_h{call.arguments[0].as_opt<ast::expr_handle>()}) {
+            stdx::option<std::string> main_name;
             if (const auto str_expr{resolving_.ast.get_as_opt<ast::string_expr>(*expr_h)}) {
-                ctx_.user_main_name = std::string{str_expr->value};
+                main_name.emplace(str_expr->value);
             } else {
                 gir::const_eval evaluator{ctx_, resolving_};
                 if (const auto val{evaluator.try_eval(*expr_h)}) {
-                    if (const auto str{val->as_opt<std::string>()}) { ctx_.user_main_name = *str; }
+                    if (const auto str{val->as_opt<std::string>()}) { main_name.emplace(*str); }
                 }
+            }
+
+            if (main_name) {
+                if (!syntax::token_type::is_valid_identifier_name(*main_name)) {
+                    return make_sema_err(
+                        fmt::format(
+                            "@setMainSymbol argument must be a valid identifier; found '{}'",
+                            *main_name),
+                        error::TYPE_MISMATCH,
+                        resolving_.ast.location_of(*expr_h));
+                }
+                ctx_.user_main_name = *main_name;
             }
         }
         return_type = &ctx_.get_builtin_resolved_type(type_kind::VOID_);

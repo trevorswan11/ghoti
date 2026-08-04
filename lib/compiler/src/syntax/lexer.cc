@@ -47,7 +47,16 @@ auto lexer::advance() noexcept -> token_t {
         token.slice = read_ident(true);
         token.type  = lu_builtin(token.slice);
         return token;
-    } else if (std::isalpha(current_byte_)) {
+    } else if (std::isalpha(current_byte_) || current_byte_ == '_') {
+        if (current_byte_ == '_') {
+            const auto next_c{peek_pos_ < input_.size() ? input_[peek_pos_] : '\0'};
+            if (!std::isalnum(static_cast<u8>(next_c)) && next_c != '_') {
+                token.slice = stdx::string::substr(input_, pos_, 1);
+                token.type  = token_type_t::UNDERSCORE;
+                read_character();
+                return token;
+            }
+        }
         token.slice = read_ident(false);
         token.type  = lu_ident(token.slice);
         return token;

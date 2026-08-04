@@ -311,6 +311,7 @@ enum class integer_category : u8 {
 
 // Check whether the token is an ident, primitive type, or builtin function.
 [[nodiscard]] auto is_valid_ident(token_type_t type) noexcept -> bool;
+[[nodiscard]] auto is_valid_identifier_name(std::string_view name) noexcept -> bool;
 
 auto suffix_length(token_type_t tt) noexcept -> usize;
 

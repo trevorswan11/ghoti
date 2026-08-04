@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <string_view>
 #include <utility>
 
 #include <stdx/assert.hh>
@@ -76,7 +77,6 @@ auto misc_from_char(char c) noexcept -> stdx::option<token_type_t> {
     case '}': return token_type_t::RBRACE;
     case '[': return token_type_t::LBRACKET;
     case ']': return token_type_t::RBRACKET;
-    case '_': return token_type_t::UNDERSCORE;
     default:  return stdx::none;
     }
 }
@@ -94,6 +94,16 @@ auto is_valid_ident(token_type_t type) noexcept -> bool {
     case token_type_t::OPAQUE_TYPE: return true;
     default:                        return is_primitive(type) || get_builtin_opt(type);
     }
+}
+
+auto is_valid_identifier_name(std::string_view name) noexcept -> bool {
+    if (name.empty()) { return false; }
+    if (!std::isalpha(static_cast<u8>(name[0])) && name[0] != '_') { return false; }
+
+    for (const auto c : name) {
+        if (!std::isalnum(static_cast<u8>(c)) && c != '_') { return false; }
+    }
+    return true;
 }
 
 namespace {

@@ -808,9 +808,7 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
     if (lhs.is<std::string>() && rhs.is<std::string>()) {
         const auto& l{lhs.as<std::string>()};
         const auto& r{rhs.as<std::string>()};
-        if (op_type == syntax::token_type_t::PLUS) {
-            return const_value::make_string(ctx_, l + r);
-        }
+        if (op_type == syntax::token_type_t::PLUS) { return const_value::make_string(ctx_, l + r); }
         if (op_type == syntax::token_type_t::EQ) { return const_value{l == r, bool_type}; }
         if (op_type == syntax::token_type_t::NEQ) { return const_value{l != r, bool_type}; }
         if (op_type == syntax::token_type_t::LT) { return const_value{l < r, bool_type}; }
@@ -1187,6 +1185,15 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         if (expr_h) {
             if (const auto val{try_eval(*expr_h)}) {
                 if (const auto str{val->as_opt<std::string>()}) {
+                    if (!syntax::token_type::is_valid_identifier_name(*str)) {
+                        ctx_.diags.emplace_back(
+                            fmt::format(
+                                "@setMainSymbol argument must be a valid identifier; found '{}'",
+                                *str),
+                            sema::error::TYPE_MISMATCH,
+                            module_.ast.location_of(*expr_h));
+                        return const_value::make_poison();
+                    }
                     ctx_.user_main_name = *str;
                 }
             }
