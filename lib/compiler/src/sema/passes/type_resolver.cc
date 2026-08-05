@@ -1868,28 +1868,28 @@ auto type_resolver::resolve_module_access(ID id, const ast::module_access_expr& 
         const auto& inner_ident{resolving_.ast.get_as<ast::identifier_expr>(access.inner)};
         auto        sym{ctx_.registry.get_from_opt(*inner_mod.root_table_idx, inner_ident.name)};
         if (!sym) {
-            return last_type_.emplace(
-                ctx_.poison_node(resolving_,
-                                 id,
-                                 fmt::format("Module '{}' has no member named '{}'",
-                                             get_rightmost_name(access.outer).value_or("<expression>"),
-                                             inner_ident.name),
-                                 error::UNDECLARED_IDENTIFIER,
-                                 resolving_.ast.location_of(access.inner)));
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("Module '{}' has no member named '{}'",
+                            get_rightmost_name(access.outer).value_or("<expression>"),
+                            inner_ident.name),
+                error::UNDECLARED_IDENTIFIER,
+                resolving_.ast.location_of(access.inner)));
         }
 
         const auto symbol_node{sym->get_data().as_opt<symbols::node_t>()};
         if (!symbol_node) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
 
         if (&inner_mod != &resolving_ && !sym->is_public(inner_mod)) {
-            return last_type_.emplace(
-                ctx_.poison_node(resolving_,
-                                 id,
-                                 fmt::format("Symbol '{}' is private to module '{}'",
-                                             inner_ident.name,
-                                             get_rightmost_name(access.outer).value_or("<expression>")),
-                                 error::ILLEGAL_PRIVATE_ACCESS,
-                                 resolving_.ast.location_of(access.inner)));
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("Symbol '{}' is private to module '{}'",
+                            inner_ident.name,
+                            get_rightmost_name(access.outer).value_or("<expression>")),
+                error::ILLEGAL_PRIVATE_ACCESS,
+                resolving_.ast.location_of(access.inner)));
         }
 
         stdx::option<ast::type_modifier> mod;
