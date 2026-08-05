@@ -366,16 +366,26 @@ TEST_CASE("Struct field access through dereferenced pointer and reference") {
         const pt_ref: &Point = undefined;
 
         const px := pt_ptr.x;
+        const px_d := (*pt_ptr).x;
         const ry := pt_ref.y;
+        const ry_d := (*pt_ref).y;
     )")};
 
     const auto [px_sym, _, px_decl, px_type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("px", idx)};
     CHECK(px_type.get_kind() == sema::type_kind::I32);
 
+    const auto [px_d_sym, _pd, px_d_decl, px_d_type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("px_d", idx)};
+    CHECK(px_d_type.get_kind() == sema::type_kind::I32);
+
     const auto [ry_sym, _r, ry_decl, ry_type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("ry", idx)};
     CHECK(ry_type.get_kind() == sema::type_kind::I32);
+
+    const auto [ry_d_sym, _rd, ry_d_decl, ry_d_type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("ry_d", idx)};
+    CHECK(ry_d_type.get_kind() == sema::type_kind::I32);
 }
 
 } // namespace ghoti::tests

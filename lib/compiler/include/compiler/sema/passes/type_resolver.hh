@@ -178,8 +178,8 @@ class type_resolver {
         -> stdx::result<gsl::not_null<type*>, diagnostic>;
 
     // Retrieve's the rightmost identifier name from the accessor
-    [[nodiscard]] auto get_rightmost_name(ast::outer_access_handle) const noexcept
-        -> std::string_view;
+    [[nodiscard]] auto get_rightmost_name(ast::expr_handle) const noexcept
+        -> stdx::option<std::string_view>;
     template <ast::IndexableID ID> auto resolve_dot(ID, const ast::dot_expr&) -> void;
 
     auto visit(ast::node_id, const ast::dot_expr&) -> void;

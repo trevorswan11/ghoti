@@ -1132,9 +1132,9 @@ auto type_resolver::resolve_structural_access(type&                          obj
     UNREACHABLE("Error handling failed to catch invalid type");
 }
 
-auto type_resolver::get_rightmost_name(ast::outer_access_handle handle) const noexcept
-    -> std::string_view {
-    auto current{handle};
+auto type_resolver::get_rightmost_name(ast::expr_handle handle) const noexcept
+    -> stdx::option<std::string_view> {
+    ast::node_id current{*handle};
     while (true) {
         if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(current)}) {
             return ident->name;
@@ -1149,7 +1149,13 @@ auto type_resolver::get_rightmost_name(ast::outer_access_handle handle) const no
             current = dot->member;
             continue;
         }
-        UNREACHABLE("OuterAccessHandle has violated an invariant of the Handle class");
+
+        if (const auto deref{resolving_.ast.get_as_opt<ast::dereference_expr>(current)}) {
+            current = deref->rhs;
+            continue;
+        }
+
+        return stdx::none;
     }
 }
 
@@ -1189,15 +1195,16 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
         const bool is_pub{is_field ? is_field_pub(member_idx) : member_symbol.is_public(enclosing)};
 
         if (!is_pub) {
-            last_type_.emplace(ctx_.poison_node(resolving_,
-                                                id,
-                                                fmt::format("{} '{}' of {} '{}' is private",
-                                                            is_field ? "Field" : "Member",
-                                                            member_ident.name,
-                                                            type_name,
-                                                            get_rightmost_name(dot.object)),
-                                                error::ILLEGAL_PRIVATE_ACCESS,
-                                                resolving_.ast.location_of(dot.member)));
+            last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("{} '{}' of {} '{}' is private",
+                            is_field ? "Field" : "Member",
+                            member_ident.name,
+                            type_name,
+                            get_rightmost_name(dot.object).value_or("<expression>")),
+                error::ILLEGAL_PRIVATE_ACCESS,
+                resolving_.ast.location_of(dot.member)));
             return false;
         }
         return true;
@@ -1865,7 +1872,7 @@ auto type_resolver::resolve_module_access(ID id, const ast::module_access_expr& 
                 ctx_.poison_node(resolving_,
                                  id,
                                  fmt::format("Module '{}' has no member named '{}'",
-                                             get_rightmost_name(access.outer),
+                                             get_rightmost_name(access.outer).value_or("<expression>"),
                                              inner_ident.name),
                                  error::UNDECLARED_IDENTIFIER,
                                  resolving_.ast.location_of(access.inner)));
@@ -1880,7 +1887,7 @@ auto type_resolver::resolve_module_access(ID id, const ast::module_access_expr& 
                                  id,
                                  fmt::format("Symbol '{}' is private to module '{}'",
                                              inner_ident.name,
-                                             get_rightmost_name(access.outer)),
+                                             get_rightmost_name(access.outer).value_or("<expression>")),
                                  error::ILLEGAL_PRIVATE_ACCESS,
                                  resolving_.ast.location_of(access.inner)));
         }

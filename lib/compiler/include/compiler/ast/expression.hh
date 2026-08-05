@@ -170,8 +170,8 @@ DECLARE_INFIX_EXPRESSION(assignment_expr)
 DECLARE_INFIX_EXPRESSION(binary_expr)
 
 struct dot_expr {
-    outer_access_handle object;
-    identifier_handle   member;
+    expr_handle       object;
+    identifier_handle member;
 
     [[nodiscard]] static auto parse(syntax::parser& parser, expr_handle outer)
         -> stdx::result<expr_handle, syntax::diagnostic>;

@@ -563,12 +563,6 @@ MAKE_INFIX_PARSER(binary_expr)
 auto dot_expr::parse(syntax::parser& parser, expr_handle outer)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
-    if (!outer.any<identifier_expr, module_access_expr, dot_expr>()) {
-        return make_syntax_err("Dot expressions must have outer accessors or identifiers",
-                               syntax::error::ILLEGAL_OUTER_ACCESSOR_TYPE,
-                               parser.get_location_of(*outer));
-    }
-
     const auto start_token{parser.get_current_token()};
     TRY(parser.expect_peek(syntax::token_type_t::IDENT));
     const identifier_handle inner{TRY(identifier_expr::parse(parser))};

@@ -182,12 +182,4 @@ TEST_CASE("Illegal inner member of dot expression") {
             "Expected token IDENT, found INT_10", syntax::error::UNEXPECTED_TOKEN, 0, 2});
 }
 
-TEST_CASE("Illegal outer object of dot expression") {
-    helpers::test_parser_fail(
-        "fn():i32{}.a;",
-        syntax::diagnostic{"Dot expressions must have outer accessors or identifiers",
-                           syntax::error::ILLEGAL_OUTER_ACCESSOR_TYPE,
-                           std::pair{0UZ, 0UZ}});
-}
-
 } // namespace ghoti::tests
