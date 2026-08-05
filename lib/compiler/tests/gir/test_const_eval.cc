@@ -11,6 +11,7 @@
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "helpers/sema.hh"
+#include "support/test.hh"
 
 namespace ghoti::tests {
 
@@ -541,6 +542,72 @@ TEST_CASE("Volatile variables refuse constant folding in const eval") {
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("read_v", idx)};
     const auto val_rv{evaluator.try_eval(*decl_rv.value)};
     CHECK_FALSE(val_rv.has_value());
+}
+
+TEST_CASE("Const eval string concatenation and comparison folding") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const greeting := "Hello, " + "world!";
+        const is_same := "ghoti" == "ghoti";
+        const is_diff := "ghoti" != "c";
+        const is_less := "apple" < "banana";
+        const char_idx := "ghoti"[1];
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym_g, _g, decl_g, type_g]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("greeting", idx)};
+    const auto val_g{UNWRAP(evaluator.try_eval(*decl_g.value))};
+    CHECK(UNWRAP(val_g.as_opt<std::string>()) == "Hello, world!");
+
+    const auto [sym_s, _s, decl_s, type_s]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("is_same", idx)};
+    const auto val_s{UNWRAP(evaluator.try_eval(*decl_s.value))};
+    CHECK(val_s.as<bool>() == true);
+
+    const auto [sym_d, _d, decl_d, type_d]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("is_diff", idx)};
+    const auto val_d{UNWRAP(evaluator.try_eval(*decl_d.value))};
+    CHECK(val_d.as<bool>() == true);
+
+    const auto [sym_l, _l, decl_l, type_l]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("is_less", idx)};
+    const auto val_l{UNWRAP(evaluator.try_eval(*decl_l.value))};
+    CHECK(val_l.as<bool>() == true);
+
+    const auto [sym_c, _c, decl_c, type_c]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("char_idx", idx)};
+    const auto val_c{UNWRAP(evaluator.try_eval(*decl_c.value))};
+    CHECK(val_c.as_int_opt() == static_cast<i64>('h'));
+}
+
+TEST_CASE("Const eval @setEvalRecursionLimit in function scope") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        constexpr count_loop := fn(n: i32): i32 {
+            @setEvalRecursionLimit(10);
+            var i := 0;
+            while (i < n) { i += 1; }
+            return i;
+        };
+        const res := count_loop(5);
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym_res, _res, decl_res, type_res]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("res", idx)};
+    const auto val_res{UNWRAP(evaluator.try_eval(*decl_res.value))};
+    CHECK(val_res.as_int_opt() == 5);
+}
+
+TEST_CASE("Const eval @setMainSymbol sets main symbol name") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const setup := @setMainSymbol("custom_entry");
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym_s, _s, decl_s, type_s]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("setup", idx)};
+    CHECK(evaluator.try_eval(*decl_s.value));
+    CHECK(ctx->analyzer.get_ctx().user_main_name == "custom_entry");
 }
 
 } // namespace ghoti::tests

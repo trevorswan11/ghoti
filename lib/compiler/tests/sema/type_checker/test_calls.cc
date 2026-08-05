@@ -219,4 +219,12 @@ TEST_CASE("Function call type checking") {
     }
 }
 
+TEST_CASE("@setEvalRecursionLimit inside function scope succeeds") {
+    helpers::type_check_and_verify(R"(
+        pub const test_fn := fn(): void {
+            @setEvalRecursionLimit(100);
+        };
+    )");
+}
+
 } // namespace ghoti::tests

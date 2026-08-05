@@ -77,4 +77,14 @@ TEST_CASE("Operator type checking") {
     }
 }
 
+TEST_CASE("Discard statement evaluating expression") {
+    helpers::type_check_and_verify(R"(
+        pub const test_fn := fn(): i32 {
+            var x: i32 = 5;
+            _ = x + 10;
+            return x;
+        };
+    )");
+}
+
 } // namespace ghoti::tests

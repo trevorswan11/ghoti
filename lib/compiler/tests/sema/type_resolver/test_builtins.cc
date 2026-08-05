@@ -248,4 +248,63 @@ TEST_CASE("Builtin C va builtins resolution") {
         "const ap: ^mut opaque = undefined;");
 }
 
+TEST_CASE("@setEvalRecursionLimit top-level placement produces error") {
+    helpers::test_resolver_fail(
+        "const bad := @setEvalRecursionLimit(50);",
+        sema::diagnostic{"@setEvalRecursionLimit can only be used within a function scope",
+                         sema::error::TYPE_MISMATCH,
+                         std::pair{0UZ, 13UZ}});
+}
+
+TEST_CASE("Free call and discard statements evaluate expressions without assignment") {
+    SECTION("Free call @setMainSymbol") {
+        auto [ctx, idx]{helpers::resolve_and_check(R"(
+            @setMainSymbol("custom_entry");
+            pub const custom_entry := fn(): void {};
+        )")};
+        CHECK(ctx->analyzer.get_ctx().user_main_name == "custom_entry");
+    }
+
+    SECTION("Free call @setMainSymbol with leading underscore") {
+        auto [ctx, idx]{helpers::resolve_and_check(R"(
+            @setMainSymbol("_my_custom_main");
+            pub const _my_custom_main := fn(): void {};
+        )")};
+        CHECK(ctx->analyzer.get_ctx().user_main_name == "_my_custom_main");
+    }
+
+    SECTION("Discard statement with @setMainSymbol") {
+        auto [ctx, idx]{helpers::resolve_and_check(R"(
+            _ = @setMainSymbol("discarded_main");
+            pub const discarded_main := fn(): void {};
+        )")};
+        CHECK(ctx->analyzer.get_ctx().user_main_name == "discarded_main");
+    }
+
+    SECTION("Leading underscore identifier in declarations") {
+        auto [ctx, idx]{helpers::resolve_and_check(R"(
+            const _val: i32 = 42;
+            pub const _get_val := fn(): i32 {
+                return _val;
+            };
+        )")};
+        CHECK(ctx->analyzer.get_ctx().diags.empty());
+    }
+}
+
+TEST_CASE("@setMainSymbol invalid identifier error") {
+    helpers::test_resolver_fail(
+        "@setMainSymbol(\"invalid main name\");",
+        sema::diagnostic{
+            "@setMainSymbol argument must be a valid identifier; found 'invalid main name'",
+            sema::error::TYPE_MISMATCH,
+            std::pair{0UZ, 15UZ}});
+
+    helpers::test_resolver_fail(
+        "@setMainSymbol(\"123bad\");",
+        sema::diagnostic{"@setMainSymbol argument must be a valid identifier; found '123bad'",
+                         sema::error::TYPE_MISMATCH,
+                         std::pair{0UZ, 15UZ}});
+}
+
 } // namespace ghoti::tests

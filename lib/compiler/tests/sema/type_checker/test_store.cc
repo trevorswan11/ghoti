@@ -7,7 +7,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("Type checker - store and assignment validation") {
+TEST_CASE("Type checker store and assignment validation") {
     SECTION("Valid variable assignment succeeds") {
         helpers::type_check_and_verify(R"(
             const f := fn(): void {

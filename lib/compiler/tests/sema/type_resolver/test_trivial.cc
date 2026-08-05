@@ -134,4 +134,16 @@ TEST_CASE("Illegal initializer targets") {
     helpers::test_resolver_fail("const a: i32 = .{};", expected_diag(16));
 }
 
+TEST_CASE("Dereferenced assignment using non-pointer fails") {
+    helpers::test_resolver_fail(
+        R"(
+        pub const test_fn := fn(x: i32): void {
+            const bad := *x;
+        };
+    )",
+        sema::diagnostic{"Cannot dereference non-pointer expression; found 'i32'",
+                         sema::error::TYPE_MISMATCH,
+                         std::pair{2UZ, 25UZ}});
+}
+
 } // namespace ghoti::tests

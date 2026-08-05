@@ -6,6 +6,7 @@
 #include <fmt/format.h>
 #include <stdx/types.hh>
 
+#include "compiler/ast/statement.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
@@ -356,6 +357,25 @@ TEST_CASE("Initializer expression in various resolution contexts") {
             ctx->get_type(sema::type_kind::POINTER, ctx->get_type(sema::type_kind::U8)));
         check_access_decl(*ctx, idx, "l", ctx->get_type(sema::type_kind::USIZE));
     }
+}
+
+TEST_CASE("Struct field access through dereferenced pointer and reference") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const Point := struct { x: i32, y: i32 };
+        const pt_ptr: ^Point = undefined;
+        const pt_ref: &Point = undefined;
+
+        const px := pt_ptr.x;
+        const ry := pt_ref.y;
+    )")};
+
+    const auto [px_sym, _, px_decl, px_type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("px", idx)};
+    CHECK(px_type.get_kind() == sema::type_kind::I32);
+
+    const auto [ry_sym, _r, ry_decl, ry_type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("ry", idx)};
+    CHECK(ry_type.get_kind() == sema::type_kind::I32);
 }
 
 } // namespace ghoti::tests

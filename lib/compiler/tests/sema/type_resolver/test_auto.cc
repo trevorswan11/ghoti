@@ -438,4 +438,28 @@ TEST_CASE("Generic functions with complex types and chaining") {
     }
 }
 
+TEST_CASE("Dereferencing pointer and reference expressions") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const p: ^i32 = undefined;
+        const r: &i32 = undefined;
+        const pp: ^^i32 = undefined;
+
+        const val_p := *p;
+        const val_r := *r;
+        const val_pp := **pp;
+    )")};
+
+    const auto [p_sym, _, p_decl, p_type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("val_p", idx)};
+    CHECK(p_type.get_kind() == sema::type_kind::I32);
+
+    const auto [r_sym, _r, r_decl, r_type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("val_r", idx)};
+    CHECK(r_type.get_kind() == sema::type_kind::I32);
+
+    const auto [pp_sym, _pp, pp_decl, pp_type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("val_pp", idx)};
+    CHECK(pp_type.get_kind() == sema::type_kind::I32);
+}
+
 } // namespace ghoti::tests
