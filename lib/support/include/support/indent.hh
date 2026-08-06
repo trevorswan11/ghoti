@@ -23,7 +23,7 @@ class indent {
     using guard = scope_guard<indent>;
 
   public:
-    constexpr auto push(bool last) -> void { levels_.push_back(last); }
+    constexpr auto push(bool last) -> void { levels_.emplace_back(last); }
     constexpr auto pop() -> void { levels_.pop_back(); }
 
     [[nodiscard]] constexpr auto current_branch() const -> std::string {

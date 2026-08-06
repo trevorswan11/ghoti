@@ -451,6 +451,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                         for (usize i{0}; i < params.size(); ++i) {
                             const auto arg_t{get_operand_type(inst.operands[i])};
                             if (arg_t && !arg_t->is_poison() &&
+                                arg_t->get_kind() != sema::type_kind::TYPE &&
                                 !is_assignable(*arg_t, params[i]->type)) {
                                 emit_diagnostic(
                                     fmt::format("Argument {} of type '{}' is not assignable to "
@@ -476,6 +477,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                     for (usize i{0}; i < params.size(); ++i) {
                         const auto arg_t{get_operand_type(inst.operands[i])};
                         if (arg_t && !arg_t->is_poison() &&
+                            arg_t->get_kind() != sema::type_kind::TYPE &&
                             !is_assignable(*arg_t, params[i]->type)) {
                             emit_diagnostic(
                                 fmt::format("Argument {} of type '{}' is not assignable to "
@@ -517,6 +519,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                             for (usize i{0}; i < expected_args; ++i) {
                                 const auto arg_t{get_operand_type(inst.operands[i + 1])};
                                 if (arg_t && !arg_t->is_poison() &&
+                                    arg_t->get_kind() != sema::type_kind::TYPE &&
                                     !is_assignable(*arg_t, *fn_data->params[i])) {
                                     emit_diagnostic(
                                         fmt::format(
@@ -542,6 +545,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                         for (usize i{0}; i < expected_args; ++i) {
                             const auto arg_t{get_operand_type(inst.operands[i + 1])};
                             if (arg_t && !arg_t->is_poison() &&
+                                arg_t->get_kind() != sema::type_kind::TYPE &&
                                 !is_assignable(*arg_t, *fn_data->params[i])) {
                                 emit_diagnostic(
                                     fmt::format(

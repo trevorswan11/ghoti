@@ -14,7 +14,7 @@ namespace {
 struct custom_stack {
     std::vector<i32> elements{};
 
-    auto push(i32 val) -> void { elements.push_back(val); }
+    auto push(i32 val) -> void { elements.emplace_back(val); }
     auto pop() -> void {
         if (!elements.empty()) { elements.pop_back(); }
     }

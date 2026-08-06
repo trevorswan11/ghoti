@@ -248,7 +248,7 @@ class symbol_table_stack {
     ~symbol_table_stack()         = default;
     MAKE_MOVE_CONSTRUCTABLE_ONLY(symbol_table_stack);
 
-    auto push(usize idx) -> void { stack_.push_back(idx); }
+    auto push(usize idx) -> void { stack_.emplace_back(idx); }
     auto pop() noexcept -> void {
         if (!stack_.empty()) { stack_.pop_back(); }
     }

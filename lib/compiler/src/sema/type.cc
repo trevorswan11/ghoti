@@ -181,6 +181,7 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
         case type_kind::UNION:
         case type_kind::ENUM:
         case type_kind::TYPE:
+        case type_kind::FUNCTION:
             return is_same_unqualified(src, dest);
             // ^S to ^T must be const correct
         case type_kind::POINTER: {

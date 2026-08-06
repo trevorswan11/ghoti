@@ -112,10 +112,10 @@ TEST_CASE("Type translate function types") {
 
     auto& fn_t{*pool[{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT}]};
     fn_t.resolve<sema::types::function>(false, params, bool_t, false);
-
     auto* fn_llvm{translator.translate(fn_t)};
-    REQUIRE(fn_llvm->isFunctionTy());
-    auto* fn_ty{llvm::cast<llvm::FunctionType>(fn_llvm)};
+    CHECK(fn_llvm->isPointerTy());
+
+    auto* fn_ty{translator.translate_function_type(fn_t.get_data().as<sema::types::function>())};
     CHECK(fn_ty->getReturnType() == llvm::Type::getInt1Ty(context));
     REQUIRE(fn_ty->getNumParams() == 2);
     CHECK(fn_ty->getParamType(0) == llvm::Type::getInt32Ty(context));

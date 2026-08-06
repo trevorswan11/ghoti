@@ -29,7 +29,8 @@ auto type_translator::translate(const sema::type& type) -> llvm::Type* {
     case sema::type_kind::VOID_:
     case sema::type_kind::NORETURN:  return get_void_ty();
     case sema::type_kind::POINTER:
-    case sema::type_kind::REFERENCE: return get_ptr_ty();
+    case sema::type_kind::REFERENCE:
+    case sema::type_kind::FUNCTION:  return get_ptr_ty();
     case sema::type_kind::SLICE:     return translate_slice(type.get_data().as<sema::types::slice>());
     case sema::type_kind::ARRAY:     return translate_array(type.get_data().as<sema::types::array>());
     case sema::type_kind::STRUCT:
@@ -37,8 +38,6 @@ auto type_translator::translate(const sema::type& type) -> llvm::Type* {
     case sema::type_kind::UNION:
         return translate_union(type.get_data().as<sema::types::union_t>(), type);
     case sema::type_kind::ENUM: return translate_enum(type.get_data().as<sema::types::enum_t>());
-    case sema::type_kind::FUNCTION:
-        return translate_function_type(type.get_data().as<sema::types::function>());
     case sema::type_kind::OPAQUE:
     case sema::type_kind::TYPE:
     case sema::type_kind::MODULE:
@@ -57,7 +56,12 @@ auto type_translator::translate_function_type(const sema::types::function& fn)
     auto*                    ret_ty{translate(fn.return_type)};
     std::vector<llvm::Type*> param_types;
     param_types.reserve(fn.params.size());
-    for (const auto* param : fn.params) { param_types.push_back(translate(*param)); }
+    for (const auto* param : fn.params) {
+        auto* p_ty{translate(*param)};
+        if (!p_ty->isVoidTy()) {
+            param_types.emplace_back(p_ty);
+        }
+    }
     return llvm::FunctionType::get(ret_ty, param_types, fn.is_variadic);
 }
 
@@ -117,7 +121,7 @@ auto type_translator::translate_struct(const sema::types::struct_t& s, const sem
 
     std::vector<llvm::Type*> element_types;
     element_types.reserve(s.fields.size());
-    for (const auto* field : s.fields) { element_types.push_back(translate(*field)); }
+    for (const auto* field : s.fields) { element_types.emplace_back(translate(*field)); }
     struct_ty->setBody(element_types, s.is_packed);
     return struct_ty;
 }

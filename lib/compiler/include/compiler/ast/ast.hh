@@ -60,7 +60,7 @@ class AST {
     ~AST() = default;
     MAKE_MOVE_ONLY(AST)
 
-    constexpr auto add_root(node_id id) -> void { nodes_.roots.push_back(id); }
+    constexpr auto add_root(node_id id) -> void { nodes_.roots.emplace_back(id); }
 
     [[nodiscard]] constexpr auto get_pool_sizes() const noexcept -> data_pool_sizes {
         return {.nodes_size = nodes_.pool.size(), .types_size = explicit_types_.pool.size()};
