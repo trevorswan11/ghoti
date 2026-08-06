@@ -3,13 +3,13 @@
 #include <string>
 #include <vector>
 
-#include <catch2/catch_test_macros.hpp>
 #include <stdx/iterator.hh>
+#include <stdx/option.hh>
 #include <stdx/string.hh>
 #include <stdx/type_traits.hh>
 #include <stdx/types.hh>
 
-namespace ghoti::tests::helpers {
+namespace ghoti {
 
 class mock_argv {
   public:
@@ -20,7 +20,6 @@ class mock_argv {
         strings_.reserve(sizeof...(Strings));
         (..., strings_.emplace_back(args));
 
-        REQUIRE(strings_.size() >= 1);
         pointers_.reserve(strings_.size() + 1);
         for (auto& s : strings_) { pointers_.emplace_back(s.data()); }
         pointers_.emplace_back(nullptr);
@@ -31,14 +30,14 @@ class mock_argv {
         return static_cast<I>(strings_.size());
     }
 
-    [[nodiscard]] auto operator[](usize idx) const noexcept -> char* {
-        REQUIRE(idx < pointers_.size());
-        return pointers_[idx];
-    }
+    [[nodiscard]] auto operator[](usize idx) const noexcept -> char* { return pointers_[idx]; }
 
   private:
     std::vector<std::string> strings_;
     mutable args_t           pointers_;
 };
 
-} // namespace ghoti::tests::helpers
+// Spawns the child and waits for its termination, returning the exit code
+[[nodiscard]] auto spawn_child(const mock_argv& args) -> stdx::option<u32>;
+
+} // namespace ghoti
