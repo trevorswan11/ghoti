@@ -551,8 +551,10 @@ auto emitter::emit_expression_id(ast::node_id id) -> value {
             UNREACHABLE("Unhandled expression node variant in emit_expression_id");
         },
         [&](ast::i32_expr data) -> value {
+            const auto sema_type{active_mod().get_sema_type_opt(id)};
             return value{static_cast<i64>(data.value),
-                         ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
+                         sema_type ? *sema_type
+                                   : ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
         },
         [&](ast::i64_expr data) -> value {
             return value{static_cast<i64>(data.value),
@@ -1948,6 +1950,22 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
             builder_.emit_get_element_ptr(base_lval, {value{member_idx, usize_type}}, field_type)};
         const auto loaded{builder_.emit_load(value{field_ptr, field_type}, field_type)};
         return value{loaded, field_type};
+    }
+
+    if (obj_type->get_kind() == sema::type_kind::ARRAY) {
+        const auto arr_data{obj_type->get_data().as_opt<sema::types::array>()};
+        auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+        if (member_ident.name == "len") {
+            return value{static_cast<u64>(arr_data->len), usize_type};
+        }
+
+        if (member_ident.name == "ptr") {
+            auto&      field_type{sema_type ? *sema_type : arr_data->underlying};
+            const auto base_lval{emit_lvalue(dot.object)};
+            const auto field_ptr{
+                builder_.emit_get_element_ptr(base_lval, {value{0ULL, usize_type}}, field_type)};
+            return value{field_ptr, field_type};
+        }
     }
 
     const auto& table{ctx_.registry.get(obj_type->get_symbol_table_idx())};

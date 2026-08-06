@@ -1037,7 +1037,21 @@ auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -
 auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> void {
     PROFILE_FUNCTION();
     TRY_RESOLVE(binary.lhs);
-    TRY_RESOLVE(binary.rhs);
+    auto* lhs_type{last_type_.take()};
+    {
+        const structural_guard g{implicit_type_stack_, lhs_type};
+        TRY_RESOLVE(binary.rhs);
+    }
+    auto& rhs_type{*last_type_.take()};
+
+    if (is_integer(rhs_type.get_kind())) {
+        if (const auto i32_node{resolving_.ast.get_as_opt<ast::i32_expr>(binary.lhs)}) {
+            if (i32_node->value >= 0) {
+                resolving_.set_sema_type(binary.lhs, rhs_type);
+                lhs_type = &rhs_type;
+            }
+        }
+    }
 
     switch (id.get_token_type()) {
     case syntax::token_type_t::LT:
@@ -1050,7 +1064,7 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
     case syntax::token_type_t::BOOLEAN_OR:
         last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::BOOL));
         break;
-    default: break;
+    default: last_type_.emplace(lhs_type); break;
     }
 
     resolving_.set_sema_type(id, *last_type_);
@@ -1073,22 +1087,26 @@ auto type_resolver::resolve_structural_access(type&                          obj
     const auto struct_type{object_data.as_opt<types::struct_t>()};
     const auto union_type{object_data.as_opt<types::union_t>()};
     const auto slice_type{object_data.as_opt<types::slice>()};
+    const auto array_type{object_data.as_opt<types::array>()};
 
-    if (slice_type) {
+    if (slice_type || array_type) {
         const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(member)};
+        auto&       underlying{slice_type ? slice_type->underlying : array_type->underlying};
         if (member_ident.name == "ptr") {
-            return &ctx_.get_pointer(target_type->get_key().get_mut(), slice_type->underlying);
+            return &ctx_.get_pointer(target_type->get_key().get_mut(), underlying);
         }
         if (member_ident.name == "len") {
             return &ctx_.get_builtin_resolved_type(type_kind::USIZE);
         }
+        const auto type_kind_name{slice_type ? "slice" : "array"};
         return make_sema_err(
             object_name
                 .transform([&](std::string_view name) -> std::string {
                     return fmt::format(
                         "Type '{}' has no field named '{}'", name, member_ident.name);
                 })
-                .value_or(fmt::format("Type 'slice' has no field named '{}'", member_ident.name)),
+                .value_or(fmt::format(
+                    "Type '{}' has no field named '{}'", type_kind_name, member_ident.name)),
             error::UNDECLARED_IDENTIFIER,
             resolving_.ast.location_of(member));
     }
@@ -1831,7 +1849,20 @@ auto type_resolver::visit(ast::node_id id, const ast::string_expr& string) -> vo
         resolving_.set_sema_type(id, *last_type_);                             \
     }
 
-MAKE_PRIMITIVE_RESOLVER(i32_expr, I32)
+auto type_resolver::visit(ast::node_id id, const ast::i32_expr& expr) -> void {
+    PROFILE_FUNCTION();
+    auto* resolved_type{&ctx_.get_builtin_resolved_type(type_kind::I32)};
+    if (expr.value >= 0) {
+        if (const auto implicit_type{implicit_type_stack_.peek()}) {
+            const auto kind{implicit_type->get_kind()};
+            if (is_integer(kind)) { resolved_type = &implicit_type.value(); }
+        }
+    }
+    last_type_.emplace(*resolved_type);
+    last_type_->resolve_if<types::builtin_type>();
+    resolving_.set_sema_type(id, *last_type_);
+}
+
 MAKE_PRIMITIVE_RESOLVER(i64_expr, I64)
 MAKE_PRIMITIVE_RESOLVER(isize_expr, ISIZE)
 MAKE_PRIMITIVE_RESOLVER(u32_expr, U32)
@@ -2593,6 +2624,16 @@ auto type_resolver::instantiate_generic(type&                        callee_type
     }
 
     type_resolver inst_resolver{fn_mod, ctx_, fn_table_idx, std::move(inst_stack)};
+    for (const auto& [arg_type, param] : std::views::zip(concrete_args, fn_expr.parameters)) {
+        inst_resolver.resolve(param.explicit_type);
+        if (inst_resolver.last_type_ && !inst_resolver.last_type_->is_poison()) {
+            auto& resolved_param_type{*inst_resolver.last_type_.take()};
+            if (resolved_param_type.get_kind() != type_kind::AUTO &&
+                resolved_param_type.get_kind() != type_kind::TYPE) {
+                fn_mod.set_sema_type(param.name, resolved_param_type);
+            }
+        }
+    }
     inst_resolver.resolve(fn_expr.explicit_return_type);
     if (inst_resolver.last_type_->is_poison()) { return stdx::none; }
     auto&      return_type{*inst_resolver.last_type_.take()};

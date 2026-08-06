@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <sstream>
 #include <string_view>
 
@@ -88,6 +89,39 @@ TEST_CASE("GIR multiple instantiations with diverse types") {
     CHECK(has_add_i32);
     CHECK(has_add_f64);
     CHECK(has_test_multi);
+}
+
+TEST_CASE("GIR monomorphization with slice parameter and array argument") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const map := fn(T: type, arr: []T, Ctx: type, func: fn(T, Ctx): T, ctx: Ctx): void {
+            var i: usize = 0;
+            for (arr) |&v| {
+                v = func(arr[i], ctx);
+            }
+
+            var j: &T = undefined;
+            while (i < arr.len) : (i += 1uz) {
+                j = &arr[i];
+                arr[i] = func(arr[i], ctx);
+            };
+        };
+
+        const MyCtx := struct { offset: i32 };
+
+        const test_map := fn(): void {
+            const slice := [6]i32{1, 2, 3, 4, 5, 6};
+            map(i32, slice, MyCtx, fn(x: i32, ctx: MyCtx): i32 {
+                return x + ctx.offset;
+            }, MyCtx{ .offset = 10 });
+        };
+    )")};
+
+    gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
+    const auto   gir_mod{emitter.emit()};
+
+    ;
+    CHECK(std::ranges::any_of(gir_mod.get_functions(),
+                              [](const auto& fn) { return fn->get_name().starts_with("map"); }));
 }
 
 } // namespace ghoti::tests

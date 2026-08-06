@@ -346,8 +346,10 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
     return module_.ast[id].visit(
         [](const auto&) -> stdx::option<const_value> { return stdx::none; },
         [&](ast::i32_expr data) {
+            const auto sema_type{module_.get_sema_type_opt(id)};
             return const_value{static_cast<i64>(data.value),
-                               ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
+                               sema_type ? *sema_type
+                                         : ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
         },
         [&](ast::i64_expr data) {
             return const_value{static_cast<i64>(data.value),

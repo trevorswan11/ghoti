@@ -104,9 +104,6 @@ TEST_CASE("Non-widenable implicit integer narrowing fails without @as") {
             var small: u8 = big;
         };
     )",
-        sema::diagnostic{"Type mismatch in store: cannot assign 'i32' to 'u64'",
-                         sema::error::TYPE_MISMATCH,
-                         std::pair{2UZ, 27UZ}},
         sema::diagnostic{"Type mismatch in store: cannot assign 'u64' to 'u8'",
                          sema::error::TYPE_MISMATCH,
                          std::pair{3UZ, 28UZ}});
