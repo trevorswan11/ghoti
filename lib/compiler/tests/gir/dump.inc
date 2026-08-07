@@ -6,38 +6,42 @@ fn compute_point(p: struct) -> i32
   seg 0:
     %0 = alloca i32
     store 0, %0
-    %1 = get_element_ptr i32 param.0, 0
-    %2 = load %1
-    %3 = call @clamp__i32_i32_i32(%2, 0, 50)
-    %4 = alloca i32
-    store 0, %4
-    %5 = alloca block
+    %1 = alloca struct
+    store param.0, %1
+    %2 = get_element_ptr i32 %1, 0
+    %3 = load %2
+    %4 = call @clamp__i32_i32_i32(%3, 0, 50)
+    %5 = alloca i32
+    store 0, %5
+    %6 = alloca block
     goto seg 1
   seg 1:
-    %6 = load %4
-    %7 = lt bool %6, 3
-    cond_goto %7 seg 2, seg 3
+    %7 = load %5
+    %8 = lt bool %7, 3
+    cond_goto %8 seg 2, seg 3
   seg 2:
-    %8 = load %0
-    %9 = add i32 %8, %3
-    store %9, %0
-    %10 = load %4
-    %11 = add i32 %10, 1
-    store %11, %4
+    %9 = load %0
+    %10 = add i32 %9, %4
+    store %10, %0
+    %11 = load %5
+    %12 = add i32 %11, 1
+    store %12, %5
     goto seg 1
   seg 3:
-    %12 = load %5
-    %13 = load %0
-    %14 = get_element_ptr i32 param.0, 1
-    %15 = load %14
-    %16 = add i32 %13, %15
-    %17 = load %0
-    %18 = add i32 %17, 1
-    store %18, %0
-    ret i32 %16
+    %13 = load %6
+    %14 = load %0
+    %15 = alloca struct
+    store param.0, %15
+    %16 = get_element_ptr i32 %15, 1
+    %17 = load %16
+    %18 = add i32 %14, %17
     %19 = load %0
     %20 = add i32 %19, 1
     store %20, %0
+    ret i32 %18
+    %21 = load %0
+    %22 = add i32 %21, 1
+    store %22, %0
     ret i32 undefined
 
 fn match_color(c: enum) -> i32
@@ -68,7 +72,16 @@ fn match_color(c: enum) -> i32
 
 test "golden_run"
   seg 0:
-    %0 = call @compute_point(void)
+    %0 = alloca struct
+    %1 = alloca struct
+    %2 = get_element_ptr i32 %1, 0
+    store 25, %2
+    %3 = get_element_ptr i32 %1, 1
+    store 10, %3
+    %4 = load %1
+    store %4, %0
+    %5 = load %0
+    %6 = call @compute_point(%5)
     ret void
 
 fn clamp__i32_i32_i32(val: i32, min_val: i32, max_val: i32) -> i32

@@ -44,6 +44,9 @@ class const_eval {
     auto resolve_all_deferred_calls() -> void;
     auto resolve_all_deferred_types() -> void;
 
+    // Forces a single possibly-deferred array type to its concrete resolved form
+    [[nodiscard]] auto force_deferred_array(sema::type& maybe_deferred) -> sema::type&;
+
     [[nodiscard]] static auto type_align_of(const sema::type& type) -> usize;
     [[nodiscard]] static auto type_size_of(const sema::type& type) -> usize;
 

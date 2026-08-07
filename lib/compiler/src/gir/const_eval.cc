@@ -292,6 +292,12 @@ auto const_eval::type_size_of(const sema::type& type) -> usize {
     }
 }
 
+auto const_eval::force_deferred_array(sema::type& maybe_deferred) -> sema::type& {
+    const auto deferred{maybe_deferred.get_data().as_opt<sema::types::deferred_array>()};
+    if (!deferred) { return maybe_deferred; }
+    return resolve_deferred_array(deferred->array, deferred->underlying);
+}
+
 auto const_eval::resolve_deferred_array(const ast::explicit_array_type& array,
                                         sema::type&                     item_type) -> sema::type& {
     ASSERT(array.dimension.has_value(), "Deferred array type must have a dimension");

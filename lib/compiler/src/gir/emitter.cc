@@ -142,7 +142,8 @@ auto emitter::emit_slice_from_array(value arr_lval, const sema::types::array& ar
     builder_.emit_store(value{field1_ptr, usize_type},
                         value{static_cast<u64>(arr_data.len), usize_type});
 
-    return value{slice_slot, slice_type};
+    const auto loaded_slice{builder_.emit_load(value{slice_slot, slice_type}, slice_type)};
+    return value{loaded_slice, slice_type};
 }
 
 auto emitter::emit_coerced_expr(ast::expr_handle expr_id, const sema::type& dest_type) -> value {
@@ -496,7 +497,17 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
     const auto is_const{decl.has_modifier(ast::decl_modifiers::CONSTANT) ||
                         decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
 
-    if (is_const && decl.value) {
+    // An aggregate referenced by name more than once (decayed to a slice, indexed, or
+    // address-of'd) must resolve to the same storage each time, so it always gets a real,
+    // stable alloca below -- regardless of const/var, or whether its value happens to be
+    // compile-time constant. Non-aggregate consts (scalars, function references, ...) can
+    // keep the cheaper storage-free bindings handled here instead.
+    const auto sema_kind{sema_type->get_kind()};
+    const auto is_aggregate{
+        sema_kind == sema::type_kind::ARRAY || sema_kind == sema::type_kind::SLICE ||
+        sema_kind == sema::type_kind::STRUCT || sema_kind == sema::type_kind::UNION};
+
+    if (is_const && decl.value && !is_aggregate) {
         if (const auto cv{const_eval_.try_eval(*decl.value)}) {
             scopes_.back().bindings.emplace(
                 name,
@@ -505,16 +516,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
             return;
         }
 
-        value val;
-        if (sema_type->get_kind() == sema::type_kind::SLICE) {
-            if (const auto rhs_type{active_mod().get_sema_type_opt(*decl.value)}) {
-                if (const auto arr_data{rhs_type->get_data().as_opt<sema::types::array>()}) {
-                    val = emit_slice_from_array(emit_lvalue(*decl.value), *arr_data);
-                }
-            }
-        }
-        if (val.data.is<void_val>()) { val = emit_expression(*decl.value); }
-
+        const value val{emit_expression(*decl.value)};
         if (const auto lid{val.as_opt<local_id>()}) {
             scopes_.back().bindings.emplace(name,
                                             local_binding{*lid, *sema_type, false, stdx::none});
@@ -652,7 +654,6 @@ auto emitter::emit_array(ast::node_id id, const ast::array_expr& arr) -> value {
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Array expression must have a resolved sema type");
 
-    if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
     const auto array_slot{builder_.emit_alloca(*sema_type)};
     auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
 
@@ -666,7 +667,8 @@ auto emitter::emit_array(ast::node_id id, const ast::array_expr& arr) -> value {
         builder_.emit_store(value{elem_ptr, elem_type}, val);
     }
 
-    return value{array_slot, sema_type};
+    const auto loaded{builder_.emit_load(value{array_slot, *sema_type}, *sema_type)};
+    return value{loaded, sema_type};
 }
 
 auto emitter::emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> value {
@@ -1511,7 +1513,7 @@ auto emitter::emit_for(ast::node_id                   id,
                         }
                         scopes_.back().bindings.emplace(
                             *info.capture_name,
-                            local_binding{elem_ptr, *info.elem_type, false, stdx::none});
+                            local_binding{elem_ptr, *info.elem_type, true, stdx::none});
                     }
                 }
             }
@@ -1710,22 +1712,31 @@ auto emitter::emit_logical_or(ast::node_id, const ast::binary_expr& binary) -> v
     return value{loaded, bool_type};
 }
 
+auto emitter::spill_to_temporary(value val, sema::type& type) -> value {
+    const auto slot{builder_.emit_alloca(type)};
+    builder_.emit_store(value{slot, type}, val);
+    return value{slot, type};
+}
+
 auto emitter::emit_lvalue(ast::node_id id) -> value {
     PROFILE_FUNCTION();
     ASSERT(id.is_valid(), "Valid node ID expected in emit_lvalue");
 
     return active_ast()[id].visit(
-        [&](const auto&) -> value { return emit_expression_id(id); },
+        [&](const auto&) -> value {
+            const auto sema_type{active_mod().get_sema_type_opt(id)};
+            ASSERT(sema_type, "LValue expression must have a resolved sema type");
+            return spill_to_temporary(emit_expression_id(id), *sema_type);
+        },
         [&](const ast::identifier_expr& ident) -> value {
             const auto binding{lookup_binding(ident.name)};
             ASSERT(binding, "LValue identifier must be bound in scope");
-            if (binding->const_val && !binding->is_alloca) {
-                // Constant-folded locals have no backing storage and need to be allocated
-                const auto slot{builder_.emit_alloca(binding->type)};
-                builder_.emit_store(slot, *binding->const_val);
-                return value{slot, binding->type};
-            }
-            return value{binding->id, binding->type};
+            if (binding->is_alloca) { return value{binding->id, binding->type}; }
+
+            // A binding with no alloca of its own has no address; spill it into a fresh one
+            const auto unspilled_value{
+                binding->const_val.value_or(value{binding->id, binding->type})};
+            return spill_to_temporary(unspilled_value, binding->type);
         },
         [&](const ast::dot_expr& dot) -> value {
             const auto base_lval{emit_lvalue(dot.object)};

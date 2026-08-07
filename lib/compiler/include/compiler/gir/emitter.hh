@@ -93,6 +93,7 @@ class emitter {
     auto emit_defers_for_scope(usize scope_idx) -> void;
     auto emit_defers_up_to(usize target_depth) -> void;
     auto emit_lvalue(ast::node_id id) -> value;
+    auto spill_to_temporary(value val, sema::type& type) -> value;
 
     auto emit_expression(const ast::expr_handle& expr) -> value {
         return emit_expression_id(*expr);

@@ -857,14 +857,16 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         }
         TRY_RESOLVE(param.explicit_type);
 
-        auto& param_type{*last_type_.take()};
+        gir::const_eval evaluator{ctx_, resolving_};
+        auto&           param_type{evaluator.force_deferred_array(*last_type_.take())};
         param_types[param_idx++] = &param_type;
         resolving_.set_sema_type(param.name, param_type);
         resolve_symbol_info(param.name, symbol_kind::VALUE);
     }
 
     TRY_RESOLVE(fn.explicit_return_type);
-    auto& return_type{*last_type_.take()};
+    gir::const_eval evaluator{ctx_, resolving_};
+    auto&           return_type{evaluator.force_deferred_array(*last_type_.take())};
     ASSERT(!fn_type.is_resolved(), "Valued function must not be resolved");
 
     if (any_param_generic(param_types)) {

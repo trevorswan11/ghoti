@@ -37,7 +37,7 @@ auto type_translator::translate(const sema::type& type) -> llvm::Type* {
         return translate_struct(type.get_data().as<sema::types::struct_t>(), type);
     case sema::type_kind::UNION:
         return translate_union(type.get_data().as<sema::types::union_t>(), type);
-    case sema::type_kind::ENUM: return translate_enum(type.get_data().as<sema::types::enum_t>());
+    case sema::type_kind::ENUM:      return translate_enum(type.get_data().as<sema::types::enum_t>());
     case sema::type_kind::OPAQUE:
     case sema::type_kind::TYPE:
     case sema::type_kind::MODULE:
@@ -58,9 +58,7 @@ auto type_translator::translate_function_type(const sema::types::function& fn)
     param_types.reserve(fn.params.size());
     for (const auto* param : fn.params) {
         auto* p_ty{translate(*param)};
-        if (!p_ty->isVoidTy()) {
-            param_types.emplace_back(p_ty);
-        }
+        if (!p_ty->isVoidTy()) { param_types.emplace_back(p_ty); }
     }
     return llvm::FunctionType::get(ret_ty, param_types, fn.is_variadic);
 }
