@@ -22,7 +22,7 @@ auto builder::emit_instruction(instruction inst) -> instruction& {
     return segment_->append(std::move(inst));
 }
 
-auto builder::emit_alloca(sema::type& type, std::string_view) -> local_id {
+auto builder::emit_alloca(sema::type& type, std::string_view, bool is_const) -> local_id {
     ASSERT(function_, "Cannot emit alloca without an active function");
     const auto slot{function_->next_local_id(local_kind::ALLOCA)};
     emit_instruction({
@@ -30,6 +30,7 @@ auto builder::emit_alloca(sema::type& type, std::string_view) -> local_id {
         .type     = type,
         .result   = slot,
         .operands = {},
+        .is_const = is_const,
     });
     return slot;
 }

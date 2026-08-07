@@ -80,6 +80,11 @@ namespace {
         "Array elements cannot have an incomplete type", error::CYCLIC_DEPENDENCY, location};
 }
 
+[[nodiscard]] constexpr auto array_element_mutability(bool mut_elements) noexcept
+    -> types::mutability_modifiers {
+    return mut_elements ? types::mut::MUTABLE : types::mut::CONSTANT;
+}
+
 } // namespace
 
 auto type_resolver::visit(ast::node_id id, const ast::array_expr& array) -> void {
@@ -95,8 +100,10 @@ auto type_resolver::visit(ast::node_id id, const ast::array_expr& array) -> void
             incomplete_array_item(resolving_.ast.location_of(array.item_explicit_type))));
     }
 
-    last_type_.emplace(
-        ctx_.get_array(types::mut::CONSTANT, array.null_terminated, array.items.size(), item_type));
+    last_type_.emplace(ctx_.get_array(array_element_mutability(array.mut_elements),
+                                      array.null_terminated,
+                                      array.items.size(),
+                                      item_type));
     resolving_.set_sema_type(id, *last_type_);
 }
 
@@ -133,16 +140,20 @@ template <ast::IndexableID ID>
         break;
     }
     case token_type_t::BUILTIN_CONST_CAST: {
-        // Pointer/reference is checked since it is an invariant of the cast
-        auto& expr_type{*get_resolved_call_arg_type(call.arguments[0])};
-        if (expr_type.get_kind() == type_kind::POINTER ||
-            expr_type.get_kind() == type_kind::REFERENCE) {
-            return_type = ctx_.pool.strip_const(expr_type);
+        // Pointer/reference/slice/array is checked since it is an invariant of the cast
+        auto&      expr_type{*get_resolved_call_arg_type(call.arguments[0])};
+        const auto castable_kind{expr_type.get_kind() == type_kind::POINTER ||
+                                 expr_type.get_kind() == type_kind::REFERENCE ||
+                                 expr_type.get_kind() == type_kind::SLICE ||
+                                 expr_type.get_kind() == type_kind::ARRAY};
+        if (castable_kind) {
+            return_type = ctx_.pool.with_const(expr_type, false);
         } else {
-            return make_sema_err(fmt::format("Expected pointer or reference type; found '{}'",
-                                             type_kind_display_name(expr_type.get_kind())),
-                                 error::TYPE_MISMATCH,
-                                 get_call_arg_location(call.arguments[0]));
+            return make_sema_err(
+                fmt::format("Expected pointer, reference, slice, or array type; found '{}'",
+                            type_kind_display_name(expr_type.get_kind())),
+                error::TYPE_MISMATCH,
+                get_call_arg_location(call.arguments[0]));
         }
         break;
     }
@@ -215,8 +226,11 @@ template <ast::IndexableID ID>
     case token_type_t::BUILTIN_SLICE_FROM_PTR: {
         auto& ptr_type{*get_resolved_call_arg_type(call.arguments[0])};
         if (const auto ptr_data{ptr_type.get_data().as_opt<types::pointer>()}) {
-            // The resulting slice isn't null terminated since the pointer gives no guarantee
-            return_type = &ctx_.get_slice(types::mut::CONSTANT, false, ptr_data->underlying);
+            // The resulting slice isn't null terminated since the pointer gives no guarantee,
+            // and mirrors the source pointer's own mutability rather than being const by default
+            const auto mutability{ptr_type.is_constant() ? types::mut::CONSTANT
+                                                         : types::mut::MUTABLE};
+            return_type = &ctx_.get_slice(mutability, false, ptr_data->underlying);
             break;
         }
 
@@ -1116,9 +1130,11 @@ auto type_resolver::visit(ast::node_id id, const ast::index_expr& index) -> void
     }
     auto& access_type{*last_type_.take()};
 
-    // There may be a slice accessor which results in a slice type
+    // There may be a slice accessor which results in a slice type and should mirror parent
     if (access_type.get_data().is<types::slice>()) {
-        last_type_.emplace(ctx_.get_slice(types::mut::CONSTANT, false, single_item_type));
+        const auto mutability{target_type->is_constant() ? types::mut::CONSTANT
+                                                         : types::mut::MUTABLE};
+        last_type_.emplace(ctx_.get_slice(mutability, false, single_item_type));
     } else {
         last_type_.emplace(single_item_type);
     }
@@ -2723,7 +2739,8 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_array_ty
         last_type_.emplace(ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, &array}]);
         last_type_->resolve_if<types::deferred_array>(array, item_type);
     } else {
-        last_type_.emplace(ctx_.get_slice(types::mut::CONSTANT, null_terminated, item_type));
+        last_type_.emplace(ctx_.get_slice(
+            array_element_mutability(array.mut_elements), null_terminated, item_type));
     }
 
     auto& final_type{apply_explicit_modifiers(id, *last_type_.take())};

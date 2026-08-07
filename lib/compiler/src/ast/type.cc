@@ -75,9 +75,14 @@ auto explicit_type::parse(syntax::parser& parser)
     -> stdx::result<explicit_type_id, syntax::diagnostic> {
     // Always check for a modifier and advance past it if present
     PROFILE_FUNCTION();
-    const auto          modifier_token{parser.get_peek_token()};
-    const type_modifier modifier{modifier_token};
-    if (!modifier.is_value()) { parser.advance(); }
+    const auto    modifier_token{parser.get_peek_token()};
+    type_modifier modifier{modifier_token};
+    if (modifier_token.type == syntax::token_type_t::MUT) {
+        parser.advance();
+        modifier = TRY(type_modifier::parse(parser, modifier_token));
+    } else if (!modifier.is_value()) {
+        parser.advance();
+    }
 
     // The array dimension of a type are only present conditionally
     if (parser.peek_token_is(syntax::token_type_t::LBRACKET)) {
@@ -100,10 +105,16 @@ auto explicit_type::parse(syntax::parser& parser)
         }
         TRY(parser.expect_peek(syntax::token_type_t::RBRACKET));
 
+        auto mut_elements{false};
+        if (parser.peek_token_is(syntax::token_type_t::MUT)) {
+            parser.advance();
+            mut_elements = true;
+        }
+
         // Arrays are recursively defined
         const auto inner{TRY(explicit_type::parse(parser))};
         return parser.add_type<explicit_array_type>(
-            modifier_token, modifier, dimension, null_terminated, inner);
+            modifier_token, modifier, dimension, null_terminated, mut_elements, inner);
     }
 
     if (!type_modifier{parser.get_peek_token()}.is_value()) {

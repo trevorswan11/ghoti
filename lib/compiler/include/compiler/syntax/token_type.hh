@@ -160,7 +160,7 @@ enum class token_type_t : u8 {
     EXTERN,
     EXPORT,
     VOLATILE,
-    MUT_VOLATILE,
+    MUT,
     PACKED,
     NORETURN,
     NULLPTR,

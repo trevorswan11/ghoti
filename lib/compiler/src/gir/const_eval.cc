@@ -330,8 +330,9 @@ auto const_eval::resolve_deferred_array(const ast::explicit_array_type& array,
                                         sema::type&                     item_type) -> sema::type& {
     ASSERT(array.dimension.has_value(), "Deferred array type must have a dimension");
     const auto len{eval_type_dim(*array.dimension).value_or(0)};
-    auto&      concrete_array{
-        ctx_.get_array(sema::types::mut::CONSTANT, array.null_terminated, len, item_type)};
+    const auto mutability{array.mut_elements ? sema::types::mut::MUTABLE
+                                             : sema::types::mut::CONSTANT};
+    auto&      concrete_array{ctx_.get_array(mutability, array.null_terminated, len, item_type)};
     return concrete_array;
 }
 

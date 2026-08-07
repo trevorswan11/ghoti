@@ -235,29 +235,19 @@ TEST_CASE("Lexing illegal underscored numbers") {
 }
 
 TEST_CASE("Lexing keywords") {
-    test_lexer("and or pub extern export volatile mut_volatile "
+    test_lexer("and or pub extern export volatile mut "
                "i32 i64 isize u32 u64 usize f32 f64 u8 bool void type test",
                {
-                   {token_type_t::BOOLEAN_AND, "and"},
-                   {token_type_t::BOOLEAN_OR, "or"},
-                   {token_type_t::PUBLIC, "pub"},
-                   {token_type_t::EXTERN, "extern"},
-                   {token_type_t::EXPORT, "export"},
-                   {token_type_t::VOLATILE, "volatile"},
-                   {token_type_t::MUT_VOLATILE, "mut_volatile"},
-                   {token_type_t::I32_TYPE, "i32"},
-                   {token_type_t::I64_TYPE, "i64"},
-                   {token_type_t::ISIZE_TYPE, "isize"},
-                   {token_type_t::U32_TYPE, "u32"},
-                   {token_type_t::U64_TYPE, "u64"},
-                   {token_type_t::USIZE_TYPE, "usize"},
-                   {token_type_t::F32_TYPE, "f32"},
-                   {token_type_t::F64_TYPE, "f64"},
-                   {token_type_t::U8_TYPE, "u8"},
-                   {token_type_t::BOOL_TYPE, "bool"},
-                   {token_type_t::VOID_TYPE, "void"},
-                   {token_type_t::TYPE_TYPE, "type"},
-                   {token_type_t::TEST, "test"},
+                   {token_type_t::BOOLEAN_AND, "and"},  {token_type_t::BOOLEAN_OR, "or"},
+                   {token_type_t::PUBLIC, "pub"},       {token_type_t::EXTERN, "extern"},
+                   {token_type_t::EXPORT, "export"},    {token_type_t::VOLATILE, "volatile"},
+                   {token_type_t::MUT, "mut"},          {token_type_t::I32_TYPE, "i32"},
+                   {token_type_t::I64_TYPE, "i64"},     {token_type_t::ISIZE_TYPE, "isize"},
+                   {token_type_t::U32_TYPE, "u32"},     {token_type_t::U64_TYPE, "u64"},
+                   {token_type_t::USIZE_TYPE, "usize"}, {token_type_t::F32_TYPE, "f32"},
+                   {token_type_t::F64_TYPE, "f64"},     {token_type_t::U8_TYPE, "u8"},
+                   {token_type_t::BOOL_TYPE, "bool"},   {token_type_t::VOID_TYPE, "void"},
+                   {token_type_t::TYPE_TYPE, "type"},   {token_type_t::TEST, "test"},
                });
 }
 

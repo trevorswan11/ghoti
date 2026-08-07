@@ -40,7 +40,8 @@ class builder {
     }
 
     auto emit_instruction(instruction inst) -> instruction&;
-    auto emit_alloca(sema::type& type, std::string_view name = {}) -> local_id;
+    auto emit_alloca(sema::type& type, std::string_view name = {}, bool is_const = false)
+        -> local_id;
     auto emit_load(local_id src, sema::type& type) -> local_id;
     auto emit_load(value src, sema::type& type) -> local_id;
     auto emit_store(local_id dest, value val) -> instruction&;

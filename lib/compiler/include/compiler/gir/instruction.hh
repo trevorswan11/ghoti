@@ -220,6 +220,8 @@ struct instruction {
     stdx::option<segment_id>      false_segment{stdx::none};
     stdx::option<std::string>     callee_name{stdx::none};
     stdx::option<source_location> location{stdx::none};
+    bool                          is_const{false};
+    bool                          is_initializer{false};
 
     [[nodiscard]] auto is_terminator() const noexcept -> bool { return gir::is_terminator(kind); }
     [[nodiscard]] auto has_result() const noexcept -> bool { return result.has_value(); }

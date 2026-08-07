@@ -45,7 +45,7 @@ TEST_CASE("Out-of-place self parameter") {
 
 TEST_CASE("Illegal self parameter modifier") {
     using namespace std::string_view_literals;
-    const auto modifier{GENERATE("volatile"sv, "mut_volatile"sv)};
+    const auto modifier{GENERATE("volatile"sv, "mut volatile"sv)};
 
     helpers::test_parser_fail(
         fmt::format("fn({} self): i32 {{}};", modifier),

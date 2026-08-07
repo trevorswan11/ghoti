@@ -134,7 +134,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                                      local_info{
                                          .type      = inst.type.get(),
                                          .is_alloca = true,
-                                         .is_const  = false,
+                                         .is_const  = inst.is_const,
                                      });
         }
         break;
@@ -644,6 +644,16 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
         }
         break;
     case gir::instruction_kind::GET_ELEMENT_PTR:
+        // The result type carries the container's own mutability for element const correctness
+        if (inst.result && inst.type) {
+            locals_.insert_or_assign(*inst.result,
+                                     local_info{
+                                         .type      = inst.type.get(),
+                                         .is_alloca = false,
+                                         .is_const  = inst.type->is_constant(),
+                                     });
+        }
+        break;
     case gir::instruction_kind::ADDRESS_OF:
     case gir::instruction_kind::DEREF:
     case gir::instruction_kind::INT_FROM_PTR:
@@ -670,7 +680,7 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
         if (auto it{locals_.find(*inst.result)}; it != locals_.end()) {
             const auto val_t{get_operand_type(inst.operands[0])};
             if (it->second.is_alloca) {
-                if (it->second.is_const) {
+                if (it->second.is_const && !inst.is_initializer) {
                     emit_diagnostic("Cannot assign to constant variable",
                                     error::ASSIGNMENT_TO_CONST,
                                     inst.location);
@@ -692,7 +702,7 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
                 const auto ptr_data{it->second.type->get_data().as_opt<types::pointer>()};
                 if (val_t && is_assignable(*val_t, *it->second.type)) {
                     // Storing pointer value into pointer variable or field: p = q
-                    if (it->second.is_const) {
+                    if (it->second.is_const && !inst.is_initializer) {
                         emit_diagnostic("Cannot assign to constant variable",
                                         error::ASSIGNMENT_TO_CONST,
                                         inst.location);
@@ -728,8 +738,8 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
                 return;
             }
 
-            if (it->second.is_const) {
-                emit_diagnostic("Cannot assign to constant variable",
+            if (it->second.is_const && !inst.is_initializer) {
+                emit_diagnostic("Cannot assign to an element of a non-mutable array or slice",
                                 error::ASSIGNMENT_TO_CONST,
                                 inst.location);
                 return;

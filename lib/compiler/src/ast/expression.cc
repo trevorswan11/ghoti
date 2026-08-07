@@ -50,6 +50,13 @@ auto array_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
     }
 
     TRY(parser.expect_peek(syntax::token_type_t::RBRACKET));
+
+    auto mut_elements{false};
+    if (parser.peek_token_is(syntax::token_type_t::MUT)) {
+        parser.advance();
+        mut_elements = true;
+    }
+
     const auto item_type{TRY(explicit_type::parse(parser))};
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
 
@@ -66,7 +73,7 @@ auto array_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
 
     TRY(parser.expect_peek(syntax::token_type_t::RBRACE));
     return parser.add_expr<array_expr>(
-        start_token, size, null_terminated, item_type, std::move(items));
+        start_token, size, null_terminated, mut_elements, item_type, std::move(items));
 }
 
 auto call_expr::parse(syntax::parser& parser, expr_handle function)
@@ -356,8 +363,8 @@ auto function_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, s
     } else {
         // The 'self' parameter can be a value type, ref, or mutable ref
         parser.advance();
-        const auto          modifier_start{parser.get_current_token()};
-        const type_modifier self_modifier{modifier_start};
+        const auto modifier_start{parser.get_current_token()};
+        const auto self_modifier{TRY(type_modifier::parse(parser, modifier_start))};
         if (self_modifier.is_volatile()) {
             return make_syntax_err(
                 "Self parameters cannot be marked volatile; they must be values, refs, or pointers",

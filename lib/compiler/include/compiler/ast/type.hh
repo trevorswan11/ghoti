@@ -20,6 +20,7 @@ namespace ast {
 struct explicit_array_type {
     stdx::option<expr_handle> dimension;
     bool                      null_terminated;
+    bool                      mut_elements;
     explicit_type_id          inner_explicit_type;
 };
 

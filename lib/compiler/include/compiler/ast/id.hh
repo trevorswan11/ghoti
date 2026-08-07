@@ -8,11 +8,15 @@
 #include <magic_enum/magic_enum.hpp>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
+#include <stdx/result.hh>
 #include <stdx/types.hh>
 
 #include "compiler/ast/kind.hh"
+#include "compiler/syntax/error.hh"
 #include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
+
+namespace ghoti::syntax { class parser; } // namespace ghoti::syntax
 
 namespace ghoti::ast {
 
@@ -111,6 +115,10 @@ class type_modifier {
     constexpr explicit type_modifier(modifier underlying) noexcept : underlying_{underlying} {}
     constexpr explicit type_modifier(u64 raw) noexcept : underlying_{static_cast<modifier>(raw)} {}
     explicit type_modifier(const syntax::token_t& tok) noexcept;
+
+    // `current` is the already-positioned modifier candidate token
+    [[nodiscard]] static auto parse(syntax::parser& parser, const syntax::token_t& current)
+        -> stdx::result<type_modifier, syntax::diagnostic>;
 
     [[nodiscard]] constexpr auto get_raw() const noexcept -> modifier { return underlying_; }
 

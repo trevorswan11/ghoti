@@ -53,7 +53,7 @@ constexpr auto ALL_KEYWORDS{string_utils::make_constexpr_map<token_type_t>(keywo
                                                                            keywords::EXTERN,
                                                                            keywords::EXPORT,
                                                                            keywords::VOLATILE,
-                                                                           keywords::MUT_VOLATILE,
+                                                                           keywords::MUT,
                                                                            keywords::PACKED,
                                                                            keywords::NORETURN,
                                                                            keywords::NULLPTR,

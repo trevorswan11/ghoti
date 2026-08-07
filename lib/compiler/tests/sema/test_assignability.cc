@@ -126,9 +126,9 @@ TEST_CASE("Slice and array coercions") {
         ctx->analyzer.get_ctx().get_slice(sema::types::mut::MUTABLE, true, u8_const)};
 
     auto& array_const_5{
-        ctx->analyzer.get_ctx().get_array(sema::types::mut::CONSTANT, false, 5UZ, u8_const)};
+        ctx->analyzer.get_ctx().get_array(sema::types::mut::MUTABLE, false, 5UZ, u8_const)};
     auto& array_null_term_const_6{
-        ctx->analyzer.get_ctx().get_array(sema::types::mut::CONSTANT, true, 6UZ, u8_const)};
+        ctx->analyzer.get_ctx().get_array(sema::types::mut::MUTABLE, true, 6UZ, u8_const)};
 
     SECTION("[]T is assignable to []const T") {
         CHECK(sema::is_assignable(slice_mut, slice_const));
@@ -145,6 +145,28 @@ TEST_CASE("Slice and array coercions") {
         CHECK(sema::is_assignable(array_null_term_const_6, slice_const));
         CHECK(sema::is_assignable(array_null_term_const_6, slice_null_term_const));
         CHECK_FALSE(sema::is_assignable(array_const_5, slice_null_term_const));
+    }
+
+    SECTION("[]mut T is assignable to []T, not the other way around") {
+        auto& slice_mut_top{
+            ctx->analyzer.get_ctx().get_slice(sema::types::mut::MUTABLE, false, u8_mut)};
+        auto& slice_const_top{
+            ctx->analyzer.get_ctx().get_slice(sema::types::mut::CONSTANT, false, u8_mut)};
+        CHECK(sema::is_assignable(slice_mut_top, slice_const_top));
+        CHECK_FALSE(sema::is_assignable(slice_const_top, slice_mut_top));
+    }
+
+    SECTION("[N]mut T decays to []T, not the other way around") {
+        auto& array_mut_top{
+            ctx->analyzer.get_ctx().get_array(sema::types::mut::MUTABLE, false, 5UZ, u8_mut)};
+        auto& array_const_top{
+            ctx->analyzer.get_ctx().get_array(sema::types::mut::CONSTANT, false, 5UZ, u8_mut)};
+        auto& slice_const_top{
+            ctx->analyzer.get_ctx().get_slice(sema::types::mut::CONSTANT, false, u8_mut)};
+        auto& slice_mut_top{
+            ctx->analyzer.get_ctx().get_slice(sema::types::mut::MUTABLE, false, u8_mut)};
+        CHECK(sema::is_assignable(array_mut_top, slice_const_top));
+        CHECK_FALSE(sema::is_assignable(array_const_top, slice_mut_top));
     }
 }
 

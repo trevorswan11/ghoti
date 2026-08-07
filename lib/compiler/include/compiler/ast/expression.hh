@@ -21,6 +21,7 @@ namespace ast {
 struct array_expr {
     stdx::option<expr_handle> size;
     bool                      null_terminated;
+    bool                      mut_elements;
     explicit_type_id          item_explicit_type;
     std::vector<expr_handle>  items;
 

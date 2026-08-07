@@ -181,10 +181,11 @@ TEST_CASE("Builtin function arity mismatch") {
 }
 
 TEST_CASE("Const cast quick type checking") {
-    helpers::test_resolver_fail("const foo := @constCast(1);",
-                                sema::diagnostic{"Expected pointer or reference type; found 'i32'",
-                                                 sema::error::TYPE_MISMATCH,
-                                                 std::pair{0UZ, 24UZ}});
+    helpers::test_resolver_fail(
+        "const foo := @constCast(1);",
+        sema::diagnostic{"Expected pointer, reference, slice, or array type; found 'i32'",
+                         sema::error::TYPE_MISMATCH,
+                         std::pair{0UZ, 24UZ}});
 }
 
 TEST_CASE("Other builtin quick type mismatch") {

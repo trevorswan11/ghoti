@@ -93,13 +93,13 @@ class emitter {
     auto emit_defers_for_scope(usize scope_idx) -> void;
     auto emit_defers_up_to(usize target_depth) -> void;
     auto emit_lvalue(ast::node_id id) -> value;
-    auto spill_to_temporary(value val, sema::type& type) -> value;
+    auto spill_to_temporary(value val, sema::type& type, bool is_const = false) -> value;
 
     auto emit_expression(const ast::expr_handle& expr) -> value {
         return emit_expression_id(*expr);
     }
     auto emit_array(ast::node_id id, const ast::array_expr& array) -> value;
-    auto emit_slice_from_array(value arr_lval, const sema::types::array& arr_data) -> value;
+    auto emit_slice_from_array(value arr_lval, const sema::type& arr_type) -> value;
     auto emit_coerced_expr(ast::expr_handle expr_id, const sema::type& dest_type) -> value;
     auto emit_generic_instantiation(const sema::generic_instantiation_request& req) -> void;
     auto emit_expression_id(ast::node_id id) -> value;

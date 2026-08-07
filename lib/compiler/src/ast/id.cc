@@ -5,8 +5,11 @@
 
 #include <stdx/enum.hh>
 #include <stdx/fixed/enum_map.hh>
+#include <stdx/result.hh>
 
 #include "compiler/ast/kind.hh"
+#include "compiler/syntax/error.hh"
+#include "compiler/syntax/parser.hh"
 #include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
 
@@ -85,12 +88,20 @@ constexpr auto MODIFIERS{stdx::fixed::enum_map<token_type, modifier>::from(
     modifier_mapping{token_type::AND_MUT, modifier::MUT_REF},
     modifier_mapping{token_type::CARET, modifier::PTR},
     modifier_mapping{token_type::CARET_MUT, modifier::MUT_PTR},
-    modifier_mapping{token_type::VOLATILE, modifier::VOLATILE},
-    modifier_mapping{token_type::MUT_VOLATILE, modifier::MUT_VOLATILE})};
+    modifier_mapping{token_type::VOLATILE, modifier::VOLATILE})};
 
 } // namespace
 
 type_modifier::type_modifier(const syntax::token_t& tok) noexcept
     : underlying_{MODIFIERS[tok.type]} {}
+
+auto type_modifier::parse(syntax::parser& parser, const syntax::token_t& current)
+    -> stdx::result<type_modifier, syntax::diagnostic> {
+    if (current.type == syntax::token_type_t::MUT) {
+        TRY(parser.expect_peek(syntax::token_type_t::VOLATILE));
+        return type_modifier{modifier::MUT_VOLATILE};
+    }
+    return type_modifier{current};
+}
 
 } // namespace ghoti::ast

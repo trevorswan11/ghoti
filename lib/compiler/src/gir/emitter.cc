@@ -116,17 +116,20 @@ auto get_decl_linkage(const ast::decl_stmt& decl) noexcept -> gir::linkage {
     return gir::linkage::INTERNAL;
 }
 
+// A tagged union lowers to { tag: i32, payload: [N x i8] } regardless of active variant
+constexpr u64 TAGGED_UNION_PAYLOAD_INDEX{1};
+
 } // namespace
 
-auto emitter::emit_slice_from_array(value arr_lval, const sema::types::array& arr_data) -> value {
+auto emitter::emit_slice_from_array(value arr_lval, const sema::type& arr_type) -> value {
     PROFILE_FUNCTION();
-    auto& ptr_type{ctx_.get_pointer(arr_data.underlying.is_constant() ? sema::types::mut::CONSTANT
-                                                                      : sema::types::mut::MUTABLE,
-                                    arr_data.underlying)};
-    auto& slice_type{ctx_.get_slice(arr_data.underlying.is_constant() ? sema::types::mut::CONSTANT
-                                                                      : sema::types::mut::MUTABLE,
-                                    arr_data.null_terminated,
-                                    arr_data.underlying)};
+    const auto arr_data{arr_type.get_data().as_opt<sema::types::array>()};
+    ASSERT(arr_data, "Array-to-slice decay requires an array sema type");
+
+    const auto mutability{arr_type.is_constant() ? sema::types::mut::CONSTANT
+                                                 : sema::types::mut::MUTABLE};
+    auto&      ptr_type{ctx_.get_pointer(mutability, arr_data->underlying)};
+    auto& slice_type{ctx_.get_slice(mutability, arr_data->null_terminated, arr_data->underlying)};
     auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
 
     const auto slice_slot{builder_.emit_alloca(slice_type)};
@@ -135,12 +138,15 @@ auto emitter::emit_slice_from_array(value arr_lval, const sema::types::array& ar
 
     const auto field0_ptr{builder_.emit_get_element_ptr(
         value{slice_slot, slice_type}, {value{static_cast<u64>(0), usize_type}}, ptr_type)};
-    builder_.emit_store(value{field0_ptr, ptr_type}, value{elem0_ptr, ptr_type});
+    builder_.emit_store(value{field0_ptr, ptr_type}, value{elem0_ptr, ptr_type}).is_initializer =
+        true;
 
     const auto field1_ptr{builder_.emit_get_element_ptr(
         value{slice_slot, slice_type}, {value{static_cast<u64>(1), usize_type}}, usize_type)};
-    builder_.emit_store(value{field1_ptr, usize_type},
-                        value{static_cast<u64>(arr_data.len), usize_type});
+    builder_
+        .emit_store(value{field1_ptr, usize_type},
+                    value{static_cast<u64>(arr_data->len), usize_type})
+        .is_initializer = true;
 
     const auto loaded_slice{builder_.emit_load(value{slice_slot, slice_type}, slice_type)};
     return value{loaded_slice, slice_type};
@@ -150,8 +156,8 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, const sema::type& dest
     PROFILE_FUNCTION();
     if (dest_type.get_kind() == sema::type_kind::SLICE) {
         if (const auto rhs_type{active_mod().get_sema_type_opt(expr_id)}) {
-            if (const auto arr_data{rhs_type->get_data().as_opt<sema::types::array>()}) {
-                return emit_slice_from_array(emit_lvalue(expr_id), *arr_data);
+            if (rhs_type->get_kind() == sema::type_kind::ARRAY) {
+                return emit_slice_from_array(emit_lvalue(expr_id), *rhs_type);
             }
         }
     }
@@ -523,10 +529,10 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         return;
     }
 
-    const auto slot{builder_.emit_alloca(*sema_type, name)};
+    const auto slot{builder_.emit_alloca(*sema_type, name, is_const)};
     if (decl.value) {
         const value val{emit_coerced_expr(*decl.value, *sema_type)};
-        builder_.emit_store(slot, val);
+        builder_.emit_store(slot, val).is_initializer = true;
     }
     scopes_.back().bindings.emplace(name, local_binding{slot, *sema_type, true, stdx::none});
 }
@@ -660,7 +666,7 @@ auto emitter::emit_array(ast::node_id id, const ast::array_expr& arr) -> value {
         const auto elem_ptr{builder_.emit_get_element_ptr(
             value{array_slot, *sema_type}, {value{i++, usize_type}}, elem_type)};
         const auto val{emit_expression(item)};
-        builder_.emit_store(value{elem_ptr, elem_type}, val);
+        builder_.emit_store(value{elem_ptr, elem_type}, val).is_initializer = true;
     }
 
     const auto loaded{builder_.emit_load(value{array_slot, *sema_type}, *sema_type)};
@@ -837,12 +843,12 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                         builder_.emit_get_element_ptr(value{slice_slot, ret_type},
                                                       {value{static_cast<u64>(0), usize_type}},
                                                       ptr_type)};
-                    builder_.emit_store(value{field0, ptr_type}, ptr_val);
+                    builder_.emit_store(value{field0, ptr_type}, ptr_val).is_initializer = true;
                     const auto field1{
                         builder_.emit_get_element_ptr(value{slice_slot, ret_type},
                                                       {value{static_cast<u64>(1), usize_type}},
                                                       usize_type)};
-                    builder_.emit_store(value{field1, usize_type}, len_val);
+                    builder_.emit_store(value{field1, usize_type}, len_val).is_initializer = true;
                     return value{slice_slot, ret_type};
                 }
             }
@@ -1708,9 +1714,9 @@ auto emitter::emit_logical_or(ast::node_id, const ast::binary_expr& binary) -> v
     return value{loaded, bool_type};
 }
 
-auto emitter::spill_to_temporary(value val, sema::type& type) -> value {
-    const auto slot{builder_.emit_alloca(type)};
-    builder_.emit_store(value{slot, type}, val);
+auto emitter::spill_to_temporary(value val, sema::type& type, bool is_const) -> value {
+    const auto slot{builder_.emit_alloca(type, {}, is_const)};
+    builder_.emit_store(value{slot, type}, val).is_initializer = true;
     return value{slot, type};
 }
 
@@ -1729,10 +1735,29 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             ASSERT(binding, "LValue identifier must be bound in scope");
             if (binding->is_alloca) { return value{binding->id, binding->type}; }
 
-            // A binding with no alloca of its own has no address; spill it into a fresh one
+            // A binding with no alloca of its own has no address; spill it into a fresh one.
+            // A binding that has a const_val is a scalar `const`, so the spilled copy stays const.
             const auto unspilled_value{
                 binding->const_val.value_or(value{binding->id, binding->type})};
-            return spill_to_temporary(unspilled_value, binding->type);
+            return spill_to_temporary(
+                unspilled_value, binding->type, binding->const_val.has_value());
+        },
+        [&](const ast::call_expr& call) -> value {
+            const auto fn_token{call.function->get_token_type()};
+            const auto is_transparent_cast{fn_token == syntax::token_type_t::BUILTIN_CONST_CAST ||
+                                           fn_token == syntax::token_type_t::BUILTIN_VOLATILE_CAST};
+            if (is_transparent_cast) {
+                // Akin to a reinterpret cast in c++, same storage, just trust me...
+                if (const auto op_expr{call.arguments[0].as_opt<ast::expr_handle>()}) {
+                    const auto sema_type{active_mod().get_sema_type_opt(id)};
+                    ASSERT(sema_type, "Cast expression must have a resolved sema type");
+                    return value{emit_lvalue(*op_expr).data, *sema_type};
+                }
+            }
+
+            const auto sema_type{active_mod().get_sema_type_opt(id)};
+            ASSERT(sema_type, "LValue expression must have a resolved sema type");
+            return spill_to_temporary(emit_expression_id(id), *sema_type);
         },
         [&](const ast::dot_expr& dot) -> value {
             const auto base_lval{emit_lvalue(dot.object)};
@@ -1755,6 +1780,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
 
             if (const auto ut{obj_type->get_data().as_opt<sema::types::union_t>()}) {
                 if (ut->is_untagged) { return value{base_lval.data, field_type}; }
+                member_idx = TAGGED_UNION_PAYLOAD_INDEX;
             }
 
             const auto field_ptr{builder_.emit_get_element_ptr(
@@ -1815,15 +1841,16 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                 builder_.emit_unreachable();
                 builder_.set_segment(valid_seg);
 
-                const auto elem_ptr{builder_.emit_get_element_ptr(base_lval, {idx_val}, elem_type)};
-                return value{elem_ptr, elem_type};
+                auto& write_elem_type{*ctx_.pool.with_const(elem_type, obj_type->is_constant())};
+                const auto elem_ptr{
+                    builder_.emit_get_element_ptr(base_lval, {idx_val}, write_elem_type)};
+                return value{elem_ptr, write_elem_type};
             } else if (const auto sl_data{obj_type->get_data().as_opt<sema::types::slice>()}) {
                 auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
                 auto& isize_type{ctx_.get_builtin_resolved_type(sema::type_kind::ISIZE)};
                 auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
-                auto& ptr_type{ctx_.get_pointer(sl_data->underlying.is_constant()
-                                                    ? sema::types::mut::CONSTANT
-                                                    : sema::types::mut::MUTABLE,
+                auto& ptr_type{ctx_.get_pointer(obj_type->is_constant() ? sema::types::mut::CONSTANT
+                                                                        : sema::types::mut::MUTABLE,
                                                 sl_data->underlying)};
 
                 const auto ptr_slot{builder_.emit_get_element_ptr(
@@ -1869,9 +1896,10 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                 builder_.emit_unreachable();
                 builder_.set_segment(valid_seg);
 
-                const auto elem_ptr{
-                    builder_.emit_get_element_ptr(value{ptr_val, ptr_type}, {idx_val}, elem_type)};
-                return value{elem_ptr, elem_type};
+                auto& write_elem_type{*ctx_.pool.with_const(elem_type, obj_type->is_constant())};
+                const auto elem_ptr{builder_.emit_get_element_ptr(
+                    value{ptr_val, ptr_type}, {idx_val}, write_elem_type)};
+                return value{elem_ptr, write_elem_type};
             }
 
             const auto elem_ptr{builder_.emit_get_element_ptr(base_lval, {idx_val}, elem_type)};
@@ -2003,6 +2031,33 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
             const auto loaded{builder_.emit_load(value{struct_slot, *sema_type}, *sema_type)};
             return value{loaded, sema_type};
         }
+
+        ASSERT(init.initializers.size() == 1,
+               "Tagged union initializer must set exactly one field");
+        const auto& [accessor, val_expr]{init.initializers[0]};
+        const auto& table{ctx_.registry.get(sema_type->get_symbol_table_idx())};
+        const auto& imp{active_ast().get_as<ast::implicit_access_expr>(*accessor)};
+        const auto& name{active_ast().get_as<ast::identifier_expr>(imp.member).name};
+        const auto  proxy{table.get_proxy_opt(name)};
+        ASSERT(proxy, "Member must exist in union symbol table");
+        const auto [sym, field_idx]{*proxy};
+
+        auto&      i32_type{ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
+        const auto tag_ptr{builder_.emit_get_element_ptr(
+            value{struct_slot, *sema_type}, {value{0ULL, usize_type}}, i32_type)};
+        builder_.emit_store(value{tag_ptr, i32_type}, value{static_cast<i64>(field_idx), i32_type})
+            .is_initializer = true;
+
+        auto&      field_type{active_mod().get_sema_type_opt(*val_expr).value_or(*sema_type)};
+        const auto payload_ptr{
+            builder_.emit_get_element_ptr(value{struct_slot, *sema_type},
+                                          {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}},
+                                          field_type)};
+        const auto val{emit_expression(val_expr)};
+        builder_.emit_store(value{payload_ptr, field_type}, val).is_initializer = true;
+
+        const auto loaded{builder_.emit_load(value{struct_slot, *sema_type}, *sema_type)};
+        return value{loaded, sema_type};
     }
 
     const auto st{sema_type->get_data().as_opt<sema::types::struct_t>()};
@@ -2020,7 +2075,7 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
                                           {value{static_cast<u64>(field_idx), usize_type}},
                                           field_type)};
         const auto val{emit_expression(val_expr)};
-        builder_.emit_store(value{field_ptr, field_type}, val);
+        builder_.emit_store(value{field_ptr, field_type}, val).is_initializer = true;
     }
 
     const auto loaded{builder_.emit_load(value{struct_slot, *sema_type}, *sema_type)};
@@ -2090,6 +2145,11 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
                     builder_.emit_load(value{base_lval.data, field_type}, field_type)};
                 return value{loaded, field_type};
             }
+
+            const auto payload_ptr{builder_.emit_get_element_ptr(
+                base_lval, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, field_type)};
+            const auto loaded{builder_.emit_load(value{payload_ptr, field_type}, field_type)};
+            return value{loaded, field_type};
         }
     }
 

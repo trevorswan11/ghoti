@@ -94,6 +94,17 @@ auto type_pool::strip_volatile(const type& t) -> gsl::not_null<type*> {
     return strip_modifiers(*this, t, types::mut::VOLATILE);
 }
 
+auto type_pool::with_const(const type& t, bool is_const) -> gsl::not_null<type*> {
+    if (t.is_constant() == is_const) { return const_cast<type*>(&t); }
+    if (!is_const) { return strip_modifiers(*this, t, types::mut::CONSTANT); }
+
+    auto key{t.get_key()};
+    key.set_mut(key.get_mut() | types::mut::CONSTANT);
+    auto new_type{(*this)[key]};
+    new_type->resolve_if<type::data_t>(t.get_data());
+    return new_type;
+}
+
 auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {
     if (a == b) { return true; }
     if (a.get_kind() != b.get_kind()) { return false; }
@@ -217,6 +228,7 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
             if (s_src->underlying.is_constant() && !s_dest->underlying.is_constant()) {
                 return false;
             }
+            if (src.is_constant() && !dest.is_constant()) { return false; }
             return is_same_unqualified(s_src->underlying, s_dest->underlying);
         }
         case type_kind::ARRAY: {
@@ -229,6 +241,7 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
             if (a_src->underlying.is_constant() && !a_dest->underlying.is_constant()) {
                 return false;
             }
+            if (src.is_constant() && !dest.is_constant()) { return false; }
             return is_same_unqualified(a_src->underlying, a_dest->underlying);
         }
         default: break;
@@ -242,6 +255,7 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
         if (!a_src || !s_dest) { return false; }
         if (s_dest->null_terminated && !a_src->null_terminated) { return false; }
         if (a_src->underlying.is_constant() && !s_dest->underlying.is_constant()) { return false; }
+        if (src.is_constant() && !dest.is_constant()) { return false; }
         return is_same_unqualified(a_src->underlying, s_dest->underlying);
     }
 
