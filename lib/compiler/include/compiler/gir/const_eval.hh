@@ -5,6 +5,7 @@
 
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
+#include <gsl/span>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
@@ -58,6 +59,9 @@ class const_eval {
   private:
     auto resolve_deferred_array(const ast::explicit_array_type& array, sema::type& item_type)
         -> sema::type&;
+    auto force_deferred_function_params(sema::type& maybe_fn) -> void;
+    auto force_deferred_aggregate_fields(sema::type& maybe_aggregate) -> void;
+    auto force_deferred_array_elements(gsl::span<sema::type*> elements) -> void;
     auto resolve_deferred_call(const ast::call_expr& call) -> sema::type&;
 
     auto eval_node(ast::node_id id) -> stdx::option<const_value>;

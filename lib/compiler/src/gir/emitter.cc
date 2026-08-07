@@ -497,11 +497,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
     const auto is_const{decl.has_modifier(ast::decl_modifiers::CONSTANT) ||
                         decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
 
-    // An aggregate referenced by name more than once (decayed to a slice, indexed, or
-    // address-of'd) must resolve to the same storage each time, so it always gets a real,
-    // stable alloca below -- regardless of const/var, or whether its value happens to be
-    // compile-time constant. Non-aggregate consts (scalars, function references, ...) can
-    // keep the cheaper storage-free bindings handled here instead.
+    // Aggregates need one stable address across every use; only non-aggregates can skip storage.
     const auto sema_kind{sema_type->get_kind()};
     const auto is_aggregate{
         sema_kind == sema::type_kind::ARRAY || sema_kind == sema::type_kind::SLICE ||

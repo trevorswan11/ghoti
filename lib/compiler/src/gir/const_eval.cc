@@ -163,6 +163,8 @@ auto const_eval::resolve_all_deferred_arrays() -> void {
         if (const auto def{type_opt->get_data().as_opt<sema::types::deferred_array>()}) {
             type_opt.emplace(resolve_deferred_array(def->array, def->underlying));
         }
+        force_deferred_function_params(*type_opt);
+        force_deferred_aggregate_fields(*type_opt);
     }
 
     for (auto& type_opt : module_.sema_side_tables.node_types.values) {
@@ -170,6 +172,8 @@ auto const_eval::resolve_all_deferred_arrays() -> void {
         if (const auto def{type_opt->get_data().as_opt<sema::types::deferred_array>()}) {
             type_opt.emplace(resolve_deferred_array(def->array, def->underlying));
         }
+        force_deferred_function_params(*type_opt);
+        force_deferred_aggregate_fields(*type_opt);
     }
 }
 
@@ -296,6 +300,30 @@ auto const_eval::force_deferred_array(sema::type& maybe_deferred) -> sema::type&
     const auto deferred{maybe_deferred.get_data().as_opt<sema::types::deferred_array>()};
     if (!deferred) { return maybe_deferred; }
     return resolve_deferred_array(deferred->array, deferred->underlying);
+}
+
+auto const_eval::force_deferred_array_elements(gsl::span<sema::type*> elements) -> void {
+    for (auto& element : elements) { element = &force_deferred_array(*element); }
+}
+
+auto const_eval::force_deferred_aggregate_fields(sema::type& maybe_aggregate) -> void {
+    if (const auto st{maybe_aggregate.get_data().as_opt<sema::types::struct_t>()}) {
+        force_deferred_array_elements(st->fields);
+        return;
+    }
+    if (const auto ut{maybe_aggregate.get_data().as_opt<sema::types::union_t>()}) {
+        force_deferred_array_elements(ut->fields);
+    }
+}
+
+auto const_eval::force_deferred_function_params(sema::type& maybe_fn) -> void {
+    const auto fn_data{maybe_fn.get_data().as_opt<sema::types::function>()};
+    if (!fn_data) { return; }
+
+    force_deferred_array_elements(fn_data->params);
+    auto& return_type{force_deferred_array(fn_data->return_type)};
+    maybe_fn.resolve<sema::types::function>(
+        fn_data->has_self, fn_data->params, return_type, fn_data->is_variadic);
 }
 
 auto const_eval::resolve_deferred_array(const ast::explicit_array_type& array,
