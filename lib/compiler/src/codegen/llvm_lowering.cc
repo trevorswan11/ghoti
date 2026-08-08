@@ -862,7 +862,6 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             auto* trap_fn{
                 llvm::Intrinsic::getOrInsertDeclaration(llvm_module_.get(), llvm::Intrinsic::trap)};
             builder_.CreateCall(trap_fn, {});
-            builder_.CreateUnreachable();
             return nullptr;
         }
         case syntax::token_type_t::BUILTIN_TARGET_OS: {

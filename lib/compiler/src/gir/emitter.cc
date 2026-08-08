@@ -861,7 +861,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                     panic_args.emplace_back(emit_expression(*expr_h));
                 }
             }
-            builder_.emit_call("@panic", std::move(panic_args), ret_type);
+            builder_.emit_builtin_call("@panic", std::move(panic_args), ret_type);
             builder_.emit_unreachable();
             return value{void_val{}, ret_type};
         }
@@ -1838,6 +1838,8 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                     value{is_in_bounds, bool_type}, valid_seg.get_id(), oob_seg.get_id());
 
                 builder_.set_segment(oob_seg);
+                auto& noreturn_type{ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN)};
+                builder_.emit_builtin_call("@panic", {}, noreturn_type);
                 builder_.emit_unreachable();
                 builder_.set_segment(valid_seg);
 
@@ -1893,6 +1895,8 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                     value{is_in_bounds, bool_type}, valid_seg.get_id(), oob_seg.get_id());
 
                 builder_.set_segment(oob_seg);
+                auto& noreturn_type{ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN)};
+                builder_.emit_builtin_call("@panic", {}, noreturn_type);
                 builder_.emit_unreachable();
                 builder_.set_segment(valid_seg);
 
