@@ -137,4 +137,11 @@ auto type_check_and_verify(std::string_view input, const std::vector<mock_file>&
     return {std::move(ctx), idx};
 }
 
+auto expect_compile_error(std::string_view source) -> ctx_idx_pair {
+    auto [ctx, idx]{helpers::type_check(source)};
+    const auto& diags{UNWRAP(ctx->root_mod.diagnostics.as_opt<sema::diagnostics>())};
+    CHECK_FALSE(diags.empty());
+    return {std::move(ctx), idx};
+}
+
 } // namespace ghoti::tests::helpers

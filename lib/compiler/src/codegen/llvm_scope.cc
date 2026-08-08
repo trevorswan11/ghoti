@@ -17,6 +17,7 @@
 #include <llvm/Support/ManagedStatic.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
+#include <stdx/enum.hh>
 #include <stdx/harness/hooks.hh>
 #include <stdx/utility.hh>
 
@@ -41,7 +42,7 @@ auto llvm_init_warmup() -> void {
     };
 
     for (const auto triple : warmup_triples) {
-        for (const auto level : {codegen::opt_level::O1, codegen::opt_level::O2}) {
+        for (const auto level : stdx::enum_range<codegen::opt_level>()) {
             codegen::target_options opts{.level = level};
             if (!triple.empty()) { opts.triple_str = std::string{triple}; }
             if (auto tm{*codegen::create_target_machine(opts)}) {
@@ -69,41 +70,43 @@ auto llvm_init_warmup() -> void {
 
     {
         for (const auto triple : {""sv, "x86_64-unknown-linux-gnu"sv}) {
-            tempfile                obj_p{"ghoti_warmup.o"};
-            tempfile                exe_p{"ghoti_warmup_exe"};
-            codegen::target_options opts{.level = codegen::opt_level::O2};
-            if (!triple.empty()) { opts.triple_str = std::string{triple}; }
-            if (auto tm_res{codegen::create_target_machine(opts)}) {
-                auto&             tm{*tm_res};
-                llvm::LLVMContext ctx;
-                llvm::Module      mod{"warmup_link", ctx};
-                mod.setDataLayout(tm->createDataLayout());
-                mod.setTargetTriple(tm->getTargetTriple());
-                auto*             ghoti_fn_ty{llvm::FunctionType::get(
-                    llvm::Type::getVoidTy(ctx), {llvm::PointerType::getUnqual(ctx)}, false)};
-                auto*             ghoti_fn{llvm::Function::Create(
-                    ghoti_fn_ty, llvm::Function::ExternalLinkage, "_ghoti_main", mod)};
-                auto*             ghoti_bb{llvm::BasicBlock::Create(ctx, "entry", ghoti_fn)};
-                llvm::IRBuilder<> gbuilder{ghoti_bb};
-                auto*             exit_fn_ty{llvm::FunctionType::get(
-                    llvm::Type::getVoidTy(ctx), {llvm::Type::getInt32Ty(ctx)}, false)};
-                auto*             exit_fn{llvm::Function::Create(
-                    exit_fn_ty, llvm::Function::ExternalLinkage, "exit", mod)};
-                gbuilder.CreateCall(exit_fn, {gbuilder.getInt32(0)});
-                gbuilder.CreateRetVoid();
+            for (const auto level : stdx::enum_range<codegen::opt_level>()) {
+                tempfile                obj_p{"ghoti_warmup.o"};
+                tempfile                exe_p{"ghoti_warmup_exe"};
+                codegen::target_options opts{.level = level};
+                if (!triple.empty()) { opts.triple_str = std::string{triple}; }
+                if (auto tm_res{codegen::create_target_machine(opts)}) {
+                    auto&             tm{*tm_res};
+                    llvm::LLVMContext ctx;
+                    llvm::Module      mod{"warmup_link", ctx};
+                    mod.setDataLayout(tm->createDataLayout());
+                    mod.setTargetTriple(tm->getTargetTriple());
+                    auto*             ghoti_fn_ty{llvm::FunctionType::get(
+                        llvm::Type::getVoidTy(ctx), {llvm::PointerType::getUnqual(ctx)}, false)};
+                    auto*             ghoti_fn{llvm::Function::Create(
+                        ghoti_fn_ty, llvm::Function::ExternalLinkage, "_ghoti_main", mod)};
+                    auto*             ghoti_bb{llvm::BasicBlock::Create(ctx, "entry", ghoti_fn)};
+                    llvm::IRBuilder<> gbuilder{ghoti_bb};
+                    auto*             exit_fn_ty{llvm::FunctionType::get(
+                        llvm::Type::getVoidTy(ctx), {llvm::Type::getInt32Ty(ctx)}, false)};
+                    auto*             exit_fn{llvm::Function::Create(
+                        exit_fn_ty, llvm::Function::ExternalLinkage, "exit", mod)};
+                    gbuilder.CreateCall(exit_fn, {gbuilder.getInt32(0)});
+                    gbuilder.CreateRetVoid();
 
-                auto* fn_ty{llvm::FunctionType::get(
-                    llvm::Type::getInt32Ty(ctx),
-                    {llvm::Type::getInt32Ty(ctx), llvm::PointerType::getUnqual(ctx)},
-                    false)};
-                auto* fn{
-                    llvm::Function::Create(fn_ty, llvm::Function::ExternalLinkage, "main", mod)};
-                llvm::IRBuilder<> builder{llvm::BasicBlock::Create(ctx, "entry", fn)};
-                builder.CreateCall(ghoti_fn, {fn->getArg(1)});
-                builder.CreateRet(builder.getInt32(0));
+                    auto*             fn_ty{llvm::FunctionType::get(
+                        llvm::Type::getInt32Ty(ctx),
+                        {llvm::Type::getInt32Ty(ctx), llvm::PointerType::getUnqual(ctx)},
+                        false)};
+                    auto*             fn{llvm::Function::Create(
+                        fn_ty, llvm::Function::ExternalLinkage, "main", mod)};
+                    llvm::IRBuilder<> builder{llvm::BasicBlock::Create(ctx, "entry", fn)};
+                    builder.CreateCall(ghoti_fn, {fn->getArg(1)});
+                    builder.CreateRet(builder.getInt32(0));
 
-                if (auto res{emit_object_file(mod, *tm, obj_p)}; res.has_value()) {
-                    DISCARD(link_executable(obj_p, exe_p, opts));
+                    if (auto res{emit_object_file(mod, *tm, obj_p)}; res.has_value()) {
+                        DISCARD(link_executable(obj_p, exe_p, opts));
+                    }
                 }
             }
         }

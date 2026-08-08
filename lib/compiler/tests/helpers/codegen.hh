@@ -2,9 +2,11 @@
 
 #include <filesystem>
 #include <string_view>
+#include <vector>
 
 #include <stdx/memory.hh>
 #include <stdx/result.hh>
+#include <stdx/types.hh>
 #include <stdx/utility.hh>
 
 #include "compiler/codegen/error.hh"
@@ -46,5 +48,8 @@ auto emit_static_lib(helpers::sema_test_context&       test_ctx,
                      const codegen::target_options&    target_opts = {},
                      const codegen::optimizer_options& opt_options = {})
     -> stdx::result<void, codegen::diagnostic>;
+
+[[nodiscard]] auto compile_and_run(std::string_view source, const std::vector<mock_file>& imports = {})
+    -> u32;
 
 } // namespace ghoti::tests::helpers

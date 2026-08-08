@@ -2,10 +2,16 @@
 
 #include <filesystem>
 #include <string_view>
+#include <utility>
+#include <vector>
 
+#include <catch2/catch_test_macros.hpp>
+#include <fmt/base.h>
+#include <fmt/format.h>
 #include <lld/Common/CommonLinkerContext.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Type.h>
@@ -25,6 +31,9 @@
 #include "compiler/gir/module.hh"
 #include "compiler/sema/analyzer.hh"
 #include "helpers/sema.hh"
+#include "support/subprocess.hh"
+#include "support/tempfile.hh"
+#include "support/test.hh"
 
 extern "C" {
 auto harness_pre_main(i32, char**) -> void { ghoti::codegen::llvm_init_warmup(); }
@@ -98,6 +107,23 @@ auto emit_static_lib(helpers::sema_test_context&       test_ctx,
     auto gir_mod{TRY(emit_preamble(test_ctx))};
     return test_ctx.analyzer.emit_static_library(
         gir_mod, context, target_opts, opt_options, output_path);
+}
+
+auto compile_and_run(std::string_view source, const std::vector<mock_file>& imports) -> u32 {
+    auto  ctx_idx{type_check_and_verify(source, imports)};
+    auto& test_ctx{*ctx_idx.first};
+
+    llvm::LLVMContext context;
+    const auto extension{codegen::get_default_output_extension(codegen::output_type::EXECUTABLE)};
+    const auto exe_stem{tempfile{"compile_and_run"}.path};
+    tempfile   exe_file{std::in_place, exe_stem.string() + std::string{extension}};
+
+    const auto emitted{emit_executable(test_ctx, context, exe_file.path)};
+    if (!emitted) { fmt::println("{}", emitted.error()); }
+    REQUIRE(emitted);
+
+    const mock_argv args{exe_file.path.string()};
+    return UNWRAP(spawn_child(args));
 }
 
 } // namespace ghoti::tests::helpers
