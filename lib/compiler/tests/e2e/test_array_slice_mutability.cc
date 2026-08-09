@@ -143,8 +143,6 @@ TEST_CASE("Tagged union field with an array type") {
     )") == 7);
 }
 
-// --- []mut T / [N]mut T array-slice mutability ---
-
 TEST_CASE("Mutable slice parameter mutates the caller's array (var)") {
     CHECK(helpers::compile_and_run(R"(
         const bump := fn(arr: []mut i32): void {
