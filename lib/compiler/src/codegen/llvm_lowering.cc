@@ -1,5 +1,6 @@
 #include "compiler/codegen/llvm_lowering.hh"
 
+#include <array>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -385,7 +386,12 @@ auto llvm_lowering::lower_value(const gir::value& val, const sema::type* expecte
             return llvm::ConstantFP::get(ty, f);
         },
         [this](bool b) -> llvm::Value* { return llvm::ConstantInt::getBool(context_, b); },
-        [this](const std::string& str) -> llvm::Value* {
+        [this, &val, expected_type](const std::string& str) -> llvm::Value* {
+            const sema::type* ty{expected_type};
+            if (!ty && val.type) { ty = &*val.type; }
+            if (ty && ty->get_kind() == sema::type_kind::ARRAY) {
+                return llvm::ConstantDataArray::getString(context_, str, true);
+            }
             return builder_.CreateGlobalString(str, "str");
         },
         [this, &val, expected_type](gir::undefined_val) -> llvm::Value* {
@@ -783,11 +789,17 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
                     ->getParamType(static_cast<u32>(args.size()))
                     ->isStructTy()) {
                 if (const auto arr_data{op.type->get_data().as_opt<sema::types::array>()}) {
-                    auto*                       slice_ty{types_.translate_slice_type()};
-                    llvm::Value*                slice_val{llvm::UndefValue::get(slice_ty)};
-                    const std::vector<unsigned> idx0{0};
-                    const std::vector<unsigned> idx1{1};
-                    slice_val = builder_.CreateInsertValue(slice_val, arg_val, idx0);
+                    auto*        slice_ty{types_.translate_slice_type()};
+                    llvm::Value* slice_val{llvm::UndefValue::get(slice_ty)};
+                    llvm::Value* ptr_val{arg_val};
+                    if (!ptr_val->getType()->isPointerTy()) {
+                        auto* tmp{builder_.CreateAlloca(arg_val->getType(), nullptr, "arr.tmp")};
+                        builder_.CreateStore(arg_val, tmp);
+                        ptr_val = tmp;
+                    }
+                    constexpr std::array<u32, 1> idx0{0};
+                    constexpr std::array<u32, 1> idx1{1};
+                    slice_val = builder_.CreateInsertValue(slice_val, ptr_val, idx0);
                     slice_val = builder_.CreateInsertValue(
                         slice_val, builder_.getInt64(static_cast<u64>(arr_data->len)), idx1);
                     arg_val = slice_val;
