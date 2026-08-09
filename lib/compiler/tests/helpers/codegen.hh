@@ -49,7 +49,7 @@ auto emit_static_lib(helpers::sema_test_context&       test_ctx,
                      const codegen::optimizer_options& opt_options = {})
     -> stdx::result<void, codegen::diagnostic>;
 
-[[nodiscard]] auto compile_and_run(std::string_view source, const std::vector<mock_file>& imports = {})
-    -> u32;
+[[nodiscard]] auto compile_and_run(std::string_view              source,
+                                   const std::vector<mock_file>& imports = {}) -> u32;
 
 } // namespace ghoti::tests::helpers

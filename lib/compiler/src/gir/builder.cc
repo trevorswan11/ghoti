@@ -190,7 +190,7 @@ auto builder::emit_call(std::string_view callee, std::vector<value> args, sema::
     return stdx::none;
 }
 
-auto builder::emit_builtin_call(std::string_view callee,
+auto builder::emit_builtin_call(std::string_view   callee,
                                 std::vector<value> args,
                                 sema::type&        return_type) -> stdx::option<local_id> {
     ASSERT(function_, "Cannot emit builtin call instruction without an active function");

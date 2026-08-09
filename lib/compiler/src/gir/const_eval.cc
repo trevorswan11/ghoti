@@ -422,7 +422,9 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
             return const_value{id.get_token_type() == syntax::token_type_t::BOOLEAN_TRUE,
                                ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
         },
-        [&](const ast::string_expr& data) { return const_value{std::string{data.value}}; },
+        [&](const ast::string_expr& data) {
+            return const_value{std::string{data.value}, module_.get_sema_type_opt(id)};
+        },
         [&](ast::void_expr) {
             return const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
         },

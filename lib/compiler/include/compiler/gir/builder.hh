@@ -55,8 +55,9 @@ class builder {
     auto emit_cast(instruction_kind kind, value operand, sema::type& target_type) -> local_id;
     auto emit_call(std::string_view callee, std::vector<value> args, sema::type& return_type)
         -> stdx::option<local_id>;
-    auto emit_builtin_call(std::string_view callee, std::vector<value> args, sema::type& return_type)
-        -> stdx::option<local_id>;
+    auto emit_builtin_call(std::string_view   callee,
+                           std::vector<value> args,
+                           sema::type&        return_type) -> stdx::option<local_id>;
     auto emit_indirect_call(value callee, std::vector<value> args, sema::type& return_type)
         -> stdx::option<local_id>;
     auto emit_return(stdx::option<value> val = stdx::none) -> instruction&;

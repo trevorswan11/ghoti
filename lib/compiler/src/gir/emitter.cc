@@ -684,6 +684,9 @@ auto emitter::emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> 
         return value{binding->id, binding->type};
     }
 
+    // Not a local binding; may be a top-level const/constexpr global, resolvable at compile time
+    if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     return value{undefined_val{}, sema_type};
 }
@@ -1732,6 +1735,14 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
         },
         [&](const ast::identifier_expr& ident) -> value {
             const auto binding{lookup_binding(ident.name)};
+            if (!binding) {
+                // Not a local binding; may be a top-level const/constexpr global.
+                if (const auto cv{const_eval_.try_eval(id)}) {
+                    const auto sema_type{active_mod().get_sema_type_opt(id)};
+                    ASSERT(sema_type, "LValue identifier must have a resolved sema type");
+                    return spill_to_temporary(cv->to_gir_value(), *sema_type, true);
+                }
+            }
             ASSERT(binding, "LValue identifier must be bound in scope");
             if (binding->is_alloca) { return value{binding->id, binding->type}; }
 
