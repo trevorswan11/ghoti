@@ -809,8 +809,9 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     PROFILE_FUNCTION();
 
     // The entire function lives inside of its preallocated scope
-    auto&       fn_type{resolving_.get_sema_type(id)};
-    const scope s{table_stack_, fn_type.get_symbol_table_idx(), table_idx_};
+    auto&                         fn_type{resolving_.get_sema_type(id)};
+    const scope                   s{table_stack_, fn_type.get_symbol_table_idx(), table_idx_};
+    const function_boundary_guard fn_boundary{function_boundaries_, table_stack_.size() - 1};
 
     const auto true_param_size{fn.parameters.size() + (fn.self ? 1 : 0)};
     auto       param_types{ctx_.pool.get_many_unsafe(true_param_size)};
@@ -1047,10 +1048,10 @@ VISITOR_TEMPLATE_INIT(type_resolver, resolve_symbol, symbol&)
 template <ast::IndexableID ID>
 auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> void {
     const auto name{ident.name};
-    auto       symbol_opt{ctx_.registry.lookup(table_stack_, name)};
+    auto       lookup{ctx_.registry.lookup_with_depth(table_stack_, name)};
 
     // Check for an undeclared identifier and poison the ident
-    if (!symbol_opt) {
+    if (!lookup) {
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
                              id,
@@ -1058,7 +1059,21 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
                              error::UNDECLARED_IDENTIFIER,
                              resolving_.ast.location_of(id)));
     }
-    resolve_symbol(id, *symbol_opt);
+
+    // Belongs to an enclosing function's stack frame rather than the module/prelude scope.
+    if (!function_boundaries_.empty() && lookup->depth < function_boundaries_.back() &&
+        lookup->depth >= function_boundaries_.front()) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            fmt::format("'{}' would require an implicit capture of a variable from an "
+                        "enclosing function, which is not yet supported",
+                        name),
+            error::ILLEGAL_IMPLICIT_CAPTURE,
+            resolving_.ast.location_of(id)));
+    }
+
+    resolve_symbol(id, lookup->symbol);
 }
 
 VISITOR_TEMPLATE_INIT(type_resolver, resolve_ident, const ast::identifier_expr&)

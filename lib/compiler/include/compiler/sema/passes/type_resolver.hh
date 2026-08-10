@@ -64,6 +64,7 @@ class type_resolver {
     using scope = symbol_table_stack::scope;
     using named_test_map_t =
         ankerl::unordered_dense::map<std::string_view, ast::handle<ast::node_kind::TEST_STATEMENT>>;
+    using function_boundary_guard = scope_guard<std::vector<usize>>;
 
     // Tracks collected return types within function bodies for auto return type inference
     struct return_tracker {
@@ -288,6 +289,7 @@ class type_resolver {
     symbol_table_stack    table_stack_;
     structural_type_stack user_type_stack_;
     structural_type_stack implicit_type_stack_;
+    std::vector<usize>    function_boundaries_;
 
     named_test_map_t     named_tests_;
     structural_validator struct_validator_;

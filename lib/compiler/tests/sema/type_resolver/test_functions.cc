@@ -199,6 +199,44 @@ TEST_CASE("Self parameters in non-structural types") {
     ctx->check_poisoned<syms::node_t>("foo", idx);
 }
 
+// TODO: Remove these once captures are supported
+TEST_CASE("Implicit capture of an enclosing function's local is rejected") {
+    helpers::test_resolver_fail(
+        "const outer := fn(): void { var offset: i32 = 0; const add := fn(x: i32): i32 { "
+        "return x + offset; }; };",
+        sema::diagnostic{"'offset' would require an implicit capture of a variable from an "
+                         "enclosing function, which is not yet supported",
+                         sema::error::ILLEGAL_IMPLICIT_CAPTURE,
+                         std::pair{0UZ, 91UZ}});
+
+    helpers::test_resolver_fail(
+        "const outer := fn(offset: i32): void { const add := fn(x: i32): i32 { "
+        "return x + offset; }; };",
+        sema::diagnostic{"'offset' would require an implicit capture of a variable from an "
+                         "enclosing function, which is not yet supported",
+                         sema::error::ILLEGAL_IMPLICIT_CAPTURE,
+                         std::pair{0UZ, 81UZ}});
+
+    helpers::test_resolver_fail(
+        "const outer := fn(): void { var offset: i32 = 0; const middle := fn(): void { "
+        "const inner := fn(x: i32): i32 { return x + offset; }; }; };",
+        sema::diagnostic{"'offset' would require an implicit capture of a variable from an "
+                         "enclosing function, which is not yet supported",
+                         sema::error::ILLEGAL_IMPLICIT_CAPTURE,
+                         std::pair{0UZ, 122UZ}});
+}
+
+TEST_CASE("Module-level globals are not implicit captures") {
+    helpers::resolve_and_check(R"(
+        const GLOBAL: i32 = 0;
+        const outer := fn(): void {
+            const add := fn(x: i32): i32 {
+                return x + GLOBAL;
+            };
+        };
+    )");
+}
+
 TEST_CASE("Declared function arity mismatch") {
     auto [ctx, idx]{helpers::test_resolver_fail(
         "const foo := fn(a: i32, b: i32): void {}; const bar := foo(1);",

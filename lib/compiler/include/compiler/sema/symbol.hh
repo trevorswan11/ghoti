@@ -327,6 +327,27 @@ class symbol_table_registry {
         return stdx::none;
     }
 
+    template <typename Self> struct depth_result {
+        stdx::const_dispatch_t<Self, symbol>& symbol;
+        usize                                 depth;
+    };
+
+    // Identical to `lookup`, but also reports the resolving stack depth
+    template <typename Self>
+    [[nodiscard]] auto lookup_with_depth(this Self&&               self,
+                                         const symbol_table_stack& stack,
+                                         std::string_view          name) noexcept
+        -> stdx::option<depth_result<Self>> {
+        usize depth{stack.size()};
+        for (const auto idx : std::views::reverse(stack)) {
+            depth -= 1;
+            if (auto symbol{self.tables_[idx].get_opt(name)}) {
+                return depth_result<Self>{*symbol, depth};
+            }
+        }
+        return stdx::none;
+    }
+
   private:
     tables tables_;
 };
