@@ -179,6 +179,22 @@ auto const_eval::resolve_all_deferred_arrays() -> void {
 
 auto const_eval::resolve_all_deferred_types() -> void { resolve_all_deferred_arrays(); }
 
+namespace {
+
+[[nodiscard]] auto capture_field_align(const sema::types::closure_capture& capture) -> usize {
+    return capture.mode == sema::types::capture_mode::VALUE
+               ? const_eval::type_align_of(*capture.captured_type)
+               : 8UZ;
+}
+
+[[nodiscard]] auto capture_field_size(const sema::types::closure_capture& capture) -> usize {
+    return capture.mode == sema::types::capture_mode::VALUE
+               ? const_eval::type_size_of(*capture.captured_type)
+               : 8UZ;
+}
+
+} // namespace
+
 auto const_eval::type_align_of(const sema::type& type) -> usize {
     switch (type.get_kind()) {
     case sema::type_kind::U8:
@@ -226,6 +242,13 @@ auto const_eval::type_align_of(const sema::type& type) -> usize {
             return type_align_of(en->underlying);
         }
         UNREACHABLE("type_kind::ENUM associated with improper type");
+    case sema::type_kind::CLOSURE:
+        if (const auto cl{type.get_data().as_opt<sema::types::closure_t>()}) {
+            return std::ranges::fold_left(cl->captures | std::views::transform(capture_field_align),
+                                          1UZ,
+                                          [](usize a, usize b) { return std::max(a, b); });
+        }
+        UNREACHABLE("type_kind::CLOSURE associated with improper type");
     default: return 1;
     }
 }
@@ -292,6 +315,22 @@ auto const_eval::type_size_of(const sema::type& type) -> usize {
             return type_size_of(en->underlying);
         }
         UNREACHABLE("type_kind::ENUM associated with improper type");
+    case sema::type_kind::CLOSURE:
+        if (const auto cl{type.get_data().as_opt<sema::types::closure_t>()}) {
+            usize current_offset{0};
+            usize max_align{1};
+            for (const auto& capture : cl->captures) {
+                const auto c_align{capture_field_align(capture)};
+                max_align = std::max(max_align, c_align);
+                if (c_align > 0) {
+                    current_offset = (current_offset + c_align - 1) / c_align * c_align;
+                }
+                current_offset += capture_field_size(capture);
+            }
+            return max_align > 0 ? (current_offset + max_align - 1) / max_align * max_align
+                                 : current_offset;
+        }
+        UNREACHABLE("type_kind::CLOSURE associated with improper type");
     default: return 0;
     }
 }

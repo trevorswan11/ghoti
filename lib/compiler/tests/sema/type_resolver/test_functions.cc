@@ -199,31 +199,28 @@ TEST_CASE("Self parameters in non-structural types") {
     ctx->check_poisoned<syms::node_t>("foo", idx);
 }
 
-// TODO: Remove these once captures are supported
-TEST_CASE("Implicit capture of an enclosing function's local is rejected") {
+// TODO: Remove once GIR emission/codegen understand closures (milestone 3)
+TEST_CASE("A capturing closure is rejected as a whole, once fully typed") {
+    const auto expected_diag = [](usize col) -> sema::diagnostic {
+        return {"Closures are not yet supported past type-resolving",
+                sema::error::ILLEGAL_IMPLICIT_CAPTURE,
+                std::pair{0UZ, col}};
+    };
+
     helpers::test_resolver_fail(
         "const outer := fn(): void { var offset: i32 = 0; const add := fn(x: i32): i32 { "
         "return x + offset; }; };",
-        sema::diagnostic{"'offset' would require an implicit capture of a variable from an "
-                         "enclosing function, which is not yet supported",
-                         sema::error::ILLEGAL_IMPLICIT_CAPTURE,
-                         std::pair{0UZ, 91UZ}});
+        expected_diag(62UZ));
 
     helpers::test_resolver_fail(
         "const outer := fn(offset: i32): void { const add := fn(x: i32): i32 { "
         "return x + offset; }; };",
-        sema::diagnostic{"'offset' would require an implicit capture of a variable from an "
-                         "enclosing function, which is not yet supported",
-                         sema::error::ILLEGAL_IMPLICIT_CAPTURE,
-                         std::pair{0UZ, 81UZ}});
+        expected_diag(52UZ));
 
     helpers::test_resolver_fail(
         "const outer := fn(): void { var offset: i32 = 0; const middle := fn(): void { "
         "const inner := fn(x: i32): i32 { return x + offset; }; }; };",
-        sema::diagnostic{"'offset' would require an implicit capture of a variable from an "
-                         "enclosing function, which is not yet supported",
-                         sema::error::ILLEGAL_IMPLICIT_CAPTURE,
-                         std::pair{0UZ, 122UZ}});
+        expected_diag(93UZ));
 }
 
 TEST_CASE("Module-level globals are not implicit captures") {

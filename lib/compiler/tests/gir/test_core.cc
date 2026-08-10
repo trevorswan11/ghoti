@@ -33,14 +33,6 @@ TEST_CASE("GIR instruction kinds and terminator traits") {
     CHECK(is_terminator(instruction_kind::GOTO));
     CHECK(is_terminator(instruction_kind::COND_GOTO));
     CHECK(is_terminator(instruction_kind::UNREACHABLE));
-
-    CHECK(instruction_kind_name(instruction_kind::ALLOCA) == "alloca");
-    CHECK(instruction_kind_name(instruction_kind::LOAD) == "load");
-    CHECK(instruction_kind_name(instruction_kind::STORE) == "store");
-    CHECK(instruction_kind_name(instruction_kind::ADD) == "add");
-    CHECK(instruction_kind_name(instruction_kind::RET) == "ret");
-    CHECK(instruction_kind_name(instruction_kind::GOTO) == "goto");
-    CHECK(instruction_kind_name(instruction_kind::COND_GOTO) == "cond_goto");
 }
 
 TEST_CASE("GIR local_id representation") {

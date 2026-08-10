@@ -20,7 +20,6 @@
 
 #include "compiler/sema/type.hh"
 #include "support/diagnostic.hh"
-#include "support/string_utils.hh"
 
 namespace ghoti::gir {
 
@@ -79,24 +78,7 @@ enum class instruction_kind : u8 {
     UNREACHABLE,
 };
 
-namespace detail {
-
-consteval auto make_instruction_kind_names() noexcept {
-    stdx::fixed::enum_map<instruction_kind, string_utils::lowercase_str<32>> map{};
-    for (const auto kind : stdx::enum_range<instruction_kind>()) {
-        map[kind] = string_utils::lowercase_str<32>{magic_enum::enum_name(kind)};
-    }
-    return map;
-}
-
-inline constexpr auto INSTRUCTION_KIND_NAMES{make_instruction_kind_names()};
-
-} // namespace detail
-
-[[nodiscard]] constexpr auto instruction_kind_name(instruction_kind kind) noexcept
-    -> std::string_view {
-    return detail::INSTRUCTION_KIND_NAMES[kind].view();
-}
+[[nodiscard]] auto instruction_kind_name(instruction_kind kind) noexcept -> std::string_view;
 
 [[nodiscard]] constexpr auto is_terminator(instruction_kind kind) noexcept -> bool {
     switch (kind) {

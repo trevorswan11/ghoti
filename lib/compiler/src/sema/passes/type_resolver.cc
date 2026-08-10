@@ -34,6 +34,7 @@
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
+#include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
@@ -420,7 +421,8 @@ namespace {
     case type_kind::STRUCT:
     case type_kind::UNION:
     case type_kind::ENUM:
-        // Struct/union/enum declaration have unique symbol tables per type so this is safe
+    case type_kind::CLOSURE:
+        // Aggregate declarations have unique symbol tables per type so this is safe
         if (t.has_symbol_table_idx()) {
             return fmt::format(
                 "{}{}", type_kind_display_name(t.get_kind()), t.get_symbol_table_idx());
@@ -904,6 +906,14 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     fn_type.resolve<types::function>(
         fn.self.has_value(), param_types, deduced_return_type, fn.variadic);
     if (is_auto_return) { resolving_.set_sema_type(fn.explicit_return_type, deduced_return_type); }
+
+    if (!resolving_.get_captures(id).empty()) {
+        auto& closure_type{attach_closure_type(id, fn_type)};
+        ctx_.diags.emplace_back("Closures are not yet supported past type-resolving",
+                                error::ILLEGAL_IMPLICIT_CAPTURE,
+                                resolving_.ast.location_of(id));
+        return last_type_.emplace(closure_type);
+    }
     last_type_.emplace(fn_type);
 }
 
@@ -960,49 +970,78 @@ namespace {
 
 } // namespace
 
+auto type_resolver::get_resolved_symbol_type(symbol::data_t& symbol_data) -> type& {
+    return symbol_data.visit(
+        [](symbols::builtin& builtin) -> type& { return builtin.get_type(); },
+        [this](symbols::label& label) -> type& {
+            const auto defn{label.get_definition()};
+            ASSERT(resolving_.has_sema_type(defn), "Resolved node has no type");
+            return resolving_.get_sema_type(defn);
+        },
+        [this](auto& sym) -> type& {
+            ASSERT(resolving_.has_sema_type(sym), "Directly indexable symbol was never typed");
+            return resolving_.get_sema_type(sym);
+        },
+        [this](HasBothNameAndType auto& sym) -> type& {
+            ASSERT(resolving_.has_sema_type(sym.name), "Symbol was never typed");
+            auto& type{resolving_.get_sema_type(sym.name)};
+            if (const auto explicit_opt{resolving_.get_sema_type_opt(sym.explicit_type)}) {
+                const auto exp_kind{explicit_opt->get_kind()};
+                ASSERT(type == *explicit_opt || exp_kind == type_kind::AUTO ||
+                           exp_kind == type_kind::TYPE || is_generic_type(*explicit_opt) ||
+                           is_assignable(type, *explicit_opt) || is_assignable(*explicit_opt, type),
+                       "Symbol was resolved with mismatched type");
+            }
+            return type;
+        },
+        [this](HasNameOnly auto& sym) -> type& {
+            ASSERT(resolving_.has_sema_type(sym.name), "Name-only sym was never typed");
+            return resolving_.get_sema_type(sym.name);
+        },
+        [this](symbols::for_loop_capture& capture) -> type& {
+            ASSERT(capture.payload.is<ast::identifier_expr>(), "Capture payload must be an ident");
+            ASSERT(resolving_.has_sema_type(capture.payload), "For loop capture was never typed");
+            return resolving_.get_sema_type(capture.payload);
+        });
+}
+
+auto type_resolver::infer_capture_mode(capture_usage usage, const type& captured_type) noexcept
+    -> types::capture_mode {
+    if (usage == capture_usage::MUTATED) { return types::capture_mode::MUT_REF; }
+
+    const auto kind{captured_type.get_kind()};
+    const auto by_value{is_numeric(kind) || kind == type_kind::BOOL || kind == type_kind::POINTER};
+    return by_value ? types::capture_mode::VALUE : types::capture_mode::REF;
+}
+
+auto type_resolver::attach_closure_type(ast::node_id fn_id, type& fn_type) -> type& {
+    const auto captures{resolving_.get_captures(fn_id)};
+    ASSERT(!captures.empty(), "attach_closure_type called with no captures");
+
+    auto  capture_span{ctx_.arena.make_span<types::closure_capture>(captures.size())};
+    usize i{0};
+    for (const auto& capture : captures) {
+        auto lookup{ctx_.registry.lookup(table_stack_, capture.name)};
+        ASSERT(lookup, "Recorded capture name failed to re-resolve in its enclosing scope");
+        auto& captured_type{get_resolved_symbol_type(lookup->get_data())};
+        capture_span[i++] = types::closure_capture{
+            capture.name, &captured_type, infer_capture_mode(capture.usage, captured_type)};
+    }
+
+    const auto idx{fn_type.get_symbol_table_idx()};
+    auto*      closure_type{ctx_.pool[{type_kind::CLOSURE, types::mut::CONSTANT, idx}].get()};
+    closure_type->set_symbol_table_idx(idx);
+    closure_type->resolve<types::closure_t>(capture_span, fn_type);
+    resolving_.set_sema_type(fn_id, *closure_type);
+    return *closure_type;
+}
+
 template <ast::IndexableID ID> auto type_resolver::resolve_symbol(ID id, symbol& sym) -> void {
     auto& symbol_data{sym.get_data()};
     switch (sym.get_status()) {
     case symbol_status::RESOLVED:
         // Identifier handles are not unique in the tree, but their symbol can be used to find root
-        resolving_.set_sema_type(
-            id,
-            symbol_data.visit(
-                [](symbols::builtin& builtin) -> type& { return builtin.get_type(); },
-                [this](symbols::label& label) -> type& {
-                    const auto defn{label.get_definition()};
-                    ASSERT(resolving_.has_sema_type(defn), "Resolved node has no type");
-                    return resolving_.get_sema_type(defn);
-                },
-                [this](auto& sym) -> type& {
-                    ASSERT(resolving_.has_sema_type(sym),
-                           "Directly indexable symbol was never typed");
-                    return resolving_.get_sema_type(sym);
-                },
-                [this](HasBothNameAndType auto& sym) -> type& {
-                    ASSERT(resolving_.has_sema_type(sym.name), "Symbol was never typed");
-                    auto& type{resolving_.get_sema_type(sym.name)};
-                    if (const auto explicit_opt{resolving_.get_sema_type_opt(sym.explicit_type)}) {
-                        const auto exp_kind{explicit_opt->get_kind()};
-                        ASSERT(type == *explicit_opt || exp_kind == type_kind::AUTO ||
-                                   exp_kind == type_kind::TYPE || is_generic_type(*explicit_opt) ||
-                                   is_assignable(type, *explicit_opt) ||
-                                   is_assignable(*explicit_opt, type),
-                               "Symbol was resolved with mismatched type");
-                    }
-                    return type;
-                },
-                [this](HasNameOnly auto& sym) -> type& {
-                    ASSERT(resolving_.has_sema_type(sym.name), "Name-only sym was never typed");
-                    return resolving_.get_sema_type(sym.name);
-                },
-                [this](symbols::for_loop_capture& capture) -> type& {
-                    ASSERT(capture.payload.is<ast::identifier_expr>(),
-                           "Capture payload must be an ident");
-                    ASSERT(resolving_.has_sema_type(capture.payload),
-                           "For loop capture was never typed");
-                    return resolving_.get_sema_type(capture.payload);
-                }));
+        resolving_.set_sema_type(id, get_resolved_symbol_type(symbol_data));
         break;
     case symbol_status::RESOLVING:
         if (const auto forwarded_type{forward_type(resolving_, stdx::none, sym)}) {
@@ -1061,20 +1100,16 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
                              resolving_.ast.location_of(id)));
     }
 
-    // Belongs to an enclosing function's stack frame rather than the module/prelude scope.
+    // Belongs to an enclosing function's stack frame rather than the module/prelude scope: this is
+    // an implicit closure capture. Recorded for `attach_closure_type` to consume once the whole
+    // body finishes resolving; the identifier itself still resolves normally to the captured
+    // variable's real type (closures are rejected as a whole once fully typed, not per-reference -
+    // see the capture-list check at the end of `visit(function_expr)`).
     if (!function_boundaries_.empty() && lookup->depth < function_boundaries_.back() &&
         lookup->depth >= function_boundaries_.front()) {
         resolving_.add_capture(open_function_nodes_.back(),
                                name,
                                in_mutating_context_ ? capture_usage::MUTATED : capture_usage::READ);
-        return last_type_.emplace(ctx_.poison_node(
-            resolving_,
-            id,
-            fmt::format("'{}' would require an implicit capture of a variable from an "
-                        "enclosing function, which is not yet supported",
-                        name),
-            error::ILLEGAL_IMPLICIT_CAPTURE,
-            resolving_.ast.location_of(id)));
     }
 
     resolve_symbol(id, lookup->symbol);

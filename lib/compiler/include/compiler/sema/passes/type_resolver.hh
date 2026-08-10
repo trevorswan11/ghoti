@@ -26,6 +26,7 @@
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
+#include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "support/diagnostic.hh"
@@ -178,6 +179,15 @@ class type_resolver {
 
     template <ast::IndexableID ID> auto resolve_symbol(ID, symbol&) -> void;
     template <ast::IndexableID ID> auto resolve_ident(ID, const ast::identifier_expr&) -> void;
+
+    [[nodiscard]] auto get_resolved_symbol_type(symbol::data_t& symbol_data) -> type&;
+
+    // Infers how a closure should store one free variable, given how it's used in the body
+    [[nodiscard]] auto infer_capture_mode(capture_usage usage, const type& captured_type) noexcept
+        -> types::capture_mode;
+
+    // Builds and attaches a `types::closure_t` for a function_expr with a non-empty capture list
+    auto attach_closure_type(ast::node_id fn_id, type& fn_type) -> type&;
 
     auto visit(ast::node_id, const ast::identifier_expr&) -> void;
     auto visit(ast::node_id, const ast::if_expr&) -> void;

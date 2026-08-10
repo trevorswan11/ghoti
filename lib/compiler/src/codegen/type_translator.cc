@@ -37,7 +37,9 @@ auto type_translator::translate(const sema::type& type) -> llvm::Type* {
         return translate_struct(type.get_data().as<sema::types::struct_t>(), type);
     case sema::type_kind::UNION:
         return translate_union(type.get_data().as<sema::types::union_t>(), type);
-    case sema::type_kind::ENUM:      return translate_enum(type.get_data().as<sema::types::enum_t>());
+    case sema::type_kind::ENUM: return translate_enum(type.get_data().as<sema::types::enum_t>());
+    case sema::type_kind::CLOSURE:
+        UNREACHABLE("Closure codegen is not implemented yet");
     case sema::type_kind::OPAQUE:
     case sema::type_kind::TYPE:
     case sema::type_kind::MODULE:

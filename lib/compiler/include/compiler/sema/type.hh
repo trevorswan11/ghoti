@@ -47,6 +47,7 @@ enum class type_kind : u8 {
     STRUCT,
     UNION,
     FUNCTION,
+    CLOSURE,
     LABEL,
     BLOCK,
     MATCH_ARM,
@@ -215,6 +216,24 @@ struct function {
     bool             is_variadic{false};
 };
 
+// How a closure stores one of its captured free variables in its environment
+enum class capture_mode : u8 {
+    VALUE,   // `T`: Copyable  and never mutated by the closure body
+    REF,     // `&T`: an aggregate that the closure body only ever reads
+    MUT_REF, // `&mut T`: the closure body assigns to it or takes `&mut`/`^mut` of it
+};
+
+struct closure_capture {
+    std::string_view name;
+    type*            captured_type;
+    capture_mode     mode;
+};
+
+struct closure_t {
+    gsl::span<closure_capture> captures;
+    type&                      signature;
+};
+
 struct module {
     mod::module& imported;
 };
@@ -333,6 +352,7 @@ class type {
                                  types::struct_t,
                                  types::module,
                                  types::function,
+                                 types::closure_t,
                                  types::builtin_function,
                                  types::meta_type,
                                  types::deferred_call,

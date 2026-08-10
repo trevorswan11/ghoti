@@ -2,11 +2,16 @@
 
 #include <ranges>
 #include <string_view>
+#include <utility>
 
 #include <gsl/pointers>
 #include <gsl/span>
+#include <magic_enum/magic_enum.hpp>
+#include <stdx/enum.hh>
 #include <stdx/fixed/enum_map.hh>
 #include <stdx/types.hh>
+
+#include "support/string_utils.hh"
 
 namespace ghoti::sema {
 
@@ -14,37 +19,15 @@ namespace {
 
 using type_mapping = std::pair<type_kind, std::string_view>;
 
-constexpr auto TYPE_KIND_NAMES{stdx::fixed::enum_map<type_kind, std::string_view>::from(
-    {},
-    type_mapping{type_kind::POISON, "poison"},
-    type_mapping{type_kind::I32, "i32"},
-    type_mapping{type_kind::I64, "i64"},
-    type_mapping{type_kind::ISIZE, "isize"},
-    type_mapping{type_kind::U32, "u32"},
-    type_mapping{type_kind::U64, "u64"},
-    type_mapping{type_kind::USIZE, "usize"},
-    type_mapping{type_kind::U8, "u8"},
-    type_mapping{type_kind::BOOL, "bool"},
-    type_mapping{type_kind::F32, "f32"},
-    type_mapping{type_kind::F64, "f64"},
-    type_mapping{type_kind::VOID_, "void"},
-    type_mapping{type_kind::UNDEFINED, "undefined"},
-    type_mapping{type_kind::TYPE, "type"},
-    type_mapping{type_kind::SLICE, "slice"},
-    type_mapping{type_kind::ARRAY, "array"},
-    type_mapping{type_kind::POINTER, "pointer"},
-    type_mapping{type_kind::REFERENCE, "reference"},
-    type_mapping{type_kind::ENUM, "enum"},
-    type_mapping{type_kind::STRUCT, "struct"},
-    type_mapping{type_kind::UNION, "union"},
-    type_mapping{type_kind::FUNCTION, "function"},
-    type_mapping{type_kind::LABEL, "label"},
-    type_mapping{type_kind::BLOCK, "block"},
-    type_mapping{type_kind::MATCH_ARM, "match arm"},
-    type_mapping{type_kind::MODULE, "module"},
-    type_mapping{type_kind::AUTO, "auto"},
-    type_mapping{type_kind::OPAQUE, "opaque"},
-    type_mapping{type_kind::NORETURN, "noreturn"})};
+constexpr auto TYPE_KIND_NAMES{[] {
+    stdx::fixed::enum_map<type_kind, string_utils::lowercase_str<32>> map{};
+    for (const auto kind : stdx::enum_range<type_kind>()) {
+        map[kind] = string_utils::lowercase_str<32>{magic_enum::enum_name(kind)};
+    }
+    map[type_kind::VOID_]     = string_utils::lowercase_str<32>{"void"};
+    map[type_kind::MATCH_ARM] = string_utils::lowercase_str<32>{"match arm"};
+    return map;
+}()};
 
 } // namespace
 
@@ -120,7 +103,8 @@ auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {
     case type_kind::POISON:    return true;
     case type_kind::STRUCT:
     case type_kind::UNION:
-    case type_kind::ENUM:      return a.get_symbol_table_idx_opt() == b.get_symbol_table_idx_opt();
+    case type_kind::ENUM:
+    case type_kind::CLOSURE:   return a.get_symbol_table_idx_opt() == b.get_symbol_table_idx_opt();
     case type_kind::POINTER:   {
         const auto p_a{a.get_data().as_opt<types::pointer>()};
         const auto p_b{b.get_data().as_opt<types::pointer>()};
@@ -193,6 +177,7 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
         case type_kind::ENUM:
         case type_kind::TYPE:
         case type_kind::FUNCTION:
+        case type_kind::CLOSURE:
             return is_same_unqualified(src, dest);
             // ^S to ^T must be const correct
         case type_kind::POINTER: {
