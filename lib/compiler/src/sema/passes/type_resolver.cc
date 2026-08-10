@@ -812,6 +812,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     auto&                         fn_type{resolving_.get_sema_type(id)};
     const scope                   s{table_stack_, fn_type.get_symbol_table_idx(), table_idx_};
     const function_boundary_guard fn_boundary{function_boundaries_, table_stack_.size() - 1};
+    const open_function_guard     fn_node{open_function_nodes_, id};
 
     const auto true_param_size{fn.parameters.size() + (fn.self ? 1 : 0)};
     auto       param_types{ctx_.pool.get_many_unsafe(true_param_size)};
@@ -1063,6 +1064,9 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
     // Belongs to an enclosing function's stack frame rather than the module/prelude scope.
     if (!function_boundaries_.empty() && lookup->depth < function_boundaries_.back() &&
         lookup->depth >= function_boundaries_.front()) {
+        resolving_.add_capture(open_function_nodes_.back(),
+                               name,
+                               in_mutating_context_ ? capture_usage::MUTATED : capture_usage::READ);
         return last_type_.emplace(ctx_.poison_node(
             resolving_,
             id,
@@ -1172,7 +1176,10 @@ auto type_resolver::visit(ast::node_id id, const ast::infinite_loop_expr& loop) 
 
 auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -> void {
     PROFILE_FUNCTION();
-    TRY_RESOLVE(assign.lhs);
+    {
+        const mutating_context_guard g{in_mutating_context_};
+        TRY_RESOLVE(assign.lhs);
+    }
     auto& lhs_type{*last_type_.take()};
     {
         const structural_guard g{implicit_type_stack_, lhs_type};
@@ -1905,7 +1912,11 @@ namespace {
 
 auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> void {
     PROFILE_FUNCTION();
-    TRY_RESOLVE(ref.rhs);
+    {
+        const mutating_context_guard g{in_mutating_context_,
+                                       ref_addr_of_is_mutable(id) == types::mut::MUTABLE};
+        TRY_RESOLVE(ref.rhs);
+    }
     auto& rhs_type{*last_type_.take()};
 
     auto& new_type{ctx_.get_reference(ref_addr_of_is_mutable(id), rhs_type)};
@@ -1917,7 +1928,11 @@ auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> vo
 
 auto type_resolver::visit(ast::node_id id, const ast::address_of_expr& adr_of) -> void {
     PROFILE_FUNCTION();
-    TRY_RESOLVE(adr_of.rhs);
+    {
+        const mutating_context_guard g{in_mutating_context_,
+                                       ref_addr_of_is_mutable(id) == types::mut::MUTABLE};
+        TRY_RESOLVE(adr_of.rhs);
+    }
     auto& rhs_type{*last_type_.take()};
 
     auto& new_type{ctx_.get_pointer(ref_addr_of_is_mutable(id), rhs_type)};

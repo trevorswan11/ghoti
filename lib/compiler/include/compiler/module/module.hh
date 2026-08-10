@@ -11,6 +11,7 @@
 
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
+#include <gsl/span>
 #include <stdx/hash.hh>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
@@ -21,6 +22,7 @@
 
 #include "compiler/ast/ast.hh"
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/ast/traits.hh"
 #include "compiler/module/error.hh"
 #include "compiler/module/source_loader.hh"
@@ -182,6 +184,24 @@ struct module {
 
     auto set_sema_type(const ast::match_expr::arm& arm, sema::type& type) noexcept -> void {
         sema_side_tables.match_arm_types[arm.pattern].emplace(type);
+    }
+
+    // Records that `function_id` implicitly captures `name` merging with any existing entry
+    auto add_capture(ast::node_id function_id, std::string_view name, sema::capture_usage usage)
+        -> void {
+        auto& captures{sema_side_tables.function_captures[function_id]};
+        for (auto& capture : captures) {
+            if (capture.name == name) {
+                if (usage == sema::capture_usage::MUTATED) { capture.usage = usage; }
+                return;
+            }
+        }
+        captures.emplace_back(sema::capture_info{name, usage});
+    }
+
+    [[nodiscard]] auto get_captures(ast::node_id function_id) const noexcept
+        -> gsl::span<const sema::capture_info> {
+        return sema_side_tables.function_captures[function_id];
     }
 };
 

@@ -1,16 +1,17 @@
 #pragma once
 
 #include <concepts>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
+#include <stdx/types.hh>
 
 #include "compiler/ast/ast.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/ast/traits.hh"
-
-#include <string>
 
 namespace ghoti::sema {
 
@@ -33,6 +34,19 @@ template <ast::IndexableID ID, typename T> struct side_table {
 
 class type;
 
+enum class capture_usage : u8 {
+    READ,
+    MUTATED,
+};
+
+struct capture_info {
+    std::string_view name;
+    capture_usage    usage;
+};
+
+// Empty for any function_expr that captures nothing
+using capture_list = std::vector<capture_info>;
+
 struct side_tables {
     detail::side_table<ast::node_id, stdx::option<sema::type&>>          node_types;
     detail::side_table<ast::explicit_type_id, stdx::option<sema::type&>> explicit_types;
@@ -43,12 +57,16 @@ struct side_tables {
     // Call expression to monomorphized generic symbol name
     detail::side_table<ast::node_id, stdx::option<std::string>> generic_call_targets;
 
+    // function_expr node id to the free variables it implicitly captures, see `capture_list`
+    detail::side_table<ast::node_id, capture_list> function_captures;
+
     // Allocates `size` slots in all backing vectors
     constexpr auto resize(const ast::AST::data_pool_sizes& sizes) -> void {
         node_types.values.resize(sizes.nodes_size);
         explicit_types.values.resize(sizes.types_size);
         match_arm_types.values.resize(sizes.nodes_size);
         generic_call_targets.values.resize(sizes.nodes_size);
+        function_captures.values.resize(sizes.nodes_size);
     }
 };
 

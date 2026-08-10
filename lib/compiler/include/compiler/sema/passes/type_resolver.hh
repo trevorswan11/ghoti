@@ -65,6 +65,22 @@ class type_resolver {
     using named_test_map_t =
         ankerl::unordered_dense::map<std::string_view, ast::handle<ast::node_kind::TEST_STATEMENT>>;
     using function_boundary_guard = scope_guard<std::vector<usize>>;
+    using open_function_guard     = scope_guard<std::vector<ast::node_id>>;
+
+    // Sets the flag to the provided value and resets it on destruction
+    class mutating_context_guard {
+      public:
+        explicit mutating_context_guard(bool& flag, bool value = true) noexcept
+            : flag_{flag}, prev_{flag} {
+            flag_ = value;
+        }
+        ~mutating_context_guard() noexcept { flag_ = prev_; }
+        MAKE_PINNED(mutating_context_guard);
+
+      private:
+        bool& flag_;
+        bool  prev_;
+    };
 
     // Tracks collected return types within function bodies for auto return type inference
     struct return_tracker {
@@ -284,12 +300,15 @@ class type_resolver {
     }
 
   private:
-    mod::module&          resolving_;
-    usize                 table_idx_;
-    symbol_table_stack    table_stack_;
-    structural_type_stack user_type_stack_;
-    structural_type_stack implicit_type_stack_;
-    std::vector<usize>    function_boundaries_;
+    mod::module&              resolving_;
+    usize                     table_idx_;
+    symbol_table_stack        table_stack_;
+    structural_type_stack     user_type_stack_;
+    structural_type_stack     implicit_type_stack_;
+    std::vector<usize>        function_boundaries_;
+    std::vector<ast::node_id> open_function_nodes_;
+
+    bool in_mutating_context_{false};
 
     named_test_map_t     named_tests_;
     structural_validator struct_validator_;
