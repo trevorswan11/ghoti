@@ -36,8 +36,13 @@ namespace {
 } // namespace
 
 TEST_CASE("A closure with no free variables records an empty capture list") {
-    auto [ctx, idx]{helpers::resolve_and_check(
-        "const outer := fn(): void { const add := fn(x: i32): i32 { return x; }; };")};
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const outer := fn(): void {
+            const add := fn(x: i32): i32 {
+                return x;
+            };
+        };
+    )")};
 
     const auto [sym, sym_data, node_data, type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("outer", idx)};
@@ -49,12 +54,18 @@ TEST_CASE("A closure with no free variables records an empty capture list") {
 
 TEST_CASE("A read-only capture is recorded with READ usage") {
     auto [ctx, idx]{helpers::test_resolver_fail(
-        "const outer := fn(): void { var offset: i32 = 0; const add := fn(x: i32): i32 { "
-        "return x + offset; }; };",
+        R"(
+        const outer := fn(): void {
+            var offset: i32 = 0;
+            const add := fn(x: i32): i32 {
+                return x + offset;
+            };
+        };
+    )",
         sema::diagnostic{"'offset' would require an implicit capture of a variable from an "
                          "enclosing function, which is not yet supported",
                          sema::error::ILLEGAL_IMPLICIT_CAPTURE,
-                         std::pair{0UZ, 91UZ}})};
+                         std::pair{4UZ, 27UZ}})};
 
     const auto [sym, sym_data, node_data, type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("outer", idx)};
@@ -69,12 +80,19 @@ TEST_CASE("A read-only capture is recorded with READ usage") {
 
 TEST_CASE("Assigning to a captured variable records MUTATED usage") {
     auto [ctx, idx]{helpers::test_resolver_fail(
-        "const outer := fn(): void { var offset: i32 = 0; const add := fn(x: i32): i32 { "
-        "offset = x; return offset; }; };",
+        R"(
+        const outer := fn(): void {
+            var offset: i32 = 0;
+            const add := fn(x: i32): i32 {
+                offset = x;
+                return offset;
+            };
+        };
+    )",
         sema::diagnostic{"'offset' would require an implicit capture of a variable from an "
                          "enclosing function, which is not yet supported",
                          sema::error::ILLEGAL_IMPLICIT_CAPTURE,
-                         std::pair{0UZ, 80UZ}})};
+                         std::pair{4UZ, 16UZ}})};
 
     const auto [sym, sym_data, node_data, type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("outer", idx)};
@@ -89,8 +107,13 @@ TEST_CASE("Assigning to a captured variable records MUTATED usage") {
 
 TEST_CASE("A later mutation escalates an existing READ capture entry to MUTATED") {
     SKIP("Actual logic in resolver not reachable due to early poison/bail");
-    auto [ctx, idx]{helpers::resolve_and_check(
-        "const outer := fn(): void { const add := fn(x: i32): i32 { return x; }; };")};
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const outer := fn(): void {
+            const add := fn(x: i32): i32 {
+                return x;
+            };
+        };
+    )")};
 
     const auto [sym, sym_data, node_data, type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("outer", idx)};
@@ -109,18 +132,28 @@ TEST_CASE("A later mutation escalates an existing READ capture entry to MUTATED"
 
 TEST_CASE("Multiple distinct captures are all recorded") {
     auto [ctx, idx]{helpers::test_resolver_fail(
-        "const outer := fn(): void { var a: i32 = 0; var b: i32 = 0; const add := fn(x: i32): "
-        "i32 { a = x; return b; }; };",
+        R"(
+        const outer := fn(): void {
+            var a: i32 = 0;
+            var b: i32 = 0;
+            const add := fn(x: i32): i32 {
+                a = x;
+                return b;
+            };
+        };
+    )",
         sema::diagnostic{"'a' would require an implicit capture of a variable from an "
                          "enclosing function, which is not yet supported",
                          sema::error::ILLEGAL_IMPLICIT_CAPTURE,
-                         std::pair{0UZ, 91UZ}})};
+                         std::pair{5UZ, 16UZ}})};
 
     const auto [sym, sym_data, node_data, type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("outer", idx)};
     const auto& outer{UNWRAP(ctx->root_mod.ast.get_as_opt<ast::function_expr>(*node_data.value))};
     const auto  add_id{find_nested_fn(ctx->root_mod, outer, "add")};
 
+    // Resolution stops at the first diagnostic (`a`'s mutation), so only `a` is recorded - `b` is
+    // never reached. This documents current best-effort, single-pass recording behavior.
     const auto captures{ctx->root_mod.get_captures(add_id)};
     REQUIRE(captures.size() == 1);
     CHECK(captures[0].name == "a");
@@ -129,12 +162,17 @@ TEST_CASE("Multiple distinct captures are all recorded") {
 
 TEST_CASE("Capturing an enclosing function's own parameter is recorded") {
     auto [ctx, idx]{helpers::test_resolver_fail(
-        "const outer := fn(offset: i32): void { const add := fn(x: i32): i32 { "
-        "return x + offset; }; };",
+        R"(
+        const outer := fn(offset: i32): void {
+            const add := fn(x: i32): i32 {
+                return x + offset;
+            };
+        };
+    )",
         sema::diagnostic{"'offset' would require an implicit capture of a variable from an "
                          "enclosing function, which is not yet supported",
                          sema::error::ILLEGAL_IMPLICIT_CAPTURE,
-                         std::pair{0UZ, 81UZ}})};
+                         std::pair{3UZ, 27UZ}})};
 
     const auto [sym, sym_data, node_data, type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("outer", idx)};
