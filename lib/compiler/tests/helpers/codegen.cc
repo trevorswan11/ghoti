@@ -115,8 +115,8 @@ auto compile_and_run(std::string_view source, const std::vector<mock_file>& impo
 
     llvm::LLVMContext context;
     const auto extension{codegen::get_default_output_extension(codegen::output_type::EXECUTABLE)};
-    const auto exe_stem{tempfile{"compile_and_run"}.path};
-    tempfile   exe_file{std::in_place, exe_stem.string() + std::string{extension}};
+    const auto exe_stem{tempfile::make_temp_path("compile_and_run")};
+    tempfile   exe_file{std::in_place, fmt::format("{}{}", exe_stem.string(), extension)};
 
     const auto emitted{emit_executable(test_ctx, context, exe_file.path)};
     if (!emitted) { fmt::println("{}", emitted.error()); }

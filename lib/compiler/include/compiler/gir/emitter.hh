@@ -15,6 +15,7 @@
 #include "compiler/ast/statement.hh"
 #include "compiler/gir/builder.hh"
 #include "compiler/gir/const_eval.hh"
+#include "compiler/gir/const_value.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/module/module.hh"
@@ -94,6 +95,10 @@ class emitter {
     auto emit_defers_up_to(usize target_depth) -> void;
     auto emit_lvalue(ast::node_id id) -> value;
     auto spill_to_temporary(value val, sema::type& type, bool is_const = false) -> value;
+
+    // An escape hatch for materializing constant evaluated aggregates since they cannot
+    // otherwise be represented as GIR instructions
+    auto materialize_const(const const_value& cv) -> value;
 
     auto emit_expression(const ast::expr_handle& expr) -> value {
         return emit_expression_id(*expr);

@@ -19,6 +19,8 @@ struct tempfile {
     ~tempfile();
     MAKE_PINNED(tempfile);
 
+    [[nodiscard]] static auto make_temp_path(std::string_view tag) -> std::filesystem::path;
+
     [[nodiscard]] operator std::filesystem::path() const noexcept { return path; }
 };
 

@@ -20,6 +20,7 @@
 #include "compiler/ast/statement.hh"
 #include "compiler/gir/builder.hh"
 #include "compiler/gir/const_eval.hh"
+#include "compiler/gir/const_value.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/module.hh"
@@ -685,7 +686,7 @@ auto emitter::emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> 
     }
 
     // Not a local binding; may be a top-level const/constexpr global, resolvable at compile time
-    if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+    if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
 
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     return value{undefined_val{}, sema_type};
@@ -1723,6 +1724,89 @@ auto emitter::spill_to_temporary(value val, sema::type& type, bool is_const) -> 
     return value{slot, type};
 }
 
+auto emitter::materialize_const(const const_value& cv) -> value {
+    auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+
+    if (const auto arr{cv.as_opt<const_array>()}) {
+        const auto type_opt{cv.get_type()};
+        ASSERT(type_opt, "const_array must carry a resolved sema type");
+        auto&      type{*type_opt};
+        const auto arr_data{type.get_data().as_opt<sema::types::array>()};
+        ASSERT(arr_data, "const_array must materialize into an array sema type");
+        auto&      elem_type{arr_data->underlying};
+        const auto slot{builder_.emit_alloca(type)};
+        for (u64 i{0}; const auto& elem : arr->elements) {
+            const auto elem_ptr{builder_.emit_get_element_ptr(
+                value{slot, type}, {value{i++, usize_type}}, elem_type)};
+            builder_.emit_store(value{elem_ptr, elem_type}, materialize_const(elem))
+                .is_initializer = true;
+        }
+        const auto loaded{builder_.emit_load(value{slot, type}, type)};
+        return value{loaded, type};
+    }
+
+    if (const auto st{cv.as_opt<const_struct>()}) {
+        const auto type_opt{cv.get_type()};
+        ASSERT(type_opt, "const_struct must carry a resolved sema type");
+        auto&      type{*type_opt};
+        const auto struct_data{type.get_data().as_opt<sema::types::struct_t>()};
+        ASSERT(struct_data, "const_struct must materialize into a struct sema type");
+        const auto  slot{builder_.emit_alloca(type)};
+        const auto& table{ctx_.registry.get(type.get_symbol_table_idx())};
+        for (const auto& [name, field_val] : st->fields) {
+            const auto proxy{table.get_proxy_opt(name)};
+            ASSERT(proxy, "const_struct field must exist in struct symbol table");
+            const auto [sym, field_idx]{*proxy};
+            auto&      field_type{struct_data->type_at(field_idx)};
+            const auto field_ptr{builder_.emit_get_element_ptr(
+                value{slot, type}, {value{static_cast<u64>(field_idx), usize_type}}, field_type)};
+            builder_.emit_store(value{field_ptr, field_type}, materialize_const(field_val))
+                .is_initializer = true;
+        }
+        const auto loaded{builder_.emit_load(value{slot, type}, type)};
+        return value{loaded, type};
+    }
+
+    if (const auto un{cv.as_opt<const_union>()}) {
+        const auto type_opt{cv.get_type()};
+        ASSERT(type_opt, "const_union must carry a resolved sema type");
+        auto&      type{*type_opt};
+        const auto union_data{type.get_data().as_opt<sema::types::union_t>()};
+        ASSERT(union_data, "const_union must materialize into a union sema type");
+        const auto slot{builder_.emit_alloca(type)};
+        ASSERT(!un->payload.empty(), "const_union must carry exactly one payload value");
+        const auto& field_val{un->payload.front()};
+
+        if (union_data->is_untagged) {
+            builder_.emit_store(value{slot, type}, materialize_const(field_val)).is_initializer =
+                true;
+        } else {
+            const auto& table{ctx_.registry.get(type.get_symbol_table_idx())};
+            const auto  proxy{table.get_proxy_opt(un->active_field)};
+            ASSERT(proxy, "const_union active field must exist in union symbol table");
+            const auto [sym, field_idx]{*proxy};
+            auto& field_type{union_data->type_at(field_idx)};
+
+            auto&      i32_type{ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
+            const auto tag_ptr{builder_.emit_get_element_ptr(
+                value{slot, type}, {value{0ULL, usize_type}}, i32_type)};
+            builder_
+                .emit_store(value{tag_ptr, i32_type}, value{static_cast<i64>(field_idx), i32_type})
+                .is_initializer = true;
+
+            const auto payload_ptr{builder_.emit_get_element_ptr(
+                value{slot, type}, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, field_type)};
+            builder_.emit_store(value{payload_ptr, field_type}, materialize_const(field_val))
+                .is_initializer = true;
+        }
+
+        const auto loaded{builder_.emit_load(value{slot, type}, type)};
+        return value{loaded, type};
+    }
+
+    return cv.to_gir_value();
+}
+
 auto emitter::emit_lvalue(ast::node_id id) -> value {
     PROFILE_FUNCTION();
     ASSERT(id.is_valid(), "Valid node ID expected in emit_lvalue");
@@ -1737,10 +1821,10 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             const auto binding{lookup_binding(ident.name)};
             if (!binding) {
                 // Not a local binding; may be a top-level const/constexpr global.
-                if (const auto cv{const_eval_.try_eval(id)}) {
+                if (const_eval_.try_eval(id)) {
                     const auto sema_type{active_mod().get_sema_type_opt(id)};
                     ASSERT(sema_type, "LValue identifier must have a resolved sema type");
-                    return spill_to_temporary(cv->to_gir_value(), *sema_type, true);
+                    return spill_to_temporary(emit_ident(id, ident), *sema_type, true);
                 }
             }
             ASSERT(binding, "LValue identifier must be bound in scope");
