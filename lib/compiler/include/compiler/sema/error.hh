@@ -49,6 +49,7 @@ enum class error : u8 {
     AUTO_RETURN_TYPE_CONFLICT,
     ILLEGAL_OPAQUE_TYPE,
     ILLEGAL_IMPLICIT_CAPTURE,
+    ILLEGAL_REFERENCE_TO_REFERENCE,
 };
 
 using diagnostic  = diagnostic<error>;

@@ -162,15 +162,9 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, const sema::type& dest
             }
         }
     }
+    // A reference destination is one of the few positions that must see the raw reference value
     if (dest_type.get_kind() == sema::type_kind::REFERENCE) {
-        if (const auto rhs_type{active_mod().get_sema_type_opt(expr_id)}) {
-            if (rhs_type->get_kind() != sema::type_kind::REFERENCE &&
-                rhs_type->get_kind() != sema::type_kind::POINTER) {
-                const auto lval{emit_lvalue(expr_id)};
-                const auto addr{builder_.emit_address_of(lval, const_cast<sema::type&>(dest_type))};
-                return value{addr, const_cast<sema::type&>(dest_type)};
-            }
-        }
+        return emit_expression_id_raw(*expr_id);
     }
     return emit_expression(expr_id);
 }
@@ -630,7 +624,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
             return;
         }
 
-        const value val{emit_expression(*decl.value)};
+        const value val{emit_coerced_expr(*decl.value, *sema_type)};
         if (const auto lid{val.as_opt<local_id>()}) {
             scopes_.back().bindings.emplace(name,
                                             local_binding{*lid, *sema_type, false, stdx::none});
@@ -668,6 +662,18 @@ auto emitter::emit_return_stmt(ast::node_id stmt_id, const ast::return_stmt& ret
 }
 
 auto emitter::emit_expression_id(ast::node_id id) -> value {
+    auto val{emit_expression_id_raw(id)};
+    if (val.type && val.type->get_kind() == sema::type_kind::REFERENCE) {
+        const auto ref_data{val.type->get_data().as_opt<sema::types::reference>()};
+        ASSERT(ref_data, "Reference-kind value must carry reference type data");
+        auto&      referent_type{const_cast<sema::type&>(ref_data->underlying)};
+        const auto loaded{builder_.emit_load(val, referent_type)};
+        return value{loaded, referent_type};
+    }
+    return val;
+}
+
+auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
     PROFILE_FUNCTION();
     ASSERT(id.is_valid(), "Valid node ID expected in emit_expression_id");
     builder_.set_location(active_ast().location_of(id));
@@ -841,8 +847,15 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
     const auto op_type{id.get_token_type()};
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type.has_value(), "Assignment expression must have a resolved sema type");
-    const auto lhs_lval{emit_lvalue(assign.lhs)};
+    auto lhs_lval{emit_lvalue(assign.lhs)};
     ASSERT(lhs_lval.type.has_value(), "Assignment LHS must have a resolved type");
+
+    // A reference-typed assignment target has value semantics
+    if (const auto ref_data{lhs_lval.type->get_data().as_opt<sema::types::reference>()}) {
+        auto& referent_type{const_cast<sema::type&>(ref_data->underlying)};
+        lhs_lval.data = value::data_t{builder_.emit_load(lhs_lval, *lhs_lval.type)};
+        lhs_lval.type.emplace(referent_type);
+    }
 
     if (op_type == syntax::token_type_t::ASSIGN) {
         const value rhs{emit_coerced_expr(assign.rhs, *lhs_lval.type)};
@@ -1936,6 +1949,14 @@ auto emitter::materialize_const(const const_value& cv) -> value {
     return cv.to_gir_value();
 }
 
+auto emitter::lvalue_of_expr(ast::node_id id, sema::type& sema_type) -> value {
+    if (const auto ref_data{sema_type.get_data().as_opt<sema::types::reference>()}) {
+        auto& referent_type{const_cast<sema::type&>(ref_data->underlying)};
+        return value{emit_expression_id_raw(id).data, referent_type};
+    }
+    return spill_to_temporary(emit_expression_id_raw(id), sema_type);
+}
+
 auto emitter::emit_lvalue(ast::node_id id) -> value {
     PROFILE_FUNCTION();
     ASSERT(id.is_valid(), "Valid node ID expected in emit_lvalue");
@@ -1944,7 +1965,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
         [&](const auto&) -> value {
             const auto sema_type{active_mod().get_sema_type_opt(id)};
             ASSERT(sema_type, "LValue expression must have a resolved sema type");
-            return spill_to_temporary(emit_expression_id(id), *sema_type);
+            return lvalue_of_expr(id, *sema_type);
         },
         [&](const ast::identifier_expr& ident) -> value {
             const auto binding{lookup_binding(ident.name)};
@@ -1981,12 +2002,26 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
 
             const auto sema_type{active_mod().get_sema_type_opt(id)};
             ASSERT(sema_type, "LValue expression must have a resolved sema type");
-            return spill_to_temporary(emit_expression_id(id), *sema_type);
+            return lvalue_of_expr(id, *sema_type);
         },
         [&](const ast::dot_expr& dot) -> value {
-            const auto base_lval{emit_lvalue(dot.object)};
-            const auto obj_type{active_mod().get_sema_type_opt(dot.object)};
-            ASSERT(obj_type, "Dot expression object must have a resolved type");
+            auto       base_lval{emit_lvalue(dot.object)};
+            const auto obj_type_opt{active_mod().get_sema_type_opt(dot.object)};
+            ASSERT(obj_type_opt, "Dot expression object must have a resolved type");
+            auto* obj_type{&obj_type_opt.value()};
+
+            // A reference/pointer-typed field or nested access needs one more indirection unwound
+            if (const auto ref_data{obj_type->get_data().as_opt<sema::types::reference>()}) {
+                auto& ref_underlying{const_cast<sema::type&>(ref_data->underlying)};
+                base_lval.data = value::data_t{builder_.emit_load(base_lval, *obj_type)};
+                base_lval.type.emplace(ref_underlying);
+                obj_type = &ref_data->underlying;
+            } else if (const auto ptr_data{obj_type->get_data().as_opt<sema::types::pointer>()}) {
+                auto& ptr_underlying{const_cast<sema::type&>(ptr_data->underlying)};
+                base_lval.data = value::data_t{builder_.emit_load(base_lval, *obj_type)};
+                base_lval.type.emplace(ptr_underlying);
+                obj_type = &ptr_data->underlying;
+            }
 
             const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
             u64         member_idx{0};
@@ -2138,7 +2173,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
         [&](const ast::dereference_expr& deref) -> value {
             const auto sema_type{active_mod().get_sema_type_opt(id)};
             ASSERT(sema_type, "Dereference lvalue must have a resolved sema type");
-            return value{emit_expression(deref.rhs).data, *sema_type};
+            return value{emit_expression_id_raw(*deref.rhs).data, *sema_type};
         });
 }
 
@@ -2259,7 +2294,7 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
         if (ut->is_untagged) {
             for (const auto& [accessor, val_expr] : init.initializers) {
                 auto& field_type{active_mod().get_sema_type_opt(*val_expr).value_or(*sema_type)};
-                const auto val{emit_expression(val_expr)};
+                const auto val{emit_coerced_expr(val_expr, field_type)};
                 builder_.emit_store(value{struct_slot, field_type}, val);
             }
             const auto loaded{builder_.emit_load(value{struct_slot, *sema_type}, *sema_type)};
@@ -2282,12 +2317,12 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
         builder_.emit_store(value{tag_ptr, i32_type}, value{static_cast<i64>(field_idx), i32_type})
             .is_initializer = true;
 
-        auto&      field_type{active_mod().get_sema_type_opt(*val_expr).value_or(*sema_type)};
+        auto&      field_type{ut->type_at(field_idx)};
         const auto payload_ptr{
             builder_.emit_get_element_ptr(value{struct_slot, *sema_type},
                                           {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}},
                                           field_type)};
-        const auto val{emit_expression(val_expr)};
+        const auto val{emit_coerced_expr(val_expr, field_type)};
         builder_.emit_store(value{payload_ptr, field_type}, val).is_initializer = true;
 
         const auto loaded{builder_.emit_load(value{struct_slot, *sema_type}, *sema_type)};
@@ -2303,12 +2338,12 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
         const auto  proxy{table.get_proxy_opt(name)};
         ASSERT(proxy, "Member must exist in struct symbol table");
         const auto [sym, field_idx]{*proxy};
-        auto&      field_type{active_mod().get_sema_type_opt(*val_expr).value_or(*sema_type)};
+        auto&      field_type{st->type_at(field_idx)};
         const auto field_ptr{
             builder_.emit_get_element_ptr(value{struct_slot, *sema_type},
                                           {value{static_cast<u64>(field_idx), usize_type}},
                                           field_type)};
-        const auto val{emit_expression(val_expr)};
+        const auto val{emit_coerced_expr(val_expr, field_type)};
         builder_.emit_store(value{field_ptr, field_type}, val).is_initializer = true;
     }
 
@@ -2322,9 +2357,16 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
     const auto raw_obj_type{active_mod().get_sema_type_opt(dot.object)};
     ASSERT(raw_obj_type, "Dot expression object must have a resolved type");
     auto* obj_type{raw_obj_type.get()};
+
+    // emit_lvalue(dot.object) addresses the object's own storage; still needs unwinding here
+    auto base_lval{emit_lvalue(dot.object)};
     if (const auto ptr_data{obj_type->get_data().as_opt<sema::types::pointer>()}) {
+        base_lval.data = value::data_t{builder_.emit_load(base_lval, *obj_type)};
+        base_lval.type.emplace(ptr_data->underlying);
         obj_type = &ptr_data->underlying;
     } else if (const auto ref_data{obj_type->get_data().as_opt<sema::types::reference>()}) {
+        base_lval.data = value::data_t{builder_.emit_load(base_lval, *obj_type)};
+        base_lval.type.emplace(ref_data->underlying);
         obj_type = &ref_data->underlying;
     }
 
@@ -2334,7 +2376,6 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
         const u64  member_idx{member_ident.name == "ptr" ? 0ULL : 1ULL};
         auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
         auto&      field_type{sema_type ? *sema_type : *obj_type};
-        const auto base_lval{emit_lvalue(dot.object)};
         const auto field_ptr{
             builder_.emit_get_element_ptr(base_lval, {value{member_idx, usize_type}}, field_type)};
         const auto loaded{builder_.emit_load(value{field_ptr, field_type}, field_type)};
@@ -2350,7 +2391,6 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
 
         if (member_ident.name == "ptr") {
             auto&      field_type{sema_type ? *sema_type : arr_data->underlying};
-            const auto base_lval{emit_lvalue(dot.object)};
             const auto field_ptr{
                 builder_.emit_get_element_ptr(base_lval, {value{0ULL, usize_type}}, field_type)};
             return value{field_ptr, field_type};
@@ -2364,7 +2404,6 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
 
         if (const auto st{obj_type->get_data().as_opt<sema::types::struct_t>()}) {
             auto&      field_type{sema_type ? *sema_type : *obj_type};
-            const auto base_lval{emit_lvalue(dot.object)};
             const auto field_ptr{builder_.emit_get_element_ptr(
                 base_lval, {value{static_cast<u64>(member_idx), usize_type}}, field_type)};
             const auto loaded{builder_.emit_load(value{field_ptr, field_type}, field_type)};
@@ -2372,8 +2411,7 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
         }
 
         if (const auto ut{obj_type->get_data().as_opt<sema::types::union_t>()}) {
-            auto&      field_type{sema_type ? *sema_type : *obj_type};
-            const auto base_lval{emit_lvalue(dot.object)};
+            auto& field_type{sema_type ? *sema_type : *obj_type};
             if (ut->is_untagged) {
                 const auto loaded{
                     builder_.emit_load(value{base_lval.data, field_type}, field_type)};
@@ -2419,7 +2457,7 @@ auto emitter::emit_dereference(ast::node_id id, const ast::dereference_expr& der
     PROFILE_FUNCTION();
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Dereference expression must have a resolved sema type");
-    const auto ptr_val{emit_expression(deref.rhs)};
+    const auto ptr_val{emit_expression_id_raw(*deref.rhs)};
     auto&      elem_type{*sema_type};
     const auto loaded{builder_.emit_load(ptr_val, elem_type)};
     return value{loaded, sema_type};

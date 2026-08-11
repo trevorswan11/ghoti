@@ -109,4 +109,130 @@ TEST_CASE("Reading an element through a &[N]mut i32 reference to a mut array") {
     )") == 30);
 }
 
+TEST_CASE("Reading a &i32 reference parameter without an explicit deref") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            var x: i32 = 41;
+            const readit := fn(c: &i32): i32 {
+                return c + 1;
+            };
+            return readit(&x);
+        };
+    )") == 42);
+}
+
+TEST_CASE("Writing through a &mut i32 reference parameter without an explicit deref") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            var x: i32 = 5;
+            const setit := fn(c: &mut i32): void {
+                c = 99;
+            };
+            setit(&mut x);
+            return x;
+        };
+    )") == 99);
+}
+
+TEST_CASE("Reading and writing a &mut i32 reference without an explicit deref, combined") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            var x: i32 = 5;
+            const addone := fn(c: &mut i32): void {
+                c = c + 1;
+            };
+            addone(&mut x);
+            return x;
+        };
+    )") == 6);
+}
+
+TEST_CASE("Compound assignment through a &mut i32 reference without an explicit deref") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            var x: i32 = 5;
+            const addone := fn(c: &mut i32): void {
+                c += 1;
+            };
+            addone(&mut x);
+            return x;
+        };
+    )") == 6);
+}
+
+TEST_CASE("Reading a struct field through a &Point reference without an explicit deref") {
+    CHECK(helpers::compile_and_run(R"(
+        const Point := struct { x: i32, y: i32 };
+        pub const main := fn(): i32 {
+            var p := Point{ .x = 1, .y = 41 };
+            const get_y := fn(pt: &Point): i32 {
+                return pt.y;
+            };
+            return get_y(&p);
+        };
+    )") == 41);
+}
+
+TEST_CASE("A local reference variable reads with value semantics") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            var x: i32 = 5;
+            const r: &mut i32 = &mut x;
+            r = r + 10;
+            return x;
+        };
+    )") == 15);
+}
+
+TEST_CASE("Passing a plain value where a &mut i32 parameter is expected is rejected") {
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            var x: i32 = 5;
+            const setit := fn(c: &mut i32): void {
+                c = 99;
+            };
+            setit(x);
+            return x;
+        };
+    )");
+}
+
+TEST_CASE("Declaring a reference-typed variable from a plain value is rejected") {
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            var x: i32 = 5;
+            var r: &i32 = x;
+            return r;
+        };
+    )");
+}
+
+TEST_CASE("Taking & of an already-reference-typed value is rejected") {
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            var x: i32 = 5;
+            const setit := fn(c: &mut i32): void {
+                c = 99;
+            };
+            const r: &mut i32 = &mut x;
+            setit(&mut r);
+            return x;
+        };
+    )");
+}
+
+TEST_CASE("Passing an existing reference directly aliases the same referent") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            var x: i32 = 5;
+            const addone := fn(c: &mut i32): void {
+                c = c + 1;
+            };
+            const r: &mut i32 = &mut x;
+            addone(r);
+            return x;
+        };
+    )") == 6);
+}
+
 } // namespace ghoti::tests

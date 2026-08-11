@@ -190,19 +190,16 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
             if (src.is_constant() && !dest.is_constant()) { return false; }
             return is_same_unqualified(p_src->underlying, p_dest->underlying);
         }
-        //  &S to &T or value S to &T (implicit reference construction)
+        // &S to &T must be const correct
         case type_kind::REFERENCE: {
+            const auto r_src{src.get_data().as_opt<types::reference>()};
             const auto r_dest{dest.get_data().as_opt<types::reference>()};
-            if (!r_dest) { return false; }
-            if (const auto r_src{src.get_data().as_opt<types::reference>()}) {
-                if (r_src->underlying.is_constant() && !r_dest->underlying.is_constant()) {
-                    return false;
-                }
-                if (src.is_constant() && !dest.is_constant()) { return false; }
-                return is_same_unqualified(r_src->underlying, r_dest->underlying);
+            if (!r_src || !r_dest) { return false; }
+            if (r_src->underlying.is_constant() && !r_dest->underlying.is_constant()) {
+                return false;
             }
-            if (src.is_constant() && !r_dest->underlying.is_constant()) { return false; }
-            return is_same_unqualified(src, r_dest->underlying);
+            if (src.is_constant() && !dest.is_constant()) { return false; }
+            return is_same_unqualified(r_src->underlying, r_dest->underlying);
         }
         // []S to []T must be const and null term correct
         case type_kind::SLICE: {

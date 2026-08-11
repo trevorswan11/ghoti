@@ -107,6 +107,7 @@ class emitter {
     auto emit_defers_up_to(usize target_depth) -> void;
     auto emit_lvalue(ast::node_id id) -> value;
     auto spill_to_temporary(value val, sema::type& type, bool is_const = false) -> value;
+    auto lvalue_of_expr(ast::node_id id, sema::type& sema_type) -> value;
 
     // An escape hatch for materializing constant evaluated aggregates since they cannot
     // otherwise be represented as GIR instructions
@@ -120,6 +121,8 @@ class emitter {
     auto emit_coerced_expr(ast::expr_handle expr_id, const sema::type& dest_type) -> value;
     auto emit_generic_instantiation(const sema::generic_instantiation_request& req) -> void;
     auto emit_expression_id(ast::node_id id) -> value;
+    // Produces a value exactly as resolved, including a bare reference-typed value where applicable.
+    auto emit_expression_id_raw(ast::node_id id) -> value;
     auto emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value;
     auto emit_match(ast::node_id id, const ast::match_expr& match) -> value;
     auto emit_initializer(ast::node_id id, const ast::initializer_expr& init) -> value;

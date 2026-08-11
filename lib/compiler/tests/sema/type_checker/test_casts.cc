@@ -109,7 +109,7 @@ TEST_CASE("Non-widenable implicit integer narrowing fails without @as") {
                          std::pair{3UZ, 28UZ}});
 }
 
-TEST_CASE("Implicit reference type construction from value types") {
+TEST_CASE("Explicit reference construction from value types") {
     helpers::type_check_and_verify(R"(
         pub const take_ref := fn(r: &i32): i32 {
             return *r;
@@ -121,23 +121,72 @@ TEST_CASE("Implicit reference type construction from value types") {
 
         pub const caller := fn(): i32 {
             var x: i32 = 10;
-            const res1 := take_ref(x);
-            take_mut_ref(x);
-            var r_var: &i32 = x;
+            const res1 := take_ref(&x);
+            take_mut_ref(&mut x);
+            var r_var: &i32 = &x;
             return res1 + *r_var;
         };
 
         const val: i32 = 10;
-        const r_var: &i32 = val;
+        const r_var: &i32 = &val;
     )");
 }
 
-TEST_CASE("Implicit reference construction in struct field initialization") {
+TEST_CASE("Implicit reference type construction from value types is rejected") {
+    helpers::test_checker_fail(
+        R"(
+        pub const take_ref := fn(r: &i32): i32 {
+            return *r;
+        };
+
+        pub const caller := fn(): i32 {
+            var x: i32 = 10;
+            return take_ref(x);
+        };
+    )",
+        sema::diagnostic{
+            "Argument 1 of type 'i32' is not assignable to parameter type 'reference' in "
+            "call to 'take_ref'",
+            sema::error::TYPE_MISMATCH,
+            std::pair{7UZ, 28UZ}});
+}
+
+TEST_CASE("Implicit reference type construction via declaration is rejected") {
+    helpers::test_checker_fail(
+        R"(
+        pub const caller := fn(): void {
+            var x: i32 = 10;
+            var r_var: &i32 = x;
+        };
+    )",
+        sema::diagnostic{"Type mismatch in store: cannot assign 'i32' to 'reference'",
+                         sema::error::TYPE_MISMATCH,
+                         std::pair{3UZ, 30UZ}});
+}
+
+TEST_CASE("Explicit reference construction in struct field initialization") {
     helpers::type_check_and_verify(R"(
         const RefHolder := struct { r: &i32 };
         const val: i32 = 10;
-        const h := RefHolder{ .r = val };
+        const h := RefHolder{ .r = &val };
     )");
+}
+
+TEST_CASE("Taking a reference to an already-reference-typed value is rejected") {
+    helpers::test_checker_fail(
+        R"(
+        pub const take_ref := fn(r: &i32): i32 {
+            return *r;
+        };
+
+        pub const caller := fn(r: &i32): i32 {
+            return take_ref(&r);
+        };
+    )",
+        sema::diagnostic{"Cannot take a reference to an already-reference-typed value; "
+                         "pass it directly to alias the same referent",
+                         sema::error::ILLEGAL_REFERENCE_TO_REFERENCE,
+                         std::pair{6UZ, 28UZ}});
 }
 
 TEST_CASE("Const mismatch in implicit mutable reference produces diagnostic error") {

@@ -575,26 +575,38 @@ auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& 
 
     if (sema_type) {
         const auto& type_data{sema_type->get_data()};
-        if (type_data.is<sema::types::struct_t>()) {
+        const auto& table{ctx_.registry.get(sema_type->get_symbol_table_idx())};
+        if (const auto st{type_data.as_opt<sema::types::struct_t>()}) {
             const_struct struct_val;
             for (const auto& item : init.initializers) {
                 const auto& member_ident{
                     module_.ast.get_as<ast::implicit_access_expr>(item.member)};
                 const auto& member_name{
                     module_.ast.get_as<ast::identifier_expr>(member_ident.member).name};
+                // A reference field needs an address to bind to
+                if (const auto proxy{table.get_proxy_opt(member_name)}) {
+                    if (st->type_at(proxy->index).get_kind() == sema::type_kind::REFERENCE) {
+                        return stdx::none;
+                    }
+                }
                 const auto field_val{try_eval(item.value)};
                 if (!field_val) { return stdx::none; }
                 struct_val.fields.emplace(std::string{member_name}, *field_val);
             }
             return const_value{std::move(struct_val), sema_type};
         }
-        if (type_data.is<sema::types::union_t>()) {
+        if (const auto ut{type_data.as_opt<sema::types::union_t>()}) {
             if (!init.initializers.empty()) {
                 const auto& item{init.initializers.front()};
                 const auto& member_ident{
                     module_.ast.get_as<ast::implicit_access_expr>(item.member)};
                 const auto& member_name{
                     module_.ast.get_as<ast::identifier_expr>(member_ident.member).name};
+                if (const auto proxy{table.get_proxy_opt(member_name)}) {
+                    if (ut->type_at(proxy->index).get_kind() == sema::type_kind::REFERENCE) {
+                        return stdx::none;
+                    }
+                }
                 const auto field_val{try_eval(item.value)};
                 if (!field_val) { return stdx::none; }
                 std::vector<const_value> payload;
