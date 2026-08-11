@@ -738,6 +738,29 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
                 return;
             }
 
+            if (it->second.type->get_kind() == type_kind::REFERENCE) {
+                // References are never reseated  unlike pointers which can also be reassigned
+                // themselves
+                const auto ref_data{it->second.type->get_data().as_opt<types::reference>()};
+                if (ref_data) {
+                    if (it->second.type->is_constant()) {
+                        emit_diagnostic("Cannot assign to constant memory through reference",
+                                        error::ASSIGNMENT_TO_CONST,
+                                        inst.location);
+                        return;
+                    }
+                    if (val_t && !is_assignable(*val_t, ref_data->underlying)) {
+                        emit_diagnostic(
+                            fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
+                                        type_kind_display_name(val_t->get_kind()),
+                                        type_kind_display_name(ref_data->underlying.get_kind())),
+                            error::TYPE_MISMATCH,
+                            inst.location);
+                    }
+                }
+                return;
+            }
+
             if (it->second.is_const && !inst.is_initializer) {
                 emit_diagnostic("Cannot assign to an element of a non-mutable array or slice",
                                 error::ASSIGNMENT_TO_CONST,
@@ -780,7 +803,7 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
             } else if (dest_t->get_kind() == type_kind::REFERENCE) {
                 const auto ref_data{dest_t->get_data().as_opt<types::reference>()};
                 if (ref_data) {
-                    if (ref_data->underlying.is_constant()) {
+                    if (dest_t->is_constant()) {
                         emit_diagnostic("Cannot assign to constant memory through reference",
                                         error::ASSIGNMENT_TO_CONST,
                                         inst.location);

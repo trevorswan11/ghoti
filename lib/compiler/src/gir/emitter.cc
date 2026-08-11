@@ -2023,15 +2023,17 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             auto* obj_type{&obj_type_opt.value()};
             if (const auto ref_data{obj_type->get_data().as_opt<sema::types::reference>()}) {
                 auto& ref_underlying{const_cast<sema::type&>(ref_data->underlying)};
-                base_lval.data = value::data_t{builder_.emit_load(base_lval, ref_underlying)};
+                base_lval.data = value::data_t{builder_.emit_load(base_lval, *obj_type)};
                 base_lval.type.emplace(ref_underlying);
                 obj_type = &ref_data->underlying;
             } else if (const auto ptr_data{obj_type->get_data().as_opt<sema::types::pointer>()}) {
                 auto& ptr_underlying{const_cast<sema::type&>(ptr_data->underlying)};
-                base_lval.data = value::data_t{builder_.emit_load(base_lval, ptr_underlying)};
+                base_lval.data = value::data_t{builder_.emit_load(base_lval, *obj_type)};
                 base_lval.type.emplace(ptr_underlying);
                 obj_type = &ptr_data->underlying;
-            } else if (const auto arr_data{obj_type->get_data().as_opt<sema::types::array>()}) {
+            }
+
+            if (const auto arr_data{obj_type->get_data().as_opt<sema::types::array>()}) {
                 auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
                 auto& isize_type{ctx_.get_builtin_resolved_type(sema::type_kind::ISIZE)};
                 auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
@@ -2133,7 +2135,11 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             const auto elem_ptr{builder_.emit_get_element_ptr(base_lval, {idx_val}, elem_type)};
             return value{elem_ptr, elem_type};
         },
-        [&](const ast::dereference_expr& deref) -> value { return emit_expression(deref.rhs); });
+        [&](const ast::dereference_expr& deref) -> value {
+            const auto sema_type{active_mod().get_sema_type_opt(id)};
+            ASSERT(sema_type, "Dereference lvalue must have a resolved sema type");
+            return value{emit_expression(deref.rhs).data, *sema_type};
+        });
 }
 
 auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value {
