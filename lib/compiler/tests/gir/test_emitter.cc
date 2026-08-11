@@ -335,4 +335,33 @@ TEST_CASE("Emitter struct method call with explicit self parameter") {
     REQUIRE(call_inst.operands.size() == 1);
 }
 
+TEST_CASE("Deferred array underlying a reference parameter resolves to a concrete array") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const bump_first := fn(a: &mut [3uz]mut i32): void {
+            a[0] = a[0] + 5;
+        };
+    )")};
+
+    gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
+    const auto   gir_mod{emitter.emit()};
+
+    REQUIRE(gir_mod.get_functions().size() == 1);
+    const auto& fn{*gir_mod.get_functions()[0]};
+    REQUIRE(fn.get_params().size() == 1);
+
+    const auto& param_type{fn.get_params()[0]->type};
+    REQUIRE(param_type.get_kind() == sema::type_kind::REFERENCE);
+    const auto ref_data{param_type.get_data().as_opt<sema::types::reference>()};
+    REQUIRE(ref_data.has_value());
+
+    // Before the fix, an array type nested inside a reference/pointer type annotation stayed
+    // a deferred placeholder (type_kind::TYPE) instead of being forced to a concrete array,
+    // which silently disabled bounds checking and lost the array's own element mutability.
+    CHECK(ref_data->underlying.get_kind() == sema::type_kind::ARRAY);
+    const auto arr_data{ref_data->underlying.get_data().as_opt<sema::types::array>()};
+    REQUIRE(arr_data.has_value());
+    CHECK(arr_data->len == 3);
+    CHECK_FALSE(ref_data->underlying.is_constant());
+}
+
 } // namespace ghoti::tests

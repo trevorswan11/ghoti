@@ -84,4 +84,29 @@ TEST_CASE("Indexing through a &[N]i32 reference parameter") {
     )") == 30);
 }
 
+TEST_CASE("Mutating an element through a &mut [N]mut i32 reference parameter") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            var arr: [3uz]mut i32 = [3uz]mut i32{10, 20, 30};
+            const bump_first := fn(a: &mut [3uz]mut i32): void {
+                a[0] = a[0] + 5;
+            };
+            bump_first(&mut arr);
+            return arr[0];
+        };
+    )") == 15);
+}
+
+TEST_CASE("Reading an element through a &[N]mut i32 reference to a mut array") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            var arr: [3uz]mut i32 = [3uz]mut i32{10, 20, 30};
+            const sum_first_two := fn(a: &[3uz]mut i32): i32 {
+                return a[0] + a[1];
+            };
+            return sum_first_two(&arr);
+        };
+    )") == 30);
+}
+
 } // namespace ghoti::tests

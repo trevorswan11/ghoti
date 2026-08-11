@@ -165,6 +165,7 @@ auto const_eval::resolve_all_deferred_arrays() -> void {
         }
         force_deferred_function_params(*type_opt);
         force_deferred_aggregate_fields(*type_opt);
+        force_deferred_indirection_underlying(*type_opt);
     }
 
     for (auto& type_opt : module_.sema_side_tables.node_types.values) {
@@ -174,6 +175,7 @@ auto const_eval::resolve_all_deferred_arrays() -> void {
         }
         force_deferred_function_params(*type_opt);
         force_deferred_aggregate_fields(*type_opt);
+        force_deferred_indirection_underlying(*type_opt);
     }
 }
 
@@ -348,6 +350,18 @@ auto const_eval::force_deferred_aggregate_fields(sema::type& maybe_aggregate) ->
     }
     if (const auto ut{maybe_aggregate.get_data().as_opt<sema::types::union_t>()}) {
         force_deferred_array_elements(ut->fields);
+    }
+}
+
+auto const_eval::force_deferred_indirection_underlying(sema::type& maybe_indirection) -> void {
+    if (const auto ref_data{maybe_indirection.get_data().as_opt<sema::types::reference>()}) {
+        auto& underlying{const_cast<sema::type&>(ref_data->underlying)};
+        maybe_indirection.resolve<sema::types::reference>(force_deferred_array(underlying));
+        return;
+    }
+    if (const auto ptr_data{maybe_indirection.get_data().as_opt<sema::types::pointer>()}) {
+        auto& underlying{const_cast<sema::type&>(ptr_data->underlying)};
+        maybe_indirection.resolve<sema::types::pointer>(force_deferred_array(underlying));
     }
 }
 
