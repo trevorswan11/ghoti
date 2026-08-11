@@ -1,5 +1,4 @@
 #include <string_view>
-#include <utility>
 
 #include <catch2/catch_test_macros.hpp>
 #include <stdx/types.hh>
@@ -9,7 +8,6 @@
 #include "compiler/ast/id.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/module/module.hh"
-#include "compiler/sema/error.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
@@ -22,30 +20,11 @@ namespace syms = sema::symbols;
 
 namespace {
 
-[[nodiscard]] auto find_nested_fn(const mod::module&        module,
-                                  const ast::function_expr& outer,
-                                  std::string_view          name) -> ast::node_id {
-    const auto& block{module.ast.get_as<ast::block_stmt>(outer.body)};
-    for (const auto& stmt : block) {
-        if (const auto decl{module.ast.get_as_opt<ast::decl_stmt>(stmt)}) {
-            const auto& ident{module.ast.get_as<ast::identifier_expr>(decl->name)};
-            if (ident.name == name && decl->value) { return *decl->value; }
-        }
-    }
-    FAIL("Could not find nested function named '" << name << "'");
-}
-
 [[nodiscard]] auto get_outer_fn(const auto& ctx, usize idx, std::string_view name)
     -> const ast::function_expr& {
     const auto [sym, sym_data, node_data, type]{
         ctx->template get_ast_type_sym_info<syms::node_t, ast::decl_stmt>(name, idx)};
     return UNWRAP(ctx->root_mod.ast.template get_as_opt<ast::function_expr>(*node_data.value));
-}
-
-[[nodiscard]] auto closure_not_yet_supported(usize line, usize col) -> sema::diagnostic {
-    return {"Closures are not yet supported past type-resolving",
-            sema::error::ILLEGAL_IMPLICIT_CAPTURE,
-            std::pair{line, col}};
 }
 
 } // namespace
@@ -60,26 +39,24 @@ TEST_CASE("A closure with no free variables records an empty capture list and st
     )")};
 
     const auto& outer{get_outer_fn(ctx, idx, "outer")};
-    const auto  add_id{find_nested_fn(ctx->root_mod, outer, "add")};
+    const auto  add_id{helpers::find_nested_fn(ctx->root_mod, outer, "add")};
 
     CHECK(ctx->root_mod.get_captures(add_id).empty());
     CHECK(ctx->root_mod.get_sema_type(add_id).get_kind() == sema::type_kind::FUNCTION);
 }
 
 TEST_CASE("A read-only primitive capture is recorded as READ and inferred VALUE") {
-    auto [ctx, idx]{helpers::test_resolver_fail(
-        R"(
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
         const outer := fn(): void {
             var offset: i32 = 0;
             const add := fn(x: i32): i32 {
                 return x + offset;
             };
         };
-    )",
-        closure_not_yet_supported(3UZ, 25UZ))};
+    )")};
 
     const auto& outer{get_outer_fn(ctx, idx, "outer")};
-    const auto  add_id{find_nested_fn(ctx->root_mod, outer, "add")};
+    const auto  add_id{helpers::find_nested_fn(ctx->root_mod, outer, "add")};
 
     const auto captures{ctx->root_mod.get_captures(add_id)};
     REQUIRE(captures.size() == 1);
@@ -96,8 +73,7 @@ TEST_CASE("A read-only primitive capture is recorded as READ and inferred VALUE"
 }
 
 TEST_CASE("Assigning to a captured variable records MUTATED usage and infers MUT_REF") {
-    auto [ctx, idx]{helpers::test_resolver_fail(
-        R"(
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
         const outer := fn(): void {
             var offset: i32 = 0;
             const add := fn(x: i32): i32 {
@@ -105,11 +81,10 @@ TEST_CASE("Assigning to a captured variable records MUTATED usage and infers MUT
                 return offset;
             };
         };
-    )",
-        closure_not_yet_supported(3UZ, 25UZ))};
+    )")};
 
     const auto& outer{get_outer_fn(ctx, idx, "outer")};
-    const auto  add_id{find_nested_fn(ctx->root_mod, outer, "add")};
+    const auto  add_id{helpers::find_nested_fn(ctx->root_mod, outer, "add")};
 
     const auto captures{ctx->root_mod.get_captures(add_id)};
     REQUIRE(captures.size() == 1);
@@ -123,8 +98,7 @@ TEST_CASE("Assigning to a captured variable records MUTATED usage and infers MUT
 }
 
 TEST_CASE("A read before a later mutation still escalates to MUTATED") {
-    auto [ctx, idx]{helpers::test_resolver_fail(
-        R"(
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
         const outer := fn(): void {
             var offset: i32 = 0;
             const add := fn(x: i32): i32 {
@@ -133,11 +107,10 @@ TEST_CASE("A read before a later mutation still escalates to MUTATED") {
                 return before;
             };
         };
-    )",
-        closure_not_yet_supported(3UZ, 25UZ))};
+    )")};
 
     const auto& outer{get_outer_fn(ctx, idx, "outer")};
-    const auto  add_id{find_nested_fn(ctx->root_mod, outer, "add")};
+    const auto  add_id{helpers::find_nested_fn(ctx->root_mod, outer, "add")};
 
     const auto captures{ctx->root_mod.get_captures(add_id)};
     REQUIRE(captures.size() == 1);
@@ -146,8 +119,7 @@ TEST_CASE("A read before a later mutation still escalates to MUTATED") {
 }
 
 TEST_CASE("Multiple distinct captures are all recorded") {
-    auto [ctx, idx]{helpers::test_resolver_fail(
-        R"(
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
         const outer := fn(): void {
             var a: i32 = 0;
             var b: i32 = 0;
@@ -156,11 +128,10 @@ TEST_CASE("Multiple distinct captures are all recorded") {
                 return b;
             };
         };
-    )",
-        closure_not_yet_supported(4UZ, 25UZ))};
+    )")};
 
     const auto& outer{get_outer_fn(ctx, idx, "outer")};
-    const auto  add_id{find_nested_fn(ctx->root_mod, outer, "add")};
+    const auto  add_id{helpers::find_nested_fn(ctx->root_mod, outer, "add")};
 
     const auto captures{ctx->root_mod.get_captures(add_id)};
     REQUIRE(captures.size() == 2);
@@ -171,19 +142,17 @@ TEST_CASE("Multiple distinct captures are all recorded") {
 }
 
 TEST_CASE("A read-only aggregate capture is inferred REF, not VALUE") {
-    auto [ctx, idx]{helpers::test_resolver_fail(
-        R"(
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
         const outer := fn(): void {
             var arr: [3uz]i32 = [_]i32{1, 2, 3};
             const add := fn(): i32 {
                 return arr[0];
             };
         };
-    )",
-        closure_not_yet_supported(3UZ, 25UZ))};
+    )")};
 
     const auto& outer{get_outer_fn(ctx, idx, "outer")};
-    const auto  add_id{find_nested_fn(ctx->root_mod, outer, "add")};
+    const auto  add_id{helpers::find_nested_fn(ctx->root_mod, outer, "add")};
 
     const auto& closure_type{ctx->root_mod.get_sema_type(add_id)};
     const auto& cl{UNWRAP(closure_type.get_data().as_opt<sema::types::closure_t>())};
@@ -193,18 +162,16 @@ TEST_CASE("A read-only aggregate capture is inferred REF, not VALUE") {
 }
 
 TEST_CASE("Capturing an enclosing function's own parameter is recorded") {
-    auto [ctx, idx]{helpers::test_resolver_fail(
-        R"(
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
         const outer := fn(offset: i32): void {
             const add := fn(x: i32): i32 {
                 return x + offset;
             };
         };
-    )",
-        closure_not_yet_supported(2UZ, 25UZ))};
+    )")};
 
     const auto& outer{get_outer_fn(ctx, idx, "outer")};
-    const auto  add_id{find_nested_fn(ctx->root_mod, outer, "add")};
+    const auto  add_id{helpers::find_nested_fn(ctx->root_mod, outer, "add")};
 
     const auto captures{ctx->root_mod.get_captures(add_id)};
     REQUIRE(captures.size() == 1);

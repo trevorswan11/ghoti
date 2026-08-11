@@ -226,12 +226,14 @@ enum class capture_mode : u8 {
 struct closure_capture {
     std::string_view name;
     type*            captured_type;
+    type*            storage_type;
     capture_mode     mode;
 };
 
 struct closure_t {
     gsl::span<closure_capture> captures;
-    type&                      signature;
+    type&                      signature;      // the public call shape: params/return as written
+    type&                      impl_signature; // `signature` plus a synthetic `&mut self` param
 };
 
 struct module {

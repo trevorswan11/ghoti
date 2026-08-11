@@ -33,17 +33,23 @@ class type_translator {
     [[nodiscard]] auto get_ptr_ty() const noexcept -> llvm::PointerType*;
 
   private:
+    using type_cache_t = ankerl::unordered_dense::map<const sema::type*, llvm::Type*>;
+
+  private:
     auto translate_slice(const sema::types::slice& s) -> llvm::Type*;
     auto translate_array(const sema::types::array& a) -> llvm::Type*;
     auto translate_struct(const sema::types::struct_t& s, const sema::type& original)
         -> llvm::Type*;
     auto translate_union(const sema::types::union_t& u, const sema::type& original) -> llvm::Type*;
     auto translate_enum(const sema::types::enum_t& e) -> llvm::Type*;
+    auto translate_closure(const sema::types::closure_t& c, const sema::type& original)
+        -> llvm::Type*;
 
   private:
-    llvm::LLVMContext&                                           context_;
-    ankerl::unordered_dense::map<const sema::type*, llvm::Type*> struct_cache_;
-    ankerl::unordered_dense::map<const sema::type*, llvm::Type*> union_cache_;
+    llvm::LLVMContext& context_;
+    type_cache_t       struct_cache_;
+    type_cache_t       union_cache_;
+    type_cache_t       closure_cache_;
 };
 
 } // namespace ghoti::codegen

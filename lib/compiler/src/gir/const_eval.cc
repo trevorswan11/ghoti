@@ -182,15 +182,11 @@ auto const_eval::resolve_all_deferred_types() -> void { resolve_all_deferred_arr
 namespace {
 
 [[nodiscard]] auto capture_field_align(const sema::types::closure_capture& capture) -> usize {
-    return capture.mode == sema::types::capture_mode::VALUE
-               ? const_eval::type_align_of(*capture.captured_type)
-               : 8UZ;
+    return const_eval::type_align_of(*capture.storage_type);
 }
 
 [[nodiscard]] auto capture_field_size(const sema::types::closure_capture& capture) -> usize {
-    return capture.mode == sema::types::capture_mode::VALUE
-               ? const_eval::type_size_of(*capture.captured_type)
-               : 8UZ;
+    return const_eval::type_size_of(*capture.storage_type);
 }
 
 } // namespace

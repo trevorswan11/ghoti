@@ -199,28 +199,62 @@ TEST_CASE("Self parameters in non-structural types") {
     ctx->check_poisoned<syms::node_t>("foo", idx);
 }
 
-// TODO: Remove once GIR emission/codegen understand closures (milestone 3)
-TEST_CASE("A capturing closure is rejected as a whole, once fully typed") {
-    const auto expected_diag = [](usize col) -> sema::diagnostic {
-        return {"Closures are not yet supported past type-resolving",
-                sema::error::ILLEGAL_IMPLICIT_CAPTURE,
-                std::pair{0UZ, col}};
-    };
+TEST_CASE("A capturing closure resolves fully when capturing its immediate enclosing function") {
+    SECTION("Capturing a local from the immediate enclosing function") {
+        auto [ctx, idx]{helpers::resolve_and_check(
+            R"(
+                const outer := fn(): void {
+                    var offset: i32 = 0;
+                    const add := fn(x: i32): i32 {
+                        return x + offset;
+                    };
+                };
+            )"
+            "")};
+        const auto [sym, sym_data, node_data, type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("outer", idx)};
+        const auto& outer{
+            UNWRAP(ctx->root_mod.ast.get_as_opt<ast::function_expr>(*node_data.value))};
+        const auto add_id{helpers::find_nested_fn(ctx->root_mod, outer, "add")};
+        CHECK(ctx->root_mod.get_sema_type(add_id).get_kind() == sema::type_kind::CLOSURE);
+    }
 
-    helpers::test_resolver_fail(
-        "const outer := fn(): void { var offset: i32 = 0; const add := fn(x: i32): i32 { "
-        "return x + offset; }; };",
-        expected_diag(62UZ));
+    SECTION("Capturing the immediate enclosing function's own parameter") {
+        auto [ctx, idx]{helpers::resolve_and_check(
+            R"(
+                const outer := fn(offset: i32): void {
+                    const add := fn(x: i32): i32 {
+                        return x + offset;
+                    };
+                };
+            )")};
+        const auto [sym, sym_data, node_data, type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("outer", idx)};
+        const auto& outer{
+            UNWRAP(ctx->root_mod.ast.get_as_opt<ast::function_expr>(*node_data.value))};
+        const auto add_id{helpers::find_nested_fn(ctx->root_mod, outer, "add")};
+        CHECK(ctx->root_mod.get_sema_type(add_id).get_kind() == sema::type_kind::CLOSURE);
+    }
+}
 
+// TODO: Remove once GIR emission forwards captures through intermediate non-capturing functions
+TEST_CASE("Capturing through an intermediate non-capturing function is rejected") {
     helpers::test_resolver_fail(
-        "const outer := fn(offset: i32): void { const add := fn(x: i32): i32 { "
-        "return x + offset; }; };",
-        expected_diag(52UZ));
-
-    helpers::test_resolver_fail(
-        "const outer := fn(): void { var offset: i32 = 0; const middle := fn(): void { "
-        "const inner := fn(x: i32): i32 { return x + offset; }; }; };",
-        expected_diag(93UZ));
+        R"(
+            const outer := fn(): void {
+                var offset: i32 = 0;
+                const middle := fn(): void {
+                    const inner := fn(x: i32): i32 {
+                        return x + offset;
+                    };
+                };
+            };
+        )"
+        "",
+        sema::diagnostic{"'offset' would require forwarding a capture through an intermediate "
+                         "function, which is not yet supported",
+                         sema::error::ILLEGAL_IMPLICIT_CAPTURE,
+                         std::pair{5UZ, 35UZ}});
 }
 
 TEST_CASE("Module-level globals are not implicit captures") {

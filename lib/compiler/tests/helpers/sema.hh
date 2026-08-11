@@ -21,6 +21,7 @@
 #include <stdx/variant.hh>
 
 #include "compiler/ast/handle.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/ast/kind.hh"
 #include "compiler/module/memory_loader.hh"
 #include "compiler/module/module.hh"
@@ -277,5 +278,11 @@ auto test_checker_fail(std::string_view failing, Ds&&... expected_diagnostics) {
 
 // Runs all of sema and expects a compile error along the way without checking its contents
 auto expect_compile_error(std::string_view source) -> ctx_idx_pair;
+
+// Finds a `const <name> := fn(...) {...};` declared directly in `outer`'s body block, returning
+// its own node id
+[[nodiscard]] auto find_nested_fn(const mod::module&        module,
+                                  const ast::function_expr& outer,
+                                  std::string_view          name) -> ast::node_id;
 
 } // namespace ghoti::tests::helpers

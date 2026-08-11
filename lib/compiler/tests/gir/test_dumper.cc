@@ -8,12 +8,12 @@
 #include <string_view>
 
 #include "compiler/gir/dumper.hh"
-#include "compiler/gir/emitter.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/segment.hh"
 #include "compiler/sema/type.hh"
 #include "helpers/common.hh"
+#include "helpers/gir.hh"
 #include "helpers/sema.hh"
 
 namespace ghoti::tests {
@@ -205,15 +205,9 @@ constexpr std::string_view expected_gir{
 };
 
 TEST_CASE("GIR comprehensive golden dump") {
-    auto [ctx, idx]{helpers::resolve_and_check(golden_input)};
-
-    gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
-    const auto   gir_mod{emitter.emit()};
-
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(gir_mod);
-    CHECK(ss.view() == expected_gir);
+    auto       ctx_idx{helpers::resolve_and_check(golden_input)};
+    const auto dump{helpers::dump_gir(ctx_idx)};
+    CHECK(dump == expected_gir);
 }
 
 } // namespace ghoti::tests

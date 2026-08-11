@@ -537,6 +537,7 @@ auto llvm_lowering::emit_get_element_ptr(const gir::instruction& inst) -> llvm::
         switch (base_type.get_kind()) {
         case sema::type_kind::STRUCT:
         case sema::type_kind::UNION:
+        case sema::type_kind::CLOSURE:
             source_elem_ty = types_.translate(base_type);
             indices.emplace_back(builder_.getInt32(0));
             for (const auto& operand : inst.operands | std::views::drop(1)) {
@@ -807,7 +808,8 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
             } else if (op.type &&
                        (op.type->get_kind() == sema::type_kind::STRUCT ||
                         op.type->get_kind() == sema::type_kind::UNION ||
-                        op.type->get_kind() == sema::type_kind::SLICE) &&
+                        op.type->get_kind() == sema::type_kind::SLICE ||
+                        op.type->get_kind() == sema::type_kind::CLOSURE) &&
                        arg_val->getType()->isPointerTy()) {
                 auto* llvm_struct_ty{types_.translate(*op.type)};
                 arg_val = builder_.CreateLoad(llvm_struct_ty, arg_val, "struct_arg");
@@ -844,7 +846,8 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
         if (operand.type &&
             (operand.type->get_kind() == sema::type_kind::STRUCT ||
              operand.type->get_kind() == sema::type_kind::UNION ||
-             operand.type->get_kind() == sema::type_kind::SLICE) &&
+             operand.type->get_kind() == sema::type_kind::SLICE ||
+             operand.type->get_kind() == sema::type_kind::CLOSURE) &&
             arg_val->getType()->isPointerTy()) {
             auto* llvm_struct_ty{types_.translate(*operand.type)};
             arg_val = builder_.CreateLoad(llvm_struct_ty, arg_val, "struct_arg");

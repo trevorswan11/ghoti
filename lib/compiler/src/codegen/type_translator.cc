@@ -39,7 +39,7 @@ auto type_translator::translate(const sema::type& type) -> llvm::Type* {
         return translate_union(type.get_data().as<sema::types::union_t>(), type);
     case sema::type_kind::ENUM: return translate_enum(type.get_data().as<sema::types::enum_t>());
     case sema::type_kind::CLOSURE:
-        UNREACHABLE("Closure codegen is not implemented yet");
+        return translate_closure(type.get_data().as<sema::types::closure_t>(), type);
     case sema::type_kind::OPAQUE:
     case sema::type_kind::TYPE:
     case sema::type_kind::MODULE:
@@ -169,6 +169,24 @@ auto type_translator::translate_union(const sema::types::union_t& u, const sema:
 
 auto type_translator::translate_enum(const sema::types::enum_t& e) -> llvm::Type* {
     return translate(e.underlying);
+}
+
+auto type_translator::translate_closure(const sema::types::closure_t& c, const sema::type& original)
+    -> llvm::Type* {
+    if (const auto it{closure_cache_.find(&original)}; it != closure_cache_.end()) {
+        return it->second;
+    }
+
+    auto* closure_ty{llvm::StructType::create(context_)};
+    closure_cache_[&original] = closure_ty;
+
+    std::vector<llvm::Type*> element_types;
+    element_types.reserve(c.captures.size());
+    for (const auto& capture : c.captures) {
+        element_types.emplace_back(translate(*capture.storage_type));
+    }
+    closure_ty->setBody(element_types);
+    return closure_ty;
 }
 
 } // namespace ghoti::codegen

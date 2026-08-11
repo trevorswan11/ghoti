@@ -82,6 +82,18 @@ class emitter {
                        const ast::function_expr& fn_expr) -> void;
     auto emit_anonymous_function(ast::node_id id, const ast::function_expr& fn_expr) -> std::string;
 
+    // Emits a capturing function_expr's implementation (once, idempotently) and constructs its
+    // environment value at the current (definition-site) insertion point
+    auto emit_closure(ast::node_id id, const ast::function_expr& fn_expr) -> value;
+    auto emit_closure_function(const ast::function_expr&     fn_expr,
+                               const sema::types::closure_t& cl,
+                               sema::type&                   closure_type) -> void;
+    auto emit_closure_env(const sema::types::closure_t& cl, sema::type& closure_type) -> value;
+
+    // Reads a captured variable's current value (VALUE mode) or address (REF/MUT_REF mode) from
+    // the definition-site scope, for use when constructing an environment field
+    auto get_capture_source(const sema::types::closure_capture& capture) -> value;
+
     auto emit_stmt(const ast::stmt_handle& stmt) -> void;
     auto emit_block(const ast::block_stmt& block) -> void;
     auto emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> void;

@@ -393,6 +393,116 @@ auto emitter::emit_anonymous_function(ast::node_id id, const ast::function_expr&
     return anon_name;
 }
 
+auto emitter::emit_closure(ast::node_id id, const ast::function_expr& fn_expr) -> value {
+    PROFILE_FUNCTION();
+    auto&      closure_type{active_mod().get_sema_type(id)};
+    const auto cl{closure_type.get_data().as_opt<sema::types::closure_t>()};
+    ASSERT(cl, "Closure expression must have closure type data");
+
+    emit_closure_function(fn_expr, *cl, closure_type);
+    return emit_closure_env(*cl, closure_type);
+}
+
+auto emitter::emit_closure_function(const ast::function_expr&     fn_expr,
+                                    const sema::types::closure_t& cl,
+                                    sema::type&                   closure_type) -> void {
+    PROFILE_FUNCTION();
+    const auto idx{closure_type.get_symbol_table_idx()};
+    const auto fn_name{fmt::format("closure{}", idx)};
+    if (gir_module_.has_function(fn_name)) { return; }
+
+    const auto impl_sig_data{cl.impl_signature.get_data().as_opt<sema::types::function>()};
+    ASSERT(impl_sig_data, "Closure implementation signature must contain function type data");
+
+    auto& fn{gir_module_.add_function(fn_name, cl.impl_signature, false, false, fn_expr.variadic)};
+    const auto prev_fn{builder_.get_function()};
+    const auto prev_seg{builder_.get_segment()};
+
+    auto& entry{fn.add_segment()};
+    builder_.set_insert_point(fn, entry);
+
+    {
+        const scope_guard g{scopes_};
+
+        auto& self_type{*impl_sig_data->params[0]};
+        auto& self_slot{fn.add_param("self", self_type)};
+        scopes_.back().bindings.emplace("self",
+                                        local_binding{self_slot.id, self_type, false, stdx::none});
+
+        for (const auto& param : fn_expr.parameters) {
+            const auto& p_ident{active_ast().get_as<ast::identifier_expr>(param.name)};
+            const auto  p_name{p_ident.name};
+            const auto  p_type{active_mod().get_sema_type_opt(param.name)};
+            ASSERT(p_type, "Closure parameter must have a resolved sema type");
+            auto& p_slot{fn.add_param(std::string{p_name}, *p_type)};
+            scopes_.back().bindings.emplace(p_name,
+                                            local_binding{p_slot.id, *p_type, false, stdx::none});
+        }
+
+        // Load every capture once, up front, from `self`
+        auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+        for (usize field_idx{0}; const auto& capture : cl.captures) {
+            const auto field_ptr{builder_.emit_get_element_ptr(value{self_slot.id, self_type},
+                                                               {value{field_idx, usize_type}},
+                                                               *capture.storage_type)};
+            const auto loaded{
+                builder_.emit_load(value{field_ptr, *capture.storage_type}, *capture.storage_type)};
+            const bool by_ref{capture.mode != sema::types::capture_mode::VALUE};
+            auto&      local_type{by_ref ? *capture.captured_type : *capture.storage_type};
+            scopes_.back().bindings.emplace(capture.name,
+                                            local_binding{loaded, local_type, by_ref, stdx::none});
+            ++field_idx;
+        }
+
+        emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
+        if (const auto cur_seg{builder_.get_segment()}) {
+            if (!cur_seg->has_terminator()) {
+                if (impl_sig_data->return_type.get_kind() == sema::type_kind::VOID_) {
+                    builder_.emit_return();
+                } else {
+                    builder_.emit_return(value{undefined_val{}, impl_sig_data->return_type});
+                }
+            }
+        }
+    }
+
+    if (prev_fn && prev_seg) { builder_.set_insert_point(*prev_fn, *prev_seg); }
+}
+
+auto emitter::emit_closure_env(const sema::types::closure_t& cl, sema::type& closure_type)
+    -> value {
+    PROFILE_FUNCTION();
+    const auto slot{builder_.emit_alloca(closure_type)};
+    auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    for (usize field_idx{0}; const auto& capture : cl.captures) {
+        const auto field_val{get_capture_source(capture)};
+        const auto field_ptr{builder_.emit_get_element_ptr(
+            value{slot, closure_type}, {value{field_idx, usize_type}}, *capture.storage_type)};
+        builder_.emit_store(value{field_ptr, *capture.storage_type}, field_val).is_initializer =
+            true;
+        ++field_idx;
+    }
+    const auto loaded{builder_.emit_load(value{slot, closure_type}, closure_type)};
+    return value{loaded, closure_type};
+}
+
+auto emitter::get_capture_source(const sema::types::closure_capture& capture) -> value {
+    const auto binding{lookup_binding(capture.name)};
+    ASSERT(binding, "Captured variable must have a binding at its definition site");
+
+    if (capture.mode == sema::types::capture_mode::VALUE) {
+        if (binding->const_val) { return *binding->const_val; }
+        if (binding->is_alloca) {
+            return value{builder_.emit_load(binding->id, binding->type), binding->type};
+        }
+        return value{binding->id, binding->type};
+    }
+
+    // Otherwise a reference, so the address is needed, not the value
+    ASSERT(binding->is_alloca, "Reference-captured variable must be addressable");
+    return value{binding->id, *capture.storage_type};
+}
+
 auto emitter::emit_stmt(const ast::stmt_handle& stmt) -> void {
     PROFILE_FUNCTION();
     const auto stmt_id{*stmt};
@@ -508,7 +618,8 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
     const auto sema_kind{sema_type->get_kind()};
     const auto is_aggregate{
         sema_kind == sema::type_kind::ARRAY || sema_kind == sema::type_kind::SLICE ||
-        sema_kind == sema::type_kind::STRUCT || sema_kind == sema::type_kind::UNION};
+        sema_kind == sema::type_kind::STRUCT || sema_kind == sema::type_kind::UNION ||
+        sema_kind == sema::type_kind::CLOSURE};
 
     if (is_const && decl.value && !is_aggregate) {
         if (const auto cv{const_eval_.try_eval(*decl.value)}) {
@@ -624,8 +735,12 @@ auto emitter::emit_expression_id(ast::node_id id) -> value {
         },
         [&](const ast::identifier_expr& data) -> value { return emit_ident(id, data); },
         [&](const ast::function_expr& data) -> value {
+            const auto sema_type{active_mod().get_sema_type_opt(id)};
+            if (sema_type && sema_type->get_kind() == sema::type_kind::CLOSURE) {
+                return emit_closure(id, data);
+            }
             const auto anon_name{emit_anonymous_function(id, data)};
-            return value{anon_name, active_mod().get_sema_type_opt(id)};
+            return value{anon_name, sema_type};
         },
         [&](const ast::if_expr& data) -> value { return emit_if(id, data); },
         [&](const ast::match_expr& data) -> value { return emit_match(id, data); },
@@ -887,6 +1002,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
 
     stdx::option<std::string> callee_name;
     stdx::option<value>       indirect_callee;
+    bool                      is_closure_ident_call{false};
     const auto                dot_call{active_ast().get_as_opt<ast::dot_expr>(call.function)};
 
     if (const auto generic_target{active_mod().get_generic_call_target_opt(id)}) {
@@ -910,6 +1026,9 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                 } else {
                     indirect_callee.emplace(value{binding->id, binding->type});
                 }
+            } else if (binding->type.get_kind() == sema::type_kind::CLOSURE) {
+                is_closure_ident_call = true;
+                callee_name.emplace(fmt::format("closure{}", binding->type.get_symbol_table_idx()));
             } else {
                 callee_name.emplace(std::string{ident->name});
             }
@@ -936,6 +1055,8 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
     if (fn_type_opt) {
         if (const auto ptr_data{fn_type_opt->get_data().as_opt<sema::types::pointer>()}) {
             fn_data = ptr_data->underlying.get_data().as_opt<sema::types::function>();
+        } else if (const auto cl_data{fn_type_opt->get_data().as_opt<sema::types::closure_t>()}) {
+            fn_data = cl_data->impl_signature.get_data().as_opt<sema::types::function>();
         } else {
             fn_data = fn_type_opt->get_data().as_opt<sema::types::function>();
         }
@@ -974,10 +1095,18 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
     }
 
     std::vector<value> args;
-    const bool         has_implicit_self{fn_data && fn_data->has_self && is_obj_instance};
+    const bool         has_implicit_self{is_closure_ident_call ||
+                                 (fn_data && fn_data->has_self && is_obj_instance)};
     args.reserve(call.arguments.size() + (has_implicit_self ? 1 : 0));
 
-    if (has_implicit_self && !fn_data->params.empty()) {
+    if (is_closure_ident_call) {
+        // The callee identifier's own binding is the environment
+        const auto& ident{active_ast().get_as<ast::identifier_expr>(call.function)};
+        const auto  binding{lookup_binding(ident.name)};
+        ASSERT(binding, "Closure callee identifier must have a binding");
+        ASSERT(!fn_data->params.empty(), "Closure implementation signature must have self");
+        args.emplace_back(value{binding->id, const_cast<sema::type&>(*fn_data->params[0])});
+    } else if (has_implicit_self && !fn_data->params.empty()) {
         const auto& self_param_type{*fn_data->params[0]};
         const auto  obj_expr_h{dot_call->object};
         const auto  obj_type{active_mod().get_sema_type_opt(obj_expr_h)};

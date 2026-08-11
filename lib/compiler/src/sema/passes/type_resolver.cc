@@ -473,12 +473,17 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
     // Verify that the type in the function is callable and store the return type
     auto&                                callee_data{callee_type.get_data()};
     stdx::option<const types::function&> function_type;
+    bool                                 is_closure_call{false};
     if (const auto ft{callee_data.as_opt<types::function>()}) {
         function_type = ft;
     } else if (const auto ptr{callee_data.as_opt<types::pointer>()}) {
         function_type = ptr->underlying.get_data().as_opt<types::function>();
     } else if (const auto ref{callee_data.as_opt<types::reference>()}) {
         function_type = ref->underlying.get_data().as_opt<types::function>();
+    } else if (const auto cl{callee_data.as_opt<types::closure_t>()}) {
+        // Called directly since synthetic `&mut self` param is always implicit here
+        function_type   = cl->impl_signature.get_data().as_opt<types::function>();
+        is_closure_call = true;
     }
 
     if (function_type) {
@@ -512,7 +517,8 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
 
             if (!is_type) { is_obj_instance = true; }
         }
-        const auto has_implicit_self{function_type->has_self && is_obj_instance};
+        const auto has_implicit_self{is_closure_call ||
+                                     (function_type->has_self && is_obj_instance)};
 
         // Check the arity of the function against params before resetting last type
         const auto& params{function_type->params};
@@ -908,11 +914,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     if (is_auto_return) { resolving_.set_sema_type(fn.explicit_return_type, deduced_return_type); }
 
     if (!resolving_.get_captures(id).empty()) {
-        auto& closure_type{attach_closure_type(id, fn_type)};
-        ctx_.diags.emplace_back("Closures are not yet supported past type-resolving",
-                                error::ILLEGAL_IMPLICIT_CAPTURE,
-                                resolving_.ast.location_of(id));
-        return last_type_.emplace(closure_type);
+        return last_type_.emplace(attach_closure_type(id, fn_type));
     }
     last_type_.emplace(fn_type);
 }
@@ -1018,20 +1020,43 @@ auto type_resolver::attach_closure_type(ast::node_id fn_id, type& fn_type) -> ty
     const auto captures{resolving_.get_captures(fn_id)};
     ASSERT(!captures.empty(), "attach_closure_type called with no captures");
 
+    const auto idx{fn_type.get_symbol_table_idx()};
+    auto*      closure_type{ctx_.pool[{type_kind::CLOSURE, types::mut::CONSTANT, idx}].get()};
+    closure_type->set_symbol_table_idx(idx);
+
     auto  capture_span{ctx_.arena.make_span<types::closure_capture>(captures.size())};
     usize i{0};
     for (const auto& capture : captures) {
         auto lookup{ctx_.registry.lookup(table_stack_, capture.name)};
         ASSERT(lookup, "Recorded capture name failed to re-resolve in its enclosing scope");
-        auto& captured_type{get_resolved_symbol_type(lookup->get_data())};
-        capture_span[i++] = types::closure_capture{
-            capture.name, &captured_type, infer_capture_mode(capture.usage, captured_type)};
+        auto&      captured_type{get_resolved_symbol_type(lookup->get_data())};
+        const auto mode{infer_capture_mode(capture.usage, captured_type)};
+
+        // What the environment actually stores: the value itself, or a reference to it
+        auto* storage_type{&captured_type};
+        if (mode == types::capture_mode::REF) {
+            storage_type = &ctx_.get_reference(types::mut::CONSTANT, captured_type);
+        } else if (mode == types::capture_mode::MUT_REF) {
+            storage_type = &ctx_.get_reference(types::mut::MUTABLE, captured_type);
+        }
+
+        capture_span[i++] =
+            types::closure_capture{capture.name, &captured_type, storage_type, mode};
     }
 
-    const auto idx{fn_type.get_symbol_table_idx()};
-    auto*      closure_type{ctx_.pool[{type_kind::CLOSURE, types::mut::CONSTANT, idx}].get()};
-    closure_type->set_symbol_table_idx(idx);
-    closure_type->resolve<types::closure_t>(capture_span, fn_type);
+    // Inject mutable self reference into closure call arguments
+    const auto& public_sig{fn_type.get_data().as<types::function>()};
+    auto        impl_params{ctx_.pool.get_many_unsafe(public_sig.params.size() + 1)};
+    impl_params[0] = &ctx_.get_reference(types::mut::MUTABLE, *closure_type);
+    for (usize p{0}; p < public_sig.params.size(); ++p) {
+        impl_params[p + 1] = public_sig.params[p];
+    }
+
+    auto* impl_sig{ctx_.pool[{type_kind::FUNCTION, types::mut::CONSTANT, idx, true}].get()};
+    impl_sig->resolve<types::function>(
+        true, impl_params, public_sig.return_type, public_sig.is_variadic);
+
+    closure_type->resolve<types::closure_t>(capture_span, fn_type, *impl_sig);
     resolving_.set_sema_type(fn_id, *closure_type);
     return *closure_type;
 }
@@ -1100,13 +1125,24 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
                              resolving_.ast.location_of(id)));
     }
 
-    // Belongs to an enclosing function's stack frame rather than the module/prelude scope: this is
-    // an implicit closure capture. Recorded for `attach_closure_type` to consume once the whole
-    // body finishes resolving; the identifier itself still resolves normally to the captured
-    // variable's real type (closures are rejected as a whole once fully typed, not per-reference -
-    // see the capture-list check at the end of `visit(function_expr)`).
+    // Belongs to an enclosing function's stack frame rather than the module/prelude scope
     if (!function_boundaries_.empty() && lookup->depth < function_boundaries_.back() &&
         lookup->depth >= function_boundaries_.front()) {
+        // GIR emission only forwards a capture from the immediate enclosing function
+        const auto immediate_parent_boundary{
+            function_boundaries_.size() >= 2 ? function_boundaries_[function_boundaries_.size() - 2]
+                                             : function_boundaries_.front()};
+        if (lookup->depth < immediate_parent_boundary) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("'{}' would require forwarding a capture through an intermediate "
+                            "function, which is not yet supported",
+                            name),
+                error::ILLEGAL_IMPLICIT_CAPTURE,
+                resolving_.ast.location_of(id)));
+        }
+
         resolving_.add_capture(open_function_nodes_.back(),
                                name,
                                in_mutating_context_ ? capture_usage::MUTATED : capture_usage::READ);

@@ -12,7 +12,9 @@
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/ast/primitive.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/gir/module.hh" // IWYU pragma: keep
@@ -142,6 +144,19 @@ auto expect_compile_error(std::string_view source) -> ctx_idx_pair {
     const auto& diags{UNWRAP(ctx->root_mod.diagnostics.as_opt<sema::diagnostics>())};
     CHECK_FALSE(diags.empty());
     return {std::move(ctx), idx};
+}
+
+auto find_nested_fn(const mod::module&        module,
+                    const ast::function_expr& outer,
+                    std::string_view          name) -> ast::node_id {
+    const auto& block{module.ast.get_as<ast::block_stmt>(outer.body)};
+    for (const auto& stmt : block) {
+        if (const auto decl{module.ast.get_as_opt<ast::decl_stmt>(stmt)}) {
+            const auto& ident{module.ast.get_as<ast::identifier_expr>(decl->name)};
+            if (ident.name == name && decl->value) { return *decl->value; }
+        }
+    }
+    FAIL("Could not find nested function named '" << name << "'");
 }
 
 } // namespace ghoti::tests::helpers

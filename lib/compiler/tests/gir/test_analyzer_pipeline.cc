@@ -4,7 +4,6 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "catch2/catch_message.hpp"
 #include "compiler/gir/dumper.hh"
 #include "compiler/gir/emitter.hh"
 #include "compiler/gir/instruction.hh"
@@ -60,7 +59,6 @@ TEST_CASE("GIR array literal stack allocation and initialization") {
     gir::dumper        dumper{ss};
     dumper.dump(fn);
     const auto dump_text{ss.view()};
-    UNSCOPED_INFO("DUMP:\n" << dump_text);
 
     CHECK(dump_text.contains("alloca"));
     CHECK(dump_text.contains("get_element_ptr"));
