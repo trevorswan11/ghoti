@@ -1,6 +1,6 @@
 # Style Guide
 
-Cairn adheres to a somewhat strict style guide to enhance readability.
+Ghoti adheres to a somewhat strict style guide to enhance readability.
 
 ## Formatting
 `clang-format` is used for code formatting all C++ code, while Zig's builtin formatter is used for formatting all Zig code. You must use `clang-format` version 21.1.8 for consistent project-wide formatting
@@ -46,4 +46,4 @@ Upon PR creation and workflow approval, GitHub actions will run `zig build fmt-c
 - Use PascalCase for files that should be treated as types
 
 ## Commits & PRs
-Commits to cairn should use [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/) whenever possible. When possible, try to rebase over merge to prevent messy merge commits from leaking into the commit history.
+Commits to ghoti should use [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/) whenever possible. When possible, try to rebase over merge to prevent messy merge commits from leaking into the commit history.
