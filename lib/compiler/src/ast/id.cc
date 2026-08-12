@@ -56,6 +56,7 @@ constexpr auto NODE_NAMES{stdx::fixed::enum_map<node_kind, std::string_view>::fr
     name_mapping{node_kind::BOOL_EXPRESSION, "bool"},
     name_mapping{node_kind::VOID_EXPRESSION, "void"},
     name_mapping{node_kind::UNDEFINED_EXPRESSION, "undefined"},
+    name_mapping{node_kind::NULLPTR_EXPRESSION, "nullptr"},
     name_mapping{node_kind::MODULE_ACCESS_EXPRESSION, "module access"},
     name_mapping{node_kind::STRUCT_EXPRESSION, "struct"},
     name_mapping{node_kind::UNION_EXPRESSION, "union"},

@@ -86,6 +86,7 @@ auto inject_types(symbol_table& prelude, type_pool& pool) -> void {
     inject_type(kws::AUTO, type_kind::AUTO);
     inject_type(kws::OPAQUE, type_kind::OPAQUE);
     inject_type(kws::UNDEFINED, type_kind::UNDEFINED);
+    inject_type(kws::NULLPTR, type_kind::NULLPTR);
     inject_type(kws::NORETURN, type_kind::NORETURN);
 }
 

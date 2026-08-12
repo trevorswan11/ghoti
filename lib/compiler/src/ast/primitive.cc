@@ -141,6 +141,11 @@ auto undefined_expr::parse(syntax::parser& parser)
     return parser.add_expr<undefined_expr>(parser.get_current_token());
 }
 
+auto nullptr_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
+    PROFILE_FUNCTION();
+    return parser.add_expr<nullptr_expr>(parser.get_current_token());
+}
+
 auto unreachable_expr::parse(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();

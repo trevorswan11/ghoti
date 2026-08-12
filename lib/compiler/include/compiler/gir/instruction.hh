@@ -154,6 +154,9 @@ struct void_val {
 struct undefined_val {
     [[nodiscard]] constexpr auto operator==(const undefined_val&) const noexcept -> bool = default;
 };
+struct nullptr_val {
+    [[nodiscard]] constexpr auto operator==(const nullptr_val&) const noexcept -> bool = default;
+};
 
 struct value {
     using data_t = stdx::variant<local_id,
@@ -164,7 +167,8 @@ struct value {
                                  std::string,
                                  stdx::option<sema::type&>,
                                  void_val,
-                                 undefined_val>;
+                                 undefined_val,
+                                 nullptr_val>;
 
     data_t                    data{void_val{}};
     stdx::option<sema::type&> type{stdx::none};

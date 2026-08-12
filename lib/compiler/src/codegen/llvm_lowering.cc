@@ -402,6 +402,9 @@ auto llvm_lowering::lower_value(const gir::value& val, const sema::type* expecte
             return llvm::UndefValue::get(ty);
         },
         [](gir::void_val) -> llvm::Value* { return nullptr; },
+        [this](gir::nullptr_val) -> llvm::Value* {
+            return llvm::ConstantPointerNull::get(types_.get_ptr_ty());
+        },
         [](const stdx::option<sema::type&>&) -> llvm::Value* { return nullptr; });
 }
 

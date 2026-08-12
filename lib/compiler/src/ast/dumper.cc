@@ -468,6 +468,11 @@ auto dumper::visit(node_id, const undefined_expr&) -> void {
     fmt::println(out_, "UndefinedExpression");
 }
 
+auto dumper::visit(node_id, const nullptr_expr&) -> void {
+    PROFILE_FUNCTION();
+    fmt::println(out_, "NullptrExpression");
+}
+
 auto dumper::visit(node_id, const unreachable_expr&) -> void {
     PROFILE_FUNCTION();
     fmt::println(out_, "UnreachableExpression");

@@ -113,6 +113,31 @@ TEST_CASE("Const correctness for values and pointers") {
     }
 }
 
+TEST_CASE("nullptr assignability") {
+    auto [ctx, idx]{helpers::resolve_and_check("const x := 42;")};
+
+    auto& nullptr_t{ctx->get_type(sema::type_kind::NULLPTR)};
+    auto& i32_mut{ctx->get_type<sema::types::mut::MUTABLE>(sema::type_kind::I32)};
+    auto& ptr_to_i32{ctx->analyzer.get_ctx().get_pointer(sema::types::mut::MUTABLE, i32_mut)};
+    auto& ref_to_i32{ctx->analyzer.get_ctx().get_reference(sema::types::mut::MUTABLE, i32_mut)};
+
+    SECTION("nullptr is assignable to any pointer type") {
+        CHECK(sema::is_assignable(nullptr_t, ptr_to_i32));
+    }
+
+    SECTION("nullptr is never assignable to a reference type") {
+        CHECK_FALSE(sema::is_assignable(nullptr_t, ref_to_i32));
+    }
+
+    SECTION("nullptr is not assignable to plain value types") {
+        CHECK_FALSE(sema::is_assignable(nullptr_t, i32_mut));
+    }
+
+    SECTION("a pointer is not assignable to nullptr's type") {
+        CHECK_FALSE(sema::is_assignable(ptr_to_i32, nullptr_t));
+    }
+}
+
 TEST_CASE("Slice and array coercions") {
     auto [ctx, idx]{helpers::resolve_and_check("const x := 42;")};
 

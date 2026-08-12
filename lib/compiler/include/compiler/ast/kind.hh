@@ -43,6 +43,7 @@ enum class node_kind : u8 {
     BOOL_EXPRESSION,
     VOID_EXPRESSION,
     UNDEFINED_EXPRESSION,
+    NULLPTR_EXPRESSION,
     UNREACHABLE_EXPRESSION,
     MODULE_ACCESS_EXPRESSION,
     STRUCT_EXPRESSION,
@@ -100,6 +101,7 @@ enum class node_kind : u8 {
     X(bool_expr)            \
     X(void_expr)            \
     X(undefined_expr)       \
+    X(nullptr_expr)         \
     X(unreachable_expr)     \
     X(module_access_expr)   \
     X(struct_expr)          \
@@ -208,6 +210,7 @@ NODE_KIND_OF_TRAIT(f64_expr, F64_EXPRESSION)
 NODE_KIND_OF_TRAIT(bool_expr, BOOL_EXPRESSION)
 NODE_KIND_OF_TRAIT(void_expr, VOID_EXPRESSION)
 NODE_KIND_OF_TRAIT(undefined_expr, UNDEFINED_EXPRESSION)
+NODE_KIND_OF_TRAIT(nullptr_expr, NULLPTR_EXPRESSION)
 NODE_KIND_OF_TRAIT(unreachable_expr, UNREACHABLE_EXPRESSION)
 NODE_KIND_OF_TRAIT(module_access_expr, MODULE_ACCESS_EXPRESSION)
 NODE_KIND_OF_TRAIT(struct_expr, STRUCT_EXPRESSION)

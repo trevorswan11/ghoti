@@ -66,6 +66,7 @@ auto symbol_collector::collect_symbols(mod::module& module, context& ctx) -> mod
     X(bool_expr)                \
     X(void_expr)                \
     X(undefined_expr)           \
+    X(nullptr_expr)             \
     X(unreachable_expr)         \
     X(module_access_expr)
 

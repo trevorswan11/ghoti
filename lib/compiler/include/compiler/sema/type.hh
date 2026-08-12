@@ -38,6 +38,7 @@ enum class type_kind : u8 {
     F64,
     VOID_,
     UNDEFINED,
+    NULLPTR,
     TYPE,
     SLICE,
     ARRAY,

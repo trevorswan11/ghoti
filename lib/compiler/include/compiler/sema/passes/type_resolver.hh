@@ -244,6 +244,7 @@ class type_resolver {
     auto visit(ast::node_id, const ast::bool_expr&) -> void;
     auto visit(ast::node_id, const ast::void_expr&) -> void;
     auto visit(ast::node_id, const ast::undefined_expr&) -> void;
+    auto visit(ast::node_id, const ast::nullptr_expr&) -> void;
     auto visit(ast::node_id, const ast::unreachable_expr&) -> void;
 
     template <ast::IndexableID ID>

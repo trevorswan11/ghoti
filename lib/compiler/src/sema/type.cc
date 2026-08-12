@@ -101,6 +101,7 @@ auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {
     case type_kind::BOOL:
     case type_kind::VOID_:
     case type_kind::UNDEFINED:
+    case type_kind::NULLPTR:
     case type_kind::TYPE:
     case type_kind::NORETURN:
     case type_kind::OPAQUE:
@@ -158,6 +159,9 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
         src.get_kind() == type_kind::AUTO || dest.get_kind() == type_kind::AUTO) {
         return true;
     }
+
+    // nullptr is assignable to any pointer type, but never to a reference
+    if (src.get_kind() == type_kind::NULLPTR) { return dest.get_kind() == type_kind::POINTER; }
 
     if (is_implicit_widenable(src.get_kind(), dest.get_kind())) { return true; }
     const auto src_kind{src.get_kind()};

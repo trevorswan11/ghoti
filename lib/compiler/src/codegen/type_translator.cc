@@ -30,7 +30,8 @@ auto type_translator::translate(const sema::type& type) -> llvm::Type* {
     case sema::type_kind::NORETURN:  return get_void_ty();
     case sema::type_kind::POINTER:
     case sema::type_kind::REFERENCE:
-    case sema::type_kind::FUNCTION:  return get_ptr_ty();
+    case sema::type_kind::FUNCTION:
+    case sema::type_kind::NULLPTR:   return get_ptr_ty();
     case sema::type_kind::SLICE:     return translate_slice(type.get_data().as<sema::types::slice>());
     case sema::type_kind::ARRAY:     return translate_array(type.get_data().as<sema::types::array>());
     case sema::type_kind::STRUCT:

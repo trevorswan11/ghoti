@@ -1870,6 +1870,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
         case type_kind::AUTO:
         case type_kind::OPAQUE:
         case type_kind::NORETURN:
+        case type_kind::NULLPTR:
             return last_type_.emplace(ctx_.poison_node(
                 resolving_,
                 id,
@@ -2127,6 +2128,7 @@ MAKE_PRIMITIVE_RESOLVER(u8_expr, U8)
 MAKE_PRIMITIVE_RESOLVER(bool_expr, BOOL)
 MAKE_PRIMITIVE_RESOLVER(void_expr, VOID_)
 MAKE_PRIMITIVE_RESOLVER(undefined_expr, UNDEFINED)
+MAKE_PRIMITIVE_RESOLVER(nullptr_expr, NULLPTR)
 MAKE_PRIMITIVE_RESOLVER(unreachable_expr, NORETURN)
 MAKE_PRIMITIVE_RESOLVER(f32_expr, F32)
 MAKE_PRIMITIVE_RESOLVER(f64_expr, F64)

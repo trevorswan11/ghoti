@@ -481,6 +481,10 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
             return const_value{undefined_val{},
                                ctx_.get_builtin_resolved_type(sema::type_kind::UNDEFINED)};
         },
+        [&](ast::nullptr_expr) {
+            return const_value{nullptr_val{},
+                               ctx_.get_builtin_resolved_type(sema::type_kind::NULLPTR)};
+        },
         [&](ast::unreachable_expr) {
             return const_value{undefined_val{},
                                ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN)};

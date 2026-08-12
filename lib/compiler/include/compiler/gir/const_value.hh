@@ -66,6 +66,7 @@ class const_value {
                                  const_union,
                                  void_val,
                                  undefined_val,
+                                 nullptr_val,
                                  poison_val>;
 
   public:

@@ -222,6 +222,7 @@ constexpr auto PREFIX_FNS = [] -> auto {
     fns[token_type_t::BOOLEAN_TRUE]     = ast::bool_expr::parse;
     fns[token_type_t::BOOLEAN_FALSE]    = ast::bool_expr::parse;
     fns[token_type_t::UNDEFINED]        = ast::undefined_expr::parse;
+    fns[token_type_t::NULLPTR]          = ast::nullptr_expr::parse;
     fns[token_type_t::UNREACHABLE]      = ast::unreachable_expr::parse;
     fns[token_type_t::LBRACE]           = ast::void_expr::parse;
     fns[token_type_t::STRING]           = ast::string_expr::parse;

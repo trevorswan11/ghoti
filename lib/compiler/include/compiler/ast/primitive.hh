@@ -67,6 +67,11 @@ struct undefined_expr {
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
+struct nullptr_expr {
+    [[nodiscard]] static auto parse(syntax::parser& parser)
+        -> stdx::result<expr_handle, syntax::diagnostic>;
+};
+
 struct unreachable_expr {
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;

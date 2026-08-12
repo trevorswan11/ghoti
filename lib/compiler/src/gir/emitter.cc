@@ -739,6 +739,9 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
             return value{undefined_val{},
                          ctx_.get_builtin_resolved_type(sema::type_kind::UNDEFINED)};
         },
+        [&](ast::nullptr_expr) -> value {
+            return value{nullptr_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::NULLPTR)};
+        },
         [&](ast::unreachable_expr) -> value {
             builder_.emit_unreachable();
             return value{undefined_val{},

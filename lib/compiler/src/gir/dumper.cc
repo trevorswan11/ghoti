@@ -64,6 +64,7 @@ auto format_value(const value& val) -> std::string {
         [](stdx::option<sema::type&> t) { return t ? format_type(*t) : "<null_type>"; },
         [](void_val) { return "void"; },
         [](undefined_val) { return "undefined"; },
+        [](nullptr_val) { return "nullptr"; },
         [](auto v) { return fmt::format("{}", v); });
 }
 
