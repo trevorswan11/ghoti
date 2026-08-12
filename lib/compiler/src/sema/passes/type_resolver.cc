@@ -1992,13 +1992,13 @@ auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> vo
 
     // References already behave like values
     if (rhs_type.get_kind() == type_kind::REFERENCE) {
-        return last_type_.emplace(ctx_.poison_node(
-            resolving_,
-            id,
-            "Cannot take a reference to an already-reference-typed value; pass it "
-            "directly to alias the same referent",
-            error::ILLEGAL_REFERENCE_TO_REFERENCE,
-            resolving_.ast.location_of(id)));
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             "Cannot take a reference to an already-reference-typed value; pass it "
+                             "directly to alias the same referent",
+                             error::ILLEGAL_REFERENCE_TO_REFERENCE,
+                             resolving_.ast.location_of(id)));
     }
 
     auto& new_type{ctx_.get_reference(ref_addr_of_is_mutable(id), rhs_type)};

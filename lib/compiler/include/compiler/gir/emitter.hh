@@ -1,11 +1,14 @@
 #pragma once
 
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include <ankerl/unordered_dense.h>
 #include <stdx/option.hh>
+#include <stdx/profiler.hh>
+#include <stdx/type_traits.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
@@ -45,6 +48,7 @@ class emitter {
         sema::type&         type;
         bool                is_alloca{false};
         stdx::option<value> const_val;
+        bool                is_const{false};
     };
 
     struct loop_context {
@@ -121,7 +125,8 @@ class emitter {
     auto emit_coerced_expr(ast::expr_handle expr_id, const sema::type& dest_type) -> value;
     auto emit_generic_instantiation(const sema::generic_instantiation_request& req) -> void;
     auto emit_expression_id(ast::node_id id) -> value;
-    // Produces a value exactly as resolved, including a bare reference-typed value where applicable.
+    // Produces a value exactly as resolved, including a bare reference-typed value where
+    // applicable.
     auto emit_expression_id_raw(ast::node_id id) -> value;
     auto emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value;
     auto emit_match(ast::node_id id, const ast::match_expr& match) -> value;
@@ -158,7 +163,16 @@ class emitter {
     auto emit_call(ast::node_id id, const ast::call_expr& call) -> value;
     auto emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> value;
 
-    auto lookup_binding(std::string_view name) const noexcept -> stdx::option<const local_binding&>;
+    template <stdx::Reference Binding = const local_binding&>
+    auto lookup_binding(std::string_view name) noexcept -> stdx::option<Binding> {
+        PROFILE_FUNCTION();
+        for (auto& frame : std::views::reverse(scopes_)) {
+            if (auto it{frame.bindings.find(name)}; it != frame.bindings.end()) {
+                return stdx::option<Binding>{it->second};
+            }
+        }
+        return stdx::none;
+    }
 
     [[nodiscard]] static constexpr auto map_binary_op(syntax::token_type_t tok) noexcept
         -> stdx::option<instruction_kind> {

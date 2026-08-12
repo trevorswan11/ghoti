@@ -269,4 +269,17 @@ TEST_CASE("Rebinding a const scalar is rejected") {
     )");
 }
 
+TEST_CASE("Indexing a slice parameter of a nested function, passed an existing slice") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            var arr: [2uz]mut i32 = [2uz]mut i32{7, 8};
+            var sl: []mut i32 = arr;
+            const readit := fn(s: []mut i32): i32 {
+                return s[0];
+            };
+            return readit(sl);
+        };
+    )") == 7);
+}
+
 } // namespace ghoti::tests

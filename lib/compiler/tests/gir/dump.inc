@@ -30,18 +30,16 @@ fn compute_point(p: struct) -> i32
   seg 3:
     %13 = load %6
     %14 = load %0
-    %15 = alloca struct
-    store param.0, %15
-    %16 = get_element_ptr i32 %15, 1
-    %17 = load %16
-    %18 = add i32 %14, %17
-    %19 = load %0
-    %20 = add i32 %19, 1
-    store %20, %0
-    ret i32 %18
-    %21 = load %0
-    %22 = add i32 %21, 1
-    store %22, %0
+    %15 = get_element_ptr i32 %1, 1
+    %16 = load %15
+    %17 = add i32 %14, %16
+    %18 = load %0
+    %19 = add i32 %18, 1
+    store %19, %0
+    ret i32 %17
+    %20 = load %0
+    %21 = add i32 %20, 1
+    store %21, %0
     ret i32 undefined
 
 fn match_color(c: enum) -> i32

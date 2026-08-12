@@ -364,9 +364,10 @@ auto emitter::emit_anonymous_function(ast::node_id id, const ast::function_expr&
             const auto  p_type{active_mod().get_sema_type_opt(param.name)};
             ASSERT(p_type, "Anonymous function parameter must have a resolved sema type");
 
-            auto& p_slot{fn.add_param(std::string{p_name}, *p_type)};
-            scopes_.back().bindings.emplace(p_name,
-                                            local_binding{p_slot.id, *p_type, false, stdx::none});
+            auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
+            const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
+            scopes_.back().bindings.emplace(
+                p_name, local_binding{p_slot.id, *p_type, p_spilled, stdx::none});
         }
 
         emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
@@ -428,9 +429,10 @@ auto emitter::emit_closure_function(const ast::function_expr&     fn_expr,
             const auto  p_name{p_ident.name};
             const auto  p_type{active_mod().get_sema_type_opt(param.name)};
             ASSERT(p_type, "Closure parameter must have a resolved sema type");
-            auto& p_slot{fn.add_param(std::string{p_name}, *p_type)};
-            scopes_.back().bindings.emplace(p_name,
-                                            local_binding{p_slot.id, *p_type, false, stdx::none});
+            auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
+            const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
+            scopes_.back().bindings.emplace(
+                p_name, local_binding{p_slot.id, *p_type, p_spilled, stdx::none});
         }
 
         // Load every capture once, up front, from `self`
@@ -617,21 +619,23 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
 
     if (is_const && decl.value && !is_aggregate) {
         if (const auto cv{const_eval_.try_eval(*decl.value)}) {
-            scopes_.back().bindings.emplace(
-                name,
-                local_binding{
-                    local_id{0, local_kind::TEMPORARY}, *sema_type, false, cv->to_gir_value()});
+            scopes_.back().bindings.emplace(name,
+                                            local_binding{local_id{0, local_kind::TEMPORARY},
+                                                          *sema_type,
+                                                          false,
+                                                          cv->to_gir_value(),
+                                                          true});
             return;
         }
 
         const value val{emit_coerced_expr(*decl.value, *sema_type)};
         if (const auto lid{val.as_opt<local_id>()}) {
-            scopes_.back().bindings.emplace(name,
-                                            local_binding{*lid, *sema_type, false, stdx::none});
+            scopes_.back().bindings.emplace(
+                name, local_binding{*lid, *sema_type, false, stdx::none, true});
             return;
         }
         scopes_.back().bindings.emplace(
-            name, local_binding{local_id{0, local_kind::TEMPORARY}, *sema_type, false, val});
+            name, local_binding{local_id{0, local_kind::TEMPORARY}, *sema_type, false, val, true});
         return;
     }
 
@@ -640,7 +644,8 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         const value val{emit_coerced_expr(*decl.value, *sema_type)};
         builder_.emit_store(slot, val).is_initializer = true;
     }
-    scopes_.back().bindings.emplace(name, local_binding{slot, *sema_type, true, stdx::none});
+    scopes_.back().bindings.emplace(name,
+                                    local_binding{slot, *sema_type, true, stdx::none, is_const});
 }
 
 auto emitter::emit_return_stmt(ast::node_id stmt_id, const ast::return_stmt& ret) -> void {
@@ -1219,15 +1224,6 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         return value{*dest, ret_type};
     }
     return value{void_val{}, ret_type};
-}
-
-auto emitter::lookup_binding(std::string_view name) const noexcept
-    -> stdx::option<const local_binding&> {
-    PROFILE_FUNCTION();
-    for (auto& frame : std::views::reverse(scopes_)) {
-        if (auto it{frame.bindings.find(name)}; it != frame.bindings.end()) { return it->second; }
-    }
-    return stdx::none;
 }
 
 auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
@@ -1978,14 +1974,25 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                 }
             }
             ASSERT(binding, "LValue identifier must be bound in scope");
-            if (binding->is_alloca) { return value{binding->id, binding->type}; }
+            // Struct/union field mutability is binding-based
+            const auto is_struct_or_union{binding->type.get_kind() == sema::type_kind::STRUCT ||
+                                          binding->type.get_kind() == sema::type_kind::UNION};
+            auto&      qualified_type{is_struct_or_union
+                                          ? *ctx_.pool.with_const(binding->type, binding->is_const)
+                                          : binding->type};
+            if (binding->is_alloca) { return value{binding->id, qualified_type}; }
 
-            // A binding with no alloca of its own has no address; spill it into a fresh one.
-            // A binding that has a const_val is a scalar `const`, so the spilled copy stays const.
+            // A binding with no alloca of its own has no address: spill it into one
+            const auto is_const_binding{binding->const_val.has_value() || binding->is_const};
             const auto unspilled_value{
-                binding->const_val.value_or(value{binding->id, binding->type})};
-            return spill_to_temporary(
-                unspilled_value, binding->type, binding->const_val.has_value());
+                binding->const_val.value_or(value{binding->id, qualified_type})};
+            const auto spilled{
+                spill_to_temporary(unspilled_value, qualified_type, is_const_binding)};
+            auto& mut_binding{*lookup_binding<local_binding&>(ident.name)};
+            mut_binding.id        = spilled.data.as<local_id>();
+            mut_binding.is_alloca = true;
+            mut_binding.const_val = stdx::none;
+            return spilled;
         },
         [&](const ast::call_expr& call) -> value {
             const auto fn_token{call.function->get_token_type()};
@@ -2012,15 +2019,17 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
 
             // A reference/pointer-typed field or nested access needs one more indirection unwound
             if (const auto ref_data{obj_type->get_data().as_opt<sema::types::reference>()}) {
-                auto& ref_underlying{const_cast<sema::type&>(ref_data->underlying)};
+                auto& ref_underlying{
+                    *ctx_.pool.with_const(ref_data->underlying, obj_type->is_constant())};
                 base_lval.data = value::data_t{builder_.emit_load(base_lval, *obj_type)};
                 base_lval.type.emplace(ref_underlying);
-                obj_type = &ref_data->underlying;
+                obj_type = &ref_underlying;
             } else if (const auto ptr_data{obj_type->get_data().as_opt<sema::types::pointer>()}) {
-                auto& ptr_underlying{const_cast<sema::type&>(ptr_data->underlying)};
+                auto& ptr_underlying{
+                    *ctx_.pool.with_const(ptr_data->underlying, obj_type->is_constant())};
                 base_lval.data = value::data_t{builder_.emit_load(base_lval, *obj_type)};
                 base_lval.type.emplace(ptr_underlying);
-                obj_type = &ptr_data->underlying;
+                obj_type = &ptr_underlying;
             }
 
             const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
@@ -2035,7 +2044,14 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             }
 
             auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
-            auto& field_type{active_mod().get_sema_type_opt(dot.member).value_or(*obj_type)};
+            auto& raw_field_type{active_mod().get_sema_type_opt(dot.member).value_or(*obj_type)};
+            const auto is_struct_or_union{obj_type->get_kind() == sema::type_kind::STRUCT ||
+                                          obj_type->get_kind() == sema::type_kind::UNION};
+
+            // Binding based typing
+            auto& field_type{is_struct_or_union ? *ctx_.pool.with_const(
+                                                      raw_field_type, base_lval.type->is_constant())
+                                                : raw_field_type};
 
             if (const auto ut{obj_type->get_data().as_opt<sema::types::union_t>()}) {
                 if (ut->is_untagged) { return value{base_lval.data, field_type}; }
@@ -2173,7 +2189,11 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
         [&](const ast::dereference_expr& deref) -> value {
             const auto sema_type{active_mod().get_sema_type_opt(id)};
             ASSERT(sema_type, "Dereference lvalue must have a resolved sema type");
-            return value{emit_expression_id_raw(*deref.rhs).data, *sema_type};
+            // The referent's own type defaults const
+            const auto ptr_type{active_mod().get_sema_type_opt(*deref.rhs)};
+            auto&      referent_type{
+                *ctx_.pool.with_const(*sema_type, ptr_type && ptr_type->is_constant())};
+            return value{emit_expression_id_raw(*deref.rhs).data, referent_type};
         });
 }
 
