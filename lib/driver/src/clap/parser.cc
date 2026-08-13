@@ -122,7 +122,7 @@ auto parser::setup_build_lib_subcmd() -> gsl::not_null<CLI::App*> {
 }
 
 auto parser::setup_fmt_subcmd() -> gsl::not_null<CLI::App*> {
-    auto* sub{app_.add_subcommand("fmt", "Opinionated Ghoti source file formatter")};
+    auto* sub{app_.add_subcommand("fmt", "Format ghoti source file and directories")};
 
     sub->add_option("files", fmt_opts_.input_paths, "Files or directories to format recursively");
     sub->add_flag("-w,--write", fmt_opts_.write_in_place, "Overwrite target files in-place");
