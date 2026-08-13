@@ -739,10 +739,21 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
             }
 
             if (it->second.type->get_kind() == type_kind::REFERENCE) {
-                // References are never reseated  unlike pointers which can also be reassigned
-                // themselves
                 const auto ref_data{it->second.type->get_data().as_opt<types::reference>()};
                 if (ref_data) {
+                    if (inst.is_initializer) {
+                        if (val_t && !is_assignable(*val_t, *it->second.type)) {
+                            emit_diagnostic(
+                                fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
+                                            type_kind_display_name(val_t->get_kind()),
+                                            type_kind_display_name(it->second.type->get_kind())),
+                                error::TYPE_MISMATCH,
+                                inst.location);
+                        }
+                        return;
+                    }
+
+                    // References are never reseated unlike pointers
                     if (it->second.type->is_constant()) {
                         emit_diagnostic("Cannot assign to constant memory through reference",
                                         error::ASSIGNMENT_TO_CONST,
@@ -803,6 +814,18 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
             } else if (dest_t->get_kind() == type_kind::REFERENCE) {
                 const auto ref_data{dest_t->get_data().as_opt<types::reference>()};
                 if (ref_data) {
+                    if (inst.is_initializer) {
+                        if (val_t && !is_assignable(*val_t, *dest_t)) {
+                            emit_diagnostic(
+                                fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
+                                            type_kind_display_name(val_t->get_kind()),
+                                            type_kind_display_name(dest_t->get_kind())),
+                                error::TYPE_MISMATCH,
+                                inst.location);
+                        }
+                        return;
+                    }
+
                     if (dest_t->is_constant()) {
                         emit_diagnostic("Cannot assign to constant memory through reference",
                                         error::ASSIGNMENT_TO_CONST,

@@ -89,7 +89,18 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
             const auto& p_ident{fn_mod.ast.get_as<ast::identifier_expr>(param.name)};
             const auto  p_name{p_ident.name};
 
-            auto&      p_slot{fn.add_param(std::string{p_name}, *arg_type)};
+            auto& p_slot{fn.add_param(std::string{p_name}, *arg_type)};
+            if (arg_type->get_kind() == sema::type_kind::CLOSURE) {
+                // A closure argument arrives by value; direct calls through it (the
+                // is_closure_ident_call convention in emit_call) need an address to pass as the
+                // synthetic `&mut self`, so spill it into an addressable slot like a local
+                // closure binding already gets in emit_decl_stmt's is_aggregate path.
+                const auto spilled{spill_to_temporary(value{p_slot.id, *arg_type}, *arg_type)};
+                scopes_.back().bindings.emplace(
+                    p_name,
+                    local_binding{spilled.data.as<local_id>(), *arg_type, true, stdx::none});
+                continue;
+            }
             const bool p_spilled{arg_type->get_kind() == sema::type_kind::SLICE};
             scopes_.back().bindings.emplace(
                 p_name, local_binding{p_slot.id, *arg_type, p_spilled, stdx::none});

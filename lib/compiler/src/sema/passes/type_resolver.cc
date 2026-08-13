@@ -398,12 +398,9 @@ namespace {
         return is_generic_type(slice->underlying);
     }
     if (const auto arr{data.as_opt<types::array>()}) { return is_generic_type(arr->underlying); }
-    if (const auto fn{data.as_opt<types::function>()}) {
-        if (is_generic_type(fn->return_type)) { return true; }
-        for (const auto* p : fn->params) {
-            if (is_generic_type(*p)) { return true; }
-        }
-    }
+
+    // A fn-typed slot may bind either a plain function or a capturing closure at any call
+    if (kind == type_kind::FUNCTION) { return true; }
     return false;
 }
 
@@ -2900,6 +2897,26 @@ auto type_resolver::instantiate_generic(type&                        callee_type
                 decl_p_type = &resolved_param_type;
                 if (resolved_param_type.get_kind() != type_kind::TYPE) {
                     body_p_type = &resolved_param_type;
+                }
+            }
+
+            // A closure argument is never structurally a plain `fn(...)` value
+            if (resolved_param_type.get_kind() == type_kind::FUNCTION &&
+                arg_type->get_kind() == type_kind::CLOSURE) {
+                const auto cl{arg_type->get_data().as_opt<types::closure_t>()};
+                if (cl && is_same_unqualified(resolved_param_type, cl->signature)) {
+                    decl_p_type = arg_type;
+                    body_p_type = arg_type;
+                } else {
+                    const auto& expected{resolved_param_type.get_data().as<types::function>()};
+                    ctx_.diags.emplace_back(
+                        fmt::format("Closure does not match the parameter's expected call "
+                                    "signature: expected {} parameter(s){}, arity/types differ",
+                                    expected.params.size(),
+                                    expected.is_variadic ? " (variadic)" : ""),
+                        error::CLOSURE_SIGNATURE_MISMATCH,
+                        fn_mod.ast.location_of(param.explicit_type));
+                    return stdx::none;
                 }
             }
             fn_mod.set_sema_type(param.explicit_type, resolved_param_type);

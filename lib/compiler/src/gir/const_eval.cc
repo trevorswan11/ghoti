@@ -1040,6 +1040,13 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
 
     if (const auto node{sym.get_data().as_opt<sema::symbols::node_t>()}) {
         if (const auto decl{module_.ast.get_as_opt<ast::decl_stmt>(*node)}) {
+            // A plain top-level function decays to a value referencing its own
+            if (decl->value && module_.ast.get_as_opt<ast::function_expr>(*decl->value)) {
+                if (const auto fn_type{module_.get_sema_type_opt(*decl->value)};
+                    fn_type && fn_type->get_kind() == sema::type_kind::FUNCTION) {
+                    return const_value{std::string{ident.name}, *fn_type};
+                }
+            }
             if (decl->has_modifier(ast::decl_modifiers::CONSTEXPR) ||
                 decl->has_modifier(ast::decl_modifiers::CONSTANT)) {
                 if (decl->value) { return try_eval(*decl->value); }

@@ -50,6 +50,7 @@ enum class error : u8 {
     ILLEGAL_OPAQUE_TYPE,
     ILLEGAL_IMPLICIT_CAPTURE,
     ILLEGAL_REFERENCE_TO_REFERENCE,
+    CLOSURE_SIGNATURE_MISMATCH,
 };
 
 using diagnostic  = diagnostic<error>;

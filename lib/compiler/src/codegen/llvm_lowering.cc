@@ -389,6 +389,16 @@ auto llvm_lowering::lower_value(const gir::value& val, const sema::type* expecte
         [this, &val, expected_type](const std::string& str) -> llvm::Value* {
             const sema::type* ty{expected_type};
             if (!ty && val.type) { ty = &*val.type; }
+            // A fn-typed string value names a function rather than holding string data
+            if (ty && ty->get_kind() == sema::type_kind::FUNCTION) {
+                if (auto* fn{llvm_module_->getFunction(str)}) { return fn; }
+                // Not yet declared in this translation unit for the linnker to resolve
+                const auto fn_data{ty->get_data().as_opt<sema::types::function>()};
+                ASSERT(fn_data, "FUNCTION-typed value must carry function type data");
+                auto* fn_ty{types_.translate_function_type(*fn_data)};
+                return llvm::Function::Create(
+                    fn_ty, llvm::Function::ExternalLinkage, str, llvm_module_.get());
+            }
             if (ty && ty->get_kind() == sema::type_kind::ARRAY) {
                 return llvm::ConstantDataArray::getString(context_, str, true);
             }
