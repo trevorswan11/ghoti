@@ -91,10 +91,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
 
             auto& p_slot{fn.add_param(std::string{p_name}, *arg_type)};
             if (arg_type->get_kind() == sema::type_kind::CLOSURE) {
-                // A closure argument arrives by value; direct calls through it (the
-                // is_closure_ident_call convention in emit_call) need an address to pass as the
-                // synthetic `&mut self`, so spill it into an addressable slot like a local
-                // closure binding already gets in emit_decl_stmt's is_aggregate path.
+                // A closure argument arrives by value
                 const auto spilled{spill_to_temporary(value{p_slot.id, *arg_type}, *arg_type)};
                 scopes_.back().bindings.emplace(
                     p_name,
@@ -1565,12 +1562,21 @@ auto emitter::emit_for(ast::node_id                   id,
             value end_val{static_cast<u64>(0), usize_type};
 
             if (arr_val.type) {
+                // The container's own mutability governs element const correctness
                 if (const auto arr_data{arr_val.type->get_data().as_opt<sema::types::array>()}) {
-                    elem_type.emplace(arr_data->underlying);
+                    elem_type.emplace(
+                        *ctx_.pool.with_const(arr_data->underlying, arr_val.type->is_constant()));
                     end_val = value{static_cast<u64>(arr_data->len), usize_type};
                 } else if (const auto sl_data{
                                arr_val.type->get_data().as_opt<sema::types::slice>()}) {
-                    elem_type.emplace(sl_data->underlying);
+                    elem_type.emplace(
+                        *ctx_.pool.with_const(sl_data->underlying, arr_val.type->is_constant()));
+
+                    // Slices carry a runtime length so load it once ahead of the loop
+                    const auto len_slot{builder_.emit_get_element_ptr(
+                        arr_val, {value{static_cast<u64>(1), usize_type}}, usize_type)};
+                    const auto len_val{builder_.emit_load(value{len_slot, usize_type}, usize_type)};
+                    end_val = value{len_val, usize_type};
                 }
             }
 
@@ -1651,7 +1657,7 @@ auto emitter::emit_for(ast::node_id                   id,
                             info.arr_val->type->get_data().as_opt<sema::types::slice>()) {
                             const auto& sl_data{
                                 info.arr_val->type->get_data().as<sema::types::slice>()};
-                            auto&      ptr_type{ctx_.get_pointer(sl_data.underlying.is_constant()
+                            auto&      ptr_type{ctx_.get_pointer(info.arr_val->type->is_constant()
                                                                 ? sema::types::mut::CONSTANT
                                                                 : sema::types::mut::MUTABLE,
                                                             sl_data.underlying)};
