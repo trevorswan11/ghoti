@@ -66,16 +66,16 @@ TEST_CASE("A plain function still works when passed to a fn(T): U generic parame
 }
 
 TEST_CASE("map over a slice with Ctx parameter") {
-    SKIP("For loop mutability isnt working...");
-    CHECK(helpers::compile_and_run(R"(
+    SECTION("By mutable reference") {
+        CHECK(helpers::compile_and_run(R"(
         const map := fn(T: type, arr: []mut T, Ctx: type, func: fn(T, Ctx): T, ctx: Ctx): void {
             for (arr) |&mut v| {
                 v = func(v, ctx);
             }
         };
-        
+
         const MyCtx := struct { offset: i32 };
-        
+
         pub const main := fn(): i32 {
             const arr := [_]mut i32{1, 2, 3, 4};
             map(i32, arr, MyCtx, fn(x: i32, ctx: MyCtx): i32 {
@@ -84,6 +84,28 @@ TEST_CASE("map over a slice with Ctx parameter") {
             return arr[0] + arr[1] + arr[2] + arr[3];
         };
     )") == 50);
+    }
+
+    SECTION("By mutable pointer") {
+        SKIP("Bug with pointer iteration");
+        CHECK(helpers::compile_and_run(R"(
+        const map := fn(T: type, arr: []mut T, Ctx: type, func: fn(T, Ctx): T, ctx: Ctx): void {
+            for (arr) |^mut v| {
+                *v = func(*v, ctx);
+            }
+        };
+
+        const MyCtx := struct { offset: i32 };
+
+        pub const main := fn(): i32 {
+            const arr := [_]mut i32{1, 2, 3, 4};
+            map(i32, arr, MyCtx, fn(x: i32, ctx: MyCtx): i32 {
+                return x + ctx.offset;
+            }, MyCtx{ .offset = 10 });
+            return arr[0] + arr[1] + arr[2] + arr[3];
+        };
+    )") == 50);
+    }
 }
 
 TEST_CASE("map over a slice with a capturing closure, no explicit Ctx parameter needed") {

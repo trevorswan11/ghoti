@@ -135,12 +135,6 @@ auto do_while_loop_expr::parse(syntax::parser& parser)
     // There's no continuation or non break clause so this is easy :)
     const auto condition{TRY(parser.parse_expression())};
     TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
-    if (parser.get_node<block_stmt>(*block).empty()) {
-        return make_syntax_err("Do-while loops' bodies must contain at least one statement",
-                               syntax::error::EMPTY_LOOP,
-                               parser.get_location_of(*block));
-    }
-
     return parser.add_expr<do_while_loop_expr>(start_token, block, condition);
 }
 
@@ -284,6 +278,12 @@ auto for_loop_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, s
     }
 
     TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
+    if (!parser.peek_token_is(syntax::token_type_t::BW_OR)) {
+        return make_syntax_err("For loops must contain the same number of captures iterables, "
+                               "which can be discarded with an underscore",
+                               syntax::error::FOR_ITERABLE_CAPTURE_MISMATCH,
+                               start_token);
+    }
 
     // Captures take on something similar to zig's capture syntax
     std::vector<capture> captures;
@@ -321,12 +321,6 @@ auto for_loop_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, s
         return make_syntax_err("The number of for loop captures must match the number of iterables",
                                syntax::error::FOR_ITERABLE_CAPTURE_MISMATCH,
                                start_token);
-    }
-
-    if (parser.get_node<block_stmt>(*block).empty()) {
-        return make_syntax_err("For loops' bodies must contain at least one statement",
-                               syntax::error::EMPTY_LOOP,
-                               parser.get_location_of(*block));
     }
 
     return parser.add_expr<for_loop_expr>(
@@ -524,11 +518,6 @@ auto infinite_loop_expr::parse(syntax::parser& parser)
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
 
     const block_handle block{TRY(block_stmt::parse(parser))};
-    if (parser.get_node<block_stmt>(*block).empty()) {
-        return make_syntax_err("Infinite loops' bodies must contain at least one statement",
-                               syntax::error::EMPTY_LOOP,
-                               parser.get_location_of(*block));
-    }
     return parser.add_expr<infinite_loop_expr>(start_token, block);
 }
 
@@ -1026,15 +1015,6 @@ auto while_loop_expr::parse(syntax::parser& parser)
     const block_handle block{TRY(block_stmt::parse(parser))};
     const auto         non_break{
         TRY(parser.try_parse_restricted_alternate(syntax::error::ILLEGAL_LOOP_NON_BREAK))};
-
-    // There needs to be at least a continuation or block
-    if (!continuation && parser.get_node<block_stmt>(*block).empty()) {
-        return make_syntax_err(
-            "While loops without continuation expressions require a statement in their body",
-            syntax::error::EMPTY_LOOP,
-            parser.get_location_of(*block));
-    }
-
     return parser.add_expr<while_loop_expr>(start_token, condition, continuation, block, non_break);
 }
 

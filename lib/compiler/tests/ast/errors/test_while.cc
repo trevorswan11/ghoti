@@ -7,14 +7,6 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("Empty do-while") {
-    helpers::test_parser_fail(
-        "do {} while (true);",
-        syntax::diagnostic{"Do-while loops' bodies must contain at least one statement",
-                           syntax::error::EMPTY_LOOP,
-                           std::pair{0UZ, 3UZ}});
-}
-
 TEST_CASE("Missing do-while condition") {
     helpers::test_parser_fail("do {a; } while ();",
                               syntax::diagnostic{"While loops must have a condition",
@@ -34,23 +26,6 @@ TEST_CASE("Unclosed do-while condition") {
                               syntax::diagnostic{"Expected token RPAREN, found SEMICOLON",
                                                  syntax::error::UNEXPECTED_TOKEN,
                                                  std::pair{0UZ, 20UZ}});
-}
-
-TEST_CASE("Empty infinite loop") {
-    helpers::test_parser_fail(
-        "loop {};",
-        syntax::diagnostic{"Infinite loops' bodies must contain at least one statement",
-                           syntax::error::EMPTY_LOOP,
-                           std::pair{0UZ, 5UZ}});
-}
-
-TEST_CASE("Empty while") {
-    helpers::test_parser_fail(
-        "while (true) {};",
-        syntax::diagnostic{
-            "While loops without continuation expressions require a statement in their body",
-            syntax::error::EMPTY_LOOP,
-            std::pair{0UZ, 13UZ}});
 }
 
 TEST_CASE("Missing while condition") {

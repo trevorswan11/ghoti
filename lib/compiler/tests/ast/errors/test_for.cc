@@ -48,8 +48,10 @@ TEST_CASE("Non-terminated captures") {
 TEST_CASE("Missing captures") {
     helpers::test_parser_fail(
         "for (0..4) { a; } else return b;",
-        syntax::diagnostic{
-            "Expected token BW_OR, found LBRACE", syntax::error::UNEXPECTED_TOKEN, 0, 11},
+        syntax::diagnostic{"For loops must contain the same number of captures iterables, "
+                           "which can be discarded with an underscore",
+                           syntax::error::FOR_ITERABLE_CAPTURE_MISMATCH,
+                           std::pair{0UZ, 0UZ}},
         syntax::diagnostic{"No prefix parse function for RBRACE(}) found",
                            syntax::error::MISSING_PREFIX_PARSER,
                            std::pair{0UZ, 16UZ}});
@@ -69,14 +71,6 @@ TEST_CASE("Iterable-capture mismatch") {
         syntax::diagnostic{"The number of for loop captures must match the number of iterables",
                            syntax::error::FOR_ITERABLE_CAPTURE_MISMATCH,
                            std::pair{0UZ, 0UZ}});
-}
-
-TEST_CASE("Empty for block") {
-    helpers::test_parser_fail(
-        "for (0..4) |i| {} else return b;",
-        syntax::diagnostic{"For loops' bodies must contain at least one statement",
-                           syntax::error::EMPTY_LOOP,
-                           std::pair{0UZ, 15UZ}});
 }
 
 TEST_CASE("Illegal for-else clause") {
