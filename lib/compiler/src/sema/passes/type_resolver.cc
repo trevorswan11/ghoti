@@ -764,6 +764,18 @@ auto type_resolver::visit(ast::node_id id, const ast::for_loop_expr& for_expr) -
                     resolving_.ast.location_of(iterable)));
             }
 
+            const bool wants_mutable_capture{capture.modifier.is_mutable_ref() ||
+                                             capture.modifier.is_mutable_ptr()};
+            if (wants_mutable_capture && iterable_type.is_constant()) {
+                return last_type_.emplace(ctx_.poison_node(
+                    resolving_,
+                    id,
+                    fmt::format("Cannot capture an immutable array or slice by mutable {}",
+                                capture.modifier.is_mutable_ref() ? "reference" : "pointer"),
+                    error::ASSIGNMENT_TO_CONST,
+                    resolving_.ast.location_of(capture.payload)));
+            }
+
             if (capture.modifier.is_ref()) {
                 auto& ref_type{ctx_.get_reference(
                     capture.modifier.is_mutable_ref() ? types::mut::MUTABLE : types::mut::CONSTANT,

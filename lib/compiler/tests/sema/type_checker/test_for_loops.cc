@@ -5,7 +5,6 @@
 namespace ghoti::tests {
 
 TEST_CASE("Illegal usage of const capture") {
-    SKIP("Bug with constant indirect iteration");
     SECTION("By const reference") {
         helpers::expect_compile_error(R"(
             const map := fn(T: type, arr: []mut T, Ctx: type, func: fn(T, Ctx): T, ctx: Ctx): void {
@@ -42,20 +41,17 @@ TEST_CASE("Illegal usage of const capture") {
                 return x + ctx.offset;
             }, MyCtx{ .offset = 10 });
             return arr[0] + arr[1] + arr[2] + arr[3];
-        };
-    )");
+        };)");
     }
 }
 
 TEST_CASE("Attempted mutable capture of const value in capture clause") {
-    SKIP("Bug? Or maybe just no error emitted");
     SECTION("By const reference") {
         helpers::expect_compile_error(R"(
     pub const main := fn(): void {
         const arr := [_]i32{1, 2, 3, 4};
         for (arr) |&mut a| {}
-    };
-)");
+    };)");
     }
 
     SECTION("By const pointer") {
@@ -63,8 +59,7 @@ TEST_CASE("Attempted mutable capture of const value in capture clause") {
     pub const main := fn(): void {
         const arr := [_]i32{1, 2, 3, 4};
         for (arr) |^mut a| {}
-    };
-)");
+    };)");
     }
 }
 

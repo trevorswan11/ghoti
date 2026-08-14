@@ -28,6 +28,7 @@
 #include "compiler/codegen/type_translator.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
+#include "compiler/gir/layout.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/gir/segment.hh"
 #include "compiler/sema/type.hh"
@@ -114,8 +115,12 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
         // BaseThreadInitThunk calls entry point without C (argc, argv)
         // Construct empty slice [][:0]u8 (args.len = 0) to avoid dereferencing invalid registers
         auto* outer_slice{builder_.CreateAlloca(slice_ty, nullptr, "outer.slice")};
-        auto* outer_data{builder_.CreateStructGEP(slice_ty, outer_slice, 0, "outer.data")};
-        auto* outer_len{builder_.CreateStructGEP(slice_ty, outer_slice, 1, "outer.len")};
+        auto* outer_data{builder_.CreateStructGEP(slice_ty,
+                                                  outer_slice,
+                                                  static_cast<unsigned>(gir::SLICE_PTR_FIELD_INDEX),
+                                                  "outer.data")};
+        auto* outer_len{builder_.CreateStructGEP(
+            slice_ty, outer_slice, static_cast<unsigned>(gir::SLICE_LEN_FIELD_INDEX), "outer.len")};
         builder_.CreateStore(llvm::ConstantPointerNull::get(types_.get_ptr_ty()), outer_data);
         builder_.CreateStore(builder_.getInt64(0), outer_len);
         auto* outer_val{builder_.CreateLoad(slice_ty, outer_slice, "outer.val")};
@@ -197,8 +202,10 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
 
     // Store { str_ptr, final_len } into slice_array[cur_i]
     auto* dest_slice_ptr{builder_.CreateGEP(slice_ty, slice_array, {cur_i}, "dest.slice.ptr")};
-    auto* dest_data_field{builder_.CreateStructGEP(slice_ty, dest_slice_ptr, 0, "dest.data")};
-    auto* dest_len_field{builder_.CreateStructGEP(slice_ty, dest_slice_ptr, 1, "dest.len")};
+    auto* dest_data_field{builder_.CreateStructGEP(
+        slice_ty, dest_slice_ptr, static_cast<unsigned>(gir::SLICE_PTR_FIELD_INDEX), "dest.data")};
+    auto* dest_len_field{builder_.CreateStructGEP(
+        slice_ty, dest_slice_ptr, static_cast<unsigned>(gir::SLICE_LEN_FIELD_INDEX), "dest.len")};
     builder_.CreateStore(str_ptr, dest_data_field);
     builder_.CreateStore(final_len, dest_len_field);
     builder_.CreateBr(loop_inc);
@@ -211,8 +218,10 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
 
     builder_.SetInsertPoint(loop_end);
     auto* outer_slice{builder_.CreateAlloca(slice_ty, nullptr, "outer.slice")};
-    auto* outer_data{builder_.CreateStructGEP(slice_ty, outer_slice, 0, "outer.data")};
-    auto* outer_len{builder_.CreateStructGEP(slice_ty, outer_slice, 1, "outer.len")};
+    auto* outer_data{builder_.CreateStructGEP(
+        slice_ty, outer_slice, static_cast<unsigned>(gir::SLICE_PTR_FIELD_INDEX), "outer.data")};
+    auto* outer_len{builder_.CreateStructGEP(
+        slice_ty, outer_slice, static_cast<unsigned>(gir::SLICE_LEN_FIELD_INDEX), "outer.len")};
     builder_.CreateStore(slice_array, outer_data);
     builder_.CreateStore(argc_i64, outer_len);
     auto* outer_val{builder_.CreateLoad(slice_ty, outer_slice, "outer.val")};

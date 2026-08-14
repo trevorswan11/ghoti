@@ -66,6 +66,7 @@ class emitter {
         value                          end_val{};
         stdx::option<std::string_view> capture_name;
         stdx::option<value>            arr_val{};
+        stdx::option<sema::type&>      capture_type;
     };
 
     struct scope_frame {

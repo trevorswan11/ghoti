@@ -87,7 +87,6 @@ TEST_CASE("map over a slice with Ctx parameter") {
     }
 
     SECTION("By mutable pointer") {
-        SKIP("Bug with pointer iteration");
         CHECK(helpers::compile_and_run(R"(
         const map := fn(T: type, arr: []mut T, Ctx: type, func: fn(T, Ctx): T, ctx: Ctx): void {
             for (arr) |^mut v| {

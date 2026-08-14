@@ -23,6 +23,7 @@
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
+#include "compiler/gir/layout.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/gir/segment.hh"
 #include "compiler/module/module.hh"
@@ -125,9 +126,6 @@ auto get_decl_linkage(const ast::decl_stmt& decl) noexcept -> gir::linkage {
     return gir::linkage::INTERNAL;
 }
 
-// A tagged union lowers to { tag: i32, payload: [N x i8] } regardless of active variant
-constexpr u64 TAGGED_UNION_PAYLOAD_INDEX{1};
-
 } // namespace
 
 auto emitter::emit_slice_from_array(value arr_lval, const sema::type& arr_type) -> value {
@@ -146,12 +144,12 @@ auto emitter::emit_slice_from_array(value arr_lval, const sema::type& arr_type) 
         arr_lval, {value{static_cast<u64>(0), usize_type}}, ptr_type)};
 
     const auto field0_ptr{builder_.emit_get_element_ptr(
-        value{slice_slot, slice_type}, {value{static_cast<u64>(0), usize_type}}, ptr_type)};
+        value{slice_slot, slice_type}, {value{SLICE_PTR_FIELD_INDEX, usize_type}}, ptr_type)};
     builder_.emit_store(value{field0_ptr, ptr_type}, value{elem0_ptr, ptr_type}).is_initializer =
         true;
 
     const auto field1_ptr{builder_.emit_get_element_ptr(
-        value{slice_slot, slice_type}, {value{static_cast<u64>(1), usize_type}}, usize_type)};
+        value{slice_slot, slice_type}, {value{SLICE_LEN_FIELD_INDEX, usize_type}}, usize_type)};
     builder_
         .emit_store(value{field1_ptr, usize_type},
                     value{static_cast<u64>(arr_data->len), usize_type})
@@ -989,12 +987,12 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                     auto&      ptr_type{ptr_val.type.value_or(ret_type)};
                     const auto field0{
                         builder_.emit_get_element_ptr(value{slice_slot, ret_type},
-                                                      {value{static_cast<u64>(0), usize_type}},
+                                                      {value{SLICE_PTR_FIELD_INDEX, usize_type}},
                                                       ptr_type)};
                     builder_.emit_store(value{field0, ptr_type}, ptr_val).is_initializer = true;
                     const auto field1{
                         builder_.emit_get_element_ptr(value{slice_slot, ret_type},
-                                                      {value{static_cast<u64>(1), usize_type}},
+                                                      {value{SLICE_LEN_FIELD_INDEX, usize_type}},
                                                       usize_type)};
                     builder_.emit_store(value{field1, usize_type}, len_val).is_initializer = true;
                     return value{slice_slot, ret_type};
@@ -1527,8 +1525,10 @@ auto emitter::emit_for(ast::node_id                   id,
     for (const auto& [iter_handle, capture] :
          std::views::zip(for_loop.iterables, for_loop.captures)) {
         stdx::option<std::string_view> cap_name;
+        stdx::option<sema::type&>      cap_type;
         if (capture.payload.is<ast::identifier_expr>()) {
             cap_name.emplace(active_ast().get_as<ast::identifier_expr>(capture.payload).name);
+            cap_type = active_mod().get_sema_type_opt(capture.payload);
         }
 
         const auto iter_id{*iter_handle};
@@ -1550,6 +1550,7 @@ auto emitter::emit_for(ast::node_id                   id,
                 .elem_type    = elem_type,
                 .end_val      = end_val,
                 .capture_name = cap_name,
+                .capture_type = cap_type,
             });
         } else {
             const auto arr_val{emit_lvalue(iter_handle)};
@@ -1574,7 +1575,7 @@ auto emitter::emit_for(ast::node_id                   id,
 
                     // Slices carry a runtime length so load it once ahead of the loop
                     const auto len_slot{builder_.emit_get_element_ptr(
-                        arr_val, {value{static_cast<u64>(1), usize_type}}, usize_type)};
+                        arr_val, {value{SLICE_LEN_FIELD_INDEX, usize_type}}, usize_type)};
                     const auto len_val{builder_.emit_load(value{len_slot, usize_type}, usize_type)};
                     end_val = value{len_val, usize_type};
                 }
@@ -1588,6 +1589,7 @@ auto emitter::emit_for(ast::node_id                   id,
                 .end_val      = end_val,
                 .capture_name = cap_name,
                 .arr_val      = arr_val,
+                .capture_type = cap_type,
             });
         }
     }
@@ -1644,41 +1646,54 @@ auto emitter::emit_for(ast::node_id                   id,
         {
             const scope_guard g{scopes_};
             for (const auto& info : iter_infos) {
-                if (info.capture_name) {
-                    if (info.is_range) {
-                        scopes_.back().bindings.emplace(
-                            *info.capture_name,
-                            local_binding{info.var_slot, *info.elem_type, true, stdx::none});
-                    } else if (info.arr_val) {
-                        auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
-                        const auto idx_val{builder_.emit_load(info.var_slot, usize_type)};
-                        local_id   elem_ptr;
-                        if (info.arr_val->type &&
-                            info.arr_val->type->get_data().as_opt<sema::types::slice>()) {
-                            const auto& sl_data{
-                                info.arr_val->type->get_data().as<sema::types::slice>()};
-                            auto&      ptr_type{ctx_.get_pointer(info.arr_val->type->is_constant()
-                                                                ? sema::types::mut::CONSTANT
-                                                                : sema::types::mut::MUTABLE,
-                                                            sl_data.underlying)};
-                            const auto ptr_slot{builder_.emit_get_element_ptr(
-                                *info.arr_val, {value{static_cast<u64>(0), usize_type}}, ptr_type)};
-                            const auto ptr_val{
-                                builder_.emit_load(value{ptr_slot, ptr_type}, ptr_type)};
-                            elem_ptr = builder_.emit_get_element_ptr(
-                                value{ptr_val, ptr_type},
-                                std::vector<value>{value{idx_val, usize_type}},
-                                *info.elem_type);
-                        } else {
-                            elem_ptr = builder_.emit_get_element_ptr(
-                                *info.arr_val,
-                                std::vector<value>{value{idx_val, usize_type}},
-                                *info.elem_type);
-                        }
-                        scopes_.back().bindings.emplace(
-                            *info.capture_name,
-                            local_binding{elem_ptr, *info.elem_type, true, stdx::none});
+                if (!info.capture_name) { continue; }
+
+                local_id elem_addr;
+                if (info.is_range) {
+                    elem_addr = info.var_slot;
+                } else if (info.arr_val) {
+                    auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+                    const auto idx_val{builder_.emit_load(info.var_slot, usize_type)};
+                    if (info.arr_val->type &&
+                        info.arr_val->type->get_data().as_opt<sema::types::slice>()) {
+                        const auto& sl_data{
+                            info.arr_val->type->get_data().as<sema::types::slice>()};
+                        auto&      ptr_type{ctx_.get_pointer(info.arr_val->type->is_constant()
+                                                            ? sema::types::mut::CONSTANT
+                                                            : sema::types::mut::MUTABLE,
+                                                        sl_data.underlying)};
+                        const auto ptr_slot{builder_.emit_get_element_ptr(
+                            *info.arr_val, {value{SLICE_PTR_FIELD_INDEX, usize_type}}, ptr_type)};
+                        const auto ptr_val{builder_.emit_load(value{ptr_slot, ptr_type}, ptr_type)};
+                        elem_addr = builder_.emit_get_element_ptr(
+                            value{ptr_val, ptr_type},
+                            std::vector<value>{value{idx_val, usize_type}},
+                            *info.elem_type);
+                    } else {
+                        elem_addr = builder_.emit_get_element_ptr(
+                            *info.arr_val,
+                            std::vector<value>{value{idx_val, usize_type}},
+                            *info.elem_type);
                     }
+                } else {
+                    continue;
+                }
+
+                // `|&v|`/`|&mut v|` and `|^v|`/`|^mut v|` alias the element's own address
+                const auto capture_kind{info.capture_type ? info.capture_type->get_kind()
+                                                          : sema::type_kind::POISON};
+                if (capture_kind == sema::type_kind::REFERENCE ||
+                    capture_kind == sema::type_kind::POINTER) {
+                    const auto capture_slot{builder_.emit_alloca(*info.capture_type)};
+                    builder_.emit_store(capture_slot, value{elem_addr, *info.capture_type})
+                        .is_initializer = true;
+                    scopes_.back().bindings.emplace(
+                        *info.capture_name,
+                        local_binding{capture_slot, *info.capture_type, true, stdx::none});
+                } else {
+                    scopes_.back().bindings.emplace(
+                        *info.capture_name,
+                        local_binding{elem_addr, *info.elem_type, true, stdx::none});
                 }
             }
             emit_block(active_ast().get_as<ast::block_stmt>(for_loop.block));
@@ -2055,7 +2070,8 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
             u64         member_idx{0};
             if (obj_type->get_kind() == sema::type_kind::SLICE) {
-                member_idx = member_ident.name == "ptr" ? 0 : 1;
+                member_idx =
+                    member_ident.name == "ptr" ? SLICE_PTR_FIELD_INDEX : SLICE_LEN_FIELD_INDEX;
             } else {
                 const auto& table{ctx_.registry.get(obj_type->get_symbol_table_idx())};
                 const auto  proxy{table.get_proxy_opt(member_ident.name)};
@@ -2153,11 +2169,11 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                                                 sl_data->underlying)};
 
                 const auto ptr_slot{builder_.emit_get_element_ptr(
-                    base_lval, {value{static_cast<u64>(0), usize_type}}, ptr_type)};
+                    base_lval, {value{SLICE_PTR_FIELD_INDEX, usize_type}}, ptr_type)};
                 const auto ptr_val{builder_.emit_load(value{ptr_slot, ptr_type}, ptr_type)};
 
                 const auto len_slot{builder_.emit_get_element_ptr(
-                    base_lval, {value{static_cast<u64>(1), usize_type}}, usize_type)};
+                    base_lval, {value{SLICE_LEN_FIELD_INDEX, usize_type}}, usize_type)};
                 const auto len_val{builder_.emit_load(value{len_slot, usize_type}, usize_type)};
 
                 const bool is_signed{idx_val.type &&
@@ -2413,7 +2429,8 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
     const auto member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
 
     if (obj_type->get_kind() == sema::type_kind::SLICE) {
-        const u64  member_idx{member_ident.name == "ptr" ? 0ULL : 1ULL};
+        const u64  member_idx{member_ident.name == "ptr" ? SLICE_PTR_FIELD_INDEX
+                                                         : SLICE_LEN_FIELD_INDEX};
         auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
         auto&      field_type{sema_type ? *sema_type : *obj_type};
         const auto field_ptr{
