@@ -162,4 +162,54 @@ TEST_CASE("A non-move closure that mutates a captured variable cannot be returne
     )");
 }
 
+TEST_CASE("A captured value forwarded through an intermediate function is read correctly") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            var offset: i32 = 7;
+            const middle := fn(): i32 {
+                const inner := fn(x: i32): i32 {
+                    return x + offset;
+                };
+                return inner(5);
+            };
+            return middle();
+        };
+    )") == 12);
+}
+
+TEST_CASE("A mutation forwarded through an intermediate function reaches the true owner") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            var n: i32 = 0;
+            const middle := fn(): void {
+                const inner := fn(): void {
+                    n = n + 1;
+                };
+                inner();
+                inner();
+            };
+            middle();
+            return n;
+        };
+    )") == 2);
+}
+
+TEST_CASE("A capture is forwarded correctly through three levels of nesting") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            var n: i32 = 100;
+            const level1 := fn(): i32 {
+                const level2 := fn(): i32 {
+                    const level3 := fn(): i32 {
+                        return n;
+                    };
+                    return level3();
+                };
+                return level2();
+            };
+            return level1();
+        };
+    )") == 100);
+}
+
 } // namespace ghoti::tests

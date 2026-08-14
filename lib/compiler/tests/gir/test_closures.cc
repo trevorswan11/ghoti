@@ -56,11 +56,22 @@ TEST_CASE("A MUT_REF capture loads the reference once and reads/writes through i
     CHECK(dump.contains("self: &closure"));
 }
 
-TEST_CASE("Capturing across two function boundaries is rejected, not silently miscompiled") {
-    auto [ctx, idx]{helpers::resolve(
-        "const outer := fn(): void { var offset: i32 = 0; const middle := fn(): void { "
-        "const inner := fn(x: i32): i32 { return x + offset; }; }; };")};
-    CHECK(ctx->root_mod.is_poisoned());
+TEST_CASE("A capture forwarded through an intermediate function reaches the innermost closure") {
+    auto       ctx_idx{helpers::resolve_and_check(R"(
+        const outer := fn(): void {
+            var offset: i32 = 0;
+            const middle := fn(): void {
+                const inner := fn(x: i32): i32 {
+                    return x + offset;
+                };
+            };
+        };
+    )")};
+    const auto dump{helpers::dump_gir(ctx_idx)};
+
+    CHECK(dump.contains("alloca closure"));
+    CHECK(dump.contains("fn closure"));
+    CHECK(dump.contains("self: &closure"));
 }
 
 } // namespace ghoti::tests

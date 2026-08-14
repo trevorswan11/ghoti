@@ -1147,24 +1147,19 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
     // Belongs to an enclosing function's stack frame rather than the module/prelude scope
     if (!function_boundaries_.empty() && lookup->depth < function_boundaries_.back() &&
         lookup->depth >= function_boundaries_.front()) {
-        // GIR emission only forwards a capture from the immediate enclosing function
-        const auto immediate_parent_boundary{
-            function_boundaries_.size() >= 2 ? function_boundaries_[function_boundaries_.size() - 2]
-                                             : function_boundaries_.front()};
-        if (lookup->depth < immediate_parent_boundary) {
-            return last_type_.emplace(ctx_.poison_node(
-                resolving_,
-                id,
-                fmt::format("'{}' would require forwarding a capture through an intermediate "
-                            "function, which is not yet supported",
-                            name),
-                error::ILLEGAL_IMPLICIT_CAPTURE,
-                resolving_.ast.location_of(id)));
-        }
+        const auto usage{in_mutating_context_ ? capture_usage::MUTATED : capture_usage::READ};
 
-        resolving_.add_capture(open_function_nodes_.back(),
-                               name,
-                               in_mutating_context_ ? capture_usage::MUTATED : capture_usage::READ);
+        // Find the innermost open function whose own scope actually contains the declaration
+        usize owner_idx{0};
+        for (usize i{function_boundaries_.size()}; i-- > 0;) {
+            if (lookup->depth >= function_boundaries_[i]) {
+                owner_idx = i;
+                break;
+            }
+        }
+        for (usize i{owner_idx + 1}; i < open_function_nodes_.size(); ++i) {
+            resolving_.add_capture(open_function_nodes_[i], name, usage);
+        }
     }
 
     resolve_symbol(id, lookup->symbol);

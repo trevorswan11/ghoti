@@ -237,24 +237,66 @@ TEST_CASE("A capturing closure resolves fully when capturing its immediate enclo
     }
 }
 
-// TODO: Remove once GIR emission forwards captures through intermediate non-capturing functions
-TEST_CASE("Capturing through an intermediate non-capturing function is rejected") {
-    helpers::test_resolver_fail(
-        R"(
-            const outer := fn(): void {
-                var offset: i32 = 0;
-                const middle := fn(): void {
-                    const inner := fn(x: i32): i32 {
-                        return x + offset;
-                    };
+TEST_CASE("Capturing through an intermediate non-capturing function forwards the capture") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const outer := fn(): void {
+            var offset: i32 = 0;
+            const middle := fn(): void {
+                const inner := fn(x: i32): i32 {
+                    return x + offset;
                 };
             };
-        )"
-        "",
-        sema::diagnostic{"'offset' would require forwarding a capture through an intermediate "
-                         "function, which is not yet supported",
-                         sema::error::ILLEGAL_IMPLICIT_CAPTURE,
-                         std::pair{5UZ, 35UZ}});
+        };
+    )")};
+
+    const auto [sym, sym_data, node_data, type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("outer", idx)};
+    const auto& outer{UNWRAP(ctx->root_mod.ast.get_as_opt<ast::function_expr>(*node_data.value))};
+    const auto  middle_id{helpers::find_nested_fn(ctx->root_mod, outer, "middle")};
+    const auto& middle{UNWRAP(ctx->root_mod.ast.get_as_opt<ast::function_expr>(middle_id))};
+    const auto  inner_id{helpers::find_nested_fn(ctx->root_mod, middle, "inner")};
+
+    CHECK(ctx->root_mod.get_sema_type(middle_id).get_kind() == sema::type_kind::CLOSURE);
+    CHECK(ctx->root_mod.get_sema_type(inner_id).get_kind() == sema::type_kind::CLOSURE);
+
+    const auto middle_captures{ctx->root_mod.get_captures(middle_id)};
+    REQUIRE(middle_captures.size() == 1);
+    CHECK(middle_captures[0].name == "offset");
+    CHECK(middle_captures[0].usage == sema::capture_usage::READ);
+
+    const auto inner_captures{ctx->root_mod.get_captures(inner_id)};
+    REQUIRE(inner_captures.size() == 1);
+    CHECK(inner_captures[0].name == "offset");
+    CHECK(inner_captures[0].usage == sema::capture_usage::READ);
+}
+
+TEST_CASE("A mutation three functions deep escalates the capture usage at every "
+          "forwarding level") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const outer := fn(): void {
+            var n: i32 = 0;
+            const middle := fn(): void {
+                const inner := fn(): void {
+                    n = n + 1;
+                };
+            };
+        };
+    )")};
+
+    const auto [sym, sym_data, node_data, type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("outer", idx)};
+    const auto& outer{UNWRAP(ctx->root_mod.ast.get_as_opt<ast::function_expr>(*node_data.value))};
+    const auto  middle_id{helpers::find_nested_fn(ctx->root_mod, outer, "middle")};
+    const auto& middle{UNWRAP(ctx->root_mod.ast.get_as_opt<ast::function_expr>(middle_id))};
+    const auto  inner_id{helpers::find_nested_fn(ctx->root_mod, middle, "inner")};
+
+    const auto middle_captures{ctx->root_mod.get_captures(middle_id)};
+    REQUIRE(middle_captures.size() == 1);
+    CHECK(middle_captures[0].usage == sema::capture_usage::MUTATED);
+
+    const auto inner_captures{ctx->root_mod.get_captures(inner_id)};
+    REQUIRE(inner_captures.size() == 1);
+    CHECK(inner_captures[0].usage == sema::capture_usage::MUTATED);
 }
 
 TEST_CASE("Module-level globals are not implicit captures") {
