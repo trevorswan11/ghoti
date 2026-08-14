@@ -3,6 +3,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "helpers/codegen.hh"
+#include "helpers/sema.hh"
 
 namespace ghoti::tests {
 
@@ -125,6 +126,40 @@ TEST_CASE("map over a slice with a capturing closure, no explicit Ctx parameter 
             return arr[0] + arr[1] + arr[2] + arr[3];
         };
     )") == 50);
+}
+
+TEST_CASE("A move fn is returned and called after its definition frame has exited") {
+    CHECK(helpers::compile_and_run(R"(
+        const make_adder := fn(): auto {
+            var n: i32 = 10;
+            return move fn(): i32 {
+                n = n + 5;
+                return n;
+            };
+        };
+
+        pub const main := fn(): i32 {
+            const f := make_adder();
+            return f();
+        };
+    )") == 15);
+}
+
+TEST_CASE("A non-move closure that mutates a captured variable cannot be returned (e2e)") {
+    helpers::expect_compile_error(R"(
+        const make_adder := fn(): auto {
+            var n: i32 = 10;
+            return fn(): i32 {
+                n = n + 5;
+                return n;
+            };
+        };
+
+        pub const main := fn(): i32 {
+            const f := make_adder();
+            return f();
+        };
+    )");
 }
 
 } // namespace ghoti::tests

@@ -340,7 +340,20 @@ auto try_parse_variadic_fn(syntax::parser& parser) -> stdx::result<bool, syntax:
     return is_variadic;
 }
 
-auto function_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
+auto parse_move_function_expr(syntax::parser& parser)
+    -> stdx::result<expr_handle, syntax::diagnostic> {
+    PROFILE_FUNCTION();
+    if (!parser.peek_token_is(syntax::token_type_t::FUNCTION)) {
+        return make_syntax_err("'move' may only appear directly before 'fn'",
+                               syntax::error::ILLEGAL_MOVE_USAGE,
+                               parser.get_current_token());
+    }
+    parser.advance();
+    return function_expr::parse(parser, true);
+}
+
+auto function_expr::parse(syntax::parser& parser, bool is_move)
+    -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
     TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
@@ -440,7 +453,7 @@ auto function_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, s
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
     const block_handle body{TRY(block_stmt::parse(parser))};
     return parser.add_expr<function_expr>(
-        start_token, self, std::move(parameters), variadic, return_type, body);
+        start_token, self, std::move(parameters), variadic, return_type, body, is_move);
 }
 
 auto grouped_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {

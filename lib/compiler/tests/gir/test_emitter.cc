@@ -354,9 +354,6 @@ TEST_CASE("Deferred array underlying a reference parameter resolves to a concret
     const auto ref_data{param_type.get_data().as_opt<sema::types::reference>()};
     REQUIRE(ref_data.has_value());
 
-    // Before the fix, an array type nested inside a reference/pointer type annotation stayed
-    // a deferred placeholder (type_kind::TYPE) instead of being forced to a concrete array,
-    // which silently disabled bounds checking and lost the array's own element mutability.
     CHECK(ref_data->underlying.get_kind() == sema::type_kind::ARRAY);
     const auto arr_data{ref_data->underlying.get_data().as_opt<sema::types::array>()};
     REQUIRE(arr_data.has_value());

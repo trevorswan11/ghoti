@@ -113,11 +113,20 @@ struct function_expr {
     bool                         variadic;
     explicit_type_id             explicit_return_type;
     block_handle                 body;
+    bool                         is_move{false};
 
     // Parse the function as a value. Meant for the parser LUT
     [[nodiscard]] static auto parse(syntax::parser& parser)
+        -> stdx::result<expr_handle, syntax::diagnostic> {
+        return parse(parser, false);
+    }
+    [[nodiscard]] static auto parse(syntax::parser& parser, bool is_move)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
+
+// Consumes a leading `move` modifier before delegating to function_expr::parse
+[[nodiscard]] auto parse_move_function_expr(syntax::parser& parser)
+    -> stdx::result<expr_handle, syntax::diagnostic>;
 
 struct grouped_expr {
     [[nodiscard]] static auto parse(syntax::parser& parser)

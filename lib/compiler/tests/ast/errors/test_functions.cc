@@ -103,4 +103,11 @@ TEST_CASE("Non-terminated parameter list") {
                               syntax::diagnostic{syntax::error::ILLEGAL_IDENTIFIER, 0, 9});
 }
 
+TEST_CASE("'move' must be followed directly by 'fn'") {
+    helpers::test_parser_fail("move struct {};",
+                              syntax::diagnostic{"'move' may only appear directly before 'fn'",
+                                                 syntax::error::ILLEGAL_MOVE_USAGE,
+                                                 std::pair{0UZ, 0UZ}});
+}
+
 } // namespace ghoti::tests

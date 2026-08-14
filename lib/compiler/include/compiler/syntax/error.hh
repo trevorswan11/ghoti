@@ -70,6 +70,7 @@ enum class error : u8 {
     ILLEGAL_LABEL_EXPRESSION,
     ILLEGAL_LABEL_STATEMENT,
     ILLEGAL_USING_ALIAS_WITH_MODIFIERS,
+    ILLEGAL_MOVE_USAGE,
 };
 
 using diagnostic  = diagnostic<error>;

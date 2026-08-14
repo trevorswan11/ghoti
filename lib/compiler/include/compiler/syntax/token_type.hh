@@ -161,6 +161,7 @@ enum class token_type_t : u8 {
     EXPORT,
     VOLATILE,
     MUT,
+    MOVE,
     PACKED,
     NORETURN,
     NULLPTR,

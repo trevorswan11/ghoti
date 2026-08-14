@@ -268,6 +268,70 @@ TEST_CASE("Module-level globals are not implicit captures") {
     )");
 }
 
+TEST_CASE("A non-move closure that mutates a captured variable cannot be returned") {
+    auto [ctx, idx]{helpers::resolve(R"(
+        const outer := fn(): auto {
+            var n: i32 = 10;
+            return fn(): i32 {
+                n = n + 5;
+                return n;
+            };
+        };
+    )")};
+    CHECK(ctx->root_mod.is_poisoned());
+}
+
+TEST_CASE("A non-move closure capturing an aggregate by reference cannot be returned") {
+    auto [ctx, idx]{helpers::resolve(R"(
+        const outer := fn(): auto {
+            var arr: [3]i32 = [_]i32{1, 2, 3};
+            return fn(): i32 {
+                return arr[0];
+            };
+        };
+    )")};
+    CHECK(ctx->root_mod.is_poisoned());
+}
+
+TEST_CASE("A move fn may be returned even though it mutates a captured variable") {
+    helpers::resolve_and_check(R"(
+        const outer := fn(): auto {
+            var n: i32 = 10;
+            return move fn(): i32 {
+                n = n + 5;
+                return n;
+            };
+        };
+    )");
+}
+
+TEST_CASE("A closure with only value captures may be returned without move") {
+    helpers::resolve_and_check(R"(
+        const outer := fn(n: i32): auto {
+            return fn(): i32 {
+                return n;
+            };
+        };
+    )");
+}
+
+TEST_CASE("Returning a closure received as a generic parameter is not flagged as an escape") {
+    helpers::resolve_and_check(R"(
+        const identity := fn(x: auto): auto {
+            return x;
+        };
+
+        const outer := fn(): void {
+            var n: i32 = 10;
+            const add := fn(): i32 {
+                n = n + 5;
+                return n;
+            };
+            const same := identity(add);
+        };
+    )");
+}
+
 TEST_CASE("Declared function arity mismatch") {
     auto [ctx, idx]{helpers::test_resolver_fail(
         "const foo := fn(a: i32, b: i32): void {}; const bar := foo(1);",

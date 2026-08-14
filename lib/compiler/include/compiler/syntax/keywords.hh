@@ -54,6 +54,7 @@ constexpr keyword_t EXTERN{"extern", token_type_t::EXTERN};
 constexpr keyword_t EXPORT{"export", token_type_t::EXPORT};
 constexpr keyword_t VOLATILE{"volatile", token_type_t::VOLATILE};
 constexpr keyword_t MUT{"mut", token_type_t::MUT};
+constexpr keyword_t MOVE{"move", token_type_t::MOVE};
 constexpr keyword_t PACKED{"packed", token_type_t::PACKED};
 constexpr keyword_t NORETURN{"noreturn", token_type_t::NORETURN};
 constexpr keyword_t NULLPTR{"nullptr", token_type_t::NULLPTR};

@@ -182,12 +182,14 @@ class type_resolver {
 
     [[nodiscard]] auto get_resolved_symbol_type(symbol::data_t& symbol_data) -> type&;
 
-    // Infers how a closure should store one free variable, given how it's used in the body
-    [[nodiscard]] auto infer_capture_mode(capture_usage usage, const type& captured_type) noexcept
-        -> types::capture_mode;
+    // Infers how a closure should store one free variable, given how it's used in the body.
+    // `force_move` overrides the inferred mode to VALUE unconditionally (`move fn`)
+    [[nodiscard]] auto infer_capture_mode(capture_usage usage,
+                                          const type&   captured_type,
+                                          bool          force_move) noexcept -> types::capture_mode;
 
     // Builds and attaches a `types::closure_t` for a function_expr with a non-empty capture list
-    auto attach_closure_type(ast::node_id fn_id, type& fn_type) -> type&;
+    auto attach_closure_type(ast::node_id fn_id, type& fn_type, bool is_move) -> type&;
 
     auto visit(ast::node_id, const ast::identifier_expr&) -> void;
     auto visit(ast::node_id, const ast::if_expr&) -> void;

@@ -404,6 +404,13 @@ namespace {
     return false;
 }
 
+// A closure is only unsound to let escape its defining frame if it holds a ref into that frame
+[[nodiscard]] auto has_dangling_capture(const types::closure_t& cl) noexcept -> bool {
+    return std::ranges::any_of(cl.captures, [](const types::closure_capture& capture) {
+        return capture.mode != types::capture_mode::VALUE;
+    });
+}
+
 [[nodiscard]] auto any_param_generic(auto&& params) noexcept -> bool {
     for (const auto* p : params) {
         if (is_generic_type(*p)) { return true; }
@@ -923,7 +930,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     if (is_auto_return) { resolving_.set_sema_type(fn.explicit_return_type, deduced_return_type); }
 
     if (!resolving_.get_captures(id).empty()) {
-        return last_type_.emplace(attach_closure_type(id, fn_type));
+        return last_type_.emplace(attach_closure_type(id, fn_type, fn.is_move));
     }
     last_type_.emplace(fn_type);
 }
@@ -1016,8 +1023,11 @@ auto type_resolver::get_resolved_symbol_type(symbol::data_t& symbol_data) -> typ
         });
 }
 
-auto type_resolver::infer_capture_mode(capture_usage usage, const type& captured_type) noexcept
-    -> types::capture_mode {
+auto type_resolver::infer_capture_mode(capture_usage usage,
+                                       const type&   captured_type,
+                                       bool          force_move) noexcept -> types::capture_mode {
+    // `move fn` copies every capture into the environment, even a mutated one
+    if (force_move) { return types::capture_mode::VALUE; }
     if (usage == capture_usage::MUTATED) { return types::capture_mode::MUT_REF; }
 
     const auto kind{captured_type.get_kind()};
@@ -1025,7 +1035,7 @@ auto type_resolver::infer_capture_mode(capture_usage usage, const type& captured
     return by_value ? types::capture_mode::VALUE : types::capture_mode::REF;
 }
 
-auto type_resolver::attach_closure_type(ast::node_id fn_id, type& fn_type) -> type& {
+auto type_resolver::attach_closure_type(ast::node_id fn_id, type& fn_type, bool is_move) -> type& {
     const auto captures{resolving_.get_captures(fn_id)};
     ASSERT(!captures.empty(), "attach_closure_type called with no captures");
 
@@ -1039,7 +1049,7 @@ auto type_resolver::attach_closure_type(ast::node_id fn_id, type& fn_type) -> ty
         auto lookup{ctx_.registry.lookup(table_stack_, capture.name)};
         ASSERT(lookup, "Recorded capture name failed to re-resolve in its enclosing scope");
         auto&      captured_type{get_resolved_symbol_type(lookup->get_data())};
-        const auto mode{infer_capture_mode(capture.usage, captured_type)};
+        const auto mode{infer_capture_mode(capture.usage, captured_type, is_move)};
 
         // What the environment actually stores: the value itself, or a reference to it
         auto* storage_type{&captured_type};
@@ -2635,6 +2645,19 @@ auto type_resolver::visit(ast::node_id id, const ast::return_stmt& return_stmt) 
     if (return_stmt.expression) {
         TRY_RESOLVE(*return_stmt.expression);
         auto& return_expr_type{*last_type_.take()};
+        // Only a closure literal constructed right here is at risk
+        if (resolving_.ast.get_as_opt<ast::function_expr>(*return_stmt.expression)) {
+            if (const auto cl{return_expr_type.get_data().as_opt<types::closure_t>()};
+                cl && has_dangling_capture(*cl)) {
+                return last_type_.emplace(ctx_.poison_node(
+                    resolving_,
+                    id,
+                    "Closure captures a reference into its enclosing function and cannot be "
+                    "returned directly; mark it 'move fn' to capture by value instead",
+                    error::ILLEGAL_CLOSURE_ESCAPE,
+                    resolving_.ast.location_of(*return_stmt.expression)));
+            }
+        }
         resolving_.set_sema_type(id, return_expr_type);
         if (!return_trackers_.empty()) { return_trackers_.back().add_return(return_expr_type); }
     } else {
