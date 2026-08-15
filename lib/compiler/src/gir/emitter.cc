@@ -1,5 +1,6 @@
 #include "compiler/gir/emitter.hh"
 
+#include <algorithm>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -903,6 +904,48 @@ auto emitter::emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> 
     return value{undefined_val{}, sema_type};
 }
 
+auto emitter::try_emit_union_field_eq(ast::node_id lhs, ast::node_id rhs)
+    -> stdx::option<local_id> {
+    const auto is_untagged_union = [](const stdx::option<sema::type&>& t) -> bool {
+        const auto ut{t ? t->get_data().as_opt<sema::types::union_t>() : stdx::none};
+        return !ut || ut->is_untagged;
+    };
+
+    const auto lhs_type{active_mod().get_sema_type_opt(lhs)};
+    if (!is_untagged_union(lhs_type) && active_ast().get_as_opt<ast::implicit_access_expr>(rhs)) {
+        return emit_union_tag_eq(emit_lvalue(lhs), rhs);
+    }
+
+    const auto rhs_type{active_mod().get_sema_type_opt(rhs)};
+    if (!is_untagged_union(rhs_type) && active_ast().get_as_opt<ast::implicit_access_expr>(lhs)) {
+        return emit_union_tag_eq(emit_lvalue(rhs), lhs);
+    }
+
+    return stdx::none;
+}
+
+// Compares a tagged union's runtime discriminant (index 0) against a `.field` pattern's ordinal.
+auto emitter::emit_union_tag_eq(value union_addr, ast::node_id member_pattern_id) -> local_id {
+    auto&      i32_type{ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
+    auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    const auto tag_ptr{
+        builder_.emit_get_element_ptr(union_addr, {value{0ULL, usize_type}}, i32_type)};
+    const auto tag_val{builder_.emit_load(value{tag_ptr, i32_type}, i32_type)};
+
+    const auto& imp{active_ast().get_as<ast::implicit_access_expr>(member_pattern_id)};
+    const auto& member_ident{active_ast().get_as<ast::identifier_expr>(imp.member)};
+    ASSERT(union_addr.type, "Union tag comparison requires a typed union address");
+    const auto& table{ctx_.registry.get(union_addr.type->get_symbol_table_idx())};
+    const auto  proxy{table.get_proxy_opt(member_ident.name)};
+    ASSERT(proxy, "Union field pattern must reference a valid field");
+
+    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    return builder_.emit_binary(instruction_kind::EQ,
+                                value{tag_val, i32_type},
+                                value{static_cast<i64>(proxy->index), i32_type},
+                                bool_type);
+}
+
 auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> value {
     PROFILE_FUNCTION();
     const auto op_type{id.get_token_type()};
@@ -913,6 +956,18 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(kind_opt.has_value(), "Binary operator must be mapped to instruction kind");
     ASSERT(sema_type.has_value(), "Binary expression must have a resolved sema type");
+
+    if (*kind_opt == instruction_kind::EQ || *kind_opt == instruction_kind::NE) {
+        if (const auto tag_eq{try_emit_union_field_eq(binary.lhs, binary.rhs)}) {
+            auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+            if (*kind_opt == instruction_kind::NE) {
+                return value{builder_.emit_unary(
+                                 instruction_kind::NOT, value{*tag_eq, bool_type}, bool_type),
+                             sema_type};
+            }
+            return value{*tag_eq, sema_type};
+        }
+    }
 
     const auto lhs{emit_expression(binary.lhs)};
     const auto rhs{emit_expression(binary.rhs)};
@@ -2361,6 +2416,21 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
     auto&      bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
     auto&      merge_seg{fn.add_segment()};
 
+    // A tagged union's tag and a capture both need the scrutinee's address
+    auto& matcher_sema_type{active_mod().get_sema_type_opt(match.matcher).value_or(*sema_type)};
+    const auto          union_data{matcher_sema_type.get_data().as_opt<sema::types::union_t>()};
+    const bool          has_capture{std::ranges::any_of(
+        match.arms, [](const ast::match_expr::arm& arm) { return arm.capture.has_value(); })};
+    stdx::option<value> matcher_addr;
+    if (has_capture || (union_data && !union_data->is_untagged)) {
+        if (active_ast().get_as_opt<ast::identifier_expr>(match.matcher)) {
+            matcher_addr.emplace(emit_lvalue(match.matcher));
+        } else {
+            matcher_addr.emplace(spill_to_temporary(
+                matcher_val, matcher_sema_type, matcher_sema_type.is_constant()));
+        }
+    }
+
     for (const auto& arm : match.arms) {
         auto& arm_body_seg{fn.add_segment()};
         auto& next_arm_seg{fn.add_segment()};
@@ -2389,9 +2459,12 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
             builder_.emit_cond_goto(
                 value{in_range, bool_type}, arm_body_seg.get_id(), next_arm_seg.get_id());
         } else {
-            const auto pat_val{emit_expression_id(pattern_node_id)};
-            const auto is_eq{
-                builder_.emit_binary(instruction_kind::EQ, matcher_val, pat_val, bool_type)};
+            const auto is_eq{union_data && !union_data->is_untagged
+                                 ? emit_union_tag_eq(*matcher_addr, pattern_node_id)
+                                 : builder_.emit_binary(instruction_kind::EQ,
+                                                        matcher_val,
+                                                        emit_expression_id(pattern_node_id),
+                                                        bool_type)};
             builder_.emit_cond_goto(
                 value{is_eq, bool_type}, arm_body_seg.get_id(), next_arm_seg.get_id());
         }
@@ -2404,9 +2477,44 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
                 auto&       cap_type{active_mod()
                                    .get_sema_type_opt(*arm.capture)
                                    .value_or(ctx_.get_builtin_resolved_type(sema::type_kind::I32))};
-                scopes_.back().bindings.emplace(
-                    cap_ident.name,
-                    local_binding{matcher_val.data.as<local_id>(), cap_type, false, stdx::none});
+                ASSERT(matcher_addr, "A capturing arm must have a computed matcher address");
+
+                // Unwrap a ref/ptr modifier to the type used to address the aliased storage.
+                auto* underlying{&cap_type};
+                if (const auto ref_d{cap_type.get_data().as_opt<sema::types::reference>()}) {
+                    underlying = &const_cast<sema::type&>(ref_d->underlying);
+                } else if (const auto ptr_d{cap_type.get_data().as_opt<sema::types::pointer>()}) {
+                    underlying = &const_cast<sema::type&>(ptr_d->underlying);
+                }
+
+                // A tagged union's fields share the payload slot
+                auto& qualified{
+                    *ctx_.pool.with_const(*underlying, matcher_addr->type->is_constant())};
+                value      field_addr{matcher_addr->data, qualified};
+                const auto ut{matcher_addr->type->get_data().as_opt<sema::types::union_t>()};
+                if (ut && !ut->is_untagged) {
+                    auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+                    const auto payload_ptr{builder_.emit_get_element_ptr(
+                        *matcher_addr, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, qualified)};
+                    field_addr = value{payload_ptr, qualified};
+                }
+
+                if (cap_type.get_kind() == sema::type_kind::REFERENCE ||
+                    cap_type.get_kind() == sema::type_kind::POINTER) {
+                    // `|&v|`/`|&mut v|` and `|^v|`/`|^mut v|` alias the field's own address
+                    const auto capture_slot{builder_.emit_alloca(cap_type)};
+                    builder_.emit_store(capture_slot, value{field_addr.data, cap_type})
+                        .is_initializer = true;
+                    scopes_.back().bindings.emplace(
+                        cap_ident.name, local_binding{capture_slot, cap_type, true, stdx::none});
+                } else {
+                    scopes_.back().bindings.emplace(cap_ident.name,
+                                                    local_binding{field_addr.data.as<local_id>(),
+                                                                  *field_addr.type,
+                                                                  true,
+                                                                  stdx::none,
+                                                                  field_addr.type->is_constant()});
+                }
             }
 
             if (yields_value && res_slot) {

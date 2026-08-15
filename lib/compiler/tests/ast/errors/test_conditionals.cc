@@ -88,4 +88,12 @@ TEST_CASE("Illegal match catch-all") {
                            std::pair{0UZ, 18UZ}});
 }
 
+TEST_CASE("Illegal match arm capture modifier on a discarded capture") {
+    helpers::test_parser_fail("match (a) { b => |&mut _| c, };",
+                              syntax::diagnostic{syntax::error::ILLEGAL_IDENTIFIER, 0, 23});
+
+    helpers::test_parser_fail("match (a) { b => |^ _| c, };",
+                              syntax::diagnostic{syntax::error::ILLEGAL_IDENTIFIER, 0, 20});
+}
+
 } // namespace ghoti::tests

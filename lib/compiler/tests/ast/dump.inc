@@ -148,7 +148,7 @@ ExpressionStatement
     └─ Arms:
         ├─ Arm:
         │   ├─ Pattern: IdentifierExpression: b
-        │   ├─ Capture: IdentifierExpression: c
+        │   ├─ Capture: c (modifier: VALUE)
         │   └─ Dispatch: ExpressionStatement
         │       └─ Expr: IdentifierExpression: d
         ├─ Arm:

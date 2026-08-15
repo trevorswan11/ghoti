@@ -710,16 +710,21 @@ auto match_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
 
         // There is an optional capture for every arm
         stdx::option<discardable_ident_handle> capture;
+        type_modifier                          modifier;
         if (parser.peek_token_is(syntax::token_type_t::BW_OR)) {
             parser.advance();
 
-            // An underscore is equivalent to a lack of capture
+            // An underscore is equivalent to a lack of capture; no modifier is allowed on it
             if (parser.peek_token_is(syntax::token_type_t::UNDERSCORE)) {
                 parser.advance();
                 capture.emplace(parser.add_node<discardable_ident_handle, ast::discarded>(
                     parser.get_current_token()));
             } else {
-                TRY(parser.expect_peek(syntax::token_type_t::IDENT));
+                // Always check for a modifier and advance past it if present
+                parser.advance();
+                modifier = type_modifier{parser.get_current_token()};
+                if (!modifier.is_value()) { parser.advance(); }
+
                 capture.emplace(TRY(identifier_expr::parse(parser)));
             }
             TRY(parser.expect_peek(syntax::token_type_t::BW_OR));
@@ -735,7 +740,7 @@ auto match_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
         parser.advance();
         const auto consequence{TRY(parser.parse_restricted_statement(
             syntax::error::ILLEGAL_MATCH_ARM, syntax::semicolon_behavior::DISALLOW))};
-        arms.emplace_back(pattern, capture, consequence);
+        arms.emplace_back(pattern, capture, modifier, consequence);
         arm_idx += 1;
 
         // The lack of a comma must mean we're at the end of the arm list

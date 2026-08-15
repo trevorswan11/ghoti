@@ -73,6 +73,54 @@ TEST_CASE("Resolving well-formed builtin-type matching") {
     }
 }
 
+TEST_CASE("Resolving match arm captures with reference/pointer modifiers") {
+    helpers::resolve_and_check(
+        "using U = union { a: i32 }; var u := U{ .a = 5 }; match (u) { .a => |&v| v };");
+    helpers::resolve_and_check(
+        "using U = union { a: i32 }; var u := U{ .a = 5 }; match (u) { .a => |&mut v| v };");
+    helpers::resolve_and_check(
+        "using U = union { a: i32 }; var u := U{ .a = 5 }; match (u) { .a => |^v| *v };");
+    helpers::resolve_and_check(
+        "using U = union { a: i32 }; var u := U{ .a = 5 }; match (u) { .a => |^mut v| *v };");
+
+    // Whole-value (non-union) captures accept the same modifiers
+    helpers::resolve_and_check("var x: i32 = 1; match (x) { 1 => |&mut v| v, _ => 0 };");
+}
+
+TEST_CASE("Illegal mutable capture of an immutable match arm value") {
+    SECTION("By mutable reference, union field") {
+        helpers::test_resolver_fail(
+            "using U = union { a: i32 }; const u := U{ .a = 5 }; match (u) { .a => |&mut v| v };",
+            sema::diagnostic{"Cannot capture an immutable value by mutable reference",
+                             sema::error::ASSIGNMENT_TO_CONST,
+                             std::pair{0UZ, 76UZ}});
+    }
+
+    SECTION("By mutable pointer, union field") {
+        helpers::test_resolver_fail(
+            "using U = union { a: i32 }; const u := U{ .a = 5 }; match (u) { .a => |^mut v| *v };",
+            sema::diagnostic{"Cannot capture an immutable value by mutable pointer",
+                             sema::error::ASSIGNMENT_TO_CONST,
+                             std::pair{0UZ, 76UZ}});
+    }
+
+    SECTION("By mutable reference, whole value") {
+        helpers::test_resolver_fail(
+            "const x: i32 = 1; match (x) { 1 => |&mut v| v, _ => 0 };",
+            sema::diagnostic{"Cannot capture an immutable value by mutable reference",
+                             sema::error::ASSIGNMENT_TO_CONST,
+                             std::pair{0UZ, 41UZ}});
+    }
+}
+
+TEST_CASE("Illegal match over an untagged union") {
+    helpers::test_resolver_fail(
+        "using U = extern union { a: i32, b: i64 }; match (U) { .a => 5, .b => 4 };",
+        sema::diagnostic{"Cannot match on an untagged union; it has no runtime tag",
+                         sema::error::TYPE_MISMATCH,
+                         std::pair{0UZ, 50UZ}});
+}
+
 TEST_CASE("Illegal resolved enum matcher type") {
     SECTION("Non-exhaustive") {
         helpers::test_resolver_fail(

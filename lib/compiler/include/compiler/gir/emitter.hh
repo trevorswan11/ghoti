@@ -163,6 +163,9 @@ class emitter {
                   stdx::option<local_id>         res_slot = stdx::none) -> value;
     auto emit_label(ast::node_id id, const ast::label_expr& label) -> value;
     auto emit_binary(ast::node_id id, const ast::binary_expr& binary) -> value;
+    // Detects `union_val == .field` and emits a tag comparison instead of a union-vs-field-type EQ
+    auto try_emit_union_field_eq(ast::node_id lhs, ast::node_id rhs) -> stdx::option<local_id>;
+    auto emit_union_tag_eq(value union_addr, ast::node_id member_pattern_id) -> local_id;
     auto emit_logical_and(ast::node_id id, const ast::binary_expr& binary) -> value;
     auto emit_logical_or(ast::node_id id, const ast::binary_expr& binary) -> value;
     auto emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value;

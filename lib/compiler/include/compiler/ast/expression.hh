@@ -228,7 +228,9 @@ struct match_expr {
     struct arm {
         match_pattern_handle                   pattern;
         stdx::option<discardable_ident_handle> capture;
-        stmt_handle                            dispatch;
+        // Only meaningful when `capture` holds a real (non-discarded) identifier
+        type_modifier modifier;
+        stmt_handle   dispatch;
     };
 
     expr_handle      matcher;

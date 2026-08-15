@@ -753,6 +753,38 @@ auto type_resolver::visit(ID id, const ast::enum_expr& enum_expr) -> void {
 
 VISITOR_TEMPLATE_INIT(type_resolver, visit, const ast::enum_expr&)
 
+namespace {
+
+// Applies a `&`/`&mut`/`^`/`^mut`/none capture modifier to a base type, rejecting when const
+[[nodiscard]] auto resolve_capture_modifier(context&           ctx,
+                                            ast::type_modifier modifier,
+                                            type&              base_type,
+                                            bool               container_is_const,
+                                            std::string_view   what,
+                                            source_location    loc) noexcept
+    -> stdx::result<gsl::not_null<type*>, diagnostic> {
+    const bool wants_mutable{modifier.is_mutable_ref() || modifier.is_mutable_ptr()};
+    if (wants_mutable && container_is_const) {
+        return make_sema_err(fmt::format("Cannot capture an immutable {} by mutable {}",
+                                         what,
+                                         modifier.is_mutable_ref() ? "reference" : "pointer"),
+                             error::ASSIGNMENT_TO_CONST,
+                             loc);
+    }
+
+    if (modifier.is_ref()) {
+        return gsl::not_null{&ctx.get_reference(
+            modifier.is_mutable_ref() ? types::mut::MUTABLE : types::mut::CONSTANT, base_type)};
+    }
+    if (modifier.is_ptr()) {
+        return gsl::not_null{&ctx.get_pointer(
+            modifier.is_mutable_ptr() ? types::mut::MUTABLE : types::mut::CONSTANT, base_type)};
+    }
+    return gsl::not_null{&base_type};
+}
+
+} // namespace
+
 auto type_resolver::visit(ast::node_id id, const ast::for_loop_expr& for_expr) -> void {
     PROFILE_FUNCTION();
     ASSERT(for_expr.iterables.size() == for_expr.captures.size());
@@ -788,31 +820,17 @@ auto type_resolver::visit(ast::node_id id, const ast::for_loop_expr& for_expr) -
                     resolving_.ast.location_of(iterable)));
             }
 
-            const bool wants_mutable_capture{capture.modifier.is_mutable_ref() ||
-                                             capture.modifier.is_mutable_ptr()};
-            if (wants_mutable_capture && iterable_type.is_constant()) {
-                return last_type_.emplace(ctx_.poison_node(
-                    resolving_,
-                    id,
-                    fmt::format("Cannot capture an immutable array or slice by mutable {}",
-                                capture.modifier.is_mutable_ref() ? "reference" : "pointer"),
-                    error::ASSIGNMENT_TO_CONST,
-                    resolving_.ast.location_of(capture.payload)));
+            auto cap_result{resolve_capture_modifier(ctx_,
+                                                     capture.modifier,
+                                                     *elem_type,
+                                                     iterable_type.is_constant(),
+                                                     "array or slice",
+                                                     resolving_.ast.location_of(capture.payload))};
+            if (!cap_result.has_value()) {
+                return last_type_.emplace(
+                    ctx_.poison_node(resolving_, id, std::move(cap_result).error()));
             }
-
-            if (capture.modifier.is_ref()) {
-                auto& ref_type{ctx_.get_reference(
-                    capture.modifier.is_mutable_ref() ? types::mut::MUTABLE : types::mut::CONSTANT,
-                    *elem_type)};
-                resolving_.set_sema_type(capture.payload, ref_type);
-            } else if (capture.modifier.is_ptr()) {
-                auto& ptr_type{ctx_.get_pointer(
-                    capture.modifier.is_mutable_ptr() ? types::mut::MUTABLE : types::mut::CONSTANT,
-                    *elem_type)};
-                resolving_.set_sema_type(capture.payload, ptr_type);
-            } else {
-                resolving_.set_sema_type(capture.payload, *elem_type);
-            }
+            resolving_.set_sema_type(capture.payload, **cap_result);
 
             if (capture.payload.is<ast::identifier_expr>()) {
                 resolve_symbol_info(capture.payload, symbol_kind::VALUE);
@@ -1850,6 +1868,13 @@ auto type_resolver::validate_union_arms(ast::node_id           match_id,
     if (!union_data_opt) { return stdx::none; }
     const auto& union_data{*union_data_opt};
 
+    // An untagged (extern) union has no runtime discriminant to check a field against
+    if (union_data.is_untagged) {
+        return diagnostic{"Cannot match on an untagged union; it has no runtime tag",
+                          error::TYPE_MISMATCH,
+                          resolving_.ast.location_of(match.matcher)};
+    }
+
     // Track seen and duplicate fields in the match arms
     if (auto diag{gather_arm_duplicates(match.arms, resolving_, union_validator_, true)}; diag) {
         return diag;
@@ -1908,6 +1933,19 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
 
     // The expression must resolve to a single type on pass 3
     stdx::option<type&> first_type;
+
+    // A struct/union local's constness isn't type-level, so it's looked up on its decl directly
+    bool matcher_is_const{false};
+    if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(match.matcher)}) {
+        if (const auto sym{ctx_.registry.lookup(table_stack_, ident->name)}) {
+            if (const auto node{sym->get_data().as_opt<symbols::node_t>()}) {
+                if (const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)}) {
+                    matcher_is_const = decl->has_modifier(ast::decl_modifiers::CONSTANT) ||
+                                       decl->has_modifier(ast::decl_modifiers::CONSTEXPR);
+                }
+            }
+        }
+    }
 
     // Rip through the arms once to validate structural arm rules
     const auto& matcher_data{matcher_type.get_data()};
@@ -2006,6 +2044,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
 
         if (arm.capture && arm.capture->is<ast::identifier_expr>()) {
             // Unions implicitly unpack the value since the field is guaranteed to be valid
+            stdx::option<type&> base_type;
             if (const auto union_data{matcher_data.as_opt<types::union_t>()}) {
                 // At this point the pattern is guaranteed to be an implicit access
                 const auto implicit_access{
@@ -2016,29 +2055,42 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
 
                 const auto& table{ctx_.registry.get(matcher_type.get_symbol_table_idx())};
                 const auto& proxy{table.get_proxy(ident.name)};
-                resolving_.set_sema_type(*arm.capture, union_data->type_at(proxy.index));
+                base_type.emplace(union_data->type_at(proxy.index));
             } else {
-                resolving_.set_sema_type(*arm.capture, matcher_type);
+                base_type.emplace(matcher_type);
             }
 
+            auto cap_result{resolve_capture_modifier(ctx_,
+                                                     arm.modifier,
+                                                     *base_type,
+                                                     matcher_is_const,
+                                                     "value",
+                                                     resolving_.ast.location_of(*arm.capture))};
+            if (!cap_result) {
+                return last_type_.emplace(
+                    ctx_.poison_node(resolving_, id, std::move(cap_result).error()));
+            }
+            resolving_.set_sema_type(*arm.capture, **cap_result);
             resolve_symbol_info(*arm.capture, symbol_kind::VALUE);
         }
 
         if (!arm.pattern.is<ast::discarded>()) { TRY_RESOLVE(arm.pattern); }
         TRY_RESOLVE(arm.dispatch);
 
-        stdx::option<type&> arm_dispatch_type{last_type_.take()};
+        // Only an expr_stmt arm can yield a value (blocks never do, per emit_stmt_as_value); a
+        // block's own resolved type is just its scope handle, not a value type, so it's ignored.
+        type* arm_dispatch_type{&ctx_.get_builtin_resolved_type(type_kind::VOID_)};
         if (const auto expr_stmt_node{resolving_.ast.get_as_opt<ast::expr_stmt>(arm.dispatch)}) {
             if (const auto inner_type{resolving_.get_sema_type_opt(expr_stmt_node->expression)}) {
                 if (!inner_type->is_poison() && inner_type->get_kind() != type_kind::VOID_) {
-                    arm_dispatch_type = inner_type;
+                    arm_dispatch_type = &inner_type.value();
                 }
             }
         }
 
-        if (arm_dispatch_type && (!first_type || first_type->get_kind() == type_kind::VOID_) &&
+        if ((!first_type || first_type->get_kind() == type_kind::VOID_) &&
             arm_dispatch_type->get_kind() != type_kind::VOID_) {
-            first_type = arm_dispatch_type;
+            first_type = *arm_dispatch_type;
         }
     }
 

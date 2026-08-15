@@ -401,7 +401,12 @@ auto dumper::visit(node_id, const match_expr& match) -> void {
             if (arm.capture) {
                 const indent::guard g_inner{indent_, false};
                 fmt::print(out_, "{}Capture: ", indent_.current_branch());
-                dump(*arm.capture);
+                if (arm.capture->is<ast::discarded>()) {
+                    fmt::println(out_, "<discarded>");
+                } else {
+                    const auto& ident{ast_.get_as<identifier_expr>(*arm.capture)};
+                    fmt::println(out_, "{} (modifier: {})", ident, arm.modifier);
+                }
             }
 
             {
