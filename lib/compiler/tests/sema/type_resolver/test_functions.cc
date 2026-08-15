@@ -374,6 +374,54 @@ TEST_CASE("Returning a closure received as a generic parameter is not flagged as
     )");
 }
 
+TEST_CASE("A closure's .ptr resolves to a callable shim including the self parameter") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const outer := fn(): void {
+            var offset: i32 = 0;
+            const add := fn(x: i32): i32 {
+                return x + offset;
+            };
+            const shim := add.ptr;
+        };
+    )")};
+
+    const auto [sym, sym_data, node_data, outer_type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("outer", idx)};
+    const auto [shim_sym, shim_sym_data, shim_type]{
+        ctx->get_type_sym_info<syms::node_t>("shim", outer_type.get_symbol_table_idx())};
+
+    REQUIRE(shim_type.get_kind() == sema::type_kind::FUNCTION);
+    const auto& fn_data{UNWRAP(shim_type.get_data().as_opt<sema::types::function>())};
+    REQUIRE(fn_data.params.size() == 2);
+    CHECK(fn_data.params[1]->get_kind() == sema::type_kind::I32);
+    CHECK(fn_data.return_type.get_kind() == sema::type_kind::I32);
+}
+
+TEST_CASE("Accessing an unknown field on a closure is rejected") {
+    auto [ctx, idx]{helpers::resolve(R"(
+        const outer := fn(): void {
+            var offset: i32 = 0;
+            const add := fn(x: i32): i32 {
+                return x + offset;
+            };
+            const bogus := add.notAField;
+        };
+    )")};
+    CHECK(ctx->root_mod.is_poisoned());
+}
+
+TEST_CASE("Two distinct non-capturing functions with the same signature share one type") {
+    helpers::resolve_and_check(R"(
+        const double_it := fn(x: i32): i32 {
+            return x * 2;
+        };
+        const square_it := fn(x: i32): i32 {
+            return x * x;
+        };
+        const fns := [2]fn(i32): i32{double_it, square_it};
+    )");
+}
+
 TEST_CASE("Declared function arity mismatch") {
     auto [ctx, idx]{helpers::test_resolver_fail(
         "const foo := fn(a: i32, b: i32): void {}; const bar := foo(1);",

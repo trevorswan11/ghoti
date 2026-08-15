@@ -29,12 +29,13 @@ struct explicit_function_type {
     bool                          variadic;
     explicit_type_id              explicit_return_type;
 
-    [[nodiscard]] static auto parse(syntax::parser& parser)
+    // allow_trailing_brace lets an aggregate literal's own '{' follow without misreading it
+    [[nodiscard]] static auto parse(syntax::parser& parser, bool allow_trailing_brace = false)
         -> stdx::result<explicit_function_type, syntax::diagnostic>;
 };
 
 struct explicit_type {
-    [[nodiscard]] static auto parse(syntax::parser& parser)
+    [[nodiscard]] static auto parse(syntax::parser& parser, bool allow_trailing_brace = false)
         -> stdx::result<explicit_type_id, syntax::diagnostic>;
 
     // Parses an optionally present type and checks/advances for value initialization

@@ -296,7 +296,9 @@ auto emitter::emit_function(ast::node_id              id,
 
     auto& entry{fn.add_segment()};
     builder_.set_insert_point(fn, entry);
-    const scope_guard g{scopes_};
+    const scope_guard           g{scopes_};
+    const open_fn_name_guard    fn_name_g{open_fn_names_, std::string{name_ident.name}};
+    const open_fn_closure_guard fn_closure_g{open_fn_is_closure_, false};
 
     if (fn_expr.self) {
         const auto& self_ident{active_ast().get_as<ast::identifier_expr>(fn_expr.self->name)};
@@ -394,6 +396,65 @@ auto emitter::emit_anonymous_function(ast::node_id id, const ast::function_expr&
     return anon_name;
 }
 
+auto emitter::emit_named_local_function(std::string_view          name,
+                                        ast::node_id              id,
+                                        const ast::function_expr& fn_expr) -> std::string {
+    PROFILE_FUNCTION();
+    const auto sema_type{active_mod().get_sema_type_opt(id)};
+    ASSERT(sema_type, "Local function must have a resolved sema type");
+    auto&      fn_type{*sema_type};
+    const auto anon_name{fmt::format("anonymous_fn{}", anon_fn_counter_++)};
+
+    auto&      fn{gir_module_.add_function(anon_name, fn_type, false, false, fn_expr.variadic)};
+    const auto prev_fn{builder_.get_function()};
+    const auto prev_seg{builder_.get_segment()};
+
+    auto& entry{fn.add_segment()};
+    builder_.set_insert_point(fn, entry);
+
+    {
+        const scope_guard           g{scopes_};
+        const open_fn_name_guard    fn_name_g{open_fn_names_, anon_name};
+        const open_fn_closure_guard fn_closure_g{open_fn_is_closure_, false};
+
+        // Let a self-referential call by name inside the body resolve to this function
+        scopes_.back().bindings.emplace(name,
+                                        local_binding{local_id{0, local_kind::TEMPORARY},
+                                                      fn_type,
+                                                      false,
+                                                      value{anon_name, fn_type},
+                                                      true});
+
+        for (const auto& param : fn_expr.parameters) {
+            const auto& p_ident{active_ast().get_as<ast::identifier_expr>(param.name)};
+            const auto  p_name{p_ident.name};
+            const auto  p_type{active_mod().get_sema_type_opt(param.name)};
+            ASSERT(p_type, "Local function parameter must have a resolved sema type");
+
+            auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
+            const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
+            scopes_.back().bindings.emplace(
+                p_name, local_binding{p_slot.id, *p_type, p_spilled, stdx::none});
+        }
+
+        emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
+        if (const auto cur_seg{builder_.get_segment()}) {
+            if (!cur_seg->has_terminator()) {
+                const auto fn_data{fn_type.get_data().as_opt<sema::types::function>()};
+                ASSERT(fn_data, "Function type must contain function type data");
+                if (fn_data->return_type.get_kind() == sema::type_kind::VOID_) {
+                    builder_.emit_return();
+                } else {
+                    builder_.emit_return(value{undefined_val{}, fn_data->return_type});
+                }
+            }
+        }
+    }
+
+    if (prev_fn && prev_seg) { builder_.set_insert_point(*prev_fn, *prev_seg); }
+    return anon_name;
+}
+
 auto emitter::emit_closure(ast::node_id id, const ast::function_expr& fn_expr) -> value {
     PROFILE_FUNCTION();
     auto&      closure_type{active_mod().get_sema_type(id)};
@@ -423,7 +484,9 @@ auto emitter::emit_closure_function(const ast::function_expr&     fn_expr,
     builder_.set_insert_point(fn, entry);
 
     {
-        const scope_guard g{scopes_};
+        const scope_guard           g{scopes_};
+        const open_fn_name_guard    fn_name_g{open_fn_names_, fn_name};
+        const open_fn_closure_guard fn_closure_g{open_fn_is_closure_, true};
 
         auto& self_type{*impl_sig_data->params[0]};
         auto& self_slot{fn.add_param("self", self_type)};
@@ -624,6 +687,19 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         sema_kind == sema::type_kind::CLOSURE};
 
     if (is_const && decl.value && !is_aggregate) {
+        // A local plain function is emitted with a synthetic name; pre-bind `name` to it so a
+        // self-referential call (by name or @fnCtx()) inside its own body resolves correctly
+        if (const auto fn_expr{active_ast().get_as_opt<ast::function_expr>(*decl.value)}) {
+            const auto anon_name{emit_named_local_function(name, **decl.value, *fn_expr)};
+            scopes_.back().bindings.emplace(name,
+                                            local_binding{local_id{0, local_kind::TEMPORARY},
+                                                          *sema_type,
+                                                          false,
+                                                          value{anon_name, *sema_type},
+                                                          true});
+            return;
+        }
+
         if (const auto cv{const_eval_.try_eval(*decl.value)}) {
             scopes_.back().bindings.emplace(name,
                                             local_binding{local_id{0, local_kind::TEMPORARY},
@@ -1030,10 +1106,20 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
     stdx::option<std::string> callee_name;
     stdx::option<value>       indirect_callee;
     bool                      is_closure_ident_call{false};
+    bool                      is_fn_ctx_self_call{false};
     const auto                dot_call{active_ast().get_as_opt<ast::dot_expr>(call.function)};
+
+    // @fnCtx()(args): the inner call is never emitted, its callee names the enclosing function
+    const auto fn_ctx_call{active_ast().get_as_opt<ast::call_expr>(call.function)};
+    const bool is_fn_ctx_call{fn_ctx_call && fn_ctx_call->function->get_token_type() ==
+                                                 syntax::token_type_t::BUILTIN_FN_CTX};
 
     if (const auto generic_target{active_mod().get_generic_call_target_opt(id)}) {
         callee_name.emplace(*generic_target);
+    } else if (is_fn_ctx_call) {
+        ASSERT(!open_fn_names_.empty(), "@fnCtx() must be inside an open function");
+        callee_name.emplace(open_fn_names_.back());
+        is_fn_ctx_self_call = open_fn_is_closure_.back();
     } else if (const auto ident{active_ast().get_as_opt<ast::identifier_expr>(call.function)}) {
         if (const auto binding{lookup_binding(ident->name)}) {
             const bool is_fn_ptr_binding{
@@ -1089,6 +1175,18 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         }
     }
 
+    // A recursive closure call needs the self-inclusive impl signature, not the public one
+    if (is_fn_ctx_self_call && fn_type_opt) {
+        const auto idx{fn_type_opt->get_symbol_table_idx()};
+        auto&      cl_type{*ctx_.pool[{sema::type_kind::CLOSURE, sema::types::mut::CONSTANT, idx}]};
+        if (cl_type.is_resolved()) {
+            fn_data = cl_type.get_data()
+                          .as_opt<sema::types::closure_t>()
+                          ->impl_signature.get_data()
+                          .as_opt<sema::types::function>();
+        }
+    }
+
     bool is_obj_instance{false};
     if (dot_call) {
         bool       is_type{false};
@@ -1122,7 +1220,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
     }
 
     std::vector<value> args;
-    const bool         has_implicit_self{is_closure_ident_call ||
+    const bool         has_implicit_self{is_closure_ident_call || is_fn_ctx_self_call ||
                                  (fn_data && fn_data->has_self && is_obj_instance)};
     args.reserve(call.arguments.size() + (has_implicit_self ? 1 : 0));
 
@@ -1132,6 +1230,13 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         const auto  binding{lookup_binding(ident.name)};
         ASSERT(binding, "Closure callee identifier must have a binding");
         ASSERT(!fn_data->params.empty(), "Closure implementation signature must have self");
+        args.emplace_back(value{binding->id, const_cast<sema::type&>(*fn_data->params[0])});
+    } else if (is_fn_ctx_self_call) {
+        // Recursing into a closure via @fnCtx(): reuse this body's own self binding
+        const auto binding{lookup_binding("self")};
+        ASSERT(binding, "@fnCtx() inside a closure must have a self binding");
+        ASSERT(fn_data && !fn_data->params.empty(),
+               "Closure implementation signature must have self");
         args.emplace_back(value{binding->id, const_cast<sema::type&>(*fn_data->params[0])});
     } else if (has_implicit_self && !fn_data->params.empty()) {
         const auto& self_param_type{*fn_data->params[0]};
@@ -2427,6 +2532,11 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
     }
 
     const auto member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
+
+    // The shim itself is static, so this ignores base_lval entirely
+    if (obj_type->get_kind() == sema::type_kind::CLOSURE && member_ident.name == "ptr") {
+        return value{fmt::format("closure{}", obj_type->get_symbol_table_idx()), sema_type};
+    }
 
     if (obj_type->get_kind() == sema::type_kind::SLICE) {
         const u64  member_idx{member_ident.name == "ptr" ? SLICE_PTR_FIELD_INDEX

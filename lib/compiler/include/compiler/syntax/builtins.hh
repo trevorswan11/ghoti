@@ -68,8 +68,11 @@ constexpr builtin_t SET_MAIN_SYMBOL{"@setMainSymbol", token_type_t::BUILTIN_SET_
 
 constexpr builtin_t PANIC{"@panic", token_type_t::BUILTIN_PANIC};
 
+// The innermost enclosing function as a callable value, for self-recursion
+constexpr builtin_t FN_CTX{"@fnCtx", token_type_t::BUILTIN_FN_CTX};
+
 constexpr auto ALL_TOKEN_TYPES{
-    stdx::enum_range<token_type_t::BUILTIN_ALIGN_CAST, token_type_t::BUILTIN_PANIC>()};
+    stdx::enum_range<token_type_t::BUILTIN_ALIGN_CAST, token_type_t::BUILTIN_FN_CTX>()};
 
 } // namespace builtins
 

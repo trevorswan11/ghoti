@@ -57,7 +57,7 @@ auto array_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
         mut_elements = true;
     }
 
-    const auto item_type{TRY(explicit_type::parse(parser))};
+    const auto item_type{TRY(explicit_type::parse(parser, true))};
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
 
     // Current token is either the LBRACE at the start or a comma before parsing

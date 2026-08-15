@@ -197,6 +197,23 @@ template <ast::IndexableID ID>
         return make_sema_err("@this() may only be used inside of structs, unions, and enums",
                              error::TYPE_MISMATCH,
                              resolving_.ast.location_of(id));
+    // @fnCtx() returns the enclosing function's own (pre-capture) signature as a callable value
+    case token_type_t::BUILTIN_FN_CTX:
+        if (open_function_nodes_.empty()) {
+            return make_sema_err("@fnCtx() may only be used inside of a function",
+                                 error::TYPE_MISMATCH,
+                                 resolving_.ast.location_of(id));
+        }
+        if (auto& fn_self_type{resolving_.get_sema_type(open_function_nodes_.back())};
+            fn_self_type.is_resolved()) {
+            return_type = &fn_self_type;
+            break;
+        }
+        return make_sema_err(
+            "@fnCtx() needs its enclosing function's return type to be known; give it an "
+            "explicit (non-auto) return type",
+            error::TYPE_MISMATCH,
+            resolving_.ast.location_of(id));
     case token_type_t::BUILTIN_PTR_FROM_ARRAY: {
         auto& array_type{*get_resolved_call_arg_type(call.arguments[0])};
         auto& type_data{array_type.get_data()};
@@ -837,6 +854,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     const scope                   s{table_stack_, fn_type.get_symbol_table_idx(), table_idx_};
     const function_boundary_guard fn_boundary{function_boundaries_, table_stack_.size() - 1};
     const open_function_guard     fn_node{open_function_nodes_, id};
+    const self_recursion_guard    fn_self_ref{self_recursive_flags_, false};
 
     const auto true_param_size{fn.parameters.size() + (fn.self ? 1 : 0)};
     auto       param_types{ctx_.pool.get_many_unsafe(true_param_size)};
@@ -915,6 +933,13 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     }
 
     const auto is_auto_return{return_type.get_kind() == type_kind::AUTO};
+
+    // A known return type lets a recursive call inside the body resolve against this signature
+    if (!is_auto_return) {
+        fn_type.resolve<types::function>(
+            fn.self.has_value(), param_types, return_type, fn.variadic);
+    }
+
     return_trackers_.emplace_back(
         return_tracker{.return_types = {}, .is_auto_return = is_auto_return});
 
@@ -925,13 +950,23 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     return_trackers_.pop_back();
 
     auto& deduced_return_type{is_auto_return ? tracker.deduced_return_type(ctx_) : return_type};
-    fn_type.resolve<types::function>(
-        fn.self.has_value(), param_types, deduced_return_type, fn.variadic);
-    if (is_auto_return) { resolving_.set_sema_type(fn.explicit_return_type, deduced_return_type); }
-
-    if (!resolving_.get_captures(id).empty()) {
-        return last_type_.emplace(attach_closure_type(id, fn_type, fn.is_move));
+    if (is_auto_return) {
+        fn_type.resolve<types::function>(
+            fn.self.has_value(), param_types, deduced_return_type, fn.variadic);
+        resolving_.set_sema_type(fn.explicit_return_type, deduced_return_type);
     }
+
+    const auto has_captures{!resolving_.get_captures(id).empty()};
+    if (self_recursive_flags_.back() && has_captures) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             "A closure cannot call itself by name; use @fnCtx() instead",
+                             error::ILLEGAL_RECURSIVE_CLOSURE,
+                             resolving_.ast.location_of(id)));
+    }
+
+    if (has_captures) { return last_type_.emplace(attach_closure_type(id, fn_type, fn.is_move)); }
     last_type_.emplace(fn_type);
 }
 
@@ -972,6 +1007,12 @@ namespace {
 
     if (const auto decl{target_mod.ast.get_as_opt<ast::decl_stmt>(*node)}) {
         if (!decl->value) { return stdx::none; }
+
+        // A recursive call only needs the signature, which is resolved before the body is
+        if (decl->value->is<ast::function_expr>()) {
+            const auto fn_ty{target_mod.get_sema_type_opt(*decl->value)};
+            return (fn_ty && fn_ty->is_resolved()) ? fn_ty : stdx::none;
+        }
 
         const auto is_aggregate{decl->value->is<ast::struct_expr>() ||
                                 decl->value->is<ast::union_expr>() ||
@@ -1147,18 +1188,34 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
     // Belongs to an enclosing function's stack frame rather than the module/prelude scope
     if (!function_boundaries_.empty() && lookup->depth < function_boundaries_.back() &&
         lookup->depth >= function_boundaries_.front()) {
-        const auto usage{in_mutating_context_ ? capture_usage::MUTATED : capture_usage::READ};
-
-        // Find the innermost open function whose own scope actually contains the declaration
-        usize owner_idx{0};
-        for (usize i{function_boundaries_.size()}; i-- > 0;) {
-            if (lookup->depth >= function_boundaries_[i]) {
-                owner_idx = i;
-                break;
+        // A function referring to its own name is recursion, not a captured free variable
+        bool is_self_reference{false};
+        if (const auto node{lookup->symbol.get_data().as_opt<symbols::node_t>()}) {
+            if (const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
+                decl && decl->value) {
+                const ast::node_id value_id{*decl->value};
+                const auto&        self_id{open_function_nodes_.back()};
+                is_self_reference = value_id.get_kind() == self_id.get_kind() &&
+                                    value_id.get_index() == self_id.get_index();
             }
         }
-        for (usize i{owner_idx + 1}; i < open_function_nodes_.size(); ++i) {
-            resolving_.add_capture(open_function_nodes_[i], name, usage);
+
+        if (is_self_reference) {
+            self_recursive_flags_.back() = true;
+        } else {
+            const auto usage{in_mutating_context_ ? capture_usage::MUTATED : capture_usage::READ};
+
+            // Find the innermost open function whose own scope actually contains the declaration
+            usize owner_idx{0};
+            for (usize i{function_boundaries_.size()}; i-- > 0;) {
+                if (lookup->depth >= function_boundaries_[i]) {
+                    owner_idx = i;
+                    break;
+                }
+            }
+            for (usize i{owner_idx + 1}; i < open_function_nodes_.size(); ++i) {
+                resolving_.add_capture(open_function_nodes_[i], name, usage);
+            }
         }
     }
 
@@ -1329,6 +1386,16 @@ auto type_resolver::resolve_structural_access(type&                          obj
     const auto union_type{object_data.as_opt<types::union_t>()};
     const auto slice_type{object_data.as_opt<types::slice>()};
     const auto array_type{object_data.as_opt<types::array>()};
+    const auto closure_type{object_data.as_opt<types::closure_t>()};
+
+    if (closure_type) {
+        const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(member)};
+        if (member_ident.name == "ptr") { return &closure_type->impl_signature; }
+        return make_sema_err(
+            fmt::format("Type 'closure' has no field named '{}'", member_ident.name),
+            error::UNDECLARED_IDENTIFIER,
+            resolving_.ast.location_of(member));
+    }
 
     if (slice_type || array_type) {
         const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(member)};

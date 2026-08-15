@@ -74,8 +74,10 @@ class emitter {
         std::vector<ast::stmt_handle>                                 defers;
     };
 
-    using scope_guard        = ghoti::scope_guard<std::vector<scope_frame>>;
-    using loop_context_guard = ghoti::scope_guard<std::vector<loop_context>>;
+    using scope_guard           = ghoti::scope_guard<std::vector<scope_frame>>;
+    using loop_context_guard    = ghoti::scope_guard<std::vector<loop_context>>;
+    using open_fn_name_guard    = ghoti::scope_guard<std::vector<std::string>>;
+    using open_fn_closure_guard = ghoti::scope_guard<std::vector<bool>>;
 
   private:
     auto emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -> void;
@@ -86,6 +88,10 @@ class emitter {
                        const ast::decl_stmt&     decl,
                        const ast::function_expr& fn_expr) -> void;
     auto emit_anonymous_function(ast::node_id id, const ast::function_expr& fn_expr) -> std::string;
+    // Like emit_anonymous_function, but pre-binds `name` to itself so the body can self-recurse
+    auto emit_named_local_function(std::string_view          name,
+                                   ast::node_id              id,
+                                   const ast::function_expr& fn_expr) -> std::string;
 
     // Emits a capturing function_expr's implementation (once, idempotently) and constructs its
     // environment value at the current (definition-site) insertion point
@@ -226,6 +232,8 @@ class emitter {
     std::vector<loop_context>  loop_stack_;
     default_counter            anon_test_counter_;
     default_counter            anon_fn_counter_;
+    std::vector<std::string>   open_fn_names_;
+    std::vector<bool>          open_fn_is_closure_;
 };
 
 } // namespace ghoti::gir

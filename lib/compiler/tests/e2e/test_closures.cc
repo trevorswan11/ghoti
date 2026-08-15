@@ -212,4 +212,130 @@ TEST_CASE("A capture is forwarded correctly through three levels of nesting") {
     )") == 100);
 }
 
+TEST_CASE("An array can hold distinct non-capturing functions sharing one signature") {
+    CHECK(helpers::compile_and_run(R"(
+        const double_it := fn(x: i32): i32 {
+            return x * 2;
+        };
+        const square_it := fn(x: i32): i32 {
+            return x * x;
+        };
+        const negate_it := fn(x: i32): i32 {
+            return -x;
+        };
+
+        pub const main := fn(): i32 {
+            const fns := [3]fn(i32): i32{double_it, square_it, negate_it};
+            return fns[0](3) + fns[1](3) + fns[2](3);
+        };
+    )") == 6 + 9 + -3);
+}
+
+TEST_CASE("A closure's .ptr shim can be called directly with its own environment") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            var offset: i32 = 7;
+            const add := fn(x: i32): i32 {
+                return x + offset;
+            };
+            const shim := add.ptr;
+            return shim(&mut add, 5);
+        };
+    )") == 12);
+}
+
+TEST_CASE("A closure's own address survives a round trip through an opaque pointer") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            var offset: i32 = 7;
+            const add := fn(x: i32): i32 {
+                return x + offset;
+            };
+            const direct: usize = @intFromPtr(^mut add);
+            const erased: ^mut opaque = @ptrCast(^mut opaque, ^mut add);
+            const round_tripped: usize = @intFromPtr(erased);
+            if (direct != round_tripped) {
+                return -1;
+            }
+            return add(5);
+        };
+    )") == 12);
+}
+
+TEST_CASE("A top-level function recurses by calling its own name") {
+    CHECK(helpers::compile_and_run(R"(
+        const fact := fn(n: i32): i32 {
+            if (n <= 1) {
+                return 1;
+            }
+            return n * fact(n - 1);
+        };
+
+        pub const main := fn(): i32 {
+            return fact(6);
+        };
+    )") == 720);
+}
+
+TEST_CASE("A local function recurses by calling its own name") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            const fact := fn(n: i32): i32 {
+                if (n <= 1) {
+                    return 1;
+                }
+                return n * fact(n - 1);
+            };
+            return fact(6);
+        };
+    )") == 720);
+}
+
+TEST_CASE("A non-capturing function recurses through @fnCtx()") {
+    CHECK(helpers::compile_and_run(R"(
+        const fib := fn(n: i32): i32 {
+            if (n <= 1) {
+                return n;
+            }
+            return @fnCtx()(n - 1) + @fnCtx()(n - 2);
+        };
+
+        pub const main := fn(): i32 {
+            return fib(10);
+        };
+    )") == 55);
+}
+
+TEST_CASE("A capturing closure recurses through @fnCtx()") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            var calls: i32 = 0;
+            const fact := fn(n: i32): i32 {
+                calls = calls + 1;
+                if (n <= 1) {
+                    return 1;
+                }
+                return n * @fnCtx()(n - 1);
+            };
+            const result := fact(5);
+            return result + calls;
+        };
+    )") == 125);
+}
+
+TEST_CASE("A closure cannot recurse by calling its own name") {
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            var offset: i32 = 1;
+            const fact := fn(n: i32): i32 {
+                if (n <= 1) {
+                    return offset;
+                }
+                return n * fact(n - 1);
+            };
+            return fact(5);
+        };
+    )");
+}
+
 } // namespace ghoti::tests

@@ -181,6 +181,8 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::SET_MAIN_SYMBOL, params(t_c_str), t_void);
 
     inject_function(bis::PANIC, params(t_c_str), t_noreturn);
+
+    inject_function(bis::FN_CTX, params(), t_auto);
 }
 
 } // namespace

@@ -18,7 +18,7 @@
 
 namespace ghoti::ast {
 
-auto explicit_function_type::parse(syntax::parser& parser)
+auto explicit_function_type::parse(syntax::parser& parser, bool allow_trailing_brace)
     -> stdx::result<explicit_function_type, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
@@ -60,7 +60,7 @@ auto explicit_function_type::parse(syntax::parser& parser)
     // There must be a return type but there cannot be a block
     TRY(parser.expect_peek(syntax::token_type_t::COLON));
     const auto return_type{TRY(explicit_type::parse(parser))};
-    if (parser.peek_token_is(syntax::token_type_t::LBRACE)) {
+    if (!allow_trailing_brace && parser.peek_token_is(syntax::token_type_t::LBRACE)) {
         return make_syntax_err("Function types may not have a body",
                                syntax::error::EXPLICIT_FN_TYPE_HAS_BODY,
                                start_token);
@@ -71,7 +71,7 @@ auto explicit_function_type::parse(syntax::parser& parser)
                                   .explicit_return_type = return_type};
 }
 
-auto explicit_type::parse(syntax::parser& parser)
+auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
     -> stdx::result<explicit_type_id, syntax::diagnostic> {
     // Always check for a modifier and advance past it if present
     PROFILE_FUNCTION();
@@ -112,14 +112,14 @@ auto explicit_type::parse(syntax::parser& parser)
         }
 
         // Arrays are recursively defined
-        const auto inner{TRY(explicit_type::parse(parser))};
+        const auto inner{TRY(explicit_type::parse(parser, allow_trailing_brace))};
         return parser.add_type<explicit_array_type>(
             modifier_token, modifier, dimension, null_terminated, mut_elements, inner);
     }
 
     if (!type_modifier{parser.get_peek_token()}.is_value()) {
         // Don't advance since the parser does it implicitly here (costs two modifier queries)
-        const auto inner{TRY(explicit_type::parse(parser))};
+        const auto inner{TRY(explicit_type::parse(parser, allow_trailing_brace))};
         return parser.add_type<explicit_type_id>(modifier_token, modifier, inner);
     }
 
@@ -178,14 +178,13 @@ auto explicit_type::parse(syntax::parser& parser)
     const auto type_start{parser.get_current_token()};
     if (parser.peek_token_is(syntax::token_type_t::FUNCTION)) {
         parser.advance();
-        const auto fn_type{TRY(explicit_function_type::parse(parser))};
+        const auto fn_type{TRY(explicit_function_type::parse(parser, allow_trailing_brace))};
         if (!(modifier.is_value() || modifier.is_ptr())) {
             return make_syntax_err("Functions types may only be values or pointers",
                                    syntax::error::ILLEGAL_FUNCTION_TYPE_MODIFIER,
                                    type_start);
         }
 
-        // Function types cannot have bodies
         return parser.add_type<explicit_function_type>(modifier_token, modifier, fn_type);
     }
 

@@ -67,6 +67,7 @@ class type_resolver {
         ankerl::unordered_dense::map<std::string_view, ast::handle<ast::node_kind::TEST_STATEMENT>>;
     using function_boundary_guard = scope_guard<std::vector<usize>>;
     using open_function_guard     = scope_guard<std::vector<ast::node_id>>;
+    using self_recursion_guard    = scope_guard<std::vector<bool>>;
 
     // Sets the flag to the provided value and resets it on destruction
     class mutating_context_guard {
@@ -320,6 +321,7 @@ class type_resolver {
     structural_type_stack     implicit_type_stack_;
     std::vector<usize>        function_boundaries_;
     std::vector<ast::node_id> open_function_nodes_;
+    std::vector<bool>         self_recursive_flags_;
 
     bool in_mutating_context_{false};
 

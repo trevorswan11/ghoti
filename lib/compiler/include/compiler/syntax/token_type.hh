@@ -212,6 +212,7 @@ enum class token_type_t : u8 {
     BUILTIN_SET_EVAL_RECURSION_LIMIT,
     BUILTIN_SET_MAIN_SYMBOL,
     BUILTIN_PANIC,
+    BUILTIN_FN_CTX,
 
     ILLEGAL,
 };
