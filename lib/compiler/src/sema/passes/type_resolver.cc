@@ -1390,7 +1390,7 @@ auto type_resolver::resolve_structural_access(type&                          obj
 
     if (closure_type) {
         const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(member)};
-        if (member_ident.name == "ptr") { return &closure_type->impl_signature; }
+        if (member_ident.name == "thunk") { return &closure_type->impl_signature; }
         return make_sema_err(
             fmt::format("Type 'closure' has no field named '{}'", member_ident.name),
             error::UNDECLARED_IDENTIFIER,

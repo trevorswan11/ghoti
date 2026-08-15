@@ -231,15 +231,15 @@ TEST_CASE("An array can hold distinct non-capturing functions sharing one signat
     )") == 6 + 9 + -3);
 }
 
-TEST_CASE("A closure's .ptr shim can be called directly with its own environment") {
+TEST_CASE("A closure's .thunk can be called directly with its own environment") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             var offset: i32 = 7;
             const add := fn(x: i32): i32 {
                 return x + offset;
             };
-            const shim := add.ptr;
-            return shim(&mut add, 5);
+            const thunk := add.thunk;
+            return thunk(&mut add, 5);
         };
     )") == 12);
 }

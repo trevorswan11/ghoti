@@ -374,24 +374,24 @@ TEST_CASE("Returning a closure received as a generic parameter is not flagged as
     )");
 }
 
-TEST_CASE("A closure's .ptr resolves to a callable shim including the self parameter") {
+TEST_CASE("A closure's .thunk resolves to a callable thunk including the self parameter") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const outer := fn(): void {
             var offset: i32 = 0;
             const add := fn(x: i32): i32 {
                 return x + offset;
             };
-            const shim := add.ptr;
+            const thunk := add.thunk;
         };
     )")};
 
     const auto [sym, sym_data, node_data, outer_type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("outer", idx)};
-    const auto [shim_sym, shim_sym_data, shim_type]{
-        ctx->get_type_sym_info<syms::node_t>("shim", outer_type.get_symbol_table_idx())};
+    const auto [thunk_sym, thunk_sym_data, thunk_type]{
+        ctx->get_type_sym_info<syms::node_t>("thunk", outer_type.get_symbol_table_idx())};
 
-    REQUIRE(shim_type.get_kind() == sema::type_kind::FUNCTION);
-    const auto& fn_data{UNWRAP(shim_type.get_data().as_opt<sema::types::function>())};
+    REQUIRE(thunk_type.get_kind() == sema::type_kind::FUNCTION);
+    const auto& fn_data{UNWRAP(thunk_type.get_data().as_opt<sema::types::function>())};
     REQUIRE(fn_data.params.size() == 2);
     CHECK(fn_data.params[1]->get_kind() == sema::type_kind::I32);
     CHECK(fn_data.return_type.get_kind() == sema::type_kind::I32);

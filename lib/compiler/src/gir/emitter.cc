@@ -2533,8 +2533,8 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
 
     const auto member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
 
-    // The shim itself is static, so this ignores base_lval entirely
-    if (obj_type->get_kind() == sema::type_kind::CLOSURE && member_ident.name == "ptr") {
+    // The thunk itself is static, so this ignores base_lval entirely
+    if (obj_type->get_kind() == sema::type_kind::CLOSURE && member_ident.name == "thunk") {
         return value{fmt::format("closure{}", obj_type->get_symbol_table_idx()), sema_type};
     }
 
