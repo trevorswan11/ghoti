@@ -95,14 +95,23 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
             if (arg_type->get_kind() == sema::type_kind::CLOSURE) {
                 // A closure argument arrives by value
                 const auto spilled{spill_to_temporary(value{p_slot.id, *arg_type}, *arg_type)};
-                scopes_.back().bindings.emplace(
-                    p_name,
-                    local_binding{spilled.data.as<local_id>(), *arg_type, true, stdx::none});
+                scopes_.back().bindings.emplace(p_name,
+                                                local_binding{
+                                                    .id        = spilled.data.as<local_id>(),
+                                                    .type      = *arg_type,
+                                                    .is_alloca = true,
+                                                    .const_val = stdx::none,
+                                                });
                 continue;
             }
             const bool p_spilled{arg_type->get_kind() == sema::type_kind::SLICE};
-            scopes_.back().bindings.emplace(
-                p_name, local_binding{p_slot.id, *arg_type, p_spilled, stdx::none});
+            scopes_.back().bindings.emplace(p_name,
+                                            local_binding{
+                                                .id        = p_slot.id,
+                                                .type      = *arg_type,
+                                                .is_alloca = p_spilled,
+                                                .const_val = stdx::none,
+                                            });
         }
 
         emit_block(fn_mod.ast.get_as<ast::block_stmt>(fn_expr.body));
@@ -309,8 +318,13 @@ auto emitter::emit_function(ast::node_id              id,
 
         auto&      self_slot{fn.add_param(std::string{self_name}, *self_type)};
         const bool self_spilled{self_type->get_kind() == sema::type_kind::SLICE};
-        scopes_.back().bindings.emplace(
-            self_name, local_binding{self_slot.id, *self_type, self_spilled, stdx::none});
+        scopes_.back().bindings.emplace(self_name,
+                                        local_binding{
+                                            .id        = self_slot.id,
+                                            .type      = *self_type,
+                                            .is_alloca = self_spilled,
+                                            .const_val = stdx::none,
+                                        });
     }
 
     for (const auto& param : fn_expr.parameters) {
@@ -322,7 +336,12 @@ auto emitter::emit_function(ast::node_id              id,
         auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
         const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
         scopes_.back().bindings.emplace(p_name,
-                                        local_binding{p_slot.id, *p_type, p_spilled, stdx::none});
+                                        local_binding{
+                                            .id        = p_slot.id,
+                                            .type      = *p_type,
+                                            .is_alloca = p_spilled,
+                                            .const_val = stdx::none,
+                                        });
     }
 
     emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
@@ -375,8 +394,13 @@ auto emitter::emit_anonymous_function(ast::node_id id, const ast::function_expr&
 
             auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
             const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-            scopes_.back().bindings.emplace(
-                p_name, local_binding{p_slot.id, *p_type, p_spilled, stdx::none});
+            scopes_.back().bindings.emplace(p_name,
+                                            local_binding{
+                                                .id        = p_slot.id,
+                                                .type      = *p_type,
+                                                .is_alloca = p_spilled,
+                                                .const_val = stdx::none,
+                                            });
         }
 
         emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
@@ -420,11 +444,13 @@ auto emitter::emit_named_local_function(std::string_view          name,
 
         // Let a self-referential call by name inside the body resolve to this function
         scopes_.back().bindings.emplace(name,
-                                        local_binding{local_id{0, local_kind::TEMPORARY},
-                                                      fn_type,
-                                                      false,
-                                                      value{anon_name, fn_type},
-                                                      true});
+                                        local_binding{
+                                            .id        = local_id{0, local_kind::TEMPORARY},
+                                            .type      = fn_type,
+                                            .is_alloca = false,
+                                            .const_val = value{anon_name, fn_type},
+                                            .is_const  = true,
+                                        });
 
         for (const auto& param : fn_expr.parameters) {
             const auto& p_ident{active_ast().get_as<ast::identifier_expr>(param.name)};
@@ -434,8 +460,13 @@ auto emitter::emit_named_local_function(std::string_view          name,
 
             auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
             const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-            scopes_.back().bindings.emplace(
-                p_name, local_binding{p_slot.id, *p_type, p_spilled, stdx::none});
+            scopes_.back().bindings.emplace(p_name,
+                                            local_binding{
+                                                .id        = p_slot.id,
+                                                .type      = *p_type,
+                                                .is_alloca = p_spilled,
+                                                .const_val = stdx::none,
+                                            });
         }
 
         emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
@@ -492,7 +523,12 @@ auto emitter::emit_closure_function(const ast::function_expr&     fn_expr,
         auto& self_type{*impl_sig_data->params[0]};
         auto& self_slot{fn.add_param("self", self_type)};
         scopes_.back().bindings.emplace("self",
-                                        local_binding{self_slot.id, self_type, false, stdx::none});
+                                        local_binding{
+                                            .id        = self_slot.id,
+                                            .type      = self_type,
+                                            .is_alloca = false,
+                                            .const_val = stdx::none,
+                                        });
 
         for (const auto& param : fn_expr.parameters) {
             const auto& p_ident{active_ast().get_as<ast::identifier_expr>(param.name)};
@@ -501,8 +537,13 @@ auto emitter::emit_closure_function(const ast::function_expr&     fn_expr,
             ASSERT(p_type, "Closure parameter must have a resolved sema type");
             auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
             const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-            scopes_.back().bindings.emplace(
-                p_name, local_binding{p_slot.id, *p_type, p_spilled, stdx::none});
+            scopes_.back().bindings.emplace(p_name,
+                                            local_binding{
+                                                .id        = p_slot.id,
+                                                .type      = *p_type,
+                                                .is_alloca = p_spilled,
+                                                .const_val = stdx::none,
+                                            });
         }
 
         // Load every capture once, up front, from `self`
@@ -516,7 +557,12 @@ auto emitter::emit_closure_function(const ast::function_expr&     fn_expr,
             const bool by_ref{capture.mode != sema::types::capture_mode::VALUE};
             auto&      local_type{by_ref ? *capture.captured_type : *capture.storage_type};
             scopes_.back().bindings.emplace(capture.name,
-                                            local_binding{loaded, local_type, by_ref, stdx::none});
+                                            local_binding{
+                                                .id        = loaded,
+                                                .type      = local_type,
+                                                .is_alloca = by_ref,
+                                                .const_val = stdx::none,
+                                            });
             ++field_idx;
         }
 
@@ -693,32 +739,48 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         if (const auto fn_expr{active_ast().get_as_opt<ast::function_expr>(*decl.value)}) {
             const auto anon_name{emit_named_local_function(name, **decl.value, *fn_expr)};
             scopes_.back().bindings.emplace(name,
-                                            local_binding{local_id{0, local_kind::TEMPORARY},
-                                                          *sema_type,
-                                                          false,
-                                                          value{anon_name, *sema_type},
-                                                          true});
+                                            local_binding{
+                                                .id        = {0, local_kind::TEMPORARY},
+                                                .type      = *sema_type,
+                                                .is_alloca = false,
+                                                .const_val = value{anon_name, *sema_type},
+                                                .is_const  = true,
+                                            });
             return;
         }
 
         if (const auto cv{const_eval_.try_eval(*decl.value)}) {
             scopes_.back().bindings.emplace(name,
-                                            local_binding{local_id{0, local_kind::TEMPORARY},
-                                                          *sema_type,
-                                                          false,
-                                                          cv->to_gir_value(),
-                                                          true});
+                                            local_binding{
+                                                .id        = {0, local_kind::TEMPORARY},
+                                                .type      = *sema_type,
+                                                .is_alloca = false,
+                                                .const_val = cv->to_gir_value(),
+                                                .is_const  = true,
+                                            });
             return;
         }
 
         const value val{emit_coerced_expr(*decl.value, *sema_type)};
         if (const auto lid{val.as_opt<local_id>()}) {
-            scopes_.back().bindings.emplace(
-                name, local_binding{*lid, *sema_type, false, stdx::none, true});
+            scopes_.back().bindings.emplace(name,
+                                            local_binding{
+                                                .id        = *lid,
+                                                .type      = *sema_type,
+                                                .is_alloca = false,
+                                                .const_val = stdx::none,
+                                                .is_const  = true,
+                                            });
             return;
         }
-        scopes_.back().bindings.emplace(
-            name, local_binding{local_id{0, local_kind::TEMPORARY}, *sema_type, false, val, true});
+        scopes_.back().bindings.emplace(name,
+                                        local_binding{
+                                            .id        = {0, local_kind::TEMPORARY},
+                                            .type      = *sema_type,
+                                            .is_alloca = false,
+                                            .const_val = val,
+                                            .is_const  = true,
+                                        });
         return;
     }
 
@@ -728,7 +790,13 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         builder_.emit_store(slot, val).is_initializer = true;
     }
     scopes_.back().bindings.emplace(name,
-                                    local_binding{slot, *sema_type, true, stdx::none, is_const});
+                                    local_binding{
+                                        .id        = slot,
+                                        .type      = *sema_type,
+                                        .is_alloca = true,
+                                        .const_val = stdx::none,
+                                        .is_const  = is_const,
+                                    });
 }
 
 auto emitter::emit_return_stmt(ast::node_id stmt_id, const ast::return_stmt& ret) -> void {
@@ -1850,29 +1918,37 @@ auto emitter::emit_for(ast::node_id                   id,
                     const auto capture_slot{builder_.emit_alloca(*info.capture_type)};
                     builder_.emit_store(capture_slot, value{elem_addr, *info.capture_type})
                         .is_initializer = true;
-                    scopes_.back().bindings.emplace(
-                        *info.capture_name,
-                        local_binding{capture_slot, *info.capture_type, true, stdx::none});
+                    scopes_.back().bindings.emplace(*info.capture_name,
+                                                    local_binding{
+                                                        .id        = capture_slot,
+                                                        .type      = *info.capture_type,
+                                                        .is_alloca = true,
+                                                        .const_val = stdx::none,
+                                                    });
                 } else if (info.is_range) {
                     // A range capture shares its address with the loop's own counter, which the
                     // step segment writes to; snapshot it as a read-only value instead of aliasing
                     const auto cur_val{builder_.emit_load(elem_addr, *info.elem_type)};
                     scopes_.back().bindings.emplace(
                         *info.capture_name,
-                        local_binding{local_id{0, local_kind::TEMPORARY},
-                                      *info.elem_type,
-                                      false,
-                                      value{cur_val, *info.elem_type},
-                                      true});
+                        local_binding{
+                            .id        = local_id{0, local_kind::TEMPORARY},
+                            .type      = *info.elem_type,
+                            .is_alloca = false,
+                            .const_val = value{cur_val, *info.elem_type},
+                            .is_const  = true,
+                        });
                 } else {
                     // A plain capture is read-only regardless of the container's own mutability;
                     // `&mut`/`^mut` is required to write through it
                     scopes_.back().bindings.emplace(
                         *info.capture_name,
-                        local_binding{elem_addr,
-                                      *ctx_.pool.with_const(*info.elem_type, true),
-                                      true,
-                                      stdx::none});
+                        local_binding{
+                            .id        = elem_addr,
+                            .type      = *ctx_.pool.with_const(*info.elem_type, true),
+                            .is_alloca = true,
+                            .const_val = stdx::none,
+                        });
                 }
             }
             emit_block(active_ast().get_as<ast::block_stmt>(for_loop.block));
@@ -2524,16 +2600,23 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
                     const auto capture_slot{builder_.emit_alloca(cap_type)};
                     builder_.emit_store(capture_slot, value{field_addr.data, cap_type})
                         .is_initializer = true;
-                    scopes_.back().bindings.emplace(
-                        cap_ident.name, local_binding{capture_slot, cap_type, true, stdx::none});
+                    scopes_.back().bindings.emplace(cap_ident.name,
+                                                    local_binding{
+                                                        .id        = capture_slot,
+                                                        .type      = cap_type,
+                                                        .is_alloca = true,
+                                                        .const_val = stdx::none,
+                                                    });
                 } else if (is_tagged_union_field) {
                     // The forced-const GEP address above already makes this read-only
                     scopes_.back().bindings.emplace(cap_ident.name,
-                                                    local_binding{field_addr.data.as<local_id>(),
-                                                                  *field_addr.type,
-                                                                  true,
-                                                                  stdx::none,
-                                                                  true});
+                                                    local_binding{
+                                                        .id        = field_addr.data.as<local_id>(),
+                                                        .type      = *field_addr.type,
+                                                        .is_alloca = true,
+                                                        .const_val = stdx::none,
+                                                        .is_const  = true,
+                                                    });
                 } else {
                     // A whole-value capture reuses the scrutinee's own storage id
                     const auto cur_val{
