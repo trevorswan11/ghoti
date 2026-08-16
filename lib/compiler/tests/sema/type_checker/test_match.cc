@@ -7,9 +7,10 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("Mutating a plain match arm capture") {
-    SECTION("Through a var union succeeds") {
-        helpers::type_check_and_verify(R"(
+TEST_CASE("Mutating a plain match arm capture is always rejected") {
+    SECTION("Union field, mutable union") {
+        helpers::test_checker_fail(
+            R"(
             const U := union { a: i32 };
             const f := fn(): void {
                 var u := U{ .a = 5 };
@@ -18,10 +19,13 @@ TEST_CASE("Mutating a plain match arm capture") {
                     _ => {},
                 };
             };
-        )");
+        )",
+            sema::diagnostic{"Cannot assign to an element of a non-mutable array or slice",
+                             sema::error::ASSIGNMENT_TO_CONST,
+                             std::pair{5UZ, 36UZ}});
     }
 
-    SECTION("Through a const union is rejected") {
+    SECTION("Union field, const union") {
         helpers::test_checker_fail(
             R"(
             const U := union { a: i32 };
@@ -38,8 +42,9 @@ TEST_CASE("Mutating a plain match arm capture") {
                              std::pair{5UZ, 36UZ}});
     }
 
-    SECTION("Through a var whole-value (non-union) capture succeeds") {
-        helpers::type_check_and_verify(R"(
+    SECTION("Whole-value (non-union), mutable scrutinee") {
+        helpers::test_checker_fail(
+            R"(
             const f := fn(): void {
                 var x: i32 = 1;
                 match (x) {
@@ -47,10 +52,13 @@ TEST_CASE("Mutating a plain match arm capture") {
                     _ => {},
                 };
             };
-        )");
+        )",
+            sema::diagnostic{"Cannot assign to constant variable",
+                             sema::error::ASSIGNMENT_TO_CONST,
+                             std::pair{4UZ, 35UZ}});
     }
 
-    SECTION("Through a const whole-value (non-union) capture is rejected") {
+    SECTION("Whole-value (non-union), const scrutinee") {
         helpers::test_checker_fail(
             R"(
             const f := fn(): void {

@@ -19,21 +19,19 @@ TEST_CASE("Match over a tagged union dispatches to the active field") {
     )") == 2);
 }
 
-TEST_CASE("Match arm capture mutates the matched union field in place") {
-    SECTION("Plain capture") {
-        CHECK(helpers::compile_and_run(R"(
-            const U := union { a: i32 };
-            pub const main := fn(): i32 {
-                var u := U{ .a = 5 };
-                match (u) {
-                    .a => |v| { v = v + 10; },
-                    _ => {},
-                };
-                return u.a;
+TEST_CASE("A plain match arm capture reads the current field value") {
+    CHECK(helpers::compile_and_run(R"(
+        const U := union { a: i32 };
+        pub const main := fn(): i32 {
+            const u := U{ .a = 5 };
+            return match (u) {
+                .a => |v| v + 10,
             };
-        )") == 15);
-    }
+        };
+    )") == 15);
+}
 
+TEST_CASE("Match arm capture mutates the matched union field in place") {
     SECTION("By mutable reference") {
         CHECK(helpers::compile_and_run(R"(
             const U := union { a: i32 };
@@ -63,12 +61,12 @@ TEST_CASE("Match arm capture mutates the matched union field in place") {
     }
 }
 
-TEST_CASE("Match arm capture mutates a whole-value (non-union) in place") {
+TEST_CASE("Match arm capture mutates a whole-value (non-union) scrutinee by mutable reference") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             var x: i32 = 5;
             match (x) {
-                5 => |v| { v = v + 10; },
+                5 => |&mut v| { v = v + 10; },
                 _ => {},
             };
             return x;

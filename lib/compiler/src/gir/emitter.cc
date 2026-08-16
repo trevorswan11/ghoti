@@ -1814,6 +1814,9 @@ auto emitter::emit_for(ast::node_id                   id,
                 } else if (info.arr_val) {
                     auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
                     const auto idx_val{builder_.emit_load(info.var_slot, usize_type)};
+
+                    // Force const so a plain capture is read-only
+                    auto& read_only_elem_type{*ctx_.pool.with_const(*info.elem_type, true)};
                     if (info.arr_val->type &&
                         info.arr_val->type->get_data().as_opt<sema::types::slice>()) {
                         const auto& sl_data{
@@ -1828,12 +1831,12 @@ auto emitter::emit_for(ast::node_id                   id,
                         elem_addr = builder_.emit_get_element_ptr(
                             value{ptr_val, ptr_type},
                             std::vector<value>{value{idx_val, usize_type}},
-                            *info.elem_type);
+                            read_only_elem_type);
                     } else {
                         elem_addr = builder_.emit_get_element_ptr(
                             *info.arr_val,
                             std::vector<value>{value{idx_val, usize_type}},
-                            *info.elem_type);
+                            read_only_elem_type);
                     }
                 } else {
                     continue;
@@ -1850,10 +1853,26 @@ auto emitter::emit_for(ast::node_id                   id,
                     scopes_.back().bindings.emplace(
                         *info.capture_name,
                         local_binding{capture_slot, *info.capture_type, true, stdx::none});
-                } else {
+                } else if (info.is_range) {
+                    // A range capture shares its address with the loop's own counter, which the
+                    // step segment writes to; snapshot it as a read-only value instead of aliasing
+                    const auto cur_val{builder_.emit_load(elem_addr, *info.elem_type)};
                     scopes_.back().bindings.emplace(
                         *info.capture_name,
-                        local_binding{elem_addr, *info.elem_type, true, stdx::none});
+                        local_binding{local_id{0, local_kind::TEMPORARY},
+                                      *info.elem_type,
+                                      false,
+                                      value{cur_val, *info.elem_type},
+                                      true});
+                } else {
+                    // A plain capture is read-only regardless of the container's own mutability;
+                    // `&mut`/`^mut` is required to write through it
+                    scopes_.back().bindings.emplace(
+                        *info.capture_name,
+                        local_binding{elem_addr,
+                                      *ctx_.pool.with_const(*info.elem_type, true),
+                                      true,
+                                      stdx::none});
                 }
             }
             emit_block(active_ast().get_as<ast::block_stmt>(for_loop.block));
@@ -2487,12 +2506,12 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
                     underlying = &const_cast<sema::type&>(ptr_d->underlying);
                 }
 
-                // A tagged union's fields share the payload slot
-                auto& qualified{
-                    *ctx_.pool.with_const(*underlying, matcher_addr->type->is_constant())};
+                // Force const so a plain capture is read-only
+                auto&      qualified{*ctx_.pool.with_const(*underlying, true)};
                 value      field_addr{matcher_addr->data, qualified};
                 const auto ut{matcher_addr->type->get_data().as_opt<sema::types::union_t>()};
-                if (ut && !ut->is_untagged) {
+                const bool is_tagged_union_field{ut && !ut->is_untagged};
+                if (is_tagged_union_field) {
                     auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
                     const auto payload_ptr{builder_.emit_get_element_ptr(
                         *matcher_addr, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, qualified)};
@@ -2507,13 +2526,25 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
                         .is_initializer = true;
                     scopes_.back().bindings.emplace(
                         cap_ident.name, local_binding{capture_slot, cap_type, true, stdx::none});
-                } else {
+                } else if (is_tagged_union_field) {
+                    // The forced-const GEP address above already makes this read-only
                     scopes_.back().bindings.emplace(cap_ident.name,
                                                     local_binding{field_addr.data.as<local_id>(),
                                                                   *field_addr.type,
                                                                   true,
                                                                   stdx::none,
-                                                                  field_addr.type->is_constant()});
+                                                                  true});
+                } else {
+                    // A whole-value capture reuses the scrutinee's own storage id
+                    const auto cur_val{
+                        builder_.emit_load(field_addr.data.as<local_id>(), *underlying)};
+                    scopes_.back().bindings.emplace(
+                        cap_ident.name,
+                        local_binding{local_id{0, local_kind::TEMPORARY},
+                                      *underlying,
+                                      false,
+                                      value{cur_val, *underlying},
+                                      true});
                 }
             }
 

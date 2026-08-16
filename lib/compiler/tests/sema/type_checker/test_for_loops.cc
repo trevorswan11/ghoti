@@ -45,6 +45,23 @@ TEST_CASE("Illegal usage of const capture") {
     }
 }
 
+TEST_CASE("A plain (no-modifier) capture is always read-only") {
+    SECTION("Array element, mutable array") {
+        helpers::expect_compile_error(R"(
+    pub const main := fn(): void {
+        var arr := [_]mut i32{1, 2, 3, 4};
+        for (arr) |v| { v = 0; }
+    };)");
+    }
+
+    SECTION("Range counter") {
+        helpers::expect_compile_error(R"(
+    pub const main := fn(): void {
+        for (0..4) |i| { i = 0; }
+    };)");
+    }
+}
+
 TEST_CASE("Attempted mutable capture of const value in capture clause") {
     SECTION("By const reference") {
         helpers::expect_compile_error(R"(
