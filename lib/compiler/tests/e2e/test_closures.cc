@@ -272,9 +272,9 @@ TEST_CASE("A top-level function recurses by calling its own name") {
         };
 
         pub const main := fn(): i32 {
-            return fact(6);
+            return fact(5);
         };
-    )") == 720);
+    )") == 120);
 }
 
 TEST_CASE("A local function recurses by calling its own name") {
@@ -286,9 +286,9 @@ TEST_CASE("A local function recurses by calling its own name") {
                 }
                 return n * fact(n - 1);
             };
-            return fact(6);
+            return fact(5);
         };
-    )") == 720);
+    )") == 120);
 }
 
 TEST_CASE("A non-capturing function recurses through @fnCtx()") {

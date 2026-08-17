@@ -549,9 +549,10 @@ auto emitter::emit_closure_function(const ast::function_expr&     fn_expr,
         // Load every capture once, up front, from `self`
         auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
         for (usize field_idx{0}; const auto& capture : cl.captures) {
-            const auto field_ptr{builder_.emit_get_element_ptr(value{self_slot.id, self_type},
-                                                               {value{field_idx, usize_type}},
-                                                               *capture.storage_type)};
+            const auto field_ptr{
+                builder_.emit_get_element_ptr(value{self_slot.id, self_type},
+                                              {value{static_cast<u64>(field_idx), usize_type}},
+                                              *capture.storage_type)};
             const auto loaded{
                 builder_.emit_load(value{field_ptr, *capture.storage_type}, *capture.storage_type)};
             const bool by_ref{capture.mode != sema::types::capture_mode::VALUE};
@@ -588,8 +589,10 @@ auto emitter::emit_closure_env(const sema::types::closure_t& cl, sema::type& clo
     auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
     for (usize field_idx{0}; const auto& capture : cl.captures) {
         const auto field_val{get_capture_source(capture)};
-        const auto field_ptr{builder_.emit_get_element_ptr(
-            value{slot, closure_type}, {value{field_idx, usize_type}}, *capture.storage_type)};
+        const auto field_ptr{
+            builder_.emit_get_element_ptr(value{slot, closure_type},
+                                          {value{static_cast<u64>(field_idx), usize_type}},
+                                          *capture.storage_type)};
         builder_.emit_store(value{field_ptr, *capture.storage_type}, field_val).is_initializer =
             true;
         ++field_idx;
