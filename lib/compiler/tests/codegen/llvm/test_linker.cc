@@ -18,14 +18,14 @@
 
 namespace ghoti::tests {
 
-TEST_CASE(
-    "In-process LLD linker execution for main entry point across targets and optimization levels") {
+TEST_CASE("In-process LLD execution for main entry point across targets and optimization levels") {
     codegen::llvm_scope   scope;
     stdx::untracked_scope untracked_guard;
 
+    // No `args` param, so this links even without a real sysroot for the target.
     constexpr auto input = R"(
-        pub const main := fn(args: [][:0]u8): i32 {
-            return @as(i32, args.len);
+        pub const main := fn(): i32 {
+            return 0;
         };
     )";
 

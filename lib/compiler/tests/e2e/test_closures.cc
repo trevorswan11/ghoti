@@ -162,6 +162,24 @@ TEST_CASE("A non-move closure that mutates a captured variable cannot be returne
     )");
 }
 
+TEST_CASE("A non-move closure bound to a local before being returned still cannot escape (e2e)") {
+    helpers::expect_compile_error(R"(
+        const make_adder := fn(): auto {
+            var n: i32 = 10;
+            const g := fn(): i32 {
+                n = n + 5;
+                return n;
+            };
+            return g;
+        };
+
+        pub const main := fn(): i32 {
+            const f := make_adder();
+            return f();
+        };
+    )");
+}
+
 TEST_CASE("A captured value forwarded through an intermediate function is read correctly") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {

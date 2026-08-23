@@ -1,3 +1,4 @@
+#include <filesystem>
 #include <string>
 
 #include <catch2/catch_test_macros.hpp>
@@ -10,8 +11,10 @@
 #include <stdx/result.hh>
 
 #include "compiler/codegen/llvm_scope.hh"
+#include "compiler/codegen/target.hh"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
+#include "support/tempfile.hh"
 #include "support/test.hh"
 
 namespace ghoti::tests {
@@ -119,6 +122,24 @@ TEST_CASE("Executable LLVM IR lowering with entry wrapper") {
     CHECK(c_main_fn.arg_size() == 2);
     CHECK(c_main_fn.getArg(0)->getType()->isIntegerTy(32));
     CHECK(c_main_fn.getArg(1)->getType()->isPointerTy());
+}
+
+TEST_CASE("Windows entry wrapper with an args parameter emits valid, verifiable IR") {
+    // Object emission alone needs no real sysroot; linking is covered in test_linker.cc.
+    codegen::llvm_scope scope;
+    llvm::LLVMContext   context;
+
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        pub const main := fn(args: [][:0]u8): i32 {
+            return @as(i32, args.len);
+        };
+    )")};
+    REQUIRE(ctx->analyzer.validate_main_entry(ctx->root_mod));
+
+    tempfile                out_file{"test_windows_args_obj"};
+    codegen::target_options target_opts{.triple_str = "x86_64-w64-windows-gnu"};
+    CHECK(helpers::emit_object(*ctx, context, out_file, target_opts));
+    CHECK(std::filesystem::exists(out_file));
 }
 
 TEST_CASE("Parameterless main function lowering") {

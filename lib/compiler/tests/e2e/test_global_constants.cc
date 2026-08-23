@@ -45,6 +45,20 @@ TEST_CASE("Top-level tagged union const active field access") {
     )") == 42);
 }
 
+TEST_CASE("Top-level const initialized by a match with a capturing arm") {
+    CHECK(helpers::compile_and_run(R"(
+        const Payload := union { A: i32, B: i32 };
+        const u := Payload{ .A = 5 };
+        const y := match (u) {
+            .A => |v| v,
+            .B => 0,
+        };
+        pub const main := fn(): i32 {
+            return y;
+        };
+    )") == 5);
+}
+
 TEST_CASE("Top-level struct const with a nested array field") {
     CHECK(helpers::compile_and_run(R"(
         const Box := struct { items: [3]i32 };

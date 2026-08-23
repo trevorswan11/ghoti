@@ -1,3 +1,5 @@
+#include <string>
+
 #include <catch2/catch_test_macros.hpp>
 
 #include "compiler/syntax/error.hh"
@@ -38,6 +40,11 @@ TEST_CASE("Floating point overflow") {
                               overflow_error(syntax::error::FLOAT_OVERFLOW));
     helpers::test_parser_fail("1023.234612e234000;",
                               overflow_error(syntax::error::DOUBLE_OVERFLOW));
+}
+
+TEST_CASE("Literal digit span too long for the scratch buffer overflows cleanly") {
+    const auto too_long{std::string(1'200, '1') + ";"};
+    helpers::test_parser_fail(too_long, overflow_error(syntax::error::INTEGER_OVERFLOW));
 }
 
 } // namespace ghoti::tests

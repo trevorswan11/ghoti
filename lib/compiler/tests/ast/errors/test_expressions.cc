@@ -1,3 +1,4 @@
+#include <string>
 #include <utility>
 
 #include <catch2/catch_test_macros.hpp>
@@ -65,6 +66,31 @@ TEST_CASE("Non-terminated infix") {
                                                  std::pair{0UZ, 2UZ}});
 }
 
+TEST_CASE("Expression nested too deeply") {
+    const auto nested{std::string(513, '(')};
+    helpers::test_parser_fail(nested + "1" + std::string(513, ')') + ";",
+                              syntax::diagnostic{"Expression nested too deeply",
+                                                 syntax::error::EXPRESSION_NESTED_TOO_DEEPLY,
+                                                 std::pair{0UZ, 512UZ}});
+}
+
+TEST_CASE("Illegal tokens report a specific diagnostic instead of a generic prefix-parser one") {
+    helpers::test_parser_fail("\"unterminated;",
+                              syntax::diagnostic{"Unterminated string literal",
+                                                 syntax::error::UNTERMINATED_STRING,
+                                                 std::pair{0UZ, 0UZ}});
+
+    helpers::test_parser_fail("0x;",
+                              syntax::diagnostic{"Invalid numeric literal",
+                                                 syntax::error::INVALID_NUMBER_LITERAL,
+                                                 std::pair{0UZ, 0UZ}});
+
+    helpers::test_parser_fail("'';",
+                              syntax::diagnostic{"Invalid or unterminated character literal",
+                                                 syntax::error::INVALID_CHARACTER_LITERAL,
+                                                 std::pair{0UZ, 0UZ}});
+}
+
 TEST_CASE("Unclosed implicit initializer") {
     helpers::test_parser_fail(".{",
                               syntax::diagnostic{"Expected token RBRACE, found END",
@@ -128,10 +154,11 @@ TEST_CASE("Illegal label statements") {
 }
 
 TEST_CASE("Illegal implicit access operand") {
-    helpers::test_parser_fail(".a::b",
-                              syntax::diagnostic{"Implicitly accessed names must be identifiers",
-                                                 syntax::error::ILLEGAL_IMPLICIT_ACCESS_OPERAND,
-                                                 std::pair{0UZ, 2UZ}});
+    helpers::test_parser_fail(
+        ".a::b",
+        syntax::diagnostic{"Module access expressions must have outer accessors or identifiers",
+                           syntax::error::ILLEGAL_OUTER_ACCESSOR_TYPE,
+                           std::pair{0UZ, 0UZ}});
 }
 
 TEST_CASE("Prefix without operand") {

@@ -15,6 +15,46 @@ TEST_CASE("Local string literal indexed directly") {
     )") == 'h');
 }
 
+TEST_CASE("String literal escape sequences are decoded to their actual bytes") {
+    SECTION("\\n decodes to a single newline byte, not two literal characters") {
+        CHECK(helpers::compile_and_run(R"(
+            pub const main := fn(): i32 {
+                const s := "a\nb";
+                return @as(i32, s.len);
+            };
+        )") == 4);
+    }
+
+    SECTION("A decoded escape byte round-trips correctly by index") {
+        CHECK(helpers::compile_and_run(R"(
+            pub const main := fn(): i32 {
+                const s := "a\tb";
+                return @as(i32, s[1]);
+            };
+        )") == '\t');
+    }
+
+    SECTION("\\\\ decodes to a single backslash, not two") {
+        CHECK(helpers::compile_and_run(R"(
+            pub const main := fn(): i32 {
+                const s := "a\\b";
+                return @as(i32, s.len);
+            };
+        )") == 4);
+    }
+}
+
+TEST_CASE("Char literal escape sequences are decoded to their actual bytes") {
+    SECTION("\\\" decodes to a literal double-quote byte") {
+        CHECK(helpers::compile_and_run(R"(
+            pub const main := fn(): i32 {
+                const c: u8 = '\"';
+                return @as(i32, c);
+            };
+        )") == '"');
+    }
+}
+
 TEST_CASE("Local string literal .len includes the implicit null terminator") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {

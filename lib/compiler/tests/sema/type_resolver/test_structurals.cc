@@ -238,6 +238,17 @@ TEST_CASE("Incomplete type used during resolution") {
     }
 }
 
+TEST_CASE("Forward reference to a later struct field is reported as an ordering error, not a "
+          "cyclic dependency") {
+    helpers::test_resolver_fail(
+        "const S := struct { a: @typeOf(b), b: i32, };",
+        sema::diagnostic{"'b' is referenced before its declaration; forward references to "
+                         "struct/union fields, function parameters, and enum members are not "
+                         "supported; declare 'b' earlier",
+                         sema::error::ILLEGAL_FIELD_ORDER_DEPENDENCY,
+                         std::pair{0UZ, 31UZ}});
+}
+
 TEST_CASE("Illegal circular module-based access resolution") {
     constexpr std::string_view a_gh{
         R"(import "b.gh" as b; pub const A := struct { field: b::B, };)"};
@@ -258,11 +269,22 @@ TEST_CASE("Illegal circular module-based access resolution") {
                          sema::error::CYCLIC_DEPENDENCY,
                          std::pair{0UZ, 54UZ}});
 
+    // Each importer along the chain gets its own diagnostic, however far from the cycle.
+    helpers::check_errors_against<sema::diagnostics>(
+        a_module,
+        sema::diagnostic{"Import 'b' failed to resolve due to errors it contains",
+                         sema::error::IMPORTED_MODULE_CONTAINS_ERRORS,
+                         std::pair{0UZ, 0UZ}});
+    helpers::check_errors_against<sema::diagnostics>(
+        test_module,
+        sema::diagnostic{"Import 'a' failed to resolve due to errors it contains",
+                         sema::error::IMPORTED_MODULE_CONTAINS_ERRORS,
+                         std::pair{0UZ, 0UZ}});
+
     ctx->check_poisoned<syms::node_t>("A", idx, test_module);
     ctx->check_poisoned<syms::node_t>("A", 1, a_module);
     ctx->check_poisoned<syms::node_t>("B", 2, b_module);
 
-    // Errors dont get bubbled up to simplify handling, so only one module is poisoned
     const auto [sym, _]{ctx->get_symbol<syms::node_t>("b", 1)};
     ctx->check_poisoned(sym);
 }
@@ -386,6 +408,29 @@ TEST_CASE("Struct field access through dereferenced pointer and reference") {
     const auto [ry_d_sym, _rd, ry_d_decl, ry_d_type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("ry_d", idx)};
     CHECK(ry_d_type.get_kind() == sema::type_kind::I32);
+}
+
+TEST_CASE("Implicit access as the left operand of a binary expression is rejected") {
+    const auto expected_diag = [] -> sema::diagnostic {
+        return {"Implicit access cannot appear on the left side of a binary expression; it "
+                "requires the other operand to establish type context first",
+                sema::error::TYPE_MISMATCH,
+                std::pair{0UZ, 72UZ}};
+    };
+
+    helpers::test_resolver_fail(
+        "const U := union { a: i32, b: i32 }; const u := U{ .a = 1 }; const r := .a == u;",
+        expected_diag());
+}
+
+TEST_CASE("Implicit access as the left operand still rejects for enums") {
+    helpers::test_resolver_fail(
+        "const Color := enum { RED, GREEN, BLUE }; const c := Color.GREEN; "
+        "const r := .GREEN == c;",
+        sema::diagnostic{"Implicit access cannot appear on the left side of a binary expression; "
+                         "it requires the other operand to establish type context first",
+                         sema::error::TYPE_MISMATCH,
+                         std::pair{0UZ, 77UZ}});
 }
 
 } // namespace ghoti::tests

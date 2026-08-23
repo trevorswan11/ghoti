@@ -1,4 +1,5 @@
 #include <string_view>
+#include <utility>
 
 #include <catch2/catch_test_macros.hpp>
 #include <stdx/types.hh>
@@ -8,6 +9,7 @@
 #include "compiler/ast/id.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/module/module.hh"
+#include "compiler/sema/error.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
@@ -177,6 +179,41 @@ TEST_CASE("Capturing an enclosing function's own parameter is recorded") {
     REQUIRE(captures.size() == 1);
     CHECK(captures[0].name == "offset");
     CHECK(captures[0].usage == sema::capture_usage::READ);
+}
+
+TEST_CASE("A non-move closure literal returned directly cannot escape its defining frame") {
+    helpers::test_resolver_fail(
+        R"(
+        const make_adder := fn(): auto {
+            var n: i32 = 10;
+            return fn(): i32 {
+                n = n + 5;
+                return n;
+            };
+        };
+    )",
+        sema::diagnostic{"Closure captures a reference into its enclosing function and cannot be "
+                         "returned directly; mark it 'move fn' to capture by value instead",
+                         sema::error::ILLEGAL_CLOSURE_ESCAPE,
+                         std::pair{3UZ, 19UZ}});
+}
+
+TEST_CASE("A non-move closure bound to a local first still cannot escape via that local") {
+    helpers::test_resolver_fail(
+        R"(
+        const make_adder := fn(): auto {
+            var n: i32 = 10;
+            const g := fn(): i32 {
+                n = n + 5;
+                return n;
+            };
+            return g;
+        };
+    )",
+        sema::diagnostic{"Closure captures a reference into its enclosing function and cannot be "
+                         "returned directly; mark it 'move fn' to capture by value instead",
+                         sema::error::ILLEGAL_CLOSURE_ESCAPE,
+                         std::pair{7UZ, 19UZ}});
 }
 
 } // namespace ghoti::tests

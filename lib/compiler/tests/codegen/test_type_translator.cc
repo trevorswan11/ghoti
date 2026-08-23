@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/Module.h>
 #include <llvm/IR/Type.h>
 #include <llvm/Support/Casting.h>
 #include <stdx/arena.hh>
@@ -14,7 +15,8 @@ namespace ghoti::tests {
 
 TEST_CASE("Type translate primitive types") {
     llvm::LLVMContext        context;
-    codegen::type_translator translator{context};
+    llvm::Module             mod{"test", context};
+    codegen::type_translator translator{context, mod};
 
     sema::arena_alloc arena;
     sema::type_pool   pool{arena};
@@ -46,7 +48,8 @@ TEST_CASE("Type translate primitive types") {
 
 TEST_CASE("Type translate pointer and reference types") {
     llvm::LLVMContext        context;
-    codegen::type_translator translator{context};
+    llvm::Module             mod{"test", context};
+    codegen::type_translator translator{context, mod};
 
     sema::arena_alloc arena;
     sema::type_pool   pool{arena};
@@ -69,7 +72,8 @@ TEST_CASE("Type translate pointer and reference types") {
 
 TEST_CASE("Type translate array and slice types") {
     llvm::LLVMContext        context;
-    codegen::type_translator translator{context};
+    llvm::Module             mod{"test", context};
+    codegen::type_translator translator{context, mod};
 
     sema::arena_alloc arena;
     sema::type_pool   pool{arena};
@@ -97,7 +101,8 @@ TEST_CASE("Type translate array and slice types") {
 
 TEST_CASE("Type translate function types") {
     llvm::LLVMContext        context;
-    codegen::type_translator translator{context};
+    llvm::Module             mod{"test", context};
+    codegen::type_translator translator{context, mod};
 
     sema::arena_alloc arena;
     sema::type_pool   pool{arena};
@@ -125,7 +130,8 @@ TEST_CASE("Type translate function types") {
 
 TEST_CASE("Type translate struct and enum types from parsed programs") {
     llvm::LLVMContext        context;
-    codegen::type_translator translator{context};
+    llvm::Module             mod{"test", context};
+    codegen::type_translator translator{context, mod};
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const Color := enum {
@@ -159,7 +165,8 @@ TEST_CASE("Type translate struct and enum types from parsed programs") {
 
 TEST_CASE("Type translate tagged union types from parsed programs") {
     llvm::LLVMContext        context;
-    codegen::type_translator translator{context};
+    llvm::Module             mod{"test", context};
+    codegen::type_translator translator{context, mod};
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const Value := union {
@@ -184,7 +191,8 @@ TEST_CASE("Type translate tagged union types from parsed programs") {
 
 TEST_CASE("Type translate untagged extern union types") {
     llvm::LLVMContext        context;
-    codegen::type_translator translator{context};
+    llvm::Module             mod{"test", context};
+    codegen::type_translator translator{context, mod};
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const RawUnion := extern union {
@@ -202,9 +210,29 @@ TEST_CASE("Type translate untagged extern union types") {
     CHECK(arr_ty->getElementType()->isIntegerTy(8));
 }
 
+TEST_CASE("Untagged union payload size follows the module's target data layout") {
+    llvm::LLVMContext context;
+    llvm::Module      mod{"test", context};
+    mod.setDataLayout("e-p:32:32"); // 32-bit pointers, unlike this host build
+    codegen::type_translator translator{context, mod};
+
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const RawUnion := extern union {
+            p: ^i32,
+        };
+    )")};
+
+    const auto [union_sym, union_data, union_type]{
+        ctx->get_type_sym_info<sema::symbols::node_t>("RawUnion", idx)};
+    auto* union_llvm{translator.translate(union_type)};
+    REQUIRE(union_llvm->isArrayTy());
+    CHECK(llvm::cast<llvm::ArrayType>(union_llvm)->getNumElements() == 4);
+}
+
 TEST_CASE("Type translate packed struct types") {
     llvm::LLVMContext        context;
-    codegen::type_translator translator{context};
+    llvm::Module             mod{"test", context};
+    codegen::type_translator translator{context, mod};
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const PackedHeader := packed struct {

@@ -151,6 +151,20 @@ TEST_CASE("Writing a union field through a var local") {
     )") == 15);
 }
 
+TEST_CASE("Writing a different union field than the active one updates the active variant") {
+    CHECK(helpers::compile_and_run(R"(
+        const U := union { a: i32, b: i32 };
+        pub const main := fn(): i32 {
+            var u := U{ .a = 1 };
+            u.b = 99;
+            return match (u) {
+                .a => 1,
+                .b => 2,
+            };
+        };
+    )") == 2);
+}
+
 TEST_CASE("Writing a union field through a const local is rejected") {
     helpers::expect_compile_error(R"(
         const U := union { flag: bool, val: i32 };

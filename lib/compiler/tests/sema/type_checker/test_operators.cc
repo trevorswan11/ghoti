@@ -75,6 +75,34 @@ TEST_CASE("Operator type checking") {
                              sema::error::OPERATOR_TYPE_MISMATCH,
                              std::pair{2UZ, 28UZ}});
     }
+
+    SECTION("Comparing two unions directly fails") {
+        helpers::test_checker_fail(
+            R"(
+            const U := union { a: i32 };
+            const f := fn(a: U, b: U): bool {
+                return a == b;
+            };
+        )",
+            sema::diagnostic{"Comparison operator cannot be applied to aggregate types "
+                             "'union' and 'union'",
+                             sema::error::OPERATOR_TYPE_MISMATCH,
+                             std::pair{3UZ, 28UZ}});
+    }
+
+    SECTION("Comparing two structs directly fails") {
+        helpers::test_checker_fail(
+            R"(
+            const S := struct { a: i32 };
+            const f := fn(a: S, b: S): bool {
+                return a == b;
+            };
+        )",
+            sema::diagnostic{"Comparison operator cannot be applied to aggregate types "
+                             "'struct' and 'struct'",
+                             sema::error::OPERATOR_TYPE_MISMATCH,
+                             std::pair{3UZ, 28UZ}});
+    }
 }
 
 TEST_CASE("Discard statement evaluating expression") {
