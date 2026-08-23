@@ -13,6 +13,7 @@
 #include <gsl/pointers>
 #include <gsl/span>
 #include <stdx/hash.hh>
+#include <stdx/iterator.hh>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
@@ -207,6 +208,12 @@ struct module {
 
 class module_manager {
   public:
+    using module_name_map = ankerl::unordered_dense::
+        map<std::string, std::filesystem::path, stdx::string_transparent_hash, std::equal_to<>>;
+    using module_table = ankerl::unordered_dense::map<std::filesystem::path, stdx::box<module>>;
+    MAKE_ITERATOR(modules, module_table, modules_)
+
+  public:
     explicit module_manager(source_loader& loader) noexcept : loader_{loader} {}
     ~module_manager() = default;
 
@@ -235,13 +242,11 @@ class module_manager {
         -> stdx::result<gsl::not_null<module*>, diagnostic>;
 
   private:
-    source_loader&                                                         loader_;
-    ankerl::unordered_dense::map<std::filesystem::path, stdx::box<module>> modules_;
+    source_loader& loader_;
+    module_table   modules_;
 
     // Maps physical ghoti modules to their path on disk
-    ankerl::unordered_dense::
-        map<std::string, std::filesystem::path, stdx::string_transparent_hash, std::equal_to<>>
-            module_lut_;
+    module_name_map module_lut_;
 };
 
 } // namespace ghoti::mod

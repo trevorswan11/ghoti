@@ -23,6 +23,7 @@
 #include "compiler/sema/analyzer.hh"
 #include "driver/clap/error.hh"
 #include "ghoti/config.h"
+#include "support/path_utils.hh"
 
 namespace ghoti::cmd {
 
@@ -107,12 +108,8 @@ auto build_options::process_raw(const raw_build_options& raw,
     };
 }
 
-auto build_options::normalize_input_path() -> void {
-    if (input_path.is_absolute()) {
-        std::error_code ec;
-        auto            rel{std::filesystem::relative(input_path, ec)};
-        if (!ec && !rel.empty()) { input_path = rel; }
-    }
+auto build_options::make_path_relative() -> void {
+    if (auto rel{path_utils::make_relative(input_path)}) { input_path = std::move(*rel); }
 }
 
 auto build_options::setup_module_manager(mod::module_manager& manager, std::ostream& error_stream)

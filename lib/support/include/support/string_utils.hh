@@ -2,11 +2,12 @@
 
 #include <array>
 #include <functional>
-#include <stdx/fixed/hash_table.hh>
-#include <stdx/hash.hh>
+#include <string>
 #include <string_view>
 
 #include <stdx/assert.hh>
+#include <stdx/fixed/hash_table.hh>
+#include <stdx/hash.hh>
 #include <stdx/string.hh>
 #include <stdx/types.hh>
 
@@ -39,5 +40,8 @@ template <typename Value, typename... Entries>
     (map.emplace(get<0>(entries), get<1>(entries)), ...);
     return map;
 }
+
+auto to_u8string(std::string_view s) -> std::u8string;
+auto to_utf8(const std::u8string& s) -> std::string;
 
 } // namespace ghoti::string_utils

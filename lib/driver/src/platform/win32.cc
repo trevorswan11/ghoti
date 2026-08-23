@@ -5,13 +5,17 @@
 #    define WIN32_LEAN_AND_MEAN
 #    define NOMINMAX
 #    include <atomic>
+#    include <cstdio>
 #    include <windows.h>
 
 #    include <consoleapi.h>
 #    include <consoleapi2.h>
+#    include <fcntl.h>
 #    include <handleapi.h>
+#    include <io.h>
 #    include <minwindef.h>
 #    include <processenv.h>
+#    include <stdio.h>
 #    include <winnls.h>
 
 #    include <stdx/profiler.hh>
@@ -57,6 +61,12 @@ rich_console::~rich_console() {
     if (auto* stderr_h{GetStdHandle(STD_ERROR_HANDLE)}; stderr_h != INVALID_HANDLE_VALUE) {
         SetConsoleMode(stderr_h, original_stderr_mode);
     }
+}
+
+auto set_binary_stdio() noexcept -> void {
+    PROFILE_FUNCTION();
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
 }
 
 } // namespace ghoti::win32

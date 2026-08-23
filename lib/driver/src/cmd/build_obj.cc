@@ -26,7 +26,7 @@ auto build_obj::execute() -> stdx::result<void, clap::error> {
                                  clap::error::FILE_NOT_FOUND);
     }
 
-    opts_.normalize_input_path();
+    opts_.make_path_relative();
     mod::file_loader    loader;
     mod::module_manager manager{loader};
     TRY(opts_.setup_module_manager(manager, error_stream_));

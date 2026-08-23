@@ -60,7 +60,7 @@ struct build_options {
                             std::ostream& error_stream) -> stdx::result<build_options, clap::error>;
 
     // Converts the input path from absolute to relative if needed
-    auto normalize_input_path() -> void;
+    auto make_path_relative() -> void;
 
     [[nodiscard]] auto setup_module_manager(mod::module_manager& manager,
                                             std::ostream&        error_stream)
