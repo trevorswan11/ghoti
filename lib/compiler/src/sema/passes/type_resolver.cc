@@ -755,14 +755,35 @@ VISITOR_TEMPLATE_INIT(type_resolver, visit, const ast::enum_expr&)
 
 namespace {
 
-// Applies a `&`/`&mut`/`^`/`^mut`/none capture modifier to a base type, rejecting when const
+// Identifiers, fields, elements, or deref off one have  real storage; anything else is an rvalue.
+[[nodiscard]] auto is_lvalue_shape(const mod::module& module, ast::expr_handle expr) noexcept
+    -> bool {
+    return module.ast.get_as_opt<ast::identifier_expr>(expr).has_value() ||
+           module.ast.get_as_opt<ast::dot_expr>(expr).has_value() ||
+           module.ast.get_as_opt<ast::index_expr>(expr).has_value() ||
+           module.ast.get_as_opt<ast::dereference_expr>(expr).has_value();
+}
+
+// Applies a `&`/`&mut`/`^`/`^mut`/none capture modifier, rejecting const or address-of-rvalue.
 [[nodiscard]] auto resolve_capture_modifier(context&           ctx,
                                             ast::type_modifier modifier,
                                             type&              base_type,
                                             bool               container_is_const,
+                                            bool               container_is_addressable,
                                             std::string_view   what,
                                             source_location    loc) noexcept
     -> stdx::result<gsl::not_null<type*>, diagnostic> {
+    const bool wants_address{modifier.is_ref() || modifier.is_ptr()};
+    if (wants_address && !container_is_addressable) {
+        return make_sema_err(
+            fmt::format("Cannot capture a temporary {} by {}; only a plain value capture is "
+                        "allowed here since it has no storage of its own",
+                        what,
+                        modifier.is_ptr() ? "pointer" : "reference"),
+            error::ILLEGAL_RVALUE_CAPTURE,
+            loc);
+    }
+
     const bool wants_mutable{modifier.is_mutable_ref() || modifier.is_mutable_ptr()};
     if (wants_mutable && container_is_const) {
         return make_sema_err(fmt::format("Cannot capture an immutable {} by mutable {}",
@@ -824,6 +845,7 @@ auto type_resolver::visit(ast::node_id id, const ast::for_loop_expr& for_expr) -
                                                      capture.modifier,
                                                      *elem_type,
                                                      iterable_type.is_constant(),
+                                                     is_lvalue_shape(resolving_, iterable),
                                                      "array or slice",
                                                      resolving_.ast.location_of(capture.payload))};
             if (!cap_result.has_value()) {
@@ -946,7 +968,8 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     if (any_param_generic(param_types)) {
         fn_type.resolve<types::function>(
             fn.self.has_value(), param_types, return_type, fn.variadic);
-        ctx_.generic_functions.register_function(fn_type, resolving_, id, fn);
+        ctx_.generic_functions.register_function(
+            fn_type, resolving_, id, fn, stdx::none, user_type_stack_.peek());
         return last_type_.emplace(fn_type);
     }
 
@@ -1162,15 +1185,20 @@ template <ast::IndexableID ID> auto type_resolver::resolve_symbol(ID id, symbol&
     case symbol_status::UNRESOLVED: {
         sym.set_status(symbol_status::RESOLVING);
 
-        // All other symbol data kinds are independently resolved
+        // Fields/params/enum members can't resolve out-of-order, so early use is an ordering
+        // issue, not a self-reference cycle.
         const auto node{symbol_data.as_opt<symbols::node_t>()};
         if (!node) {
             ctx_.poison_symbol(sym);
             return last_type_.emplace(ctx_.poison_node(
                 resolving_,
                 id,
-                fmt::format("'{}' is used during its own resolution", sym.get_name()),
-                error::CYCLIC_DEPENDENCY,
+                fmt::format("'{}' is referenced before its declaration; forward references to "
+                            "struct/union fields, function parameters, and enum members are not "
+                            "supported; declare '{}' earlier",
+                            sym.get_name(),
+                            sym.get_name()),
+                error::ILLEGAL_FIELD_ORDER_DEPENDENCY,
                 resolving_.ast.location_of(id)));
         }
         resolve(*node);
@@ -1352,6 +1380,18 @@ auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -
 
 auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> void {
     PROFILE_FUNCTION();
+
+    // Implicit access needs type context established elsewhere; nothing has for a binary LHS.
+    if (resolving_.ast.get_as_opt<ast::implicit_access_expr>(binary.lhs)) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            "Implicit access cannot appear on the left side of a binary expression; it "
+            "requires the other operand to establish type context first",
+            error::TYPE_MISMATCH,
+            resolving_.ast.location_of(binary.lhs)));
+    }
+
     TRY_RESOLVE(binary.lhs);
     auto* lhs_type{last_type_.take()};
     {
@@ -1396,6 +1436,11 @@ auto type_resolver::resolve_structural_access(type&                          obj
         target_type = &ptr_data->underlying;
     } else if (const auto ref_data{target_type->get_data().as_opt<types::reference>()}) {
         target_type = &ref_data->underlying;
+    }
+
+    // e.g. `const f: fn(): T = .init;` fall through to the return type for its members
+    if (const auto fn_data{target_type->get_data().as_opt<types::function>()}) {
+        target_type = &fn_data->return_type;
     }
 
     auto&      object_data{target_type->get_data()};
@@ -1933,9 +1978,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
 
     // The expression must resolve to a single type on pass 3
     stdx::option<type&> first_type;
-
-    // A struct/union local's constness isn't type-level, so it's looked up on its decl directly
-    bool matcher_is_const{false};
+    bool                matcher_is_const{false};
     if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(match.matcher)}) {
         if (const auto sym{ctx_.registry.lookup(table_stack_, ident->name)}) {
             if (const auto node{sym->get_data().as_opt<symbols::node_t>()}) {
@@ -1946,6 +1989,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
             }
         }
     }
+    const bool matcher_is_addressable{is_lvalue_shape(resolving_, match.matcher)};
 
     // Rip through the arms once to validate structural arm rules
     const auto& matcher_data{matcher_type.get_data()};
@@ -2064,6 +2108,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                                                      arm.modifier,
                                                      *base_type,
                                                      matcher_is_const,
+                                                     matcher_is_addressable,
                                                      "value",
                                                      resolving_.ast.location_of(*arm.capture))};
             if (!cap_result) {
@@ -2281,7 +2326,13 @@ auto type_resolver::resolve_module_access(ID id, const ast::module_access_expr& 
             context new_ctx{ctx_};
             resolve_types(inner_mod, new_ctx);
             if (inner_mod.is_poisoned()) {
-                return last_type_.emplace(ctx_.poison_node(resolving_, id));
+                return last_type_.emplace(ctx_.poison_node(
+                    resolving_,
+                    id,
+                    fmt::format("Module '{}' failed to resolve due to errors it contains",
+                                get_rightmost_name(access.outer).value_or("<module>")),
+                    error::IMPORTED_MODULE_CONTAINS_ERRORS,
+                    resolving_.ast.location_of(access.outer)));
             }
         }
 
@@ -2750,7 +2801,15 @@ auto type_resolver::visit(ast::node_id id, const ast::import_stmt& import_stmt) 
     // There's no need to poison the import type since it would lose all of the module information
     context new_ctx{ctx_};
     resolve_types(module.imported, new_ctx);
-    if (module.imported.is_poisoned()) { return poison_out(); }
+    if (module.imported.is_poisoned()) {
+        last_type_.emplace(ctx_.get_poison());
+        resolving_.set_sema_type(ident_id, *last_type_);
+        return ctx_.poison_symbol(
+            sym,
+            fmt::format("Import '{}' failed to resolve due to errors it contains", name),
+            error::IMPORTED_MODULE_CONTAINS_ERRORS,
+            resolving_.ast.location_of(id));
+    }
     last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
 }
 
@@ -2759,8 +2818,25 @@ auto type_resolver::visit(ast::node_id id, const ast::return_stmt& return_stmt) 
     if (return_stmt.expression) {
         TRY_RESOLVE(*return_stmt.expression);
         auto& return_expr_type{*last_type_.take()};
-        // Only a closure literal constructed right here is at risk
-        if (resolving_.ast.get_as_opt<ast::function_expr>(*return_stmt.expression)) {
+
+        // Only these two shapes are checked; the AST can't tell origin from pass-through.
+        const auto constructs_closure_literal = [&] {
+            if (resolving_.ast.get_as_opt<ast::function_expr>(*return_stmt.expression)) {
+                return true;
+            }
+            const auto ident{
+                resolving_.ast.get_as_opt<ast::identifier_expr>(*return_stmt.expression)};
+            if (!ident) { return false; }
+            const auto sym{ctx_.registry.lookup(table_stack_, ident->name)};
+            if (!sym) { return false; }
+            const auto node{sym->get_data().as_opt<symbols::node_t>()};
+            if (!node) { return false; }
+            const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
+            return decl && decl->value &&
+                   resolving_.ast.get_as_opt<ast::function_expr>(*decl->value).has_value();
+        }();
+
+        if (constructs_closure_literal) {
             if (const auto cl{return_expr_type.get_data().as_opt<types::closure_t>()};
                 cl && has_dangling_capture(*cl)) {
                 return last_type_.emplace(ctx_.poison_node(
@@ -3034,7 +3110,12 @@ auto type_resolver::instantiate_generic(type&                        callee_type
     }
 
     type_resolver inst_resolver{fn_mod, ctx_, fn_table_idx, std::move(inst_stack)};
-    auto          inst_param_types{ctx_.pool.get_many_unsafe(fn_expr.parameters.size())};
+    // This freestanding resolver has no enclosing-type context, so @this() needs it restored.
+    stdx::option<structural_guard> this_type_guard;
+    if (fn_info.enclosing_type) {
+        this_type_guard.emplace(inst_resolver.user_type_stack_, *fn_info.enclosing_type);
+    }
+    auto inst_param_types{ctx_.pool.get_many_unsafe(fn_expr.parameters.size())};
     for (usize i{0};
          const auto& [arg_type, param] : std::views::zip(concrete_args, fn_expr.parameters)) {
         inst_resolver.resolve(param.explicit_type);

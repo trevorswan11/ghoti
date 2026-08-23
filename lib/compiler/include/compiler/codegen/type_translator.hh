@@ -4,6 +4,7 @@
 #include <gsl/pointers>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/Module.h>
 #include <llvm/IR/Type.h>
 #include <stdx/utility.hh>
 
@@ -13,7 +14,9 @@ namespace ghoti::codegen {
 
 class type_translator {
   public:
-    explicit type_translator(llvm::LLVMContext& context) noexcept : context_{context} {}
+    // `module`'s data layout is read for target-correct union sizing; needn't be final yet.
+    explicit type_translator(llvm::LLVMContext& context, llvm::Module& module) noexcept
+        : context_{context}, module_{module} {}
     ~type_translator() = default;
     MAKE_PINNED(type_translator);
 
@@ -47,6 +50,7 @@ class type_translator {
 
   private:
     llvm::LLVMContext& context_;
+    llvm::Module&      module_;
     type_cache_t       struct_cache_;
     type_cache_t       union_cache_;
     type_cache_t       closure_cache_;

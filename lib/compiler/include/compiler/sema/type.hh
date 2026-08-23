@@ -131,6 +131,17 @@ enum class type_kind : u8 {
     }
 }
 
+[[nodiscard]] constexpr auto is_aggregate(type_kind kind) noexcept -> bool {
+    switch (kind) {
+    case type_kind::STRUCT:
+    case type_kind::UNION:
+    case type_kind::SLICE:
+    case type_kind::ARRAY:
+    case type_kind::CLOSURE: return true;
+    default:                 return false;
+    }
+}
+
 class type;
 
 [[nodiscard]] auto is_same_unqualified(const type& a, const type& b) noexcept -> bool;

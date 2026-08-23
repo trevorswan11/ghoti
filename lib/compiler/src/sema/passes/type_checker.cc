@@ -267,7 +267,16 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             const auto lhs_t{get_operand_type(inst.operands[0])};
             const auto rhs_t{get_operand_type(inst.operands[1])};
             if (lhs_t && rhs_t && !lhs_t->is_poison() && !rhs_t->is_poison()) {
-                if (!is_assignable(*lhs_t, *rhs_t) && !is_assignable(*rhs_t, *lhs_t)) {
+                // Aggregates lower to LLVM structs/arrays, which have no '=='/'!=' semantics.
+                if (is_aggregate(lhs_t->get_kind()) || is_aggregate(rhs_t->get_kind())) {
+                    emit_diagnostic(
+                        fmt::format("Comparison operator cannot be applied to aggregate types "
+                                    "'{}' and '{}'",
+                                    type_kind_display_name(lhs_t->get_kind()),
+                                    type_kind_display_name(rhs_t->get_kind())),
+                        error::OPERATOR_TYPE_MISMATCH,
+                        inst.location);
+                } else if (!is_assignable(*lhs_t, *rhs_t) && !is_assignable(*rhs_t, *lhs_t)) {
                     emit_diagnostic(
                         fmt::format("Comparison operator cannot be applied to incompatible types "
                                     "'{}' and '{}'",

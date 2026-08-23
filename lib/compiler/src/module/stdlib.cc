@@ -24,8 +24,10 @@ auto find_stdlib() -> stdx::option<std::filesystem::path> {
     const auto self{self_exe_path()};
     auto       cur_dir{self.parent_path()};
     for (i32 depth{0}; depth <= GHOTI_STDLIB_MAX_SEARCH_DEPTH; ++depth) {
-        auto candidate{cur_dir / "lib" / "std" / "std.gh"};
-        if (std::filesystem::exists(candidate) && !std::filesystem::is_directory(candidate)) {
+        auto            candidate{cur_dir / "lib" / "std" / "std.gh"};
+        std::error_code ec;
+        if (std::filesystem::exists(candidate, ec) &&
+            !std::filesystem::is_directory(candidate, ec)) {
             return candidate;
         }
         if (!cur_dir.has_parent_path() || cur_dir == cur_dir.parent_path()) { break; }

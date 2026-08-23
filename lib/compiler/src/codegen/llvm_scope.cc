@@ -45,7 +45,8 @@ auto llvm_init_warmup() -> void {
         for (const auto level : stdx::enum_range<codegen::opt_level>()) {
             codegen::target_options opts{.level = level};
             if (!triple.empty()) { opts.triple_str = std::string{triple}; }
-            if (auto tm{*codegen::create_target_machine(opts)}) {
+            if (auto tm_res{codegen::create_target_machine(opts)}) {
+                auto&             tm{*tm_res};
                 llvm::LLVMContext ctx;
                 llvm::Module      mod{"warmup", ctx};
                 mod.setDataLayout(tm->createDataLayout());

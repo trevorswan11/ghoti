@@ -1,6 +1,7 @@
 #include "compiler/ast/primitive.hh"
 
 #include <charconv>
+#include <concepts>
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -37,8 +38,8 @@ template <typename ValueType>
             slice.cbegin() + (!base || *base == syntax::numeric_base::DECIMAL ? 0 : 2);
         const auto* last = slice.cend() - syntax::token_type::suffix_length(type);
 
-        // Strip out the underscores from the slice
-        VERIFY(static_cast<usize>(last - first) < numeric_buffer.capacity(), "Literal too long");
+        // Can't fit the scratch buffer -> can't be in range either; report like out-of-range.
+        if (static_cast<usize>(last - first) >= numeric_buffer.capacity()) { return stdx::none; }
         numeric_buffer.clear();
         for (const auto* ptr = first; ptr != last; ++ptr) {
             if (*ptr != '_') { numeric_buffer.emplace_back(*ptr); }
@@ -113,6 +114,7 @@ auto u8_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax:
     case 't':  value = '\t'; break;
     case '\\': value = '\\'; break;
     case '\'': value = '\''; break;
+    case '"':  value = '"'; break;
     case '0':  value = '\0'; break;
     default:   return make_syntax_err(syntax::error::UNKNOWN_CHARACTER_ESCAPE, start_token);
     }

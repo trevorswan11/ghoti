@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <ranges>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -1058,11 +1059,43 @@ auto emitter::emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value
     return value{dest, sema_type};
 }
 
+// A direct `union.field = ...` write bypasses the initializer's tag, so it's re-synced here.
+auto emitter::sync_tagged_union_tag(ast::node_id assign_lhs) -> void {
+    const auto dot{active_ast().get_as_opt<ast::dot_expr>(assign_lhs)};
+    if (!dot) { return; }
+
+    const auto obj_type{active_mod().get_sema_type_opt(dot->object)};
+    if (!obj_type) { return; }
+    auto* unwrapped{&obj_type.value()};
+    if (const auto ptr_data{unwrapped->get_data().as_opt<sema::types::pointer>()}) {
+        unwrapped = &ptr_data->underlying;
+    } else if (const auto ref_data{unwrapped->get_data().as_opt<sema::types::reference>()}) {
+        unwrapped = &ref_data->underlying;
+    }
+    const auto ut{unwrapped->get_data().as_opt<sema::types::union_t>()};
+    if (!ut || ut->is_untagged) { return; }
+
+    const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot->member)};
+    const auto& table{ctx_.registry.get(unwrapped->get_symbol_table_idx())};
+    const auto  proxy{table.get_proxy_opt(member_ident.name)};
+    ASSERT(proxy, "Union field write must reference a valid field");
+
+    const auto union_addr{emit_lvalue(dot->object)};
+    auto&      i32_type{ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
+    auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    const auto tag_ptr{
+        builder_.emit_get_element_ptr(union_addr, {value{0ULL, usize_type}}, i32_type)};
+    // The tag write establishes the active variant, the same as a construction-time write does
+    builder_.emit_store(value{tag_ptr, i32_type}, value{static_cast<i64>(proxy->index), i32_type})
+        .is_initializer = true;
+}
+
 auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assign) -> value {
     PROFILE_FUNCTION();
     const auto op_type{id.get_token_type()};
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type.has_value(), "Assignment expression must have a resolved sema type");
+    sync_tagged_union_tag(assign.lhs);
     auto lhs_lval{emit_lvalue(assign.lhs)};
     ASSERT(lhs_lval.type.has_value(), "Assignment LHS must have a resolved type");
 
@@ -1277,6 +1310,11 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
     } else if (dot_call) {
         const auto member_ident{active_ast().get_as<ast::identifier_expr>(dot_call->member)};
         callee_name.emplace(std::string{member_ident.name});
+    } else if (const auto imp_call{
+                   active_ast().get_as_opt<ast::implicit_access_expr>(call.function)}) {
+        // e.g. `const a: T = .init();` -- a no-self member called via implicit access.
+        const auto member_ident{active_ast().get_as<ast::identifier_expr>(imp_call->member)};
+        callee_name.emplace(std::string{member_ident.name});
     } else if (const auto fn_expr{active_ast().get_as_opt<ast::function_expr>(call.function)}) {
         callee_name.emplace(emit_anonymous_function(*call.function, *fn_expr));
     } else {
@@ -1351,12 +1389,10 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
     args.reserve(call.arguments.size() + (has_implicit_self ? 1 : 0));
 
     if (is_closure_ident_call) {
-        // The callee identifier's own binding is the environment
-        const auto& ident{active_ast().get_as<ast::identifier_expr>(call.function)};
-        const auto  binding{lookup_binding(ident.name)};
-        ASSERT(binding, "Closure callee identifier must have a binding");
+        // The callee's binding is the environment; spill it to an alloca to get its address.
         ASSERT(!fn_data->params.empty(), "Closure implementation signature must have self");
-        args.emplace_back(value{binding->id, const_cast<sema::type&>(*fn_data->params[0])});
+        const auto self_ptr{emit_lvalue(call.function)};
+        args.emplace_back(value{self_ptr.data, const_cast<sema::type&>(*fn_data->params[0])});
     } else if (is_fn_ctx_self_call) {
         // Recursing into a closure via @fnCtx(): reuse this body's own self binding
         const auto binding{lookup_binding("self")};
@@ -1444,9 +1480,13 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         }
 
         if (fn_match) {
-            VERIFY(req.arg_types.size() == args.size(), "Generic arg types do not match arity");
+            // req.arg_types excludes the implicit self already prepended to args above.
+            const auto explicit_args{
+                std::span{args}.subspan(static_cast<usize>(has_implicit_self ? 1 : 0))};
+            VERIFY(req.arg_types.size() == explicit_args.size(),
+                   "Generic arg types do not match arity");
             bool args_match{true};
-            for (const auto& [arg, arg_type] : std::views::zip(args, req.arg_types)) {
+            for (const auto& [arg, arg_type] : std::views::zip(explicit_args, req.arg_types)) {
                 if (arg.type && *arg_type != *arg.type &&
                     !sema::is_assignable(*arg.type, *arg_type)) {
                     args_match = false;
@@ -2521,7 +2561,12 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
         match.arms, [](const ast::match_expr::arm& arm) { return arm.capture.has_value(); })};
     stdx::option<value> matcher_addr;
     if (has_capture || (union_data && !union_data->is_untagged)) {
-        if (active_ast().get_as_opt<ast::identifier_expr>(match.matcher)) {
+        // Anything else is an rvalue: its value is spilled instead of re-evaluating the matcher.
+        const bool is_lvalue_shape{active_ast().get_as_opt<ast::identifier_expr>(match.matcher) ||
+                                   active_ast().get_as_opt<ast::dot_expr>(match.matcher) ||
+                                   active_ast().get_as_opt<ast::index_expr>(match.matcher) ||
+                                   active_ast().get_as_opt<ast::dereference_expr>(match.matcher)};
+        if (is_lvalue_shape) {
             matcher_addr.emplace(emit_lvalue(match.matcher));
         } else {
             matcher_addr.emplace(spill_to_temporary(

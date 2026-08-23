@@ -60,7 +60,7 @@ namespace {
 
 llvm_lowering::llvm_lowering(llvm::LLVMContext& context, std::string_view module_name) noexcept
     : context_{context}, llvm_module_{stdx::make_box<llvm::Module>(module_name, context_)},
-      builder_{context_}, types_{context_} {}
+      builder_{context_}, types_{context_, *llvm_module_} {}
 
 auto llvm_lowering::lower(const gir::module& gir_mod) -> stdx::box<llvm::Module> {
     for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
@@ -112,20 +112,132 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
 
     // Windows raw PE entry point
     if (triple.isOSWindows()) {
-        // BaseThreadInitThunk calls entry point without C (argc, argv)
-        // Construct empty slice [][:0]u8 (args.len = 0) to avoid dereferencing invalid registers
-        auto* outer_slice{builder_.CreateAlloca(slice_ty, nullptr, "outer.slice")};
-        auto* outer_data{builder_.CreateStructGEP(slice_ty,
-                                                  outer_slice,
-                                                  static_cast<unsigned>(gir::SLICE_PTR_FIELD_INDEX),
-                                                  "outer.data")};
-        auto* outer_len{builder_.CreateStructGEP(
-            slice_ty, outer_slice, static_cast<unsigned>(gir::SLICE_LEN_FIELD_INDEX), "outer.len")};
-        builder_.CreateStore(llvm::ConstantPointerNull::get(types_.get_ptr_ty()), outer_data);
-        builder_.CreateStore(builder_.getInt64(0), outer_len);
-        auto* outer_val{builder_.CreateLoad(slice_ty, outer_slice, "outer.val")};
-
+        // BaseThreadInitThunk calls entry with no argc/argv, unlike the POSIX path below.
         const bool takes_arg{user_fn->getFunctionType()->getNumParams() == 1};
+
+        llvm::Value* outer_val{nullptr};
+        if (!takes_arg) {
+            // Nothing reads args -- skip the WinAPI calls entirely and pass an empty slice
+            auto* outer_slice{builder_.CreateAlloca(slice_ty, nullptr, "outer.slice")};
+            auto* outer_data{builder_.CreateStructGEP(
+                slice_ty, outer_slice, static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX), "outer.data")};
+            auto* outer_len{builder_.CreateStructGEP(
+                slice_ty, outer_slice, static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX), "outer.len")};
+            builder_.CreateStore(llvm::ConstantPointerNull::get(types_.get_ptr_ty()), outer_data);
+            builder_.CreateStore(builder_.getInt64(0), outer_len);
+            outer_val = builder_.CreateLoad(slice_ty, outer_slice, "outer.val");
+        } else {
+            // Recover argv via raw Win32 APIs (no CRT): split into wide args, convert to UTF-8.
+            auto* get_cmdline_ty{llvm::FunctionType::get(types_.get_ptr_ty(), {}, false)};
+            auto  get_cmdline_fn{
+                llvm_module_->getOrInsertFunction("GetCommandLineW", get_cmdline_ty)};
+
+            auto* cmdline_to_argv_ty{llvm::FunctionType::get(
+                types_.get_ptr_ty(), {types_.get_ptr_ty(), types_.get_ptr_ty()}, false)};
+            auto  cmdline_to_argv_fn{
+                llvm_module_->getOrInsertFunction("CommandLineToArgvW", cmdline_to_argv_ty)};
+
+            auto* wc2mb_ty{llvm::FunctionType::get(types_.get_int32_ty(),
+                                                   {types_.get_int32_ty(),
+                                                    types_.get_int32_ty(),
+                                                    types_.get_ptr_ty(),
+                                                    types_.get_int32_ty(),
+                                                    types_.get_ptr_ty(),
+                                                    types_.get_int32_ty(),
+                                                    types_.get_ptr_ty(),
+                                                    types_.get_ptr_ty()},
+                                                   false)};
+            auto  wc2mb_fn{llvm_module_->getOrInsertFunction("WideCharToMultiByte", wc2mb_ty)};
+
+            constexpr u64 max_args{16};
+            constexpr u64 max_arg_bytes{1'024};
+            constexpr u32 cp_utf8{65'001};
+
+            auto* nargs_slot{builder_.CreateAlloca(types_.get_int32_ty(), nullptr, "nargs")};
+            auto* cmdline{builder_.CreateCall(get_cmdline_fn, {}, "cmdline")};
+            auto* wargv{builder_.CreateCall(cmdline_to_argv_fn, {cmdline, nargs_slot}, "wargv")};
+            auto* nargs_i32{builder_.CreateLoad(types_.get_int32_ty(), nargs_slot, "nargs.val")};
+            auto* raw_argc_i64{builder_.CreateSExt(nargs_i32, types_.get_int64_ty(), "argc.i64")};
+
+            auto* max_args_v{builder_.getInt64(max_args)};
+            auto* slice_array{builder_.CreateAlloca(slice_ty, max_args_v, "args.array")};
+            auto* arg_bufs{builder_.CreateAlloca(
+                types_.get_int8_ty(), builder_.getInt64(max_args * max_arg_bytes), "arg.bufs")};
+            auto* argc_i64{builder_.CreateSelect(builder_.CreateICmpSLT(raw_argc_i64, max_args_v),
+                                                 raw_argc_i64,
+                                                 max_args_v,
+                                                 "argc.bounded")};
+
+            auto* loop_cond{llvm::BasicBlock::Create(context_, "wargs.cond", main_fn)};
+            auto* loop_body{llvm::BasicBlock::Create(context_, "wargs.body", main_fn)};
+            auto* loop_inc{llvm::BasicBlock::Create(context_, "wargs.inc", main_fn)};
+            auto* loop_end{llvm::BasicBlock::Create(context_, "wargs.end", main_fn)};
+
+            auto* i_var{builder_.CreateAlloca(types_.get_int64_ty(), nullptr, "wi")};
+            builder_.CreateStore(builder_.getInt64(0), i_var);
+            builder_.CreateBr(loop_cond);
+
+            builder_.SetInsertPoint(loop_cond);
+            auto* cur_i{builder_.CreateLoad(types_.get_int64_ty(), i_var, "wcur.i")};
+            auto* cmp{builder_.CreateICmpSLT(cur_i, argc_i64, "wcmp")};
+            builder_.CreateCondBr(cmp, loop_body, loop_end);
+
+            builder_.SetInsertPoint(loop_body);
+            auto* wargv_elem_ptr{
+                builder_.CreateGEP(types_.get_ptr_ty(), wargv, {cur_i}, "wargv.elem.ptr")};
+            auto* wstr_ptr{builder_.CreateLoad(types_.get_ptr_ty(), wargv_elem_ptr, "wstr.ptr")};
+            auto* buf_off{builder_.CreateMul(cur_i, builder_.getInt64(max_arg_bytes), "buf.off")};
+            auto* buf_ptr{builder_.CreateGEP(types_.get_int8_ty(), arg_bufs, {buf_off}, "buf.ptr")};
+
+            // Subtract one to exclude the converted null terminator, matching strlen-style.
+            constexpr u32 auto_len{0xFFFFFFFFu}; // cchWideChar = -1: source is null-terminated
+            auto*         converted{
+                builder_.CreateCall(wc2mb_fn,
+                                            {builder_.getInt32(cp_utf8),
+                                             builder_.getInt32(0),
+                                             wstr_ptr,
+                                             builder_.getInt32(auto_len),
+                                             buf_ptr,
+                                             builder_.getInt32(max_arg_bytes),
+                                             llvm::ConstantPointerNull::get(types_.get_ptr_ty()),
+                                             llvm::ConstantPointerNull::get(types_.get_ptr_ty())},
+                                    "converted.len")};
+            auto* converted_i64{
+                builder_.CreateSExt(converted, types_.get_int64_ty(), "converted.i64")};
+            auto* final_len{builder_.CreateSub(converted_i64, builder_.getInt64(1), "final.len")};
+
+            auto* dest_slice_ptr{
+                builder_.CreateGEP(slice_ty, slice_array, {cur_i}, "wdest.slice.ptr")};
+            auto* dest_data_field{
+                builder_.CreateStructGEP(slice_ty,
+                                         dest_slice_ptr,
+                                         static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX),
+                                         "wdest.data")};
+            auto* dest_len_field{
+                builder_.CreateStructGEP(slice_ty,
+                                         dest_slice_ptr,
+                                         static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX),
+                                         "wdest.len")};
+            builder_.CreateStore(buf_ptr, dest_data_field);
+            builder_.CreateStore(final_len, dest_len_field);
+            builder_.CreateBr(loop_inc);
+
+            builder_.SetInsertPoint(loop_inc);
+            auto* inc_i{builder_.CreateAdd(cur_i, builder_.getInt64(1), "winc.i")};
+            builder_.CreateStore(inc_i, i_var);
+            builder_.CreateBr(loop_cond);
+
+            builder_.SetInsertPoint(loop_end);
+            auto* outer_slice{builder_.CreateAlloca(slice_ty, nullptr, "outer.slice")};
+            auto* outer_data{builder_.CreateStructGEP(
+                slice_ty, outer_slice, static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX), "outer.data")};
+            auto* outer_len{builder_.CreateStructGEP(
+                slice_ty, outer_slice, static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX), "outer.len")};
+            builder_.CreateStore(slice_array, outer_data);
+            builder_.CreateStore(argc_i64, outer_len);
+            outer_val = builder_.CreateLoad(slice_ty, outer_slice, "outer.val");
+        }
+
         if (user_fn->getReturnType()->isVoidTy()) {
             if (takes_arg) {
                 builder_.CreateCall(user_fn, {outer_val});
@@ -150,8 +262,8 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
 
     auto* raw_argc_i64{builder_.CreateSExt(argc, types_.get_int64_ty(), "argc.i64")};
 
-    // Use a fixed 16-element stack buffer to avoid dynamic stack allocation and stack probe issues
-    auto* max_args{builder_.getInt64(16)};
+    // Fixed 128-slot buffer of {ptr, len} pairs; small enough to avoid stack probing.
+    auto* max_args{builder_.getInt64(128)};
     auto* slice_array{builder_.CreateAlloca(slice_ty, max_args, "args.array")};
     auto* argc_i64{builder_.CreateSelect(
         builder_.CreateICmpSLT(raw_argc_i64, max_args), raw_argc_i64, max_args, "argc.bounded")};
@@ -203,9 +315,9 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
     // Store { str_ptr, final_len } into slice_array[cur_i]
     auto* dest_slice_ptr{builder_.CreateGEP(slice_ty, slice_array, {cur_i}, "dest.slice.ptr")};
     auto* dest_data_field{builder_.CreateStructGEP(
-        slice_ty, dest_slice_ptr, static_cast<unsigned>(gir::SLICE_PTR_FIELD_INDEX), "dest.data")};
+        slice_ty, dest_slice_ptr, static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX), "dest.data")};
     auto* dest_len_field{builder_.CreateStructGEP(
-        slice_ty, dest_slice_ptr, static_cast<unsigned>(gir::SLICE_LEN_FIELD_INDEX), "dest.len")};
+        slice_ty, dest_slice_ptr, static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX), "dest.len")};
     builder_.CreateStore(str_ptr, dest_data_field);
     builder_.CreateStore(final_len, dest_len_field);
     builder_.CreateBr(loop_inc);
@@ -219,9 +331,9 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
     builder_.SetInsertPoint(loop_end);
     auto* outer_slice{builder_.CreateAlloca(slice_ty, nullptr, "outer.slice")};
     auto* outer_data{builder_.CreateStructGEP(
-        slice_ty, outer_slice, static_cast<unsigned>(gir::SLICE_PTR_FIELD_INDEX), "outer.data")};
+        slice_ty, outer_slice, static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX), "outer.data")};
     auto* outer_len{builder_.CreateStructGEP(
-        slice_ty, outer_slice, static_cast<unsigned>(gir::SLICE_LEN_FIELD_INDEX), "outer.len")};
+        slice_ty, outer_slice, static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX), "outer.len")};
     builder_.CreateStore(slice_array, outer_data);
     builder_.CreateStore(argc_i64, outer_len);
     auto* outer_val{builder_.CreateLoad(slice_ty, outer_slice, "outer.val")};
@@ -373,8 +485,8 @@ auto llvm_lowering::lower_value(const gir::value& val, const sema::type* expecte
     return val.data.visit(
         [this](gir::local_id loc) -> llvm::Value* {
             const auto it{locals_.find(loc)};
-            if (it != locals_.end()) { return it->second; }
-            return nullptr;
+            ASSERT(it != locals_.end(), "Referenced GIR local was never lowered");
+            return it->second;
         },
         [this, &val, expected_type](i64 i) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)

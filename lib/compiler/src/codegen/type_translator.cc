@@ -47,9 +47,10 @@ auto type_translator::translate(const sema::type& type) -> llvm::Type* {
     case sema::type_kind::LABEL:
     case sema::type_kind::BLOCK:
     case sema::type_kind::MATCH_ARM:
-    case sema::type_kind::POISON:
-    case sema::type_kind::UNDEFINED:
     case sema::type_kind::AUTO:      return get_void_ty();
+    // These should never survive to codegen; treat reaching here as an internal-compiler error.
+    case sema::type_kind::POISON:
+    case sema::type_kind::UNDEFINED: UNREACHABLE("POISON/UNDEFINED type reached codegen");
     }
     UNREACHABLE("Unhandled type kind in codegen::type_translator");
 }
@@ -133,9 +134,9 @@ auto type_translator::translate_union(const sema::types::union_t& u, const sema:
         return it->second;
     }
 
+    const auto& dl{module_.getDataLayout()};
     if (u.is_untagged) {
-        u64              max_size{0};
-        llvm::DataLayout dl;
+        u64 max_size{0};
         for (const auto* field : u.fields) {
             if (field->get_kind() == sema::type_kind::VOID_) { continue; }
             auto* field_ty{translate(*field)};
@@ -152,7 +153,6 @@ auto type_translator::translate_union(const sema::types::union_t& u, const sema:
     union_cache_[&original] = union_ty;
     u64 max_size{0};
 
-    llvm::DataLayout dl;
     for (const auto* field : u.fields) {
         if (field->get_kind() == sema::type_kind::VOID_) { continue; }
         auto* field_ty{translate(*field)};

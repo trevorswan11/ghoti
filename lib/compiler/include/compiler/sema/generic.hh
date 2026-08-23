@@ -28,6 +28,8 @@ struct generic_function_info {
     gsl::not_null<const ast::function_expr*> fn_expr;
     gsl::not_null<type*>                     fn_type;
     stdx::option<std::string_view>           name;
+    // Enclosing struct/union/enum, if any; may not be resolved
+    stdx::option<type&> enclosing_type{stdx::none};
 };
 
 class generic_function_registry {
@@ -40,14 +42,16 @@ class generic_function_registry {
                            mod::module&                   module,
                            ast::node_id                   node_id,
                            const ast::function_expr&      fn_expr,
-                           stdx::option<std::string_view> name = stdx::none) -> void {
+                           stdx::option<std::string_view> name           = stdx::none,
+                           stdx::option<type&>            enclosing_type = stdx::none) -> void {
         registry_.emplace(&fn_type,
                           generic_function_info{
-                              .module  = &module,
-                              .node_id = node_id,
-                              .fn_expr = &fn_expr,
-                              .fn_type = &fn_type,
-                              .name    = name,
+                              .module         = &module,
+                              .node_id        = node_id,
+                              .fn_expr        = &fn_expr,
+                              .fn_type        = &fn_type,
+                              .name           = name,
+                              .enclosing_type = enclosing_type,
                           });
     }
 

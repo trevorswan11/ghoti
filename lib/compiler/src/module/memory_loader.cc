@@ -24,7 +24,7 @@ auto memory_loader::load(const std::filesystem::path& path)
     -> stdx::result<std::string, diagnostic> {
     PROFILE_FUNCTION();
     auto normalized{normalize(path)};
-    ASSERT(normalized);
+    if (!normalized) { return make_mod_err(normalized.error()); }
     auto it{files_.find(normalized->string())};
     if (it == files_.end()) {
         return make_mod_err(

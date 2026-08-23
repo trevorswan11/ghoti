@@ -1,5 +1,6 @@
 #include "compiler/syntax/parser.hh"
 
+#include <cctype>
 #include <string_view>
 #include <utility>
 
@@ -34,10 +35,21 @@ auto parser::reset(std::string_view input) noexcept -> void {
     advance(2);
 }
 
+namespace {
+
+// Skip comments here so no downstream code has to special-case `token_type_t::COMMENT`.
+[[nodiscard]] auto next_significant_token(lexer& lex) noexcept -> token_t {
+    auto token{lex.advance()};
+    while (token.type == token_type_t::COMMENT) { token = lex.advance(); }
+    return token;
+}
+
+} // namespace
+
 auto parser::advance(u8 times) noexcept -> const token_t& {
     for (u8 i = 0; i < times; ++i) {
         current_token_ = peek_token_;
-        peek_token_    = lexer_.advance();
+        peek_token_    = next_significant_token(lexer_);
     }
     return current_token_;
 }
@@ -56,25 +68,22 @@ auto parser::consume(ast::AST& ast) -> diagnostics {
         if (skip(current_token_.type)) { while (skip(advance().type)); } // NOLINT
         if (current_token_is(token_type_t::END)) { break; }
 
-        // Comments are entirely discarded from the tree
-        if (!current_token_is(token_type_t::COMMENT)) {
-            auto stmt{parse_statement()};
-            if (stmt) {
-                ast.add_root(**stmt);
-            } else {
-                diagnostics.emplace_back(std::move(stmt.error()));
+        auto stmt{parse_statement()};
+        if (stmt) {
+            ast.add_root(**stmt);
+        } else {
+            diagnostics.emplace_back(std::move(stmt.error()));
 
-                // Errors should advance up to next logical end to prevent useless errors
-                const auto stop_condition = [](token_type_t tt) -> bool {
-                    switch (tt) {
-                    case token_type_t::RBRACE:
-                    case token_type_t::SEMICOLON:
-                    case token_type_t::END:       return true;
-                    default:                      return false;
-                    }
-                };
-                while (!stop_condition(advance().type)); // NOLINT
-            }
+            // Errors should advance up to next logical end to prevent useless errors
+            const auto stop_condition = [](token_type_t tt) -> bool {
+                switch (tt) {
+                case token_type_t::RBRACE:
+                case token_type_t::SEMICOLON:
+                case token_type_t::END:       return true;
+                default:                      return false;
+                }
+            };
+            while (!stop_condition(advance().type)); // NOLINT
         }
         advance();
     }
@@ -155,8 +164,32 @@ auto parser::parse_expression(bind_precedence precedence)
         return make_syntax_err(error::END_OF_TOKEN_STREAM, current_token_);
     }
 
+    const depth_guard guard{expr_depth_};
+    if (expr_depth_ > MAX_EXPRESSION_DEPTH) {
+        return make_syntax_err(
+            "Expression nested too deeply", error::EXPRESSION_NESTED_TOO_DEEPLY, current_token_);
+    }
+
     const auto prefix{get_prefix_fn_opt(current_token_.type)};
     if (!prefix) {
+        // The slice's leading char reliably tells which lexer failure produced ILLEGAL.
+        if (current_token_is(token_type_t::ILLEGAL) && !current_token_.slice.empty()) {
+            switch (current_token_.slice.front()) {
+            case '"':
+                return make_syntax_err(
+                    "Unterminated string literal", error::UNTERMINATED_STRING, current_token_);
+            case '\'':
+                return make_syntax_err("Invalid or unterminated character literal",
+                                       error::INVALID_CHARACTER_LITERAL,
+                                       current_token_);
+            default:
+                if (std::isdigit(static_cast<u8>(current_token_.slice.front()))) {
+                    return make_syntax_err(
+                        "Invalid numeric literal", error::INVALID_NUMBER_LITERAL, current_token_);
+                }
+                break;
+            }
+        }
         return make_syntax_err(fmt::format("No prefix parse function for {}({}) found",
                                            magic_enum::enum_name(current_token_.type),
                                            current_token_.slice),

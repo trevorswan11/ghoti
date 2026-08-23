@@ -17,12 +17,13 @@ namespace ghoti::mod {
 
 auto file_loader::load(const std::filesystem::path& path) -> stdx::result<std::string, diagnostic> {
     PROFILE_FUNCTION();
-    if (!std::filesystem::exists(path)) {
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec)) {
         return make_mod_err(fmt::format("Path '{}' does not exist", path.string()),
                             error::PATH_DOES_NOT_EXIST);
     }
 
-    if (!std::filesystem::is_regular_file(path)) {
+    if (!std::filesystem::is_regular_file(path, ec)) {
         return make_mod_err(fmt::format("Path '{}' is not a file", path.string()),
                             error::PATH_IS_NOT_FILE);
     }

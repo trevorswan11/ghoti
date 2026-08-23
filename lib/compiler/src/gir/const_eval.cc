@@ -96,14 +96,18 @@ auto const_eval::try_eval(ast::node_id id) -> stdx::option<const_value> {
         if (sema_ty->is_volatile()) { return stdx::none; }
     }
     const auto key{id.get_index()};
-    if (call_stack_.empty()) {
+    const bool is_outermost{call_stack_.empty()};
+    if (is_outermost) {
         if (auto cached{memo_cache_.find(key)}; cached != memo_cache_.end()) {
             return cached->second;
         }
+        // A top-level const initializer has no call frame; push a synthetic one to bind into.
+        call_stack_.emplace_back();
     }
 
     auto res{eval_node(id)};
-    if (res && call_stack_.empty()) { memo_cache_.emplace(key, *res); }
+    if (res && is_outermost) { memo_cache_.emplace(key, *res); }
+    if (is_outermost) { call_stack_.pop_back(); }
     return res;
 }
 
@@ -710,7 +714,8 @@ auto const_eval::eval_implicit_access(ast::node_id id, const ast::implicit_acces
         }
     }
 
-    return const_value{const_enum{std::string{member_name}, 0}, sema_type};
+    // Not an enum member so let the caller fall back
+    return stdx::none;
 }
 
 auto const_eval::eval_module_access(ast::node_id, const ast::module_access_expr& mod_access)

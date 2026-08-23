@@ -16,6 +16,8 @@ struct extra_linker_options {
     gsl::span<std::filesystem::path> objects{};
     gsl::span<std::filesystem::path> library_paths{};
     gsl::span<std::string>           libraries{};
+    // Set when the entry wrapper calls the raw Win32 APIs used to recover real argv.
+    bool needs_windows_argv_apis{false};
 };
 
 [[nodiscard]] auto link_executable(const std::filesystem::path& object_file,

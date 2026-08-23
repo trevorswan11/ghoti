@@ -13,8 +13,29 @@ namespace ghoti::syntax {
 auto token_t::materialize_string() const -> std::string {
     ASSERT(type == token_type_t::STRING || type == token_type_t::MULTILINE_STRING);
 
-    // Here we can just trim off the start and finish of the string
-    if (type == token_type_t::STRING) { return std::string{slice.begin() + 1, slice.end() - 1}; }
+    // Trim quotes and decode escapes; the lexer only scans past them, never decodes them.
+    if (type == token_type_t::STRING) {
+        std::string decoded;
+        decoded.reserve(slice.size());
+        for (auto it{slice.begin() + 1}, end{slice.end() - 1}; it != end; ++it) {
+            if (*it != '\\' || it + 1 == end) {
+                decoded.push_back(*it);
+                continue;
+            }
+            ++it;
+            switch (*it) {
+            case 'n':  decoded.push_back('\n'); break;
+            case 'r':  decoded.push_back('\r'); break;
+            case 't':  decoded.push_back('\t'); break;
+            case '\\': decoded.push_back('\\'); break;
+            case '\'': decoded.push_back('\''); break;
+            case '"':  decoded.push_back('"'); break;
+            case '0':  decoded.push_back('\0'); break;
+            default:   decoded.push_back(*it); break;
+            }
+        }
+        return decoded;
+    }
 
     std::string builder{};
     builder.reserve(slice.size());

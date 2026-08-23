@@ -169,6 +169,8 @@ class emitter {
     auto emit_logical_and(ast::node_id id, const ast::binary_expr& binary) -> value;
     auto emit_logical_or(ast::node_id id, const ast::binary_expr& binary) -> value;
     auto emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value;
+    // Keeps a tagged union's runtime discriminant in sync with a direct `union.field = ...` write
+    auto sync_tagged_union_tag(ast::node_id assign_lhs) -> void;
     auto emit_assignment(ast::node_id id, const ast::assignment_expr& assign) -> value;
     auto emit_call(ast::node_id id, const ast::call_expr& call) -> value;
     auto emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> value;

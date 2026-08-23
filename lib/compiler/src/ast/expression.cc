@@ -804,13 +804,8 @@ auto implicit_access_expr::parse(syntax::parser& parser)
     }
 
     parser.advance();
-    const auto operand{TRY(parser.parse_expression(syntax::bind_precedence::PREFIX))};
-    if (!operand.is<identifier_expr>()) {
-        return make_syntax_err("Implicitly accessed names must be identifiers",
-                               syntax::error::ILLEGAL_IMPLICIT_ACCESS_OPERAND,
-                               parser.get_location_of(*operand));
-    }
-
+    // A trailing `(...)` for implicit calls are picked up by the enclosing Pratt loop.
+    const identifier_handle operand{TRY(identifier_expr::parse(parser))};
     return parser.add_expr<implicit_access_expr>(prefix_token, operand);
 }
 

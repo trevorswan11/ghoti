@@ -1,7 +1,6 @@
 #include "support/tempfile.hh"
 
 #include <atomic>
-#include <exception>
 #include <filesystem>
 #include <fmt/ostream.h>
 #include <iostream>
@@ -10,6 +9,7 @@
 
 #include <fmt/format.h>
 #include <stdx/types.hh>
+#include <system_error>
 
 namespace ghoti {
 
@@ -19,11 +19,9 @@ const u64        seed{std::random_device{}()};
 std::atomic<u64> counter{0};
 
 auto try_remove_path(const std::filesystem::path& path) -> void {
-    try {
-        std::filesystem::remove(path);
-    } catch (std::exception& e) {
-        fmt::println(std::cerr, "Failed to remove tempfile: {}", e.what());
-    }
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+    if (ec) { fmt::println(std::cerr, "Failed to remove tempfile: {}", ec.message()); }
 }
 
 } // namespace

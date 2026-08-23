@@ -57,23 +57,26 @@ auto analyzer::analyze(const std::filesystem::path& entry_path) -> stdx::result<
     auto module{*module_result};
     if (module->diagnostics.is<syntax::diagnostics>()) { module->print_diagnostics(error_stream_); }
 
+    // An errored module's AST is incomplete/inconsistent; it can't proceed past this point.
+    if (module->is_errored()) { return {}; }
+
     collect_symbols(*module);
     resolve_types(*module);
 
     if (module->is_poisoned()) {
-        module->print_diagnostics(error_stream_);
+        modules_.print_all_diagnostics(error_stream_);
         return {};
     }
 
     auto gir_mod{emit_gir(*module)};
     if (module->is_poisoned()) {
-        module->print_diagnostics(error_stream_);
+        modules_.print_all_diagnostics(error_stream_);
         return {};
     }
 
     check_types(gir_mod, *module);
     if (module->is_poisoned()) {
-        module->print_diagnostics(error_stream_);
+        modules_.print_all_diagnostics(error_stream_);
         return {};
     }
 
@@ -299,7 +302,12 @@ auto analyzer::emit_executable(gir::module&                         gir_module,
     auto llvm_mod{TRY(emit_llvm_ir_executable(gir_module, context, opts))};
     auto temp_obj_path{make_tmp_obj(output_path)};
     TRY(codegen::emit_object_file(*llvm_mod, *target_machine, temp_obj_path));
-    return codegen::link_executable(temp_obj_path, output_path, target_opts, linker_opts);
+
+    // Only link kernel32/shell32 when the wrapper actually needs them to recover argv.
+    auto effective_linker_opts{linker_opts};
+    effective_linker_opts.needs_windows_argv_apis =
+        llvm_mod->getFunction("GetCommandLineW") != nullptr;
+    return codegen::link_executable(temp_obj_path, output_path, target_opts, effective_linker_opts);
 }
 
 auto analyzer::emit_static_library(gir::module&                         gir_module,

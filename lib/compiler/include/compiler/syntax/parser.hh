@@ -16,6 +16,7 @@
 #include "compiler/syntax/precedence.hh"
 #include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
+#include "support/counter.hh"
 #include "support/diagnostic.hh"
 
 namespace ghoti::ast { class AST; } // namespace ghoti::ast
@@ -155,6 +156,12 @@ class parser {
     }
 
   private:
+    // Bounds recursive-descent depth so deep nesting reports a diagnostic, not a stack overflow.
+    static constexpr u32 MAX_EXPRESSION_DEPTH{512};
+    using depth_counter = counter<u32>;
+    using depth_guard   = depth_counter::guard;
+
+  private:
     // Reverts the parser to the state from the checkpoint.
     auto rollback(const checkpoint& checkpoint) noexcept -> void {
         lexer_.restore(checkpoint.snapshot_);
@@ -168,6 +175,7 @@ class parser {
     token_t                 current_token_;
     token_t                 peek_token_;
     stdx::option<ast::AST&> ast_;
+    depth_counter           expr_depth_;
 };
 
 } // namespace ghoti::syntax

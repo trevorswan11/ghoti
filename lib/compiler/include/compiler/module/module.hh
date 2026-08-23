@@ -205,8 +205,6 @@ struct module {
     }
 };
 
-#undef MAKE_MODULE_DIAGNOSTIC_UNPACKER
-
 class module_manager {
   public:
     explicit module_manager(source_loader& loader) noexcept : loader_{loader} {}
@@ -228,6 +226,9 @@ class module_manager {
     // Adds a library module and its underlying path to the lookup table
     [[nodiscard]] auto add_library_module(std::string_view name, const std::filesystem::path& path)
         -> stdx::result<void, diagnostic>;
+
+    // Prints every poisoned/errored module's diagnostics
+    auto print_all_diagnostics(std::ostream& os) const -> void;
 
   private:
     [[nodiscard]] auto try_get(const std::filesystem::path& path)

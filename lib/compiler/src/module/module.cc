@@ -58,7 +58,7 @@ auto module::print_diagnostics(std::ostream& os) const -> void {
                     << "\n";
             }
         },
-        [](const stdx::monostate&) -> void {
+        [](stdx::monostate) -> void {
             UNREACHABLE("This function should've never been called with stdx::monostate");
         });
 }
@@ -107,6 +107,12 @@ auto module_manager::add_library_module(std::string_view name, const std::filesy
 
     module_lut_.emplace(name, *normalized);
     return {};
+}
+
+auto module_manager::print_all_diagnostics(std::ostream& os) const -> void {
+    for (const auto& [path, mod] : modules_) {
+        if (mod->is_poisoned() || mod->is_errored()) { mod->print_diagnostics(os); }
+    }
 }
 
 auto module_manager::try_get(const std::filesystem::path& path)
