@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -36,6 +37,9 @@ class mock_argv {
     std::vector<std::string> strings_;
     mutable args_t           pointers_;
 };
+
+// Returns the path of the current process' running exe
+[[nodiscard]] auto self_exe_path() -> std::filesystem::path;
 
 // Spawns the child and waits for its termination, returning the exit code
 [[nodiscard]] auto spawn_child(const mock_argv& args) -> stdx::option<u32>;

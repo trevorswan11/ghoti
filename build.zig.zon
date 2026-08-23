@@ -6,7 +6,7 @@
     .dependencies = .{
         .stdx = .{
             .url = "https://github.com/trevorswan11/stdx/archive/refs/tags/v2.8.0.tar.gz",
-            .hash = "stdx-2.8.0-dNitgx8ZCQBFpy90diqUUhJ5bPQEEODc0W0WRPJ2-PD-",
+            .hash = "stdx-2.8.0-dNitg1oZCQAKkP8vwajjJoTg1K5TZwlD2g8vpDB_etnS",
         },
         .cli11 = .{
             .url = "https://github.com/CLIUtils/CLI11/archive/refs/tags/v2.6.2.tar.gz",

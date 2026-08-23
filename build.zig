@@ -250,6 +250,7 @@ fn addArtifacts(b: *std.Build, config: struct {
         .GHOTI_VERSION_PATCH = @as(i64, version.patch),
         .GHOTI_VERSION_PRE = version.pre orelse "",
         .GHOTI_STDLIB_ENV = "GHOTI_STDLIB",
+        .GHOTI_STDLIB_MAX_SEARCH_DEPTH = 5,
         .GHOTI_UNKNOWN_ERROR =
         \\Something went worng interally that isn't reported through an error message.
         \\Submit a bug report by opening an issue at https://github.com/trevorswan11/ghoti/issues/new/choose

@@ -1,6 +1,8 @@
 #include "support/subprocess.hh"
 
+#include <array>
 #include <cstdlib>
+#include <filesystem>
 #include <string>
 
 #include <fmt/base.h>
@@ -37,6 +39,24 @@
 #endif
 
 namespace ghoti {
+
+auto self_exe_path() -> std::filesystem::path {
+    using namespace stdx::size_literals;
+    std::array<char, 1_KiB> buffer{};
+
+#if GHOTI_WINDOWS
+    static_assert(MAX_PATH < buffer.size(), "max path exceeds buffer size");
+    ::GetModuleFileNameA(nullptr, buffer.data(), buffer.size());
+#elif GHOTI_APPLE
+    u32 size{sizeof(buffer)};
+    ::_NSGetExecutablePath(buffer.data(), &size);
+#else
+    const auto len{::readlink("/proc/self/exe", buffer.data(), buffer.size() - 1)};
+    if (len != -1) { buffer[static_cast<usize>(len)] = '\0'; }
+#endif
+
+    return buffer.data();
+}
 
 auto spawn_child(const mock_argv& args) -> stdx::option<u32> {
 #if GHOTI_WINDOWS

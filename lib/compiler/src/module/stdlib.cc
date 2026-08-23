@@ -8,6 +8,7 @@
 
 #include "ghoti/config.h"
 #include "support/env.hh"
+#include "support/subprocess.hh"
 
 namespace ghoti::mod {
 
@@ -20,18 +21,15 @@ auto find_stdlib() -> stdx::option<std::filesystem::path> {
         }
     }
 
-    std::error_code ec;
-    auto            cur_dir{std::filesystem::current_path(ec)};
-    if (!ec) {
-        for (usize depth{0}; depth <= 5; ++depth) {
-            auto candidate{cur_dir / "lib" / "std" / "std.gh"};
-            if (std::filesystem::exists(candidate, ec) &&
-                !std::filesystem::is_directory(candidate, ec)) {
-                return candidate;
-            }
-            if (!cur_dir.has_parent_path() || cur_dir == cur_dir.parent_path()) { break; }
-            cur_dir = cur_dir.parent_path();
+    const auto self{self_exe_path()};
+    auto       cur_dir{self.parent_path()};
+    for (i32 depth{0}; depth <= GHOTI_STDLIB_MAX_SEARCH_DEPTH; ++depth) {
+        auto candidate{cur_dir / "lib" / "std" / "std.gh"};
+        if (std::filesystem::exists(candidate) && !std::filesystem::is_directory(candidate)) {
+            return candidate;
         }
+        if (!cur_dir.has_parent_path() || cur_dir == cur_dir.parent_path()) { break; }
+        cur_dir = cur_dir.parent_path();
     }
 
     return stdx::none;
