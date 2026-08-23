@@ -304,6 +304,15 @@ fn addArtifacts(b: *std.Build, config: struct {
     const lld_includes = config.lld.allIncludePaths();
     const lld_artifacts = config.lld.allArtifacts();
 
+    var compiler_system_includes: stdx.ArrayList(std.Build.LazyPath) = .fromSlice(b, llvm_includes.includes);
+    compiler_system_includes.appendSlice(lld_includes.includes);
+    var compiler_config_headers: stdx.ArrayList(*std.Build.Step.ConfigHeader) = .fromSlice(b, llvm_includes.config_headers);
+    compiler_config_headers.appendSlice(lld_includes.config_headers);
+    compiler_config_headers.append(config_h);
+    var compiler_link_libraries: stdx.ArrayList(*std.Build.Step.Compile) = .fromSlice(b, llvm_artifacts);
+    compiler_link_libraries.appendSlice(lld_artifacts);
+    compiler_link_libraries.append(libsupport);
+
     const libcompiler = b.addLibrary(.{
         .name = "compiler",
         .root_module = stdx.utils.createModule(b, .{
@@ -313,20 +322,16 @@ fn addArtifacts(b: *std.Build, config: struct {
                 b.path(ProjectPaths.compiler.inc),
                 b.path(ProjectPaths.support.inc),
             },
-            .config_headers = &.{config_h},
-            .link_libraries = &.{ libsupport, libstdx },
+            .system_include_paths = compiler_system_includes.wrapped.items,
+            .config_headers = compiler_config_headers.wrapped.items,
+            .link_libraries = compiler_link_libraries.wrapped.items,
             .cxx = .{
                 .files = try stdx.utils.collectFiles(b, ProjectPaths.compiler.src, .{}),
                 .flags = config.cxx_flags,
             },
         }),
     });
-    for (llvm_includes.includes) |inc| libcompiler.root_module.addSystemIncludePath(inc);
-    for (llvm_includes.config_headers) |header| libcompiler.root_module.addConfigHeader(header);
-    for (llvm_artifacts) |artifact| libcompiler.root_module.linkLibrary(artifact);
-    for (lld_includes.includes) |inc| libcompiler.root_module.addSystemIncludePath(inc);
-    for (lld_includes.config_headers) |header| libcompiler.root_module.addConfigHeader(header);
-    for (lld_artifacts) |artifact| libcompiler.root_module.linkLibrary(artifact);
+    libcompiler.root_module.linkLibrary(libstdx);
     if (config.auto_install) b.installArtifact(libcompiler);
     if (config.cdb_steps) |cdb_steps| cdb_steps.append(&libcompiler.step);
 
@@ -424,9 +429,10 @@ fn addArtifacts(b: *std.Build, config: struct {
                 b.path(ProjectPaths.support.inc),
                 b.path(ProjectPaths.compiler.tests),
             },
-            .link_libraries = &.{libcompiler},
-            .config_headers = &.{config_h},
-            .system_include_paths = &.{cli11_inc},
+            .system_include_paths = compiler_system_includes.wrapped.items,
+            .config_headers = compiler_config_headers.wrapped.items,
+            .link_libraries = compiler_link_libraries.wrapped.items,
+            .fail_on_leak = false,
             .executable_config = .{
                 .name = "compiler",
                 .behavior = config.behavior orelse .{
@@ -439,12 +445,7 @@ fn addArtifacts(b: *std.Build, config: struct {
                 },
             },
         });
-        for (llvm_includes.includes) |inc| compiler_tests.root_module.addSystemIncludePath(inc);
-        for (llvm_includes.config_headers) |header| compiler_tests.root_module.addConfigHeader(header);
-        for (llvm_artifacts) |artifact| compiler_tests.root_module.linkLibrary(artifact);
-        for (lld_includes.includes) |inc| compiler_tests.root_module.addSystemIncludePath(inc);
-        for (lld_includes.config_headers) |header| compiler_tests.root_module.addConfigHeader(header);
-        for (lld_artifacts) |artifact| compiler_tests.root_module.linkLibrary(artifact);
+        compiler_tests.root_module.linkLibrary(libcompiler);
 
         const driver_tests = stdx.builders.strappedTest(b, .{
             .target = target,
