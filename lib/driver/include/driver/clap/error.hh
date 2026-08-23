@@ -17,6 +17,7 @@ enum class error : u8 {
     STDIN_LOAD_FAILED,
     INVALID_MODULE_SPEC,
     CONFLICTING_OPTIONS,
+    UNEXPECTED_ERROR,
 };
 
 [[nodiscard]] auto fatal_error(std::ostream& os, std::string message, error code)

@@ -1,6 +1,7 @@
 #include "driver/cmd/build_exe.hh"
 
 #include <filesystem>
+#include <system_error>
 
 #include <fmt/base.h>
 #include <fmt/format.h>
@@ -19,7 +20,8 @@ namespace ghoti::cmd {
 auto build_exe::execute() -> stdx::result<void, clap::error> {
     PROFILE_FUNCTION();
 
-    if (!std::filesystem::exists(opts_.input_path)) {
+    std::error_code ec;
+    if (!std::filesystem::exists(opts_.input_path, ec)) {
         return clap::fatal_error(error_stream_,
                                  fmt::format("file '{}' not found", opts_.input_path.string()),
                                  clap::error::FILE_NOT_FOUND);

@@ -188,6 +188,29 @@ TEST_CASE("build_exe command execution") {
         CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::COMPILATION_FAILED);
     }
 
+    SECTION("Syntax error in a non-first top-level declaration returns COMPILATION_FAILED") {
+        codegen::llvm_scope scope;
+        tempfile            src_file{"test_syntax_error_after_decl.gh"};
+        tempfile            exe_file{"test_syntax_error_after_decl_out"};
+
+        {
+            std::ofstream out{src_file.path};
+            fmt::print(out, R"(
+                const X := 1;
+
+                pub const main := fn(): i32 {{
+                    return 1 +;
+                }};
+            )");
+        }
+
+        cmd::build_exe cmd{{
+            .input_path  = src_file,
+            .output_path = exe_file,
+        }};
+        CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::COMPILATION_FAILED);
+    }
+
     SECTION("build_exe with extra precompiled objects, library search paths, and library flags") {
         codegen::llvm_scope scope;
         tempfile            src_file{"test_exe_extra_opts.gh"};

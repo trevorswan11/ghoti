@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <stdx/iterator.hh>
@@ -40,6 +41,9 @@ class mock_argv {
 
 // Returns the path of the current process' running exe
 [[nodiscard]] auto self_exe_path() -> std::filesystem::path;
+
+// Quotes one argument per Win32's argv-splitting rules (see CommandLineToArgvW)
+[[nodiscard]] auto quote_arg_windows(std::string_view arg) -> std::string;
 
 // Spawns the child and waits for its termination, returning the exit code
 [[nodiscard]] auto spawn_child(const mock_argv& args) -> stdx::option<u32>;

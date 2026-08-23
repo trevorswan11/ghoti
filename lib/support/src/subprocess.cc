@@ -18,6 +18,7 @@
 #if GHOTI_WINDOWS
 #    include <iterator>
 #    include <ranges>
+#    include <string_view>
 
 #    define WIN32_LEAN_AND_MEAN
 #    include <handleapi.h>
@@ -40,6 +41,33 @@
 
 namespace ghoti {
 
+auto quote_arg_windows(std::string_view arg) -> std::string {
+    if (!arg.empty() && arg.find_first_of(" \t\n\v\"") == std::string_view::npos) {
+        return std::string{arg};
+    }
+
+    std::string out{"\""};
+    usize       backslashes{0};
+    for (const char c : arg) {
+        if (c == '\\') {
+            ++backslashes;
+            continue;
+        }
+        if (c == '"') {
+            out.append(backslashes * 2 + 1, '\\');
+            backslashes = 0;
+            out += '"';
+            continue;
+        }
+        out.append(backslashes, '\\');
+        backslashes = 0;
+        out += c;
+    }
+    out.append(backslashes * 2, '\\');
+    out += '"';
+    return out;
+}
+
 auto self_exe_path() -> std::filesystem::path {
     using namespace stdx::size_literals;
     std::array<char, 1_KiB> buffer{};
@@ -60,10 +88,10 @@ auto self_exe_path() -> std::filesystem::path {
 
 auto spawn_child(const mock_argv& args) -> stdx::option<u32> {
 #if GHOTI_WINDOWS
-    auto cmd_line{fmt::format(R"("{}")", args[0])};
+    auto cmd_line{quote_arg_windows(args[0])};
     for (const auto& arg : args | std::views::drop(1)) {
         if (!arg) { break; }
-        fmt::format_to(std::back_inserter(cmd_line), " {}", arg);
+        fmt::format_to(std::back_inserter(cmd_line), " {}", quote_arg_windows(arg));
     }
 
     // I don't think you understand how much I hate working with the windows API

@@ -125,10 +125,19 @@ auto build_options::setup_module_manager(mod::module_manager& manager, std::ostr
                             res.error().get_message().value_or(GHOTI_UNKNOWN_ERROR)),
                 clap::error::COMPILATION_FAILED);
         }
+    } else {
+        // Otherwise this just defers to a confusing "Unknown module 'std'" on first import.
+        return clap::fatal_error(
+            error_stream,
+            fmt::format("could not locate the ghoti standard library; set {} to its std.gh "
+                        "path, or run from within a source checkout",
+                        GHOTI_STDLIB_ENV),
+            clap::error::COMPILATION_FAILED);
     }
 
     for (const auto& mod : modules) {
-        if (!std::filesystem::exists(mod.path)) {
+        std::error_code ec;
+        if (!std::filesystem::exists(mod.path, ec)) {
             return clap::fatal_error(
                 error_stream,
                 fmt::format("module '{}' root path '{}' not found", mod.name, mod.path.string()),
