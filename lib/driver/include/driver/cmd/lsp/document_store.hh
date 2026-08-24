@@ -24,8 +24,8 @@
 namespace ghoti::lsp {
 
 enum class document_sync_kind : i32 {
-    full        = 1,
-    incremental = 2,
+    FULL        = 1,
+    INCREMENTAL = 2,
 };
 
 // Tracks open editor buffers as overlays and re-runs a full analysis pass on every change

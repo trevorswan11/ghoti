@@ -117,7 +117,7 @@ auto lsp_server::handle_message(const nlohmann::json& message, lsp::document_sto
 
 auto lsp_server::handle_initialize(const nlohmann::json& message) -> void {
     const nlohmann::json capabilities{
-        {"textDocumentSync", std::to_underlying(lsp::document_sync_kind::incremental)},
+        {"textDocumentSync", std::to_underlying(lsp::document_sync_kind::INCREMENTAL)},
         {"hoverProvider", true},
         {"definitionProvider", true},
         {"documentSymbolProvider", true},

@@ -1,0 +1,290 @@
+#include <algorithm>
+#include <filesystem>
+#include <iostream>
+#include <string>
+#include <string_view>
+#include <utility>
+
+#include <catch2/catch_test_macros.hpp>
+#include <nlohmann/json.hpp>
+#include <stdx/types.hh>
+
+#include "driver/cmd/lsp/document_store.hh"
+#include "driver/cmd/lsp/rpc.hh"
+#include "support/subprocess.hh"
+#include "support/test.hh"
+
+namespace ghoti::tests {
+
+TEST_CASE("ghoti lsp answers initialize/didOpen/hover/shutdown over a real child process") {
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp"}};
+    REQUIRE(proc.is_running());
+
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"},
+         {"id", 1},
+         {"method", "initialize"},
+         {"params", {{"processId", nullptr}, {"capabilities", nlohmann::json::object()}}}});
+    const auto init_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(init_resp.at("result").at("capabilities").at("hoverProvider").get<bool>());
+    CHECK(init_resp.at("result").at("capabilities").at("textDocumentSync").get<i32>() ==
+          std::to_underlying(lsp::document_sync_kind::INCREMENTAL));
+
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"}, {"method", "initialized"}, {"params", nlohmann::json::object()}});
+
+    constexpr std::string_view uri{"file:///test_e2e.gh"};
+    constexpr std::string_view text{"pub const x := 5;\npub const y := x + 1;\n"};
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"},
+         {"method", "textDocument/didOpen"},
+         {"params",
+          {{"textDocument",
+            {{"uri", uri}, {"languageId", "ghoti"}, {"version", 1}, {"text", text}}}}}});
+    const auto diag_note = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(diag_note.at("method") == "textDocument/publishDiagnostics");
+    CHECK(diag_note.at("params").at("diagnostics").empty());
+
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"},
+         {"id", 2},
+         {"method", "textDocument/hover"},
+         {"params",
+          {{"textDocument", {{"uri", uri}}}, {"position", {{"line", 1}, {"character", 15}}}}}});
+    const auto hover_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(hover_resp.at("result").at("contents").at("value") == "i32");
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "shutdown"}});
+    const auto shutdown_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(shutdown_resp.at("result").is_null());
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+    CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
+}
+
+TEST_CASE("ghoti lsp offers a missing-semicolon quick fix over a real child process") {
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp"}};
+    REQUIRE(proc.is_running());
+
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"},
+         {"id", 1},
+         {"method", "initialize"},
+         {"params", {{"processId", nullptr}, {"capabilities", nlohmann::json::object()}}}});
+    const auto init_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(init_resp.at("result").at("capabilities").at("codeActionProvider").get<bool>());
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"}, {"method", "initialized"}, {"params", nlohmann::json::object()}});
+
+    const std::string uri{"file:///test_e2e_code_action.gh"};
+    const std::string text{"pub const x := 5\n"}; // missing trailing ';'
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"},
+         {"method", "textDocument/didOpen"},
+         {"params",
+          {{"textDocument",
+            {{"uri", uri}, {"languageId", "ghoti"}, {"version", 1}, {"text", text}}}}}});
+    const auto  diag_note = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    const auto& diagnostics{diag_note.at("params").at("diagnostics")};
+    REQUIRE(diagnostics.size() == 1);
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"},
+                        {"id", 2},
+                        {"method", "textDocument/codeAction"},
+                        {"params",
+                         {{"textDocument", {{"uri", uri}}},
+                          {"range", diagnostics[0].at("range")},
+                          {"context", {{"diagnostics", diagnostics}}}}}});
+    const auto  action_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    const auto& actions{action_resp.at("result")};
+    REQUIRE(actions.size() == 1);
+    CHECK(actions[0].at("title") == "Insert missing ';'");
+    const auto& edits{actions[0].at("edit").at("changes").at(uri)};
+    CHECK(edits[0].at("newText") == ";");
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "shutdown"}});
+    const auto shutdown_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(shutdown_resp.at("result").is_null());
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+
+    const auto exit_code = UNWRAP(proc.close_stdin_and_wait());
+    CHECK(exit_code == 0);
+}
+
+TEST_CASE("ghoti lsp applies an incremental didChange edit and re-analyzes it") {
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp"}};
+    REQUIRE(proc.is_running());
+
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"},
+         {"id", 1},
+         {"method", "initialize"},
+         {"params", {{"processId", nullptr}, {"capabilities", nlohmann::json::object()}}}});
+    const auto init_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(init_resp.contains("result"));
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"}, {"method", "initialized"}, {"params", nlohmann::json::object()}});
+
+    const std::string uri{"file:///test_e2e_incremental.gh"};
+    const std::string text{"pub const x := 5;\npub const y := x + 1;\n"};
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"},
+         {"method", "textDocument/didOpen"},
+         {"params",
+          {{"textDocument",
+            {{"uri", uri}, {"languageId", "ghoti"}, {"version", 1}, {"text", text}}}}}});
+    const auto initial_diag = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(initial_diag.at("params").at("diagnostics").empty());
+
+    // A zero-width range past the current end of the document appends new text there
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"},
+                        {"method", "textDocument/didChange"},
+                        {"params",
+                         {{"textDocument", {{"uri", uri}, {"version", 2}}},
+                          {"contentChanges",
+                           {{{"range",
+                              {{"start", {{"line", 2}, {"character", 0}}},
+                               {"end", {{"line", 2}, {"character", 0}}}}},
+                             {"text", "pub const z := 99;\n"}}}}}}});
+    const auto edited_diag = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(edited_diag.at("params").at("diagnostics").empty());
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"},
+                        {"id", 2},
+                        {"method", "textDocument/documentSymbol"},
+                        {"params", {{"textDocument", {{"uri", uri}}}}}});
+    const auto  symbols_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    const auto& symbols{symbols_resp.at("result")};
+    CHECK(lsp::has_field(symbols, "name", "z"));
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "shutdown"}});
+    const auto shutdown_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(shutdown_resp.at("result").is_null());
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+
+    const auto exit_code = UNWRAP(proc.close_stdin_and_wait());
+    CHECK(exit_code == 0);
+}
+
+TEST_CASE("ghoti lsp reports both a syntax error and a sema error in the same file") {
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp"}};
+    REQUIRE(proc.is_running());
+
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"},
+         {"id", 1},
+         {"method", "initialize"},
+         {"params", {{"processId", nullptr}, {"capabilities", nlohmann::json::object()}}}});
+    const auto init_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(init_resp.contains("result"));
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"}, {"method", "initialized"}, {"params", nlohmann::json::object()}});
+
+    constexpr std::string_view uri{"file:///test_e2e_mixed_errors.gh"};
+    constexpr std::string_view text{"pub const x := 5;\n"
+                                    "pub const y := undeclared_thing;\n"
+                                    "pub const broken := 1\n"};
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"},
+         {"method", "textDocument/didOpen"},
+         {"params",
+          {{"textDocument",
+            {{"uri", uri}, {"languageId", "ghoti"}, {"version", 1}, {"text", text}}}}}});
+    const auto  diag_note = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    const auto& diagnostics{diag_note.at("params").at("diagnostics")};
+    REQUIRE(diagnostics.size() == 2);
+    const auto has_code = [&](std::string_view code) {
+        return std::ranges::any_of(diagnostics, [&](const auto& d) {
+            return d.at("code").template get<std::string>() == code;
+        });
+    };
+    CHECK(has_code("UNEXPECTED_TOKEN"));      // the missing semicolon
+    CHECK(has_code("UNDECLARED_IDENTIFIER")); // the reference to `undeclared_thing`
+
+    // hover on the first `x` still resolves, proving sema actually ran despite the syntax error
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"},
+         {"id", 2},
+         {"method", "textDocument/hover"},
+         {"params",
+          {{"textDocument", {{"uri", uri}}}, {"position", {{"line", 0}, {"character", 10}}}}}});
+    const auto hover_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(hover_resp.at("result").at("contents").at("value") == "i32");
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "shutdown"}});
+    const auto shutdown_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(shutdown_resp.at("result").is_null());
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+    CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
+}
+
+TEST_CASE("ghoti lsp answers workspace/symbol over a real child process") {
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp"}};
+    REQUIRE(proc.is_running());
+
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"},
+         {"id", 1},
+         {"method", "initialize"},
+         {"params", {{"processId", nullptr}, {"capabilities", nlohmann::json::object()}}}});
+    const auto init_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(init_resp.at("result").at("capabilities").at("workspaceSymbolProvider").get<bool>());
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"}, {"method", "initialized"}, {"params", nlohmann::json::object()}});
+
+    const std::string uri{"file:///test_e2e_workspace_symbol.gh"};
+    const std::string text{"pub const findable_thing := 1;\npub const other := 2;\n"};
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"},
+         {"method", "textDocument/didOpen"},
+         {"params",
+          {{"textDocument",
+            {{"uri", uri}, {"languageId", "ghoti"}, {"version", 1}, {"text", text}}}}}});
+    const auto diag_note = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(diag_note.at("params").at("diagnostics").empty());
+    // The server normalizes the URI to an absolute form
+    const auto canonical_uri = diag_note.at("params").at("uri").get<std::string>();
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"},
+                        {"id", 2},
+                        {"method", "workspace/symbol"},
+                        {"params", {{"query", "findable"}}}});
+    const auto  symbol_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    const auto& symbols{symbol_resp.at("result")};
+    REQUIRE(symbols.size() == 1);
+    CHECK(symbols[0].at("name") == "findable_thing");
+    CHECK(symbols[0].at("location").at("uri") == canonical_uri);
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "shutdown"}});
+    const auto shutdown_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(shutdown_resp.at("result").is_null());
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+    CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
+}
+
+} // namespace ghoti::tests
