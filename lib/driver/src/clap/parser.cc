@@ -27,6 +27,7 @@
 #include "driver/cmd/build_options.hh"
 #include "driver/cmd/command.hh"
 #include "driver/cmd/format.hh"
+#include "driver/cmd/lsp/lsp.hh"
 #include "driver/cmd/repl.hh"
 #include "ghoti/config.h"
 
@@ -48,6 +49,7 @@ auto parser::parse() -> stdx::result<stdx::box<cmd::command>, error> {
     app_.require_subcommand(1);
 
     const auto repl_cmd{setup_repl_subcmd()};
+    const auto lsp_cmd{setup_lsp_subcmd()};
     const auto build_obj_cmd{setup_build_obj_subcmd()};
     const auto build_exe_cmd{setup_build_exe_subcmd()};
     const auto build_lib_cmd{setup_build_lib_subcmd()};
@@ -64,6 +66,7 @@ auto parser::parse() -> stdx::result<stdx::box<cmd::command>, error> {
     } catch (const CLI::ParseError& e) { return stdx::err{static_cast<error>(app_.exit(e))}; };
 
     if (repl_cmd->parsed()) { return stdx::make_box<cmd::repl>(error_stream_); }
+    if (lsp_cmd->parsed()) { return stdx::make_box<cmd::lsp_server>(error_stream_); }
 
     if (build_obj_cmd->parsed()) {
         auto opts{TRY(cmd::build_options::process_raw(
@@ -94,6 +97,10 @@ auto parser::parse() -> stdx::result<stdx::box<cmd::command>, error> {
 
 auto parser::setup_repl_subcmd() -> gsl::not_null<CLI::App*> {
     return app_.add_subcommand("repl", "Run the ghoti REPL");
+}
+
+auto parser::setup_lsp_subcmd() -> gsl::not_null<CLI::App*> {
+    return app_.add_subcommand("lsp", "Run the ghoti language server over stdio");
 }
 
 auto parser::setup_build_obj_subcmd() -> gsl::not_null<CLI::App*> {

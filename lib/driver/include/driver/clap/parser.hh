@@ -29,6 +29,7 @@ class parser {
 
   private:
     [[nodiscard]] auto setup_repl_subcmd() -> gsl::not_null<CLI::App*>;
+    [[nodiscard]] auto setup_lsp_subcmd() -> gsl::not_null<CLI::App*>;
     [[nodiscard]] auto setup_build_obj_subcmd() -> gsl::not_null<CLI::App*>;
     [[nodiscard]] auto setup_build_exe_subcmd() -> gsl::not_null<CLI::App*>;
     [[nodiscard]] auto setup_build_lib_subcmd() -> gsl::not_null<CLI::App*>;
