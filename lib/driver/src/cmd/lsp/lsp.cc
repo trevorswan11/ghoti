@@ -14,10 +14,13 @@
 #include <stdx/types.hh>
 
 #include "driver/clap/error.hh"
+#include "driver/cmd/lsp/diagnostics.hh"
 #include "driver/cmd/lsp/document_store.hh"
+#include "driver/cmd/lsp/position_index.hh"
 #include "driver/cmd/lsp/rpc.hh"
 #include "driver/platform/win32.hh"
 #include "ghoti/config.h"
+#include "support/diagnostic.hh"
 #include "support/path_utils.hh"
 
 namespace ghoti::cmd {
@@ -37,6 +40,14 @@ auto make_error_response(const nlohmann::json& id, i32 code, std::string_view me
 
 auto make_notification(std::string_view method, nlohmann::json params) -> nlohmann::json {
     return {{"jsonrpc", "2.0"}, {"method", method}, {"params", std::move(params)}};
+}
+
+auto position_from(const nlohmann::json& position) -> source_location {
+    return {position.at("line").get<usize>(), position.at("character").get<usize>()};
+}
+
+auto write_null_id(const nlohmann::json& message) -> void {
+    lsp::write_message(std::cout, make_response(message.at("id"), nullptr));
 }
 
 } // namespace
@@ -76,6 +87,10 @@ auto lsp_server::handle_message(const nlohmann::json& message, lsp::document_sto
         handle_did_change(message, store);
     } else if (method == "textDocument/didClose") {
         handle_did_close(message, store);
+    } else if (method == "textDocument/hover") {
+        handle_hover(message, store);
+    } else if (method == "textDocument/definition") {
+        handle_definition(message, store);
     } else if (message.contains("id")) {
         lsp::write_message(
             std::cout, make_error_response(message["id"], METHOD_NOT_FOUND, "method not found"));
@@ -84,7 +99,11 @@ auto lsp_server::handle_message(const nlohmann::json& message, lsp::document_sto
 }
 
 auto lsp_server::handle_initialize(const nlohmann::json& message) -> void {
-    const nlohmann::json capabilities{{"textDocumentSync", 1}}; // TextDocumentSyncKind.Full
+    const nlohmann::json capabilities{
+        {"textDocumentSync", 1}, // TextDocumentSyncKind.Full
+        {"hoverProvider", true},
+        {"definitionProvider", true},
+    };
     const nlohmann::json server_info{{"name", "ghoti"}, {"version", GHOTI_VERSION_STR}};
     lsp::write_message(
         std::cout,
@@ -94,7 +113,7 @@ auto lsp_server::handle_initialize(const nlohmann::json& message) -> void {
 
 auto lsp_server::handle_shutdown(const nlohmann::json& message) -> void {
     shutdown_received_ = true;
-    lsp::write_message(std::cout, make_response(message.at("id"), nullptr));
+    write_null_id(message);
 }
 
 auto lsp_server::handle_did_open(const nlohmann::json& message, lsp::document_store& store)
@@ -128,6 +147,53 @@ auto lsp_server::handle_did_close(const nlohmann::json& message, lsp::document_s
     -> void {
     const auto uri{message.at("params").at("textDocument").at("uri").get<std::string>()};
     if (const auto path{path_utils::uri_to_path(uri)}) { store.close(*path); }
+}
+
+auto lsp_server::handle_hover(const nlohmann::json& message, lsp::document_store& store) -> void {
+    const auto& params{message.at("params")};
+    const auto  path{
+        path_utils::uri_to_path(params.at("textDocument").at("uri").get<std::string>())};
+    if (!path) { return write_null_id(message); }
+
+    const auto target{position_from(params.at("position"))};
+    auto       result{store.analyze(*path)};
+    if (!result) { return write_null_id(message); }
+
+    const auto& entry_module{*result->second};
+    const auto  id{lsp::identifier_at(entry_module, target)};
+    if (!id) { return write_null_id(message); }
+
+    const auto type{entry_module.get_sema_type_opt(*id)};
+    if (!type) { return write_null_id(message); }
+
+    lsp::write_message(
+        std::cout,
+        make_response(message.at("id"),
+                      {{"contents", {{"kind", "plaintext"}, {"value", type->to_string()}}}}));
+}
+
+auto lsp_server::handle_definition(const nlohmann::json& message, lsp::document_store& store)
+    -> void {
+    const auto& params{message.at("params")};
+    const auto  path{
+        path_utils::uri_to_path(params.at("textDocument").at("uri").get<std::string>())};
+    if (!path) { return write_null_id(message); }
+
+    const auto target{position_from(params.at("position"))};
+    auto       result{store.analyze(*path)};
+    if (!result) { return write_null_id(message); }
+
+    const auto& entry_module{*result->second};
+    const auto  id{lsp::identifier_at(entry_module, target)};
+    if (!id) { return write_null_id(message); }
+
+    const auto def_loc{entry_module.get_identifier_definition(*id)};
+    if (!def_loc) { return write_null_id(message); }
+
+    lsp::write_message(std::cout,
+                       make_response(message.at("id"),
+                                     {{"uri", path_utils::path_to_uri(*path)},
+                                      {"range", lsp::range_of(*def_loc)}}));
 }
 
 auto lsp_server::publish_diagnostics(const std::filesystem::path& path,

@@ -10,8 +10,8 @@
 namespace ghoti::tests {
 
 TEST_CASE("uri_to_path rejects non-file schemes") {
-    CHECK_FALSE(path_utils::uri_to_path("https://example.com/foo.gh").has_value());
-    CHECK_FALSE(path_utils::uri_to_path("untitled:Untitled-1").has_value());
+    CHECK_FALSE(path_utils::uri_to_path("https://example.com/foo.gh"));
+    CHECK_FALSE(path_utils::uri_to_path("untitled:Untitled-1"));
 }
 
 TEST_CASE("path_to_uri and uri_to_path round-trip a path with a space") {

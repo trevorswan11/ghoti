@@ -20,16 +20,6 @@ namespace {
     return level.transform([](diagnostic_level l) { return static_cast<i32>(l); });
 }
 
-// Diagnostics only carry a start point today, so end is a same-line one-character placeholder
-// TODO: change diags to carry more data
-[[nodiscard]] [[maybe_unused]] auto range_of(stdx::option<source_location> loc) -> nlohmann::json {
-    const auto start{loc.value_or(source_location{0, 0})};
-    return {
-        {"start", {{"line", start.line}, {"character", start.column}}},
-        {"end", {{"line", start.line}, {"character", start.column + 1}}},
-    };
-}
-
 auto push_diagnostic(nlohmann::json& out, const auto& d) -> void {
     const auto     formattable{d.to_formattable()};
     nlohmann::json entry{
@@ -54,6 +44,14 @@ auto to_lsp_diagnostics(const mod::module& module) -> nlohmann::json {
         },
         [](stdx::monostate) {});
     return out;
+}
+
+auto range_of(stdx::option<source_location> loc) -> nlohmann::json {
+    const auto start{loc.value_or(source_location{0, 0})};
+    return {
+        {"start", {{"line", start.line}, {"character", start.column}}},
+        {"end", {{"line", start.line}, {"character", start.column + 1}}},
+    };
 }
 
 } // namespace ghoti::lsp

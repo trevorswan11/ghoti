@@ -9,8 +9,10 @@
 #include <magic_enum/magic_enum.hpp>
 #include <nlohmann/json.hpp>
 #include <stdx/memory.hh>
+#include <stdx/result.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/module/error.hh"
 #include "driver/cmd/lsp/diagnostics.hh"
 #include "driver/cmd/lsp/session.hh"
 
@@ -26,16 +28,26 @@ auto document_store::update(const std::filesystem::path& path, std::string text)
         return {};
     }
 
-    auto session{stdx::make_box<analysis_session>(loader_, error_stream_)};
-    DISCARD(session->analyze(path));
+    auto result{analyze(path)};
+    if (!result) { return {}; }
 
     touched_modules results;
-    for (const auto& [mod_path, mod] : session->get_manager()) {
+    for (const auto& [mod_path, mod] : result->first->get_manager()) {
         results.emplace_back(mod_path, to_lsp_diagnostics(*mod));
     }
     return results;
 }
 
 auto document_store::close(const std::filesystem::path& path) -> void { loader_.remove(path); }
+
+auto document_store::analyze(const std::filesystem::path& path)
+    -> stdx::result<query_result, mod::diagnostic> {
+    auto session{stdx::make_box<analysis_session>(loader_, error_stream_)};
+    auto module_result{session->analyze(path)};
+    if (!module_result) { return stdx::err{module_result.error()}; }
+
+    const auto entry_module{*module_result};
+    return query_result{std::move(session), entry_module};
+}
 
 } // namespace ghoti::lsp

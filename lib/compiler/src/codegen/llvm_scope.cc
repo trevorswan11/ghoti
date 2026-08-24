@@ -105,7 +105,7 @@ auto llvm_init_warmup() -> void {
                     builder.CreateCall(ghoti_fn, {fn->getArg(1)});
                     builder.CreateRet(builder.getInt32(0));
 
-                    if (auto res{emit_object_file(mod, *tm, obj_p)}; res.has_value()) {
+                    if (emit_object_file(mod, *tm, obj_p)) {
                         DISCARD(link_executable(obj_p, exe_p, opts));
                     }
                 }
