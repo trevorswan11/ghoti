@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <functional>
 #include <string>
@@ -43,5 +44,22 @@ template <typename Value, typename... Entries>
 
 auto to_u8string(std::string_view s) -> std::u8string;
 auto to_utf8(const std::u8string& s) -> std::string;
+
+constexpr auto strip_trailing_cr(std::string& line) -> void {
+    if (!line.empty() && line.back() == '\r') { line.pop_back(); }
+}
+
+[[nodiscard]] constexpr auto contains_ci(std::string_view haystack, std::string_view needle)
+    -> bool {
+    return std::ranges::search(haystack, needle, [](char a, char b) {
+               return stdx::string::to_lower(a) == stdx::string::to_lower(b);
+           }).begin() != haystack.end();
+}
+
+[[nodiscard]] constexpr auto starts_with_ci(std::string_view line, std::string_view prefix)
+    -> bool {
+    return std::ranges::starts_with(
+        line, prefix, {}, stdx::string::to_lower, stdx::string::to_lower);
+}
 
 } // namespace ghoti::string_utils

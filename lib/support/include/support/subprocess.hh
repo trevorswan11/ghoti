@@ -1,15 +1,19 @@
 #pragma once
 
 #include <filesystem>
+#include <istream>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include <stdx/iterator.hh>
+#include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/string.hh>
 #include <stdx/type_traits.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 namespace ghoti {
 
@@ -47,5 +51,31 @@ class mock_argv {
 
 // Spawns the child and waits for its termination, returning the exit code
 [[nodiscard]] auto spawn_child(const mock_argv& args) -> stdx::option<u32>;
+
+// A child process with its stdin/stdout piped through streams and stderr inherited
+class piped_process {
+  public:
+    explicit piped_process(const mock_argv& args);
+    ~piped_process();
+    MAKE_MOVE_ONLY(piped_process)
+
+    [[nodiscard]] auto is_running() const noexcept -> bool;
+
+    // Write end of the child's stdin
+    [[nodiscard]] auto stdin_stream() noexcept -> std::ostream&;
+    // Read end of the child's stdout
+    [[nodiscard]] auto stdout_stream() noexcept -> std::istream&;
+    // Read end of the child's stderr
+    [[nodiscard]] auto stderr_stream() noexcept -> std::istream&;
+
+    // Closes the child's stdin, then blocks until it exits, returning its exit code
+    [[nodiscard]] auto close_stdin_and_wait() -> stdx::option<u32>;
+
+  private:
+    struct impl;
+
+  private:
+    stdx::box<impl> impl_;
+};
 
 } // namespace ghoti
