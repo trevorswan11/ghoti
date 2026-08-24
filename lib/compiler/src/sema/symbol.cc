@@ -55,10 +55,54 @@ namespace {
         });
 }
 
+template <typename Handle>
+[[nodiscard]] auto span_of(const mod::module& module, Handle handle) noexcept -> source_span {
+    return {module.ast.location_of(handle), module.ast.end_location_of(handle)};
+}
+
+[[nodiscard]] auto symbol_span_of(const mod::module&    module,
+                                  const symbol::data_t& data) noexcept -> source_span {
+    PROFILE_FUNCTION();
+    return data.visit(
+        [](const symbols::builtin&) -> source_span { return {}; },
+        [&module](const symbols::node_t& node) -> source_span {
+            if (const auto decl{module.ast.get_as_opt<ast::decl_stmt>(node)}) {
+                return span_of(module, decl->name);
+            }
+            return span_of(module, node);
+        },
+        [&module](const auto& handle) -> source_span { return span_of(module, handle); },
+        [&module](const symbols::label& label) -> source_span {
+            return span_of(module, label.get_definition());
+        },
+        [&module](const symbols::struct_field& inner) -> source_span {
+            return span_of(module, inner.name);
+        },
+        [&module](const symbols::union_field& inner) -> source_span {
+            return span_of(module, inner.name);
+        },
+        [&module](const symbols::enumeration& inner) -> source_span {
+            return span_of(module, inner.name);
+        },
+        [&module](const symbols::self_parameter& inner) -> source_span {
+            return span_of(module, inner.name);
+        },
+        [&module](const symbols::parameter& inner) -> source_span {
+            return span_of(module, inner.name);
+        },
+        [&module](const symbols::for_loop_capture& inner) -> source_span {
+            return span_of(module, inner.payload);
+        });
+}
+
 } // namespace
 
 auto symbol::get_symbol_location(const mod::module& module) const noexcept -> source_location {
     return symbol_location_of(module, data_);
+}
+
+auto symbol::get_symbol_span(const mod::module& module) const noexcept -> source_span {
+    return symbol_span_of(module, data_);
 }
 
 auto symbol::is_public(const mod::module& module) const noexcept -> bool {

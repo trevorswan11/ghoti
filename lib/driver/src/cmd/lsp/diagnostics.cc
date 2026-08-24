@@ -54,4 +54,11 @@ auto range_of(stdx::option<source_location> loc) -> nlohmann::json {
     };
 }
 
+auto range_of(source_span span) -> nlohmann::json {
+    return {
+        {"start", {{"line", span.start.line}, {"character", span.start.column}}},
+        {"end", {{"line", span.end.line}, {"character", span.end.column}}},
+    };
+}
+
 } // namespace ghoti::lsp

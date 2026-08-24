@@ -1233,7 +1233,7 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
     }
 
     // Record where this reference resolves to, for LSP go-to-definition
-    resolving_.set_identifier_definition(id, lookup->symbol.get_symbol_location(resolving_));
+    resolving_.set_identifier_definition(id, lookup->symbol.get_symbol_span(resolving_));
     if constexpr (std::same_as<ID, ast::node_id>) { resolving_.add_identifier_reference(id); }
 
     // Belongs to an enclosing function's stack frame rather than the module/prelude scope

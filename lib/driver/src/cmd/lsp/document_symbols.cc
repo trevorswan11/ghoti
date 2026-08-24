@@ -9,6 +9,7 @@
 #include "compiler/ast/statement.hh"
 #include "compiler/module/module.hh"
 #include "driver/cmd/lsp/diagnostics.hh"
+#include "support/diagnostic.hh"
 
 namespace ghoti::lsp {
 
@@ -45,13 +46,15 @@ auto document_symbols(const mod::module& module) -> nlohmann::json {
         if (!decl) { continue; }
         const auto& name_ident{module.ast.get_as<ast::identifier_expr>(decl->name)};
 
-        // Only the name's own point is tracked; both fields share it until real spans exist
-        const auto selection_range = range_of(module.ast.location_of(decl->name));
+        const source_span full_span{module.ast.location_of(root_id),
+                                    module.ast.end_location_of(root_id)};
+        const source_span name_span{module.ast.location_of(decl->name),
+                                    module.ast.end_location_of(decl->name)};
         out.push_back({
             {"name", std::string{name_ident.name}},
             {"kind", symbol_kind_of(module, *decl)},
-            {"range", selection_range},
-            {"selectionRange", selection_range},
+            {"range", range_of(full_span)},
+            {"selectionRange", range_of(name_span)},
         });
     }
     return out;

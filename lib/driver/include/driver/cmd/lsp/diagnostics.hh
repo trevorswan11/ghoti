@@ -15,4 +15,7 @@ namespace ghoti::lsp {
 // TODO: change diags to carry more data
 [[nodiscard]] auto range_of(stdx::option<source_location> loc) -> nlohmann::json;
 
+// A real [start, end) range, for callers that have one
+[[nodiscard]] auto range_of(source_span span) -> nlohmann::json;
+
 } // namespace ghoti::lsp

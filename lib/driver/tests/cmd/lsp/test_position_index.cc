@@ -34,10 +34,12 @@ TEST_CASE("identifier_at finds a reference and its declaration through the side 
     const auto& type{UNWRAP(module->get_sema_type_opt(id))};
     CHECK(type.to_string() == "i32");
 
-    // get_symbol_location resolves to the declaring statement's start token
-    const auto def_loc{UNWRAP(module->get_identifier_definition(id))};
-    CHECK(def_loc.line == 0);
-    CHECK(def_loc.column == 0);
+    // get_symbol_span resolves to the declared name itself, not the whole `pub const` statement
+    const auto def_span{UNWRAP(module->get_identifier_definition(id))};
+    CHECK(def_span.start.line == 0);
+    CHECK(def_span.start.column == 10);
+    CHECK(def_span.end.line == 0);
+    CHECK(def_span.end.column == 11);
 }
 
 TEST_CASE("identifier_at returns none off the end of an identifier and off any identifier") {

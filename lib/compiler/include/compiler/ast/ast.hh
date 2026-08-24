@@ -20,16 +20,22 @@ namespace ghoti::ast {
 template <IndexableID ID, typename Data> struct data_pool_base {
     std::vector<Data>            pool;
     std::vector<source_location> locations;
+    std::vector<source_location> end_locations;
 
     constexpr auto clear() noexcept -> void {
         pool.clear();
         locations.clear();
+        end_locations.clear();
     }
 
-    constexpr auto emplace_back(const syntax::token_t& start_token, Data&& data) -> u64 {
+    // `end_token` is the last token consumed while parsing this node
+    constexpr auto emplace_back(const syntax::token_t& start_token,
+                                const syntax::token_t& end_token,
+                                Data&&                 data) -> u64 {
         const u64 index{pool.size()};
         pool.emplace_back(std::forward<Data>(data));
         locations.emplace_back(source_info<syntax::token_t>::get(start_token));
+        end_locations.emplace_back(end_token.line, end_token.column + end_token.slice.size());
         return index;
     }
 };
@@ -67,19 +73,22 @@ class AST {
     }
 
     template <NodeData Data>
-    [[nodiscard]] constexpr auto add_node(const syntax::token_t& start_token, Data&& data)
-        -> node_id {
+    [[nodiscard]] constexpr auto add_node(const syntax::token_t& start_token,
+                                          const syntax::token_t& end_token,
+                                          Data&&                 data) -> node_id {
         constexpr auto kind{node_kind_of<Data>::value()};
-        const auto     index{nodes_.emplace_back(start_token, std::forward<Data>(data))};
+        const auto     index{nodes_.emplace_back(start_token, end_token, std::forward<Data>(data))};
         return node_id{kind, start_token.type, index};
     }
 
     template <ExplicitTypeData Data>
     [[nodiscard]] constexpr auto add_type(const syntax::token_t& start_token,
+                                          const syntax::token_t& end_token,
                                           type_modifier          mod,
                                           Data&&                 data) -> explicit_type_id {
         constexpr auto kind{explicit_type_kind_of<Data>::value()};
-        const auto     index{explicit_types_.emplace_back(start_token, std::forward<Data>(data))};
+        const auto     index{
+            explicit_types_.emplace_back(start_token, end_token, std::forward<Data>(data))};
         return explicit_type_id{kind, mod, start_token.type, index};
     }
 
@@ -90,6 +99,17 @@ class AST {
             return nodes_.locations[id.get_index()];
         } else {
             return explicit_types_.locations[id.get_index()];
+        }
+    }
+
+    // The position just past the node's last token; see `data_pool_base::emplace_back`
+    template <IndexableID ID>
+    [[nodiscard]] constexpr auto end_location_of(ID id) const noexcept -> const source_location& {
+        ASSERT(id.is_valid(), "Attempt to access invalid id");
+        if constexpr (IndexableNodeID<ID>) {
+            return nodes_.end_locations[id.get_index()];
+        } else {
+            return explicit_types_.end_locations[id.get_index()];
         }
     }
 

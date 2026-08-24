@@ -5,6 +5,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <stdx/memory.hh>
+#include <stdx/types.hh>
 
 #include "compiler/module/overlay_loader.hh"
 #include "driver/cmd/lsp/document_symbols.hh"
@@ -24,8 +25,8 @@ constexpr std::string_view source{"pub const X := 5;\n"
 } // namespace
 
 TEST_CASE("document_symbols outlines every top-level declaration with the right kind") {
-    mod::overlay_loader          loader;
-    const std::filesystem::path  path{"test_document_symbols.gh"};
+    mod::overlay_loader         loader;
+    const std::filesystem::path path{"test_document_symbols.gh"};
     CHECK(loader.add(path, std::string{source}));
 
     auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
@@ -50,9 +51,9 @@ TEST_CASE("document_symbols outlines every top-level declaration with the right 
     CHECK(symbols.at(4).at("kind") == 10); // Enum
 }
 
-TEST_CASE("document_symbols selectionRange lands on the name, not the statement start") {
-    mod::overlay_loader          loader;
-    const std::filesystem::path  path{"test_document_symbols_range.gh"};
+TEST_CASE("document_symbols selectionRange lands on the name; range covers the whole statement") {
+    mod::overlay_loader         loader;
+    const std::filesystem::path path{"test_document_symbols_range.gh"};
     CHECK(loader.add(path, "pub const X := 5;\n"));
 
     auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
@@ -60,7 +61,15 @@ TEST_CASE("document_symbols selectionRange lands on the name, not the statement 
 
     const auto symbols = lsp::document_symbols(*module);
     REQUIRE(symbols.size() == 1);
-    CHECK(symbols.at(0).at("selectionRange").at("start").at("character") == 10);
+
+    const auto& selection{symbols.at(0).at("selectionRange")};
+    CHECK(selection.at("start").at("character") == 10);
+    CHECK(selection.at("end").at("character") == 11);
+
+    // The full statement range starts at `pub` and extends past the name
+    const auto& range{symbols.at(0).at("range")};
+    CHECK(range.at("start").at("character") == 0);
+    CHECK(range.at("end").at("character") > selection.at("end").at("character").get<usize>());
 }
 
 } // namespace ghoti::tests

@@ -142,17 +142,19 @@ class parser {
         return add_node<ast::stmt_handle, Data>(start_token, std::forward<Args>(args)...);
     }
 
-    // Adds a node to the ast and casts the result to the requested handle
+    // Adds a node to the ast and casts the result to the requested handle. `current_token_` is
+    // the last token consumed for this node, since callers always add a node as their final step
     template <typename Handle, ast::NodeData Data, typename... Args>
     [[nodiscard]] constexpr auto add_node(const syntax::token_t& start_token, Args&&... args) {
-        return Handle{ast_->add_node(start_token, Data{std::forward<Args>(args)...})};
+        return Handle{
+            ast_->add_node(start_token, current_token_, Data{std::forward<Args>(args)...})};
     }
 
     // Helper for type-ast insertion, reducing a layer of call-site indirection
     template <ast::ExplicitTypeData Data, typename... Args>
     [[nodiscard]] constexpr auto
     add_type(const syntax::token_t& start_token, ast::type_modifier mod, Args&&... args) {
-        return ast_->add_type(start_token, mod, Data{std::forward<Args>(args)...});
+        return ast_->add_type(start_token, current_token_, mod, Data{std::forward<Args>(args)...});
     }
 
   private:

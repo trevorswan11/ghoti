@@ -214,17 +214,16 @@ struct module {
 
     // Records where the identifier at `id` resolved to, for LSP go-to-definition
     template <ast::IndexableID ID>
-    auto set_identifier_definition(ID id, source_location loc) noexcept -> void {
+    auto set_identifier_definition(ID id, source_span span) noexcept -> void {
         if constexpr (ast::IndexableNodeID<ID>) {
-            sema_side_tables.identifier_definitions[id].emplace(loc);
+            sema_side_tables.identifier_definitions[id].emplace(span);
         } else {
-            sema_side_tables.explicit_type_definitions[id].emplace(loc);
+            sema_side_tables.explicit_type_definitions[id].emplace(span);
         }
     }
 
     template <ast::IndexableID ID>
-    [[nodiscard]] auto get_identifier_definition(ID id) const noexcept
-        -> stdx::option<source_location> {
+    [[nodiscard]] auto get_identifier_definition(ID id) const noexcept -> stdx::option<source_span> {
         if constexpr (ast::IndexableNodeID<ID>) {
             return sema_side_tables.identifier_definitions[id];
         } else {

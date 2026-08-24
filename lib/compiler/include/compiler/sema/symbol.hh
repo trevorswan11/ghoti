@@ -125,6 +125,10 @@ class symbol {
     [[nodiscard]] auto get_symbol_location(const mod::module& module) const noexcept
         -> source_location;
 
+    // Like `get_symbol_location`, but a decl_stmt resolves to its declared name's span rather
+    // than the whole statement's; used for LSP go-to-definition/rename ranges
+    [[nodiscard]] auto get_symbol_span(const mod::module& module) const noexcept -> source_span;
+
     // Can only be true for decls, imports, and type aliases
     [[nodiscard]] auto is_public(const mod::module& module) const noexcept -> bool;
 

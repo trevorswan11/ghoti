@@ -34,6 +34,14 @@ struct source_location {
     auto operator==(const source_location&) const noexcept -> bool = default;
 };
 
+// A half-open [start, end) range; `end` is the position just past the last character
+struct source_span {
+    source_location start;
+    source_location end;
+
+    auto operator==(const source_span&) const noexcept -> bool = default;
+};
+
 template <typename T> struct source_info;
 
 template <typename T>
