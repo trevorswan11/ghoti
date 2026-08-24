@@ -31,6 +31,7 @@
 #include "compiler/sema/generic.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/syntax/error.hh"
+#include "support/diagnostic.hh"
 #include "support/source_file.hh"
 
 namespace ghoti::mod {
@@ -61,6 +62,9 @@ struct module {
     stdx::opt_size                                   root_table_idx;
     module_state                                     state{module_state::PARSED};
     std::vector<sema::generic_instantiation_request> generic_instantiations;
+
+    // Used to build the LSP position index without a second, separate AST walk
+    std::vector<ast::node_id> identifier_references;
 
     diagnotic_list_variant diagnostics{stdx::monostate{}};
 
@@ -203,6 +207,29 @@ struct module {
     [[nodiscard]] auto get_captures(ast::node_id function_id) const noexcept
         -> gsl::span<const sema::capture_info> {
         return sema_side_tables.function_captures[function_id];
+    }
+
+    // Records that `id` is a resolved identifier reference, for the LSP position index
+    auto add_identifier_reference(ast::node_id id) -> void { identifier_references.push_back(id); }
+
+    // Records where the identifier at `id` resolved to, for LSP go-to-definition
+    template <ast::IndexableID ID>
+    auto set_identifier_definition(ID id, source_location loc) noexcept -> void {
+        if constexpr (ast::IndexableNodeID<ID>) {
+            sema_side_tables.identifier_definitions[id].emplace(loc);
+        } else {
+            sema_side_tables.explicit_type_definitions[id].emplace(loc);
+        }
+    }
+
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto get_identifier_definition(ID id) const noexcept
+        -> stdx::option<source_location> {
+        if constexpr (ast::IndexableNodeID<ID>) {
+            return sema_side_tables.identifier_definitions[id];
+        } else {
+            return sema_side_tables.explicit_type_definitions[id];
+        }
     }
 };
 

@@ -21,34 +21,6 @@ namespace ghoti::gir {
 
 namespace {
 
-auto format_type(const sema::type& type) -> std::string {
-    return type.get_data().visit(
-        [](sema::types::pointer ptr) { return fmt::format("^{}", format_type(ptr.underlying)); },
-        [](sema::types::reference ref) { return fmt::format("&{}", format_type(ref.underlying)); },
-        [](sema::types::slice slice) { return fmt::format("[]{}", format_type(slice.underlying)); },
-        [](sema::types::array arr) {
-            return fmt::format("[{}]{}", arr.len, format_type(arr.underlying));
-        },
-        [](sema::types::function fn) {
-            auto params_str{
-                fmt::to_string(fmt::join(fn.params | std::views::transform([](sema::type* param) {
-                                             return format_type(*param);
-                                         }),
-                                         ", "))};
-            if (fn.is_variadic) {
-                if (!params_str.empty()) {
-                    params_str += ", ...";
-                } else {
-                    params_str = "...";
-                }
-            }
-            return fmt::format("fn({}) -> {}", params_str, format_type(fn.return_type));
-        },
-        [&type](const auto&) {
-            return std::string{sema::type_kind_display_name(type.get_kind())};
-        });
-}
-
 auto format_value(const value& val) -> std::string {
     return val.data.visit(
         [](local_id loc) {
@@ -61,7 +33,7 @@ auto format_value(const value& val) -> std::string {
             }
         },
         [](const std::string& str) { return fmt::format("\"{}\"", str); },
-        [](stdx::option<sema::type&> t) { return t ? format_type(*t) : "<null_type>"; },
+        [](stdx::option<sema::type&> t) { return t ? t->to_string() : "<null_type>"; },
         [](void_val) { return "void"; },
         [](undefined_val) { return "undefined"; },
         [](nullptr_val) { return "nullptr"; },
@@ -69,7 +41,7 @@ auto format_value(const value& val) -> std::string {
 }
 
 auto format_instruction(const instruction& inst) -> std::string {
-    const auto type_str = inst.type ? format_type(*inst.type) : "";
+    const auto type_str = inst.type ? inst.type->to_string() : "";
     const auto prefix   = inst.result ? fmt::format("%{} = ", inst.result->get_index()) : "";
 
     switch (inst.kind) {
@@ -180,14 +152,14 @@ auto dumper::dump(const function& fn) -> void {
     } else {
         std::string return_str;
         if (const auto fn_type{fn.get_type().get_data().as_opt<sema::types::function>()}) {
-            return_str = format_type(fn_type->return_type);
+            return_str = fn_type->return_type.to_string();
         } else {
-            return_str = format_type(fn.get_type());
+            return_str = fn.get_type().to_string();
         }
 
         auto params_str{fmt::to_string(
             fmt::join(fn.get_params() | std::views::transform([](const parameter* p) {
-                          return fmt::format("{}: {}", p->name, format_type(p->type));
+                          return fmt::format("{}: {}", p->name, p->type.to_string());
                       }),
                       ", "))};
         if (fn.get_is_variadic()) {
@@ -206,7 +178,7 @@ auto dumper::dump(const function& fn) -> void {
 
 auto dumper::dump(const module& mod) -> void {
     for (const auto& type_decl : mod.get_types()) {
-        fmt::println(out_, "type {} = {}", type_decl->name, format_type(type_decl->type));
+        fmt::println(out_, "type {} = {}", type_decl->name, type_decl->type.to_string());
     }
 
     for (const auto& global : mod.get_globals()) {
@@ -216,10 +188,10 @@ auto dumper::dump(const module& mod) -> void {
                          "{} {}: {} = {}",
                          kw,
                          global->name,
-                         format_type(global->type),
+                         global->type.to_string(),
                          format_value(*global->init_value));
         } else {
-            fmt::println(out_, "{} {}: {}", kw, global->name, format_type(global->type));
+            fmt::println(out_, "{} {}: {}", kw, global->name, global->type.to_string());
         }
     }
 

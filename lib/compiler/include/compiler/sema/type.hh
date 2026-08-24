@@ -1,6 +1,7 @@
 #pragma once
 
 #include <concepts>
+#include <string>
 #include <string_view>
 
 #include <ankerl/unordered_dense.h>
@@ -384,6 +385,9 @@ class type {
     MAKE_DEDUCING_GETTER(data)
 
     [[nodiscard]] auto get_kind() const noexcept -> type_kind { return key_.get_kind(); }
+
+    // Renders a human-readable form, e.g. "^i32", "[]u8", "fn(i32, ...) -> bool"
+    [[nodiscard]] auto to_string() const -> std::string;
 
     // Intended for use on pass 1 only
     constexpr auto set_symbol_table_idx(usize idx) noexcept -> void {

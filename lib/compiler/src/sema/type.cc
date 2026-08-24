@@ -1,9 +1,12 @@
 #include "compiler/sema/type.hh"
 
 #include <ranges>
+#include <string>
 #include <string_view>
 #include <utility>
 
+#include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <gsl/pointers>
 #include <gsl/span>
 #include <magic_enum/magic_enum.hpp>
@@ -33,6 +36,27 @@ constexpr auto TYPE_KIND_NAMES{[] {
 
 auto type_kind_display_name(type_kind kind) noexcept -> std::string_view {
     return TYPE_KIND_NAMES[kind];
+}
+
+auto type::to_string() const -> std::string {
+    return data_.visit(
+        [](types::pointer ptr) { return fmt::format("^{}", ptr.underlying.to_string()); },
+        [](types::reference ref) { return fmt::format("&{}", ref.underlying.to_string()); },
+        [](types::slice slice) { return fmt::format("[]{}", slice.underlying.to_string()); },
+        [](types::array arr) {
+            return fmt::format("[{}]{}", arr.len, arr.underlying.to_string());
+        },
+        [](types::function fn) {
+            auto params_str{fmt::to_string(
+                fmt::join(fn.params | std::views::transform(
+                                          [](type* param) { return param->to_string(); }),
+                          ", "))};
+            if (fn.is_variadic) {
+                params_str += params_str.empty() ? "..." : ", ...";
+            }
+            return fmt::format("fn({}) -> {}", params_str, fn.return_type.to_string());
+        },
+        [this](const auto&) { return std::string{type_kind_display_name(get_kind())}; });
 }
 
 auto type_pool::get_or_emplace(const types::key_t& key) -> gsl::not_null<type*> {

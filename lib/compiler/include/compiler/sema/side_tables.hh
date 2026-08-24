@@ -12,6 +12,7 @@
 #include "compiler/ast/ast.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/ast/traits.hh"
+#include "support/diagnostic.hh"
 
 namespace ghoti::sema {
 
@@ -60,6 +61,13 @@ struct side_tables {
     // function_expr node id to the free variables it implicitly captures, see `capture_list`
     detail::side_table<ast::node_id, capture_list> function_captures;
 
+    // Used for LSP go-to-definition
+    detail::side_table<ast::node_id, stdx::option<source_location>> identifier_definitions;
+
+    // Same as `identifier_definitions`, but for identifiers used as explicit type annotations
+    detail::side_table<ast::explicit_type_id, stdx::option<source_location>>
+        explicit_type_definitions;
+
     // Allocates `size` slots in all backing vectors
     constexpr auto resize(const ast::AST::data_pool_sizes& sizes) -> void {
         node_types.values.resize(sizes.nodes_size);
@@ -67,6 +75,8 @@ struct side_tables {
         match_arm_types.values.resize(sizes.nodes_size);
         generic_call_targets.values.resize(sizes.nodes_size);
         function_captures.values.resize(sizes.nodes_size);
+        identifier_definitions.values.resize(sizes.nodes_size);
+        explicit_type_definitions.values.resize(sizes.types_size);
     }
 };
 

@@ -1,6 +1,7 @@
 #include "compiler/sema/passes/type_resolver.hh"
 
 #include <algorithm>
+#include <concepts>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -1230,6 +1231,10 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
                              error::UNDECLARED_IDENTIFIER,
                              resolving_.ast.location_of(id)));
     }
+
+    // Record where this reference resolves to, for LSP go-to-definition
+    resolving_.set_identifier_definition(id, lookup->symbol.get_symbol_location(resolving_));
+    if constexpr (std::same_as<ID, ast::node_id>) { resolving_.add_identifier_reference(id); }
 
     // Belongs to an enclosing function's stack frame rather than the module/prelude scope
     if (!function_boundaries_.empty() && lookup->depth < function_boundaries_.back() &&
