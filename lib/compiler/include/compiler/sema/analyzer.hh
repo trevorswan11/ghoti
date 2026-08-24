@@ -45,8 +45,10 @@ class analyzer {
     explicit analyzer(mod::module_manager&    modules,
                       std::ostream&           error_stream,
                       stdx::option<bool>      in_terminal,
-                      codegen::target_options target_opts = {}) noexcept
+                      codegen::target_options target_opts          = {},
+                      bool                    tolerate_syntax_errors = false) noexcept
         : modules_{modules}, pool_{arena_}, error_stream_{error_stream}, in_terminal_{in_terminal},
+          tolerate_syntax_errors_{tolerate_syntax_errors},
           ctx_{modules_,
                registry_,
                pool_,
@@ -165,6 +167,7 @@ class analyzer {
     generic_instantiation_cache instantiation_cache_;
     std::ostream&               error_stream_;
     stdx::option<bool>          in_terminal_;
+    bool                        tolerate_syntax_errors_;
 
     context ctx_;
 };

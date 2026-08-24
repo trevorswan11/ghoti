@@ -102,6 +102,13 @@ auto format_diagnostic(std::ostream&                    os,
 
 } // namespace detail
 
+struct diagnostic_snapshot {
+    std::string                   message;
+    stdx::option<source_location> location;
+    std::string                   error_name;
+    diagnostic_level              level;
+};
+
 template <stdx::ScopedEnum E> class diagnostic {
   public:
     explicit diagnostic(E err) noexcept : error_{err} {}
@@ -144,6 +151,14 @@ template <stdx::ScopedEnum E> class diagnostic {
     MAKE_GETTER(error, E)
     [[nodiscard]] auto to_formattable() const noexcept -> detail::formattable_diagnostic {
         return {message_, loc_, magic_enum::enum_name(error_), level_};
+    }
+
+    // An owning copy, for callers that need this diagnostic's content to outlive its list
+    [[nodiscard]] auto snapshot() const -> diagnostic_snapshot {
+        return {message_.value_or(std::string{magic_enum::enum_name(error_)}),
+               loc_,
+               std::string{magic_enum::enum_name(error_)},
+               level_.value_or(diagnostic_level::ERROR)};
     }
 
     // Diagnostics are always ERROR by default, see `unset_level`

@@ -57,6 +57,11 @@ auto analyzer::analyze(const std::filesystem::path& entry_path) -> stdx::result<
     auto module{*module_result};
     if (module->diagnostics.is<syntax::diagnostics>()) { module->print_diagnostics(error_stream_); }
 
+    // A lenient analyzer still runs sema over whatever parsed
+    if (module->is_errored() && tolerate_syntax_errors_) {
+        module->state = mod::module_state::PARSED;
+    }
+
     // An errored module's AST is incomplete/inconsistent; it can't proceed past this point.
     if (module->is_errored()) { return {}; }
 

@@ -68,6 +68,9 @@ struct module {
 
     diagnotic_list_variant diagnostics{stdx::monostate{}};
 
+    // A permanent copy of the syntax diagnostics found at parse time, if any
+    std::vector<diagnostic_snapshot> parse_diagnostics;
+
     module(std::filesystem::path path,
            std::filesystem::path parent_path,
            source_file           source) noexcept :path{std::move(path)},
