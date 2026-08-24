@@ -202,8 +202,8 @@ auto lsp_server::handle_definition(const nlohmann::json& message, lsp::document_
 
 auto lsp_server::handle_document_symbol(const nlohmann::json& message, lsp::document_store& store)
     -> void {
-    const auto path{
-        path_utils::uri_to_path(message.at("params").at("textDocument").at("uri").get<std::string>())};
+    const auto path{path_utils::uri_to_path(
+        message.at("params").at("textDocument").at("uri").get<std::string>())};
     if (!path) { return write_null_id(message); }
 
     auto result{store.analyze(*path)};

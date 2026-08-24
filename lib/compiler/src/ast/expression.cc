@@ -552,9 +552,10 @@ template <NodeData Expr>
             static_cast<syntax::bind_precedence>(std::to_underlying(current_precedence) - 1);
     }
 
+    const auto lhs_start{parser.get_location_of(*lhs)};
     parser.advance();
     const auto rhs{TRY(parser.parse_expression(current_precedence))};
-    return parser.add_expr<Expr>(op_token, lhs, rhs);
+    return parser.add_expr<Expr>(lhs_start, op_token, lhs, rhs);
 }
 
 } // namespace

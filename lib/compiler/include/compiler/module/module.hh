@@ -223,7 +223,8 @@ struct module {
     }
 
     template <ast::IndexableID ID>
-    [[nodiscard]] auto get_identifier_definition(ID id) const noexcept -> stdx::option<source_span> {
+    [[nodiscard]] auto get_identifier_definition(ID id) const noexcept
+        -> stdx::option<source_span> {
         if constexpr (ast::IndexableNodeID<ID>) {
             return sema_side_tables.identifier_definitions[id];
         } else {

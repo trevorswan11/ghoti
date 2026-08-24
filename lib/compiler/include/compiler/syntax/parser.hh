@@ -136,6 +136,13 @@ class parser {
         return add_node<ast::expr_handle, Data>(start_token, std::forward<Args>(args)...);
     }
 
+    // For infix expressions whose span starts before the operator token that tags their node_id
+    template <ast::NodeData Data, typename... Args>
+    [[nodiscard]] constexpr auto
+    add_expr(const source_location& span_start, const syntax::token_t& tag_token, Args&&... args) {
+        return add_node<ast::expr_handle, Data>(span_start, tag_token, std::forward<Args>(args)...);
+    }
+
     // Adds a statement to the ast and returns its handle
     template <ast::NodeData Data, typename... Args>
     [[nodiscard]] constexpr auto add_stmt(const syntax::token_t& start_token, Args&&... args) {
@@ -148,6 +155,13 @@ class parser {
     [[nodiscard]] constexpr auto add_node(const syntax::token_t& start_token, Args&&... args) {
         return Handle{
             ast_->add_node(start_token, current_token_, Data{std::forward<Args>(args)...})};
+    }
+
+    template <typename Handle, ast::NodeData Data, typename... Args>
+    [[nodiscard]] constexpr auto
+    add_node(const source_location& span_start, const syntax::token_t& tag_token, Args&&... args) {
+        return Handle{ast_->add_node(
+            span_start, tag_token, current_token_, Data{std::forward<Args>(args)...})};
     }
 
     // Helper for type-ast insertion, reducing a layer of call-site indirection

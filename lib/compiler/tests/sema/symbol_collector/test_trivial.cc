@@ -52,7 +52,7 @@ TEST_CASE("Duplicate identifiers") {
         "const a := 2; import a;",
         helpers::make_vector<mock_file>(
             mock_file{.path = "a.gh", .source = "const foo := bar;", .name = "a"}),
-        sema::diagnostic{"Redeclaration of symbol 'a'; previous declaration here: 1:1",
+        sema::diagnostic{"Redeclaration of symbol 'a'; previous declaration here: 1:7",
                          sema::error::IDENTIFIER_REDECLARATION,
                          std::pair{0UZ, 14UZ}});
 }

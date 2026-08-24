@@ -67,7 +67,7 @@ TEST_CASE("Flat match collection") {
 namespace {
 
 [[nodiscard]] auto expected_diag(usize col) -> sema::diagnostic {
-    return {"Attempt to shadow identifier 'a'; previous declaration here: 1:1",
+    return {"Attempt to shadow identifier 'a'; previous declaration here: 1:7",
             sema::error::SHADOWING_DECLARATION,
             std::pair{0UZ, col}};
 }
@@ -75,17 +75,17 @@ namespace {
 } // namespace
 
 TEST_CASE("If expression inner shadowing") {
-    helpers::test_collector_fail("const a := if (b) { var a: i32; };", expected_diag(20));
+    helpers::test_collector_fail("const a := if (b) { var a: i32; };", expected_diag(24));
     helpers::test_collector_fail("const a := if (b) { var c: i32; } else { var a: i32; };",
-                                 expected_diag(41));
+                                 expected_diag(45));
 }
 
 TEST_CASE("Match shadowing assignee") {
     helpers::test_collector_fail("const a := match (c) { b => |a| b, };", expected_diag(29));
     helpers::test_collector_fail("const a := match (c) { b => { var a: i32; } };",
-                                 expected_diag(30));
+                                 expected_diag(34));
     helpers::test_collector_fail("const a := match (b) { c => d, _ => { var a: i32; } };",
-                                 expected_diag(38));
+                                 expected_diag(42));
 }
 
 TEST_CASE("Match dispatch shadowing") {
@@ -93,7 +93,7 @@ TEST_CASE("Match dispatch shadowing") {
         "const a := match (c) { b => |c| { var c: i32; } };",
         sema::diagnostic{"Attempt to shadow identifier 'c'; previous declaration here: 1:30",
                          sema::error::SHADOWING_DECLARATION,
-                         std::pair{0UZ, 34UZ}});
+                         std::pair{0UZ, 38UZ}});
 }
 
 } // namespace ghoti::tests

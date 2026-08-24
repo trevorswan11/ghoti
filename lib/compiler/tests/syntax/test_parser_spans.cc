@@ -5,6 +5,7 @@
 
 #include "compiler/ast/ast.hh"
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/primitive.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/syntax/parser.hh"
 
@@ -34,7 +35,7 @@ TEST_CASE("every node has an end_location_of that is not before its start locati
 }
 
 TEST_CASE("a call_expr's span ends just past its closing paren") {
-    auto ast{parse("const x := foo(1, 2);\n")};
+    auto        ast{parse("const x := foo(1, 2);\n")};
     const auto& decl{ast.get_as<ast::decl_stmt>(*ast.begin())};
 
     REQUIRE(decl.value);
@@ -46,10 +47,43 @@ TEST_CASE("a call_expr's span ends just past its closing paren") {
     CHECK(call.arguments.size() == 2);
 }
 
+TEST_CASE("a binary_expr's span starts at its lhs, not its operator") {
+    auto        ast{parse("const x := 1 + 2;\n")};
+    const auto& decl{ast.get_as<ast::decl_stmt>(*ast.begin())};
+
+    REQUIRE(decl.value);
+    const auto& bin{ast.get_as<ast::binary_expr>(*decl.value)};
+    const auto& start{ast.location_of(*decl.value)};
+    CHECK(bin.rhs.is<ast::i32_expr>());
+
+    CHECK(start.line == 0);
+    CHECK(start.column == 11);
+}
+
+TEST_CASE("an assignment_expr's span starts at its lhs, not its operator") {
+    auto        ast{parse("const f := fn(): void {\n"
+                          "    var x := 1;\n"
+                          "    x = 2;\n"
+                          "};\n")};
+    const auto& decl{ast.get_as<ast::decl_stmt>(*ast.begin())};
+    REQUIRE(decl.value);
+    const auto& fn{ast.get_as<ast::function_expr>(*decl.value)};
+    const auto& body{ast.get_as<ast::block_stmt>(*fn.body)};
+
+    REQUIRE(body.statements.size() == 2);
+    const auto& assign_stmt{ast.get_as<ast::expr_stmt>(*body.statements[1])};
+    const auto& assign{ast.get_as<ast::assignment_expr>(*assign_stmt.expression)};
+    const auto& start{ast.location_of(*assign_stmt.expression)};
+    CHECK(assign.lhs.is<ast::identifier_expr>());
+
+    CHECK(start.line == 2);
+    CHECK(start.column == 4);
+}
+
 TEST_CASE("a block_stmt's span ends just past its closing brace") {
-    auto ast{parse("const f := fn(): void {\n"
-                   "    return;\n"
-                   "};\n")};
+    auto        ast{parse("const f := fn(): void {\n"
+                          "    return;\n"
+                          "};\n")};
     const auto& decl{ast.get_as<ast::decl_stmt>(*ast.begin())};
 
     REQUIRE(decl.value);

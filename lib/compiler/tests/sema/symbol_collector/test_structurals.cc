@@ -74,17 +74,17 @@ TEST_CASE("Public using query") {
 
 TEST_CASE("Shadowing member/field declarations") {
     const auto expected_diag = [](usize col) -> sema::diagnostic {
-        return {"Attempt to shadow identifier 'a'; previous declaration here: 1:1",
+        return {"Attempt to shadow identifier 'a'; previous declaration here: 1:7",
                 sema::error::SHADOWING_DECLARATION,
                 std::pair{0UZ, col}};
     };
 
-    helpers::test_collector_fail("const a := struct { var a := 2; };", expected_diag(20));
+    helpers::test_collector_fail("const a := struct { var a := 2; };", expected_diag(24));
     helpers::test_collector_fail("const a := struct { a: i32, var b := 2; };", expected_diag(20));
     helpers::test_collector_fail("const a := enum {a};", expected_diag(17));
-    helpers::test_collector_fail("const a := enum {b const a := 2; };", expected_diag(19));
+    helpers::test_collector_fail("const a := enum {b const a := 2; };", expected_diag(25));
     helpers::test_collector_fail("const a := union { a: i32 };", expected_diag(19));
-    helpers::test_collector_fail("const a := union { b: i32 const a := 2; };", expected_diag(26));
+    helpers::test_collector_fail("const a := union { b: i32 const a := 2; };", expected_diag(32));
 }
 
 } // namespace ghoti::tests

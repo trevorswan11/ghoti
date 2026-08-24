@@ -2,8 +2,8 @@
 
 #include <string>
 
-#include <stdx/types.hh>
 #include <nlohmann/json.hpp>
+#include <stdx/types.hh>
 
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/statement.hh"

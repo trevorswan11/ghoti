@@ -26,9 +26,9 @@ TEST_CASE("Test statement symbol collection") {
 TEST_CASE("Test shadowing") {
     helpers::test_collector_fail(
         R"(const a := 2; test "foo" { const a := 3; })",
-        sema::diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:1",
+        sema::diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:7",
                          sema::error::SHADOWING_DECLARATION,
-                         std::pair{0UZ, 27UZ}});
+                         std::pair{0UZ, 33UZ}});
 }
 
 TEST_CASE("Illegal test location") {

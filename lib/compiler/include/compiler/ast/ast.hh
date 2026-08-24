@@ -32,9 +32,17 @@ template <IndexableID ID, typename Data> struct data_pool_base {
     constexpr auto emplace_back(const syntax::token_t& start_token,
                                 const syntax::token_t& end_token,
                                 Data&&                 data) -> u64 {
+        return emplace_back(
+            source_info<syntax::token_t>::get(start_token), end_token, std::forward<Data>(data));
+    }
+
+    // For nodes whose span starts earlier than the token that tags their node_id
+    constexpr auto emplace_back(const source_location& start_loc,
+                                const syntax::token_t& end_token,
+                                Data&&                 data) -> u64 {
         const u64 index{pool.size()};
         pool.emplace_back(std::forward<Data>(data));
-        locations.emplace_back(source_info<syntax::token_t>::get(start_token));
+        locations.emplace_back(start_loc);
         end_locations.emplace_back(end_token.line, end_token.column + end_token.slice.size());
         return index;
     }
@@ -79,6 +87,18 @@ class AST {
         constexpr auto kind{node_kind_of<Data>::value()};
         const auto     index{nodes_.emplace_back(start_token, end_token, std::forward<Data>(data))};
         return node_id{kind, start_token.type, index};
+    }
+
+    // For infix nodes whose operator (tagging `node_id`'s token type) starts after the node's
+    // true span start, e.g. `binary_expr` starting at its lhs rather than the operator
+    template <NodeData Data>
+    [[nodiscard]] constexpr auto add_node(const source_location& span_start,
+                                          const syntax::token_t& tag_token,
+                                          const syntax::token_t& end_token,
+                                          Data&&                 data) -> node_id {
+        constexpr auto kind{node_kind_of<Data>::value()};
+        const auto     index{nodes_.emplace_back(span_start, end_token, std::forward<Data>(data))};
+        return node_id{kind, tag_token.type, index};
     }
 
     template <ExplicitTypeData Data>

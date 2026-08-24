@@ -44,15 +44,15 @@ TEST_CASE("Constexpr function declaration") {
 TEST_CASE("Defer statements respect identifier collection rules") {
     helpers::test_collector_fail(
         "pub const main := fn(args: [][:0]u8): i32 { defer { var main: i32; } };",
-        sema::diagnostic{"Attempt to shadow identifier 'main'; previous declaration here: 1:1",
+        sema::diagnostic{"Attempt to shadow identifier 'main'; previous declaration here: 1:11",
                          sema::error::SHADOWING_DECLARATION,
-                         std::pair{0UZ, 52UZ}});
+                         std::pair{0UZ, 56UZ}});
 }
 
 TEST_CASE("Function basic param redeclaration") {
     helpers::test_collector_fail(
         "const f := fn(f: bool): void {};",
-        sema::diagnostic{"Attempt to shadow identifier 'f'; previous declaration here: 1:1",
+        sema::diagnostic{"Attempt to shadow identifier 'f'; previous declaration here: 1:7",
                          sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 14UZ}});
 }
@@ -60,7 +60,7 @@ TEST_CASE("Function basic param redeclaration") {
 TEST_CASE("Function self param redeclaration") {
     helpers::test_collector_fail(
         "const f := fn(f): void {};",
-        sema::diagnostic{"Attempt to shadow identifier 'f'; previous declaration here: 1:1",
+        sema::diagnostic{"Attempt to shadow identifier 'f'; previous declaration here: 1:7",
                          sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 14UZ}});
 }
@@ -76,9 +76,9 @@ TEST_CASE("Function local param redeclaration") {
 TEST_CASE("Function block shadowing") {
     helpers::test_collector_fail(
         "const f := fn(): void { var f := 3; };",
-        sema::diagnostic{"Attempt to shadow identifier 'f'; previous declaration here: 1:1",
+        sema::diagnostic{"Attempt to shadow identifier 'f'; previous declaration here: 1:7",
                          sema::error::SHADOWING_DECLARATION,
-                         std::pair{0UZ, 24UZ}});
+                         std::pair{0UZ, 28UZ}});
 }
 
 } // namespace ghoti::tests

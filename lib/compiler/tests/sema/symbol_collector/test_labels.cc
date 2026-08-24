@@ -44,7 +44,7 @@ TEST_CASE("Label collection") {
 TEST_CASE("Label redeclaration") {
     helpers::test_collector_fail(
         "const a := a: {};",
-        sema::diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:1",
+        sema::diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:7",
                          sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 12UZ}});
 }
@@ -54,7 +54,7 @@ TEST_CASE("Label shadowing") {
         "const a := blk: { var blk: i32; };",
         sema::diagnostic{"Attempt to shadow identifier 'blk'; previous declaration here: 1:15",
                          sema::error::SHADOWING_DECLARATION,
-                         std::pair{0UZ, 18UZ}});
+                         std::pair{0UZ, 22UZ}});
 }
 
 } // namespace ghoti::tests
