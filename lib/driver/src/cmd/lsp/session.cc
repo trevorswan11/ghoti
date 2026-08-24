@@ -15,6 +15,7 @@
 #include "compiler/module/module.hh"
 #include "compiler/module/overlay_loader.hh"
 #include "compiler/module/stdlib.hh"
+#include "support/path_utils.hh"
 
 namespace ghoti::lsp {
 
@@ -35,9 +36,12 @@ analysis_session::analysis_session(mod::overlay_loader& loader, std::ostream& er
 auto analysis_session::analyze(const std::filesystem::path& entry_path)
     -> stdx::result<gsl::not_null<mod::module*>, mod::diagnostic> {
     PROFILE_FUNCTION();
+    auto relative_path{entry_path};
+    if (auto rel{path_utils::make_relative(relative_path)}) { relative_path = std::move(*rel); }
+
     // A poisoned/errored module is still returned so its diagnostics can be reported
-    DISCARD(analyzer_.analyze(entry_path));
-    return manager_.try_get_file_module(entry_path);
+    DISCARD(analyzer_.analyze(relative_path));
+    return manager_.try_get_file_module(relative_path);
 }
 
 } // namespace ghoti::lsp

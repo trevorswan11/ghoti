@@ -53,9 +53,10 @@ template <> struct source_info<source_location> {
 
 namespace mod { struct module; } // namespace mod
 
+// Mappings not to be changed, tied to LSP diagnostic emission
 enum class diagnostic_level : u8 {
-    ERROR,
-    WARNING,
+    ERROR = 1,
+    WARNING = 2,
 };
 
 namespace detail {
