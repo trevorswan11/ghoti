@@ -20,7 +20,8 @@ constexpr std::string_view source{"pub const x := 5;\n"
 
 } // namespace
 
-TEST_CASE("definition_span_at resolves the same span from a reference and the declaration name") {
+TEST_CASE(
+    "definition_location_at resolves the same location from a reference and the declaration name") {
     mod::overlay_loader         loader;
     const std::filesystem::path path{"test_references.gh"};
     CHECK(loader.add(path, std::string{source}));
@@ -29,14 +30,14 @@ TEST_CASE("definition_span_at resolves the same span from a reference and the de
     const auto module{UNWRAP(session->analyze(path))};
 
     // Line 1, column 15 lands on the first `x` reference
-    const auto from_reference{UNWRAP(lsp::definition_span_at(*module, {1, 15}))};
+    const auto from_reference{UNWRAP(lsp::definition_location_at(*module, {1, 15}))};
     // Line 0, column 10 lands on the `x` declaration name itself
-    const auto from_declaration{UNWRAP(lsp::definition_span_at(*module, {0, 10}))};
+    const auto from_declaration{UNWRAP(lsp::definition_location_at(*module, {0, 10}))};
 
-    CHECK(from_reference.start.line == 0);
-    CHECK(from_reference.start.column == 10);
-    CHECK(from_reference.end.line == 0);
-    CHECK(from_reference.end.column == 11);
+    CHECK(from_reference.span.start.line == 0);
+    CHECK(from_reference.span.start.column == 10);
+    CHECK(from_reference.span.end.line == 0);
+    CHECK(from_reference.span.end.column == 11);
     CHECK(from_reference == from_declaration);
 }
 
@@ -48,17 +49,44 @@ TEST_CASE("find_references returns every reference to a definition, not the decl
     auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
     const auto module{UNWRAP(session->analyze(path))};
 
-    const auto definition{UNWRAP(lsp::definition_span_at(*module, {0, 10}))};
-    const auto refs{lsp::find_references(*module, definition)};
+    const auto definition{UNWRAP(lsp::definition_location_at(*module, {0, 10}))};
+    const auto refs{lsp::find_references(session->get_manager(), definition)};
 
     REQUIRE(refs.size() == 2);
-    CHECK(refs[0].start.line == 1);
-    CHECK(refs[0].start.column == 15);
-    CHECK(refs[1].start.line == 1);
-    CHECK(refs[1].start.column == 19);
+    CHECK(refs[0].span.start.line == 1);
+    CHECK(refs[0].span.start.column == 15);
+    CHECK(refs[1].span.start.line == 1);
+    CHECK(refs[1].span.start.column == 19);
 }
 
-TEST_CASE("definition_span_at returns none off any identifier") {
+TEST_CASE("definition_location_at resolves a cross-module `::` access into the imported file") {
+    mod::overlay_loader         loader;
+    const std::filesystem::path helper_path{"test_xmod_helper.gh"};
+    const std::filesystem::path main_path{"test_xmod_main.gh"};
+    CHECK(loader.add(helper_path, "pub const value := 42;\n"));
+    CHECK(loader.add(main_path,
+                     "import \"test_xmod_helper.gh\" as helper;\n"
+                     "pub const x := helper::value;\n"));
+
+    auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
+    const auto module{UNWRAP(session->analyze(main_path))};
+
+    // Line 1, column 23 lands on `value` in `helper::value`
+    const auto def{UNWRAP(lsp::definition_location_at(*module, {1, 23}))};
+    CHECK(def.path == std::filesystem::weakly_canonical(helper_path));
+    CHECK(def.span.start.line == 0);
+    CHECK(def.span.start.column == 10);
+    CHECK(def.span.end.column == 15);
+
+    // find_references searches the whole manager
+    const auto refs{lsp::find_references(session->get_manager(), def)};
+    REQUIRE(refs.size() == 1);
+    CHECK(refs[0].path == std::filesystem::weakly_canonical(main_path));
+    CHECK(refs[0].span.start.line == 1);
+    CHECK(refs[0].span.start.column == 23);
+}
+
+TEST_CASE("definition_location_at returns none off any identifier") {
     mod::overlay_loader         loader;
     const std::filesystem::path path{"test_references_none.gh"};
     CHECK(loader.add(path, std::string{source}));
@@ -66,7 +94,7 @@ TEST_CASE("definition_span_at returns none off any identifier") {
     auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
     const auto module{UNWRAP(session->analyze(path))};
 
-    CHECK_FALSE(lsp::definition_span_at(*module, {0, 0})); // `pub`, not an identifier
+    CHECK_FALSE(lsp::definition_location_at(*module, {0, 0})); // `pub`, not an identifier
 }
 
 } // namespace ghoti::tests

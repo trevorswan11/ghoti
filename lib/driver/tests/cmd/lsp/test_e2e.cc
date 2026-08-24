@@ -287,4 +287,92 @@ TEST_CASE("ghoti lsp answers workspace/symbol over a real child process") {
     CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
 }
 
+TEST_CASE("ghoti lsp resolves go-to-definition and references across an import") {
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp"}};
+    REQUIRE(proc.is_running());
+
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"},
+         {"id", 1},
+         {"method", "initialize"},
+         {"params", {{"processId", nullptr}, {"capabilities", nlohmann::json::object()}}}});
+    const auto init_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(init_resp.at("result").at("capabilities").at("definitionProvider").get<bool>());
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"}, {"method", "initialized"}, {"params", nlohmann::json::object()}});
+
+    // Both files share a directory so the relative import resolves without touching real disk
+    constexpr std::string_view helper_uri{"file:///C:/ghoti_e2e_xmod/helper.gh"};
+    constexpr std::string_view main_uri{"file:///C:/ghoti_e2e_xmod/main.gh"};
+    constexpr std::string_view helper_text{"pub const value := 42;\n"};
+    constexpr std::string_view main_text{"import \"helper.gh\" as helper;\n"
+                                         "pub const x := helper::value;\n"};
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"},
+                        {"method", "textDocument/didOpen"},
+                        {"params",
+                         {{"textDocument",
+                           {{"uri", helper_uri},
+                            {"languageId", "ghoti"},
+                            {"version", 1},
+                            {"text", helper_text}}}}}});
+    const auto helper_diag = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(helper_diag.at("params").at("diagnostics").empty());
+    const auto canonical_helper_uri = helper_diag.at("params").at("uri").get<std::string>();
+
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"},
+         {"method", "textDocument/didOpen"},
+         {"params",
+          {{"textDocument",
+            {{"uri", main_uri}, {"languageId", "ghoti"}, {"version", 1}, {"text", main_text}}}}}});
+    // This didOpen touches both main.gh and helper.gh, so two unordered notifications come back
+    std::string canonical_main_uri;
+    for (i32 i{0}; i < 2; ++i) {
+        const auto note = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+        CHECK(note.at("params").at("diagnostics").empty());
+        const auto uri = note.at("params").at("uri").get<std::string>();
+        if (uri != canonical_helper_uri) { canonical_main_uri = uri; }
+    }
+    REQUIRE_FALSE(canonical_main_uri.empty());
+
+    // Line 1, column 23 lands on `value` in `helper::value`
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"},
+                        {"id", 2},
+                        {"method", "textDocument/definition"},
+                        {"params",
+                         {{"textDocument", {{"uri", main_uri}}},
+                          {"position", {{"line", 1}, {"character", 23}}}}}});
+    const auto def_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(def_resp.at("result").at("uri") == canonical_helper_uri);
+    CHECK(def_resp.at("result").at("range").at("start").at("character") == 10);
+
+    // Each LSP query re-analyzes fresh, scoped to the queried file's own import closure
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"},
+                        {"id", 3},
+                        {"method", "textDocument/references"},
+                        {"params",
+                         {{"textDocument", {{"uri", main_uri}}},
+                          {"position", {{"line", 1}, {"character", 23}}},
+                          {"context", {{"includeDeclaration", false}}}}}});
+    const auto  refs_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    const auto& locations{refs_resp.at("result")};
+    REQUIRE(locations.size() == 1);
+    CHECK(locations[0].at("uri") == canonical_main_uri);
+    CHECK(locations[0].at("range").at("start").at("character") == 23);
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 4}, {"method", "shutdown"}});
+    const auto shutdown_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(shutdown_resp.at("result").is_null());
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+    CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
+}
+
 } // namespace ghoti::tests
