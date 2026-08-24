@@ -352,7 +352,6 @@ TEST_CASE("ghoti lsp resolves go-to-definition and references across an import")
     CHECK(def_resp.at("result").at("uri") == canonical_helper_uri);
     CHECK(def_resp.at("result").at("range").at("start").at("character") == 10);
 
-    // Each LSP query re-analyzes fresh, scoped to the queried file's own import closure
     lsp::write_message(proc.stdin_stream(),
                        {{"jsonrpc", "2.0"},
                         {"id", 3},
@@ -368,7 +367,122 @@ TEST_CASE("ghoti lsp resolves go-to-definition and references across an import")
     CHECK(locations[0].at("range").at("start").at("character") == 23);
 
     lsp::write_message(proc.stdin_stream(),
-                       {{"jsonrpc", "2.0"}, {"id", 4}, {"method", "shutdown"}});
+                       {{"jsonrpc", "2.0"},
+                        {"id", 4},
+                        {"method", "textDocument/references"},
+                        {"params",
+                         {{"textDocument", {{"uri", helper_uri}}},
+                          {"position", {{"line", 0}, {"character", 10}}},
+                          {"context", {{"includeDeclaration", false}}}}}});
+    const auto  upstream_refs_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    const auto& upstream_locations{upstream_refs_resp.at("result")};
+    REQUIRE(upstream_locations.size() == 1);
+    CHECK(upstream_locations[0].at("uri") == canonical_main_uri);
+    CHECK(upstream_locations[0].at("range").at("start").at("character") == 23);
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"},
+                        {"method", "textDocument/didChange"},
+                        {"params",
+                         {{"textDocument", {{"uri", main_uri}, {"version", 2}}},
+                          {"contentChanges",
+                           {{{"text",
+                              "import \"helper.gh\" as helper;\n"
+                              "pub const x := helper::value;\n"
+                              "pub const y := helper::value;\n"}}}}}}});
+    for (i32 i{0}; i < 2; ++i) {
+        const auto note = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+        CHECK(note.at("params").at("diagnostics").empty());
+    }
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"},
+                        {"id", 5},
+                        {"method", "textDocument/references"},
+                        {"params",
+                         {{"textDocument", {{"uri", helper_uri}}},
+                          {"position", {{"line", 0}, {"character", 10}}},
+                          {"context", {{"includeDeclaration", false}}}}}});
+    const auto  edited_refs_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    const auto& edited_locations{edited_refs_resp.at("result")};
+    REQUIRE(edited_locations.size() == 2);
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 6}, {"method", "shutdown"}});
+    const auto shutdown_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(shutdown_resp.at("result").is_null());
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+    CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
+}
+
+TEST_CASE("ghoti lsp renames a symbol from its upstream importer's usage") {
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp"}};
+    REQUIRE(proc.is_running());
+
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"},
+         {"id", 1},
+         {"method", "initialize"},
+         {"params", {{"processId", nullptr}, {"capabilities", nlohmann::json::object()}}}});
+    const auto init_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(init_resp.contains("result"));
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"}, {"method", "initialized"}, {"params", nlohmann::json::object()}});
+
+    constexpr std::string_view helper_uri{"file:///C:/ghoti_e2e_rename_xmod/helper.gh"};
+    constexpr std::string_view main_uri{"file:///C:/ghoti_e2e_rename_xmod/main.gh"};
+    constexpr std::string_view helper_text{"pub const value := 42;\n"};
+    constexpr std::string_view main_text{"import \"helper.gh\" as helper;\n"
+                                         "pub const x := helper::value;\n"};
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"},
+                        {"method", "textDocument/didOpen"},
+                        {"params",
+                         {{"textDocument",
+                           {{"uri", helper_uri},
+                            {"languageId", "ghoti"},
+                            {"version", 1},
+                            {"text", helper_text}}}}}});
+    const auto helper_diag          = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    const auto canonical_helper_uri = helper_diag.at("params").at("uri").get<std::string>();
+
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"},
+         {"method", "textDocument/didOpen"},
+         {"params",
+          {{"textDocument",
+            {{"uri", main_uri}, {"languageId", "ghoti"}, {"version", 1}, {"text", main_text}}}}}});
+    std::string canonical_main_uri;
+    for (i32 i{0}; i < 2; ++i) {
+        const auto note = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+        const auto uri  = note.at("params").at("uri").get<std::string>();
+        if (uri != canonical_helper_uri) { canonical_main_uri = uri; }
+    }
+    REQUIRE_FALSE(canonical_main_uri.empty());
+
+    // Rename initiated from helper.gh's own declaration must produce an edit for main.gh too
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"},
+                        {"id", 2},
+                        {"method", "textDocument/rename"},
+                        {"params",
+                         {{"textDocument", {{"uri", helper_uri}}},
+                          {"position", {{"line", 0}, {"character", 10}}},
+                          {"newName", "renamed"}}}});
+    const auto  rename_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    const auto& changes{rename_resp.at("result").at("changes")};
+    REQUIRE(changes.contains(canonical_main_uri));
+    const auto& main_edits{changes.at(canonical_main_uri)};
+    REQUIRE(main_edits.size() == 1);
+    CHECK(main_edits[0].at("newText") == "renamed");
+    CHECK(main_edits[0].at("range").at("start").at("character") == 23);
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "shutdown"}});
     const auto shutdown_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
     CHECK(shutdown_resp.at("result").is_null());
     lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});

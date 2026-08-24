@@ -8,6 +8,7 @@
 #include <stdx/option.hh>
 
 #include "driver/cmd/lsp/document_store.hh"
+#include "driver/cmd/lsp/references.hh"
 #include "driver/cmd/lsp/rpc.hh"
 #include "support/test.hh"
 
@@ -77,6 +78,90 @@ TEST_CASE("document_store workspace_symbols keeps entries for a closed document"
     store.close(path);
 
     CHECK(lsp::has_field(store.workspace_symbols(""), "name", "still_here"));
+}
+
+TEST_CASE("document_store finds references in a file that imports the queried definition") {
+    lsp::document_store         store{std::cerr};
+    const std::filesystem::path helper_path{"test_ds_xmod_helper.gh"};
+    const std::filesystem::path main_path{"test_ds_xmod_main.gh"};
+
+    CHECK(!store.update(helper_path, "pub const value := 42;\n").empty());
+    CHECK(!store
+               .update(main_path,
+                       "import \"test_ds_xmod_helper.gh\" as helper;\n"
+                       "pub const x := helper::value;\n")
+               .empty());
+
+    const auto helper_module{UNWRAP(store.analyze(helper_path))};
+    const auto definition{UNWRAP(lsp::definition_location_at(*helper_module, {0, 10}))};
+
+    const auto refs{lsp::find_references(store.manager(), definition)};
+    REQUIRE(refs.size() == 1);
+    CHECK(refs[0].path == std::filesystem::weakly_canonical(main_path));
+    CHECK(refs[0].span.start.line == 1);
+    CHECK(refs[0].span.start.column == 23);
+}
+
+TEST_CASE("document_store finds the upstream reference regardless of which file was opened first") {
+    lsp::document_store         store{std::cerr};
+    const std::filesystem::path helper_path{"test_ds_xmod_order_helper.gh"};
+    const std::filesystem::path main_path{"test_ds_xmod_order_main.gh"};
+
+    // main opened before helper, the reverse of the previous test
+    CHECK(!store
+               .update(main_path,
+                       "import \"test_ds_xmod_order_helper.gh\" as helper;\n"
+                       "pub const x := helper::value;\n")
+               .empty());
+    CHECK(!store.update(helper_path, "pub const value := 42;\n").empty());
+
+    const auto helper_module{UNWRAP(store.analyze(helper_path))};
+    const auto definition{UNWRAP(lsp::definition_location_at(*helper_module, {0, 10}))};
+
+    const auto refs{lsp::find_references(store.manager(), definition)};
+    REQUIRE(refs.size() == 1);
+    CHECK(refs[0].path == std::filesystem::weakly_canonical(main_path));
+}
+
+TEST_CASE(
+    "document_store reflects a downstream edit in a later upstream-relative references query") {
+    lsp::document_store         store{std::cerr};
+    const std::filesystem::path helper_path{"test_ds_xmod_edit_helper.gh"};
+    const std::filesystem::path main_path{"test_ds_xmod_edit_main.gh"};
+
+    CHECK(!store.update(helper_path, "pub const value := 42;\n").empty());
+    CHECK(!store
+               .update(main_path,
+                       "import \"test_ds_xmod_edit_helper.gh\" as helper;\n"
+                       "pub const x := helper::value;\n")
+               .empty());
+
+    const auto definition_of = [&] {
+        const auto helper_module{UNWRAP(store.analyze(helper_path))};
+        return UNWRAP(lsp::definition_location_at(*helper_module, {0, 10}));
+    };
+    REQUIRE(lsp::find_references(store.manager(), definition_of()).size() == 1);
+
+    // A second didChange adding a second usage of helper::value
+    CHECK(!store
+               .update(main_path,
+                       "import \"test_ds_xmod_edit_helper.gh\" as helper;\n"
+                       "pub const x := helper::value;\n"
+                       "pub const y := helper::value;\n")
+               .empty());
+
+    CHECK(lsp::find_references(store.manager(), definition_of()).size() == 2);
+}
+
+TEST_CASE("document_store only finds references in files it has actually opened or queried") {
+    lsp::document_store         store{std::cerr};
+    const std::filesystem::path helper_path{"test_ds_xmod_unopened_helper.gh"};
+    CHECK(!store.update(helper_path, "pub const value := 42;\n").empty());
+
+    // No importer of `value` was ever opened via update() or queried via analyze()
+    const auto helper_module{UNWRAP(store.analyze(helper_path))};
+    const auto definition{UNWRAP(lsp::definition_location_at(*helper_module, {0, 10}))};
+    CHECK(lsp::find_references(store.manager(), definition).empty());
 }
 
 } // namespace ghoti::tests
