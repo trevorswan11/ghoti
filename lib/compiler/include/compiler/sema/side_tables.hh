@@ -62,10 +62,10 @@ struct side_tables {
     detail::side_table<ast::node_id, capture_list> function_captures;
 
     // Used for LSP go-to-definition
-    detail::side_table<ast::node_id, stdx::option<source_span>> identifier_definitions;
+    detail::side_table<ast::node_id, stdx::option<located_span>> identifier_definitions;
 
     // Same as `identifier_definitions`, but for identifiers used as explicit type annotations
-    detail::side_table<ast::explicit_type_id, stdx::option<source_span>> explicit_type_definitions;
+    detail::side_table<ast::explicit_type_id, stdx::option<located_span>> explicit_type_definitions;
 
     // Allocates `size` slots in all backing vectors
     constexpr auto resize(const ast::AST::data_pool_sizes& sizes) -> void {

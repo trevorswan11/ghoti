@@ -1,6 +1,7 @@
 #pragma once
 
 #include <concepts>
+#include <filesystem>
 #include <ostream>
 #include <sstream>
 #include <string>
@@ -40,6 +41,13 @@ struct source_span {
     source_location end;
 
     auto operator==(const source_span&) const noexcept -> bool = default;
+};
+
+struct located_span {
+    std::filesystem::path path;
+    source_span           span;
+
+    auto operator==(const located_span&) const noexcept -> bool = default;
 };
 
 template <typename T> struct source_info;

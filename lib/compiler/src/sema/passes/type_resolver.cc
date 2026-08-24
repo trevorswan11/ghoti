@@ -1233,7 +1233,7 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
     }
 
     // Record where this reference resolves to, for LSP go-to-definition
-    resolving_.set_identifier_definition(id, lookup->symbol.get_symbol_span(resolving_));
+    resolving_.set_identifier_definition(id, {resolving_.path, lookup->symbol.get_symbol_span(resolving_)});
     if constexpr (std::same_as<ID, ast::node_id>) { resolving_.add_identifier_position(id); }
 
     // Belongs to an enclosing function's stack frame rather than the module/prelude scope
@@ -2406,6 +2406,10 @@ auto type_resolver::resolve_module_access(ID id, const ast::module_access_expr& 
         if (sym->get_kind() == symbol_kind::POISONED || !inner_mod.has_sema_type(*symbol_node)) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
+
+        // Record where this cross-module reference resolves to, for LSP go-to-definition
+        resolving_.set_identifier_definition(access.inner, {inner_mod.path, sym->get_symbol_span(inner_mod)});
+        resolving_.add_identifier_position(access.inner);
 
         auto& ident_type{inner_mod.get_sema_type(*symbol_node)};
         resolving_.set_sema_type(access.inner, ident_type);

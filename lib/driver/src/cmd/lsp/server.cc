@@ -7,6 +7,7 @@
 #include <string_view>
 #include <utility>
 
+#include <ankerl/unordered_dense.h>
 #include <fmt/format.h>
 #include <fmt/ostream.h>
 #include <nlohmann/json.hpp>
@@ -206,16 +207,13 @@ auto lsp_server::handle_definition(const nlohmann::json& message, lsp::document_
     if (!result) { return write_null_id(message); }
 
     const auto& entry_module{*result->second};
-    const auto  id{lsp::identifier_at(entry_module, target)};
-    if (!id) { return write_null_id(message); }
-
-    const auto def_loc{entry_module.get_identifier_definition(*id)};
+    const auto  def_loc{lsp::definition_location_at(entry_module, target)};
     if (!def_loc) { return write_null_id(message); }
 
     lsp::write_message(std::cout,
                        make_response(message.at("id"),
-                                     {{"uri", path_utils::path_to_uri(*path)},
-                                      {"range", lsp::range_of(*def_loc)}}));
+                                     {{"uri", path_utils::path_to_uri(def_loc->path)},
+                                      {"range", lsp::range_of(def_loc->span)}}));
 }
 
 auto lsp_server::handle_document_symbol(const nlohmann::json& message, lsp::document_store& store)
@@ -271,19 +269,20 @@ auto lsp_server::handle_references(const nlohmann::json& message, lsp::document_
     if (!result) { return write_null_id(message); }
 
     const auto& entry_module{*result->second};
-    const auto  definition{lsp::definition_span_at(entry_module, target)};
+    const auto  definition{lsp::definition_location_at(entry_module, target)};
     if (!definition) { return write_null_id(message); }
 
     const auto include_declaration{
         params.value("context", nlohmann::json::object()).value("includeDeclaration", false)};
-    const auto uri{path_utils::path_to_uri(*path)};
 
     auto locations = nlohmann::json::array();
     if (include_declaration) {
-        locations.push_back({{"uri", uri}, {"range", lsp::range_of(*definition)}});
+        locations.push_back({{"uri", path_utils::path_to_uri(definition->path)},
+                             {"range", lsp::range_of(definition->span)}});
     }
-    for (const auto& ref_span : lsp::find_references(entry_module, *definition)) {
-        locations.push_back({{"uri", uri}, {"range", lsp::range_of(ref_span)}});
+    for (const auto& ref : lsp::find_references(result->first->get_manager(), *definition)) {
+        locations.push_back(
+            {{"uri", path_utils::path_to_uri(ref.path)}, {"range", lsp::range_of(ref.span)}});
     }
 
     lsp::write_message(std::cout, make_response(message.at("id"), locations));
@@ -300,21 +299,28 @@ auto lsp_server::handle_rename(const nlohmann::json& message, lsp::document_stor
     if (!result) { return write_null_id(message); }
 
     const auto& entry_module{*result->second};
-    const auto  definition{lsp::definition_span_at(entry_module, target)};
+    const auto  definition{lsp::definition_location_at(entry_module, target)};
     if (!definition) { return write_null_id(message); }
 
     const auto new_name{params.at("newName").get<std::string>()};
 
-    auto edits = nlohmann::json::array();
-    edits.push_back({{"range", lsp::range_of(*definition)}, {"newText", new_name}});
-    for (const auto& ref_span : lsp::find_references(entry_module, *definition)) {
-        edits.push_back({{"range", lsp::range_of(ref_span)}, {"newText", new_name}});
+    // Grouped by target file, since a rename can now touch more than one module
+    ankerl::unordered_dense::map<std::string, nlohmann::json> edits_by_uri;
+    const auto                                                add_edit = [&](const located_span& loc) {
+        auto& edits = edits_by_uri[path_utils::path_to_uri(loc.path)];
+        if (!edits.is_array()) { edits = nlohmann::json::array(); }
+        edits.push_back({{"range", lsp::range_of(loc.span)}, {"newText", new_name}});
+    };
+
+    add_edit(*definition);
+    for (const auto& ref : lsp::find_references(result->first->get_manager(), *definition)) {
+        add_edit(ref);
     }
 
-    auto changes                            = nlohmann::json::object();
-    changes[path_utils::path_to_uri(*path)] = std::move(edits);
-    auto workspace_edit                     = nlohmann::json::object();
-    workspace_edit["changes"]               = std::move(changes);
+    auto changes = nlohmann::json::object();
+    for (auto& [uri, edits] : edits_by_uri) { changes[uri] = std::move(edits); }
+    auto workspace_edit       = nlohmann::json::object();
+    workspace_edit["changes"] = std::move(changes);
 
     lsp::write_message(std::cout, make_response(message.at("id"), workspace_edit));
 }
