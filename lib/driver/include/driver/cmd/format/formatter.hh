@@ -1,28 +1,30 @@
 #pragma once
 
 #include <iostream>
+#include <ostream>
 
+#include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
 #include "driver/clap/error.hh"
-#include "driver/cmd/build_options.hh"
 #include "driver/cmd/command.hh"
+#include "driver/cmd/format/options.hh"
 
 namespace ghoti::cmd {
 
-class build_exe final : public command {
+class formatter final : public command {
   public:
-    explicit build_exe(build_options opts, std::ostream& error_stream = std::cerr)
+    explicit formatter(format::options opts, std::ostream& error_stream = std::cerr)
         : command{error_stream}, opts_{std::move(opts)} {}
 
     [[nodiscard]] auto execute() -> stdx::result<void, clap::error> override;
 
-    MAKE_GETTER(opts, const build_options&)
+    MAKE_GETTER(opts, const format::options&);
 
   private:
-    build_options opts_;
+    format::options opts_;
 };
 
 } // namespace ghoti::cmd

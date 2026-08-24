@@ -10,7 +10,7 @@
 
 namespace ghoti::cmd {
 
-class repl final : public command {
+class shell final : public command {
   public:
     using command::command;
     [[nodiscard]] auto execute() -> stdx::result<void, clap::error> override;

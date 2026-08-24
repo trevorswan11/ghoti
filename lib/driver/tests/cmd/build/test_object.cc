@@ -12,8 +12,8 @@
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
 #include "driver/clap/error.hh"
-#include "driver/cmd/build_obj.hh"
-#include "driver/cmd/build_options.hh"
+#include "driver/cmd/build/object.hh"
+#include "driver/cmd/build/options.hh"
 #include "support/bin_utils.hh"
 #include "support/tempfile.hh"
 #include "support/test.hh"
@@ -190,11 +190,11 @@ TEST_CASE("build_obj command execution") {
             )");
         }
 
-        std::vector<cmd::module_binding> modules{{"mylib", custom_lib}};
-        cmd::build_obj                   cmd{{
-                              .input_path  = src_file,
-                              .output_path = obj_file,
-                              .modules     = std::move(modules),
+        std::vector<cmd::build::module_binding> modules{{"mylib", custom_lib}};
+        cmd::build_obj                          cmd{{
+                                     .input_path  = src_file,
+                                     .output_path = obj_file,
+                                     .modules     = std::move(modules),
         }};
         REQUIRE(cmd.execute());
         CHECK(std::filesystem::exists(obj_file));
@@ -231,11 +231,11 @@ TEST_CASE("build_obj command execution") {
             )");
         }
 
-        std::vector<cmd::module_binding> modules{{"math", custom_lib}};
-        cmd::build_obj                   cmd{{
-                              .input_path  = src_file,
-                              .output_path = obj_file,
-                              .modules     = std::move(modules),
+        std::vector<cmd::build::module_binding> modules{{"math", custom_lib}};
+        cmd::build_obj                          cmd{{
+                                     .input_path  = src_file,
+                                     .output_path = obj_file,
+                                     .modules     = std::move(modules),
         }};
         REQUIRE(cmd.execute());
         CHECK(std::filesystem::exists(obj_file));

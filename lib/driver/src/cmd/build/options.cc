@@ -1,4 +1,4 @@
-#include "driver/cmd/build_options.hh"
+#include "driver/cmd/build/options.hh"
 
 #include <filesystem>
 #include <iostream>
@@ -25,12 +25,11 @@
 #include "ghoti/config.h"
 #include "support/path_utils.hh"
 
-namespace ghoti::cmd {
+namespace ghoti::cmd::build {
 
-auto build_options::process_raw(const raw_build_options& raw,
-                                codegen::output_type     type,
-                                std::ostream&            error_stream)
-    -> stdx::result<build_options, clap::error> {
+auto options::process_raw(const raw_options&   raw,
+                          codegen::output_type type,
+                          std::ostream&        error_stream) -> stdx::result<options, clap::error> {
     codegen::optimizer_options opt_opts{
         .debug_logging = raw.debug_passes,
         .time_passes   = raw.time_passes,
@@ -95,7 +94,7 @@ auto build_options::process_raw(const raw_build_options& raw,
     library_paths.reserve(raw.library_paths.size());
     for (const auto& dir : raw.library_paths) { library_paths.emplace_back(dir); }
 
-    return build_options{
+    return options{
         .input_path    = std::move(input_path),
         .output_path   = std::move(output_path),
         .target_opts   = std::move(target_opts),
@@ -108,11 +107,11 @@ auto build_options::process_raw(const raw_build_options& raw,
     };
 }
 
-auto build_options::make_path_relative() -> void {
+auto options::make_path_relative() -> void {
     if (auto rel{path_utils::make_relative(input_path)}) { input_path = std::move(*rel); }
 }
 
-auto build_options::setup_module_manager(mod::module_manager& manager, std::ostream& error_stream)
+auto options::setup_module_manager(mod::module_manager& manager, std::ostream& error_stream)
     -> stdx::result<void, clap::error> {
     if (const auto stdlib_path{mod::find_stdlib()}) {
         if (auto res{manager.add_library_module("std", *stdlib_path)}; !res) {
@@ -154,9 +153,9 @@ auto build_options::setup_module_manager(mod::module_manager& manager, std::ostr
     return {};
 }
 
-auto build_options::analyze(sema::analyzer&      analyzer,
-                            mod::module_manager& manager,
-                            std::ostream&        error_stream)
+auto options::analyze(sema::analyzer&      analyzer,
+                      mod::module_manager& manager,
+                      std::ostream&        error_stream)
     -> stdx::result<gsl::not_null<ghoti::mod::module*>, clap::error> {
     if (!analyzer.analyze(input_path)) { return stdx::err{clap::error::COMPILATION_FAILED}; }
 
@@ -174,9 +173,7 @@ auto build_options::analyze(sema::analyzer&      analyzer,
     return module;
 }
 
-auto setup_build_options_flags(CLI::App*          subcmd,
-                               raw_build_options& opts,
-                               std::string_view   output_desc) -> void {
+auto setup_flags(CLI::App* subcmd, raw_options& opts, std::string_view output_desc) -> void {
     subcmd->add_option("-o,--output", opts.output, std::string{output_desc});
     subcmd->add_option(
         "-m,--module", opts.module_raw_args, "Register a library module (format: <name>,<path>)");
@@ -195,4 +192,4 @@ auto setup_build_options_flags(CLI::App*          subcmd,
     subcmd->add_flag("--time-passes", opts.time_passes, "Enable pass execution timing report");
 }
 
-} // namespace ghoti::cmd
+} // namespace ghoti::cmd::build

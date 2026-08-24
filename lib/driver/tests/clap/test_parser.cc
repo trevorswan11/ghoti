@@ -9,10 +9,10 @@
 #include "compiler/codegen/target.hh"
 #include "driver/clap/error.hh"
 #include "driver/clap/parser.hh"
-#include "driver/cmd/build_exe.hh"
-#include "driver/cmd/build_lib.hh"
-#include "driver/cmd/build_obj.hh"
-#include "driver/cmd/repl.hh"
+#include "driver/cmd/build/executable.hh"
+#include "driver/cmd/build/library.hh"
+#include "driver/cmd/build/object.hh"
+#include "driver/cmd/repl/shell.hh"
 #include "support/subprocess.hh"
 #include "support/test.hh"
 
@@ -30,7 +30,7 @@ TEST_CASE("REPL subcommand parser") {
     mock_argv    args{"ghoti", "repl"};
     clap::parser parser{args.argc(), args.argv(), std::cerr, false};
     auto         cmd{UNWRAP(parser.parse())};
-    CHECK(dynamic_cast<cmd::repl*>(cmd.get()));
+    CHECK(dynamic_cast<cmd::shell*>(cmd.get()));
 }
 
 TEST_CASE("build-obj subcommand parser") {

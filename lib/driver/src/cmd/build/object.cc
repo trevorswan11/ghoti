@@ -1,4 +1,4 @@
-#include "driver/cmd/build_obj.hh"
+#include "driver/cmd/build/object.hh"
 
 #include <filesystem>
 #include <system_error>

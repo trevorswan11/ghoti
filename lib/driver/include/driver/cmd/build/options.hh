@@ -19,7 +19,7 @@
 
 namespace CLI { class App; } // namespace CLI
 
-namespace ghoti::cmd {
+namespace ghoti::cmd::build {
 
 struct module_binding {
     std::string           name;
@@ -27,7 +27,7 @@ struct module_binding {
 };
 
 // Raw options populated directly by CLI parser
-struct raw_build_options {
+struct raw_options {
     std::string              input;
     std::string              output;
     std::string              target;
@@ -44,7 +44,7 @@ struct raw_build_options {
     bool                     dynamic{false};
 };
 
-struct build_options {
+struct options {
     std::filesystem::path              input_path{};
     std::filesystem::path              output_path{};
     codegen::target_options            target_opts{};
@@ -55,9 +55,9 @@ struct build_options {
     std::vector<std::string>           libraries{};
     bool                               dynamic{false};
 
-    static auto process_raw(const raw_build_options& raw,
-                            codegen::output_type     type,
-                            std::ostream& error_stream) -> stdx::result<build_options, clap::error>;
+    static auto process_raw(const raw_options&   raw,
+                            codegen::output_type type,
+                            std::ostream& error_stream) -> stdx::result<options, clap::error>;
 
     // Converts the input path from absolute to relative if needed
     auto make_path_relative() -> void;
@@ -71,8 +71,6 @@ struct build_options {
 };
 
 // Helper to register standard build options into CLI subcommands
-auto setup_build_options_flags(CLI::App*          subcmd,
-                               raw_build_options& opts,
-                               std::string_view   output_desc) -> void;
+auto setup_flags(CLI::App* subcmd, raw_options& opts, std::string_view output_desc) -> void;
 
-} // namespace ghoti::cmd
+} // namespace ghoti::cmd::build

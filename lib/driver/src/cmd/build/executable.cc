@@ -1,4 +1,4 @@
-#include "driver/cmd/build_exe.hh"
+#include "driver/cmd/build/executable.hh"
 
 #include <filesystem>
 #include <system_error>

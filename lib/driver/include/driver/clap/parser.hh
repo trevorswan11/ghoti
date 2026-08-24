@@ -11,9 +11,9 @@
 #include <stdx/utility.hh>
 
 #include "driver/clap/error.hh"
-#include "driver/cmd/build_options.hh"
+#include "driver/cmd/build/options.hh"
 #include "driver/cmd/command.hh"
-#include "driver/cmd/format.hh"
+#include "driver/cmd/format/options.hh"
 #include "driver/platform/win32.hh"
 
 namespace ghoti::clap {
@@ -40,11 +40,11 @@ class parser {
     char**        argv_;
     std::ostream& error_stream_;
 
-    CLI::App               app_;
-    cmd::raw_build_options build_obj_opts_;
-    cmd::raw_build_options build_exe_opts_;
-    cmd::raw_build_options build_lib_opts_;
-    cmd::raw_fmt_options   fmt_opts_;
+    CLI::App                 app_;
+    cmd::build::raw_options  build_obj_opts_;
+    cmd::build::raw_options  build_exe_opts_;
+    cmd::build::raw_options  build_lib_opts_;
+    cmd::format::raw_options fmt_opts_;
 
 #if GHOTI_WINDOWS
     win32::rich_console console_;

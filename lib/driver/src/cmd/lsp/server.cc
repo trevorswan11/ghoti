@@ -1,4 +1,4 @@
-#include "driver/cmd/lsp/lsp.hh"
+#include "driver/cmd/lsp/server.hh"
 
 #include <exception>
 #include <filesystem>

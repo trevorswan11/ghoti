@@ -1,4 +1,4 @@
-#include "driver/cmd/format.hh"
+#include "driver/cmd/format/options.hh"
 
 #include <filesystem>
 #include <ostream>
@@ -12,11 +12,12 @@
 #include <stdx/utility.hh>
 
 #include "driver/clap/error.hh"
+#include "driver/cmd/format/options.hh"
 
-namespace ghoti::cmd {
+namespace ghoti::cmd::format {
 
-auto fmt_options::process_raw(const raw_fmt_options& raw, std::ostream& error_stream)
-    -> stdx::result<fmt_options, clap::error> {
+auto options::process_raw(const raw_options& raw, std::ostream& error_stream)
+    -> stdx::result<options, clap::error> {
     std::vector<std::filesystem::path> input_paths;
     const auto try_add_file = [&input_paths](const std::filesystem::path& p) {
         if (std::filesystem::is_regular_file(p)) {
@@ -81,7 +82,7 @@ auto fmt_options::process_raw(const raw_fmt_options& raw, std::ostream& error_st
             clap::error::CONFLICTING_OPTIONS);
     }
 
-    return fmt_options{
+    return options{
         .input_paths    = std::move(input_paths),
         .write_in_place = raw.write_in_place,
         .check_only     = raw.check_only,
@@ -94,6 +95,4 @@ auto fmt_options::process_raw(const raw_fmt_options& raw, std::ostream& error_st
     };
 }
 
-auto format::execute() -> stdx::result<void, clap::error> { TODO("Connect to syntax formatter"); }
-
-} // namespace ghoti::cmd
+} // namespace ghoti::cmd::format

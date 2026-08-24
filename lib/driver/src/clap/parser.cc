@@ -21,14 +21,15 @@
 #include "compiler/codegen/target.hh"
 #include "driver/clap/error.hh"
 #include "driver/clap/formatter.hh"
-#include "driver/cmd/build_exe.hh"
-#include "driver/cmd/build_lib.hh"
-#include "driver/cmd/build_obj.hh"
-#include "driver/cmd/build_options.hh"
+#include "driver/cmd/build/executable.hh"
+#include "driver/cmd/build/library.hh"
+#include "driver/cmd/build/object.hh"
+#include "driver/cmd/build/options.hh"
 #include "driver/cmd/command.hh"
-#include "driver/cmd/format.hh"
-#include "driver/cmd/lsp/lsp.hh"
-#include "driver/cmd/repl.hh"
+#include "driver/cmd/format/formatter.hh"
+#include "driver/cmd/format/options.hh"
+#include "driver/cmd/lsp/server.hh"
+#include "driver/cmd/repl/shell.hh"
 #include "ghoti/config.h"
 
 namespace ghoti::clap {
@@ -65,17 +66,17 @@ auto parser::parse() -> stdx::result<stdx::box<cmd::command>, error> {
         app_.parse(argc_, argv_);
     } catch (const CLI::ParseError& e) { return stdx::err{static_cast<error>(app_.exit(e))}; };
 
-    if (repl_cmd->parsed()) { return stdx::make_box<cmd::repl>(error_stream_); }
+    if (repl_cmd->parsed()) { return stdx::make_box<cmd::shell>(error_stream_); }
     if (lsp_cmd->parsed()) { return stdx::make_box<cmd::lsp_server>(error_stream_); }
 
     if (build_obj_cmd->parsed()) {
-        auto opts{TRY(cmd::build_options::process_raw(
+        auto opts{TRY(cmd::build::options::process_raw(
             build_obj_opts_, codegen::output_type::OBJECT, error_stream_))};
         return stdx::make_box<cmd::build_obj>(std::move(opts), error_stream_);
     }
 
     if (build_exe_cmd->parsed()) {
-        auto opts{TRY(cmd::build_options::process_raw(
+        auto opts{TRY(cmd::build::options::process_raw(
             build_exe_opts_, codegen::output_type::EXECUTABLE, error_stream_))};
         return stdx::make_box<cmd::build_exe>(std::move(opts), error_stream_);
     }
@@ -83,13 +84,13 @@ auto parser::parse() -> stdx::result<stdx::box<cmd::command>, error> {
     if (build_lib_cmd->parsed()) {
         const auto type{build_lib_opts_.dynamic ? codegen::output_type::DYNAMIC_LIBRARY
                                                 : codegen::output_type::STATIC_LIBRARY};
-        auto       opts{TRY(cmd::build_options::process_raw(build_lib_opts_, type, error_stream_))};
+        auto opts{TRY(cmd::build::options::process_raw(build_lib_opts_, type, error_stream_))};
         return stdx::make_box<cmd::build_lib>(std::move(opts), error_stream_);
     }
 
     if (fmt_cmd->parsed()) {
-        auto opts{TRY(cmd::fmt_options::process_raw(fmt_opts_, error_stream_))};
-        return stdx::make_box<cmd::format>(std::move(opts), error_stream_);
+        auto opts{TRY(cmd::format::options::process_raw(fmt_opts_, error_stream_))};
+        return stdx::make_box<cmd::formatter>(std::move(opts), error_stream_);
     }
 
     return fatal_error(error_stream_, "expected command argument", error::MISSING_SUBCOMMAND);
@@ -106,14 +107,14 @@ auto parser::setup_lsp_subcmd() -> gsl::not_null<CLI::App*> {
 auto parser::setup_build_obj_subcmd() -> gsl::not_null<CLI::App*> {
     auto* sub{app_.add_subcommand("build-obj", "Build an object file from source")};
     sub->add_option("input_file", build_obj_opts_.input, "Input source file (.gh)")->required();
-    setup_build_options_flags(sub, build_obj_opts_, "Output object file (.o / .obj)");
+    cmd::build::setup_flags(sub, build_obj_opts_, "Output object file (.o / .obj)");
     return sub;
 }
 
 auto parser::setup_build_exe_subcmd() -> gsl::not_null<CLI::App*> {
     auto* sub{app_.add_subcommand("build-exe", "Build an executable binary from source")};
     sub->add_option("input_file", build_exe_opts_.input, "Input source file (.gh)")->required();
-    setup_build_options_flags(sub, build_exe_opts_, "Output executable binary");
+    cmd::build::setup_flags(sub, build_exe_opts_, "Output executable binary");
     return sub;
 }
 
@@ -123,7 +124,7 @@ auto parser::setup_build_lib_subcmd() -> gsl::not_null<CLI::App*> {
     sub->add_flag("--dynamic,--shared",
                   build_lib_opts_.dynamic,
                   "Build a dynamic / shared library instead of a static library");
-    setup_build_options_flags(
+    cmd::build::setup_flags(
         sub, build_lib_opts_, "Output library path (.a / .lib / .so / .dylib / .dll)");
     return sub;
 }

@@ -10,8 +10,8 @@
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
 #include "driver/clap/error.hh"
-#include "driver/cmd/build_exe.hh"
-#include "driver/cmd/build_lib.hh"
+#include "driver/cmd/build/executable.hh"
+#include "driver/cmd/build/library.hh"
 #include "support/tempfile.hh"
 #include "support/test.hh"
 

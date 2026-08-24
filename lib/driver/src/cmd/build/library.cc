@@ -1,4 +1,4 @@
-#include "driver/cmd/build_lib.hh"
+#include "driver/cmd/build/library.hh"
 
 #include <filesystem>
 #include <system_error>
