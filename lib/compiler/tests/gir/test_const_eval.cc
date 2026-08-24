@@ -24,24 +24,18 @@ TEST_CASE("Primitive literal constant eval") {
 
     const auto [sym_a, _, decl_a, type_a]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("a", idx)};
-    const auto val_a{evaluator.try_eval(*decl_a.value)};
-    REQUIRE(val_a.has_value());
-    CHECK(val_a->is<i64>());
-    CHECK(val_a->as<i64>() == 42);
+    const auto val_a{UNWRAP(evaluator.try_eval(*decl_a.value))};
+    CHECK(UNWRAP(val_a.as_opt<i64>()) == 42);
 
     const auto [sym_b, _b, decl_b, type_b]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("b", idx)};
-    const auto val_b{evaluator.try_eval(*decl_b.value)};
-    REQUIRE(val_b.has_value());
-    CHECK(val_b->is<bool>());
-    CHECK(val_b->as<bool>() == true);
+    const auto val_b{UNWRAP(evaluator.try_eval(*decl_b.value))};
+    CHECK(UNWRAP(val_b.as_opt<bool>()) == true);
 
     const auto [sym_c, _c, decl_c, type_c]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("c", idx)};
-    const auto val_c{evaluator.try_eval(*decl_c.value)};
-    REQUIRE(val_c.has_value());
-    CHECK(val_c->is<f64>());
-    CHECK(val_c->as<f64>() == 3.14);
+    const auto val_c{UNWRAP(evaluator.try_eval(*decl_c.value))};
+    CHECK(UNWRAP(val_c.as_opt<f64>()) == 3.14);
 }
 
 TEST_CASE("Integer arithmetic and bitwise folding constant eval") {
@@ -64,9 +58,8 @@ TEST_CASE("Integer arithmetic and bitwise folding constant eval") {
     const auto check_val = [&](std::string_view name, i64 expected) {
         const auto [sym, _, decl, type]{
             ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>(name, idx)};
-        const auto val{evaluator.try_eval(*decl.value)};
-        REQUIRE(val.has_value());
-        CHECK(val->as_int_opt() == expected);
+        const auto val{UNWRAP(evaluator.try_eval(*decl.value))};
+        CHECK(UNWRAP(val.as_int_opt()) == expected);
     };
 
     check_val("add", 2 + 3);
@@ -98,9 +91,8 @@ TEST_CASE("Boolean logic and comparisons constant eval") {
     const auto check_bool = [&](std::string_view name, bool expected) {
         const auto [sym, _, decl, type]{
             ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>(name, idx)};
-        const auto val{evaluator.try_eval(*decl.value)};
-        REQUIRE(val.has_value());
-        CHECK(val->as<bool>() == expected);
+        const auto val{UNWRAP(evaluator.try_eval(*decl.value))};
+        CHECK(UNWRAP(val.as_opt<bool>()) == expected);
     };
 
     check_bool("t_and", true && false);
@@ -129,9 +121,8 @@ TEST_CASE("Compile-time builtins constant eval") {
     const auto check_u64 = [&](std::string_view name, u64 expected) {
         const auto [sym, _, decl, type]{
             ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>(name, idx)};
-        const auto val{evaluator.try_eval(*decl.value)};
-        REQUIRE(val.has_value());
-        CHECK(val->as_uint_opt() == expected);
+        const auto val{UNWRAP(evaluator.try_eval(*decl.value))};
+        CHECK(UNWRAP(val.as_uint_opt()) == expected);
     };
 
     check_u64("sz_u8", 1);
@@ -156,11 +147,8 @@ TEST_CASE("Target builtins constant eval") {
     const auto check_str = [&](std::string_view name) {
         const auto [sym, _, decl, type]{
             ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>(name, idx)};
-        const auto val{evaluator.try_eval(*decl.value)};
-        REQUIRE(val.has_value());
-        const auto str_opt{val->as_opt<std::string>()};
-        REQUIRE(str_opt.has_value());
-        CHECK(!str_opt->empty());
+        const auto val{UNWRAP(evaluator.try_eval(*decl.value))};
+        CHECK_FALSE(UNWRAP(val.as_opt<std::string>()).empty());
     };
 
     check_str("os_name");
@@ -178,17 +166,13 @@ TEST_CASE("MulAdd and TagName constant eval") {
 
     const auto [sym_ma, _, decl_ma, type_ma]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("v_mul_add", idx)};
-    const auto val_ma{evaluator.try_eval(*decl_ma.value)};
-    REQUIRE(val_ma.has_value());
-    CHECK(val_ma->as_int_opt() == 10);
+    const auto val_ma{UNWRAP(evaluator.try_eval(*decl_ma.value))};
+    CHECK(UNWRAP(val_ma.as_int_opt()) == 10);
 
     const auto [sym_tag, _t, decl_tag, type_tag]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("tag", idx)};
-    const auto val_tag{evaluator.try_eval(*decl_tag.value)};
-    REQUIRE(val_tag.has_value());
-    const auto str_tag{val_tag->as_opt<std::string>()};
-    REQUIRE(str_tag.has_value());
-    CHECK(*str_tag == "GREEN");
+    const auto val_tag{UNWRAP(evaluator.try_eval(*decl_tag.value))};
+    CHECK(UNWRAP(val_tag.as_opt<std::string>()) == "GREEN");
 }
 
 TEST_CASE("Const symbol reference propagation constant eval") {
@@ -201,15 +185,13 @@ TEST_CASE("Const symbol reference propagation constant eval") {
 
     const auto [sym_m, _m, decl_m, type_m]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("M", idx)};
-    const auto val_m{evaluator.try_eval(*decl_m.value)};
-    REQUIRE(val_m.has_value());
-    CHECK(val_m->as_int_opt() == 8);
+    const auto val_m{UNWRAP(evaluator.try_eval(*decl_m.value))};
+    CHECK(UNWRAP(val_m.as_int_opt()) == 8);
 
     const auto [sym_k, _k, decl_k, type_k]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("K", idx)};
-    const auto val_k{evaluator.try_eval(*decl_k.value)};
-    REQUIRE(val_k.has_value());
-    CHECK(val_k->as_int_opt() == 12);
+    const auto val_k{UNWRAP(evaluator.try_eval(*decl_k.value))};
+    CHECK(UNWRAP(val_k.as_int_opt()) == 12);
 }
 
 TEST_CASE("Array dimension resolution constant eval") {
@@ -227,10 +209,9 @@ TEST_CASE("Array dimension resolution constant eval") {
     const auto& resolved_type{ctx->root_mod.get_sema_type(explicit_type_id)};
 
     CHECK(resolved_type.get_kind() == sema::type_kind::ARRAY);
-    const auto arr_data{resolved_type.get_data().as_opt<sema::types::array>()};
-    REQUIRE(arr_data.has_value());
-    CHECK(arr_data->len == 8);
-    CHECK(arr_data->underlying.get_kind() == sema::type_kind::U8);
+    const auto arr_data{UNWRAP(resolved_type.get_data().as_opt<sema::types::array>())};
+    CHECK(arr_data.len == 8);
+    CHECK(arr_data.underlying.get_kind() == sema::type_kind::U8);
 }
 
 TEST_CASE("Const eval function evaluation") {
@@ -253,15 +234,13 @@ TEST_CASE("Const eval function evaluation") {
 
     const auto [sym_a, _a, decl_a, type_a]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("res_add", idx)};
-    const auto val_a{evaluator.try_eval(*decl_a.value)};
-    REQUIRE(val_a.has_value());
-    CHECK(val_a->as_int_opt() == 42);
+    const auto val_a{UNWRAP(evaluator.try_eval(*decl_a.value))};
+    CHECK(UNWRAP(val_a.as_int_opt()) == 42);
 
     const auto [sym_m, _m, decl_m, type_m]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("res_max", idx)};
-    const auto val_m{evaluator.try_eval(*decl_m.value)};
-    REQUIRE(val_m.has_value());
-    CHECK(val_m->as_int_opt() == 100);
+    const auto val_m{UNWRAP(evaluator.try_eval(*decl_m.value))};
+    CHECK(UNWRAP(val_m.as_int_opt()) == 100);
 }
 
 TEST_CASE("Const eval variable mutation and loops") {
@@ -295,15 +274,13 @@ TEST_CASE("Const eval variable mutation and loops") {
 
     const auto [sym_s, _s, decl_s, type_s]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("sum_10", idx)};
-    const auto val_s{evaluator.try_eval(*decl_s.value)};
-    REQUIRE(val_s.has_value());
-    CHECK(val_s->as_int_opt() == 55);
+    const auto val_s{UNWRAP(evaluator.try_eval(*decl_s.value))};
+    CHECK(UNWRAP(val_s.as_int_opt()) == 55);
 
     const auto [sym_c, _c, decl_c, type_c]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("collatz_6", idx)};
-    const auto val_c{evaluator.try_eval(*decl_c.value)};
-    REQUIRE(val_c.has_value());
-    CHECK(val_c->as_int_opt() == 8);
+    const auto val_c{UNWRAP(evaluator.try_eval(*decl_c.value))};
+    CHECK(UNWRAP(val_c.as_int_opt()) == 8);
 }
 
 TEST_CASE("Const eval for loops over ranges and arrays") {
@@ -329,15 +306,13 @@ TEST_CASE("Const eval for loops over ranges and arrays") {
 
     const auto [sym_r, _r, decl_r, type_r]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("r_sum_10", idx)};
-    const auto val_r{evaluator.try_eval(*decl_r.value)};
-    REQUIRE(val_r.has_value());
-    CHECK(val_r->as_int_opt() == 55);
+    const auto val_r{UNWRAP(evaluator.try_eval(*decl_r.value))};
+    CHECK(UNWRAP(val_r.as_int_opt()) == 55);
 
     const auto [sym_a, _a, decl_a, type_a]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("a_sum", idx)};
-    const auto val_a{evaluator.try_eval(*decl_a.value)};
-    REQUIRE(val_a.has_value());
-    CHECK(val_a->as_int_opt() == 60);
+    const auto val_a{UNWRAP(evaluator.try_eval(*decl_a.value))};
+    CHECK(UNWRAP(val_a.as_int_opt()) == 60);
 }
 
 TEST_CASE("Array constant eval indexing") {
@@ -350,15 +325,13 @@ TEST_CASE("Array constant eval indexing") {
 
     const auto [sym_0, _0, decl_0, type_0]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("elem0", idx)};
-    const auto val_0{evaluator.try_eval(*decl_0.value)};
-    REQUIRE(val_0.has_value());
-    CHECK(val_0->as_int_opt() == 10);
+    const auto val_0{UNWRAP(evaluator.try_eval(*decl_0.value))};
+    CHECK(UNWRAP(val_0.as_int_opt()) == 10);
 
     const auto [sym_2, _2, decl_2, type_2]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("elem2", idx)};
-    const auto val_2{evaluator.try_eval(*decl_2.value)};
-    REQUIRE(val_2.has_value());
-    CHECK(val_2->as_int_opt() == 30);
+    const auto val_2{UNWRAP(evaluator.try_eval(*decl_2.value))};
+    CHECK(UNWRAP(val_2.as_int_opt()) == 30);
 }
 
 TEST_CASE("Struct member constant eval access") {
@@ -372,15 +345,13 @@ TEST_CASE("Struct member constant eval access") {
 
     const auto [sym_x, _x, decl_x, type_x]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("px", idx)};
-    const auto val_x{evaluator.try_eval(*decl_x.value)};
-    REQUIRE(val_x.has_value());
-    CHECK(val_x->as_int_opt() == 15);
+    const auto val_x{UNWRAP(evaluator.try_eval(*decl_x.value))};
+    CHECK(UNWRAP(val_x.as_int_opt()) == 15);
 
     const auto [sym_y, _y, decl_y, type_y]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("py", idx)};
-    const auto val_y{evaluator.try_eval(*decl_y.value)};
-    REQUIRE(val_y.has_value());
-    CHECK(val_y->as_int_opt() == 25);
+    const auto val_y{UNWRAP(evaluator.try_eval(*decl_y.value))};
+    CHECK(UNWRAP(val_y.as_int_opt()) == 25);
 }
 
 TEST_CASE("Union constant eval active and inactive member access") {
@@ -394,9 +365,8 @@ TEST_CASE("Union constant eval active and inactive member access") {
 
     const auto [sym_a, _a, decl_a, type_a]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("active_val", idx)};
-    const auto val_a{evaluator.try_eval(*decl_a.value)};
-    REQUIRE(val_a.has_value());
-    CHECK(val_a->as_int_opt() == 42);
+    const auto val_a{UNWRAP(evaluator.try_eval(*decl_a.value))};
+    CHECK(UNWRAP(val_a.as_int_opt()) == 42);
 
     const auto [sym_i, _i, decl_i, type_i]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("inactive_val", idx)};
@@ -432,33 +402,28 @@ TEST_CASE("Match constant eval expression evaluation") {
 
     const auto [sym_0, _0, decl_0, type_0]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("c0", idx)};
-    const auto val_0{evaluator.try_eval(*decl_0.value)};
-    REQUIRE(val_0.has_value());
-    CHECK(val_0->as_int_opt() == 100);
+    const auto val_0{UNWRAP(evaluator.try_eval(*decl_0.value))};
+    CHECK(UNWRAP(val_0.as_int_opt()) == 100);
 
     const auto [sym_1, _1, decl_1, type_1]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("c1", idx)};
-    const auto val_1{evaluator.try_eval(*decl_1.value)};
-    REQUIRE(val_1.has_value());
-    CHECK(val_1->as_int_opt() == 200);
+    const auto val_1{UNWRAP(evaluator.try_eval(*decl_1.value))};
+    CHECK(UNWRAP(val_1.as_int_opt()) == 200);
 
     const auto [sym_99, _99, decl_99, type_99]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("c99", idx)};
-    const auto val_99{evaluator.try_eval(*decl_99.value)};
-    REQUIRE(val_99.has_value());
-    CHECK(val_99->as_int_opt() == 300);
+    const auto val_99{UNWRAP(evaluator.try_eval(*decl_99.value))};
+    CHECK(UNWRAP(val_99.as_int_opt()) == 300);
 
     const auto [sym_r, _r, decl_r, type_r]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("code_red", idx)};
-    const auto val_r{evaluator.try_eval(*decl_r.value)};
-    REQUIRE(val_r.has_value());
-    CHECK(val_r->as_int_opt() == 10);
+    const auto val_r{UNWRAP(evaluator.try_eval(*decl_r.value))};
+    CHECK(UNWRAP(val_r.as_int_opt()) == 10);
 
     const auto [sym_b, _b, decl_b, type_b]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("code_blue", idx)};
-    const auto val_b{evaluator.try_eval(*decl_b.value)};
-    REQUIRE(val_b.has_value());
-    CHECK(val_b->as_int_opt() == 30);
+    const auto val_b{UNWRAP(evaluator.try_eval(*decl_b.value))};
+    CHECK(UNWRAP(val_b.as_int_opt()) == 30);
 }
 
 TEST_CASE("Resolve deferred call returning type") {
@@ -485,13 +450,11 @@ TEST_CASE("Resolve deferred call returning type") {
 
     evaluator.resolve_all_deferred_types();
 
-    const auto resolved_a{ctx->root_mod.get_sema_type_opt(node_a.explicit_type)};
-    REQUIRE(resolved_a.has_value());
-    CHECK(resolved_a->get_kind() == sema::type_kind::I64);
+    const auto& resolved_a{UNWRAP(ctx->root_mod.get_sema_type_opt(node_a.explicit_type))};
+    CHECK(resolved_a.get_kind() == sema::type_kind::I64);
 
-    const auto resolved_b{ctx->root_mod.get_sema_type_opt(node_b.explicit_type)};
-    REQUIRE(resolved_b.has_value());
-    CHECK(resolved_b->get_kind() == sema::type_kind::I32);
+    const auto& resolved_b{UNWRAP(ctx->root_mod.get_sema_type_opt(node_b.explicit_type))};
+    CHECK(resolved_b.get_kind() == sema::type_kind::I32);
 }
 
 TEST_CASE("Division by zero failure handling in constant eval") {
@@ -520,15 +483,13 @@ TEST_CASE("Builtin const eval @this") {
 
     const auto [sym_sz, _sz, decl_sz, type_sz]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("sz", idx)};
-    const auto val_sz{evaluator.try_eval(*decl_sz.value)};
-    REQUIRE(val_sz.has_value());
-    CHECK(val_sz->as_int_opt() == 4);
+    const auto val_sz{UNWRAP(evaluator.try_eval(*decl_sz.value))};
+    CHECK(UNWRAP(val_sz.as_int_opt()) == 4);
 
     const auto [sym_al, _al, decl_al, type_al]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("al", idx)};
-    const auto val_al{evaluator.try_eval(*decl_al.value)};
-    REQUIRE(val_al.has_value());
-    CHECK(val_al->as_int_opt() == 4);
+    const auto val_al{UNWRAP(evaluator.try_eval(*decl_al.value))};
+    CHECK(UNWRAP(val_al.as_int_opt()) == 4);
 }
 
 TEST_CASE("Volatile variables refuse constant folding in const eval") {
@@ -541,7 +502,7 @@ TEST_CASE("Volatile variables refuse constant folding in const eval") {
     const auto [sym_rv, _rv, decl_rv, type_rv]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("read_v", idx)};
     const auto val_rv{evaluator.try_eval(*decl_rv.value)};
-    CHECK_FALSE(val_rv.has_value());
+    CHECK_FALSE(val_rv);
 }
 
 TEST_CASE("Const eval string concatenation and comparison folding") {

@@ -2,6 +2,7 @@
 #include <string>
 
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/format.h>
 #include <nlohmann/json.hpp>
 
 #include "driver/cmd/lsp/rpc.hh"
@@ -31,29 +32,29 @@ TEST_CASE("read_message header matching ignores case") {
 TEST_CASE("read_message returns none on a clean empty stream") {
     std::istringstream in;
     std::ostringstream errors;
-    CHECK_FALSE(lsp::read_message(in, errors).has_value());
+    CHECK_FALSE(lsp::read_message(in, errors));
 }
 
 TEST_CASE("read_message returns none and logs when Content-Length is missing") {
     std::istringstream in{"Foo: bar\r\n\r\n{}"};
     std::ostringstream errors;
-    CHECK_FALSE(lsp::read_message(in, errors).has_value());
-    CHECK(errors.str().find("Content-Length") != std::string::npos);
+    CHECK_FALSE(lsp::read_message(in, errors));
+    CHECK(errors.view().contains("Content-Length"));
 }
 
 TEST_CASE("read_message returns none and logs when the body is shorter than advertised") {
     std::istringstream in{"Content-Length: 100\r\n\r\n{}"};
     std::ostringstream errors;
-    CHECK_FALSE(lsp::read_message(in, errors).has_value());
-    CHECK(errors.str().find("shorter") != std::string::npos);
+    CHECK_FALSE(lsp::read_message(in, errors));
+    CHECK(errors.view().contains("shorter"));
 }
 
 TEST_CASE("read_message returns none and logs on invalid JSON") {
     const std::string  body{"not json"};
-    std::istringstream in{"Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body};
+    std::istringstream in{fmt::format("Content-Length: {}\r\n\r\n{}", body.size(), body)};
     std::ostringstream errors;
-    CHECK_FALSE(lsp::read_message(in, errors).has_value());
-    CHECK(errors.str().find("parse") != std::string::npos);
+    CHECK_FALSE(lsp::read_message(in, errors));
+    CHECK(errors.view().contains("parse"));
 }
 
 TEST_CASE("write_message frames the body with a matching byte-exact Content-Length") {
@@ -62,9 +63,8 @@ TEST_CASE("write_message frames the body with a matching byte-exact Content-Leng
     lsp::write_message(out, message);
 
     const auto expected_body{message.dump()};
-    const auto expected{"Content-Length: " + std::to_string(expected_body.size()) + "\r\n\r\n" +
-                        expected_body};
-    CHECK(out.str() == expected);
+    CHECK(out.view() ==
+          fmt::format("Content-Length: {}\r\n\r\n{}", expected_body.size(), expected_body));
 }
 
 TEST_CASE("write_message output round-trips through read_message") {

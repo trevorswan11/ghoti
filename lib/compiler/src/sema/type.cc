@@ -43,17 +43,12 @@ auto type::to_string() const -> std::string {
         [](types::pointer ptr) { return fmt::format("^{}", ptr.underlying.to_string()); },
         [](types::reference ref) { return fmt::format("&{}", ref.underlying.to_string()); },
         [](types::slice slice) { return fmt::format("[]{}", slice.underlying.to_string()); },
-        [](types::array arr) {
-            return fmt::format("[{}]{}", arr.len, arr.underlying.to_string());
-        },
+        [](types::array arr) { return fmt::format("[{}]{}", arr.len, arr.underlying.to_string()); },
         [](types::function fn) {
-            auto params_str{fmt::to_string(
-                fmt::join(fn.params | std::views::transform(
-                                          [](type* param) { return param->to_string(); }),
-                          ", "))};
-            if (fn.is_variadic) {
-                params_str += params_str.empty() ? "..." : ", ...";
-            }
+            auto params_str{fmt::to_string(fmt::join(
+                fn.params | std::views::transform([](type* param) { return param->to_string(); }),
+                ", "))};
+            if (fn.is_variadic) { params_str += params_str.empty() ? "..." : ", ..."; }
             return fmt::format("fn({}) -> {}", params_str, fn.return_type.to_string());
         },
         [this](const auto&) { return std::string{type_kind_display_name(get_kind())}; });

@@ -351,14 +351,12 @@ TEST_CASE("Deferred array underlying a reference parameter resolves to a concret
 
     const auto& param_type{fn.get_params()[0]->type};
     REQUIRE(param_type.get_kind() == sema::type_kind::REFERENCE);
-    const auto ref_data{param_type.get_data().as_opt<sema::types::reference>()};
-    REQUIRE(ref_data.has_value());
+    const auto& ref_data{UNWRAP(param_type.get_data().as_opt<sema::types::reference>())};
 
-    CHECK(ref_data->underlying.get_kind() == sema::type_kind::ARRAY);
-    const auto arr_data{ref_data->underlying.get_data().as_opt<sema::types::array>()};
-    REQUIRE(arr_data.has_value());
-    CHECK(arr_data->len == 3);
-    CHECK_FALSE(ref_data->underlying.is_constant());
+    CHECK(ref_data.underlying.get_kind() == sema::type_kind::ARRAY);
+    const auto& arr_data{UNWRAP(ref_data.underlying.get_data().as_opt<sema::types::array>())};
+    CHECK(arr_data.len == 3);
+    CHECK_FALSE(ref_data.underlying.is_constant());
 }
 
 } // namespace ghoti::tests

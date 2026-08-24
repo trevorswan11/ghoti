@@ -22,7 +22,7 @@ namespace ghoti::lsp {
 class document_store {
   public:
     using touched_modules = std::vector<std::pair<std::filesystem::path, nlohmann::json>>;
-    using query_result     = std::pair<stdx::box<analysis_session>, gsl::not_null<mod::module*>>;
+    using query_result    = std::pair<stdx::box<analysis_session>, gsl::not_null<mod::module*>>;
 
   public:
     explicit document_store(std::ostream& error_stream) noexcept : error_stream_{error_stream} {}

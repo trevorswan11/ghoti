@@ -198,7 +198,7 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
         if (const auto fn_expr{active_ast().get_as_opt<ast::function_expr>(*decl.value)}) {
             if (const auto fn_data{sema_type->get_data().as_opt<sema::types::function>()}) {
                 // Generic templates will be emitted via monomorphized instantiations
-                if (ctx_.generic_functions.get_opt(*sema_type).has_value()) { return; }
+                if (ctx_.generic_functions.get_opt(*sema_type)) { return; }
             }
             return emit_function(id, decl, *fn_expr);
         } else if (const auto struct_expr{active_ast().get_as_opt<ast::struct_expr>(*decl.value)}) {
@@ -349,13 +349,13 @@ auto emitter::emit_function(ast::node_id              id,
     if (const auto cur_seg{builder_.get_segment()}) {
         if (!cur_seg->has_terminator()) {
             stdx::option<const sema::types::function&> fn_data;
-            const sema::type* target_t{sema_type.has_value() ? &sema_type.value() : nullptr};
+            auto                                       target_t{sema_type};
             if (target_t) {
                 if (const auto ref{target_t->get_data().as_opt<sema::types::reference>()}) {
-                    target_t = &ref->underlying;
+                    target_t.emplace(ref->underlying);
                 }
                 if (const auto ptr{target_t->get_data().as_opt<sema::types::pointer>()}) {
-                    target_t = &ptr->underlying;
+                    target_t.emplace(ptr->underlying);
                 }
                 fn_data = target_t->get_data().as_opt<sema::types::function>();
             }
@@ -1026,8 +1026,8 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
 
     const auto kind_opt{map_binary_op(op_type)};
     const auto sema_type{active_mod().get_sema_type_opt(id)};
-    ASSERT(kind_opt.has_value(), "Binary operator must be mapped to instruction kind");
-    ASSERT(sema_type.has_value(), "Binary expression must have a resolved sema type");
+    ASSERT(kind_opt, "Binary operator must be mapped to instruction kind");
+    ASSERT(sema_type, "Binary expression must have a resolved sema type");
 
     if (*kind_opt == instruction_kind::EQ || *kind_opt == instruction_kind::NE) {
         if (const auto tag_eq{try_emit_union_field_eq(binary.lhs, binary.rhs)}) {
@@ -1051,8 +1051,8 @@ auto emitter::emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value
     const auto op_type{id.get_token_type()};
     const auto kind_opt{map_unary_op(op_type)};
     const auto sema_type{active_mod().get_sema_type_opt(id)};
-    ASSERT(kind_opt.has_value(), "Unary operator must be mapped to instruction kind");
-    ASSERT(sema_type.has_value(), "Unary expression must have a resolved sema type");
+    ASSERT(kind_opt, "Unary operator must be mapped to instruction kind");
+    ASSERT(sema_type, "Unary expression must have a resolved sema type");
 
     const auto operand{emit_expression(unary.rhs)};
     const auto dest{builder_.emit_unary(*kind_opt, operand, *sema_type)};
@@ -1094,10 +1094,10 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
     PROFILE_FUNCTION();
     const auto op_type{id.get_token_type()};
     const auto sema_type{active_mod().get_sema_type_opt(id)};
-    ASSERT(sema_type.has_value(), "Assignment expression must have a resolved sema type");
+    ASSERT(sema_type, "Assignment expression must have a resolved sema type");
     sync_tagged_union_tag(assign.lhs);
     auto lhs_lval{emit_lvalue(assign.lhs)};
-    ASSERT(lhs_lval.type.has_value(), "Assignment LHS must have a resolved type");
+    ASSERT(lhs_lval.type, "Assignment LHS must have a resolved type");
 
     // A reference-typed assignment target has value semantics
     if (const auto ref_data{lhs_lval.type->get_data().as_opt<sema::types::reference>()}) {
@@ -2316,7 +2316,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             if (binding->is_alloca) { return value{binding->id, qualified_type}; }
 
             // A binding with no alloca of its own has no address: spill it into one
-            const auto is_const_binding{binding->const_val.has_value() || binding->is_const};
+            const auto is_const_binding{binding->const_val || binding->is_const};
             const auto unspilled_value{
                 binding->const_val.value_or(value{binding->id, qualified_type})};
             const auto spilled{

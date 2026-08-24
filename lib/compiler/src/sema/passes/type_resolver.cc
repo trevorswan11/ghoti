@@ -568,7 +568,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
         }
 
         const auto fn_info_opt{ctx_.generic_functions.get_opt(callee_type)};
-        if (any_param_generic(params) && fn_info_opt.has_value()) {
+        if (any_param_generic(params) && fn_info_opt) {
             auto concrete_arg_types{ctx_.pool.get_many_unsafe(call.arguments.size())};
             bool any_arg_poison{false};
             for (usize i{0}; auto [param_type, arg] :
@@ -759,10 +759,10 @@ namespace {
 // Identifiers, fields, elements, or deref off one have  real storage; anything else is an rvalue.
 [[nodiscard]] auto is_lvalue_shape(const mod::module& module, ast::expr_handle expr) noexcept
     -> bool {
-    return module.ast.get_as_opt<ast::identifier_expr>(expr).has_value() ||
-           module.ast.get_as_opt<ast::dot_expr>(expr).has_value() ||
-           module.ast.get_as_opt<ast::index_expr>(expr).has_value() ||
-           module.ast.get_as_opt<ast::dereference_expr>(expr).has_value();
+    return module.ast.get_as_opt<ast::identifier_expr>(expr) ||
+           module.ast.get_as_opt<ast::dot_expr>(expr) ||
+           module.ast.get_as_opt<ast::index_expr>(expr) ||
+           module.ast.get_as_opt<ast::dereference_expr>(expr);
 }
 
 // Applies a `&`/`&mut`/`^`/`^mut`/none capture modifier, rejecting const or address-of-rvalue.
@@ -849,7 +849,7 @@ auto type_resolver::visit(ast::node_id id, const ast::for_loop_expr& for_expr) -
                                                      is_lvalue_shape(resolving_, iterable),
                                                      "array or slice",
                                                      resolving_.ast.location_of(capture.payload))};
-            if (!cap_result.has_value()) {
+            if (!cap_result) {
                 return last_type_.emplace(
                     ctx_.poison_node(resolving_, id, std::move(cap_result).error()));
             }
@@ -2838,7 +2838,7 @@ auto type_resolver::visit(ast::node_id id, const ast::return_stmt& return_stmt) 
             if (!node) { return false; }
             const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
             return decl && decl->value &&
-                   resolving_.ast.get_as_opt<ast::function_expr>(*decl->value).has_value();
+                   resolving_.ast.get_as_opt<ast::function_expr>(*decl->value);
         }();
 
         if (constructs_closure_literal) {

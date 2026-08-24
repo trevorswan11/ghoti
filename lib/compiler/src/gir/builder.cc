@@ -18,7 +18,7 @@ namespace ghoti::gir {
 
 auto builder::emit_instruction(instruction inst) -> instruction& {
     ASSERT(segment_, "Cannot emit instruction without an active segment");
-    if (!inst.location.has_value() && location_.has_value()) { inst.location = location_; }
+    if (!inst.location && location_) { inst.location = location_; }
     return segment_->append(std::move(inst));
 }
 

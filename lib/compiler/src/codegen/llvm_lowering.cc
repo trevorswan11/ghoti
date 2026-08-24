@@ -960,13 +960,12 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
     ASSERT(!inst.operands.empty(), "Indirect call requires callee operand");
     auto* callee_val{lower_value(inst.operands[0])};
     ASSERT(inst.operands[0].type, "Indirect callee must have function type");
-    const sema::type* ind_target{inst.operands[0].type.has_value() ? &inst.operands[0].type.value()
-                                                                   : nullptr};
+    auto ind_target{inst.operands[0].type};
     if (const auto ref{ind_target->get_data().as_opt<sema::types::reference>()}) {
-        ind_target = &ref->underlying;
+        ind_target.emplace(ref->underlying);
     }
     if (const auto ptr{ind_target->get_data().as_opt<sema::types::pointer>()}) {
-        ind_target = &ptr->underlying;
+        ind_target.emplace(ptr->underlying);
     }
     const auto ind_fn_data{ind_target->get_data().as_opt<sema::types::function>()};
     ASSERT(ind_fn_data, "Indirect callee must have function type");

@@ -73,8 +73,7 @@ TEST_CASE("build-obj subcommand parser") {
         auto         cmd{UNWRAP(parser.parse())};
         auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
         const auto&  target_opts{build_cmd.get_opts().target_opts};
-        REQUIRE(target_opts.triple_str.has_value());
-        CHECK(*target_opts.triple_str == "x86_64-unknown-linux-gnu");
+        CHECK(UNWRAP(target_opts.triple_str) == "x86_64-unknown-linux-gnu");
         CHECK(target_opts.cpu == "skylake");
         CHECK(target_opts.features == "+avx2");
     }
