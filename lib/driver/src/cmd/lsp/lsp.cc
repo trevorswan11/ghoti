@@ -16,6 +16,7 @@
 #include "driver/clap/error.hh"
 #include "driver/cmd/lsp/diagnostics.hh"
 #include "driver/cmd/lsp/document_store.hh"
+#include "driver/cmd/lsp/document_symbols.hh"
 #include "driver/cmd/lsp/position_index.hh"
 #include "driver/cmd/lsp/rpc.hh"
 #include "driver/platform/win32.hh"
@@ -91,6 +92,8 @@ auto lsp_server::handle_message(const nlohmann::json& message, lsp::document_sto
         handle_hover(message, store);
     } else if (method == "textDocument/definition") {
         handle_definition(message, store);
+    } else if (method == "textDocument/documentSymbol") {
+        handle_document_symbol(message, store);
     } else if (message.contains("id")) {
         lsp::write_message(
             std::cout, make_error_response(message["id"], METHOD_NOT_FOUND, "method not found"));
@@ -103,6 +106,7 @@ auto lsp_server::handle_initialize(const nlohmann::json& message) -> void {
         {"textDocumentSync", 1}, // TextDocumentSyncKind.Full
         {"hoverProvider", true},
         {"definitionProvider", true},
+        {"documentSymbolProvider", true},
     };
     const nlohmann::json server_info{{"name", "ghoti"}, {"version", GHOTI_VERSION_STR}};
     lsp::write_message(
@@ -194,6 +198,19 @@ auto lsp_server::handle_definition(const nlohmann::json& message, lsp::document_
                        make_response(message.at("id"),
                                      {{"uri", path_utils::path_to_uri(*path)},
                                       {"range", lsp::range_of(*def_loc)}}));
+}
+
+auto lsp_server::handle_document_symbol(const nlohmann::json& message, lsp::document_store& store)
+    -> void {
+    const auto path{
+        path_utils::uri_to_path(message.at("params").at("textDocument").at("uri").get<std::string>())};
+    if (!path) { return write_null_id(message); }
+
+    auto result{store.analyze(*path)};
+    if (!result) { return write_null_id(message); }
+
+    lsp::write_message(std::cout,
+                       make_response(message.at("id"), lsp::document_symbols(*result->second)));
 }
 
 auto lsp_server::publish_diagnostics(const std::filesystem::path& path,
