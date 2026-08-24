@@ -143,6 +143,14 @@ auto spawn_child(const mock_argv& args) -> stdx::option<u32> {
 #endif
 }
 
+auto ghoti_binary_path() -> std::filesystem::path {
+    auto path{self_exe_path().parent_path().parent_path() / "bin" / "ghoti"};
+#if GHOTI_WINDOWS
+    path += ".exe";
+#endif
+    return path;
+}
+
 namespace {
 
 #if GHOTI_WINDOWS

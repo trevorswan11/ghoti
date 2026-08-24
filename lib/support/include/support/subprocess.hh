@@ -52,6 +52,9 @@ class mock_argv {
 // Spawns the child and waits for its termination, returning the exit code
 [[nodiscard]] auto spawn_child(const mock_argv& args) -> stdx::option<u32>;
 
+// zig-out/tests/*.exe -> zig-out/bin/ghoti(.exe)
+[[nodiscard]] auto ghoti_binary_path() -> std::filesystem::path;
+
 // A child process with its stdin/stdout piped through streams and stderr inherited
 class piped_process {
   public:

@@ -13,6 +13,7 @@
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
+#include <stdx/types.hh>
 
 #include "compiler/module/error.hh"
 #include "compiler/module/module.hh"
@@ -21,6 +22,11 @@
 #include "driver/cmd/lsp/workspace_symbols.hh"
 
 namespace ghoti::lsp {
+
+enum class document_sync_kind : i32 {
+    full        = 1,
+    incremental = 2,
+};
 
 // Tracks open editor buffers as overlays and re-runs a full analysis pass on every change
 class document_store {
