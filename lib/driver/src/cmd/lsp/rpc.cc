@@ -70,7 +70,6 @@ auto read_message(std::istream& in, std::ostream& error_stream) -> stdx::option<
         return stdx::none;
     }
 
-    // Brace-init here would hit nlohmann's single-element-wraps-in-an-array pitfall
     auto parsed = nlohmann::json::parse(body, nullptr, false);
     if (parsed.is_discarded()) {
         fmt::println(error_stream, "lsp: failed to parse message body as JSON");

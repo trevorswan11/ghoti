@@ -15,7 +15,7 @@ namespace ghoti::lsp {
 
 namespace {
 
-// LSP CompletionItemKind
+// There's no dedicated Union kind, so unions map to Struct
 enum class completion_kind : i32 {
     FUNCTION = 3,
     VARIABLE = 6,
@@ -43,7 +43,6 @@ auto completion_kind_of(const mod::module& module, const ast::decl_stmt& decl) -
 } // namespace
 
 auto completion_items(const mod::module& module) -> nlohmann::json {
-    // Brace-init here would hit nlohmann's single-element-wraps-in-an-array pitfall
     auto out = nlohmann::json::array();
 
     for (const auto& keyword : syntax::ALL_KEYWORDS) {

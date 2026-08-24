@@ -256,7 +256,6 @@ auto lsp_server::handle_references(const nlohmann::json& message, lsp::document_
         params.value("context", nlohmann::json::object()).value("includeDeclaration", false)};
     const auto uri{path_utils::path_to_uri(*path)};
 
-    // Brace-init here would hit nlohmann's single-element-wraps-in-an-array pitfall
     auto locations = nlohmann::json::array();
     if (include_declaration) {
         locations.push_back({{"uri", uri}, {"range", lsp::range_of(*definition)}});
@@ -284,7 +283,6 @@ auto lsp_server::handle_rename(const nlohmann::json& message, lsp::document_stor
 
     const auto new_name{params.at("newName").get<std::string>()};
 
-    // Brace-init here would hit nlohmann's single-element-wraps-in-an-array pitfall
     auto edits = nlohmann::json::array();
     edits.push_back({{"range", lsp::range_of(*definition)}, {"newText", new_name}});
     for (const auto& ref_span : lsp::find_references(entry_module, *definition)) {

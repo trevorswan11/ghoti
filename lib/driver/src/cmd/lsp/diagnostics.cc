@@ -35,7 +35,6 @@ auto push_diagnostic(nlohmann::json& out, const auto& d) -> void {
 } // namespace
 
 auto to_lsp_diagnostics(const mod::module& module) -> nlohmann::json {
-    // Brace-init here would hit nlohmann's single-element-wraps-in-an-array pitfall
     auto out = nlohmann::json::array();
 
     module.diagnostics.visit(

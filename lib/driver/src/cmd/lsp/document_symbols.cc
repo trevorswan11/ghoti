@@ -43,7 +43,6 @@ auto symbol_kind_of(const mod::module& module, const ast::decl_stmt& decl) -> sy
 } // namespace
 
 auto document_symbols(const mod::module& module) -> nlohmann::json {
-    // Brace-init here would hit nlohmann's single-element-wraps-in-an-array pitfall
     auto out = nlohmann::json::array();
 
     for (const auto root_id : module.ast) {
