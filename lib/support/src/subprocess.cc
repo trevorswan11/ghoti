@@ -1,6 +1,5 @@
 #include "support/subprocess.hh"
 
-#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <filesystem>
@@ -17,7 +16,6 @@
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
-#include <sys/signal.h>
 
 #include "ghoti/config.h"
 
@@ -37,14 +35,17 @@
 #    include <processthreadsapi.h>
 #    include <synchapi.h>
 #    include <windows.h>
+#    include <winnt.h>
 #elif GHOTI_APPLE
 #    include <mach-o/dyld.h>
 #endif
 
 #if !GHOTI_WINDOWS
+#    include <algorithm>
 #    include <csignal>
 #    include <signal.h>
 #    include <stdlib.h>
+#    include <sys/signal.h>
 #    include <sys/wait.h>
 #    include <unistd.h>
 #endif
@@ -185,8 +186,8 @@ class handle_streambuf final : public std::streambuf {
     }
 
   private:
-    ::HANDLE                handle_;
-    std::array<char, 4'096> buffer_{};
+    ::HANDLE                                handle_;
+    std::array<char, stdx::sizes::kib(4UZ)> buffer_{};
 };
 
 #else
