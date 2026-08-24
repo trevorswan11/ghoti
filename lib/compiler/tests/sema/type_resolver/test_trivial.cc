@@ -134,6 +134,20 @@ TEST_CASE("Illegal initializer targets") {
     helpers::test_resolver_fail("const a: i32 = .{};", expected_diag(16));
 }
 
+TEST_CASE("Duplicate top-level symbols resolve without crashing") {
+    helpers::test_resolver_fail(
+        "pub const x := 5; pub const x := 6;",
+        sema::diagnostic{"Redeclaration of symbol 'x'; previous declaration here: 1:11",
+                         sema::error::IDENTIFIER_REDECLARATION,
+                         std::pair{0UZ, 28UZ}});
+
+    helpers::test_resolver_fail(
+        "using X = i32; using X = i64;",
+        sema::diagnostic{"Redeclaration of symbol 'X'; previous declaration here: 1:1",
+                         sema::error::IDENTIFIER_REDECLARATION,
+                         std::pair{0UZ, 15UZ}});
+}
+
 TEST_CASE("Dereferenced assignment using non-pointer fails") {
     helpers::test_resolver_fail(
         R"(

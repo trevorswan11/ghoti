@@ -237,15 +237,17 @@ auto lsp_server::handle_workspace_symbol(const nlohmann::json& message, lsp::doc
 
 auto lsp_server::handle_completion(const nlohmann::json& message, lsp::document_store& store)
     -> void {
-    const auto path{path_utils::uri_to_path(
-        message.at("params").at("textDocument").at("uri").get<std::string>())};
+    const auto& params{message.at("params")};
+    const auto  path{
+        path_utils::uri_to_path(params.at("textDocument").at("uri").get<std::string>())};
     if (!path) { return write_null_id(message); }
 
-    auto result{store.analyze(*path)};
+    const auto target{position_from(params.at("position"))};
+    auto       result{store.analyze(*path)};
     if (!result) { return write_null_id(message); }
 
-    lsp::write_message(std::cout,
-                       make_response(message.at("id"), lsp::completion_items(*result->second)));
+    lsp::write_message(
+        std::cout, make_response(message.at("id"), lsp::completion_items(*result->second, target)));
 }
 
 auto lsp_server::handle_code_action(const nlohmann::json& message, lsp::document_store&) -> void {
@@ -306,7 +308,7 @@ auto lsp_server::handle_rename(const nlohmann::json& message, lsp::document_stor
 
     // Grouped by target file, since a rename can now touch more than one module
     ankerl::unordered_dense::map<std::string, nlohmann::json> edits_by_uri;
-    const auto                                                add_edit = [&](const located_span& loc) {
+    const auto add_edit = [&](const located_span& loc) {
         auto& edits = edits_by_uri[path_utils::path_to_uri(loc.path)];
         if (!edits.is_array()) { edits = nlohmann::json::array(); }
         edits.push_back({{"range", lsp::range_of(loc.span)}, {"newText", new_name}});

@@ -28,7 +28,7 @@ TEST_CASE("completion_items lists keywords and top-level declarations") {
     auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
     const auto module{UNWRAP(session->analyze(path))};
 
-    const auto items = lsp::completion_items(*module);
+    const auto items = lsp::completion_items(*module, {0, 0});
     CHECK(lsp::has_field(items, "label", "const"));  // keyword
     CHECK(lsp::has_field(items, "label", "fn"));     // keyword
     CHECK(lsp::has_field(items, "label", "answer")); // top-level constant
@@ -51,10 +51,33 @@ TEST_CASE("completion_items still surfaces valid top-level declarations around a
     CHECK_FALSE(module->is_errored());
     CHECK_FALSE(module->parse_diagnostics.empty());
 
-    const auto items = lsp::completion_items(*module);
+    const auto items = lsp::completion_items(*module, {0, 0});
     CHECK(lsp::has_field(items, "label", "before"));
     CHECK(lsp::has_field(items, "label", "after"));
     CHECK_FALSE(lsp::has_field(items, "label", "broken"));
+}
+
+TEST_CASE("completion_items surfaces function parameters and preceding locals in scope") {
+    constexpr std::string_view source{
+        "pub const unrelated := fn(other_param: i32): i32 { return other_param; };\n"
+        "pub const add := fn(a: i32, b: i32): i32 {\n"
+        "    const sum := a + b;\n"
+        "    return sum;\n"
+        "};\n"};
+
+    mod::overlay_loader         loader;
+    const std::filesystem::path path{"test_completion_locals.gh"};
+    CHECK(loader.add(path, std::string{source}));
+
+    auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
+    const auto module{UNWRAP(session->analyze(path))};
+
+    // Position inside add's body, on the blank line just before `return sum;`
+    const auto items = lsp::completion_items(*module, {3, 4});
+    CHECK(lsp::has_field(items, "label", "a"));
+    CHECK(lsp::has_field(items, "label", "b"));
+    CHECK(lsp::has_field(items, "label", "sum"));
+    CHECK_FALSE(lsp::has_field(items, "label", "other_param"));
 }
 
 } // namespace ghoti::tests

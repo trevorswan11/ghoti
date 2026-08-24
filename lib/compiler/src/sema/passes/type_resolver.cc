@@ -47,9 +47,8 @@ namespace ghoti::sema {
 auto type_resolver::resolve_types(mod::module& module, context& ctx) -> mod::module_state {
     PROFILE_FUNCTION();
 
-    // Poisoned collection should flush the diagnostics
+    // A module already poisoned by symbol collection stays poisoned
     const auto poisoned_collection{module.state == mod::module_state::POISONED_SYMBOL_COLLECTION};
-    if (poisoned_collection) { module.print_diagnostics(ctx.error_stream); }
 
     if (module.is_resolvable()) {
         module.state = poisoned_collection ? mod::module_state::POISONED_TYPE_RESOLVING
@@ -59,9 +58,13 @@ auto type_resolver::resolve_types(mod::module& module, context& ctx) -> mod::mod
         type_resolver resolver{module, ctx};
         for (const auto& node : module.ast) { resolver.resolve(node); }
 
-        if (!ctx.diags.empty() || module.is_poisoned()) {
+        if (!ctx.diags.empty()) {
             return module.error_out(std::move(ctx.diags),
                                     mod::module_state::POISONED_TYPE_RESOLVED);
+        }
+        if (module.is_poisoned()) {
+            module.state = mod::module_state::POISONED_TYPE_RESOLVED;
+            return module.state;
         }
         module.state = mod::module_state::TYPE_RESOLVED;
     }
@@ -1233,7 +1236,8 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
     }
 
     // Record where this reference resolves to, for LSP go-to-definition
-    resolving_.set_identifier_definition(id, {resolving_.path, lookup->symbol.get_symbol_span(resolving_)});
+    resolving_.set_identifier_definition(
+        id, {resolving_.path, lookup->symbol.get_symbol_span(resolving_)});
     if constexpr (std::same_as<ID, ast::node_id>) { resolving_.add_identifier_position(id); }
 
     // Belongs to an enclosing function's stack frame rather than the module/prelude scope
@@ -1578,10 +1582,18 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
                                   std::string_view   type_name,
                                   usize              field_count,
                                   auto&&             is_field_pub) -> bool {
-        if (&enclosing == &resolving_) { return true; }
         const auto& table{ctx_.registry.get(object_type.get_symbol_table_idx())};
         const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(dot.member)};
         const auto  proxy{table.get_proxy_opt(member_ident.name)};
+
+        // Record where this field/member access resolves to, for LSP go-to-definition
+        if (proxy) {
+            resolving_.set_identifier_definition(
+                dot.member, {enclosing.path, proxy->symbol.get_symbol_span(enclosing)});
+            resolving_.add_identifier_position(dot.member);
+        }
+
+        if (&enclosing == &resolving_) { return true; }
         if (!proxy) { return true; }
 
         const auto& [member_symbol, member_idx]{*proxy};
@@ -2408,7 +2420,8 @@ auto type_resolver::resolve_module_access(ID id, const ast::module_access_expr& 
         }
 
         // Record where this cross-module reference resolves to, for LSP go-to-definition
-        resolving_.set_identifier_definition(access.inner, {inner_mod.path, sym->get_symbol_span(inner_mod)});
+        resolving_.set_identifier_definition(access.inner,
+                                             {inner_mod.path, sym->get_symbol_span(inner_mod)});
         resolving_.add_identifier_position(access.inner);
 
         auto& ident_type{inner_mod.get_sema_type(*symbol_node)};
@@ -2698,8 +2711,13 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
 
     // Breaking out early is possible due to out of order semantics
     if (sym.get_status() == symbol_status::RESOLVED) {
-        ASSERT(resolving_.has_sema_type(id), "Resolved decl has no type");
-        return last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
+        auto& void_type{ctx_.get_builtin_resolved_type(type_kind::VOID_)};
+        // `id` may not be the node that resolved this symbol
+        if (!resolving_.has_sema_type(id)) {
+            resolving_.set_sema_type(decl.name, void_type);
+            resolving_.set_sema_type(id, void_type);
+        }
+        return last_type_.emplace(void_type);
     }
     sym.set_status(symbol_status::RESOLVING);
 
@@ -2901,8 +2919,12 @@ auto type_resolver::visit(ast::node_id id, const ast::using_stmt& using_stmt) ->
     auto        sym{ctx_.registry.get_from_opt(table_idx_, ident.name)};
     if (!sym) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
     if (sym->get_status() == symbol_status::RESOLVED) {
-        ASSERT(resolving_.has_sema_type(id), "Resolved alias has no type");
-        return last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
+        auto& void_type{ctx_.get_builtin_resolved_type(type_kind::VOID_)};
+        if (!resolving_.has_sema_type(id)) {
+            resolving_.set_sema_type(using_stmt.alias, void_type);
+            resolving_.set_sema_type(id, void_type);
+        }
+        return last_type_.emplace(void_type);
     }
 
     const auto poison_out = [&] -> void {

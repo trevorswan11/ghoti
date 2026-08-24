@@ -86,6 +86,42 @@ TEST_CASE("definition_location_at resolves a cross-module `::` access into the i
     CHECK(refs[0].span.start.column == 23);
 }
 
+TEST_CASE("definition_location_at resolves a struct field access in the same module") {
+    mod::overlay_loader         loader;
+    const std::filesystem::path path{"test_field_same_module.gh"};
+    CHECK(loader.add(path,
+                     "pub const point := struct { x: i32, y: i32 };\n"
+                     "pub const p := point{ .x = 1, .y = 2 };\n"
+                     "pub const px := p.x;\n"));
+
+    auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
+    const auto module{UNWRAP(session->analyze(path))};
+
+    // Line 2, column 18 lands on the `x` in `p.x`
+    const auto def{UNWRAP(lsp::definition_location_at(*module, {2, 18}))};
+    CHECK(def.path == std::filesystem::weakly_canonical(path));
+    CHECK(def.span.start.line == 0);
+}
+
+TEST_CASE("definition_location_at resolves a struct field access across an import") {
+    mod::overlay_loader         loader;
+    const std::filesystem::path helper_path{"test_field_xmod_helper.gh"};
+    const std::filesystem::path main_path{"test_field_xmod_main.gh"};
+    CHECK(loader.add(helper_path, "pub const point := struct { pub x: i32, pub y: i32 };\n"));
+    CHECK(loader.add(main_path,
+                     "import \"test_field_xmod_helper.gh\" as helper;\n"
+                     "pub const p := helper::point{ .x = 1, .y = 2 };\n"
+                     "pub const px := p.x;\n"));
+
+    auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
+    const auto module{UNWRAP(session->analyze(main_path))};
+
+    // Line 2, column 18 lands on the `x` in `p.x`
+    const auto def{UNWRAP(lsp::definition_location_at(*module, {2, 18}))};
+    CHECK(def.path == std::filesystem::weakly_canonical(helper_path));
+    CHECK(def.span.start.line == 0);
+}
+
 TEST_CASE("definition_location_at returns none off any identifier") {
     mod::overlay_loader         loader;
     const std::filesystem::path path{"test_references_none.gh"};

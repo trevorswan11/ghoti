@@ -1,5 +1,6 @@
 #include "driver/cmd/lsp/code_actions.hh"
 
+#include <array>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -9,6 +10,15 @@
 namespace ghoti::lsp {
 
 namespace {
+
+constexpr std::array<std::pair<std::string_view, std::string_view>, 6> INSERTABLE_TOKENS{{
+    {"SEMICOLON", ";"},
+    {"RBRACE", "}"},
+    {"RPAREN", ")"},
+    {"RBRACKET", "]"},
+    {"COLON", ":"},
+    {"COMMA", ","},
+}};
 
 auto quick_fix(std::string_view      title,
                const std::string&    uri,
@@ -35,6 +45,8 @@ auto quick_fix(std::string_view      title,
 } // namespace
 
 auto code_actions(const std::string& uri, const nlohmann::json& diagnostics) -> nlohmann::json {
+    constexpr std::string_view expected_token_prefix{"Expected token "};
+
     auto out = nlohmann::json::array();
 
     for (const auto& diag : diagnostics) {
@@ -42,12 +54,21 @@ auto code_actions(const std::string& uri, const nlohmann::json& diagnostics) -> 
         const auto  message{diag.value("message", std::string{})};
         const auto& start{diag.at("range").at("start")};
 
-        // TODO: Expand this LUT to capture more safe actions
-        if (code == "UNEXPECTED_TOKEN" && message.starts_with("Expected token SEMICOLON, found ")) {
-            out.push_back(quick_fix("Insert missing ';'", uri, start, ";", diag));
+        if (code == "UNEXPECTED_TOKEN" && message.starts_with(expected_token_prefix)) {
+            // Message shape: "Expected token <NAME>, found <NAME>"
+            const std::string_view after_prefix{message.data() + expected_token_prefix.size(),
+                                                message.size() - expected_token_prefix.size()};
+            const auto             expected_name{after_prefix.substr(0, after_prefix.find(','))};
+            for (const auto& [name, spelling] : INSERTABLE_TOKENS) {
+                if (expected_name != name) { continue; }
+                out.push_back(quick_fix(
+                    "Insert missing '" + std::string{spelling} + "'", uri, start, spelling, diag));
+                break;
+            }
         } else if (code == "ILLEGAL_DECL_MODIFIERS" &&
                    message == "Exactly one mutability modifier may be used; found 0") {
             out.push_back(quick_fix("Add 'const' modifier", uri, start, "const ", diag));
+            out.push_back(quick_fix("Add 'var' modifier", uri, start, "var ", diag));
         }
     }
 

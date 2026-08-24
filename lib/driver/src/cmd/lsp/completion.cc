@@ -4,12 +4,14 @@
 #include <utility>
 
 #include <nlohmann/json.hpp>
+#include <stdx/option.hh>
 #include <stdx/types.hh>
 
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/module/module.hh"
 #include "compiler/syntax/keywords.hh"
+#include "support/diagnostic.hh"
 
 namespace ghoti::lsp {
 
@@ -40,9 +42,50 @@ auto completion_kind_of(const mod::module& module, const ast::decl_stmt& decl) -
                                                             : completion_kind::VARIABLE;
 }
 
+auto at_or_before(source_location a, source_location b) -> bool {
+    return a.line < b.line || (a.line == b.line && a.column <= b.column);
+}
+
+// source_span is half-open [start, end)
+auto contains(source_span span, source_location point) -> bool {
+    return at_or_before(span.start, point) &&
+           (point.line < span.end.line ||
+            (point.line == span.end.line && point.column < span.end.column));
+}
+
+// Every declared name that's in scope at `target`
+auto local_scope_completions(const mod::module& module, source_location target) -> nlohmann::json {
+    auto out = nlohmann::json::array();
+
+    stdx::option<source_span> enclosing;
+    for (const auto root_id : module.ast) {
+        const source_span span{module.ast.location_of(root_id),
+                               module.ast.end_location_of(root_id)};
+        if (contains(span, target)) {
+            enclosing = span;
+            break;
+        }
+    }
+    if (!enclosing) { return out; }
+
+    for (const auto id : module.identifier_positions) {
+        if (module.get_identifier_definition(id)) { continue; } // a reference, not a declaration
+        const auto start{module.ast.location_of(id)};
+        if (!contains(*enclosing, start) || !at_or_before(start, target)) { continue; }
+
+        const auto& ident{module.ast.get_as<ast::identifier_expr>(id)};
+        out.push_back({
+            {"label", std::string{ident.name}},
+            {"kind", completion_kind::VARIABLE},
+        });
+    }
+
+    return out;
+}
+
 } // namespace
 
-auto completion_items(const mod::module& module) -> nlohmann::json {
+auto completion_items(const mod::module& module, source_location target) -> nlohmann::json {
     auto out = nlohmann::json::array();
 
     for (const auto& keyword : syntax::ALL_KEYWORDS) {
@@ -62,6 +105,7 @@ auto completion_items(const mod::module& module) -> nlohmann::json {
         });
     }
 
+    for (auto& item : local_scope_completions(module, target)) { out.push_back(std::move(item)); }
     return out;
 }
 

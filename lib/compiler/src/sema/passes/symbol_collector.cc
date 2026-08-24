@@ -172,6 +172,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::function_expr& fn) -> v
     // Parameters belong to the parent scope
     if (fn.self) {
         const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(fn.self->name)};
+        collecting_.add_identifier_position(fn.self->name);
         try_declare<symbols::self_parameter>(ident.name, *fn.self.get());
     }
 
@@ -179,6 +180,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::function_expr& fn) -> v
     for (const auto& param : fn.parameters) {
         collect(param.explicit_type);
         const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(param.name)};
+        collecting_.add_identifier_position(param.name);
         try_declare<symbols::parameter>(ident.name, param);
     }
     collect(fn.explicit_return_type);
