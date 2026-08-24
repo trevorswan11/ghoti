@@ -182,7 +182,7 @@ auto lsp_server::handle_hover(const nlohmann::json& message, lsp::document_store
     auto       result{store.analyze(*path)};
     if (!result) { return write_null_id(message); }
 
-    const auto& entry_module{*result->second};
+    const auto& entry_module{**result};
     const auto  id{lsp::identifier_at(entry_module, target)};
     if (!id) { return write_null_id(message); }
 
@@ -206,7 +206,7 @@ auto lsp_server::handle_definition(const nlohmann::json& message, lsp::document_
     auto       result{store.analyze(*path)};
     if (!result) { return write_null_id(message); }
 
-    const auto& entry_module{*result->second};
+    const auto& entry_module{**result};
     const auto  def_loc{lsp::definition_location_at(entry_module, target)};
     if (!def_loc) { return write_null_id(message); }
 
@@ -225,8 +225,7 @@ auto lsp_server::handle_document_symbol(const nlohmann::json& message, lsp::docu
     auto result{store.analyze(*path)};
     if (!result) { return write_null_id(message); }
 
-    lsp::write_message(std::cout,
-                       make_response(message.at("id"), lsp::document_symbols(*result->second)));
+    lsp::write_message(std::cout, make_response(message.at("id"), lsp::document_symbols(**result)));
 }
 
 auto lsp_server::handle_workspace_symbol(const nlohmann::json& message, lsp::document_store& store)
@@ -246,8 +245,8 @@ auto lsp_server::handle_completion(const nlohmann::json& message, lsp::document_
     auto       result{store.analyze(*path)};
     if (!result) { return write_null_id(message); }
 
-    lsp::write_message(
-        std::cout, make_response(message.at("id"), lsp::completion_items(*result->second, target)));
+    lsp::write_message(std::cout,
+                       make_response(message.at("id"), lsp::completion_items(**result, target)));
 }
 
 auto lsp_server::handle_code_action(const nlohmann::json& message, lsp::document_store&) -> void {
@@ -270,7 +269,7 @@ auto lsp_server::handle_references(const nlohmann::json& message, lsp::document_
     auto       result{store.analyze(*path)};
     if (!result) { return write_null_id(message); }
 
-    const auto& entry_module{*result->second};
+    const auto& entry_module{**result};
     const auto  definition{lsp::definition_location_at(entry_module, target)};
     if (!definition) { return write_null_id(message); }
 
@@ -282,7 +281,7 @@ auto lsp_server::handle_references(const nlohmann::json& message, lsp::document_
         locations.push_back({{"uri", path_utils::path_to_uri(definition->path)},
                              {"range", lsp::range_of(definition->span)}});
     }
-    for (const auto& ref : lsp::find_references(result->first->get_manager(), *definition)) {
+    for (const auto& ref : lsp::find_references(store.manager(), *definition)) {
         locations.push_back(
             {{"uri", path_utils::path_to_uri(ref.path)}, {"range", lsp::range_of(ref.span)}});
     }
@@ -300,7 +299,7 @@ auto lsp_server::handle_rename(const nlohmann::json& message, lsp::document_stor
     auto       result{store.analyze(*path)};
     if (!result) { return write_null_id(message); }
 
-    const auto& entry_module{*result->second};
+    const auto& entry_module{**result};
     const auto  definition{lsp::definition_location_at(entry_module, target)};
     if (!definition) { return write_null_id(message); }
 
@@ -315,9 +314,7 @@ auto lsp_server::handle_rename(const nlohmann::json& message, lsp::document_stor
     };
 
     add_edit(*definition);
-    for (const auto& ref : lsp::find_references(result->first->get_manager(), *definition)) {
-        add_edit(ref);
-    }
+    for (const auto& ref : lsp::find_references(store.manager(), *definition)) { add_edit(ref); }
 
     auto changes = nlohmann::json::object();
     for (auto& [uri, edits] : edits_by_uri) { changes[uri] = std::move(edits); }
