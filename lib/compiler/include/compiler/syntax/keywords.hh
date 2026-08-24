@@ -67,6 +67,27 @@ constexpr keyword_t UNREACHABLE{"unreachable", token_type_t::UNREACHABLE};
 
 [[nodiscard]] auto get_keyword_opt(std::string_view sv) noexcept -> stdx::option<token_type_t>;
 
+// Single source of truth for every reserved word
+constexpr std::array ALL_KEYWORDS{
+    keywords::FN,          keywords::VAR,          keywords::CONSTANT,
+    keywords::CONSTEXPR,   keywords::STRUCT,       keywords::ENUM,
+    keywords::UNION,       keywords::BOOLEAN_TRUE, keywords::BOOLEAN_FALSE,
+    keywords::IF,          keywords::ELSE,         keywords::DO,
+    keywords::MATCH,       keywords::RETURN,       keywords::DEFER,
+    keywords::LOOP,        keywords::FOR,          keywords::WHILE,
+    keywords::CONTINUE,    keywords::BREAK,        keywords::IMPORT,
+    keywords::I32,         keywords::I64,          keywords::ISIZE,
+    keywords::U32,         keywords::U64,          keywords::USIZE,
+    keywords::F32,         keywords::F64,          keywords::U8,
+    keywords::BOOL,        keywords::VOID,         keywords::TYPE,
+    keywords::AUTO,        keywords::OPAQUE,       keywords::AS,
+    keywords::PUBLIC,      keywords::EXTERN,       keywords::EXPORT,
+    keywords::VOLATILE,    keywords::MUT,          keywords::MOVE,
+    keywords::PACKED,      keywords::NORETURN,     keywords::NULLPTR,
+    keywords::USING,       keywords::TEST,         keywords::UNDEFINED,
+    keywords::UNREACHABLE,
+};
+
 constexpr std::array ALL_PRIMITIVES{
     keywords::I32.type,
     keywords::I64.type,

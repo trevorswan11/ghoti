@@ -30,6 +30,7 @@ class lsp_server final : public command {
     auto handle_hover(const nlohmann::json& message, lsp::document_store& store) -> void;
     auto handle_definition(const nlohmann::json& message, lsp::document_store& store) -> void;
     auto handle_document_symbol(const nlohmann::json& message, lsp::document_store& store) -> void;
+    auto handle_completion(const nlohmann::json& message, lsp::document_store& store) -> void;
     auto handle_references(const nlohmann::json& message, lsp::document_store& store) -> void;
     auto handle_rename(const nlohmann::json& message, lsp::document_store& store) -> void;
     auto publish_diagnostics(const std::filesystem::path& path, const nlohmann::json& diagnostics)

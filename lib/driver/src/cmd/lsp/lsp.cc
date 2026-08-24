@@ -14,6 +14,7 @@
 #include <stdx/types.hh>
 
 #include "driver/clap/error.hh"
+#include "driver/cmd/lsp/completion.hh"
 #include "driver/cmd/lsp/diagnostics.hh"
 #include "driver/cmd/lsp/document_store.hh"
 #include "driver/cmd/lsp/document_symbols.hh"
@@ -95,6 +96,8 @@ auto lsp_server::handle_message(const nlohmann::json& message, lsp::document_sto
         handle_definition(message, store);
     } else if (method == "textDocument/documentSymbol") {
         handle_document_symbol(message, store);
+    } else if (method == "textDocument/completion") {
+        handle_completion(message, store);
     } else if (method == "textDocument/references") {
         handle_references(message, store);
     } else if (method == "textDocument/rename") {
@@ -112,6 +115,7 @@ auto lsp_server::handle_initialize(const nlohmann::json& message) -> void {
         {"hoverProvider", true},
         {"definitionProvider", true},
         {"documentSymbolProvider", true},
+        {"completionProvider", {{"triggerCharacters", nlohmann::json::array()}}},
         {"referencesProvider", true},
         {"renameProvider", true},
     };
@@ -218,6 +222,19 @@ auto lsp_server::handle_document_symbol(const nlohmann::json& message, lsp::docu
 
     lsp::write_message(std::cout,
                        make_response(message.at("id"), lsp::document_symbols(*result->second)));
+}
+
+auto lsp_server::handle_completion(const nlohmann::json& message, lsp::document_store& store)
+    -> void {
+    const auto path{path_utils::uri_to_path(
+        message.at("params").at("textDocument").at("uri").get<std::string>())};
+    if (!path) { return write_null_id(message); }
+
+    auto result{store.analyze(*path)};
+    if (!result) { return write_null_id(message); }
+
+    lsp::write_message(std::cout,
+                       make_response(message.at("id"), lsp::completion_items(*result->second)));
 }
 
 auto lsp_server::handle_references(const nlohmann::json& message, lsp::document_store& store)

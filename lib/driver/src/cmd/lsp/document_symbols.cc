@@ -1,6 +1,7 @@
 #include "driver/cmd/lsp/document_symbols.hh"
 
 #include <string>
+#include <utility>
 
 #include <nlohmann/json.hpp>
 #include <stdx/types.hh>
@@ -15,24 +16,28 @@ namespace ghoti::lsp {
 
 namespace {
 
-// LSP SymbolKind; there's no dedicated Union kind, so unions map to Struct
-constexpr i32 SYMBOL_KIND_ENUM{10};
-constexpr i32 SYMBOL_KIND_FUNCTION{12};
-constexpr i32 SYMBOL_KIND_VARIABLE{13};
-constexpr i32 SYMBOL_KIND_CONSTANT{14};
-constexpr i32 SYMBOL_KIND_STRUCT{23};
+// There's no dedicated Union kind, so unions map to Struct
+enum class symbol_kind : i32 {
+    ENUM     = 10,
+    FUNCTION = 12,
+    VARIABLE = 13,
+    CONSTANT = 14,
+    STRUCT   = 23,
+};
 
-auto symbol_kind_of(const mod::module& module, const ast::decl_stmt& decl) -> i32 {
+auto symbol_kind_of(const mod::module& module, const ast::decl_stmt& decl) -> symbol_kind {
     if (decl.value) {
-        if (module.ast.get_as_opt<ast::function_expr>(*decl.value)) { return SYMBOL_KIND_FUNCTION; }
-        if (module.ast.get_as_opt<ast::enum_expr>(*decl.value)) { return SYMBOL_KIND_ENUM; }
+        if (module.ast.get_as_opt<ast::function_expr>(*decl.value)) {
+            return symbol_kind::FUNCTION;
+        }
+        if (module.ast.get_as_opt<ast::enum_expr>(*decl.value)) { return symbol_kind::ENUM; }
         if (module.ast.get_as_opt<ast::struct_expr>(*decl.value) ||
             module.ast.get_as_opt<ast::union_expr>(*decl.value)) {
-            return SYMBOL_KIND_STRUCT;
+            return symbol_kind::STRUCT;
         }
     }
-    return decl.has_modifier(ast::decl_modifiers::CONSTANT) ? SYMBOL_KIND_CONSTANT
-                                                            : SYMBOL_KIND_VARIABLE;
+    return decl.has_modifier(ast::decl_modifiers::CONSTANT) ? symbol_kind::CONSTANT
+                                                            : symbol_kind::VARIABLE;
 }
 
 } // namespace
@@ -52,7 +57,7 @@ auto document_symbols(const mod::module& module) -> nlohmann::json {
                                     module.ast.end_location_of(decl->name)};
         out.push_back({
             {"name", std::string{name_ident.name}},
-            {"kind", symbol_kind_of(module, *decl)},
+            {"kind", std::to_underlying(symbol_kind_of(module, *decl))},
             {"range", range_of(full_span)},
             {"selectionRange", range_of(name_span)},
         });
