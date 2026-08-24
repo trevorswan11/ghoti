@@ -14,6 +14,7 @@
 #include <stdx/types.hh>
 
 #include "driver/clap/error.hh"
+#include "driver/cmd/lsp/code_actions.hh"
 #include "driver/cmd/lsp/completion.hh"
 #include "driver/cmd/lsp/diagnostics.hh"
 #include "driver/cmd/lsp/document_store.hh"
@@ -21,6 +22,7 @@
 #include "driver/cmd/lsp/position_index.hh"
 #include "driver/cmd/lsp/references.hh"
 #include "driver/cmd/lsp/rpc.hh"
+#include "driver/cmd/lsp/text_edit.hh"
 #include "driver/platform/win32.hh"
 #include "ghoti/config.h"
 #include "support/diagnostic.hh"
@@ -96,8 +98,12 @@ auto lsp_server::handle_message(const nlohmann::json& message, lsp::document_sto
         handle_definition(message, store);
     } else if (method == "textDocument/documentSymbol") {
         handle_document_symbol(message, store);
+    } else if (method == "workspace/symbol") {
+        handle_workspace_symbol(message, store);
     } else if (method == "textDocument/completion") {
         handle_completion(message, store);
+    } else if (method == "textDocument/codeAction") {
+        handle_code_action(message, store);
     } else if (method == "textDocument/references") {
         handle_references(message, store);
     } else if (method == "textDocument/rename") {
@@ -111,11 +117,13 @@ auto lsp_server::handle_message(const nlohmann::json& message, lsp::document_sto
 
 auto lsp_server::handle_initialize(const nlohmann::json& message) -> void {
     const nlohmann::json capabilities{
-        {"textDocumentSync", 1}, // TextDocumentSyncKind.Full
+        {"textDocumentSync", 2}, // TextDocumentSyncKind.Incremental
         {"hoverProvider", true},
         {"definitionProvider", true},
         {"documentSymbolProvider", true},
+        {"workspaceSymbolProvider", true},
         {"completionProvider", {{"triggerCharacters", nlohmann::json::array()}}},
+        {"codeActionProvider", true},
         {"referencesProvider", true},
         {"renameProvider", true},
     };
@@ -151,8 +159,7 @@ auto lsp_server::handle_did_change(const nlohmann::json& message, lsp::document_
     const auto& changes{params.at("contentChanges")};
     if (!path || changes.empty()) { return; }
 
-    // Full sync guarantees exactly one entry carrying the whole new document text
-    auto text{changes.back().at("text").get<std::string>()};
+    auto text{lsp::apply_content_changes(store.text_of(*path).value_or(std::string{}), changes)};
     for (auto& [touched_path, diagnostics] : store.update(*path, std::move(text))) {
         publish_diagnostics(touched_path, diagnostics);
     }
@@ -224,6 +231,12 @@ auto lsp_server::handle_document_symbol(const nlohmann::json& message, lsp::docu
                        make_response(message.at("id"), lsp::document_symbols(*result->second)));
 }
 
+auto lsp_server::handle_workspace_symbol(const nlohmann::json& message, lsp::document_store& store)
+    -> void {
+    const auto query{message.at("params").value("query", std::string{})};
+    lsp::write_message(std::cout, make_response(message.at("id"), store.workspace_symbols(query)));
+}
+
 auto lsp_server::handle_completion(const nlohmann::json& message, lsp::document_store& store)
     -> void {
     const auto path{path_utils::uri_to_path(
@@ -235,6 +248,15 @@ auto lsp_server::handle_completion(const nlohmann::json& message, lsp::document_
 
     lsp::write_message(std::cout,
                        make_response(message.at("id"), lsp::completion_items(*result->second)));
+}
+
+auto lsp_server::handle_code_action(const nlohmann::json& message, lsp::document_store&) -> void {
+    const auto& params{message.at("params")};
+    const auto  uri{params.at("textDocument").at("uri").get<std::string>()};
+    const auto& diagnostics{params.at("context").at("diagnostics")};
+
+    lsp::write_message(std::cout,
+                       make_response(message.at("id"), lsp::code_actions(uri, diagnostics)));
 }
 
 auto lsp_server::handle_references(const nlohmann::json& message, lsp::document_store& store)

@@ -2,6 +2,7 @@
 
 #include <istream>
 #include <ostream>
+#include <string_view>
 
 #include <nlohmann/json.hpp>
 #include <stdx/option.hh>
@@ -14,5 +15,9 @@ namespace ghoti::lsp {
 
 // Writes one JSON-RPC message with Content-Length framing and flushes immediately
 auto write_message(std::ostream& out, const nlohmann::json& message) -> void;
+
+[[nodiscard]] auto has_field(const nlohmann::json& message,
+                             std::string_view      field,
+                             std::string_view      needle) noexcept -> bool;
 
 } // namespace ghoti::lsp

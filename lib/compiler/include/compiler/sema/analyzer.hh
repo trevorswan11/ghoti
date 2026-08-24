@@ -45,19 +45,18 @@ class analyzer {
     explicit analyzer(mod::module_manager&    modules,
                       std::ostream&           error_stream,
                       stdx::option<bool>      in_terminal,
-                      codegen::target_options target_opts          = {},
+                      codegen::target_options target_opts            = {},
                       bool                    tolerate_syntax_errors = false) noexcept
         : modules_{modules}, pool_{arena_}, error_stream_{error_stream}, in_terminal_{in_terminal},
-          tolerate_syntax_errors_{tolerate_syntax_errors},
-          ctx_{modules_,
-               registry_,
-               pool_,
-               generic_functions_,
-               instantiation_cache_,
-               arena_,
-               diagnostics{in_terminal_},
-               error_stream_,
-               std::move(target_opts)} {}
+          tolerate_syntax_errors_{tolerate_syntax_errors}, ctx_{modules_,
+                                                                registry_,
+                                                                pool_,
+                                                                generic_functions_,
+                                                                instantiation_cache_,
+                                                                arena_,
+                                                                diagnostics{in_terminal_},
+                                                                error_stream_,
+                                                                std::move(target_opts)} {}
     ~analyzer() = default;
     MAKE_MOVE_CONSTRUCTABLE_ONLY(analyzer);
 

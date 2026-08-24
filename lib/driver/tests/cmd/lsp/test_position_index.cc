@@ -28,9 +28,7 @@ TEST_CASE("identifier_at finds a reference and its declaration through the side 
     auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
     const auto module{UNWRAP(session->analyze(path))};
 
-    // Line 1 (0-indexed), column 15 lands on the `x` reference in `y := x + 1`
-    const auto id{UNWRAP(lsp::identifier_at(*module, {1, 15}))};
-
+    const auto  id{UNWRAP(lsp::identifier_at(*module, {1, 15}))};
     const auto& type{UNWRAP(module->get_sema_type_opt(id))};
     CHECK(type.to_string() == "i32");
 
@@ -40,6 +38,30 @@ TEST_CASE("identifier_at finds a reference and its declaration through the side 
     CHECK(def_span.start.column == 10);
     CHECK(def_span.end.line == 0);
     CHECK(def_span.end.column == 11);
+}
+
+TEST_CASE("hover-style type resolution still works around an unrelated syntax error") {
+    // The 3rd statement is a dangling dot-expression and fails to parse
+    constexpr std::string_view broken_source{"pub const x := 5;\n"
+                                             "pub const y := x + 1;\n"
+                                             "pub const broken := y.;\n"};
+
+    mod::overlay_loader         loader;
+    const std::filesystem::path path{"test_position_index_partial_error.gh"};
+    CHECK(loader.add(path, std::string{broken_source}));
+
+    auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
+    const auto module{UNWRAP(session->analyze(path))};
+    CHECK_FALSE(module->is_errored());
+    CHECK_FALSE(module->parse_diagnostics.empty());
+
+    const auto  id{UNWRAP(lsp::identifier_at(*module, {1, 15}))};
+    const auto& type{UNWRAP(module->get_sema_type_opt(id))};
+    CHECK(type.to_string() == "i32");
+
+    const auto def_span{UNWRAP(module->get_identifier_definition(id))};
+    CHECK(def_span.start.line == 0);
+    CHECK(def_span.start.column == 10);
 }
 
 TEST_CASE("identifier_at returns none off the end of an identifier and off any identifier") {

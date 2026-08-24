@@ -1,4 +1,3 @@
-#include <algorithm>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -10,20 +9,11 @@
 
 #include "compiler/module/overlay_loader.hh"
 #include "driver/cmd/lsp/completion.hh"
+#include "driver/cmd/lsp/rpc.hh"
 #include "driver/cmd/lsp/session.hh"
 #include "support/test.hh"
 
 namespace ghoti::tests {
-
-namespace {
-
-auto has_label(const nlohmann::json& items, std::string_view label) -> bool {
-    return std::ranges::any_of(items, [&](const auto& item) {
-        return item.at("label").template get<std::string>() == label;
-    });
-}
-
-} // namespace
 
 TEST_CASE("completion_items lists keywords and top-level declarations") {
     constexpr std::string_view source{
@@ -38,12 +28,12 @@ TEST_CASE("completion_items lists keywords and top-level declarations") {
     auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
     const auto module{UNWRAP(session->analyze(path))};
 
-    const auto items = lsp::completion_items(*module); // brace-init here double-wraps in an array
-    CHECK(has_label(items, "const"));                  // keyword
-    CHECK(has_label(items, "fn"));                     // keyword
-    CHECK(has_label(items, "answer"));                 // top-level constant
-    CHECK(has_label(items, "add"));                    // top-level function
-    CHECK(has_label(items, "point"));                  // top-level struct
+    const auto items = lsp::completion_items(*module);
+    CHECK(lsp::has_field(items, "label", "const"));  // keyword
+    CHECK(lsp::has_field(items, "label", "fn"));     // keyword
+    CHECK(lsp::has_field(items, "label", "answer")); // top-level constant
+    CHECK(lsp::has_field(items, "label", "add"));    // top-level function
+    CHECK(lsp::has_field(items, "label", "point"));  // top-level struct
 }
 
 TEST_CASE("completion_items still surfaces valid top-level declarations around a syntax error") {
@@ -57,12 +47,14 @@ TEST_CASE("completion_items still surfaces valid top-level declarations around a
 
     auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
     const auto module{UNWRAP(session->analyze(path))};
-    CHECK(module->is_errored());
+    // The LSP's analysis_session tolerates the syntax error and still runs sema over
+    CHECK_FALSE(module->is_errored());
+    CHECK_FALSE(module->parse_diagnostics.empty());
 
-    const auto items = lsp::completion_items(*module); // brace-init here double-wraps in an array
-    CHECK(has_label(items, "before"));
-    CHECK(has_label(items, "after"));
-    CHECK_FALSE(has_label(items, "broken"));
+    const auto items = lsp::completion_items(*module);
+    CHECK(lsp::has_field(items, "label", "before"));
+    CHECK(lsp::has_field(items, "label", "after"));
+    CHECK_FALSE(lsp::has_field(items, "label", "broken"));
 }
 
 } // namespace ghoti::tests

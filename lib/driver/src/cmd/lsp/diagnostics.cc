@@ -32,16 +32,27 @@ auto push_diagnostic(nlohmann::json& out, const auto& d) -> void {
     out.push_back(std::move(entry));
 }
 
+auto push_diagnostic(nlohmann::json& out, const diagnostic_snapshot& d) -> void {
+    out.push_back({
+        {"range", range_of(d.location)},
+        {"message", d.message},
+        {"source", "ghoti"},
+        {"code", d.error_name},
+        {"severity", static_cast<i32>(d.level)},
+    });
+}
+
 } // namespace
 
 auto to_lsp_diagnostics(const mod::module& module) -> nlohmann::json {
     auto out = nlohmann::json::array();
 
-    module.diagnostics.visit(
-        [&out](const auto& diags) {
-            for (const auto& d : diags) { push_diagnostic(out, d); }
-        },
-        [](stdx::monostate) {});
+    // module.parse_diagnostics is a permanent record of syntax errors found at parse time
+    for (const auto& d : module.parse_diagnostics) { push_diagnostic(out, d); }
+    if (const auto sema_diags{module.diagnostics.as_opt<sema::diagnostics>()}) {
+        for (const auto& d : *sema_diags) { push_diagnostic(out, d); }
+    }
+
     return out;
 }
 

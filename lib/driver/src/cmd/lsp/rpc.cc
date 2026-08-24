@@ -8,6 +8,7 @@
 #include <ostream>
 #include <string>
 #include <string_view>
+#include <system_error>
 
 #include <fmt/format.h>
 #include <fmt/ostream.h>
@@ -16,24 +17,17 @@
 #include <stdx/profiler.hh>
 #include <stdx/string.hh>
 #include <stdx/types.hh>
-#include <system_error>
+
+#include "support/string_utils.hh"
 
 namespace ghoti::lsp {
 
 namespace {
 
-// getline splits on '\n', leaving a trailing '\r' behind on CRLF-framed headers
-auto strip_trailing_cr(std::string& line) -> void {
-    if (!line.empty() && line.back() == '\r') { line.pop_back(); }
-}
-
 // Parses a "Content-Length: <n>" header; header name matching is case-insensitive per the spec
 auto try_parse_content_length(std::string_view line) -> stdx::option<usize> {
     constexpr std::string_view prefix{"Content-Length:"};
-    if (!std::ranges::starts_with(
-            line, prefix, {}, stdx::string::to_lower, stdx::string::to_lower)) {
-        return stdx::none;
-    }
+    if (!string_utils::starts_with_ci(line, prefix)) { return stdx::none; }
 
     auto value{line.substr(prefix.size())};
     while (!value.empty() && value.front() == ' ') { value.remove_prefix(1); }
@@ -52,7 +46,7 @@ auto read_message(std::istream& in, std::ostream& error_stream) -> stdx::option<
     std::string         line;
 
     while (std::getline(in, line)) {
-        strip_trailing_cr(line);
+        string_utils::strip_trailing_cr(line);
         if (line.empty()) { break; }
         if (auto length{try_parse_content_length(line)}) { content_length = length; }
     }
@@ -83,6 +77,16 @@ auto write_message(std::ostream& out, const nlohmann::json& message) -> void {
     const auto body{message.dump()};
     fmt::print(out, "Content-Length: {}\r\n\r\n{}", body.size(), body); // registered nurse
     out.flush();
+}
+
+auto has_field(const nlohmann::json& message,
+               std::string_view      field,
+               std::string_view      needle) noexcept -> bool {
+    try {
+        return std::ranges::any_of(message, [&](const auto& s) {
+            return s.at(field).template get<std::string>() == needle;
+        });
+    } catch (...) { return false; }
 }
 
 } // namespace ghoti::lsp

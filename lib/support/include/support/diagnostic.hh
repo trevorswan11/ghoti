@@ -156,9 +156,9 @@ template <stdx::ScopedEnum E> class diagnostic {
     // An owning copy, for callers that need this diagnostic's content to outlive its list
     [[nodiscard]] auto snapshot() const -> diagnostic_snapshot {
         return {message_.value_or(std::string{magic_enum::enum_name(error_)}),
-               loc_,
-               std::string{magic_enum::enum_name(error_)},
-               level_.value_or(diagnostic_level::ERROR)};
+                loc_,
+                std::string{magic_enum::enum_name(error_)},
+                level_.value_or(diagnostic_level::ERROR)};
     }
 
     // Diagnostics are always ERROR by default, see `unset_level`

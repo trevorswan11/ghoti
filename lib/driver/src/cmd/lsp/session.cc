@@ -20,7 +20,7 @@
 namespace ghoti::lsp {
 
 analysis_session::analysis_session(mod::overlay_loader& loader, std::ostream& error_stream) noexcept
-    : manager_{loader}, analyzer_{manager_, error_stream, false} {
+    : manager_{loader}, analyzer_{manager_, error_stream, false, {}, true} {
     PROFILE_FUNCTION();
     const auto stdlib_path{mod::find_stdlib()};
     if (!stdlib_path) {

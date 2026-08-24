@@ -15,6 +15,7 @@
 namespace ghoti::lsp {
 
 // One full parse+sema pass over an overlay-backed module graph rooted at an entry file.
+// Lenient: keep running sema over whatever parsed even with an unrelated syntax error
 //
 // Must be heap allocated since `analyzer` holds a reference to `manager`
 // that is only valid as long as this object's address never changes.
