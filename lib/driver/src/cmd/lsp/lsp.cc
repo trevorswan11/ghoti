@@ -18,6 +18,7 @@
 #include "driver/cmd/lsp/document_store.hh"
 #include "driver/cmd/lsp/document_symbols.hh"
 #include "driver/cmd/lsp/position_index.hh"
+#include "driver/cmd/lsp/references.hh"
 #include "driver/cmd/lsp/rpc.hh"
 #include "driver/platform/win32.hh"
 #include "ghoti/config.h"
@@ -94,6 +95,10 @@ auto lsp_server::handle_message(const nlohmann::json& message, lsp::document_sto
         handle_definition(message, store);
     } else if (method == "textDocument/documentSymbol") {
         handle_document_symbol(message, store);
+    } else if (method == "textDocument/references") {
+        handle_references(message, store);
+    } else if (method == "textDocument/rename") {
+        handle_rename(message, store);
     } else if (message.contains("id")) {
         lsp::write_message(
             std::cout, make_error_response(message["id"], METHOD_NOT_FOUND, "method not found"));
@@ -107,6 +112,8 @@ auto lsp_server::handle_initialize(const nlohmann::json& message) -> void {
         {"hoverProvider", true},
         {"definitionProvider", true},
         {"documentSymbolProvider", true},
+        {"referencesProvider", true},
+        {"renameProvider", true},
     };
     const nlohmann::json server_info{{"name", "ghoti"}, {"version", GHOTI_VERSION_STR}};
     lsp::write_message(
@@ -211,6 +218,68 @@ auto lsp_server::handle_document_symbol(const nlohmann::json& message, lsp::docu
 
     lsp::write_message(std::cout,
                        make_response(message.at("id"), lsp::document_symbols(*result->second)));
+}
+
+auto lsp_server::handle_references(const nlohmann::json& message, lsp::document_store& store)
+    -> void {
+    const auto& params{message.at("params")};
+    const auto  path{
+        path_utils::uri_to_path(params.at("textDocument").at("uri").get<std::string>())};
+    if (!path) { return write_null_id(message); }
+
+    const auto target{position_from(params.at("position"))};
+    auto       result{store.analyze(*path)};
+    if (!result) { return write_null_id(message); }
+
+    const auto& entry_module{*result->second};
+    const auto  definition{lsp::definition_span_at(entry_module, target)};
+    if (!definition) { return write_null_id(message); }
+
+    const auto include_declaration{
+        params.value("context", nlohmann::json::object()).value("includeDeclaration", false)};
+    const auto uri{path_utils::path_to_uri(*path)};
+
+    // Brace-init here would hit nlohmann's single-element-wraps-in-an-array pitfall
+    auto locations = nlohmann::json::array();
+    if (include_declaration) {
+        locations.push_back({{"uri", uri}, {"range", lsp::range_of(*definition)}});
+    }
+    for (const auto& ref_span : lsp::find_references(entry_module, *definition)) {
+        locations.push_back({{"uri", uri}, {"range", lsp::range_of(ref_span)}});
+    }
+
+    lsp::write_message(std::cout, make_response(message.at("id"), locations));
+}
+
+auto lsp_server::handle_rename(const nlohmann::json& message, lsp::document_store& store) -> void {
+    const auto& params{message.at("params")};
+    const auto  path{
+        path_utils::uri_to_path(params.at("textDocument").at("uri").get<std::string>())};
+    if (!path) { return write_null_id(message); }
+
+    const auto target{position_from(params.at("position"))};
+    auto       result{store.analyze(*path)};
+    if (!result) { return write_null_id(message); }
+
+    const auto& entry_module{*result->second};
+    const auto  definition{lsp::definition_span_at(entry_module, target)};
+    if (!definition) { return write_null_id(message); }
+
+    const auto new_name{params.at("newName").get<std::string>()};
+
+    // Brace-init here would hit nlohmann's single-element-wraps-in-an-array pitfall
+    auto edits = nlohmann::json::array();
+    edits.push_back({{"range", lsp::range_of(*definition)}, {"newText", new_name}});
+    for (const auto& ref_span : lsp::find_references(entry_module, *definition)) {
+        edits.push_back({{"range", lsp::range_of(ref_span)}, {"newText", new_name}});
+    }
+
+    auto changes                            = nlohmann::json::object();
+    changes[path_utils::path_to_uri(*path)] = std::move(edits);
+    auto workspace_edit                     = nlohmann::json::object();
+    workspace_edit["changes"]               = std::move(changes);
+
+    lsp::write_message(std::cout, make_response(message.at("id"), workspace_edit));
 }
 
 auto lsp_server::publish_diagnostics(const std::filesystem::path& path,

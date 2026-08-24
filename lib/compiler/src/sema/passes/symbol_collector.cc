@@ -401,6 +401,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::decl_stmt& decl) -> voi
     // We can stop analyzing early if there's no value
     const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(decl.name)};
     const auto  name{ident.name};
+    collecting_.add_identifier_position(decl.name);
     if (!try_declare<symbols::node_t>(name, id)) { return; };
     if (!decl.value) { return; }
 

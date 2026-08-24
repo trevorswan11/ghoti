@@ -63,8 +63,8 @@ struct module {
     module_state                                     state{module_state::PARSED};
     std::vector<sema::generic_instantiation_request> generic_instantiations;
 
-    // Used to build the LSP position index without a second, separate AST walk
-    std::vector<ast::node_id> identifier_references;
+    // Every identifier_expr references and uses encountered during symbol collection/resolution
+    std::vector<ast::node_id> identifier_positions;
 
     diagnotic_list_variant diagnostics{stdx::monostate{}};
 
@@ -209,8 +209,8 @@ struct module {
         return sema_side_tables.function_captures[function_id];
     }
 
-    // Records that `id` is a resolved identifier reference, for the LSP position index
-    auto add_identifier_reference(ast::node_id id) -> void { identifier_references.push_back(id); }
+    // Records that `id` is an identifier_expr worth indexing by position, for the LSP
+    auto add_identifier_position(ast::node_id id) -> void { identifier_positions.push_back(id); }
 
     // Records where the identifier at `id` resolved to, for LSP go-to-definition
     template <ast::IndexableID ID>

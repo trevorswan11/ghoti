@@ -8,10 +8,10 @@
 
 namespace ghoti::lsp {
 
-// A linear scan over resolved identifiers; simple and fast enough for a single file's worth
+// A linear scan over known identifier positions; simple and fast enough for a single file's worth
 auto identifier_at(const mod::module& module, source_location target)
     -> stdx::option<ast::node_id> {
-    for (const auto id : module.identifier_references) {
+    for (const auto id : module.identifier_positions) {
         const auto& start{module.ast.location_of(id)};
         const auto& end{module.ast.end_location_of(id)};
         if (start.line != target.line || target.column < start.column) { continue; }
