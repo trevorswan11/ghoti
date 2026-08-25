@@ -24,6 +24,7 @@
 #include "driver/cmd/lsp/references.hh"
 #include "driver/cmd/lsp/rpc.hh"
 #include "driver/cmd/lsp/text_edit.hh"
+#include "driver/cmd/lsp/workspace_scan.hh"
 #include "driver/platform/win32.hh"
 #include "ghoti/config.h"
 #include "support/diagnostic.hh"
@@ -63,7 +64,7 @@ auto lsp_server::execute() -> stdx::result<void, clap::error> {
     win32::set_binary_stdio();
 #endif
 
-    lsp::document_store store{error_stream_};
+    lsp::document_store store{error_stream_, throttle_interval_};
     while (auto message{lsp::read_message(std::cin, error_stream_)}) {
         try {
             if (!handle_message(*message, store)) { break; }
@@ -86,7 +87,7 @@ auto lsp_server::handle_message(const nlohmann::json& message, lsp::document_sto
     } else if (method == "exit") {
         return false;
     } else if (method == "initialized") {
-        // Sent after the initialize response; intentionally a no-op
+        handle_initialized(message, store);
     } else if (method == "textDocument/didOpen") {
         handle_did_open(message, store);
     } else if (method == "textDocument/didChange") {
@@ -117,6 +118,26 @@ auto lsp_server::handle_message(const nlohmann::json& message, lsp::document_sto
 }
 
 auto lsp_server::handle_initialize(const nlohmann::json& message) -> void {
+    const auto& params{message.value("params", nlohmann::json::object())};
+
+    workspace_roots_.clear();
+    if (const auto it{params.find("workspaceFolders")};
+        it != params.end() && it->is_array() && !it->empty()) {
+        for (const auto& folder : *it) {
+            if (!folder.is_object()) { continue; }
+            const auto uri_it{folder.find("uri")};
+            if (uri_it == folder.end() || !uri_it->is_string()) { continue; }
+            if (const auto path{path_utils::uri_to_path(uri_it->get<std::string>())}) {
+                workspace_roots_.emplace_back(*path);
+            }
+        }
+    } else if (const auto root_uri_it{params.find("rootUri")};
+               root_uri_it != params.end() && root_uri_it->is_string()) {
+        if (const auto path{path_utils::uri_to_path(root_uri_it->get<std::string>())}) {
+            workspace_roots_.emplace_back(*path);
+        }
+    }
+
     const nlohmann::json capabilities{
         {"textDocumentSync", std::to_underlying(lsp::document_sync_kind::INCREMENTAL)},
         {"hoverProvider", true},
@@ -133,6 +154,16 @@ auto lsp_server::handle_initialize(const nlohmann::json& message) -> void {
         std::cout,
         make_response(message.at("id"),
                       {{"capabilities", capabilities}, {"serverInfo", server_info}}));
+}
+
+auto lsp_server::handle_initialized(const nlohmann::json&, lsp::document_store& store) -> void {
+    if (workspace_roots_.empty()) { return; }
+
+    const auto discovered{
+        lsp::discover_workspace_files(workspace_roots_, workspace_excludes_, workspace_file_cap_)};
+    for (auto& [touched_path, diagnostics] : store.seed_known_roots(discovered)) {
+        publish_diagnostics(touched_path, diagnostics);
+    }
 }
 
 auto lsp_server::handle_shutdown(const nlohmann::json& message) -> void {
@@ -161,7 +192,7 @@ auto lsp_server::handle_did_change(const nlohmann::json& message, lsp::document_
     if (!path || changes.empty()) { return; }
 
     auto text{lsp::apply_content_changes(store.text_of(*path).value_or(std::string{}), changes)};
-    for (auto& [touched_path, diagnostics] : store.update(*path, std::move(text))) {
+    for (const auto& [touched_path, diagnostics] : store.update_throttled(*path, std::move(text))) {
         publish_diagnostics(touched_path, diagnostics);
     }
 }

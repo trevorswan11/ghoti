@@ -1,6 +1,7 @@
 #include "driver/cmd/lsp/document_store.hh"
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -27,23 +28,15 @@
 
 namespace ghoti::lsp {
 
-auto document_store::update(const std::filesystem::path& path, std::string text)
-    -> touched_modules {
-    if (auto res{loader_.add(path, text)}; !res) {
-        fmt::println(error_stream_,
-                     "lsp: failed to overlay '{}': {}",
-                     path.string(),
-                     magic_enum::enum_name(res.error()));
-        return {};
-    }
+auto document_store::register_known_root(const std::filesystem::path& path) -> bool {
+    auto normalized{loader_.normalize(path)};
+    if (!normalized) { return false; }
+    if (std::ranges::find(known_roots_, *normalized) != known_roots_.end()) { return false; }
+    known_roots_.emplace_back(std::move(*normalized));
+    return true;
+}
 
-    if (auto normalized{loader_.normalize(path)}) {
-        if (std::ranges::find(known_roots_, *normalized) == known_roots_.end()) {
-            known_roots_.push_back(std::move(*normalized));
-        }
-    }
-
-    // Rebuild from scratch and reanalyze every known root, not just `path`
+auto document_store::rebuild() -> void {
     session_ = stdx::make_box<analysis_session>(loader_, error_stream_);
     for (const auto& root : known_roots_) {
         if (auto res{session_->analyze(root)}; !res) {
@@ -54,10 +47,69 @@ auto document_store::update(const std::filesystem::path& path, std::string text)
         }
     }
 
+    for (const auto& [mod_path, mod] : session_->get_manager()) {
+        workspace_index_[mod_path] = module_workspace_symbols(*mod);
+    }
+
+    last_rebuild_ = std::chrono::steady_clock::now();
+    dirty_        = false;
+}
+
+auto document_store::rebuild_if_dirty() -> void {
+    if (dirty_) { rebuild(); }
+}
+
+auto document_store::update(const std::filesystem::path& path, std::string text)
+    -> touched_modules {
+    if (auto res{loader_.add(path, text)}; !res) {
+        fmt::println(error_stream_,
+                     "lsp: failed to overlay '{}': {}",
+                     path.string(),
+                     magic_enum::enum_name(res.error()));
+        return {};
+    }
+    register_known_root(path);
+
+    // Rebuild from scratch and reanalyze every known root, not just `path`
+    rebuild();
+
     touched_modules results;
     for (const auto& [mod_path, mod] : session_->get_manager()) {
         results.emplace_back(mod_path, to_lsp_diagnostics(*mod));
-        workspace_index_[mod_path] = module_workspace_symbols(*mod);
+    }
+    return results;
+}
+
+auto document_store::update_throttled(const std::filesystem::path& path, std::string text)
+    -> touched_modules {
+    if (auto res{loader_.add(path, text)}; !res) {
+        fmt::println(error_stream_,
+                     "lsp: failed to overlay '{}': {}",
+                     path.string(),
+                     magic_enum::enum_name(res.error()));
+        return {};
+    }
+    register_known_root(path);
+    dirty_ = true;
+
+    if (std::chrono::steady_clock::now() - last_rebuild_ < throttle_interval_) { return {}; }
+
+    rebuild();
+
+    touched_modules results;
+    for (const auto& [mod_path, mod] : session_->get_manager()) {
+        results.emplace_back(mod_path, to_lsp_diagnostics(*mod));
+    }
+    return results;
+}
+
+auto document_store::seed_known_roots(std::vector<std::filesystem::path> paths) -> touched_modules {
+    for (const auto& path : paths) { register_known_root(path); }
+    rebuild();
+
+    touched_modules results;
+    for (const auto& [mod_path, mod] : session_->get_manager()) {
+        results.emplace_back(mod_path, to_lsp_diagnostics(*mod));
     }
     return results;
 }
@@ -72,10 +124,18 @@ auto document_store::text_of(const std::filesystem::path& path) -> stdx::option<
 
 auto document_store::analyze(const std::filesystem::path& path)
     -> stdx::result<gsl::not_null<mod::module*>, mod::diagnostic> {
+    rebuild_if_dirty();
     return session_->analyze(path);
 }
 
-auto document_store::workspace_symbols(std::string_view query) const -> nlohmann::json {
+auto document_store::manager() -> const mod::module_manager& {
+    rebuild_if_dirty();
+    return session_->get_manager();
+}
+
+auto document_store::workspace_symbols(std::string_view query) -> nlohmann::json {
+    rebuild_if_dirty();
+
     auto out = nlohmann::json::array();
 
     for (const auto& [path, entries] : workspace_index_) {

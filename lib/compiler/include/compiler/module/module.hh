@@ -213,7 +213,7 @@ struct module {
     }
 
     // Records that `id` is an identifier_expr worth indexing by position, for the LSP
-    auto add_identifier_position(ast::node_id id) -> void { identifier_positions.push_back(id); }
+    auto add_identifier_position(ast::node_id id) -> void { identifier_positions.emplace_back(id); }
 
     // Records where the identifier at `id` resolved to, for LSP go-to-definition
     template <ast::IndexableID ID>
