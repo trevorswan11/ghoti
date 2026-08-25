@@ -80,6 +80,9 @@ class document_store {
     // Top-level symbols across every module touched so far this session. Rebuilds first if stale
     [[nodiscard]] auto workspace_symbols(std::string_view query) -> nlohmann::json;
 
+    // Diagnostics produced by the most recent rebuild that haven't been published yet
+    [[nodiscard]] auto take_pending_diagnostics() -> touched_modules;
+
   private:
     // Registers `path` as a known root (normalized, deduplicated); returns whether it was new
     auto register_known_root(const std::filesystem::path& path) -> bool;
@@ -99,6 +102,7 @@ class document_store {
     stdx::box<analysis_session>           session_;
     std::vector<std::filesystem::path>    known_roots_;
     workspace_map                         workspace_index_;
+    touched_modules                       pending_diagnostics_;
 };
 
 } // namespace ghoti::lsp

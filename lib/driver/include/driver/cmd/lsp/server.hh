@@ -54,6 +54,8 @@ class lsp_server final : public command {
     auto handle_rename(const nlohmann::json& message, lsp::document_store& store) -> void;
     auto publish_diagnostics(const std::filesystem::path& path, const nlohmann::json& diagnostics)
         -> void;
+    // Publishes whatever `store` accumulated from its most recent dirty-triggered rebuild
+    auto publish_pending_diagnostics(lsp::document_store& store) -> void;
 
   private:
     bool                               shutdown_received_{false};

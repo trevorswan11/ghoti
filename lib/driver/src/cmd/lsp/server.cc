@@ -231,6 +231,7 @@ auto lsp_server::handle_hover(const nlohmann::json& message, lsp::document_store
 
     const auto target{position_from(params.at("position"))};
     auto       result{store.analyze(*path)};
+    publish_pending_diagnostics(store);
     if (!result) { return write_null_id(message); }
 
     const auto& entry_module{**result};
@@ -262,6 +263,7 @@ auto lsp_server::handle_definition(const nlohmann::json& message, lsp::document_
 
     const auto target{position_from(params.at("position"))};
     auto       result{store.analyze(*path)};
+    publish_pending_diagnostics(store);
     if (!result) { return write_null_id(message); }
 
     const auto& entry_module{**result};
@@ -283,6 +285,7 @@ auto lsp_server::handle_document_symbol(const nlohmann::json& message, lsp::docu
     if (!path) { return write_null_id(message); }
 
     auto result{store.analyze(*path)};
+    publish_pending_diagnostics(store);
     if (!result) { return write_null_id(message); }
 
     lsp::write_message(std::cout, make_response(message.at("id"), lsp::document_symbols(**result)));
@@ -291,7 +294,9 @@ auto lsp_server::handle_document_symbol(const nlohmann::json& message, lsp::docu
 auto lsp_server::handle_workspace_symbol(const nlohmann::json& message, lsp::document_store& store)
     -> void {
     const auto query{message.at("params").value("query", std::string{})};
-    lsp::write_message(std::cout, make_response(message.at("id"), store.workspace_symbols(query)));
+    auto       symbols = store.workspace_symbols(query);
+    publish_pending_diagnostics(store);
+    lsp::write_message(std::cout, make_response(message.at("id"), std::move(symbols)));
 }
 
 auto lsp_server::handle_completion(const nlohmann::json& message, lsp::document_store& store)
@@ -303,6 +308,7 @@ auto lsp_server::handle_completion(const nlohmann::json& message, lsp::document_
 
     const auto target{position_from(params.at("position"))};
     auto       result{store.analyze(*path)};
+    publish_pending_diagnostics(store);
     if (!result) { return write_null_id(message); }
 
     lsp::write_message(std::cout,
@@ -327,6 +333,7 @@ auto lsp_server::handle_references(const nlohmann::json& message, lsp::document_
 
     const auto target{position_from(params.at("position"))};
     auto       result{store.analyze(*path)};
+    publish_pending_diagnostics(store);
     if (!result) { return write_null_id(message); }
 
     const auto& entry_module{**result};
@@ -359,6 +366,7 @@ auto lsp_server::handle_rename(const nlohmann::json& message, lsp::document_stor
 
     const auto target{position_from(params.at("position"))};
     auto       result{store.analyze(*path)};
+    publish_pending_diagnostics(store);
     if (!result) { return write_null_id(message); }
 
     const auto& entry_module{**result};
@@ -397,6 +405,12 @@ auto lsp_server::publish_diagnostics(const std::filesystem::path& path,
                                              {"uri", path_utils::path_to_uri(path)},
                                              {"diagnostics", diagnostics},
                                          }));
+}
+
+auto lsp_server::publish_pending_diagnostics(lsp::document_store& store) -> void {
+    for (const auto& [touched_path, diagnostics] : store.take_pending_diagnostics()) {
+        publish_diagnostics(touched_path, diagnostics);
+    }
 }
 
 } // namespace ghoti::cmd

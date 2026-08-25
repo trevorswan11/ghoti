@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <fmt/format.h>
 #include <fmt/ostream.h>
@@ -47,8 +48,10 @@ auto document_store::rebuild() -> void {
         }
     }
 
+    pending_diagnostics_.clear();
     for (const auto& [mod_path, mod] : session_->get_manager()) {
         workspace_index_[mod_path] = module_workspace_symbols(*mod);
+        pending_diagnostics_.emplace_back(mod_path, to_lsp_diagnostics(*mod));
     }
 
     last_rebuild_ = std::chrono::steady_clock::now();
@@ -57,6 +60,10 @@ auto document_store::rebuild() -> void {
 
 auto document_store::rebuild_if_dirty() -> void {
     if (dirty_) { rebuild(); }
+}
+
+auto document_store::take_pending_diagnostics() -> touched_modules {
+    return std::exchange(pending_diagnostics_, {});
 }
 
 auto document_store::update(const std::filesystem::path& path, std::string text)
@@ -72,12 +79,7 @@ auto document_store::update(const std::filesystem::path& path, std::string text)
 
     // Rebuild from scratch and reanalyze every known root, not just `path`
     rebuild();
-
-    touched_modules results;
-    for (const auto& [mod_path, mod] : session_->get_manager()) {
-        results.emplace_back(mod_path, to_lsp_diagnostics(*mod));
-    }
-    return results;
+    return take_pending_diagnostics();
 }
 
 auto document_store::update_throttled(const std::filesystem::path& path, std::string text)
@@ -95,23 +97,13 @@ auto document_store::update_throttled(const std::filesystem::path& path, std::st
     if (std::chrono::steady_clock::now() - last_rebuild_ < throttle_interval_) { return {}; }
 
     rebuild();
-
-    touched_modules results;
-    for (const auto& [mod_path, mod] : session_->get_manager()) {
-        results.emplace_back(mod_path, to_lsp_diagnostics(*mod));
-    }
-    return results;
+    return take_pending_diagnostics();
 }
 
 auto document_store::seed_known_roots(std::vector<std::filesystem::path> paths) -> touched_modules {
     for (const auto& path : paths) { register_known_root(path); }
     rebuild();
-
-    touched_modules results;
-    for (const auto& [mod_path, mod] : session_->get_manager()) {
-        results.emplace_back(mod_path, to_lsp_diagnostics(*mod));
-    }
-    return results;
+    return take_pending_diagnostics();
 }
 
 auto document_store::close(const std::filesystem::path& path) -> void { loader_.remove(path); }

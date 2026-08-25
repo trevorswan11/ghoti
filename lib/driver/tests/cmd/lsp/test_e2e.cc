@@ -864,7 +864,6 @@ TEST_CASE("ghoti lsp throttles rapid didChange notifications but stays content-f
                               {"contentChanges", {{{"text", text}}}}}}});
     }
 
-    // The very next message off the wire must be this documentSymbol's own response
     lsp::write_message(proc.stdin_stream(),
                        {
                            {"jsonrpc", "2.0"},
@@ -882,6 +881,11 @@ TEST_CASE("ghoti lsp throttles rapid didChange notifications but stays content-f
                                },
                            },
                        });
+    const auto catchup_diag = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    REQUIRE(catchup_diag.contains("method"));
+    CHECK(catchup_diag.at("method") == "textDocument/publishDiagnostics");
+    CHECK(catchup_diag.at("params").at("diagnostics").empty());
+
     const auto symbols_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
     REQUIRE(symbols_resp.contains("id"));
     CHECK(symbols_resp.at("id") == 2);
