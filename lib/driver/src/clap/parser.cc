@@ -1,5 +1,6 @@
 #include "driver/clap/parser.hh"
 
+#include <chrono>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -67,7 +68,12 @@ auto parser::parse() -> stdx::result<stdx::box<cmd::command>, error> {
     } catch (const CLI::ParseError& e) { return stdx::err{static_cast<error>(app_.exit(e))}; };
 
     if (repl_cmd->parsed()) { return stdx::make_box<cmd::shell>(error_stream_); }
-    if (lsp_cmd->parsed()) { return stdx::make_box<cmd::lsp_server>(error_stream_); }
+    if (lsp_cmd->parsed()) {
+        return stdx::make_box<cmd::lsp_server>(error_stream_,
+                                               std::chrono::milliseconds{lsp_throttle_ms_},
+                                               lsp_workspace_excludes_,
+                                               static_cast<usize>(lsp_workspace_file_cap_));
+    }
 
     if (build_obj_cmd->parsed()) {
         auto opts{TRY(cmd::build::options::process_raw(
@@ -101,7 +107,20 @@ auto parser::setup_repl_subcmd() -> gsl::not_null<CLI::App*> {
 }
 
 auto parser::setup_lsp_subcmd() -> gsl::not_null<CLI::App*> {
-    return app_.add_subcommand("lsp", "Run the ghoti language server over stdio");
+    auto* sub{app_.add_subcommand("lsp", "Run the ghoti language server over stdio")};
+    sub->add_option("--throttle-ms",
+                    lsp_throttle_ms_,
+                    "Minimum milliseconds between full workspace reanalysis passes")
+        ->default_val(lsp_throttle_ms_);
+    sub->add_option("--workspace-exclude",
+                    lsp_workspace_excludes_,
+                    "Directory name to skip during workspace file discovery")
+        ->default_val(lsp_workspace_excludes_);
+    sub->add_option("--workspace-file-cap",
+                    lsp_workspace_file_cap_,
+                    "Maximum number of files to discover during workspace-wide file discovery")
+        ->default_val(lsp_workspace_file_cap_);
+    return sub;
 }
 
 auto parser::setup_build_obj_subcmd() -> gsl::not_null<CLI::App*> {
@@ -121,9 +140,8 @@ auto parser::setup_build_exe_subcmd() -> gsl::not_null<CLI::App*> {
 auto parser::setup_build_lib_subcmd() -> gsl::not_null<CLI::App*> {
     auto* sub{app_.add_subcommand("build-lib", "Build a static or dynamic library from source")};
     sub->add_option("input_file", build_lib_opts_.input, "Input source file (.gh)")->required();
-    sub->add_flag("--dynamic,--shared",
-                  build_lib_opts_.dynamic,
-                  "Build a dynamic / shared library instead of a static library");
+    sub->add_flag("--dynamic,--shared", build_lib_opts_.dynamic, "Build a dynamic / shared library")
+        ->default_val(build_lib_opts_.dynamic);
     cmd::build::setup_flags(
         sub, build_lib_opts_, "Output library path (.a / .lib / .so / .dylib / .dll)");
     return sub;
@@ -138,11 +156,11 @@ auto parser::setup_fmt_subcmd() -> gsl::not_null<CLI::App*> {
     sub->add_option("--stdin,--stdin-filepath",
                     fmt_opts_.stdin_filepath,
                     "Virtual file path when reading from stdin");
+    sub->add_option("-m,--max-width", fmt_opts_.max_width, "Maximum column line width")
+        ->default_val(fmt_opts_.max_width);
     sub->add_option(
-        "-m,--max-width", fmt_opts_.max_width, "Maximum column line width (default: 100)");
-    sub->add_option("-i,--indent-spaces",
-                    fmt_opts_.indent_spaces,
-                    "Number of spaces to use for indenting (default: 4)");
+           "-i,--indent-spaces", fmt_opts_.indent_spaces, "Number of spaces to use for indenting")
+        ->default_val(fmt_opts_.indent_spaces);
     return sub;
 }
 

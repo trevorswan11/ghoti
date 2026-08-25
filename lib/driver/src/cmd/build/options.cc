@@ -182,14 +182,19 @@ auto setup_flags(CLI::App* subcmd, raw_options& opts, std::string_view output_de
         "-L,--library-path", opts.library_paths, "Add directory to library search paths");
     subcmd->add_option("-l,--library", opts.libraries, "Link against library name");
     subcmd->add_option("--target", opts.target, "Target triple");
-    subcmd->add_option("--cpu", opts.cpu, "Target CPU architecture (default: generic)");
+    subcmd->add_option("--cpu", opts.cpu, "Target CPU architecture")->default_val(opts.cpu);
     subcmd->add_option("--features", opts.features, "Target CPU features");
     subcmd->add_option(
         "-O,--opt-level", opts.opt_level_str, "Optimization level (0, 1, 2, 3, s, z)");
-    subcmd->add_flag("--release", opts.release, "Build in release mode (defaults to -O2)");
-    subcmd->add_flag(
-        "--debug-passes", opts.debug_passes, "Enable debug logging and IR printing after passes");
-    subcmd->add_flag("--time-passes", opts.time_passes, "Enable pass execution timing report");
+    subcmd->add_flag("--release", opts.release, "Build in release mode (defaults to -O2)")
+        ->default_val(opts.release);
+    subcmd
+        ->add_flag("--debug-passes",
+                   opts.debug_passes,
+                   "Enable debug logging and IR printing after passes")
+        ->default_val(opts.debug_passes);
+    subcmd->add_flag("--time-passes", opts.time_passes, "Enable pass execution timing report")
+        ->default_val(opts.time_passes);
 }
 
 } // namespace ghoti::cmd::build

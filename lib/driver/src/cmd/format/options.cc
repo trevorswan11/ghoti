@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <ostream>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #include <fmt/format.h>
@@ -38,7 +39,9 @@ auto options::process_raw(const raw_options& raw, std::ostream& error_stream)
         }
 
         if (std::filesystem::is_directory(path)) {
-            for (const auto& entry : std::filesystem::recursive_directory_iterator{path}) {
+            std::error_code ec;
+            for (const auto& entry : std::filesystem::recursive_directory_iterator{path, ec}) {
+                if (ec) { continue; }
                 ASSERT(entry.exists(), "Recursive walker encountered non-existent file");
                 if (entry.is_directory()) { continue; }
 

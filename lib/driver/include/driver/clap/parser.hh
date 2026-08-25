@@ -2,6 +2,8 @@
 
 #include <iostream>
 #include <ostream>
+#include <string>
+#include <vector>
 
 #include <CLI/App.hpp>
 #include <gsl/pointers>
@@ -14,6 +16,7 @@
 #include "driver/cmd/build/options.hh"
 #include "driver/cmd/command.hh"
 #include "driver/cmd/format/options.hh"
+#include "driver/cmd/lsp/workspace_scan.hh"
 #include "driver/platform/win32.hh"
 
 namespace ghoti::clap {
@@ -45,6 +48,9 @@ class parser {
     cmd::build::raw_options  build_exe_opts_;
     cmd::build::raw_options  build_lib_opts_;
     cmd::format::raw_options fmt_opts_;
+    i32                      lsp_throttle_ms_{300};
+    std::vector<std::string> lsp_workspace_excludes_{lsp::DEFAULT_WORKSPACE_EXCLUDES};
+    i32 lsp_workspace_file_cap_{static_cast<i32>(lsp::DEFAULT_WORKSPACE_FILE_CAP)};
 
 #if GHOTI_WINDOWS
     win32::rich_console console_;
