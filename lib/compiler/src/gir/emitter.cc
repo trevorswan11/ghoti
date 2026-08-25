@@ -1000,8 +1000,8 @@ auto emitter::try_emit_union_field_eq(ast::node_id lhs, ast::node_id rhs)
 auto emitter::emit_union_tag_eq(value union_addr, ast::node_id member_pattern_id) -> local_id {
     auto&      i32_type{ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
     auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
-    const auto tag_ptr{
-        builder_.emit_get_element_ptr(union_addr, {value{0ULL, usize_type}}, i32_type)};
+    const auto tag_ptr{builder_.emit_get_element_ptr(
+        union_addr, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
     const auto tag_val{builder_.emit_load(value{tag_ptr, i32_type}, i32_type)};
 
     const auto& imp{active_ast().get_as<ast::implicit_access_expr>(member_pattern_id)};
@@ -1083,8 +1083,8 @@ auto emitter::sync_tagged_union_tag(ast::node_id assign_lhs) -> void {
     const auto union_addr{emit_lvalue(dot->object)};
     auto&      i32_type{ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
     auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
-    const auto tag_ptr{
-        builder_.emit_get_element_ptr(union_addr, {value{0ULL, usize_type}}, i32_type)};
+    const auto tag_ptr{builder_.emit_get_element_ptr(
+        union_addr, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
     // The tag write establishes the active variant, the same as a construction-time write does
     builder_.emit_store(value{tag_ptr, i32_type}, value{static_cast<i64>(proxy->index), i32_type})
         .is_initializer = true;
@@ -2260,7 +2260,7 @@ auto emitter::materialize_const(const const_value& cv) -> value {
 
             auto&      i32_type{ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
             const auto tag_ptr{builder_.emit_get_element_ptr(
-                value{slot, type}, {value{0ULL, usize_type}}, i32_type)};
+                value{slot, type}, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
             builder_
                 .emit_store(value{tag_ptr, i32_type}, value{static_cast<i64>(field_idx), i32_type})
                 .is_initializer = true;
@@ -2743,8 +2743,10 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
         const auto [sym, field_idx]{*proxy};
 
         auto&      i32_type{ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
-        const auto tag_ptr{builder_.emit_get_element_ptr(
-            value{struct_slot, *sema_type}, {value{0ULL, usize_type}}, i32_type)};
+        const auto tag_ptr{
+            builder_.emit_get_element_ptr(value{struct_slot, *sema_type},
+                                          {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}},
+                                          i32_type)};
         builder_.emit_store(value{tag_ptr, i32_type}, value{static_cast<i64>(field_idx), i32_type})
             .is_initializer = true;
 
@@ -2828,8 +2830,8 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
 
         if (member_ident.name == "ptr") {
             auto&      field_type{sema_type ? *sema_type : arr_data->underlying};
-            const auto field_ptr{
-                builder_.emit_get_element_ptr(base_lval, {value{0ULL, usize_type}}, field_type)};
+            const auto field_ptr{builder_.emit_get_element_ptr(
+                base_lval, {value{ARRAY_PTR_FIELD_INDEX, usize_type}}, field_type)};
             return value{field_ptr, field_type};
         }
     }
