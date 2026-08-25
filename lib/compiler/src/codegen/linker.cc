@@ -27,6 +27,8 @@
 #include "compiler/codegen/error.hh"
 #include "compiler/codegen/target.hh"
 #include "support/env.hh"
+#include "support/string_utils.hh"
+#include "support/subprocess.hh"
 
 LLD_HAS_DRIVER(macho)
 LLD_HAS_DRIVER(coff)
@@ -42,6 +44,24 @@ constexpr auto exe_permissions{
     std::filesystem::perms::owner_all | std::filesystem::perms::group_read |
     std::filesystem::perms::group_exec | std::filesystem::perms::others_read |
     std::filesystem::perms::others_exec};
+
+// `SDKROOT` isn't set in every environment that has a usable macOS SDK, fall back to xcrun
+[[nodiscard]] auto resolve_darwin_sdkroot() -> stdx::option<std::string> {
+    if (const auto sdkroot{get_env("SDKROOT")}) { return std::string{*sdkroot}; }
+
+    static const auto cached_sdkroot{[] -> stdx::option<std::string> {
+        piped_process proc{mock_argv{"xcrun", "-sdk", "macosx", "--show-sdk-path"}};
+        const auto    exit_code{proc.close_stdin_and_wait()};
+        if (!exit_code || *exit_code != 0) { return stdx::none; }
+
+        std::string path;
+        std::getline(proc.stdout_stream(), path);
+        string_utils::strip_trailing_cr(path);
+        if (path.empty()) { return stdx::none; }
+        return path;
+    }()};
+    return cached_sdkroot;
+}
 
 auto add_darwin_args(std::vector<std::string>&   args,
                      const llvm::Triple&         triple,
@@ -83,7 +103,7 @@ auto add_darwin_args(std::vector<std::string>&   args,
     args.emplace_back("-o");
     args.emplace_back(out_path_str);
 
-    if (const auto sdkroot{get_env("SDKROOT")}) {
+    if (const auto sdkroot{resolve_darwin_sdkroot()}) {
         args.emplace_back("-syslibroot");
         args.emplace_back(*sdkroot);
         args.emplace_back("-lSystem");
