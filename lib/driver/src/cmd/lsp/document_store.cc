@@ -145,7 +145,13 @@ auto document_store::workspace_symbols(std::string_view query) -> nlohmann::json
             out.push_back({
                 {"name", entry.name},
                 {"kind", std::to_underlying(entry.kind)},
-                {"location", {{"uri", uri}, {"range", range_of(entry.range)}}},
+                {
+                    "location",
+                    {
+                        {"uri", uri},
+                        {"range", range_of(entry.range)},
+                    },
+                },
             });
         }
     }

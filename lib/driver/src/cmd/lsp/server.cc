@@ -37,16 +37,34 @@ namespace {
 constexpr i32 METHOD_NOT_FOUND{-32'601};
 
 auto make_response(const nlohmann::json& id, nlohmann::json result) -> nlohmann::json {
-    return {{"jsonrpc", "2.0"}, {"id", id}, {"result", std::move(result)}};
+    return {
+        {"jsonrpc", "2.0"},
+        {"id", id},
+        {"result", std::move(result)},
+    };
 }
 
 auto make_error_response(const nlohmann::json& id, i32 code, std::string_view message)
     -> nlohmann::json {
-    return {{"jsonrpc", "2.0"}, {"id", id}, {"error", {{"code", code}, {"message", message}}}};
+    return {
+        {"jsonrpc", "2.0"},
+        {"id", id},
+        {
+            "error",
+            {
+                {"code", code},
+                {"message", message},
+            },
+        },
+    };
 }
 
 auto make_notification(std::string_view method, nlohmann::json params) -> nlohmann::json {
-    return {{"jsonrpc", "2.0"}, {"method", method}, {"params", std::move(params)}};
+    return {
+        {"jsonrpc", "2.0"},
+        {"method", method},
+        {"params", std::move(params)},
+    };
 }
 
 auto position_from(const nlohmann::json& position) -> source_location {
@@ -150,10 +168,12 @@ auto lsp_server::handle_initialize(const nlohmann::json& message) -> void {
         {"renameProvider", true},
     };
     const nlohmann::json server_info{{"name", "ghoti"}, {"version", GHOTI_VERSION_STR}};
-    lsp::write_message(
-        std::cout,
-        make_response(message.at("id"),
-                      {{"capabilities", capabilities}, {"serverInfo", server_info}}));
+    lsp::write_message(std::cout,
+                       make_response(message.at("id"),
+                                     {
+                                         {"capabilities", capabilities},
+                                         {"serverInfo", server_info},
+                                     }));
 }
 
 auto lsp_server::handle_initialized(const nlohmann::json&, lsp::document_store& store) -> void {
@@ -220,10 +240,17 @@ auto lsp_server::handle_hover(const nlohmann::json& message, lsp::document_store
     const auto type{entry_module.get_sema_type_opt(*id)};
     if (!type) { return write_null_id(message); }
 
-    lsp::write_message(
-        std::cout,
-        make_response(message.at("id"),
-                      {{"contents", {{"kind", "plaintext"}, {"value", type->to_string()}}}}));
+    lsp::write_message(std::cout,
+                       make_response(message.at("id"),
+                                     {
+                                         {
+                                             "contents",
+                                             {
+                                                 {"kind", "plaintext"},
+                                                 {"value", type->to_string()},
+                                             },
+                                         },
+                                     }));
 }
 
 auto lsp_server::handle_definition(const nlohmann::json& message, lsp::document_store& store)
@@ -243,8 +270,10 @@ auto lsp_server::handle_definition(const nlohmann::json& message, lsp::document_
 
     lsp::write_message(std::cout,
                        make_response(message.at("id"),
-                                     {{"uri", path_utils::path_to_uri(def_loc->path)},
-                                      {"range", lsp::range_of(def_loc->span)}}));
+                                     {
+                                         {"uri", path_utils::path_to_uri(def_loc->path)},
+                                         {"range", lsp::range_of(def_loc->span)},
+                                     }));
 }
 
 auto lsp_server::handle_document_symbol(const nlohmann::json& message, lsp::document_store& store)
@@ -313,8 +342,10 @@ auto lsp_server::handle_references(const nlohmann::json& message, lsp::document_
                              {"range", lsp::range_of(definition->span)}});
     }
     for (const auto& ref : lsp::find_references(store.manager(), *definition)) {
-        locations.push_back(
-            {{"uri", path_utils::path_to_uri(ref.path)}, {"range", lsp::range_of(ref.span)}});
+        locations.push_back({
+            {"uri", path_utils::path_to_uri(ref.path)},
+            {"range", lsp::range_of(ref.span)},
+        });
     }
 
     lsp::write_message(std::cout, make_response(message.at("id"), locations));
@@ -341,7 +372,10 @@ auto lsp_server::handle_rename(const nlohmann::json& message, lsp::document_stor
     const auto add_edit = [&](const located_span& loc) {
         auto& edits = edits_by_uri[path_utils::path_to_uri(loc.path)];
         if (!edits.is_array()) { edits = nlohmann::json::array(); }
-        edits.push_back({{"range", lsp::range_of(loc.span)}, {"newText", new_name}});
+        edits.push_back({
+            {"range", lsp::range_of(loc.span)},
+            {"newText", new_name},
+        });
     };
 
     add_edit(*definition);
@@ -357,10 +391,12 @@ auto lsp_server::handle_rename(const nlohmann::json& message, lsp::document_stor
 
 auto lsp_server::publish_diagnostics(const std::filesystem::path& path,
                                      const nlohmann::json&        diagnostics) -> void {
-    lsp::write_message(
-        std::cout,
-        make_notification("textDocument/publishDiagnostics",
-                          {{"uri", path_utils::path_to_uri(path)}, {"diagnostics", diagnostics}}));
+    lsp::write_message(std::cout,
+                       make_notification("textDocument/publishDiagnostics",
+                                         {
+                                             {"uri", path_utils::path_to_uri(path)},
+                                             {"diagnostics", diagnostics},
+                                         }));
 }
 
 } // namespace ghoti::cmd

@@ -14,8 +14,20 @@ auto point_diagnostic(std::string code, std::string message) -> nlohmann::json {
     return {
         {"code", std::move(code)},
         {"message", std::move(message)},
-        {"range",
-         {{"start", {{"line", 0}, {"character", 5}}}, {"end", {{"line", 0}, {"character", 6}}}}}};
+        {
+            "range",
+            {
+                {"start", {{"line", 0}, {"character", 5}}},
+                {
+                    "end",
+                    {
+                        {"line", 0},
+                        {"character", 6},
+                    },
+                },
+            },
+        },
+    };
 }
 
 } // namespace

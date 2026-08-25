@@ -15,8 +15,7 @@ namespace ghoti::lsp {
 namespace {
 
 // LSP DiagnosticSeverity: 1 = Error, 2 = Warning; absent lets the client pick its own default
-[[nodiscard]] [[maybe_unused]] auto severity_of(stdx::option<diagnostic_level> level)
-    -> stdx::option<i32> {
+[[nodiscard]] auto severity_of(stdx::option<diagnostic_level> level) -> stdx::option<i32> {
     return level.transform([](diagnostic_level l) { return static_cast<i32>(l); });
 }
 
@@ -59,15 +58,39 @@ auto to_lsp_diagnostics(const mod::module& module) -> nlohmann::json {
 auto range_of(stdx::option<source_location> loc) -> nlohmann::json {
     const auto start{loc.value_or(source_location{0, 0})};
     return {
-        {"start", {{"line", start.line}, {"character", start.column}}},
-        {"end", {{"line", start.line}, {"character", start.column + 1}}},
+        {
+            "start",
+            {
+                {"line", start.line},
+                {"character", start.column},
+            },
+        },
+        {
+            "end",
+            {
+                {"line", start.line},
+                {"character", start.column + 1},
+            },
+        },
     };
 }
 
 auto range_of(source_span span) -> nlohmann::json {
     return {
-        {"start", {{"line", span.start.line}, {"character", span.start.column}}},
-        {"end", {{"line", span.end.line}, {"character", span.end.column}}},
+        {
+            "start",
+            {
+                {"line", span.start.line},
+                {"character", span.start.column},
+            },
+        },
+        {
+            "end",
+            {
+                {"line", span.end.line},
+                {"character", span.end.column},
+            },
+        },
     };
 }
 

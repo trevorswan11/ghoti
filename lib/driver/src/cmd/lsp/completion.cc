@@ -17,16 +17,6 @@ namespace ghoti::lsp {
 
 namespace {
 
-// There's no dedicated Union kind, so unions map to Struct
-enum class completion_kind : i32 {
-    FUNCTION = 3,
-    VARIABLE = 6,
-    KEYWORD  = 14,
-    CONSTANT = 21,
-    STRUCT   = 22,
-    ENUM     = 13,
-};
-
 auto completion_kind_of(const mod::module& module, const ast::decl_stmt& decl) -> completion_kind {
     if (decl.value) {
         if (module.ast.get_as_opt<ast::function_expr>(*decl.value)) {

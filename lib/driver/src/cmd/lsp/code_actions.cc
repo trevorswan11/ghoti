@@ -38,7 +38,12 @@ auto quick_fix(std::string_view      title,
         {"title", std::string{title}},
         {"kind", "quickfix"},
         {"diagnostics", std::move(diagnostics)},
-        {"edit", {{"changes", std::move(changes)}}},
+        {
+            "edit",
+            {
+                {"changes", std::move(changes)},
+            },
+        },
     };
 }
 
