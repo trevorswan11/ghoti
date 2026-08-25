@@ -16,7 +16,7 @@ pub fn main(init: std.process.Init) !void {
     const go = init.environ_map.get("GHOTI_GO_PATH") orelse return error.GoNotFound;
     const output = init.environ_map.get("GHOTI_SITE_OUTPUT") orelse return error.OutputNotFound;
     var go_proc = try std.process.spawn(init.io, .{
-        .argv = &.{ go, "build", "-o", output, "./cmd/server/main.go" },
+        .argv = &.{ go, "build", "-o", output, "./cmd/server" },
         .create_no_window = true,
     });
 

@@ -1,0 +1,22 @@
+package views
+
+import "webserver/internal/render"
+
+templ Nav(active string) {
+	<nav class="sidebar">
+		<a class={ "nav-link", templ.KV("active", active == "") } href="/">Overview</a>
+		for _, section := range render.Nav {
+			<div class="nav-section">
+				<div class="nav-heading">{ section.Title }</div>
+				for _, item := range section.Items {
+					<a
+						class={ "nav-link", templ.KV("active", active == item.Slug) }
+						href={ templ.URL(render.Href(item)) }
+					>
+						{ item.Title }
+					</a>
+				}
+			</div>
+		}
+	</nav>
+}

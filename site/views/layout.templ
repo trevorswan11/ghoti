@@ -1,0 +1,27 @@
+package views
+
+templ Layout(title string, active string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title } · ghoti</title>
+			<link rel="icon" href="data:,"/>
+			<link rel="stylesheet" href="/static/style.css"/>
+			<script src="/static/htmx.min.js"></script>
+		</head>
+		<body hx-boost="true">
+			<header class="topbar">
+				<a class="brand" href="/">ghoti<span class="brand-dot">docs</span></a>
+				<a class="topbar-link" href="https://github.com/trevorswan11/ghoti" target="_blank" rel="noreferrer">GitHub ↗</a>
+			</header>
+			<div class="shell">
+				@Nav(active)
+				<main id="content" class="content">
+					{ children... }
+				</main>
+			</div>
+		</body>
+	</html>
+}
