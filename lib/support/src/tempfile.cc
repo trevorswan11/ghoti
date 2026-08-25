@@ -2,14 +2,15 @@
 
 #include <atomic>
 #include <filesystem>
-#include <fmt/ostream.h>
+#include <fstream>
 #include <iostream>
 #include <random>
 #include <string_view>
+#include <system_error>
 
 #include <fmt/format.h>
+#include <fmt/ostream.h>
 #include <stdx/types.hh>
-#include <system_error>
 
 namespace ghoti {
 
@@ -34,6 +35,22 @@ auto tempfile::make_temp_path(std::string_view tag) -> std::filesystem::path {
     const auto dir{std::filesystem::temp_directory_path()};
     const auto name{fmt::format("ghoti_{}_{}_{}", tag, seed, counter.fetch_add(1))};
     return dir / name;
+}
+
+tempdir::tempdir(std::string_view tag) : path{tempfile::make_temp_path(tag)} {
+    std::filesystem::create_directories(path);
+}
+
+tempdir::~tempdir() {
+    std::error_code ec;
+    std::filesystem::remove_all(path, ec);
+}
+
+auto tempdir::write(const std::filesystem::path& relative, std::string_view content) const -> void {
+    const auto full{path / relative};
+    std::filesystem::create_directories(full.parent_path());
+    std::ofstream out{full};
+    out << content;
 }
 
 } // namespace ghoti

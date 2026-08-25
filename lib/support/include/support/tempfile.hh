@@ -24,4 +24,14 @@ struct tempfile {
     [[nodiscard]] operator std::filesystem::path() const noexcept { return path; }
 };
 
+struct tempdir {
+    std::filesystem::path path;
+
+    explicit tempdir(std::string_view tag);
+    ~tempdir();
+    MAKE_PINNED(tempdir);
+
+    auto write(const std::filesystem::path& relative, std::string_view content) const -> void;
+};
+
 } // namespace ghoti
