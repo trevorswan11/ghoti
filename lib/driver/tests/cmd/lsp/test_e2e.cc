@@ -6,18 +6,21 @@
 #include <utility>
 
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/format.h>
 #include <nlohmann/json.hpp>
 #include <stdx/types.hh>
 
 #include "driver/cmd/lsp/document_store.hh"
 #include "driver/cmd/lsp/rpc.hh"
+#include "support/path_utils.hh"
 #include "support/subprocess.hh"
+#include "support/tempfile.hh"
 #include "support/test.hh"
 
 namespace ghoti::tests {
 
 TEST_CASE("ghoti lsp answers initialize/didOpen/hover/shutdown over a real child process") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp"}};
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
     REQUIRE(proc.is_running());
 
     lsp::write_message(
@@ -67,7 +70,7 @@ TEST_CASE("ghoti lsp answers initialize/didOpen/hover/shutdown over a real child
 }
 
 TEST_CASE("ghoti lsp offers a missing-semicolon quick fix over a real child process") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp"}};
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
     REQUIRE(proc.is_running());
 
     lsp::write_message(
@@ -121,7 +124,7 @@ TEST_CASE("ghoti lsp offers a missing-semicolon quick fix over a real child proc
 }
 
 TEST_CASE("ghoti lsp applies an incremental didChange edit and re-analyzes it") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp"}};
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
     REQUIRE(proc.is_running());
 
     lsp::write_message(
@@ -182,7 +185,7 @@ TEST_CASE("ghoti lsp applies an incremental didChange edit and re-analyzes it") 
 }
 
 TEST_CASE("ghoti lsp reports both a syntax error and a sema error in the same file") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp"}};
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
     REQUIRE(proc.is_running());
 
     lsp::write_message(
@@ -239,7 +242,7 @@ TEST_CASE("ghoti lsp reports both a syntax error and a sema error in the same fi
 }
 
 TEST_CASE("ghoti lsp answers workspace/symbol over a real child process") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp"}};
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
     REQUIRE(proc.is_running());
 
     lsp::write_message(
@@ -288,7 +291,7 @@ TEST_CASE("ghoti lsp answers workspace/symbol over a real child process") {
 }
 
 TEST_CASE("ghoti lsp resolves go-to-definition and references across an import") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp"}};
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
     REQUIRE(proc.is_running());
 
     lsp::write_message(
@@ -416,7 +419,7 @@ TEST_CASE("ghoti lsp resolves go-to-definition and references across an import")
 }
 
 TEST_CASE("ghoti lsp renames a symbol from its upstream importer's usage") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp"}};
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
     REQUIRE(proc.is_running());
 
     lsp::write_message(
@@ -480,6 +483,153 @@ TEST_CASE("ghoti lsp renames a symbol from its upstream importer's usage") {
     REQUIRE(main_edits.size() == 1);
     CHECK(main_edits[0].at("newText") == "renamed");
     CHECK(main_edits[0].at("range").at("start").at("character") == 23);
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "shutdown"}});
+    const auto shutdown_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(shutdown_resp.at("result").is_null());
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+    CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
+}
+
+TEST_CASE("ghoti lsp throttles rapid didChange notifications but stays content-fresh") {
+    // A large explicit window so every didChange in the rapid burst below must land inside it
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "5000"}};
+    REQUIRE(proc.is_running());
+
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"id", 1},
+                           {"method", "initialize"},
+                           {
+                               "params",
+                               {
+                                   {"processId", nullptr},
+                                   {"capabilities", nlohmann::json::object()},
+                               },
+                           },
+                       });
+    const auto init_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(init_resp.contains("result"));
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"}, {"method", "initialized"}, {"params", nlohmann::json::object()}});
+
+    const std::string uri{"file:///test_e2e_throttle.gh"};
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"},
+                        {"method", "textDocument/didOpen"},
+                        {"params",
+                         {{"textDocument",
+                           {{"uri", uri},
+                            {"languageId", "ghoti"},
+                            {"version", 1},
+                            {"text", "pub const x := 1;\n"}}}}}});
+    const auto initial_diag = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(initial_diag.at("params").at("diagnostics").empty());
+
+    // Five rapid edits, none read in between -- all must land inside the 5s throttle window that
+    // didOpen's rebuild just started, so none of them should produce a publishDiagnostics. The
+    // final edit adds a brand-new top-level declaration, so documentSymbol below can prove the
+    // content is genuinely fresh (not just unchanged) despite no diagnostics having been published
+    for (i32 i{2}; i <= 6; ++i) {
+        const auto text{i == 6 ? std::string{"pub const x := 1;\npub const z := 99;\n"}
+                               : fmt::format("pub const x := {};\n", i)};
+        lsp::write_message(proc.stdin_stream(),
+                           {{"jsonrpc", "2.0"},
+                            {"method", "textDocument/didChange"},
+                            {"params",
+                             {{"textDocument", {{"uri", uri}, {"version", i}}},
+                              {"contentChanges", {{{"text", text}}}}}}});
+    }
+
+    // The very next message off the wire must be this documentSymbol's own response, not a
+    // stray publishDiagnostics -- proving none of the five throttled edits published one
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"},
+                        {"id", 2},
+                        {"method", "textDocument/documentSymbol"},
+                        {"params", {{"textDocument", {{"uri", uri}}}}}});
+    const auto symbols_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    REQUIRE(symbols_resp.contains("id"));
+    CHECK(symbols_resp.at("id") == 2);
+    // Content is genuinely fresh (reflects the last throttled edit's new `z` declaration) even
+    // though no diagnostics notification was ever published for any of the five edits
+    CHECK(lsp::has_field(symbols_resp.at("result"), "name", "z"));
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "shutdown"}});
+    const auto shutdown_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(shutdown_resp.at("result").is_null());
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+    CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
+}
+
+TEST_CASE("ghoti lsp discovers workspace files and resolves references without opening them") {
+    tempdir dir{"e2e_workspace_scan"};
+    dir.write("helper.gh", "pub const value := 42;\n");
+    dir.write("main.gh",
+              "import \"helper.gh\" as helper;\n"
+              "pub const x := helper::value;\n");
+
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
+    REQUIRE(proc.is_running());
+
+    const auto workspace_uri{path_utils::path_to_uri(dir.path)};
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"id", 1},
+                           {"method", "initialize"},
+                           {
+                               "params",
+                               {
+                                   {"processId", nullptr},
+                                   {"capabilities", nlohmann::json::object()},
+                                   {
+                                       "workspaceFolders",
+                                       {
+                                           {
+                                               {"uri", workspace_uri},
+                                               {"name", "e2e_workspace_scan"},
+                                           },
+                                       },
+                                   },
+                               },
+                           },
+                       });
+    const auto init_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(init_resp.contains("result"));
+
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"}, {"method", "initialized"}, {"params", nlohmann::json::object()}});
+    // The scan+seed publishes diagnostics for both discovered files, in no guaranteed order
+    for (i32 i{0}; i < 2; ++i) {
+        const auto note = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+        CHECK(note.at("params").at("diagnostics").empty());
+    }
+
+    // Neither file was ever opened
+    const auto helper_uri{
+        path_utils::path_to_uri(std::filesystem::weakly_canonical(dir.path / "helper.gh"))};
+    const auto main_uri{
+        path_utils::path_to_uri(std::filesystem::weakly_canonical(dir.path / "main.gh"))};
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"},
+                        {"id", 2},
+                        {"method", "textDocument/references"},
+                        {"params",
+                         {{"textDocument", {{"uri", helper_uri}}},
+                          {"position", {{"line", 0}, {"character", 10}}},
+                          {"context", {{"includeDeclaration", false}}}}}});
+    const auto  refs_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    const auto& locations{refs_resp.at("result")};
+    REQUIRE(locations.size() == 1);
+    CHECK(locations[0].at("uri") == main_uri);
+    CHECK(locations[0].at("range").at("start").at("character") == 23);
 
     lsp::write_message(proc.stdin_stream(),
                        {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "shutdown"}});

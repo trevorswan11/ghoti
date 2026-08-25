@@ -1,16 +1,24 @@
+#include <chrono> // IWYU pragma: keep
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <thread>
 
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/format.h>
+#include <fmt/ostream.h>
 #include <nlohmann/json.hpp>
 #include <stdx/option.hh>
 
 #include "driver/cmd/lsp/document_store.hh"
 #include "driver/cmd/lsp/references.hh"
 #include "driver/cmd/lsp/rpc.hh"
+#include "support/tempfile.hh"
 #include "support/test.hh"
+
+using namespace std::chrono_literals;
 
 namespace ghoti::tests {
 
@@ -162,6 +170,61 @@ TEST_CASE("document_store only finds references in files it has actually opened 
     const auto helper_module{UNWRAP(store.analyze(helper_path))};
     const auto definition{UNWRAP(lsp::definition_location_at(*helper_module, {0, 10}))};
     CHECK(lsp::find_references(store.manager(), definition).empty());
+}
+
+TEST_CASE("update_throttled skips the rebuild when called again inside the throttle window") {
+    lsp::document_store         store{std::cerr, 1'000ms};
+    const std::filesystem::path path{"test_ds_throttle_skip.gh"};
+
+    CHECK(!store.update_throttled(path, "pub const x := 5;\n").empty()); // first call rebuilds
+    CHECK(store.update_throttled(path, "pub const x := 6;\n").empty());  // second is throttled
+}
+
+TEST_CASE("update_throttled rebuilds again once the throttle interval has elapsed") {
+    lsp::document_store         store{std::cerr, 1ms};
+    const std::filesystem::path path{"test_ds_throttle_elapsed.gh"};
+
+    CHECK(!store.update_throttled(path, "pub const x := 5;\n").empty());
+    std::this_thread::sleep_for(10ms); // 10x margin over the 1ms interval
+    CHECK(!store.update_throttled(path, "pub const x := 6;\n").empty());
+}
+
+TEST_CASE("a throttled-and-skipped update_throttled call still leaves reads fresh") {
+    lsp::document_store         store{std::cerr, 1'000ms};
+    const std::filesystem::path path{"test_ds_throttle_dirty_read.gh"};
+
+    CHECK(!store.update_throttled(path, "pub const x := 5;\n").empty());
+    CHECK(store.update_throttled(path, "pub const x := 6; pub const y := 1;\n").empty());
+
+    // The rebuild was skipped, but analyze()/workspace_symbols() must still see the latest text
+    const auto module{UNWRAP(store.analyze(path))};
+    CHECK(module->identifier_positions.size() > 0);
+    CHECK(lsp::has_field(store.workspace_symbols(""), "name", "y"));
+}
+
+TEST_CASE("seed_known_roots discovers cross-file references without ever opening either file") {
+    const tempfile helper_file{"seed_helper"};
+    {
+        std::ofstream helper_out{helper_file.path};
+        fmt::println(helper_out, "pub const value := 42;");
+    }
+    const tempfile main_file{"seed_main"};
+    {
+        std::ofstream main_out{main_file.path};
+        fmt::println(main_out,
+                     "import \"{}\" as helper;\npub const x := helper::value;",
+                     helper_file.path.filename().string());
+    }
+
+    lsp::document_store store{std::cerr};
+    const auto          seeded{store.seed_known_roots({helper_file.path, main_file.path})};
+    CHECK(!seeded.empty());
+
+    const auto helper_module{UNWRAP(store.analyze(helper_file.path))};
+    const auto definition{UNWRAP(lsp::definition_location_at(*helper_module, {0, 10}))};
+    const auto refs{lsp::find_references(store.manager(), definition)};
+    REQUIRE(refs.size() == 1);
+    CHECK(refs[0].path == std::filesystem::weakly_canonical(main_file.path));
 }
 
 } // namespace ghoti::tests

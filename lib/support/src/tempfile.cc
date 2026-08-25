@@ -50,7 +50,7 @@ auto tempdir::write(const std::filesystem::path& relative, std::string_view cont
     const auto full{path / relative};
     std::filesystem::create_directories(full.parent_path());
     std::ofstream out{full};
-    out << content;
+    fmt::print(out, "{}", content);
 }
 
 } // namespace ghoti

@@ -9,6 +9,8 @@ CompileFlags:
 Diagnostics:
     Suppress: [static_non_static]
     MissingIncludes: Strict
+    Includes:
+        IgnoreHeader: [".*__chrono/.*", "<chrono>"]
 
 Style:
     QuotedHeaders: ["lib/.*", "fuzz/.*"]
