@@ -42,8 +42,14 @@ auto type::to_string() const -> std::string {
     return data_.visit(
         [](types::pointer ptr) { return fmt::format("^{}", ptr.underlying.to_string()); },
         [](types::reference ref) { return fmt::format("&{}", ref.underlying.to_string()); },
-        [](types::slice slice) { return fmt::format("[]{}", slice.underlying.to_string()); },
-        [](types::array arr) { return fmt::format("[{}]{}", arr.len, arr.underlying.to_string()); },
+        [](types::slice slice) {
+            return fmt::format(
+                "[{}]{}", slice.null_terminated ? ":0" : "", slice.underlying.to_string());
+        },
+        [](types::array arr) {
+            return fmt::format(
+                "[{}{}]{}", arr.len, arr.null_terminated ? ":0" : "", arr.underlying.to_string());
+        },
         [](types::function fn) {
             auto params_str{fmt::to_string(fmt::join(
                 fn.params | std::views::transform([](type* param) { return param->to_string(); }),

@@ -31,7 +31,7 @@ template <typename Handle>
     return {module.ast.location_of(handle), module.ast.end_location_of(handle)};
 }
 
-// A decl_stmt resolves to its declared name's span, not the whole statement's
+// A decl resolves to its declared name's span, not the whole statement's
 [[nodiscard]] auto symbol_span_of(const mod::module& module, const symbol::data_t& data) noexcept
     -> source_span {
     PROFILE_FUNCTION();
@@ -40,6 +40,12 @@ template <typename Handle>
         [&module](const symbols::node_t& node) -> source_span {
             if (const auto decl{module.ast.get_as_opt<ast::decl_stmt>(node)}) {
                 return span_of(module, decl->name);
+            }
+            if (const auto using_stmt{module.ast.get_as_opt<ast::using_stmt>(node)}) {
+                return span_of(module, using_stmt->alias);
+            }
+            if (const auto import_stmt{module.ast.get_as_opt<ast::import_stmt>(node)}) {
+                if (import_stmt->alias) { return span_of(module, *import_stmt->alias); }
             }
             return span_of(module, node);
         },

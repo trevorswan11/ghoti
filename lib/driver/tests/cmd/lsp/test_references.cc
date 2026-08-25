@@ -143,6 +143,34 @@ TEST_CASE("analyze can be called twice on the same session for different entry p
     CHECK(refs[0].path == std::filesystem::weakly_canonical(main_path));
 }
 
+TEST_CASE("definition_location_at resolves a using-alias reference to just the alias") {
+    mod::overlay_loader         loader;
+    const std::filesystem::path path{"test_references_using_alias.gh"};
+    CHECK(loader.add(path, "using X = i32;\npub const s := @sizeOf(X);\n"));
+
+    auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
+    const auto module{UNWRAP(session->analyze(path))};
+
+    const auto def{UNWRAP(lsp::definition_location_at(*module, {1, 23}))};
+    CHECK(def.span.start.line == 0);
+    CHECK(def.span.start.column == 6);
+    CHECK(def.span.end.line == 0);
+    CHECK(def.span.end.column == 7);
+}
+
+TEST_CASE("definition_location_at resolves a using-alias from its own declaration name") {
+    mod::overlay_loader         loader;
+    const std::filesystem::path path{"test_references_using_decl.gh"};
+    CHECK(loader.add(path, "using X = i32;\n"));
+
+    auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
+    const auto module{UNWRAP(session->analyze(path))};
+
+    const auto def{UNWRAP(lsp::definition_location_at(*module, {0, 6}))};
+    CHECK(def.span.start.column == 6);
+    CHECK(def.span.end.column == 7);
+}
+
 TEST_CASE("definition_location_at returns none off any identifier") {
     mod::overlay_loader         loader;
     const std::filesystem::path path{"test_references_none.gh"};

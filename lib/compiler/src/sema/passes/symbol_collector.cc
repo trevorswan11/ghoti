@@ -123,6 +123,7 @@ auto symbol_collector::visit(ID id, const ast::enum_expr& enum_expr) -> void {
                             // Resolve the ident second to prevent self-referential values
                             const auto& ident =
                                 collecting_.ast.get_as<ast::identifier_expr>(enumeration.name);
+                            collecting_.add_identifier_position(enumeration.name);
                             try_declare<symbols::enumeration>(ident.name, enumeration);
                         }},
         stdx::iter_pair{enum_expr.members,
@@ -305,6 +306,7 @@ auto symbol_collector::visit(ID id, const ast::struct_expr& struct_expr) -> void
                             // Resolve the ident last to prevent self-referential values
                             const auto& ident =
                                 collecting_.ast.get_as<ast::identifier_expr>(field.name);
+                            collecting_.add_identifier_position(field.name);
                             try_declare<symbols::struct_field>(ident.name, field);
                         }},
         stdx::iter_pair{struct_expr.members,
@@ -327,6 +329,7 @@ auto symbol_collector::visit(ID id, const ast::union_expr& union_expr) -> void {
 
                             const auto& ident =
                                 collecting_.ast.get_as<ast::identifier_expr>(field.name);
+                            collecting_.add_identifier_position(field.name);
                             try_declare<symbols::union_field>(ident.name, field);
                         }},
         stdx::iter_pair{union_expr.members,
@@ -489,6 +492,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::import_stmt& import_stm
         collect_symbols(*imported_mod, new_ctx);
     }
 
+    if (import_stmt.alias) { collecting_.add_identifier_position(*import_stmt.alias); }
     try_declare<symbols::node_t>(alias, id);
     if (imported_mod && !imported_mod->is_errored()) {
         // Its much easier for other steps to get the enclosing module if we resolve now
@@ -539,6 +543,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::using_stmt& using_stmt)
     PROFILE_FUNCTION();
     collect(using_stmt.explicit_type);
     const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(using_stmt.alias)};
+    collecting_.add_identifier_position(using_stmt.alias);
     try_declare<symbols::node_t>(ident.name, id);
     ctx_.registry.get_from(table_idx_, ident.name).set_kind(symbol_kind::TYPE);
 }

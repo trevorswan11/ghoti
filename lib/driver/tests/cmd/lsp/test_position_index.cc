@@ -77,4 +77,70 @@ TEST_CASE("identifier_at returns none off the end of an identifier and off any i
     CHECK_FALSE(lsp::identifier_at(*module, {0, 0}));  // `pub`, not an identifier_expr
 }
 
+TEST_CASE("hover-style type resolution works on a struct field declaration's own name") {
+    mod::overlay_loader         loader;
+    const std::filesystem::path path{"test_position_index_struct_field.gh"};
+    CHECK(loader.add(path, "pub const S := struct { x: i32 };\n"));
+
+    auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
+    const auto module{UNWRAP(session->analyze(path))};
+
+    // Column 24 lands on the `x` field name itself, inside the struct body
+    const auto  id{UNWRAP(lsp::identifier_at(*module, {0, 24}))};
+    const auto& type{UNWRAP(module->get_sema_type_opt(id))};
+    CHECK(type.to_string() == "i32");
+}
+
+TEST_CASE("hover-style type resolution works on an enum enumerator's own name") {
+    mod::overlay_loader         loader;
+    const std::filesystem::path path{"test_position_index_enum_member.gh"};
+    CHECK(loader.add(path, "pub const E := enum { RED };\n"));
+
+    auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
+    const auto module{UNWRAP(session->analyze(path))};
+
+    const auto  id{UNWRAP(lsp::identifier_at(*module, {0, 22}))};
+    const auto& type{UNWRAP(module->get_sema_type_opt(id))};
+    CHECK(type.to_string() == "i32");
+}
+
+TEST_CASE("hover-style type resolution works on a union field declaration's own name") {
+    mod::overlay_loader         loader;
+    const std::filesystem::path path{"test_position_index_union_field.gh"};
+    CHECK(loader.add(path, "pub const U := union { x: i32, y: i32 };\n"));
+
+    auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
+    const auto module{UNWRAP(session->analyze(path))};
+
+    const auto  id{UNWRAP(lsp::identifier_at(*module, {0, 23}))};
+    const auto& type{UNWRAP(module->get_sema_type_opt(id))};
+    CHECK(type.to_string() == "i32");
+}
+
+TEST_CASE("hover-style type resolution works on a slice's .len member access") {
+    mod::overlay_loader         loader;
+    const std::filesystem::path path{"test_position_index_slice_len.gh"};
+    CHECK(loader.add(path, "pub const f := fn(s: []i32): usize { return s.len; };\n"));
+
+    auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
+    const auto module{UNWRAP(session->analyze(path))};
+
+    const auto  id{UNWRAP(lsp::identifier_at(*module, {0, 46}))};
+    const auto& type{UNWRAP(module->get_sema_type_opt(id))};
+    CHECK(type.to_string() == "usize");
+}
+
+TEST_CASE("hover-style type resolution shows the null-terminated sentinel on array/slice types") {
+    mod::overlay_loader         loader;
+    const std::filesystem::path path{"test_position_index_null_terminated.gh"};
+    CHECK(loader.add(path, "pub const f := fn(s: [:0]u8): void { const l := s; };\n"));
+
+    auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
+    const auto module{UNWRAP(session->analyze(path))};
+
+    const auto  id{UNWRAP(lsp::identifier_at(*module, {0, 48}))};
+    const auto& type{UNWRAP(module->get_sema_type_opt(id))};
+    CHECK(type.to_string() == "[:0]u8");
+}
+
 } // namespace ghoti::tests
