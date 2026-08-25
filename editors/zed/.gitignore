@@ -1,0 +1,4 @@
+target
+*.wasm
+grammars
+!Cargo.lock
