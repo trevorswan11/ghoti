@@ -18,8 +18,13 @@ auto scan_root(const std::filesystem::path&        root,
                usize                               max_files,
                std::vector<std::filesystem::path>& out) -> void {
     std::error_code ec;
-    auto            it{std::filesystem::recursive_directory_iterator{
-        root, std::filesystem::directory_options::skip_permission_denied, ec}};
+    // Resolve symlinks in the root once so every yielded entry is consistently canonical
+    const auto  canonical_root{std::filesystem::weakly_canonical(root, ec)};
+    const auto& effective_root{ec ? root : canonical_root};
+    ec.clear();
+
+    auto it{std::filesystem::recursive_directory_iterator{
+        effective_root, std::filesystem::directory_options::skip_permission_denied, ec}};
     const std::filesystem::recursive_directory_iterator end{};
     if (ec) { return; }
 

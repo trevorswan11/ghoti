@@ -7,7 +7,6 @@
 #include <vector>
 
 #include <fmt/format.h>
-#include <stdx/assert.hh>
 #include <stdx/result.hh>
 #include <stdx/string.hh>
 #include <stdx/utility.hh>
@@ -17,46 +16,85 @@
 
 namespace ghoti::cmd::format {
 
+namespace {
+
+// Adds `p` if it's a regular file, or the target of `p` if it's a symlink to one
+[[nodiscard]] auto try_add_file(std::vector<std::filesystem::path>& input_paths,
+                                const std::filesystem::path&        p) -> bool {
+    std::error_code ec;
+    if (std::filesystem::is_regular_file(p, ec)) {
+        input_paths.emplace_back(p);
+        return true;
+    }
+
+    if (std::filesystem::is_symlink(p, ec) && !ec) {
+        auto target{std::filesystem::read_symlink(p, ec)};
+        if (!ec) {
+            input_paths.emplace_back(std::move(target));
+            return true;
+        }
+    }
+    return false;
+}
+
+// Recursively collects every `.gh` file under `root`
+auto collect_gh_files(const std::filesystem::path&        root,
+                      std::vector<std::filesystem::path>& input_paths) -> void {
+    std::error_code                               it_ec;
+    std::filesystem::recursive_directory_iterator it{root, it_ec};
+    if (it_ec) { return; }
+    const std::filesystem::recursive_directory_iterator end{};
+
+    while (it != end) {
+        std::error_code entry_ec;
+        const bool      is_dir{it->is_directory(entry_ec)};
+        if (!entry_ec && !is_dir) {
+            const auto& entry_path{it->path()};
+            if (entry_path.has_extension()) {
+                auto ext{entry_path.extension().string()};
+                stdx::string::inplace_lower(ext);
+                if (ext == ".gh") { DISCARD(try_add_file(input_paths, entry_path)); }
+            }
+        }
+
+        it.increment(it_ec);
+        if (it_ec) { it_ec.clear(); }
+    }
+}
+
+} // namespace
+
 auto options::process_raw(const raw_options& raw, std::ostream& error_stream)
     -> stdx::result<options, clap::error> {
     std::vector<std::filesystem::path> input_paths;
-    const auto try_add_file = [&input_paths](const std::filesystem::path& p) {
-        if (std::filesystem::is_regular_file(p)) {
-            input_paths.emplace_back(p);
-        } else if (std::filesystem::is_symlink(p)) {
-            input_paths.emplace_back(std::filesystem::read_symlink(p));
-        } else {
-            return false;
-        }
-        return true;
-    };
 
     for (const auto& input_path : raw.input_paths) {
         std::filesystem::path path{input_path};
-        if (!std::filesystem::exists(path)) {
+        std::error_code       ec;
+
+        const bool path_exists{std::filesystem::exists(path, ec)};
+        if (ec) {
+            clap::warn_error(
+                error_stream,
+                fmt::format("could not check path '{}': {}", path.string(), ec.message()));
+            continue;
+        }
+        if (!path_exists) {
             clap::warn_error(error_stream, fmt::format("path '{}' does not exist", path.string()));
             continue;
         }
 
-        if (std::filesystem::is_directory(path)) {
-            std::error_code ec;
-            for (const auto& entry : std::filesystem::recursive_directory_iterator{path, ec}) {
-                if (ec) { continue; }
-                ASSERT(entry.exists(), "Recursive walker encountered non-existent file");
-                if (entry.is_directory()) { continue; }
+        const bool is_dir{std::filesystem::is_directory(path, ec)};
+        if (ec) {
+            clap::warn_error(
+                error_stream,
+                fmt::format("could not check path '{}': {}", path.string(), ec.message()));
+            continue;
+        }
 
-                const auto& entry_path{entry.path()};
-                if (entry_path.has_extension()) {
-                    auto ext{entry_path.extension().string()};
-                    stdx::string::inplace_lower(ext);
-                    if (ext != ".gh") { continue; }
-                } else {
-                    continue;
-                }
-
-                try_add_file(entry_path);
-            }
-        } else if (!try_add_file(path)) {
+        if (is_dir) {
+            collect_gh_files(path, input_paths);
+        } else if (!try_add_file(input_paths, path)) {
             clap::warn_error(error_stream,
                              fmt::format("path '{}' is not a valid file type", path.string()));
             continue;
