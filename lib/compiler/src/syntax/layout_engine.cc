@@ -90,7 +90,7 @@ auto layout_engine::measure(doc_id doc, i64& width_left) const noexcept -> bool 
             return true;
         },
         [&](docs::indent i) { return measure(i.child, width_left); },
-        [&](docs::group& g) { return !g.force_break && measure(g.child, width_left); },
+        [&](docs::group g) { return !g.force_break && measure(g.child, width_left); },
         [&](docs::line_or_space l) {
             width_left -= static_cast<i64>(l.space_text.size());
             return width_left >= 0;
