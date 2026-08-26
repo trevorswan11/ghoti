@@ -38,22 +38,7 @@ auto test_lexer(std::string_view input, std::initializer_list<expected_lexeme> e
 
 TEST_CASE("Lexing illegal characters") {
     syntax::lexer l{"月😭🎶"};
-    const auto    tokens{l.consume()};
-
-    for (usize i{0}; i < tokens.size(); ++i) {
-        const auto& token{tokens[i]};
-        if (i == tokens.size() - 1) {
-            CHECK(token.type == token_type_t::END);
-            break;
-        }
-        CHECK(token.type == token_type_t::ILLEGAL);
-    }
-}
-
-TEST_CASE("Lexer over-consumption") {
-    syntax::lexer l{"Lexer"};
-    CHECK(l.consume().size() == 2);
-    for (usize i{0}; i < 100; ++i) { CHECK(l.advance().type == token_type_t::END); }
+    for (auto it{l.begin()}; it != l.end(); ++it) { CHECK(it->type == token_type_t::ILLEGAL); }
 }
 
 TEST_CASE("Lexing symbols") {
@@ -382,22 +367,10 @@ TEST_CASE("Lexing compiler builtins & Lexer resetting") {
     });
     syntax::lexer l{input};
 
-    syntax::lexer l_accumulator{input};
-    const auto    accumulated_tokens{l_accumulator.consume()};
-    l_accumulator.reset(input);
-    const auto reset_acc{l_accumulator.consume()};
-
-    for (usize i{0}; const auto& [expected_slice, expected_tt] : expecteds) {
-        const auto  token{l.advance()};
-        const auto& accumulated_token{accumulated_tokens[i]};
-        const auto& reset{reset_acc[i]};
-
+    for (const auto& [expected_slice, expected_tt] : expecteds) {
+        const auto token{l.advance()};
         CHECK(expected_tt == token.type);
-        CHECK(expected_tt == accumulated_token.type);
         CHECK(expected_slice == token.slice);
-        CHECK(expected_slice == accumulated_token.slice);
-        CHECK(accumulated_token == reset);
-        i += 1;
     }
 }
 

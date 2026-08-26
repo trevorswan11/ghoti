@@ -3,7 +3,6 @@
 #include <cctype>
 #include <string_view>
 #include <utility>
-#include <vector>
 
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
@@ -15,6 +14,7 @@
 #include "compiler/syntax/operators.hh"
 #include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
+#include "compiler/syntax/trvia.hh"
 
 namespace ghoti::syntax {
 
@@ -75,13 +75,62 @@ auto lexer::advance() noexcept -> token_t {
     return token;
 }
 
-auto lexer::consume() -> std::vector<token_t> {
-    reset(input_);
+auto lexer::advance_enriched() noexcept -> enriched_token {
+    enriched_token result;
 
-    std::vector<token_t> tokens;
-    do { tokens.emplace_back(advance()); } while (tokens.back().type != token_type_t::END);
+    // Collect leading trivia
+    while (pos_ < input_.size() && (std::isspace(current_byte_) || current_byte_ == '/')) {
+        if (current_byte_ == '/' && peek_pos_ < input_.size() && input_[peek_pos_] != '/') {
+            break;
+        }
 
-    return tokens;
+        const auto start_line{line_no_};
+        const auto start_col{col_no_};
+        const auto start_pos{pos_};
+
+        if (current_byte_ == '\n') {
+            read_character();
+            result.leading_trivia.emplace_back(trivia_kind::NEWLINE, "\n", start_line, start_col);
+        } else if (std::isspace(current_byte_)) {
+            while (pos_ < input_.size() && std::isspace(current_byte_) && current_byte_ != '\n') {
+                read_character();
+            }
+            result.leading_trivia.emplace_back(
+                trivia_kind::WHITESPACE,
+                stdx::string::substr(input_, start_pos, pos_ - start_pos),
+                start_line,
+                start_col);
+        } else if (current_byte_ == '/') {
+            const auto comment{read_comment()};
+            result.leading_trivia.emplace_back(
+                trivia_kind::LINE_COMMENT, comment.slice, comment.line, comment.column);
+        }
+    }
+
+    // Lex the actual token
+    result.token = advance();
+    if (result.token.type == token_type_t::END) { return result; }
+
+    // Collect trailing same-line trivia
+    const auto token_line{result.token.line};
+    while (pos_ < input_.size() && line_no_ == token_line && current_byte_ != '\n') {
+        if (current_byte_ == ' ' || current_byte_ == '\t') {
+            read_character(); // trimmed
+            continue;
+        }
+
+        // Single line comments consume the rest of the line
+        if (current_byte_ == '/' && peek_pos_ < input_.size() && input_[peek_pos_] == '/') {
+            const auto comment_line{line_no_};
+            const auto comment_col{col_no_};
+            const auto comment{read_comment()};
+            result.leading_trivia.emplace_back(
+                trivia_kind::LINE_COMMENT, comment.slice, comment_line, comment_col);
+        }
+        break;
+    }
+
+    return result;
 }
 
 auto lexer::skip_whitespace() noexcept -> void {

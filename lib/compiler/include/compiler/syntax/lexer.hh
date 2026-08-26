@@ -2,13 +2,14 @@
 
 #include <iterator>
 #include <string_view>
-#include <vector>
 
 #include <stdx/option.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
+#include "compiler/syntax/trvia.hh"
 
 namespace ghoti::syntax {
 
@@ -63,9 +64,9 @@ class lexer {
     lexer() noexcept = default;
     explicit lexer(std::string_view input) noexcept : input_{input} { read_character(); }
 
-    auto               reset(std::string_view input = {}) noexcept -> void;
-    auto               advance() noexcept -> token_t;
-    [[nodiscard]] auto consume() -> std::vector<token_t>;
+    auto reset(std::string_view input = {}) noexcept -> void;
+    auto advance() noexcept -> token_t;
+    auto advance_enriched() noexcept -> enriched_token;
 
     auto        begin() noexcept -> iterator { return iterator{*this, advance()}; }
     static auto end() noexcept -> std::default_sentinel_t { return std::default_sentinel; }
