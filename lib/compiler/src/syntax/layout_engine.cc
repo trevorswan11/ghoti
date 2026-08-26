@@ -46,22 +46,21 @@ auto layout_engine::render(doc_id root, std::ostream& os) -> void {
                 stack.emplace_back(g.child, indent_level, fit_mode);
             },
             [&](docs::line_or_space l) {
-                switch (mode) {
-                case layout_mode::FLAT:
-                    fmt::print(os, l.space_text);
+                if (mode == layout_mode::FLAT) {
+                    fmt::print(os, "{}", l.space_text);
                     current_width += static_cast<u32>(l.space_text.size());
-                case layout_mode::BREAK:
-                    fmt::print(os, "\n{}", fmt::format("{:' '>{}}", "", indent_level));
+                } else {
+                    fmt::print(os, "\n{:{}}", "", indent_level);
                     current_width = indent_level;
                 }
             },
             [&](docs::hard_line) {
-                fmt::print(os, "\n{}", fmt::format("{:' '>{}}", "", indent_level));
+                fmt::print(os, "\n{:{}}", "", indent_level);
                 current_width = indent_level;
             },
             [&](docs::soft_line) {
                 if (mode == layout_mode::BREAK) {
-                    fmt::print(os, "\n{}", fmt::format("{:' '>{}}", "", indent_level));
+                    fmt::print(os, "\n{:{}}", "", indent_level);
                     current_width = indent_level;
                 }
             },
