@@ -32,9 +32,11 @@ class function {
              bool               is_test      = false,
              bool               is_constexpr = false,
              bool               is_variadic  = false,
-             gir::linkage       linkage      = linkage::INTERNAL) noexcept
+             gir::linkage       linkage      = linkage::INTERNAL,
+             std::string        abi_name     = "c") noexcept
         : arena_{arena}, name_{std::move(name)}, type_{type}, is_test_{is_test},
-          is_constexpr_{is_constexpr}, is_variadic_{is_variadic}, linkage_{linkage} {}
+          is_constexpr_{is_constexpr}, is_variadic_{is_variadic}, linkage_{linkage},
+          abi_name_{std::move(abi_name)} {}
     ~function() = default;
     MAKE_PINNED(function);
 
@@ -44,6 +46,7 @@ class function {
     MAKE_GETTER(is_constexpr, bool);
     MAKE_GETTER(is_variadic, bool);
     MAKE_GETTER(linkage, gir::linkage);
+    MAKE_GETTER(abi_name, const std::string&);
     MAKE_DEDUCING_GETTER(params);
     MAKE_DEDUCING_GETTER(segments);
 
@@ -81,6 +84,7 @@ class function {
     bool                    is_constexpr_{false};
     bool                    is_variadic_{false};
     gir::linkage            linkage_{linkage::INTERNAL};
+    std::string             abi_name_{"c"};
 };
 
 } // namespace ghoti::gir

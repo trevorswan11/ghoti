@@ -67,6 +67,8 @@ constexpr std::string_view golden_input{R"(
     ^mut a; ^a;
     call();
     [_]i32{};
+    extern const foo: fn(): i32;
+    extern("kernel32") const bar: fn(): void;
 )"};
 
 constexpr std::string_view expected{

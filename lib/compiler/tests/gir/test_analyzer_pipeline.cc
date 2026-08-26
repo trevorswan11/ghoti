@@ -64,6 +64,49 @@ TEST_CASE("GIR array literal stack allocation and initialization") {
     CHECK(dump_text.contains("get_element_ptr"));
 }
 
+TEST_CASE("GIR extern decls default to the \"c\" ABI target") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        extern const puts: fn(^u8): i32;
+    )")};
+
+    gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
+    const auto   gir_mod{emitter.emit()};
+
+    REQUIRE(gir_mod.get_functions().size() == 1);
+    CHECK(gir_mod.get_functions()[0]->get_abi_name() == "c");
+    CHECK(gir_mod.get_required_libraries().empty());
+}
+
+TEST_CASE("GIR extern decls record an explicit ABI target") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        extern("kernel32") const GetLastError: fn(): void;
+    )")};
+
+    gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
+    const auto   gir_mod{emitter.emit()};
+
+    REQUIRE(gir_mod.get_functions().size() == 1);
+    CHECK(gir_mod.get_functions()[0]->get_abi_name() == "kernel32");
+
+    const auto libraries{gir_mod.get_required_libraries()};
+    REQUIRE(libraries.size() == 1);
+    CHECK(libraries[0] == "kernel32");
+}
+
+TEST_CASE("GIR required libraries are deduplicated") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        extern("kernel32") const GetLastError: fn(): void;
+        extern("kernel32") const GetCurrentProcessId: fn(): void;
+    )")};
+
+    gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
+    const auto   gir_mod{emitter.emit()};
+
+    const auto libraries{gir_mod.get_required_libraries()};
+    REQUIRE(libraries.size() == 1);
+    CHECK(libraries[0] == "kernel32");
+}
+
 TEST_CASE("GIR builtins cast operations") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const test_casts := fn(x: i32, ptr: ^i32): usize {

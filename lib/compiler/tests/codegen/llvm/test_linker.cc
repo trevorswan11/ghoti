@@ -15,6 +15,7 @@
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
 #include "support/tempfile.hh"
+#include "support/test.hh"
 
 namespace ghoti::tests {
 
@@ -59,6 +60,41 @@ TEST_CASE("In-process LLD execution for main entry point across targets and opti
                 CHECK(std::filesystem::exists(out_file));
                 CHECK(std::filesystem::file_size(out_file) > 0);
             }
+        }
+    }
+}
+
+TEST_CASE("extern targets are forwarded to the real linker invocation") {
+    codegen::llvm_scope   scope;
+    stdx::untracked_scope untracked_guard;
+
+    constexpr auto input = R"(
+        extern("ghoti_test_missing_lib_9f3a") const foo: fn(): void;
+        pub const main := fn(): i32 {
+            foo();
+            return 0;
+        };
+    )";
+
+    constexpr std::array target_triples{
+        "x86_64-unknown-linux-gnu",
+        "x86_64-w64-windows-gnu",
+        "x86_64-pc-windows-msvc",
+    };
+
+    for (const auto triple_str : target_triples) {
+        DYNAMIC_SECTION("Target: " << triple_str) {
+            llvm::LLVMContext context;
+            auto [ctx, idx]{helpers::resolve_and_check(input)};
+            REQUIRE(ctx->analyzer.validate_main_entry(ctx->root_mod));
+
+            tempfile                out_file{"test_extern_lib_link"};
+            codegen::target_options target_opts{.triple_str = triple_str};
+
+            const auto  result{helpers::emit_executable(*ctx, context, out_file, target_opts)};
+            const auto& diag{UNWRAP_ERR(result)};
+            REQUIRE(diag.get_message());
+            CHECK(diag.get_message()->contains("ghoti_test_missing_lib_9f3a"));
         }
     }
 }

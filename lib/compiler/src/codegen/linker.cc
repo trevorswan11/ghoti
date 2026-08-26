@@ -168,7 +168,9 @@ auto add_msvc_args(std::vector<std::string>&   args,
     for (const auto& dir : linker_opts.library_paths) {
         args.emplace_back(fmt::format("/libpath:{}", dir.string()));
     }
-    for (const auto& lib : linker_opts.libraries) { args.emplace_back(lib); }
+    for (const auto& lib : linker_opts.libraries) {
+        args.emplace_back(lib.ends_with(".lib") ? lib : fmt::format("{}.lib", lib));
+    }
     // See the equivalent comment in add_mingw_args -- these aren't supplied by a spec file here
     if (linker_opts.needs_windows_argv_apis) {
         if (const auto sysroot_lib{windows_sysroot_lib_dir()}) {

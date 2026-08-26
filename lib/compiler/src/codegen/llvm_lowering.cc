@@ -357,6 +357,49 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
     return main_fn;
 }
 
+auto llvm_lowering::lower_test_executable(const gir::module& gir_mod) -> stdx::box<llvm::Module> {
+    is_executable_ = true;
+    for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
+    for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
+    for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
+    emit_test_entry_wrapper(gir_mod);
+    return std::move(llvm_module_);
+}
+
+auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod) -> llvm::Function* {
+    auto* main_fn_ty{llvm::FunctionType::get(types_.get_int32_ty(), {}, false)};
+    auto* main_fn{llvm::Function::Create(
+        main_fn_ty, llvm::Function::ExternalLinkage, "main", llvm_module_.get())};
+    main_fn->addFnAttr(llvm::Attribute::NoBuiltin);
+    main_fn->addFnAttr("no-builtins");
+    main_fn->addFnAttr("no-stack-arg-probe", "true");
+
+    const llvm::Triple triple{llvm_module_->getTargetTriple()};
+    if (triple.isWindowsGNUEnvironment() && !llvm_module_->getFunction("__main")) {
+        auto*             void_ty{llvm::Type::getVoidTy(context_)};
+        auto*             dummy_main_ty{llvm::FunctionType::get(void_ty, false)};
+        auto*             dummy_main{llvm::Function::Create(
+            dummy_main_ty, llvm::Function::ExternalLinkage, "__main", llvm_module_.get())};
+        auto*             dummy_bb{llvm::BasicBlock::Create(context_, "entry", dummy_main)};
+        llvm::IRBuilder<> dummy_builder{dummy_bb};
+        dummy_builder.CreateRetVoid();
+        llvm::appendToUsed(*llvm_module_, {dummy_main});
+    }
+
+    auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", main_fn)};
+    builder_.SetInsertPoint(entry_bb);
+
+    // No libc dependency by design a failing test signals via @panic's trap, not printed output.
+    for (const auto* fn : gir_mod.get_test_functions()) {
+        auto* test_llvm_fn{llvm_module_->getFunction(fn->get_name())};
+        ASSERT(test_llvm_fn, "Test function must already be declared before the entry wrapper");
+        builder_.CreateCall(test_llvm_fn, {});
+    }
+
+    builder_.CreateRet(builder_.getInt32(0));
+    return main_fn;
+}
+
 auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVariable* {
     if (auto* existing{llvm_module_->getGlobalVariable(g.name)}) { return existing; }
 

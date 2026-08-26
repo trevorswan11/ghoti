@@ -24,6 +24,7 @@ struct global_decl {
     bool                is_constant{false};
     stdx::option<value> init_value;
     gir::linkage        linkage{linkage::INTERNAL};
+    std::string         abi_name{"c"};
 };
 
 struct type_decl {
@@ -45,6 +46,14 @@ class module {
     MAKE_DEDUCING_GETTER(tests);
     [[nodiscard]] auto arena() noexcept -> auto& { return arena_; }
 
+    // Resolves the raw `tests` indices into their owning functions, in declaration order.
+    [[nodiscard]] auto get_test_functions() const -> std::vector<const function*> {
+        std::vector<const function*> result;
+        result.reserve(tests_.size());
+        for (const auto idx : tests_) { result.emplace_back(functions_[idx]); }
+        return result;
+    }
+
     [[nodiscard]] auto has_function(std::string_view name) const noexcept -> bool {
         return std::ranges::any_of(functions_,
                                    [&](const auto* fn) { return fn->get_name() == name; });
@@ -54,14 +63,19 @@ class module {
     auto add_global(std::string         name,
                     sema::type&         type,
                     bool                is_const,
-                    stdx::option<value> init    = stdx::none,
-                    gir::linkage        linkage = linkage::INTERNAL) -> global_decl&;
+                    stdx::option<value> init     = stdx::none,
+                    gir::linkage        linkage  = linkage::INTERNAL,
+                    std::string         abi_name = "c") -> global_decl&;
     auto add_function(std::string  name,
                       sema::type&  type,
                       bool         is_test      = false,
                       bool         is_constexpr = false,
                       bool         is_variadic  = false,
-                      gir::linkage linkage      = linkage::INTERNAL) -> function&;
+                      gir::linkage linkage      = linkage::INTERNAL,
+                      std::string  abi_name     = "c") -> function&;
+
+    // Names extern decls contribute to the link line (excludes the default "c" target).
+    [[nodiscard]] auto get_required_libraries() const -> std::vector<std::string>;
 
   private:
     const mod::module&        ast_module_;

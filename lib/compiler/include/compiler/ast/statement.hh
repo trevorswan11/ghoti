@@ -62,6 +62,7 @@ struct decl_stmt {
     stdx::option<explicit_type_id> explicit_type;
     stdx::option<expr_handle>      value;
     decl_modifiers                 modifiers;
+    stdx::option<string_handle>    extern_target;
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<stmt_handle, syntax::diagnostic>;

@@ -34,6 +34,11 @@ class llvm_lowering {
         -> stdx::box<llvm::Module>;
     auto emit_main_entry_wrapper(std::string_view user_main_name = "main") -> llvm::Function*;
 
+    // Lowers every function/global as usual, but synthesizes an entry point that calls each
+    // `test` block in declaration order
+    auto lower_test_executable(const gir::module& gir_mod) -> stdx::box<llvm::Module>;
+    auto emit_test_entry_wrapper(const gir::module& gir_mod) -> llvm::Function*;
+
     [[nodiscard]] auto context(this auto&& self) noexcept -> auto& { return self.context_; }
     [[nodiscard]] auto module(this auto&& self) noexcept -> auto& { return *self.llvm_module_; }
     [[nodiscard]] auto builder() noexcept -> llvm::IRBuilder<>& { return builder_; }

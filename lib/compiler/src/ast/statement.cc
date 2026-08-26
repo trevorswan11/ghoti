@@ -126,12 +126,36 @@ constexpr auto LEGAL_MODIFIERS{
     return stdx::none;
 }
 
+// Parses an optional `("target")` suffix immediately following an `extern` modifier token.
+[[nodiscard]] auto try_parse_extern_target(syntax::parser& parser)
+    -> stdx::result<stdx::option<string_handle>, syntax::diagnostic> {
+    stdx::option<string_handle> target;
+    if (parser.peek_token_is(syntax::token_type_t::LPAREN)) {
+        parser.advance();
+        TRY(parser.expect_peek(syntax::token_type_t::STRING));
+        target.emplace(TRY(string_expr::parse(parser)));
+
+        if (parser.get_node<string_expr>(**target).value.empty()) {
+            return make_syntax_err("Extern target may not be empty",
+                                   syntax::error::EMPTY_EXTERN_TARGET,
+                                   parser.get_location_of(**target));
+        }
+        TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
+    }
+    return target;
+}
+
 } // namespace
 
 auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
     auto       modifiers{LEGAL_MODIFIERS[start_token.type].value()};
+
+    stdx::option<string_handle> extern_target;
+    if (start_token.type == syntax::token_type_t::EXTERN) {
+        extern_target = TRY(try_parse_extern_target(parser));
+    }
 
     stdx::option<decl_modifiers> current_modifier;
     while ((current_modifier = LEGAL_MODIFIERS[parser.get_peek_token().type])) {
@@ -142,6 +166,10 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
                                    parser.get_current_token());
         }
         modifiers |= *current_modifier;
+
+        if (*current_modifier == decl_modifiers::EXTERN) {
+            extern_target = TRY(try_parse_extern_target(parser));
+        }
     }
 
     if (auto msg{validate_modifiers(modifiers)}) {
@@ -173,7 +201,8 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
     }
 
     TRY(parser.expect_semicolon());
-    return parser.add_stmt<decl_stmt>(start_token, decl_name, decl_type, decl_value, modifiers);
+    return parser.add_stmt<decl_stmt>(
+        start_token, decl_name, decl_type, decl_value, modifiers, extern_target);
 }
 
 auto defer_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {

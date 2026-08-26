@@ -229,6 +229,27 @@ TEST_CASE("Untagged union payload size follows the module's target data layout")
     CHECK(llvm::cast<llvm::ArrayType>(union_llvm)->getNumElements() == 4);
 }
 
+TEST_CASE("usize/isize/slice-length follow the module's target data layout") {
+    llvm::LLVMContext context;
+    llvm::Module      mod{"test", context};
+    mod.setDataLayout("e-p:32:32"); // 32-bit pointers, unlike this host build
+    codegen::type_translator translator{context, mod};
+
+    sema::arena_alloc arena;
+    sema::type_pool   pool{arena};
+
+    auto& isize_t{*pool[{sema::type_kind::ISIZE, sema::types::mut::CONSTANT}]};
+    auto& usize_t{*pool[{sema::type_kind::USIZE, sema::types::mut::CONSTANT}]};
+
+    CHECK(translator.translate(isize_t) == llvm::Type::getInt32Ty(context));
+    CHECK(translator.translate(usize_t) == llvm::Type::getInt32Ty(context));
+
+    auto* slice_ty{translator.translate_slice_type()};
+    REQUIRE(slice_ty->getNumElements() == 2);
+    CHECK(slice_ty->getElementType(1)->isIntegerTy(32));
+    CHECK(mod.getDataLayout().getTypeAllocSize(slice_ty).getFixedValue() == 8);
+}
+
 TEST_CASE("Type translate packed struct types") {
     llvm::LLVMContext        context;
     llvm::Module             mod{"test", context};

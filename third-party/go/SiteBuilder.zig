@@ -195,7 +195,7 @@ pub fn addRunTempl(self: *const Self) *std.Build.Step.Run {
 
 fn getGoOptimizeFlags(optimize: std.builtin.OptimizeMode) []const []const u8 {
     return switch (optimize) {
-        .Debug => return &.{ "-gcflags=all=-N -l" },
+        .Debug => return &.{"-gcflags=all=-N -l"},
         .ReleaseSmall => return &.{ "-ldflags=-s -w", "-trimpath" },
         .ReleaseFast, .ReleaseSafe => return &.{"-ldflags=-s -w"},
     };

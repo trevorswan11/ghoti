@@ -39,6 +39,8 @@ auto llvm_init_warmup() -> void {
         "aarch64-unknown-linux-gnu"sv,
         "x86_64-apple-darwin"sv,
         "arm64-apple-darwin"sv,
+        "i686-unknown-linux-gnu"sv,
+        "armv7-unknown-linux-gnueabihf"sv,
     };
 
     for (const auto triple : warmup_triples) {

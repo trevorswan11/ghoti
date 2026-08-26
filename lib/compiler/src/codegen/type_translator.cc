@@ -19,9 +19,9 @@ auto type_translator::translate(const sema::type& type) -> llvm::Type* {
     case sema::type_kind::I32:
     case sema::type_kind::U32:       return get_int32_ty();
     case sema::type_kind::I64:
-    case sema::type_kind::U64:
+    case sema::type_kind::U64:       return get_int64_ty();
     case sema::type_kind::ISIZE:
-    case sema::type_kind::USIZE:     return get_int64_ty();
+    case sema::type_kind::USIZE:     return get_usize_ty();
     case sema::type_kind::U8:        return get_int8_ty();
     case sema::type_kind::BOOL:      return get_int1_ty();
     case sema::type_kind::F32:       return get_float_ty();
@@ -68,7 +68,7 @@ auto type_translator::translate_function_type(const sema::types::function& fn)
 }
 
 auto type_translator::translate_slice_type() -> llvm::StructType* {
-    const std::vector<llvm::Type*> elements{get_ptr_ty(), get_int64_ty()};
+    const std::vector<llvm::Type*> elements{get_ptr_ty(), get_usize_ty()};
     return llvm::StructType::get(context_, elements);
 }
 
@@ -86,6 +86,10 @@ auto type_translator::get_int64_ty() const noexcept -> llvm::IntegerType* {
 
 auto type_translator::get_int1_ty() const noexcept -> llvm::IntegerType* {
     return llvm::Type::getInt1Ty(context_);
+}
+
+auto type_translator::get_usize_ty() const noexcept -> llvm::IntegerType* {
+    return module_.getDataLayout().getIntPtrType(context_);
 }
 
 auto type_translator::get_float_ty() const noexcept -> llvm::Type* {

@@ -518,4 +518,21 @@ ExpressionStatement
     ├─ Type: ExplicitType (modifier: VALUE)
     │   └─ IdentifierExpression: i32 (primitive)
     └─ Items: <empty>
+DeclStatement
+├─ Name: IdentifierExpression: foo
+├─ Modifiers: CONSTANT|EXTERN
+└─ Type: ExplicitType (modifier: VALUE)
+    └─ FunctionExpression
+        ├─ Variadic: false
+        └─ Returns: ExplicitType (modifier: VALUE)
+            └─ IdentifierExpression: i32 (primitive)
+DeclStatement
+├─ Name: IdentifierExpression: bar
+├─ Modifiers: CONSTANT|EXTERN
+├─ Extern Target: StringExpression: kernel32
+└─ Type: ExplicitType (modifier: VALUE)
+    └─ FunctionExpression
+        ├─ Variadic: false
+        └─ Returns: ExplicitType (modifier: VALUE)
+            └─ IdentifierExpression: void (primitive)
 )"

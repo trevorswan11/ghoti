@@ -187,17 +187,19 @@ auto const_eval::resolve_all_deferred_types() -> void { resolve_all_deferred_arr
 
 namespace {
 
-[[nodiscard]] auto capture_field_align(const sema::types::closure_capture& capture) -> usize {
-    return const_eval::type_align_of(*capture.storage_type);
+[[nodiscard]] auto capture_field_align(const sema::types::closure_capture& capture, usize ptr_size)
+    -> usize {
+    return const_eval::type_align_of(*capture.storage_type, ptr_size);
 }
 
-[[nodiscard]] auto capture_field_size(const sema::types::closure_capture& capture) -> usize {
-    return const_eval::type_size_of(*capture.storage_type);
+[[nodiscard]] auto capture_field_size(const sema::types::closure_capture& capture, usize ptr_size)
+    -> usize {
+    return const_eval::type_size_of(*capture.storage_type, ptr_size);
 }
 
 } // namespace
 
-auto const_eval::type_align_of(const sema::type& type) -> usize {
+auto const_eval::type_align_of(const sema::type& type, usize ptr_size) -> usize {
     switch (type.get_kind()) {
     case sema::type_kind::U8:
     case sema::type_kind::BOOL:      return 1;
@@ -206,47 +208,54 @@ auto const_eval::type_align_of(const sema::type& type) -> usize {
     case sema::type_kind::F32:       return 4;
     case sema::type_kind::I64:
     case sema::type_kind::U64:
+    case sema::type_kind::F64:       return 8;
     case sema::type_kind::ISIZE:
     case sema::type_kind::USIZE:
-    case sema::type_kind::F64:
     case sema::type_kind::POINTER:
     case sema::type_kind::REFERENCE:
-    case sema::type_kind::FUNCTION:  return 8;
-    case sema::type_kind::SLICE:     return 8;
+    case sema::type_kind::FUNCTION:
+    case sema::type_kind::SLICE:     return ptr_size;
     case sema::type_kind::ARRAY:
         if (const auto arr{type.get_data().as_opt<sema::types::array>()}) {
-            return type_align_of(arr->underlying);
+            return type_align_of(arr->underlying, ptr_size);
         }
         if (const auto def{type.get_data().as_opt<sema::types::deferred_array>()}) {
-            return type_align_of(def->underlying);
+            return type_align_of(def->underlying, ptr_size);
         }
         UNREACHABLE("type_kind::ARRAY associated with improper type");
     case sema::type_kind::STRUCT:
         if (const auto st{type.get_data().as_opt<sema::types::struct_t>()}) {
-            return std::ranges::fold_left(
-                st->fields | std::views::filter([](const auto* f) { return f != nullptr; }) |
-                    std::views::transform([](const auto* f) { return type_align_of(*f); }),
-                1UZ,
-                [](usize a, usize b) { return std::max(a, b); });
+            return std::ranges::fold_left(st->fields | std::views::filter([](const auto* f) {
+                                              return f != nullptr;
+                                          }) | std::views::transform([ptr_size](const auto* f) {
+                                              return type_align_of(*f, ptr_size);
+                                          }),
+                                          1UZ,
+                                          [](usize a, usize b) { return std::max(a, b); });
         }
         UNREACHABLE("type_kind::STRUCT associated with improper type");
     case sema::type_kind::UNION:
         if (const auto un{type.get_data().as_opt<sema::types::union_t>()}) {
-            return std::ranges::fold_left(
-                un->fields | std::views::filter([](const auto* f) { return f != nullptr; }) |
-                    std::views::transform([](const auto* f) { return type_align_of(*f); }),
-                1UZ,
-                [](usize a, usize b) { return std::max(a, b); });
+            return std::ranges::fold_left(un->fields | std::views::filter([](const auto* f) {
+                                              return f != nullptr;
+                                          }) | std::views::transform([ptr_size](const auto* f) {
+                                              return type_align_of(*f, ptr_size);
+                                          }),
+                                          1UZ,
+                                          [](usize a, usize b) { return std::max(a, b); });
         }
         UNREACHABLE("type_kind::UNION associated with improper type");
     case sema::type_kind::ENUM:
         if (const auto en{type.get_data().as_opt<sema::types::enum_t>()}) {
-            return type_align_of(en->underlying);
+            return type_align_of(en->underlying, ptr_size);
         }
         UNREACHABLE("type_kind::ENUM associated with improper type");
     case sema::type_kind::CLOSURE:
         if (const auto cl{type.get_data().as_opt<sema::types::closure_t>()}) {
-            return std::ranges::fold_left(cl->captures | std::views::transform(capture_field_align),
+            return std::ranges::fold_left(cl->captures |
+                                              std::views::transform([ptr_size](const auto& c) {
+                                                  return capture_field_align(c, ptr_size);
+                                              }),
                                           1UZ,
                                           [](usize a, usize b) { return std::max(a, b); });
         }
@@ -255,7 +264,7 @@ auto const_eval::type_align_of(const sema::type& type) -> usize {
     }
 }
 
-auto const_eval::type_size_of(const sema::type& type) -> usize {
+auto const_eval::type_size_of(const sema::type& type, usize ptr_size) -> usize {
     switch (type.get_kind()) {
     case sema::type_kind::VOID_:     return 0;
     case sema::type_kind::U8:
@@ -265,17 +274,17 @@ auto const_eval::type_size_of(const sema::type& type) -> usize {
     case sema::type_kind::F32:       return 4;
     case sema::type_kind::I64:
     case sema::type_kind::U64:
+    case sema::type_kind::F64:       return 8;
     case sema::type_kind::ISIZE:
     case sema::type_kind::USIZE:
-    case sema::type_kind::F64:
     case sema::type_kind::POINTER:
     case sema::type_kind::REFERENCE:
-    case sema::type_kind::FUNCTION:  return 8;
-    case sema::type_kind::SLICE:     return 16;
+    case sema::type_kind::FUNCTION:  return ptr_size;
+    case sema::type_kind::SLICE:     return 2 * ptr_size;
     case sema::type_kind::ARRAY:
         if (const auto arr{type.get_data().as_opt<sema::types::array>()}) {
-            const auto elem_size{type_size_of(arr->underlying)};
-            const auto elem_align{type_align_of(arr->underlying)};
+            const auto elem_size{type_size_of(arr->underlying, ptr_size)};
+            const auto elem_align{type_align_of(arr->underlying, ptr_size)};
             const auto elem_stride{elem_align > 0
                                        ? (elem_size + elem_align - 1) / elem_align * elem_align
                                        : elem_size};
@@ -288,12 +297,12 @@ auto const_eval::type_size_of(const sema::type& type) -> usize {
             usize max_align{1};
             for (const auto* field : st->fields) {
                 if (!field) { continue; }
-                const auto f_align{type_align_of(*field)};
+                const auto f_align{type_align_of(*field, ptr_size)};
                 max_align = std::max(max_align, f_align);
                 if (f_align > 0) {
                     current_offset = (current_offset + f_align - 1) / f_align * f_align;
                 }
-                current_offset += type_size_of(*field);
+                current_offset += type_size_of(*field, ptr_size);
             }
 
             return max_align > 0 ? (current_offset + max_align - 1) / max_align * max_align
@@ -306,15 +315,15 @@ auto const_eval::type_size_of(const sema::type& type) -> usize {
             usize max_align{1};
             for (const auto* field : un->fields) {
                 if (!field) { continue; }
-                max_align = std::max(max_align, type_align_of(*field));
-                max_size  = std::max(max_size, type_size_of(*field));
+                max_align = std::max(max_align, type_align_of(*field, ptr_size));
+                max_size  = std::max(max_size, type_size_of(*field, ptr_size));
             }
             return max_align > 0 ? (max_size + max_align - 1) / max_align * max_align : max_size;
         }
         UNREACHABLE("type_kind::UNION associated with improper type");
     case sema::type_kind::ENUM:
         if (const auto en{type.get_data().as_opt<sema::types::enum_t>()}) {
-            return type_size_of(en->underlying);
+            return type_size_of(en->underlying, ptr_size);
         }
         UNREACHABLE("type_kind::ENUM associated with improper type");
     case sema::type_kind::CLOSURE:
@@ -322,12 +331,12 @@ auto const_eval::type_size_of(const sema::type& type) -> usize {
             usize current_offset{0};
             usize max_align{1};
             for (const auto& capture : cl->captures) {
-                const auto c_align{capture_field_align(capture)};
+                const auto c_align{capture_field_align(capture, ptr_size)};
                 max_align = std::max(max_align, c_align);
                 if (c_align > 0) {
                     current_offset = (current_offset + c_align - 1) / c_align * c_align;
                 }
-                current_offset += capture_field_size(capture);
+                current_offset += capture_field_size(capture, ptr_size);
             }
             return max_align > 0 ? (current_offset + max_align - 1) / max_align * max_align
                                  : current_offset;
@@ -1120,12 +1129,15 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         }
         if (!target_type) { return stdx::none; }
 
+        const auto ptr_size{
+            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? usize{8}
+                                                                                      : usize{4}};
         if (const auto def{target_type->get_data().as_opt<sema::types::deferred_array>()}) {
             if (def->array.dimension) {
                 const auto dim_opt{eval_type_dim(*def->array.dimension)};
                 const auto len{dim_opt.value_or(0)};
-                const auto elem_size{type_size_of(def->underlying)};
-                const auto elem_align{type_align_of(def->underlying)};
+                const auto elem_size{type_size_of(def->underlying, ptr_size)};
+                const auto elem_align{type_align_of(def->underlying, ptr_size)};
                 const auto elem_stride{elem_align > 0
                                            ? (elem_size + elem_align - 1) / elem_align * elem_align
                                            : elem_size};
@@ -1133,7 +1145,7 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
                 return const_value{static_cast<u64>(total_sz), usize_type};
             }
         }
-        const auto sz{type_size_of(*target_type)};
+        const auto sz{type_size_of(*target_type, ptr_size)};
         return const_value{static_cast<u64>(sz), usize_type};
     }
     case syntax::token_type_t::BUILTIN_ALIGN_OF: {
@@ -1147,10 +1159,14 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         }
         if (!target_type) { return stdx::none; }
 
+        const auto ptr_size{
+            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? usize{8}
+                                                                                      : usize{4}};
         if (const auto def{target_type->get_data().as_opt<sema::types::deferred_array>()}) {
-            return const_value{static_cast<u64>(type_align_of(def->underlying)), usize_type};
+            return const_value{static_cast<u64>(type_align_of(def->underlying, ptr_size)),
+                               usize_type};
         }
-        const auto al{type_align_of(*target_type)};
+        const auto al{type_align_of(*target_type, ptr_size)};
         return const_value{static_cast<u64>(al), usize_type};
     }
     case syntax::token_type_t::BUILTIN_TYPE_OF: {

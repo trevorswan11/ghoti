@@ -659,6 +659,12 @@ auto dumper::visit(node_id, const decl_stmt& decl) -> void {
                      magic_enum::enum_flags_name(decl.modifiers));
     }
 
+    if (decl.extern_target) {
+        const indent::guard g{indent_, false};
+        fmt::print(out_, "{}Extern Target: ", indent_.current_branch());
+        dump(*decl.extern_target);
+    }
+
     const auto has_value{decl.value.has_value()};
     {
         const indent::guard g{indent_, !has_value};

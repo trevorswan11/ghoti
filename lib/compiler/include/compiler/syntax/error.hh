@@ -74,6 +74,7 @@ enum class error : u8 {
     UNTERMINATED_STRING,
     INVALID_NUMBER_LITERAL,
     INVALID_CHARACTER_LITERAL,
+    EMPTY_EXTERN_TARGET,
 };
 
 using diagnostic  = diagnostic<error>;

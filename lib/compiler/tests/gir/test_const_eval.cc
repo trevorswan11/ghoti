@@ -136,6 +136,43 @@ TEST_CASE("Compile-time builtins constant eval") {
     check_u64("v_pop", 3);
 }
 
+TEST_CASE("sizeOf/alignOf of pointer-width types follow the target's pointer width") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const PtrHolder := struct {
+            p: ^i32,
+            n: u8,
+        };
+
+        const sz_usize := @sizeOf(usize);
+        const al_usize := @alignOf(usize);
+        const sz_ptr := @sizeOf(^i32);
+        const sz_slice := @sizeOf([]u8);
+        const sz_struct := @sizeOf(PtrHolder);
+    )")};
+
+    const auto check_u64 = [&](std::string_view name, u64 expected) {
+        const auto [sym, _, decl, type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>(name, idx)};
+        gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+        const auto      val{UNWRAP(evaluator.try_eval(*decl.value))};
+        CHECK(UNWRAP(val.as_uint_opt()) == expected);
+    };
+
+    // Default 64-bit host target: unchanged from before this fix.
+    check_u64("sz_usize", 1 * sizeof(void*));
+    check_u64("al_usize", 1 * sizeof(void*));
+    check_u64("sz_ptr", 1 * sizeof(void*));
+    check_u64("sz_slice", 2 * sizeof(void*));
+    check_u64("sz_struct", 2 * sizeof(void*)); // p(8) + n(1), padded to 8-byte alignment
+
+    ctx->analyzer.get_ctx().target_opts.triple_str = "i686-unknown-linux-gnu";
+    check_u64("sz_usize", 4);
+    check_u64("al_usize", 4);
+    check_u64("sz_ptr", 4);
+    check_u64("sz_slice", 8);
+    check_u64("sz_struct", 8); // p(4) + n(1), padded to 4-byte alignment
+}
+
 TEST_CASE("Target builtins constant eval") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const os_name := @targetOs();

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <gsl/span>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
@@ -137,6 +138,12 @@ auto get_decl_linkage(const ast::decl_stmt& decl) noexcept -> gir::linkage {
     return gir::linkage::INTERNAL;
 }
 
+// Resolves an extern decl's optional `("target")` argument, defaulting to `"c"`.
+auto get_extern_target(const ast::AST& ast, const ast::decl_stmt& decl) -> std::string {
+    if (!decl.extern_target) { return "c"; }
+    return ast.get_as<ast::string_expr>(**decl.extern_target).value;
+}
+
 } // namespace
 
 auto emitter::emit_slice_from_array(value arr_lval, const sema::type& arr_type) -> value {
@@ -227,7 +234,8 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                                               false,
                                               false,
                                               fn_data->is_variadic,
-                                              gir::linkage::EXTERN)};
+                                              gir::linkage::EXTERN,
+                                              get_extern_target(active_ast(), decl))};
             for (usize i{0}; const auto& param : fn_data->params) {
                 fn.add_param(fmt::format("param.{}", i++), *param);
             }
@@ -245,7 +253,12 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                 init_val.emplace(cv->to_gir_value());
             }
         }
-        gir_module_.add_global(std::string{name}, *sema_type, true, init_val, linkage);
+        gir_module_.add_global(std::string{name},
+                               *sema_type,
+                               true,
+                               init_val,
+                               linkage,
+                               get_extern_target(active_ast(), decl));
     } else {
         stdx::option<value> init_val;
         if (decl.value) {
@@ -255,7 +268,12 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                 init_val.emplace(emit_expression(*decl.value));
             }
         }
-        gir_module_.add_global(std::string{name}, *sema_type, false, init_val, linkage);
+        gir_module_.add_global(std::string{name},
+                               *sema_type,
+                               false,
+                               init_val,
+                               linkage,
+                               get_extern_target(active_ast(), decl));
     }
 }
 
@@ -269,7 +287,12 @@ auto emitter::emit_top_level_using(ast::node_id, const ast::using_stmt& using_st
 
 auto emitter::emit_top_level_test(ast::node_id, const ast::test_stmt& test) -> void {
     PROFILE_FUNCTION();
-    auto&      void_type{ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+    // Every test block shares one canonical `fn(): void` signature
+    auto& void_type{ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+    auto& test_fn_type{*ctx_.pool[{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT}]};
+    test_fn_type.resolve_if<sema::types::function>(
+        false, gsl::span<sema::type*>{}, void_type, false);
+
     const auto test_name{test.description
                              .transform([&](ast::string_handle h) {
                                  return active_ast().get_as<ast::string_expr>(h).value;
@@ -278,7 +301,7 @@ auto emitter::emit_top_level_test(ast::node_id, const ast::test_stmt& test) -> v
                                  return fmt::format("anonymous_test{}", anon_test_counter_++);
                              })};
 
-    auto& fn{gir_module_.add_function(*test_name, void_type, true, false)};
+    auto& fn{gir_module_.add_function(*test_name, test_fn_type, true, false)};
     auto& entry{fn.add_segment()};
     builder_.set_insert_point(fn, entry);
 

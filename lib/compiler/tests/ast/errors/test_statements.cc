@@ -85,6 +85,28 @@ TEST_CASE("Extern requirements") {
     test_decl_fail({keywords::EXTERN, keywords::VAR}, expected_diag());
 }
 
+TEST_CASE("Malformed extern targets") {
+    helpers::test_parser_fail(
+        "extern(",
+        syntax::diagnostic{
+            "Expected token STRING, found END", syntax::error::UNEXPECTED_TOKEN, 0, 7});
+
+    helpers::test_parser_fail(
+        "extern()",
+        syntax::diagnostic{
+            "Expected token STRING, found RPAREN", syntax::error::UNEXPECTED_TOKEN, 0, 7});
+
+    helpers::test_parser_fail(
+        "extern(42)",
+        syntax::diagnostic{
+            "Expected token STRING, found INT_10", syntax::error::UNEXPECTED_TOKEN, 0, 7});
+
+    helpers::test_parser_fail(R"(extern("") a: i32;)",
+                              syntax::diagnostic{"Extern target may not be empty",
+                                                 syntax::error::EMPTY_EXTERN_TARGET,
+                                                 std::pair{0UZ, 7UZ}});
+}
+
 TEST_CASE("Constant requirements") {
     const auto expected_diag = [] -> syntax::diagnostic {
         return {"Constant non-extern declarations must have an associated value",

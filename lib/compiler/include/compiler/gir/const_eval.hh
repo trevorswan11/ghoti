@@ -48,8 +48,8 @@ class const_eval {
     // Forces a single possibly-deferred array type to its concrete resolved form
     [[nodiscard]] auto force_deferred_array(sema::type& maybe_deferred) -> sema::type&;
 
-    [[nodiscard]] static auto type_align_of(const sema::type& type) -> usize;
-    [[nodiscard]] static auto type_size_of(const sema::type& type) -> usize;
+    [[nodiscard]] static auto type_align_of(const sema::type& type, usize ptr_size) -> usize;
+    [[nodiscard]] static auto type_size_of(const sema::type& type, usize ptr_size) -> usize;
 
   private:
     struct call_frame {

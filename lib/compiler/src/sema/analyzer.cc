@@ -278,6 +278,76 @@ auto analyzer::emit_llvm_ir_executable(gir::module&                      gir_mod
     return llvm_mod;
 }
 
+auto analyzer::emit_llvm_ir_test_executable(gir::module&                      gir_module,
+                                            llvm::LLVMContext&                context,
+                                            const codegen::optimizer_options& options)
+    -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic> {
+    PROFILE_FUNCTION();
+    codegen::llvm_lowering lowering{context, gir_module.get_ast_module().path.string()};
+    if (options.target_machine) {
+        lowering.module().setDataLayout(options.target_machine->createDataLayout());
+        lowering.module().setTargetTriple(options.target_machine->getTargetTriple());
+    }
+    auto llvm_mod{lowering.lower_test_executable(gir_module)};
+
+    std::string              err_str;
+    llvm::raw_string_ostream os{err_str};
+    if (llvm::verifyModule(*llvm_mod, &os)) {
+        return codegen::make_codegen_err(err_str, codegen::error::VERIFICATION_FAILED);
+    }
+
+    if (options.level != codegen::opt_level::O0 || options.debug_logging || options.time_passes) {
+        codegen::llvm_optimizer optimizer{llvm_mod->getContext()};
+        TRY(optimizer.optimize(*llvm_mod, options));
+    }
+
+    return llvm_mod;
+}
+
+auto analyzer::emit_test_executable(gir::module&                         gir_module,
+                                    const codegen::target_options&       target_opts,
+                                    const codegen::optimizer_options&    opt_options,
+                                    const std::filesystem::path&         output_path,
+                                    const codegen::extra_linker_options& linker_opts)
+    -> stdx::result<void, codegen::diagnostic> {
+    llvm::LLVMContext context;
+    return emit_test_executable(
+        gir_module, context, target_opts, opt_options, output_path, linker_opts);
+}
+
+auto analyzer::emit_test_executable(gir::module&                         gir_module,
+                                    llvm::LLVMContext&                   context,
+                                    const codegen::target_options&       target_opts,
+                                    const codegen::optimizer_options&    opt_options,
+                                    const std::filesystem::path&         output_path,
+                                    const codegen::extra_linker_options& linker_opts)
+    -> stdx::result<void, codegen::diagnostic> {
+    PROFILE_FUNCTION();
+    auto target_machine{TRY(codegen::create_target_machine(target_opts))};
+
+    codegen::optimizer_options opts{opt_options};
+    opts.target_machine = target_machine.get();
+    if (opts.level == codegen::opt_level::O0 && target_opts.level != codegen::opt_level::O0) {
+        opts.level = target_opts.level;
+    }
+
+    auto llvm_mod{TRY(emit_llvm_ir_test_executable(gir_module, context, opts))};
+    auto temp_obj_path{make_tmp_obj(output_path)};
+    TRY(codegen::emit_object_file(*llvm_mod, *target_machine, temp_obj_path));
+
+    auto effective_linker_opts{linker_opts};
+    effective_linker_opts.needs_windows_argv_apis =
+        llvm_mod->getFunction("GetCommandLineW") != nullptr;
+
+    std::vector<std::string> merged_libraries{linker_opts.libraries.begin(),
+                                              linker_opts.libraries.end()};
+    for (auto& lib : gir_module.get_required_libraries()) {
+        merged_libraries.emplace_back(std::move(lib));
+    }
+    effective_linker_opts.libraries = merged_libraries;
+    return codegen::link_executable(temp_obj_path, output_path, target_opts, effective_linker_opts);
+}
+
 auto analyzer::emit_executable(gir::module&                         gir_module,
                                const codegen::target_options&       target_opts,
                                const codegen::optimizer_options&    opt_options,
@@ -312,6 +382,13 @@ auto analyzer::emit_executable(gir::module&                         gir_module,
     auto effective_linker_opts{linker_opts};
     effective_linker_opts.needs_windows_argv_apis =
         llvm_mod->getFunction("GetCommandLineW") != nullptr;
+
+    std::vector<std::string> merged_libraries{linker_opts.libraries.begin(),
+                                              linker_opts.libraries.end()};
+    for (auto& lib : gir_module.get_required_libraries()) {
+        merged_libraries.emplace_back(std::move(lib));
+    }
+    effective_linker_opts.libraries = merged_libraries;
     return codegen::link_executable(temp_obj_path, output_path, target_opts, effective_linker_opts);
 }
 
@@ -388,7 +465,16 @@ auto analyzer::emit_dynamic_library(gir::module&                         gir_mod
     auto temp_obj_path{make_tmp_obj(output_path)};
     auto llvm_mod{TRY(emit_llvm_ir(gir_module, context, opts))};
     TRY(codegen::emit_object_file(*llvm_mod, *target_machine, temp_obj_path));
-    return codegen::link_dynamic_library(temp_obj_path, output_path, target_opts, linker_opts);
+
+    auto                     effective_linker_opts{linker_opts};
+    std::vector<std::string> merged_libraries{linker_opts.libraries.begin(),
+                                              linker_opts.libraries.end()};
+    for (auto& lib : gir_module.get_required_libraries()) {
+        merged_libraries.emplace_back(std::move(lib));
+    }
+    effective_linker_opts.libraries = merged_libraries;
+    return codegen::link_dynamic_library(
+        temp_obj_path, output_path, target_opts, effective_linker_opts);
 }
 
 } // namespace ghoti::sema

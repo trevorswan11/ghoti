@@ -30,6 +30,8 @@ class type_translator {
     [[nodiscard]] auto get_int32_ty() const noexcept -> llvm::IntegerType*;
     [[nodiscard]] auto get_int64_ty() const noexcept -> llvm::IntegerType*;
     [[nodiscard]] auto get_int1_ty() const noexcept -> llvm::IntegerType*;
+    // Pointer-width integer type, per the module's own target data layout.
+    [[nodiscard]] auto get_usize_ty() const noexcept -> llvm::IntegerType*;
     [[nodiscard]] auto get_float_ty() const noexcept -> llvm::Type*;
     [[nodiscard]] auto get_double_ty() const noexcept -> llvm::Type*;
     [[nodiscard]] auto get_void_ty() const noexcept -> llvm::Type*;
