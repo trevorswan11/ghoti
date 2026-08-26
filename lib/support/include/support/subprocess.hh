@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <filesystem>
 #include <istream>
 #include <ostream>
@@ -49,8 +50,12 @@ class mock_argv {
 // Quotes one argument per Win32's argv-splitting rules (see CommandLineToArgvW)
 [[nodiscard]] auto quote_arg_windows(std::string_view arg) -> std::string;
 
-// Spawns the child and waits for its termination, returning the exit code
-[[nodiscard]] auto spawn_child(const mock_argv& args) -> stdx::option<u32>;
+// Exit code returned by spawn_child when the child is killed for exceeding its timeout
+constexpr u32 spawn_child_timeout_exit_code{124};
+
+[[nodiscard]] auto spawn_child(const mock_argv&          args,
+                               std::chrono::milliseconds timeout = std::chrono::seconds{30})
+    -> stdx::option<u32>;
 
 // zig-out/tests/*.exe -> zig-out/bin/ghoti(.exe)
 [[nodiscard]] auto ghoti_binary_path() -> std::filesystem::path;

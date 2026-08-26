@@ -1,6 +1,7 @@
 #include "support/subprocess.hh"
 
 #include <array>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <ios>
@@ -8,6 +9,7 @@
 #include <ostream>
 #include <streambuf>
 #include <string>
+#include <thread>
 
 #include <fmt/base.h>
 #include <fmt/format.h>
@@ -97,7 +99,7 @@ auto self_exe_path() -> std::filesystem::path {
     return buffer.data();
 }
 
-auto spawn_child(const mock_argv& args) -> stdx::option<u32> {
+auto spawn_child(const mock_argv& args, std::chrono::milliseconds timeout) -> stdx::option<u32> {
 #if GHOTI_WINDOWS
     auto cmd_line{quote_arg_windows(args[0])};
     for (const auto& arg : args | std::views::drop(1)) {
@@ -118,7 +120,16 @@ auto spawn_child(const mock_argv& args) -> stdx::option<u32> {
         return stdx::none;
     }
 
-    ::WaitForSingleObject(pi.hProcess, INFINITE);
+    const auto wait_result{
+        ::WaitForSingleObject(pi.hProcess, static_cast<::DWORD>(timeout.count()))};
+    if (wait_result == WAIT_TIMEOUT) {
+        ::TerminateProcess(pi.hProcess, spawn_child_timeout_exit_code);
+        ::WaitForSingleObject(pi.hProcess, INFINITE);
+        ::CloseHandle(pi.hProcess);
+        ::CloseHandle(pi.hThread);
+        return spawn_child_timeout_exit_code;
+    }
+
     ::DWORD exit_code;
     ::GetExitCodeProcess(pi.hProcess, &exit_code);
     ::CloseHandle(pi.hProcess);
@@ -132,14 +143,28 @@ auto spawn_child(const mock_argv& args) -> stdx::option<u32> {
         // Child
         ::execvp(args[0], args.argv());
         std::_Exit(127); // execvp failed
-    } else {
-        // Parent
-        i32 status;
-        if (::waitpid(pid, &status, 0) < 0) { return stdx::none; }
-
-        if (WIFEXITED(status)) { return static_cast<u32>(WEXITSTATUS(status)); }
-        if (WIFSIGNALED(status)) { return static_cast<u32>(128 + WTERMSIG(status)); }
     }
+
+    // Poll for exit rather than blocking on waitpid indefinitely to prevent stall on trap
+    const auto deadline{std::chrono::steady_clock::now() + timeout};
+
+    i32 status{0};
+    while (true) {
+        using namespace std::chrono_literals;
+        const auto reaped{::waitpid(pid, &status, WNOHANG)};
+        if (reaped == pid) { break; }
+        if (reaped < 0) { return stdx::none; }
+
+        if (std::chrono::steady_clock::now() >= deadline) {
+            ::kill(pid, SIGKILL);
+            ::waitpid(pid, &status, 0); // reap to avoid leaving a zombie
+            return spawn_child_timeout_exit_code;
+        }
+        std::this_thread::sleep_for(5ms);
+    }
+
+    if (WIFEXITED(status)) { return static_cast<u32>(WEXITSTATUS(status)); }
+    if (WIFSIGNALED(status)) { return static_cast<u32>(128 + WTERMSIG(status)); }
     return stdx::none;
 #endif
 }
