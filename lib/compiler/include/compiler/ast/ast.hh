@@ -89,8 +89,7 @@ class AST {
         return node_id{kind, start_token.type, index};
     }
 
-    // For infix nodes whose operator (tagging `node_id`'s token type) starts after the node's
-    // true span start, e.g. `binary_expr` starting at its lhs rather than the operator
+    // For infix nodes whose operator starts after the node's true span start
     template <NodeData Data>
     [[nodiscard]] constexpr auto add_node(const source_location& span_start,
                                           const syntax::token_t& tag_token,
