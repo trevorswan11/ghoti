@@ -83,7 +83,7 @@ TEST_CASE("Comprehensive dump") {
 
     std::ostringstream oss;
     ast::dumper        dumper{ast, oss};
-    for (const auto& node : ast) { dumper.dump(node); }
+    dumper.dump();
     CHECK(expected == oss.view());
 }
 

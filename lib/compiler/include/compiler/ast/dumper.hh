@@ -21,6 +21,11 @@ class dumper {
   public:
     explicit dumper(const AST& ast, std::ostream& out) : out_{out}, ast_{ast} {}
 
+    auto dump() -> void {
+        for (const auto& node : ast_) { dump(node); }
+    }
+
+  private:
     template <IndexableNodeID ID> auto dump(ID id) -> void {
         ast_[id].visit([&](const auto& data) -> void { this->visit(id, data); });
     }
@@ -31,7 +36,6 @@ class dumper {
         ast_[id].visit([&](const auto& data) -> void { visit(id, data); });
     }
 
-  private:
     auto visit(node_id, const array_expr&) -> void;
     auto visit(node_id, const call_expr&) -> void;
     auto visit(node_id, const do_while_loop_expr&) -> void;

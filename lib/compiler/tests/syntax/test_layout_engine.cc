@@ -1,9 +1,11 @@
+#include <sstream>
 #include <string>
 
 #include <catch2/catch_test_macros.hpp>
 #include <stdx/types.hh>
 
 #include "compiler/syntax/doc.hh"
+#include "compiler/syntax/layout_engine.hh"
 #include "helpers/common.hh"
 #include "helpers/formatter.hh"
 
@@ -122,6 +124,18 @@ TEST_CASE("layout_engine align shifts the indent level of its child by the curre
     const auto root{m.add<docs::concat>(helpers::make_vector<syntax::doc_id>(label, aligned))};
 
     CHECK(helpers::render_docs(m, root) == "key: \n" + std::string(5, ' ') + "value");
+}
+
+TEST_CASE("layout_engine renders all doc_manager roots in sequence") {
+    syntax::doc_manager m;
+    const auto          r1{m.add<docs::text>("hello ")};
+    const auto          r2{m.add<docs::text>("world")};
+    m.add_root(r1);
+    m.add_root(r2);
+
+    std::ostringstream os;
+    syntax::layout_engine{m}.render(os);
+    CHECK(os.str() == "hello world");
 }
 
 } // namespace ghoti::tests

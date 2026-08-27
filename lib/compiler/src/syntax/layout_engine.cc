@@ -13,6 +13,10 @@
 
 namespace ghoti::syntax {
 
+auto layout_engine::render(std::ostream& os) -> void {
+    for (const auto root : doc_manager_) { render(root, os); }
+}
+
 auto layout_engine::render(doc_id root, std::ostream& os) -> void {
     u32                         current_width{0};
     std::vector<layout_command> stack{{
@@ -25,7 +29,7 @@ auto layout_engine::render(doc_id root, std::ostream& os) -> void {
         auto [doc, indent_level, mode]{stack.back()};
         stack.pop_back();
 
-        manager_[doc].visit(
+        doc_manager_[doc].visit(
             [&](docs::text t) {
                 fmt::print(os, "{}", t.text);
                 current_width += static_cast<u32>(t.text.size());
@@ -79,7 +83,7 @@ auto layout_engine::fits(u32 current_width, doc_id doc) const noexcept -> bool {
 auto layout_engine::measure(doc_id doc, i64& width_left) const noexcept -> bool {
     if (width_left < 0) { return false; }
 
-    return manager_[doc].visit(
+    return doc_manager_[doc].visit(
         [&](docs::text t) {
             width_left -= static_cast<i64>(t.text.size());
             return width_left >= 0;

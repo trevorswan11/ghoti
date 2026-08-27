@@ -49,7 +49,7 @@ auto shell::execute() -> stdx::result<void, clap::error> {
         if (stdin_mod->is_errored()) { continue; }
 
         ast::dumper dumper{stdin_mod->ast, std::cout};
-        for (const auto& node : stdin_mod->ast) { dumper.dump(node); }
+        dumper.dump();
         if (stdin_mod->is_poisoned()) { continue; }
 
         const auto& registry{analyzer.get_registry()};
