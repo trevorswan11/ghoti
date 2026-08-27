@@ -17,7 +17,6 @@ auto render_docs(syntax::doc_manager& m,
 // Parses `src`, asserts it has no diagnostics, then runs the AST formatter over it.
 auto format_source(std::string_view src, u16 max_width = 100, u16 indent_spaces = 4) -> std::string;
 
-// If either input has errors, dumped ast output is never compared
-auto check_sources_equiv(std::string_view s1, std::string_view s2) -> void;
+auto round_trips(std::string_view src) -> void;
 
 } // namespace ghoti::tests::helpers

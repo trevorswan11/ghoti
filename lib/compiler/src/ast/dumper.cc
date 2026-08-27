@@ -500,16 +500,26 @@ auto dumper::visit(node_id, const module_access_expr& module_access) -> void {
 }
 
 // Safe to call with invalid ID in type dispatch
-auto dumper::visit(node_id, const struct_expr& struct_expr) -> void {
+auto dumper::visit(node_id, const struct_expr& node) -> void {
     PROFILE_FUNCTION();
     fmt::println(out_, "StructExpression");
-    if (struct_expr.fields.empty() && struct_expr.members.empty()) { return; }
 
-    const auto has_members{!struct_expr.members.empty()};
-    if (!struct_expr.fields.empty()) {
+    const auto has_fields{!node.fields.empty()};
+    const auto has_members{!node.members.empty()};
+
+    {
+        const indent::guard g{indent_, false};
+        fmt::println(out_, "{}Extern: {}", indent_.current_branch(), node.is_extern);
+    }
+    {
+        const indent::guard g{indent_, !has_fields && !has_members};
+        fmt::println(out_, "{}Packed: {}", indent_.current_branch(), node.is_packed);
+    }
+
+    if (has_fields) {
         const indent::guard g{indent_, !has_members};
         fmt::println(out_, "{}Fields:", indent_.current_branch());
-        dump_container(struct_expr.fields, [this](const struct_expr::field& field) -> void {
+        dump_container(node.fields, [this](const struct_expr::field& field) -> void {
             {
                 fmt::print(out_, "{}Name: ", indent_.current_branch());
                 dump(field.name);
@@ -521,16 +531,23 @@ auto dumper::visit(node_id, const struct_expr& struct_expr) -> void {
             }
 
             const auto has_default{field.default_value.has_value()};
+            const auto has_alignment{field.explicit_alignment.has_value()};
             {
-                const indent::guard g_type{indent_, !has_default};
+                const indent::guard g_type{indent_, !has_default && !has_alignment};
                 fmt::print(out_, "{}Type: ", indent_.current_branch());
                 dump(field.explicit_type);
             }
 
             if (has_default) {
-                const indent::guard g_val{indent_, true};
+                const indent::guard g_val{indent_, !has_alignment};
                 fmt::print(out_, "{}Default: ", indent_.current_branch());
                 dump(*field.default_value);
+            }
+
+            if (has_alignment) {
+                const indent::guard g_align{indent_, true};
+                fmt::print(out_, "{}Alignment: ", indent_.current_branch());
+                dump(*field.explicit_alignment);
             }
         });
     }
@@ -538,31 +555,42 @@ auto dumper::visit(node_id, const struct_expr& struct_expr) -> void {
     if (has_members) {
         const indent::guard g{indent_, true};
         fmt::println(out_, "{}Members:", indent_.current_branch());
-        dump_node_list(struct_expr.members);
+        dump_node_list(node.members);
     }
 }
 
 // Safe to call with invalid ID in type dispatch
-auto dumper::visit(node_id, const union_expr& union_expr) -> void {
+auto dumper::visit(node_id, const union_expr& node) -> void {
     PROFILE_FUNCTION();
     fmt::println(out_, "UnionExpression");
 
-    const auto has_members{!union_expr.members.empty()};
+    const auto has_members{!node.members.empty()};
+    {
+        const indent::guard g{indent_, false};
+        fmt::println(out_, "{}Extern: {}", indent_.current_branch(), node.is_extern);
+    }
     {
         const indent::guard g{indent_, !has_members};
         fmt::println(out_, "{}Fields:", indent_.current_branch());
-        dump_container(union_expr.fields, [this](const union_expr::field& field) -> void {
+        dump_container(node.fields, [this](const union_expr::field& field) -> void {
             fmt::println(out_, "{}Field:", indent_.current_branch());
             {
-                const indent::guard g_pattern{indent_, false};
+                const indent::guard g_tag{indent_, false};
                 fmt::print(out_, "{}Tag: ", indent_.current_branch());
                 dump(field.name);
             }
 
+            const auto has_alignment{field.explicit_alignment.has_value()};
             {
-                const indent::guard g_result{indent_, true};
+                const indent::guard g_result{indent_, !has_alignment};
                 fmt::print(out_, "{}Type: ", indent_.current_branch());
                 dump(field.explicit_type);
+            }
+
+            if (has_alignment) {
+                const indent::guard g_align{indent_, true};
+                fmt::print(out_, "{}Alignment: ", indent_.current_branch());
+                dump(*field.explicit_alignment);
             }
         });
     }
@@ -570,7 +598,7 @@ auto dumper::visit(node_id, const union_expr& union_expr) -> void {
     if (has_members) {
         const indent::guard g{indent_, true};
         fmt::println(out_, "{}Members:", indent_.current_branch());
-        dump_node_list(union_expr.members);
+        dump_node_list(node.members);
     }
 }
 

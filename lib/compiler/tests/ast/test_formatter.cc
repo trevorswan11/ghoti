@@ -1,0 +1,271 @@
+#include <string>
+#include <string_view>
+
+#include <catch2/catch_test_macros.hpp>
+#include <stdx/types.hh>
+
+#include "helpers/formatter.hh"
+
+namespace ghoti::tests {
+
+using helpers::format_source;
+using helpers::round_trips;
+
+TEST_CASE("formatter round-trips simple declarations") {
+    CHECK(format_source(R"(const version := "0.0.1";)") == "const version := \"0.0.1\";\n");
+    CHECK(format_source("pub  const   x:i32=42;") == "pub const x: i32 = 42;\n");
+    CHECK(format_source("constexpr SIZE:=2uz;") == "constexpr SIZE := 2uz;\n");
+    CHECK(format_source("var a := 3u;") == "var a := 3u;\n");
+    CHECK(format_source("var a := 1l;") == "var a := 1l;\n");
+    CHECK(format_source("var a := 2.3;") == "var a := 2.3;\n");
+    CHECK(format_source("var a := 'a';") == "var a := 'a';\n");
+}
+
+TEST_CASE("formatter preserves numeric literal base, separators, and suffix verbatim") {
+    CHECK(format_source("var a := 0x2Fuz;") == "var a := 0x2Fuz;\n");
+    CHECK(format_source("var a := 0b00_11_00_11;") == "var a := 0b00_11_00_11;\n");
+    CHECK(format_source("var a := 1_000_000;") == "var a := 1_000_000;\n");
+    CHECK(format_source("var a := 0o17ul;") == "var a := 0o17ul;\n");
+    CHECK(format_source("var a := 2.5e10;") == "var a := 2.5e10;\n");
+    CHECK(format_source(R"(var a := '\n';)") == "var a := '\\n';\n");
+}
+
+TEST_CASE("formatter preserves grouping parens the author wrote") {
+    CHECK(format_source("_ = (a + b) * c;") == "_ = (a + b) * c;\n");
+    CHECK(format_source("_ = a + b * c;") == "_ = a + b * c;\n");
+    CHECK(format_source("_ = ((a));") == "_ = ((a));\n");
+    CHECK(format_source("_ = (*arr[i][j]);") == "_ = (*arr[i][j]);\n");
+    CHECK(format_source("const x := (a);") == "const x := (a);\n");
+}
+
+TEST_CASE("formatter round-trips operator expressions") {
+    CHECK(format_source("a <= b or c == d and e;") == "a <= b or c == d and e;\n");
+    CHECK(format_source("a or b[3uz] == !c;") == "a or b[3uz] == !c;\n");
+    CHECK(format_source("A::B::C;") == "A::B::C;\n");
+    CHECK(format_source("a.b;") == "a.b;\n");
+    CHECK(format_source("a..b;") == "a..b;\n");
+    CHECK(format_source("a..=b;") == "a..=b;\n");
+    CHECK(format_source("&a; &mut b; *a; ^mut c;") == R"(&a;
+&mut b;
+*a;
+^mut c;
+)");
+    CHECK(format_source("i += 1;") == "i += 1;\n");
+}
+
+TEST_CASE("formatter round-trips leaf statements") {
+    CHECK(format_source("import std;") == "import std;\n");
+    CHECK(format_source(R"(pub import "ast/node.p" as node;)") ==
+          "pub import \"ast/node.p\" as node;\n");
+    CHECK(format_source("using T = i32;") == "using T = i32;\n");
+    CHECK(format_source("pub using a = ^^i32;") == "pub using a = ^^i32;\n");
+    CHECK(format_source("break :blk a;") == "break :blk a;\n");
+    CHECK(format_source("continue;") == "continue;\n");
+    CHECK(format_source("return enum { RED };") == "return enum { RED };\n");
+    CHECK(format_source("_ = enum { RED, _ };") == "_ = enum { RED, _ };\n");
+    CHECK(format_source("defer 3;") == "defer 3;\n");
+}
+
+TEST_CASE("formatter round-trips types") {
+    CHECK(format_source("var a: []i32;") == "var a: []i32;\n");
+    CHECK(format_source("var a: std::ArrayList(u8);") == "var a: std::ArrayList(u8);\n");
+    CHECK(format_source("var a: List(i32);") == "var a: List(i32);\n");
+    CHECK(format_source("var v: mut volatile i32 = 42;") == "var v: mut volatile i32 = 42;\n");
+    CHECK(format_source("var f: ^fn(&a, ^mut B, ...): ^E;") ==
+          "var f: ^fn(&a, ^mut B, ...): ^E;\n");
+    CHECK(format_source("var a: [N:0]u8;") == "var a: [N:0]u8;\n");
+}
+
+TEST_CASE("formatter lays out a function body with K&R braces") {
+    CHECK(format_source("pub const main := fn(): i32 { return 0; };") ==
+          R"(pub const main := fn(): i32 {
+    return 0;
+};
+)");
+    CHECK(format_source("const f := fn(): void {};") == "const f := fn(): void {};\n");
+}
+
+TEST_CASE("formatter keeps small aggregates inline and breaks ones with bodies") {
+    CHECK(format_source("const P := struct { x: i32, y: i32 };") ==
+          "const P := struct { x: i32, y: i32 };\n");
+    CHECK(format_source("const U := union { a: i32, b: i32 };") ==
+          "const U := union { a: i32, b: i32 };\n");
+    CHECK(format_source("const E := enum : u64 { A = 1ul, B, C };") ==
+          "const E := enum : u64 { A = 1ul, B, C };\n");
+
+    CHECK(format_source("const S := struct { x: i32, const m := fn(): i32 { return x; }; };") ==
+          R"(const S := struct {
+    x: i32,
+    const m := fn(): i32 {
+        return x;
+    };
+};
+)");
+}
+
+TEST_CASE("formatter lays out if / match") {
+    CHECK(format_source("if (a) { b(); } else { c(); };") == R"(if (a) {
+    b();
+} else {
+    c();
+};
+)");
+
+    CHECK(format_source("const r := match (u) { .a => 1, .b => 2 };") ==
+          "const r := match (u) { .a => 1, .b => 2 };\n");
+
+    CHECK(format_source("match (u) { .a => |&mut v| { v = 1; }, _ => {}, };") == R"(match (u) {
+    .a => |&mut v| {
+        v = 1;
+    },
+    _ => {},
+};
+)");
+}
+
+TEST_CASE("formatter does not double the terminator on a value-if or loop tail") {
+    CHECK(
+        format_source("const min := fn(a: auto, b: auto): auto { return if (a < b) a else b; };") ==
+        R"(const min := fn(a: auto, b: auto): auto {
+    return if (a < b) a else b;
+};
+)");
+    CHECK(format_source("while (c) { a; } else return b;") == R"(while (c) {
+    a;
+} else return b;
+)");
+    CHECK(format_source("if (c) return x; else return y;") == "if (c) return x; else return y;\n");
+}
+
+TEST_CASE("formatter writes an inferred array size as _") {
+    CHECK(format_source("[_]i32{};") == "[_]i32{};\n");
+    CHECK(format_source("[_:0]^N{ a, b };") == "[_:0]^N{ a, b };\n");
+}
+
+TEST_CASE("formatter breaks a wide argument list") {
+    const auto out{format_source(
+        "callee(aaaaaaaaaa, bbbbbbbbbb, cccccccccc, dddddddddd, eeeeeeeeee, ffffffffff);", 40)};
+    CHECK(out == R"(callee(
+    aaaaaaaaaa,
+    bbbbbbbbbb,
+    cccccccccc,
+    dddddddddd,
+    eeeeeeeeee,
+    ffffffffff,
+);
+)");
+}
+
+TEST_CASE("formatter preserves a single blank line between items") {
+    CHECK(format_source("const a := 1;\n\n\nconst b := 2;") == R"(const a := 1;
+
+const b := 2;
+)");
+    CHECK(format_source("const a := 1;\nconst b := 2;") == "const a := 1;\nconst b := 2;\n");
+    CHECK(format_source("const f := fn(): void { a();\n\n\n b(); };") == R"(const f := fn(): void {
+    a();
+
+    b();
+};
+)");
+}
+
+TEST_CASE("formatter round trip: declarations and literals") {
+    round_trips(R"(pub const version := "0.0.1";)");
+    round_trips("constexpr SIZE := 2uz;");
+    round_trips("var a: i32 = undefined;");
+    round_trips("var v: mut volatile i32 = 42;");
+    round_trips("const v: volatile i32 = 42;");
+    round_trips("var a := 0x2Fuz; var b := 0b00_11_00_11; var c := 1_000; var d := 2.3f;");
+    round_trips(R"('\n'; '\r'; '\t'; '\\'; '\''; '\0';)");
+}
+
+TEST_CASE("formatter round trip: operators and grouping") {
+    round_trips("a <= b or c == d and e;");
+    round_trips("a or b[3uz] == !c;");
+    round_trips("(*arr[i][j]) = 2;");
+    round_trips("_ = (a + b) * c;");
+    round_trips("_ = a + b * c - d / e;");
+    round_trips("_ = ((a));");
+    round_trips("A::B::C; a.b; a..b; a..=b;");
+    round_trips("&a; &mut b; *a; ^mut a; ^a;");
+    round_trips("@as(i32, a); .a; .{ .a = 3 }; TT{ .adfasf = a }; .{};");
+}
+
+TEST_CASE("formatter round trip: precedence and nesting are preserved") {
+    round_trips("_ = a + b * c - d;");
+    round_trips("_ = (a + b) * (c - d);");
+    round_trips("_ = a and b or c and d;");
+    round_trips("_ = a or (b or c) or d;");
+    round_trips("_ = a - b - c;");
+    round_trips("_ = a - (b - c);");
+    round_trips("_ = !a and !(b or c);");
+    round_trips("_ = *a.b[0].c;");
+    round_trips("_ = &obj.field;");
+    round_trips("_ = a.b.c().d[e].f;");
+    round_trips("_ = (a + 1)..(b - 1);");
+    round_trips("_ = x == y and (p or q);");
+}
+
+TEST_CASE("formatter round trip: functions and types") {
+    round_trips("var f_ptr: ^fn(&a, ^mut B, ...): &[0x2uz][N]^E;");
+    round_trips("fn(^mut this, a: A, b: ^B, ): i32 { c; };");
+    round_trips("fn(self): i32 {};");
+    round_trips("pub const min := fn(a: auto, b: auto): auto { return if (a < b) a else b; };");
+    round_trips("using T = i32; pub using a = ^^i32;");
+    round_trips("var a: std::ArrayList(u8); var a: List(i32); var a: []i32;");
+    round_trips("extern const foo: fn(): i32;");
+    round_trips(R"(extern("kernel32") const bar: fn(): void;)");
+}
+
+TEST_CASE("formatter round trip: aggregates") {
+    round_trips("struct { var a: Foo = bar; const b := fn(^mut this, a: A, b: ^B): C { c; }; };");
+    round_trips("union { a: i32, b: &mut T, };");
+    round_trips("enum : u64 { A = 1ul, B = T, C, };");
+    round_trips("enum : i64 { A = 2l, const b := fn(&self, a: A): C { c; }; };");
+    round_trips("union { a: struct { b: Foo = bar, pub c: i32, var d: u32; }, "
+                "const b := fn(&self, a: A): C { c; }; };");
+    round_trips(R"(const S := struct {
+    x: i32,
+    const make := fn(v: auto): i32 {
+        const r: @this() = S{ .x = v };
+        return r.x;
+    };
+};)");
+}
+
+TEST_CASE("formatter round trip: control flow") {
+    round_trips("if (a) { b; } else { c; };");
+    round_trips("if constexpr (a) { b; };");
+    round_trips("while (true) : (i += 1) { a; } else return b;");
+    round_trips("do { a; } while (true);");
+    round_trips("for (arr, l, p) |i, &mut j, _| { a; } else return b;");
+    round_trips("loop { a; };");
+    round_trips("match (a) { b => |c| d, e => |_| f, g => h, _ => d, };");
+    round_trips("a: { continue :a; };");
+    round_trips(R"(test "dump" { import other; std::testing::expect(a == true); })");
+}
+
+TEST_CASE("formatter round trip: nested module") {
+    round_trips(R"(pub const main := fn(): i32 {
+    var u := U{ .b = 7 };
+    for (0..3) |v| { sum = sum + v; }
+    return match (u) { .a => 1, .b => 2, };
+};)");
+}
+
+TEST_CASE("formatter round trip: adjacent brace-tailed statements keep their terminators") {
+    round_trips(".{ .a = 3 }; TT{ .adfasf = a }; .{};");
+    round_trips("[1uz]A{a}; [_]i32{}; b.c;");
+    round_trips("if (a) { b; }; .c;");
+    round_trips("match (a) { _ => d, }; x[0];");
+    round_trips("struct { a: i32 }; .field;");
+}
+
+constexpr std::string_view corpus{
+#include "ast/golden.gh.inc"
+};
+
+TEST_CASE("formatter round trip: full node corpus") { round_trips(corpus); }
+
+} // namespace ghoti::tests

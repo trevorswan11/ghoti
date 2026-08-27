@@ -16,6 +16,25 @@
 
 namespace ghoti::tests::helpers {
 
+namespace {
+
+auto check_sources_equiv(std::string_view s1, std::string_view s2) -> void {
+    syntax::parser p1{s1}, p2{s2};
+    ast::AST       s1_ast, s2_ast;
+    const auto     diag1{p1.consume(s1_ast)};
+    const auto     diag2{p2.consume(s2_ast)};
+    CHECK(std::ranges::equal(diag1, diag2));
+    if (!diag1.empty() || !diag2.empty()) { return; }
+
+    std::ostringstream s1_oss, s2_oss;
+    ast::dumper        dumper1{s1_ast, s1_oss}, dumper2{s2_ast, s2_oss};
+    dumper1.dump();
+    dumper2.dump();
+    CHECK(s1_oss.view() == s2_oss.view());
+}
+
+} // namespace
+
 auto render_docs(syntax::doc_manager& m, syntax::doc_id root, u16 max_width, u16 indent_spaces)
     -> std::string {
     std::ostringstream os;
@@ -34,19 +53,10 @@ auto format_source(std::string_view src, u16 max_width, u16 indent_spaces) -> st
     return os.str();
 }
 
-auto check_sources_equiv(std::string_view s1, std::string_view s2) -> void {
-    syntax::parser p1{s1}, p2{s2};
-    ast::AST       s1_ast, s2_ast;
-    const auto     diag1{p1.consume(s1_ast)};
-    const auto     diag2{p2.consume(s2_ast)};
-    CHECK(std::ranges::equal(diag1, diag2));
-    if (!diag1.empty() || !diag2.empty()) { return; }
-
-    std::ostringstream s1_oss, s2_oss;
-    ast::dumper        dumper1{s1_ast, s1_oss}, dumper2{s2_ast, s2_oss};
-    dumper1.dump();
-    dumper2.dump();
-    CHECK(s1_oss.view() == s2_oss.view());
+auto round_trips(std::string_view src) -> void {
+    check_sources_equiv(src, format_source(src));                   // default width
+    check_sources_equiv(src, format_source(src, 24));               // forced to break
+    CHECK(format_source(format_source(src)) == format_source(src)); // idempotent
 }
 
 } // namespace ghoti::tests::helpers

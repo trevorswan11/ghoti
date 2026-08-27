@@ -105,6 +105,8 @@ ExpressionStatement
     └─ Inner: IdentifierExpression: C
 ExpressionStatement
 └─ Expr: StructExpression
+    ├─ Extern: false
+    ├─ Packed: false
     └─ Members:
         ├─ DeclStatement
         │   ├─ Name: IdentifierExpression: a
@@ -266,6 +268,7 @@ ExpressionStatement
     └─ Member: IdentifierExpression: a
 ExpressionStatement
 └─ Expr: UnionExpression
+    ├─ Extern: false
     └─ Fields:
         ├─ Field:
         │   ├─ Tag: IdentifierExpression: a
@@ -348,11 +351,14 @@ ExpressionStatement
     └─ Object Type: <inferred>
 ExpressionStatement
 └─ Expr: UnionExpression
+    ├─ Extern: false
     ├─ Fields:
     │   └─ Field:
     │       ├─ Tag: IdentifierExpression: a
     │       └─ Type: ExplicitType (modifier: VALUE)
     │           └─ StructExpression
+    │               ├─ Extern: false
+    │               ├─ Packed: false
     │               ├─ Fields:
     │               │   ├─ Name: IdentifierExpression: b
     │               │   │   ├─ Public: false
@@ -535,4 +541,81 @@ DeclStatement
         ├─ Variadic: false
         └─ Returns: ExplicitType (modifier: VALUE)
             └─ IdentifierExpression: void (primitive)
+DeclStatement
+├─ Name: IdentifierExpression: ExS
+├─ Modifiers: CONSTANT
+├─ Type: (inferred)
+└─ Value: StructExpression
+    ├─ Extern: true
+    ├─ Packed: false
+    └─ Fields:
+        └─ Name: IdentifierExpression: a
+            ├─ Public: false
+            └─ Type: ExplicitType (modifier: VALUE)
+                └─ IdentifierExpression: i32 (primitive)
+DeclStatement
+├─ Name: IdentifierExpression: ExPS
+├─ Modifiers: CONSTANT
+├─ Type: (inferred)
+└─ Value: StructExpression
+    ├─ Extern: true
+    ├─ Packed: true
+    └─ Fields:
+        ├─ Name: IdentifierExpression: a
+        │   ├─ Public: false
+        │   └─ Type: ExplicitType (modifier: VALUE)
+        │       └─ IdentifierExpression: i32 (primitive)
+        └─ Name: IdentifierExpression: b
+            ├─ Public: false
+            └─ Type: ExplicitType (modifier: VALUE)
+                └─ IdentifierExpression: u8 (primitive)
+ExpressionStatement
+└─ Expr: StructExpression
+    ├─ Extern: false
+    ├─ Packed: true
+    └─ Fields:
+        ├─ Name: IdentifierExpression: a
+        │   ├─ Public: false
+        │   ├─ Type: ExplicitType (modifier: VALUE)
+        │   │   └─ IdentifierExpression: i32 (primitive)
+        │   └─ Alignment: I32Expression: 4
+        ├─ Name: IdentifierExpression: b
+        │   ├─ Public: false
+        │   ├─ Type: ExplicitType (modifier: VALUE)
+        │   │   └─ IdentifierExpression: u8 (primitive)
+        │   └─ Alignment: I32Expression: 8
+        └─ Name: IdentifierExpression: c
+            ├─ Public: false
+            ├─ Type: ExplicitType (modifier: VALUE)
+            │   └─ IdentifierExpression: i32 (primitive)
+            └─ Alignment: I32Expression: 16
+ExpressionStatement
+└─ Expr: UnionExpression
+    ├─ Extern: false
+    └─ Fields:
+        ├─ Field:
+        │   ├─ Tag: IdentifierExpression: a
+        │   ├─ Type: ExplicitType (modifier: VALUE)
+        │   │   └─ IdentifierExpression: i32 (primitive)
+        │   └─ Alignment: I32Expression: 16
+        └─ Field:
+            ├─ Tag: IdentifierExpression: b
+            └─ Type: ExplicitType (modifier: MUT_REF)
+                └─ IdentifierExpression: T
+DeclStatement
+├─ Name: IdentifierExpression: ExU
+├─ Modifiers: CONSTANT
+├─ Type: (inferred)
+└─ Value: UnionExpression
+    ├─ Extern: true
+    └─ Fields:
+        ├─ Field:
+        │   ├─ Tag: IdentifierExpression: a
+        │   ├─ Type: ExplicitType (modifier: VALUE)
+        │   │   └─ IdentifierExpression: i32 (primitive)
+        │   └─ Alignment: I32Expression: 8
+        └─ Field:
+            ├─ Tag: IdentifierExpression: b
+            └─ Type: ExplicitType (modifier: VALUE)
+                └─ IdentifierExpression: u8 (primitive)
 )"

@@ -56,4 +56,9 @@ R"([_:0]^N{a, b, c, d, e, 3, "54" };
     [_]i32{};
     extern const foo: fn(): i32;
     extern("kernel32") const bar: fn(): void;
+    const ExS := extern struct { a: i32 };
+    const ExPS := extern packed struct { a: i32, b: u8 };
+    packed struct { @alignas(4) a: i32, b: @alignas(8) u8, c: i32 @alignas(16) };
+    union { @alignas(16) a: i32, b: &mut T };
+    const ExU := extern union { a: @alignas(8) i32, b: u8 };
 )"
