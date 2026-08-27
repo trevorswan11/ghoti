@@ -3,6 +3,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <stdx/types.hh>
+#include <fmt/format.h>
 
 #include "compiler/syntax/doc.hh"
 #include "compiler/syntax/layout_engine.hh"
@@ -143,7 +144,7 @@ TEST_CASE("layout_engine align shifts the indent level of its child by the curre
     const auto          aligned{m.add<docs::align>(aligned_body, static_cast<u16>(0))};
     const auto root{m.add<docs::concat>(helpers::make_vector<syntax::doc_id>(label, aligned))};
 
-    CHECK(helpers::render_docs(m, root) == "key: \n" + std::string(5, ' ') + "value");
+    CHECK(helpers::render_docs(m, root) == fmt::format("key: \n{:{}}value", "", 5));
 }
 
 TEST_CASE("layout_engine renders all doc_manager roots in sequence") {

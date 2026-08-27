@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <string_view>
 
+#include <stdx/fixed/enum_map.hh>
 #include <stdx/fixed/hash_table.hh>
 #include <stdx/hash.hh>
 #include <stdx/option.hh>
@@ -61,6 +62,12 @@ constexpr auto ALL_OPERATORS{
                                                    operators::MULTILINE_STRING,
                                                    operators::NULL_TERMINATED)};
 
+constexpr auto ALL_OPERATORS_TT{[] -> auto {
+    stdx::fixed::enum_map<token_type_t, stdx::option<std::string_view>> operators;
+    for (const auto& [name, tok] : ALL_OPERATORS) { operators[tok] = name; }
+    return operators;
+}()};
+
 } // namespace
 
 auto max_operator_length() noexcept -> usize {
@@ -72,6 +79,10 @@ auto max_operator_length() noexcept -> usize {
 
 auto get_operator_opt(std::string_view sv) noexcept -> stdx::option<token_type_t> {
     return ALL_OPERATORS.get_opt(sv).materialize();
+}
+
+auto get_operator_opt(token_type_t tt) noexcept -> stdx::option<std::string_view> {
+    return ALL_OPERATORS_TT[tt];
 }
 
 } // namespace ghoti::syntax
