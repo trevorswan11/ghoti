@@ -29,25 +29,45 @@ TEST_CASE("layout_engine indent only shifts lines that break after it") {
     syntax::doc_manager m;
     const auto          body{m.add<docs::concat>(
         helpers::make_vector<syntax::doc_id>(m.add<docs::hard_line>(), m.add<docs::text>("x")))};
-    const auto          root{m.add<docs::indent>(body, static_cast<u16>(1))};
+    const auto          root{m.add<docs::indent>(body)};
     CHECK(helpers::render_docs(m, root) == "\n    x");
 }
 
-TEST_CASE("layout_engine indent width is configurable, independent of level count") {
+TEST_CASE("layout_engine indent width follows indent_spaces") {
     syntax::doc_manager m;
     const auto          body{m.add<docs::concat>(
         helpers::make_vector<syntax::doc_id>(m.add<docs::hard_line>(), m.add<docs::text>("x")))};
-    const auto          root{m.add<docs::indent>(body, static_cast<u16>(1))};
+    const auto          root{m.add<docs::indent>(body)};
     CHECK(helpers::render_docs(m, root, 100, 2) == "\n  x");
 }
 
-TEST_CASE("layout_engine nested indents accumulate their levels") {
+TEST_CASE("layout_engine nested indents accumulate one level each") {
     syntax::doc_manager m;
     const auto          innermost{m.add<docs::concat>(
         helpers::make_vector<syntax::doc_id>(m.add<docs::hard_line>(), m.add<docs::text>("x")))};
-    const auto          inner{m.add<docs::indent>(innermost, static_cast<u16>(1))};
-    const auto          root{m.add<docs::indent>(inner, static_cast<u16>(1))};
+    const auto          inner{m.add<docs::indent>(innermost)};
+    const auto          root{m.add<docs::indent>(inner)};
     CHECK(helpers::render_docs(m, root) == "\n        x");
+}
+
+TEST_CASE("layout_engine writes no trailing whitespace on a blank line between indented content") {
+    syntax::doc_manager m;
+    const auto          body{
+        m.add<docs::concat>(helpers::make_vector<syntax::doc_id>(m.add<docs::hard_line>(),
+                                                                 m.add<docs::text>("a"),
+                                                                 m.add<docs::hard_line>(),
+                                                                 m.add<docs::hard_line>(),
+                                                                 m.add<docs::text>("b")))};
+    const auto root{m.add<docs::indent>(body)};
+    CHECK(helpers::render_docs(m, root) == "\n    a\n\n    b");
+}
+
+TEST_CASE("layout_engine leaves no dangling indentation after a trailing break") {
+    syntax::doc_manager m;
+    const auto          body{m.add<docs::concat>(
+        helpers::make_vector<syntax::doc_id>(m.add<docs::text>("x"), m.add<docs::hard_line>()))};
+    const auto          root{m.add<docs::indent>(body)};
+    CHECK(helpers::render_docs(m, root) == "x\n");
 }
 
 TEST_CASE("layout_engine keeps a group flat when its content fits max_width") {

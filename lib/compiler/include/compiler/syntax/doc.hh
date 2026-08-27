@@ -28,7 +28,6 @@ struct concat {
 
 struct indent {
     doc_id child;
-    u16    amount;
 };
 
 struct group {

@@ -19,29 +19,43 @@ auto layout_engine::render(std::ostream& os) -> void {
 
 auto layout_engine::render(doc_id root, std::ostream& os) -> void {
     u32                         current_width{0};
+    u16                         pending_cols{0};
     std::vector<layout_command> stack{{
-        .doc          = root,
-        .indent_level = 0,
-        .mode         = layout_mode::FLAT,
+        .doc         = root,
+        .indent_cols = 0,
+        .mode        = layout_mode::FLAT,
     }};
 
+    const auto flush_indent = [&] {
+        if (pending_cols == 0) { return; }
+        fmt::print(os, "{:{}}", "", pending_cols);
+        pending_cols = 0;
+    };
+
+    const auto break_line = [&](u16 cols) {
+        fmt::print(os, "\n");
+        pending_cols  = cols;
+        current_width = cols;
+    };
+
     while (!stack.empty()) {
-        auto [doc, indent_level, mode]{stack.back()};
+        auto [doc, indent_cols, mode]{stack.back()};
         stack.pop_back();
 
         doc_manager_[doc].visit(
             [&](docs::text t) {
+                flush_indent();
                 fmt::print(os, "{}", t.text);
                 current_width += static_cast<u32>(t.text.size());
             },
             [&](const docs::concat& c) {
                 // Push in reverse order to process children seq
                 for (const auto& child : std::views::reverse(c.children)) {
-                    stack.emplace_back(child, indent_level, mode);
+                    stack.emplace_back(child, indent_cols, mode);
                 }
             },
             [&](docs::indent i) {
-                stack.emplace_back(i.child, indent_level + i.amount * indent_spaces_, mode);
+                stack.emplace_back(i.child, static_cast<u16>(indent_cols + indent_spaces_), mode);
             },
             [&](docs::group g) {
                 auto fit_mode{layout_mode::BREAK};
@@ -49,28 +63,24 @@ auto layout_engine::render(doc_id root, std::ostream& os) -> void {
                 if (!g.force_break && fits(current_width, g.child)) {
                     fit_mode = layout_mode::FLAT;
                 }
-                stack.emplace_back(g.child, indent_level, fit_mode);
+                stack.emplace_back(g.child, indent_cols, fit_mode);
             },
             [&](docs::line_or_space l) {
                 if (mode == layout_mode::FLAT) {
+                    flush_indent();
                     fmt::print(os, "{}", l.space_text);
                     current_width += static_cast<u32>(l.space_text.size());
                 } else {
-                    fmt::print(os, "\n{:{}}", "", indent_level);
-                    current_width = indent_level;
+                    break_line(indent_cols);
                 }
             },
-            [&](docs::hard_line) {
-                fmt::print(os, "\n{:{}}", "", indent_level);
-                current_width = indent_level;
-            },
+            [&](docs::hard_line) { break_line(indent_cols); },
             [&](docs::soft_line) {
-                if (mode == layout_mode::BREAK) {
-                    fmt::print(os, "\n{:{}}", "", indent_level);
-                    current_width = indent_level;
-                }
+                if (mode == layout_mode::BREAK) { break_line(indent_cols); }
             },
-            [&](docs::align a) { stack.emplace_back(a.child, current_width + a.columns, mode); });
+            [&](docs::align a) {
+                stack.emplace_back(a.child, static_cast<u16>(current_width + a.columns), mode);
+            });
     }
 }
 

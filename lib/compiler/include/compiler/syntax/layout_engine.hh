@@ -16,7 +16,7 @@ enum class layout_mode : u8 {
 
 struct layout_command {
     doc_id      doc;
-    u16         indent_level;
+    u16         indent_cols;
     layout_mode mode;
 };
 
