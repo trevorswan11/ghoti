@@ -36,7 +36,9 @@ auto layout_engine::render(doc_id root, std::ostream& os) -> void {
                     stack.emplace_back(child, indent_level, mode);
                 }
             },
-            [&](docs::indent i) { stack.emplace_back(i.child, indent_level + i.amount, mode); },
+            [&](docs::indent i) {
+                stack.emplace_back(i.child, indent_level + i.amount * indent_spaces_, mode);
+            },
             [&](docs::group g) {
                 auto fit_mode{layout_mode::BREAK};
                 // Test if the group fits horizontally in flat mode

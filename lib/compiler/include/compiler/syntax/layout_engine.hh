@@ -22,8 +22,10 @@ struct layout_command {
 
 class layout_engine {
   public:
-    explicit layout_engine(doc_manager& manager, u16 max_width = 100) noexcept
-        : manager_{manager}, max_width_{max_width} {}
+    explicit layout_engine(doc_manager& manager,
+                           u16          max_width     = 100,
+                           u16          indent_spaces = 4) noexcept
+        : manager_{manager}, max_width_{max_width}, indent_spaces_{indent_spaces} {}
     ~layout_engine() = default;
     MAKE_PINNED(layout_engine);
 
@@ -36,6 +38,7 @@ class layout_engine {
   private:
     doc_manager& manager_;
     u16          max_width_;
+    u16          indent_spaces_;
 };
 
 } // namespace ghoti::syntax
