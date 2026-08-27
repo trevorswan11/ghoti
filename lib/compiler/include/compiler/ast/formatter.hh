@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ostream>
+#include <vector>
 
 #include <stdx/types.hh>
 #include <stdx/variant.hh>
@@ -28,8 +29,26 @@ class formatter {
 
   private:
     template <IndexableID ID> auto format(ID id) -> syntax::doc_id {
-        return ast_[id].visit([&](const auto& data) { return this->visit(id, data); });
+        auto doc{ast_[id].visit([&](const auto& data) { return this->visit(id, data); })};
+        if constexpr (IndexableNodeID<ID>) {
+            for (u8 depth{ast_.paren_depth_of(id)}; depth != 0; --depth) {
+                doc = doc_manager_.concat({doc_manager_.text("("), doc, doc_manager_.text(")")});
+            }
+        }
+        return doc;
     }
+
+    [[nodiscard]] auto with_modifier(explicit_type_id id, syntax::doc_id base) -> syntax::doc_id;
+    [[nodiscard]] auto blank_line_between(node_id before, node_id after) const -> bool;
+
+    [[nodiscard]] auto format_struct(const struct_expr& node) -> syntax::doc_id;
+    [[nodiscard]] auto format_union(const union_expr& node) -> syntax::doc_id;
+    [[nodiscard]] auto format_enum(const enum_expr& node) -> syntax::doc_id;
+    [[nodiscard]] auto aggregate_body(std::vector<syntax::doc_id> entries, usize comma_count)
+        -> syntax::doc_id;
+
+    [[nodiscard]] auto decl_prefix(const decl_stmt& node) -> syntax::doc_id;
+    [[nodiscard]] auto tail_clause(node_id stmt) -> syntax::doc_id;
 
     auto visit(node_id, const array_expr&) -> syntax::doc_id;
     auto visit(node_id, const call_expr&) -> syntax::doc_id;
