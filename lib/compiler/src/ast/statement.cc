@@ -271,6 +271,7 @@ auto expr_stmt::parse(syntax::parser& parser, syntax::semicolon_behavior behavio
     if (at_block_end) {
         if (parser.peek_token_is(syntax::token_type_t::SEMICOLON)) {
             if (auto err{check_illegal_semicolon()}) { return std::move(*err); }
+            terminated = true;
         }
     } else if (has_semicolon) {
         terminated = true;
