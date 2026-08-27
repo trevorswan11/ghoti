@@ -18,6 +18,7 @@ enum class error : u8 {
     INVALID_MODULE_SPEC,
     CONFLICTING_OPTIONS,
     UNEXPECTED_ERROR,
+    FORMATTING_FAILED,
 };
 
 [[nodiscard]] auto fatal_error(std::ostream& os, std::string message, error code)

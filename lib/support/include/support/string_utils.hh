@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <functional>
+#include <iterator>
 #include <string>
 #include <string_view>
 
@@ -60,6 +61,13 @@ constexpr auto strip_trailing_cr(std::string& line) -> void {
     -> bool {
     return std::ranges::starts_with(
         line, prefix, {}, stdx::string::to_lower, stdx::string::to_lower);
+}
+
+[[nodiscard]] auto read_stream(auto&& stream) -> std::string {
+    return {
+        std::istreambuf_iterator<char>(stream),
+        std::istreambuf_iterator<char>(),
+    };
 }
 
 } // namespace ghoti::string_utils
