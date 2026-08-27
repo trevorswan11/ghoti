@@ -38,7 +38,7 @@ auto check_sources_equiv(std::string_view s1, std::string_view s2) -> void {
     syntax::parser p1{s1}, p2{s2};
     ast::AST       s1_ast, s2_ast;
     const auto     diag1{p1.consume(s1_ast)};
-    const auto     diag2{p1.consume(s2_ast)};
+    const auto     diag2{p2.consume(s2_ast)};
     CHECK(std::ranges::equal(diag1, diag2));
     if (!diag1.empty() || !diag2.empty()) { return; }
 

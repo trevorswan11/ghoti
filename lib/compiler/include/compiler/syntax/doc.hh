@@ -1,8 +1,10 @@
 #pragma once
 
+#include <string>
 #include <string_view>
 #include <vector>
 
+#include <stdx/arena.hh>
 #include <stdx/assert.hh>
 #include <stdx/iterator.hh>
 #include <stdx/types.hh>
@@ -91,9 +93,37 @@ class doc_manager {
         return docs_[id_idx];
     }
 
+    [[nodiscard]] auto nil() -> syntax::doc_id;
+    [[nodiscard]] auto text(std::string_view s) -> syntax::doc_id;
+    [[nodiscard]] auto owned(const std::string& s) -> syntax::doc_id;
+    [[nodiscard]] auto concat(std::vector<syntax::doc_id> parts) -> syntax::doc_id;
+    [[nodiscard]] auto group(syntax::doc_id child, bool force_break = false) -> syntax::doc_id;
+    [[nodiscard]] auto nest(syntax::doc_id child) -> syntax::doc_id;
+
+    // space when flat, newline when broken
+    [[nodiscard]] auto line() -> syntax::doc_id;
+
+    // nothing when flat, newline when broken
+    [[nodiscard]] auto soft_line() -> syntax::doc_id;
+    [[nodiscard]] auto hard_line() -> syntax::doc_id;
+    [[nodiscard]] auto if_break(syntax::doc_id when_broken, syntax::doc_id when_flat)
+        -> syntax::doc_id;
+
+    // Interleaves `sep` between `items`.
+    [[nodiscard]] auto join(std::vector<syntax::doc_id> items, syntax::doc_id sep)
+        -> syntax::doc_id;
+
+    // `open pad items pad close` as a group: one line if it fits
+    [[nodiscard]] auto delimited(std::string_view            open,
+                                 std::string_view            close,
+                                 std::vector<syntax::doc_id> items,
+                                 bool                        pad,
+                                 bool                        trailing_comma) -> syntax::doc_id;
+
   private:
     roots_t            roots_;
     std::vector<doc_t> docs_;
+    stdx::arena<>      owned_;
 };
 
 } // namespace ghoti::syntax
