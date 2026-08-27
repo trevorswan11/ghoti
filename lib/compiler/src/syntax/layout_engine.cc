@@ -78,6 +78,10 @@ auto layout_engine::render(doc_id root, std::ostream& os) -> void {
             [&](docs::soft_line) {
                 if (mode == layout_mode::BREAK) { break_line(indent_cols); }
             },
+            [&](docs::if_break b) {
+                stack.emplace_back(
+                    mode == layout_mode::BREAK ? b.when_broken : b.when_flat, indent_cols, mode);
+            },
             [&](docs::align a) {
                 stack.emplace_back(a.child, static_cast<u16>(current_width + a.columns), mode);
             });
@@ -110,8 +114,9 @@ auto layout_engine::measure(doc_id doc, i64& width_left) const noexcept -> bool 
             width_left -= static_cast<i64>(l.space_text.size());
             return width_left >= 0;
         },
-        [&](docs::hard_line) { return true; },
+        [&](docs::hard_line) { return false; },
         [&](docs::soft_line) { return true; },
+        [&](docs::if_break b) { return measure(b.when_flat, width_left); },
         [&](docs::align a) { return measure(a.child, width_left); });
 }
 

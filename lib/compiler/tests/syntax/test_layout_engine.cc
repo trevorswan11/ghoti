@@ -2,8 +2,8 @@
 #include <string>
 
 #include <catch2/catch_test_macros.hpp>
-#include <stdx/types.hh>
 #include <fmt/format.h>
+#include <stdx/types.hh>
 
 #include "compiler/syntax/doc.hh"
 #include "compiler/syntax/layout_engine.hh"
@@ -145,6 +145,28 @@ TEST_CASE("layout_engine align shifts the indent level of its child by the curre
     const auto root{m.add<docs::concat>(helpers::make_vector<syntax::doc_id>(label, aligned))};
 
     CHECK(helpers::render_docs(m, root) == fmt::format("key: \n{:{}}value", "", 5));
+}
+
+TEST_CASE("layout_engine if_break takes the flat child while its group fits") {
+    syntax::doc_manager m;
+    const auto          inner{m.add<docs::concat>(helpers::make_vector<syntax::doc_id>(
+        m.add<docs::text>("a"),
+        m.add<docs::if_break>(m.add<docs::text>(","), m.add<docs::text>("")),
+        m.add<docs::soft_line>(),
+        m.add<docs::text>("b")))};
+    const auto          root{m.add<docs::group>(inner, false)};
+    CHECK(helpers::render_docs(m, root, 100) == "ab");
+}
+
+TEST_CASE("layout_engine if_break takes the broken child once its group breaks") {
+    syntax::doc_manager m;
+    const auto          inner{m.add<docs::concat>(helpers::make_vector<syntax::doc_id>(
+        m.add<docs::text>("aaaaaaaaaa"),
+        m.add<docs::if_break>(m.add<docs::text>(","), m.add<docs::text>("")),
+        m.add<docs::soft_line>(),
+        m.add<docs::text>("bbbbbbbbbb")))};
+    const auto          root{m.add<docs::group>(inner, false)};
+    CHECK(helpers::render_docs(m, root, 15) == "aaaaaaaaaa,\nbbbbbbbbbb");
 }
 
 TEST_CASE("layout_engine renders all doc_manager roots in sequence") {

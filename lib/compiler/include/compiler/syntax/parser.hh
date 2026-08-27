@@ -171,6 +171,9 @@ class parser {
         return ast_->add_type(start_token, current_token_, mod, Data{std::forward<Args>(args)...});
     }
 
+    // Records that `id` was wrapped in a `( )` pair the parser is about to discard.
+    auto mark_parenthesized(ast::node_id id) -> void { ast_->add_parenthesization(id); }
+
   private:
     // Bounds recursive-descent depth so deep nesting reports a diagnostic, not a stack overflow.
     static constexpr u32 MAX_EXPRESSION_DEPTH{512};

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <type_traits>
 
 #include <stdx/result.hh>
@@ -19,6 +20,7 @@ namespace ast {
     struct NodeType {                                           \
         using value_type = ValueType;                           \
         value_type                value;                        \
+        std::string_view          spelling;                     \
         [[nodiscard]] static auto parse(syntax::parser& parser) \
             -> stdx::result<expr_handle, syntax::diagnostic>;   \
     };

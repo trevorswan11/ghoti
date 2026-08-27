@@ -9,6 +9,7 @@
 #include <stdx/types.hh>
 
 #include "compiler/ast/dumper.hh"
+#include "compiler/ast/formatter.hh"
 #include "compiler/syntax/doc.hh"
 #include "compiler/syntax/layout_engine.hh"
 #include "compiler/syntax/parser.hh"
@@ -19,6 +20,17 @@ auto render_docs(syntax::doc_manager& m, syntax::doc_id root, u16 max_width, u16
     -> std::string {
     std::ostringstream os;
     syntax::layout_engine{m, max_width, indent_spaces}.render(root, os);
+    return os.str();
+}
+
+auto format_source(std::string_view src, u16 max_width, u16 indent_spaces) -> std::string {
+    syntax::parser p{src};
+    ast::AST       ast;
+    const auto     errors{p.consume(ast)};
+    CHECK(errors.empty());
+
+    std::ostringstream os;
+    ast::formatter{ast, os, max_width, indent_spaces}.format();
     return os.str();
 }
 

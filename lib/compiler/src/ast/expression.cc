@@ -461,6 +461,7 @@ auto grouped_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, sy
     parser.advance();
     const auto inner{TRY(parser.parse_expression())};
     TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
+    parser.mark_parenthesized(*inner);
     return inner;
 }
 
@@ -813,7 +814,8 @@ auto implicit_access_expr::parse(syntax::parser& parser)
 auto string_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
-    return parser.add_expr<string_expr>(start_token, start_token.materialize_string());
+    return parser.add_expr<string_expr>(
+        start_token, start_token.materialize_string(), start_token.slice);
 }
 
 auto module_access_expr::parse(syntax::parser& parser, expr_handle outer)

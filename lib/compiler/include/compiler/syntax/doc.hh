@@ -42,6 +42,11 @@ struct line_or_space {
 struct hard_line {};
 struct soft_line {};
 
+struct if_break {
+    doc_id when_broken;
+    doc_id when_flat;
+};
+
 struct align {
     doc_id child;
     u16    columns;
@@ -56,6 +61,7 @@ using doc_t = stdx::variant<docs::text,
                             docs::line_or_space,
                             docs::hard_line,
                             docs::soft_line,
+                            docs::if_break,
                             docs::align>;
 
 class doc_manager {

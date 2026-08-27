@@ -70,7 +70,7 @@ auto parse_primitive(syntax::parser& parser) -> stdx::result<expr_handle, syntax
     using value_type = typename Primitive::value_type;
     const auto start_token{parser.get_current_token()};
     const auto value{parse_primitive_value<value_type>(start_token.slice, start_token.type)};
-    if (value) { return parser.add_expr<Primitive>(start_token, *value); }
+    if (value) { return parser.add_expr<Primitive>(start_token, *value, start_token.slice); }
 
     syntax::error error_code;
     if constexpr (std::is_same_v<value_type, f64>) {
@@ -103,7 +103,7 @@ auto u8_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax:
     const auto start_token{parser.get_current_token()};
     const auto slice{start_token.slice};
     if (slice[1] != '\\') {
-        return parser.add_expr<u8_expr>(start_token, static_cast<u8>(slice[1]));
+        return parser.add_expr<u8_expr>(start_token, static_cast<u8>(slice[1]), slice);
     }
 
     const auto escaped{slice[2]};
@@ -119,7 +119,7 @@ auto u8_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax:
     default:   return make_syntax_err(syntax::error::UNKNOWN_CHARACTER_ESCAPE, start_token);
     }
 
-    return parser.add_expr<u8_expr>(start_token, value);
+    return parser.add_expr<u8_expr>(start_token, value, slice);
 }
 
 MAKE_PRIMITIVE_PARSER(f32_expr)

@@ -93,6 +93,7 @@ struct discard_stmt {
 
 struct expr_stmt {
     expr_handle expression;
+    bool        terminated;
 
     [[nodiscard]] static auto parse(syntax::parser& parser, syntax::semicolon_behavior behavior)
         -> stdx::result<stmt_handle, syntax::diagnostic>;

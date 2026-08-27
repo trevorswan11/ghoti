@@ -65,7 +65,6 @@ constexpr operator_t NULL_TERMINATED{":0", token_type_t::NULL_TERMINATED};
 
 [[nodiscard]] auto max_operator_length() noexcept -> usize;
 [[nodiscard]] auto get_operator_opt(std::string_view sv) noexcept -> stdx::option<token_type_t>;
-[[nodiscard]] auto get_operator_opt(token_type_t tt) noexcept
-    -> stdx::option<std::string_view>;
+[[nodiscard]] auto get_operator_opt(token_type_t tt) noexcept -> stdx::option<std::string_view>;
 
 } // namespace ghoti::syntax

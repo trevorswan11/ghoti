@@ -265,19 +265,25 @@ auto expr_stmt::parse(syntax::parser& parser, syntax::semicolon_behavior behavio
         return stdx::none;
     };
 
+    auto terminated{false};
+
     // RBRACE would mean we're at the end of a block and a semicolon is never required
     if (at_block_end) {
         if (parser.peek_token_is(syntax::token_type_t::SEMICOLON)) {
             if (auto err{check_illegal_semicolon()}) { return std::move(*err); }
         }
-    } else if (!has_semicolon) {
+    } else if (has_semicolon) {
+        terminated = true;
+    } else {
         if (parser.peek_token_is(syntax::token_type_t::SEMICOLON)) {
             if (auto err{check_illegal_semicolon()}) { return std::move(*err); }
+            terminated = true;
         } else if (behavior == behavior_t::REQUIRE) {
             TRY(parser.expect_peek(syntax::token_type_t::SEMICOLON));
+            terminated = true;
         }
     }
-    return parser.add_stmt<expr_stmt>(start_token, expr);
+    return parser.add_stmt<expr_stmt>(start_token, expr, terminated);
 }
 
 namespace {

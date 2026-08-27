@@ -28,7 +28,7 @@ template <IndexableID ID, typename Data> struct data_pool_base {
         end_locations.clear();
     }
 
-    // `end_token` is the last token consumed while parsing this node
+    // `end_token` is the last token consumed while parsing this types
     constexpr auto emplace_back(const syntax::token_t& start_token,
                                 const syntax::token_t& end_token,
                                 Data&&                 data) -> u64 {
@@ -36,7 +36,7 @@ template <IndexableID ID, typename Data> struct data_pool_base {
             source_info<syntax::token_t>::get(start_token), end_token, std::forward<Data>(data));
     }
 
-    // For nodes whose span starts earlier than the token that tags their node_id
+    // For types whose span starts earlier than the token that tags their id
     constexpr auto emplace_back(const source_location& start_loc,
                                 const syntax::token_t& end_token,
                                 Data&&                 data) -> u64 {
@@ -51,6 +51,24 @@ template <IndexableID ID, typename Data> struct data_pool_base {
 template <typename ID, typename Data> struct data_pool : public data_pool_base<ID, Data> {};
 template <typename Data> struct data_pool<node_id, Data> : public data_pool_base<node_id, Data> {
     std::vector<node_id> roots;
+    std::vector<u8>      paren_depths;
+
+    // `end_token` is the last token consumed while parsing this node
+    constexpr auto emplace_back(const syntax::token_t& start_token,
+                                const syntax::token_t& end_token,
+                                Data&&                 data) -> u64 {
+        return emplace_back(
+            source_info<syntax::token_t>::get(start_token), end_token, std::forward<Data>(data));
+    }
+
+    // For nodes whose span starts earlier than the token that tags their node_id
+    constexpr auto emplace_back(const source_location& start_loc,
+                                const syntax::token_t& end_token,
+                                Data&&                 data) -> u64 {
+        paren_depths.emplace_back(u8{0});
+        return data_pool_base<node_id, Data>::emplace_back(
+            start_loc, end_token, std::forward<Data>(data));
+    }
 
     constexpr auto clear() noexcept -> void {
         roots.clear();
@@ -130,6 +148,18 @@ class AST {
         } else {
             return explicit_types_.end_locations[id.get_index()];
         }
+    }
+
+    // How many redundant `( )` pairs enclosed this node in the source.
+    [[nodiscard]] constexpr auto paren_depth_of(node_id id) const noexcept -> u8 {
+        ASSERT(id.is_valid(), "Attempt to access invalid id");
+        return nodes_.paren_depths[id.get_index()];
+    }
+
+    // Records one more `( )` pair around an already-added node.
+    constexpr auto add_parenthesization(node_id id) noexcept -> void {
+        ASSERT(id.is_valid(), "Attempt to access invalid id");
+        nodes_.paren_depths[id.get_index()] += 1;
     }
 
     // Returns the node data at the provided id
