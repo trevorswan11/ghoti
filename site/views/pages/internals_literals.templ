@@ -9,6 +9,11 @@ templ InternalsLiteralsPage() {
 		<li><code>true</code></li>
 		<li><code>false</code></li>
 	</ul>
+	<h3>Null Pointer</h3>
+	<ul>
+		<li><code>nullptr</code></li>
+	</ul>
+	<p>This literal represents a null pointer value. It has a special primitive null pointer type that implicitly coerces to any constant or mutable pointer type (<code>^T</code> or <code>^mut T</code>).</p>
 	<h3>Undefined</h3>
 	<ul>
 		<li><code>undefined</code></li>
@@ -17,17 +22,13 @@ templ InternalsLiteralsPage() {
 	<p>This can be assigned to any type, including as a call argument or member initializer. There are no restrictions on the usage of this literal for initialization.</p>
 	<h2>Numeric Literals</h2>
 	<p>All numbers in ghoti can be broken into sections with an underscore. The underscore may be placed in between any two digits, meaning it can neither lead or end any part of a literal (exponent included). For example:</p>
-	<pre>
-		<code class="language-ghoti">
-			{ `0b1100_0011;   // Legal
+	<pre><code class="language-ghoti">{ `0b1100_0011;   // Legal
 0b1100_0011_;  // Illegal
 3.14_15_92;    // Legal
 3_.14_15_92;   // Illegal
 3.14_15_92_;   // Illegal
 3e14;          // Legal
-3_e14;         // Illegal` }
-		</code>
-	</pre>
+3_e14;         // Illegal` }</code></pre>
 	<p>In all of these cases, the underscore has no impact on the resulting value of the numeric literal. Internally, the underscores are stripped out before constexpr evaluation and code generation.</p>
 	<p>It is recommended to use underscores in numbers when there is a logical grouping of digits for your use case. They are implemented in such a way that there is a high amount of freedom for the programmer to convey the most meaning with their code.</p>
 	<h3>Trailing Numeric Literals</h3>

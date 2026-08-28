@@ -2,7 +2,7 @@ package pages
 
 templ InternalsBuiltinsPage() {
 	<h1>Builtin Functions</h1>
-	<p>Ghoti has the following builtin functions that are provided by the runtime and can be called form any scope. They are typically functions that facilitate low-level control and often make use of dedicated hardware instructions when available. This list is exhaustive though proposals for modifications, additions, and deletions are welcome.</p>
+	<p>Ghoti has the following builtin functions that are provided by the runtime and can be called from any scope. They are typically functions that facilitate low-level control and often make use of dedicated hardware instructions when available.</p>
 	<h2>Casting</h2>
 	<h3>{ "@alignCast" }</h3>
 	<pre><code class="language-ghoti">{ `@alignCast(T: type, expression: auto): T` }</code></pre>
@@ -51,6 +51,29 @@ templ InternalsBuiltinsPage() {
 	<h3>{ "@tagName" }</h3>
 	<pre><code class="language-ghoti">{ `@tagName(expression: auto): [:0]u8` }</code></pre>
 	<p>Returns a null-terminated static string representing the name of the enum or active union tag yielded by the expression.</p>
+	<h2>Target Information</h2>
+	<h3>{ "@targetOs" }</h3>
+	<pre><code class="language-ghoti">{ `@targetOs(): [:0]u8` }</code></pre>
+	<p>Returns a null-terminated string literal representing the compilation target operating system (e.g. <code>"windows"</code>, <code>"linux"</code>, <code>"macos"</code>).</p>
+	<h3>{ "@targetArch" }</h3>
+	<pre><code class="language-ghoti">{ `@targetArch(): [:0]u8` }</code></pre>
+	<p>Returns a null-terminated string literal representing the compilation target architecture (e.g. <code>"x86_64"</code>, <code>"aarch64"</code>).</p>
+	<h3>{ "@targetTriple" }</h3>
+	<pre><code class="language-ghoti">{ `@targetTriple(): [:0]u8` }</code></pre>
+	<p>Returns a null-terminated string literal representing the target triple string (e.g. <code>"x86_64-pc-windows-msvc"</code>).</p>
+	<h2>C Variadics</h2>
+	<h3>{ "@cVaStart" }</h3>
+	<pre><code class="language-ghoti">{ `@cVaStart(ap: ^u8): void` }</code></pre>
+	<p>Initializes a C variadic argument list pointer <code>ap</code> { "for interop with C variadic functions." }</p>
+	<h3>{ "@cVaArg" }</h3>
+	<pre><code class="language-ghoti">{ `@cVaArg(ap: ^u8, T: type): T` }</code></pre>
+	<p>Extracts the next argument of type <code>T</code> from the C variadic argument list <code>ap</code>.</p>
+	<h3>{ "@cVaCopy" }</h3>
+	<pre><code class="language-ghoti">{ `@cVaCopy(dest: ^u8, src: ^u8): void` }</code></pre>
+	<p>Copies state from C variadic argument list <code>src</code> to <code>dest</code>.</p>
+	<h3>{ "@cVaEnd" }</h3>
+	<pre><code class="language-ghoti">{ `@cVaEnd(ap: ^u8): void` }</code></pre>
+	<p>Cleans up the C variadic argument list pointer <code>ap</code>.</p>
 	<h2>Memory Operations</h2>
 	<h3>{ "@memcpy" }</h3>
 	<pre><code class="language-ghoti">{ `@memcpy(src: auto, dest: auto): void` }</code></pre>
@@ -110,6 +133,20 @@ templ InternalsBuiltinsPage() {
 	<h3>{ "@ceil" }</h3>
 	<pre><code class="language-ghoti">{ `@ceil(expression: auto): @typeOf(expression)` }</code></pre>
 	<p>Computes the ceil'ed value of the passed expression.</p>
+	<h2>Self-Recursion</h2>
+	<h3>{ "@fnCtx" }</h3>
+	<pre><code class="language-ghoti">{ `@fnCtx(): auto` }</code></pre>
+	<p>Returns the innermost enclosing function as a callable value, enabling self-recursion for anonymous functions or closures.</p>
+	<h2>Compiler &amp; Alignment Directives</h2>
+	<h3>{ "@alignas" }</h3>
+	<pre><code class="language-ghoti">{ `@alignas(alignment: usize)` }</code></pre>
+	<p>Explicit alignment modifier specifier applied to struct fields or types.</p>
+	<h3>{ "@setEvalRecursionLimit" }</h3>
+	<pre><code class="language-ghoti">{ `@setEvalRecursionLimit(limit: usize): void` }</code></pre>
+	<p>Sets the maximum recursion depth limit for compile-time (<code>constexpr</code>) expression evaluation.</p>
+	<h3>{ "@setMainSymbol" }</h3>
+	<pre><code class="language-ghoti">{ `@setMainSymbol(symbol_name: [:0]u8): void` }</code></pre>
+	<p>Overrides the default entry point symbol name used by the compiler when linking the executable.</p>
 	<h2>Control Flow</h2>
 	<h3>{ "@panic" }</h3>
 	<pre><code class="language-ghoti">{ `@panic(message: [:0]u8): noreturn` }</code></pre>

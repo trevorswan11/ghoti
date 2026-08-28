@@ -15,12 +15,21 @@ templ SyntaxStructsPage() {
 			<ul>
 				<li>These must be the first thing to appear in the struct</li>
 				<li>They are declared with an optional <code>pub</code> to mark access modifiers, followed by the name, type, and optional default value: e.g. <code>pub foo: i32 = 23</code></li>
+				<li>An optional <code>{ "@alignas(N)" }</code> specifier can precede a field to enforce an explicit alignment of <code>N</code> bytes.</li>
 				<li>
 					Members do not have an individual idea of mutability, simply inheriting the mutability of their enclosing object when used
 					<ul>
 						<li>This is of course only applied to value types as pointers and references enforce local immutability</li>
 					</ul>
 				</li>
+			</ul>
+		</li>
+		<li>
+			Structs can be annotated with layout modifiers:
+			<ul>
+				<li><code>packed struct {"{ ... }"}</code>: Removes padding bytes between fields, creating a tightly packed byte layout.</li>
+				<li><code>extern struct {"{ ... }"}</code>: Enforces C ABI struct layout and alignment rules for C interop.</li>
+				<li><code>extern packed struct {"{ ... }"}</code>: Combines both C ABI compatibility and packed byte layout rules.</li>
 			</ul>
 		</li>
 		<li>
@@ -55,9 +64,12 @@ templ SyntaxStructsPage() {
 		<li>Struct 'declarations' can also be <code>using</code> or <code>import</code> statements</li>
 		<li>All internal accesses are resolved using the <code>.</code> operator</li>
 	</ul>
-	<pre>
-		<code class="language-ghoti">
-			{ `const Foo := struct {           // Standard declaration with type inference
+	<pre><code class="language-ghoti">{ `const PackedHeader := packed struct {
+    @alignas(1) pub magic: u32,
+    pub payload_len: u16,
+};
+
+const Foo := struct {           // Standard declaration with type inference
     bar: i32,                   // Private field without default value (must appear in initializer list)
     pub boo: u32 = 4u,          // Public field with default value
 
@@ -76,11 +88,6 @@ templ SyntaxStructsPage() {
         // ...
     };
 
-    // Compile Error - top-level functions cannot be marked 'var'
-    // var worker_four := fn(a: i32, b: u32): u64 {
-    //
-    // };
-
     pub const fee := "Hello, World!";           // Decls can be placed anywhere after the fields
 };
 
@@ -88,10 +95,8 @@ Foo.foo;                                           // All members are resolved u
 Foo.worker_three();                                // The same goes for functions
 
 var foo: Foo = .{ .bar = 42, };
-Foo.worker_two(&mut foo);   // Member functions may be called explicitly 
-foo.worker_two();           // Or with this shorthand` }
-		</code>
-	</pre>
+Foo.worker_two(&mut foo);   // Member functions may be called explicitly
+foo.worker_two();           // Or with this shorthand` }</code></pre>
 	<ul>
 		<li>There is no inheritance</li>
 		<li>Interfaces are not natively supported</li>
@@ -102,19 +107,15 @@ foo.worker_two();           // Or with this shorthand` }
 			Structs can be initialized in two ways
 			<ul>
 				<li>You may use the structs name followed by a braced list of implicit access declarations assigned to values</li>
-				<li>You may use the <code>.{ "{}" }</code> syntax followed by the same list as above</li>
+				<li>You may use the <code>.{"{}"}</code> syntax followed by the same list as above</li>
 			</ul>
 		</li>
 		<li>The below example demonstrates both of these mechanisms</li>
 	</ul>
-	<pre>
-		<code class="language-ghoti">
-			{ `const S = struct { var a: int; };
+	<pre><code class="language-ghoti">{ `const S = struct { var a: int; };
 
 const s1 := S{ .a = 3 };
-const s2: S = .{ .a = 3 };` }
-		</code>
-	</pre>
+const s2: S = .{ .a = 3 };` }</code></pre>
 	<ul>
 		<li>All member variables that do not have default values associated with their declarations must be initialized in either case</li>
 	</ul>

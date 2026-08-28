@@ -19,16 +19,12 @@ templ SyntaxControlFlowPage() {
 			</ul>
 		</li>
 	</ul>
-	<pre>
-		<code class="language-ghoti">
-			{ `import std;
+	<pre><code class="language-ghoti">{ `import std;
 
 pub const main := fn(args: [][:0]u8): void {
     const message := "Hello, world!";
     std::io::println(message);
-};` }
-		</code>
-	</pre>
+};` }</code></pre>
 	<h2>Labels</h2>
 	<ul>
 		<li>
@@ -40,7 +36,7 @@ pub const main := fn(args: [][:0]u8): void {
 				<li>Blocks</li>
 			</ul>
 		</li>
-		<li>Labels are declared as a single identifier followed by a colon before the construct is reached (e.g. <code>blk: { "{}" }</code>)</li>
+		<li>Labels are declared as a single identifier followed by a colon before the construct is reached (e.g. <code>blk: {"{}"}</code>)</li>
 		<li>
 			Inside of a block, you can break with a value
 			<ul>
@@ -83,6 +79,15 @@ pub const main := fn(args: [][:0]u8): void {
 			</ul>
 		</li>
 	</ul>
+	<h2>Unreachable</h2>
+	<ul>
+		<li>The <code>unreachable</code> expression informs the compiler that a code path is impossible to reach at execution time.</li>
+		<li>It has the return type <code>noreturn</code>, allowing it to fulfill any type requirement in conditional branches or match arms.</li>
+	</ul>
+	<pre><code class="language-ghoti">{ `const val: i32 = match (opt) {
+    .some => |v| v,
+    .none => unreachable, // Fulfills i32 return type for unreachable branch
+};` }</code></pre>
 	<h2>Conditional Expressions</h2>
 	<ul>
 		<li>If-else expressions are a crucial part of control flow</li>
@@ -101,15 +106,11 @@ pub const main := fn(args: [][:0]u8): void {
 	<ul>
 		<li>Conditionals can be evaluated at compile time with a syntax similar to C++</li>
 	</ul>
-	<pre>
-		<code class="language-ghoti">
-			{ `if constexpr (true) {
+	<pre><code class="language-ghoti">{ `if constexpr (true) {
     ...
 } else {
     ...
-}` }
-		</code>
-	</pre>
+}` }</code></pre>
 	<ul>
 		<li>In the above example, the top block is the only statement evaluated, with the <code>else</code> branch and condition being completely dropped at runtime</li>
 		<li>Statements inside the consequent of a conditional are still scoped as written, <code>constexpr</code> will not hoist a branch into the outer scope</li>
@@ -125,16 +126,12 @@ pub const main := fn(args: [][:0]u8): void {
 			</ul>
 		</li>
 	</ul>
-	<pre>
-		<code class="language-ghoti">
-			{ `import std;
+	<pre><code class="language-ghoti">{ `import std;
 
 const main := fn(): void {
     defer std::io::println("World!");
     defer std::io::print("Hello, ");
-};` }
-		</code>
-	</pre>
+};` }</code></pre>
 	<ul>
 		<li>
 			This example prints "Hello, World!"

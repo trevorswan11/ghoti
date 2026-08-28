@@ -7,13 +7,9 @@ templ SyntaxFunctionsPage() {
 		<li>Function types can be aliased with a <code>using</code> statement</li>
 		<li>Function parameters are immutable by default</li>
 	</ul>
-	<pre>
-		<code class="language-ghoti">
-			{ `const foo := fn(a: i32, b: u32): u64 {
+	<pre><code class="language-ghoti">{ `const foo := fn(a: i32, b: u32): u64 {
     // ...
-};` }
-		</code>
-	</pre>
+};` }</code></pre>
 	<h2>Parameters</h2>
 	<ul>
 		<li>Parameters obey the same syntax rules as the rest of the type system</li>
@@ -39,9 +35,7 @@ templ SyntaxFunctionsPage() {
 		</li>
 		<li>There are no default parameters</li>
 	</ul>
-	<pre>
-		<code class="language-ghoti">
-			{ `const foo := fn(a: &i32): u64 {
+	<pre><code class="language-ghoti">{ `const foo := fn(a: &i32): u64 {
     // ...
 };
 
@@ -61,9 +55,7 @@ _ = baz(&mut a);    // Allowed, passed by mutable reference
 const b := 1;
 _ = foo(&b);        // Allowed, passed by const reference
 _ = bar(b);         // Allowed, passed by value
-_ = baz(&mut b);    // Illegal, cannot mutate const` }
-		</code>
-	</pre>
+_ = baz(&mut b);    // Illegal, cannot mutate const` }</code></pre>
 	<ul>
 		<li>
 			Variadic function parameters are supported to allow for c-interop
@@ -97,12 +89,26 @@ _ = baz(&mut b);    // Illegal, cannot mutate const` }
 				<li>Non-value objects that can be trivially copied and are not mutated in the closure are copied</li>
 			</ul>
 		</li>
+		<li>
+			The <code>move</code> modifier can be placed before <code>fn</code> (e.g. <code>move fn(...)</code>) to force an anonymous closure to capture outer variables by value rather than reference.
+		</li>
 		<li>The type of a closure is not known to the programmer</li>
 	</ul>
-	<h2>Builtin Functions</h2>
+	<pre><code class="language-ghoti">{ `var val := 42;
+const closure := move fn(): i32 { return val; };` }</code></pre>
+	<h2>Generic Functions</h2>
+	<ul>
+		<li>Functions can accept parameters of type <code>auto</code> or return <code>auto</code> to construct generic functions.</li>
+		<li>When a function parameter is declared as <code>auto</code>, the compiler automatically deduces the parameter type at the call site and monomorphizes the function for each concrete type combination.</li>
+	</ul>
+	<pre><code class="language-ghoti">{ `const identity := fn(val: auto): auto {
+    return val;
+};` }</code></pre>
+	<h2>Builtin Functions &amp; Self Recursion</h2>
 	<ul>
 		<li>Builtin functions are prefixed with the <code>{ "@" }</code> symbol and are always camelCase</li>
 		<li>Builtin functions can run at compile time or runtime depending on the context, and will attempt to lower to the most efficient instructions when possible</li>
+		<li>Anonymous functions or closures can use the <code>{ "@fnCtx()" }</code> builtin to obtain a handle to the enclosing function for self-recursion.</li>
 	</ul>
 	<h2>Calling</h2>
 	<ul>
@@ -150,7 +156,6 @@ _ = baz(&mut b);    // Illegal, cannot mutate const` }
 			<ul>
 				<li>IO must not be performed (reading from/writing to disk, via threading, printing to stdout, etc)</li>
 				<li>Heap allocations may not be made</li>
-				<li>TODO</li>
 			</ul>
 		</li>
 		<li>A local function can be declared <code>constexpr</code> only if it captures no values</li>

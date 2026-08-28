@@ -29,15 +29,11 @@ templ SyntaxDeclarationsPage() {
 			</ul>
 		</li>
 	</ul>
-	<pre>
-		<code class="language-ghoti">
-			{ `const a := 2;           // Type deduced to be i32
+	<pre><code class="language-ghoti">{ `const a := 2;           // Type deduced to be i32
 const b := "str";       // Type deduced to be a constant size array of bytes (non-null terminated)
 const c: u8 = 's';    // Explicitly typed, so value must agree
 const d :=;             // Illegal, walrus needs a value!
-var e: []u8;         // Allowed, e is forward declared and future assignments must be a slice of bytes` }
-		</code>
-	</pre>
+var e: []u8;         // Allowed, e is forward declared and future assignments must be a slice of bytes` }</code></pre>
 	<h2>Runtime Constants</h2>
 	<ul>
 		<li>Constants are declared with the <code>const</code> keyword</li>
@@ -77,13 +73,9 @@ var e: []u8;         // Allowed, e is forward declared and future assignments mu
 		<li>A variable's value does not have to be compile-time known</li>
 		<li>A variable may be assigned to a constant</li>
 	</ul>
-	<pre>
-		<code class="language-ghoti">
-			{ `const a := 1;       // Allowed, see above
+	<pre><code class="language-ghoti">{ `const a := 1;       // Allowed, see above
 var b := a;         // Allowed, a is copied by value
-var c := &mut a;    // Illegal, cannot take mutable reference of constant` }
-		</code>
-	</pre>
+var c := &mut a;    // Illegal, cannot take mutable reference of constant` }</code></pre>
 	<h2>Modifiers</h2>
 	<ul>
 		<li>
@@ -95,26 +87,33 @@ var c := &mut a;    // Illegal, cannot take mutable reference of constant` }
 			</ul>
 		</li>
 	</ul>
-	<pre>
-		<code class="language-ghoti">
-			{ `pub var c := 2;          // Allowed, symbol can be imported
+	<pre><code class="language-ghoti">{ `pub var c := 2;          // Allowed, symbol can be imported
 extern const a: i32;     // Allowed, externs must be explicitly typed without values
 export var b := 1;       // Allowed
-extern constexpr a: i32; // Illegal, inherently contradictory` }
-		</code>
-	</pre>
+extern constexpr a: i32; // Illegal, inherently contradictory` }</code></pre>
+	<h2>Testing Statements</h2>
+	<ul>
+		<li>The <code>test</code> keyword is used to declare top-level unit test blocks that are compiled into test runner executables.</li>
+		<li>Tests can optionally take a string literal description, or be declared without a description string.</li>
+		<li>Test blocks contain standard statement blocks and are automatically executed by the test runner.</li>
+	</ul>
+	<pre><code class="language-ghoti">{ `test "addition logic" {
+    const x := 1 + 1;
+    _ = x;
+}
+
+test {
+    const y := 2 + 2;
+    _ = y;
+}` }</code></pre>
 	<h2>Assignment</h2>
 	<ul>
 		<li>Non-const declarations can be reassigned</li>
 		<li>Re-assignment is right associative, meaning that you can chain assignment expressions:</li>
 	</ul>
-	<pre>
-		<code class="language-ghoti">
-			{ `var a: i32 = 2;
+	<pre><code class="language-ghoti">{ `var a: i32 = 2;
 var b: i32 = 5;
-a = (b = 6);` }
-		</code>
-	</pre>
+a = (b = 6);` }</code></pre>
 	<ul>
 		<li>This works because an assignment returns the assigned value</li>
 	</ul>
@@ -124,12 +123,8 @@ a = (b = 6);` }
 		<li>An alias can be marked public in order to expose it to the outside world when the enclosing file is imported</li>
 		<li>This is very similar to C++, for example:</li>
 	</ul>
-	<pre>
-		<code class="language-ghoti">
-			{ `using MyBool = bool; // Private to this file
-pub using MyPublicBool = bool; // Publically accessible via namespacig when imported` }
-		</code>
-	</pre>
+	<pre><code class="language-ghoti">{ `using MyBool = bool; // Private to this file
+pub using MyPublicBool = bool; // Publically accessible via namespacig when imported` }</code></pre>
 	<ul>
 		<li>Note that this is an <em>alias</em>, so there is no difference between using the aliased type and handwriting the entire raw type</li>
 		<li>
@@ -148,12 +143,8 @@ pub using MyPublicBool = bool; // Publically accessible via namespacig when impo
 			</ul>
 		</li>
 	</ul>
-	<pre>
-		<code class="language-ghoti">
-			{ `using S = &struct { ... };          // Illegal
+	<pre><code class="language-ghoti">{ `using S = &struct { ... };          // Illegal
 using S = ^union { ... };           // Illegal
 using S = volatile enum { ... };    // Illegal
-using S = enum { ... };             // Legal` }
-		</code>
-	</pre>
+using S = enum { ... };             // Legal` }</code></pre>
 }

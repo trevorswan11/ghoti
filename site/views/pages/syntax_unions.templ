@@ -11,6 +11,12 @@ templ SyntaxUnionsPage() {
 			</ul>
 		</li>
 		<li>
+			Unions can be annotated with the extern layout modifier:
+			<ul>
+				<li><code>extern union {"{ ... }"}</code>: Enforces C ABI union layout rules for C interop.</li>
+			</ul>
+		</li>
+		<li>
 			A union is defined by a a comma separated list of key-value pairs, where:
 			<ul>
 				<li>Each key is an identifier which is used for the active tag</li>
@@ -26,12 +32,10 @@ templ SyntaxUnionsPage() {
 			</ul>
 		</li>
 		<li>The inner types of a union are not restricted to any subset or superset of the language (i.e. you are not restricted to only primitive types nor are you prohibited from using user-defined types)</li>
-		<li>Initializing a union is done through the exact same mechanism as structs, using the <code>Name{ "{" }.field = value{ "}" }</code> syntax (shorthand <code>.{ "{" }.field = value{ "}" }</code>)</li>
+		<li>Initializing a union is done through the exact same mechanism as structs, using the <code>Name{"{"}.field = value{"}"}</code> syntax (shorthand <code>.{"{"}.field = value{"}"}</code>)</li>
 		<li>To access a union's members, the <code>.</code> operator is used</li>
 	</ul>
-	<pre>
-		<code class="language-ghoti">
-			{ `const Hand := union {
+	<pre><code class="language-ghoti">{ `const Hand := union {
     card: bool,
     pen: i32,
     shoe: void,
@@ -47,9 +51,7 @@ match (h1) {
     .card => |c| { ... } // Capture the boolean field if active
     .pen => |_| { ... } // Discarded
     .shoe => { ... } // No capture
-};` }
-		</code>
-	</pre>
+};` }</code></pre>
 	<ul>
 		<li>
 			You can put declarations inside of an union as you would with a struct
