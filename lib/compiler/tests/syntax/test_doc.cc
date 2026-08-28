@@ -30,11 +30,11 @@ TEST_CASE("doc_manager assigns a distinct id to every added doc") {
 
 TEST_CASE("doc_manager total_doc_count tracks every doc added, not just roots") {
     syntax::doc_manager m;
-    CHECK(m.total_doc_count() == 0);
+    CHECK(m.total_doc_count() == 1);
 
     DISCARD(m.add<docs::text>(std::string_view{"a"}));
     DISCARD(m.add<docs::text>(std::string_view{"b"}));
-    CHECK(m.total_doc_count() == 2);
+    CHECK(m.total_doc_count() == 3);
 }
 
 TEST_CASE("doc_manager roots only contains docs explicitly added as roots") {

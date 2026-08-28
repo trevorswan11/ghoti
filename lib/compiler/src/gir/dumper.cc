@@ -114,6 +114,23 @@ auto format_instruction(const instruction& inst) -> std::string {
                            instruction_kind_name(inst.kind),
                            inst.callee_name.value_or("builtin"),
                            fmt::join(inst.operands | std::views::transform(format_value), ", "));
+    case instruction_kind::INLINE_ASM: {
+        const auto& info{inst.asm_info};
+        std::string flags;
+        if (info) {
+            if (info->is_volatile) { flags += " volatile"; }
+            if (info->is_noreturn) { flags += " noreturn"; }
+            if (info->align_stack) { flags += " alignstack"; }
+            if (info->intel_dialect) { flags += " inteldialect"; }
+        }
+        return fmt::format("{}{}{} \"{}\" \"{}\"({})",
+                           prefix,
+                           instruction_kind_name(inst.kind),
+                           flags,
+                           info ? info->tmpl : std::string{},
+                           info ? info->constraints : std::string{},
+                           fmt::join(inst.operands | std::views::transform(format_value), ", "));
+    }
     default: break;
     }
 

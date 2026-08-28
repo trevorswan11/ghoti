@@ -9,6 +9,7 @@ namespace ghoti::ast {
 
 enum class node_kind : u8 {
     ARRAY_EXPRESSION,
+    ASM_EXPRESSION,
     CALL_EXPRESSION,
     DO_WHILE_LOOP_EXPRESSION,
     ENUM_EXPRESSION,
@@ -67,6 +68,7 @@ enum class node_kind : u8 {
 
 #define FOREACH_AST_EXPR(X) \
     X(array_expr)           \
+    X(asm_expr)             \
     X(call_expr)            \
     X(do_while_loop_expr)   \
     X(enum_expr)            \
@@ -176,6 +178,7 @@ concept NodeData = requires {
     };
 
 NODE_KIND_OF_TRAIT(array_expr, ARRAY_EXPRESSION)
+NODE_KIND_OF_TRAIT(asm_expr, ASM_EXPRESSION)
 NODE_KIND_OF_TRAIT(call_expr, CALL_EXPRESSION)
 NODE_KIND_OF_TRAIT(do_while_loop_expr, DO_WHILE_LOOP_EXPRESSION)
 NODE_KIND_OF_TRAIT(enum_expr, ENUM_EXPRESSION)

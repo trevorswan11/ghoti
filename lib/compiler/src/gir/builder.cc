@@ -242,6 +242,21 @@ auto builder::emit_indirect_call(value callee, std::vector<value> args, sema::ty
     return stdx::none;
 }
 
+auto builder::emit_inline_asm(inline_asm info, std::vector<value> inputs, sema::type& result_type)
+    -> stdx::option<local_id> {
+    ASSERT(function_, "Cannot emit inline asm without an active function");
+    stdx::option<local_id> dest;
+    if (info.has_result_slot) { dest = function_->next_local_id(local_kind::TEMPORARY); }
+    emit_instruction({
+        .kind     = instruction_kind::INLINE_ASM,
+        .type     = result_type,
+        .result   = dest,
+        .operands = std::move(inputs),
+        .asm_info = std::move(info),
+    });
+    return dest;
+}
+
 auto builder::emit_return(stdx::option<value> val) -> instruction& {
     if (val) {
         const auto val_type{val->type};

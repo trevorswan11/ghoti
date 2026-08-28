@@ -74,7 +74,7 @@ auto formatter::process_target(std::string_view                           source
     }
 
     std::ostringstream formatted_os;
-    ast::formatter     ast_fmt{ast, formatted_os, opts_.max_width, opts_.indent_spaces};
+    ast::formatter ast_fmt{ast, formatted_os, opts_.max_width, opts_.indent_spaces, source_code};
     ast_fmt.format();
     auto formatted_code{formatted_os.view()};
 

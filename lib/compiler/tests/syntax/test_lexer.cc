@@ -221,7 +221,7 @@ TEST_CASE("Lexing illegal underscored numbers") {
 
 TEST_CASE("Lexing keywords") {
     test_lexer("and or pub extern export volatile mut "
-               "i32 i64 isize u32 u64 usize f32 f64 u8 bool void type test",
+               "i32 i64 isize u32 u64 usize f32 f64 u8 bool void type test asm",
                {
                    {token_type_t::BOOLEAN_AND, "and"},  {token_type_t::BOOLEAN_OR, "or"},
                    {token_type_t::PUBLIC, "pub"},       {token_type_t::EXTERN, "extern"},
@@ -233,6 +233,7 @@ TEST_CASE("Lexing keywords") {
                    {token_type_t::F64_TYPE, "f64"},     {token_type_t::U8_TYPE, "u8"},
                    {token_type_t::BOOL_TYPE, "bool"},   {token_type_t::VOID_TYPE, "void"},
                    {token_type_t::TYPE_TYPE, "type"},   {token_type_t::TEST, "test"},
+                   {token_type_t::ASM, "asm"},
                });
 }
 

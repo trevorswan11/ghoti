@@ -47,7 +47,7 @@ namespace {
     if (!diagnostics.empty()) { return stdx::none; }
 
     std::ostringstream formatted_os;
-    ast::formatter     ast_fmt{ast, formatted_os, opts.max_width, opts.indent_spaces};
+    ast::formatter     ast_fmt{ast, formatted_os, opts.max_width, opts.indent_spaces, source_code};
     ast_fmt.format();
     std::string formatted_code{formatted_os.str()};
 

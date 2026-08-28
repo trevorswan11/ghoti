@@ -82,6 +82,7 @@ class llvm_lowering {
 
     auto emit_call(const gir::instruction& inst) -> llvm::Value*;
     auto emit_builtin_call(const gir::instruction& inst) -> llvm::Value*;
+    auto emit_inline_asm(const gir::instruction& inst) -> llvm::Value*;
 
     auto emit_ret(const gir::instruction& inst) -> void;
     auto emit_goto(const gir::instruction& inst) -> void;

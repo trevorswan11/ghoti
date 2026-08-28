@@ -152,6 +152,7 @@ class type_resolver {
 
   private:
     auto visit(ast::node_id, const ast::array_expr&) -> void;
+    auto visit(ast::node_id, const ast::asm_expr&) -> void;
 
     // This is meant to be called after the arguments have all been resolved
     template <ast::IndexableID ID>

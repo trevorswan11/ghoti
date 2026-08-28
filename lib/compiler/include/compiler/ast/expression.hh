@@ -1,10 +1,12 @@
 #pragma once
 
+#include <algorithm>
 #include <string_view>
 #include <vector>
 
 #include <stdx/option.hh>
 #include <stdx/result.hh>
+#include <stdx/types.hh>
 #include <stdx/variant.hh>
 
 #include "compiler/ast/handle.hh"
@@ -36,6 +38,42 @@ struct call_expr {
     std::vector<argument> arguments;
 
     [[nodiscard]] static auto parse(syntax::parser& parser, expr_handle function)
+        -> stdx::result<expr_handle, syntax::diagnostic>;
+};
+
+struct asm_expr {
+    // How each operand's constraint string is bound to a ghoti expression.
+    //   inputs : `"{rdi}" = fd`     -> `value` holds the expression producing the input
+    //   outputs: `"={rax}" = ret`   -> `value` holds the (mutable lvalue) to store the result into
+    //   outputs: `"={rax}" = _`     -> `value` is none; the operand feeds `asm`'s own result
+    struct operand {
+        string_handle             constraint;
+        stdx::option<expr_handle> value;
+
+        [[nodiscard]] auto is_result_slot() const noexcept -> bool { return !value.has_value(); }
+    };
+
+    // Bare identifiers accepted inside the `options: ( ... )` clause.
+    enum class option : u8 {
+        VOLATILE,
+        NORETURN,
+        INTEL,
+        ATT,
+        ALIGN_STACK,
+    };
+
+    string_handle                  tmpl;
+    stdx::option<explicit_type_id> result_type;
+    std::vector<operand>           outputs;
+    std::vector<operand>           inputs;
+    std::vector<string_handle>     clobbers;
+    std::vector<option>            options;
+
+    [[nodiscard]] auto has_option(option opt) const noexcept -> bool {
+        return std::ranges::contains(options, opt);
+    }
+
+    [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 

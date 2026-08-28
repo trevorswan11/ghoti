@@ -618,4 +618,42 @@ DeclStatement
             ├─ Tag: IdentifierExpression: b
             └─ Type: ExplicitType (modifier: VALUE)
                 └─ IdentifierExpression: u8 (primitive)
+ExpressionStatement
+└─ Expr: AsmExpression
+    ├─ Template: StringExpression: syscall
+    ├─ ResultType: (none)
+    ├─ Outputs: <empty>
+    ├─ Inputs:
+    │   ├─ StringExpression: {rax}
+    │   │   └─ Value: IdentifierExpression: n
+    │   └─ StringExpression: {rdi}
+    │       └─ Value: IdentifierExpression: fd
+    ├─ Clobbers:
+    │   ├─ StringExpression: rcx
+    │   ├─ StringExpression: r11
+    │   └─ StringExpression: memory
+    └─ Options: VOLATILE
+ExpressionStatement
+└─ Expr: AsmExpression
+    ├─ Template: StringExpression: rdtsc
+    ├─ ResultType: ExplicitType (modifier: VALUE)
+    │   └─ IdentifierExpression: u32 (primitive)
+    ├─ Outputs:
+    │   └─ StringExpression: ={eax}
+    │       └─ Value: _ (result slot)
+    ├─ Inputs: <empty>
+    ├─ Clobbers: <empty>
+    └─ Options: VOLATILE
+ExpressionStatement
+└─ Expr: AsmExpression
+    ├─ Template: StringExpression: mov %0, %1
+    ├─ ResultType: (none)
+    ├─ Outputs:
+    │   └─ StringExpression: =r
+    │       └─ Value: IdentifierExpression: dst
+    ├─ Inputs:
+    │   └─ StringExpression: r
+    │       └─ Value: IdentifierExpression: src
+    ├─ Clobbers: <empty>
+    └─ Options: <none>
 )"

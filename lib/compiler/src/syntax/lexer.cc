@@ -124,7 +124,7 @@ auto lexer::advance_enriched() noexcept -> enriched_token {
             const auto comment_line{line_no_};
             const auto comment_col{col_no_};
             const auto comment{read_comment()};
-            result.leading_trivia.emplace_back(
+            result.trailing_trivia.emplace_back(
                 trivia_kind::LINE_COMMENT, comment.slice, comment_line, comment_col);
         }
         break;

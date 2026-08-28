@@ -173,6 +173,7 @@ class emitter {
     auto sync_tagged_union_tag(ast::node_id assign_lhs) -> void;
     auto emit_assignment(ast::node_id id, const ast::assignment_expr& assign) -> value;
     auto emit_call(ast::node_id id, const ast::call_expr& call) -> value;
+    auto emit_asm(ast::node_id id, const ast::asm_expr& node) -> value;
     auto emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> value;
 
     template <stdx::Reference Binding = const local_binding&>

@@ -40,6 +40,7 @@ class dumper {
     }
 
     auto visit(node_id, const array_expr&) -> void;
+    auto visit(node_id, const asm_expr&) -> void;
     auto visit(node_id, const call_expr&) -> void;
     auto visit(node_id, const do_while_loop_expr&) -> void;
     auto visit(node_id, const enum_expr&) -> void;

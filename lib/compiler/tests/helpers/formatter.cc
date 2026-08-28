@@ -29,7 +29,7 @@ auto format_source(std::string_view src, u16 max_width, u16 indent_spaces) -> st
     CHECK(errors.empty());
 
     std::ostringstream os;
-    ast::formatter{ast, os, max_width, indent_spaces}.format();
+    ast::formatter{ast, os, max_width, indent_spaces, src}.format();
     return os.str();
 }
 

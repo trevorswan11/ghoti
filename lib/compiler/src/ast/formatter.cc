@@ -21,8 +21,10 @@
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/doc.hh"
 #include "compiler/syntax/layout_engine.hh"
+#include "compiler/syntax/lexer.hh"
 #include "compiler/syntax/operators.hh"
 #include "compiler/syntax/token_type.hh"
+#include "compiler/syntax/trvia.hh"
 
 namespace ghoti::ast {
 
@@ -48,22 +50,173 @@ auto modifier_prefix(type_modifier mod) -> std::string_view {
     }
 }
 
+auto asm_option_spelling(asm_expr::option opt) -> std::string_view {
+    switch (opt) {
+    case asm_expr::option::VOLATILE:    return "volatile";
+    case asm_expr::option::NORETURN:    return "noreturn";
+    case asm_expr::option::INTEL:       return "intel";
+    case asm_expr::option::ATT:         return "att";
+    case asm_expr::option::ALIGN_STACK: return "align_stack";
+    default:                            UNREACHABLE("Unrecognized asm option"); ;
+    }
+}
+
 [[nodiscard]] auto prefix_needs_gap(std::string_view op) -> bool {
     return !op.empty() && (std::isalnum(static_cast<u8>(op.back())) != 0);
 }
 
 } // namespace
 
+auto formatter::init_trivia() -> void {
+    if (source_.empty()) { return; }
+
+    syntax::lexer lex{source_};
+    usize         prev_line{0};
+    bool          first{true};
+
+    while (true) {
+        auto enriched{lex.advance_enriched()};
+
+        for (const auto& t : enriched.leading_trivia) {
+            if (t.kind == syntax::trivia_kind::LINE_COMMENT) {
+                bool has_blank{false};
+                if (!first && t.line > prev_line + 1) { has_blank = true; }
+                comments_.emplace_back<comment_item>({
+                    .text             = t.slice,
+                    .line             = t.line,
+                    .col              = t.col,
+                    .is_trailing      = false,
+                    .is_leading_blank = has_blank,
+                    .consumed         = false,
+                });
+                prev_line = t.line;
+                first     = false;
+            }
+        }
+
+        if (enriched.token.type == syntax::token_type_t::END) { break; }
+
+        prev_line = enriched.token.line;
+        first     = false;
+
+        for (const auto& t : enriched.trailing_trivia) {
+            if (t.kind == syntax::trivia_kind::LINE_COMMENT) {
+                comments_.emplace_back<comment_item>({
+                    .text             = t.slice,
+                    .line             = t.line,
+                    .col              = t.col,
+                    .is_trailing      = true,
+                    .is_leading_blank = false,
+                    .consumed         = false,
+                });
+                prev_line = t.line;
+            }
+        }
+    }
+}
+
+auto formatter::consume_leading_comments(usize before_line) -> syntax::doc_id {
+    if (comment_idx_ >= comments_.size()) { return doc_manager_.nil(); }
+
+    std::vector<syntax::doc_id> docs;
+    while (comment_idx_ < comments_.size()) {
+        const auto& c{comments_[comment_idx_]};
+        if (c.line >= before_line) { break; }
+        if (!c.consumed) {
+            comments_[comment_idx_].consumed = true;
+            if (c.is_leading_blank && !docs.empty()) {
+                docs.emplace_back(doc_manager_.hard_line());
+            }
+            docs.emplace_back(doc_manager_.text(c.text));
+            docs.emplace_back(doc_manager_.hard_line());
+        }
+        ++comment_idx_;
+    }
+    if (docs.empty()) { return doc_manager_.nil(); }
+    return doc_manager_.concat(std::move(docs));
+}
+
+auto formatter::consume_trailing_comment(usize line) -> syntax::doc_id {
+    for (usize i{comment_idx_}; i < comments_.size(); ++i) {
+        auto& c{comments_[i]};
+        if (c.line > line) { break; }
+        if (c.line == line && c.is_trailing && !c.consumed) {
+            c.consumed = true;
+            while (comment_idx_ < comments_.size() && comments_[comment_idx_].consumed) {
+                ++comment_idx_;
+            }
+            return doc_manager_.concat({doc_manager_.text(" "), doc_manager_.text(c.text)});
+        }
+    }
+    return doc_manager_.nil();
+}
+
+auto formatter::consume_dangling_comments(usize brace_line) -> syntax::doc_id {
+    if (comment_idx_ >= comments_.size()) { return doc_manager_.nil(); }
+
+    std::vector<syntax::doc_id> docs;
+    while (comment_idx_ < comments_.size()) {
+        const auto& c{comments_[comment_idx_]};
+        if (c.line > brace_line) { break; }
+        if (!c.consumed) {
+            comments_[comment_idx_].consumed = true;
+            if (!docs.empty()) {
+                docs.emplace_back(doc_manager_.hard_line());
+                if (c.is_leading_blank) { docs.emplace_back(doc_manager_.hard_line()); }
+            }
+            docs.emplace_back(doc_manager_.text(c.text));
+        }
+        ++comment_idx_;
+    }
+    if (docs.empty()) { return doc_manager_.nil(); }
+    return doc_manager_.concat(std::move(docs));
+}
+
+auto formatter::consume_remaining_comments() -> syntax::doc_id {
+    if (comment_idx_ >= comments_.size()) { return doc_manager_.nil(); }
+
+    std::vector<syntax::doc_id> docs;
+    while (comment_idx_ < comments_.size()) {
+        const auto& c{comments_[comment_idx_]};
+        if (!c.consumed) {
+            comments_[comment_idx_].consumed = true;
+            if (c.is_leading_blank) { docs.emplace_back(doc_manager_.hard_line()); }
+            docs.emplace_back(doc_manager_.text(c.text));
+            docs.emplace_back(doc_manager_.hard_line());
+        }
+        ++comment_idx_;
+    }
+    if (docs.empty()) { return doc_manager_.nil(); }
+    return doc_manager_.concat(std::move(docs));
+}
+
 auto formatter::format() -> void {
     auto previous{node_id::make_invalid()};
     for (const auto id : ast_) {
-        if (previous.is_valid() && blank_line_between(previous, id)) {
-            doc_manager_.add_root(doc_manager_.hard_line());
+        const auto& start_loc{ast_.location_of(id)};
+        const auto& end_loc{ast_.end_location_of(id)};
+
+        auto leading{consume_leading_comments(start_loc.line)};
+        if (leading != doc_manager_.nil()) { doc_manager_.add_root(leading); }
+
+        if (previous.is_valid() &&
+            (blank_line_between(previous, id) || is_function_or_aggregate_node(previous))) {
+            if (leading == doc_manager_.nil()) { doc_manager_.add_root(doc_manager_.hard_line()); }
         }
-        doc_manager_.add_root(format(id));
+
+        auto node_doc{format(id)};
+        auto trailing{consume_trailing_comment(end_loc.line)};
+        if (trailing != doc_manager_.nil()) {
+            node_doc = doc_manager_.concat({node_doc, trailing});
+        }
+
+        doc_manager_.add_root(node_doc);
         doc_manager_.add_root(doc_manager_.hard_line());
         previous = id;
     }
+
+    auto remaining{consume_remaining_comments()};
+    if (remaining != doc_manager_.nil()) { doc_manager_.add_root(remaining); }
 
     syntax::layout_engine solver{doc_manager_, max_width_, indent_spaces_};
     solver.render(out_);
@@ -113,7 +266,11 @@ auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
     head.emplace_back(doc_manager_.text("struct "));
 
     std::vector<syntax::doc_id> entries;
-    for (const auto& field : node.fields) {
+    for (usize i{0}; i < node.fields.size(); ++i) {
+        const auto& field{node.fields[i]};
+        const auto& start_loc{ast_.location_of(field.name)};
+        auto        leading{consume_leading_comments(start_loc.line)};
+
         std::vector<syntax::doc_id> parts;
         if (field.is_public()) { parts.emplace_back(doc_manager_.text("pub ")); }
         parts.emplace_back(format(field.name));
@@ -128,10 +285,46 @@ auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
             parts.emplace_back(doc_manager_.text(" = "));
             parts.emplace_back(format(*field.default_value));
         }
-        entries.emplace_back(doc_manager_.concat(std::move(parts)));
+
+        const auto end_line{field.default_value
+                                ? ast_.end_location_of(*field.default_value).line
+                                : (field.explicit_alignment
+                                       ? ast_.end_location_of(*field.explicit_alignment).line
+                                       : ast_.end_location_of(field.explicit_type).line)};
+        const auto more_follows{i + 1 < node.fields.size() || !node.members.empty()};
+        auto       field_doc{doc_manager_.concat(std::move(parts))};
+        auto       trailing{consume_trailing_comment(end_line)};
+        if (more_follows || trailing != doc_manager_.nil()) {
+            field_doc = doc_manager_.concat({field_doc, doc_manager_.text(",")});
+        } else {
+            field_doc = doc_manager_.concat(
+                {field_doc, doc_manager_.if_break(doc_manager_.text(","), doc_manager_.nil())});
+        }
+        if (trailing != doc_manager_.nil()) {
+            field_doc = doc_manager_.concat({field_doc, trailing});
+        }
+        if (leading != doc_manager_.nil()) {
+            field_doc = doc_manager_.concat({leading, field_doc});
+        }
+        entries.emplace_back(field_doc);
     }
+
     const auto field_count{entries.size()};
-    for (const auto& member : node.members) { entries.emplace_back(format(member)); }
+    for (const auto& member : node.members) {
+        const auto& start_loc{ast_.location_of(member)};
+        auto        leading{consume_leading_comments(start_loc.line)};
+
+        auto       member_doc{format(member)};
+        const auto end_line{ast_.end_location_of(member).line};
+        auto       trailing{consume_trailing_comment(end_line)};
+        if (trailing != doc_manager_.nil()) {
+            member_doc = doc_manager_.concat({member_doc, trailing});
+        }
+        if (leading != doc_manager_.nil()) {
+            member_doc = doc_manager_.concat({leading, member_doc});
+        }
+        entries.emplace_back(member_doc);
+    }
 
     head.emplace_back(aggregate_body(std::move(entries), field_count));
     return doc_manager_.concat(std::move(head));
@@ -143,7 +336,11 @@ auto formatter::format_union(const union_expr& node) -> syntax::doc_id {
     head.emplace_back(doc_manager_.text("union "));
 
     std::vector<syntax::doc_id> entries;
-    for (const auto& [name, explicit_type, explicit_alignment] : node.fields) {
+    for (usize i{0}; i < node.fields.size(); ++i) {
+        const auto& [name, explicit_type, explicit_alignment]{node.fields[i]};
+        const auto& start_loc{ast_.location_of(name)};
+        auto        leading{consume_leading_comments(start_loc.line)};
+
         std::vector<syntax::doc_id> parts;
         parts.emplace_back(format(name));
         parts.emplace_back(doc_manager_.text(": "));
@@ -153,10 +350,42 @@ auto formatter::format_union(const union_expr& node) -> syntax::doc_id {
                                                     doc_manager_.text(") ")}));
         }
         parts.emplace_back(format(explicit_type));
-        entries.emplace_back(doc_manager_.concat(std::move(parts)));
+
+        const auto end_line{explicit_alignment ? ast_.end_location_of(*explicit_alignment).line
+                                               : ast_.end_location_of(explicit_type).line};
+        const auto more_follows{i + 1 < node.fields.size() || !node.members.empty()};
+        auto       field_doc{doc_manager_.concat(std::move(parts))};
+        auto       trailing{consume_trailing_comment(end_line)};
+        if (more_follows || trailing != doc_manager_.nil()) {
+            field_doc = doc_manager_.concat({field_doc, doc_manager_.text(",")});
+        } else {
+            field_doc = doc_manager_.concat(
+                {field_doc, doc_manager_.if_break(doc_manager_.text(","), doc_manager_.nil())});
+        }
+        if (trailing != doc_manager_.nil()) {
+            field_doc = doc_manager_.concat({field_doc, trailing});
+        }
+        if (leading != doc_manager_.nil()) {
+            field_doc = doc_manager_.concat({leading, field_doc});
+        }
+        entries.emplace_back(field_doc);
     }
     const auto field_count{entries.size()};
-    for (const auto& member : node.members) { entries.emplace_back(format(member)); }
+    for (const auto& member : node.members) {
+        const auto& start_loc{ast_.location_of(member)};
+        auto        leading{consume_leading_comments(start_loc.line)};
+
+        auto       member_doc{format(member)};
+        const auto end_line{ast_.end_location_of(member).line};
+        auto       trailing{consume_trailing_comment(end_line)};
+        if (trailing != doc_manager_.nil()) {
+            member_doc = doc_manager_.concat({member_doc, trailing});
+        }
+        if (leading != doc_manager_.nil()) {
+            member_doc = doc_manager_.concat({leading, member_doc});
+        }
+        entries.emplace_back(member_doc);
+    }
 
     head.emplace_back(aggregate_body(std::move(entries), field_count));
     return doc_manager_.concat(std::move(head));
@@ -167,15 +396,58 @@ auto formatter::format_enum(const enum_expr& node) -> syntax::doc_id {
     head.emplace_back(doc_manager_.text("enum "));
 
     std::vector<syntax::doc_id> entries;
-    for (const auto& enumeration : node.enumerations) {
-        entries.emplace_back(enumeration.value ? doc_manager_.concat({format(enumeration.name),
-                                                                      doc_manager_.text(" = "),
-                                                                      format(*enumeration.value)})
-                                               : format(enumeration.name));
+    const auto total_enums{node.enumerations.size() + (node.non_exhaustive ? 1 : 0)};
+    for (usize i{0}; i < node.enumerations.size(); ++i) {
+        const auto& enumeration{node.enumerations[i]};
+        const auto& start_loc{ast_.location_of(enumeration.name)};
+        auto        leading{consume_leading_comments(start_loc.line)};
+
+        auto       enum_doc{enumeration.value ? doc_manager_.concat({format(enumeration.name),
+                                                                     doc_manager_.text(" = "),
+                                                                     format(*enumeration.value)})
+                                              : format(enumeration.name)};
+        const auto end_line{enumeration.value ? ast_.end_location_of(*enumeration.value).line
+                                              : ast_.end_location_of(enumeration.name).line};
+        const auto more_follows{i + 1 < total_enums || !node.members.empty()};
+        auto       trailing{consume_trailing_comment(end_line)};
+        if (more_follows || trailing != doc_manager_.nil()) {
+            enum_doc = doc_manager_.concat({enum_doc, doc_manager_.text(",")});
+        } else {
+            enum_doc = doc_manager_.concat(
+                {enum_doc, doc_manager_.if_break(doc_manager_.text(","), doc_manager_.nil())});
+        }
+        if (trailing != doc_manager_.nil()) {
+            enum_doc = doc_manager_.concat({enum_doc, trailing});
+        }
+        if (leading != doc_manager_.nil()) { enum_doc = doc_manager_.concat({leading, enum_doc}); }
+        entries.emplace_back(enum_doc);
     }
-    if (node.non_exhaustive) { entries.emplace_back(doc_manager_.text("_")); }
+    if (node.non_exhaustive) {
+        auto non_ex{doc_manager_.text("_")};
+        if (!node.members.empty()) {
+            non_ex = doc_manager_.concat({non_ex, doc_manager_.text(",")});
+        } else {
+            non_ex = doc_manager_.concat(
+                {non_ex, doc_manager_.if_break(doc_manager_.text(","), doc_manager_.nil())});
+        }
+        entries.emplace_back(non_ex);
+    }
     const auto value_count{entries.size()};
-    for (const auto& member : node.members) { entries.emplace_back(format(member)); }
+    for (const auto& member : node.members) {
+        const auto& start_loc{ast_.location_of(member)};
+        auto        leading{consume_leading_comments(start_loc.line)};
+
+        auto       member_doc{format(member)};
+        const auto end_line{ast_.end_location_of(member).line};
+        auto       trailing{consume_trailing_comment(end_line)};
+        if (trailing != doc_manager_.nil()) {
+            member_doc = doc_manager_.concat({member_doc, trailing});
+        }
+        if (leading != doc_manager_.nil()) {
+            member_doc = doc_manager_.concat({leading, member_doc});
+        }
+        entries.emplace_back(member_doc);
+    }
 
     if (node.underlying) {
         head.emplace_back(doc_manager_.text(": "));
@@ -197,18 +469,12 @@ auto formatter::aggregate_body(std::vector<syntax::doc_id> entries, usize comma_
             if (i == comma_count) { body.emplace_back(doc_manager_.hard_line()); }
         }
         body.emplace_back(entries[i]);
-        const auto is_field{i < comma_count};
-        const auto more_follows{i + 1 < comma_count || comma_count < entries.size()};
-        if (is_field && more_follows) { body.emplace_back(doc_manager_.text(",")); }
     }
-    const auto trailing{comma_count != 0 && comma_count == entries.size()
-                            ? doc_manager_.if_break(doc_manager_.text(","), doc_manager_.nil())
-                            : doc_manager_.nil()};
 
     return doc_manager_.group(doc_manager_.concat({
         doc_manager_.text("{"),
-        doc_manager_.nest(doc_manager_.concat(
-            {doc_manager_.line(), doc_manager_.concat(std::move(body)), trailing})),
+        doc_manager_.nest(
+            doc_manager_.concat({doc_manager_.line(), doc_manager_.concat(std::move(body))})),
         doc_manager_.line(),
         doc_manager_.text("}"),
     }));
@@ -287,6 +553,64 @@ auto formatter::visit(node_id, const array_expr& node) -> syntax::doc_id {
     for (const auto& item : node.items) { items.emplace_back(format(item)); }
     head.emplace_back(doc_manager_.delimited("{", "}", std::move(items), true, true));
 
+    return doc_manager_.concat(std::move(head));
+}
+
+auto formatter::visit(node_id, const asm_expr& node) -> syntax::doc_id {
+    const auto operand_doc = [&](const asm_expr::operand& op) -> syntax::doc_id {
+        return doc_manager_.concat({
+            format(op.constraint),
+            doc_manager_.text(" = "),
+            op.value ? format(*op.value) : doc_manager_.text("_"),
+        });
+    };
+    const auto operand_list = [&](std::string_view                      label,
+                                  const std::vector<asm_expr::operand>& ops) -> syntax::doc_id {
+        std::vector<syntax::doc_id> items;
+        items.reserve(ops.size());
+        for (const auto& op : ops) { items.emplace_back(operand_doc(op)); }
+        return doc_manager_.concat({
+            doc_manager_.text(label),
+            doc_manager_.text(": "),
+            doc_manager_.delimited("(", ")", std::move(items), false, false),
+        });
+    };
+
+    std::vector<syntax::doc_id> clauses;
+    clauses.emplace_back(doc_manager_.concat({
+        doc_manager_.text("template: "),
+        format(node.tmpl),
+    }));
+    if (!node.outputs.empty()) { clauses.emplace_back(operand_list("outputs", node.outputs)); }
+    if (!node.inputs.empty()) { clauses.emplace_back(operand_list("inputs", node.inputs)); }
+    if (!node.clobbers.empty()) {
+        std::vector<syntax::doc_id> items;
+        items.reserve(node.clobbers.size());
+        for (const auto& clobber : node.clobbers) { items.emplace_back(format(clobber)); }
+        clauses.emplace_back(doc_manager_.concat({
+            doc_manager_.text("clobbers: "),
+            doc_manager_.delimited("(", ")", std::move(items), false, false),
+        }));
+    }
+    if (!node.options.empty()) {
+        std::vector<syntax::doc_id> items;
+        items.reserve(node.options.size());
+        for (const auto opt : node.options) {
+            items.emplace_back(doc_manager_.text(asm_option_spelling(opt)));
+        }
+        clauses.emplace_back(doc_manager_.concat({
+            doc_manager_.text("options: "),
+            doc_manager_.delimited("(", ")", std::move(items), false, false),
+        }));
+    }
+
+    std::vector<syntax::doc_id> head;
+    head.emplace_back(doc_manager_.text("asm "));
+    if (node.result_type) {
+        head.emplace_back(format(*node.result_type));
+        head.emplace_back(doc_manager_.text(" "));
+    }
+    head.emplace_back(doc_manager_.delimited("{", "}", std::move(clauses), true, true));
     return doc_manager_.concat(std::move(head));
 }
 
@@ -445,10 +769,14 @@ auto formatter::visit(node_id, const label_expr& node) -> syntax::doc_id {
     return doc_manager_.concat({format(node.name), doc_manager_.text(": "), format(node.body)});
 }
 
-auto formatter::visit(node_id, const match_expr& node) -> syntax::doc_id {
+auto formatter::visit(node_id id, const match_expr& node) -> syntax::doc_id {
+    const auto& match_end{ast_.end_location_of(id)};
+
     std::vector<syntax::doc_id> arms;
-    arms.reserve(node.arms.size());
     for (const auto& arm : node.arms) {
+        const auto& start_loc{ast_.location_of(arm.pattern)};
+        auto        leading{consume_leading_comments(start_loc.line)};
+
         std::vector<syntax::doc_id> parts;
         parts.emplace_back(format(arm.pattern));
         parts.emplace_back(doc_manager_.text(" => "));
@@ -459,8 +787,18 @@ auto formatter::visit(node_id, const match_expr& node) -> syntax::doc_id {
             parts.emplace_back(doc_manager_.text("| "));
         }
         parts.emplace_back(format(arm.dispatch));
-        arms.emplace_back(doc_manager_.concat(std::move(parts)));
+
+        const auto end_line{ast_.end_location_of(arm.dispatch).line};
+        auto       arm_doc{doc_manager_.concat(std::move(parts))};
+        auto       trailing{consume_trailing_comment(end_line)};
+        if (trailing != doc_manager_.nil()) { arm_doc = doc_manager_.concat({arm_doc, trailing}); }
+        if (leading != doc_manager_.nil()) { arm_doc = doc_manager_.concat({leading, arm_doc}); }
+        arms.emplace_back(arm_doc);
     }
+
+    auto dangling{consume_dangling_comments(match_end.line)};
+    if (dangling != doc_manager_.nil()) { arms.emplace_back(dangling); }
+
     return doc_manager_.concat({
         doc_manager_.text("match ("),
         format(node.matcher),
@@ -549,24 +887,59 @@ auto formatter::visit(node_id, const while_loop_expr& node) -> syntax::doc_id {
     });
 }
 
-auto formatter::visit(node_id, const block_stmt& node) -> syntax::doc_id {
-    if (node.statements.empty()) { return doc_manager_.text("{}"); }
+auto formatter::visit(node_id id, const block_stmt& node) -> syntax::doc_id {
+    const auto& block_start{ast_.location_of(id)};
+    const auto& block_end{ast_.end_location_of(id)};
+
+    auto header_trailing{consume_trailing_comment(block_start.line)};
 
     std::vector<syntax::doc_id> body;
     auto                        previous{node_id::make_invalid()};
+
     for (const auto& stmt : node.statements) {
+        const auto& stmt_start{ast_.location_of(*stmt)};
+        const auto& stmt_end{ast_.end_location_of(*stmt)};
+
+        auto leading{consume_leading_comments(stmt_start.line)};
+
         if (!body.empty()) {
             body.emplace_back(doc_manager_.hard_line());
-            if (blank_line_between(previous, *stmt)) {
+            if (leading == doc_manager_.nil() && blank_line_between(previous, *stmt)) {
                 body.emplace_back(doc_manager_.hard_line());
             }
         }
-        body.emplace_back(format(stmt));
+
+        auto stmt_doc{format(stmt)};
+        auto trailing{consume_trailing_comment(stmt_end.line)};
+        if (trailing != doc_manager_.nil()) {
+            stmt_doc = doc_manager_.concat({stmt_doc, trailing});
+        }
+        if (leading != doc_manager_.nil()) { stmt_doc = doc_manager_.concat({leading, stmt_doc}); }
+
+        body.emplace_back(stmt_doc);
         previous = *stmt;
     }
 
+    auto dangling{consume_dangling_comments(block_end.line)};
+    if (dangling != doc_manager_.nil()) {
+        if (!body.empty()) { body.emplace_back(doc_manager_.hard_line()); }
+        body.emplace_back(dangling);
+    }
+
+    if (body.empty()) {
+        if (header_trailing != doc_manager_.nil()) {
+            return doc_manager_.concat(
+                {doc_manager_.text("{"), header_trailing, doc_manager_.text("}")});
+        }
+        return doc_manager_.text("{}");
+    }
+
+    std::vector<syntax::doc_id> open_parts;
+    open_parts.emplace_back(doc_manager_.text("{"));
+    if (header_trailing != doc_manager_.nil()) { open_parts.emplace_back(header_trailing); }
+
     return doc_manager_.concat({
-        doc_manager_.text("{"),
+        doc_manager_.concat(std::move(open_parts)),
         doc_manager_.nest(
             doc_manager_.concat({doc_manager_.hard_line(), doc_manager_.concat(std::move(body))})),
         doc_manager_.hard_line(),

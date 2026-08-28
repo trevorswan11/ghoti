@@ -270,6 +270,7 @@ constexpr auto PREFIX_FNS = [] -> auto {
     fns[token_type_t::PACKED]           = ast::parse_modified_struct_or_union;
     fns[token_type_t::ENUM]             = ast::enum_expr::parse;
     fns[token_type_t::MATCH]            = ast::match_expr::parse;
+    fns[token_type_t::ASM]              = ast::asm_expr::parse;
     fns[token_type_t::LBRACKET]         = ast::array_expr::parse;
     fns[token_type_t::FOR]              = ast::for_loop_expr::parse;
     fns[token_type_t::WHILE]            = ast::while_loop_expr::parse;

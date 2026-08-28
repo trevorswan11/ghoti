@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ostream>
+#include <string_view>
 #include <vector>
 
 #include <stdx/types.hh>
@@ -19,13 +20,27 @@ namespace ghoti::ast {
 
 class formatter {
   public:
-    explicit formatter(const AST&    ast,
-                       std::ostream& out,
-                       u16           max_width     = 100,
-                       u16           indent_spaces = 4) noexcept
-        : out_{out}, ast_{ast}, max_width_{max_width}, indent_spaces_{indent_spaces} {}
+    explicit formatter(const AST&       ast,
+                       std::ostream&    out,
+                       u16              max_width     = 100,
+                       u16              indent_spaces = 4,
+                       std::string_view source        = {}) noexcept
+        : out_{out}, ast_{ast}, max_width_{max_width}, indent_spaces_{indent_spaces},
+          source_{source} {
+        init_trivia();
+    }
 
     auto format() -> void;
+
+  private:
+    struct comment_item {
+        std::string_view text;
+        usize            line;
+        usize            col;
+        bool             is_trailing{false};
+        bool             is_leading_blank{false};
+        bool             consumed{false};
+    };
 
   private:
     template <IndexableID ID> auto format(ID id) -> syntax::doc_id {
@@ -52,6 +67,7 @@ class formatter {
     [[nodiscard]] auto tail_clause(node_id stmt) -> syntax::doc_id;
 
     auto visit(node_id, const array_expr&) -> syntax::doc_id;
+    auto visit(node_id, const asm_expr&) -> syntax::doc_id;
     auto visit(node_id, const call_expr&) -> syntax::doc_id;
     auto visit(node_id, const do_while_loop_expr&) -> syntax::doc_id;
     auto visit(node_id, const enum_expr&) -> syntax::doc_id;
@@ -116,12 +132,21 @@ class formatter {
     auto visit(explicit_type_id, const union_expr&) -> syntax::doc_id;
     auto visit(explicit_type_id, const explicit_array_type&) -> syntax::doc_id;
 
+    auto init_trivia() -> void;
+    auto consume_leading_comments(usize before_line) -> syntax::doc_id;
+    auto consume_trailing_comment(usize line) -> syntax::doc_id;
+    auto consume_dangling_comments(usize brace_line) -> syntax::doc_id;
+    auto consume_remaining_comments() -> syntax::doc_id;
+
   private:
-    std::ostream&       out_;
-    const AST&          ast_;
-    syntax::doc_manager doc_manager_;
-    u16                 max_width_;
-    u16                 indent_spaces_;
+    std::ostream&             out_;
+    const AST&                ast_;
+    syntax::doc_manager       doc_manager_;
+    u16                       max_width_;
+    u16                       indent_spaces_;
+    std::string_view          source_;
+    std::vector<comment_item> comments_;
+    usize                     comment_idx_{0};
 };
 
 } // namespace ghoti::ast

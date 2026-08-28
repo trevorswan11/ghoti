@@ -319,6 +319,77 @@ TEST_CASE("formatter round trip: adjacent brace-tailed statements keep their ter
     round_trips("struct { a: i32 }; .field;");
 }
 
+TEST_CASE("formatter preserves leading, trailing, and in-block comments") {
+    constexpr std::string_view source{R"(// File leading comment
+const X := 1;
+// leading comment
+pub const main := fn(): i32 { // trailing on brace
+    // comment before decl
+    var sum: i32 = 0; // trailing
+    // comment between statements
+    if (sum == 0) { // comment in if header context
+        sum = sum + 1;
+        // comment before closing brace
+    }
+    for (0..3) |v| { // comment in for header
+        sum = sum + v;
+    }
+    match (sum) {
+        // comment inside match
+        4 => {
+            sum = sum + 100;
+        },
+        _ => {},
+    }
+    return sum;
+    // trailing comment before closing brace
+};
+)"};
+
+    CHECK(format_source(source) == source);
+}
+
+TEST_CASE("formatter preserves comments inside aggregates") {
+    constexpr std::string_view source{R"(const S := struct {
+    // comment before field
+    x: i32, // field trailing
+
+    // comment before member
+    const m := fn(): i32 {
+        return x;
+    };
+};
+)"};
+
+    CHECK(format_source(source) == source);
+}
+
+TEST_CASE("formatter preserves standalone comments") {
+    CHECK(format_source("// single line comment\n") == "// single line comment\n");
+    CHECK(format_source("// comment 1\n// comment 2\n") == "// comment 1\n// comment 2\n");
+}
+
+TEST_CASE("formatter does not insert extra newlines after trailing comments") {
+    constexpr std::string_view source{R"(const a := 1; // comment a
+const b := 2; // comment b
+const c := 3; // comment c
+)"};
+
+    CHECK(format_source(source) == source);
+}
+
+TEST_CASE("formatter preserves trailing comments on statements without extra blank lines") {
+    constexpr std::string_view source{R"(pub const foo := fn(): void {
+    var x := 1; // comment on x
+    var y := 2; // comment on y
+    var z := 3;
+    // comment on z
+};
+)"};
+
+    CHECK(format_source(source) == source);
+}
+
 constexpr std::string_view corpus{
 #include "ast/golden.gh.inc"
 };

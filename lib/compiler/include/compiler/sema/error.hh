@@ -55,6 +55,7 @@ enum class error : u8 {
     IMPORTED_MODULE_CONTAINS_ERRORS,
     ILLEGAL_RVALUE_CAPTURE,
     ILLEGAL_FIELD_ORDER_DEPENDENCY,
+    ILLEGAL_INLINE_ASM,
 };
 
 using diagnostic  = diagnostic<error>;

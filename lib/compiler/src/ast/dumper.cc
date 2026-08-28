@@ -5,6 +5,7 @@
 
 #include <fmt/format.h>
 #include <fmt/ostream.h>
+#include <gsl/span>
 #include <magic_enum/magic_enum.hpp>
 #include <magic_enum/magic_enum_flags.hpp>
 #include <stdx/profiler.hh>
@@ -69,6 +70,79 @@ auto dumper::visit(node_id, const array_expr& array) -> void {
     } else {
         fmt::println(out_, "");
         dump_node_list(array.items);
+    }
+}
+
+auto dumper::visit(node_id, const asm_expr& asm_node) -> void {
+    PROFILE_FUNCTION();
+    fmt::println(out_, "AsmExpression");
+
+    const auto dump_operands = [this](std::string_view                   label,
+                                      gsl::span<const asm_expr::operand> operands,
+                                      bool                               last) -> void {
+        const indent::guard g{indent_, last};
+        if (operands.empty()) {
+            fmt::println(out_, "{}{}: <empty>", indent_.current_branch(), label);
+            return;
+        }
+        fmt::println(out_, "{}{}:", indent_.current_branch(), label);
+        dump_container(operands, [this](const asm_expr::operand& op) -> void {
+            fmt::print(out_, "{}", indent_.current_branch());
+            dump(op.constraint);
+            const indent::guard g_inner{indent_, true};
+            fmt::print(out_, "{}Value: ", indent_.current_branch());
+            if (op.value) {
+                dump(*op.value);
+            } else {
+                fmt::println(out_, "_ (result slot)");
+            }
+        });
+    };
+
+    {
+        const indent::guard g{indent_, false};
+        fmt::print(out_, "{}Template: ", indent_.current_branch());
+        dump(asm_node.tmpl);
+    }
+
+    {
+        const indent::guard g{indent_, false};
+        if (asm_node.result_type) {
+            fmt::print(out_, "{}ResultType: ", indent_.current_branch());
+            dump(*asm_node.result_type);
+        } else {
+            fmt::println(out_, "{}ResultType: (none)", indent_.current_branch());
+        }
+    }
+
+    dump_operands("Outputs", asm_node.outputs, false);
+    dump_operands("Inputs", asm_node.inputs, false);
+
+    {
+        const indent::guard g{indent_, false};
+        fmt::print(out_, "{}Clobbers:", indent_.current_branch());
+        if (asm_node.clobbers.empty()) {
+            fmt::println(out_, " <empty>");
+        } else {
+            fmt::println(out_, "");
+            dump_container(asm_node.clobbers, [this](auto clobber) -> void {
+                fmt::print(out_, "{}", indent_.current_branch());
+                dump(clobber);
+            });
+        }
+    }
+
+    {
+        const indent::guard g{indent_, true};
+        fmt::print(out_, "{}Options:", indent_.current_branch());
+        if (asm_node.options.empty()) {
+            fmt::println(out_, " <none>");
+        } else {
+            for (const auto opt : asm_node.options) {
+                fmt::print(out_, " {}", magic_enum::enum_name(opt));
+            }
+            fmt::println(out_, "");
+        }
     }
 }
 

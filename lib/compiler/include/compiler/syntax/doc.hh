@@ -71,7 +71,7 @@ class doc_manager {
     MAKE_ITERATOR(roots_t, std::vector<doc_id>, roots_);
 
   public:
-    doc_manager()  = default;
+    doc_manager() : nil_{text("")} {}
     ~doc_manager() = default;
     MAKE_MOVE_ONLY(doc_manager);
 
@@ -93,7 +93,8 @@ class doc_manager {
         return docs_[id_idx];
     }
 
-    [[nodiscard]] auto nil() -> syntax::doc_id;
+    // Guaranteed to be a stable document id
+    [[nodiscard]] auto nil() const noexcept -> syntax::doc_id { return nil_; }
     [[nodiscard]] auto text(std::string_view s) -> syntax::doc_id;
     [[nodiscard]] auto owned(const std::string& s) -> syntax::doc_id;
     [[nodiscard]] auto concat(std::vector<syntax::doc_id> parts) -> syntax::doc_id;
@@ -124,6 +125,7 @@ class doc_manager {
     roots_t            roots_;
     std::vector<doc_t> docs_;
     stdx::arena<>      owned_;
+    doc_id             nil_;
 };
 
 } // namespace ghoti::syntax

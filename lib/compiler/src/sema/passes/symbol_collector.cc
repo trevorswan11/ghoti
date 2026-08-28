@@ -82,6 +82,18 @@ auto symbol_collector::visit(ast::node_id, const ast::array_expr& array) -> void
     for (const auto& item : array.items) { collect(*item); }
 }
 
+auto symbol_collector::visit(ast::node_id, const ast::asm_expr& asm_node) -> void {
+    PROFILE_FUNCTION();
+    const default_counter::guard g{in_expr_scope_};
+    if (asm_node.result_type) { collect(*asm_node.result_type); }
+    for (const auto& op : asm_node.outputs) {
+        if (op.value) { collect(*op.value); }
+    }
+    for (const auto& op : asm_node.inputs) {
+        if (op.value) { collect(*op.value); }
+    }
+}
+
 auto symbol_collector::visit(ast::node_id, const ast::call_expr& call) -> void {
     PROFILE_FUNCTION();
     const default_counter::guard g{in_expr_scope_};

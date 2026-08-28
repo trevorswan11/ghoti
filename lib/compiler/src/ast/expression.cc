@@ -20,6 +20,7 @@
 #include "compiler/syntax/error.hh"
 #include "compiler/syntax/parser.hh"
 #include "compiler/syntax/precedence.hh"
+#include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
 
 namespace ghoti::ast {
@@ -74,6 +75,169 @@ auto array_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
     TRY(parser.expect_peek(syntax::token_type_t::RBRACE));
     return parser.add_expr<array_expr>(
         start_token, size, null_terminated, mut_elements, item_type, std::move(items));
+}
+
+namespace {
+
+[[nodiscard]] auto map_asm_option(std::string_view name) noexcept
+    -> stdx::option<asm_expr::option> {
+    if (name == "volatile") { return asm_expr::option::VOLATILE; }
+    if (name == "noreturn") { return asm_expr::option::NORETURN; }
+    if (name == "intel") { return asm_expr::option::INTEL; }
+    if (name == "att") { return asm_expr::option::ATT; }
+    if (name == "align_stack") { return asm_expr::option::ALIGN_STACK; }
+    return stdx::none;
+}
+
+// Parses one `"<constraint>" = <expr>` / `"<constraint>" = _` operand entry
+[[nodiscard]] auto parse_asm_operand(syntax::parser& parser)
+    -> stdx::result<asm_expr::operand, syntax::diagnostic> {
+    if (!parser.peek_token_is(syntax::token_type_t::STRING)) {
+        return make_syntax_err("An asm operand must begin with a constraint string literal",
+                               syntax::error::ASM_MALFORMED_OPERAND,
+                               parser.get_peek_token());
+    }
+    parser.advance();
+    const string_handle constraint{TRY(string_expr::parse(parser))};
+    TRY(parser.expect_peek(syntax::token_type_t::ASSIGN));
+
+    stdx::option<expr_handle> value;
+    if (parser.peek_token_is(syntax::token_type_t::UNDERSCORE)) {
+        parser.advance();
+    } else {
+        parser.advance();
+        value.emplace(TRY(parser.parse_expression()));
+    }
+    return asm_expr::operand{constraint, value};
+}
+
+template <typename Fn>
+[[nodiscard]] auto parse_asm_paren_list(syntax::parser& parser, Fn&& element)
+    -> stdx::result<void, syntax::diagnostic> {
+    TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
+    while (!parser.peek_token_is(syntax::token_type_t::RPAREN) &&
+           !parser.peek_token_is(syntax::token_type_t::END)) {
+        TRY(element());
+        if (!parser.peek_token_is(syntax::token_type_t::RPAREN)) {
+            TRY(parser.expect_peek(syntax::token_type_t::COMMA));
+        }
+    }
+    return parser.expect_peek(syntax::token_type_t::RPAREN);
+}
+
+} // namespace
+
+auto asm_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
+    PROFILE_FUNCTION();
+    const auto start_token{parser.get_current_token()};
+
+    // An optional explicit result type precedes the brace body: `asm u32 { ... }`
+    stdx::option<explicit_type_id> result_type;
+    if (!parser.peek_token_is(syntax::token_type_t::LBRACE)) {
+        result_type.emplace(TRY(explicit_type::parse(parser, true)));
+    }
+    TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
+
+    stdx::option<string_handle> tmpl;
+    std::vector<operand>        outputs;
+    std::vector<operand>        inputs;
+    std::vector<string_handle>  clobbers;
+    std::vector<option>         options;
+    bool                        seen_template{false}, seen_outputs{false}, seen_inputs{false};
+    bool                        seen_clobbers{false}, seen_options{false};
+
+    const auto reject_duplicate =
+        [&](bool& flag, const syntax::token_t& key) -> stdx::result<void, syntax::diagnostic> {
+        if (flag) {
+            return make_syntax_err(fmt::format("Duplicate asm clause '{}'", key.slice),
+                                   syntax::error::ASM_DUPLICATE_CLAUSE,
+                                   key);
+        }
+        flag = true;
+        return {};
+    };
+
+    while (!parser.peek_token_is(syntax::token_type_t::RBRACE) &&
+           !parser.peek_token_is(syntax::token_type_t::END)) {
+        TRY(parser.expect_peek(syntax::token_type_t::IDENT));
+        const auto key_token{parser.get_current_token()};
+        const auto key{key_token.slice};
+        TRY(parser.expect_peek(syntax::token_type_t::COLON));
+
+        if (key == "template") {
+            TRY(reject_duplicate(seen_template, key_token));
+            if (!parser.peek_token_is(syntax::token_type_t::STRING) &&
+                !parser.peek_token_is(syntax::token_type_t::MULTILINE_STRING)) {
+                return make_syntax_err("The asm 'template' clause requires a string literal",
+                                       syntax::error::ASM_MISSING_TEMPLATE,
+                                       parser.get_peek_token());
+            }
+            parser.advance();
+            tmpl.emplace(string_handle{TRY(string_expr::parse(parser))});
+        } else if (key == "outputs") {
+            TRY(reject_duplicate(seen_outputs, key_token));
+            TRY(parse_asm_paren_list(parser, [&] -> stdx::result<void, syntax::diagnostic> {
+                outputs.emplace_back(TRY(parse_asm_operand(parser)));
+                return {};
+            }));
+        } else if (key == "inputs") {
+            TRY(reject_duplicate(seen_inputs, key_token));
+            TRY(parse_asm_paren_list(parser, [&] -> stdx::result<void, syntax::diagnostic> {
+                inputs.emplace_back(TRY(parse_asm_operand(parser)));
+                return {};
+            }));
+        } else if (key == "clobbers") {
+            TRY(reject_duplicate(seen_clobbers, key_token));
+            TRY(parse_asm_paren_list(parser, [&] -> stdx::result<void, syntax::diagnostic> {
+                if (!parser.peek_token_is(syntax::token_type_t::STRING)) {
+                    return make_syntax_err("An asm clobber must be a string literal",
+                                           syntax::error::ASM_MALFORMED_OPERAND,
+                                           parser.get_peek_token());
+                }
+                parser.advance();
+                clobbers.emplace_back(string_handle{TRY(string_expr::parse(parser))});
+                return {};
+            }));
+        } else if (key == "options") {
+            TRY(reject_duplicate(seen_options, key_token));
+            TRY(parse_asm_paren_list(parser, [&] -> stdx::result<void, syntax::diagnostic> {
+                // Some (`volatile`, `noreturn`) are reserved keywords
+                parser.advance();
+                const auto opt_token{parser.get_current_token()};
+                const auto opt{map_asm_option(opt_token.slice)};
+                if (!opt) {
+                    return make_syntax_err(fmt::format("Unknown asm option '{}'", opt_token.slice),
+                                           syntax::error::ASM_UNKNOWN_OPTION,
+                                           opt_token);
+                }
+                options.emplace_back(*opt);
+                return {};
+            }));
+        } else {
+            return make_syntax_err(fmt::format("Unknown asm clause '{}'", key),
+                                   syntax::error::ASM_UNKNOWN_CLAUSE,
+                                   key_token);
+        }
+
+        if (!parser.peek_token_is(syntax::token_type_t::RBRACE)) {
+            TRY(parser.expect_peek(syntax::token_type_t::COMMA));
+        }
+    }
+    TRY(parser.expect_peek(syntax::token_type_t::RBRACE));
+
+    if (!tmpl) {
+        return make_syntax_err("An asm block requires a 'template' clause",
+                               syntax::error::ASM_MISSING_TEMPLATE,
+                               start_token);
+    }
+
+    return parser.add_expr<asm_expr>(start_token,
+                                     *tmpl,
+                                     result_type,
+                                     std::move(outputs),
+                                     std::move(inputs),
+                                     std::move(clobbers),
+                                     std::move(options));
 }
 
 auto call_expr::parse(syntax::parser& parser, expr_handle function)

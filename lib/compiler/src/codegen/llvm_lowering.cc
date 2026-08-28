@@ -12,6 +12,7 @@
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LLVMContext.h>
@@ -739,6 +740,7 @@ auto llvm_lowering::lower_instruction(const gir::instruction& inst) -> void {
     case gir::instruction_kind::PTR_FROM_INT:    result_val = emit_cast(inst); break;
     case gir::instruction_kind::CALL:            result_val = emit_call(inst); break;
     case gir::instruction_kind::BUILTIN_CALL:    result_val = emit_builtin_call(inst); break;
+    case gir::instruction_kind::INLINE_ASM:      result_val = emit_inline_asm(inst); break;
     case gir::instruction_kind::RET:             emit_ret(inst); return;
     case gir::instruction_kind::GOTO:            emit_goto(inst); return;
     case gir::instruction_kind::COND_GOTO:       emit_cond_goto(inst); return;
@@ -1491,6 +1493,69 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
         }
     }
     return emit_call(inst);
+}
+
+auto llvm_lowering::emit_inline_asm(const gir::instruction& inst) -> llvm::Value* {
+    ASSERT(inst.asm_info, "INLINE_ASM instruction requires asm_info");
+    const auto& info{*inst.asm_info};
+
+    // Input operands become the asm call's arguments, in listed order.
+    std::vector<llvm::Value*> args;
+    std::vector<llvm::Type*>  param_tys;
+    args.reserve(inst.operands.size());
+    param_tys.reserve(inst.operands.size());
+    for (const auto& op : inst.operands) {
+        auto* val{lower_value(op)};
+        ASSERT(val, "inline asm input operand lowered to null");
+        args.emplace_back(val);
+        param_tys.emplace_back(val->getType());
+    }
+
+    // One result per bound output operand, or a single result for the `_` result slot.
+    std::vector<llvm::Type*> result_tys;
+    if (info.has_result_slot) {
+        ASSERT(inst.type, "inline asm result slot requires a result type");
+        result_tys.emplace_back(types_.translate(*inst.type));
+    } else {
+        for (const auto& addr : info.output_addrs) {
+            ASSERT(addr.type, "inline asm output operand requires a type");
+            result_tys.emplace_back(types_.translate(*addr.type));
+        }
+    }
+
+    llvm::Type* ret_ty{nullptr};
+    if (result_tys.empty()) {
+        ret_ty = types_.get_void_ty();
+    } else if (result_tys.size() == 1) {
+        ret_ty = result_tys.front();
+    } else {
+        ret_ty = llvm::StructType::get(context_, result_tys);
+    }
+
+    auto*      fn_ty{llvm::FunctionType::get(ret_ty, param_tys, false)};
+    const bool has_side_effects{info.is_volatile || result_tys.empty()};
+    const auto dialect{info.intel_dialect ? llvm::InlineAsm::AD_Intel : llvm::InlineAsm::AD_ATT};
+
+    auto* inline_asm{llvm::InlineAsm::get(
+        fn_ty, info.tmpl, info.constraints, has_side_effects, info.align_stack, dialect, false)};
+
+    auto* call{builder_.CreateCall(fn_ty, inline_asm, args)};
+    call->addFnAttr(llvm::Attribute::NoUnwind);
+    if (info.is_noreturn) { call->setDoesNotReturn(); }
+
+    // Store each bound output back through its target address.
+    if (!info.has_result_slot && !info.output_addrs.empty()) {
+        if (info.output_addrs.size() == 1) {
+            builder_.CreateStore(call, lower_value(info.output_addrs.front()));
+        } else {
+            for (u32 i{0}; i < info.output_addrs.size(); ++i) {
+                auto* field{builder_.CreateExtractValue(call, i)};
+                builder_.CreateStore(field, lower_value(info.output_addrs[i]));
+            }
+        }
+    }
+
+    return info.has_result_slot ? call : nullptr;
 }
 
 auto llvm_lowering::emit_ret(const gir::instruction& inst) -> void {

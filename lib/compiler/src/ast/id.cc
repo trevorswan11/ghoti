@@ -22,6 +22,7 @@ using name_mapping = std::pair<node_kind, std::string_view>;
 constexpr auto NODE_NAMES{stdx::fixed::enum_map<node_kind, std::string_view>::from(
     "expression",
     name_mapping{node_kind::ARRAY_EXPRESSION, "array"},
+    name_mapping{node_kind::ASM_EXPRESSION, "asm"},
     name_mapping{node_kind::CALL_EXPRESSION, "call"},
     name_mapping{node_kind::DO_WHILE_LOOP_EXPRESSION, "do-while loop"},
     name_mapping{node_kind::ENUM_EXPRESSION, "enum"},

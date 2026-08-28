@@ -39,6 +39,7 @@ class symbol_collector {
 
   private:
     auto                                visit(ast::node_id, const ast::array_expr&) -> void;
+    auto                                visit(ast::node_id, const ast::asm_expr&) -> void;
     auto                                visit(ast::node_id, const ast::call_expr&) -> void;
     auto                                visit(ast::node_id, const ast::do_while_loop_expr&) -> void;
     template <ast::IndexableID ID> auto visit(ID, const ast::enum_expr&) -> void;

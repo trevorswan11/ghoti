@@ -143,6 +143,7 @@ enum class token_type_t : u8 {
     DEFER,
     TEST,
     UNDEFINED,
+    ASM,
 
     I32_TYPE,
     I64_TYPE,

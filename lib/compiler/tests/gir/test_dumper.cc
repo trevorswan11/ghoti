@@ -193,6 +193,18 @@ constexpr std::string_view golden_input{R"(
         };
     };
 
+    const raw_write := fn(fd: i64, buf: ^u8, len: usize): i64 {
+        var ret: i64 = 0l;
+        asm {
+            template: "syscall",
+            outputs: ("={rax}" = ret),
+            inputs: ("{rax}" = 1l, "{rdi}" = fd, "{rsi}" = buf, "{rdx}" = len),
+            clobbers: ("rcx", "r11", "memory"),
+            options: (volatile),
+        };
+        return ret;
+    };
+
     test "golden_run" {
         const p := Point{ .x = 25, .y = 10 };
         const ans := compute_point(p);

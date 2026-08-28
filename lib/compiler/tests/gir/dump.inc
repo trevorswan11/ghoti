@@ -68,6 +68,14 @@ fn match_color(c: enum) -> i32
   seg 7:
     unreachable
 
+fn raw_write(fd: i64, buf: ^u8, len: usize) -> i64
+  seg 0:
+    %0 = alloca i64
+    store 0, %0
+    inline_asm volatile "syscall" "={rax},{rax},{rdi},{rsi},{rdx},~{rcx},~{r11},~{memory}"(1, param.0, param.1, param.2)
+    %1 = load %0
+    ret i64 %1
+
 test "golden_run"
   seg 0:
     %0 = alloca struct

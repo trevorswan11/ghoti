@@ -678,6 +678,17 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                                      });
         }
         break;
+    case gir::instruction_kind::INLINE_ASM:
+        // Operand well-formedness is enforced during type resolution
+        if (inst.result && inst.type) {
+            locals_.insert_or_assign(*inst.result,
+                                     local_info{
+                                         .type      = inst.type.get(),
+                                         .is_alloca = false,
+                                         .is_const  = false,
+                                     });
+        }
+        break;
     case gir::instruction_kind::GOTO:
     case gir::instruction_kind::UNREACHABLE: break;
     }

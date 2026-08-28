@@ -40,6 +40,37 @@
 
 namespace ghoti::gir {
 
+namespace {
+
+// Rewrites ghoti's GCC-style `%N` operand placeholders into LLVM's `$N` form
+[[nodiscard]] auto rewrite_asm_template(std::string_view src) -> std::string {
+    std::string out;
+    out.reserve(src.size());
+    for (usize i{0}; i < src.size(); ++i) {
+        const char c{src[i]};
+        if (c == '$') {
+            out += "$$";
+            continue;
+        }
+        if (c == '%' && i + 1 < src.size()) {
+            const char next{src[i + 1]};
+            if (next == '%') {
+                out += '%';
+                ++i;
+                continue;
+            }
+            if (next >= '0' && next <= '9') {
+                out += '$';
+                continue;
+            }
+        }
+        out += c;
+    }
+    return out;
+}
+
+} // namespace
+
 auto emitter::emit() -> module {
     PROFILE_FUNCTION();
     const_eval_.resolve_all_deferred_types();
@@ -1004,6 +1035,7 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
         [&](const ast::unary_expr& data) -> value { return emit_unary(id, data); },
         [&](const ast::assignment_expr& data) -> value { return emit_assignment(id, data); },
         [&](const ast::call_expr& data) -> value { return emit_call(id, data); },
+        [&](const ast::asm_expr& data) -> value { return emit_asm(id, data); },
         [&](const ast::array_expr& data) -> value { return emit_array(id, data); },
         [&](ast::grouped_expr) -> value { return emit_expression_id(id); });
 }
@@ -1207,6 +1239,62 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
     }
     default: UNREACHABLE("Unhandled assignment operator type");
     }
+}
+
+auto emitter::emit_asm(ast::node_id id, const ast::asm_expr& node) -> value {
+    PROFILE_FUNCTION();
+    auto& void_type{ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+
+    const auto constraint_text = [&](const ast::string_handle& h) -> std::string_view {
+        return active_ast().get_as<ast::string_expr>(h).value;
+    };
+
+    inline_asm info;
+    info.is_volatile   = node.has_option(ast::asm_expr::option::VOLATILE);
+    info.is_noreturn   = node.has_option(ast::asm_expr::option::NORETURN);
+    info.align_stack   = node.has_option(ast::asm_expr::option::ALIGN_STACK);
+    info.intel_dialect = node.has_option(ast::asm_expr::option::INTEL);
+    info.tmpl = rewrite_asm_template(active_ast().get_as<ast::string_expr>(node.tmpl).value);
+
+    // Constraint list: outputs, then inputs, then clobbers
+    std::vector<std::string> pieces;
+    for (const auto& op : node.outputs) { pieces.emplace_back(constraint_text(op.constraint)); }
+
+    std::vector<value> inputs;
+    inputs.reserve(node.inputs.size());
+    for (const auto& op : node.inputs) {
+        pieces.emplace_back(constraint_text(op.constraint));
+        ASSERT(op.value, "asm input operand must carry an expression");
+        inputs.emplace_back(emit_expression(*op.value));
+    }
+    for (const auto& clob : node.clobbers) {
+        pieces.emplace_back(fmt::format("~{{{}}}", constraint_text(clob)));
+    }
+    for (usize i{0}; i < pieces.size(); ++i) {
+        if (i != 0) { info.constraints += ','; }
+        info.constraints += pieces[i];
+    }
+
+    // Bind each output: a real lvalue gets a store target, `_` feeds the asm's own result.
+    stdx::option<sema::type&> result_type;
+    for (const auto& op : node.outputs) {
+        if (op.is_result_slot()) {
+            info.has_result_slot = true;
+            result_type          = active_mod().get_sema_type_opt(id);
+        } else {
+            info.output_addrs.emplace_back(emit_lvalue(*op.value));
+        }
+    }
+
+    auto&      asm_result_type{result_type ? *result_type : void_type};
+    const auto dest{builder_.emit_inline_asm(std::move(info), std::move(inputs), asm_result_type)};
+
+    if (node.has_option(ast::asm_expr::option::NORETURN)) {
+        builder_.emit_unreachable();
+        return value{undefined_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN)};
+    }
+    if (dest) { return value{*dest, asm_result_type}; }
+    return value{void_val{}, void_type};
 }
 
 auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {

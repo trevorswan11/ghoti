@@ -1,8 +1,10 @@
 #include "compiler/sema/passes/type_resolver.hh"
 
 #include <algorithm>
+#include <cctype>
 #include <concepts>
 #include <ranges>
+#include <stdx/enum.hh>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -110,6 +112,128 @@ auto type_resolver::visit(ast::node_id id, const ast::array_expr& array) -> void
                                       array.items.size(),
                                       item_type));
     resolving_.set_sema_type(id, *last_type_);
+}
+
+auto type_resolver::visit(ast::node_id id, const ast::asm_expr& node) -> void {
+    PROFILE_FUNCTION();
+
+    // Resolve every string literal (template, constraints, clobbers) and operand expression so
+    // that all child nodes carry a resolved type for the emitter and later passes.
+    resolve(node.tmpl);
+    for (const auto& op : node.outputs) { resolve(op.constraint); }
+    for (const auto& op : node.inputs) { resolve(op.constraint); }
+    for (const auto& clobber : node.clobbers) { resolve(clobber); }
+    for (const auto& op : node.inputs) {
+        if (op.value) { TRY_RESOLVE(*op.value); }
+    }
+
+    usize bound_output_count{0};
+    usize result_slot_count{0};
+    for (const auto& op : node.outputs) {
+        if (!op.value) {
+            ++result_slot_count;
+            continue;
+        }
+        {
+            const mutating_context_guard g{in_mutating_context_};
+            TRY_RESOLVE(*op.value);
+        }
+        ++bound_output_count;
+
+        // Outputs must name something assignable; deep mutability is a pass-3 concern.
+        const auto kind{(*op.value)->get_kind()};
+        const auto assignable{kind == ast::node_kind::IDENTIFIER_EXPRESSION ||
+                              kind == ast::node_kind::DOT_EXPRESSION ||
+                              kind == ast::node_kind::INDEX_EXPRESSION ||
+                              kind == ast::node_kind::DEREFERENCE_EXPRESSION ||
+                              kind == ast::node_kind::IMPLICIT_ACCESS_EXPRESSION};
+        if (!assignable) {
+            return last_type_.emplace(
+                ctx_.poison_node(resolving_,
+                                 id,
+                                 std::string{"An asm output operand must be an assignable lvalue"},
+                                 error::ILLEGAL_INLINE_ASM,
+                                 resolving_.ast.location_of(*op.value)));
+        }
+    }
+
+    stdx::option<type&> declared_result_type;
+    if (node.result_type) {
+        resolve(*node.result_type);
+        declared_result_type.emplace(*last_type_);
+    }
+
+    const auto fail = [&](std::string msg) -> void {
+        last_type_.emplace(ctx_.poison_node(resolving_,
+                                            id,
+                                            std::move(msg),
+                                            error::ILLEGAL_INLINE_ASM,
+                                            resolving_.ast.location_of(id)));
+    };
+
+    const bool has_volatile{node.has_option(ast::asm_expr::option::VOLATILE)};
+    const bool has_noreturn{node.has_option(ast::asm_expr::option::NORETURN)};
+    const bool has_intel{node.has_option(ast::asm_expr::option::INTEL)};
+    const bool has_att{node.has_option(ast::asm_expr::option::ATT)};
+
+    for (const auto opt : stdx::enum_range<ast::asm_expr::option>()) {
+        if (std::ranges::count(node.options, opt) > 1) { return fail("Duplicate asm option"); }
+    }
+    if (has_intel && has_att) {
+        return fail("The asm options 'intel' and 'att' are mutually exclusive");
+    }
+
+    // `volatile` is never implied: a no-output asm must state it or it has no observable effect.
+    if (node.outputs.empty() && !has_volatile) {
+        return fail("An asm block with no output operands must be marked `volatile`");
+    }
+
+    if (result_slot_count > 1) {
+        return fail("An asm block may have at most one `_` result operand");
+    }
+    if (result_slot_count == 1 && !node.result_type) {
+        return fail("An asm block with a `_` result operand needs an explicit result type, "
+                    "e.g. `asm u32 { ... }`");
+    }
+    if (result_slot_count == 1 && node.outputs.size() != 1) {
+        return fail("An asm block with a `_` result operand may not bind any other outputs");
+    }
+    if (result_slot_count == 0 && node.result_type) {
+        return fail("An asm result type is only meaningful alongside a `_` result operand");
+    }
+    if (has_noreturn && (bound_output_count > 0 || result_slot_count > 0)) {
+        return fail("A `noreturn` asm block cannot bind any output operands");
+    }
+
+    // Template placeholder bounds: `%N` must index an operand
+    const auto& tmpl_str{resolving_.ast.get_as<ast::string_expr>(node.tmpl).value};
+    const usize operand_count{node.outputs.size() + node.inputs.size()};
+    for (usize i{0}; i + 1 < tmpl_str.size(); ++i) {
+        if (tmpl_str[i] != '%') { continue; }
+        if (tmpl_str[i + 1] == '%') {
+            ++i;
+            continue;
+        }
+        if (!std::isdigit(tmpl_str[i + 1])) { continue; }
+        usize idx{0};
+        usize j{i + 1};
+        for (; j < tmpl_str.size() && std::isdigit(tmpl_str[j]); ++j) {
+            idx = (idx * 10) + static_cast<usize>(tmpl_str[j] - '0');
+        }
+        i = j - 1;
+        if (idx >= operand_count) {
+            return fail(fmt::format("asm template references operand %{} but {} operand(s) are "
+                                    "given (outputs are numbered first, then inputs)",
+                                    idx,
+                                    operand_count));
+        }
+    }
+
+    // A `_` result slot makes `asm` an rvalue of the declared type
+    type& node_type{result_slot_count == 1 ? *declared_result_type
+                                           : ctx_.get_builtin_resolved_type(type_kind::VOID_)};
+    resolving_.set_sema_type(id, node_type);
+    last_type_.emplace(node_type);
 }
 
 template <ast::IndexableID ID>

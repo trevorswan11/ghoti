@@ -67,6 +67,7 @@ enum class instruction_kind : u8 {
     // Calls
     CALL,
     BUILTIN_CALL,
+    INLINE_ASM,
 
     // Constants
     CONSTANT,
@@ -196,6 +197,21 @@ struct value {
 
 enum class segment_id : usize {};
 
+struct inline_asm {
+    std::string        tmpl;
+    std::string        constraints;
+    std::vector<value> output_addrs;
+    bool               is_volatile{false};
+    bool               is_noreturn{false};
+    bool               align_stack{false};
+    bool               intel_dialect{false};
+    bool               has_result_slot{false};
+
+    [[nodiscard]] auto result_count() const noexcept -> usize {
+        return has_result_slot ? 1 : output_addrs.size();
+    }
+};
+
 struct instruction {
     instruction_kind              kind{instruction_kind::UNREACHABLE};
     stdx::option<sema::type&>     type{stdx::none};
@@ -206,6 +222,7 @@ struct instruction {
     stdx::option<segment_id>      false_segment{stdx::none};
     stdx::option<std::string>     callee_name{stdx::none};
     stdx::option<source_location> location{stdx::none};
+    stdx::option<inline_asm>      asm_info{stdx::none};
     bool                          is_const{false};
     bool                          is_initializer{false};
 

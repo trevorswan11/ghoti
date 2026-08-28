@@ -11,8 +11,6 @@
 
 namespace ghoti::syntax {
 
-auto doc_manager::nil() -> doc_id { return text(std::string_view{""}); }
-
 auto doc_manager::text(std::string_view s) -> doc_id { return add<docs::text>(s); }
 
 auto doc_manager::owned(const std::string& s) -> doc_id {

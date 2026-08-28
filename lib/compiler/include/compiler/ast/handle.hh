@@ -66,6 +66,7 @@ template <node_kind... AllowedKinds> class handle {
 };
 
 using expr_handle = handle<node_kind::ARRAY_EXPRESSION,
+                           node_kind::ASM_EXPRESSION,
                            node_kind::ASSIGNMENT_EXPRESSION,
                            node_kind::BINARY_EXPRESSION,
                            node_kind::CALL_EXPRESSION,

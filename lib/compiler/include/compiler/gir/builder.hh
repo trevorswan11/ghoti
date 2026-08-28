@@ -60,6 +60,8 @@ class builder {
                            sema::type&        return_type) -> stdx::option<local_id>;
     auto emit_indirect_call(value callee, std::vector<value> args, sema::type& return_type)
         -> stdx::option<local_id>;
+    auto emit_inline_asm(inline_asm info, std::vector<value> inputs, sema::type& result_type)
+        -> stdx::option<local_id>;
     auto emit_return(stdx::option<value> val = stdx::none) -> instruction&;
     auto emit_goto(segment_id target_segment) -> instruction&;
     auto emit_cond_goto(value cond, segment_id true_segment, segment_id false_segment)
