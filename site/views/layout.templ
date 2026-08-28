@@ -32,28 +32,34 @@ templ Layout(title string, active string) {
 			</div>
 			<script>
 				function filterNav() {
-					const query = (document.getElementById('doc-search')?.value || '').toLowerCase();
-					const links = document.querySelectorAll('.sidebar .nav-link');
-					links.forEach(link => {
-						const title = (link.getAttribute('data-title') || link.textContent || '').toLowerCase();
+					const query = (
+						document.getElementById("doc-search")?.value || ""
+					).toLowerCase();
+					const links = document.querySelectorAll(".sidebar .nav-link");
+					links.forEach((link) => {
+						const title = (
+							link.getAttribute("data-title") ||
+							link.textContent ||
+							""
+						).toLowerCase();
 						if (title.includes(query)) {
-							link.style.display = 'flex';
+							link.style.display = "flex";
 						} else {
-							link.style.display = 'none';
+							link.style.display = "none";
 						}
 					});
 				}
 
 				function enhanceCodeBlocks() {
-					document.querySelectorAll('.doc pre code').forEach(codeBlock => {
+					document.querySelectorAll(".doc pre code").forEach((codeBlock) => {
 						const pre = codeBlock.parentElement;
-						if (pre.parentElement.classList.contains('code-wrapper')) return;
+						if (pre.parentElement.classList.contains("code-wrapper")) return;
 
-						const wrapper = document.createElement('div');
-						wrapper.className = 'code-wrapper';
+						const wrapper = document.createElement("div");
+						wrapper.className = "code-wrapper";
 
-						const header = document.createElement('div');
-						header.className = 'code-header';
+						const header = document.createElement("div");
+						header.className = "code-header";
 						header.innerHTML = `<span>ghoti</span><button class="code-copy-btn" onclick="copyCode(this)">Copy</button>`;
 
 						pre.parentNode.insertBefore(wrapper, pre);
@@ -65,12 +71,16 @@ templ Layout(title string, active string) {
 				}
 
 				function copyCode(btn) {
-					const wrapper = btn.closest('.code-wrapper');
-					const code = wrapper ? wrapper.querySelector('code')?.textContent : '';
+					const wrapper = btn.closest(".code-wrapper");
+					const code = wrapper
+						? wrapper.querySelector("code")?.textContent
+						: "";
 					if (!code) return;
 					navigator.clipboard.writeText(code).then(() => {
-						btn.textContent = 'Copied!';
-						setTimeout(() => { btn.textContent = 'Copy'; }, 1800);
+						btn.textContent = "Copied!";
+						setTimeout(() => {
+							btn.textContent = "Copy";
+						}, 1800);
 					});
 				}
 
@@ -79,14 +89,18 @@ templ Layout(title string, active string) {
 					codeEl.dataset.highlighted = "true";
 
 					const rawText = codeEl.textContent;
-					const tokenRegex = /(\/\/[^\n]*)|("[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*')|(@\w+)|(\b(?:const|var|constexpr|fn|struct|union|enum|if|else|do|match|return|defer|loop|for|while|continue|break|import|pub|extern|export|volatile|mut|move|packed|noreturn|using|test|as)\b)|(\b(?:i32|i64|isize|u32|u64|usize|f32|f64|u8|bool|void|type|auto|opaque|nullptr|undefined|unreachable)\b)|(\b(?:0[xXoObB][0-9a-fA-F_]+|\d[\d_]*(\.[\d_]+)?([eE][+-]?[\d_]+)?(uz|u|ul|z|l|f)?)\b)/g;
+					const tokenRegex =
+						/(\/\/[^\n]*)|("[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*')|(@\w+)|(\b(?:const|var|constexpr|fn|struct|union|enum|if|else|do|match|return|defer|loop|for|while|continue|break|import|pub|extern|export|volatile|mut|move|packed|noreturn|using|test|as)\b)|(\b(?:i32|i64|isize|u32|u64|usize|f32|f64|u8|bool|void|type|auto|opaque|nullptr|undefined|unreachable)\b)|(\b(?:0[xXoObB][0-9a-fA-F_]+|\d[\d_]*(\.[\d_]+)?([eE][+-]?[\d_]+)?(uz|u|ul|z|l|f)?)\b)/g;
 
-					let result = '';
+					let result = "";
 					let lastIndex = 0;
 					let match;
 
 					function escapeHtml(str) {
-						return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+						return str
+							.replace(/&/g, "&amp;")
+							.replace(/</g, "&lt;")
+							.replace(/>/g, "&gt;");
 					}
 
 					while ((match = tokenRegex.exec(rawText)) !== null) {
@@ -95,7 +109,15 @@ templ Layout(title string, active string) {
 						}
 						lastIndex = tokenRegex.lastIndex;
 
-						const [full, comment, stringLit, builtin, keyword, typeTok, numberLit] = match;
+						const [
+							full,
+							comment,
+							stringLit,
+							builtin,
+							keyword,
+							typeTok,
+							numberLit,
+						] = match;
 
 						if (comment) {
 							result += `<span class="tok-comment">${escapeHtml(comment)}</span>`;
@@ -119,8 +141,8 @@ templ Layout(title string, active string) {
 					codeEl.innerHTML = result;
 				}
 
-				document.addEventListener('DOMContentLoaded', enhanceCodeBlocks);
-				document.body.addEventListener('htmx:afterSwap', enhanceCodeBlocks);
+				document.addEventListener("DOMContentLoaded", enhanceCodeBlocks);
+				document.body.addEventListener("htmx:afterSwap", enhanceCodeBlocks);
 			</script>
 		</body>
 	</html>
