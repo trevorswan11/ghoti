@@ -63,13 +63,13 @@ namespace {
 [[nodiscard]] auto to_llvm_callconv(ast::calling_convention conv) noexcept
     -> llvm::CallingConv::ID {
     switch (conv) {
-    case ast::calling_convention::C:        return llvm::CallingConv::C;
-    case ast::calling_convention::SYSV:     return llvm::CallingConv::X86_64_SysV;
-    case ast::calling_convention::WIN64:    return llvm::CallingConv::Win64;
-    case ast::calling_convention::STDCALL:  return llvm::CallingConv::X86_StdCall;
-    case ast::calling_convention::FASTCALL: return llvm::CallingConv::X86_FastCall;
-    case ast::calling_convention::AAPCS:    return llvm::CallingConv::ARM_AAPCS;
-    default:                                return llvm::CallingConv::C;
+    case ast::calling_convention::C:            return llvm::CallingConv::C;
+    case ast::calling_convention::SYSV:         return llvm::CallingConv::X86_64_SysV;
+    case ast::calling_convention::WIN64:        return llvm::CallingConv::Win64;
+    case ast::calling_convention::X86_STDCALL:  return llvm::CallingConv::X86_StdCall;
+    case ast::calling_convention::X86_FASTCALL: return llvm::CallingConv::X86_FastCall;
+    case ast::calling_convention::AAPCS:        return llvm::CallingConv::ARM_AAPCS;
+    default:                                    return llvm::CallingConv::C;
     }
 }
 

@@ -12,8 +12,8 @@ enum class calling_convention : u8 {
     C,
     SYSV,
     WIN64,
-    STDCALL,
-    FASTCALL,
+    X86_STDCALL,
+    X86_FASTCALL,
     AAPCS,
 };
 

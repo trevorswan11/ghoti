@@ -53,7 +53,7 @@ pub const default_test_runner := fn(tests: []Test): i32 {
     for (tests) |test| {
         reset_test_state();
         const ok := test.func();
-        if (!ok || has_current_test_failed()) {
+        if (!ok or has_current_test_failed()) {
             failed_count = failed_count + 1;
         }
     }

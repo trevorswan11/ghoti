@@ -19,6 +19,7 @@ enum class node_kind : u8 {
     IF_EXPRESSION,
     INDEX_EXPRESSION,
     INFINITE_LOOP_EXPRESSION,
+    CFG_VALUE_EXPRESSION,
     ASSIGNMENT_EXPRESSION,
     BINARY_EXPRESSION,
     DOT_EXPRESSION,
@@ -53,6 +54,7 @@ enum class node_kind : u8 {
 
     BLOCK_STATEMENT,
     BREAK_STATEMENT,
+    CFG_STATEMENT,
     CONTINUE_STATEMENT,
     DECL_STATEMENT,
     DEFER_STATEMENT,
@@ -78,6 +80,7 @@ enum class node_kind : u8 {
     X(if_expr)              \
     X(index_expr)           \
     X(infinite_loop_expr)   \
+    X(cfg_value_expr)       \
     X(assignment_expr)      \
     X(binary_expr)          \
     X(dot_expr)             \
@@ -113,6 +116,7 @@ enum class node_kind : u8 {
 #define FOREACH_AST_STMT(X) \
     X(block_stmt)           \
     X(break_stmt)           \
+    X(cfg_stmt)             \
     X(continue_stmt)        \
     X(decl_stmt)            \
     X(defer_stmt)           \
@@ -188,6 +192,7 @@ NODE_KIND_OF_TRAIT(identifier_expr, IDENTIFIER_EXPRESSION)
 NODE_KIND_OF_TRAIT(if_expr, IF_EXPRESSION)
 NODE_KIND_OF_TRAIT(index_expr, INDEX_EXPRESSION)
 NODE_KIND_OF_TRAIT(infinite_loop_expr, INFINITE_LOOP_EXPRESSION)
+NODE_KIND_OF_TRAIT(cfg_value_expr, CFG_VALUE_EXPRESSION)
 NODE_KIND_OF_TRAIT(assignment_expr, ASSIGNMENT_EXPRESSION)
 NODE_KIND_OF_TRAIT(binary_expr, BINARY_EXPRESSION)
 NODE_KIND_OF_TRAIT(dot_expr, DOT_EXPRESSION)
@@ -222,6 +227,7 @@ NODE_KIND_OF_TRAIT(while_loop_expr, WHILE_LOOP_EXPRESSION)
 
 NODE_KIND_OF_TRAIT(block_stmt, BLOCK_STATEMENT)
 NODE_KIND_OF_TRAIT(break_stmt, BREAK_STATEMENT)
+NODE_KIND_OF_TRAIT(cfg_stmt, CFG_STATEMENT)
 NODE_KIND_OF_TRAIT(continue_stmt, CONTINUE_STATEMENT)
 NODE_KIND_OF_TRAIT(decl_stmt, DECL_STATEMENT)
 NODE_KIND_OF_TRAIT(defer_stmt, DEFER_STATEMENT)

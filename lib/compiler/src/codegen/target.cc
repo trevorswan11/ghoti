@@ -94,6 +94,103 @@ auto resolve_target_triple(stdx::option<std::string_view> triple_str) -> llvm::T
     return triple;
 }
 
+// A stable, version-suffix-free OS token (`macosx13.0.0` -> `macos`).
+auto normalized_target_os(const llvm::Triple& triple) -> std::string_view {
+    switch (triple.getOS()) {
+    case llvm::Triple::Darwin:
+    case llvm::Triple::MacOSX:     return "macos";
+    case llvm::Triple::IOS:        return "ios";
+    case llvm::Triple::Linux:      return "linux";
+    case llvm::Triple::Win32:      return "windows";
+    case llvm::Triple::FreeBSD:    return "freebsd";
+    case llvm::Triple::OpenBSD:    return "openbsd";
+    case llvm::Triple::NetBSD:     return "netbsd";
+    case llvm::Triple::DragonFly:  return "dragonfly";
+    case llvm::Triple::Solaris:    return "solaris";
+    case llvm::Triple::Haiku:      return "haiku";
+    case llvm::Triple::WASI:       return "wasi";
+    case llvm::Triple::Emscripten: return "emscripten";
+    case llvm::Triple::UEFI:       return "uefi";
+    case llvm::Triple::UnknownOS:  return "freestanding";
+    default:                       return triple.getOSTypeName(triple.getOS());
+    }
+}
+
+// Canonical LLVM arch name, collapsed to the compile-time-config.md §2.2 spellings.
+auto normalized_target_arch(const llvm::Triple& triple) -> std::string_view {
+    switch (triple.getArch()) {
+    case llvm::Triple::x86_64:      return "x86_64";
+    case llvm::Triple::x86:         return "x86";
+    case llvm::Triple::aarch64:     return "aarch64";
+    case llvm::Triple::arm:         return "arm";
+    case llvm::Triple::thumb:       return "thumb";
+    case llvm::Triple::riscv64:     return "riscv64";
+    case llvm::Triple::riscv32:     return "riscv32";
+    case llvm::Triple::wasm32:      return "wasm32";
+    case llvm::Triple::wasm64:      return "wasm64";
+    case llvm::Triple::ppc64:
+    case llvm::Triple::ppc64le:     return "powerpc64";
+    case llvm::Triple::ppc:         return "powerpc";
+    case llvm::Triple::mips64:
+    case llvm::Triple::mips64el:    return "mips64";
+    case llvm::Triple::mips:
+    case llvm::Triple::mipsel:      return "mips";
+    case llvm::Triple::systemz:     return "s390x";
+    case llvm::Triple::loongarch64: return "loongarch64";
+    case llvm::Triple::sparcv9:     return "sparc64";
+    default:                        return llvm::Triple::getArchTypeName(triple.getArch());
+    }
+}
+
+auto normalized_target_abi(const llvm::Triple& triple) -> std::string_view {
+    if (triple.getEnvironment() == llvm::Triple::UnknownEnvironment) { return "none"; }
+    return triple.getEnvironmentName();
+}
+
+auto normalized_target_family(const llvm::Triple& triple) -> std::string_view {
+    if (triple.isOSWindows()) { return "windows"; }
+    if (triple.isWasm()) { return "wasm"; }
+    switch (triple.getOS()) {
+    case llvm::Triple::Darwin:
+    case llvm::Triple::MacOSX:
+    case llvm::Triple::IOS:
+    case llvm::Triple::Linux:
+    case llvm::Triple::FreeBSD:
+    case llvm::Triple::OpenBSD:
+    case llvm::Triple::NetBSD:
+    case llvm::Triple::DragonFly:
+    case llvm::Triple::Solaris:
+    case llvm::Triple::Haiku:
+    case llvm::Triple::AIX:       return "unix";
+    default:                      return "other";
+    }
+}
+
+auto normalized_target_endian(const llvm::Triple& triple) -> std::string_view {
+    return triple.isLittleEndian() ? "little" : "big";
+}
+
+auto normalized_target_ptr_bits(const llvm::Triple& triple) -> u32 {
+    if (triple.isArch64Bit()) { return 64U; }
+    if (triple.isArch16Bit()) { return 16U; }
+    return 32U;
+}
+
+auto target_facts::resolve(const llvm::Triple& triple) noexcept -> target_facts {
+    return target_facts{
+        .os       = normalized_target_os(triple),
+        .arch     = normalized_target_arch(triple),
+        .abi      = normalized_target_abi(triple),
+        .family   = normalized_target_family(triple),
+        .endian   = normalized_target_endian(triple),
+        .ptr_bits = normalized_target_ptr_bits(triple),
+    };
+}
+
+auto target_facts::resolve(stdx::option<std::string_view> triple_str) -> target_facts {
+    return resolve(resolve_target_triple(triple_str));
+}
+
 auto get_default_output_extension(output_type type, stdx::option<std::string_view> triple_str)
     -> std::string_view {
     const auto triple{resolve_target_triple(triple_str)};

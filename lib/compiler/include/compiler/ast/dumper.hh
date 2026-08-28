@@ -81,8 +81,10 @@ class dumper {
     auto visit(node_id, const struct_expr&) -> void;
     auto visit(node_id, const union_expr&) -> void;
     auto visit(node_id, const while_loop_expr&) -> void;
+    auto visit(node_id, const cfg_value_expr&) -> void;
     auto visit(node_id, const block_stmt&) -> void;
     auto visit(node_id, const break_stmt&) -> void;
+    auto visit(node_id, const cfg_stmt&) -> void;
     auto visit(node_id, const continue_stmt&) -> void;
     auto visit(node_id, const decl_stmt&) -> void;
     auto visit(node_id, const defer_stmt&) -> void;

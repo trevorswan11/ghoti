@@ -1024,6 +1024,20 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
             return value{anon_name, sema_type};
         },
         [&](const ast::if_expr& data) -> value { return emit_if(id, data); },
+        [&](const ast::cfg_value_expr&) -> value {
+            // The cfg pass settled this value; emit it via the recorded verdict.
+            const auto it{active_mod().cfg_value_results.find(id.get_index())};
+            if (it != active_mod().cfg_value_results.end()) {
+                if (it->second.is_predicate) {
+                    return value{it->second.boolean,
+                                 ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+                }
+                if (it->second.chosen.is_valid()) {
+                    return emit_expression_id_raw(it->second.chosen);
+                }
+            }
+            return value{undefined_val{}, active_mod().get_sema_type_opt(id)};
+        },
         [&](const ast::match_expr& data) -> value { return emit_match(id, data); },
         [&](const ast::initializer_expr& data) -> value { return emit_initializer(id, data); },
         [&](const ast::dot_expr& data) -> value { return emit_dot(id, data); },

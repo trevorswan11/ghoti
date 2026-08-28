@@ -144,16 +144,17 @@ auto parser::parse_statement(semicolon_behavior behavior)
     }
 
     switch (current_token_.type) {
-    case token_type_t::LBRACE:     return ast::block_stmt::parse(*this);
-    case token_type_t::BREAK:      return ast::break_stmt::parse(*this);
-    case token_type_t::CONTINUE:   return ast::continue_stmt::parse(*this);
-    case token_type_t::DEFER:      return ast::defer_stmt::parse(*this);
-    case token_type_t::UNDERSCORE: return ast::discard_stmt::parse(*this);
-    case token_type_t::IMPORT:     return ast::import_stmt::parse(*this);
-    case token_type_t::RETURN:     return ast::return_stmt::parse(*this);
-    case token_type_t::TEST:       return ast::test_stmt::parse(*this);
-    case token_type_t::USING:      return ast::using_stmt::parse(*this);
-    default:                       return ast::expr_stmt::parse(*this, behavior);
+    case token_type_t::BUILTIN_CFG: return ast::cfg_stmt::parse(*this);
+    case token_type_t::LBRACE:      return ast::block_stmt::parse(*this);
+    case token_type_t::BREAK:       return ast::break_stmt::parse(*this);
+    case token_type_t::CONTINUE:    return ast::continue_stmt::parse(*this);
+    case token_type_t::DEFER:       return ast::defer_stmt::parse(*this);
+    case token_type_t::UNDERSCORE:  return ast::discard_stmt::parse(*this);
+    case token_type_t::IMPORT:      return ast::import_stmt::parse(*this);
+    case token_type_t::RETURN:      return ast::return_stmt::parse(*this);
+    case token_type_t::TEST:        return ast::test_stmt::parse(*this);
+    case token_type_t::USING:       return ast::using_stmt::parse(*this);
+    default:                        return ast::expr_stmt::parse(*this, behavior);
     }
 }
 
@@ -292,6 +293,7 @@ constexpr auto PREFIX_FNS = [] -> auto {
 
     for (const auto tt : ALL_PRIMITIVES) { fns[tt] = ast::identifier_expr::parse; }
     for (const auto tt : builtins::ALL_TOKEN_TYPES) { fns[tt] = ast::identifier_expr::parse; }
+    fns[token_type_t::BUILTIN_CFG_VALUE] = ast::cfg_value_expr::parse;
 
     return fns;
 }();

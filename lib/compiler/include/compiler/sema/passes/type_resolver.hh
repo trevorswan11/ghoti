@@ -197,6 +197,7 @@ class type_resolver {
     auto visit(ast::node_id, const ast::if_expr&) -> void;
     auto visit(ast::node_id, const ast::index_expr&) -> void;
     auto visit(ast::node_id, const ast::infinite_loop_expr&) -> void;
+    auto visit(ast::node_id, const ast::cfg_value_expr&) -> void;
     auto visit(ast::node_id, const ast::assignment_expr&) -> void;
     auto visit(ast::node_id, const ast::binary_expr&) -> void;
 
@@ -267,6 +268,7 @@ class type_resolver {
         -> stdx::result<stdx::option<symbol&>, diagnostic>;
 
     auto visit(ast::node_id, const ast::break_stmt&) -> void;
+    auto visit(ast::node_id, const ast::cfg_stmt&) -> void;
     auto visit(ast::node_id, const ast::continue_stmt&) -> void;
     auto visit(ast::node_id, const ast::decl_stmt&) -> void;
     auto visit(ast::node_id, const ast::defer_stmt&) -> void;

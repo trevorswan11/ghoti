@@ -910,6 +910,58 @@ auto formatter::visit(node_id, const while_loop_expr& node) -> syntax::doc_id {
     });
 }
 
+auto formatter::visit(node_id, const cfg_value_expr& node) -> syntax::doc_id {
+    if (node.predicate) {
+        return doc_manager_.concat({
+            doc_manager_.text("@cfgValue("),
+            format(*node.predicate),
+            doc_manager_.text(")"),
+        });
+    }
+
+    std::vector<syntax::doc_id> arms;
+    arms.reserve(node.guards.size() + 1);
+    for (const auto& guard : node.guards) {
+        arms.emplace_back(doc_manager_.concat(
+            {format(guard.predicate), doc_manager_.text(" => "), format(guard.value)}));
+    }
+    if (node.fallback) {
+        arms.emplace_back(
+            doc_manager_.concat({doc_manager_.text("_ => "), format(*node.fallback)}));
+    }
+
+    return doc_manager_.concat({
+        doc_manager_.text("@cfgValue"),
+        doc_manager_.delimited("(", ")", std::move(arms), true, true),
+    });
+}
+
+auto formatter::visit(node_id, const cfg_stmt& node) -> syntax::doc_id {
+    std::vector<syntax::doc_id> parts;
+    for (auto it{node.arms.begin()}; it != node.arms.end(); ++it) {
+        if (it != node.arms.begin()) { parts.emplace_back(doc_manager_.text(" else ")); }
+        if (it->predicate) {
+            parts.emplace_back(doc_manager_.text("@cfg ("));
+            parts.emplace_back(format(*it->predicate));
+            parts.emplace_back(doc_manager_.text(") "));
+        }
+
+        std::vector<syntax::doc_id> body;
+        for (const auto& item : it->items) {
+            if (!body.empty()) { body.emplace_back(doc_manager_.hard_line()); }
+            body.emplace_back(format(item));
+        }
+        parts.emplace_back(doc_manager_.concat({
+            doc_manager_.text("{"),
+            doc_manager_.nest(doc_manager_.concat(
+                {doc_manager_.hard_line(), doc_manager_.concat(std::move(body))})),
+            doc_manager_.hard_line(),
+            doc_manager_.text("}"),
+        }));
+    }
+    return doc_manager_.concat(std::move(parts));
+}
+
 auto formatter::visit(node_id id, const block_stmt& node) -> syntax::doc_id {
     const auto& block_start{ast_.location_of(id)};
     const auto& block_end{ast_.end_location_of(id)};

@@ -25,6 +25,7 @@
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/sema/passes/cfg_pass.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "support/counter.hh"
@@ -35,6 +36,11 @@ auto symbol_collector::collect_symbols(mod::module& module, context& ctx) -> mod
     PROFILE_FUNCTION();
     if (module.is_collectable()) {
         module.root_table_idx.emplace(ctx.registry.create());
+
+        if (!cfg_pass::run(module, ctx)) {
+            return module.error_out(std::move(ctx.diags),
+                                    mod::module_state::POISONED_SYMBOL_COLLECTION);
+        }
 
         symbol_collector collector{module, ctx};
         for (const auto& node : module.ast) { collector.collect(node); }
@@ -232,6 +238,20 @@ auto symbol_collector::visit(ast::node_id id, const ast::infinite_loop_expr& loo
                         }})};
     last_type_->set_symbol_table_idx(idx);
     collecting_.set_sema_type(id, *last_type_.take());
+}
+
+auto symbol_collector::visit(ast::node_id id, const ast::cfg_value_expr&) -> void {
+    PROFILE_FUNCTION();
+    const default_counter::guard g{in_expr_scope_};
+    if (const auto& result{collecting_.cfg_value_results.find(id.get_index())};
+        result != collecting_.cfg_value_results.end() && result->second.chosen.is_valid()) {
+        collect(result->second.chosen);
+    }
+}
+
+// `@cfg` statements are spliced away by the cfg pass before symbol collection runs.
+auto symbol_collector::visit(ast::node_id, const ast::cfg_stmt&) -> void {
+    UNREACHABLE("cfg_stmt must be removed by the cfg pass before symbol collection");
 }
 
 #define MAKE_INFIX_COLLECTOR(NodeType)                                              \

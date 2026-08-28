@@ -16,8 +16,8 @@ constexpr auto CALLCONV_NAMES_TO_VALUES{string_utils::make_constexpr_map<calling
     std::pair{"c", calling_convention::C},
     std::pair{"sysv", calling_convention::SYSV},
     std::pair{"win64", calling_convention::WIN64},
-    std::pair{"stdcall", calling_convention::STDCALL},
-    std::pair{"fastcall", calling_convention::FASTCALL},
+    std::pair{"stdcall", calling_convention::X86_STDCALL},
+    std::pair{"fastcall", calling_convention::X86_FASTCALL},
     std::pair{"aapcs", calling_convention::AAPCS})};
 
 constexpr auto CALLCONV_VALS_TO_NAMES{[] {

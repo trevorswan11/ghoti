@@ -400,6 +400,7 @@ template <ast::IndexableID ID>
     case token_type_t::BUILTIN_TARGET_ARCH:
     case token_type_t::BUILTIN_TARGET_TRIPLE:
     case token_type_t::BUILTIN_TARGET_ABI:
+    case token_type_t::BUILTIN_TARGET_FAMILY:
     case token_type_t::BUILTIN_TARGET_ENDIAN: {
         ASSERT(builtin.return_type.get_kind() == type_kind::SLICE);
         return_type = &builtin.return_type;
@@ -483,6 +484,26 @@ template <ast::IndexableID ID>
     }
     case token_type_t::BUILTIN_PANIC: {
         ASSERT(builtin.return_type.get_kind() == type_kind::NORETURN);
+        return_type = &builtin.return_type;
+        break;
+    }
+    case token_type_t::BUILTIN_COMPILE_ERROR: {
+        std::string message{"compilation aborted by @compileError"};
+        if (!call.arguments.empty()) {
+            if (const auto expr_h{call.arguments[0].as_opt<ast::expr_handle>()}) {
+                if (const auto str_expr{resolving_.ast.get_as_opt<ast::string_expr>(*expr_h)}) {
+                    message = str_expr->value;
+                } else {
+                    gir::const_eval evaluator{ctx_, resolving_};
+                    if (const auto val{evaluator.try_eval(*expr_h)}) {
+                        if (const auto str{val->as_opt<std::string>()}) { message = *str; }
+                    }
+                }
+            }
+        }
+        ctx_.diags.emplace_back(std::move(message),
+                                error::COMPILE_ERROR_REACHED,
+                                resolving_.ast.location_of(call.function));
         return_type = &builtin.return_type;
         break;
     }
@@ -1516,6 +1537,27 @@ auto type_resolver::visit(ast::node_id id, const ast::infinite_loop_expr& loop) 
     const auto& block{resolving_.ast.get_as<ast::block_stmt>(loop.block)};
     for (const auto& stmt : block) { TRY_RESOLVE(stmt); }
     last_type_.emplace(loop_type);
+}
+
+// The cfg pass has already evaluated this `@cfgValue`; adopt the verdict's type
+auto type_resolver::visit(ast::node_id id, const ast::cfg_value_expr&) -> void {
+    PROFILE_FUNCTION();
+    const auto it{resolving_.cfg_value_results.find(id.get_index())};
+    if (it == resolving_.cfg_value_results.end() || it->second.is_predicate) {
+        auto& bool_type{ctx_.get_builtin_resolved_type(type_kind::BOOL)};
+        resolving_.set_sema_type(id, bool_type);
+        last_type_.emplace(bool_type);
+        return;
+    }
+    TRY_RESOLVE(it->second.chosen);
+    auto& chosen_type{*last_type_};
+    resolving_.set_sema_type(id, chosen_type);
+    last_type_.emplace(chosen_type);
+}
+
+// `@cfg` statements are spliced away by the cfg pass before type resolution runs.
+auto type_resolver::visit(ast::node_id, const ast::cfg_stmt&) -> void {
+    UNREACHABLE("cfg_stmt must be removed by the cfg pass before type resolution");
 }
 
 auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -> void {

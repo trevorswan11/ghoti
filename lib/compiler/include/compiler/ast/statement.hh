@@ -39,6 +39,18 @@ struct break_stmt {
         -> stdx::result<stmt_handle, syntax::diagnostic>;
 };
 
+struct cfg_stmt {
+    struct arm {
+        stdx::option<expr_handle> predicate;
+        std::vector<stmt_handle>  items;
+    };
+
+    std::vector<arm> arms;
+
+    [[nodiscard]] static auto parse(syntax::parser& parser)
+        -> stdx::result<stmt_handle, syntax::diagnostic>;
+};
+
 struct continue_stmt {
     stdx::option<identifier_handle> label;
 

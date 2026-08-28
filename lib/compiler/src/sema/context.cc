@@ -180,11 +180,13 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::TARGET_ABI, params(), t_c_str);
     inject_function(bis::TARGET_PTR_BITS, params(), t_usize);
     inject_function(bis::TARGET_ENDIAN, params(), t_c_str);
+    inject_function(bis::TARGET_FAMILY, params(), t_c_str);
 
     inject_function(bis::SET_EVAL_RECURSION_LIMIT, params(t_usize), t_void);
     inject_function(bis::SET_MAIN_SYMBOL, params(t_c_str), t_void);
 
     inject_function(bis::PANIC, params(t_c_str), t_noreturn);
+    inject_function(bis::COMPILE_ERROR, params(t_c_str), t_noreturn);
 
     inject_function(bis::FN_CTX, params(), t_auto);
 

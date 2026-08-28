@@ -53,6 +53,12 @@ enum class module_state : u8 {
 using diagnotic_list_variant =
     stdx::variant<stdx::monostate, syntax::diagnostics, sema::diagnostics>;
 
+struct cfg_value_result {
+    bool         boolean{false};
+    bool         is_predicate{true};
+    ast::node_id chosen{ast::node_id::make_invalid()};
+};
+
 struct module {
     std::filesystem::path                            path;
     std::filesystem::path                            parent_path;
@@ -62,6 +68,9 @@ struct module {
     stdx::opt_size                                   root_table_idx;
     module_state                                     state{module_state::PARSED};
     std::vector<sema::generic_instantiation_request> generic_instantiations;
+
+    // `@cfgValue` node index -> the cfg pass's evaluated verdict
+    ankerl::unordered_dense::map<usize, cfg_value_result> cfg_value_results;
 
     // Every identifier_expr references and uses encountered during symbol collection/resolution
     std::vector<ast::node_id> identifier_positions;

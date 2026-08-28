@@ -61,13 +61,17 @@ constexpr auto ALL_BUILTINS_BY_SV{
                                                    builtins::TARGET_ABI,
                                                    builtins::TARGET_PTR_BITS,
                                                    builtins::TARGET_ENDIAN,
+                                                   builtins::TARGET_FAMILY,
                                                    builtins::SET_EVAL_RECURSION_LIMIT,
                                                    builtins::SET_MAIN_SYMBOL,
                                                    builtins::PANIC,
                                                    builtins::FN_CTX,
                                                    builtins::SRC,
                                                    builtins::EXPECT,
-                                                   builtins::REQUIRE)};
+                                                   builtins::REQUIRE,
+                                                   builtins::CFG,
+                                                   builtins::CFG_VALUE,
+                                                   builtins::COMPILE_ERROR)};
 
 constexpr auto ALL_BUILTINS_BY_TT{[] -> auto {
     stdx::fixed::enum_map<token_type_t, stdx::option<std::string_view>> builtins;

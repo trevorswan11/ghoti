@@ -186,6 +186,17 @@ class AST {
         return operator[](id).template as_opt<Data>();
     }
 
+    // Mutable access to a node's payload. Caller asserts the stored alternative.
+    template <typename Data, IndexableNodeID ID>
+    [[nodiscard]] constexpr auto get_as_mut(ID id) noexcept -> Data& {
+        ASSERT(id.template is<Data>(), "Illegal node data retrieval");
+        return nodes_.pool[id.get_index()].template as<Data>();
+    }
+
+    [[nodiscard]] constexpr auto roots_mut() noexcept -> std::vector<node_id>& {
+        return nodes_.roots;
+    }
+
     constexpr auto clear() noexcept -> void {
         nodes_.clear();
         explicit_types_.clear();

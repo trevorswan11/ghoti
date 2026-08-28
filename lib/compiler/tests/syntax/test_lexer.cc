@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <stdx/types.hh>
@@ -357,9 +358,17 @@ TEST_CASE("Lexing pointers and references") {
 }
 
 TEST_CASE("Lexing compiler builtins & Lexer resetting") {
-    constexpr auto expecteds{std::views::transform(
-        syntax::builtins::ALL_TOKEN_TYPES,
-        [](const auto& tt) -> syntax::builtin_t { return {*syntax::get_builtin_opt(tt), tt}; })};
+    std::vector<token_type_t> all_builtins;
+    all_builtins.insert(all_builtins.end(),
+                        syntax::builtins::ALL_TOKEN_TYPES.begin(),
+                        syntax::builtins::ALL_TOKEN_TYPES.end());
+    all_builtins.insert(all_builtins.end(),
+                        syntax::builtins::SPECIAL_FORM_TOKEN_TYPES.begin(),
+                        syntax::builtins::SPECIAL_FORM_TOKEN_TYPES.end());
+    const auto expecteds{
+        std::views::transform(all_builtins, [](const auto& tt) -> syntax::builtin_t {
+            return {*syntax::get_builtin_opt(tt), tt};
+        })};
 
     std::string input;
     std::ranges::for_each(expecteds, [&input](const auto& lexeme) -> void {

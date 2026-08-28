@@ -49,6 +49,7 @@ class symbol_collector {
     auto                                visit(ast::node_id, const ast::if_expr&) -> void;
     auto                                visit(ast::node_id, const ast::index_expr&) -> void;
     auto                                visit(ast::node_id, const ast::infinite_loop_expr&) -> void;
+    auto                                visit(ast::node_id, const ast::cfg_value_expr&) -> void;
     auto                                visit(ast::node_id, const ast::assignment_expr&) -> void;
     auto                                visit(ast::node_id, const ast::binary_expr&) -> void;
     auto                                visit(ast::node_id, const ast::dot_expr&) -> void;
@@ -84,6 +85,7 @@ class symbol_collector {
 
     auto visit(ast::node_id, const ast::block_stmt&) -> void;
     auto visit(ast::node_id, const ast::break_stmt&) -> void;
+    auto visit(ast::node_id, const ast::cfg_stmt&) -> void;
     auto visit(ast::node_id, const ast::continue_stmt&) -> void;
     auto visit(ast::node_id, const ast::decl_stmt&) -> void;
     auto visit(ast::node_id, const ast::defer_stmt&) -> void;

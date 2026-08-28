@@ -394,6 +394,34 @@ auto dumper::visit(node_id, const infinite_loop_expr& loop) -> void {
     dump_node_list(block);
 }
 
+auto dumper::visit(node_id, const cfg_value_expr& cfg_value) -> void {
+    PROFILE_FUNCTION();
+    fmt::println(out_, "CfgValueExpression");
+    if (cfg_value.predicate) {
+        const indent::guard g{indent_, true};
+        fmt::print(out_, "{}Predicate: ", indent_.current_branch());
+        dump(*cfg_value.predicate);
+        return;
+    }
+
+    for (const auto& guard : cfg_value.guards) {
+        const indent::guard g{indent_, false};
+        fmt::print(out_, "{}Guard: ", indent_.current_branch());
+        dump(guard.predicate);
+        {
+            const indent::guard g2{indent_, true};
+            fmt::print(out_, "{}=> ", indent_.current_branch());
+            dump(guard.value);
+        }
+    }
+
+    if (cfg_value.fallback) {
+        const indent::guard g{indent_, true};
+        fmt::print(out_, "{}_ => ", indent_.current_branch());
+        dump(*cfg_value.fallback);
+    }
+}
+
 #define MAKE_INFIX_DUMP(NodeType, Name, LeftLabel, RightLabel)                         \
     auto dumper::visit(node_id id, const NodeType& node) -> void {                     \
         PROFILE_FUNCTION();                                                            \
@@ -767,6 +795,26 @@ auto dumper::visit(node_id, const break_stmt& break_stmt) -> void {
         const indent ::guard g{indent_, true};
         fmt::print(out_, "{}Value: ", indent_.current_branch());
         dump(*break_stmt.expression);
+    }
+}
+
+auto dumper::visit(node_id, const cfg_stmt& cfg) -> void {
+    PROFILE_FUNCTION();
+    fmt::println(out_, "CfgStatement");
+    for (auto it{cfg.arms.begin()}; it != cfg.arms.end(); ++it) {
+        const indent::guard g{indent_, std::next(it) == cfg.arms.end()};
+        if (it->predicate) {
+            fmt::print(out_, "{}Arm: ", indent_.current_branch());
+            dump(*it->predicate);
+        } else {
+            fmt::println(out_, "{}Else:", indent_.current_branch());
+        }
+
+        for (auto item{it->items.begin()}; item != it->items.end(); ++item) {
+            const indent::guard g2{indent_, std::next(item) == it->items.end()};
+            fmt::print(out_, "{}", indent_.current_branch());
+            dump(*item);
+        }
     }
 }
 

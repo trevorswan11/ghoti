@@ -108,8 +108,10 @@ class formatter {
     auto visit(node_id, const struct_expr&) -> syntax::doc_id;
     auto visit(node_id, const union_expr&) -> syntax::doc_id;
     auto visit(node_id, const while_loop_expr&) -> syntax::doc_id;
+    auto visit(node_id, const cfg_value_expr&) -> syntax::doc_id;
     auto visit(node_id, const block_stmt&) -> syntax::doc_id;
     auto visit(node_id, const break_stmt&) -> syntax::doc_id;
+    auto visit(node_id, const cfg_stmt&) -> syntax::doc_id;
     auto visit(node_id, const continue_stmt&) -> syntax::doc_id;
     auto visit(node_id, const decl_stmt&) -> syntax::doc_id;
     auto visit(node_id, const defer_stmt&) -> syntax::doc_id;

@@ -210,6 +210,22 @@ struct infinite_loop_expr {
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
+// `@cfgValue(<pred>)` -> constexpr bool, or the guard form
+// `@cfgValue(<pred> => <val>, ..., _ => <val>)` -> constexpr T
+struct cfg_value_expr {
+    struct guard {
+        expr_handle predicate;
+        expr_handle value;
+    };
+
+    stdx::option<expr_handle> predicate;
+    std::vector<guard>        guards;
+    stdx::option<expr_handle> fallback;
+
+    [[nodiscard]] static auto parse(syntax::parser& parser)
+        -> stdx::result<expr_handle, syntax::diagnostic>;
+};
+
 #define DECLARE_INFIX_EXPRESSION(Type)                                           \
     struct Type {                                                                \
         expr_handle               lhs;                                           \

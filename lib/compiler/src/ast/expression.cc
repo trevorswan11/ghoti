@@ -739,6 +739,76 @@ auto infinite_loop_expr::parse(syntax::parser& parser)
     return parser.add_expr<infinite_loop_expr>(start_token, block);
 }
 
+auto cfg_value_expr::parse(syntax::parser& parser)
+    -> stdx::result<expr_handle, syntax::diagnostic> {
+    PROFILE_FUNCTION();
+    using syntax::token_type_t;
+    const auto start_token{parser.get_current_token()};
+
+    TRY(parser.expect_peek(token_type_t::LPAREN));
+    parser.advance();
+    if (parser.current_token_is(token_type_t::RPAREN)) {
+        return make_syntax_err("@cfgValue requires an argument",
+                               syntax::error::CFG_VALUE_MISSING_ARGUMENT,
+                               start_token);
+    }
+
+    std::vector<guard>        guards;
+    stdx::option<expr_handle> fallback;
+
+    // Parses one `<pred> => <val>` or `_ => <val>` arm
+    const auto parse_guard_arm = [&] -> stdx::result<void, syntax::diagnostic> {
+        if (parser.current_token_is(token_type_t::UNDERSCORE)) {
+            if (fallback) {
+                return make_syntax_err("@cfgValue guard form allows only one '_ =>' arm",
+                                       syntax::error::CFG_VALUE_DUPLICATE_FALLBACK,
+                                       parser.get_current_token());
+            }
+            TRY(parser.expect_peek(token_type_t::FAT_ARROW));
+            parser.advance();
+            fallback.emplace(TRY(parser.parse_expression()));
+            return {};
+        }
+        const auto predicate{TRY(parser.parse_expression())};
+        TRY(parser.expect_peek(token_type_t::FAT_ARROW));
+        parser.advance();
+        const auto value{TRY(parser.parse_expression())};
+        guards.emplace_back(guard{predicate, value});
+        return {};
+    };
+
+    if (!parser.current_token_is(token_type_t::UNDERSCORE)) {
+        const auto first{TRY(parser.parse_expression())};
+        if (!parser.peek_token_is(token_type_t::FAT_ARROW)) {
+            TRY(parser.expect_peek(token_type_t::RPAREN));
+            return parser.add_expr<cfg_value_expr>(start_token,
+                                                   stdx::option<expr_handle>{first},
+                                                   std::vector<guard>{},
+                                                   stdx::option<expr_handle>{});
+        }
+        parser.advance(2); // current = =>, then value's first token
+        guards.emplace_back(guard{first, TRY(parser.parse_expression())});
+    } else {
+        TRY(parse_guard_arm());
+    }
+
+    while (parser.peek_token_is(token_type_t::COMMA)) {
+        parser.advance();                                          // ,
+        if (parser.peek_token_is(token_type_t::RPAREN)) { break; } // trailing comma
+        parser.advance();                                          // arm's first token
+        TRY(parse_guard_arm());
+    }
+
+    TRY(parser.expect_peek(token_type_t::RPAREN));
+    if (guards.empty() && !fallback) {
+        return make_syntax_err("@cfgValue guard form requires at least one arm",
+                               syntax::error::CFG_VALUE_EMPTY_GUARD,
+                               start_token);
+    }
+    return parser.add_expr<cfg_value_expr>(
+        start_token, stdx::option<expr_handle>{}, std::move(guards), std::move(fallback));
+}
+
 namespace {
 
 template <NodeData Expr>

@@ -41,30 +41,6 @@ namespace ghoti::gir {
 
 namespace {
 
-// A stable, version-suffix-free OS token (`macosx13.0.0` -> `macos`) for `if constexpr`.
-[[nodiscard]] auto normalized_target_os(const llvm::Triple& triple) -> std::string {
-    switch (triple.getOS()) {
-    case llvm::Triple::Darwin:
-    case llvm::Triple::MacOSX:     return "macos";
-    case llvm::Triple::IOS:        return "ios";
-    case llvm::Triple::Linux:      return "linux";
-    case llvm::Triple::Win32:      return "windows";
-    case llvm::Triple::FreeBSD:    return "freebsd";
-    case llvm::Triple::OpenBSD:    return "openbsd";
-    case llvm::Triple::NetBSD:     return "netbsd";
-    case llvm::Triple::WASI:       return "wasi";
-    case llvm::Triple::Emscripten: return "emscripten";
-    case llvm::Triple::UnknownOS:  return "freestanding";
-    default:                       return std::string{triple.getOSTypeName(triple.getOS())};
-    }
-}
-
-// gnu / musl / msvc / android / gnueabihf / ... ; `none` when unspecified.
-[[nodiscard]] auto normalized_target_abi(const llvm::Triple& triple) -> std::string {
-    if (triple.getEnvironment() == llvm::Triple::UnknownEnvironment) { return "none"; }
-    return std::string{triple.getEnvironmentName()};
-}
-
 template <typename T>
 [[nodiscard]] auto fold_binary_arithmetic(syntax::token_type_t      op_type,
                                           T                         l,
@@ -541,6 +517,16 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
         [&](const ast::identifier_expr& data) { return eval_ident(id, data); },
         [&](const ast::call_expr& data) { return eval_call(id, data); },
         [&](const ast::if_expr& data) { return eval_if(id, data); },
+        [&](const ast::cfg_value_expr&) -> stdx::option<const_value> {
+            // The cfg pass already settled this; read its verdict.
+            const auto it{module_->cfg_value_results.find(id.get_index())};
+            if (it == module_->cfg_value_results.end()) { return stdx::none; }
+            if (it->second.is_predicate) {
+                return const_value{it->second.boolean,
+                                   ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+            }
+            return it->second.chosen.is_valid() ? try_eval(it->second.chosen) : stdx::none;
+        },
         [&](const ast::while_loop_expr& data) { return eval_while(id, data); },
         [&](const ast::do_while_loop_expr& data) { return eval_do_while(id, data); },
         [&](const ast::for_loop_expr& data) { return eval_for(id, data); },
@@ -1336,30 +1322,33 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
         return stdx::none;
     }
     case syntax::token_type_t::BUILTIN_TARGET_OS: {
-        const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
-        return const_value::make_string(ctx_, normalized_target_os(triple));
+        const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
+        return const_value::make_string(ctx_, std::string{facts.os});
     }
     case syntax::token_type_t::BUILTIN_TARGET_ARCH: {
-        const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
-        return const_value::make_string(
-            ctx_, std::string{llvm::Triple::getArchTypeName(triple.getArch())});
+        const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
+        return const_value::make_string(ctx_, std::string{facts.arch});
     }
     case syntax::token_type_t::BUILTIN_TARGET_TRIPLE: {
         const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
         return const_value::make_string(ctx_, triple.str());
     }
     case syntax::token_type_t::BUILTIN_TARGET_ABI: {
-        const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
-        return const_value::make_string(ctx_, normalized_target_abi(triple));
+        const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
+        return const_value::make_string(ctx_, std::string{facts.abi});
+    }
+    case syntax::token_type_t::BUILTIN_TARGET_FAMILY: {
+        const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
+        return const_value::make_string(ctx_, std::string{facts.family});
     }
     case syntax::token_type_t::BUILTIN_TARGET_ENDIAN: {
-        const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
-        return const_value::make_string(ctx_, triple.isLittleEndian() ? "little" : "big");
+        const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
+        return const_value::make_string(ctx_, std::string{facts.endian});
     }
     case syntax::token_type_t::BUILTIN_TARGET_PTR_BITS: {
-        const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
-        const u64  bits{triple.isArch64Bit() ? 64U : (triple.isArch16Bit() ? 16U : 32U)};
-        return const_value{bits, ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+        const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
+        return const_value{u64{facts.ptr_bits},
+                           ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
     }
     case syntax::token_type_t::BUILTIN_SRC: {
         const auto   loc{module_->ast.location_of(call.function)};

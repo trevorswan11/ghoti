@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <fmt/format.h>
 #include <stdx/fixed/enum_map.hh>
@@ -65,6 +66,75 @@ auto break_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synt
     }
     TRY(parser.expect_semicolon());
     return parser.add_stmt<break_stmt>(start_token, label, value);
+}
+
+namespace {
+
+// Parses a `@cfg` arm body: either a braced `{ <item>* }` group or a single bare item
+[[nodiscard]] auto parse_cfg_body(syntax::parser& parser)
+    -> stdx::result<std::vector<stmt_handle>, syntax::diagnostic> {
+    using syntax::token_type_t;
+    std::vector<stmt_handle> items;
+
+    if (parser.current_token_is(token_type_t::LBRACE)) {
+        while (!parser.peek_token_is(token_type_t::RBRACE) &&
+               !parser.peek_token_is(token_type_t::END)) {
+            parser.advance();
+            if (parser.current_token_is(token_type_t::SEMICOLON)) { continue; }
+            items.emplace_back(TRY(parser.parse_statement()));
+        }
+        TRY(parser.expect_peek(token_type_t::RBRACE));
+    } else {
+        items.emplace_back(TRY(parser.parse_statement()));
+    }
+    return items;
+}
+
+// Parses `( <predicate> )` for a `@cfg` arm. Assumes the current token is `@cfg`
+[[nodiscard]] auto parse_cfg_predicate(syntax::parser& parser)
+    -> stdx::result<expr_handle, syntax::diagnostic> {
+    using syntax::token_type_t;
+    TRY(parser.expect_peek(token_type_t::LPAREN));
+    parser.advance();
+    if (parser.current_token_is(token_type_t::RPAREN)) {
+        return make_syntax_err("@cfg requires a predicate",
+                               syntax::error::CFG_MISSING_PREDICATE,
+                               parser.get_current_token());
+    }
+    const auto predicate{TRY(parser.parse_expression())};
+    TRY(parser.expect_peek(token_type_t::RPAREN));
+    return predicate;
+}
+
+} // namespace
+
+auto cfg_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
+    PROFILE_FUNCTION();
+    using syntax::token_type_t;
+    const auto start_token{parser.get_current_token()};
+
+    std::vector<arm> arms;
+
+    const auto predicate{TRY(parse_cfg_predicate(parser))};
+    parser.advance();
+    arms.emplace_back(arm{stdx::option<expr_handle>{predicate}, TRY(parse_cfg_body(parser))});
+
+    while (parser.peek_token_is(token_type_t::ELSE)) {
+        parser.advance(); // current = else
+        if (parser.peek_token_is(token_type_t::BUILTIN_CFG)) {
+            parser.advance(); // current = @cfg
+            const auto else_predicate{TRY(parse_cfg_predicate(parser))};
+            parser.advance();
+            arms.emplace_back(
+                arm{stdx::option<expr_handle>{else_predicate}, TRY(parse_cfg_body(parser))});
+        } else {
+            parser.advance(); // current = body's first token
+            arms.emplace_back(arm{stdx::none, TRY(parse_cfg_body(parser))});
+            break; // a predicate-less `else` terminates the chain
+        }
+    }
+
+    return parser.add_stmt<cfg_stmt>(start_token, std::move(arms));
 }
 
 auto continue_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
