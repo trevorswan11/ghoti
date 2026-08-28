@@ -234,6 +234,18 @@ auto parser::parse_expression(bind_precedence precedence)
     return stdx::none;
 }
 
+[[nodiscard]] auto parser::parse_cfg_predicate() -> stdx::result<ast::expr_handle, diagnostic> {
+    TRY(expect_peek(token_type_t::LPAREN));
+    advance();
+    if (current_token_is(token_type_t::RPAREN)) {
+        return make_syntax_err(
+            "@cfg requires a predicate", error::CFG_MISSING_PREDICATE, get_current_token());
+    }
+    const auto predicate{TRY(parse_expression())};
+    TRY(expect_peek(token_type_t::RPAREN));
+    return predicate;
+}
+
 namespace {
 
 constexpr auto PREFIX_FNS = [] -> auto {

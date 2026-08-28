@@ -86,14 +86,28 @@ struct do_while_loop_expr {
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
+// A `@cfg(...) ...` group inside an aggregate  body
+template <typename Item> struct cfg_item_group {
+    struct arm {
+        stdx::option<expr_handle> predicate; // unset on the trailing bare `else`
+        std::vector<Item>         items;
+    };
+
+    usize            position{0}; // index in the aggregate's item list this group expands at
+    std::vector<arm> arms;
+};
+
 struct enum_expr {
     struct enumeration {
         identifier_handle         name;
         stdx::option<expr_handle> value;
     };
 
+    using cfg_group = cfg_item_group<enumeration>;
+
     stdx::option<identifier_handle> underlying;
     std::vector<enumeration>        enumerations;
+    std::vector<cfg_group>          cfg_groups;
     bool                            non_exhaustive;
     member_list                     members;
 
@@ -344,10 +358,13 @@ struct struct_expr {
         }
     };
 
-    std::vector<field> fields;
-    member_list        members;
-    bool               is_extern{false};
-    bool               is_packed{false};
+    using cfg_group = cfg_item_group<field>;
+
+    std::vector<field>     fields;
+    std::vector<cfg_group> cfg_groups;
+    member_list            members;
+    bool                   is_extern{false};
+    bool                   is_packed{false};
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic> {
@@ -364,9 +381,12 @@ struct union_expr {
         stdx::option<expr_handle> explicit_alignment;
     };
 
-    std::vector<field> fields;
-    member_list        members;
-    bool               is_extern{false};
+    using cfg_group = cfg_item_group<field>;
+
+    std::vector<field>     fields;
+    std::vector<cfg_group> cfg_groups;
+    member_list            members;
+    bool                   is_extern{false};
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic> {

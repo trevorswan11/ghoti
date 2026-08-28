@@ -159,4 +159,65 @@ auto find_nested_fn(const mod::module&        module,
     FAIL("Could not find nested function named '" << name << "'");
 }
 
+auto run_cfg(std::string_view input) -> cfg_outcome {
+    auto [ctx, idx]{helpers::collect(input)};
+
+    cfg_outcome out;
+    if (const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()}) {
+        for (const auto& diag : *diags) {
+            out.codes.emplace_back(diag.get_error());
+            out.messages.emplace_back(diag.get_message().value_or(""));
+        }
+    }
+    return out;
+}
+
+auto selected(std::string_view input, std::string_view name) -> bool {
+    auto [ctx, idx]{helpers::collect(input)};
+
+    bool found_decl{false};
+    for (const auto root : ctx->root_mod.ast) {
+        if (ctx->root_mod.ast.get_as_opt<ast::cfg_stmt>(root)) { return false; }
+        if (const auto decl{ctx->root_mod.ast.get_as_opt<ast::decl_stmt>(root)}) {
+            const auto& decl_name{ctx->root_mod.ast.get_as<ast::identifier_expr>(decl->name).name};
+            if (decl_name == name) { found_decl = true; }
+        }
+    }
+    return found_decl;
+}
+
+auto struct_fields(std::string_view input, std::string_view name) -> std::vector<std::string> {
+    auto [ctx, idx]{helpers::collect(input)};
+    for (const auto root : ctx->root_mod.ast) {
+        const auto decl{ctx->root_mod.ast.get_as_opt<ast::decl_stmt>(root)};
+        if (!decl || !decl->value) { continue; }
+        if (ctx->root_mod.ast.get_as<ast::identifier_expr>(decl->name).name != name) { continue; }
+        const auto se{ctx->root_mod.ast.get_as_opt<ast::struct_expr>(*decl->value)};
+        if (!se) { break; }
+        std::vector<std::string> out;
+        for (const auto& field : se->fields) {
+            out.emplace_back(ctx->root_mod.ast.get_as<ast::identifier_expr>(field.name).name);
+        }
+        return out;
+    }
+    return {};
+}
+
+auto enum_variants(std::string_view input, std::string_view name) -> std::vector<std::string> {
+    auto [ctx, idx]{helpers::collect(input)};
+    for (const auto root : ctx->root_mod.ast) {
+        const auto decl{ctx->root_mod.ast.get_as_opt<ast::decl_stmt>(root)};
+        if (!decl || !decl->value) { continue; }
+        if (ctx->root_mod.ast.get_as<ast::identifier_expr>(decl->name).name != name) { continue; }
+        const auto ee{ctx->root_mod.ast.get_as_opt<ast::enum_expr>(*decl->value)};
+        if (!ee) { break; }
+        std::vector<std::string> out;
+        for (const auto& variant : ee->enumerations) {
+            out.emplace_back(ctx->root_mod.ast.get_as<ast::identifier_expr>(variant.name).name);
+        }
+        return out;
+    }
+    return {};
+}
+
 } // namespace ghoti::tests::helpers

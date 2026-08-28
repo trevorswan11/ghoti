@@ -104,12 +104,38 @@ class cfg_pass {
     auto fire_compile_error(ast::node_id at, const ast::call_expr& call) -> void;
     auto fire_eager_compile_errors(const std::vector<ast::stmt_handle>& items) -> void;
 
-    [[nodiscard]] auto select_arm(const ast::cfg_stmt& cfg) -> const ast::cfg_stmt::arm*;
-    auto               rewrite_items(std::vector<ast::stmt_handle>& list) -> void;
-    auto               rewrite_roots(std::vector<ast::node_id>& roots) -> void;
-    auto               recurse_into_bodies(ast::stmt_handle stmt) -> void;
-    auto               recurse_into_expr(ast::expr_handle expr) -> void;
-    auto               recurse_into_block(ast::block_handle block) -> void;
+    // Selects the surviving arm of any `@cfg` chain (statement or aggregate group)
+    template <typename Arm>
+    [[nodiscard]] auto select_arm_of(const std::vector<Arm>& arms) -> stdx::option<const Arm&> {
+        for (const auto& arm : arms) {
+            if (!arm.predicate) { return &arm; } // bare `else`
+            const auto taken{eval_predicate(*arm.predicate)};
+            if (!taken) { return nullptr; }
+            if (*taken) { return &arm; }
+        }
+        return nullptr;
+    }
+
+    // Splices each aggregate `@cfg` group's selected items into `items` at the group's position
+    template <typename Group, typename Item>
+    auto flatten_cfg_groups(std::vector<Group>& groups, std::vector<Item>& items) -> void {
+        usize offset{0};
+        for (auto& group : groups) {
+            const auto* arm{select_arm_of(group.arms)};
+            if (!arm) { continue; }
+            const auto at{static_cast<idiff>(group.position + offset)};
+            items.insert(items.begin() + at, arm->items.begin(), arm->items.end());
+            offset += arm->items.size();
+        }
+        groups.clear();
+    }
+
+    auto rewrite_items(std::vector<ast::stmt_handle>& list) -> void;
+    auto rewrite_roots(std::vector<ast::node_id>& roots) -> void;
+    auto recurse_into_bodies(ast::stmt_handle stmt) -> void;
+    auto recurse_into_expr(ast::expr_handle expr) -> void;
+    auto recurse_into_block(ast::block_handle block) -> void;
+    auto recurse_into_members(const ast::member_list& members) -> void;
 
   private:
     mod::module&          module_;

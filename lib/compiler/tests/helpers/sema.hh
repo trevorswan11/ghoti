@@ -1,10 +1,12 @@
 #pragma once
 
+#include <algorithm>
 #include <concepts>
 #include <filesystem>
 #include <functional>
 #include <iostream>
 #include <ostream>
+#include <string>
 #include <string_view>
 #include <tuple>
 #include <utility>
@@ -284,5 +286,31 @@ auto expect_compile_error(std::string_view source) -> ctx_idx_pair;
 [[nodiscard]] auto find_nested_fn(const mod::module&        module,
                                   const ast::function_expr& outer,
                                   std::string_view          name) -> ast::node_id;
+
+struct cfg_outcome {
+    std::vector<sema::error> codes;
+    std::vector<std::string> messages;
+
+    [[nodiscard]] auto has_code(sema::error code) const -> bool {
+        return std::ranges::contains(codes, code);
+    }
+
+    [[nodiscard]] auto any_message_contains(std::string_view needle) const -> bool {
+        return std::ranges::any_of(messages,
+                                   [&](const auto& message) { return message.contains(needle); });
+    }
+};
+
+// Runs the cfg pass over `input` at module scope and collects every emitted diagnostic
+[[nodiscard]] auto run_cfg(std::string_view input) -> cfg_outcome;
+[[nodiscard]] auto selected(std::string_view input, std::string_view name) -> bool;
+
+// The post-cfg-pass field names of the first `const <name> := struct { ... }` root.
+[[nodiscard]] auto struct_fields(std::string_view input, std::string_view name)
+    -> std::vector<std::string>;
+
+// The post-cfg-pass variant names of the first `const <name> := enum { ... }` root.
+[[nodiscard]] auto enum_variants(std::string_view input, std::string_view name)
+    -> std::vector<std::string>;
 
 } // namespace ghoti::tests::helpers

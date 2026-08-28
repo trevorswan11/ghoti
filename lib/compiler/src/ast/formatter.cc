@@ -266,12 +266,7 @@ auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
     if (node.is_packed) { head.emplace_back(doc_manager_.text("packed ")); }
     head.emplace_back(doc_manager_.text("struct "));
 
-    std::vector<syntax::doc_id> entries;
-    for (usize i{0}; i < node.fields.size(); ++i) {
-        const auto& field{node.fields[i]};
-        const auto& start_loc{ast_.location_of(field.name)};
-        auto        leading{consume_leading_comments(start_loc.line)};
-
+    const auto field_item{[&](const struct_expr::field& field) -> syntax::doc_id {
         std::vector<syntax::doc_id> parts;
         if (field.is_public()) { parts.emplace_back(doc_manager_.text("pub ")); }
         parts.emplace_back(format(field.name));
@@ -286,14 +281,31 @@ auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
             parts.emplace_back(doc_manager_.text(" = "));
             parts.emplace_back(format(*field.default_value));
         }
+        return doc_manager_.concat(std::move(parts));
+    }};
+
+    std::vector<syntax::doc_id> entries;
+    const auto                  flush_cfg_groups{[&](usize position) -> void {
+        for (const auto& group : node.cfg_groups) {
+            if (group.position != position) { continue; }
+            entries.emplace_back(format_aggregate_cfg_group(group, field_item));
+        }
+    }};
+
+    flush_cfg_groups(0);
+    for (usize i{0}; i < node.fields.size(); ++i) {
+        const auto& field{node.fields[i]};
+        const auto& start_loc{ast_.location_of(field.name)};
+        auto        leading{consume_leading_comments(start_loc.line)};
 
         const auto end_line{field.default_value
                                 ? ast_.end_location_of(*field.default_value).line
                                 : (field.explicit_alignment
                                        ? ast_.end_location_of(*field.explicit_alignment).line
                                        : ast_.end_location_of(field.explicit_type).line)};
-        const auto more_follows{i + 1 < node.fields.size() || !node.members.empty()};
-        auto       field_doc{doc_manager_.concat(std::move(parts))};
+        const auto more_follows{i + 1 < node.fields.size() || !node.members.empty() ||
+                                !node.cfg_groups.empty()};
+        auto       field_doc{field_item(field)};
         auto       trailing{consume_trailing_comment(end_line)};
         if (more_follows || trailing != doc_manager_.nil()) {
             field_doc = doc_manager_.concat({field_doc, doc_manager_.text(",")});
@@ -308,6 +320,7 @@ auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
             field_doc = doc_manager_.concat({leading, field_doc});
         }
         entries.emplace_back(field_doc);
+        flush_cfg_groups(i + 1);
     }
 
     const auto field_count{entries.size()};
@@ -336,26 +349,39 @@ auto formatter::format_union(const union_expr& node) -> syntax::doc_id {
     if (node.is_extern) { head.emplace_back(doc_manager_.text("extern ")); }
     head.emplace_back(doc_manager_.text("union "));
 
+    const auto field_item{[&](const union_expr::field& field) -> syntax::doc_id {
+        std::vector<syntax::doc_id> parts;
+        parts.emplace_back(format(field.name));
+        parts.emplace_back(doc_manager_.text(": "));
+        if (field.explicit_alignment) {
+            parts.emplace_back(doc_manager_.concat({doc_manager_.text("@alignas("),
+                                                    format(*field.explicit_alignment),
+                                                    doc_manager_.text(") ")}));
+        }
+        parts.emplace_back(format(field.explicit_type));
+        return doc_manager_.concat(std::move(parts));
+    }};
+
     std::vector<syntax::doc_id> entries;
+    const auto                  flush_cfg_groups{[&](usize position) -> void {
+        for (const auto& group : node.cfg_groups) {
+            if (group.position == position) {
+                entries.emplace_back(format_aggregate_cfg_group(group, field_item));
+            }
+        }
+    }};
+
+    flush_cfg_groups(0);
     for (usize i{0}; i < node.fields.size(); ++i) {
         const auto& [name, explicit_type, explicit_alignment]{node.fields[i]};
         const auto& start_loc{ast_.location_of(name)};
         auto        leading{consume_leading_comments(start_loc.line)};
 
-        std::vector<syntax::doc_id> parts;
-        parts.emplace_back(format(name));
-        parts.emplace_back(doc_manager_.text(": "));
-        if (explicit_alignment) {
-            parts.emplace_back(doc_manager_.concat({doc_manager_.text("@alignas("),
-                                                    format(*explicit_alignment),
-                                                    doc_manager_.text(") ")}));
-        }
-        parts.emplace_back(format(explicit_type));
-
         const auto end_line{explicit_alignment ? ast_.end_location_of(*explicit_alignment).line
                                                : ast_.end_location_of(explicit_type).line};
-        const auto more_follows{i + 1 < node.fields.size() || !node.members.empty()};
-        auto       field_doc{doc_manager_.concat(std::move(parts))};
+        const auto more_follows{i + 1 < node.fields.size() || !node.members.empty() ||
+                                !node.cfg_groups.empty()};
+        auto       field_doc{field_item(node.fields[i])};
         auto       trailing{consume_trailing_comment(end_line)};
         if (more_follows || trailing != doc_manager_.nil()) {
             field_doc = doc_manager_.concat({field_doc, doc_manager_.text(",")});
@@ -370,6 +396,7 @@ auto formatter::format_union(const union_expr& node) -> syntax::doc_id {
             field_doc = doc_manager_.concat({leading, field_doc});
         }
         entries.emplace_back(field_doc);
+        flush_cfg_groups(i + 1);
     }
     const auto field_count{entries.size()};
     for (const auto& member : node.members) {
@@ -396,20 +423,34 @@ auto formatter::format_enum(const enum_expr& node) -> syntax::doc_id {
     std::vector<syntax::doc_id> head;
     head.emplace_back(doc_manager_.text("enum "));
 
+    const auto variant_item{[&](const enum_expr::enumeration& variant) -> syntax::doc_id {
+        return variant.value
+                   ? doc_manager_.concat(
+                         {format(variant.name), doc_manager_.text(" = "), format(*variant.value)})
+                   : format(variant.name);
+    }};
+
     std::vector<syntax::doc_id> entries;
+    const auto                  flush_cfg_groups{[&](usize position) -> void {
+        for (const auto& group : node.cfg_groups) {
+            if (group.position == position) {
+                entries.emplace_back(format_aggregate_cfg_group(group, variant_item));
+            }
+        }
+    }};
+
     const auto total_enums{node.enumerations.size() + (node.non_exhaustive ? 1 : 0)};
+    flush_cfg_groups(0);
     for (usize i{0}; i < node.enumerations.size(); ++i) {
         const auto& enumeration{node.enumerations[i]};
         const auto& start_loc{ast_.location_of(enumeration.name)};
         auto        leading{consume_leading_comments(start_loc.line)};
 
-        auto       enum_doc{enumeration.value ? doc_manager_.concat({format(enumeration.name),
-                                                                     doc_manager_.text(" = "),
-                                                                     format(*enumeration.value)})
-                                              : format(enumeration.name)};
+        auto       enum_doc{variant_item(enumeration)};
         const auto end_line{enumeration.value ? ast_.end_location_of(*enumeration.value).line
                                               : ast_.end_location_of(enumeration.name).line};
-        const auto more_follows{i + 1 < total_enums || !node.members.empty()};
+        const auto more_follows{i + 1 < total_enums || !node.members.empty() ||
+                                !node.cfg_groups.empty()};
         auto       trailing{consume_trailing_comment(end_line)};
         if (more_follows || trailing != doc_manager_.nil()) {
             enum_doc = doc_manager_.concat({enum_doc, doc_manager_.text(",")});
@@ -422,6 +463,7 @@ auto formatter::format_enum(const enum_expr& node) -> syntax::doc_id {
         }
         if (leading != doc_manager_.nil()) { enum_doc = doc_manager_.concat({leading, enum_doc}); }
         entries.emplace_back(enum_doc);
+        flush_cfg_groups(i + 1);
     }
     if (node.non_exhaustive) {
         auto non_ex{doc_manager_.text("_")};

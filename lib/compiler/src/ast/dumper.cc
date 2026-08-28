@@ -214,6 +214,11 @@ auto dumper::visit(node_id, const enum_expr& enum_expr) -> void {
                        });
     }
 
+    if (!enum_expr.cfg_groups.empty()) {
+        const indent::guard g{indent_, false};
+        dump_cfg_groups(enum_expr.cfg_groups);
+    }
+
     const auto has_members{!enum_expr.members.empty()};
     {
         const indent::guard g{indent_, !has_members};
@@ -644,6 +649,7 @@ auto dumper::visit(node_id, const struct_expr& node) -> void {
     fmt::println(out_, "StructExpression");
 
     const auto has_fields{!node.fields.empty()};
+    const auto has_cfg{!node.cfg_groups.empty()};
     const auto has_members{!node.members.empty()};
 
     {
@@ -651,12 +657,12 @@ auto dumper::visit(node_id, const struct_expr& node) -> void {
         fmt::println(out_, "{}Extern: {}", indent_.current_branch(), node.is_extern);
     }
     {
-        const indent::guard g{indent_, !has_fields && !has_members};
+        const indent::guard g{indent_, !has_fields && !has_cfg && !has_members};
         fmt::println(out_, "{}Packed: {}", indent_.current_branch(), node.is_packed);
     }
 
     if (has_fields) {
-        const indent::guard g{indent_, !has_members};
+        const indent::guard g{indent_, !has_cfg && !has_members};
         fmt::println(out_, "{}Fields:", indent_.current_branch());
         dump_container(node.fields, [this](const struct_expr::field& field) -> void {
             {
@@ -691,6 +697,11 @@ auto dumper::visit(node_id, const struct_expr& node) -> void {
         });
     }
 
+    if (has_cfg) {
+        const indent::guard g{indent_, !has_members};
+        dump_cfg_groups(node.cfg_groups);
+    }
+
     if (has_members) {
         const indent::guard g{indent_, true};
         fmt::println(out_, "{}Members:", indent_.current_branch());
@@ -703,13 +714,14 @@ auto dumper::visit(node_id, const union_expr& node) -> void {
     PROFILE_FUNCTION();
     fmt::println(out_, "UnionExpression");
 
+    const auto has_cfg{!node.cfg_groups.empty()};
     const auto has_members{!node.members.empty()};
     {
         const indent::guard g{indent_, false};
         fmt::println(out_, "{}Extern: {}", indent_.current_branch(), node.is_extern);
     }
     {
-        const indent::guard g{indent_, !has_members};
+        const indent::guard g{indent_, !has_cfg && !has_members};
         fmt::println(out_, "{}Fields:", indent_.current_branch());
         dump_container(node.fields, [this](const union_expr::field& field) -> void {
             fmt::println(out_, "{}Field:", indent_.current_branch());
@@ -732,6 +744,11 @@ auto dumper::visit(node_id, const union_expr& node) -> void {
                 dump(*field.explicit_alignment);
             }
         });
+    }
+
+    if (has_cfg) {
+        const indent::guard g{indent_, !has_members};
+        dump_cfg_groups(node.cfg_groups);
     }
 
     if (has_members) {

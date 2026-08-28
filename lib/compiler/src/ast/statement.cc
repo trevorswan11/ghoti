@@ -90,22 +90,6 @@ namespace {
     return items;
 }
 
-// Parses `( <predicate> )` for a `@cfg` arm. Assumes the current token is `@cfg`
-[[nodiscard]] auto parse_cfg_predicate(syntax::parser& parser)
-    -> stdx::result<expr_handle, syntax::diagnostic> {
-    using syntax::token_type_t;
-    TRY(parser.expect_peek(token_type_t::LPAREN));
-    parser.advance();
-    if (parser.current_token_is(token_type_t::RPAREN)) {
-        return make_syntax_err("@cfg requires a predicate",
-                               syntax::error::CFG_MISSING_PREDICATE,
-                               parser.get_current_token());
-    }
-    const auto predicate{TRY(parser.parse_expression())};
-    TRY(parser.expect_peek(token_type_t::RPAREN));
-    return predicate;
-}
-
 } // namespace
 
 auto cfg_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
@@ -115,7 +99,7 @@ auto cfg_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax
 
     std::vector<arm> arms;
 
-    const auto predicate{TRY(parse_cfg_predicate(parser))};
+    const auto predicate{TRY(parser.parse_cfg_predicate())};
     parser.advance();
     arms.emplace_back(arm{stdx::option<expr_handle>{predicate}, TRY(parse_cfg_body(parser))});
 
@@ -123,7 +107,7 @@ auto cfg_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax
         parser.advance(); // current = else
         if (parser.peek_token_is(token_type_t::BUILTIN_CFG)) {
             parser.advance(); // current = @cfg
-            const auto else_predicate{TRY(parse_cfg_predicate(parser))};
+            const auto else_predicate{TRY(parser.parse_cfg_predicate())};
             parser.advance();
             arms.emplace_back(
                 arm{stdx::option<expr_handle>{else_predicate}, TRY(parse_cfg_body(parser))});

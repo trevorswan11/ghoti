@@ -2,6 +2,7 @@
 
 #include <ostream>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <stdx/types.hh>
@@ -62,6 +63,26 @@ class formatter {
     [[nodiscard]] auto format_enum(const enum_expr& node) -> syntax::doc_id;
     [[nodiscard]] auto aggregate_body(std::vector<syntax::doc_id> entries, usize comma_count)
         -> syntax::doc_id;
+
+    template <typename Group, typename ItemFmt>
+    [[nodiscard]] auto format_aggregate_cfg_group(const Group& group, ItemFmt item_fmt)
+        -> syntax::doc_id {
+        std::vector<syntax::doc_id> parts;
+        for (usize a{0}; a < group.arms.size(); ++a) {
+            const auto& arm{group.arms[a]};
+            if (a != 0) { parts.emplace_back(doc_manager_.text(" else ")); }
+            if (arm.predicate) {
+                parts.emplace_back(doc_manager_.text("@cfg ("));
+                parts.emplace_back(format(*arm.predicate));
+                parts.emplace_back(doc_manager_.text(") "));
+            }
+            std::vector<syntax::doc_id> items;
+            items.reserve(arm.items.size());
+            for (const auto& item : arm.items) { items.emplace_back(item_fmt(item)); }
+            parts.emplace_back(doc_manager_.delimited("{", "}", std::move(items), true, true));
+        }
+        return doc_manager_.concat(std::move(parts));
+    }
 
     [[nodiscard]] auto decl_prefix(const decl_stmt& node) -> syntax::doc_id;
     [[nodiscard]] auto tail_clause(node_id stmt) -> syntax::doc_id;

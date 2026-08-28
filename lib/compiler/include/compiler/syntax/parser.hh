@@ -118,6 +118,10 @@ class parser {
                                    semicolon_behavior behavior = semicolon_behavior::REQUIRE)
         -> stdx::result<stdx::option<ast::stmt_handle>, diagnostic>;
 
+    // Parses the `( <predicate> )` of a `@cfg` arm. Assumes the current token is `@cfg`
+    // and leaves the current token on the `)`
+    [[nodiscard]] auto parse_cfg_predicate() -> stdx::result<ast::expr_handle, diagnostic>;
+
     static auto get_prefix_fn_opt(token_type_t tt) noexcept -> stdx::option<prefix_fn>;
     static auto get_poll_infix_fn_opt(token_type_t tt) noexcept -> stdx::option<infix_fn>;
 

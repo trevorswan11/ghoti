@@ -164,12 +164,12 @@ class AST {
 
     // Returns the node data at the provided id
     template <IndexableID ID>
-    [[nodiscard]] constexpr auto operator[](ID id) const noexcept -> auto& {
+    [[nodiscard]] constexpr auto operator[](this auto&& self, ID id) noexcept -> auto& {
         ASSERT(id.is_valid(), "Attempt to access invalid id");
         if constexpr (IndexableNodeID<ID>) {
-            return nodes_.pool[id.get_index()];
+            return self.nodes_.pool[id.get_index()];
         } else {
-            return explicit_types_.pool[id.get_index()];
+            return self.explicit_types_.pool[id.get_index()];
         }
     }
 

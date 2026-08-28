@@ -562,22 +562,12 @@ auto cfg_pass::fire_eager_compile_errors(const std::vector<ast::stmt_handle>& it
     }
 }
 
-auto cfg_pass::select_arm(const ast::cfg_stmt& cfg) -> const ast::cfg_stmt::arm* {
-    for (const auto& arm : cfg.arms) {
-        if (!arm.predicate) { return &arm; } // bare `else`
-        const auto taken{eval_predicate(*arm.predicate)};
-        if (!taken) { return nullptr; }
-        if (*taken) { return &arm; }
-    }
-    return nullptr;
-}
-
 auto cfg_pass::rewrite_items(std::vector<ast::stmt_handle>& list) -> void {
     std::vector<ast::stmt_handle> out;
     out.reserve(list.size());
     for (const auto stmt : list) {
         if (const auto cfg{module_.ast.get_as_opt<ast::cfg_stmt>(stmt)}) {
-            if (const auto arm{select_arm(*cfg)}) {
+            if (const auto arm{select_arm_of(cfg->arms)}) {
                 auto items{arm->items};
                 rewrite_items(items);
                 fire_eager_compile_errors(items);
@@ -621,6 +611,15 @@ auto cfg_pass::recurse_into_block(ast::block_handle block) -> void {
     rewrite_items(module_.ast.get_as_mut<ast::block_stmt>(ast::node_id{block}).statements);
 }
 
+auto cfg_pass::recurse_into_members(const ast::member_list& members) -> void {
+    for (const auto member : members) {
+        const ast::node_id mid{member};
+        if (const auto decl{module_.ast.get_as_opt<ast::decl_stmt>(mid)}; decl && decl->value) {
+            recurse_into_expr(*decl->value);
+        }
+    }
+}
+
 auto cfg_pass::recurse_into_expr(ast::expr_handle expr) -> void {
     module_.ast[expr].visit(
         [&](const ast::function_expr& fn) { recurse_into_block(fn.body); },
@@ -648,6 +647,18 @@ auto cfg_pass::recurse_into_expr(ast::expr_handle expr) -> void {
             } else {
                 recurse_into_expr(ast::expr_handle{body});
             }
+        },
+        [&](ast::struct_expr& node) {
+            flatten_cfg_groups(node.cfg_groups, node.fields);
+            recurse_into_members(node.members);
+        },
+        [&](ast::union_expr& node) {
+            flatten_cfg_groups(node.cfg_groups, node.fields);
+            recurse_into_members(node.members);
+        },
+        [&](ast::enum_expr& node) {
+            flatten_cfg_groups(node.cfg_groups, node.enumerations);
+            recurse_into_members(node.members);
         },
         [](const auto&) {});
 }

@@ -2,6 +2,7 @@
 
 #include <ostream>
 #include <string_view>
+#include <vector>
 
 #include <fmt/ostream.h>
 #include <stdx/assert.hh>
@@ -118,6 +119,26 @@ class dumper {
         dump_container(list, [this](const auto& node_handle) -> void {
             fmt::print(out_, "{}", indent_.current_branch());
             dump(*node_handle);
+        });
+    }
+
+    // Compact dump of an aggregate's `@cfg` groups; Only enough for AST comparison.
+    template <typename Group> void dump_cfg_groups(const std::vector<Group>& groups) {
+        fmt::println(out_, "{}CfgGroups:", indent_.current_branch());
+        dump_container(groups, [this](const Group& group) -> void {
+            fmt::println(out_, "{}Group @ {}", indent_.current_branch(), group.position);
+            dump_container(group.arms, [this](const typename Group::arm& arm) -> void {
+                if (arm.predicate) {
+                    fmt::print(out_, "{}Arm: ", indent_.current_branch());
+                    dump(*arm.predicate);
+                } else {
+                    fmt::println(out_, "{}Else:", indent_.current_branch());
+                }
+                dump_container(arm.items, [this](const auto& item) -> void {
+                    fmt::print(out_, "{}Item: ", indent_.current_branch());
+                    dump(item.name);
+                });
+            });
         });
     }
 

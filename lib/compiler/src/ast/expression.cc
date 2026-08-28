@@ -353,6 +353,118 @@ namespace {
     return members;
 }
 
+[[nodiscard]] auto try_parse_alignment(syntax::parser& parser)
+    -> stdx::result<stdx::option<expr_handle>, syntax::diagnostic> {
+    stdx::option<expr_handle> explicit_alignment;
+    if (parser.peek_token_is(syntax::token_type_t::BUILTIN_ALIGNAS)) {
+        parser.advance();
+        TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
+        parser.advance();
+        explicit_alignment.emplace(TRY(parser.parse_expression()));
+        TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
+    }
+    return explicit_alignment;
+}
+
+[[nodiscard]] auto parse_struct_field(syntax::parser& parser)
+    -> stdx::result<struct_expr::field, syntax::diagnostic> {
+    using tt = syntax::token_type_t;
+    auto align{TRY(try_parse_alignment(parser))};
+    bool is_public{false};
+    if (parser.peek_token_is(tt::PUBLIC)) {
+        parser.advance();
+        is_public = true;
+    }
+
+    TRY(parser.expect_peek(tt::IDENT));
+    identifier_handle ident{TRY(identifier_expr::parse(parser))};
+    TRY(parser.expect_peek(tt::COLON));
+    if (!align) { align = TRY(try_parse_alignment(parser)); }
+    const auto type{TRY(explicit_type::parse(parser))};
+    if (!align) { align = TRY(try_parse_alignment(parser)); }
+    stdx::option<expr_handle> value;
+    if (parser.peek_token_is(tt::ASSIGN)) {
+        parser.advance(2);
+        value.emplace(TRY(parser.parse_expression()));
+    }
+    if (is_public) { ident->set_token_type(tt::PUBLIC); }
+    return struct_expr::field{ident, type, value, align};
+}
+
+[[nodiscard]] auto parse_union_field(syntax::parser& parser)
+    -> stdx::result<union_expr::field, syntax::diagnostic> {
+    using tt = syntax::token_type_t;
+    auto align{TRY(try_parse_alignment(parser))};
+    TRY(parser.expect_peek(tt::IDENT));
+    const identifier_handle ident{TRY(identifier_expr::parse(parser))};
+    TRY(parser.expect_peek(tt::COLON));
+    if (!align) { align = TRY(try_parse_alignment(parser)); }
+    const auto type{TRY(explicit_type::parse(parser))};
+    if (!align) { align = TRY(try_parse_alignment(parser)); }
+    return union_expr::field{ident, type, align};
+}
+
+[[nodiscard]] auto parse_enumeration(syntax::parser& parser)
+    -> stdx::result<enum_expr::enumeration, syntax::diagnostic> {
+    using tt = syntax::token_type_t;
+    TRY(parser.expect_peek(tt::IDENT));
+    const identifier_handle   ident{TRY(identifier_expr::parse(parser))};
+    stdx::option<expr_handle> value;
+    if (parser.peek_token_is(tt::ASSIGN)) {
+        parser.advance(2);
+        value.emplace(TRY(parser.parse_expression()));
+    }
+    return enum_expr::enumeration{ident, value};
+}
+
+template <typename Item>
+[[nodiscard]] auto
+parse_aggregate_cfg_group(syntax::parser& parser,
+                          usize           position,
+                          stdx::result<Item, syntax::diagnostic> (*parse_one)(syntax::parser&))
+    -> stdx::result<cfg_item_group<Item>, syntax::diagnostic> {
+    using tt    = syntax::token_type_t;
+    using group = cfg_item_group<Item>;
+    using arm   = typename group::arm;
+
+    // Current token is `)` (just after a predicate) or `else`; peek is `{` or an item.
+    const auto parse_body = [&] -> stdx::result<std::vector<Item>, syntax::diagnostic> {
+        std::vector<Item> items;
+        if (parser.peek_token_is(tt::LBRACE)) {
+            parser.advance(); // current == {
+            while (!parser.peek_token_is(tt::RBRACE) && !parser.peek_token_is(tt::END)) {
+                if (parser.peek_token_is(tt::COMMA)) {
+                    parser.advance();
+                    continue;
+                }
+                items.emplace_back(TRY(parse_one(parser)));
+            }
+            TRY(parser.expect_peek(tt::RBRACE));
+        } else {
+            items.emplace_back(TRY(parse_one(parser)));
+        }
+        return items;
+    };
+
+    std::vector<arm> arms;
+    arms.emplace_back(
+        arm{stdx::option<expr_handle>{TRY(parser.parse_cfg_predicate())}, TRY(parse_body())});
+
+    while (parser.peek_token_is(tt::ELSE)) {
+        parser.advance(); // current == else
+        if (parser.peek_token_is(tt::BUILTIN_CFG)) {
+            parser.advance(); // current == @cfg
+            auto predicate{TRY(parser.parse_cfg_predicate())};
+            arms.emplace_back(arm{stdx::option<expr_handle>{predicate}, TRY(parse_body())});
+        } else {
+            arms.emplace_back(arm{stdx::none, TRY(parse_body())});
+            break; // a predicate-less `else` terminates the chain
+        }
+    }
+
+    return group{position, std::move(arms)};
+}
+
 } // namespace
 
 auto enum_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
@@ -368,8 +480,16 @@ auto enum_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synta
 
     bool                     non_exhaustive{false};
     std::vector<enumeration> enumerations;
+    std::vector<cfg_group>   cfg_groups;
     while (!parser.peek_token_is(syntax::token_type_t::RBRACE) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
+        if (parser.peek_token_is(syntax::token_type_t::BUILTIN_CFG)) {
+            parser.advance(); // current == @cfg
+            cfg_groups.emplace_back(TRY(parse_aggregate_cfg_group<enumeration>(
+                parser, enumerations.size(), parse_enumeration)));
+            if (parser.peek_token_is(syntax::token_type_t::COMMA)) { parser.advance(); }
+            continue;
+        }
         if (parser.get_peek_token().is_member_token()) { break; }
 
         if (parser.peek_token_is(syntax::token_type_t::UNDERSCORE)) {
@@ -408,13 +528,17 @@ auto enum_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synta
     TRY(parser.expect_peek(syntax::token_type_t::RBRACE));
 
     // Validate here so that there aren't 3 errors spawning from an empty enum with decls
-    if (!non_exhaustive && enumerations.empty()) {
+    if (!non_exhaustive && enumerations.empty() && cfg_groups.empty()) {
         return make_syntax_err("Enums must be declared with at least one enumeration",
                                syntax::error::EMPTY_ENUM,
                                start_token);
     }
-    return parser.add_expr<enum_expr>(
-        start_token, underlying, std::move(enumerations), non_exhaustive, std::move(members));
+    return parser.add_expr<enum_expr>(start_token,
+                                      underlying,
+                                      std::move(enumerations),
+                                      std::move(cfg_groups),
+                                      non_exhaustive,
+                                      std::move(members));
 }
 
 auto for_loop_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
@@ -1107,31 +1231,23 @@ auto module_access_expr::parse(syntax::parser& parser, expr_handle outer)
     return parser.add_expr<module_access_expr>(start_token, outer, inner);
 }
 
-namespace {
-
-[[nodiscard]] auto try_parse_alignment(syntax::parser& parser)
-    -> stdx::result<stdx::option<expr_handle>, syntax::diagnostic> {
-    stdx::option<expr_handle> explicit_alignment;
-    if (parser.peek_token_is(syntax::token_type_t::BUILTIN_ALIGNAS)) {
-        parser.advance();
-        TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
-        parser.advance();
-        explicit_alignment.emplace(TRY(parser.parse_expression()));
-        TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
-    }
-    return explicit_alignment;
-}
-
-} // namespace
-
 auto struct_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
-    std::vector<field> fields;
+    std::vector<field>     fields;
+    std::vector<cfg_group> cfg_groups;
     while (!parser.peek_token_is(syntax::token_type_t::RBRACE) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
+        if (parser.peek_token_is(syntax::token_type_t::BUILTIN_CFG)) {
+            parser.advance(); // current == @cfg
+            cfg_groups.emplace_back(
+                TRY(parse_aggregate_cfg_group<field>(parser, fields.size(), parse_struct_field)));
+            if (parser.peek_token_is(syntax::token_type_t::COMMA)) { parser.advance(); }
+            continue;
+        }
+
         bool is_public{false};
         auto explicit_alignment{TRY(try_parse_alignment(parser))};
 
@@ -1177,8 +1293,12 @@ auto struct_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
 
     auto members{TRY(parse_members(parser))};
     TRY(parser.expect_peek(syntax::token_type_t::RBRACE));
-    return parser.add_expr<struct_expr>(
-        start_token, std::move(fields), std::move(members), is_extern, is_packed);
+    return parser.add_expr<struct_expr>(start_token,
+                                        std::move(fields),
+                                        std::move(cfg_groups),
+                                        std::move(members),
+                                        is_extern,
+                                        is_packed);
 }
 
 auto union_expr::parse(syntax::parser& parser, bool is_extern)
@@ -1186,9 +1306,17 @@ auto union_expr::parse(syntax::parser& parser, bool is_extern)
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
-    std::vector<field> fields;
+    std::vector<field>     fields;
+    std::vector<cfg_group> cfg_groups;
     while (!parser.peek_token_is(syntax::token_type_t::RBRACE) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
+        if (parser.peek_token_is(syntax::token_type_t::BUILTIN_CFG)) {
+            parser.advance(); // current == @cfg
+            cfg_groups.emplace_back(
+                TRY(parse_aggregate_cfg_group<field>(parser, fields.size(), parse_union_field)));
+            if (parser.peek_token_is(syntax::token_type_t::COMMA)) { parser.advance(); }
+            continue;
+        }
         if (parser.get_peek_token().is_member_token()) { break; }
 
         auto explicit_alignment{TRY(try_parse_alignment(parser))};
@@ -1211,13 +1339,13 @@ auto union_expr::parse(syntax::parser& parser, bool is_extern)
     TRY(parser.expect_peek(syntax::token_type_t::RBRACE));
 
     // Validate here so that there aren't 3 errors spawning from an empty union with decls
-    if (fields.empty()) {
+    if (fields.empty() && cfg_groups.empty()) {
         return make_syntax_err("Unions must be declared with at least one field",
                                syntax::error::EMPTY_UNION,
                                start_token);
     }
     return parser.add_expr<union_expr>(
-        start_token, std::move(fields), std::move(members), is_extern);
+        start_token, std::move(fields), std::move(cfg_groups), std::move(members), is_extern);
 }
 
 auto parse_modified_struct_or_union(syntax::parser& parser)
