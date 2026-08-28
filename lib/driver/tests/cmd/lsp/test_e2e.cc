@@ -978,9 +978,136 @@ TEST_CASE("ghoti lsp discovers workspace files and resolves references without o
     REQUIRE(locations.size() == 1);
     CHECK(locations[0].at("uri") == main_uri);
     CHECK(locations[0].at("range").at("start").at("character") == 23);
-
     lsp::write_message(proc.stdin_stream(),
                        {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "shutdown"}});
+    const auto shutdown_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(shutdown_resp.at("result").is_null());
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+    CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
+}
+
+TEST_CASE("ghoti lsp formats an unformatted document over a real child process") {
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
+    REQUIRE(proc.is_running());
+
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"id", 1},
+                           {"method", "initialize"},
+                           {
+                               "params",
+                               {
+                                   {"processId", nullptr},
+                                   {"capabilities", nlohmann::json::object()},
+                               },
+                           },
+                       });
+    const auto init_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(init_resp.at("result").at("capabilities").at("documentFormattingProvider").get<bool>());
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"}, {"method", "initialized"}, {"params", nlohmann::json::object()}});
+
+    constexpr std::string_view uri{"file:///test_e2e_format.gh"};
+    constexpr std::string_view text{"pub const x:i32=10;\npub const y:i32=20;\n"};
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"method", "textDocument/didOpen"},
+                           {
+                               "params",
+                               {
+                                   {
+                                       "textDocument",
+                                       {
+                                           {"uri", uri},
+                                           {"languageId", "ghoti"},
+                                           {"version", 1},
+                                           {"text", text},
+                                       },
+                                   },
+                               },
+                           },
+                       });
+    const auto diag_note = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(diag_note.at("params").at("diagnostics").empty());
+    const auto canonical_uri = diag_note.at("params").at("uri").get<std::string>();
+
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"id", 2},
+                           {"method", "textDocument/formatting"},
+                           {
+                               "params",
+                               {
+                                   {"textDocument", {{"uri", canonical_uri}}},
+                                   {"options", {{"tabSize", 4}, {"insertSpaces", true}}},
+                               },
+                           },
+                       });
+    const auto  fmt_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    const auto& edits{fmt_resp.at("result")};
+    REQUIRE(edits.is_array());
+    REQUIRE(edits.size() == 1);
+    CHECK(edits[0].at("newText") == "pub const x: i32 = 10;\npub const y: i32 = 20;\n");
+    CHECK(edits[0].at("range").at("start").at("line") == 0);
+    CHECK(edits[0].at("range").at("start").at("character") == 0);
+    CHECK(edits[0].at("range").at("end").at("line") == 2);
+    CHECK(edits[0].at("range").at("end").at("character") == 0);
+
+    // Document with syntax errors should return null
+    constexpr std::string_view broken_uri{"file:///test_e2e_format_broken.gh"};
+    constexpr std::string_view broken_text{"pub const broken := ;\n"};
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"method", "textDocument/didOpen"},
+                           {
+                               "params",
+                               {
+                                   {
+                                       "textDocument",
+                                       {
+                                           {"uri", broken_uri},
+                                           {"languageId", "ghoti"},
+                                           {"version", 1},
+                                           {"text", broken_text},
+                                       },
+                                   },
+                               },
+                           },
+                       });
+    std::string canonical_broken_uri;
+    for (i32 i{0}; i < 2; ++i) {
+        const auto note     = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+        const auto note_uri = note.at("params").at("uri").get<std::string>();
+        if (note_uri != canonical_uri) {
+            canonical_broken_uri = note_uri;
+            CHECK_FALSE(note.at("params").at("diagnostics").empty());
+        }
+    }
+    REQUIRE_FALSE(canonical_broken_uri.empty());
+
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"id", 3},
+                           {"method", "textDocument/formatting"},
+                           {
+                               "params",
+                               {
+                                   {"textDocument", {{"uri", canonical_broken_uri}}},
+                                   {"options", {{"tabSize", 4}, {"insertSpaces", true}}},
+                               },
+                           },
+                       });
+    const auto broken_fmt_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(broken_fmt_resp.at("result").is_null());
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 4}, {"method", "shutdown"}});
     const auto shutdown_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
     CHECK(shutdown_resp.at("result").is_null());
     lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
