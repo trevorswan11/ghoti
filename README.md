@@ -1,7 +1,7 @@
 <h1 align="center">ghoti</h1>
 
 <p align="center">
-<img src="https://img.shields.io/badge/C%2B%2B-23-blue?logo=c%2B%2B&logoColor=white" alt="C++23" /> <img src="https://img.shields.io/badge/Zig-0.16.0-orange?logo=zig" alt="Zig 0.16.0" /> <a href="LICENSE"><img src="https://img.shields.io/github/license/trevorswan11/ghoti" alt="License" /></a> <a href="https://github.com/trevorswan11/ghoti/actions/workflows/format.yml"><img src="https://github.com/trevorswan11/ghoti/actions/workflows/format.yml/badge.svg" alt="Formatting" /></a> <a href="https://github.com/trevorswan11/ghoti/actions/workflows/ci.yml"><img src="https://github.com/trevorswan11/ghoti/actions/workflows/ci.yml/badge.svg" alt="CI" /></a> <img src="https://raw.githubusercontent.com/trevorswan11/ghoti/coverage/coverage.svg" alt="Coverage" />
+<img src="https://img.shields.io/badge/C%2B%2B-23-blue?logo=c%2B%2B&logoColor=white" alt="C++23" /> <img src="https://img.shields.io/badge/Zig-0.16.0-orange?logo=zig" alt="Zig 0.16.0" /> <a href="LICENSE"><img src="https://img.shields.io/github/license/trevorswan11/ghoti" alt="License" /></a>
 </p>
 
 <p align="center">
@@ -109,6 +109,10 @@ The language's website is written with [Go](https://go.dev/), [HTMX](https://htm
 - [x] Tooling (available through subcommands)
     - [x] LSP
     - [x] Formatter
+- [ ] Standard library
+    - [ ] Cross-platform support w/o forcing libc
+    - [ ] Generic data structures
+    - [ ] Generic algorithms
 
 See the [open issues](https://github.com/trevorswan11/ghoti/issues) for a full list of proposed features (and known issues).
 
