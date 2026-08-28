@@ -102,11 +102,12 @@ auto emit_test_executable(helpers::sema_test_context&       test_ctx,
                           llvm::LLVMContext&                context,
                           const std::filesystem::path&      output_path,
                           const codegen::target_options&    target_opts,
-                          const codegen::optimizer_options& opt_options)
+                          const codegen::optimizer_options& opt_options,
+                          std::string_view                  user_runner_name)
     -> stdx::result<void, codegen::diagnostic> {
     auto gir_mod{TRY(emit_preamble(test_ctx))};
     return test_ctx.analyzer.emit_test_executable(
-        gir_mod, context, target_opts, opt_options, output_path);
+        gir_mod, context, target_opts, opt_options, output_path, {}, user_runner_name);
 }
 
 auto emit_static_lib(helpers::sema_test_context&       test_ctx,
@@ -137,7 +138,9 @@ auto compile_and_run(std::string_view source, const std::vector<mock_file>& impo
     return UNWRAP(spawn_child(args));
 }
 
-auto compile_and_run_tests(std::string_view source, const std::vector<mock_file>& imports) -> u32 {
+auto compile_and_run_tests(std::string_view              source,
+                           const std::vector<mock_file>& imports,
+                           std::string_view              runner_name) -> u32 {
     auto  ctx_idx{type_check_and_verify(source, imports)};
     auto& test_ctx{*ctx_idx.first};
 
@@ -146,7 +149,7 @@ auto compile_and_run_tests(std::string_view source, const std::vector<mock_file>
     const auto exe_stem{tempfile::make_temp_path("compile_and_run_tests")};
     tempfile   exe_file{std::in_place, fmt::format("{}{}", exe_stem.string(), extension)};
 
-    const auto emitted{emit_test_executable(test_ctx, context, exe_file.path)};
+    const auto emitted{emit_test_executable(test_ctx, context, exe_file.path, {}, {}, runner_name)};
     if (!emitted) { fmt::println("{}", emitted.error()); }
     REQUIRE(emitted);
 

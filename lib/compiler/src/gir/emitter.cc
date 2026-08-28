@@ -1415,7 +1415,22 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         }
     } else if (dot_call) {
         const auto member_ident{active_ast().get_as<ast::identifier_expr>(dot_call->member)};
-        callee_name.emplace(std::string{member_ident.name});
+        const auto fn_ty{active_mod().get_sema_type_opt(call.function)};
+        stdx::option<const sema::types::function&> fn_d;
+        if (fn_ty) {
+            if (const auto ptr_d{fn_ty->get_data().as_opt<sema::types::pointer>()}) {
+                fn_d = ptr_d->underlying.get_data().as_opt<sema::types::function>();
+            } else {
+                fn_d = fn_ty->get_data().as_opt<sema::types::function>();
+            }
+        }
+
+        if (fn_d && !fn_d->has_self) {
+            const auto callee_val{emit_expression(call.function)};
+            indirect_callee.emplace(callee_val);
+        } else {
+            callee_name.emplace(std::string{member_ident.name});
+        }
     } else if (const auto imp_call{
                    active_ast().get_as_opt<ast::implicit_access_expr>(call.function)}) {
         // e.g. `const a: T = .init();` -- a no-self member called via implicit access.

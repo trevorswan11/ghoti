@@ -1,7 +1,6 @@
 #include "compiler/codegen/llvm_lowering.hh"
 
 #include <algorithm>
-#include <array>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -359,8 +358,11 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
     return main_fn;
 }
 
-auto llvm_lowering::lower_test_executable(const gir::module& gir_mod) -> stdx::box<llvm::Module> {
-    is_executable_ = true;
+auto llvm_lowering::lower_test_executable(const gir::module& gir_mod,
+                                          std::string_view   user_runner_name)
+    -> stdx::box<llvm::Module> {
+    user_main_name_ = user_runner_name;
+    is_executable_  = true;
     for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
     for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
     for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
@@ -460,12 +462,12 @@ auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod) -> llvm:
     builder_.SetInsertPoint(entry_bb);
 
     // Look for a test runner function
-    llvm::Function* runner_fn{nullptr};
-    if (!user_main_name_.empty() && user_main_name_ != "main") {
+    llvm::Function* runner_fn{llvm_module_->getFunction("_ghoti_main")};
+    if (!runner_fn && !user_main_name_.empty() && user_main_name_ != "main") {
         runner_fn = llvm_module_->getFunction(user_main_name_);
     }
-    if (!runner_fn) { runner_fn = llvm_module_->getFunction("default_runner"); }
-    if (!runner_fn) { runner_fn = llvm_module_->getFunction("runner"); }
+    if (!runner_fn) { runner_fn = llvm_module_->getFunction("default_test_runner"); }
+    if (!runner_fn) { runner_fn = llvm_module_->getFunction("test_runner"); }
 
     if (runner_fn) {
         auto*        test_slice_val{builder_.CreateLoad(slice_ty, test_slice_gvar, "tests.slice")};
@@ -1070,51 +1072,53 @@ auto llvm_lowering::emit_const(const gir::instruction& inst) -> llvm::Value* {
 
 auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
     if (inst.callee_name) {
-        auto* callee_fn{llvm_module_->getFunction(*inst.callee_name)};
-        ASSERT(callee_fn, "Callee function not found in module");
-        std::vector<llvm::Value*> args;
-        args.reserve(inst.operands.size());
-        for (const auto& op : inst.operands) {
-            if (op.type && op.type->get_kind() == sema::type_kind::TYPE) { continue; }
-            auto* arg_val{lower_value(op)};
-            if (!arg_val || arg_val->getType()->isVoidTy()) { continue; }
-            if (op.type && op.type->get_kind() == sema::type_kind::ARRAY &&
-                args.size() < callee_fn->getFunctionType()->getNumParams() &&
-                callee_fn->getFunctionType()
-                    ->getParamType(static_cast<u32>(args.size()))
-                    ->isStructTy()) {
-                if (const auto arr_data{op.type->get_data().as_opt<sema::types::array>()}) {
-                    auto*        slice_ty{types_.translate_slice_type()};
-                    llvm::Value* slice_val{llvm::UndefValue::get(slice_ty)};
-                    llvm::Value* ptr_val{arg_val};
-                    if (!ptr_val->getType()->isPointerTy()) {
-                        auto* tmp{builder_.CreateAlloca(arg_val->getType(), nullptr, "arr.tmp")};
-                        builder_.CreateStore(arg_val, tmp);
-                        ptr_val = tmp;
+        if (auto* callee_fn{llvm_module_->getFunction(*inst.callee_name)}) {
+            std::vector<llvm::Value*> args;
+            args.reserve(inst.operands.size());
+            for (const auto& op : inst.operands) {
+                if (op.type && op.type->get_kind() == sema::type_kind::TYPE) { continue; }
+                auto* arg_val{lower_value(op)};
+                if (!arg_val || arg_val->getType()->isVoidTy()) { continue; }
+                if (op.type && op.type->get_kind() == sema::type_kind::ARRAY &&
+                    args.size() < callee_fn->getFunctionType()->getNumParams() &&
+                    callee_fn->getFunctionType()
+                        ->getParamType(static_cast<u32>(args.size()))
+                        ->isStructTy()) {
+                    if (const auto arr_data{op.type->get_data().as_opt<sema::types::array>()}) {
+                        auto*        slice_ty{types_.translate_slice_type()};
+                        llvm::Value* slice_val{llvm::UndefValue::get(slice_ty)};
+                        llvm::Value* ptr_val{arg_val};
+                        if (!ptr_val->getType()->isPointerTy()) {
+                            auto* tmp{
+                                builder_.CreateAlloca(arg_val->getType(), nullptr, "arr.tmp")};
+                            builder_.CreateStore(arg_val, tmp);
+                            ptr_val = tmp;
+                        }
+                        slice_val = builder_.CreateInsertValue(
+                            slice_val, ptr_val, {static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX)});
+                        slice_val = builder_.CreateInsertValue(
+                            slice_val,
+                            builder_.getInt64(static_cast<u64>(arr_data->len)),
+                            {static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX)});
+                        arg_val = slice_val;
                     }
-                    constexpr std::array<u32, 1> idx0{0};
-                    constexpr std::array<u32, 1> idx1{1};
-                    slice_val = builder_.CreateInsertValue(slice_val, ptr_val, idx0);
-                    slice_val = builder_.CreateInsertValue(
-                        slice_val, builder_.getInt64(static_cast<u64>(arr_data->len)), idx1);
-                    arg_val = slice_val;
+                } else if (op.type &&
+                           (op.type->get_kind() == sema::type_kind::STRUCT ||
+                            op.type->get_kind() == sema::type_kind::UNION ||
+                            op.type->get_kind() == sema::type_kind::SLICE ||
+                            op.type->get_kind() == sema::type_kind::CLOSURE) &&
+                           arg_val->getType()->isPointerTy()) {
+                    auto* llvm_struct_ty{types_.translate(*op.type)};
+                    arg_val = builder_.CreateLoad(llvm_struct_ty, arg_val, "struct_arg");
                 }
-            } else if (op.type &&
-                       (op.type->get_kind() == sema::type_kind::STRUCT ||
-                        op.type->get_kind() == sema::type_kind::UNION ||
-                        op.type->get_kind() == sema::type_kind::SLICE ||
-                        op.type->get_kind() == sema::type_kind::CLOSURE) &&
-                       arg_val->getType()->isPointerTy()) {
-                auto* llvm_struct_ty{types_.translate(*op.type)};
-                arg_val = builder_.CreateLoad(llvm_struct_ty, arg_val, "struct_arg");
+                args.emplace_back(arg_val);
             }
-            args.emplace_back(arg_val);
-        }
-        const bool is_void{!inst.type || inst.type->get_kind() == sema::type_kind::VOID_};
+            const bool is_void{!inst.type || inst.type->get_kind() == sema::type_kind::VOID_};
 
-        auto* call_inst{builder_.CreateCall(callee_fn, args, is_void ? "" : "calltmp")};
-        if (inst.result && !is_void) { set_local(*inst.result, call_inst); }
-        return call_inst;
+            auto* call_inst{builder_.CreateCall(callee_fn, args, is_void ? "" : "calltmp")};
+            if (inst.result && !is_void) { set_local(*inst.result, call_inst); }
+            return call_inst;
+        }
     }
 
     ASSERT(!inst.operands.empty(), "Indirect call requires callee operand");

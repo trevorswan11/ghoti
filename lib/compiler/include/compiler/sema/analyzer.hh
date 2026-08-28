@@ -100,7 +100,8 @@ class analyzer {
         -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic>;
     [[nodiscard]] auto emit_llvm_ir_test_executable(gir::module&                      gir_module,
                                                     llvm::LLVMContext&                context,
-                                                    const codegen::optimizer_options& options)
+                                                    const codegen::optimizer_options& options,
+                                                    std::string_view user_runner_name = "")
         -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic>;
 
     [[nodiscard]] auto emit_object(gir::module&                      gir_module,
@@ -133,14 +134,16 @@ class analyzer {
                                             const codegen::target_options&       target_opts,
                                             const codegen::optimizer_options&    opt_options,
                                             const std::filesystem::path&         output_path,
-                                            const codegen::extra_linker_options& linker_opts = {})
+                                            const codegen::extra_linker_options& linker_opts = {},
+                                            std::string_view user_runner_name                = "")
         -> stdx::result<void, codegen::diagnostic>;
     [[nodiscard]] auto emit_test_executable(gir::module&                         gir_module,
                                             llvm::LLVMContext&                   context,
                                             const codegen::target_options&       target_opts,
                                             const codegen::optimizer_options&    opt_options,
                                             const std::filesystem::path&         output_path,
-                                            const codegen::extra_linker_options& linker_opts = {})
+                                            const codegen::extra_linker_options& linker_opts = {},
+                                            std::string_view user_runner_name                = "")
         -> stdx::result<void, codegen::diagnostic>;
 
     [[nodiscard]] auto emit_static_library(gir::module&                         gir_module,

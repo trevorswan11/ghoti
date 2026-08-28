@@ -44,4 +44,85 @@ TEST_CASE("Test with @src compiles and executes properly") {
     )") == 0);
 }
 
+TEST_CASE("Custom test runner 'test_runner' is automatically invoked") {
+    CHECK(helpers::compile_and_run_tests(R"(
+        test "ignored test" {
+            @require(false);
+        }
+
+        pub const test_runner := fn(): i32 {
+            return 77;
+        };
+    )") == 77);
+}
+
+TEST_CASE("Custom test runner 'default_test_runner' is automatically invoked") {
+    CHECK(helpers::compile_and_run_tests(R"(
+        test "ignored test" {
+            @require(false);
+        }
+
+        pub const default_test_runner := fn(): i32 {
+            return 88;
+        };
+    )") == 88);
+}
+
+TEST_CASE("Custom test runner specified by name receives test metadata slice") {
+    CHECK(helpers::compile_and_run_tests(R"(
+        pub const Test := struct {
+            name: []u8,
+            file: []u8,
+            line: u32,
+            column: u32,
+            func: fn(): bool,
+        };
+
+        test "test one" {
+            @expect(true);
+        }
+
+        test "test two" {
+            @expect(true);
+        }
+
+        pub const my_custom_runner := fn(tests: []Test): i32 {
+            if (tests.len == 2) {
+                return 42;
+            }
+            return 1;
+        };
+    )",
+                                         {},
+                                         "my_custom_runner") == 42);
+}
+
+TEST_CASE("Custom test runner invokes test function pointer directly") {
+    CHECK(helpers::compile_and_run_tests(R"(
+        pub const Test := struct {
+            name: []u8,
+            file: []u8,
+            line: u32,
+            column: u32,
+            func: fn(): bool,
+        };
+
+        test "successful test" {
+            @expect(1 + 1 == 2);
+        }
+
+        pub const invoke_runner := fn(tests: []Test): i32 {
+            if (tests.len == 1) {
+                const ok := tests[0].func();
+                if (ok) {
+                    return 0;
+                }
+            }
+            return 99;
+        };
+    )",
+                                         {},
+                                         "invoke_runner") == 0);
+}
+
 } // namespace ghoti::tests

@@ -280,15 +280,18 @@ auto analyzer::emit_llvm_ir_executable(gir::module&                      gir_mod
 
 auto analyzer::emit_llvm_ir_test_executable(gir::module&                      gir_module,
                                             llvm::LLVMContext&                context,
-                                            const codegen::optimizer_options& options)
+                                            const codegen::optimizer_options& options,
+                                            std::string_view                  user_runner_name)
     -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic> {
     PROFILE_FUNCTION();
+    const auto effective_runner_name{
+        !user_runner_name.empty() ? user_runner_name : std::string_view{ctx_.user_main_name}};
     codegen::llvm_lowering lowering{context, gir_module.get_ast_module().path.string()};
     if (options.target_machine) {
         lowering.module().setDataLayout(options.target_machine->createDataLayout());
         lowering.module().setTargetTriple(options.target_machine->getTargetTriple());
     }
-    auto llvm_mod{lowering.lower_test_executable(gir_module)};
+    auto llvm_mod{lowering.lower_test_executable(gir_module, effective_runner_name)};
 
     std::string              err_str;
     llvm::raw_string_ostream os{err_str};
@@ -308,11 +311,12 @@ auto analyzer::emit_test_executable(gir::module&                         gir_mod
                                     const codegen::target_options&       target_opts,
                                     const codegen::optimizer_options&    opt_options,
                                     const std::filesystem::path&         output_path,
-                                    const codegen::extra_linker_options& linker_opts)
+                                    const codegen::extra_linker_options& linker_opts,
+                                    std::string_view                     user_runner_name)
     -> stdx::result<void, codegen::diagnostic> {
     llvm::LLVMContext context;
     return emit_test_executable(
-        gir_module, context, target_opts, opt_options, output_path, linker_opts);
+        gir_module, context, target_opts, opt_options, output_path, linker_opts, user_runner_name);
 }
 
 auto analyzer::emit_test_executable(gir::module&                         gir_module,
@@ -320,7 +324,8 @@ auto analyzer::emit_test_executable(gir::module&                         gir_mod
                                     const codegen::target_options&       target_opts,
                                     const codegen::optimizer_options&    opt_options,
                                     const std::filesystem::path&         output_path,
-                                    const codegen::extra_linker_options& linker_opts)
+                                    const codegen::extra_linker_options& linker_opts,
+                                    std::string_view                     user_runner_name)
     -> stdx::result<void, codegen::diagnostic> {
     PROFILE_FUNCTION();
     auto target_machine{TRY(codegen::create_target_machine(target_opts))};
@@ -331,7 +336,7 @@ auto analyzer::emit_test_executable(gir::module&                         gir_mod
         opts.level = target_opts.level;
     }
 
-    auto llvm_mod{TRY(emit_llvm_ir_test_executable(gir_module, context, opts))};
+    auto llvm_mod{TRY(emit_llvm_ir_test_executable(gir_module, context, opts, user_runner_name))};
     auto temp_obj_path{make_tmp_obj(output_path)};
     TRY(codegen::emit_object_file(*llvm_mod, *target_machine, temp_obj_path));
 

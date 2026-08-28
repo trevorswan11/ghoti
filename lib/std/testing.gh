@@ -47,7 +47,7 @@ pub const expect_eq := fn(actual: auto, expected: auto): bool {
     return true;
 };
 
-pub const default_runner := fn(tests: []Test): i32 {
+pub const default_test_runner := fn(tests: []Test): i32 {
     var failed_count: usize := 0;
 
     for (tests) |test| {
