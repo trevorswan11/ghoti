@@ -65,10 +65,27 @@ TEST_CASE("GIR reachability: transitively referenced imported extern is retained
     CHECK(gir_mod.get_required_libraries()[0] == "kernel32");
 }
 
-TEST_CASE("GIR reachability: root-module externs are never pruned") {
+TEST_CASE("GIR reachability: an unreferenced root-module extern is pruned too") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         extern("kernel32") const GetLastError: fn(): u32;
         pub const main := fn(args: [][:0]u8): void {};
+    )")};
+
+    auto gir_mod{emit(*ctx)};
+
+    const std::vector<std::string_view> roots{"main"};
+    gir_mod.prune_unreachable(roots);
+
+    CHECK_FALSE(gir_mod.has_function("GetLastError"));
+    CHECK(gir_mod.get_required_libraries().empty());
+}
+
+TEST_CASE("GIR reachability: a referenced root-module extern is retained") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        extern("kernel32") const GetLastError: fn(): u32;
+        pub const main := fn(args: [][:0]u8): void {
+            const e := GetLastError();
+        };
     )")};
 
     auto gir_mod{emit(*ctx)};

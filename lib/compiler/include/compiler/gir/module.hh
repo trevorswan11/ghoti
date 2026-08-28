@@ -89,7 +89,7 @@ class module {
         import_boundary_marked_ = true;
     }
 
-    // Drops imported-module decls not reachable from `roots`
+    // Drops every unreferenced `extern` decl and every unreachable imported decl
     auto prune_unreachable(gsl::span<const std::string_view> roots) -> void;
 
   private:

@@ -67,9 +67,8 @@ auto module::get_required_libraries() const -> std::vector<std::string> {
 auto module::prune_unreachable(gsl::span<const std::string_view> roots) -> void {
     PROFILE_FUNCTION();
     if (!import_boundary_marked_) { return; }
-    if (import_boundary_fn_ >= functions_.size() && import_boundary_global_ >= globals_.size()) {
-        return; // nothing imported
-    }
+
+    const auto is_extern{[](gir::linkage l) { return l == gir::linkage::EXTERN; }};
 
     ankerl::unordered_dense::map<std::string_view, const function*> fn_by_name;
     for (const auto* fn : functions_) { fn_by_name.try_emplace(fn->get_name(), fn); }
@@ -92,10 +91,10 @@ auto module::prune_unreachable(gsl::span<const std::string_view> roots) -> void 
         if (const auto s{v.as_opt<std::string>()}) { note_symbol(*s); }
     }};
 
-    // Roots: caller entry points + every root-module decl (below the import boundary)
+    // Roots: caller entry points + every non-extern root-module function
     for (const auto root : roots) { enqueue_fn(root); }
     for (usize i{0}; i < import_boundary_fn_ && i < functions_.size(); ++i) {
-        enqueue_fn(functions_[i]->get_name());
+        if (!is_extern(functions_[i]->get_linkage())) { enqueue_fn(functions_[i]->get_name()); }
     }
 
     // Over-approximate: keep anything any global initializer names.
@@ -117,10 +116,14 @@ auto module::prune_unreachable(gsl::span<const std::string_view> roots) -> void 
         }
     }
 
+    // Candidates for removal: any `extern` decl, plus any imported (non-root) decl.
+    // Everything else -- the root module's own definitions -- is always retained;
+    // trimming unused non-extern `pub` code is left to P4.2 (InternalizePass/GlobalDCE).
     std::vector<function*> kept_fns;
     kept_fns.reserve(functions_.size());
     for (usize i{0}; i < functions_.size(); ++i) {
-        if (i < import_boundary_fn_ || reachable_fns.contains(functions_[i]->get_name())) {
+        const bool candidate{is_extern(functions_[i]->get_linkage()) || i >= import_boundary_fn_};
+        if (!candidate || reachable_fns.contains(functions_[i]->get_name())) {
             kept_fns.emplace_back(functions_[i]);
         }
     }
@@ -129,10 +132,10 @@ auto module::prune_unreachable(gsl::span<const std::string_view> roots) -> void 
     std::vector<global_decl*> kept_globals;
     kept_globals.reserve(globals_.size());
     for (usize i{0}; i < globals_.size(); ++i) {
-        const bool retained{i < import_boundary_global_ ||
-                            globals_[i]->linkage != gir::linkage::EXTERN ||
-                            referenced_globals.contains(globals_[i]->name)};
-        if (retained) { kept_globals.emplace_back(globals_[i]); }
+        const bool candidate{is_extern(globals_[i]->linkage) || i >= import_boundary_global_};
+        if (!candidate || referenced_globals.contains(globals_[i]->name)) {
+            kept_globals.emplace_back(globals_[i]);
+        }
     }
     globals_ = std::move(kept_globals);
 
