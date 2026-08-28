@@ -743,7 +743,9 @@ fn createConfigHeaders(self: *const Self, target: std.Target) ConfigHeaders {
         .HAVE_MALLINFO = @intFromBool(is_linux and
             // musl libc does not have mallinfo
             !is_musl_libc),
-        .HAVE_MALLINFO2 = @intFromBool(is_linux and blk: {
+        .HAVE_MALLINFO2 = @intFromBool(is_linux and
+            // musl libc does not have mallinfo2
+            !is_musl_libc and blk: {
             if (target.os.versionRange().gnuLibCVersion()) |semver| {
                 const order = semver.order(.{
                     .major = 2,
@@ -769,7 +771,7 @@ fn createConfigHeaders(self: *const Self, target: std.Target) ConfigHeaders {
         .LLVM_ENABLE_LIBXML2 = 1,
         .HAVE_ICU = 0,
         .HAVE_ICONV = 0,
-        .LLVM_SUPPORT_XCODE_SIGNPOSTS = @intFromBool(is_darwin),
+        .LLVM_SUPPORT_XCODE_SIGNPOSTS = 0,
         .BACKTRACE_HEADER = if (is_darwin or is_linux) "execinfo.h" else "link.h",
         .HOST_LINK_VERSION = "0",
         .LLVM_TARGET_TRIPLE_ENV = "",

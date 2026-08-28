@@ -589,6 +589,16 @@ fn addTooling(b: *std.Build, config: struct {
     _ = LOCCounter.init(b, counted_files.wrapped.items);
 }
 
+// Compilation takes a while and I don't have a data center to run this on
+const minimal_target_queries: []const std.Target.Query = &.{
+    .{ .cpu_arch = .x86_64, .os_tag = .macos },
+    .{ .cpu_arch = .aarch64, .os_tag = .macos },
+    .{ .cpu_arch = .x86, .os_tag = .linux },
+    .{ .cpu_arch = .x86_64, .os_tag = .linux },
+    .{ .cpu_arch = .x86, .os_tag = .windows },
+    .{ .cpu_arch = .x86_64, .os_tag = .windows },
+};
+
 fn addPackageStep(b: *std.Build, config: struct {
     llvm: *LLVMBuilder,
     cxx_flags: []const []const u8,
@@ -598,7 +608,7 @@ fn addPackageStep(b: *std.Build, config: struct {
         .compressor = config.compressor,
     });
 
-    for (stdx.Packager.base_target_queries) |query| {
+    for (minimal_target_queries) |query| {
         const target = b.resolveTargetQuery(query);
         const stdx_dep = b.dependency("stdx", .{
             .target = target,
@@ -629,7 +639,7 @@ fn addPackageStep(b: *std.Build, config: struct {
             .{ .source = b.path("LICENSE"), .destination = "LICENSE" },
             .{ .source = b.path("README.md"), .destination = "README.md" },
             .{ .source = b.path(".github/CHANGELOG.md"), .destination = "CHANGELOG.md" },
-            .{ .source = b.path(ProjectPaths.stdlib), .destination = "lib", .kind = .dir },
+            .{ .source = b.path(ProjectPaths.stdlib), .destination = "lib/std", .kind = .dir },
         };
 
         packager.addArchives(.{

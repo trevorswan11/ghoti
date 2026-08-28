@@ -39,6 +39,9 @@
 #    include <winnt.h>
 #elif GHOTI_APPLE
 #    include <mach-o/dyld.h>
+#    include <sys/signal.h>
+#elif GHOTI_LINUX
+#    include <signal.h>
 #endif
 
 #if !GHOTI_WINDOWS
@@ -46,7 +49,6 @@
 #    include <csignal>
 #    include <signal.h>
 #    include <stdlib.h>
-#    include <sys/signal.h>
 #    include <sys/wait.h>
 #    include <thread>
 #    include <unistd.h>
