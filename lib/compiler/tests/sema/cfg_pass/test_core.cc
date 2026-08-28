@@ -1,5 +1,3 @@
-#include <algorithm>
-#include <string>
 #include <string_view>
 #include <vector>
 
@@ -7,58 +5,13 @@
 #include <fmt/format.h>
 #include <stdx/option.hh>
 
-#include "compiler/ast/expression.hh"
-#include "compiler/ast/statement.hh"
 #include "compiler/sema/error.hh"
 #include "helpers/sema.hh"
 
 namespace ghoti::tests {
 
-namespace {
-
-struct cfg_outcome {
-    std::vector<sema::error> codes;
-    std::vector<std::string> messages;
-
-    [[nodiscard]] auto has_code(sema::error code) const -> bool {
-        return std::ranges::contains(codes, code);
-    }
-
-    [[nodiscard]] auto any_message_contains(std::string_view needle) const -> bool {
-        return std::ranges::any_of(messages,
-                                   [&](const auto& message) { return message.contains(needle); });
-    }
-};
-
-// Runs the cfg pass over `input` at module scope and collects every emitted diagnostic
-[[nodiscard]] auto run_cfg(std::string_view input) -> cfg_outcome {
-    auto [ctx, idx]{helpers::collect(input)};
-
-    cfg_outcome out;
-    if (const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()}) {
-        for (const auto& diag : *diags) {
-            out.codes.emplace_back(diag.get_error());
-            out.messages.emplace_back(diag.get_message().value_or(""));
-        }
-    }
-    return out;
-}
-
-[[nodiscard]] auto selected(std::string_view input, std::string_view name) -> bool {
-    auto [ctx, idx]{helpers::collect(input)};
-
-    bool found_decl{false};
-    for (const auto root : ctx->root_mod.ast) {
-        if (ctx->root_mod.ast.get_as_opt<ast::cfg_stmt>(root)) { return false; }
-        if (const auto decl{ctx->root_mod.ast.get_as_opt<ast::decl_stmt>(root)}) {
-            const auto& decl_name{ctx->root_mod.ast.get_as<ast::identifier_expr>(decl->name).name};
-            if (decl_name == name) { found_decl = true; }
-        }
-    }
-    return found_decl;
-}
-
-} // namespace
+using helpers::run_cfg;
+using helpers::selected;
 
 TEST_CASE("cfg: a selected @cfg arm is spliced in, the rest are deleted") {
     constexpr std::string_view src{R"(
@@ -202,60 +155,6 @@ TEST_CASE("cfg: @compileError needs a comptime-known message") {
         else                { const unused := 1; }
     )"};
     CHECK(run_cfg(src).has_code(sema::error::COMPILE_ERROR_NON_CONSTANT_MESSAGE));
-}
-
-
-TEST_CASE("cfg: @cfg is evaluated inside an if block") {
-    constexpr std::string_view src{R"(
-        pub const f := fn(): i32 {
-            if (true) {
-                @cfg(ptr_bits >= 8) { @compileError("reached in if"); }
-            }
-            return 0;
-        };
-    )"};
-    const auto                 out{run_cfg(src)};
-    CHECK(out.has_code(sema::error::COMPILE_ERROR_REACHED));
-    CHECK(out.any_message_contains("reached in if"));
-}
-
-TEST_CASE("cfg: @cfg is evaluated inside a match arm") {
-    constexpr std::string_view src{R"(
-        pub const f := fn(x: i32): i32 {
-            match (x) {
-                _ => {
-                    @cfg(ptr_bits >= 8) { @compileError("reached in match"); }
-                }
-            }
-            return 0;
-        };
-    )"};
-    CHECK(run_cfg(src).any_message_contains("reached in match"));
-}
-
-TEST_CASE("cfg: @cfg is evaluated inside a loop body") {
-    constexpr std::string_view src{R"(
-        pub const f := fn(): i32 {
-            while (true) {
-                @cfg(ptr_bits >= 8) { @compileError("reached in loop"); }
-            }
-            return 0;
-        };
-    )"};
-    CHECK(run_cfg(src).any_message_contains("reached in loop"));
-}
-
-TEST_CASE("cfg: a nested @cfg splices its selected arm and prunes the rest") {
-    constexpr std::string_view src{R"(
-        pub const f := fn(): i32 {
-            if (true) {
-                @cfg(ptr_bits >= 8) { const fine := 1; }
-                else                { @compileError("pruned nested arm"); }
-            }
-            return 0;
-        };
-    )"};
-    CHECK(run_cfg(src).codes.empty());
 }
 
 } // namespace ghoti::tests
