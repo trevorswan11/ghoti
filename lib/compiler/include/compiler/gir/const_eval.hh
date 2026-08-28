@@ -28,9 +28,11 @@ namespace ghoti::gir {
 class const_eval {
   public:
     explicit const_eval(sema::context& ctx, mod::module& module) noexcept
-        : ctx_{ctx}, module_{module} {}
+        : ctx_{ctx}, module_{&module} {}
     ~const_eval() = default;
     MAKE_MOVE_CONSTRUCTABLE_ONLY(const_eval);
+
+    auto set_module(mod::module& module) noexcept -> void { module_ = &module; }
 
     // Attempt to evaluate node as a compile-time constant. Returns none if non-constant.
     [[nodiscard]] auto try_eval(ast::node_id id) -> stdx::option<const_value>;
@@ -114,7 +116,7 @@ class const_eval {
     usize                                            max_recursion_depth_{256};
     std::vector<usize>                               recursion_limit_stack_;
     sema::context&                                   ctx_;
-    mod::module&                                     module_;
+    gsl::not_null<mod::module*>                      module_;
     std::vector<call_frame>                          call_stack_;
     default_counter                                  recursion_depth_;
     ankerl::unordered_dense::map<usize, const_value> memo_cache_;

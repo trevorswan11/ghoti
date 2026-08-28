@@ -213,6 +213,9 @@ enum class token_type_t : u8 {
     BUILTIN_SET_MAIN_SYMBOL,
     BUILTIN_PANIC,
     BUILTIN_FN_CTX,
+    BUILTIN_SRC,
+    BUILTIN_EXPECT,
+    BUILTIN_REQUIRE,
 
     ILLEGAL,
 };

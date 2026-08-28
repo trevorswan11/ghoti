@@ -118,18 +118,28 @@ template <ast::IndexableID ID>
                                                        const types::builtin_function& builtin)
     -> stdx::result<void, diagnostic> {
     ASSERT(call.function.is<ast::identifier_expr>(), "Builtin function must be a raw ident");
+    // There must be an actual builtin present with a token id
+    const auto builtin_id{call.function->get_token_type()};
+    ASSERT(syntax::get_builtin_opt(builtin_id), "Cannot resolve non-builtin function");
+
+    using syntax::token_type_t;
+    const auto  is_expect_or_require{builtin_id == token_type_t::BUILTIN_EXPECT ||
+                                    builtin_id == token_type_t::BUILTIN_REQUIRE};
     const auto& params{builtin.params};
-    if (call.arguments.size() != params.size()) {
+    if (is_expect_or_require) {
+        if (call.arguments.empty() || call.arguments.size() > 2) {
+            return make_sema_err(
+                fmt::format("Builtin expects 1 or 2 arguments, found {}", call.arguments.size()),
+                error::ARITY_MISMATCH,
+                resolving_.ast.location_of(call.function));
+        }
+    } else if (call.arguments.size() != params.size()) {
         return make_sema_err(fmt::format("Builtin expects {} arguments, found {}",
                                          params.size(),
                                          call.arguments.size()),
                              error::ARITY_MISMATCH,
                              resolving_.ast.location_of(call.function));
     }
-
-    // There must be an actual builtin present with a token id
-    const auto builtin_id{call.function->get_token_type()};
-    ASSERT(syntax::get_builtin_opt(builtin_id), "Cannot resolve non-builtin function");
 
     using syntax::token_type_t;
     gsl::not_null<type*> return_type = &ctx_.get_poison();
@@ -342,6 +352,12 @@ template <ast::IndexableID ID>
     }
     case token_type_t::BUILTIN_PANIC: {
         ASSERT(builtin.return_type.get_kind() == type_kind::NORETURN);
+        return_type = &builtin.return_type;
+        break;
+    }
+    case token_type_t::BUILTIN_SRC:
+    case token_type_t::BUILTIN_EXPECT:
+    case token_type_t::BUILTIN_REQUIRE: {
         return_type = &builtin.return_type;
         break;
     }

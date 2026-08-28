@@ -61,7 +61,10 @@ constexpr auto ALL_BUILTINS_BY_SV{
                                                    builtins::SET_EVAL_RECURSION_LIMIT,
                                                    builtins::SET_MAIN_SYMBOL,
                                                    builtins::PANIC,
-                                                   builtins::FN_CTX)};
+                                                   builtins::FN_CTX,
+                                                   builtins::SRC,
+                                                   builtins::EXPECT,
+                                                   builtins::REQUIRE)};
 
 constexpr auto ALL_BUILTINS_BY_TT{[] -> auto {
     stdx::fixed::enum_map<token_type_t, stdx::option<std::string_view>> builtins;

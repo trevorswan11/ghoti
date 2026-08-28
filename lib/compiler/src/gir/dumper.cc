@@ -148,7 +148,8 @@ auto dumper::dump(const segment& seg) -> void {
 
 auto dumper::dump(const function& fn) -> void {
     if (fn.get_is_test()) {
-        fmt::println(out_, "test \"{}\"", fn.get_name());
+        const auto test_name{fn.get_test_desc().empty() ? fn.get_name() : fn.get_test_desc()};
+        fmt::println(out_, "test \"{}\"", test_name);
     } else {
         std::string return_str;
         if (const auto fn_type{fn.get_type().get_data().as_opt<sema::types::function>()}) {

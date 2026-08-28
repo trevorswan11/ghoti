@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -49,7 +50,7 @@ auto module::add_function(std::string  name,
 
 auto module::get_required_libraries() const -> std::vector<std::string> {
     std::vector<std::string> libraries;
-    const auto add_if_required{[&](gir::linkage linkage, const std::string& abi_name) {
+    const auto               add_if_required{[&](gir::linkage linkage, std::string_view abi_name) {
         if (linkage != gir::linkage::EXTERN || abi_name == "c") { return; }
         if (!std::ranges::contains(libraries, abi_name)) { libraries.emplace_back(abi_name); }
     }};

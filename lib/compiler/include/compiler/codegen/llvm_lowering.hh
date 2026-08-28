@@ -86,6 +86,8 @@ class llvm_lowering {
     auto emit_cond_goto(const gir::instruction& inst) -> void;
     auto emit_unreachable() -> void;
 
+    auto get_or_create_test_failed_flag() -> llvm::GlobalVariable*;
+
   private:
     llvm::LLVMContext&                                                 context_;
     stdx::box<llvm::Module>                                            llvm_module_;

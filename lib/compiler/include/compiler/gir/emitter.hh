@@ -235,7 +235,8 @@ class emitter {
     module                     gir_module_;
     std::vector<scope_frame>   scopes_;
     std::vector<loop_context>  loop_stack_;
-    default_counter            anon_test_counter_;
+    default_counter            anon_test_desc_counter_;
+    default_counter            anon_test_fn_counter_;
     default_counter            anon_fn_counter_;
     std::vector<std::string>   open_fn_names_;
     std::vector<bool>          open_fn_is_closure_;

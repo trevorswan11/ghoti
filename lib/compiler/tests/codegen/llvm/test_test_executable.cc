@@ -18,12 +18,30 @@ TEST_CASE("A test-only source with no pub main compiles and all tests pass") {
     )") == 0);
 }
 
-TEST_CASE("A panicking test aborts the test executable") {
+TEST_CASE("Test with passing @expect and @require passes") {
     CHECK(helpers::compile_and_run_tests(R"(
-        test "boom" {
-            @panic("boom");
+        test "assertions pass" {
+            @expect(1 + 1 == 2);
+            @require(2 + 2 == 4);
+        }
+    )") == 0);
+}
+
+TEST_CASE("Test with failing @require returns failure status without aborting process") {
+    CHECK(helpers::compile_and_run_tests(R"(
+        test "failing require" {
+            @require(1 + 1 == 3);
         }
     )") != 0);
+}
+
+TEST_CASE("Test with @src compiles and executes properly") {
+    CHECK(helpers::compile_and_run_tests(R"(
+        test "src location check" {
+            const loc := @src();
+            _ = loc;
+        }
+    )") == 0);
 }
 
 } // namespace ghoti::tests

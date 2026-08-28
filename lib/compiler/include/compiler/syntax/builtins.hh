@@ -71,8 +71,12 @@ constexpr builtin_t PANIC{"@panic", token_type_t::BUILTIN_PANIC};
 // The innermost enclosing function as a callable value, for self-recursion
 constexpr builtin_t FN_CTX{"@fnCtx", token_type_t::BUILTIN_FN_CTX};
 
+constexpr builtin_t SRC{"@src", token_type_t::BUILTIN_SRC};
+constexpr builtin_t EXPECT{"@expect", token_type_t::BUILTIN_EXPECT};
+constexpr builtin_t REQUIRE{"@require", token_type_t::BUILTIN_REQUIRE};
+
 constexpr auto ALL_TOKEN_TYPES{
-    stdx::enum_range<token_type_t::BUILTIN_ALIGN_CAST, token_type_t::BUILTIN_FN_CTX>()};
+    stdx::enum_range<token_type_t::BUILTIN_ALIGN_CAST, token_type_t::BUILTIN_REQUIRE>()};
 
 } // namespace builtins
 

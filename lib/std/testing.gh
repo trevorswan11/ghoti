@@ -1,0 +1,62 @@
+﻿pub const SourceLocation := struct {
+    file: []u8,
+    line: u32,
+    column: u32,
+};
+
+pub const Test := struct {
+    name: []u8,
+    file: []u8,
+    line: u32,
+    column: u32,
+    func: fn(): bool,
+};
+
+pub var current_test_failed: bool := false;
+
+pub const record_failure := fn(file: []u8, line: u32, col: u32, msg: []u8): void {
+    current_test_failed = true;
+    _ = file;
+    _ = line;
+    _ = col;
+    _ = msg;
+};
+
+pub const has_current_test_failed := fn(): bool {
+    return current_test_failed;
+};
+
+pub const reset_test_state := fn(): void {
+    current_test_failed = false;
+};
+
+pub const expect := fn(condition: bool, msg: []const u8 = ""): bool {
+    if (!condition) {
+        current_test_failed = true;
+        _ = msg;
+        return false;
+    }
+    return true;
+};
+
+pub const expect_eq := fn(actual: auto, expected: auto): bool {
+    if (actual != expected) {
+        current_test_failed = true;
+        return false;
+    }
+    return true;
+};
+
+pub const default_runner := fn(tests: []Test): i32 {
+    var failed_count: usize := 0;
+
+    for (tests) |test| {
+        reset_test_state();
+        const ok := test.func();
+        if (!ok || has_current_test_failed()) {
+            failed_count = failed_count + 1;
+        }
+    }
+
+    return if (failed_count == 0) 0 else 1;
+};

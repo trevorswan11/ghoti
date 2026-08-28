@@ -44,17 +44,53 @@ auto emitter::emit() -> module {
     PROFILE_FUNCTION();
     const_eval_.resolve_all_deferred_types();
 
-    for (const auto root_id : ast_module_.ast) {
-        ast_module_.ast[root_id].visit(
+    const auto emit_top_level_stmt = [&](mod::module& module, ast::node_id id) {
+        return module.ast[id].visit(
             [&](const auto&) {},
-            [&](const ast::decl_stmt& decl) { emit_top_level_decl(root_id, decl); },
-            [&](const ast::using_stmt& using_stmt) { emit_top_level_using(root_id, using_stmt); },
-            [&](const ast::test_stmt& test) { emit_top_level_test(root_id, test); });
-    }
+            [&](const ast::decl_stmt& decl) { emit_top_level_decl(id, decl); },
+            [&](const ast::using_stmt& using_stmt) { emit_top_level_using(id, using_stmt); },
+            [&](const ast::test_stmt& test) { emit_top_level_test(id, test); });
+    };
 
+    for (const auto root_id : ast_module_.ast) { emit_top_level_stmt(ast_module_, root_id); }
     for (const auto& inst : ast_module_.generic_instantiations) {
         emit_generic_instantiation(inst);
     }
+
+    // Traverse all transitively imported modules reachable from ast_module_
+    std::vector<mod::module*>                  imported_mods;
+    ankerl::unordered_dense::set<mod::module*> visited;
+    visited.insert(&ast_module_);
+
+    auto collect_imported = [&](auto& self, mod::module& cur) -> void {
+        for (const auto root_id : cur.ast) {
+            if (cur.ast[root_id].is<ast::import_stmt>()) {
+                if (const auto sema_type{cur.get_sema_type_opt(root_id)}) {
+                    if (const auto m_data{sema_type->get_data().as_opt<sema::types::module>()}) {
+                        auto& dep{m_data->imported};
+                        if (visited.insert(&dep).second) {
+                            imported_mods.emplace_back(&dep);
+                            self(self, dep);
+                        }
+                    }
+                }
+            }
+        }
+    };
+    collect_imported(collect_imported, ast_module_);
+
+    for (auto* other_mod : imported_mods) {
+        if (!other_mod || other_mod->is_poisoned() || other_mod->is_errored()) { continue; }
+        auto prev_module{std::exchange(active_module_, other_mod)};
+        const_eval_.set_module(*other_mod);
+        for (const auto root_id : other_mod->ast) { emit_top_level_stmt(*other_mod, root_id); }
+        for (const auto& inst : other_mod->generic_instantiations) {
+            emit_generic_instantiation(inst);
+        }
+        active_module_ = prev_module;
+        const_eval_.set_module(*prev_module);
+    }
+
     return std::move(gir_module_);
 }
 
@@ -87,6 +123,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
     builder_.set_insert_point(fn, entry);
 
     auto prev_module{std::exchange(active_module_, &fn_mod)};
+    const_eval_.set_module(fn_mod);
     {
         const scope_guard g{scopes_};
         for (const auto& [param, arg_type] : std::views::zip(fn_expr.parameters, req.arg_types)) {
@@ -127,6 +164,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
     }
 
     active_module_ = prev_module;
+    if (prev_module) { const_eval_.set_module(*prev_module); }
 }
 
 namespace {
@@ -228,6 +266,7 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
             }
         }
     } else if (decl.has_modifier(ast::decl_modifiers::EXTERN)) {
+        if (gir_module_.has_function(name)) { return; }
         if (const auto fn_data{sema_type->get_data().as_opt<sema::types::function>()}) {
             auto& fn{gir_module_.add_function(std::string{name},
                                               *sema_type,
@@ -242,6 +281,8 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
             return;
         }
     }
+
+    if (gir_module_.has_global(name)) { return; }
 
     const auto is_const{decl.has_modifier(ast::decl_modifiers::CONSTANT) ||
                         decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
@@ -285,30 +326,37 @@ auto emitter::emit_top_level_using(ast::node_id, const ast::using_stmt& using_st
     gir_module_.add_type(std::string{name_ident.name}, *sema_type);
 }
 
-auto emitter::emit_top_level_test(ast::node_id, const ast::test_stmt& test) -> void {
+auto emitter::emit_top_level_test(ast::node_id id, const ast::test_stmt& test) -> void {
     PROFILE_FUNCTION();
-    // Every test block shares one canonical `fn(): void` signature
-    auto& void_type{ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+    // Every test block shares one canonical `fn(): bool` signature
+    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
     auto& test_fn_type{*ctx_.pool[{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT}]};
     test_fn_type.resolve_if<sema::types::function>(
-        false, gsl::span<sema::type*>{}, void_type, false);
+        false, gsl::span<sema::type*>{}, bool_type, false);
 
-    const auto test_name{test.description
+    const auto test_desc{test.description
                              .transform([&](ast::string_handle h) {
                                  return active_ast().get_as<ast::string_expr>(h).value;
                              })
                              .or_else([this] -> stdx::option<std::string> {
-                                 return fmt::format("anonymous_test{}", anon_test_counter_++);
+                                 return fmt::format("anonymous_test{}", anon_test_desc_counter_++);
                              })};
 
-    auto& fn{gir_module_.add_function(*test_name, test_fn_type, true, false)};
+    const auto loc{active_ast().location_of(id)};
+    const auto unique_fn_name{fmt::format("__ghoti_test_fn_{}", anon_test_fn_counter_++)};
+
+    auto& fn{gir_module_.add_function(unique_fn_name, test_fn_type, true, false)};
+    fn.set_test_desc(*test_desc);
+    fn.set_test_location(
+        active_mod().path.string(), static_cast<u32>(loc.line), static_cast<u32>(loc.column));
+
     auto& entry{fn.add_segment()};
     builder_.set_insert_point(fn, entry);
 
     const scope_guard g{scopes_};
     emit_block(active_ast().get_as<ast::block_stmt>(test.block));
     if (const auto cur_seg{builder_.get_segment()}) {
-        if (!cur_seg->has_terminator()) { builder_.emit_return(); }
+        if (!cur_seg->has_terminator()) { builder_.emit_return(value{true, bool_type}); }
     }
 }
 
@@ -317,7 +365,8 @@ auto emitter::emit_function(ast::node_id              id,
                             const ast::function_expr& fn_expr) -> void {
     PROFILE_FUNCTION();
     const auto& name_ident{active_ast().get_as<ast::identifier_expr>(decl.name)};
-    const auto  sema_type{active_mod().get_sema_type_opt(id)};
+    if (gir_module_.has_function(name_ident.name)) { return; }
+    const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Function declaration must have a resolved sema type");
 
     const auto is_constexpr{decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
@@ -1269,6 +1318,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             builder_.emit_unreachable();
             return value{void_val{}, ret_type};
         }
+        case syntax::token_type_t::BUILTIN_SRC:
         case syntax::token_type_t::BUILTIN_SIZE_OF:
         case syntax::token_type_t::BUILTIN_ALIGN_OF:
         case syntax::token_type_t::BUILTIN_TYPE_OF:
@@ -1277,6 +1327,39 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         case syntax::token_type_t::BUILTIN_TARGET_TRIPLE: {
             if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
             break;
+        }
+        case syntax::token_type_t::BUILTIN_EXPECT: {
+            std::vector<value> args;
+            for (const auto& arg : call.arguments) {
+                if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
+                    args.emplace_back(emit_expression(*expr_h));
+                }
+            }
+            const auto loc{active_ast().location_of(id)};
+            auto&      u32_type{ctx_.get_builtin_resolved_type(sema::type_kind::U32)};
+            args.emplace_back(
+                const_value::make_string(ctx_, active_mod().path.string()).to_gir_value());
+            args.emplace_back(value{static_cast<u64>(loc.line), u32_type});
+            args.emplace_back(value{static_cast<u64>(loc.column), u32_type});
+            const auto local_res{builder_.emit_builtin_call("@expect", std::move(args), ret_type)};
+            if (local_res) { return value{*local_res, ret_type}; }
+            return value{void_val{}, ret_type};
+        }
+        case syntax::token_type_t::BUILTIN_REQUIRE: {
+            std::vector<value> args;
+            for (const auto& arg : call.arguments) {
+                if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
+                    args.emplace_back(emit_expression(*expr_h));
+                }
+            }
+            const auto loc{active_ast().location_of(id)};
+            auto&      u32_type{ctx_.get_builtin_resolved_type(sema::type_kind::U32)};
+            args.emplace_back(
+                const_value::make_string(ctx_, active_mod().path.string()).to_gir_value());
+            args.emplace_back(value{static_cast<u64>(loc.line), u32_type});
+            args.emplace_back(value{static_cast<u64>(loc.column), u32_type});
+            builder_.emit_builtin_call("@require", std::move(args), ret_type);
+            return value{void_val{}, ret_type};
         }
         default: {
             if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
@@ -2938,10 +3021,7 @@ auto emitter::emit_reference(ast::node_id id, const ast::reference_expr& ref) ->
 auto emitter::emit_implicit_access(ast::node_id id, const ast::implicit_access_expr& imp) -> value {
     PROFILE_FUNCTION();
     const auto sema_type{active_mod().get_sema_type_opt(id)};
-    if (const auto cv{const_eval_.try_eval(id)}) {
-        if (const auto i{cv->as_int_opt()}) { return value{*i, sema_type}; }
-        if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
-    }
+    if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
     const auto& ident{active_ast().get_as<ast::identifier_expr>(imp.member)};
     return value{std::string{ident.name}, sema_type};
 }
@@ -2950,11 +3030,7 @@ auto emitter::emit_module_access(ast::node_id id, const ast::module_access_expr&
     -> value {
     PROFILE_FUNCTION();
     const auto sema_type{active_mod().get_sema_type_opt(id)};
-    if (const auto cv{const_eval_.try_eval(id)}) {
-        if (const auto i{cv->as_int_opt()}) { return value{*i, sema_type}; }
-        if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
-        if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
-    }
+    if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
     const auto& inner_ident{active_ast().get_as<ast::identifier_expr>(mod_access.inner)};
     return value{std::string{inner_ident.name}, sema_type};
 }

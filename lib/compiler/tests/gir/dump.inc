@@ -80,7 +80,7 @@ test "golden_run"
     store %4, %0
     %5 = load %0
     %6 = call @compute_point(%5)
-    ret void
+    ret bool true
 
 fn clamp__i32_i32_i32(val: i32, min_val: i32, max_val: i32) -> i32
   seg 0:

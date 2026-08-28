@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -40,15 +41,26 @@ class function {
     ~function() = default;
     MAKE_PINNED(function);
 
-    MAKE_GETTER(name, const std::string&);
+    MAKE_GETTER(name, std::string_view);
     MAKE_GETTER(type, sema::type&);
     MAKE_GETTER(is_test, bool);
     MAKE_GETTER(is_constexpr, bool);
     MAKE_GETTER(is_variadic, bool);
     MAKE_GETTER(linkage, gir::linkage);
-    MAKE_GETTER(abi_name, const std::string&);
+    MAKE_GETTER(abi_name, std::string_view);
+    MAKE_GETTER(test_desc, std::string_view);
+    MAKE_GETTER(test_file, std::string_view);
+    MAKE_GETTER(test_line, u32);
+    MAKE_GETTER(test_column, u32);
     MAKE_DEDUCING_GETTER(params);
     MAKE_DEDUCING_GETTER(segments);
+
+    auto set_test_desc(std::string desc) -> void { test_desc_ = std::move(desc); }
+    auto set_test_location(std::string file, u32 line, u32 col) -> void {
+        test_file_   = std::move(file);
+        test_line_   = line;
+        test_column_ = col;
+    }
 
     auto add_param(std::string name, sema::type& param_type) -> parameter&;
     auto add_segment() -> segment&;
@@ -85,6 +97,10 @@ class function {
     bool                    is_variadic_{false};
     gir::linkage            linkage_{linkage::INTERNAL};
     std::string             abi_name_{"c"};
+    std::string             test_desc_;
+    std::string             test_file_;
+    u32                     test_line_{1};
+    u32                     test_column_{1};
 };
 
 } // namespace ghoti::gir

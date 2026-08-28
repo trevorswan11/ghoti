@@ -59,6 +59,10 @@ class module {
                                    [&](const auto* fn) { return fn->get_name() == name; });
     }
 
+    [[nodiscard]] auto has_global(std::string_view name) const noexcept -> bool {
+        return std::ranges::any_of(globals_, [&](const auto* g) { return g->name == name; });
+    }
+
     auto add_type(std::string name, sema::type& type) -> type_decl&;
     auto add_global(std::string         name,
                     sema::type&         type,

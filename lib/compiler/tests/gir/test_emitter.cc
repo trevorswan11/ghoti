@@ -212,11 +212,11 @@ TEST_CASE("Emitter test blocks") {
 
     REQUIRE(gir_mod.get_functions().size() == 2);
     const auto& test_fn{*gir_mod.get_functions()[0]};
-    CHECK(test_fn.get_name() == "simple addition test");
+    CHECK(test_fn.get_test_desc() == "simple addition test");
     CHECK(test_fn.get_is_test());
 
     const auto& anon_test_fn{*gir_mod.get_functions()[1]};
-    CHECK(anon_test_fn.get_name() == "anonymous_test0");
+    CHECK(anon_test_fn.get_test_desc() == "anonymous_test0");
     CHECK(anon_test_fn.get_is_test());
 }
 

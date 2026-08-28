@@ -1,5 +1,6 @@
 #include "compiler/codegen/llvm_lowering.hh"
 
+#include <algorithm>
 #include <array>
 #include <ranges>
 #include <string>
@@ -10,6 +11,7 @@
 #include <fmt/format.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Intrinsics.h>
@@ -386,18 +388,133 @@ auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod) -> llvm:
         llvm::appendToUsed(*llvm_module_, {dummy_main});
     }
 
+    auto* slice_ty{types_.translate_slice_type()};
+    auto* test_struct_ty{llvm::StructType::get(
+        context_,
+        {slice_ty, slice_ty, types_.get_int32_ty(), types_.get_int32_ty(), types_.get_ptr_ty()})};
+
+    const auto& test_fns{gir_mod.get_test_functions()};
+    const auto  test_count{test_fns.size()};
+
+    std::vector<llvm::Constant*> test_descriptors;
+    test_descriptors.reserve(test_count);
+
+    for (usize i{0}; i < test_count; ++i) {
+        const auto* fn{test_fns[i]};
+        const auto& fn_symbol_name{fn->get_name()};
+        auto*       test_llvm_fn{llvm_module_->getFunction(fn_symbol_name)};
+        ASSERT(test_llvm_fn, "Test function must already be declared before the entry wrapper");
+
+        const auto& desc_name{fn->get_test_desc().empty() ? fn_symbol_name : fn->get_test_desc()};
+        auto*       name_str{llvm::ConstantDataArray::getString(context_, desc_name, false)};
+        auto*       name_gvar{new llvm::GlobalVariable(*llvm_module_,
+                                                 name_str->getType(),
+                                                 true,
+                                                 llvm::GlobalValue::InternalLinkage,
+                                                 name_str,
+                                                 fmt::format("str.test_name.{}", i))};
+        auto*       name_slice{llvm::ConstantStruct::get(
+            slice_ty,
+            {name_gvar, llvm::ConstantInt::get(types_.get_usize_ty(), desc_name.size())})};
+
+        const auto file_path{fn->get_test_file().empty() ? gir_mod.get_ast_module().path.string()
+                                                         : fn->get_test_file()};
+        auto*      file_str{llvm::ConstantDataArray::getString(context_, file_path, false)};
+        auto*      file_gvar{new llvm::GlobalVariable(*llvm_module_,
+                                                 file_str->getType(),
+                                                 true,
+                                                 llvm::GlobalValue::InternalLinkage,
+                                                 file_str,
+                                                 fmt::format("str.test_file.{}", i))};
+        auto*      file_slice{llvm::ConstantStruct::get(
+            slice_ty,
+            {file_gvar, llvm::ConstantInt::get(types_.get_usize_ty(), file_path.size())})};
+
+        auto* line_val{llvm::ConstantInt::get(types_.get_int32_ty(), fn->get_test_line())};
+        auto* col_val{llvm::ConstantInt::get(types_.get_int32_ty(), fn->get_test_column())};
+
+        test_descriptors.emplace_back(llvm::ConstantStruct::get(
+            test_struct_ty, {name_slice, file_slice, line_val, col_val, test_llvm_fn}));
+    }
+
+    auto* test_array_ty{llvm::ArrayType::get(test_struct_ty, std::max(test_count, usize{1}))};
+    auto* test_array_init{test_count > 0 ? llvm::ConstantArray::get(test_array_ty, test_descriptors)
+                                         : llvm::ConstantAggregateZero::get(test_array_ty)};
+    auto* test_array_gvar{new llvm::GlobalVariable(*llvm_module_,
+                                                   test_array_ty,
+                                                   true,
+                                                   llvm::GlobalValue::InternalLinkage,
+                                                   test_array_init,
+                                                   "__ghoti_tests_data")};
+
+    auto* test_slice_const{llvm::ConstantStruct::get(
+        slice_ty, {test_array_gvar, llvm::ConstantInt::get(types_.get_usize_ty(), test_count)})};
+    auto* test_slice_gvar{new llvm::GlobalVariable(*llvm_module_,
+                                                   slice_ty,
+                                                   true,
+                                                   llvm::GlobalValue::InternalLinkage,
+                                                   test_slice_const,
+                                                   "__ghoti_tests_slice")};
+
     auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", main_fn)};
     builder_.SetInsertPoint(entry_bb);
 
-    // No libc dependency by design a failing test signals via @panic's trap, not printed output.
-    for (const auto* fn : gir_mod.get_test_functions()) {
-        auto* test_llvm_fn{llvm_module_->getFunction(fn->get_name())};
-        ASSERT(test_llvm_fn, "Test function must already be declared before the entry wrapper");
-        builder_.CreateCall(test_llvm_fn, {});
+    // Look for a test runner function
+    llvm::Function* runner_fn{nullptr};
+    if (!user_main_name_.empty() && user_main_name_ != "main") {
+        runner_fn = llvm_module_->getFunction(user_main_name_);
+    }
+    if (!runner_fn) { runner_fn = llvm_module_->getFunction("default_runner"); }
+    if (!runner_fn) { runner_fn = llvm_module_->getFunction("runner"); }
+
+    if (runner_fn) {
+        auto*        test_slice_val{builder_.CreateLoad(slice_ty, test_slice_gvar, "tests.slice")};
+        llvm::Value* call_res{nullptr};
+        if (runner_fn->getFunctionType()->getNumParams() >= 1) {
+            call_res = builder_.CreateCall(runner_fn, {test_slice_val});
+        } else {
+            call_res = builder_.CreateCall(runner_fn, {});
+        }
+
+        if (runner_fn->getReturnType()->isIntegerTy(32)) {
+            builder_.CreateRet(call_res);
+        } else {
+            builder_.CreateRet(builder_.getInt32(0));
+        }
+    } else {
+        // Fallback in-process runner: call each test, check return values and failure flags
+        auto*        failed_flag{get_or_create_test_failed_flag()};
+        llvm::Value* all_passed{builder_.getInt1(true)};
+        for (const auto* fn : test_fns) {
+            auto* test_llvm_fn{llvm_module_->getFunction(fn->get_name())};
+            ASSERT(test_llvm_fn, "Test function must already be declared before the entry wrapper");
+            builder_.CreateStore(builder_.getInt1(false), failed_flag);
+            auto* res{builder_.CreateCall(test_llvm_fn, {})};
+            auto* did_fail{builder_.CreateLoad(builder_.getInt1Ty(), failed_flag, "test.failed")};
+            auto* not_failed{builder_.CreateNot(did_fail, "test.not_failed")};
+            if (res->getType()->isIntegerTy(1)) {
+                auto* ok{builder_.CreateAnd(res, not_failed, "test.ok")};
+                all_passed = builder_.CreateAnd(all_passed, ok);
+            } else {
+                all_passed = builder_.CreateAnd(all_passed, not_failed);
+            }
+        }
+        auto* exit_code{
+            builder_.CreateSelect(all_passed, builder_.getInt32(0), builder_.getInt32(1))};
+        builder_.CreateRet(exit_code);
     }
 
-    builder_.CreateRet(builder_.getInt32(0));
     return main_fn;
+}
+
+auto llvm_lowering::get_or_create_test_failed_flag() -> llvm::GlobalVariable* {
+    if (auto* gvar{llvm_module_->getGlobalVariable("__ghoti_test_failed")}) { return gvar; }
+    return new llvm::GlobalVariable(*llvm_module_,
+                                    builder_.getInt1Ty(),
+                                    false,
+                                    llvm::GlobalValue::InternalLinkage,
+                                    builder_.getInt1(false),
+                                    "__ghoti_test_failed");
 }
 
 auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVariable* {
@@ -1053,6 +1170,75 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             auto* trap_fn{
                 llvm::Intrinsic::getOrInsertDeclaration(llvm_module_.get(), llvm::Intrinsic::trap)};
             builder_.CreateCall(trap_fn, {});
+            return nullptr;
+        }
+        case syntax::token_type_t::BUILTIN_EXPECT: {
+            if (inst.operands.empty()) { return builder_.getInt1(true); }
+            auto* cond_val{lower_value(inst.operands[0])};
+            if (!cond_val) { return builder_.getInt1(true); }
+            if (cond_val->getType()->isIntegerTy() &&
+                cond_val->getType()->getIntegerBitWidth() != 1) {
+                cond_val = builder_.CreateICmpNE(
+                    cond_val, llvm::Constant::getNullValue(cond_val->getType()), "tobool");
+            }
+
+            auto* cur_fn{builder_.GetInsertBlock()->getParent()};
+            auto* fail_bb{llvm::BasicBlock::Create(context_, "expect.fail", cur_fn)};
+            auto* cont_bb{llvm::BasicBlock::Create(context_, "expect.cont", cur_fn)};
+
+            builder_.CreateCondBr(cond_val, cont_bb, fail_bb);
+
+            builder_.SetInsertPoint(fail_bb);
+            auto* failed_flag{get_or_create_test_failed_flag()};
+            builder_.CreateStore(builder_.getInt1(true), failed_flag);
+
+            if (auto* record_fn = llvm_module_->getFunction("record_failure")) {
+                std::vector<llvm::Value*> rec_args;
+                for (usize i = 1; i < inst.operands.size(); ++i) {
+                    if (auto* v = lower_value(inst.operands[i])) { rec_args.push_back(v); }
+                }
+                if (record_fn->getFunctionType()->getNumParams() == rec_args.size()) {
+                    builder_.CreateCall(record_fn, rec_args);
+                }
+            }
+            builder_.CreateBr(cont_bb);
+
+            builder_.SetInsertPoint(cont_bb);
+            if (inst.result) { set_local(*inst.result, cond_val); }
+            return cond_val;
+        }
+        case syntax::token_type_t::BUILTIN_REQUIRE: {
+            if (inst.operands.empty()) { return nullptr; }
+            auto* cond_val{lower_value(inst.operands[0])};
+            if (!cond_val) { return nullptr; }
+            if (cond_val->getType()->isIntegerTy() &&
+                cond_val->getType()->getIntegerBitWidth() != 1) {
+                cond_val = builder_.CreateICmpNE(
+                    cond_val, llvm::Constant::getNullValue(cond_val->getType()), "tobool");
+            }
+
+            auto* cur_fn{builder_.GetInsertBlock()->getParent()};
+            auto* fail_bb{llvm::BasicBlock::Create(context_, "require.fail", cur_fn)};
+            auto* cont_bb{llvm::BasicBlock::Create(context_, "require.cont", cur_fn)};
+
+            builder_.CreateCondBr(cond_val, cont_bb, fail_bb);
+
+            builder_.SetInsertPoint(fail_bb);
+            auto* failed_flag{get_or_create_test_failed_flag()};
+            builder_.CreateStore(builder_.getInt1(true), failed_flag);
+
+            if (auto* record_fn = llvm_module_->getFunction("record_failure")) {
+                std::vector<llvm::Value*> rec_args;
+                for (usize i = 1; i < inst.operands.size(); ++i) {
+                    if (auto* v = lower_value(inst.operands[i])) { rec_args.push_back(v); }
+                }
+                if (record_fn->getFunctionType()->getNumParams() == rec_args.size()) {
+                    builder_.CreateCall(record_fn, rec_args);
+                }
+            }
+            builder_.CreateRet(builder_.getInt1(false));
+
+            builder_.SetInsertPoint(cont_bb);
             return nullptr;
         }
         case syntax::token_type_t::BUILTIN_TARGET_OS: {

@@ -123,6 +123,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     auto& t_usize{*pool[{type_kind::USIZE, types::mut::CONSTANT}]};
     auto& t_auto{*pool[{type_kind::AUTO, types::mut::CONSTANT}]};
     auto& t_noreturn{*pool[{type_kind::NORETURN, types::mut::CONSTANT}]};
+    auto& t_bool{*pool[{type_kind::BOOL, types::mut::CONSTANT}]};
 
     // C-string
     auto& t_u8{*pool[{type_kind::U8, types::mut::CONSTANT}]};
@@ -183,6 +184,10 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::PANIC, params(t_c_str), t_noreturn);
 
     inject_function(bis::FN_CTX, params(), t_auto);
+
+    inject_function(bis::SRC, params(), t_auto);
+    inject_function(bis::EXPECT, params(t_bool), t_bool);
+    inject_function(bis::REQUIRE, params(t_bool), t_void);
 }
 
 } // namespace

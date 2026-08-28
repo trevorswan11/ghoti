@@ -150,12 +150,8 @@ TEST_CASE("build_obj command execution") {
             fmt::print(out, R"(
                 pub import std;
 
-                pub const pick_min := fn(a: i64, b: i64): i64 {{
-                    return std::min(a, b);
-                }};
-
-                pub const pick_max := fn(a: i64, b: i64): i64 {{
-                    return std::max(a, b);
+                pub const ver := fn(): auto {{
+                    return std::version;
                 }};
             )");
         }
