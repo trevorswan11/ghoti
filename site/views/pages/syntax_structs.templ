@@ -1,0 +1,121 @@
+package pages
+
+templ SyntaxStructsPage() {
+	<h1>Structs</h1>
+	<ul>
+		<li>
+			Structs are defined using the standard declaration syntax or with a <code>using</code> statement
+			<ul>
+				<li>In the event that the standard declaration syntax is used, it must be <code>const</code></li>
+			</ul>
+		</li>
+		<li>Struct definitions must be <code>const</code></li>
+		<li>
+			Structs may have a comma-separated list of fields that are owned by instances of the struct
+			<ul>
+				<li>These must be the first thing to appear in the struct</li>
+				<li>They are declared with an optional <code>pub</code> to mark access modifiers, followed by the name, type, and optional default value: e.g. <code>pub foo: i32 = 23</code></li>
+				<li>
+					Members do not have an individual idea of mutability, simply inheriting the mutability of their enclosing object when used
+					<ul>
+						<li>This is of course only applied to value types as pointers and references enforce local immutability</li>
+					</ul>
+				</li>
+			</ul>
+		</li>
+		<li>
+			Structs can also have member declarations
+			<ul>
+				<li>Once the first declaration is hit, there may not be any more instance members</li>
+				<li>Decls here cannot be marked <code>extern</code> or <code>export</code></li>
+				<li>Decls here can be marked <code>pub</code> to allow external access</li>
+				<li>
+					Member functions have a first argument which is an instance of the struct: <code>self</code>
+					<ul>
+						<li>
+							A member function can provide this keyword in five different ways:
+							<ol>
+								<li><code>self</code> denotes a pass by value (copy)</li>
+								<li><code>&amp;self</code> denotes a pass by const reference</li>
+								<li><code>^self</code> denotes a pass by const pointer</li>
+								<li><code>&amp;mut self</code> denotes a pass by mutable reference</li>
+								<li><code>^mut self</code> denotes a pass by mutable pointer</li>
+							</ol>
+						</li>
+						<li>This parameter <em>must</em> be the first parameter of the function's parameter list</li>
+						<li>This parameter is conventionally named <code>self</code> but is allowed to assume any non-reserved keyword</li>
+						<li>This parameter has the underlying type of the directly enclosing struct</li>
+					</ul>
+				</li>
+				<li>Declared functions without a self parameter can be thought of as <code>static</code> in other languages</li>
+				<li>Functions are considered to be top-level within the struct and must be <code>const</code></li>
+				<li>Declarations must always come after a list of instance members (which may be empty)</li>
+			</ul>
+		</li>
+		<li>Struct 'declarations' can also be <code>using</code> or <code>import</code> statements</li>
+		<li>All internal accesses are resolved using the <code>.</code> operator</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const Foo := struct {           // Standard declaration with type inference
+    bar: i32,                   // Private field without default value (must appear in initializer list)
+    pub boo: u32 = 4u,          // Public field with default value
+
+    pub var foo := 3.4;         // Decl variables are struct globals and are not instance specific
+    const baz: []u8 = "baz";  // Constant decl, must be initialized in-line
+
+    const worker_one := fn(&self): void {           // Functions can have an explicit 'self' parameter
+        // ...
+    };
+
+    const worker_two := fn(&mut self): void {       // The self parameter can be marked '&mut' to mutate state
+        // ...
+    };
+
+    pub const worker_three = fn(): void {        // Functions without 'self' parameter cannot take an instance of the struct
+        // ...
+    };
+
+    // Compile Error - top-level functions cannot be marked 'var'
+    // var worker_four := fn(a: i32, b: u32): u64 {
+    //
+    // };
+
+    pub const fee := "Hello, World!";           // Decls can be placed anywhere after the fields
+};
+
+Foo.foo;                                           // All members are resolved using the '.' operator
+Foo.worker_three();                                // The same goes for functions
+
+var foo: Foo = .{ .bar = 42, };
+Foo.worker_two(&mut foo);   // Member functions may be called explicitly 
+foo.worker_two();           // Or with this shorthand` }
+		</code>
+	</pre>
+	<ul>
+		<li>There is no inheritance</li>
+		<li>Interfaces are not natively supported</li>
+	</ul>
+	<h2>Initialization</h2>
+	<ul>
+		<li>
+			Structs can be initialized in two ways
+			<ul>
+				<li>You may use the structs name followed by a braced list of implicit access declarations assigned to values</li>
+				<li>You may use the <code>.{ "{}" }</code> syntax followed by the same list as above</li>
+			</ul>
+		</li>
+		<li>The below example demonstrates both of these mechanisms</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const S = struct { var a: int; };
+
+const s1 := S{ .a = 3 };
+const s2: S = .{ .a = 3 };` }
+		</code>
+	</pre>
+	<ul>
+		<li>All member variables that do not have default values associated with their declarations must be initialized in either case</li>
+	</ul>
+}

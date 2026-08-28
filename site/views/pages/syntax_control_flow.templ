@@ -1,0 +1,146 @@
+package pages
+
+templ SyntaxControlFlowPage() {
+	<h1>Control Flow</h1>
+	<h2>Entry Point</h2>
+	<ul>
+		<li>
+			The entry point of a program must be a public <code>main</code> function that returns an integer or void
+			<ul>
+				<li>The function may return an integer (<code>i32</code>) when a non-zero exit code may be desired</li>
+				<li>Using <code>void</code> is equivalent to the implicit return behavior observed in C</li>
+			</ul>
+		</li>
+		<li>
+			This function must take in a single parameter of type <code>[][:0]u8</code> representing the passed command line args
+			<ul>
+				<li>This is conventionally named <code>args</code> but can be named to your choosing</li>
+				<li>Note that these args are null terminated to respect C-interop with minimal friction</li>
+			</ul>
+		</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `import std;
+
+pub const main := fn(args: [][:0]u8): void {
+    const message := "Hello, world!";
+    std::io::println(message);
+};` }
+		</code>
+	</pre>
+	<h2>Labels</h2>
+	<ul>
+		<li>
+			Labels can be applied to the following statements and expressions for expressiveness:
+			<ul>
+				<li>All loops</li>
+				<li>If expressions</li>
+				<li>Match expressions</li>
+				<li>Blocks</li>
+			</ul>
+		</li>
+		<li>Labels are declared as a single identifier followed by a colon before the construct is reached (e.g. <code>blk: { "{}" }</code>)</li>
+		<li>
+			Inside of a block, you can break with a value
+			<ul>
+				<li>If there is no value but you break out of a block, the resulting block is of <code>void</code> type</li>
+			</ul>
+		</li>
+		<li>
+			When labels are applied to loops, you can control which iteration is skipped or broken from
+			<ul>
+				<li>This is particularly useful in cases of nested loops</li>
+			</ul>
+		</li>
+	</ul>
+	<h2>Jumps</h2>
+	<ul>
+		<li>
+			Jump statements are implemented using the <code>return</code>, <code>break</code> and <code>continue</code> keywords
+			<ul>
+				<li><code>return</code> and <code>break</code> statements are the only constructs that can return a value upon execution</li>
+			</ul>
+		</li>
+		<li>
+			The <code>return</code> keyword is the only jump statement that allows an associated value
+			<ul>
+				<li>This value can be any expression, including a type alias or declaration (new union, struct, or enum)</li>
+			</ul>
+		</li>
+		<li><code>break</code> can be used in loop or label bodies</li>
+		<li>
+			<code>continue</code> in loop bodies
+			<ul>
+				<li>These statements cannot have an associated value in any case</li>
+			</ul>
+		</li>
+		<li><code>return</code> can only be used inside of functions</li>
+		<li>
+			<code>continue</code> and <code>break</code> will always apply to the immediately enclosing loop without a label
+			<ul>
+				<li>Without a label, a value cannot be specified with the statement</li>
+			</ul>
+		</li>
+	</ul>
+	<h2>Conditional Expressions</h2>
+	<ul>
+		<li>If-else expressions are a crucial part of control flow</li>
+		<li>They are composed of a required conditional and consequence with an optional alternate</li>
+		<li>
+			The alternate clause is a restricted else statement, similar to <code>match</code>, <code>for</code>, and <code>while</code> loops. Similarly, it can only be a:
+			<ul>
+				<li>Jump statement</li>
+				<li>Expression statement</li>
+				<li>Block statement</li>
+			</ul>
+		</li>
+		<li>If the consequence and alternate statements are both expression statements, then the resulting value is returned</li>
+	</ul>
+	<pre><code class="language-ghoti">{ `a = if (a) b; else c; // Assigns a conditionally` }</code></pre>
+	<ul>
+		<li>Conditionals can be evaluated at compile time with a syntax similar to C++</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `if constexpr (true) {
+    ...
+} else {
+    ...
+}` }
+		</code>
+	</pre>
+	<ul>
+		<li>In the above example, the top block is the only statement evaluated, with the <code>else</code> branch and condition being completely dropped at runtime</li>
+		<li>Statements inside the consequent of a conditional are still scoped as written, <code>constexpr</code> will not hoist a branch into the outer scope</li>
+	</ul>
+	<h2>Defer</h2>
+	<ul>
+		<li>Defer statements defer execution to the end of their scope</li>
+		<li>They are executed in reverse order with respect to their declaration</li>
+		<li>
+			A defer statement can be an expression, block, or discard statement
+			<ul>
+				<li>All other inner statement variants are disallowed</li>
+			</ul>
+		</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `import std;
+
+const main := fn(): void {
+    defer std::io::println("World!");
+    defer std::io::print("Hello, ");
+};` }
+		</code>
+	</pre>
+	<ul>
+		<li>
+			This example prints "Hello, World!"
+			<ul>
+				<li>Every defer statement pushes execution onto a LIFO stack that is executed at the end of scope</li>
+			</ul>
+		</li>
+	</ul>
+}

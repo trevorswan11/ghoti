@@ -1,0 +1,211 @@
+package pages
+
+templ SyntaxTypesPage() {
+	<h1>Types</h1>
+	<h2>Explicit Types</h2>
+	<ul>
+		<li>Types in ghoti are first class values and can be assigned to values and passed to functions</li>
+		<li>
+			There are 5 different explicit type modifiers in ghoti
+			<ul>
+				<li><code>^</code>: Denotes a constant pointer</li>
+				<li><code>^mut</code>: Denotes a mutable pointer</li>
+				<li><code>&amp;</code>: Denotes a constant reference</li>
+				<li><code>&amp;mut</code>: Denotes a mutable reference</li>
+				<li><code>volatile</code>: Denotes a <a href="https://en.wikipedia.org/wiki/Volatile_(computer_programming)">volatile</a> value, preventing certain compiler optimizations for the sake of correctness</li>
+			</ul>
+		</li>
+		<li>
+			Most of these modifiers act in an opposite way to languages like C, C++, and Zig, while behaving similar to Rust
+			<ul>
+				<li>Mutability is opt-in, with everything else being constant by default</li>
+			</ul>
+		</li>
+		<li>
+			There are 4 different explicit types in ghoti
+			<ul>
+				<li>Identifier types: Consist of an identifier (either a keyword or user defined type)</li>
+				<li>Function types: Consist of the functions argument types and return type.</li>
+				<li>
+					Array types: Consist of an optional size (required if array, not if slice) and type which can be any of these types. These are recursively defined.
+					<ul>
+						<li>You can annotate an array type to indicate that it is null-terminated by suffixing the size with <code>:0</code> (i.e. <code>[N:0]</code>)</li>
+						<li>You can annotate a slice type to indicate that it is null-terminated by placing <code>:0</code> in between the brackets (i.e. <code>[:0]</code>)</li>
+					</ul>
+				</li>
+				<li>Nested types: Consist of an outer type modifier acting on any of these types in a recursive fashion</li>
+			</ul>
+		</li>
+		<li>The location of the type modifier is extremely important:</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `^mut [5uz]i32 // A mutable pointer to an array of 5 integers.
+[5uz]^mut i32 // A constant array of 5 mutable pointers to integers` }
+		</code>
+	</pre>
+	<ul>
+		<li>
+			Each of these explicit types can be accompanied by any amount of type modifiers (syntactically)
+			<code>&amp;&amp;&amp;&amp;&amp;&amp;&amp;&amp;&amp;&amp;&amp;&amp;&amp;&amp;&amp;i32</code> is technically a valid type, though it likely would never be used
+		</li>
+		<li>
+			Types can be passed to functions whose parameter has the type <code>type</code>
+			<ul>
+				<li>Function argument parsing prioritizes expressions over types</li>
+			</ul>
+		</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const func := fn(p: type): void { ... };
+func(&mut P);` }
+		</code>
+	</pre>
+	<ul>
+		<li>In the above example, the call expression is parsed as taking in a mutable reference to a declaration P</li>
+		<li>If you instead meant for <code>&amp;mut P</code> to be a type, you can circumvent this priority by using a <code>using</code> statement</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `using tP = &mut P;
+const func := fn(p: type): void { ... };
+func(tP);` }
+		</code>
+	</pre>
+	<ul>
+		<li>In this example, the identifier <code>tP</code> is aliased to a type which is a mutable reference to a type <code>P</code></li>
+		<li>Types can also be returned from functions, assuming the type can be fully constructed at compile time</li>
+		<li>Function types require parameter names for clarity and maintainability:</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `using Callback = fn(status: i32, result: ^bool): void;
+const register := fn(cb: Callback): void { ... };` }
+		</code>
+	</pre>
+	<h2>Pointers vs. References</h2>
+	<ul>
+		<li>When possible, references should be used over pointers</li>
+		<li>While references and pointers act similarly, references are guaranteed to be non-null</li>
+		<li>
+			Any pointer type can receive the builtin <code>nullptr</code> pointer
+			<ul>
+				<li>This is the only use-case for a built-in null in ghoti</li>
+			</ul>
+		</li>
+		<li>A reference to an object can access its internal fields using the dot operator</li>
+		<li>You can dereference a pointer by using the <code>*</code> operator</li>
+		<li>
+			A pointer to an object can access its internal fields using the standard dot operator
+			<ul>
+				<li>Note that this is just syntactic sugar for an explicit dereference expression followed by a dot operator</li>
+			</ul>
+		</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `var a: ^A = ...;
+a.b;   // Syntactic sugar
+(*a).b; // Equivalent expression` }
+		</code>
+	</pre>
+	<ul>
+		<li>
+			You can get a pointer to an object using the <code>^</code> prefix operator
+			<ul>
+				<li><code>^</code>: Returns a constant pointer to the object</li>
+				<li><code>^mut</code>: Returns a constant pointer to the object</li>
+			</ul>
+		</li>
+		<li>
+			You can get a reference to an object using the <code>&amp;</code> prefix operator
+			<ul>
+				<li><code>&amp;</code>: Returns a constant reference to the object</li>
+				<li><code>&amp;mut</code>: Returns a constant reference to the object</li>
+			</ul>
+		</li>
+	</ul>
+	<h2>Type Introspection</h2>
+	<ul>
+		<li>You can get the type of a value by using the <code>{ "@typeOf" }</code> builtin</li>
+		<li>You can get the size of a type (in bytes) by using the <code>{ "@sizeOf" }</code> builtin</li>
+		<li>You can get the align of a type by using the <code>{ "@alignOf" }</code> builtin</li>
+	</ul>
+	<h2>User-Defined Types</h2>
+	<ul>
+		<li>User defined types (enums, unions, and structs) can be declared inline (as an explicit type) or out of line (as an expression)</li>
+		<li>
+			It may be helpful to return a user-defined type from a function (e.g. a generic type like an array list)
+			<ul>
+				<li>In this case, the return type should be of type <code>type</code></li>
+			</ul>
+		</li>
+		<li>Generated types are done at compile time and functions which wish to return a type must have compile-time known parameters like types or integral constants</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const Hand := union {
+    card: bool,
+    pen: i32,
+    shoe: void,
+    deck: struct {
+        var hearts: [12uz]Card;
+        var diamonds: [12uz]Card;
+        var clubs: [12uz]Card;
+        var spades: [12uz]Card;
+        var has_jokers: bool;
+    },
+};` }
+		</code>
+	</pre>
+	<h2>Primitive Types</h2>
+	<ul>
+		<li><code>i32</code>: A 32-bit signed integer, represented by a standalone number</li>
+		<li><code>i64</code>: A 64-bit signed integer, represented by a <code>l</code> suffixed number</li>
+		<li><code>isize</code>: A platform specific signed integer equivalent to ptrdiff_t (64-bit on 64-bit systems), represented by a <code>z</code> suffixed number</li>
+		<li><code>u32</code>: A 32-bit unsigned integer, represented by a <code>u</code> suffixed number</li>
+		<li><code>u64</code>: A 64-bit unsigned integer, represented by a <code>ul</code> suffixed number</li>
+		<li><code>usize</code>: A platform specific unsigned integer equivalent to size_t (64-bit on 64-bit systems), represented by a <code>uz</code> suffixed number</li>
+		<li><code>f32</code>: A 32-bit floating point, represented by a <code>f</code> suffixed number (base-10), decimal, or scientific notation</li>
+		<li><code>f64</code>: A 64-bit floating point, represented by a standalone decimal or scientific notation</li>
+		<li>
+			<code>u8</code>: An unsigned 8-bit value, typically used for characters (i.e. <code>'a'</code>) or ascii values
+			<ul>
+				<li>There is no string type in ghoti. Instead you must use an array or slice of bytes (i.e. <code>[]u8</code> or <code>[N]u8</code>)</li>
+			</ul>
+		</li>
+		<li><code>bool</code>: True (<code>true</code>) or false (<code>false</code>)</li>
+		<li><code>void</code>: The unit type, this can be declared using empty curly braces <code>{ "{}" }</code></li>
+	</ul>
+	<h2>Special Types</h2>
+	<ul>
+		<li>
+			<code>type</code>: A type encapsulating the information presented in this documentation
+			<ul>
+				<li>Useful for generic programming where a struct is returned from a function to create a custom container or type</li>
+			</ul>
+		</li>
+		<li>
+			<code>auto</code>: This type is used to tell function signatures that the type should be deduced by the call arguments
+			<ul>
+				<li>This is restricted to values and cannot be used to represent a type, see the <code>type</code> type</li>
+				<li>This is valid for parameters and for the return type</li>
+				<li>It can also be used in declarations, but this behaves the same as the walrus (<code>:=</code>) inference operator</li>
+			</ul>
+		</li>
+		<li>
+			<code>opaque</code>: This type indicates a type that is not known to the compiler for some reason
+			<ul>
+				<li>Opaque types must be behind a pointer and cannot be dereferenced (mutability is allowed, but references are not)</li>
+				<li>This exists to fulfill the need introduced by C's <code>void*</code> idiom</li>
+			</ul>
+		</li>
+		<li>
+			<code>noreturn</code>: Used to indicate that a function will never return to the caller
+			<ul>
+				<li>This is only valid on functions and does not support type modifiers</li>
+			</ul>
+		</li>
+	</ul>
+}

@@ -1,0 +1,158 @@
+package pages
+
+templ SyntaxFunctionsPage() {
+	<h1>Functions</h1>
+	<ul>
+		<li>Functions are defined using the standard declaration syntax</li>
+		<li>Function types can be aliased with a <code>using</code> statement</li>
+		<li>Function parameters are immutable by default</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const foo := fn(a: i32, b: u32): u64 {
+    // ...
+};` }
+		</code>
+	</pre>
+	<h2>Parameters</h2>
+	<ul>
+		<li>Parameters obey the same syntax rules as the rest of the type system</li>
+		<li>
+			Without any type modifiers, parameters are passed by value
+			<ul>
+				<li>All parameters are implicitly constant values</li>
+			</ul>
+		</li>
+		<li>
+			A parameter may be passed by const reference by marking it as <code>&amp;</code>
+			<ul>
+				<li>To call such a function, the call site must also indicate with the <code>&amp;</code> operator</li>
+				<li>A const pointer is created with the <code>^</code> operator which the function must also indicate</li>
+			</ul>
+		</li>
+		<li>
+			A parameter may be passed by mutable reference by marking it as <code>&amp;mut</code>
+			<ul>
+				<li>To call such a function, the call site must also indicate with the <code>&amp;mut</code> operator</li>
+				<li>A mutable pointer is created with the <code>^mut</code> operator which the function must also indicate</li>
+			</ul>
+		</li>
+		<li>There are no default parameters</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const foo := fn(a: &i32): u64 {
+    // ...
+};
+
+const bar := fn(b: i32): u64 {
+    // ...
+};
+
+const baz := fn(c: &mut i32): u64 {
+    // ...
+};
+
+var a := 2;
+_ = foo(&a);        // Allowed, passed by const reference
+_ = bar(a);         // Allowed, passed by value
+_ = baz(&mut a);    // Allowed, passed by mutable reference
+
+const b := 1;
+_ = foo(&b);        // Allowed, passed by const reference
+_ = bar(b);         // Allowed, passed by value
+_ = baz(&mut b);    // Illegal, cannot mutate const` }
+		</code>
+	</pre>
+	<ul>
+		<li>
+			Variadic function parameters are supported to allow for c-interop
+			<ul>
+				<li>Currently, ghoti does not expose primitives for interacting with this parameter type</li>
+				<li>For example, you can declare an extern function like <code>printf</code> from libc as: <code>{ `extern const printf: fn(^u8, ...): i32;` }</code></li>
+			</ul>
+		</li>
+	</ul>
+	<h2>Semantics</h2>
+	<ul>
+		<li>
+			There is no function overloading
+			<ul>
+				<li>This includes operators. There is no operator overloading</li>
+			</ul>
+		</li>
+		<li>Top-level function declarations cannot be marked variable and must be <code>const</code></li>
+		<li>
+			Functions can have the <code>noreturn</code> return 'type' which signifies that the compiler should not expect a <code>return</code> construct in the function body
+			<ul>
+				<li>Violating this assumption is a compile time error</li>
+			</ul>
+		</li>
+		<li>The return types <code>noreturn</code> and <code>void</code> cannot have any type modifiers</li>
+		<li>You are able to declare local functions (i.e. functions inside of functions) or anonymous functions (i.e. functions passed directly as a parameter to a function)</li>
+		<li>
+			Closures are implicit as they are in rust
+			<ul>
+				<li>A closure implicitly captures referenced values by mutable reference if the value is used in mutable contexts</li>
+				<li>Non-value objects that can be trivially copied and are not mutated in the closure are copied</li>
+			</ul>
+		</li>
+		<li>The type of a closure is not known to the programmer</li>
+	</ul>
+	<h2>Builtin Functions</h2>
+	<ul>
+		<li>Builtin functions are prefixed with the <code>{ "@" }</code> symbol and are always camelCase</li>
+		<li>Builtin functions can run at compile time or runtime depending on the context, and will attempt to lower to the most efficient instructions when possible</li>
+	</ul>
+	<h2>Calling</h2>
+	<ul>
+		<li>
+			Functions are called in three ways depending on the context
+			<ul>
+				<li>If calling a top-level, non-struct function, the syntax is simple (<code>{ `func(args...)` }</code>)</li>
+				<li>
+					If calling a member function, the syntax is similar to other languages (<code>{ `instance.func(args...)` }</code>)
+					<ul>
+						<li>This requires the function to have a self parameter, as discussed in the struct, enum, and union documentation</li>
+						<li>The callee must have mutability that matches the explicit self parameter</li>
+					</ul>
+				</li>
+				<li>If calling a 'static' struct function (one without a self parameter), the syntax uses the dot operator (<code>{ `Struct.func(args...)` }</code>)</li>
+			</ul>
+		</li>
+	</ul>
+	<h2>Types</h2>
+	<ul>
+		<li>
+			Function's signatures are their types, including parameter modifiers and the return type
+			<ul>
+				<li>Note that these signatures do not contain parameter names (this is not supported, even optionally)</li>
+				<li>Signatures do include the variadic argument distinction</li>
+			</ul>
+		</li>
+		<li>A function can be declared verbosely by using the type before the declaration function</li>
+	</ul>
+	<pre><code class="language-ghoti">{ `const f: fn(bool): i32 = fn(b: bool): i32 { ... };` }</code></pre>
+	<ul>
+		<li>You can also use this to indicate that a function takes a function as an argument</li>
+	</ul>
+	<pre><code class="language-ghoti">{ `const f := fn(g: fn(): i32): i32 { ... };` }</code></pre>
+	<h2>Constexpr functions</h2>
+	<ul>
+		<li>
+			Functions declared and assigned to <code>constexpr</code> declarations signal to the compiler that the function may be called at compile time
+			<ul>
+				<li>'May' meaning that it will be called at compile time at a <code>constexpr</code> context</li>
+			</ul>
+		</li>
+		<li>
+			There are restrictions imposed on <code>constexpr</code> functions that do not apply to normal ones
+			<ul>
+				<li>IO must not be performed (reading from/writing to disk, via threading, printing to stdout, etc)</li>
+				<li>Heap allocations may not be made</li>
+				<li>TODO</li>
+			</ul>
+		</li>
+		<li>A local function can be declared <code>constexpr</code> only if it captures no values</li>
+	</ul>
+}

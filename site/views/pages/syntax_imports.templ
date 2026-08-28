@@ -1,0 +1,70 @@
+package pages
+
+templ SyntaxImportsPage() {
+	<h1>Imports</h1>
+	<ul>
+		<li>
+			There are two kinds of imports in ghoti
+			<ul>
+				<li>Library imports: These are imports denoted by identifiers and are declared in dedicated 'library' files</li>
+				<li>File imports: These are imports denoted by a string that is a file path, followed by an identifier alias</li>
+			</ul>
+		</li>
+		<li>The standard file extension for ghoti files is <code>.gh</code></li>
+		<li>Both file and library imports allow an identifier alias using the <code>as</code> keyword, with this being required for user imports</li>
+		<li>An import can be marked public in order to expose it to the outside world when the enclosing file is imported</li>
+		<li>Note that these statements are private by default and can be prefixed with <code>pub</code> to unrestrict visibility</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `import std; // Library import
+import std as stud; // Library import with alias
+import "node.gh"; // Illegal, file imports always require alias
+pub import "node.gh" as node; // Public file import with alias` }
+		</code>
+	</pre>
+	<ul>
+		<li>The filepath given to the import should be relative to the asking file, <em>not</em> to a local project 'root'</li>
+		<li>Import statements can be used anywhere in your program, though they do not yield a value (hence why they are not called expressions)</li>
+	</ul>
+	<h2>Library Import Declaration</h2>
+	<ul>
+		<li>Libraries are declared by indicating that a file is a root of an import tree</li>
+		<li>A library's root file path must be provided to the compiler through the command line</li>
+		<li>These imports can be aliased to avoid name collisions, though this is not required</li>
+	</ul>
+	<h2>File Import Declaration</h2>
+	<ul>
+		<li>A file in conch is importable through its relative path to the importing file</li>
+		<li>These imports must be aliased to an identifier as the string path cannot be used implicitly as a namespace</li>
+	</ul>
+	<h3>Example</h3>
+	<ul>
+		<li><code>std.gh</code> declares</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `pub import "io/io.gh" as io;
+pub import "containers/array_list.gh" as array_list;
+pub const ArrayList := array_list::ArrayList;
+...` }
+		</code>
+	</pre>
+	<ul>
+		<li><code>io/io.gh</code> declares a public function <code>println</code> which can be accessed via:</li>
+	</ul>
+	<pre><code class="language-ghoti">{ `std::io::println(...);` }</code></pre>
+	<ul>
+		<li><code>containers/array_list.gh</code> declares a public function <code>ArrayList</code> that returns a generically-typed struct</li>
+	</ul>
+	<pre><code class="language-ghoti">{ `pub const ArrayList := fn(T: type): type {...};` }</code></pre>
+	<ul>
+		<li>This can be used just like any other function through the module access operator (<code>::</code>):</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `var a: std::array_list::ArrayList(i32);
+var a: std::ArrayList(i32); // Allowed due to function declaration alias` }
+		</code>
+	</pre>
+}

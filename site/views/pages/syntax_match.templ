@@ -1,0 +1,36 @@
+package pages
+
+templ SyntaxMatchPage() {
+	<h1>Match</h1>
+	<ul>
+		<li>In addition to <code>if</code> control flow, ghoti has match expressions</li>
+		<li>Match expressions can easily switch over enum values, but are also helpful when working with unions</li>
+		<li>
+			When matching a union, you must use a capture group with each match arm
+			<ul>
+				<li>This will capture the active field value of the union</li>
+				<li>This can also be discarded using an underscore <code>_</code></li>
+				<li>There is no concept of a modifier with this capture, with access modifiers being dependent on the match object/the union's field types</li>
+			</ul>
+		</li>
+		<li>
+			Match expressions must always be exhaustive
+			<ul>
+				<li>
+					To catch all arms that were not explicitly listed, you can use a catch-all branch where the LHS of the branch is the underscore <code>_</code> token
+					<ul>
+						<li>This branch does not support capturing as the value is already available in the scope</li>
+						<li>This branch may come anywhere in the match arm list</li>
+					</ul>
+				</li>
+				<li>Similar to <code>for</code> and <code>while</code> non-break, the catch-all clause is a restricted statement, meaning it can only be a:</li>
+				<li>Jump statement (return, break, continue)</li>
+				<li>Expression statement</li>
+				<li>Block statement</li>
+			</ul>
+		</li>
+		<li>Arms of match expressions must be comma separated and there may be a trailing comma</li>
+		<li>Loops are expressions and must be terminated by a semicolon</li>
+	</ul>
+	<pre><code class="language-ghoti">{ "match (a) { 2 => { c; }, _ => d }; // Standard match on a non-union value\nmatch (a) { .b => |b| { c; } }; // Match on a union value that has a field `b`" }</code></pre>
+}

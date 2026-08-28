@@ -1,0 +1,84 @@
+package pages
+
+templ SyntaxLoopsPage() {
+	<h1>Loops</h1>
+	<ul>
+		<li>There are 4 different loops in ghoti</li>
+	</ul>
+	<h2>Do-while Loops</h2>
+	<ul>
+		<li>Equivalent to the C/C++ do-while</li>
+		<li>The loop's body is guaranteed to be evaluated at least once before the condition is tested</li>
+		<li>The loop's body cannot be empty</li>
+	</ul>
+	<pre><code class="language-ghoti">{ `do { a; } while (b != c);` }</code></pre>
+	<h2>For Loops</h2>
+	<ul>
+		<li>For loops are explicitly designed for array/slice iteration</li>
+		<li>
+			For loops have 4 different clauses:
+			<ul>
+				<li>Iterables: A comma separated list in parenthesis. This is the first clause and is required</li>
+				<li>
+					Captures: A comma separated list enclosed by bitwise or <code>|</code> pipes. The is the second clause and is required. If you would like to discard a capture, use <code>_</code>
+					<ul>
+						<li>There must be the same number of captures as there are iterables</li>
+					</ul>
+				</li>
+				<li>Body: The loop body, which encloses all values from the outer scope and captures</li>
+				<li>Non-break: An <code>else</code> clause that is located after the loop that only runs if the loop reached the end of execution naturally (i.e. there was not a break statement)</li>
+			</ul>
+		</li>
+		<li>The loop's body cannot be empty</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `for (arr, l, p) |i, &mut j, _| { ... }; // Captures can have modifiers or be discarded
+for (0..4) |i| { ... } else return b; // The return statement only runs if the loop body does not break
+for (0..4) |i, j| { ... } else { return b; } // Illegal, the number of captures and iterables must match` }
+		</code>
+	</pre>
+	<h2>Infinite Loops</h2>
+	<ul>
+		<li>The equivalent to a <code>while (true)</code> loop in C</li>
+		<li>These loops are never intended to end naturally, requiring an explicit control flow statement to exit execution</li>
+		<li>The loop's body cannot be empty</li>
+	</ul>
+	<pre><code class="language-ghoti">{ `loop { a; };` }</code></pre>
+	<h2>While Loops</h2>
+	<ul>
+		<li>
+			While loops have 4 different clauses:
+			<ul>
+				<li>Condition: An expression enclosed by parenthesis. This is the first clause and is required</li>
+				<li>
+					Continuation: An expression preceded by a colon, enclosed by parenthesis. This is the second clause and is purely optional
+					<ul>
+						<li>This expression is evaluated in between loop iterations, meaning it will not run before the first iteration nor after the last iteration or after a break.</li>
+					</ul>
+				</li>
+				<li>Body: The loop body, which encloses all values from the outer scope</li>
+				<li>Non-break: An <code>else</code> clause that is located after the loop that only runs if the loop reached the end of execution naturally (i.e. there was not a break statement)</li>
+			</ul>
+		</li>
+		<li>The loop's body cannot be empty unless there is a continuation clause</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `while (true) : (i += 1) {a;}; // (i += 1) is evaluated evaluated in between loop iterations
+while (true) {a;} else return b; // The return statement only runs if the loop body does not break` }
+		</code>
+	</pre>
+	<h2>Important Considerations</h2>
+	<ul>
+		<li>
+			The non break-clause of <code>for</code> and <code>while</code> loops are restricted statements, meaning they can only be:
+			<ul>
+				<li>Jump statements (return, break, continue)</li>
+				<li>Expressions</li>
+				<li>Blocks</li>
+			</ul>
+		</li>
+		<li>Loops are expressions and must be terminated by a semicolon</li>
+	</ul>
+}

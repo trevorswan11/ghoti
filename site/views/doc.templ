@@ -4,7 +4,7 @@ import "webserver/internal/render"
 
 templ DocPage(page render.Page, prev, next render.NavItem) {
 	<article class="doc">
-		@templ.Raw(page.HTML)
+		@page.Component
 		<nav class="pager">
 			if prev.Title != "" {
 				<a class="pager-link pager-prev" href={ templ.URL(render.Href(prev)) }>

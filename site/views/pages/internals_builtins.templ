@@ -1,0 +1,117 @@
+package pages
+
+templ InternalsBuiltinsPage() {
+	<h1>Builtin Functions</h1>
+	<p>Ghoti has the following builtin functions that are provided by the runtime and can be called form any scope. They are typically functions that facilitate low-level control and often make use of dedicated hardware instructions when available. This list is exhaustive though proposals for modifications, additions, and deletions are welcome.</p>
+	<h2>Casting</h2>
+	<h3>{ "@alignCast" }</h3>
+	<pre><code class="language-ghoti">{ `@alignCast(T: type, expression: auto): T` }</code></pre>
+	<p>Casts the alignment of the expression's pointer value to that of the provided type. Both <code>T</code> and <code>expression</code> must be pointer types.</p>
+	<h3>{ "@ptrCast" }</h3>
+	<pre><code class="language-ghoti">{ `@ptrCast(T: type, expression: auto): T` }</code></pre>
+	<p>Casts the pointer result of <code>expression</code> to pointer <code>T</code>. Both <code>T</code> and <code>expression</code> must be pointer types.</p>
+	<h3>{ "@bitCast" }</h3>
+	<pre><code class="language-ghoti">{ `@bitCast(T: type, expression: auto): T` }</code></pre>
+	<p>Converts a value of one type to another provided type.</p>
+	<h3>{ "@constCast" }</h3>
+	<pre><code class="language-ghoti">{ `@constCast(expression: auto): auto` }</code></pre>
+	<p>Casts away top-level <code>const</code>-ness of the expression, preserving all other aspects of the type.</p>
+	<h3>{ "@volatileCast" }</h3>
+	<pre><code class="language-ghoti">{ `@volatileCast(expression: auto): auto` }</code></pre>
+	<p>Casts away top-level <code>volatile</code>-ness of the expression, preserving all other aspects of the type.</p>
+	<h3>{ "@as" }</h3>
+	<pre><code class="language-ghoti">{ `@as(T: type, expression: auto): T` }</code></pre>
+	<p>Coerces the value of <code>expression</code> into a value of type <code>T</code>.</p>
+	<h2>Pointer Operations</h2>
+	<h3>{ "@intFromPtr" }</h3>
+	<pre><code class="language-ghoti">{ `@intFromPtr(expression: auto): usize` }</code></pre>
+	<p>Returns the memory address as a <code>usize</code> integer.</p>
+	<h3>{ "@ptrFromInt" }</h3>
+	<pre><code class="language-ghoti">{ `@ptrFromInt(T: type, expression: usize): T` }</code></pre>
+	<p>Returns a pointer type <code>T</code> at the memory address represented by the <code>usize</code> integer. <code>T</code> must be a pointer type.</p>
+	<h3>{ "@ptrFromArray" }</h3>
+	<pre><code class="language-ghoti">{ `@ptrFromArray(expression: auto): auto` }</code></pre>
+	<p>Returns a pointer to the first element of the array-yielding expression.</p>
+	<h3>{ "@sliceFromPtr" }</h3>
+	<pre><code class="language-ghoti">{ `@sliceFromPtr(expression: auto, len: usize): auto` }</code></pre>
+	<p>Constructs a slice from the pointer-yielding expression and length.</p>
+	<h2>Introspection &amp; Metadata</h2>
+	<h3>{ "@alignOf" }</h3>
+	<pre><code class="language-ghoti">{ `@alignOf(expression: auto): usize` }</code></pre>
+	<p>Computes the alignment of the provided expression in bytes.</p>
+	<h3>{ "@sizeOf" }</h3>
+	<pre><code class="language-ghoti">{ `@sizeOf(expression: auto): usize` }</code></pre>
+	<p>Computes the size of the provided expression in bytes.</p>
+	<h3>{ "@typeOf" }</h3>
+	<pre><code class="language-ghoti">{ `@typeOf(expression: auto): type` }</code></pre>
+	<p>Returns the type of the provided expression.</p>
+	<h3>{ "@this" }</h3>
+	<pre><code class="language-ghoti">{ `@this(): type` }</code></pre>
+	<p>Returns the type of the current enclosing structural type (i.e. struct, enum, union). Invalid in all other contexts.</p>
+	<h3>{ "@tagName" }</h3>
+	<pre><code class="language-ghoti">{ `@tagName(expression: auto): [:0]u8` }</code></pre>
+	<p>Returns a null-terminated static string representing the name of the enum or active union tag yielded by the expression.</p>
+	<h2>Memory Operations</h2>
+	<h3>{ "@memcpy" }</h3>
+	<pre><code class="language-ghoti">{ `@memcpy(src: auto, dest: auto): void` }</code></pre>
+	<p>Copies all bytes from src to dest. Requires the two memory regions to be unique.</p>
+	<h3>{ "@memset" }</h3>
+	<pre><code class="language-ghoti">{ `@memset(mem: auto, expression: auto): void` }</code></pre>
+	<p>Sets all values in the array or slice to the expression.</p>
+	<h3>{ "@memmove" }</h3>
+	<pre><code class="language-ghoti">{ `@memmove(src: auto, dest: auto): void` }</code></pre>
+	<p>Moves all bytes from src to dest. Allows the two memory regions to overlap.</p>
+	<h2>Math</h2>
+	<h3>{ "@mulAdd" }</h3>
+	<pre><code class="language-ghoti">{ `@mulAdd(T: type, a: T, b: T, c: T): T` }</code></pre>
+	<p>Fused multiply-add, similar to (a * b) + c, except only rounds once, and is thus more accurate. T must be a floating point type.</p>
+	<h3>{ "@clz" }</h3>
+	<pre><code class="language-ghoti">{ `@clz(expression: auto): usize` }</code></pre>
+	<p>Count the number of leading zeros in the expression's bit representation.</p>
+	<h3>{ "@ctz" }</h3>
+	<pre><code class="language-ghoti">{ `@ctz(expression: auto): usize` }</code></pre>
+	<p>Count the number of trailing zeros in the expression's bit representation.</p>
+	<h3>{ "@popCount" }</h3>
+	<pre><code class="language-ghoti">{ `@popCount(expression: auto): usize` }</code></pre>
+	<p>Computes the number of set bits in the expression's binary representation.</p>
+	<h3>{ "@sqrt" }</h3>
+	<pre><code class="language-ghoti">{ `@sqrt(expression: auto): @typeOf(expression)` }</code></pre>
+	<p>Computes the square root of the passed expression.</p>
+	<h3>{ "@sin" }</h3>
+	<pre><code class="language-ghoti">{ `@sin(expression: auto): @typeOf(expression)` }</code></pre>
+	<p>Computes the sine of the passed expression.</p>
+	<h3>{ "@cos" }</h3>
+	<pre><code class="language-ghoti">{ `@cos(expression: auto): @typeOf(expression)` }</code></pre>
+	<p>Computes the cosine of the passed expression.</p>
+	<h3>{ "@tan" }</h3>
+	<pre><code class="language-ghoti">{ `@tan(expression: auto): @typeOf(expression)` }</code></pre>
+	<p>Computes the tangent of the passed expression.</p>
+	<h3>{ "@exp" }</h3>
+	<pre><code class="language-ghoti">{ `@exp(expression: auto): @typeOf(expression)` }</code></pre>
+	<p>Computes the exponentiation <code>e^x</code> of the passed expression.</p>
+	<h3>{ "@exp2" }</h3>
+	<pre><code class="language-ghoti">{ `@exp2(expression: auto): @typeOf(expression)` }</code></pre>
+	<p>Computes the exponentiation <code>2^x</code> of the passed expression.</p>
+	<h3>{ "@log" }</h3>
+	<pre><code class="language-ghoti">{ `@log(expression: auto): @typeOf(expression)` }</code></pre>
+	<p>Computes the natural logarithm of the passed expression.</p>
+	<h3>{ "@log2" }</h3>
+	<pre><code class="language-ghoti">{ `@log2(expression: auto): @typeOf(expression)` }</code></pre>
+	<p>Computes the base-2 logarithm of the passed expression.</p>
+	<h3>{ "@log10" }</h3>
+	<pre><code class="language-ghoti">{ `@log10(expression: auto): @typeOf(expression)` }</code></pre>
+	<p>Computes the base-10 logarithm of the passed expression.</p>
+	<h3>{ "@abs" }</h3>
+	<pre><code class="language-ghoti">{ `@abs(expression: auto): @typeOf(expression)` }</code></pre>
+	<p>Computes the absolute value of the passed expression.</p>
+	<h3>{ "@floor" }</h3>
+	<pre><code class="language-ghoti">{ `@floor(expression: auto): @typeOf(expression)` }</code></pre>
+	<p>Computes the floor'ed value of the passed expression.</p>
+	<h3>{ "@ceil" }</h3>
+	<pre><code class="language-ghoti">{ `@ceil(expression: auto): @typeOf(expression)` }</code></pre>
+	<p>Computes the ceil'ed value of the passed expression.</p>
+	<h2>Control Flow</h2>
+	<h3>{ "@panic" }</h3>
+	<pre><code class="language-ghoti">{ `@panic(message: [:0]u8): noreturn` }</code></pre>
+	<p>Immediately terminates execution and panics with the provided message.</p>
+}

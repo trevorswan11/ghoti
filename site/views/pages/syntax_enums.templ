@@ -1,0 +1,58 @@
+package pages
+
+templ SyntaxEnumsPage() {
+	<h1>Enums</h1>
+	<ul>
+		<li>
+			Enums are extremely simple in ghoti, consisting of:
+			<ul>
+				<li>An optional backing integral type</li>
+				<li>Variants</li>
+				<li>Optional default values for variants</li>
+				<li>A list of member declarations similar to structs</li>
+			</ul>
+		</li>
+		<li>
+			Enums are strongly typed, and are declared with the standard declaration syntax or with a <code>using</code> statement
+			<ul>
+				<li>In the event that the standard declaration syntax is used, it must be <code>const</code></li>
+			</ul>
+		</li>
+		<li>In the event that the standard declaration syntax is used, it must be <code>const</code></li>
+		<li>The backing type of an enum is defaulted to the smallest available type, but can be set to any integer (signed, unsigned, or byte)</li>
+		<li>Enums can be casted to and from their underlying type by using the <code>{ "@cast" }</code> builtin</li>
+		<li>
+			For an enum to accept values that are outside of the values of its internal enumerations, you must end the enumeration list with an underscore <code>_</code>
+			<ul>
+				<li>You cannot access these via the dot operator, and their value may only be retrieved via a cast as in C++</li>
+			</ul>
+		</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const Colors := enum { red, blue = 3, green };
+const Shapes := enum : u64 { circle, square, _ };` }
+		</code>
+	</pre>
+	<ul>
+		<li>Enum variants are namespaced, meaning they do not leak into their outer scope as they would in C</li>
+		<li>To access an enum's variants and members, the <code>.</code> operator is used</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const a := Colors.red;
+const a: Colors = .red; // Equivalent` }
+		</code>
+	</pre>
+	<ul>
+		<li>
+			You can put declarations inside of an enum as you would with a struct
+			<ul>
+				<li>Member functions have a first argument which is an instance of the enum as explained in the struct documentation</li>
+				<li>There is no concept of an instance field in an enum</li>
+				<li>These members must appear after all enumeration values</li>
+			</ul>
+		</li>
+		<li>Enum 'members' can also be <code>using</code> or <code>import</code> statements</li>
+	</ul>
+}

@@ -1,0 +1,171 @@
+package pages
+
+templ SyntaxArraysPage() {
+	<h1>Arrays</h1>
+	<h2>Declarations</h2>
+	<ul>
+		<li>
+			Arrays are defined with 3 key components
+			<ul>
+				<li>A size: This must be an underscore (signifying inferred size), a compile time constant (previously declared with <code>constexpr</code>), or an integer literal (suffix <code>uz</code>)</li>
+				<li>A type: This can be any valid type, but it must be present and cannot be inferred</li>
+				<li>Items: These items must be of the type specified, and must match the provided size if provided</li>
+			</ul>
+		</li>
+		<li>Arrays are immutably sized, though internal elements can be mutable based on the provided type</li>
+		<li>A trailing comma is allowed, but not required</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `[_]^N{a, b, c, d, e, }; // Inferred Size
+[2uz]i32{A, B, }; // Explicit size
+[1uz]i32{2, 3}; // Illegal - size mismatch` }
+		</code>
+	</pre>
+	<ul>
+		<li>Arrays do not decay to pointers implicitly as they do in C</li>
+		<li>
+			To call a C function that takes in a pointer that is actually an array, you can use the builtin <code>{ "@ptrFromArray" }</code>
+			<ul>
+				<li>This erases the underlying size of the array and is not trivially reversible. It is only recommended for use with C interop</li>
+			</ul>
+		</li>
+		<li>If you have a pointer and its size, you can recreate a ghoti-style slice using the <code>{ "@sliceFromPtr" }</code> builtin</li>
+	</ul>
+	<h2>Types</h2>
+	<ul>
+		<li>
+			There are two types of Array types
+			<ul>
+				<li>
+					Array types are extremely similar to their declaration counterpart, requiring two key components
+					<ul>
+						<li>A size: This must be a compile time constant integer or integer literal coercible to a usize</li>
+						<li>A type: This can be any valid type, but it must be present and cannot be inferred. It can be as deeply nested as you'd like (i.e. <code>[2uz][2uz]i32</code>)</li>
+					</ul>
+				</li>
+				<li>
+					Slice types differ from array types in that they lack a size. They are composed of:
+					<ul>
+						<li>An open-close bracket pair with nothing in between</li>
+						<li>A type: exactly the same as an array</li>
+					</ul>
+				</li>
+				<li>Slices do not have to be of fixed size as they are technically a fat pointer. They store both a pointer and size</li>
+				<li>Values of type 'array' have an implicit <code>len</code> field that can be accessed used the dot operator</li>
+				<li>Values of type 'slice' also have this <code>len</code> field, but are equipped with a second field called <code>ptr</code> to access the pointer directly</li>
+				<li>Values of either type can be used with array-related builtins</li>
+			</ul>
+		</li>
+		<li>Array types can have modifiers</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `var a: &[S]&^mut T; // Normal array type
+var a: &[]&^mut T; // Analogous slice type` }
+		</code>
+	</pre>
+	<ul>
+		<li>
+			Arrays do not implicitly 'decay' to slices or pointers
+			<ul>
+				<li>To pass an array to a function that expects a slice, you should use the respective reference operator (<code>&amp;</code> or <code>&amp;mut</code>) depending on the context. This is similar to Zig's array/slice syntax</li>
+			</ul>
+		</li>
+	</ul>
+	<h2>Indexing</h2>
+	<ul>
+		<li>Array indexing is bounds-checked, and follows a familiar syntax</li>
+		<li>
+			Array indices can take two forms:
+			<ul>
+				<li>A single value: <code>arr[i]</code></li>
+				<li>
+					A range of values (lower bound is always inclusive):
+					<ul>
+						<li>Exclusive range: <code>arr[i..j]</code></li>
+						<li>Inclusive range: <code>arr[i..=j]</code></li>
+					</ul>
+				</li>
+			</ul>
+		</li>
+		<li>
+			Indexing an array with a single value returns a value that is of the same type as the array's inner items
+			<ul>
+				<li>This can be used to chain array indexing as: <code>const val := matrix[0uz][1uz];</code></li>
+			</ul>
+		</li>
+		<li>Indexing an array with a range returns a slice that is exactly the size specified by said range</li>
+		<li>An attempt to index outside of the bounds of an array results in a crash</li>
+		<li>
+			Indexing may be done on an array, slice, or raw pointer
+			<ul>
+				<li>It is not permitted to index through a reference</li>
+			</ul>
+		</li>
+	</ul>
+	<h2>Memory layout</h2>
+	<ul>
+		<li>
+			Arrays and slices of bytes are not implicitly null terminated
+			<ul>
+				<li>If you wish to make a non-null terminated slice a null terminated one, you must do so explicitly</li>
+				<li>You can indicate that a slice or array is null terminated by annotating the size with <code>:0</code></li>
+			</ul>
+		</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const a := [_:0]u8{'a', 'b', '\0' }; // Inferred Size ending with a null byte
+var a: [:0]i32; // Null terminated slice type
+var a: [5uz:0]i32; // Null terminated array type` }
+		</code>
+	</pre>
+	<ul>
+		<li>
+			Note that the size of the array type is baked into the null terminated flag, they are not summed
+			<ul>
+				<li>This means the size <code>[5uz:0]</code> means size 5 with the element at index 4 a null byte</li>
+			</ul>
+		</li>
+	</ul>
+	<h3>Arrays</h3>
+	<ul>
+		<li>Arrays are guaranteed to be contiguous in memory</li>
+		<li>Arrays do not support implicit sentinel termination, the size provided to an array at initialization is exactly the size of that array during use</li>
+	</ul>
+	<h3>Slices</h3>
+	<ul>
+		<li>Slices are represented by the equivalent size of two <code>usize</code> members (e.g. 16 bytes on a 64-bit system)</li>
+	</ul>
+	<h2>Iteration</h2>
+	<ul>
+		<li>
+			Arrays/slices can be iterated over in two ways:
+			<ul>
+				<li>Looping through all possible index values (i.e. manually walking an index from low -&gt; high)</li>
+				<li>Looping through the array/slice directly</li>
+			</ul>
+		</li>
+		<li>An array/slice can be directly iterated over such that items are constant in the loop body:</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const a := [_]i32{1, 2, 3, 4};
+for (a) |b| { ... };` }
+		</code>
+	</pre>
+	<ul>
+		<li>An array/slice can be mutable iterated over if the array/slice is mutable and the underlying type is also mutable (i.e. not a constant pointer/reference)</li>
+		<li>Arrays that hold value types inherit the mutability of the array itself when being iterated</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `var a := [_]i32{1, 2, 3, 4};
+for (a) |&mut b| { ... };
+
+const c := [_]i32{1, 2, 3, 4};
+for (c) |&mut b| { ... }; // Illegal, c is a constant` }
+		</code>
+	</pre>
+}

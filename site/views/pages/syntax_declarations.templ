@@ -1,0 +1,159 @@
+package pages
+
+templ SyntaxDeclarationsPage() {
+	<h1>Declarations</h1>
+	<ul>
+		<li>
+			The assignment operator <code>=</code> can be used to assign an existing non-constant value
+			<ul>
+				<li>It is also used to assign a value to an explicitly typed variable in-line</li>
+				<li>The operator can also be used to discard a value using the <code>_ = ...</code> syntax</li>
+			</ul>
+		</li>
+		<li>
+			You can discard expression results using the <code>_ = ...</code> syntax
+			<ul>
+				<li>In ghoti, identifiers cannot start with <code>_</code> and thus cannot be named <code>_</code></li>
+			</ul>
+		</li>
+		<li>
+			The walrus operator <code>:=</code> can be used to declare a value who's type is inferred based on the assigned value
+			<ul>
+				<li>The walrus operator can only be used with value-initialized declarations</li>
+			</ul>
+		</li>
+		<li>
+			There is no shadowing in ghoti
+			<ul>
+				<li>You cannot declare the same variable name in the same scope or enclosing scope</li>
+			</ul>
+		</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const a := 2;           // Type deduced to be i32
+const b := "str";       // Type deduced to be a constant size array of bytes (non-null terminated)
+const c: u8 = 's';    // Explicitly typed, so value must agree
+const d :=;             // Illegal, walrus needs a value!
+var e: []u8;         // Allowed, e is forward declared and future assignments must be a slice of bytes` }
+		</code>
+	</pre>
+	<h2>Runtime Constants</h2>
+	<ul>
+		<li>Constants are declared with the <code>const</code> keyword</li>
+		<li>
+			A constant must be initialized with a value
+			<ul>
+				<li>This is true unless it is a value that is marked <code>extern</code></li>
+			</ul>
+		</li>
+		<li>A constant's value does not have to be compile-time known</li>
+		<li>Constness cannot be casted away</li>
+		<li>A mutable reference cannot be taken from a constant</li>
+	</ul>
+	<h2>Compile-time Constants</h2>
+	<ul>
+		<li>Compile-time-known constants are declared with the <code>constexpr</code> keyword</li>
+		<li>
+			In most cases, <code>constexpr</code> values behave identically to <code>const</code> constants with a few key differences
+			<ul>
+				<li><code>constexpr</code> values must be computable at compile time</li>
+				<li><code>constexpr</code> functions must be callable at compile time (it is safe to call them at runtime as well)</li>
+			</ul>
+		</li>
+		<li>A <code>constexpr</code> declaration can not be declared <code>extern</code></li>
+	</ul>
+	<h2>Variables</h2>
+	<ul>
+		<li>Variables are declared with the <code>var</code> keyword</li>
+		<li>
+			A variable can be initialized with or without a value
+			<ul>
+				<li>Variables without an initial value must be initialized with an explicit type</li>
+				<li>Variables declared without an initial value are necessarily uninitialized, and reading from them in this state is illegal behavior</li>
+				<li>Variables can be explicitly marked as uninitialized with the <code>undefined</code> keyword. Using this as the right hand side of a declaration is equivalent to not using a value at all</li>
+			</ul>
+		</li>
+		<li>A variable's value does not have to be compile-time known</li>
+		<li>A variable may be assigned to a constant</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const a := 1;       // Allowed, see above
+var b := a;         // Allowed, a is copied by value
+var c := &mut a;    // Illegal, cannot take mutable reference of constant` }
+		</code>
+	</pre>
+	<h2>Modifiers</h2>
+	<ul>
+		<li>
+			Declarations have many different modifiers that affect linkage, access, and ownership
+			<ul>
+				<li><code>pub</code>: When used inside of a struct, this opens access to non-struct-local functions (i.e. member functions). When used on a top-level declaration, this lets importing files access the declaration. The presence of this keyword correctly implies that all declarations are <em>private</em> unless explicitly stated otherwise.</li>
+				<li><code>extern</code>: Denotes a declaration as relating to a symbol yet-to-be defined (i.e. external linkage). This currently supports only C symbols. This keyword cannot be combined with the <code>export</code> modifier.</li>
+				<li><code>export</code>: Forwards the declaration to the 'outside world'. This means that the symbol is treated as a C symbol. This keyword cannot be combined with the <code>extern</code> modifier.</li>
+			</ul>
+		</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `pub var c := 2;          // Allowed, symbol can be imported
+extern const a: i32;     // Allowed, externs must be explicitly typed without values
+export var b := 1;       // Allowed
+extern constexpr a: i32; // Illegal, inherently contradictory` }
+		</code>
+	</pre>
+	<h2>Assignment</h2>
+	<ul>
+		<li>Non-const declarations can be reassigned</li>
+		<li>Re-assignment is right associative, meaning that you can chain assignment expressions:</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `var a: i32 = 2;
+var b: i32 = 5;
+a = (b = 6);` }
+		</code>
+	</pre>
+	<ul>
+		<li>This works because an assignment returns the assigned value</li>
+	</ul>
+	<h2>Type Aliasing</h2>
+	<ul>
+		<li>Type aliases can be declared with the <code>using</code> keyword</li>
+		<li>An alias can be marked public in order to expose it to the outside world when the enclosing file is imported</li>
+		<li>This is very similar to C++, for example:</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `using MyBool = bool; // Private to this file
+pub using MyPublicBool = bool; // Publically accessible via namespacig when imported` }
+		</code>
+	</pre>
+	<ul>
+		<li>Note that this is an <em>alias</em>, so there is no difference between using the aliased type and handwriting the entire raw type</li>
+		<li>
+			The most common use cases for this are for saving keystrokes for long types and for passing complex types to functions at the call site
+			<ul>
+				<li>Since function calls prioritize expressions over types, so an attempt to pass <code>&amp;mut P</code> will always be parsed as a mutable reference to an object P</li>
+				<li>Declaring the type using <code>using T = &amp;mut P;</code> allows you to then pass the identifier to the function</li>
+				<li>This is more explicit than having to go to the function definition to see what is being expected at the call site</li>
+			</ul>
+		</li>
+		<li>Note that these statements are private by default and can be prefixed with <code>pub</code> to unrestrict visibility</li>
+		<li>
+			You may declare types such as unions, enums, and structs with this declaration, though they must be bare types without modifiers
+			<ul>
+				<li>This restriction is in place as it would be impossible to instantiate the underlying type</li>
+			</ul>
+		</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `using S = &struct { ... };          // Illegal
+using S = ^union { ... };           // Illegal
+using S = volatile enum { ... };    // Illegal
+using S = enum { ... };             // Legal` }
+		</code>
+	</pre>
+}

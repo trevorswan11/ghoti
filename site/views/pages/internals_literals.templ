@@ -1,0 +1,118 @@
+package pages
+
+templ InternalsLiteralsPage() {
+	<h1>Literals</h1>
+	<p>Ghoti has numeric and identifier literals that carry intrinsic type information with their usage.</p>
+	<h2>Identifiers</h2>
+	<h3>Booleans</h3>
+	<ul>
+		<li><code>true</code></li>
+		<li><code>false</code></li>
+	</ul>
+	<h3>Undefined</h3>
+	<ul>
+		<li><code>undefined</code></li>
+	</ul>
+	<p>This literal is used to explicitly denote that the assignee's value is undefined. Reading from undefined memory is illegal and safety checked when possible.</p>
+	<p>This can be assigned to any type, including as a call argument or member initializer. There are no restrictions on the usage of this literal for initialization.</p>
+	<h2>Numeric Literals</h2>
+	<p>All numbers in ghoti can be broken into sections with an underscore. The underscore may be placed in between any two digits, meaning it can neither lead or end any part of a literal (exponent included). For example:</p>
+	<pre>
+		<code class="language-ghoti">
+			{ `0b1100_0011;   // Legal
+0b1100_0011_;  // Illegal
+3.14_15_92;    // Legal
+3_.14_15_92;   // Illegal
+3.14_15_92_;   // Illegal
+3e14;          // Legal
+3_e14;         // Illegal` }
+		</code>
+	</pre>
+	<p>In all of these cases, the underscore has no impact on the resulting value of the numeric literal. Internally, the underscores are stripped out before constexpr evaluation and code generation.</p>
+	<p>It is recommended to use underscores in numbers when there is a logical grouping of digits for your use case. They are implemented in such a way that there is a high amount of freedom for the programmer to convey the most meaning with their code.</p>
+	<h3>Trailing Numeric Literals</h3>
+	<p>To designate the true type of a numeric literal, you may use the following suffixes that were also discussed in the <a href="/doc/syntax/types">type</a> documentation.</p>
+	<h4>Integer Suffixes</h4>
+	<table>
+		<thead>
+			<tr>
+				<th>Suffix</th>
+				<th>Type</th>
+			</tr>
+		</thead>
+		<tbody>
+			<tr>
+				<td>None</td>
+				<td><code>i32</code></td>
+			</tr>
+			<tr>
+				<td><code>l</code></td>
+				<td><code>i64</code></td>
+			</tr>
+			<tr>
+				<td><code>z</code></td>
+				<td><code>isize</code></td>
+			</tr>
+			<tr>
+				<td><code>u</code></td>
+				<td><code>u32</code></td>
+			</tr>
+			<tr>
+				<td><code>ul</code></td>
+				<td><code>u64</code></td>
+			</tr>
+			<tr>
+				<td><code>uz</code></td>
+				<td><code>usize</code></td>
+			</tr>
+		</tbody>
+	</table>
+	<h4>Float Suffixes</h4>
+	<table>
+		<thead>
+			<tr>
+				<th>Suffix</th>
+				<th>Type</th>
+			</tr>
+		</thead>
+		<tbody>
+			<tr>
+				<td><code>f</code></td>
+				<td><code>f32</code></td>
+			</tr>
+			<tr>
+				<td>None</td>
+				<td><code>f64</code></td>
+			</tr>
+		</tbody>
+	</table>
+	<h3>Integer Bases</h3>
+	<p>Integer literals may be prefixed to denote a base:</p>
+	<table>
+		<thead>
+			<tr>
+				<th>Prefix</th>
+				<th>Base</th>
+			</tr>
+		</thead>
+		<tbody>
+			<tr>
+				<td>None</td>
+				<td>10</td>
+			</tr>
+			<tr>
+				<td><code>0o</code></td>
+				<td>8</td>
+			</tr>
+			<tr>
+				<td><code>0x</code></td>
+				<td>16</td>
+			</tr>
+			<tr>
+				<td><code>0b</code></td>
+				<td>2</td>
+			</tr>
+		</tbody>
+	</table>
+	<p>Conformance to the bases digit set is enforced during tokenization.</p>
+}
