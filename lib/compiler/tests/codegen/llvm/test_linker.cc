@@ -99,4 +99,29 @@ TEST_CASE("extern targets are forwarded to the real linker invocation") {
     }
 }
 
+TEST_CASE("windows entry point argv link failure includes sysroot hint") {
+    codegen::llvm_scope   scope;
+    stdx::untracked_scope untracked_guard;
+
+    constexpr auto input = R"(
+        pub const main := fn(args: [][:0]u8): i32 {
+            return @as(i32, args.len);
+        };
+    )";
+
+    llvm::LLVMContext context;
+    auto [ctx, idx]{helpers::resolve_and_check(input)};
+    REQUIRE(ctx->analyzer.validate_main_entry(ctx->root_mod));
+
+    tempfile                out_file{"test_windows_argv_link"};
+    codegen::target_options target_opts{.triple_str = "x86_64-w64-windows-gnu"};
+
+    const auto result{helpers::emit_executable(*ctx, context, out_file, target_opts)};
+    if (!result) {
+        const auto& diag{result.error()};
+        REQUIRE(diag.get_message());
+        CHECK(diag.get_message()->contains("hint: set GHOTI_WIN_SYSROOT_LIB"));
+    }
+}
+
 } // namespace ghoti::tests

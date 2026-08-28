@@ -262,8 +262,17 @@ auto add_elf_args(std::vector<std::string>&   args,
     }
 
     if (!success) {
+        std::string extra_hint;
+        if (triple.isOSWindows() &&
+            (error_output.contains("kernel32") || error_output.contains("shell32"))) {
+            if (!error_output.empty() && !error_output.ends_with('\n')) { extra_hint += '\n'; }
+            extra_hint +=
+                "hint: set GHOTI_WIN_SYSROOT_LIB or pass -L pointing to your MinGW-w64 or Windows "
+                "SDK lib directory";
+        }
         return make_codegen_err(
-            fmt::format("Linking failed for target '{}':\n{}", triple.str(), error_output),
+            fmt::format(
+                "Linking failed for target '{}':\n{}{}", triple.str(), error_output, extra_hint),
             error::LINKING_FAILED);
     }
     return {};
