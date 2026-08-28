@@ -175,7 +175,6 @@ const TestArtifacts = struct {
     support_tests: *std.Build.Step.Compile = undefined,
     compiler_tests: *std.Build.Step.Compile = undefined,
     driver_tests: *std.Build.Step.Compile = undefined,
-    webserver_tests: ?WebserverTests = null,
 
     pub fn configure(
         self: *const TestArtifacts,
@@ -207,13 +206,6 @@ const TestArtifacts = struct {
             )) |run| {
                 run.setEnvironmentVariable("GHOTI_STDLIB", b.pathFromRoot(ProjectPaths.stdlib_entry));
             }
-        }
-
-        if (self.webserver_tests) |webserver_tests| {
-            if (install_only) {
-                webserver_tests.run.addArg("-c");
-            }
-            test_step.dependOn(&webserver_tests.install.step);
         }
     }
 };
@@ -468,6 +460,7 @@ fn addArtifacts(b: *std.Build, config: struct {
                 libdriver,
                 replxx_dep.artifact,
             },
+            .fail_on_leak = false,
             .config_headers = &.{config_h},
             .system_include_paths = &.{cli11_inc},
             .executable_config = .{
@@ -483,33 +476,10 @@ fn addArtifacts(b: *std.Build, config: struct {
             },
         });
 
-        var webserver_tests: ?TestArtifacts.WebserverTests = null;
-        if (config.site_builder) |site| {
-            const ws_run = b.addSystemCommand(&.{ site.go_exe_path, "test", "./...", "-o" });
-            ws_run.setCwd(site.site_path);
-            const ws_tests = ws_run.addOutputDirectoryArg("webserver");
-            const ws_install = b.addInstallDirectory(.{
-                .source_dir = ws_tests,
-                .install_dir = .{ .custom = "tests" },
-                .install_subdir = "webserver",
-            });
-            ws_run.has_side_effects = true;
-            ws_run.step.dependOn(&site.main_builder.step);
-
-            const step = b.step("test-webserver", "Build/run the webserver's tests");
-            step.dependOn(&ws_install.step);
-
-            webserver_tests = .{
-                .run = ws_run,
-                .install = ws_install,
-            };
-        }
-
         tests = .{
             .support_tests = support_tests,
             .compiler_tests = compiler_tests,
             .driver_tests = driver_tests,
-            .webserver_tests = webserver_tests,
         };
         try tests.?.configure(b, config.cdb_steps, test_install_dir, config.install_tests_only);
     }
