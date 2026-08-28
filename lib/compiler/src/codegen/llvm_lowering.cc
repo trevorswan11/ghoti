@@ -530,17 +530,19 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
                              ? llvm::GlobalValue::InternalLinkage
                              : llvm::GlobalValue::ExternalLinkage};
 
-    stdx::option<llvm::Constant&> init;
+    llvm::Constant* init{nullptr};
     if (g.init_value) {
         auto* init_v{lower_value(*g.init_value, &g.type)};
         if (init_v && llvm::isa<llvm::Constant>(init_v)) {
-            init.emplace(llvm::cast<llvm::Constant>(init_v));
+            init = llvm::cast<llvm::Constant>(init_v);
         }
     }
-    if (!init) { init.emplace(llvm::Constant::getNullValue(g_type)); }
 
-    auto* gvar{
-        new llvm::GlobalVariable{*llvm_module_, g_type, is_const, g_linkage, init.get(), g.name}};
+    if (init == nullptr && g.linkage != gir::linkage::EXTERN) {
+        init = llvm::Constant::getNullValue(g_type);
+    }
+
+    auto* gvar{new llvm::GlobalVariable{*llvm_module_, g_type, is_const, g_linkage, init, g.name}};
     globals_[g.name] = gvar;
     return gvar;
 }

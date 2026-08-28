@@ -5,6 +5,7 @@
 #include <string_view>
 #include <vector>
 
+#include <gsl/span>
 #include <stdx/arena.hh>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
@@ -81,6 +82,16 @@ class module {
     // Names extern decls contribute to the link line (excludes the default "c" target).
     [[nodiscard]] auto get_required_libraries() const -> std::vector<std::string>;
 
+    // Marks the split between root-module decls and imported ones
+    auto mark_import_boundary() noexcept -> void {
+        import_boundary_fn_     = functions_.size();
+        import_boundary_global_ = globals_.size();
+        import_boundary_marked_ = true;
+    }
+
+    // Drops imported-module decls not reachable from `roots`
+    auto prune_unreachable(gsl::span<const std::string_view> roots) -> void;
+
   private:
     const mod::module&        ast_module_;
     sema::arena_alloc&        arena_;
@@ -88,6 +99,9 @@ class module {
     std::vector<global_decl*> globals_;
     std::vector<function*>    functions_;
     std::vector<usize>        tests_;
+    usize                     import_boundary_fn_{0};
+    usize                     import_boundary_global_{0};
+    bool                      import_boundary_marked_{false};
 };
 
 } // namespace ghoti::gir

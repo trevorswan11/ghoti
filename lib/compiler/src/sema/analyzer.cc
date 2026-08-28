@@ -24,6 +24,7 @@
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/emitter.hh"
+#include "compiler/gir/instruction.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/error.hh"
@@ -43,6 +44,17 @@ namespace {
     auto temp_obj_path{path};
     temp_obj_path.replace_extension(".tmp.o");
     return tempfile{std::in_place, temp_obj_path};
+}
+
+[[nodiscard]] auto export_roots(const gir::module& mod) -> std::vector<std::string_view> {
+    std::vector<std::string_view> roots;
+    for (const auto* fn : mod.get_functions()) {
+        if (fn->get_linkage() == gir::linkage::EXPORT) { roots.emplace_back(fn->get_name()); }
+    }
+    for (const auto* g : mod.get_globals()) {
+        if (g->linkage == gir::linkage::EXPORT) { roots.emplace_back(g->name); }
+    }
+    return roots;
 }
 
 } // namespace
@@ -258,6 +270,8 @@ auto analyzer::emit_llvm_ir_executable(gir::module&                      gir_mod
     const auto effective_main_name{user_main_name == "main" && ctx_.user_main_name != "main"
                                        ? std::string_view{ctx_.user_main_name}
                                        : user_main_name};
+    const std::vector<std::string_view> roots{effective_main_name};
+    gir_module.prune_unreachable(roots);
     codegen::llvm_lowering lowering{context, gir_module.get_ast_module().path.string()};
     if (options.target_machine) {
         lowering.module().setDataLayout(options.target_machine->createDataLayout());
@@ -291,6 +305,10 @@ auto analyzer::emit_llvm_ir_test_executable(gir::module&                      gi
             .and_then([](auto sv) {
                 return sv.empty() ? stdx::none : stdx::option<std::string_view>{sv};
             })};
+    std::vector<std::string_view> roots;
+    for (const auto* fn : gir_module.get_test_functions()) { roots.emplace_back(fn->get_name()); }
+    if (effective_runner_name) { roots.emplace_back(*effective_runner_name); }
+    gir_module.prune_unreachable(roots);
     codegen::llvm_lowering lowering{context, gir_module.get_ast_module().path.string()};
     if (options.target_machine) {
         lowering.module().setDataLayout(options.target_machine->createDataLayout());
@@ -430,6 +448,7 @@ auto analyzer::emit_static_library(gir::module&                         gir_modu
     }
 
     auto temp_obj_path{make_tmp_obj(output_path)};
+    gir_module.prune_unreachable(export_roots(gir_module));
     auto llvm_mod{TRY(emit_llvm_ir(gir_module, context, opts))};
     TRY(codegen::emit_object_file(*llvm_mod, *target_machine, temp_obj_path));
 
@@ -473,6 +492,7 @@ auto analyzer::emit_dynamic_library(gir::module&                         gir_mod
     }
 
     auto temp_obj_path{make_tmp_obj(output_path)};
+    gir_module.prune_unreachable(export_roots(gir_module));
     auto llvm_mod{TRY(emit_llvm_ir(gir_module, context, opts))};
     TRY(codegen::emit_object_file(*llvm_mod, *target_machine, temp_obj_path));
 

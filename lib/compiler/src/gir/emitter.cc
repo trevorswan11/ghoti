@@ -110,6 +110,8 @@ auto emitter::emit() -> module {
     };
     collect_imported(collect_imported, ast_module_);
 
+    gir_module_.mark_import_boundary();
+
     for (auto* other_mod : imported_mods) {
         if (!other_mod || other_mod->is_poisoned() || other_mod->is_errored()) { continue; }
         auto prev_module{std::exchange(active_module_, other_mod)};
