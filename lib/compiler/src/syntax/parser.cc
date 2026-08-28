@@ -264,6 +264,7 @@ constexpr auto PREFIX_FNS = [] -> auto {
     fns[token_type_t::IF]               = ast::if_expr::parse;
     fns[token_type_t::FUNCTION]         = ast::function_expr::parse;
     fns[token_type_t::MOVE]             = ast::parse_move_function_expr;
+    fns[token_type_t::NAKED]            = ast::parse_naked_function_expr;
     fns[token_type_t::STRUCT]           = ast::struct_expr::parse;
     fns[token_type_t::UNION]            = ast::union_expr::parse;
     fns[token_type_t::EXTERN]           = ast::parse_modified_struct_or_union;

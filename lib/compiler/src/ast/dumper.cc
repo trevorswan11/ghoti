@@ -785,6 +785,12 @@ auto dumper::visit(node_id, const decl_stmt& decl) -> void {
         dump(*decl.extern_target);
     }
 
+    if (decl.link_name) {
+        const indent::guard g{indent_, false};
+        fmt::print(out_, "{}Link Name: ", indent_.current_branch());
+        dump(*decl.link_name);
+    }
+
     const auto has_value{decl.value.has_value()};
     {
         const indent::guard g{indent_, !has_value};

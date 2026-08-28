@@ -48,6 +48,9 @@ class function {
     MAKE_GETTER(is_variadic, bool);
     MAKE_GETTER(linkage, gir::linkage);
     MAKE_GETTER(abi_name, std::string_view);
+    MAKE_GETTER(link_name, std::string_view);
+    MAKE_GETTER(is_weak, bool);
+    MAKE_GETTER(is_naked, bool);
     MAKE_GETTER(test_desc, std::string_view);
     MAKE_GETTER(test_file, std::string_view);
     MAKE_GETTER(test_line, u32);
@@ -55,6 +58,9 @@ class function {
     MAKE_DEDUCING_GETTER(params);
     MAKE_DEDUCING_GETTER(segments);
 
+    auto set_link_name(std::string name) -> void { link_name_ = std::move(name); }
+    auto set_weak(bool weak) -> void { is_weak_ = weak; }
+    auto set_naked(bool naked) -> void { is_naked_ = naked; }
     auto set_test_desc(std::string desc) -> void { test_desc_ = std::move(desc); }
     auto set_test_location(std::string file, u32 line, u32 col) -> void {
         test_file_   = std::move(file);
@@ -95,8 +101,11 @@ class function {
     bool                    is_test_{false};
     bool                    is_constexpr_{false};
     bool                    is_variadic_{false};
+    bool                    is_weak_{false};
+    bool                    is_naked_{false};
     gir::linkage            linkage_{linkage::INTERNAL};
     std::string             abi_name_{"c"};
+    std::string             link_name_;
     std::string             test_desc_;
     std::string             test_file_;
     u32                     test_line_{1};

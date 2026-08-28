@@ -215,6 +215,12 @@ auto get_extern_target(const ast::AST& ast, const ast::decl_stmt& decl) -> std::
     return ast.get_as<ast::string_expr>(**decl.extern_target).value;
 }
 
+// The explicit symbol name from `extern("lib", "sym")` / `export("sym")`, else empty.
+auto get_link_name(const ast::AST& ast, const ast::decl_stmt& decl) -> std::string {
+    if (!decl.link_name) { return {}; }
+    return ast.get_as<ast::string_expr>(**decl.link_name).value;
+}
+
 } // namespace
 
 auto emitter::emit_slice_from_array(value arr_lval, const sema::type& arr_type) -> value {
@@ -308,6 +314,8 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                                               fn_data->is_variadic,
                                               gir::linkage::EXTERN,
                                               get_extern_target(active_ast(), decl))};
+            fn.set_link_name(get_link_name(active_ast(), decl));
+            fn.set_weak(decl.has_modifier(ast::decl_modifiers::WEAK));
             for (usize i{0}; const auto& param : fn_data->params) {
                 fn.add_param(fmt::format("param.{}", i++), *param);
             }
@@ -320,35 +328,23 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
     const auto is_const{decl.has_modifier(ast::decl_modifiers::CONSTANT) ||
                         decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
 
-    if (is_const) {
-        stdx::option<value> init_val;
-        if (decl.value) {
-            if (const auto cv{const_eval_.try_eval(*decl.value)}) {
-                init_val.emplace(cv->to_gir_value());
-            }
+    stdx::option<value> init_val;
+    if (decl.value) {
+        if (const auto cv{const_eval_.try_eval(*decl.value)}) {
+            init_val.emplace(cv->to_gir_value());
+        } else if (!is_const) {
+            init_val.emplace(emit_expression(*decl.value));
         }
-        gir_module_.add_global(std::string{name},
-                               *sema_type,
-                               true,
-                               init_val,
-                               linkage,
-                               get_extern_target(active_ast(), decl));
-    } else {
-        stdx::option<value> init_val;
-        if (decl.value) {
-            if (const auto cv{const_eval_.try_eval(*decl.value)}) {
-                init_val.emplace(cv->to_gir_value());
-            } else {
-                init_val.emplace(emit_expression(*decl.value));
-            }
-        }
-        gir_module_.add_global(std::string{name},
-                               *sema_type,
-                               false,
-                               init_val,
-                               linkage,
-                               get_extern_target(active_ast(), decl));
     }
+    auto& g{gir_module_.add_global(std::string{name},
+                                   *sema_type,
+                                   is_const,
+                                   init_val,
+                                   linkage,
+                                   get_extern_target(active_ast(), decl))};
+    g.link_name       = get_link_name(active_ast(), decl);
+    g.is_thread_local = decl.has_modifier(ast::decl_modifiers::THREADLOCAL);
+    g.is_weak         = decl.has_modifier(ast::decl_modifiers::WEAK);
 }
 
 auto emitter::emit_top_level_using(ast::node_id, const ast::using_stmt& using_stmt) -> void {
@@ -409,6 +405,9 @@ auto emitter::emit_function(ast::node_id              id,
                                       is_constexpr,
                                       fn_expr.variadic,
                                       get_decl_linkage(decl))};
+    fn.set_link_name(get_link_name(active_ast(), decl));
+    fn.set_weak(decl.has_modifier(ast::decl_modifiers::WEAK));
+    fn.set_naked(fn_expr.is_naked);
 
     auto& entry{fn.add_segment()};
     builder_.set_insert_point(fn, entry);
@@ -453,23 +452,28 @@ auto emitter::emit_function(ast::node_id              id,
     emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
     if (const auto cur_seg{builder_.get_segment()}) {
         if (!cur_seg->has_terminator()) {
-            stdx::option<const sema::types::function&> fn_data;
-            auto                                       target_t{sema_type};
-            if (target_t) {
-                if (const auto ref{target_t->get_data().as_opt<sema::types::reference>()}) {
-                    target_t.emplace(ref->underlying);
-                }
-                if (const auto ptr{target_t->get_data().as_opt<sema::types::pointer>()}) {
-                    target_t.emplace(ptr->underlying);
-                }
-                fn_data = target_t->get_data().as_opt<sema::types::function>();
-            }
-            if (fn_data && fn_data->return_type.get_kind() == sema::type_kind::VOID_) {
-                builder_.emit_return();
-            } else if (fn_data) {
-                builder_.emit_return(value{undefined_val{}, fn_data->return_type});
+            if (fn_expr.is_naked) {
+                // A naked body owns its own control flow; never synthesise a return.
+                builder_.emit_unreachable();
             } else {
-                builder_.emit_return();
+                stdx::option<const sema::types::function&> fn_data;
+                auto                                       target_t{sema_type};
+                if (target_t) {
+                    if (const auto ref{target_t->get_data().as_opt<sema::types::reference>()}) {
+                        target_t.emplace(ref->underlying);
+                    }
+                    if (const auto ptr{target_t->get_data().as_opt<sema::types::pointer>()}) {
+                        target_t.emplace(ptr->underlying);
+                    }
+                    fn_data = target_t->get_data().as_opt<sema::types::function>();
+                }
+                if (fn_data && fn_data->return_type.get_kind() == sema::type_kind::VOID_) {
+                    builder_.emit_return();
+                } else if (fn_data) {
+                    builder_.emit_return(value{undefined_val{}, fn_data->return_type});
+                } else {
+                    builder_.emit_return();
+                }
             }
         }
     }

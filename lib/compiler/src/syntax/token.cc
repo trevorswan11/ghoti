@@ -67,8 +67,10 @@ auto token_t::is_decl_token() const noexcept -> bool {
     case token_type_t::CONSTEXPR:
     case token_type_t::PUBLIC:
     case token_type_t::EXTERN:
-    case token_type_t::EXPORT:    return true;
-    default:                      return false;
+    case token_type_t::EXPORT:
+    case token_type_t::THREADLOCAL:
+    case token_type_t::WEAK:        return true;
+    default:                        return false;
     }
 }
 

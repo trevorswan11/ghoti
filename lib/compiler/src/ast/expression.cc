@@ -513,10 +513,22 @@ auto parse_move_function_expr(syntax::parser& parser)
                                parser.get_current_token());
     }
     parser.advance();
-    return function_expr::parse(parser, true);
+    return function_expr::parse(parser, true, false);
 }
 
-auto function_expr::parse(syntax::parser& parser, bool is_move)
+auto parse_naked_function_expr(syntax::parser& parser)
+    -> stdx::result<expr_handle, syntax::diagnostic> {
+    PROFILE_FUNCTION();
+    if (!parser.peek_token_is(syntax::token_type_t::FUNCTION)) {
+        return make_syntax_err("'naked' may only appear directly before 'fn'",
+                               syntax::error::ILLEGAL_MOVE_USAGE,
+                               parser.get_current_token());
+    }
+    parser.advance();
+    return function_expr::parse(parser, false, true);
+}
+
+auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
@@ -617,7 +629,7 @@ auto function_expr::parse(syntax::parser& parser, bool is_move)
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
     const block_handle body{TRY(block_stmt::parse(parser))};
     return parser.add_expr<function_expr>(
-        start_token, self, std::move(parameters), variadic, return_type, body, is_move);
+        start_token, self, std::move(parameters), return_type, body, variadic, is_move, is_naked);
 }
 
 auto grouped_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {

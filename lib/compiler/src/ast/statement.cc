@@ -102,7 +102,9 @@ constexpr auto LEGAL_MODIFIERS{
         modifier_mapping{syntax::token_type_t::CONSTEXPR, decl_modifiers::CONSTEXPR},
         modifier_mapping{syntax::token_type_t::PUBLIC, decl_modifiers::PUBLIC},
         modifier_mapping{syntax::token_type_t::EXTERN, decl_modifiers::EXTERN},
-        modifier_mapping{syntax::token_type_t::EXPORT, decl_modifiers::EXPORT})};
+        modifier_mapping{syntax::token_type_t::EXPORT, decl_modifiers::EXPORT},
+        modifier_mapping{syntax::token_type_t::THREADLOCAL, decl_modifiers::THREADLOCAL},
+        modifier_mapping{syntax::token_type_t::WEAK, decl_modifiers::WEAK})};
 
 [[nodiscard]] constexpr auto validate_modifiers(decl_modifiers modifiers) noexcept
     -> stdx::option<std::string> {
@@ -123,26 +125,50 @@ constexpr auto LEGAL_MODIFIERS{
     if (abi_count > 1) {
         return fmt::format("At most one ABI-related modifier may be used; found {}", abi_count);
     }
+
+    const auto tls_constexpr{decl_modifiers::THREADLOCAL | decl_modifiers::CONSTEXPR};
+    if ((modifiers & tls_constexpr) == tls_constexpr) {
+        return "A 'threadlocal' declaration cannot also be 'constexpr'";
+    }
+
+    const auto weak_constexpr{decl_modifiers::WEAK | decl_modifiers::CONSTEXPR};
+    if ((modifiers & weak_constexpr) == weak_constexpr) {
+        return "A 'weak' declaration cannot also be 'constexpr'";
+    }
     return stdx::none;
 }
 
-// Parses an optional `("target")` suffix immediately following an `extern` modifier token.
-[[nodiscard]] auto try_parse_extern_target(syntax::parser& parser)
-    -> stdx::result<stdx::option<string_handle>, syntax::diagnostic> {
-    stdx::option<string_handle> target;
-    if (parser.peek_token_is(syntax::token_type_t::LPAREN)) {
-        parser.advance();
-        TRY(parser.expect_peek(syntax::token_type_t::STRING));
-        target.emplace(TRY(string_expr::parse(parser)));
+struct binding_args {
+    stdx::option<string_handle> first;  // extern: library; export: exported name
+    stdx::option<string_handle> second; // extern: link name; unused for export
+};
 
-        if (parser.get_node<string_expr>(**target).value.empty()) {
-            return make_syntax_err("Extern target may not be empty",
-                                   syntax::error::EMPTY_EXTERN_TARGET,
-                                   parser.get_location_of(**target));
-        }
-        TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
+// Parses an optional `("a")` or `("a", "b")` suffix after an `extern`/`export` token.
+[[nodiscard]] auto try_parse_binding_args(syntax::parser& parser, bool allow_second)
+    -> stdx::result<binding_args, syntax::diagnostic> {
+    binding_args out;
+    if (!parser.peek_token_is(syntax::token_type_t::LPAREN)) { return out; }
+
+    const auto parse_string{
+        [&](std::string_view what) -> stdx::result<string_handle, syntax::diagnostic> {
+            TRY(parser.expect_peek(syntax::token_type_t::STRING));
+            const auto handle{TRY(string_expr::parse(parser))};
+            if (parser.get_node<string_expr>(*handle).value.empty()) {
+                return make_syntax_err(fmt::format("{} may not be empty", what),
+                                       syntax::error::EMPTY_EXTERN_TARGET,
+                                       parser.get_location_of(*handle));
+            }
+            return handle;
+        }};
+
+    parser.advance();
+    out.first.emplace(TRY(parse_string(allow_second ? "Extern target" : "Exported name")));
+    if (allow_second && parser.peek_token_is(syntax::token_type_t::COMMA)) {
+        parser.advance();
+        out.second.emplace(TRY(parse_string("Link name")));
     }
-    return target;
+    TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
+    return out;
 }
 
 } // namespace
@@ -153,9 +179,21 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
     auto       modifiers{LEGAL_MODIFIERS[start_token.type].value()};
 
     stdx::option<string_handle> extern_target;
-    if (start_token.type == syntax::token_type_t::EXTERN) {
-        extern_target = TRY(try_parse_extern_target(parser));
-    }
+    stdx::option<string_handle> link_name;
+
+    const auto parse_binding_for{[&](decl_modifiers m) -> stdx::result<void, syntax::diagnostic> {
+        if (m == decl_modifiers::EXTERN) {
+            auto args{TRY(try_parse_binding_args(parser, /*allow_second=*/true))};
+            extern_target = args.first;
+            if (args.second) { link_name = args.second; }
+        } else if (m == decl_modifiers::EXPORT) {
+            auto args{TRY(try_parse_binding_args(parser, /*allow_second=*/false))};
+            if (args.first) { link_name = args.first; }
+        }
+        return {};
+    }};
+
+    TRY(parse_binding_for(modifiers));
 
     stdx::option<decl_modifiers> current_modifier;
     while ((current_modifier = LEGAL_MODIFIERS[parser.get_peek_token().type])) {
@@ -167,9 +205,7 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
         }
         modifiers |= *current_modifier;
 
-        if (*current_modifier == decl_modifiers::EXTERN) {
-            extern_target = TRY(try_parse_extern_target(parser));
-        }
+        TRY(parse_binding_for(*current_modifier));
     }
 
     if (auto msg{validate_modifiers(modifiers)}) {
@@ -202,7 +238,7 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
 
     TRY(parser.expect_semicolon());
     return parser.add_stmt<decl_stmt>(
-        start_token, decl_name, decl_type, decl_value, modifiers, extern_target);
+        start_token, decl_name, decl_type, decl_value, modifiers, extern_target, link_name);
 }
 
 auto defer_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {

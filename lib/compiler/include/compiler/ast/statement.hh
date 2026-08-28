@@ -47,12 +47,14 @@ struct continue_stmt {
 };
 
 enum class decl_modifiers : u8 {
-    VARIABLE  = 1 << 0,
-    CONSTANT  = 1 << 1,
-    CONSTEXPR = 1 << 2,
-    PUBLIC    = 1 << 3,
-    EXTERN    = 1 << 4,
-    EXPORT    = 1 << 5,
+    VARIABLE    = 1 << 0,
+    CONSTANT    = 1 << 1,
+    CONSTEXPR   = 1 << 2,
+    PUBLIC      = 1 << 3,
+    EXTERN      = 1 << 4,
+    EXPORT      = 1 << 5,
+    THREADLOCAL = 1 << 6,
+    WEAK        = 1 << 7,
 };
 
 MAKE_ENUM_OPERATORS(decl_modifiers)
@@ -63,6 +65,7 @@ struct decl_stmt {
     stdx::option<expr_handle>      value;
     decl_modifiers                 modifiers;
     stdx::option<string_handle>    extern_target;
+    stdx::option<string_handle>    link_name;
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<stmt_handle, syntax::diagnostic>;

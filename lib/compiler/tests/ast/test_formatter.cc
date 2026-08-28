@@ -273,6 +273,13 @@ TEST_CASE("formatter round trip: functions and types") {
     round_trips("var a: std::ArrayList(u8); var a: List(i32); var a: []i32;");
     round_trips("extern const foo: fn(): i32;");
     round_trips(R"(extern("kernel32") const bar: fn(): void;)");
+    round_trips(R"(extern("c", "__errno_location") const errno_loc: fn(): ^mut i32;)");
+    round_trips(R"(export("ghoti_add") const add := fn(a: i32, b: i32): i32 { return a + b; };)");
+    round_trips("threadlocal var tls_counter: i32 = 0;");
+    round_trips("pub threadlocal var tls_state: i64 = 0l;");
+    round_trips("weak extern const maybe: fn(): void;");
+    round_trips("pub weak const overridable := fn(): i32 { return 1; };");
+    round_trips("pub const stub := naked fn(): void {};");
 }
 
 TEST_CASE("formatter round trip: aggregates") {

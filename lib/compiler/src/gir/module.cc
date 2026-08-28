@@ -28,8 +28,15 @@ auto module::add_global(std::string         name,
                         stdx::option<value> init,
                         gir::linkage        linkage,
                         std::string         abi_name) -> global_decl& {
-    return *globals_.emplace_back(arena_.make<global_decl>(
-        std::move(name), type, is_const, std::move(init), linkage, std::move(abi_name)));
+    return *globals_.emplace_back(arena_.make<global_decl>(std::move(name),
+                                                           type,
+                                                           std::move(init),
+                                                           linkage,
+                                                           std::move(abi_name),
+                                                           std::string{},
+                                                           is_const,
+                                                           false,
+                                                           false));
 }
 
 auto module::add_function(std::string  name,

@@ -52,6 +52,9 @@ constexpr keyword_t AS{"as", token_type_t::AS};
 constexpr keyword_t PUBLIC{"pub", token_type_t::PUBLIC};
 constexpr keyword_t EXTERN{"extern", token_type_t::EXTERN};
 constexpr keyword_t EXPORT{"export", token_type_t::EXPORT};
+constexpr keyword_t THREADLOCAL{"threadlocal", token_type_t::THREADLOCAL};
+constexpr keyword_t WEAK{"weak", token_type_t::WEAK};
+constexpr keyword_t NAKED{"naked", token_type_t::NAKED};
 constexpr keyword_t VOLATILE{"volatile", token_type_t::VOLATILE};
 constexpr keyword_t MUT{"mut", token_type_t::MUT};
 constexpr keyword_t MOVE{"move", token_type_t::MOVE};
@@ -84,6 +87,7 @@ constexpr std::array ALL_KEYWORDS{
     keywords::BOOL,        keywords::VOID,         keywords::TYPE,
     keywords::AUTO,        keywords::OPAQUE,       keywords::AS,
     keywords::PUBLIC,      keywords::EXTERN,       keywords::EXPORT,
+    keywords::THREADLOCAL, keywords::WEAK,         keywords::NAKED,
     keywords::VOLATILE,    keywords::MUT,          keywords::MOVE,
     keywords::PACKED,      keywords::NORETURN,     keywords::NULLPTR,
     keywords::USING,       keywords::TEST,         keywords::UNDEFINED,

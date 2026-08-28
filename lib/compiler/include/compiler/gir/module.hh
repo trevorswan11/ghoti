@@ -22,10 +22,13 @@ namespace ghoti::gir {
 struct global_decl {
     std::string         name;
     sema::type&         type;
-    bool                is_constant{false};
     stdx::option<value> init_value;
     gir::linkage        linkage{linkage::INTERNAL};
     std::string         abi_name{"c"};
+    std::string         link_name;
+    bool                is_constant{false};
+    bool                is_thread_local{false};
+    bool                is_weak{false};
 };
 
 struct type_decl {

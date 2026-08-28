@@ -148,22 +148,27 @@ struct function_expr {
 
     stdx::option<self_parameter> self;
     std::vector<parameter>       parameters;
-    bool                         variadic;
     explicit_type_id             explicit_return_type;
     block_handle                 body;
+    bool                         variadic;
     bool                         is_move{false};
+    bool                         is_naked{false};
 
     // Parse the function as a value. Meant for the parser LUT
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic> {
-        return parse(parser, false);
+        return parse(parser, false, false);
     }
-    [[nodiscard]] static auto parse(syntax::parser& parser, bool is_move)
+    [[nodiscard]] static auto parse(syntax::parser& parser, bool is_move, bool is_naked)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
 // Consumes a leading `move` modifier before delegating to function_expr::parse
 [[nodiscard]] auto parse_move_function_expr(syntax::parser& parser)
+    -> stdx::result<expr_handle, syntax::diagnostic>;
+
+// Consumes a leading `naked` modifier before delegating to function_expr::parse
+[[nodiscard]] auto parse_naked_function_expr(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic>;
 
 struct grouped_expr {

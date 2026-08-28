@@ -67,6 +67,8 @@ class llvm_lowering {
     auto lower_function(const gir::function& fn) -> llvm::Function*;
     auto lower_global(const gir::global_decl& g) -> llvm::GlobalVariable*;
 
+    auto resolve_named_function(std::string_view ghoti_name) -> llvm::Function*;
+
     auto emit_alloca(const gir::instruction& inst) -> llvm::Value*;
     auto emit_load(const gir::instruction& inst) -> llvm::Value*;
     auto emit_store(const gir::instruction& inst) -> void;

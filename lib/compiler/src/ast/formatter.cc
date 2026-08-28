@@ -486,16 +486,33 @@ auto formatter::decl_prefix(const decl_stmt& node) -> syntax::doc_id {
         parts.emplace_back(doc_manager_.text("pub "));
     }
     if (node.has_modifier(decl_modifiers::EXPORT)) {
-        parts.emplace_back(doc_manager_.text("export "));
+        if (node.link_name) {
+            parts.emplace_back(doc_manager_.concat(
+                {doc_manager_.text("export("), format(*node.link_name), doc_manager_.text(") ")}));
+        } else {
+            parts.emplace_back(doc_manager_.text("export "));
+        }
     }
     if (node.has_modifier(decl_modifiers::EXTERN)) {
-        if (node.extern_target) {
+        if (node.extern_target && node.link_name) {
+            parts.emplace_back(doc_manager_.concat({doc_manager_.text("extern("),
+                                                    format(*node.extern_target),
+                                                    doc_manager_.text(", "),
+                                                    format(*node.link_name),
+                                                    doc_manager_.text(") ")}));
+        } else if (node.extern_target) {
             parts.emplace_back(doc_manager_.concat({doc_manager_.text("extern("),
                                                     format(*node.extern_target),
                                                     doc_manager_.text(") ")}));
         } else {
             parts.emplace_back(doc_manager_.text("extern "));
         }
+    }
+    if (node.has_modifier(decl_modifiers::WEAK)) {
+        parts.emplace_back(doc_manager_.text("weak "));
+    }
+    if (node.has_modifier(decl_modifiers::THREADLOCAL)) {
+        parts.emplace_back(doc_manager_.text("threadlocal "));
     }
     if (node.has_modifier(decl_modifiers::CONSTEXPR)) {
         parts.emplace_back(doc_manager_.text("constexpr "));
@@ -680,6 +697,7 @@ auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
 
     return doc_manager_.concat({
         node.is_move ? doc_manager_.text("move ") : doc_manager_.nil(),
+        node.is_naked ? doc_manager_.text("naked ") : doc_manager_.nil(),
         doc_manager_.text("fn"),
         doc_manager_.delimited("(", ")", std::move(params), false, true),
         doc_manager_.text(": "),

@@ -526,9 +526,14 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
 
     auto*      g_type{types_.translate(g.type)};
     const bool is_const{g.is_constant};
-    const auto g_linkage{(g.linkage == gir::linkage::INTERNAL)
+    auto       g_linkage{(g.linkage == gir::linkage::INTERNAL)
                              ? llvm::GlobalValue::InternalLinkage
                              : llvm::GlobalValue::ExternalLinkage};
+    if (g.is_weak && g_linkage != llvm::GlobalValue::InternalLinkage) {
+        g_linkage = (g.linkage == gir::linkage::EXTERN)
+                        ? llvm::GlobalValue::ExternalWeakLinkage
+                        : llvm::GlobalValue::WeakAnyLinkage;
+    }
 
     llvm::Constant* init{nullptr};
     if (g.init_value) {
@@ -542,7 +547,13 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
         init = llvm::Constant::getNullValue(g_type);
     }
 
-    auto* gvar{new llvm::GlobalVariable{*llvm_module_, g_type, is_const, g_linkage, init, g.name}};
+    const std::string sym_name{g.link_name.empty() ? g.name : g.link_name};
+    auto*             gvar{
+        new llvm::GlobalVariable{*llvm_module_, g_type, is_const, g_linkage, init, sym_name}};
+    if (g.is_thread_local) {
+        gvar->setThreadLocalMode(is_executable_ ? llvm::GlobalValue::LocalExecTLSModel
+                                                : llvm::GlobalValue::GeneralDynamicTLSModel);
+    }
     globals_[g.name] = gvar;
     return gvar;
 }
@@ -561,6 +572,14 @@ auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function*
     if (is_executable_ && fn_name == user_main_name_) {
         fn_name   = "_ghoti_main";
         g_linkage = llvm::GlobalValue::InternalLinkage;
+    } else if (!fn.get_link_name().empty()) {
+        fn_name = std::string{fn.get_link_name()};
+    }
+
+    if (fn.get_is_weak() && g_linkage != llvm::GlobalValue::InternalLinkage) {
+        g_linkage = (fn.get_linkage() == gir::linkage::EXTERN)
+                        ? llvm::GlobalValue::ExternalWeakLinkage
+                        : llvm::GlobalValue::WeakAnyLinkage;
     }
 
     if (auto* existing = llvm_module_->getFunction(fn_name)) { return existing; }
@@ -580,6 +599,10 @@ auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function*
     auto* llvm_fn{llvm::Function::Create(fn_ty, g_linkage, fn_name, llvm_module_.get())};
     llvm_fn->addFnAttr(llvm::Attribute::NoBuiltin);
     llvm_fn->addFnAttr("no-stack-arg-probe", "true");
+    if (fn.get_is_naked()) {
+        llvm_fn->addFnAttr(llvm::Attribute::Naked);
+        llvm_fn->addFnAttr(llvm::Attribute::NoInline);
+    }
     for (usize arg_idx{0}; const auto& param : fn.get_params()) {
         auto* p_ty{types_.translate(param->type)};
         if (p_ty->isVoidTy()) { continue; }
@@ -678,7 +701,7 @@ auto llvm_lowering::lower_value(const gir::value& val, const sema::type* expecte
             if (!ty && val.type) { ty = &*val.type; }
             // A fn-typed string value names a function rather than holding string data
             if (ty && ty->get_kind() == sema::type_kind::FUNCTION) {
-                if (auto* fn{llvm_module_->getFunction(str)}) { return fn; }
+                if (auto* fn{resolve_named_function(str)}) { return fn; }
                 // Not yet declared in this translation unit for the linnker to resolve
                 const auto fn_data{ty->get_data().as_opt<sema::types::function>()};
                 ASSERT(fn_data, "FUNCTION-typed value must carry function type data");
@@ -1075,9 +1098,16 @@ auto llvm_lowering::emit_const(const gir::instruction& inst) -> llvm::Value* {
     return val;
 }
 
+auto llvm_lowering::resolve_named_function(std::string_view ghoti_name) -> llvm::Function* {
+    if (const auto it{globals_.find(ghoti_name)}; it != globals_.end()) {
+        if (auto* fn{llvm::dyn_cast<llvm::Function>(it->second)}) { return fn; }
+    }
+    return llvm_module_->getFunction(ghoti_name);
+}
+
 auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
     if (inst.callee_name) {
-        if (auto* callee_fn{llvm_module_->getFunction(*inst.callee_name)}) {
+        if (auto* callee_fn{resolve_named_function(*inst.callee_name)}) {
             std::vector<llvm::Value*> args;
             args.reserve(inst.operands.size());
             for (const auto& op : inst.operands) {
