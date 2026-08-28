@@ -70,4 +70,22 @@ constexpr auto strip_trailing_cr(std::string& line) -> void {
     };
 }
 
+// Levenshtein distance, capped
+template <usize Cap = 64>
+[[nodiscard]] auto edit_distance(std::string_view a, std::string_view b) -> usize {
+    std::array<usize, Cap> prev{};
+    std::array<usize, Cap> curr{};
+    if (a.size() >= prev.size() || b.size() >= prev.size()) { return prev.size(); } // too long
+    for (usize j{0}; j <= b.size(); ++j) { prev[j] = j; }
+    for (usize i{1}; i <= a.size(); ++i) {
+        curr[0] = i;
+        for (usize j{1}; j <= b.size(); ++j) {
+            const auto cost{a[i - 1] == b[j - 1] ? usize{0} : usize{1}};
+            curr[j] = std::min({prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost});
+        }
+        prev = curr;
+    }
+    return prev[b.size()];
+}
+
 } // namespace ghoti::string_utils
