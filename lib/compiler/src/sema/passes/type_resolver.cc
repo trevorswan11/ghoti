@@ -398,8 +398,15 @@ template <ast::IndexableID ID>
     case token_type_t::BUILTIN_TAG_NAME:
     case token_type_t::BUILTIN_TARGET_OS:
     case token_type_t::BUILTIN_TARGET_ARCH:
-    case token_type_t::BUILTIN_TARGET_TRIPLE: {
+    case token_type_t::BUILTIN_TARGET_TRIPLE:
+    case token_type_t::BUILTIN_TARGET_ABI:
+    case token_type_t::BUILTIN_TARGET_ENDIAN: {
         ASSERT(builtin.return_type.get_kind() == type_kind::SLICE);
+        return_type = &builtin.return_type;
+        break;
+    }
+    case token_type_t::BUILTIN_TARGET_PTR_BITS: {
+        ASSERT(builtin.return_type.get_kind() == type_kind::USIZE);
         return_type = &builtin.return_type;
         break;
     }

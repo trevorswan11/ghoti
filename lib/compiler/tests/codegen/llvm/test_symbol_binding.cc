@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <llvm/IR/Attributes.h>
+#include <llvm/IR/CallingConv.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalValue.h>
 #include <llvm/IR/GlobalVariable.h>
@@ -124,6 +125,37 @@ TEST_CASE("Codegen: naked function carries the naked attribute and no synthesize
         }
     }
     CHECK_FALSE(has_ret);
+}
+
+TEST_CASE("Codegen: callconv sets the LLVM calling convention on the function and its call sites") {
+    llvm::LLVMContext context;
+
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        pub const handler := fn() callconv(.win64): void {};
+        pub const main := fn(args: [][:0]u8): void {
+            handler();
+        };
+    )")};
+
+    auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
+    CHECK_FALSE(llvm::verifyModule(*llvm_mod));
+
+    auto& handler{UNWRAP(llvm_mod->getFunction("handler"))};
+    CHECK(handler.getCallingConv() == llvm::CallingConv::Win64);
+
+    auto& caller{UNWRAP(llvm_mod->getFunction("main"))};
+    bool  found_call{false};
+    for (auto& bb : caller) {
+        for (auto& inst : bb) {
+            if (auto* call{llvm::dyn_cast<llvm::CallInst>(&inst)}) {
+                if (call->getCalledFunction() == &handler) {
+                    found_call = true;
+                    CHECK(call->getCallingConv() == llvm::CallingConv::Win64);
+                }
+            }
+        }
+    }
+    CHECK(found_call);
 }
 
 } // namespace ghoti::tests

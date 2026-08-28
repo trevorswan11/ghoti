@@ -130,6 +130,9 @@ ExpressionStatement
                 │       └─ Type: ExplicitType (modifier: PTR)
                 │           └─ IdentifierExpression: B
                 ├─ Variadic: false
+                ├─ Move: false
+                ├─ Naked: false
+                ├─ CallConv: c
                 ├─ Returns: ExplicitType (modifier: VALUE)
                 │   └─ IdentifierExpression: C
                 └─ Body: BlockStatement
@@ -209,6 +212,9 @@ ExpressionStatement
     │       └─ Type: ExplicitType (modifier: PTR)
     │           └─ IdentifierExpression: B
     ├─ Variadic: false
+    ├─ Move: false
+    ├─ Naked: false
+    ├─ CallConv: c
     ├─ Returns: ExplicitType (modifier: VALUE)
     │   └─ IdentifierExpression: i32 (primitive)
     └─ Body: BlockStatement
@@ -388,6 +394,9 @@ ExpressionStatement
                 │       └─ Type: ExplicitType (modifier: VALUE)
                 │           └─ IdentifierExpression: A
                 ├─ Variadic: false
+                ├─ Move: false
+                ├─ Naked: false
+                ├─ CallConv: c
                 ├─ Returns: ExplicitType (modifier: VALUE)
                 │   └─ IdentifierExpression: C
                 └─ Body: BlockStatement
@@ -413,6 +422,9 @@ ExpressionStatement
                 │       └─ Type: ExplicitType (modifier: VALUE)
                 │           └─ IdentifierExpression: A
                 ├─ Variadic: false
+                ├─ Move: false
+                ├─ Naked: false
+                ├─ CallConv: c
                 ├─ Returns: ExplicitType (modifier: VALUE)
                 │   └─ IdentifierExpression: C
                 └─ Body: BlockStatement
@@ -484,6 +496,9 @@ ExpressionStatement
 └─ Expr: FunctionExpression
     ├─ Self: self (modifier: VALUE)
     ├─ Variadic: false
+    ├─ Move: false
+    ├─ Naked: false
+    ├─ CallConv: c
     ├─ Returns: ExplicitType (modifier: VALUE)
     │   └─ IdentifierExpression: i32 (primitive)
     └─ Body: BlockStatement
@@ -541,6 +556,90 @@ DeclStatement
         ├─ Variadic: false
         └─ Returns: ExplicitType (modifier: VALUE)
             └─ IdentifierExpression: void (primitive)
+DeclStatement
+├─ Name: IdentifierExpression: errno_loc
+├─ Modifiers: CONSTANT|EXTERN
+├─ Extern Target: StringExpression: c
+├─ Link Name: StringExpression: __errno_location
+└─ Type: ExplicitType (modifier: VALUE)
+    └─ FunctionExpression
+        ├─ Variadic: false
+        └─ Returns: ExplicitType (modifier: MUT_PTR)
+            └─ IdentifierExpression: i32
+DeclStatement
+├─ Name: IdentifierExpression: add
+├─ Modifiers: CONSTANT|EXPORT
+├─ Link Name: StringExpression: ghoti_add
+├─ Type: (inferred)
+└─ Value: FunctionExpression
+    ├─ Parameters:
+    │   └─ Param:
+    │       ├─ Name: IdentifierExpression: a
+    │       └─ Type: ExplicitType (modifier: VALUE)
+    │           └─ IdentifierExpression: i32 (primitive)
+    ├─ Variadic: false
+    ├─ Move: false
+    ├─ Naked: false
+    ├─ CallConv: c
+    ├─ Returns: ExplicitType (modifier: VALUE)
+    │   └─ IdentifierExpression: i32 (primitive)
+    └─ Body: BlockStatement
+        └─ ReturnStatement
+            └─ Value: IdentifierExpression: a
+DeclStatement
+├─ Name: IdentifierExpression: tls_ctr
+├─ Modifiers: VARIABLE|THREADLOCAL
+├─ Type: ExplicitType (modifier: VALUE)
+│   └─ IdentifierExpression: i32 (primitive)
+└─ Value: I32Expression: 0
+DeclStatement
+├─ Name: IdentifierExpression: maybe
+├─ Modifiers: CONSTANT|EXTERN|WEAK
+└─ Type: ExplicitType (modifier: VALUE)
+    └─ FunctionExpression
+        ├─ Variadic: false
+        └─ Returns: ExplicitType (modifier: VALUE)
+            └─ IdentifierExpression: void (primitive)
+DeclStatement
+├─ Name: IdentifierExpression: mv
+├─ Modifiers: CONSTANT
+├─ Type: (inferred)
+└─ Value: FunctionExpression
+    ├─ Variadic: false
+    ├─ Move: true
+    ├─ Naked: false
+    ├─ CallConv: c
+    ├─ Returns: ExplicitType (modifier: VALUE)
+    │   └─ IdentifierExpression: i32 (primitive)
+    └─ Body: BlockStatement
+        └─ ReturnStatement
+            └─ Value: I32Expression: 0
+DeclStatement
+├─ Name: IdentifierExpression: stub
+├─ Modifiers: CONSTANT
+├─ Type: (inferred)
+└─ Value: FunctionExpression
+    ├─ Variadic: false
+    ├─ Move: false
+    ├─ Naked: true
+    ├─ CallConv: c
+    ├─ Returns: ExplicitType (modifier: VALUE)
+    │   └─ IdentifierExpression: void (primitive)
+    └─ Body: BlockStatement
+        └─ <empty>
+DeclStatement
+├─ Name: IdentifierExpression: cb
+├─ Modifiers: CONSTANT
+├─ Type: (inferred)
+└─ Value: FunctionExpression
+    ├─ Variadic: false
+    ├─ Move: false
+    ├─ Naked: false
+    ├─ CallConv: stdcall
+    ├─ Returns: ExplicitType (modifier: VALUE)
+    │   └─ IdentifierExpression: void (primitive)
+    └─ Body: BlockStatement
+        └─ <empty>
 DeclStatement
 ├─ Name: IdentifierExpression: ExS
 ├─ Modifiers: CONSTANT

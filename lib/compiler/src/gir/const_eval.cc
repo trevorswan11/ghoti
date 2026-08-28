@@ -41,6 +41,30 @@ namespace ghoti::gir {
 
 namespace {
 
+// A stable, version-suffix-free OS token (`macosx13.0.0` -> `macos`) for `if constexpr`.
+[[nodiscard]] auto normalized_target_os(const llvm::Triple& triple) -> std::string {
+    switch (triple.getOS()) {
+    case llvm::Triple::Darwin:
+    case llvm::Triple::MacOSX:     return "macos";
+    case llvm::Triple::IOS:        return "ios";
+    case llvm::Triple::Linux:      return "linux";
+    case llvm::Triple::Win32:      return "windows";
+    case llvm::Triple::FreeBSD:    return "freebsd";
+    case llvm::Triple::OpenBSD:    return "openbsd";
+    case llvm::Triple::NetBSD:     return "netbsd";
+    case llvm::Triple::WASI:       return "wasi";
+    case llvm::Triple::Emscripten: return "emscripten";
+    case llvm::Triple::UnknownOS:  return "freestanding";
+    default:                       return std::string{triple.getOSTypeName(triple.getOS())};
+    }
+}
+
+// gnu / musl / msvc / android / gnueabihf / ... ; `none` when unspecified.
+[[nodiscard]] auto normalized_target_abi(const llvm::Triple& triple) -> std::string {
+    if (triple.getEnvironment() == llvm::Triple::UnknownEnvironment) { return "none"; }
+    return std::string{triple.getEnvironmentName()};
+}
+
 template <typename T>
 [[nodiscard]] auto fold_binary_arithmetic(syntax::token_type_t      op_type,
                                           T                         l,
@@ -1313,7 +1337,7 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
     }
     case syntax::token_type_t::BUILTIN_TARGET_OS: {
         const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
-        return const_value::make_string(ctx_, std::string{triple.getOSName()});
+        return const_value::make_string(ctx_, normalized_target_os(triple));
     }
     case syntax::token_type_t::BUILTIN_TARGET_ARCH: {
         const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
@@ -1323,6 +1347,19 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
     case syntax::token_type_t::BUILTIN_TARGET_TRIPLE: {
         const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
         return const_value::make_string(ctx_, triple.str());
+    }
+    case syntax::token_type_t::BUILTIN_TARGET_ABI: {
+        const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
+        return const_value::make_string(ctx_, normalized_target_abi(triple));
+    }
+    case syntax::token_type_t::BUILTIN_TARGET_ENDIAN: {
+        const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
+        return const_value::make_string(ctx_, triple.isLittleEndian() ? "little" : "big");
+    }
+    case syntax::token_type_t::BUILTIN_TARGET_PTR_BITS: {
+        const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
+        const u64  bits{triple.isArch64Bit() ? 64U : (triple.isArch16Bit() ? 16U : 32U)};
+        return const_value{bits, ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
     }
     case syntax::token_type_t::BUILTIN_SRC: {
         const auto   loc{module_->ast.location_of(call.function)};

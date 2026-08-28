@@ -286,8 +286,24 @@ auto analyzer::emit_llvm_ir_executable(gir::module&                      gir_mod
     }
 
     if (options.level != codegen::opt_level::O0 || options.debug_logging || options.time_passes) {
+        codegen::optimizer_options exe_opts{options};
+        exe_opts.internalize = true;
+        exe_opts.preserved_symbols.emplace_back("main");
+        for (const auto* fn : gir_module.get_functions()) {
+            if (fn->get_linkage() == gir::linkage::EXPORT) {
+                exe_opts.preserved_symbols.emplace_back(fn->get_link_name().empty()
+                                                            ? std::string{fn->get_name()}
+                                                            : std::string{fn->get_link_name()});
+            }
+        }
+        for (const auto* g : gir_module.get_globals()) {
+            if (g->linkage == gir::linkage::EXPORT) {
+                exe_opts.preserved_symbols.emplace_back(g->link_name.empty() ? g->name
+                                                                             : g->link_name);
+            }
+        }
         codegen::llvm_optimizer optimizer{llvm_mod->getContext()};
-        TRY(optimizer.optimize(*llvm_mod, options));
+        TRY(optimizer.optimize(*llvm_mod, exe_opts));
     }
 
     return llvm_mod;

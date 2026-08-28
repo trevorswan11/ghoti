@@ -13,6 +13,10 @@
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Passes/StandardInstrumentations.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Transforms/IPO/GlobalDCE.h>
+#include <llvm/Transforms/IPO/Internalize.h>
+
+#include <algorithm>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
@@ -94,9 +98,24 @@ auto llvm_optimizer::optimize(llvm::Module& module, const optimizer_options& opt
     pb.crossRegisterProxies(lam, fam, cgam, mam);
 
     const auto              llvm_level{to_llvm_opt_level(options.level)};
-    llvm::ModulePassManager mpm{options.level == opt_level::O0
-                                    ? pb.buildO0DefaultPipeline(llvm_level)
-                                    : pb.buildPerModuleDefaultPipeline(llvm_level)};
+    llvm::ModulePassManager mpm;
+
+    {
+        PROFILE_SCOPE("Strip everything the entry point / exports can't reach");
+        if (options.internalize) {
+            mpm.addPass(llvm::InternalizePass(
+                [preserved = options.preserved_symbols](const llvm::GlobalValue& gv) {
+                    return std::ranges::find(preserved, gv.getName().str()) != preserved.end();
+                }));
+            mpm.addPass(llvm::GlobalDCEPass());
+        }
+
+        if (options.level == opt_level::O0) {
+            mpm.addPass(pb.buildO0DefaultPipeline(llvm_level));
+        } else {
+            mpm.addPass(pb.buildPerModuleDefaultPipeline(llvm_level));
+        }
+    }
 
     {
         PROFILE_SCOPE("Run LLVM Optimizations");

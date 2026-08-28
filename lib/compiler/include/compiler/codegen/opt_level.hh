@@ -1,6 +1,8 @@
 #pragma once
 
+#include <string>
 #include <string_view>
+#include <vector>
 
 #include <stdx/option.hh>
 #include <stdx/types.hh>
@@ -21,11 +23,13 @@ enum class opt_level : u8 {
 [[nodiscard]] auto parse_opt_level(std::string_view str) noexcept -> stdx::option<opt_level>;
 
 struct optimizer_options {
-    llvm::TargetMachine* target_machine{nullptr};
-    opt_level            level{opt_level::O0};
-    bool                 verify_each{true};
-    bool                 debug_logging{false};
-    bool                 time_passes{false};
+    llvm::TargetMachine*     target_machine{nullptr};
+    opt_level                level{opt_level::O0};
+    bool                     verify_each{true};
+    bool                     debug_logging{false};
+    bool                     time_passes{false};
+    bool                     internalize{false}; // Run InternalizePass + GlobalDCEPass first
+    std::vector<std::string> preserved_symbols{};
 };
 
 } // namespace ghoti::codegen

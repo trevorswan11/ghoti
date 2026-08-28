@@ -9,6 +9,7 @@
 
 #include <fmt/format.h>
 #include <llvm/IR/Attributes.h>
+#include <llvm/IR/CallingConv.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/IRBuilder.h>
@@ -27,6 +28,7 @@
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/codegen/type_translator.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
@@ -56,6 +58,19 @@ namespace {
     }
     if (inst.type) { return sema::is_signed_integer(inst.type->get_kind()); }
     return false;
+}
+
+[[nodiscard]] auto to_llvm_callconv(ast::calling_convention conv) noexcept
+    -> llvm::CallingConv::ID {
+    switch (conv) {
+    case ast::calling_convention::C:        return llvm::CallingConv::C;
+    case ast::calling_convention::SYSV:     return llvm::CallingConv::X86_64_SysV;
+    case ast::calling_convention::WIN64:    return llvm::CallingConv::Win64;
+    case ast::calling_convention::STDCALL:  return llvm::CallingConv::X86_StdCall;
+    case ast::calling_convention::FASTCALL: return llvm::CallingConv::X86_FastCall;
+    case ast::calling_convention::AAPCS:    return llvm::CallingConv::ARM_AAPCS;
+    default:                                return llvm::CallingConv::C;
+    }
 }
 
 } // namespace
@@ -526,13 +541,11 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
 
     auto*      g_type{types_.translate(g.type)};
     const bool is_const{g.is_constant};
-    auto       g_linkage{(g.linkage == gir::linkage::INTERNAL)
-                             ? llvm::GlobalValue::InternalLinkage
-                             : llvm::GlobalValue::ExternalLinkage};
+    auto       g_linkage{(g.linkage == gir::linkage::INTERNAL) ? llvm::GlobalValue::InternalLinkage
+                                                               : llvm::GlobalValue::ExternalLinkage};
     if (g.is_weak && g_linkage != llvm::GlobalValue::InternalLinkage) {
-        g_linkage = (g.linkage == gir::linkage::EXTERN)
-                        ? llvm::GlobalValue::ExternalWeakLinkage
-                        : llvm::GlobalValue::WeakAnyLinkage;
+        g_linkage = (g.linkage == gir::linkage::EXTERN) ? llvm::GlobalValue::ExternalWeakLinkage
+                                                        : llvm::GlobalValue::WeakAnyLinkage;
     }
 
     llvm::Constant* init{nullptr};
@@ -599,6 +612,9 @@ auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function*
     auto* llvm_fn{llvm::Function::Create(fn_ty, g_linkage, fn_name, llvm_module_.get())};
     llvm_fn->addFnAttr(llvm::Attribute::NoBuiltin);
     llvm_fn->addFnAttr("no-stack-arg-probe", "true");
+    if (fn.get_calling_conv() != ast::calling_convention::C) {
+        llvm_fn->setCallingConv(to_llvm_callconv(fn.get_calling_conv()));
+    }
     if (fn.get_is_naked()) {
         llvm_fn->addFnAttr(llvm::Attribute::Naked);
         llvm_fn->addFnAttr(llvm::Attribute::NoInline);
@@ -1151,6 +1167,7 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
             const bool is_void{!inst.type || inst.type->get_kind() == sema::type_kind::VOID_};
 
             auto* call_inst{builder_.CreateCall(callee_fn, args, is_void ? "" : "calltmp")};
+            call_inst->setCallingConv(callee_fn->getCallingConv());
             if (inst.result && !is_void) { set_local(*inst.result, call_inst); }
             return call_inst;
         }

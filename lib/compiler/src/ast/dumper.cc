@@ -11,6 +11,7 @@
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/ast/kind.hh"
@@ -298,6 +299,24 @@ auto dumper::visit(node_id, const function_expr& function) -> void {
     {
         const indent::guard g{indent_, false};
         fmt::println(out_, "{}Variadic: {}", indent_.current_branch(), function.variadic);
+    }
+
+    {
+        const indent::guard g{indent_, false};
+        fmt::println(out_, "{}Move: {}", indent_.current_branch(), function.is_move);
+    }
+
+    {
+        const indent::guard g{indent_, false};
+        fmt::println(out_, "{}Naked: {}", indent_.current_branch(), function.is_naked);
+    }
+
+    {
+        const indent::guard g{indent_, false};
+        fmt::println(out_,
+                     "{}CallConv: {}",
+                     indent_.current_branch(),
+                     calling_convention_name(function.conv));
     }
 
     {

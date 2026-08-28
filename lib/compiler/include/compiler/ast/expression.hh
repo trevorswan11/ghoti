@@ -9,6 +9,7 @@
 #include <stdx/types.hh>
 #include <stdx/variant.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/syntax/error.hh"
@@ -153,6 +154,7 @@ struct function_expr {
     bool                         variadic;
     bool                         is_move{false};
     bool                         is_naked{false};
+    calling_convention           conv{calling_convention::C};
 
     // Parse the function as a value. Meant for the parser LUT
     [[nodiscard]] static auto parse(syntax::parser& parser)

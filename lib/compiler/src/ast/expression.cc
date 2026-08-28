@@ -11,6 +11,7 @@
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/ast/kind.hh"
@@ -528,6 +529,25 @@ auto parse_naked_function_expr(syntax::parser& parser)
     return function_expr::parse(parser, false, true);
 }
 
+// Optional `callconv(.ident)` between the parameter list and the return-type colon.
+[[nodiscard]] auto try_parse_callconv(syntax::parser& parser)
+    -> stdx::result<calling_convention, syntax::diagnostic> {
+    if (!parser.peek_token_is(syntax::token_type_t::CALLCONV)) { return calling_convention::C; }
+    parser.advance();
+    TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
+    TRY(parser.expect_peek(syntax::token_type_t::DOT));
+    TRY(parser.expect_peek(syntax::token_type_t::IDENT));
+    const auto name_token{parser.get_current_token()};
+    const auto conv{calling_convention_from_name(name_token.slice)};
+    if (!conv) {
+        return make_syntax_err(fmt::format("Unknown calling convention '.{}'", name_token.slice),
+                               syntax::error::ILLEGAL_DECL_MODIFIERS,
+                               name_token);
+    }
+    TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
+    return *conv;
+}
+
 auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
@@ -616,6 +636,7 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
         TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
     }
 
+    const auto conv{TRY(try_parse_callconv(parser))};
     TRY(parser.expect_peek(syntax::token_type_t::COLON));
     const auto return_type{TRY(explicit_type::parse(parser))};
 
@@ -628,8 +649,15 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
 
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
     const block_handle body{TRY(block_stmt::parse(parser))};
-    return parser.add_expr<function_expr>(
-        start_token, self, std::move(parameters), return_type, body, variadic, is_move, is_naked);
+    return parser.add_expr<function_expr>(start_token,
+                                          self,
+                                          std::move(parameters),
+                                          return_type,
+                                          body,
+                                          variadic,
+                                          is_move,
+                                          is_naked,
+                                          conv);
 }
 
 auto grouped_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {

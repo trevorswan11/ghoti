@@ -12,6 +12,7 @@
 #include <stdx/utility.hh>
 #include <stdx/variant.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
@@ -508,9 +509,7 @@ auto formatter::decl_prefix(const decl_stmt& node) -> syntax::doc_id {
             parts.emplace_back(doc_manager_.text("extern "));
         }
     }
-    if (node.has_modifier(decl_modifiers::WEAK)) {
-        parts.emplace_back(doc_manager_.text("weak "));
-    }
+    if (node.has_modifier(decl_modifiers::WEAK)) { parts.emplace_back(doc_manager_.text("weak ")); }
     if (node.has_modifier(decl_modifiers::THREADLOCAL)) {
         parts.emplace_back(doc_manager_.text("threadlocal "));
     }
@@ -695,11 +694,17 @@ auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
     }
     if (node.variadic) { params.emplace_back(doc_manager_.text("...")); }
 
+    const auto callconv_doc{node.conv == calling_convention::C
+                                ? doc_manager_.nil()
+                                : doc_manager_.owned(fmt::format(
+                                      " callconv(.{})", calling_convention_name(node.conv)))};
+
     return doc_manager_.concat({
         node.is_move ? doc_manager_.text("move ") : doc_manager_.nil(),
         node.is_naked ? doc_manager_.text("naked ") : doc_manager_.nil(),
         doc_manager_.text("fn"),
         doc_manager_.delimited("(", ")", std::move(params), false, true),
+        callconv_doc,
         doc_manager_.text(": "),
         format(node.explicit_return_type),
         doc_manager_.text(" "),

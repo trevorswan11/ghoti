@@ -61,6 +61,9 @@ constexpr builtin_t ALIGNAS{"@alignas", token_type_t::BUILTIN_ALIGNAS};
 constexpr builtin_t TARGET_OS{"@targetOs", token_type_t::BUILTIN_TARGET_OS};
 constexpr builtin_t TARGET_ARCH{"@targetArch", token_type_t::BUILTIN_TARGET_ARCH};
 constexpr builtin_t TARGET_TRIPLE{"@targetTriple", token_type_t::BUILTIN_TARGET_TRIPLE};
+constexpr builtin_t TARGET_ABI{"@targetAbi", token_type_t::BUILTIN_TARGET_ABI};
+constexpr builtin_t TARGET_PTR_BITS{"@targetPtrBits", token_type_t::BUILTIN_TARGET_PTR_BITS};
+constexpr builtin_t TARGET_ENDIAN{"@targetEndian", token_type_t::BUILTIN_TARGET_ENDIAN};
 
 constexpr builtin_t SET_EVAL_RECURSION_LIMIT{"@setEvalRecursionLimit",
                                              token_type_t::BUILTIN_SET_EVAL_RECURSION_LIMIT};

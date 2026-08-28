@@ -178,19 +178,36 @@ TEST_CASE("Target builtins constant eval") {
         const os_name := @targetOs();
         const arch_name := @targetArch();
         const triple_name := @targetTriple();
+        const abi_name := @targetAbi();
+        const endian_name := @targetEndian();
+        const ptr_bits := @targetPtrBits();
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
-    const auto check_str = [&](std::string_view name) {
+    const auto str_of = [&](std::string_view name) -> std::string {
         const auto [sym, _, decl, type]{
             ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>(name, idx)};
         const auto val{UNWRAP(evaluator.try_eval(*decl.value))};
-        CHECK_FALSE(UNWRAP(val.as_opt<std::string>()).empty());
+        return UNWRAP(val.as_opt<std::string>());
     };
 
-    check_str("os_name");
-    check_str("arch_name");
-    check_str("triple_name");
+    CHECK_FALSE(str_of("arch_name").empty());
+    CHECK_FALSE(str_of("triple_name").empty());
+    CHECK_FALSE(str_of("abi_name").empty());
+
+    const auto endian{str_of("endian_name")};
+    CHECK((endian == "little" || endian == "big"));
+
+    // The normalized OS token must be version-suffix-free.
+    const auto os{str_of("os_name")};
+    CHECK_FALSE(os.empty());
+    CHECK(os.find_first_of("0123456789") == std::string::npos);
+
+    const auto [sym, _, decl, type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("ptr_bits", idx)};
+    const auto bits_val{UNWRAP(evaluator.try_eval(*decl.value))};
+    const auto bits{UNWRAP(bits_val.as_opt<u64>())};
+    CHECK((bits == 64 || bits == 32 || bits == 16));
 }
 
 TEST_CASE("MulAdd and TagName constant eval") {

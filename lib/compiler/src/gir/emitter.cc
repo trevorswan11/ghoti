@@ -408,6 +408,7 @@ auto emitter::emit_function(ast::node_id              id,
     fn.set_link_name(get_link_name(active_ast(), decl));
     fn.set_weak(decl.has_modifier(ast::decl_modifiers::WEAK));
     fn.set_naked(fn_expr.is_naked);
+    fn.set_calling_conv(fn_expr.conv);
 
     auto& entry{fn.add_segment()};
     builder_.set_insert_point(fn, entry);
@@ -487,7 +488,8 @@ auto emitter::emit_anonymous_function(ast::node_id id, const ast::function_expr&
     auto&      fn_type{*sema_type};
     const auto anon_name{fmt::format("anonymous_fn{}", anon_fn_counter_++)};
 
-    auto&      fn{gir_module_.add_function(anon_name, fn_type, false, false, fn_expr.variadic)};
+    auto& fn{gir_module_.add_function(anon_name, fn_type, false, false, fn_expr.variadic)};
+    fn.set_calling_conv(fn_expr.conv);
     const auto prev_fn{builder_.get_function()};
     const auto prev_seg{builder_.get_segment()};
 
@@ -540,7 +542,8 @@ auto emitter::emit_named_local_function(std::string_view          name,
     auto&      fn_type{*sema_type};
     const auto anon_name{fmt::format("anonymous_fn{}", anon_fn_counter_++)};
 
-    auto&      fn{gir_module_.add_function(anon_name, fn_type, false, false, fn_expr.variadic)};
+    auto& fn{gir_module_.add_function(anon_name, fn_type, false, false, fn_expr.variadic)};
+    fn.set_calling_conv(fn_expr.conv);
     const auto prev_fn{builder_.get_function()};
     const auto prev_seg{builder_.get_segment()};
 

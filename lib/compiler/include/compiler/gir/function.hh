@@ -13,6 +13,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/segment.hh"
 #include "compiler/sema/type.hh"
@@ -51,6 +52,7 @@ class function {
     MAKE_GETTER(link_name, std::string_view);
     MAKE_GETTER(is_weak, bool);
     MAKE_GETTER(is_naked, bool);
+    MAKE_GETTER(calling_conv, ast::calling_convention);
     MAKE_GETTER(test_desc, std::string_view);
     MAKE_GETTER(test_file, std::string_view);
     MAKE_GETTER(test_line, u32);
@@ -61,6 +63,7 @@ class function {
     auto set_link_name(std::string name) -> void { link_name_ = std::move(name); }
     auto set_weak(bool weak) -> void { is_weak_ = weak; }
     auto set_naked(bool naked) -> void { is_naked_ = naked; }
+    auto set_calling_conv(ast::calling_convention conv) -> void { calling_conv_ = conv; }
     auto set_test_desc(std::string desc) -> void { test_desc_ = std::move(desc); }
     auto set_test_location(std::string file, u32 line, u32 col) -> void {
         test_file_   = std::move(file);
@@ -103,6 +106,7 @@ class function {
     bool                    is_variadic_{false};
     bool                    is_weak_{false};
     bool                    is_naked_{false};
+    ast::calling_convention calling_conv_{ast::calling_convention::C};
     gir::linkage            linkage_{linkage::INTERNAL};
     std::string             abi_name_{"c"};
     std::string             link_name_;

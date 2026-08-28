@@ -103,6 +103,7 @@ auto add_darwin_args(std::vector<std::string>&   args,
     args.emplace_back("-o");
     args.emplace_back(out_path_str);
 
+    args.emplace_back("-dead_strip");
     if (const auto sdkroot{resolve_darwin_sdkroot()}) {
         args.emplace_back("-syslibroot");
         args.emplace_back(*sdkroot);
@@ -145,6 +146,7 @@ auto add_mingw_args(std::vector<std::string>&   args,
         args.emplace_back("-lkernel32");
         args.emplace_back("-lshell32");
     }
+    args.emplace_back("--gc-sections");
     args.emplace_back("-o");
     args.emplace_back(out_path_str);
     if (!is_dylib) {
@@ -179,6 +181,8 @@ auto add_msvc_args(std::vector<std::string>&   args,
         args.emplace_back("kernel32.lib");
         args.emplace_back("shell32.lib");
     }
+    args.emplace_back("/opt:ref");
+    args.emplace_back("/opt:icf");
     args.emplace_back(fmt::format("/out:{}", out_path_str));
     if (!is_dylib) {
         args.emplace_back("/entry:main");
@@ -202,6 +206,7 @@ auto add_wasm_args(std::vector<std::string>&   args,
         args.emplace_back(fmt::format("-L{}", dir.string()));
     }
     for (const auto& lib : linker_opts.libraries) { args.emplace_back(fmt::format("-l{}", lib)); }
+    args.emplace_back("--gc-sections");
     args.emplace_back("-o");
     args.emplace_back(out_path_str);
     if (!is_dylib) {
@@ -224,6 +229,7 @@ auto add_elf_args(std::vector<std::string>&   args,
         args.emplace_back(fmt::format("-L{}", dir.string()));
     }
     for (const auto& lib : linker_opts.libraries) { args.emplace_back(fmt::format("-l{}", lib)); }
+    args.emplace_back("--gc-sections");
     args.emplace_back("-o");
     args.emplace_back(out_path_str);
     if (!is_dylib) {

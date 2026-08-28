@@ -132,7 +132,10 @@ auto create_target_machine(const target_options& options)
     }
 
     llvm::TargetOptions target_opts;
-    const auto          codegen_opt_level{to_llvm_codegen_opt_level(options.level)};
+    // One section per function/global so the linker's dead-strip can work its magic
+    target_opts.FunctionSections = true;
+    target_opts.DataSections     = true;
+    const auto codegen_opt_level{to_llvm_codegen_opt_level(options.level)};
 
     stdx::option<llvm::Reloc::Model> reloc;
     if (options.reloc) { reloc.emplace(to_llvm_reloc_model(*options.reloc)); }
