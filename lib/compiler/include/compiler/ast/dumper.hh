@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ostream>
+#include <string_view>
 
 #include <fmt/ostream.h>
 #include <stdx/assert.hh>
@@ -24,6 +25,8 @@ class dumper {
     auto dump() -> void {
         for (const auto& node : ast_) { dump(node); }
     }
+
+    [[nodiscard]] static auto compare_source_asts(std::string_view s1, std::string_view s2) -> bool;
 
   private:
     template <IndexableNodeID ID> auto dump(ID id) -> void {

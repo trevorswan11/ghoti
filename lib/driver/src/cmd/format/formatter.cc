@@ -78,28 +78,17 @@ auto formatter::process_target(std::string_view                           source
     ast_fmt.format();
     auto formatted_code{formatted_os.view()};
 
-    const bool is_different{source_code != formatted_code};
-    {
-        // Verify ASTs for each are valid before writing out the result
-        syntax::parser p1{source_code}, p2{formatted_code};
-        ast::AST       s1_ast, s2_ast;
-        const auto     diag1{p1.consume(s1_ast)}, diag2{p2.consume(s2_ast)};
-        VERIFY(diag1.empty() && diag2.empty(), "Syntax errors made it through formatting");
-
-        std::ostringstream s1_oss, s2_oss;
-        ast::dumper        dumper1{s1_ast, s1_oss}, dumper2{s2_ast, s2_oss};
-        dumper1.dump();
-        dumper2.dump();
-        if (s1_oss.view() != s2_oss.view()) {
-            clap::warn_error(
-                error_stream_,
-                display_name ? fmt::format("file '{}' was not formatted due to an unknown error",
-                                           *display_name)
-                             : "stdin was not formatted due to an unknown error");
-            return false;
-        }
+    // Verify ASTs for each are valid before writing out the result
+    if (!ast::dumper::compare_source_asts(source_code, formatted_code)) {
+        clap::warn_error(
+            error_stream_,
+            display_name
+                ? fmt::format("file '{}' was not formatted due to an unknown error", *display_name)
+                : "stdin was not formatted due to an unknown error");
+        return false;
     }
 
+    const bool is_different{source_code != formatted_code};
     if (opts_.check_only) {
         if (is_different) {
             clap::warn_error(error_stream_,

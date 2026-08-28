@@ -20,6 +20,7 @@
 #include "driver/cmd/lsp/diagnostics.hh"
 #include "driver/cmd/lsp/document_store.hh"
 #include "driver/cmd/lsp/document_symbols.hh"
+#include "driver/cmd/lsp/formatting.hh"
 #include "driver/cmd/lsp/position_index.hh"
 #include "driver/cmd/lsp/references.hh"
 #include "driver/cmd/lsp/rpc.hh"
@@ -128,6 +129,8 @@ auto lsp_server::handle_message(const nlohmann::json& message, lsp::document_sto
         handle_references(message, store);
     } else if (method == "textDocument/rename") {
         handle_rename(message, store);
+    } else if (method == "textDocument/formatting") {
+        handle_formatting(message, store);
     } else if (message.contains("id")) {
         lsp::write_message(
             std::cout, make_error_response(message["id"], METHOD_NOT_FOUND, "method not found"));
@@ -166,6 +169,7 @@ auto lsp_server::handle_initialize(const nlohmann::json& message) -> void {
         {"codeActionProvider", true},
         {"referencesProvider", true},
         {"renameProvider", true},
+        {"documentFormattingProvider", true},
     };
     const nlohmann::json server_info{{"name", "ghoti"}, {"version", GHOTI_VERSION_STR}};
     lsp::write_message(std::cout,
@@ -395,6 +399,28 @@ auto lsp_server::handle_rename(const nlohmann::json& message, lsp::document_stor
     workspace_edit["changes"] = std::move(changes);
 
     lsp::write_message(std::cout, make_response(message.at("id"), workspace_edit));
+}
+
+auto lsp_server::handle_formatting(const nlohmann::json& message, lsp::document_store& store)
+    -> void {
+    const auto& params{message.at("params")};
+    const auto  path{
+        path_utils::uri_to_path(params.at("textDocument").at("uri").get<std::string>())};
+    if (!path) { return write_null_id(message); }
+
+    const auto text{store.text_of(*path)};
+    if (!text) { return write_null_id(message); }
+
+    lsp::formatting_options opts{};
+    if (params.contains("options")) {
+        const auto& options{params.at("options")};
+        if (options.contains("tabSize") && options.at("tabSize").is_number_integer()) {
+            opts.indent_spaces = static_cast<u16>(options.at("tabSize").get<i64>());
+        }
+    }
+
+    const auto edits = lsp::format(*text, opts);
+    lsp::write_message(std::cout, make_response(message.at("id"), edits));
 }
 
 auto lsp_server::publish_diagnostics(const std::filesystem::path& path,

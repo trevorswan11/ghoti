@@ -9,7 +9,6 @@
 #include <ostream>
 #include <streambuf>
 #include <string>
-#include <thread>
 
 #include <fmt/base.h>
 #include <fmt/format.h>
@@ -49,6 +48,7 @@
 #    include <stdlib.h>
 #    include <sys/signal.h>
 #    include <sys/wait.h>
+#    include <thread>
 #    include <unistd.h>
 #endif
 
@@ -174,6 +174,13 @@ auto ghoti_binary_path() -> std::filesystem::path {
 #if GHOTI_WINDOWS
     path += ".exe";
 #endif
+    if (!std::filesystem::exists(path)) {
+        auto fallback{std::filesystem::current_path() / "zig-out" / "bin" / "ghoti"};
+#if GHOTI_WINDOWS
+        fallback += ".exe";
+#endif
+        if (std::filesystem::exists(fallback)) { return fallback; }
+    }
     return path;
 }
 

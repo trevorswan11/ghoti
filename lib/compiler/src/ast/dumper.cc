@@ -1,5 +1,8 @@
 #include "compiler/ast/dumper.hh"
 
+#include <sstream>
+#include <string_view>
+
 #include <fmt/format.h>
 #include <fmt/ostream.h>
 #include <magic_enum/magic_enum.hpp>
@@ -14,10 +17,25 @@
 #include "compiler/ast/statement.hh"
 #include "compiler/ast/type.hh"
 #include "compiler/syntax/builtins.hh"
+#include "compiler/syntax/parser.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/indent.hh"
 
 namespace ghoti::ast {
+
+auto dumper::compare_source_asts(std::string_view s1, std::string_view s2) -> bool {
+    syntax::parser p1{s1}, p2{s2};
+    ast::AST       s1_ast, s2_ast;
+    const auto     diag1{p1.consume(s1_ast)}, diag2{p2.consume(s2_ast)};
+    if (!diag1.empty() || !diag2.empty()) { return false; }
+
+    std::ostringstream s1_oss, s2_oss;
+    ast::dumper        dumper1{s1_ast, s1_oss}, dumper2{s2_ast, s2_oss};
+    dumper1.dump();
+    dumper2.dump();
+    if (s1_oss.view() != s2_oss.view()) { return false; }
+    return true;
+}
 
 auto dumper::visit(node_id, const array_expr& array) -> void {
     PROFILE_FUNCTION();
