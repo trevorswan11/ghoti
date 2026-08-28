@@ -29,6 +29,7 @@ struct module_binding {
 // Raw options populated directly by CLI parser
 struct raw_options {
     std::string              input;
+    std::string              test_runner;
     std::string              output;
     std::string              target;
     std::string              cpu{"generic"};
@@ -46,6 +47,7 @@ struct raw_options {
 
 struct options {
     std::filesystem::path              input_path{};
+    std::string                        test_runner{};
     std::filesystem::path              output_path{};
     codegen::target_options            target_opts{};
     codegen::optimizer_options         opt_opts{};
@@ -71,6 +73,7 @@ struct options {
 };
 
 // Helper to register standard build options into CLI subcommands
-auto setup_flags(CLI::App* subcmd, raw_options& opts, std::string_view output_desc) -> void;
+auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_view> output_desc)
+    -> void;
 
 } // namespace ghoti::cmd::build

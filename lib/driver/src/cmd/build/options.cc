@@ -96,6 +96,7 @@ auto options::process_raw(const raw_options&   raw,
 
     return options{
         .input_path    = std::move(input_path),
+        .test_runner   = raw.test_runner,
         .output_path   = std::move(output_path),
         .target_opts   = std::move(target_opts),
         .opt_opts      = std::move(opt_opts),
@@ -122,7 +123,6 @@ auto options::setup_module_manager(mod::module_manager& manager, std::ostream& e
                 clap::error::COMPILATION_FAILED);
         }
     } else {
-        // Otherwise this just defers to a confusing "Unknown module 'std'" on first import.
         return clap::fatal_error(
             error_stream,
             fmt::format("could not locate the ghoti standard library; set {} to its std.gh "
@@ -173,8 +173,9 @@ auto options::analyze(sema::analyzer&      analyzer,
     return module;
 }
 
-auto setup_flags(CLI::App* subcmd, raw_options& opts, std::string_view output_desc) -> void {
-    subcmd->add_option("-o,--output", opts.output, std::string{output_desc});
+auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_view> output_desc)
+    -> void {
+    if (output_desc) { subcmd->add_option("-o,--output", opts.output, std::string{*output_desc}); }
     subcmd->add_option(
         "-m,--module", opts.module_raw_args, "Register a library module (format: <name>,<path>)");
     subcmd->add_option("--object", opts.extra_objects, "Link precompiled object file or library");

@@ -229,4 +229,18 @@ TEST_CASE("build-lib subcommand parser") {
     }
 }
 
+TEST_CASE("test subcommand parser") {
+    SECTION("ghoti test input.gh parses into test command") {
+        mock_argv    args{"ghoti", "test", "my_test.gh"};
+        clap::parser p{args.argc(), args.argv(), std::cerr, false};
+        CHECK(p.parse());
+    }
+
+    SECTION("ghoti test input.gh with --test-runner flag parses correctly") {
+        mock_argv    args{"ghoti", "test", "my_test.gh", "--test-runner", "custom_runner"};
+        clap::parser p{args.argc(), args.argv(), std::cerr, false};
+        CHECK(p.parse());
+    }
+}
+
 } // namespace ghoti::tests

@@ -3,7 +3,6 @@
 #include <chrono>
 #include <iostream>
 #include <string>
-#include <string_view>
 #include <utility>
 
 #include <CLI/CLI.hpp>
@@ -26,6 +25,7 @@
 #include "driver/cmd/build/library.hh"
 #include "driver/cmd/build/object.hh"
 #include "driver/cmd/build/options.hh"
+#include "driver/cmd/build/test.hh"
 #include "driver/cmd/command.hh"
 #include "driver/cmd/format/formatter.hh"
 #include "driver/cmd/format/options.hh"
@@ -56,6 +56,7 @@ auto parser::parse() -> stdx::result<stdx::box<cmd::command>, error> {
     const auto build_exe_cmd{setup_build_exe_subcmd()};
     const auto build_lib_cmd{setup_build_lib_subcmd()};
     const auto fmt_cmd{setup_fmt_subcmd()};
+    const auto test_cmd{setup_test_subcmd()};
 
     // No arguments should be handled by printing help and exiting
     if (argc_ == 1) {
@@ -97,6 +98,12 @@ auto parser::parse() -> stdx::result<stdx::box<cmd::command>, error> {
     if (fmt_cmd->parsed()) {
         auto opts{TRY(cmd::format::options::process_raw(fmt_opts_, error_stream_))};
         return stdx::make_box<cmd::formatter>(std::move(opts), error_stream_);
+    }
+
+    if (test_cmd->parsed()) {
+        auto opts{TRY(cmd::build::options::process_raw(
+            test_opts_, codegen::output_type::EXECUTABLE, error_stream_))};
+        return stdx::make_box<cmd::test_cmd>(std::move(opts), error_stream_);
     }
 
     return fatal_error(error_stream_, "expected command argument", error::MISSING_SUBCOMMAND);
@@ -161,6 +168,15 @@ auto parser::setup_fmt_subcmd() -> gsl::not_null<CLI::App*> {
     sub->add_option(
            "-i,--indent-spaces", fmt_opts_.indent_spaces, "Number of spaces to use for indenting")
         ->default_val(fmt_opts_.indent_spaces);
+    return sub;
+}
+
+auto parser::setup_test_subcmd() -> gsl::not_null<CLI::App*> {
+    auto* sub{app_.add_subcommand("test", "Run tests in ghoti source file")};
+    sub->add_option("input_file", test_opts_.input, "Input source file (.gh)")->required();
+    sub->add_option(
+        "--test-runner", test_opts_.test_runner, "Custom test runner entrypoint or module path");
+    cmd::build::setup_flags(sub, test_opts_, stdx::none);
     return sub;
 }
 
