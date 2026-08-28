@@ -27,9 +27,9 @@ templ SyntaxStructsPage() {
 		<li>
 			Structs can be annotated with layout modifiers:
 			<ul>
-				<li><code>packed struct {"{ ... }"}</code>: Removes padding bytes between fields, creating a tightly packed byte layout.</li>
-				<li><code>extern struct {"{ ... }"}</code>: Enforces C ABI struct layout and alignment rules for C interop.</li>
-				<li><code>extern packed struct {"{ ... }"}</code>: Combines both C ABI compatibility and packed byte layout rules.</li>
+				<li><code>packed struct { "{ ... }" }</code>: Removes padding bytes between fields, creating a tightly packed byte layout.</li>
+				<li><code>extern struct { "{ ... }" }</code>: Enforces C ABI struct layout and alignment rules for C interop.</li>
+				<li><code>extern packed struct { "{ ... }" }</code>: Combines both C ABI compatibility and packed byte layout rules.</li>
 			</ul>
 		</li>
 		<li>
@@ -64,7 +64,9 @@ templ SyntaxStructsPage() {
 		<li>Struct 'declarations' can also be <code>using</code> or <code>import</code> statements</li>
 		<li>All internal accesses are resolved using the <code>.</code> operator</li>
 	</ul>
-	<pre><code class="language-ghoti">{ `const PackedHeader := packed struct {
+	<pre>
+		<code class="language-ghoti">
+			{ `const PackedHeader := packed struct {
     @alignas(1) pub magic: u32,
     pub payload_len: u16,
 };
@@ -96,7 +98,9 @@ Foo.worker_three();                                // The same goes for function
 
 var foo: Foo = .{ .bar = 42, };
 Foo.worker_two(&mut foo);   // Member functions may be called explicitly
-foo.worker_two();           // Or with this shorthand` }</code></pre>
+foo.worker_two();           // Or with this shorthand` }
+		</code>
+	</pre>
 	<ul>
 		<li>There is no inheritance</li>
 		<li>Interfaces are not natively supported</li>
@@ -107,15 +111,19 @@ foo.worker_two();           // Or with this shorthand` }</code></pre>
 			Structs can be initialized in two ways
 			<ul>
 				<li>You may use the structs name followed by a braced list of implicit access declarations assigned to values</li>
-				<li>You may use the <code>.{"{}"}</code> syntax followed by the same list as above</li>
+				<li>You may use the <code>.{ "{}" }</code> syntax followed by the same list as above</li>
 			</ul>
 		</li>
 		<li>The below example demonstrates both of these mechanisms</li>
 	</ul>
-	<pre><code class="language-ghoti">{ `const S = struct { var a: int; };
+	<pre>
+		<code class="language-ghoti">
+			{ `const S = struct { var a: int; };
 
 const s1 := S{ .a = 3 };
-const s2: S = .{ .a = 3 };` }</code></pre>
+const s2: S = .{ .a = 3 };` }
+		</code>
+	</pre>
 	<ul>
 		<li>All member variables that do not have default values associated with their declarations must be initialized in either case</li>
 	</ul>

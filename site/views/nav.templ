@@ -4,7 +4,16 @@ import "webserver/internal/render"
 
 templ Nav(active string) {
 	<nav class="sidebar">
-		<a class={ "nav-link", templ.KV("active", active == "") } href="/">Overview</a>
+		<div class="search-box">
+			<input
+				type="text"
+				id="doc-search"
+				class="search-input"
+				placeholder="Filter docs..."
+				oninput="filterNav()"
+			/>
+		</div>
+		<a class={ "nav-link", templ.KV("active", active == "") } href="/" data-title="Overview">Overview</a>
 		for _, section := range render.Nav {
 			<div class="nav-section">
 				<div class="nav-heading">{ section.Title }</div>
@@ -12,6 +21,7 @@ templ Nav(active string) {
 					<a
 						class={ "nav-link", templ.KV("active", active == item.Slug) }
 						href={ templ.URL(render.Href(item)) }
+						data-title={ item.Title }
 					>
 						{ item.Title }
 					</a>

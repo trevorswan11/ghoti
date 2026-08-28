@@ -6,15 +6,23 @@ templ Layout(title string, active string) {
 		<head>
 			<meta charset="UTF-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
-			<title>{ title } · ghoti</title>
+			<title>{ title } · ghoti docs</title>
 			<link rel="icon" href="data:,"/>
 			<link rel="stylesheet" href="/static/style.css"/>
 			<script src="/static/htmx.min.js"></script>
 		</head>
 		<body hx-boost="true">
 			<header class="topbar">
-				<a class="brand" href="/">ghoti<span class="brand-dot">docs</span></a>
-				<a class="topbar-link" href="https://github.com/trevorswan11/ghoti" target="_blank" rel="noreferrer">GitHub ↗</a>
+				<div class="brand-container">
+					<a class="brand" href="/">ghoti<span class="brand-dot">docs</span></a>
+					<span class="brand-badge">v0.1.0</span>
+				</div>
+				<div class="topbar-right">
+					<a class="topbar-link" href="https://github.com/trevorswan11/ghoti" target="_blank" rel="noreferrer">
+						<span>GitHub</span>
+						<span>↗</span>
+					</a>
+				</div>
 			</header>
 			<div class="shell">
 				@Nav(active)
@@ -22,6 +30,98 @@ templ Layout(title string, active string) {
 					{ children... }
 				</main>
 			</div>
+			<script>
+				function filterNav() {
+					const query = (document.getElementById('doc-search')?.value || '').toLowerCase();
+					const links = document.querySelectorAll('.sidebar .nav-link');
+					links.forEach(link => {
+						const title = (link.getAttribute('data-title') || link.textContent || '').toLowerCase();
+						if (title.includes(query)) {
+							link.style.display = 'flex';
+						} else {
+							link.style.display = 'none';
+						}
+					});
+				}
+
+				function enhanceCodeBlocks() {
+					document.querySelectorAll('.doc pre code').forEach(codeBlock => {
+						const pre = codeBlock.parentElement;
+						if (pre.parentElement.classList.contains('code-wrapper')) return;
+
+						const wrapper = document.createElement('div');
+						wrapper.className = 'code-wrapper';
+
+						const header = document.createElement('div');
+						header.className = 'code-header';
+						header.innerHTML = `<span>ghoti</span><button class="code-copy-btn" onclick="copyCode(this)">Copy</button>`;
+
+						pre.parentNode.insertBefore(wrapper, pre);
+						wrapper.appendChild(header);
+						wrapper.appendChild(pre);
+
+						highlightGhoti(codeBlock);
+					});
+				}
+
+				function copyCode(btn) {
+					const wrapper = btn.closest('.code-wrapper');
+					const code = wrapper ? wrapper.querySelector('code')?.textContent : '';
+					if (!code) return;
+					navigator.clipboard.writeText(code).then(() => {
+						btn.textContent = 'Copied!';
+						setTimeout(() => { btn.textContent = 'Copy'; }, 1800);
+					});
+				}
+
+				function highlightGhoti(codeEl) {
+					if (codeEl.dataset.highlighted) return;
+					codeEl.dataset.highlighted = "true";
+
+					const rawText = codeEl.textContent;
+					const tokenRegex = /(\/\/[^\n]*)|("[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*')|(@\w+)|(\b(?:const|var|constexpr|fn|struct|union|enum|if|else|do|match|return|defer|loop|for|while|continue|break|import|pub|extern|export|volatile|mut|move|packed|noreturn|using|test|as)\b)|(\b(?:i32|i64|isize|u32|u64|usize|f32|f64|u8|bool|void|type|auto|opaque|nullptr|undefined|unreachable)\b)|(\b(?:0[xXoObB][0-9a-fA-F_]+|\d[\d_]*(\.[\d_]+)?([eE][+-]?[\d_]+)?(uz|u|ul|z|l|f)?)\b)/g;
+
+					let result = '';
+					let lastIndex = 0;
+					let match;
+
+					function escapeHtml(str) {
+						return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+					}
+
+					while ((match = tokenRegex.exec(rawText)) !== null) {
+						if (match.index > lastIndex) {
+							result += escapeHtml(rawText.slice(lastIndex, match.index));
+						}
+						lastIndex = tokenRegex.lastIndex;
+
+						const [full, comment, stringLit, builtin, keyword, typeTok, numberLit] = match;
+
+						if (comment) {
+							result += `<span class="tok-comment">${escapeHtml(comment)}</span>`;
+						} else if (stringLit) {
+							result += `<span class="tok-string">${escapeHtml(stringLit)}</span>`;
+						} else if (builtin) {
+							result += `<span class="tok-builtin">${escapeHtml(builtin)}</span>`;
+						} else if (keyword) {
+							result += `<span class="tok-keyword">${escapeHtml(keyword)}</span>`;
+						} else if (typeTok) {
+							result += `<span class="tok-type">${escapeHtml(typeTok)}</span>`;
+						} else if (numberLit) {
+							result += `<span class="tok-number">${escapeHtml(numberLit)}</span>`;
+						}
+					}
+
+					if (lastIndex < rawText.length) {
+						result += escapeHtml(rawText.slice(lastIndex));
+					}
+
+					codeEl.innerHTML = result;
+				}
+
+				document.addEventListener('DOMContentLoaded', enhanceCodeBlocks);
+				document.body.addEventListener('htmx:afterSwap', enhanceCodeBlocks);
+			</script>
 		</body>
 	</html>
 }
