@@ -1,6 +1,7 @@
 #include "driver/cmd/build/test.hh"
 
 #include <filesystem>
+#include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -48,7 +49,9 @@ auto test_cmd::execute() -> stdx::result<void, clap::error> {
 
     // If a custom runner is specified, configure analyzer
     sema::analyzer analyzer{manager, error_stream_, true, opts_.target_opts};
-    if (!opts_.test_runner.empty()) { analyzer.get_ctx().user_main_name = opts_.test_runner; }
+    const auto     runner_opt{
+        opts_.test_runner.transform([](const auto& s) { return std::string_view{s}; })};
+    if (runner_opt) { analyzer.get_ctx().user_main_name = std::string{*runner_opt}; }
 
     auto module{TRY(opts_.analyze(analyzer, manager, error_stream_))};
     auto gir_mod{analyzer.emit_gir(*module)};
@@ -62,7 +65,8 @@ auto test_cmd::execute() -> stdx::result<void, clap::error> {
                                                     .objects       = opts_.extra_objects,
                                                     .library_paths = opts_.library_paths,
                                                     .libraries     = opts_.libraries,
-                                                })};
+                                                },
+                                                runner_opt)};
     if (!emit_res) {
         return clap::fatal_error(error_stream_,
                                  emit_res.error().get_message().value_or(GHOTI_UNKNOWN_ERROR),

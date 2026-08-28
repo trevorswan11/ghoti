@@ -36,7 +36,8 @@ class llvm_lowering {
 
     // Lowers every function/global as usual, but synthesizes an entry point that calls each
     // `test` block in declaration order
-    auto lower_test_executable(const gir::module& gir_mod, std::string_view user_runner_name = "")
+    auto lower_test_executable(const gir::module&             gir_mod,
+                               stdx::option<std::string_view> user_runner_name = stdx::none)
         -> stdx::box<llvm::Module>;
     auto emit_test_entry_wrapper(const gir::module& gir_mod) -> llvm::Function*;
 

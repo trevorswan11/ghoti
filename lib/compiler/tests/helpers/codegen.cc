@@ -21,6 +21,7 @@
 #include <llvm/Target/TargetMachine.h>
 #include <stdx/harness/hooks.hh>
 #include <stdx/memory.hh>
+#include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
@@ -103,7 +104,7 @@ auto emit_test_executable(helpers::sema_test_context&       test_ctx,
                           const std::filesystem::path&      output_path,
                           const codegen::target_options&    target_opts,
                           const codegen::optimizer_options& opt_options,
-                          std::string_view                  user_runner_name)
+                          stdx::option<std::string_view>    user_runner_name)
     -> stdx::result<void, codegen::diagnostic> {
     auto gir_mod{TRY(emit_preamble(test_ctx))};
     return test_ctx.analyzer.emit_test_executable(
@@ -138,9 +139,9 @@ auto compile_and_run(std::string_view source, const std::vector<mock_file>& impo
     return UNWRAP(spawn_child(args));
 }
 
-auto compile_and_run_tests(std::string_view              source,
-                           const std::vector<mock_file>& imports,
-                           std::string_view              runner_name) -> u32 {
+auto compile_and_run_tests(std::string_view               source,
+                           const std::vector<mock_file>&  imports,
+                           stdx::option<std::string_view> runner_name) -> u32 {
     auto  ctx_idx{type_check_and_verify(source, imports)};
     auto& test_ctx{*ctx_idx.first};
 

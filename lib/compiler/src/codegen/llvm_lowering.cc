@@ -358,11 +358,12 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
     return main_fn;
 }
 
-auto llvm_lowering::lower_test_executable(const gir::module& gir_mod,
-                                          std::string_view   user_runner_name)
+auto llvm_lowering::lower_test_executable(const gir::module&             gir_mod,
+                                          stdx::option<std::string_view> user_runner_name)
     -> stdx::box<llvm::Module> {
-    user_main_name_ = user_runner_name;
-    is_executable_  = true;
+    user_main_name_ =
+        user_runner_name.transform([](auto sv) { return std::string{sv}; }).value_or(std::string{});
+    is_executable_ = true;
     for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
     for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
     for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }

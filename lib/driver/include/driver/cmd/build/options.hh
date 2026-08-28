@@ -47,7 +47,7 @@ struct raw_options {
 
 struct options {
     std::filesystem::path              input_path{};
-    std::string                        test_runner{};
+    stdx::option<std::string>          test_runner{stdx::none};
     std::filesystem::path              output_path{};
     codegen::target_options            target_opts{};
     codegen::optimizer_options         opt_opts{};

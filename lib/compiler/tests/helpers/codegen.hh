@@ -5,6 +5,7 @@
 #include <vector>
 
 #include <stdx/memory.hh>
+#include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
@@ -47,7 +48,7 @@ auto emit_test_executable(helpers::sema_test_context&       test_ctx,
                           const std::filesystem::path&      output_path,
                           const codegen::target_options&    target_opts      = {},
                           const codegen::optimizer_options& opt_options      = {},
-                          std::string_view                  user_runner_name = "")
+                          stdx::option<std::string_view>    user_runner_name = stdx::none)
     -> stdx::result<void, codegen::diagnostic>;
 
 auto emit_static_lib(helpers::sema_test_context&       test_ctx,
@@ -60,8 +61,9 @@ auto emit_static_lib(helpers::sema_test_context&       test_ctx,
 [[nodiscard]] auto compile_and_run(std::string_view              source,
                                    const std::vector<mock_file>& imports = {}) -> u32;
 
-[[nodiscard]] auto compile_and_run_tests(std::string_view              source,
-                                         const std::vector<mock_file>& imports     = {},
-                                         std::string_view              runner_name = "") -> u32;
+[[nodiscard]] auto compile_and_run_tests(std::string_view               source,
+                                         const std::vector<mock_file>&  imports     = {},
+                                         stdx::option<std::string_view> runner_name = stdx::none)
+    -> u32;
 
 } // namespace ghoti::tests::helpers
