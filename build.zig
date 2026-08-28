@@ -259,6 +259,8 @@ fn addArtifacts(b: *std.Build, config: struct {
         .GHOTI_WINDOWS = target.result.os.tag == .windows,
         .GHOTI_LINUX = target.result.os.tag == .linux,
         .GHOTI_APPLE = target.result.os.tag == .macos,
+        .GHOTI_ASM_HOST_X86_64 = target.result.cpu.arch == .x86_64,
+        .GHOTI_ASM_HOST_AARCH64 = target.result.cpu.arch == .aarch64,
     });
     const libstdx = config.stdx_dep.artifact("stdx");
     const building_for_host = config.target == null;
