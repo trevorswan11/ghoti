@@ -96,8 +96,65 @@ TEST_CASE("formatter keeps small aggregates inline and breaks ones with bodies")
     CHECK(format_source("const S := struct { x: i32, const m := fn(): i32 { return x; }; };") ==
           R"(const S := struct {
     x: i32,
+
     const m := fn(): i32 {
         return x;
+    };
+};
+)");
+}
+
+TEST_CASE("formatter puts a hard line after top level functions and structs") {
+    CHECK(format_source("const f := fn(): void {};\nconst g := fn(): void {};") ==
+          R"(const f := fn(): void {};
+
+const g := fn(): void {};
+)");
+
+    CHECK(format_source(
+              "test \"yeah this is epic\"{ @expect(a == b); }\nconst g := fn(): void {};") ==
+          R"(test "yeah this is epic" {
+    @expect(a == b);
+}
+
+const g := fn(): void {};
+)");
+
+    CHECK(format_source("pub const main := fn(): i32 { return 0; };\nconst x := 42;") ==
+          R"(pub const main := fn(): i32 {
+    return 0;
+};
+
+const x := 42;
+)");
+
+    CHECK(format_source("const S := struct { x: i32, };\nconst f := fn(): void {};") ==
+          R"(const S := struct { x: i32 };
+
+const f := fn(): void {};
+)");
+
+    CHECK(format_source("const a := 1;\nconst b := 2;") == "const a := 1;\nconst b := 2;\n");
+}
+
+TEST_CASE("formatter puts a hard line between fields and members in aggregates") {
+    CHECK(format_source("const U := union { a: i32, const b := fn(&self, a: A): C { c; }; };") ==
+          R"(const U := union {
+    a: i32,
+
+    const b := fn(&self, a: A): C {
+        c;
+    };
+};
+)");
+
+    CHECK(
+        format_source("const E := enum : i64 { A = 2l, const b := fn(&self, a: A): C { c; }; };") ==
+        R"(const E := enum : i64 {
+    A = 2l,
+
+    const b := fn(&self, a: A): C {
+        c;
     };
 };
 )");

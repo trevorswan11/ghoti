@@ -30,7 +30,7 @@ pub const reset_test_state := fn(): void {
     current_test_failed = false;
 };
 
-pub const expect := fn(condition: bool, msg: []const u8 = ""): bool {
+pub const expect := fn(condition: bool, msg: []u8 = ""): bool {
     if (!condition) {
         current_test_failed = true;
         _ = msg;

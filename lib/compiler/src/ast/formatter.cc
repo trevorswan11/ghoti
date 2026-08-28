@@ -76,7 +76,34 @@ auto formatter::with_modifier(explicit_type_id id, syntax::doc_id base) -> synta
 }
 
 auto formatter::blank_line_between(node_id before, node_id after) const -> bool {
+    if (is_function_or_aggregate_node(before)) { return true; }
     return ast_.location_of(after).line > ast_.end_location_of(before).line + 1;
+}
+
+auto formatter::is_function_or_aggregate_node(node_id id) const -> bool {
+    const auto is_aggregate = [this](auto id) {
+        return ast_.get_as_opt<struct_expr>(id) || ast_.get_as_opt<union_expr>(id) ||
+               ast_.get_as_opt<struct_expr>(id);
+    };
+
+    if (ast_.get_as_opt<test_stmt>(id)) { return true; }
+    if (ast_.get_as_opt<function_expr>(id) || is_aggregate(id)) { return true; }
+    if (const auto decl{ast_.get_as_opt<decl_stmt>(id)}) {
+        if (decl->value &&
+            (ast_.get_as_opt<function_expr>(*decl->value) || is_aggregate(*decl->value))) {
+            return true;
+        }
+        if (decl->explicit_type && is_aggregate(*decl->explicit_type)) { return true; }
+    }
+    if (const auto expr{ast_.get_as_opt<expr_stmt>(id)}) {
+        if (ast_.get_as_opt<function_expr>(expr->expression) || is_aggregate(expr->expression)) {
+            return true;
+        }
+    }
+    if (const auto us{ast_.get_as_opt<using_stmt>(id)}) {
+        if (is_aggregate(us->explicit_type)) { return true; }
+    }
+    return false;
 }
 
 auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
@@ -165,7 +192,10 @@ auto formatter::aggregate_body(std::vector<syntax::doc_id> entries, usize comma_
 
     std::vector<syntax::doc_id> body;
     for (usize i{0}; i < entries.size(); ++i) {
-        if (i != 0) { body.emplace_back(doc_manager_.line()); }
+        if (i != 0) {
+            body.emplace_back(doc_manager_.line());
+            if (i == comma_count) { body.emplace_back(doc_manager_.hard_line()); }
+        }
         body.emplace_back(entries[i]);
         const auto is_field{i < comma_count};
         const auto more_follows{i + 1 < comma_count || comma_count < entries.size()};
