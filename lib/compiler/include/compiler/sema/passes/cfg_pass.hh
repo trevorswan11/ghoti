@@ -109,6 +109,7 @@ class cfg_pass {
     auto               rewrite_roots(std::vector<ast::node_id>& roots) -> void;
     auto               recurse_into_bodies(ast::stmt_handle stmt) -> void;
     auto               recurse_into_expr(ast::expr_handle expr) -> void;
+    auto               recurse_into_block(ast::block_handle block) -> void;
 
   private:
     mod::module&          module_;

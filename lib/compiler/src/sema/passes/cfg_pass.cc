@@ -617,11 +617,39 @@ auto cfg_pass::recurse_into_bodies(ast::stmt_handle stmt) -> void {
     }
 }
 
+auto cfg_pass::recurse_into_block(ast::block_handle block) -> void {
+    rewrite_items(module_.ast.get_as_mut<ast::block_stmt>(ast::node_id{block}).statements);
+}
+
 auto cfg_pass::recurse_into_expr(ast::expr_handle expr) -> void {
-    const ast::node_id id{expr};
-    if (const auto fn{module_.ast.get_as_opt<ast::function_expr>(id)}) {
-        rewrite_items(module_.ast.get_as_mut<ast::block_stmt>(ast::node_id{fn->body}).statements);
-    }
+    module_.ast[expr].visit(
+        [&](const ast::function_expr& fn) { recurse_into_block(fn.body); },
+        [&](const ast::if_expr& branch) {
+            recurse_into_bodies(branch.consequence);
+            if (branch.alternate) { recurse_into_bodies(*branch.alternate); }
+        },
+        [&](const ast::match_expr& match) {
+            for (const auto& arm : match.arms) { recurse_into_bodies(arm.dispatch); }
+        },
+        [&](const ast::while_loop_expr& loop) {
+            recurse_into_block(loop.block);
+            if (loop.non_break) { recurse_into_bodies(*loop.non_break); }
+        },
+        [&](const ast::do_while_loop_expr& loop) { recurse_into_block(loop.block); },
+        [&](const ast::for_loop_expr& loop) {
+            recurse_into_block(loop.block);
+            if (loop.non_break) { recurse_into_bodies(*loop.non_break); }
+        },
+        [&](const ast::infinite_loop_expr& loop) { recurse_into_block(loop.block); },
+        [&](const ast::label_expr& label) {
+            const ast::node_id body{label.body};
+            if (body.get_kind() == ast::node_kind::BLOCK_STATEMENT) {
+                recurse_into_block(ast::block_handle{body});
+            } else {
+                recurse_into_expr(ast::expr_handle{body});
+            }
+        },
+        [](const auto&) {});
 }
 
 } // namespace ghoti::sema
