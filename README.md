@@ -16,6 +16,15 @@ A hand-crafted systems programming language.
 
 Ghoti is a compiled systems language powered by LLVM, C++, and Zig. It attempts to combine select features from its more popular predecessors (i.e. Zig, Rust, C, C++) into a performant low-level language.
 
+### Why Ghoti?
+
+- Procedural & structural
+- Low-level with transparent memory layout
+- Manually manged memory
+- Immutability by default
+- Sophisticated `constexpr` evaluation with first-class types
+- WYSIWYG: No overloading, variable shadowing, or macros
+
 ### What's With the Name?
 
 The name 'ghoti' was largely inspired by VSauce's short about [forbidden spellings](https://youtube.com/shorts/3ipFdRfFvK4?si=0cdgxtmpbaFZtFHM). With the help of some abuse of the English language, **'ghoti'** is pronounced **'fish'**:
@@ -97,9 +106,9 @@ The language's website is written with [Go](https://go.dev/), [HTMX](https://htm
         - [x] Kaleidoscope examples
         - [ ] Test parity through the build system
     - [x] Compiler backend integration
-- [ ] Tooling (available through subcommands)
-    - [ ] LSP
-    - [ ] Formatter
+- [x] Tooling (available through subcommands)
+    - [x] LSP
+    - [x] Formatter
 
 See the [open issues](https://github.com/trevorswan11/ghoti/issues) for a full list of proposed features (and known issues).
 
