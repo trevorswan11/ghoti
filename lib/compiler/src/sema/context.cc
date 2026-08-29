@@ -247,8 +247,8 @@ auto context::get_builtin_resolved_type(type_kind kind) -> type& {
     return type;
 }
 
-auto context::get_target_enum_type(std::string_view name) -> type& {
-    VERIFY(prelude_index, "get_target_enum_type requires inject_prelude to have run");
+auto context::get_builtin_type(std::string_view name) -> type& {
+    VERIFY(prelude_index, "get_builtin_type requires inject_prelude to have run");
     auto& enum_mod{modules.builtin_module()};
     auto& enum_sym{registry.get(*enum_mod.root_table_idx).get(name)};
     return enum_mod.get_sema_type(enum_sym.get_data().as<symbols::node_t>());

@@ -408,15 +408,11 @@ template <ast::IndexableID ID>
         return_type = &builtin.return_type;
         break;
     }
-    case token_type_t::BUILTIN_TARGET_OS:   return_type = &ctx_.get_target_enum_type("Os"); break;
-    case token_type_t::BUILTIN_TARGET_ARCH: return_type = &ctx_.get_target_enum_type("Arch"); break;
-    case token_type_t::BUILTIN_TARGET_ABI:  return_type = &ctx_.get_target_enum_type("Abi"); break;
-    case token_type_t::BUILTIN_TARGET_FAMILY:
-        return_type = &ctx_.get_target_enum_type("Family");
-        break;
-    case token_type_t::BUILTIN_TARGET_ENDIAN:
-        return_type = &ctx_.get_target_enum_type("Endian");
-        break;
+    case token_type_t::BUILTIN_TARGET_OS:       return_type = &ctx_.get_builtin_type("Os"); break;
+    case token_type_t::BUILTIN_TARGET_ARCH:     return_type = &ctx_.get_builtin_type("Arch"); break;
+    case token_type_t::BUILTIN_TARGET_ABI:      return_type = &ctx_.get_builtin_type("Abi"); break;
+    case token_type_t::BUILTIN_TARGET_FAMILY:   return_type = &ctx_.get_builtin_type("Family"); break;
+    case token_type_t::BUILTIN_TARGET_ENDIAN:   return_type = &ctx_.get_builtin_type("Endian"); break;
     case token_type_t::BUILTIN_TARGET_PTR_BITS: {
         ASSERT(builtin.return_type.get_kind() == type_kind::USIZE);
         return_type = &builtin.return_type;
@@ -518,7 +514,10 @@ template <ast::IndexableID ID>
         return_type = &builtin.return_type;
         break;
     }
-    case token_type_t::BUILTIN_SRC:
+    case token_type_t::BUILTIN_SRC: {
+        return_type = &ctx_.get_builtin_type("SourceLocation");
+        break;
+    }
     case token_type_t::BUILTIN_EXPECT:
     case token_type_t::BUILTIN_REQUIRE: {
         return_type = &builtin.return_type;

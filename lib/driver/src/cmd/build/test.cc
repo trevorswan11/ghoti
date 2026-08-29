@@ -43,6 +43,13 @@ auto test_cmd::execute() -> stdx::result<void, clap::error> {
         opts_.output_path = temp_stem;
         if (!default_ext.empty()) { opts_.output_path.replace_extension(default_ext); }
     }
+
+    if (opts_.output_path.is_relative()) {
+        std::error_code abs_ec;
+        if (auto abs{std::filesystem::absolute(opts_.output_path, abs_ec)}; !abs_ec) {
+            opts_.output_path = std::move(abs);
+        }
+    }
     mod::file_loader    loader;
     mod::module_manager manager{loader};
     TRY(opts_.setup_module_manager(manager, error_stream_));

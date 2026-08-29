@@ -1442,37 +1442,39 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
             break;
         }
-        case syntax::token_type_t::BUILTIN_EXPECT: {
-            std::vector<value> args;
-            for (const auto& arg : call.arguments) {
-                if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
-                    args.emplace_back(emit_expression(*expr_h));
-                }
-            }
-            const auto loc{active_ast().location_of(id)};
-            auto&      u32_type{ctx_.get_builtin_resolved_type(sema::type_kind::U32)};
-            args.emplace_back(
-                const_value::make_string(ctx_, active_mod().path.string()).to_gir_value());
-            args.emplace_back(value{static_cast<u64>(loc.line), u32_type});
-            args.emplace_back(value{static_cast<u64>(loc.column), u32_type});
-            const auto local_res{builder_.emit_builtin_call("@expect", std::move(args), ret_type)};
-            if (local_res) { return value{*local_res, ret_type}; }
-            return value{void_val{}, ret_type};
-        }
+        case syntax::token_type_t::BUILTIN_EXPECT:
         case syntax::token_type_t::BUILTIN_REQUIRE: {
-            std::vector<value> args;
+            const auto is_expect{fn_token == syntax::token_type_t::BUILTIN_EXPECT};
+
+            value               cond_val{void_val{}, ret_type};
+            stdx::option<value> msg_val;
+            bool                first{true};
             for (const auto& arg : call.arguments) {
                 if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
-                    args.emplace_back(emit_expression(*expr_h));
+                    if (first) {
+                        cond_val = emit_expression(*expr_h);
+                        first    = false;
+                    } else {
+                        msg_val.emplace(emit_expression(*expr_h));
+                    }
                 }
             }
+
             const auto loc{active_ast().location_of(id)};
             auto&      u32_type{ctx_.get_builtin_resolved_type(sema::type_kind::U32)};
+
+            std::vector<value> args;
+            args.emplace_back(std::move(cond_val));
             args.emplace_back(
                 const_value::make_string(ctx_, active_mod().path.string()).to_gir_value());
             args.emplace_back(value{static_cast<u64>(loc.line), u32_type});
             args.emplace_back(value{static_cast<u64>(loc.column), u32_type});
-            builder_.emit_builtin_call("@require", std::move(args), ret_type);
+            args.emplace_back(msg_val ? std::move(*msg_val)
+                                      : const_value::make_string(ctx_, "").to_gir_value());
+
+            const auto* name{is_expect ? "@expect" : "@require"};
+            const auto  local_res{builder_.emit_builtin_call(name, std::move(args), ret_type)};
+            if (is_expect && local_res) { return value{*local_res, ret_type}; }
             return value{void_val{}, ret_type};
         }
         default: {
@@ -1552,6 +1554,10 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         callee_name.emplace(std::string{member_ident.name});
     } else if (const auto fn_expr{active_ast().get_as_opt<ast::function_expr>(call.function)}) {
         callee_name.emplace(emit_anonymous_function(*call.function, *fn_expr));
+    } else if (const auto mod_call{
+                   active_ast().get_as_opt<ast::module_access_expr>(call.function)}) {
+        const auto& inner_ident{active_ast().get_as<ast::identifier_expr>(mod_call->inner)};
+        callee_name.emplace(std::string{inner_ident.name});
     } else {
         const auto callee_val{emit_expression(call.function)};
         if (callee_val.type && (callee_val.type->get_kind() == sema::type_kind::FUNCTION ||

@@ -55,4 +55,18 @@ pub const Abi := enum {
 
 pub const Family := enum { unix, windows, wasm, other, _ };
 pub const Endian := enum { little, big };
+
+pub const SourceLocation := struct {
+    pub file: []u8,
+    pub line: u32,
+    pub column: u32,
+};
+
+pub const Test := struct {
+    pub name: []u8,
+    pub file: []u8,
+    pub line: u32,
+    pub column: u32,
+    pub func: fn(): bool,
+};
 )"

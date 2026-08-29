@@ -122,7 +122,7 @@ struct context {
     [[nodiscard]] auto get_builtin_resolved_type(type_kind kind) -> type&;
 
     // A compiler-known target-fact enum by name, from the prelude
-    [[nodiscard]] auto get_target_enum_type(std::string_view name) -> type&;
+    [[nodiscard]] auto get_builtin_type(std::string_view name) -> type&;
 };
 
 } // namespace ghoti::sema

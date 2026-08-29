@@ -713,7 +713,7 @@ auto const_eval::eval_dot(ast::node_id, const ast::dot_expr& dot) -> stdx::optio
 
 auto const_eval::target_enum_value(std::string_view enum_name, std::string_view member)
     -> const_value {
-    auto&      enum_type{ctx_.get_target_enum_type(enum_name)};
+    auto&      enum_type{ctx_.get_builtin_type(enum_name)};
     const auto en{enum_type.get_data().as_opt<sema::types::enum_t>()};
 
     // The discriminant must equal what `.<member>` produces against this enum type
@@ -1140,7 +1140,7 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
 auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
     -> stdx::option<const_value> {
     const auto fn_token{call.function->get_token_type()};
-    if (syntax::get_builtin_opt(fn_token)) { return eval_builtin(call, fn_token); }
+    if (syntax::get_builtin_opt(fn_token)) { return eval_builtin(id, call, fn_token); }
 
     if (const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(call.function)}) {
         if (!module_->root_table_idx) { return stdx::none; }
@@ -1173,8 +1173,9 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
     return stdx::none;
 }
 
-auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t builtin_type)
-    -> stdx::option<const_value> {
+auto const_eval::eval_builtin(ast::node_id          id,
+                              const ast::call_expr& call,
+                              syntax::token_type_t  builtin_type) -> stdx::option<const_value> {
     auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
 
     switch (builtin_type) {
@@ -1379,13 +1380,14 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
                            ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
     }
     case syntax::token_type_t::BUILTIN_SRC: {
-        const auto   loc{module_->ast.location_of(call.function)};
+        const auto   loc{id.is_valid() ? module_->ast.location_of(id)
+                                       : module_->ast.location_of(call.function)};
         const_struct src_struct;
         auto&        t_u32{ctx_.get_builtin_resolved_type(sema::type_kind::U32)};
         src_struct.fields["file"]   = const_value::make_string(ctx_, module_->path.string());
         src_struct.fields["line"]   = const_value{static_cast<u64>(loc.line), t_u32};
         src_struct.fields["column"] = const_value{static_cast<u64>(loc.column), t_u32};
-        return const_value{std::move(src_struct)};
+        return const_value{std::move(src_struct), ctx_.get_builtin_type("SourceLocation")};
     }
     case syntax::token_type_t::BUILTIN_SET_EVAL_RECURSION_LIMIT: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");

@@ -527,7 +527,7 @@ auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod) -> llvm:
 }
 
 auto llvm_lowering::get_or_create_test_failed_flag() -> llvm::GlobalVariable* {
-    if (auto* gvar{llvm_module_->getGlobalVariable("__ghoti_test_failed")}) { return gvar; }
+    if (auto* gvar{llvm_module_->getGlobalVariable("__ghoti_test_failed", true)}) { return gvar; }
     return new llvm::GlobalVariable(*llvm_module_,
                                     builder_.getInt1Ty(),
                                     false,

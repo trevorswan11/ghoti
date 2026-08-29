@@ -319,7 +319,7 @@ TEST_CASE("formatter round trip: control flow") {
     round_trips("loop { a; };");
     round_trips("match (a) { b => |c| d, e => |_| f, g => h, _ => d, };");
     round_trips("a: { continue :a; };");
-    round_trips(R"(test "dump" { import other; std::testing::expect(a == true); })");
+    round_trips(R"(test "dump" { import other; @expect(a == true); })");
 }
 
 TEST_CASE("formatter round trip: nested module") {
