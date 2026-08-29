@@ -41,6 +41,7 @@ constexpr auto NODE_NAMES{stdx::fixed::enum_map<node_kind, std::string_view>::fr
     name_mapping{node_kind::LABEL_EXPRESSION, "label"},
     name_mapping{node_kind::MATCH_EXPRESSION, "match"},
     name_mapping{node_kind::UNARY_EXPRESSION, "unary"},
+    name_mapping{node_kind::UNWRAP_EXPRESSION, "unwrap"},
     name_mapping{node_kind::REFERENCE_EXPRESSION, "reference-of"},
     name_mapping{node_kind::ADDRESS_OF_EXPRESSION, "address-of"},
     name_mapping{node_kind::DEREFERENCE_EXPRESSION, "dereference"},

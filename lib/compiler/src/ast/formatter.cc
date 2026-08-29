@@ -899,6 +899,11 @@ auto formatter::visit(node_id id, const unary_expr& node) -> syntax::doc_id {
         {doc_manager_.text(operator_spelling(id.get_token_type())), format(node.rhs)});
 }
 
+auto formatter::visit(node_id id, const unwrap_expr& node) -> syntax::doc_id {
+    return doc_manager_.concat(
+        {format(node.operand), doc_manager_.text(operator_spelling(id.get_token_type()))});
+}
+
 auto formatter::visit(node_id, const implicit_access_expr& node) -> syntax::doc_id {
     return doc_manager_.concat({doc_manager_.text("."), format(node.member)});
 }

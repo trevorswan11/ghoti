@@ -1207,6 +1207,7 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
         [&](const ast::label_expr& data) -> value { return emit_label(id, data); },
         [&](const ast::binary_expr& data) -> value { return emit_binary(id, data); },
         [&](const ast::unary_expr& data) -> value { return emit_unary(id, data); },
+        [&](const ast::unwrap_expr&) -> value { TODO(); },
         [&](const ast::assignment_expr& data) -> value { return emit_assignment(id, data); },
         [&](const ast::call_expr& data) -> value { return emit_call(id, data); },
         [&](const ast::asm_expr& data) -> value { return emit_asm(id, data); },

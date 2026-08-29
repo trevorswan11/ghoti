@@ -579,6 +579,14 @@ MAKE_PREFIX_DUMP(address_of_expr, AddressOfExpression)
 MAKE_PREFIX_DUMP(dereference_expr, DereferenceExpression)
 MAKE_PREFIX_DUMP(unary_expr, UnaryExpression)
 
+auto dumper::visit(node_id id, const unwrap_expr& node) -> void {
+    PROFILE_FUNCTION();
+    fmt::println(out_, "UnwrapExpression ({})", magic_enum::enum_name(id.get_token_type()));
+    const indent::guard g{indent_, true};
+    fmt::print(out_, "{}Operand: ", indent_.current_branch());
+    dump(node.operand);
+}
+
 auto dumper::visit(node_id, const implicit_access_expr& implicit_access) -> void {
     PROFILE_FUNCTION();
     fmt::println(out_, "ImplicitAccessExpression");

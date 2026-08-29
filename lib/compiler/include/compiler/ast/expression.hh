@@ -317,6 +317,14 @@ struct match_expr {
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
+// The operator token (`QUESTION` / `BANG`) is stored in the node's id.
+struct unwrap_expr {
+    expr_handle operand;
+
+    [[nodiscard]] static auto parse(syntax::parser& parser, expr_handle lhs)
+        -> stdx::result<expr_handle, syntax::diagnostic>;
+};
+
 #define DECLARE_PREFIX_EXPRESSION(Type)                         \
     struct Type {                                               \
         expr_handle               rhs;                          \

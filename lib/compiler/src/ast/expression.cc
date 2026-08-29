@@ -987,6 +987,14 @@ auto dot_expr::parse(syntax::parser& parser, expr_handle outer)
 
 MAKE_INFIX_PARSER(range_expr)
 
+auto unwrap_expr::parse(syntax::parser& parser, expr_handle lhs)
+    -> stdx::result<expr_handle, syntax::diagnostic> {
+    PROFILE_FUNCTION();
+    const auto op_token{parser.get_current_token()};
+    const auto lhs_start{parser.get_location_of(*lhs)};
+    return parser.add_expr<unwrap_expr>(lhs_start, op_token, lhs);
+}
+
 auto initializer_expr::parse(syntax::parser& parser, stdx::option<expr_handle> object)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();

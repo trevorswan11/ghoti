@@ -59,6 +59,7 @@ enum class token_type_t : u8 {
     SLASH,
     PERCENT,
     BANG,
+    QUESTION,
 
     BW_AND,
     BW_OR,

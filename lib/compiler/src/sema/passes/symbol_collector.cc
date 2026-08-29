@@ -325,6 +325,12 @@ MAKE_PREFIX_COLLECTOR(address_of_expr)
 MAKE_PREFIX_COLLECTOR(dereference_expr)
 MAKE_PREFIX_COLLECTOR(unary_expr)
 
+auto symbol_collector::visit(ast::node_id, const ast::unwrap_expr& node) -> void {
+    PROFILE_FUNCTION();
+    const default_counter::guard g{in_expr_scope_};
+    collect(node.operand);
+}
+
 template <ast::IndexableID ID>
 auto symbol_collector::visit(ID id, const ast::struct_expr& struct_expr) -> void {
     PROFILE_FUNCTION();

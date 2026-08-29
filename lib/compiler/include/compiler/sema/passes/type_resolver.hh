@@ -241,6 +241,7 @@ class type_resolver {
     auto visit(ast::node_id, const ast::address_of_expr&) -> void;
     auto visit(ast::node_id, const ast::dereference_expr&) -> void;
     auto visit(ast::node_id, const ast::unary_expr&) -> void;
+    auto visit(ast::node_id, const ast::unwrap_expr&) -> void;
     auto visit(ast::node_id, const ast::implicit_access_expr&) -> void;
     auto visit(ast::node_id, const ast::string_expr&) -> void;
     auto visit(ast::node_id, const ast::i32_expr&) -> void;

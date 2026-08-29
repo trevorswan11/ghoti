@@ -30,6 +30,7 @@ constexpr auto ALL_OPERATORS{
                                                    operators::PERCENT,
                                                    operators::PERCENT_ASSIGN,
                                                    operators::BANG,
+                                                   operators::QUESTION,
                                                    operators::AND_MUT,
                                                    operators::CARET_MUT,
                                                    operators::BW_AND,

@@ -28,6 +28,7 @@ enum class node_kind : u8 {
     LABEL_EXPRESSION,
     MATCH_EXPRESSION,
     UNARY_EXPRESSION,
+    UNWRAP_EXPRESSION,
     REFERENCE_EXPRESSION,
     ADDRESS_OF_EXPRESSION,
     DEREFERENCE_EXPRESSION,
@@ -89,6 +90,7 @@ enum class node_kind : u8 {
     X(label_expr)           \
     X(match_expr)           \
     X(unary_expr)           \
+    X(unwrap_expr)          \
     X(reference_expr)       \
     X(dereference_expr)     \
     X(address_of_expr)      \
@@ -201,6 +203,7 @@ NODE_KIND_OF_TRAIT(initializer_expr, INITIALIZER_EXPRESSION)
 NODE_KIND_OF_TRAIT(label_expr, LABEL_EXPRESSION)
 NODE_KIND_OF_TRAIT(match_expr, MATCH_EXPRESSION)
 NODE_KIND_OF_TRAIT(unary_expr, UNARY_EXPRESSION)
+NODE_KIND_OF_TRAIT(unwrap_expr, UNWRAP_EXPRESSION)
 NODE_KIND_OF_TRAIT(reference_expr, REFERENCE_EXPRESSION)
 NODE_KIND_OF_TRAIT(dereference_expr, DEREFERENCE_EXPRESSION)
 NODE_KIND_OF_TRAIT(address_of_expr, ADDRESS_OF_EXPRESSION)

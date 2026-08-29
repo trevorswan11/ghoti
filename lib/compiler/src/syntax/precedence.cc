@@ -37,6 +37,8 @@ constexpr auto ALL_BINDINGS{stdx::fixed::enum_map<token_type_t, stdx::option<bin
     map_pair{token_type_t::SHL, bind_precedence::MUL_DIV},
     map_pair{token_type_t::LPAREN, bind_precedence::GROUP_CALL_IDX},
     map_pair{token_type_t::LBRACKET, bind_precedence::GROUP_CALL_IDX},
+    map_pair{token_type_t::QUESTION, bind_precedence::GROUP_CALL_IDX},
+    map_pair{token_type_t::BANG, bind_precedence::GROUP_CALL_IDX},
     map_pair{token_type_t::DOT_DOT, bind_precedence::RANGE},
     map_pair{token_type_t::DOT_DOT_EQ, bind_precedence::RANGE},
     map_pair{token_type_t::ASSIGN, assignment_binding},

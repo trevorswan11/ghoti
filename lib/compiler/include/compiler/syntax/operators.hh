@@ -26,6 +26,7 @@ constexpr operator_t SLASH_ASSIGN{"/=", token_type_t::SLASH_ASSIGN};
 constexpr operator_t PERCENT{"%", token_type_t::PERCENT};
 constexpr operator_t PERCENT_ASSIGN{"%=", token_type_t::PERCENT_ASSIGN};
 constexpr operator_t BANG{"!", token_type_t::BANG};
+constexpr operator_t QUESTION{"?", token_type_t::QUESTION};
 constexpr operator_t AND_MUT{"&mut", token_type_t::AND_MUT};
 constexpr operator_t CARET_MUT{"^mut", token_type_t::CARET_MUT};
 

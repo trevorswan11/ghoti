@@ -109,6 +109,7 @@ class formatter {
     auto visit(node_id, const address_of_expr&) -> syntax::doc_id;
     auto visit(node_id, const dereference_expr&) -> syntax::doc_id;
     auto visit(node_id, const unary_expr&) -> syntax::doc_id;
+    auto visit(node_id, const unwrap_expr&) -> syntax::doc_id;
     auto visit(node_id, const implicit_access_expr&) -> syntax::doc_id;
     auto visit(node_id, const string_expr&) -> syntax::doc_id;
     auto visit(node_id, const i32_expr&) -> syntax::doc_id;

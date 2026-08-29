@@ -2646,6 +2646,19 @@ auto type_resolver::visit(ast::node_id id, const ast::unary_expr& node) -> void 
     resolving_.set_sema_type(id, *last_type_);
 }
 
+auto type_resolver::visit(ast::node_id id, const ast::unwrap_expr& unwrap) -> void {
+    PROFILE_FUNCTION();
+    TRY_RESOLVE(unwrap.operand);
+
+    const auto* op{id.get_token_type() == syntax::token_type_t::QUESTION ? "?" : "!"};
+    last_type_.emplace(
+        ctx_.poison_node(resolving_,
+                         id,
+                         fmt::format("the postfix '{}' operator is not yet implemented", op),
+                         error::UNWRAP_NOT_YET_LOWERED,
+                         resolving_.ast.location_of(id)));
+}
+
 auto type_resolver::visit(ast::node_id id, const ast::implicit_access_expr& implicit_access)
     -> void {
     PROFILE_FUNCTION();
