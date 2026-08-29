@@ -1650,6 +1650,47 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             if (is_expect && local_res) { return value{*local_res, ret_type}; }
             return value{void_val{}, ret_type};
         }
+        case syntax::token_type_t::BUILTIN_CLZ:
+        case syntax::token_type_t::BUILTIN_CTZ:
+        case syntax::token_type_t::BUILTIN_POP_COUNT:
+        case syntax::token_type_t::BUILTIN_ABS:
+        case syntax::token_type_t::BUILTIN_MIN:
+        case syntax::token_type_t::BUILTIN_MAX:
+        case syntax::token_type_t::BUILTIN_DIV_TRUNC:
+        case syntax::token_type_t::BUILTIN_DIV_FLOOR:
+        case syntax::token_type_t::BUILTIN_REM:
+        case syntax::token_type_t::BUILTIN_MOD:       {
+            if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+
+            std::vector<value> args;
+            args.reserve(call.arguments.size());
+            for (const auto& arg : call.arguments) {
+                if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
+                    args.emplace_back(emit_expression(*expr_h));
+                }
+            }
+            const auto name{*syntax::get_builtin_opt(fn_token)};
+            if (const auto res{builder_.emit_builtin_call(name, std::move(args), ret_type)}) {
+                return value{*res, ret_type};
+            }
+            return value{void_val{}, ret_type};
+        }
+        case syntax::token_type_t::BUILTIN_ADD_WITH_OVERFLOW:
+        case syntax::token_type_t::BUILTIN_SUB_WITH_OVERFLOW:
+        case syntax::token_type_t::BUILTIN_MUL_WITH_OVERFLOW:
+        case syntax::token_type_t::BUILTIN_SHL_WITH_OVERFLOW: {
+            // args: a, b, and a `&mut T` / `^mut T` result slot passed as its raw address.
+            std::vector<value> args;
+            args.emplace_back(emit_expression(*call.arguments[0].as_opt<ast::expr_handle>()));
+            args.emplace_back(emit_expression(*call.arguments[1].as_opt<ast::expr_handle>()));
+            args.emplace_back(
+                emit_expression_id_raw(*call.arguments[2].as_opt<ast::expr_handle>()));
+            const auto name{*syntax::get_builtin_opt(fn_token)};
+            if (const auto res{builder_.emit_builtin_call(name, std::move(args), ret_type)}) {
+                return value{*res, ret_type};
+            }
+            return value{void_val{}, ret_type};
+        }
         default: {
             if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
             break;

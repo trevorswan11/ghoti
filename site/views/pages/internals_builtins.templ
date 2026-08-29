@@ -97,42 +97,30 @@ templ InternalsBuiltinsPage() {
 	<h3>{ "@popCount" }</h3>
 	<pre><code class="language-ghoti">{ `@popCount(expression: auto): usize` }</code></pre>
 	<p>Computes the number of set bits in the expression's binary representation.</p>
-	<h3>{ "@sqrt" }</h3>
-	<pre><code class="language-ghoti">{ `@sqrt(expression: auto): @typeOf(expression)` }</code></pre>
-	<p>Computes the square root of the passed expression.</p>
-	<h3>{ "@sin" }</h3>
-	<pre><code class="language-ghoti">{ `@sin(expression: auto): @typeOf(expression)` }</code></pre>
-	<p>Computes the sine of the passed expression.</p>
-	<h3>{ "@cos" }</h3>
-	<pre><code class="language-ghoti">{ `@cos(expression: auto): @typeOf(expression)` }</code></pre>
-	<p>Computes the cosine of the passed expression.</p>
-	<h3>{ "@tan" }</h3>
-	<pre><code class="language-ghoti">{ `@tan(expression: auto): @typeOf(expression)` }</code></pre>
-	<p>Computes the tangent of the passed expression.</p>
-	<h3>{ "@exp" }</h3>
-	<pre><code class="language-ghoti">{ `@exp(expression: auto): @typeOf(expression)` }</code></pre>
-	<p>Computes the exponentiation <code>e^x</code> of the passed expression.</p>
-	<h3>{ "@exp2" }</h3>
-	<pre><code class="language-ghoti">{ `@exp2(expression: auto): @typeOf(expression)` }</code></pre>
-	<p>Computes the exponentiation <code>2^x</code> of the passed expression.</p>
-	<h3>{ "@log" }</h3>
-	<pre><code class="language-ghoti">{ `@log(expression: auto): @typeOf(expression)` }</code></pre>
-	<p>Computes the natural logarithm of the passed expression.</p>
-	<h3>{ "@log2" }</h3>
-	<pre><code class="language-ghoti">{ `@log2(expression: auto): @typeOf(expression)` }</code></pre>
-	<p>Computes the base-2 logarithm of the passed expression.</p>
-	<h3>{ "@log10" }</h3>
-	<pre><code class="language-ghoti">{ `@log10(expression: auto): @typeOf(expression)` }</code></pre>
-	<p>Computes the base-10 logarithm of the passed expression.</p>
 	<h3>{ "@abs" }</h3>
 	<pre><code class="language-ghoti">{ `@abs(expression: auto): @typeOf(expression)` }</code></pre>
 	<p>Computes the absolute value of the passed expression.</p>
-	<h3>{ "@floor" }</h3>
-	<pre><code class="language-ghoti">{ `@floor(expression: auto): @typeOf(expression)` }</code></pre>
-	<p>Computes the floor'ed value of the passed expression.</p>
-	<h3>{ "@ceil" }</h3>
-	<pre><code class="language-ghoti">{ `@ceil(expression: auto): @typeOf(expression)` }</code></pre>
-	<p>Computes the ceil'ed value of the passed expression.</p>
+	<h3>{ "@min / @max" }</h3>
+	<pre>
+		<code class="language-ghoti">
+			{ `@min(a: T, b: T): T
+@max(a: T, b: T): T` }
+		</code>
+	</pre>
+	<p>Smallest / largest of two operands of the same integer or floating-point type.</p>
+	<h3>{ "@divTrunc / @divFloor / @rem / @mod" }</h3>
+	<pre>
+		<code class="language-ghoti">
+			{ `@divTrunc(a: T, b: T): T  // integer division truncated toward zero
+@divFloor(a: T, b: T): T  // integer division rounded toward negative infinity
+@rem(a: T, b: T): T       // remainder; sign follows the dividend
+@mod(a: T, b: T): T       // modulo; sign follows the divisor` }
+		</code>
+	</pre>
+	<p>Integer-only. A zero divisor in a compile-time constant expression is an error.</p>
+	<h3>{ "@addWithOverflow / @subWithOverflow / @mulWithOverflow / @shlWithOverflow" }</h3>
+	<pre><code class="language-ghoti">{ `@addWithOverflow(a: T, b: T, result: &mut T): bool` }</code></pre>
+	<p>Integer-only. Writes the wrapped result through <code>result</code> and returns whether the operation overflowed.</p>
 	<h2>Self-Recursion</h2>
 	<h3>{ "@fnCtx" }</h3>
 	<pre><code class="language-ghoti">{ `@fnCtx(): auto` }</code></pre>

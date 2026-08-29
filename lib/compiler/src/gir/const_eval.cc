@@ -1321,30 +1321,6 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (arg->is<f64>()) { return const_value{std::abs(arg->as<f64>()), arg->get_type()}; }
         return arg;
     }
-    case syntax::token_type_t::BUILTIN_SQRT: {
-        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
-        const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
-        if (!expr_h) { return stdx::none; }
-        const auto arg{try_eval(*expr_h)};
-        if (!arg || !arg->is<f64>()) { return stdx::none; }
-        return const_value{std::sqrt(arg->as<f64>()), arg->get_type()};
-    }
-    case syntax::token_type_t::BUILTIN_FLOOR: {
-        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
-        const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
-        if (!expr_h) { return stdx::none; }
-        const auto arg{try_eval(*expr_h)};
-        if (!arg || !arg->is<f64>()) { return stdx::none; }
-        return const_value{std::floor(arg->as<f64>()), arg->get_type()};
-    }
-    case syntax::token_type_t::BUILTIN_CEIL: {
-        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
-        const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
-        if (!expr_h) { return stdx::none; }
-        const auto arg{try_eval(*expr_h)};
-        if (!arg || !arg->is<f64>()) { return stdx::none; }
-        return const_value{std::ceil(arg->as<f64>()), arg->get_type()};
-    }
     case syntax::token_type_t::BUILTIN_CLZ: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
@@ -1374,6 +1350,74 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!arg->is<u64>() && !arg->is<i64>()) { return stdx::none; }
         const auto v{arg->is<u64>() ? arg->as<u64>() : static_cast<u64>(arg->as<i64>())};
         return const_value{static_cast<u64>(std::popcount(v)), usize_type};
+    }
+    case syntax::token_type_t::BUILTIN_MIN:
+    case syntax::token_type_t::BUILTIN_MAX:
+    case syntax::token_type_t::BUILTIN_DIV_TRUNC:
+    case syntax::token_type_t::BUILTIN_DIV_FLOOR:
+    case syntax::token_type_t::BUILTIN_REM:
+    case syntax::token_type_t::BUILTIN_MOD:       {
+        VERIFY(call.arguments.size() >= 2, "Arity mismatch not verified during resolution");
+        const auto a_h{call.arguments[0].as_opt<ast::expr_handle>()};
+        const auto b_h{call.arguments[1].as_opt<ast::expr_handle>()};
+        if (!a_h || !b_h) { return stdx::none; }
+        const auto a{try_eval(*a_h)};
+        const auto b{try_eval(*b_h)};
+        if (!a || !b) { return stdx::none; }
+
+        const auto tok{builtin_type};
+        const auto fold_int = [&](auto av, auto bv) -> stdx::option<const_value> {
+            using T = decltype(av);
+            switch (tok) {
+            case syntax::token_type_t::BUILTIN_MIN:
+                return const_value{av < bv ? av : bv, a->get_type()};
+            case syntax::token_type_t::BUILTIN_MAX:
+                return const_value{av > bv ? av : bv, a->get_type()};
+            default: break;
+            }
+            if (bv == T{0}) {
+                const bool is_rem{tok == syntax::token_type_t::BUILTIN_REM ||
+                                  tok == syntax::token_type_t::BUILTIN_MOD};
+                ctx_.diags.emplace_back(
+                    fmt::format("{} by zero in compile-time constant expression",
+                                is_rem ? "Modulo" : "Division"),
+                    sema::error::CONSTEXPR_EVALUATION_FAILED,
+                    module_->ast.location_of(id));
+                return const_value::make_poison();
+            }
+            switch (tok) {
+            case syntax::token_type_t::BUILTIN_DIV_TRUNC:
+                return const_value{av / bv, a->get_type()};
+            case syntax::token_type_t::BUILTIN_REM:       return const_value{av % bv, a->get_type()};
+            case syntax::token_type_t::BUILTIN_DIV_FLOOR: {
+                auto q{av / bv};
+                if constexpr (std::is_signed_v<T>) {
+                    if ((av % bv != 0) && ((av < 0) != (bv < 0))) { --q; }
+                }
+                return const_value{q, a->get_type()};
+            }
+            case syntax::token_type_t::BUILTIN_MOD: {
+                auto r{av % bv};
+                if constexpr (std::is_signed_v<T>) {
+                    if ((r != 0) && ((r < 0) != (bv < 0))) { r += bv; }
+                }
+                return const_value{r, a->get_type()};
+            }
+            default: return stdx::none;
+            }
+        };
+
+        if (a->is<i64>() && b->is<i64>()) { return fold_int(a->as<i64>(), b->as<i64>()); }
+        if (a->is<u64>() && b->is<u64>()) { return fold_int(a->as<u64>(), b->as<u64>()); }
+        if ((tok == syntax::token_type_t::BUILTIN_MIN ||
+             tok == syntax::token_type_t::BUILTIN_MAX) &&
+            a->is<f64>() && b->is<f64>()) {
+            const auto av{a->as<f64>()};
+            const auto bv{b->as<f64>()};
+            const bool want_max{tok == syntax::token_type_t::BUILTIN_MAX};
+            return const_value{want_max ? (av > bv ? av : bv) : (av < bv ? av : bv), a->get_type()};
+        }
+        return stdx::none;
     }
     case syntax::token_type_t::BUILTIN_MUL_ADD: {
         VERIFY(call.arguments.size() >= 4, "Arity mismatch not verified during resolution");

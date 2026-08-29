@@ -463,21 +463,72 @@ template <ast::IndexableID ID>
         return_type = &ctx_.get_builtin_resolved_type(type_kind::VOID_);
         break;
     }
-    // Many of these return @typeOf(expression) which is trivial
+    // These return @typeOf(expression) which is trivial
     case token_type_t::BUILTIN_MUL_ADD:
-    case token_type_t::BUILTIN_SQRT:
-    case token_type_t::BUILTIN_SIN:
-    case token_type_t::BUILTIN_COS:
-    case token_type_t::BUILTIN_TAN:
-    case token_type_t::BUILTIN_EXP:
-    case token_type_t::BUILTIN_EXP2:
-    case token_type_t::BUILTIN_LOG:
-    case token_type_t::BUILTIN_LOG2:
-    case token_type_t::BUILTIN_LOG10:
-    case token_type_t::BUILTIN_ABS:
-    case token_type_t::BUILTIN_FLOOR:
-    case token_type_t::BUILTIN_CEIL:    {
+    case token_type_t::BUILTIN_ABS:     {
         return_type = get_resolved_call_arg_type(call.arguments[0]);
+        break;
+    }
+    case token_type_t::BUILTIN_MIN:
+    case token_type_t::BUILTIN_MAX:
+    case token_type_t::BUILTIN_DIV_TRUNC:
+    case token_type_t::BUILTIN_DIV_FLOOR:
+    case token_type_t::BUILTIN_REM:
+    case token_type_t::BUILTIN_MOD:       {
+        auto&      lhs_type{*get_resolved_call_arg_type(call.arguments[0])};
+        auto&      rhs_type{*get_resolved_call_arg_type(call.arguments[1])};
+        const bool floats_ok{builtin_id == token_type_t::BUILTIN_MIN ||
+                             builtin_id == token_type_t::BUILTIN_MAX};
+        const auto accepts{
+            [&](type_kind k) -> bool { return floats_ok ? is_numeric(k) : is_integer(k); }};
+        if (!accepts(lhs_type.get_kind()) || lhs_type.get_kind() != rhs_type.get_kind()) {
+            return make_sema_err(
+                fmt::format("'{}' expects two operands of the same {} type; found '{}' and '{}'",
+                            *syntax::get_builtin_opt(builtin_id),
+                            floats_ok ? "numeric" : "integer",
+                            type_kind_display_name(lhs_type.get_kind()),
+                            type_kind_display_name(rhs_type.get_kind())),
+                error::OPERATOR_TYPE_MISMATCH,
+                get_call_arg_location(call.arguments[0]));
+        }
+        return_type = ctx_.pool.with_const(lhs_type, false);
+        break;
+    }
+    case token_type_t::BUILTIN_ADD_WITH_OVERFLOW:
+    case token_type_t::BUILTIN_SUB_WITH_OVERFLOW:
+    case token_type_t::BUILTIN_MUL_WITH_OVERFLOW:
+    case token_type_t::BUILTIN_SHL_WITH_OVERFLOW: {
+        auto& lhs_type{*get_resolved_call_arg_type(call.arguments[0])};
+        auto& rhs_type{*get_resolved_call_arg_type(call.arguments[1])};
+        auto& out_type{*get_resolved_call_arg_type(call.arguments[2])};
+        if (!is_integer(lhs_type.get_kind()) || lhs_type.get_kind() != rhs_type.get_kind()) {
+            return make_sema_err(
+                fmt::format("'{}' expects two integer operands of the same type; found '{}' and "
+                            "'{}'",
+                            *syntax::get_builtin_opt(builtin_id),
+                            type_kind_display_name(lhs_type.get_kind()),
+                            type_kind_display_name(rhs_type.get_kind())),
+                error::OPERATOR_TYPE_MISMATCH,
+                get_call_arg_location(call.arguments[0]));
+        }
+        // The result slot is a mutable reference (`&mut T`); a `^mut T` pointer is also accepted.
+        const auto  out_ref{out_type.get_data().as_opt<types::reference>()};
+        const auto  out_ptr{out_type.get_data().as_opt<types::pointer>()};
+        const type* out_underlying{out_ref   ? &out_ref->underlying
+                                   : out_ptr ? &out_ptr->underlying
+                                             : nullptr};
+        if (!out_underlying || out_type.is_constant() ||
+            out_underlying->get_kind() != lhs_type.get_kind()) {
+            return make_sema_err(
+                fmt::format("'{}' expects its third argument to be a '&mut {}' result reference; "
+                            "found '{}'",
+                            *syntax::get_builtin_opt(builtin_id),
+                            type_kind_display_name(lhs_type.get_kind()),
+                            out_type.to_string()),
+                error::TYPE_MISMATCH,
+                get_call_arg_location(call.arguments[2]));
+        }
+        return_type = &ctx_.get_builtin_resolved_type(type_kind::BOOL);
         break;
     }
     case token_type_t::BUILTIN_C_VA_START:

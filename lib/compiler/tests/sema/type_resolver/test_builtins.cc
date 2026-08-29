@@ -166,19 +166,7 @@ TEST_CASE("Builtins memory operation") {
 }
 
 TEST_CASE("Builtin arithmetic") {
-    const auto bi{GENERATE(bis::SQRT,
-                           bis::SIN,
-                           bis::COS,
-                           bis::TAN,
-                           bis::EXP,
-                           bis::EXP2,
-                           bis::LOG,
-                           bis::LOG2,
-                           bis::LOG10,
-                           bis::ABS,
-                           bis::FLOOR,
-                           bis::CEIL)};
-    test_builtin_resolve(bi, "2.34f", [](helpers::sema_test_context& ctx) -> sema::type& {
+    test_builtin_resolve(bis::ABS, "2.34f", [](helpers::sema_test_context& ctx) -> sema::type& {
         return ctx.get_type(sema::type_kind::F32);
     });
 }
