@@ -222,7 +222,7 @@ TEST_CASE("Target enum comparison folds against a bare member") {
         const here  := @targetOs();
         const eq    := @targetOs() == here;
         const ne    := @targetArch() != @targetArch();
-        const probe := fn(o: Os): void {};
+        const probe := fn(o: builtin::Os): void {};
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 

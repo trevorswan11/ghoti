@@ -138,20 +138,20 @@ auto module_manager::try_get(const std::filesystem::path& path)
     return ptr;
 }
 
-auto module_manager::get_or_create_target_enum_module(std::string_view source) -> module& {
+auto module_manager::get_or_create_builtin_module(std::string_view source) -> module& {
     PROFILE_FUNCTION();
-    if (target_enum_module_) { return *target_enum_module_; }
+    if (builtin_module_) { return *builtin_module_; }
 
-    target_enum_module_ = stdx::make_box<module>(std::filesystem::path{"<target-enums>"},
-                                                 std::filesystem::path{},
-                                                 source_file{std::string{source}});
-    syntax::parser p{target_enum_module_->source};
-    const auto     diagnostics{p.consume(target_enum_module_->ast)};
+    builtin_module_ = stdx::make_box<module>(std::filesystem::path{"<builtin>"},
+                                             std::filesystem::path{},
+                                             source_file{std::string{source}});
+    syntax::parser p{builtin_module_->source};
+    const auto     diagnostics{p.consume(builtin_module_->ast)};
     VERIFY(diagnostics.empty(), "the compiler-provided target-fact enum source must parse cleanly");
 
-    target_enum_module_->sema_side_tables.resize(target_enum_module_->ast.get_pool_sizes());
-    target_enum_module_->state = module_state::PARSED;
-    return *target_enum_module_;
+    builtin_module_->sema_side_tables.resize(builtin_module_->ast.get_pool_sizes());
+    builtin_module_->state = module_state::PARSED;
+    return *builtin_module_;
 }
 
 } // namespace ghoti::mod

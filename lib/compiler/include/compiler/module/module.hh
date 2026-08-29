@@ -12,6 +12,7 @@
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
 #include <gsl/span>
+#include <stdx/assert.hh>
 #include <stdx/hash.hh>
 #include <stdx/iterator.hh>
 #include <stdx/memory.hh>
@@ -274,7 +275,12 @@ class module_manager {
 
     // Prints every poisoned/errored module's diagnostics
     auto               print_all_diagnostics(std::ostream& os) const -> void;
-    [[nodiscard]] auto get_or_create_target_enum_module(std::string_view source) -> module&;
+    [[nodiscard]] auto get_or_create_builtin_module(std::string_view source) -> module&;
+
+    [[nodiscard]] auto builtin_module() -> module& {
+        ASSERT(builtin_module_, "the `builtin` module has not been created yet");
+        return *builtin_module_;
+    }
 
   private:
     [[nodiscard]] auto try_get(const std::filesystem::path& path)
@@ -283,7 +289,7 @@ class module_manager {
   private:
     source_loader&    loader_;
     module_table      modules_;
-    stdx::box<module> target_enum_module_;
+    stdx::box<module> builtin_module_;
 
     // Maps physical ghoti modules to their path on disk
     module_name_map module_lut_;

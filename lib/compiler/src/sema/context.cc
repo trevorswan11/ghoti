@@ -200,35 +200,33 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::REQUIRE, params(t_bool), t_void);
 }
 
-constexpr std::string_view TARGET_ENUM_SOURCE{
-#include "intrinsic_types.gh.inc"
+constexpr std::string_view BUILTIN_MODULE_SOURCE{
+#include "builtin.gh.inc"
 };
 
-auto inject_target_enums(context& ctx, usize prelude_idx) -> void {
+constexpr std::string_view BUILTIN_NAMESPACE{"builtin"};
+
+auto inject_builtin_module(context& ctx, usize prelude_idx) -> void {
     PROFILE_FUNCTION();
 
-    auto& enum_mod{ctx.modules.get_or_create_target_enum_module(TARGET_ENUM_SOURCE)};
+    auto& enum_mod{ctx.modules.get_or_create_builtin_module(BUILTIN_MODULE_SOURCE)};
     symbol_collector::collect_symbols(enum_mod, ctx);
     type_resolver::resolve_types(enum_mod, ctx);
     VERIFY(!enum_mod.is_poisoned() && ctx.diags.empty(),
-           "the compiler-provided target-fact enum module must resolve cleanly");
+           "the compiler-provided `builtin` module must resolve cleanly");
 
-    auto&       prelude{ctx.registry.get(prelude_idx)};
-    const auto& mod_table{ctx.registry.get(*enum_mod.root_table_idx)};
-    for (const std::string_view name : {"Os", "Arch", "Abi", "Family", "Endian"}) {
-        auto&      sym{mod_table.get(name)};
-        const auto node{sym.get_data().as_opt<symbols::node_t>()};
-        VERIFY(node, "target-fact enum symbol is not a declaration");
-        auto& enum_type{enum_mod.get_sema_type(*node)};
+    // Expose the module under one prelude name, reusing the ordinary module-access machinery
+    auto& mod_type{*ctx.pool[{type_kind::MODULE, types::mut::CONSTANT, *enum_mod.root_table_idx}]};
+    mod_type.resolve_if<types::module>(enum_mod);
 
-        prelude.insert_unchecked(
-            name,
-            symbols::builtin{syntax::typed_identifier{name, syntax::token_type_t::IDENT},
-                             enum_type});
-        auto& injected{prelude.get(name)};
-        injected.set_kind(symbol_kind::TYPE);
-        injected.set_status(symbol_status::RESOLVED);
-    }
+    auto& prelude{ctx.registry.get(prelude_idx)};
+    prelude.insert_unchecked(
+        BUILTIN_NAMESPACE,
+        symbols::builtin{syntax::typed_identifier{BUILTIN_NAMESPACE, syntax::token_type_t::IDENT},
+                         mod_type});
+    auto& injected{prelude.get(BUILTIN_NAMESPACE)};
+    injected.set_kind(symbol_kind::MODULE);
+    injected.set_status(symbol_status::RESOLVED);
 }
 
 } // namespace
@@ -240,7 +238,7 @@ auto context::inject_prelude() -> void {
 
     inject_types(registry.get(*prelude_index), pool);
     inject_functions(registry.get(*prelude_index), pool);
-    inject_target_enums(*this, *prelude_index);
+    inject_builtin_module(*this, *prelude_index);
 }
 
 auto context::get_builtin_resolved_type(type_kind kind) -> type& {
@@ -251,8 +249,9 @@ auto context::get_builtin_resolved_type(type_kind kind) -> type& {
 
 auto context::get_target_enum_type(std::string_view name) -> type& {
     VERIFY(prelude_index, "get_target_enum_type requires inject_prelude to have run");
-    auto& symbol{registry.get(*prelude_index).get(name)};
-    return symbol.get_data().as<symbols::builtin>().get_type();
+    auto& enum_mod{modules.builtin_module()};
+    auto& enum_sym{registry.get(*enum_mod.root_table_idx).get(name)};
+    return enum_mod.get_sema_type(enum_sym.get_data().as<symbols::node_t>());
 }
 
 } // namespace ghoti::sema
