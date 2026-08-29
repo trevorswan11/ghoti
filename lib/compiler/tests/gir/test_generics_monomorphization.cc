@@ -64,7 +64,12 @@ TEST_CASE("GIR constexpr parameter monomorphizes per value") {
 
     std::set<std::string_view> shifted_variants;
     for (const auto& fn : gir_mod.get_functions()) {
-        if (fn->get_name().starts_with("shifted__")) { shifted_variants.insert(fn->get_name()); }
+        if (fn->get_name().starts_with("shifted__")) {
+            shifted_variants.insert(fn->get_name());
+            // `constexpr by` is erased from the signature; only the runtime `x` remains.
+            REQUIRE(fn->get_params().size() == 1);
+            CHECK(fn->get_params()[0]->name == "x");
+        }
     }
     CHECK(shifted_variants.size() == 2);
 }

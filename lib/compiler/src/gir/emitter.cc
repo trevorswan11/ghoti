@@ -201,32 +201,35 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
     }
     {
         const scope_guard g{scopes_};
-        for (const auto& [param, arg_type] : std::views::zip(fn_expr.parameters, req.arg_types)) {
-            const auto& p_ident{fn_mod.ast.get_as<ast::identifier_expr>(param.name)};
-            const auto  p_name{p_ident.name};
+        usize             rt_i{0};
+        for (const auto& param : fn_expr.parameters) {
+            const auto& p_name{fn_mod.ast.get_as<ast::identifier_expr>(param.name).name};
 
-            // A `constexpr` function-reference / closure argument binds by name so calls through
-            // the parameter lower to a direct call to a (materialized) plain function.
-            const auto cxit{cx_by_name.find(p_name)};
-            const bool is_cx_callable{
-                cxit != cx_by_name.end() &&
-                (cxit->second->is<std::string>() || cxit->second->is<const_closure>())};
-            if (is_cx_callable) {
-                std::string callee{cxit->second->is<std::string>()
-                                       ? cxit->second->as<std::string>()
-                                       : emit_constexpr_closure(cxit->second->as<const_closure>())};
-                fn.add_param(std::string{p_name}, *arg_type);
-                scopes_.back().bindings.emplace(
-                    p_name,
-                    local_binding{
-                        .id        = {0, local_kind::TEMPORARY},
-                        .type      = *arg_type,
-                        .is_alloca = false,
-                        .const_val = value{std::move(callee), *arg_type},
-                    });
+            // `constexpr` parameters are erased from the signature
+            if (param.is_constexpr) {
+                const auto cxit{cx_by_name.find(p_name)};
+                if (cxit == cx_by_name.end()) { continue; }
+                const auto& val{*cxit->second};
+                auto&       btype{val.get_type() ? val.get_type().value() : fn_type};
+                value       bound{value{void_val{}, btype}};
+                if (val.is<const_closure>()) {
+                    bound = value{emit_constexpr_closure(val.as<const_closure>()), btype};
+                } else if (val.is<std::string>()) {
+                    bound = value{val.as<std::string>(), btype};
+                } else {
+                    bound = materialize_const(val);
+                }
+                scopes_.back().bindings.emplace(p_name,
+                                                local_binding{
+                                                    .id        = {0, local_kind::TEMPORARY},
+                                                    .type      = btype,
+                                                    .is_alloca = false,
+                                                    .const_val = std::move(bound),
+                                                });
                 continue;
             }
 
+            auto& arg_type{req.arg_types[rt_i++]};
             auto& p_slot{fn.add_param(std::string{p_name}, *arg_type)};
             if (arg_type->get_kind() == sema::type_kind::CLOSURE) {
                 // A closure argument arrives by value
@@ -1831,9 +1834,22 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         }
     }
 
+    // `constexpr` parameters are erased from a monomorph's signature, so skip their arguments.
+    stdx::option<const ast::function_expr&> generic_target_fn;
+    if (resolved_generic_target && fn_type_opt) {
+        if (const auto gi{ctx_.generic_functions.get_opt(*fn_type_opt)}) {
+            generic_target_fn.emplace(*gi->fn_expr);
+        }
+    }
+
     const usize param_offset{has_implicit_self ? 1UZ : 0UZ};
     for (usize i{0}; const auto& arg : call.arguments) {
         const usize param_idx{i + param_offset};
+        if (generic_target_fn && i < generic_target_fn->parameters.size() &&
+            generic_target_fn->parameters[i].is_constexpr) {
+            ++i;
+            continue;
+        }
         if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
             bool is_type_arg{false};
             if (const auto t_opt{active_mod().get_sema_type_opt(*expr_h)}) {

@@ -216,4 +216,14 @@ TEST_CASE("constexpr parameter: `constexpr` on a `type` parameter is a no-op") {
     )") == 42);
 }
 
+TEST_CASE("constexpr parameter: an all-constexpr signature still works") {
+    CHECK(helpers::compile_and_run(R"(
+        const combine := fn(constexpr a: i32, constexpr b: i32): i32 { return a * b; };
+
+        pub const main := fn(): i32 {
+            return combine(6, 7);
+        };
+    )") == 42);
+}
+
 } // namespace ghoti::tests

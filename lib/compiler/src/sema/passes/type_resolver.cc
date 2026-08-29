@@ -3560,7 +3560,10 @@ auto type_resolver::instantiate_generic(type&                             callee
     if (fn_info.enclosing_type) {
         this_type_guard.emplace(inst_resolver.user_type_stack_, *fn_info.enclosing_type);
     }
-    auto inst_param_types{ctx_.pool.get_many_unsafe(fn_expr.parameters.size())};
+    // `constexpr` parameters are erased from the monomorph's signature.
+    const auto rt_param_count{static_cast<usize>(
+        std::ranges::count_if(fn_expr.parameters, [](const auto& p) { return !p.is_constexpr; }))};
+    auto       inst_param_types{ctx_.pool.get_many_unsafe(rt_param_count)};
     for (usize i{0};
          const auto& [arg_type, param] : std::views::zip(concrete_args, fn_expr.parameters)) {
         inst_resolver.resolve(param.explicit_type);
@@ -3599,7 +3602,7 @@ auto type_resolver::instantiate_generic(type&                             callee
             fn_mod.set_sema_type(param.explicit_type, *decl_p_type);
         }
         fn_mod.set_sema_type(param.name, *body_p_type);
-        inst_param_types[i++] = decl_p_type;
+        if (!param.is_constexpr) { inst_param_types[i++] = decl_p_type; }
     }
     inst_resolver.resolve(fn_expr.explicit_return_type);
     if (inst_resolver.last_type_->is_poison()) { return stdx::none; }
