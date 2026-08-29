@@ -35,6 +35,10 @@ const zlib = parent_build.zlib;
 
 pub const default_optimize: std.builtin.OptimizeMode = .ReleaseSafe;
 
+// Prioritize speed for modules compiled for the host to avoid slowing a debug build.
+// For example, a LLVMTableGen executable (compiled with Debug) increases the build time because the generation of .inc files is slower.
+const default_host_optimize = std.builtin.OptimizeMode.ReleaseFast;
+
 pub const Options = struct {
     optimize: ?std.builtin.OptimizeMode = null,
 };
@@ -567,7 +571,7 @@ fn buildTargetLLVM(self: *Self) void {
 fn createHostModule(self: *const Self) *std.Build.Module {
     return self.b.createModule(.{
         .target = self.b.graph.host,
-        .optimize = self.metadata.optimize,
+        .optimize = default_host_optimize,
         .link_libc = true,
         .link_libcpp = true,
     });
@@ -598,6 +602,7 @@ pub const ArtifactCreateConfig = struct {
     config_headers: ?[]const *std.Build.Step.ConfigHeader = null,
     link_libraries: ?[]const Artifact = null,
     target_override: ?std.Build.ResolvedTarget = null,
+    optimize_override: ?std.builtin.OptimizeMode = null,
     bundle_compiler_rt: ?bool = null,
 };
 
@@ -606,6 +611,9 @@ fn createLLVMModule(self: *const Self, config: ArtifactCreateConfig) *std.Build.
     const mod = self.createTargetModule();
     if (config.target_override) |target| {
         mod.resolved_target = target;
+    }
+    if (config.optimize_override) |optimize| {
+        mod.optimize = optimize;
     }
 
     if (config.cxx_source_files) |cxx_source_files| mod.addCSourceFiles(.{
@@ -1092,6 +1100,10 @@ fn buildDemangle(self: *const Self, platform: Platform) Artifact {
         },
         .target_override = switch (platform) {
             .host => self.b.graph.host,
+            .target => null,
+        },
+        .optimize_override = switch (platform) {
+            .host => default_host_optimize,
             .target => null,
         },
     });
