@@ -123,6 +123,7 @@ class const_eval {
     auto eval_module_access(ast::node_id id, const ast::module_access_expr& mod_access)
         -> stdx::option<const_value>;
     auto eval_match(ast::node_id id, const ast::match_expr& match) -> stdx::option<const_value>;
+    auto eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> stdx::option<const_value>;
     auto match_pattern(const ast::match_pattern_handle& pattern_h, const const_value& target)
         -> bool;
 

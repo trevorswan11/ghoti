@@ -37,10 +37,6 @@ fn compute_point(p: struct) -> i32
     %19 = add i32 %18, 1
     store %19, %0
     ret i32 %17
-    %20 = load %0
-    %21 = add i32 %20, 1
-    store %21, %0
-    ret i32 undefined
 
 fn match_color(c: enum) -> i32
   seg 0:

@@ -978,7 +978,9 @@ auto emitter::emit_block(const ast::block_stmt& block) -> void {
         if (const auto seg{builder_.get_segment()}; seg && seg->has_terminator()) { break; }
         emit_stmt(stmt);
     }
-    emit_defers_for_scope(scopes_.size() - 1);
+    if (const auto seg{builder_.get_segment()}; !seg || !seg->has_terminator()) {
+        emit_defers_for_scope(scopes_.size() - 1);
+    }
 }
 
 auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> void {
@@ -1207,7 +1209,7 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
         [&](const ast::label_expr& data) -> value { return emit_label(id, data); },
         [&](const ast::binary_expr& data) -> value { return emit_binary(id, data); },
         [&](const ast::unary_expr& data) -> value { return emit_unary(id, data); },
-        [&](const ast::unwrap_expr&) -> value { TODO(); },
+        [&](const ast::unwrap_expr& data) -> value { return emit_unwrap(id, data); },
         [&](const ast::assignment_expr& data) -> value { return emit_assignment(id, data); },
         [&](const ast::call_expr& data) -> value { return emit_call(id, data); },
         [&](const ast::asm_expr& data) -> value { return emit_asm(id, data); },
@@ -3183,6 +3185,174 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
     return value{void_val{}, sema_type};
 }
 
+namespace {
+
+// A tagged union recognized as `union { ok/some: T, err/none: E }`, resolved to field ordinals.
+struct unwrap_field_layout {
+    u64  payload_idx;
+    u64  diverge_idx;
+    bool diverge_is_void;
+};
+
+[[nodiscard]] auto unwrap_layout_of(sema::context& ctx, const sema::type& union_type)
+    -> unwrap_field_layout {
+    const auto& table{ctx.registry.get(union_type.get_symbol_table_idx())};
+    const bool  is_optional{table.get_proxy_opt("some").has_value()};
+    return {
+        .payload_idx     = table.get_proxy(is_optional ? "some" : "ok").index,
+        .diverge_idx     = table.get_proxy(is_optional ? "none" : "err").index,
+        .diverge_is_void = is_optional,
+    };
+}
+
+} // namespace
+
+auto emitter::emit_union_active_field_guard(value            union_addr,
+                                            u64              field_idx,
+                                            std::string_view field_name,
+                                            ast::node_id     site) -> void {
+    PROFILE_FUNCTION();
+    auto fn_opt{builder_.get_function()};
+    if (!fn_opt) { return; }
+    auto& fn{*fn_opt};
+
+    auto& i32_type{ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
+    auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+
+    const auto tag_ptr{builder_.emit_get_element_ptr(
+        union_addr, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
+    const auto tag_val{builder_.emit_load(value{tag_ptr, i32_type}, i32_type)};
+    const auto is_active{builder_.emit_binary(instruction_kind::EQ,
+                                              value{tag_val, i32_type},
+                                              value{static_cast<i64>(field_idx), i32_type},
+                                              bool_type)};
+
+    auto& active_seg{fn.add_segment()};
+    auto& inactive_seg{fn.add_segment()};
+    builder_.emit_cond_goto(
+        value{is_active, bool_type}, active_seg.get_id(), inactive_seg.get_id());
+
+    builder_.set_segment(inactive_seg);
+    emit_panic_call(fmt::format("accessed inactive union field '{}'", field_name), site);
+
+    builder_.set_segment(active_seg);
+}
+
+auto emitter::emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> value {
+    PROFILE_FUNCTION();
+    const auto payload_type_opt{active_mod().get_sema_type_opt(id)};
+    ASSERT(payload_type_opt, "unwrap expression must have a resolved payload type");
+    auto& payload_type{*payload_type_opt};
+
+    const auto operand_type_opt{active_mod().get_sema_type_opt(unwrap.operand)};
+    ASSERT(operand_type_opt, "unwrap operand must have a resolved type");
+    auto& operand_type{*operand_type_opt};
+    ASSERT(operand_type.get_data().as_opt<sema::types::union_t>(),
+           "unwrap operand must be a tagged union");
+
+    const auto layout{unwrap_layout_of(ctx_, operand_type)};
+
+    auto fn_opt{builder_.get_function()};
+    ASSERT(fn_opt, "unwrap must be within an active function");
+    auto& fn{*fn_opt};
+
+    auto& i32_type{ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
+    auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+
+    // Address of the scrutinee: reuse its storage when it is an lvalue, else spill the rvalue.
+    const bool is_lvalue_shape{active_ast().get_as_opt<ast::identifier_expr>(unwrap.operand) ||
+                               active_ast().get_as_opt<ast::dot_expr>(unwrap.operand) ||
+                               active_ast().get_as_opt<ast::index_expr>(unwrap.operand) ||
+                               active_ast().get_as_opt<ast::dereference_expr>(unwrap.operand)};
+    const auto operand_addr{is_lvalue_shape ? emit_lvalue(unwrap.operand)
+                                            : spill_to_temporary(emit_expression(unwrap.operand),
+                                                                 operand_type,
+                                                                 operand_type.is_constant())};
+
+    const auto tag_ptr{builder_.emit_get_element_ptr(
+        operand_addr, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
+    const auto tag_val{builder_.emit_load(value{tag_ptr, i32_type}, i32_type)};
+    const auto is_payload{
+        builder_.emit_binary(instruction_kind::EQ,
+                             value{tag_val, i32_type},
+                             value{static_cast<i64>(layout.payload_idx), i32_type},
+                             bool_type)};
+
+    auto& payload_seg{fn.add_segment()};
+    auto& diverge_seg{fn.add_segment()};
+    builder_.emit_cond_goto(
+        value{is_payload, bool_type}, payload_seg.get_id(), diverge_seg.get_id());
+
+    builder_.set_segment(diverge_seg);
+    if (id.get_token_type() == syntax::token_type_t::QUESTION) {
+        emit_unwrap_propagation(
+            operand_addr, operand_type, layout.diverge_idx, layout.diverge_is_void, id);
+    } else {
+        emit_panic_call(layout.diverge_is_void ? "'!' unwrapped an empty optional"
+                                               : "'!' unwrapped an errored result",
+                        id);
+    }
+
+    // `diverge_seg` always terminates (return / unreachable); execution continues in `payload_seg`.
+    builder_.set_segment(payload_seg);
+    const auto payload_ptr{builder_.emit_get_element_ptr(
+        operand_addr, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, payload_type)};
+    const auto loaded{builder_.emit_load(value{payload_ptr, payload_type}, payload_type)};
+    return value{loaded, payload_type};
+}
+
+auto emitter::emit_unwrap_propagation(value             operand_addr,
+                                      const sema::type& operand_union,
+                                      u64               operand_diverge_idx,
+                                      bool              diverge_is_void,
+                                      ast::node_id      site) -> void {
+    PROFILE_FUNCTION();
+    auto fn_opt{builder_.get_function()};
+    ASSERT(fn_opt, "`?` propagation must be within an active function");
+    const auto fn_data{fn_opt->get_type().get_data().as_opt<sema::types::function>()};
+    ASSERT(fn_data, "`?` propagation requires the enclosing function signature");
+    auto& ret_type{fn_data->return_type};
+
+    const auto ret_layout{unwrap_layout_of(ctx_, ret_type)};
+
+    auto& i32_type{ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
+    auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+
+    builder_.set_location(active_ast().location_of(site));
+    const auto ret_slot{builder_.emit_alloca(ret_type)};
+
+    const auto tag_ptr{builder_.emit_get_element_ptr(
+        value{ret_slot, ret_type}, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
+    builder_
+        .emit_store(value{tag_ptr, i32_type},
+                    value{static_cast<i64>(ret_layout.diverge_idx), i32_type})
+        .is_initializer = true;
+
+    // A non-void divergent payload is copied across
+    if (!diverge_is_void) {
+        auto& src_type{
+            operand_union.get_data().as<sema::types::union_t>().type_at(operand_diverge_idx)};
+        auto& dst_type{
+            ret_type.get_data().as<sema::types::union_t>().type_at(ret_layout.diverge_idx)};
+
+        const auto src_ptr{builder_.emit_get_element_ptr(
+            operand_addr, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, src_type)};
+        const auto err_val{builder_.emit_load(value{src_ptr, src_type}, src_type)};
+
+        const auto dst_ptr{builder_.emit_get_element_ptr(
+            value{ret_slot, ret_type}, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, dst_type)};
+        builder_.emit_store(value{dst_ptr, dst_type}, value{err_val, src_type}).is_initializer =
+            true;
+    }
+
+    const auto ret_val{builder_.emit_load(value{ret_slot, ret_type}, ret_type)};
+    emit_defers_up_to(0);
+    builder_.set_location(active_ast().location_of(site));
+    builder_.emit_return(value{ret_val, ret_type});
+}
+
 auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& init) -> value {
     PROFILE_FUNCTION();
     const auto sema_type{active_mod().get_sema_type_opt(id)};
@@ -3332,6 +3502,9 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
                     builder_.emit_load(value{base_lval.data, field_type}, field_type)};
                 return value{loaded, field_type};
             }
+
+            emit_union_active_field_guard(
+                base_lval, static_cast<u64>(member_idx), member_ident.name, id);
 
             const auto payload_ptr{builder_.emit_get_element_ptr(
                 base_lval, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, field_type)};

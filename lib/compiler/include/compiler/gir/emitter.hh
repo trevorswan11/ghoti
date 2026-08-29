@@ -145,6 +145,17 @@ class emitter {
     auto emit_expression_id_raw(ast::node_id id) -> value;
     auto emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value;
     auto emit_match(ast::node_id id, const ast::match_expr& match) -> value;
+
+    auto emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> value;
+    auto emit_unwrap_propagation(value             operand_addr,
+                                 const sema::type& operand_union,
+                                 u64               operand_diverge_idx,
+                                 bool              diverge_is_void,
+                                 ast::node_id      site) -> void;
+    auto emit_union_active_field_guard(value            union_addr,
+                                       u64              field_idx,
+                                       std::string_view field_name,
+                                       ast::node_id     site) -> void;
     auto emit_initializer(ast::node_id id, const ast::initializer_expr& init) -> value;
     auto emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value;
     auto emit_index(ast::node_id id, const ast::index_expr& index) -> value;

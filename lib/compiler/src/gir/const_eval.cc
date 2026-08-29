@@ -517,6 +517,7 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
         [&](const ast::implicit_access_expr& data) { return eval_implicit_access(id, data); },
         [&](const ast::module_access_expr& data) { return eval_module_access(id, data); },
         [&](const ast::match_expr& data) { return eval_match(id, data); },
+        [&](const ast::unwrap_expr& data) { return eval_unwrap(id, data); },
         [&](const ast::assignment_expr& data) {
             return eval_assignment(id, data, id.get_token_type());
         },
@@ -877,6 +878,29 @@ auto const_eval::eval_match(ast::node_id id, const ast::match_expr& match)
                             sema::error::CONSTEXPR_EVALUATION_FAILED,
                             module_->ast.location_of(id));
     return const_value::make_poison();
+}
+
+auto const_eval::eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap)
+    -> stdx::option<const_value> {
+    const auto operand{try_eval(unwrap.operand)};
+    if (!operand) { return stdx::none; }
+
+    const auto un{operand->as_opt<const_union>()};
+    if (!un) { return stdx::none; }
+
+    const auto payload{
+        [&] -> const_value { return un->payload.empty() ? *operand : un->payload.front(); }};
+    if (un->active_field == "ok" || un->active_field == "some") { return payload(); }
+
+    if (id.get_token_type() == syntax::token_type_t::BANG) {
+        ctx_.diags.emplace_back(
+            fmt::format("compile-time '!' on a union whose active field is '{}'", un->active_field),
+            sema::error::CONSTEXPR_EVALUATION_FAILED,
+            module_->ast.location_of(id));
+        return const_value::make_poison();
+    }
+
+    return payload();
 }
 
 auto const_eval::match_pattern(const ast::match_pattern_handle& pattern_h,
