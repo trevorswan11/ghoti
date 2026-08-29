@@ -755,4 +755,10 @@ ExpressionStatement
     │       └─ Value: IdentifierExpression: src
     ├─ Clobbers: <empty>
     └─ Options: <none>
+ExpressionStatement
+└─ Expr: UnwrapExpression (QUESTION)
+    └─ Operand: IdentifierExpression: a
+ExpressionStatement
+└─ Expr: UnwrapExpression (BANG)
+    └─ Operand: IdentifierExpression: b
 )"

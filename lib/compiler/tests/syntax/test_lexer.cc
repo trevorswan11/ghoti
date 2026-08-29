@@ -43,26 +43,38 @@ TEST_CASE("Lexing illegal characters") {
 }
 
 TEST_CASE("Lexing symbols") {
-    test_lexer("=+(){}[],;: !-/*<>_",
+    test_lexer("=+(){}[],;: !?-/*<>_",
                {
-                   {token_type_t::ASSIGN, "="},
-                   {token_type_t::PLUS, "+"},
-                   {token_type_t::LPAREN, "("},
-                   {token_type_t::RPAREN, ")"},
-                   {token_type_t::LBRACE, "{"},
-                   {token_type_t::RBRACE, "}"},
-                   {token_type_t::LBRACKET, "["},
-                   {token_type_t::RBRACKET, "]"},
-                   {token_type_t::COMMA, ","},
-                   {token_type_t::SEMICOLON, ";"},
-                   {token_type_t::COLON, ":"},
-                   {token_type_t::BANG, "!"},
-                   {token_type_t::MINUS, "-"},
-                   {token_type_t::SLASH, "/"},
-                   {token_type_t::STAR, "*"},
-                   {token_type_t::LT, "<"},
-                   {token_type_t::GT, ">"},
+                   {token_type_t::ASSIGN, "="},     {token_type_t::PLUS, "+"},
+                   {token_type_t::LPAREN, "("},     {token_type_t::RPAREN, ")"},
+                   {token_type_t::LBRACE, "{"},     {token_type_t::RBRACE, "}"},
+                   {token_type_t::LBRACKET, "["},   {token_type_t::RBRACKET, "]"},
+                   {token_type_t::COMMA, ","},      {token_type_t::SEMICOLON, ";"},
+                   {token_type_t::COLON, ":"},      {token_type_t::BANG, "!"},
+                   {token_type_t::QUESTION, "?"},   {token_type_t::MINUS, "-"},
+                   {token_type_t::SLASH, "/"},      {token_type_t::STAR, "*"},
+                   {token_type_t::LT, "<"},         {token_type_t::GT, ">"},
                    {token_type_t::UNDERSCORE, "_"},
+               });
+}
+
+TEST_CASE("Postfix unwrap operators do not disturb neighboring tokens") {
+    test_lexer("a?.b",
+               {
+                   {token_type_t::IDENT, "a"},
+                   {token_type_t::QUESTION, "?"},
+                   {token_type_t::DOT, "."},
+                   {token_type_t::IDENT, "b"},
+               });
+
+    // `!` stays greedy: `!=` is still a single not-equal token
+    test_lexer("a! != b!",
+               {
+                   {token_type_t::IDENT, "a"},
+                   {token_type_t::BANG, "!"},
+                   {token_type_t::NEQ, "!="},
+                   {token_type_t::IDENT, "b"},
+                   {token_type_t::BANG, "!"},
                });
 }
 

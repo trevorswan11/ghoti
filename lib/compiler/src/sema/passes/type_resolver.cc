@@ -2646,17 +2646,117 @@ auto type_resolver::visit(ast::node_id id, const ast::unary_expr& node) -> void 
     resolving_.set_sema_type(id, *last_type_);
 }
 
+namespace {
+
+enum class unwrap_family {
+    RESULT,
+    OPTIONAL,
+};
+
+struct unwrap_shape {
+    unwrap_family family;
+    usize         payload_idx;
+    usize         diverge_idx;
+};
+
+// Recognizes a tagged two-field union shaped like `union { ok: T, err: E }` (RESULT) or
+// `union { some: T, none: void }` (OPTIONAL).
+[[nodiscard]] auto classify_unwrap_union(const type& t) -> stdx::option<unwrap_shape> {
+    const auto ud{t.get_data().as_opt<types::union_t>()};
+    if (!ud || ud->is_untagged || ud->fields.size() != 2) { return stdx::none; }
+
+    const auto& enclosing{ud->enclosing};
+    const auto  name_of{[&](usize i) -> std::string_view {
+        return enclosing.ast.get_as<ast::identifier_expr>(ud->ast_fields[i].name).name;
+    }};
+    const auto  n0{name_of(0)}, n1{name_of(1)};
+
+    if (n0 == "ok" && n1 == "err") { return unwrap_shape{unwrap_family::RESULT, 0, 1}; }
+    if (n0 == "err" && n1 == "ok") { return unwrap_shape{unwrap_family::RESULT, 1, 0}; }
+    if (n0 == "some" && n1 == "none") { return unwrap_shape{unwrap_family::OPTIONAL, 0, 1}; }
+    if (n0 == "none" && n1 == "some") { return unwrap_shape{unwrap_family::OPTIONAL, 1, 0}; }
+    return stdx::none;
+}
+
+} // namespace
+
 auto type_resolver::visit(ast::node_id id, const ast::unwrap_expr& unwrap) -> void {
     PROFILE_FUNCTION();
     TRY_RESOLVE(unwrap.operand);
+    auto& operand_type{*last_type_.take()};
 
-    const auto* op{id.get_token_type() == syntax::token_type_t::QUESTION ? "?" : "!"};
-    last_type_.emplace(
-        ctx_.poison_node(resolving_,
-                         id,
-                         fmt::format("the postfix '{}' operator is not yet implemented", op),
-                         error::UNWRAP_NOT_YET_LOWERED,
-                         resolving_.ast.location_of(id)));
+    const bool is_question{id.get_token_type() == syntax::token_type_t::QUESTION};
+    const auto loc{resolving_.ast.location_of(id)};
+
+    const auto shape{classify_unwrap_union(operand_type)};
+    if (!shape) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            fmt::format("the postfix '{}' operator expects a tagged union shaped like "
+                        "'union {{ ok: T, err: E }}' or 'union {{ some: T, none: void }}'; "
+                        "its operand has type '{}'",
+                        is_question ? "?" : "!",
+                        operand_type.to_string()),
+            error::UNWRAP_ON_NON_RESULT,
+            loc));
+    }
+
+    const auto& operand_union{operand_type.get_data().as<types::union_t>()};
+    auto&       payload_type{operand_union.type_at(shape->payload_idx)};
+
+    // `expr!` just projects the success payload with lowering handling the discriminant check
+    if (!is_question) {
+        resolving_.set_sema_type(id, payload_type);
+        return last_type_.emplace(payload_type);
+    }
+
+    if (open_function_nodes_.empty()) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             "the '?' operator can only be used inside a function",
+                             error::UNWRAP_OUTSIDE_FUNCTION,
+                             loc));
+    }
+
+    auto&                     fn_type{resolving_.get_sema_type(open_function_nodes_.back())};
+    stdx::option<const type&> ret_type;
+    if (const auto fd{fn_type.get_data().as_opt<types::function>()}) {
+        ret_type.emplace(fd->return_type);
+    } else if (const auto cd{fn_type.get_data().as_opt<types::closure_t>()}) {
+        if (const auto sd{cd->signature.get_data().as_opt<types::function>()}) {
+            ret_type.emplace(sd->return_type);
+        }
+    }
+    if (!ret_type) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            "the '?' operator requires the enclosing function's return type to be written "
+            "explicitly rather than inferred with 'auto'",
+            error::UNWRAP_RETURN_TYPE_MISMATCH,
+            loc));
+    }
+
+    const auto ret_shape{classify_unwrap_union(*ret_type)};
+    if (!ret_shape || ret_shape->family != shape->family) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            fmt::format(
+                "the '?' operator propagates a '{}' but the enclosing function returns '{}', "
+                "which is not a matching {}",
+                operand_type.to_string(),
+                ret_type->to_string(),
+                shape->family == unwrap_family::RESULT ? "'union { ok: _, err: E }'"
+                                                       : "'union { some: _, none: void }'"),
+            error::UNWRAP_RETURN_TYPE_MISMATCH,
+            loc));
+    }
+
+    resolving_.set_sema_type(id, payload_type);
+    last_type_.emplace(payload_type);
 }
 
 auto type_resolver::visit(ast::node_id id, const ast::implicit_access_expr& implicit_access)

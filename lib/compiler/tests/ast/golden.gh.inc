@@ -71,4 +71,5 @@ R"([_:0]^N{a, b, c, d, e, 3, "54" };
     asm { template: "syscall", inputs: ("{rax}" = n, "{rdi}" = fd), clobbers: ("rcx", "r11", "memory"), options: (volatile) };
     asm u32 { template: "rdtsc", outputs: ("={eax}" = _), options: (volatile) };
     asm { template: "mov %0, %1", outputs: ("=r" = dst), inputs: ("r" = src) };
+    a?; b!;
 )"

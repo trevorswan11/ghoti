@@ -53,6 +53,21 @@ TEST_CASE("formatter round-trips operator expressions") {
     CHECK(format_source("i += 1;") == "i += 1;\n");
 }
 
+TEST_CASE("formatter round-trips postfix unwrap operators") {
+    CHECK(format_source("a?;") == "a?;\n");
+    CHECK(format_source("a!;") == "a!;\n");
+    CHECK(format_source("foo(x)?;") == "foo(x)?;\n");
+
+    // `?` and `!` bind tighter than `.`, so no parens are re-inserted
+    CHECK(format_source("a.b?;") == "a.b?;\n");
+    CHECK(format_source("a?.b;") == "a?.b;\n");
+    CHECK(format_source("foo()?.bar!;") == "foo()?.bar!;\n");
+    CHECK(format_source("_ = a? + b;") == "_ = a? + b;\n");
+
+    // author-written grouping parens survive
+    CHECK(format_source("(a + b)?;") == "(a + b)?;\n");
+}
+
 TEST_CASE("formatter round-trips leaf statements") {
     CHECK(format_source("import std;") == "import std;\n");
     CHECK(format_source(R"(pub import "ast/node.p" as node;)") ==

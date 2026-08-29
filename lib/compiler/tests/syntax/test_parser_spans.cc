@@ -80,6 +80,23 @@ TEST_CASE("an assignment_expr's span starts at its lhs, not its operator") {
     CHECK(start.column == 4);
 }
 
+TEST_CASE("a postfix unwrap_expr's span starts at its operand and ends past its operator") {
+    auto        ast{parse("const x := abc?;\n")};
+    const auto& decl{ast.get_as<ast::decl_stmt>(*ast.begin())};
+
+    REQUIRE(decl.value);
+    const auto& unwrap{ast.get_as<ast::unwrap_expr>(*decl.value)};
+    CHECK((**decl.value).get_token_type() == syntax::token_type_t::QUESTION);
+    CHECK(unwrap.operand.is<ast::identifier_expr>());
+
+    const auto& start{ast.location_of(*decl.value)};
+    const auto& end{ast.end_location_of(*decl.value)};
+    CHECK(start.line == 0);
+    CHECK(start.column == 11); // the `a` of `abc`, not the `?`
+    CHECK(end.line == 0);
+    CHECK(end.column == 15); // just past the `?`
+}
+
 TEST_CASE("a block_stmt's span ends just past its closing brace") {
     auto        ast{parse("const f := fn(): void {\n"
                           "    return;\n"

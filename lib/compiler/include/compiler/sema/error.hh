@@ -70,7 +70,6 @@ enum class error : u8 {
     UNWRAP_ON_NON_RESULT,
     UNWRAP_RETURN_TYPE_MISMATCH,
     UNWRAP_OUTSIDE_FUNCTION,
-    UNWRAP_NOT_YET_LOWERED,
 };
 
 using diagnostic  = diagnostic<error>;
