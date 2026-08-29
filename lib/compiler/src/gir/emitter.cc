@@ -276,6 +276,8 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
     const auto  name{name_ident.name};
     const auto  sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Top-level declaration must have a resolved sema type");
+    if (sema_type->get_kind() == sema::type_kind::TYPE) { return; }
+
     const auto linkage{get_decl_linkage(decl)};
 
     if (decl.value) {
@@ -838,6 +840,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
     const auto  name{name_ident.name};
     const auto  sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Local declaration must have a resolved sema type");
+    if (sema_type->get_kind() == sema::type_kind::TYPE) { return; }
 
     const auto is_const{decl.has_modifier(ast::decl_modifiers::CONSTANT) ||
                         decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};

@@ -110,6 +110,30 @@ TEST_CASE("Deferred return type from typeOf") {
     CHECK(&call == &UNWRAP(type.get_data().as_opt<sema::types::deferred_call>()).call);
 }
 
+TEST_CASE("typeOf denotes the wrapped type in a value's or parameter's explicit type") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const Alias := @typeOf(0);
+        const via_alias: Alias = 7;
+        const direct: @typeOf(false) = true;
+        const echo := fn(x: auto, y: @typeOf(x)): auto { return y; };
+        const call_echo := echo(1, 2);
+    )")};
+
+    const auto& i32_type{ctx->get_type(sema::type_kind::I32)};
+    const auto& bool_type{ctx->get_type(sema::type_kind::BOOL)};
+
+    const auto decl_type = [&](std::string_view name) -> const sema::type& {
+        const auto [sym, _, node, type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>(name, idx)};
+        return type;
+    };
+
+    CHECK(decl_type("Alias") == ctx->get_type(sema::type_kind::TYPE, i32_type));
+    CHECK(decl_type("via_alias") == i32_type);
+    CHECK(decl_type("direct") == bool_type);
+    CHECK(decl_type("call_echo") == i32_type);
+}
+
 TEST_CASE("Builtin pointer conversions") {
     test_builtin_resolve(
         bis::PTR_FROM_ARRAY,

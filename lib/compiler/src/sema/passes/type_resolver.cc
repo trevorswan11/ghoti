@@ -92,6 +92,13 @@ namespace {
     return mut_elements ? types::mut::MUTABLE : types::mut::CONSTANT;
 }
 
+[[nodiscard]] auto denoted_type(type& t) -> type& {
+    if (t.get_kind() == type_kind::TYPE) {
+        if (const auto meta{t.get_data().as_opt<types::meta_type>()}) { return meta->instance; }
+    }
+    return t;
+}
+
 } // namespace
 
 auto type_resolver::visit(ast::node_id id, const ast::array_expr& array) -> void {
@@ -1131,7 +1138,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         }
         TRY_RESOLVE(param.explicit_type);
 
-        auto& param_type{*last_type_.take()};
+        auto& param_type{denoted_type(*last_type_.take())};
         param_types[param_idx++] = &param_type;
         resolving_.set_sema_type(param.name, param_type);
         resolve_symbol_info(param.name, symbol_kind::VALUE);
@@ -2928,7 +2935,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
         if (decl.explicit_type) {
             resolve(*decl.explicit_type);
             if (last_type_->is_poison()) { return poison_out(); }
-            auto& explicit_type{*last_type_.take()};
+            auto& explicit_type{denoted_type(*last_type_.take())};
             if (explicit_type.get_kind() == type_kind::AUTO) {
                 if (!decl.value) {
                     ctx_.poison_symbol(sym,
@@ -3347,7 +3354,7 @@ auto type_resolver::instantiate_generic(type&                        callee_type
         type* decl_p_type{arg_type}; // erased type data corresponding to nominal signature type
         type* body_p_type{arg_type}; // contextual type meaning in the function body
         if (inst_resolver.last_type_ && !inst_resolver.last_type_->is_poison()) {
-            auto& resolved_param_type{*inst_resolver.last_type_.take()};
+            auto& resolved_param_type{denoted_type(*inst_resolver.last_type_.take())};
             if (resolved_param_type.get_kind() != type_kind::AUTO) {
                 decl_p_type = &resolved_param_type;
                 if (resolved_param_type.get_kind() != type_kind::TYPE) {
