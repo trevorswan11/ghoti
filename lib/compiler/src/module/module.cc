@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <ostream>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -135,6 +136,22 @@ auto module_manager::try_get(const std::filesystem::path& path)
     auto* ptr = mod.get();
     modules_.emplace(path, std::move(mod));
     return ptr;
+}
+
+auto module_manager::get_or_create_target_enum_module(std::string_view source) -> module& {
+    PROFILE_FUNCTION();
+    if (target_enum_module_) { return *target_enum_module_; }
+
+    target_enum_module_ = stdx::make_box<module>(std::filesystem::path{"<target-enums>"},
+                                                 std::filesystem::path{},
+                                                 source_file{std::string{source}});
+    syntax::parser p{target_enum_module_->source};
+    const auto     diagnostics{p.consume(target_enum_module_->ast)};
+    VERIFY(diagnostics.empty(), "the compiler-provided target-fact enum source must parse cleanly");
+
+    target_enum_module_->sema_side_tables.resize(target_enum_module_->ast.get_pool_sizes());
+    target_enum_module_->state = module_state::PARSED;
+    return *target_enum_module_;
 }
 
 } // namespace ghoti::mod

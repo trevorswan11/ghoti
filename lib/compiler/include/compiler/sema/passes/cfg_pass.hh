@@ -108,12 +108,12 @@ class cfg_pass {
     template <typename Arm>
     [[nodiscard]] auto select_arm_of(const std::vector<Arm>& arms) -> stdx::option<const Arm&> {
         for (const auto& arm : arms) {
-            if (!arm.predicate) { return &arm; } // bare `else`
+            if (!arm.predicate) { return arm; } // bare `else`
             const auto taken{eval_predicate(*arm.predicate)};
-            if (!taken) { return nullptr; }
-            if (*taken) { return &arm; }
+            if (!taken) { return stdx::none; }
+            if (*taken) { return arm; }
         }
-        return nullptr;
+        return stdx::none;
     }
 
     // Splices each aggregate `@cfg` group's selected items into `items` at the group's position
@@ -121,7 +121,7 @@ class cfg_pass {
     auto flatten_cfg_groups(std::vector<Group>& groups, std::vector<Item>& items) -> void {
         usize offset{0};
         for (auto& group : groups) {
-            const auto* arm{select_arm_of(group.arms)};
+            const auto arm{select_arm_of(group.arms)};
             if (!arm) { continue; }
             const auto at{static_cast<idiff>(group.position + offset)};
             items.insert(items.begin() + at, arm->items.begin(), arm->items.end());

@@ -180,35 +180,61 @@ TEST_CASE("Target builtins constant eval") {
         const arch_name := @targetArch();
         const triple_name := @targetTriple();
         const abi_name := @targetAbi();
+        const family_name := @targetFamily();
         const endian_name := @targetEndian();
         const ptr_bits := @targetPtrBits();
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
-    const auto str_of = [&](std::string_view name) -> std::string {
+    const auto eval_of = [&](std::string_view name) -> gir::const_value {
         const auto [sym, _, decl, type]{
             ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>(name, idx)};
-        const auto val{UNWRAP(evaluator.try_eval(*decl.value))};
-        return UNWRAP(val.as_opt<std::string>());
+        return UNWRAP(evaluator.try_eval(*decl.value));
     };
 
-    CHECK_FALSE(str_of("arch_name").empty());
-    CHECK_FALSE(str_of("triple_name").empty());
-    CHECK_FALSE(str_of("abi_name").empty());
+    const auto triple{eval_of("triple_name")};
+    CHECK_FALSE(UNWRAP(triple.as_opt<std::string>()).empty());
 
-    const auto endian{str_of("endian_name")};
+    const auto enum_name_of = [&](std::string_view name) -> std::string {
+        const auto value{eval_of(name)};
+        return UNWRAP(value.as_opt<gir::const_enum>()).name;
+    };
+
+    CHECK_FALSE(enum_name_of("arch_name").empty());
+    CHECK_FALSE(enum_name_of("abi_name").empty());
+    CHECK_FALSE(enum_name_of("family_name").empty());
+
+    const auto endian{enum_name_of("endian_name")};
     CHECK((endian == "little" || endian == "big"));
 
     // The normalized OS token must be version-suffix-free.
-    const auto os{str_of("os_name")};
+    const auto os{enum_name_of("os_name")};
     CHECK_FALSE(os.empty());
     CHECK(os.find_first_of("0123456789") == std::string::npos);
 
-    const auto [sym, _, decl, type]{
-        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("ptr_bits", idx)};
-    const auto bits_val{UNWRAP(evaluator.try_eval(*decl.value))};
+    const auto bits_val{eval_of("ptr_bits")};
     const auto bits{UNWRAP(bits_val.as_opt<u64>())};
     CHECK((bits == 64 || bits == 32 || bits == 16));
+}
+
+TEST_CASE("Target enum comparison folds against a bare member") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const here  := @targetOs();
+        const eq    := @targetOs() == here;
+        const ne    := @targetArch() != @targetArch();
+        const probe := fn(o: Os): void {};
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto bool_of = [&](std::string_view name) -> bool {
+        const auto [sym, _, decl, type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>(name, idx)};
+        const auto value{UNWRAP(evaluator.try_eval(*decl.value))};
+        return UNWRAP(value.as_opt<bool>());
+    };
+
+    CHECK(bool_of("eq"));
+    CHECK_FALSE(bool_of("ne"));
 }
 
 TEST_CASE("MulAdd and TagName constant eval") {

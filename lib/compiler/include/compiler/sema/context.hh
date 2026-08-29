@@ -2,6 +2,7 @@
 
 #include <ostream>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <gsl/pointers>
@@ -119,6 +120,9 @@ struct context {
 
     // Convenience function for retrieving constant builtin types
     [[nodiscard]] auto get_builtin_resolved_type(type_kind kind) -> type&;
+
+    // A compiler-known target-fact enum by name, from the prelude
+    [[nodiscard]] auto get_target_enum_type(std::string_view name) -> type&;
 };
 
 } // namespace ghoti::sema

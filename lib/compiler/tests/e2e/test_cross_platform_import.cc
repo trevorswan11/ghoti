@@ -38,9 +38,9 @@ TEST_CASE("E2E: importing every platform module still links on the host") {
             import "plat_windows.gh" as plat_windows;
 
             const plat_tag := fn(): i32 {
-                if constexpr (@targetOs() == "linux") {
+                if constexpr (@targetOs() == .linux) {
                     return plat_linux::linux_tag();
-                } else if constexpr (@targetOs() == "macos") {
+                } else if constexpr (@targetOs() == .macos) {
                     return plat_darwin::darwin_tag();
                 } else {
                     return plat_windows::windows_tag();

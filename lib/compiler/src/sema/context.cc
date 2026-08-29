@@ -1,6 +1,7 @@
 #include "compiler/sema/context.hh"
 
 #include <concepts>
+#include <string_view>
 #include <utility>
 
 #include <gsl/pointers>
@@ -8,10 +9,14 @@
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
 
+#include "compiler/module/module.hh"
+#include "compiler/sema/passes/symbol_collector.hh"
+#include "compiler/sema/passes/type_resolver.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/keywords.hh"
+#include "compiler/syntax/token_type.hh"
 
 namespace ghoti::sema {
 
@@ -195,6 +200,37 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::REQUIRE, params(t_bool), t_void);
 }
 
+constexpr std::string_view TARGET_ENUM_SOURCE{
+#include "target_enums.gh.inc"
+};
+
+auto inject_target_enums(context& ctx, usize prelude_idx) -> void {
+    PROFILE_FUNCTION();
+
+    auto& enum_mod{ctx.modules.get_or_create_target_enum_module(TARGET_ENUM_SOURCE)};
+    symbol_collector::collect_symbols(enum_mod, ctx);
+    type_resolver::resolve_types(enum_mod, ctx);
+    VERIFY(!enum_mod.is_poisoned() && ctx.diags.empty(),
+           "the compiler-provided target-fact enum module must resolve cleanly");
+
+    auto&       prelude{ctx.registry.get(prelude_idx)};
+    const auto& mod_table{ctx.registry.get(*enum_mod.root_table_idx)};
+    for (const std::string_view name : {"Os", "Arch", "Abi", "Family", "Endian"}) {
+        auto&      sym{mod_table.get(name)};
+        const auto node{sym.get_data().as_opt<symbols::node_t>()};
+        VERIFY(node, "target-fact enum symbol is not a declaration");
+        auto& enum_type{enum_mod.get_sema_type(*node)};
+
+        prelude.insert_unchecked(
+            name,
+            symbols::builtin{syntax::typed_identifier{name, syntax::token_type_t::IDENT},
+                             enum_type});
+        auto& injected{prelude.get(name)};
+        injected.set_kind(symbol_kind::TYPE);
+        injected.set_status(symbol_status::RESOLVED);
+    }
+}
+
 } // namespace
 
 auto context::inject_prelude() -> void {
@@ -202,15 +238,21 @@ auto context::inject_prelude() -> void {
     if (prelude_index) { return; }
     prelude_index.emplace(registry.create());
 
-    auto& prelude{registry.get(*prelude_index)};
-    inject_types(prelude, pool);
-    inject_functions(prelude, pool);
+    inject_types(registry.get(*prelude_index), pool);
+    inject_functions(registry.get(*prelude_index), pool);
+    inject_target_enums(*this, *prelude_index);
 }
 
 auto context::get_builtin_resolved_type(type_kind kind) -> type& {
     auto& type{*pool[{kind, types::mut::CONSTANT}]};
     ASSERT(type.is_resolved(), "Builtin type was not already resolved");
     return type;
+}
+
+auto context::get_target_enum_type(std::string_view name) -> type& {
+    VERIFY(prelude_index, "get_target_enum_type requires inject_prelude to have run");
+    auto& symbol{registry.get(*prelude_index).get(name)};
+    return symbol.get_data().as<symbols::builtin>().get_type();
 }
 
 } // namespace ghoti::sema

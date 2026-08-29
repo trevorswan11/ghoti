@@ -711,6 +711,26 @@ auto const_eval::eval_dot(ast::node_id, const ast::dot_expr& dot) -> stdx::optio
     return stdx::none;
 }
 
+auto const_eval::target_enum_value(std::string_view enum_name, std::string_view member)
+    -> const_value {
+    auto&      enum_type{ctx_.get_target_enum_type(enum_name)};
+    const auto en{enum_type.get_data().as_opt<sema::types::enum_t>()};
+
+    // The discriminant must equal what `.<member>` produces against this enum type
+    i64 ordinal{en ? static_cast<i64>(en->ast_enumerations.size()) : 0};
+    if (en) {
+        for (usize i{0}; i < en->ast_enumerations.size(); ++i) {
+            const auto& vname{
+                en->enclosing.ast.get_as<ast::identifier_expr>(en->ast_enumerations[i].name).name};
+            if (vname == member) {
+                ordinal = static_cast<i64>(i);
+                break;
+            }
+        }
+    }
+    return const_value{const_enum{std::string{member}, ordinal}, enum_type};
+}
+
 auto const_eval::eval_implicit_access(ast::node_id id, const ast::implicit_access_expr& implicit)
     -> stdx::option<const_value> {
     const auto& member_name{module_->ast.get_as<ast::identifier_expr>(implicit.member).name};
@@ -720,7 +740,9 @@ auto const_eval::eval_implicit_access(ast::node_id id, const ast::implicit_acces
         if (const auto en{sema_type->get_data().as_opt<sema::types::enum_t>()}) {
             for (usize idx{0}; idx < en->ast_enumerations.size(); ++idx) {
                 const auto& e{en->ast_enumerations[idx]};
-                const auto& vname{module_->ast.get_as<ast::identifier_expr>(e.name).name};
+                // Variant identifiers live in the enum's defining module, which is not
+                // necessarily the module being const-evaluated.
+                const auto& vname{en->enclosing.ast.get_as<ast::identifier_expr>(e.name).name};
                 if (vname == member_name) {
                     auto val{static_cast<i64>(idx)};
                     if (e.value) {
@@ -959,6 +981,12 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
         const auto r{rhs.as<bool>()};
         if (op_type == syntax::token_type_t::EQ) { return const_value{l == r, bool_type}; }
         if (op_type == syntax::token_type_t::NEQ) { return const_value{l != r, bool_type}; }
+    }
+
+    if (lhs.is<const_enum>() && rhs.is<const_enum>()) {
+        const auto equal{lhs.as<const_enum>() == rhs.as<const_enum>()};
+        if (op_type == syntax::token_type_t::EQ) { return const_value{equal, bool_type}; }
+        if (op_type == syntax::token_type_t::NEQ) { return const_value{!equal, bool_type}; }
     }
 
     if (lhs.is<std::string>() && rhs.is<std::string>()) {
@@ -1323,11 +1351,11 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
     }
     case syntax::token_type_t::BUILTIN_TARGET_OS: {
         const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
-        return const_value::make_string(ctx_, std::string{facts.os});
+        return target_enum_value("Os", facts.os);
     }
     case syntax::token_type_t::BUILTIN_TARGET_ARCH: {
         const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
-        return const_value::make_string(ctx_, std::string{facts.arch});
+        return target_enum_value("Arch", facts.arch);
     }
     case syntax::token_type_t::BUILTIN_TARGET_TRIPLE: {
         const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
@@ -1335,15 +1363,15 @@ auto const_eval::eval_builtin(const ast::call_expr& call, syntax::token_type_t b
     }
     case syntax::token_type_t::BUILTIN_TARGET_ABI: {
         const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
-        return const_value::make_string(ctx_, std::string{facts.abi});
+        return target_enum_value("Abi", facts.abi);
     }
     case syntax::token_type_t::BUILTIN_TARGET_FAMILY: {
         const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
-        return const_value::make_string(ctx_, std::string{facts.family});
+        return target_enum_value("Family", facts.family);
     }
     case syntax::token_type_t::BUILTIN_TARGET_ENDIAN: {
         const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
-        return const_value::make_string(ctx_, std::string{facts.endian});
+        return target_enum_value("Endian", facts.endian);
     }
     case syntax::token_type_t::BUILTIN_TARGET_PTR_BITS: {
         const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};

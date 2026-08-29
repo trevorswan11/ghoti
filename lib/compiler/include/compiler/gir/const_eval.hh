@@ -82,6 +82,9 @@ class const_eval {
     auto eval_call(ast::node_id id, const ast::call_expr& call) -> stdx::option<const_value>;
     auto eval_builtin(const ast::call_expr& call, syntax::token_type_t builtin_type)
         -> stdx::option<const_value>;
+
+    [[nodiscard]] auto target_enum_value(std::string_view enum_name, std::string_view member)
+        -> const_value;
     auto eval_constexpr_fn(ast::node_id                    call_id,
                            const ast::function_expr&       fn_expr,
                            const std::vector<const_value>& args) -> stdx::option<const_value>;

@@ -273,15 +273,17 @@ class module_manager {
         -> stdx::result<void, diagnostic>;
 
     // Prints every poisoned/errored module's diagnostics
-    auto print_all_diagnostics(std::ostream& os) const -> void;
+    auto               print_all_diagnostics(std::ostream& os) const -> void;
+    [[nodiscard]] auto get_or_create_target_enum_module(std::string_view source) -> module&;
 
   private:
     [[nodiscard]] auto try_get(const std::filesystem::path& path)
         -> stdx::result<gsl::not_null<module*>, diagnostic>;
 
   private:
-    source_loader& loader_;
-    module_table   modules_;
+    source_loader&    loader_;
+    module_table      modules_;
+    stdx::box<module> target_enum_module_;
 
     // Maps physical ghoti modules to their path on disk
     module_name_map module_lut_;
