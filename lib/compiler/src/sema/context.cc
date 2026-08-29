@@ -11,8 +11,8 @@
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
 
+#include "compiler/gir/const_value.hh"
 #include "compiler/module/module.hh"
-#include "compiler/sema/const_arg.hh"
 #include "compiler/sema/passes/symbol_collector.hh"
 #include "compiler/sema/passes/type_resolver.hh"
 #include "compiler/sema/symbol.hh"
@@ -252,7 +252,7 @@ auto context::get_builtin_resolved_type(type_kind kind) -> type& {
 }
 
 auto context::lookup_constexpr_binding(std::string_view name) const
-    -> stdx::option<const const_arg&> {
+    -> stdx::option<const gir::const_value&> {
     for (const auto& frame : constexpr_binding_frames | std::views::reverse) {
         if (const auto it{frame.find(name)}; it != frame.end()) { return it->second; }
     }

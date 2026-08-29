@@ -101,6 +101,9 @@ class emitter {
                                sema::type&                   closure_type) -> void;
     auto emit_closure_env(const sema::types::closure_t& cl, sema::type& closure_type) -> value;
 
+    // Emits as a plain non-capturing fn with its captures baked in as constants
+    auto emit_constexpr_closure(const const_closure& cl) -> std::string;
+
     // Reads a captured variable's current value (VALUE mode) or address (REF/MUT_REF mode) from
     // the definition-site scope, for use when constructing an environment field
     auto get_capture_source(const sema::types::closure_capture& capture) -> value;

@@ -13,9 +13,12 @@
 #include <stdx/utility.hh>
 #include <stdx/variant.hh>
 
+#include "compiler/ast/id.hh"
 #include "compiler/gir/instruction.hh"
-#include "compiler/sema/context.hh"
 #include "compiler/sema/type.hh"
+
+namespace ghoti::sema { struct context; } // namespace ghoti::sema
+namespace ghoti::mod { struct module; }   // namespace ghoti::mod
 
 namespace ghoti::gir {
 
@@ -52,6 +55,13 @@ struct const_union {
     [[nodiscard]] auto       operator==(const const_union& other) const noexcept -> bool;
 };
 
+struct const_closure {
+    ast::node_id               fn_node;
+    stdx::option<mod::module&> module{};
+    const_struct               captures;
+    [[nodiscard]] auto         operator==(const const_closure& other) const noexcept -> bool;
+};
+
 class const_value {
   public:
     using data_t = stdx::variant<i64,
@@ -64,6 +74,7 @@ class const_value {
                                  const_struct,
                                  const_enum,
                                  const_union,
+                                 const_closure,
                                  void_val,
                                  undefined_val,
                                  nullptr_val,
@@ -122,6 +133,9 @@ class const_value {
     constexpr auto     set_type(stdx::option<sema::type&> t) noexcept -> void { type_ = t; }
     [[nodiscard]] auto to_gir_value() const noexcept -> value;
     [[nodiscard]] auto operator==(const const_value& other) const noexcept -> bool;
+
+    [[nodiscard]] auto hash() const noexcept -> u64;
+    [[nodiscard]] auto mangle() const -> std::string;
 
   private:
     data_t                    data_{poison_val{}};

@@ -1,7 +1,6 @@
 #include "compiler/sema/passes/type_resolver.hh"
 
 #include <algorithm>
-#include <bit>
 #include <cctype>
 #include <concepts>
 #include <ranges>
@@ -36,10 +35,10 @@
 #include "compiler/gir/const_eval.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/module/module.hh"
-#include "compiler/sema/const_arg.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
+#include "compiler/sema/instantiation_cache.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
@@ -604,15 +603,91 @@ auto type_resolver::get_call_arg_location(const ast::call_expr::argument& arg) -
     return arg.visit([this](auto id) -> source_location { return resolving_.ast.location_of(id); });
 }
 
+auto type_resolver::local_const_fn_ref(ast::expr_handle expr) -> stdx::option<gir::const_value> {
+    const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(expr)};
+    if (!ident) { return stdx::none; }
+    const auto sym{ctx_.registry.lookup(table_stack_, ident->name)};
+    if (!sym) { return stdx::none; }
+    const auto node{sym->get_data().as_opt<symbols::node_t>()};
+    if (!node) { return stdx::none; }
+    const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
+    if (!decl || !decl->value ||
+        !(decl->has_modifier(ast::decl_modifiers::CONSTANT) ||
+          decl->has_modifier(ast::decl_modifiers::CONSTEXPR))) {
+        return stdx::none;
+    }
+    if (!resolving_.ast.get_as_opt<ast::function_expr>(*decl->value)) { return stdx::none; }
+    const auto fn_type{resolving_.get_sema_type_opt(*decl->value)};
+    if (!fn_type || fn_type->get_kind() != type_kind::FUNCTION) { return stdx::none; }
+    // A capture-less closure value gets emitted as a plain function
+    return gir::const_value{gir::const_value::data_t{
+                                gir::const_closure{
+                                    .fn_node  = *decl->value,
+                                    .module   = &resolving_,
+                                    .captures = {},
+                                },
+                            },
+                            *fn_type};
+}
+
+auto type_resolver::constexpr_closure_value(ast::expr_handle expr)
+    -> stdx::option<gir::const_value> {
+    // Resolve `expr` to the `function_expr` node: either a literal or a `const` local bound to one.
+    ast::node_id fn_node{ast::node_id::make_invalid()};
+    if (resolving_.ast.get_as_opt<ast::function_expr>(expr)) {
+        fn_node = *expr;
+    } else if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(expr)}) {
+        const auto sym{ctx_.registry.lookup(table_stack_, ident->name)};
+        if (!sym) { return stdx::none; }
+        const auto node{sym->get_data().as_opt<symbols::node_t>()};
+        if (!node) { return stdx::none; }
+        const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
+        if (!decl || !decl->value ||
+            !(decl->has_modifier(ast::decl_modifiers::CONSTANT) ||
+              decl->has_modifier(ast::decl_modifiers::CONSTEXPR)) ||
+            !resolving_.ast.get_as_opt<ast::function_expr>(*decl->value)) {
+            return stdx::none;
+        }
+        fn_node = *decl->value;
+    } else {
+        return stdx::none;
+    }
+
+    const auto cl_type{resolving_.get_sema_type_opt(fn_node)};
+    if (!cl_type || cl_type->get_kind() != type_kind::CLOSURE) { return stdx::none; }
+    const auto cl_data{cl_type->get_data().as_opt<types::closure_t>()};
+    if (!cl_data) { return stdx::none; }
+
+    gir::const_closure result{
+        .fn_node  = fn_node,
+        .module   = &resolving_,
+        .captures = {},
+    };
+
+    for (const auto& capture : cl_data->captures) {
+        const auto sym{ctx_.registry.lookup(table_stack_, capture.name)};
+        if (!sym) { return stdx::none; }
+        const auto node{sym->get_data().as_opt<symbols::node_t>()};
+        if (!node) { return stdx::none; }
+        const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
+        if (!decl || !decl->value ||
+            !(decl->has_modifier(ast::decl_modifiers::CONSTANT) ||
+              decl->has_modifier(ast::decl_modifiers::CONSTEXPR))) {
+            return stdx::none;
+        }
+        gir::const_eval evaluator{ctx_, resolving_};
+        auto            cv{evaluator.try_eval(*decl->value)};
+        if (!cv || cv->is_poison()) { return stdx::none; }
+        result.captures.fields.emplace(std::string{capture.name}, std::move(*cv));
+    }
+
+    return gir::const_value{gir::const_value::data_t{std::move(result)}, *cl_type};
+}
+
 namespace {
 
-[[nodiscard]] auto to_const_arg(const gir::const_value& cv) noexcept -> stdx::option<const_arg> {
-    if (const auto s{cv.as_opt<std::string>()}) { return const_arg{const_arg::data_t{*s}}; }
-    if (cv.is<i64>()) { return const_arg{const_arg::data_t{cv.as<i64>()}}; }
-    if (cv.is<u64>()) { return const_arg{const_arg::data_t{cv.as<u64>()}}; }
-    if (cv.is<f64>()) { return const_arg{const_arg::data_t{cv.as<f64>()}}; }
-    if (cv.is<bool>()) { return const_arg{const_arg::data_t{cv.as<bool>()}}; }
-    return stdx::none;
+[[nodiscard]] auto any_param_constexpr(const ast::function_expr& fn) noexcept -> bool {
+    return std::ranges::any_of(fn.parameters, [](const auto& p) { return p.is_constexpr; });
 }
 
 [[nodiscard]] auto is_generic_type(const type& t) noexcept -> bool {
@@ -785,7 +860,8 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
         }
 
         const auto fn_info_opt{ctx_.generic_functions.get_opt(callee_type)};
-        if (fn_info_opt && (any_param_generic(params) || function_type->constexpr_mask != 0)) {
+        if (fn_info_opt &&
+            (any_param_generic(params) || any_param_constexpr(*fn_info_opt->fn_expr))) {
             auto concrete_arg_types{ctx_.pool.get_many_unsafe(call.arguments.size())};
             bool any_arg_poison{false};
             for (usize i{0}; auto [param_type, arg] :
@@ -825,24 +901,37 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
             if (any_arg_poison) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
 
             // Fold the argument supplied for each `constexpr` parameter to a compile-time value
-            const u32 cx_mask{function_type->constexpr_mask};
-            auto      constexpr_args{
-                ctx_.arena.make_span<const_arg>(static_cast<usize>(std::popcount(cx_mask)))};
-            for (usize i{0}, cx_i{0}; i < call.arguments.size() && i < 32; ++i) {
-                if ((cx_mask & (1U << i)) == 0) { continue; }
-                stdx::option<const_arg> folded;
+            const auto& cx_params{fn_info_opt->fn_expr->parameters};
+            const auto  cx_count{static_cast<usize>(
+                std::ranges::count_if(cx_params, [](const auto& p) { return p.is_constexpr; }))};
+            auto        constexpr_args{ctx_.arena.make_span<gir::const_value>(cx_count)};
+            for (usize i{0}, cx_i{0}; i < cx_params.size() && i < call.arguments.size(); ++i) {
+                if (!cx_params[i].is_constexpr) { continue; }
+                stdx::option<gir::const_value> folded;
                 if (const auto expr_h{call.arguments[i].as_opt<ast::expr_handle>()}) {
                     gir::const_eval evaluator{ctx_, resolving_};
-                    if (const auto cv{evaluator.try_eval(*expr_h)}) { folded = to_const_arg(*cv); }
+                    if (auto cv{evaluator.try_eval(*expr_h)}; cv && !cv->is_poison()) {
+                        folded.emplace(std::move(*cv));
+                    } else if (auto ref{local_const_fn_ref(*expr_h)}) {
+                        folded.emplace(std::move(*ref));
+                    } else if (auto clv{constexpr_closure_value(*expr_h)}) {
+                        folded.emplace(std::move(*clv));
+                    }
                 }
+
                 if (!folded) {
-                    return last_type_.emplace(ctx_.poison_node(
-                        resolving_,
-                        id,
-                        "argument to a constexpr parameter must be a compile-time-constant "
-                        "scalar or string",
-                        error::CONSTEXPR_EVALUATION_FAILED,
-                        get_call_arg_location(call.arguments[i])));
+                    const auto* arg_ty{concrete_arg_types[i]};
+                    const auto  msg{arg_ty && arg_ty->get_kind() == type_kind::CLOSURE
+                                        ? "a constexpr closure argument must capture only "
+                                          "compile-time constants"
+                                        : "argument to a constexpr parameter must be a "
+                                          "compile-time constant"};
+                    return last_type_.emplace(
+                        ctx_.poison_node(resolving_,
+                                         id,
+                                         msg,
+                                         error::CONSTEXPR_EVALUATION_FAILED,
+                                         get_call_arg_location(call.arguments[i])));
                 }
                 constexpr_args[cx_i++] = std::move(*folded);
             }
@@ -1191,8 +1280,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     }
 
     // Every parameter contributes to the resolution but not the type key due to unique idx
-    u32 constexpr_mask{0};
-    for (usize p_idx{0}; const auto& param : fn.parameters) {
+    for (const auto& param : fn.parameters) {
         const auto& ident{resolving_.ast.get_as<ast::identifier_expr>(param.name)};
         if (auto sym{ctx_.registry.get_from_opt(table_idx_, ident.name)}) {
             sym->set_status(symbol_status::RESOLVING);
@@ -1200,33 +1288,21 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         TRY_RESOLVE(param.explicit_type);
 
         auto& param_type{denoted_type(*last_type_.take())};
-        if (param.is_constexpr) {
-            const auto k{param_type.get_kind()};
-            if (k == type_kind::AUTO || k == type_kind::TYPE) {
-                return last_type_.emplace(
-                    ctx_.poison_node(resolving_,
-                                     id,
-                                     "constexpr parameters must have a concrete, non-'type' type",
-                                     error::ILLEGAL_AUTO_USAGE,
-                                     resolving_.ast.location_of(param.name)));
-            }
-            if (p_idx < 32) { constexpr_mask |= (1 << p_idx); }
-        }
         param_types[param_idx++] = &param_type;
         resolving_.set_sema_type(param.name, param_type);
         resolve_symbol_info(param.name, symbol_kind::VALUE);
-        ++p_idx;
     }
 
     TRY_RESOLVE(fn.explicit_return_type);
     auto& return_type{*last_type_.take()};
     ASSERT(!fn_type.is_resolved(), "Valued function must not be resolved");
 
-    if (any_param_generic(param_types) || constexpr_mask != 0) {
+    // A `constexpr` parameter makes the function a template, monomorphized per value
+    if (any_param_generic(param_types) || any_param_constexpr(fn)) {
         fn_type.resolve<types::function>(
-            fn.self.has_value(), param_types, return_type, fn.variadic, constexpr_mask);
+            fn.self.has_value(), param_types, return_type, fn.variadic);
         ctx_.generic_functions.register_function(
-            fn_type, resolving_, id, fn, stdx::none, user_type_stack_.peek(), constexpr_mask);
+            fn_type, resolving_, id, fn, stdx::none, user_type_stack_.peek());
         return last_type_.emplace(fn_type);
     }
 
@@ -1459,7 +1535,13 @@ template <ast::IndexableID ID> auto type_resolver::resolve_symbol(ID id, symbol&
                 resolving_.ast.location_of(id)));
         }
         resolve(*node);
-        resolving_.set_sema_type(id, *last_type_.take());
+        // Take the symbol's real type so forward references and mutual recursion resolve.
+        if (sym.get_status() == symbol_status::RESOLVED &&
+            sym.get_kind() != symbol_kind::POISONED) {
+            resolving_.set_sema_type(id, get_resolved_symbol_type(symbol_data));
+        } else {
+            resolving_.set_sema_type(id, *last_type_.take());
+        }
         break;
     }
     default: UNREACHABLE("Symbol status should only be 1 of 3 states");
@@ -1566,11 +1648,10 @@ auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void 
                 static_cast<void>(last_type_.take());
                 auto& node_type{live_type ? *live_type
                                           : ctx_.get_builtin_resolved_type(type_kind::VOID_)};
-                if (!for_generic_instantiation_) {
-                    resolving_.if_constexpr_results.insert_or_assign(
-                        id.get_index(),
-                        *folded ? mod::if_branch::CONSEQUENCE : mod::if_branch::ALTERNATE);
-                }
+                // Per-instantiation verdicts are captured and replayed by instantiate_generic.
+                resolving_.if_constexpr_results.insert_or_assign(
+                    id.get_index(),
+                    *folded ? mod::if_branch::CONSEQUENCE : mod::if_branch::ALTERNATE);
                 resolving_.set_sema_type(id, node_type);
                 last_type_.emplace(node_type);
                 return;
@@ -3428,25 +3509,30 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_array_ty
     last_type_.emplace(final_type);
 }
 
-auto type_resolver::instantiate_generic(type&                        callee_type,
-                                        const generic_function_info& fn_info,
-                                        gsl::span<type*>             concrete_args,
-                                        gsl::span<const const_arg>   constexpr_args)
+auto type_resolver::instantiate_generic(type&                             callee_type,
+                                        const generic_function_info&      fn_info,
+                                        gsl::span<type*>                  concrete_args,
+                                        gsl::span<const gir::const_value> constexpr_args)
     -> stdx::option<generic_instantiation_entry> {
     mod::module& fn_mod{*fn_info.module};
     const auto&  fn_expr{*fn_info.fn_expr};
     const auto   fn_type{fn_info.fn_type};
     const auto   fn_table_idx{fn_type->get_symbol_table_idx()};
 
-    std::vector<constexpr_binding> bindings_list;
-    constexpr_frame                binding_frame;
-    for (usize p_idx{0}, cx_i{0}; p_idx < fn_expr.parameters.size() && p_idx < 32; ++p_idx) {
-        if ((fn_info.constexpr_mask & (1 << p_idx)) == 0) { continue; }
+    // Snapshot the shared side tables so this typing can be captured as a diff and replayed
+    const auto snap_nodes{fn_mod.sema_side_tables.node_types.values};
+    const auto snap_types{fn_mod.sema_side_tables.explicit_types.values};
+    const auto snap_ifs{fn_mod.if_constexpr_results};
+
+    // Bind each `constexpr` parameter to its folded value while this instantiation's body is
+    // resolved, so `const_eval` folds it there. `constexpr_args` is in parameter order.
+    constexpr_frame binding_frame;
+    for (usize p_idx{0}, cx_i{0}; p_idx < fn_expr.parameters.size(); ++p_idx) {
+        if (!fn_expr.parameters[p_idx].is_constexpr) { continue; }
         if (cx_i >= constexpr_args.size()) { break; }
         const auto& name{
             fn_mod.ast.get_as<ast::identifier_expr>(fn_expr.parameters[p_idx].name).name};
         binding_frame.insert_or_assign(name, constexpr_args[cx_i]);
-        bindings_list.emplace_back(constexpr_binding{.name = name, .value = constexpr_args[cx_i]});
         ++cx_i;
     }
     const constexpr_frame_guard cfg{ctx_.constexpr_binding_frames, std::move(binding_frame)};
@@ -3533,6 +3619,25 @@ auto type_resolver::instantiate_generic(type&                        callee_type
     }
     if (ctx_.diags.size() > diags_before || resolved_poison) { return stdx::none; }
 
+    // Diff the side tables against the snapshot: everything this instantiation's body/signature
+    // resolved, to be replayed at emit time.
+    body_type_diff typing;
+    const auto     collect{[](const auto& live, const auto& snap, auto& out) {
+        for (usize i{0}; i < live.size(); ++i) {
+            if (!live[i]) { continue; }
+            const bool changed{i >= snap.size() || !snap[i] || snap[i].get() != live[i].get()};
+            if (changed) { out.emplace_back(i, live[i]); }
+        }
+    }};
+    collect(fn_mod.sema_side_tables.node_types.values, snap_nodes, typing.node_types);
+    collect(fn_mod.sema_side_tables.explicit_types.values, snap_types, typing.explicit_types);
+    for (const auto& [idx, br] : fn_mod.if_constexpr_results) {
+        const auto prev{snap_ifs.find(idx)};
+        if (prev == snap_ifs.end() || prev->second != br) {
+            typing.if_branches.emplace_back(idx, br);
+        }
+    }
+
     auto tracker{std::move(inst_resolver.return_trackers_.back())};
     inst_resolver.return_trackers_.pop_back();
     auto& deduced_return_type{is_auto_return ? tracker.deduced_return_type(ctx_) : return_type};
@@ -3547,14 +3652,23 @@ auto type_resolver::instantiate_generic(type&                        callee_type
     // Distinct `constexpr` argument values must produce distinct symbols.
     for (const auto& cx : constexpr_args) { mangled_name += fmt::format("_cx{}", cx.mangle()); }
 
+    // Hand the folded values to the emitter out-of-band
+    if (!constexpr_args.empty()) {
+        ctx_.constexpr_instantiation_args.insert_or_assign(
+            mangled_name,
+            std::vector<gir::const_value>(constexpr_args.begin(), constexpr_args.end()));
+    }
+    if (!typing.empty()) {
+        ctx_.instantiation_body_types.insert_or_assign(mangled_name, std::move(typing));
+    }
+
     generic_instantiation_request req{
-        .generic_fn_type    = &callee_type,
-        .arg_types          = inst_param_types,
-        .return_type        = &deduced_return_type,
-        .mangled_name       = mangled_name,
-        .fn_node_id         = fn_info.node_id,
-        .module             = &fn_mod,
-        .constexpr_bindings = bindings_list,
+        .generic_fn_type = &callee_type,
+        .arg_types       = inst_param_types,
+        .return_type     = &deduced_return_type,
+        .mangled_name    = mangled_name,
+        .fn_node_id      = fn_info.node_id,
+        .module          = &fn_mod,
     };
 
     fn_mod.generic_instantiations.emplace_back(req);

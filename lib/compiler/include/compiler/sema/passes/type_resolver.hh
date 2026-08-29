@@ -22,8 +22,8 @@
 #include "compiler/ast/statement.hh"
 #include "compiler/ast/traits.hh"
 #include "compiler/ast/type.hh"
+#include "compiler/gir/const_value.hh"
 #include "compiler/module/module.hh"
-#include "compiler/sema/const_arg.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
@@ -168,6 +168,10 @@ class type_resolver {
     [[nodiscard]] auto get_call_arg_location(const ast::call_expr::argument& arg)
         -> source_location;
 
+    [[nodiscard]] auto local_const_fn_ref(ast::expr_handle expr) -> stdx::option<gir::const_value>;
+    [[nodiscard]] auto constexpr_closure_value(ast::expr_handle expr)
+        -> stdx::option<gir::const_value>;
+
     template <ast::IndexableID ID> auto resolve_call(ID, const ast::call_expr&) -> void;
     auto                                visit(ast::node_id, const ast::call_expr&) -> void;
     auto                                visit(ast::node_id, const ast::do_while_loop_expr&) -> void;
@@ -297,10 +301,10 @@ class type_resolver {
     auto resolve_symbol_info(ast::identifier_handle handle, stdx::option<symbol_kind> kind)
         -> stdx::option<symbol&>;
 
-    auto instantiate_generic(type&                        callee_type,
-                             const generic_function_info& fn_info,
-                             gsl::span<type*>             concrete_args,
-                             gsl::span<const const_arg>   constexpr_args = {})
+    auto instantiate_generic(type&                             callee_type,
+                             const generic_function_info&      fn_info,
+                             gsl::span<type*>                  concrete_args,
+                             gsl::span<const gir::const_value> constexpr_args = {})
         -> stdx::option<generic_instantiation_entry>;
 
     type_resolver(mod::module& resolving, context& ctx)

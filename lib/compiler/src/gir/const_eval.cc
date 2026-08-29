@@ -29,7 +29,6 @@
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/module/module.hh"
-#include "compiler/sema/const_arg.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/symbol.hh"
@@ -41,22 +40,6 @@
 namespace ghoti::gir {
 
 namespace {
-
-// Materializes a `constexpr` parameter binding as a foldable constant.
-[[nodiscard]] auto const_arg_to_value(sema::context& ctx, const sema::const_arg& arg)
-    -> const_value {
-    if (arg.is<std::string>()) { return const_value::make_string(ctx, arg.as<std::string>()); }
-    if (arg.is<i64>()) {
-        return const_value{arg.as<i64>(), ctx.get_builtin_resolved_type(sema::type_kind::I64)};
-    }
-    if (arg.is<u64>()) {
-        return const_value{arg.as<u64>(), ctx.get_builtin_resolved_type(sema::type_kind::U64)};
-    }
-    if (arg.is<f64>()) {
-        return const_value{arg.as<f64>(), ctx.get_builtin_resolved_type(sema::type_kind::F64)};
-    }
-    return const_value{arg.as<bool>(), ctx.get_builtin_resolved_type(sema::type_kind::BOOL)};
-}
 
 template <typename T>
 [[nodiscard]] auto fold_binary_arithmetic(syntax::token_type_t      op_type,
@@ -182,7 +165,9 @@ auto const_eval::resolve_all_deferred_arrays() -> void {
     for (auto& type_opt : module_->sema_side_tables.explicit_types.values) {
         if (!type_opt) { continue; }
         if (const auto def{type_opt->get_data().as_opt<sema::types::deferred_array>()}) {
-            type_opt.emplace(resolve_deferred_array(def->array, def->underlying));
+            if (auto concrete{resolve_deferred_array(def->array, def->underlying)}) {
+                type_opt.emplace(*concrete);
+            }
         }
         force_deferred_function_params(*type_opt);
         force_deferred_aggregate_fields(*type_opt);
@@ -192,7 +177,9 @@ auto const_eval::resolve_all_deferred_arrays() -> void {
     for (auto& type_opt : module_->sema_side_tables.node_types.values) {
         if (!type_opt) { continue; }
         if (const auto def{type_opt->get_data().as_opt<sema::types::deferred_array>()}) {
-            type_opt.emplace(resolve_deferred_array(def->array, def->underlying));
+            if (auto concrete{resolve_deferred_array(def->array, def->underlying)}) {
+                type_opt.emplace(*concrete);
+            }
         }
         force_deferred_function_params(*type_opt);
         force_deferred_aggregate_fields(*type_opt);
@@ -366,7 +353,10 @@ auto const_eval::type_size_of(const sema::type& type, usize ptr_size) -> usize {
 auto const_eval::force_deferred_array(sema::type& maybe_deferred) -> sema::type& {
     const auto deferred{maybe_deferred.get_data().as_opt<sema::types::deferred_array>()};
     if (!deferred) { return maybe_deferred; }
-    return resolve_deferred_array(deferred->array, deferred->underlying);
+    if (auto concrete{resolve_deferred_array(deferred->array, deferred->underlying)}) {
+        return *concrete;
+    }
+    return maybe_deferred;
 }
 
 auto const_eval::force_deferred_array_elements(gsl::span<sema::type*> elements) -> void {
@@ -406,13 +396,14 @@ auto const_eval::force_deferred_function_params(sema::type& maybe_fn) -> void {
 }
 
 auto const_eval::resolve_deferred_array(const ast::explicit_array_type& array,
-                                        sema::type&                     item_type) -> sema::type& {
+                                        sema::type& item_type) -> stdx::option<sema::type&> {
     ASSERT(array.dimension, "Deferred array type must have a dimension");
-    const auto len{eval_type_dim(*array.dimension).value_or(0)};
+    const auto cv{try_eval(*array.dimension)};
+    if (!cv || cv->is_poison()) { return stdx::none; }
+    const auto len{cv->as_uint_opt().value_or(0)};
     const auto mutability{array.mut_elements ? sema::types::mut::MUTABLE
                                              : sema::types::mut::CONSTANT};
-    auto&      concrete_array{ctx_.get_array(mutability, array.null_terminated, len, item_type)};
-    return concrete_array;
+    return ctx_.get_array(mutability, array.null_terminated, len, item_type);
 }
 
 auto const_eval::resolve_deferred_call(const ast::call_expr& call) -> sema::type& {
@@ -1091,9 +1082,7 @@ auto const_eval::eval_unary(ast::node_id id, const ast::unary_expr& unary)
 auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
     -> stdx::option<const_value> {
     if (auto local_val{lookup_local_binding(ident.name)}) { return local_val; }
-    if (const auto cx{ctx_.lookup_constexpr_binding(ident.name)}) {
-        return const_arg_to_value(ctx_, *cx);
-    }
+    if (const auto cx{ctx_.lookup_constexpr_binding(ident.name)}) { return *cx; }
 
     if (id.is_valid()) {
         if (const auto sema_type{module_->get_sema_type_opt(id)}) {
@@ -1172,6 +1161,25 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
     -> stdx::option<const_value> {
     const auto fn_token{call.function->get_token_type()};
     if (syntax::get_builtin_opt(fn_token)) { return eval_builtin(id, call, fn_token); }
+
+    // A `constexpr` callable (closure or function) parameter invoked inside a monomorphized body.
+    if (const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(call.function)}) {
+        if (const auto bc{lookup_bound_callable(ident->name)}) {
+            std::vector<const_value> args;
+            for (const auto& arg : call.arguments) {
+                if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
+                    const auto av{try_eval(*expr_h)};
+                    if (!av) { return stdx::none; }
+                    args.emplace_back(*av);
+                }
+            }
+            auto* const prev{module_.get()};
+            set_module(*bc->module);
+            auto res{eval_constexpr_fn(id, *bc->fn_expr, args, bc->captures)};
+            set_module(*prev);
+            return res;
+        }
+    }
 
     if (const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(call.function)}) {
         if (!module_->root_table_idx) { return stdx::none; }
@@ -1460,9 +1468,47 @@ auto const_eval::eval_builtin(ast::node_id          id,
     }
 }
 
-auto const_eval::eval_constexpr_fn(ast::node_id                    call_id,
-                                   const ast::function_expr&       fn_expr,
-                                   const std::vector<const_value>& args)
+auto const_eval::lookup_bound_callable(std::string_view name) -> stdx::option<bound_callable> {
+    // Find a constexpr callable value bound to `name` (call frame first, then constexpr frame).
+    stdx::option<const const_value&> v;
+    for (auto& fr : std::views::reverse(call_stack_)) {
+        if (auto it{fr.bindings.find(name)}; it != fr.bindings.end()) {
+            v.emplace(it->second);
+            break;
+        }
+    }
+    if (!v) { v = ctx_.lookup_constexpr_binding(name); }
+    if (!v) { return stdx::none; }
+
+    if (const auto cl{v->as_opt<const_closure>()}) {
+        auto& m{cl->module ? *cl->module : *module_};
+        if (const auto fe{m.ast.get_as_opt<ast::function_expr>(cl->fn_node)}) {
+            return bound_callable{.module = &m, .fn_expr = fe.get(), .captures = cl->captures};
+        }
+        return stdx::none;
+    }
+    const auto sref{v->as_opt<std::string>()};
+    if (!sref) { return stdx::none; }
+
+    // A top-level `const` function by name (globals decay to a name string).
+    if (!module_->root_table_idx) { return stdx::none; }
+    const auto& table{ctx_.registry.get(*module_->root_table_idx)};
+    const auto  sym{table.get_opt(*sref)};
+    if (!sym) { return stdx::none; }
+    const auto sn{sym->get_data().as_opt<sema::symbols::node_t>()};
+    if (!sn) { return stdx::none; }
+    const auto decl{module_->ast.get_as_opt<ast::decl_stmt>(*sn)};
+    if (!decl || !decl->value) { return stdx::none; }
+    if (const auto fe{module_->ast.get_as_opt<ast::function_expr>(*decl->value)}) {
+        return bound_callable{.module = module_, .fn_expr = fe.get()};
+    }
+    return stdx::none;
+}
+
+auto const_eval::eval_constexpr_fn(ast::node_id                      call_id,
+                                   const ast::function_expr&         fn_expr,
+                                   const std::vector<const_value>&   args,
+                                   stdx::option<const const_struct&> captures)
     -> stdx::option<const_value> {
     VERIFY(fn_expr.parameters.size() == args.size(),
            "Constexpr function args count must match parameters count");
@@ -1480,6 +1526,9 @@ auto const_eval::eval_constexpr_fn(ast::node_id                    call_id,
     for (const auto& [param, arg] : std::views::zip(fn_expr.parameters, args)) {
         const auto& ident{module_->ast.get_as<ast::identifier_expr>(param.name)};
         frame.bindings.emplace(ident.name, arg);
+    }
+    if (captures) {
+        for (const auto& [name, val] : captures->fields) { frame.bindings.emplace(name, val); }
     }
 
     const usize prev_stack_size{recursion_limit_stack_.size()};

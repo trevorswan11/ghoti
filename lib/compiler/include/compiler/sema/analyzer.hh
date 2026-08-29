@@ -18,6 +18,7 @@
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
+#include "compiler/sema/instantiation_cache.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 

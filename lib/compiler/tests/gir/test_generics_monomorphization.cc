@@ -69,6 +69,50 @@ TEST_CASE("GIR constexpr parameter monomorphizes per value") {
     CHECK(shifted_variants.size() == 2);
 }
 
+TEST_CASE("GIR constexpr parameter sizes a type per instantiation") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const room := fn(constexpr n: usize): usize { return @sizeOf([n]i32); };
+
+        const test_fn := fn(): usize {
+            return room(2uz) + room(5uz);
+        };
+    )")};
+
+    gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
+    const auto   gir_mod{emitter.emit()};
+
+    std::set<std::string> rets;
+    for (const auto& fn : gir_mod.get_functions()) {
+        if (!fn->get_name().starts_with("room__")) { continue; }
+        std::ostringstream ss;
+        gir::dumper        dumper{ss};
+        dumper.dump(*fn);
+        rets.insert(std::string{ss.view()});
+    }
+    // Two instantiations with different bodies: [2]i32 -> 8, [5]i32 -> 20.
+    REQUIRE(rets.size() == 2);
+}
+
+TEST_CASE("GIR constexpr struct value dedups regardless of field order") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const P := struct { x: i32, y: i32 };
+        const dot := fn(constexpr p: P): i32 { return p.x + p.y; };
+
+        const test_fn := fn(): i32 {
+            return dot(P{ .x = 1, .y = 2 }) + dot(P{ .y = 2, .x = 1 }) + dot(P{ .x = 9, .y = 9 });
+        };
+    )")};
+
+    gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
+    const auto   gir_mod{emitter.emit()};
+
+    std::set<std::string_view> dot_variants;
+    for (const auto& fn : gir_mod.get_functions()) {
+        if (fn->get_name().starts_with("dot__")) { dot_variants.insert(fn->get_name()); }
+    }
+    CHECK(dot_variants.size() == 2);
+}
+
 TEST_CASE("GIR multiple instantiations with diverse types") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const add := fn(a: auto, b: auto): auto {

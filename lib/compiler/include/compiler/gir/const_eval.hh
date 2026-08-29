@@ -34,6 +34,9 @@ class const_eval {
 
     auto set_module(mod::module& module) noexcept -> void { module_ = &module; }
 
+    // Node-indexed memoization is unsound across generic instantiations that share AST nodes.
+    auto clear_memo() noexcept -> void { memo_cache_.clear(); }
+
     // Attempt to evaluate node as a compile-time constant. Returns none if non-constant.
     [[nodiscard]] auto try_eval(ast::node_id id) -> stdx::option<const_value>;
 
@@ -59,13 +62,13 @@ class const_eval {
     };
 
   private:
-    auto resolve_deferred_array(const ast::explicit_array_type& array, sema::type& item_type)
-        -> sema::type&;
-    auto force_deferred_function_params(sema::type& maybe_fn) -> void;
-    auto force_deferred_aggregate_fields(sema::type& maybe_aggregate) -> void;
-    auto force_deferred_indirection_underlying(sema::type& maybe_indirection) -> void;
-    auto force_deferred_array_elements(gsl::span<sema::type*> elements) -> void;
-    auto resolve_deferred_call(const ast::call_expr& call) -> sema::type&;
+    [[nodiscard]] auto resolve_deferred_array(const ast::explicit_array_type& array,
+                                              sema::type& item_type) -> stdx::option<sema::type&>;
+    auto               force_deferred_function_params(sema::type& maybe_fn) -> void;
+    auto               force_deferred_aggregate_fields(sema::type& maybe_aggregate) -> void;
+    auto               force_deferred_indirection_underlying(sema::type& maybe_indirection) -> void;
+    auto               force_deferred_array_elements(gsl::span<sema::type*> elements) -> void;
+    auto               resolve_deferred_call(const ast::call_expr& call) -> sema::type&;
 
     auto eval_node(ast::node_id id) -> stdx::option<const_value>;
     auto eval_binary(ast::node_id id, const ast::binary_expr& binary) -> stdx::option<const_value>;
@@ -86,9 +89,19 @@ class const_eval {
 
     [[nodiscard]] auto target_enum_value(std::string_view enum_name, std::string_view member)
         -> const_value;
-    auto eval_constexpr_fn(ast::node_id                    call_id,
-                           const ast::function_expr&       fn_expr,
-                           const std::vector<const_value>& args) -> stdx::option<const_value>;
+    auto eval_constexpr_fn(ast::node_id                      call_id,
+                           const ast::function_expr&         fn_expr,
+                           const std::vector<const_value>&   args,
+                           stdx::option<const const_struct&> captures = stdx::none)
+        -> stdx::option<const_value>;
+
+    // A `constexpr` callable (closure or plain function) bound to `name` in scope
+    struct bound_callable {
+        gsl::not_null<mod::module*>              module;
+        gsl::not_null<const ast::function_expr*> fn_expr;
+        stdx::option<const const_struct&>        captures{};
+    };
+    auto lookup_bound_callable(std::string_view name) -> stdx::option<bound_callable>;
 
     auto eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_value>;
     auto eval_decl(ast::node_id id, const ast::decl_stmt& decl) -> stdx::option<const_value>;

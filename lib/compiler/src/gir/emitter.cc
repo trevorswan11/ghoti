@@ -2,13 +2,14 @@
 
 #include <algorithm>
 #include <ranges>
-#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include <ankerl/unordered_dense.h>
 #include <fmt/format.h>
+#include <gsl/pointers>
 #include <gsl/span>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
@@ -168,17 +169,63 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
     auto prev_module{std::exchange(active_module_, &fn_mod)};
     const_eval_.set_module(fn_mod);
 
-    // Re-bind `constexpr` parameters so `const_eval` folds them
-    sema::constexpr_frame cx_frame;
-    for (const auto& binding : req.constexpr_bindings) {
-        cx_frame.insert_or_assign(binding.name, binding.value);
+    // Re-bind `constexpr` parameters so `const_eval` folds them the same way it did at resolution
+    sema::constexpr_frame                                                             cx_frame;
+    ankerl::unordered_dense::map<std::string_view, gsl::not_null<const const_value*>> cx_by_name;
+    if (const auto it{ctx_.constexpr_instantiation_args.find(req.mangled_name)};
+        it != ctx_.constexpr_instantiation_args.end()) {
+        usize cx_i{0};
+        for (const auto& param : fn_expr.parameters) {
+            if (!param.is_constexpr || cx_i >= it->second.size()) { continue; }
+            const auto& p_name{fn_mod.ast.get_as<ast::identifier_expr>(param.name).name};
+            cx_frame.insert_or_assign(p_name, it->second[cx_i]);
+            cx_by_name.emplace(p_name, &it->second[cx_i]);
+            ++cx_i;
+        }
     }
     const constexpr_frame_guard cx_frame_guard{ctx_.constexpr_binding_frames, std::move(cx_frame)};
+
+    // Replay this monomorphization's body typing onto the shared AST nodes before emitting
+    const_eval_.clear_memo();
+    if (const auto it{ctx_.instantiation_body_types.find(req.mangled_name)};
+        it != ctx_.instantiation_body_types.end()) {
+        for (const auto& [idx, ty] : it->second.node_types) {
+            fn_mod.sema_side_tables.node_types.values[idx] = ty;
+        }
+        for (const auto& [idx, ty] : it->second.explicit_types) {
+            fn_mod.sema_side_tables.explicit_types.values[idx] = ty;
+        }
+        for (const auto& [idx, br] : it->second.if_branches) {
+            fn_mod.if_constexpr_results.insert_or_assign(idx, br);
+        }
+    }
     {
         const scope_guard g{scopes_};
         for (const auto& [param, arg_type] : std::views::zip(fn_expr.parameters, req.arg_types)) {
             const auto& p_ident{fn_mod.ast.get_as<ast::identifier_expr>(param.name)};
             const auto  p_name{p_ident.name};
+
+            // A `constexpr` function-reference / closure argument binds by name so calls through
+            // the parameter lower to a direct call to a (materialized) plain function.
+            const auto cxit{cx_by_name.find(p_name)};
+            const bool is_cx_callable{
+                cxit != cx_by_name.end() &&
+                (cxit->second->is<std::string>() || cxit->second->is<const_closure>())};
+            if (is_cx_callable) {
+                std::string callee{cxit->second->is<std::string>()
+                                       ? cxit->second->as<std::string>()
+                                       : emit_constexpr_closure(cxit->second->as<const_closure>())};
+                fn.add_param(std::string{p_name}, *arg_type);
+                scopes_.back().bindings.emplace(
+                    p_name,
+                    local_binding{
+                        .id        = {0, local_kind::TEMPORARY},
+                        .type      = *arg_type,
+                        .is_alloca = false,
+                        .const_val = value{std::move(callee), *arg_type},
+                    });
+                continue;
+            }
 
             auto& p_slot{fn.add_param(std::string{p_name}, *arg_type)};
             if (arg_type->get_kind() == sema::type_kind::CLOSURE) {
@@ -558,8 +605,10 @@ auto emitter::emit_named_local_function(std::string_view          name,
     PROFILE_FUNCTION();
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Local function must have a resolved sema type");
-    auto&      fn_type{*sema_type};
-    const auto anon_name{fmt::format("anonymous_fn{}", anon_fn_counter_++)};
+    auto& fn_type{*sema_type};
+    // Deterministic per fn node, so a `constexpr` function-ref argument can name it.
+    const auto anon_name{fmt::format("localfn.{}", id.get_index())};
+    if (gir_module_.has_function(anon_name)) { return anon_name; }
 
     auto& fn{gir_module_.add_function(anon_name, fn_type, false, false, fn_expr.variadic)};
     fn.set_calling_conv(fn_expr.conv);
@@ -750,6 +799,80 @@ auto emitter::get_capture_source(const sema::types::closure_capture& capture) ->
     return value{binding->id, *capture.storage_type};
 }
 
+auto emitter::emit_constexpr_closure(const const_closure& cl) -> std::string {
+    PROFILE_FUNCTION();
+    const_value       key{const_value::data_t{cl}};
+    const std::string fn_name{fmt::format("closureconst.{}", key.mangle())};
+    if (gir_module_.has_function(fn_name)) { return fn_name; }
+
+    auto&       def_mod{cl.module ? *cl.module : ast_module_};
+    const auto& fn_expr{def_mod.ast.get_as<ast::function_expr>(cl.fn_node)};
+    auto&       node_type{def_mod.get_sema_type(cl.fn_node)};
+    // A capture-less closure value may wrap a plain function; use its public call signature.
+    auto&      sig{node_type.get_data().as_opt<sema::types::closure_t>()
+                       ? node_type.get_data().as<sema::types::closure_t>().signature
+                       : node_type};
+    const auto sig_data{sig.get_data().as_opt<sema::types::function>()};
+    ASSERT(sig_data, "constexpr callable must have a function signature");
+
+    auto&      fn{gir_module_.add_function(fn_name, sig, false, false, fn_expr.variadic)};
+    const auto prev_fn{builder_.get_function()};
+    const auto prev_seg{builder_.get_segment()};
+    auto       prev_module{std::exchange(active_module_, &def_mod)};
+    const_eval_.set_module(def_mod);
+
+    auto& entry{fn.add_segment()};
+    builder_.set_insert_point(fn, entry);
+    {
+        const scope_guard g{scopes_};
+
+        // Captures fold both in const-eval and as runtime constants inside the body.
+        sema::constexpr_frame cx_frame;
+        for (const auto& [name, val] : cl.captures.fields) {
+            cx_frame.insert_or_assign(std::string_view{name}, val);
+            scopes_.back().bindings.emplace(
+                std::string_view{name},
+                local_binding{
+                    .id        = {0, local_kind::TEMPORARY},
+                    .type      = val.get_type().value_or(*sig_data->params.front()),
+                    .is_alloca = false,
+                    .const_val = materialize_const(val),
+                });
+        }
+        const constexpr_frame_guard cxg{ctx_.constexpr_binding_frames, std::move(cx_frame)};
+
+        for (const auto& param : fn_expr.parameters) {
+            const auto& p_ident{def_mod.ast.get_as<ast::identifier_expr>(param.name)};
+            const auto  p_name{p_ident.name};
+            const auto  p_type{def_mod.get_sema_type_opt(param.name)};
+            ASSERT(p_type, "closure parameter must have a resolved sema type");
+            auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
+            const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
+            scopes_.back().bindings.emplace(p_name,
+                                            local_binding{
+                                                .id        = p_slot.id,
+                                                .type      = *p_type,
+                                                .is_alloca = p_spilled,
+                                                .const_val = stdx::none,
+                                            });
+        }
+
+        emit_block(def_mod.ast.get_as<ast::block_stmt>(fn_expr.body));
+        if (const auto cur_seg{builder_.get_segment()}; cur_seg && !cur_seg->has_terminator()) {
+            if (sig_data->return_type.get_kind() == sema::type_kind::VOID_) {
+                builder_.emit_return();
+            } else {
+                builder_.emit_return(value{undefined_val{}, sig_data->return_type});
+            }
+        }
+    }
+
+    active_module_ = prev_module;
+    if (prev_module) { const_eval_.set_module(*prev_module); }
+    if (prev_fn && prev_seg) { builder_.set_insert_point(*prev_fn, *prev_seg); }
+    return fn_name;
+}
+
 auto emitter::emit_stmt(const ast::stmt_handle& stmt) -> void {
     PROFILE_FUNCTION();
     const auto stmt_id{*stmt};
@@ -847,7 +970,11 @@ auto emitter::emit_continue(ast::node_id, const ast::continue_stmt& cnt) -> void
 auto emitter::emit_block(const ast::block_stmt& block) -> void {
     PROFILE_FUNCTION();
     const scope_guard g{scopes_};
-    for (const auto& stmt : block.statements) { emit_stmt(stmt); }
+    for (const auto& stmt : block.statements) {
+        // A folded `if constexpr` arm (or any diverging statement) can terminate the block
+        if (const auto seg{builder_.get_segment()}; seg && seg->has_terminator()) { break; }
+        emit_stmt(stmt);
+    }
     emit_defers_for_scope(scopes_.size() - 1);
 }
 
@@ -1535,8 +1662,11 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
     const bool is_fn_ctx_call{fn_ctx_call && fn_ctx_call->function->get_token_type() ==
                                                  syntax::token_type_t::BUILTIN_FN_CTX};
 
+    // The resolver pinned this call's monomorphization (keyed on types *and* constexpr values).
+    bool resolved_generic_target{false};
     if (const auto generic_target{active_mod().get_generic_call_target_opt(id)}) {
         callee_name.emplace(*generic_target);
+        resolved_generic_target = true;
     } else if (is_fn_ctx_call) {
         ASSERT(!open_fn_names_.empty(), "@fnCtx() must be inside an open function");
         callee_name.emplace(open_fn_names_.back());
@@ -1749,8 +1879,9 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         return value{void_val{}, ret_type};
     }
 
-    // Check if callee targets a generic instantiation
+    // Fallback match by arg types only, for calls the resolver did not pin above.
     for (const auto& req : ast_module_.generic_instantiations) {
+        if (resolved_generic_target) { break; }
         bool fn_match{false};
         if (fn_type_opt && *req.generic_fn_type == *fn_type_opt) {
             fn_match = true;
@@ -1762,7 +1893,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         if (fn_match) {
             // req.arg_types excludes the implicit self already prepended to args above.
             const auto explicit_args{
-                std::span{args}.subspan(static_cast<usize>(has_implicit_self ? 1 : 0))};
+                gsl::span{args}.subspan(static_cast<usize>(has_implicit_self))};
             VERIFY(req.arg_types.size() == explicit_args.size(),
                    "Generic arg types do not match arity");
             bool args_match{true};

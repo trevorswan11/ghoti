@@ -15,16 +15,32 @@
 
 #include "compiler/ast/traits.hh"
 #include "compiler/codegen/target.hh"
+#include "compiler/gir/const_value.hh"
 #include "compiler/module/module.hh"
-#include "compiler/sema/const_arg.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
+#include "compiler/sema/instantiation_cache.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 
 namespace ghoti::sema {
 
-using constexpr_frame = ankerl::unordered_dense::map<std::string_view, const_arg>;
+using constexpr_frame = ankerl::unordered_dense::map<std::string_view, gir::const_value>;
+
+// Constexpr argument values per monomorphization, keyed by mangled name
+using constexpr_arg_map = ankerl::unordered_dense::map<std::string, std::vector<gir::const_value>>;
+
+// Per-monomorphization body typing to facilitate `[n]T` with a `constexpr n`
+struct body_type_diff {
+    std::vector<std::pair<usize, stdx::option<type&>>> node_types;
+    std::vector<std::pair<usize, stdx::option<type&>>> explicit_types;
+    std::vector<std::pair<usize, mod::if_branch>>      if_branches;
+
+    [[nodiscard]] auto empty() const noexcept -> bool {
+        return node_types.empty() && explicit_types.empty() && if_branches.empty();
+    }
+};
+using body_type_diff_map = ankerl::unordered_dense::map<std::string, body_type_diff>;
 
 // A contextual wrapper around sematic steps
 //
@@ -45,6 +61,8 @@ struct context {
 
     // For the generic instantiation currently being resolved or emitted.
     std::vector<constexpr_frame> constexpr_binding_frames;
+    constexpr_arg_map            constexpr_instantiation_args;
+    body_type_diff_map           instantiation_body_types;
 
     context(mod::module_manager&         modules,
             symbol_table_registry&       registry,
@@ -68,7 +86,9 @@ struct context {
           diags{other.diags.create_new()}, error_stream{other.error_stream},
           prelude_index{other.prelude_index}, target_opts{other.target_opts},
           user_main_name{other.user_main_name},
-          constexpr_binding_frames{other.constexpr_binding_frames} {}
+          constexpr_binding_frames{other.constexpr_binding_frames},
+          constexpr_instantiation_args{other.constexpr_instantiation_args},
+          instantiation_body_types{other.instantiation_body_types} {}
 
     auto operator=(const context& other) -> context& = delete;
     context(context&&) noexcept                      = default;
@@ -135,7 +155,7 @@ struct context {
 
     // The bound value of a `constexpr` parameter named `name`, searching innermost frame first
     [[nodiscard]] auto lookup_constexpr_binding(std::string_view name) const
-        -> stdx::option<const const_arg&>;
+        -> stdx::option<const gir::const_value&>;
 };
 
 } // namespace ghoti::sema

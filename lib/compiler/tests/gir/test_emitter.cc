@@ -239,14 +239,14 @@ TEST_CASE("Anonymous function expression and local lambda binding") {
     CHECK(fn0.get_name() == "run");
 
     const auto& fn1{*gir_mod.get_functions()[1]};
-    CHECK(fn1.get_name() == "anonymous_fn0");
+    CHECK(fn1.get_name().starts_with("localfn."));
     REQUIRE(fn1.get_params().size() == 1);
     CHECK(fn1.get_params()[0]->name == "v");
 
-    // The call inside run should call @anonymous_fn0
+    // The call inside run should target the local function
     const auto& run_seg{*fn0.get_segments()[0]};
     const auto& call_inst{UNWRAP(find_call_instruction(run_seg))};
-    CHECK(call_inst.callee_name == "anonymous_fn0");
+    CHECK(call_inst.callee_name == fn1.get_name());
 }
 
 TEST_CASE("Immediate anonymous function invocation in expression position") {
