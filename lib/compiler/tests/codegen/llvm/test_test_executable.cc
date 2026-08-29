@@ -44,40 +44,21 @@ TEST_CASE("Test with @src compiles and executes properly") {
     )") == 0);
 }
 
-TEST_CASE("Custom test runner 'test_runner' is automatically invoked") {
+TEST_CASE("A non-weak `test_runner` overrides the builtin weak default") {
     CHECK(helpers::compile_and_run_tests(R"(
         test "ignored test" {
             @require(false);
         }
 
-        pub const test_runner := fn(): i32 {
+        pub const test_runner := fn(tests: []builtin::Test): i32 {
+            _ = tests;
             return 77;
         };
     )") == 77);
 }
 
-TEST_CASE("Custom test runner 'default_test_runner' is automatically invoked") {
+TEST_CASE("The overriding `test_runner` receives the test metadata slice") {
     CHECK(helpers::compile_and_run_tests(R"(
-        test "ignored test" {
-            @require(false);
-        }
-
-        pub const default_test_runner := fn(): i32 {
-            return 88;
-        };
-    )") == 88);
-}
-
-TEST_CASE("Custom test runner specified by name receives test metadata slice") {
-    CHECK(helpers::compile_and_run_tests(R"(
-        pub const Test := struct {
-            name: []u8,
-            file: []u8,
-            line: u32,
-            column: u32,
-            func: fn(): bool,
-        };
-
         test "test one" {
             @expect(true);
         }
@@ -86,32 +67,22 @@ TEST_CASE("Custom test runner specified by name receives test metadata slice") {
             @expect(true);
         }
 
-        pub const my_custom_runner := fn(tests: []Test): i32 {
+        pub const test_runner := fn(tests: []builtin::Test): i32 {
             if (tests.len == 2) {
                 return 42;
             }
             return 1;
         };
-    )",
-                                         {},
-                                         "my_custom_runner") == 42);
+    )") == 42);
 }
 
-TEST_CASE("Custom test runner invokes test function pointer directly") {
+TEST_CASE("The overriding `test_runner` invokes a test function pointer directly") {
     CHECK(helpers::compile_and_run_tests(R"(
-        pub const Test := struct {
-            name: []u8,
-            file: []u8,
-            line: u32,
-            column: u32,
-            func: fn(): bool,
-        };
-
         test "successful test" {
             @expect(1 + 1 == 2);
         }
 
-        pub const invoke_runner := fn(tests: []Test): i32 {
+        pub const test_runner := fn(tests: []builtin::Test): i32 {
             if (tests.len == 1) {
                 const ok := tests[0].func();
                 if (ok) {
@@ -120,9 +91,15 @@ TEST_CASE("Custom test runner invokes test function pointer directly") {
             }
             return 99;
         };
-    )",
-                                         {},
-                                         "invoke_runner") == 0);
+    )") == 0);
+}
+
+TEST_CASE("The default runner counts failing tests") {
+    CHECK(helpers::compile_and_run_tests(R"(
+        test "pass" { @expect(true); }
+        test "fail one" { @expect(false); }
+        test "fail two" { @require(1 == 2); }
+    )") == 2);
 }
 
 } // namespace ghoti::tests

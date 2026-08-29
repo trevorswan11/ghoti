@@ -92,6 +92,7 @@ class llvm_lowering {
     auto emit_unreachable() -> void;
 
     auto get_or_create_test_failed_flag() -> llvm::GlobalVariable*;
+    auto emit_record_failure_call(const gir::instruction& inst) -> void;
 
   private:
     llvm::LLVMContext&                                                 context_;

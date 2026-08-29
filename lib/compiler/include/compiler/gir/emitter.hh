@@ -39,8 +39,7 @@ class emitter {
     ~emitter() = default;
     MAKE_PINNED(emitter);
 
-    // Translates the AST module into a GIR module
-    [[nodiscard]] auto emit() -> module;
+    [[nodiscard]] auto emit(bool include_builtin_test_runtime = false) -> module;
 
   private:
     struct local_binding {

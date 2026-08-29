@@ -69,4 +69,14 @@ pub const Test := struct {
     pub column: u32,
     pub func: fn(): bool,
 };
+
+pub weak const test_runner := fn(tests: []Test): i32 {
+    var failures: i32 = 0;
+    for (tests) |entry| {
+        if (!entry.func()) {
+            failures = failures + 1;
+        }
+    }
+    return failures;
+};
 )"

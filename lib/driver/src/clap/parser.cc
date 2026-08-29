@@ -174,8 +174,6 @@ auto parser::setup_fmt_subcmd() -> gsl::not_null<CLI::App*> {
 auto parser::setup_test_subcmd() -> gsl::not_null<CLI::App*> {
     auto* sub{app_.add_subcommand("test", "Run tests in ghoti source file")};
     sub->add_option("input_file", test_opts_.input, "Input source file (.gh)")->required();
-    sub->add_option(
-        "--test-runner", test_opts_.test_runner, "Custom test runner entrypoint or module path");
     cmd::build::setup_flags(sub, test_opts_, stdx::none);
     return sub;
 }

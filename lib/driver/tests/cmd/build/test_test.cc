@@ -132,7 +132,7 @@ TEST_CASE("test command execution") {
         CHECK(!cmd.execute());
     }
 
-    SECTION("Custom runner specified via test_cmd options is invoked and passes") {
+    SECTION("A non-weak `test_runner` overrides the builtin default and passes") {
         codegen::llvm_scope scope;
         tempfile            src_file{"test_driver_custom_runner_pass.gh"};
 
@@ -143,20 +143,20 @@ TEST_CASE("test command execution") {
                     @require(false);
                 }}
 
-                pub const custom_pass_runner := fn(): i32 {{
+                pub const test_runner := fn(tests: []builtin::Test): i32 {{
+                    _ = tests;
                     return 0;
                 }};
             )");
         }
 
         cmd::test_cmd cmd{{
-            .input_path  = src_file,
-            .test_runner = "custom_pass_runner",
+            .input_path = src_file,
         }};
         REQUIRE(cmd.execute());
     }
 
-    SECTION("Custom runner returning non-zero fails test_cmd execution") {
+    SECTION("An overriding `test_runner` returning non-zero fails test_cmd execution") {
         codegen::llvm_scope scope;
         tempfile            src_file{"test_driver_custom_runner_fail.gh"};
 
@@ -167,15 +167,15 @@ TEST_CASE("test command execution") {
                     @expect(true);
                 }}
 
-                pub const custom_fail_runner := fn(): i32 {{
+                pub const test_runner := fn(tests: []builtin::Test): i32 {{
+                    _ = tests;
                     return 12;
                 }};
             )");
         }
 
         cmd::test_cmd cmd{{
-            .input_path  = src_file,
-            .test_runner = "custom_fail_runner",
+            .input_path = src_file,
         }};
         CHECK(!cmd.execute());
     }

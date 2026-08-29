@@ -54,14 +54,10 @@ auto test_cmd::execute() -> stdx::result<void, clap::error> {
     mod::module_manager manager{loader};
     TRY(opts_.setup_module_manager(manager, error_stream_));
 
-    // If a custom runner is specified, configure analyzer
     sema::analyzer analyzer{manager, error_stream_, true, opts_.target_opts};
-    const auto     runner_opt{
-        opts_.test_runner.transform([](const auto& s) { return std::string_view{s}; })};
-    if (runner_opt) { analyzer.get_ctx().user_main_name = std::string{*runner_opt}; }
 
     auto module{TRY(opts_.analyze(analyzer, manager, error_stream_))};
-    auto gir_mod{analyzer.emit_gir(*module)};
+    auto gir_mod{analyzer.emit_gir(*module, /*for_test_executable=*/true)};
     if (module->is_poisoned()) { return stdx::err{clap::error::COMPILATION_FAILED}; }
 
     auto emit_res{analyzer.emit_test_executable(gir_mod,
@@ -72,8 +68,7 @@ auto test_cmd::execute() -> stdx::result<void, clap::error> {
                                                     .objects       = opts_.extra_objects,
                                                     .library_paths = opts_.library_paths,
                                                     .libraries     = opts_.libraries,
-                                                },
-                                                runner_opt)};
+                                                })};
     if (!emit_res) {
         return clap::fatal_error(error_stream_,
                                  emit_res.error().get_message().value_or(GHOTI_UNKNOWN_ERROR),

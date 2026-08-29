@@ -282,6 +282,10 @@ class module_manager {
         return *builtin_module_;
     }
 
+    [[nodiscard]] auto has_builtin_module() const noexcept -> bool {
+        return static_cast<bool>(builtin_module_);
+    }
+
   private:
     [[nodiscard]] auto try_get(const std::filesystem::path& path)
         -> stdx::result<gsl::not_null<module*>, diagnostic>;

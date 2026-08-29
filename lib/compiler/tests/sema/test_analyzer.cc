@@ -68,7 +68,7 @@ TEST_CASE("Full sema pipeline") {
                                    mock_file{.path = "io.gh", .source = io_gh})};
     ctx->verify_registry_resolved();
 
-    REQUIRE(ctx->analyzer.get_registry().size() == 14);
+    REQUIRE(ctx->analyzer.get_registry().size() == 17);
     auto& root_module{ctx->root_mod};
     CHECK(root_module.root_table_idx == 0);
     auto [std_module, std_module_type]{check_inner_module(*ctx, root_module, "std", 0, false)};

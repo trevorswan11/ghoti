@@ -408,6 +408,7 @@ auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod) -> llvm:
     }
 
     auto* slice_ty{types_.translate_slice_type()};
+    // Mirrors `builtin::Test { name: []u8, file: []u8, line: u32, column: u32, func: fn(): bool }`
     auto* test_struct_ty{llvm::StructType::get(
         context_,
         {slice_ty, slice_ty, types_.get_int32_ty(), types_.get_int32_ty(), types_.get_ptr_ty()})};
@@ -478,49 +479,17 @@ auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod) -> llvm:
     auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", main_fn)};
     builder_.SetInsertPoint(entry_bb);
 
-    // Look for a test runner function
-    llvm::Function* runner_fn{llvm_module_->getFunction("_ghoti_main")};
-    if (!runner_fn && !user_main_name_.empty() && user_main_name_ != "main") {
-        runner_fn = llvm_module_->getFunction(user_main_name_);
-    }
-    if (!runner_fn) { runner_fn = llvm_module_->getFunction("default_test_runner"); }
-    if (!runner_fn) { runner_fn = llvm_module_->getFunction("test_runner"); }
+    // The runner is always `test_runner(tests: []Test): i32`. `builtin` provides a
+    // `weak` default; a non-weak `test_runner` in the build overrides it at link time.
+    auto* runner_fn{llvm_module_->getFunction("test_runner")};
+    ASSERT(runner_fn, "a `test_runner` (builtin weak default or user override) must be linked");
 
-    if (runner_fn) {
-        auto*        test_slice_val{builder_.CreateLoad(slice_ty, test_slice_gvar, "tests.slice")};
-        llvm::Value* call_res{nullptr};
-        if (runner_fn->getFunctionType()->getNumParams() >= 1) {
-            call_res = builder_.CreateCall(runner_fn, {test_slice_val});
-        } else {
-            call_res = builder_.CreateCall(runner_fn, {});
-        }
-
-        if (runner_fn->getReturnType()->isIntegerTy(32)) {
-            builder_.CreateRet(call_res);
-        } else {
-            builder_.CreateRet(builder_.getInt32(0));
-        }
+    auto* test_slice_val{builder_.CreateLoad(slice_ty, test_slice_gvar, "tests.slice")};
+    auto* call_res{builder_.CreateCall(runner_fn, {test_slice_val})};
+    if (runner_fn->getReturnType()->isIntegerTy(32)) {
+        builder_.CreateRet(call_res);
     } else {
-        // Fallback in-process runner: call each test, check return values and failure flags
-        auto*        failed_flag{get_or_create_test_failed_flag()};
-        llvm::Value* all_passed{builder_.getInt1(true)};
-        for (const auto* fn : test_fns) {
-            auto* test_llvm_fn{llvm_module_->getFunction(fn->get_name())};
-            ASSERT(test_llvm_fn, "Test function must already be declared before the entry wrapper");
-            builder_.CreateStore(builder_.getInt1(false), failed_flag);
-            auto* res{builder_.CreateCall(test_llvm_fn, {})};
-            auto* did_fail{builder_.CreateLoad(builder_.getInt1Ty(), failed_flag, "test.failed")};
-            auto* not_failed{builder_.CreateNot(did_fail, "test.not_failed")};
-            if (res->getType()->isIntegerTy(1)) {
-                auto* ok{builder_.CreateAnd(res, not_failed, "test.ok")};
-                all_passed = builder_.CreateAnd(all_passed, ok);
-            } else {
-                all_passed = builder_.CreateAnd(all_passed, not_failed);
-            }
-        }
-        auto* exit_code{
-            builder_.CreateSelect(all_passed, builder_.getInt32(0), builder_.getInt32(1))};
-        builder_.CreateRet(exit_code);
+        builder_.CreateRet(builder_.getInt32(0));
     }
 
     return main_fn;
@@ -534,6 +503,48 @@ auto llvm_lowering::get_or_create_test_failed_flag() -> llvm::GlobalVariable* {
                                     llvm::GlobalValue::InternalLinkage,
                                     builder_.getInt1(false),
                                     "__ghoti_test_failed");
+}
+
+auto llvm_lowering::emit_record_failure_call(const gir::instruction& inst) -> void {
+    auto* record_fn{llvm_module_->getFunction("record_failure")};
+    if (!record_fn) { return; }
+
+    auto* fn_ty{record_fn->getFunctionType()};
+    // Canonical `@expect` / `@require` operands: [cond, file, line, col, msg].
+    if (inst.operands.size() < 5 || fn_ty->getNumParams() != 4) { return; }
+
+    std::vector<llvm::Value*> args;
+    args.reserve(4);
+    for (usize i{1}; i < 5; ++i) {
+        auto*       param_ty{fn_ty->getParamType(static_cast<u32>(i - 1))};
+        const auto& op{inst.operands[i]};
+
+        if (const auto str{op.as_opt<std::string>()}) {
+            // A raw string operand (`file`, `msg`) becomes a `[]u8` slice `{ ptr, len }`.
+            auto* gstr{builder_.CreateGlobalString(*str, "rf.str")};
+            if (param_ty->isStructTy()) {
+                llvm::Value* slice{llvm::UndefValue::get(param_ty)};
+                slice = builder_.CreateInsertValue(
+                    slice, gstr, {static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX)});
+                slice = builder_.CreateInsertValue(slice,
+                                                   builder_.getInt64(str->size()),
+                                                   {static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX)});
+                args.push_back(slice);
+            } else {
+                args.push_back(gstr);
+            }
+            continue;
+        }
+
+        auto* v{lower_value(op)};
+        if (!v) { return; }
+        if (v->getType() != param_ty && v->getType()->isIntegerTy() && param_ty->isIntegerTy()) {
+            v = builder_.CreateZExtOrTrunc(v, param_ty);
+        }
+        args.push_back(v);
+    }
+
+    builder_.CreateCall(record_fn, args);
 }
 
 auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVariable* {
@@ -659,6 +670,10 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
         }
     }
 
+    if (fn.get_is_test()) {
+        builder_.CreateStore(builder_.getInt1(false), get_or_create_test_failed_flag());
+    }
+
     // Lower each segment
     for (const auto* seg : fn.get_segments()) {
         auto* bb{segment_blocks_[seg->get_id()]};
@@ -679,6 +694,26 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
             } else {
                 builder_.CreateUnreachable();
             }
+        }
+    }
+
+    if (fn.get_is_test()) {
+        auto*                          flag{get_or_create_test_failed_flag()};
+        std::vector<llvm::ReturnInst*> rets;
+        for (auto& bb : *llvm_fn) {
+            if (auto* ret{llvm::dyn_cast<llvm::ReturnInst>(bb.getTerminator())}) {
+                if (auto* rv{ret->getReturnValue()}; rv && rv->getType()->isIntegerTy(1)) {
+                    rets.push_back(ret);
+                }
+            }
+        }
+        for (auto* ret : rets) {
+            llvm::IRBuilder<> rb{ret};
+            auto*             failed{rb.CreateLoad(rb.getInt1Ty(), flag, "test.failed")};
+            auto*             combined{
+                rb.CreateAnd(ret->getReturnValue(), rb.CreateNot(failed), "test.result")};
+            rb.CreateRet(combined);
+            ret->eraseFromParent();
         }
     }
 
@@ -1247,16 +1282,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             builder_.SetInsertPoint(fail_bb);
             auto* failed_flag{get_or_create_test_failed_flag()};
             builder_.CreateStore(builder_.getInt1(true), failed_flag);
-
-            if (auto* record_fn = llvm_module_->getFunction("record_failure")) {
-                std::vector<llvm::Value*> rec_args;
-                for (usize i = 1; i < inst.operands.size(); ++i) {
-                    if (auto* v = lower_value(inst.operands[i])) { rec_args.push_back(v); }
-                }
-                if (record_fn->getFunctionType()->getNumParams() == rec_args.size()) {
-                    builder_.CreateCall(record_fn, rec_args);
-                }
-            }
+            emit_record_failure_call(inst);
             builder_.CreateBr(cont_bb);
 
             builder_.SetInsertPoint(cont_bb);
@@ -1282,20 +1308,37 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             builder_.SetInsertPoint(fail_bb);
             auto* failed_flag{get_or_create_test_failed_flag()};
             builder_.CreateStore(builder_.getInt1(true), failed_flag);
-
-            if (auto* record_fn = llvm_module_->getFunction("record_failure")) {
-                std::vector<llvm::Value*> rec_args;
-                for (usize i = 1; i < inst.operands.size(); ++i) {
-                    if (auto* v = lower_value(inst.operands[i])) { rec_args.push_back(v); }
-                }
-                if (record_fn->getFunctionType()->getNumParams() == rec_args.size()) {
-                    builder_.CreateCall(record_fn, rec_args);
-                }
-            }
+            emit_record_failure_call(inst);
             builder_.CreateRet(builder_.getInt1(false));
 
             builder_.SetInsertPoint(cont_bb);
             return nullptr;
+        }
+        case syntax::token_type_t::BUILTIN_SRC: {
+            ASSERT(inst.type, "@src must carry its SourceLocation result type");
+            ASSERT(inst.operands.size() >= 3, "@src expects [file, line, column] operands");
+            auto* struct_ty{llvm::cast<llvm::StructType>(types_.translate(*inst.type))};
+            auto* slice_ty{types_.translate_slice_type()};
+
+            llvm::Value* file_slice{llvm::UndefValue::get(slice_ty)};
+            if (const auto path{inst.operands[0].as_opt<std::string>()}) {
+                auto* gstr{builder_.CreateGlobalString(*path, "src.file")};
+                file_slice = builder_.CreateInsertValue(
+                    file_slice, gstr, {static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX)});
+                file_slice =
+                    builder_.CreateInsertValue(file_slice,
+                                               builder_.getInt64(path->size()),
+                                               {static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX)});
+            }
+
+            auto* line_v{lower_value(inst.operands[1])};
+            auto* col_v{lower_value(inst.operands[2])};
+
+            llvm::Value* agg{llvm::UndefValue::get(struct_ty)};
+            agg = builder_.CreateInsertValue(agg, file_slice, {0U});
+            if (line_v) { agg = builder_.CreateInsertValue(agg, line_v, {1U}); }
+            if (col_v) { agg = builder_.CreateInsertValue(agg, col_v, {2U}); }
+            return agg;
         }
         case syntax::token_type_t::BUILTIN_TARGET_OS: {
             const llvm::Triple triple{llvm_module_->getTargetTriple()};

@@ -46,9 +46,8 @@ auto emit_executable(helpers::sema_test_context&       test_ctx,
 auto emit_test_executable(helpers::sema_test_context&       test_ctx,
                           llvm::LLVMContext&                context,
                           const std::filesystem::path&      output_path,
-                          const codegen::target_options&    target_opts      = {},
-                          const codegen::optimizer_options& opt_options      = {},
-                          stdx::option<std::string_view>    user_runner_name = stdx::none)
+                          const codegen::target_options&    target_opts = {},
+                          const codegen::optimizer_options& opt_options = {})
     -> stdx::result<void, codegen::diagnostic>;
 
 auto emit_static_lib(helpers::sema_test_context&       test_ctx,
@@ -61,9 +60,7 @@ auto emit_static_lib(helpers::sema_test_context&       test_ctx,
 [[nodiscard]] auto compile_and_run(std::string_view              source,
                                    const std::vector<mock_file>& imports = {}) -> u32;
 
-[[nodiscard]] auto compile_and_run_tests(std::string_view               source,
-                                         const std::vector<mock_file>&  imports     = {},
-                                         stdx::option<std::string_view> runner_name = stdx::none)
-    -> u32;
+[[nodiscard]] auto compile_and_run_tests(std::string_view              source,
+                                         const std::vector<mock_file>& imports = {}) -> u32;
 
 } // namespace ghoti::tests::helpers

@@ -29,7 +29,6 @@ struct module_binding {
 // Raw options populated directly by CLI parser
 struct raw_options {
     std::string              input;
-    std::string              test_runner;
     std::string              output;
     std::string              target;
     std::string              cpu{"generic"};
@@ -47,7 +46,6 @@ struct raw_options {
 
 struct options {
     std::filesystem::path              input_path{};
-    stdx::option<std::string>          test_runner{stdx::none};
     std::filesystem::path              output_path{};
     codegen::target_options            target_opts{};
     codegen::optimizer_options         opt_opts{};

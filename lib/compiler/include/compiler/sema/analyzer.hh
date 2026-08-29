@@ -84,7 +84,7 @@ class analyzer {
 
     auto collect_symbols(mod::module& module) -> mod::module_state;
     auto resolve_types(mod::module& module) -> mod::module_state;
-    auto emit_gir(mod::module& module) -> gir::module;
+    auto emit_gir(mod::module& module, bool for_test_executable = false) -> gir::module;
     auto check_types(gir::module& gir_module, mod::module& ast_module) -> mod::module_state;
     [[nodiscard]] auto validate_main_entry(const mod::module& root_module) const
         -> stdx::result<void, diagnostic>;
@@ -98,11 +98,9 @@ class analyzer {
                                                const codegen::optimizer_options& options,
                                                std::string_view user_main_name = "main")
         -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic>;
-    [[nodiscard]] auto
-    emit_llvm_ir_test_executable(gir::module&                      gir_module,
-                                 llvm::LLVMContext&                context,
-                                 const codegen::optimizer_options& options,
-                                 stdx::option<std::string_view>    user_runner_name = stdx::none)
+    [[nodiscard]] auto emit_llvm_ir_test_executable(gir::module&                      gir_module,
+                                                    llvm::LLVMContext&                context,
+                                                    const codegen::optimizer_options& options)
         -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic>;
 
     [[nodiscard]] auto emit_object(gir::module&                      gir_module,
@@ -131,22 +129,18 @@ class analyzer {
                                        const codegen::extra_linker_options& linker_opts = {})
         -> stdx::result<void, codegen::diagnostic>;
 
-    [[nodiscard]] auto
-    emit_test_executable(gir::module&                         gir_module,
-                         const codegen::target_options&       target_opts,
-                         const codegen::optimizer_options&    opt_options,
-                         const std::filesystem::path&         output_path,
-                         const codegen::extra_linker_options& linker_opts      = {},
-                         stdx::option<std::string_view>       user_runner_name = stdx::none)
+    [[nodiscard]] auto emit_test_executable(gir::module&                         gir_module,
+                                            const codegen::target_options&       target_opts,
+                                            const codegen::optimizer_options&    opt_options,
+                                            const std::filesystem::path&         output_path,
+                                            const codegen::extra_linker_options& linker_opts = {})
         -> stdx::result<void, codegen::diagnostic>;
-    [[nodiscard]] auto
-    emit_test_executable(gir::module&                         gir_module,
-                         llvm::LLVMContext&                   context,
-                         const codegen::target_options&       target_opts,
-                         const codegen::optimizer_options&    opt_options,
-                         const std::filesystem::path&         output_path,
-                         const codegen::extra_linker_options& linker_opts      = {},
-                         stdx::option<std::string_view>       user_runner_name = stdx::none)
+    [[nodiscard]] auto emit_test_executable(gir::module&                         gir_module,
+                                            llvm::LLVMContext&                   context,
+                                            const codegen::target_options&       target_opts,
+                                            const codegen::optimizer_options&    opt_options,
+                                            const std::filesystem::path&         output_path,
+                                            const codegen::extra_linker_options& linker_opts = {})
         -> stdx::result<void, codegen::diagnostic>;
 
     [[nodiscard]] auto emit_static_library(gir::module&                         gir_module,

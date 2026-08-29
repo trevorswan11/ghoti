@@ -45,13 +45,14 @@ namespace ghoti::tests::helpers {
 
 namespace {
 
-[[nodiscard]] auto emit_preamble(helpers::sema_test_context& test_ctx)
+[[nodiscard]] auto emit_preamble(helpers::sema_test_context& test_ctx,
+                                 bool                        for_test_executable = false)
     -> stdx::result<gir::module, codegen::diagnostic> {
     if (test_ctx.root_mod.is_poisoned()) {
         return codegen::make_codegen_err("Module is poisoned", codegen::error::MODULE_LOAD_ERROR);
     }
 
-    auto gir_mod{test_ctx.analyzer.emit_gir(test_ctx.root_mod)};
+    auto gir_mod{test_ctx.analyzer.emit_gir(test_ctx.root_mod, for_test_executable)};
     if (test_ctx.root_mod.is_poisoned()) {
         return codegen::make_codegen_err("Module is poisoned during GIR emission",
                                          codegen::error::MODULE_LOAD_ERROR);
@@ -103,12 +104,11 @@ auto emit_test_executable(helpers::sema_test_context&       test_ctx,
                           llvm::LLVMContext&                context,
                           const std::filesystem::path&      output_path,
                           const codegen::target_options&    target_opts,
-                          const codegen::optimizer_options& opt_options,
-                          stdx::option<std::string_view>    user_runner_name)
+                          const codegen::optimizer_options& opt_options)
     -> stdx::result<void, codegen::diagnostic> {
-    auto gir_mod{TRY(emit_preamble(test_ctx))};
+    auto gir_mod{TRY(emit_preamble(test_ctx, true))};
     return test_ctx.analyzer.emit_test_executable(
-        gir_mod, context, target_opts, opt_options, output_path, {}, user_runner_name);
+        gir_mod, context, target_opts, opt_options, output_path, {});
 }
 
 auto emit_static_lib(helpers::sema_test_context&       test_ctx,
@@ -139,9 +139,7 @@ auto compile_and_run(std::string_view source, const std::vector<mock_file>& impo
     return UNWRAP(spawn_child(args));
 }
 
-auto compile_and_run_tests(std::string_view               source,
-                           const std::vector<mock_file>&  imports,
-                           stdx::option<std::string_view> runner_name) -> u32 {
+auto compile_and_run_tests(std::string_view source, const std::vector<mock_file>& imports) -> u32 {
     auto  ctx_idx{type_check_and_verify(source, imports)};
     auto& test_ctx{*ctx_idx.first};
 
@@ -150,7 +148,7 @@ auto compile_and_run_tests(std::string_view               source,
     const auto exe_stem{tempfile::make_temp_path("compile_and_run_tests")};
     tempfile   exe_file{std::in_place, fmt::format("{}{}", exe_stem.string(), extension)};
 
-    const auto emitted{emit_test_executable(test_ctx, context, exe_file.path, {}, {}, runner_name)};
+    const auto emitted{emit_test_executable(test_ctx, context, exe_file.path, {}, {})};
     if (!emitted) { fmt::println("{}", emitted.error()); }
     REQUIRE(emitted);
 

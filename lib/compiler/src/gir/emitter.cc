@@ -71,7 +71,7 @@ namespace {
 
 } // namespace
 
-auto emitter::emit() -> module {
+auto emitter::emit(bool include_builtin_test_runtime) -> module {
     PROFILE_FUNCTION();
     const_eval_.resolve_all_deferred_types();
 
@@ -109,6 +109,14 @@ auto emitter::emit() -> module {
         }
     };
     collect_imported(collect_imported, ast_module_);
+
+    // The compiler-provided `builtin` module is injected into the prelude rather than
+    // `import`ed, so the traversal above never reaches it
+    if (include_builtin_test_runtime && !gir_module_.get_test_functions().empty() &&
+        ctx_.modules.has_builtin_module()) {
+        auto& builtin_mod{ctx_.modules.builtin_module()};
+        if (visited.insert(&builtin_mod).second) { imported_mods.emplace_back(&builtin_mod); }
+    }
 
     gir_module_.mark_import_boundary();
 
@@ -1432,7 +1440,20 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             builder_.emit_unreachable();
             return value{void_val{}, ret_type};
         }
-        case syntax::token_type_t::BUILTIN_SRC:
+        case syntax::token_type_t::BUILTIN_SRC: {
+            // `@src()` yields a `builtin::SourceLocation` aggregate
+            const auto         loc{active_ast().location_of(id)};
+            auto&              u32_type{ctx_.get_builtin_resolved_type(sema::type_kind::U32)};
+            std::vector<value> args;
+            args.emplace_back(
+                const_value::make_string(ctx_, active_mod().path.string()).to_gir_value());
+            args.emplace_back(value{static_cast<u64>(loc.line), u32_type});
+            args.emplace_back(value{static_cast<u64>(loc.column), u32_type});
+            if (const auto res{builder_.emit_builtin_call("@src", std::move(args), ret_type)}) {
+                return value{*res, ret_type};
+            }
+            return value{void_val{}, ret_type};
+        }
         case syntax::token_type_t::BUILTIN_SIZE_OF:
         case syntax::token_type_t::BUILTIN_ALIGN_OF:
         case syntax::token_type_t::BUILTIN_TYPE_OF:
@@ -1540,7 +1561,6 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                 fn_d = fn_ty->get_data().as_opt<sema::types::function>();
             }
         }
-
         if (fn_d && !fn_d->has_self) {
             const auto callee_val{emit_expression(call.function)};
             indirect_callee.emplace(callee_val);

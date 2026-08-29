@@ -95,9 +95,7 @@ auto options::process_raw(const raw_options&   raw,
     for (const auto& dir : raw.library_paths) { library_paths.emplace_back(dir); }
 
     return options{
-        .input_path = std::move(input_path),
-        .test_runner =
-            raw.test_runner.empty() ? stdx::none : stdx::option<std::string>{raw.test_runner},
+        .input_path    = std::move(input_path),
         .output_path   = std::move(output_path),
         .target_opts   = std::move(target_opts),
         .opt_opts      = std::move(opt_opts),
