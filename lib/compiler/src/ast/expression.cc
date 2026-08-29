@@ -731,6 +731,13 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
 
             // If there was no self parameter then we can't advance on the first pass
             if (!first || self) { parser.advance(); }
+
+            bool is_constexpr{false};
+            if (parser.current_token_is(syntax::token_type_t::CONSTEXPR)) {
+                is_constexpr = true;
+                parser.advance();
+            }
+
             const identifier_handle name{TRY(identifier_expr::parse(parser))};
             const auto [param_type, initialized]{TRY(explicit_type::parse_opt_init(parser))};
 
@@ -751,7 +758,7 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
                 }
             }
 
-            parameters.emplace_back(name, explicit_type);
+            parameters.emplace_back(name, explicit_type, is_constexpr);
             if (!parser.peek_token_is(syntax::token_type_t::RPAREN)) {
                 TRY(parser.expect_peek(syntax::token_type_t::COMMA));
             }

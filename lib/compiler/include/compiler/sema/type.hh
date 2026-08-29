@@ -227,6 +227,7 @@ struct function {
     gsl::span<type*> params;
     type&            return_type;
     bool             is_variadic{false};
+    u32              constexpr_mask{0}; // Bit i set => parameter i is `constexpr`
 };
 
 // How a closure stores one of its captured free variables in its environment

@@ -325,7 +325,7 @@ class symbol_table_registry {
     [[nodiscard]] auto
     lookup(this Self&& self, const symbol_table_stack& stack, std::string_view name) noexcept
         -> stdx::option<stdx::const_dispatch_t<Self, symbol>&> {
-        for (const auto idx : std::views::reverse(stack)) {
+        for (const auto idx : stack | std::views::reverse) {
             if (auto symbol{self.tables_[idx].get_opt(name)}) { return symbol; }
         }
         return stdx::none;
@@ -343,7 +343,7 @@ class symbol_table_registry {
                                          std::string_view          name) noexcept
         -> stdx::option<depth_result<Self>> {
         usize depth{stack.size()};
-        for (const auto idx : std::views::reverse(stack)) {
+        for (const auto idx : stack | std::views::reverse) {
             depth -= 1;
             if (auto symbol{self.tables_[idx].get_opt(name)}) {
                 return depth_result<Self>{*symbol, depth};

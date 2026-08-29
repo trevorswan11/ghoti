@@ -132,6 +132,8 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
         const_eval_.set_module(*prev_module);
     }
 
+    // `@panic` and injected safety checks reference `panic_handler`
+    if (needs_panic_runtime_) { ensure_panic_runtime(); }
     return std::move(gir_module_);
 }
 
@@ -165,6 +167,13 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
 
     auto prev_module{std::exchange(active_module_, &fn_mod)};
     const_eval_.set_module(fn_mod);
+
+    // Re-bind `constexpr` parameters so `const_eval` folds them
+    sema::constexpr_frame cx_frame;
+    for (const auto& binding : req.constexpr_bindings) {
+        cx_frame.insert_or_assign(binding.name, binding.value);
+    }
+    const constexpr_frame_guard cx_frame_guard{ctx_.constexpr_binding_frames, std::move(cx_frame)};
     {
         const scope_guard g{scopes_};
         for (const auto& [param, arg_type] : std::views::zip(fn_expr.parameters, req.arg_types)) {
@@ -777,7 +786,7 @@ auto emitter::emit_defers_for_scope(usize scope_idx) -> void {
     PROFILE_FUNCTION();
     if (scope_idx >= scopes_.size()) { return; }
     const auto defers{scopes_[scope_idx].defers};
-    for (const auto& def_stmt : std::views::reverse(defers)) { emit_stmt(def_stmt); }
+    for (const auto& def_stmt : defers | std::views::reverse) { emit_stmt(def_stmt); }
 }
 
 auto emitter::emit_defers_up_to(usize target_depth) -> void {
@@ -1021,7 +1030,8 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
             return value{nullptr_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::NULLPTR)};
         },
         [&](ast::unreachable_expr) -> value {
-            builder_.emit_unreachable();
+            // Reaching a `unreachable` is a safety-check violation
+            emit_panic_call("reached unreachable code", id);
             return value{undefined_val{},
                          ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN)};
         },
@@ -1430,13 +1440,22 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             break;
         }
         case syntax::token_type_t::BUILTIN_PANIC: {
-            std::vector<value> panic_args;
-            for (const auto& arg : call.arguments) {
-                if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
-                    panic_args.emplace_back(emit_expression(*expr_h));
+            // The resolver has already checked the message is a compile-time-constant string.
+            std::string message{"panic"};
+            if (!call.arguments.empty()) {
+                if (const auto expr_h{call.arguments[0].as_opt<ast::expr_handle>()}) {
+                    if (const auto str_expr{active_ast().get_as_opt<ast::string_expr>(*expr_h)}) {
+                        message = std::string{str_expr->value};
+                    } else if (const auto cv{const_eval_.try_eval(*expr_h)}) {
+                        if (const auto s{cv->as_opt<std::string>()}) { message = *s; }
+                    }
                 }
             }
-            builder_.emit_builtin_call("@panic", std::move(panic_args), ret_type);
+            emit_panic_call(message, id);
+            return value{void_val{}, ret_type};
+        }
+        case syntax::token_type_t::BUILTIN_TRAP: {
+            builder_.emit_builtin_call("@trap", {}, ret_type);
             builder_.emit_unreachable();
             return value{void_val{}, ret_type};
         }
@@ -2562,6 +2581,43 @@ auto emitter::lvalue_of_expr(ast::node_id id, sema::type& sema_type) -> value {
     return spill_to_temporary(emit_expression_id_raw(id), sema_type);
 }
 
+auto emitter::emit_panic_call(std::string_view message, ast::node_id site) -> void {
+    const auto loc{active_ast().location_of(site)};
+    auto&      u32_type{ctx_.get_builtin_resolved_type(sema::type_kind::U32)};
+    auto&      noreturn_type{ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN)};
+
+    std::vector<value> args;
+    args.emplace_back(const_value::make_string(ctx_, std::string{message}).to_gir_value());
+    args.emplace_back(const_value::make_string(ctx_, active_mod().path.string()).to_gir_value());
+    args.emplace_back(value{static_cast<u64>(loc.line), u32_type});
+    args.emplace_back(value{static_cast<u64>(loc.column), u32_type});
+
+    builder_.emit_call("panic_handler", std::move(args), noreturn_type);
+    builder_.emit_unreachable();
+    needs_panic_runtime_ = true;
+}
+
+auto emitter::ensure_panic_runtime() -> void {
+    if (panic_runtime_emitted_ || gir_module_.has_function("panic_handler")) { return; }
+    if (!ctx_.modules.has_builtin_module()) { return; }
+
+    auto& builtin_mod{ctx_.modules.builtin_module()};
+    for (const auto root_id : builtin_mod.ast) {
+        const auto decl{builtin_mod.ast.get_as_opt<ast::decl_stmt>(root_id)};
+        if (!decl || !decl->name.is_valid()) { continue; }
+        const auto ident{builtin_mod.ast.get_as_opt<ast::identifier_expr>(decl->name)};
+        if (!ident || ident->name != "panic_handler") { continue; }
+
+        const auto prev_module{std::exchange(active_module_, builtin_mod)};
+        const_eval_.set_module(builtin_mod);
+        emit_top_level_decl(root_id, *decl);
+        active_module_ = prev_module;
+        const_eval_.set_module(*prev_module);
+        break;
+    }
+    panic_runtime_emitted_ = true;
+}
+
 auto emitter::emit_lvalue(ast::node_id id) -> value {
     PROFILE_FUNCTION();
     ASSERT(id.is_valid(), "Valid node ID expected in emit_lvalue");
@@ -2725,9 +2781,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                     value{is_in_bounds, bool_type}, valid_seg.get_id(), oob_seg.get_id());
 
                 builder_.set_segment(oob_seg);
-                auto& noreturn_type{ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN)};
-                builder_.emit_builtin_call("@panic", {}, noreturn_type);
-                builder_.emit_unreachable();
+                emit_panic_call("index out of bounds", id);
                 builder_.set_segment(valid_seg);
 
                 auto& write_elem_type{*ctx_.pool.with_const(elem_type, obj_type->is_constant())};
@@ -2782,9 +2836,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                     value{is_in_bounds, bool_type}, valid_seg.get_id(), oob_seg.get_id());
 
                 builder_.set_segment(oob_seg);
-                auto& noreturn_type{ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN)};
-                builder_.emit_builtin_call("@panic", {}, noreturn_type);
-                builder_.emit_unreachable();
+                emit_panic_call("index out of bounds", id);
                 builder_.set_segment(valid_seg);
 
                 auto& write_elem_type{*ctx_.pool.with_const(elem_type, obj_type->is_constant())};

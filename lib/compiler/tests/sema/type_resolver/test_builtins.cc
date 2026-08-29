@@ -195,6 +195,18 @@ TEST_CASE("Builtin control flow") {
         bis::PANIC, R"("Help!")", [](helpers::sema_test_context& ctx) -> sema::type& {
             return ctx.get_type(sema::type_kind::NORETURN);
         });
+
+    test_builtin_resolve(bis::TRAP, "", [](helpers::sema_test_context& ctx) -> sema::type& {
+        return ctx.get_type(sema::type_kind::NORETURN);
+    });
+}
+
+TEST_CASE("@panic requires a compile-time-constant message") {
+    helpers::test_resolver_fail(
+        R"(const f := fn(m: []u8): void { @panic(m); };)",
+        sema::diagnostic{"@panic message must be a compile-time-constant string",
+                         sema::error::CONSTEXPR_EVALUATION_FAILED,
+                         std::pair{0UZ, 38UZ}});
 }
 
 TEST_CASE("Builtin function arity mismatch") {

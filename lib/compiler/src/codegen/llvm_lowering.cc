@@ -1199,7 +1199,8 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
                 }
                 args.emplace_back(arg_val);
             }
-            const bool is_void{!inst.type || inst.type->get_kind() == sema::type_kind::VOID_};
+            const bool is_void{!inst.type || inst.type->get_kind() == sema::type_kind::VOID_ ||
+                               inst.type->get_kind() == sema::type_kind::NORETURN};
 
             auto* call_inst{builder_.CreateCall(callee_fn, args, is_void ? "" : "calltmp")};
             call_inst->setCallingConv(callee_fn->getCallingConv());
@@ -1239,7 +1240,8 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
         args.emplace_back(arg_val);
     }
 
-    const bool is_void{!inst.type || inst.type->get_kind() == sema::type_kind::VOID_};
+    const bool is_void{!inst.type || inst.type->get_kind() == sema::type_kind::VOID_ ||
+                       inst.type->get_kind() == sema::type_kind::NORETURN};
     auto*      call_inst{builder_.CreateCall(fn_ty, callee_val, args, is_void ? "" : "calltmp")};
     if (inst.result && !is_void) { set_local(*inst.result, call_inst); }
     return call_inst;
@@ -1257,7 +1259,8 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
 
     if (builtin_tok) {
         switch (*builtin_tok) {
-        case syntax::token_type_t::BUILTIN_PANIC: {
+        case syntax::token_type_t::BUILTIN_PANIC:
+        case syntax::token_type_t::BUILTIN_TRAP:  {
             auto* trap_fn{
                 llvm::Intrinsic::getOrInsertDeclaration(llvm_module_.get(), llvm::Intrinsic::trap)};
             builder_.CreateCall(trap_fn, {});

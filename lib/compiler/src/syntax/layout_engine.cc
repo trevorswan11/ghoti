@@ -50,7 +50,7 @@ auto layout_engine::render(doc_id root, std::ostream& os) -> void {
             },
             [&](const docs::concat& c) {
                 // Push in reverse order to process children seq
-                for (const auto& child : std::views::reverse(c.children)) {
+                for (const auto& child : c.children | std::views::reverse) {
                     stack.emplace_back(child, indent_cols, mode);
                 }
             },

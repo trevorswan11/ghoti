@@ -4,7 +4,9 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
+#include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
 #include <stdx/arena.hh>
 #include <stdx/option.hh>
@@ -14,12 +16,15 @@
 #include "compiler/ast/traits.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/module/module.hh"
+#include "compiler/sema/const_arg.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 
 namespace ghoti::sema {
+
+using constexpr_frame = ankerl::unordered_dense::map<std::string_view, const_arg>;
 
 // A contextual wrapper around sematic steps
 //
@@ -37,6 +42,9 @@ struct context {
     stdx::opt_size          prelude_index;
     codegen::target_options target_opts;
     std::string             user_main_name{"main"};
+
+    // For the generic instantiation currently being resolved or emitted.
+    std::vector<constexpr_frame> constexpr_binding_frames;
 
     context(mod::module_manager&         modules,
             symbol_table_registry&       registry,
@@ -59,7 +67,8 @@ struct context {
           instantiation_cache{other.instantiation_cache}, arena{other.arena},
           diags{other.diags.create_new()}, error_stream{other.error_stream},
           prelude_index{other.prelude_index}, target_opts{other.target_opts},
-          user_main_name{other.user_main_name} {}
+          user_main_name{other.user_main_name},
+          constexpr_binding_frames{other.constexpr_binding_frames} {}
 
     auto operator=(const context& other) -> context& = delete;
     context(context&&) noexcept                      = default;
@@ -123,6 +132,10 @@ struct context {
 
     // A compiler-known target-fact enum by name, from the prelude
     [[nodiscard]] auto get_builtin_type(std::string_view name) -> type&;
+
+    // The bound value of a `constexpr` parameter named `name`, searching innermost frame first
+    [[nodiscard]] auto lookup_constexpr_binding(std::string_view name) const
+        -> stdx::option<const const_arg&>;
 };
 
 } // namespace ghoti::sema

@@ -26,19 +26,81 @@ TEST_CASE("GIR array indexing bounds checking") {
     gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
     const auto   gir_mod{emitter.emit()};
 
-    REQUIRE(gir_mod.get_functions().size() == 2);
+    // The two user functions plus the `weak` `panic_handler` pulled in for the bounds checks.
+    REQUIRE(gir_mod.get_functions().size() == 3);
+    bool saw_panic_handler{false};
     for (const auto& fn : gir_mod.get_functions()) {
+        if (fn->get_name() == "panic_handler") {
+            saw_panic_handler = true;
+            continue;
+        }
+
         std::ostringstream ss;
         gir::dumper        dumper{ss};
         dumper.dump(*fn);
         const auto dump_text{ss.view()};
 
-        // Bounds checking must emit LT comparison with size (5), cond_goto, and unreachable
         CHECK(dump_text.contains("lt bool"));
         CHECK(dump_text.contains("cond_goto"));
+        CHECK(dump_text.contains("call @panic_handler"));
         CHECK(dump_text.contains("unreachable"));
         CHECK(dump_text.contains("get_element_ptr"));
     }
+    CHECK(saw_panic_handler);
+}
+
+TEST_CASE("GIR @panic lowers to an overridable panic_handler call") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const boom := fn(): void {
+            @panic("kaboom");
+        };
+    )")};
+
+    gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
+    const auto   gir_mod{emitter.emit()};
+
+    REQUIRE(gir_mod.get_functions().size() == 2);
+
+    const gir::function* boom{nullptr};
+    bool                 saw_panic_handler{false};
+    for (const auto& fn : gir_mod.get_functions()) {
+        if (fn->get_name() == "boom") { boom = fn; }
+        if (fn->get_name() == "panic_handler") { saw_panic_handler = true; }
+    }
+    REQUIRE(boom);
+    CHECK(saw_panic_handler);
+
+    std::ostringstream ss;
+    gir::dumper        dumper{ss};
+    dumper.dump(*boom);
+    const auto dump_text{ss.view()};
+
+    CHECK(dump_text.contains("call @panic_handler"));
+    CHECK(dump_text.contains("\"kaboom\""));
+    CHECK(dump_text.contains("unreachable"));
+}
+
+TEST_CASE("GIR a reached `unreachable` routes through panic_handler") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const pick := fn(b: bool): i32 {
+            if (b) { return 1; }
+            unreachable;
+        };
+    )")};
+
+    gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
+    const auto   gir_mod{emitter.emit()};
+
+    const gir::function* pick{nullptr};
+    for (const auto& fn : gir_mod.get_functions()) {
+        if (fn->get_name() == "pick") { pick = fn; }
+    }
+    REQUIRE(pick);
+
+    std::ostringstream ss;
+    gir::dumper        dumper{ss};
+    dumper.dump(*pick);
+    CHECK(ss.view().contains("call @panic_handler"));
 }
 
 TEST_CASE("GIR array literal stack allocation and initialization") {
@@ -52,7 +114,8 @@ TEST_CASE("GIR array literal stack allocation and initialization") {
     gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
     const auto   gir_mod{emitter.emit()};
 
-    REQUIRE(gir_mod.get_functions().size() == 1);
+    // `test_array_lit` plus the `weak` `panic_handler` pulled in for the `a[1]` bounds check.
+    REQUIRE(gir_mod.get_functions().size() == 2);
     const auto& fn{*gir_mod.get_functions()[0]};
 
     std::ostringstream ss;
@@ -193,7 +256,8 @@ TEST_CASE("GIR slice indexing and fat pointer operations") {
     )")};
 
     const auto gir_mod{ctx->analyzer.emit_gir(ctx->root_mod)};
-    REQUIRE(gir_mod.get_functions().size() == 1);
+    // `slice_ops` plus the `weak` `panic_handler` pulled in for the `s[i]` bounds check.
+    REQUIRE(gir_mod.get_functions().size() == 2);
     const auto& fn{*gir_mod.get_functions()[0]};
 
     std::ostringstream ss;

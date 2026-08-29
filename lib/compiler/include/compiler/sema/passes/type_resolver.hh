@@ -23,6 +23,7 @@
 #include "compiler/ast/traits.hh"
 #include "compiler/ast/type.hh"
 #include "compiler/module/module.hh"
+#include "compiler/sema/const_arg.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
@@ -128,7 +129,8 @@ class type_resolver {
         std::vector<gsl::not_null<type*>> stack_;
     };
 
-    using structural_guard = structural_type_stack::guard;
+    using structural_guard      = structural_type_stack::guard;
+    using constexpr_frame_guard = scope_guard<std::vector<constexpr_frame>>;
 
     // Resolves the provided type and unresolves upon destruction if not committed
     template <typename Resolvee> class committable_resolution {
@@ -297,7 +299,8 @@ class type_resolver {
 
     auto instantiate_generic(type&                        callee_type,
                              const generic_function_info& fn_info,
-                             gsl::span<type*>             concrete_args)
+                             gsl::span<type*>             concrete_args,
+                             gsl::span<const const_arg>   constexpr_args = {})
         -> stdx::option<generic_instantiation_entry>;
 
     type_resolver(mod::module& resolving, context& ctx)

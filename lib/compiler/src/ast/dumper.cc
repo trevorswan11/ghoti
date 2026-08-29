@@ -286,7 +286,10 @@ auto dumper::visit(node_id, const function_expr& function) -> void {
         fmt::println(out_, "{}Parameters:", indent_.current_branch());
         dump_container(function.parameters,
                        [this](const function_expr::parameter& parameter) -> void {
-                           fmt::println(out_, "{}Param:", indent_.current_branch());
+                           fmt::println(out_,
+                                        "{}Param{}:",
+                                        indent_.current_branch(),
+                                        parameter.is_constexpr ? " (constexpr)" : "");
                            {
                                const indent::guard g_name{indent_, false};
                                fmt::print(out_, "{}Name: ", indent_.current_branch());

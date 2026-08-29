@@ -1,15 +1,18 @@
 #include "compiler/sema/context.hh"
 
 #include <concepts>
+#include <ranges>
 #include <string_view>
 #include <utility>
 
 #include <gsl/pointers>
 #include <stdx/assert.hh>
+#include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
 
 #include "compiler/module/module.hh"
+#include "compiler/sema/const_arg.hh"
 #include "compiler/sema/passes/symbol_collector.hh"
 #include "compiler/sema/passes/type_resolver.hh"
 #include "compiler/sema/symbol.hh"
@@ -191,6 +194,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::SET_MAIN_SYMBOL, params(t_c_str), t_void);
 
     inject_function(bis::PANIC, params(t_c_str), t_noreturn);
+    inject_function(bis::TRAP, params(), t_noreturn);
     inject_function(bis::COMPILE_ERROR, params(t_c_str), t_noreturn);
 
     inject_function(bis::FN_CTX, params(), t_auto);
@@ -245,6 +249,14 @@ auto context::get_builtin_resolved_type(type_kind kind) -> type& {
     auto& type{*pool[{kind, types::mut::CONSTANT}]};
     ASSERT(type.is_resolved(), "Builtin type was not already resolved");
     return type;
+}
+
+auto context::lookup_constexpr_binding(std::string_view name) const
+    -> stdx::option<const const_arg&> {
+    for (const auto& frame : constexpr_binding_frames | std::views::reverse) {
+        if (const auto it{frame.find(name)}; it != frame.end()) { return it->second; }
+    }
+    return stdx::none;
 }
 
 auto context::get_builtin_type(std::string_view name) -> type& {

@@ -65,6 +65,7 @@ constexpr auto ALL_BUILTINS_BY_SV{
                                                    builtins::SET_EVAL_RECURSION_LIMIT,
                                                    builtins::SET_MAIN_SYMBOL,
                                                    builtins::PANIC,
+                                                   builtins::TRAP,
                                                    builtins::FN_CTX,
                                                    builtins::SRC,
                                                    builtins::EXPECT,

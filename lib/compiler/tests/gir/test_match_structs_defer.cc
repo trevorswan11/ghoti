@@ -173,7 +173,8 @@ TEST_CASE("GIR array index expression and assignment") {
     gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
     const auto   gir_mod{emitter.emit()};
 
-    REQUIRE(gir_mod.get_functions().size() == 1);
+    // `test_array` plus the `weak` `panic_handler` pulled in for the `arr[i]` bounds check.
+    REQUIRE(gir_mod.get_functions().size() == 2);
     const auto& fn{*gir_mod.get_functions()[0]};
 
     std::ostringstream ss;

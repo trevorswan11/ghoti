@@ -98,6 +98,43 @@ TEST_CASE("Codegen: weak definition uses weak_any linkage") {
     CHECK(fn.hasWeakAnyLinkage());
 }
 
+TEST_CASE("Codegen: a bounds check pulls in the weak default panic_handler") {
+    llvm::LLVMContext context;
+
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        pub const main := fn(args: [][:0]u8): void {
+            const arr: [3]i32 = [3]i32{ 1, 2, 3 };
+            const x := arr[args.len];
+        };
+    )")};
+
+    auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
+    CHECK_FALSE(llvm::verifyModule(*llvm_mod));
+
+    auto& handler{UNWRAP(llvm_mod->getFunction("panic_handler"))};
+    CHECK(handler.hasWeakAnyLinkage());
+}
+
+TEST_CASE("Codegen: a non-weak panic_handler overrides the builtin default") {
+    llvm::LLVMContext context;
+
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        pub const panic_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): noreturn {
+            @trap();
+        };
+        pub const main := fn(args: [][:0]u8): void {
+            const arr: [3]i32 = [3]i32{ 1, 2, 3 };
+            const x := arr[args.len];
+        };
+    )")};
+
+    auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
+    CHECK_FALSE(llvm::verifyModule(*llvm_mod));
+
+    auto& handler{UNWRAP(llvm_mod->getFunction("panic_handler"))};
+    CHECK_FALSE(handler.isWeakForLinker());
+}
+
 TEST_CASE("Codegen: naked function carries the naked attribute and no synthesized return") {
     llvm::LLVMContext context;
 

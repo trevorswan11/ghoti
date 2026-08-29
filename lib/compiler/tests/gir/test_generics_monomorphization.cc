@@ -1,4 +1,6 @@
+#include <set>
 #include <sstream>
+#include <string>
 #include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
@@ -44,6 +46,27 @@ TEST_CASE("GIR single monomorphized instantiation") {
 
     CHECK(has_identity_i32);
     CHECK(has_test_fn);
+}
+
+TEST_CASE("GIR constexpr parameter monomorphizes per value") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const shifted := fn(constexpr by: i32, x: i32): i32 {
+            return x + by;
+        };
+
+        const test_fn := fn(): i32 {
+            return shifted(10, 1) + shifted(100, 2) + shifted(10, 3);
+        };
+    )")};
+
+    gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
+    const auto   gir_mod{emitter.emit()};
+
+    std::set<std::string_view> shifted_variants;
+    for (const auto& fn : gir_mod.get_functions()) {
+        if (fn->get_name().starts_with("shifted__")) { shifted_variants.insert(fn->get_name()); }
+    }
+    CHECK(shifted_variants.size() == 2);
 }
 
 TEST_CASE("GIR multiple instantiations with diverse types") {

@@ -3,6 +3,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
@@ -15,6 +16,7 @@
 
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
+#include "compiler/sema/const_arg.hh"
 
 namespace ghoti::mod { struct module; } // namespace ghoti::mod
 
@@ -22,6 +24,7 @@ namespace ghoti::sema {
 
 class type;
 
+// A function is a template when it has an `auto` parameter *or* a non-zero mask.
 struct generic_function_info {
     gsl::not_null<mod::module*>              module;
     ast::node_id                             node_id;
@@ -30,6 +33,7 @@ struct generic_function_info {
     stdx::option<std::string_view>           name;
     // Enclosing struct/union/enum, if any; may not be resolved
     stdx::option<type&> enclosing_type{stdx::none};
+    u32                 constexpr_mask{0}; // Bit i set => parameter i is `constexpr`
 };
 
 class generic_function_registry {
@@ -43,7 +47,8 @@ class generic_function_registry {
                            ast::node_id                   node_id,
                            const ast::function_expr&      fn_expr,
                            stdx::option<std::string_view> name           = stdx::none,
-                           stdx::option<type&>            enclosing_type = stdx::none) -> void {
+                           stdx::option<type&>            enclosing_type = stdx::none,
+                           u32                            constexpr_mask = 0) -> void {
         registry_.emplace(&fn_type,
                           generic_function_info{
                               .module         = &module,
@@ -52,6 +57,7 @@ class generic_function_registry {
                               .fn_type        = &fn_type,
                               .name           = name,
                               .enclosing_type = enclosing_type,
+                              .constexpr_mask = constexpr_mask,
                           });
     }
 
@@ -76,6 +82,8 @@ class generic_function_registry {
 struct generic_instantiation_key {
     gsl::not_null<type*> generic_fn_type;
     gsl::span<type*>     arg_types;
+    // Values bound to `constexpr` parameters, in parameter order
+    gsl::span<const const_arg> constexpr_args;
 
     [[nodiscard]] auto hash() const noexcept -> u64 {
         stdx::hasher h{reinterpret_cast<u64>(generic_fn_type.get())};
@@ -83,6 +91,7 @@ struct generic_instantiation_key {
             VERIFY(arg, "Null argument leaked from resolution");
             h.combine(reinterpret_cast<u64>(arg));
         }
+        for (const auto& cx : constexpr_args) { h.combine(cx.hash()); }
         return h.finalize();
     }
 
@@ -100,13 +109,19 @@ template <> struct ankerl::unordered_dense::hash<ghoti::sema::generic_instantiat
 
 namespace ghoti::sema {
 
+struct constexpr_binding {
+    std::string_view name;
+    const_arg        value;
+};
+
 struct generic_instantiation_request {
-    gsl::not_null<type*>        generic_fn_type;
-    gsl::span<type*>            arg_types;
-    gsl::not_null<type*>        return_type;
-    std::string                 mangled_name;
-    ast::node_id                fn_node_id;
-    gsl::not_null<mod::module*> module;
+    gsl::not_null<type*>           generic_fn_type;
+    gsl::span<type*>               arg_types;
+    gsl::not_null<type*>           return_type;
+    std::string                    mangled_name;
+    ast::node_id                   fn_node_id;
+    gsl::not_null<mod::module*>    module;
+    std::vector<constexpr_binding> constexpr_bindings;
 };
 
 struct generic_instantiation_entry {

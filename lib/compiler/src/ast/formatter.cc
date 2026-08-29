@@ -731,8 +731,11 @@ auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
             {doc_manager_.text(modifier_prefix(node.self->modifier)), format(node.self->name)}));
     }
     for (const auto& param : node.parameters) {
-        params.emplace_back(doc_manager_.concat(
-            {format(param.name), doc_manager_.text(": "), format(param.explicit_type)}));
+        params.emplace_back(
+            doc_manager_.concat({doc_manager_.text(param.is_constexpr ? "constexpr " : ""),
+                                 format(param.name),
+                                 doc_manager_.text(": "),
+                                 format(param.explicit_type)}));
     }
     if (node.variadic) { params.emplace_back(doc_manager_.text("...")); }
 

@@ -159,6 +159,7 @@ struct function_expr {
     struct parameter {
         identifier_handle name;
         explicit_type_id  explicit_type;
+        bool              is_constexpr{false};
     };
 
     stdx::option<self_parameter> self;

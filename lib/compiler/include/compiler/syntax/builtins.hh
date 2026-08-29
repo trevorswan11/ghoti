@@ -71,6 +71,7 @@ constexpr builtin_t SET_EVAL_RECURSION_LIMIT{"@setEvalRecursionLimit",
 constexpr builtin_t SET_MAIN_SYMBOL{"@setMainSymbol", token_type_t::BUILTIN_SET_MAIN_SYMBOL};
 
 constexpr builtin_t PANIC{"@panic", token_type_t::BUILTIN_PANIC};
+constexpr builtin_t TRAP{"@trap", token_type_t::BUILTIN_TRAP};
 
 // The innermost enclosing function as a callable value, for self-recursion
 constexpr builtin_t FN_CTX{"@fnCtx", token_type_t::BUILTIN_FN_CTX};

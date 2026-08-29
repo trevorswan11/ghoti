@@ -77,6 +77,7 @@ class emitter {
     using loop_context_guard    = ghoti::scope_guard<std::vector<loop_context>>;
     using open_fn_name_guard    = ghoti::scope_guard<std::vector<std::string>>;
     using open_fn_closure_guard = ghoti::scope_guard<std::vector<bool>>;
+    using constexpr_frame_guard = ghoti::scope_guard<std::vector<sema::constexpr_frame>>;
 
   private:
     auto emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -> void;
@@ -116,6 +117,11 @@ class emitter {
     auto emit_defers_for_scope(usize scope_idx) -> void;
     auto emit_defers_up_to(usize target_depth) -> void;
     auto emit_lvalue(ast::node_id id) -> value;
+
+    // Emits a `panic_handler(msg, file, line, column)` call followed by `unreachable`
+    auto emit_panic_call(std::string_view message, ast::node_id site) -> void;
+    // Pulls the `weak` default `panic_handler` from the `builtin` module into GIR
+    auto ensure_panic_runtime() -> void;
     auto spill_to_temporary(value val, sema::type& type, bool is_const = false) -> value;
     auto lvalue_of_expr(ast::node_id id, sema::type& sema_type) -> value;
 
@@ -178,7 +184,7 @@ class emitter {
     template <stdx::Reference Binding = const local_binding&>
     auto lookup_binding(std::string_view name) noexcept -> stdx::option<Binding> {
         PROFILE_FUNCTION();
-        for (auto& frame : std::views::reverse(scopes_)) {
+        for (auto& frame : scopes_ | std::views::reverse) {
             if (auto it{frame.bindings.find(name)}; it != frame.bindings.end()) {
                 return stdx::option<Binding>{it->second};
             }
@@ -240,6 +246,8 @@ class emitter {
     default_counter            anon_fn_counter_;
     std::vector<std::string>   open_fn_names_;
     std::vector<bool>          open_fn_is_closure_;
+    bool                       needs_panic_runtime_{false};
+    bool                       panic_runtime_emitted_{false};
 };
 
 } // namespace ghoti::gir

@@ -29,6 +29,7 @@
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/module/module.hh"
+#include "compiler/sema/const_arg.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/symbol.hh"
@@ -40,6 +41,22 @@
 namespace ghoti::gir {
 
 namespace {
+
+// Materializes a `constexpr` parameter binding as a foldable constant.
+[[nodiscard]] auto const_arg_to_value(sema::context& ctx, const sema::const_arg& arg)
+    -> const_value {
+    if (arg.is<std::string>()) { return const_value::make_string(ctx, arg.as<std::string>()); }
+    if (arg.is<i64>()) {
+        return const_value{arg.as<i64>(), ctx.get_builtin_resolved_type(sema::type_kind::I64)};
+    }
+    if (arg.is<u64>()) {
+        return const_value{arg.as<u64>(), ctx.get_builtin_resolved_type(sema::type_kind::U64)};
+    }
+    if (arg.is<f64>()) {
+        return const_value{arg.as<f64>(), ctx.get_builtin_resolved_type(sema::type_kind::F64)};
+    }
+    return const_value{arg.as<bool>(), ctx.get_builtin_resolved_type(sema::type_kind::BOOL)};
+}
 
 template <typename T>
 [[nodiscard]] auto fold_binary_arithmetic(syntax::token_type_t      op_type,
@@ -421,14 +438,14 @@ auto const_eval::resolve_deferred_call(const ast::call_expr& call) -> sema::type
 
 auto const_eval::lookup_local_binding(std::string_view name) const noexcept
     -> stdx::option<const_value> {
-    for (auto& frame : std::views::reverse(call_stack_)) {
+    for (auto& frame : call_stack_ | std::views::reverse) {
         if (auto it{frame.bindings.find(name)}; it != frame.bindings.end()) { return it->second; }
     }
     return stdx::none;
 }
 
-auto const_eval::mutate_local_binding(std::string_view name, const_value val) -> bool {
-    for (auto& frame : std::views::reverse(call_stack_)) {
+auto const_eval::set_local_binding(std::string_view name, const_value val) -> bool {
+    for (auto& frame : call_stack_ | std::views::reverse) {
         if (auto it{frame.bindings.find(name)}; it != frame.bindings.end()) {
             it->second = std::move(val);
             return true;
@@ -918,7 +935,7 @@ auto const_eval::eval_assignment(ast::node_id                id,
     if (op_type == syntax::token_type_t::ASSIGN) {
         const auto rhs{try_eval(assign.rhs)};
         if (!rhs) { return stdx::none; }
-        if (!mutate_local_binding(ident->name, *rhs)) { return stdx::none; }
+        if (!set_local_binding(ident->name, *rhs)) { return stdx::none; }
         return rhs;
     }
 
@@ -930,7 +947,7 @@ auto const_eval::eval_assignment(ast::node_id                id,
         const auto folded{fold_binary_values(*base_op, *lhs_val, *rhs_val, id)};
         if (!folded) { return stdx::none; }
 
-        if (!mutate_local_binding(ident->name, *folded)) { return stdx::none; }
+        if (!set_local_binding(ident->name, *folded)) { return stdx::none; }
         return folded;
     }
 
@@ -1074,6 +1091,9 @@ auto const_eval::eval_unary(ast::node_id id, const ast::unary_expr& unary)
 auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
     -> stdx::option<const_value> {
     if (auto local_val{lookup_local_binding(ident.name)}) { return local_val; }
+    if (const auto cx{ctx_.lookup_constexpr_binding(ident.name)}) {
+        return const_arg_to_value(ctx_, *cx);
+    }
 
     if (id.is_valid()) {
         if (const auto sema_type{module_->get_sema_type_opt(id)}) {

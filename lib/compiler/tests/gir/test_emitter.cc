@@ -345,7 +345,8 @@ TEST_CASE("Deferred array underlying a reference parameter resolves to a concret
     gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
     const auto   gir_mod{emitter.emit()};
 
-    REQUIRE(gir_mod.get_functions().size() == 1);
+    // `bump_first` plus the `weak` `panic_handler` pulled in for the `a[0]` bounds checks.
+    REQUIRE(gir_mod.get_functions().size() == 2);
     const auto& fn{*gir_mod.get_functions()[0]};
     REQUIRE(fn.get_params().size() == 1);
 

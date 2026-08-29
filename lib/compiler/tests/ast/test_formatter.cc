@@ -85,6 +85,11 @@ TEST_CASE("formatter lays out a function body with K&R braces") {
     CHECK(format_source("const f := fn(): void {};") == "const f := fn(): void {};\n");
 }
 
+TEST_CASE("formatter round-trips a constexpr parameter modifier") {
+    CHECK(format_source("const f := fn(constexpr n: i32, x: i32): i32 { return x; };") ==
+          "const f := fn(constexpr n: i32, x: i32): i32 {\n    return x;\n};\n");
+}
+
 TEST_CASE("formatter keeps small aggregates inline and breaks ones with bodies") {
     CHECK(format_source("const P := struct { x: i32, y: i32 };") ==
           "const P := struct { x: i32, y: i32 };\n");

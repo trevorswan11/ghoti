@@ -114,7 +114,7 @@ class const_eval {
         -> bool;
 
     auto lookup_local_binding(std::string_view name) const noexcept -> stdx::option<const_value>;
-    auto mutate_local_binding(std::string_view name, const_value val) -> bool;
+    auto set_local_binding(std::string_view name, const_value val) -> bool;
 
   private:
     usize                                            max_recursion_depth_{256};

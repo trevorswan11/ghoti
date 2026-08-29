@@ -79,4 +79,12 @@ pub weak const test_runner := fn(tests: []Test): i32 {
     }
     return failures;
 };
+
+pub weak const panic_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): noreturn {
+    _ = msg;
+    _ = file;
+    _ = line;
+    _ = column;
+    @trap();
+};
 )"
