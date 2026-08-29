@@ -18,18 +18,18 @@ namespace ghoti::tests {
 using mock_file = helpers::mock_file;
 
 TEST_CASE("Resolving well-formed enum matching") {
-    helpers::resolve_and_check("using E = enum { a }; match (E) { .a => 5 };");
-    helpers::resolve_and_check("using E = enum { a, b }; match (E) { .a => 5, .b => 6 };");
-    helpers::resolve_and_check("using E = enum { a, b }; match (E) { .a => 5, _ => 6 };");
-    helpers::resolve_and_check("using E = enum { a, b, _ }; match (E) { .a => 5, _ => 6 };");
+    helpers::resolve_and_check("using E = enum { a }; _ = match (E) { .a => 5 };");
+    helpers::resolve_and_check("using E = enum { a, b }; _ = match (E) { .a => 5, .b => 6 };");
+    helpers::resolve_and_check("using E = enum { a, b }; _ = match (E) { .a => 5, _ => 6 };");
+    helpers::resolve_and_check("using E = enum { a, b, _ }; _ = match (E) { .a => 5, _ => 6 };");
 }
 
 TEST_CASE("Resolving well-formed union matching") {
-    helpers::resolve_and_check("using U = union { a: i32 }; match (U) { .a => 5 };");
+    helpers::resolve_and_check("using U = union { a: i32 }; _ = match (U) { .a => 5 };");
     helpers::resolve_and_check(
-        "using U = union { a: i32, b: i64 }; match (U) { .a => 5, .b => 4 };");
+        "using U = union { a: i32, b: i64 }; _ = match (U) { .a => 5, .b => 4 };");
     helpers::resolve_and_check(
-        "using U = union { a: i32, b: i64 }; match (U) { .a => 5, _ => 4 };");
+        "using U = union { a: i32, b: i64 }; _ = match (U) { .a => 5, _ => 4 };");
 }
 
 TEST_CASE("Resolving capturing match arms") {
@@ -43,14 +43,14 @@ TEST_CASE("Resolving capturing match arms") {
         CHECK(actual_data == expected_type_fn(*ctx));
     };
 
-    test_arm_capture("using E = enum { a }; match (E) { .a => |a| 5 };",
+    test_arm_capture("using E = enum { a }; _ = match (E) { .a => |a| 5 };",
                      "a",
                      2,
                      [](helpers::sema_test_context& ctx) -> auto& {
                          return ctx.get_type(sema::type_kind::ENUM, 1);
                      });
 
-    test_arm_capture("using U = union { a: i32 }; match (U) { .a => |a| 5 };",
+    test_arm_capture("using U = union { a: i32 }; _ = match (U) { .a => |a| 5 };",
                      "a",
                      2,
                      [](helpers::sema_test_context& ctx) -> auto& {
@@ -60,31 +60,31 @@ TEST_CASE("Resolving capturing match arms") {
 
 TEST_CASE("Resolving well-formed builtin-type matching") {
     SECTION("Bools") {
-        helpers::resolve_and_check("match (true) { true => {}, false => {} };");
-        helpers::resolve_and_check("match (true) { true => {}, _ => {} };");
+        helpers::resolve_and_check("_ = match (true) { true => {}, false => {} };");
+        helpers::resolve_and_check("_ = match (true) { true => {}, _ => {} };");
     }
 
     SECTION("Bytes") {
         std::ostringstream arms;
         for (usize i{0}; i < 256; ++i) { fmt::print(arms, "{} => 0,", i); }
-        const auto input{fmt::format("match('0') {{ {} }};", arms.view())};
+        const auto input{fmt::format("_ = match('0') {{ {} }};", arms.view())};
         helpers::resolve_and_check(input);
-        helpers::resolve_and_check("match ('0') { 0 => {}, _ => {} };");
+        helpers::resolve_and_check("_ = match ('0') { 0 => {}, _ => {} };");
     }
 }
 
 TEST_CASE("Resolving match arm captures with reference/pointer modifiers") {
     helpers::resolve_and_check(
-        "using U = union { a: i32 }; var u := U{ .a = 5 }; match (u) { .a => |&v| v };");
+        "using U = union { a: i32 }; var u := U{ .a = 5 }; _ = match (u) { .a => |&v| v };");
     helpers::resolve_and_check(
-        "using U = union { a: i32 }; var u := U{ .a = 5 }; match (u) { .a => |&mut v| v };");
+        "using U = union { a: i32 }; var u := U{ .a = 5 }; _ = match (u) { .a => |&mut v| v };");
     helpers::resolve_and_check(
-        "using U = union { a: i32 }; var u := U{ .a = 5 }; match (u) { .a => |^v| *v };");
+        "using U = union { a: i32 }; var u := U{ .a = 5 }; _ = match (u) { .a => |^v| *v };");
     helpers::resolve_and_check(
-        "using U = union { a: i32 }; var u := U{ .a = 5 }; match (u) { .a => |^mut v| *v };");
+        "using U = union { a: i32 }; var u := U{ .a = 5 }; _ = match (u) { .a => |^mut v| *v };");
 
     // Whole-value (non-union) captures accept the same modifiers
-    helpers::resolve_and_check("var x: i32 = 1; match (x) { 1 => |&mut v| v, _ => 0 };");
+    helpers::resolve_and_check("var x: i32 = 1; _ = match (x) { 1 => |&mut v| v, _ => 0 };");
 }
 
 TEST_CASE("Illegal mutable capture of an immutable match arm value") {

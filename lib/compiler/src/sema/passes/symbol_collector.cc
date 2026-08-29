@@ -490,8 +490,28 @@ auto symbol_collector::visit(ast::node_id, const ast::discard_stmt& discard) -> 
     collect(discard.discarded);
 }
 
-auto symbol_collector::visit(ast::node_id, const ast::expr_stmt& expr) -> void {
+auto symbol_collector::visit(ast::node_id id, const ast::expr_stmt& expr) -> void {
     PROFILE_FUNCTION();
+    if (!in_expr_scope_ && table_stack_.size() == 1) {
+        using ast::node_kind;
+        switch (expr.expression->get_kind()) {
+        case node_kind::IF_EXPRESSION:
+        case node_kind::MATCH_EXPRESSION:
+        case node_kind::WHILE_LOOP_EXPRESSION:
+        case node_kind::DO_WHILE_LOOP_EXPRESSION:
+        case node_kind::FOR_LOOP_EXPRESSION:
+        case node_kind::INFINITE_LOOP_EXPRESSION:
+        case node_kind::LABEL_EXPRESSION:
+            ctx_.diags.emplace_back(
+                "Control-flow constructs are not allowed as statements at the top level; "
+                "use `@cfg` for conditional declarations, or bind the value with "
+                "`const x := ...`",
+                error::ILLEGAL_TOP_LEVEL_STATEMENT,
+                collecting_.ast.location_of(id));
+            break;
+        default: break;
+        }
+    }
     collect(expr.expression);
 }
 

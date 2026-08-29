@@ -1465,6 +1465,44 @@ auto type_resolver::visit(ast::node_id id, const ast::identifier_expr& ident) ->
 auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void {
     PROFILE_FUNCTION();
     TRY_RESOLVE(if_expr.condition);
+
+    // Opportunistic fold of an `if constexpr` condition to try to not resolve dead code
+    if (if_expr.constexpr_condition) {
+        gir::const_eval evaluator{ctx_, resolving_};
+        if (const auto cond_cv{evaluator.try_eval(if_expr.condition)}) {
+            if (const auto folded{cond_cv->as_opt<bool>()}) {
+                const auto arm_value_type{[&](ast::stmt_handle arm) -> type& {
+                    if (const auto es{resolving_.ast.get_as_opt<ast::expr_stmt>(arm)}) {
+                        if (const auto t{resolving_.get_sema_type_opt(es->expression)}) {
+                            return *t;
+                        }
+                    }
+                    return *last_type_;
+                }};
+
+                stdx::option<type&> live_type;
+                if (*folded) {
+                    TRY_RESOLVE(if_expr.consequence);
+                    live_type.emplace(arm_value_type(if_expr.consequence));
+                } else if (if_expr.alternate) {
+                    TRY_RESOLVE(*if_expr.alternate);
+                    live_type.emplace(arm_value_type(*if_expr.alternate));
+                }
+                static_cast<void>(last_type_.take());
+                auto& node_type{live_type ? *live_type
+                                          : ctx_.get_builtin_resolved_type(type_kind::VOID_)};
+                if (!for_generic_instantiation_) {
+                    resolving_.if_constexpr_results.insert_or_assign(
+                        id.get_index(),
+                        *folded ? mod::if_branch::CONSEQUENCE : mod::if_branch::ALTERNATE);
+                }
+                resolving_.set_sema_type(id, node_type);
+                last_type_.emplace(node_type);
+                return;
+            }
+        }
+    }
+
     TRY_RESOLVE(if_expr.consequence);
 
     auto* branch_type{last_type_.take()};
@@ -3341,6 +3379,7 @@ auto type_resolver::instantiate_generic(type&                        callee_type
     }
 
     type_resolver inst_resolver{fn_mod, ctx_, fn_table_idx, std::move(inst_stack)};
+    inst_resolver.for_generic_instantiation_ = true;
     // This freestanding resolver has no enclosing-type context, so @this() needs it restored.
     stdx::option<structural_guard> this_type_guard;
     if (fn_info.enclosing_type) {

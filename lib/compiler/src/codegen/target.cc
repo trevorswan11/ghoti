@@ -94,7 +94,7 @@ auto resolve_target_triple(stdx::option<std::string_view> triple_str) -> llvm::T
     return triple;
 }
 
-// A stable, version-suffix-free OS token (`macosx13.0.0` -> `macos`).
+// A stable, version-suffix-free OS token
 auto normalized_target_os(const llvm::Triple& triple) -> std::string_view {
     switch (triple.getOS()) {
     case llvm::Triple::Darwin:
@@ -116,7 +116,7 @@ auto normalized_target_os(const llvm::Triple& triple) -> std::string_view {
     }
 }
 
-// Canonical LLVM arch name, collapsed to the compile-time-config.md §2.2 spellings.
+// Canonical LLVM arch name
 auto normalized_target_arch(const llvm::Triple& triple) -> std::string_view {
     switch (triple.getArch()) {
     case llvm::Triple::x86_64:      return "x86_64";

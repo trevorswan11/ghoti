@@ -989,6 +989,17 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
         if (op_type == syntax::token_type_t::NEQ) { return const_value{!equal, bool_type}; }
     }
 
+    // Type-valued operands: `@typeOf(x) == u8`, `T != i32`, ... in an `if constexpr`.
+    if (lhs.is<stdx::option<sema::type&>>() && rhs.is<stdx::option<sema::type&>>()) {
+        const auto l{lhs.as<stdx::option<sema::type&>>()};
+        const auto r{rhs.as<stdx::option<sema::type&>>()};
+        if (l && r) {
+            const bool equal{sema::is_same_unqualified(*l, *r)};
+            if (op_type == syntax::token_type_t::EQ) { return const_value{equal, bool_type}; }
+            if (op_type == syntax::token_type_t::NEQ) { return const_value{!equal, bool_type}; }
+        }
+    }
+
     if (lhs.is<std::string>() && rhs.is<std::string>()) {
         const auto& l{lhs.as<std::string>()};
         const auto& r{rhs.as<std::string>()};

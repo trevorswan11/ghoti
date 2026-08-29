@@ -327,6 +327,7 @@ class type_resolver {
     std::vector<bool>         self_recursive_flags_;
 
     bool in_mutating_context_{false};
+    bool for_generic_instantiation_{false};
 
     named_test_map_t     named_tests_;
     structural_validator struct_validator_;

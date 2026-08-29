@@ -1779,7 +1779,22 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
     }
     const bool yields_value{if_expr.alternate && sema_type && is_value_type(sema_type->get_kind())};
 
-    // Comptime / constexpr condition evaluation
+    const auto emit_single_arm{[&](ast::stmt_handle arm) -> value {
+        return yields_value ? emit_stmt_as_value(arm)
+                            : (emit_stmt(arm), value{void_val{}, sema_type});
+    }};
+
+    // The type resolver already folded this `if constexpr`
+    if (const auto it{active_mod().if_constexpr_results.find(id.get_index())};
+        it != active_mod().if_constexpr_results.end()) {
+        if (it->second == mod::if_branch::CONSEQUENCE) {
+            return emit_single_arm(if_expr.consequence);
+        }
+        if (if_expr.alternate) { return emit_single_arm(*if_expr.alternate); }
+        return value{void_val{}, sema_type};
+    }
+
+    // Constexpr condition evaluation fallback
     if (if_expr.constexpr_condition) {
         const auto cond_cv{const_eval_.try_eval(if_expr.condition)};
         if (!cond_cv) {

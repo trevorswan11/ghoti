@@ -96,4 +96,39 @@ TEST_CASE("Match dispatch shadowing") {
                          std::pair{0UZ, 38UZ}});
 }
 
+namespace {
+
+// Collects `src` and returns the first sema diagnostic code, if any.
+[[nodiscard]] auto first_collect_error(std::string_view src) -> stdx::option<sema::error> {
+    auto [ctx, idx]{helpers::collect(src)};
+    if (const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()};
+        diags && !diags->empty()) {
+        return (*diags)[0].get_error();
+    }
+    return stdx::none;
+}
+
+} // namespace
+
+TEST_CASE("Control-flow constructs are rejected as bare top-level statements") {
+    CHECK(first_collect_error("if (true) { const a := 1; };") ==
+          sema::error::ILLEGAL_TOP_LEVEL_STATEMENT);
+    CHECK(first_collect_error("if constexpr (true) { const a := 1; } else { const b := 2; };") ==
+          sema::error::ILLEGAL_TOP_LEVEL_STATEMENT);
+    CHECK(first_collect_error("match (1) { _ => 0 };") == sema::error::ILLEGAL_TOP_LEVEL_STATEMENT);
+    CHECK(first_collect_error("while (true) { };") == sema::error::ILLEGAL_TOP_LEVEL_STATEMENT);
+    CHECK(first_collect_error("for (0..3) |_| { };") == sema::error::ILLEGAL_TOP_LEVEL_STATEMENT);
+    CHECK(first_collect_error("loop { };") == sema::error::ILLEGAL_TOP_LEVEL_STATEMENT);
+    CHECK(first_collect_error("blk: { break :blk 1; };") ==
+          sema::error::ILLEGAL_TOP_LEVEL_STATEMENT);
+}
+
+TEST_CASE("Binding control flow with a top-level `const` is still allowed") {
+    CHECK_FALSE(first_collect_error("const a := if (true) 1 else 2;"));
+    CHECK_FALSE(first_collect_error("const a := if constexpr (true) 1 else 2;"));
+    CHECK_FALSE(first_collect_error("const a := match (1) { 1 => 10, _ => 20 };"));
+    CHECK_FALSE(first_collect_error("const a := blk: { break :blk 7; };"));
+    CHECK_FALSE(first_collect_error("@setMainSymbol(\"go\"); pub const go := fn(): void {};"));
+}
+
 } // namespace ghoti::tests

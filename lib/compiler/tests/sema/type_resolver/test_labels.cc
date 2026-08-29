@@ -68,7 +68,7 @@ TEST_CASE("Complex label resolution") {
 TEST_CASE("Label multi-type resolution") {
     SECTION("Multi control flow") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-blk: {
+_ = blk: {
     break :blk 42;
     break :blk true;
     break :blk "val";
@@ -87,11 +87,11 @@ blk: {
 
     SECTION("Only continue") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-loop {
+_ = loop {
     blk: {
         continue :blk;
     };
-})")};
+};)")};
 
         const auto [_, data]{ctx->get_symbol<syms::label>("blk", idx + 2)};
         const auto yield_types{data.get_yield_types()};

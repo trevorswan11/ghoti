@@ -60,6 +60,12 @@ struct cfg_value_result {
     ast::node_id chosen{ast::node_id::make_invalid()};
 };
 
+// Which arm of an `if constexpr` the resolver folded to
+enum class if_branch : u8 {
+    CONSEQUENCE,
+    ALTERNATE,
+};
+
 struct module {
     std::filesystem::path                            path;
     std::filesystem::path                            parent_path;
@@ -72,6 +78,9 @@ struct module {
 
     // `@cfgValue` node index -> the cfg pass's evaluated verdict
     ankerl::unordered_dense::map<usize, cfg_value_result> cfg_value_results;
+
+    // `if constexpr` node index -> the arm the type resolver folded to
+    ankerl::unordered_dense::map<usize, if_branch> if_constexpr_results;
 
     // Every identifier_expr references and uses encountered during symbol collection/resolution
     std::vector<ast::node_id> identifier_positions;
