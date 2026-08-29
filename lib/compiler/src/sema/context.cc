@@ -201,7 +201,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
 }
 
 constexpr std::string_view TARGET_ENUM_SOURCE{
-#include "target_enums.gh.inc"
+#include "intrinsic_types.gh.inc"
 };
 
 auto inject_target_enums(context& ctx, usize prelude_idx) -> void {
