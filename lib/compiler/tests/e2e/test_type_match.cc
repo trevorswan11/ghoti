@@ -100,6 +100,35 @@ TEST_CASE("a pointer/slice type passes through a `T: type` parameter") {
     )") == 60);
 }
 
+TEST_CASE("match on a function-type literal") {
+    CHECK(helpers::compile_and_run(R"(
+        const T := fn(i32): void;
+        pub const main := fn(): i32 {
+            return match (T) {
+                fn(i32): i32  => 1,
+                fn(i32): void => 8,
+                fn(): void    => 2,
+                _             => 0,
+            };
+        };
+    )") == 8);
+}
+
+TEST_CASE("a function-type match arm works across multiple generic instantiations") {
+    CHECK(helpers::compile_and_run(R"(
+        const kind := fn(T: type): i32 {
+            return match (T) {
+                fn(i32): void => 1,
+                _             => 0,
+            };
+        };
+        pub const main := fn(): i32 {
+            const F := fn(i32): void;
+            return kind(F) * 100 + kind(i32) * 10 + kind(F);
+        };
+    )") == 101);
+}
+
 TEST_CASE("match on a named struct type") {
     CHECK(helpers::compile_and_run(R"(
         const A := struct { x: i32 };

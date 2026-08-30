@@ -334,7 +334,7 @@ auto dumper::visit(node_id, const function_expr& function) -> void {
         dump(function.explicit_return_type);
     }
 
-    {
+    if (!function.is_type_expr) {
         const indent::guard g{indent_, true};
         fmt::print(out_, "{}Body: ", indent_.current_branch());
         dump(*function.body);
@@ -487,10 +487,10 @@ auto dumper::visit(node_id, const initializer_expr& init) -> void {
         dump_container(init.initializers,
                        [this](const initializer_expr::initializer& initializer) -> void {
                            fmt::println(out_, "{}Initializer:", indent_.current_branch());
-                           {
+                           if (initializer.member) {
                                const indent::guard g_inner{indent_, false};
                                fmt::print(out_, "{}Member: ", indent_.current_branch());
-                               dump(initializer.member);
+                               dump(*initializer.member);
                            }
 
                            {

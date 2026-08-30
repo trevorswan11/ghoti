@@ -223,8 +223,10 @@ auto symbol_collector::visit(ast::node_id id, const ast::function_expr& fn) -> v
     }
     collect(fn.explicit_return_type);
 
-    const auto& block{collecting_.ast.get_as<ast::block_stmt>(fn.body)};
-    for (const auto& stmt : block) { collect(stmt); }
+    if (!fn.is_type_expr) {
+        const auto& block{collecting_.ast.get_as<ast::block_stmt>(fn.body)};
+        for (const auto& stmt : block) { collect(stmt); }
+    }
 
     last_type_.emplace(ctx_.pool[{type_kind::FUNCTION, types::mut::CONSTANT, new_idx}]);
     last_type_->set_symbol_table_idx(new_idx);

@@ -903,6 +903,9 @@ namespace {
 
 // Mangles a type such that it will not conflict with any other monomorphized instance
 [[nodiscard]] auto mangle_arg_type(const type& t) -> std::string {
+    if (const auto meta{t.get_data().as_opt<types::meta_type>()}) {
+        return "type_" + mangle_arg_type(meta->instance);
+    }
     const auto& data{t.get_data()};
     switch (t.get_kind()) {
     case type_kind::STRUCT:
@@ -1394,9 +1397,37 @@ namespace {
 auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void {
     PROFILE_FUNCTION();
 
+    if (fn.is_type_expr) {
+        const auto true_param_count{fn.parameters.size() + (fn.self ? 1UZ : 0UZ)};
+        auto       fn_param_types{ctx_.pool.get_many_unsafe(true_param_count)};
+        usize      p_idx{0};
+        if (fn.self) {
+            fn_param_types[p_idx++] = &ctx_.get_builtin_resolved_type(type_kind::OPAQUE);
+        }
+        for (const auto& param : fn.parameters) {
+            TRY_RESOLVE(param.explicit_type);
+            fn_param_types[p_idx++] = &denoted_type(*last_type_.take());
+        }
+        TRY_RESOLVE(fn.explicit_return_type);
+        auto& return_type{denoted_type(*last_type_.take())};
+
+        types::key_t fn_key{type_kind::FUNCTION, types::mut::CONSTANT};
+        for (const auto* p : fn_param_types) { fn_key.imprint(*p); }
+        fn_key.imprint(return_type);
+        auto& fn_type{*ctx_.pool[fn_key]};
+        fn_type.resolve_if<types::function>(
+            fn.self.has_value(), fn_param_types, return_type, fn.variadic);
+
+        auto& meta{*ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, fn_type}]};
+        meta.resolve_if<types::meta_type>(fn_type);
+        resolving_.set_sema_type(id, meta);
+        return last_type_.emplace(meta);
+    }
+
     // The entire function lives inside of its preallocated scope
-    auto&                         fn_type{resolving_.get_sema_type(id)};
-    const scope                   s{table_stack_, fn_type.get_symbol_table_idx(), table_idx_};
+    auto&       fn_type{resolving_.get_sema_type(id)};
+    const scope s{table_stack_, fn_type.get_symbol_table_idx(), table_idx_};
+
     const function_boundary_guard fn_boundary{function_boundaries_, table_stack_.size() - 1};
     const open_function_guard     fn_node{open_function_nodes_, id};
     const self_recursion_guard    fn_self_ref{self_recursive_flags_, false};
@@ -2273,8 +2304,13 @@ auto type_resolver::validate_struct_initializer(ast::node_id                 ini
     const auto& struct_data{*struct_data_opt};
 
     // Check for duplicates
-    for (const auto& [accessor, value] : init.initializers) {
-        const auto  accessor_node{resolving_.ast.get_as<ast::implicit_access_expr>(accessor)};
+    for (const auto& [accessor_opt, value] : init.initializers) {
+        if (!accessor_opt) {
+            return diagnostic{"Struct initializers require '.field = ...' entries",
+                              error::TYPE_MISMATCH,
+                              resolving_.ast.location_of(value)};
+        }
+        const auto  accessor_node{resolving_.ast.get_as<ast::implicit_access_expr>(*accessor_opt)};
         const auto& accessor_ident =
             resolving_.ast.get_as<ast::identifier_expr>(accessor_node.member);
         const auto field_name{accessor_ident.name};
@@ -2357,6 +2393,42 @@ auto type_resolver::visit(ast::node_id id, const ast::initializer_expr& init) ->
 
     const auto  num_initializers{init.initializers.size()};
     const auto& object_data{object_type.get_data()};
+
+    // `RowAlias{ a, b, c }` / `.{ a, b }` in an array-typed context
+    type* array_object{&object_type};
+    if (object_data.is<types::deferred_array>()) {
+        gir::const_eval evaluator{ctx_, resolving_};
+        array_object = &evaluator.force_deferred_array(object_type);
+    }
+    if (const auto arr_data{array_object->get_data().as_opt<types::array>()}) {
+        for (const auto& entry : init.initializers) {
+            if (entry.member) {
+                return last_type_.emplace(ctx_.poison_node(
+                    resolving_,
+                    id,
+                    "An array initializer takes positional values, not '.field = ...' entries",
+                    error::TYPE_MISMATCH,
+                    resolving_.ast.location_of(*entry.member)));
+            }
+        }
+        if (num_initializers != arr_data->len) {
+            return last_type_.emplace(
+                ctx_.poison_node(resolving_,
+                                 id,
+                                 fmt::format("Array of length {} initialized with {} value(s)",
+                                             arr_data->len,
+                                             num_initializers),
+                                 error::ARITY_MISMATCH,
+                                 resolving_.ast.location_of(id)));
+        }
+        for (const auto& entry : init.initializers) {
+            const structural_guard g{implicit_type_stack_, arr_data->underlying};
+            TRY_RESOLVE(entry.value);
+        }
+        resolving_.set_sema_type(id, *array_object);
+        return last_type_.emplace(*array_object);
+    }
+
     if (object_data.is<types::enum_t>()) {
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
@@ -2394,7 +2466,17 @@ auto type_resolver::visit(ast::node_id id, const ast::initializer_expr& init) ->
                              resolving_.ast.location_of(id)));
     }
 
-    for (const auto& [accessor, value] : init.initializers) {
+    for (const auto& [accessor_opt, value] : init.initializers) {
+        if (!accessor_opt) {
+            return last_type_.emplace(
+                ctx_.poison_node(resolving_,
+                                 id,
+                                 "Struct and union initializers require '.field = ...' entries",
+                                 error::TYPE_MISMATCH,
+                                 resolving_.ast.location_of(value)));
+        }
+        const auto accessor{*accessor_opt};
+
         // The accessor is always a lookup into the stack
         {
             const structural_guard g{implicit_type_stack_, object_type};
@@ -2689,6 +2771,9 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
             }
             if (const auto arr{resolving_.ast.get_as_opt<ast::array_expr>(n)}) {
                 return arr->is_type_expr;
+            }
+            if (const auto fx{resolving_.ast.get_as_opt<ast::function_expr>(n)}) {
+                return fx->is_type_expr;
             }
             if (const auto addr{resolving_.ast.get_as_opt<ast::address_of_expr>(n)}) {
                 return self(self, *addr->rhs);

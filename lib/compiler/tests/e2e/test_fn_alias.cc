@@ -94,6 +94,19 @@ TEST_CASE("unbound method reference passed as a `fn`-pointer argument") {
     )") == 42);
 }
 
+TEST_CASE("a bodyless `fn(...)` type expression names a callable type") {
+    CHECK(helpers::compile_and_run(R"(
+        const BinOp := fn(a: i32, b: i32): i32;
+
+        const apply := fn(f: BinOp, a: i32, b: i32): i32 { return f(a, b); };
+        const add := fn(a: i32, b: i32): i32 { return a + b; };
+
+        pub const main := fn(): i32 {
+            return apply(add, 40, 2);
+        };
+    )") == 42);
+}
+
 TEST_CASE("an extracted method is not callable via a dot expression on an instance") {
     helpers::expect_compile_error(R"(
         const Box := struct {

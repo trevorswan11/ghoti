@@ -33,7 +33,15 @@ auto array_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
 
     stdx::option<expr_handle> size;
     auto                      slice_shape{false};
-    if (!parser.peek_token_is(syntax::token_type_t::RBRACKET)) {
+    if (parser.peek_token_is(syntax::token_type_t::RBRACKET)) {
+        // `[]T` with nothing between the brackets: a slice type, never a literal
+        slice_shape = true;
+    } else if (parser.peek_token_is(syntax::token_type_t::NULL_TERMINATED)) {
+        // `[:0]T`: a null-terminated slice type
+        parser.advance();
+        slice_shape     = true;
+        null_terminated = true;
+    } else {
         parser.advance();
         if (!parser.current_token_is(syntax::token_type_t::UNDERSCORE)) {
             size.emplace(TRY(parser.parse_expression()));
@@ -44,9 +52,6 @@ auto array_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
             parser.advance();
             null_terminated = true;
         }
-    } else {
-        // `[]T` with nothing between the brackets: a slice type, never a literal
-        slice_shape = true;
     }
 
     TRY(parser.expect_peek(syntax::token_type_t::RBRACKET));
@@ -790,11 +795,18 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
     TRY(parser.expect_peek(syntax::token_type_t::COLON));
     const auto return_type{TRY(explicit_type::parse(parser))};
 
-    // Function types are decoupled so a block is required here
+    // No body: `fn(params): ret` is a function*type value
     if (!parser.peek_token_is(syntax::token_type_t::LBRACE)) {
-        return make_syntax_err("Function declarations must have a body",
-                               syntax::error::FN_DECLARATION_WITHOUT_BODY,
-                               start_token);
+        return parser.add_expr<function_expr>(start_token,
+                                              self,
+                                              std::move(parameters),
+                                              return_type,
+                                              block_handle::make_invalid(),
+                                              variadic,
+                                              is_move,
+                                              is_naked,
+                                              conv,
+                                              true);
     }
 
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
@@ -807,7 +819,8 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
                                           variadic,
                                           is_move,
                                           is_naked,
-                                          conv);
+                                          conv,
+                                          false);
 }
 
 auto grouped_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
@@ -1022,11 +1035,17 @@ auto initializer_expr::parse(syntax::parser& parser, stdx::option<expr_handle> o
     std::vector<initializer> initializers;
     while (!parser.peek_token_is(syntax::token_type_t::RBRACE) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
-        TRY(parser.expect_peek(syntax::token_type_t::DOT));
-        implicit_access_handle member{TRY(implicit_access_expr::parse(parser))};
-
-        TRY(parser.expect_peek(syntax::token_type_t::ASSIGN));
-        parser.advance();
+        stdx::option<implicit_access_handle> member;
+        if (parser.peek_token_is(syntax::token_type_t::DOT)) {
+            // Named entry: `.field = value`
+            parser.advance();
+            member.emplace(TRY(implicit_access_expr::parse(parser)));
+            TRY(parser.expect_peek(syntax::token_type_t::ASSIGN));
+            parser.advance();
+        } else {
+            // Positional entry: `value` (array-style `T{ a, b, c }`)
+            parser.advance();
+        }
         const auto value{TRY(parser.parse_expression())};
         initializers.emplace_back(member, value);
 

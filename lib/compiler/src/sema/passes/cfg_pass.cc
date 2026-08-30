@@ -622,7 +622,9 @@ auto cfg_pass::recurse_into_members(const ast::member_list& members) -> void {
 
 auto cfg_pass::recurse_into_expr(ast::expr_handle expr) -> void {
     module_.ast[expr].visit(
-        [&](const ast::function_expr& fn) { recurse_into_block(fn.body); },
+        [&](const ast::function_expr& fn) {
+            if (!fn.is_type_expr) { recurse_into_block(fn.body); }
+        },
         [&](const ast::if_expr& branch) {
             recurse_into_bodies(branch.consequence);
             if (branch.alternate) { recurse_into_bodies(*branch.alternate); }

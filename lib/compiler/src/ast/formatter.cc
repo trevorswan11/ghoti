@@ -749,6 +749,16 @@ auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
                                 : doc_manager_.owned(fmt::format(
                                       " callconv(.{})", calling_convention_name(node.conv)))};
 
+    if (node.is_type_expr) {
+        return doc_manager_.concat({
+            doc_manager_.text("fn"),
+            doc_manager_.delimited("(", ")", std::move(params), false, true),
+            callconv_doc,
+            doc_manager_.text(": "),
+            format(node.explicit_return_type),
+        });
+    }
+
     return doc_manager_.concat({
         node.is_move ? doc_manager_.text("move ") : doc_manager_.nil(),
         node.is_naked ? doc_manager_.text("naked ") : doc_manager_.nil(),
@@ -830,8 +840,12 @@ auto formatter::visit(node_id, const initializer_expr& node) -> syntax::doc_id {
     std::vector<syntax::doc_id> inits;
     inits.reserve(node.initializers.size());
     for (const auto& init : node.initializers) {
-        inits.emplace_back(doc_manager_.concat(
-            {format(init.member), doc_manager_.text(" = "), format(init.value)}));
+        if (init.member) {
+            inits.emplace_back(doc_manager_.concat(
+                {format(*init.member), doc_manager_.text(" = "), format(init.value)}));
+        } else {
+            inits.emplace_back(format(init.value));
+        }
     }
     parts.emplace_back(doc_manager_.delimited("{", "}", std::move(inits), true, true));
 

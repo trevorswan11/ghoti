@@ -171,6 +171,7 @@ struct function_expr {
     bool                         is_move{false};
     bool                         is_naked{false};
     calling_convention           conv{calling_convention::C};
+    bool                         is_type_expr{false};
 
     // Parse the function as a value. Meant for the parser LUT
     [[nodiscard]] static auto parse(syntax::parser& parser)
@@ -271,8 +272,8 @@ DECLARE_INFIX_EXPRESSION(range_expr)
 
 struct initializer_expr {
     struct initializer {
-        implicit_access_handle member;
-        expr_handle            value;
+        stdx::option<implicit_access_handle> member; // Absent for a positional entry like an array
+        expr_handle                          value;
     };
 
     stdx::option<expr_handle> object_type;

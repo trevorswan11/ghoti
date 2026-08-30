@@ -96,6 +96,28 @@ TEST_CASE("String literal passed directly to a slice parameter preserves length"
     )") == 6);
 }
 
+TEST_CASE("A `[:0]T` null-terminated slice type is usable in value position") {
+    SECTION("annotating a string literal binding") {
+        CHECK(helpers::compile_and_run(R"(
+            pub const main := fn(): i32 {
+                const s: [:0]u8 = "hello";
+                return @as(i32, s.len);
+            };
+        )") == 6);
+    }
+
+    SECTION("as a function parameter type") {
+        CHECK(helpers::compile_and_run(R"(
+            const len_of := fn(msg: [:0]u8): i32 {
+                return @as(i32, msg.len);
+            };
+            pub const main := fn(): i32 {
+                return len_of("hello");
+            };
+        )") == 6);
+    }
+}
+
 TEST_CASE("Top-level scalar const referenced from a function") {
     CHECK(helpers::compile_and_run(R"(
         const FOO := 42;

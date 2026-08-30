@@ -1217,6 +1217,8 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
         [&](const ast::identifier_expr& data) -> value { return emit_ident(id, data); },
         [&](const ast::function_expr& data) -> value {
             const auto sema_type{active_mod().get_sema_type_opt(id)};
+            // A bodyless `fn(...): ret` type expression carries no runtime value.
+            if (data.is_type_expr) { return value{void_val{}, sema_type}; }
             if (sema_type && sema_type->get_kind() == sema::type_kind::CLOSURE) {
                 return emit_closure(id, data);
             }
@@ -3732,6 +3734,20 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
 
     const auto struct_slot{builder_.emit_alloca(*sema_type)};
     auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+
+    // `RowAlias{ a, b, c }`: an array literal of positional values.
+    if (const auto arr{sema_type->get_data().as_opt<sema::types::array>()}) {
+        auto& elem_type{arr->underlying};
+        for (u64 i{0}; const auto& [accessor, val_expr] : init.initializers) {
+            const auto elem_ptr{builder_.emit_get_element_ptr(
+                value{struct_slot, *sema_type}, {value{i, usize_type}}, elem_type)};
+            const auto val{emit_coerced_expr(val_expr, elem_type)};
+            builder_.emit_store(value{elem_ptr, elem_type}, val).is_initializer = true;
+            ++i;
+        }
+        const auto loaded{builder_.emit_load(value{struct_slot, *sema_type}, *sema_type)};
+        return value{loaded, sema_type};
+    }
 
     if (const auto ut{sema_type->get_data().as_opt<sema::types::union_t>()}) {
         if (ut->is_untagged) {
