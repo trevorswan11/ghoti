@@ -205,6 +205,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::SRC, params(), t_auto);
     inject_function(bis::EXPECT, params(t_bool), t_bool);
     inject_function(bis::REQUIRE, params(t_bool), t_void);
+    inject_function(bis::SKIP, params(t_c_str), t_noreturn);
 }
 
 constexpr std::string_view BUILTIN_MODULE_SOURCE{

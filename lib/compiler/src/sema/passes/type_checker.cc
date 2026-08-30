@@ -621,8 +621,13 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                 const auto src_k{src_t->get_kind()};
                 const auto dest_k{dest_t->get_kind()};
                 const bool is_num_cast{sema::is_numeric(src_k) && sema::is_numeric(dest_k)};
+                // An enum and its numeric underlying representation convert freely
+                const bool is_enum_repr_cast{
+                    (dest_k == type_kind::ENUM && sema::is_numeric(src_k)) ||
+                    (src_k == type_kind::ENUM && sema::is_numeric(dest_k)) ||
+                    (src_k == type_kind::ENUM && dest_k == type_kind::ENUM)};
                 if (!is_implicit_widenable(src_k, dest_k) &&
-                    !is_same_unqualified(*src_t, *dest_t) && !is_num_cast) {
+                    !is_same_unqualified(*src_t, *dest_t) && !is_num_cast && !is_enum_repr_cast) {
                     emit_diagnostic(fmt::format("Cannot cast type '{}' to '{}'",
                                                 type_kind_display_name(src_k),
                                                 type_kind_display_name(dest_k)),

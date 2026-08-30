@@ -133,8 +133,7 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
         const_eval_.set_module(*prev_module);
     }
 
-    // `@panic` and injected safety checks reference `panic_handler`
-    if (needs_panic_runtime_) { ensure_panic_runtime(); }
+    for (const auto name : pending_builtin_runtime_) { ensure_builtin_runtime(name); }
     return std::move(gir_module_);
 }
 
@@ -1576,7 +1575,9 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                         cast_kind = instruction_kind::PTR_CAST;
                     }
                     const auto dest{builder_.emit_cast(cast_kind, operand, ret_type)};
-                    return value{dest, ret_type};
+                    value      result{dest, ret_type};
+                    emit_enum_cast_guard(id, result, operand, *op_expr);
+                    return result;
                 }
             }
             break;
@@ -1745,9 +1746,40 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             args.emplace_back(msg_val ? std::move(*msg_val)
                                       : const_value::make_string(ctx_, "").to_gir_value());
 
+            // The failure branch calls a weak context handler
+            request_builtin_runtime(is_expect ? "expect_handler" : "require_handler");
+
             const auto* name{is_expect ? "@expect" : "@require"};
             const auto  local_res{builder_.emit_builtin_call(name, std::move(args), ret_type)};
             if (is_expect && local_res) { return value{*local_res, ret_type}; }
+            return value{void_val{}, ret_type};
+        }
+        case syntax::token_type_t::BUILTIN_SKIP: {
+            // `@skip(["msg"])` marks the enclosing test as skipped and returns from it.
+            stdx::option<value> msg_val;
+            for (const auto& arg : call.arguments) {
+                if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
+                    msg_val.emplace(emit_expression(*expr_h));
+                }
+            }
+
+            const auto loc{active_ast().location_of(id)};
+            auto&      u32_type{ctx_.get_builtin_resolved_type(sema::type_kind::U32)};
+            auto&      void_type{ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+            auto&      bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+
+            std::vector<value> args;
+            args.emplace_back(msg_val ? std::move(*msg_val)
+                                      : const_value::make_string(ctx_, "").to_gir_value());
+            args.emplace_back(
+                const_value::make_string(ctx_, active_mod().path.string()).to_gir_value());
+            args.emplace_back(value{static_cast<u64>(loc.line), u32_type});
+            args.emplace_back(value{static_cast<u64>(loc.column), u32_type});
+
+            request_builtin_runtime("skip_handler");
+            builder_.emit_builtin_call("@skip", std::move(args), void_type);
+            // A skipped test simply passes: return `true` and stop emitting this path.
+            builder_.emit_return(value{true, bool_type});
             return value{void_val{}, ret_type};
         }
         case syntax::token_type_t::BUILTIN_CLZ:
@@ -2896,11 +2928,84 @@ auto emitter::emit_panic_call(std::string_view message, ast::node_id site) -> vo
 
     builder_.emit_call("panic_handler", std::move(args), noreturn_type);
     builder_.emit_unreachable();
-    needs_panic_runtime_ = true;
+    request_builtin_runtime("panic_handler");
 }
 
-auto emitter::ensure_panic_runtime() -> void {
-    if (panic_runtime_emitted_ || gir_module_.has_function("panic_handler")) { return; }
+auto emitter::emit_enum_cast_guard(ast::node_id     site,
+                                   const value&     enum_val,
+                                   const value&     src_val,
+                                   ast::expr_handle src_expr) -> void {
+    if (!enum_val.type || !src_val.type) { return; }
+
+    // Only integer -> enum casts need guarding
+    if (!sema::is_integer(src_val.type->get_kind())) { return; }
+    const auto en{enum_val.type->get_data().as_opt<sema::types::enum_t>()};
+    if (!en || en->non_exhaustive) { return; }
+
+    // Gather the enum's listed discriminant values, mirroring const-eval's ordinal model.
+    std::vector<i64> discriminants;
+    discriminants.reserve(en->ast_enumerations.size());
+    for (usize idx{0}; idx < en->ast_enumerations.size(); ++idx) {
+        const auto& enumeration{en->ast_enumerations[idx]};
+        i64         disc{static_cast<i64>(idx)};
+        if (enumeration.value) {
+            if (const auto ev{const_eval_.try_eval(*enumeration.value)}) {
+                disc = ev->as_int_opt().value_or(disc);
+            }
+        }
+        discriminants.emplace_back(disc);
+    }
+    if (discriminants.empty()) { return; }
+
+    // A compile-time-known value that already lands on a variant needs no runtime check.
+    if (const auto cv{const_eval_.try_eval(*src_expr)}) {
+        if (const auto known{cv->as_int_opt()}) {
+            if (std::ranges::contains(discriminants, *known)) { return; }
+        }
+    }
+
+    auto fn_opt{builder_.get_function()};
+    if (!fn_opt) { return; }
+
+    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto& underlying{en->underlying};
+
+    // Compare against the discriminants in the enum's underlying integer type.
+    const value raw_val{builder_.emit_cast(instruction_kind::BIT_CAST, enum_val, underlying),
+                        underlying};
+
+    // is_valid = (v == d0) || (v == d1) || ...
+    stdx::option<value> is_valid;
+    for (const auto disc : discriminants) {
+        const value rhs{static_cast<u64>(disc), underlying};
+        const auto  eq{builder_.emit_binary(instruction_kind::EQ, raw_val, rhs, bool_type)};
+        const value eq_val{eq, bool_type};
+        if (!is_valid) {
+            is_valid.emplace(eq_val);
+        } else {
+            is_valid.emplace(
+                builder_.emit_binary(instruction_kind::OR, *is_valid, eq_val, bool_type),
+                bool_type);
+        }
+    }
+
+    auto& ok_seg{fn_opt->add_segment()};
+    auto& bad_seg{fn_opt->add_segment()};
+    builder_.emit_cond_goto(*is_valid, ok_seg.get_id(), bad_seg.get_id());
+
+    builder_.set_segment(bad_seg);
+    emit_panic_call("invalid enum value", site);
+    builder_.set_segment(ok_seg);
+}
+
+auto emitter::request_builtin_runtime(std::string_view name) -> void {
+    if (std::ranges::find(pending_builtin_runtime_, name) == pending_builtin_runtime_.end()) {
+        pending_builtin_runtime_.emplace_back(name);
+    }
+}
+
+auto emitter::ensure_builtin_runtime(std::string_view name) -> void {
+    if (gir_module_.has_function(name)) { return; }
     if (!ctx_.modules.has_builtin_module()) { return; }
 
     auto& builtin_mod{ctx_.modules.builtin_module()};
@@ -2908,7 +3013,7 @@ auto emitter::ensure_panic_runtime() -> void {
         const auto decl{builtin_mod.ast.get_as_opt<ast::decl_stmt>(root_id)};
         if (!decl || !decl->name.is_valid()) { continue; }
         const auto ident{builtin_mod.ast.get_as_opt<ast::identifier_expr>(decl->name)};
-        if (!ident || ident->name != "panic_handler") { continue; }
+        if (!ident || ident->name != name) { continue; }
 
         const auto prev_module{std::exchange(active_module_, builtin_mod)};
         const_eval_.set_module(builtin_mod);
@@ -2917,7 +3022,6 @@ auto emitter::ensure_panic_runtime() -> void {
         const_eval_.set_module(*prev_module);
         break;
     }
-    panic_runtime_emitted_ = true;
 }
 
 auto emitter::emit_lvalue(ast::node_id id) -> value {

@@ -81,6 +81,7 @@ constexpr builtin_t FN_CTX{"@fnCtx", token_type_t::BUILTIN_FN_CTX};
 constexpr builtin_t SRC{"@src", token_type_t::BUILTIN_SRC};
 constexpr builtin_t EXPECT{"@expect", token_type_t::BUILTIN_EXPECT};
 constexpr builtin_t REQUIRE{"@require", token_type_t::BUILTIN_REQUIRE};
+constexpr builtin_t SKIP{"@skip", token_type_t::BUILTIN_SKIP};
 
 constexpr builtin_t COMPILE_ERROR{"@compileError", token_type_t::BUILTIN_COMPILE_ERROR};
 constexpr builtin_t CFG{"@cfg", token_type_t::BUILTIN_CFG};

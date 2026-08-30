@@ -265,11 +265,19 @@ template <ast::IndexableID ID>
     using syntax::token_type_t;
     const auto  is_expect_or_require{builtin_id == token_type_t::BUILTIN_EXPECT ||
                                     builtin_id == token_type_t::BUILTIN_REQUIRE};
+    const auto  is_skip{builtin_id == token_type_t::BUILTIN_SKIP};
     const auto& params{builtin.params};
     if (is_expect_or_require) {
         if (call.arguments.empty() || call.arguments.size() > 2) {
             return make_sema_err(
                 fmt::format("Builtin expects 1 or 2 arguments, found {}", call.arguments.size()),
+                error::ARITY_MISMATCH,
+                resolving_.ast.location_of(call.function));
+        }
+    } else if (is_skip) {
+        if (call.arguments.size() > 1) {
+            return make_sema_err(
+                fmt::format("Builtin expects 0 or 1 arguments, found {}", call.arguments.size()),
                 error::ARITY_MISMATCH,
                 resolving_.ast.location_of(call.function));
         }
@@ -625,6 +633,30 @@ template <ast::IndexableID ID>
     }
     case token_type_t::BUILTIN_TRAP: {
         ASSERT(builtin.return_type.get_kind() == type_kind::NORETURN);
+        return_type = &builtin.return_type;
+        break;
+    }
+    case token_type_t::BUILTIN_SKIP: {
+        ASSERT(builtin.return_type.get_kind() == type_kind::NORETURN);
+        // An optional message must be compile-time known so it can be interned
+        if (!call.arguments.empty()) {
+            bool is_const_string{false};
+            if (const auto expr_h{call.arguments[0].as_opt<ast::expr_handle>()}) {
+                if (resolving_.ast.get_as_opt<ast::string_expr>(*expr_h)) {
+                    is_const_string = true;
+                } else {
+                    gir::const_eval evaluator{ctx_, resolving_};
+                    if (const auto val{evaluator.try_eval(*expr_h)}) {
+                        is_const_string = val->is<std::string>();
+                    }
+                }
+            }
+            if (!is_const_string) {
+                return make_sema_err("@skip message must be a compile-time-constant string",
+                                     error::CONSTEXPR_EVALUATION_FAILED,
+                                     get_call_arg_location(call.arguments[0]));
+            }
+        }
         return_type = &builtin.return_type;
         break;
     }

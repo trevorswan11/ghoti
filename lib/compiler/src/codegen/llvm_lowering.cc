@@ -1,6 +1,7 @@
 #include "compiler/codegen/llvm_lowering.hh"
 
 #include <algorithm>
+#include <array>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -8,6 +9,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <gsl/span>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/CallingConv.h>
 #include <llvm/IR/Constants.h>
@@ -386,6 +388,7 @@ auto llvm_lowering::lower_test_executable(const gir::module&             gir_mod
     is_executable_ = true;
     gir_module_.emplace(gir_mod);
     for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
+    define_test_take_skipped();
     for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
     for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
     emit_test_entry_wrapper(gir_mod);
@@ -510,23 +513,59 @@ auto llvm_lowering::get_or_create_test_failed_flag() -> llvm::GlobalVariable* {
                                     "__ghoti_test_failed");
 }
 
-auto llvm_lowering::emit_record_failure_call(const gir::instruction& inst) -> void {
-    auto* record_fn{llvm_module_->getFunction("record_failure")};
-    if (!record_fn) { return; }
+auto llvm_lowering::get_or_create_test_skipped_flag() -> llvm::GlobalVariable* {
+    if (auto* gvar{llvm_module_->getGlobalVariable("__ghoti_test_skipped", true)}) { return gvar; }
+    return new llvm::GlobalVariable(*llvm_module_,
+                                    builder_.getInt1Ty(),
+                                    false,
+                                    llvm::GlobalValue::InternalLinkage,
+                                    builder_.getInt1(false),
+                                    "__ghoti_test_skipped");
+}
 
-    auto* fn_ty{record_fn->getFunctionType()};
-    // Canonical `@expect` / `@require` operands: [cond, file, line, col, msg].
-    if (inst.operands.size() < 5 || fn_ty->getNumParams() != 4) { return; }
+auto llvm_lowering::define_test_take_skipped() -> void {
+    auto* i1_ty{builder_.getInt1Ty()};
+    auto* fn{llvm_module_->getFunction("__ghoti_test_take_skipped")};
+    if (!fn) {
+        auto* fn_ty{llvm::FunctionType::get(i1_ty, {}, false)};
+        fn = llvm::Function::Create(fn_ty,
+                                    llvm::Function::InternalLinkage,
+                                    "__ghoti_test_take_skipped",
+                                    llvm_module_.get());
+    } else {
+        fn->setLinkage(llvm::Function::InternalLinkage);
+    }
+    if (!fn->empty()) { return; }
+
+    auto*             bb{llvm::BasicBlock::Create(context_, "entry", fn)};
+    llvm::IRBuilder<> b{bb};
+    auto*             flag{get_or_create_test_skipped_flag()};
+    auto*             was_skipped{b.CreateLoad(i1_ty, flag, "skipped")};
+    b.CreateStore(b.getInt1(false), flag);
+    b.CreateRet(was_skipped);
+}
+
+auto llvm_lowering::emit_context_handler_call(const gir::instruction&   inst,
+                                              std::string_view          handler_name,
+                                              gsl::span<const usize, 4> order) -> void {
+    auto* handler_fn{llvm_module_->getFunction(handler_name)};
+    if (!handler_fn) { return; }
+
+    auto* fn_ty{handler_fn->getFunctionType()};
+    if (fn_ty->getNumParams() != 4) { return; }
+    for (const auto idx : order) {
+        if (idx >= inst.operands.size()) { return; }
+    }
 
     std::vector<llvm::Value*> args;
     args.reserve(4);
-    for (usize i{1}; i < 5; ++i) {
-        auto*       param_ty{fn_ty->getParamType(static_cast<u32>(i - 1))};
-        const auto& op{inst.operands[i]};
+    for (u32 param_idx{0}; param_idx < 4; ++param_idx) {
+        auto*       param_ty{fn_ty->getParamType(param_idx)};
+        const auto& op{inst.operands[order[param_idx]]};
 
         if (const auto str{op.as_opt<std::string>()}) {
             // A raw string operand (`file`, `msg`) becomes a `[]u8` slice `{ ptr, len }`.
-            auto* gstr{builder_.CreateGlobalString(*str, "rf.str")};
+            auto* gstr{builder_.CreateGlobalString(*str, "ch.str")};
             if (param_ty->isStructTy()) {
                 llvm::Value* slice{llvm::UndefValue::get(param_ty)};
                 slice = builder_.CreateInsertValue(
@@ -549,7 +588,7 @@ auto llvm_lowering::emit_record_failure_call(const gir::instruction& inst) -> vo
         args.push_back(v);
     }
 
-    builder_.CreateCall(record_fn, args);
+    builder_.CreateCall(handler_fn, args);
 }
 
 auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) -> llvm::Constant* {
@@ -736,6 +775,7 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
 
     if (fn.get_is_test()) {
         builder_.CreateStore(builder_.getInt1(false), get_or_create_test_failed_flag());
+        builder_.CreateStore(builder_.getInt1(false), get_or_create_test_skipped_flag());
     }
 
     // Lower each segment
@@ -1366,7 +1406,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             builder_.SetInsertPoint(fail_bb);
             auto* failed_flag{get_or_create_test_failed_flag()};
             builder_.CreateStore(builder_.getInt1(true), failed_flag);
-            emit_record_failure_call(inst);
+            emit_context_handler_call(inst, "expect_handler", std::array{4UZ, 1UZ, 2UZ, 3UZ});
             builder_.CreateBr(cont_bb);
 
             builder_.SetInsertPoint(cont_bb);
@@ -1392,10 +1432,15 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             builder_.SetInsertPoint(fail_bb);
             auto* failed_flag{get_or_create_test_failed_flag()};
             builder_.CreateStore(builder_.getInt1(true), failed_flag);
-            emit_record_failure_call(inst);
+            emit_context_handler_call(inst, "require_handler", std::array{4UZ, 1UZ, 2UZ, 3UZ});
             builder_.CreateRet(builder_.getInt1(false));
 
             builder_.SetInsertPoint(cont_bb);
+            return nullptr;
+        }
+        case syntax::token_type_t::BUILTIN_SKIP: {
+            builder_.CreateStore(builder_.getInt1(true), get_or_create_test_skipped_flag());
+            emit_context_handler_call(inst, "skip_handler", std::array{0UZ, 1UZ, 2UZ, 3UZ});
             return nullptr;
         }
         case syntax::token_type_t::BUILTIN_SRC: {

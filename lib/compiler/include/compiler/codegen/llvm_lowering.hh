@@ -4,6 +4,7 @@
 #include <string_view>
 
 #include <ankerl/unordered_dense.h>
+#include <gsl/span>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalVariable.h>
@@ -13,6 +14,7 @@
 #include <llvm/IR/Value.h>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
+#include <stdx/types.hh>
 #include <stdx/utility.hh>
 
 #include "compiler/codegen/type_translator.hh"
@@ -96,7 +98,14 @@ class llvm_lowering {
     auto emit_unreachable() -> void;
 
     auto get_or_create_test_failed_flag() -> llvm::GlobalVariable*;
-    auto emit_record_failure_call(const gir::instruction& inst) -> void;
+    auto get_or_create_test_skipped_flag() -> llvm::GlobalVariable*;
+    auto define_test_take_skipped() -> void;
+
+    // Calls a weak `builtin` context handler `handler(msg, file, line, column)`. `order`
+    // lists which instruction operand feeds each of those four parameters
+    auto emit_context_handler_call(const gir::instruction&   inst,
+                                   std::string_view          handler_name,
+                                   gsl::span<const usize, 4> order) -> void;
 
   private:
     llvm::LLVMContext&                                                 context_;

@@ -228,6 +228,7 @@ enum class token_type_t : u8 {
     BUILTIN_SRC,
     BUILTIN_EXPECT,
     BUILTIN_REQUIRE,
+    BUILTIN_SKIP,
     BUILTIN_COMPILE_ERROR,
 
     BUILTIN_CFG,

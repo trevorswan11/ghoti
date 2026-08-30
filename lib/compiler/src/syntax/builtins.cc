@@ -71,6 +71,7 @@ constexpr auto ALL_BUILTINS_BY_SV{
                                                    builtins::SRC,
                                                    builtins::EXPECT,
                                                    builtins::REQUIRE,
+                                                   builtins::SKIP,
                                                    builtins::CFG,
                                                    builtins::CFG_VALUE,
                                                    builtins::COMPILE_ERROR)};

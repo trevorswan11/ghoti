@@ -123,8 +123,12 @@ class emitter {
 
     // Emits a `panic_handler(msg, file, line, column)` call followed by `unreachable`
     auto emit_panic_call(std::string_view message, ast::node_id site) -> void;
-    // Pulls the `weak` default `panic_handler` from the `builtin` module into GIR
-    auto ensure_panic_runtime() -> void;
+    auto emit_enum_cast_guard(ast::node_id     site,
+                              const value&     enum_val,
+                              const value&     src_val,
+                              ast::expr_handle src_expr) -> void;
+    auto request_builtin_runtime(std::string_view name) -> void;
+    auto ensure_builtin_runtime(std::string_view name) -> void;
     auto spill_to_temporary(value val, sema::type& type, bool is_const = false) -> value;
     auto lvalue_of_expr(ast::node_id id, sema::type& sema_type) -> value;
 
@@ -259,22 +263,21 @@ class emitter {
     }
 
   private:
-    sema::context&             ctx_;
-    mod::module&               ast_module_;
-    stdx::option<mod::module&> active_module_{ast_module_};
-    const_eval                 const_eval_;
-    builder                    builder_;
-    module                     gir_module_;
-    std::vector<scope_frame>   scopes_;
-    std::vector<loop_context>  loop_stack_;
-    default_counter            anon_test_desc_counter_;
-    default_counter            anon_test_fn_counter_;
-    default_counter            anon_fn_counter_;
-    std::vector<std::string>   open_fn_names_;
-    std::vector<bool>          open_fn_is_closure_;
-    std::vector<sema::type*>   user_type_stack_;
-    bool                       needs_panic_runtime_{false};
-    bool                       panic_runtime_emitted_{false};
+    sema::context&                ctx_;
+    mod::module&                  ast_module_;
+    stdx::option<mod::module&>    active_module_{ast_module_};
+    const_eval                    const_eval_;
+    builder                       builder_;
+    module                        gir_module_;
+    std::vector<scope_frame>      scopes_;
+    std::vector<loop_context>     loop_stack_;
+    default_counter               anon_test_desc_counter_;
+    default_counter               anon_test_fn_counter_;
+    default_counter               anon_fn_counter_;
+    std::vector<std::string>      open_fn_names_;
+    std::vector<bool>             open_fn_is_closure_;
+    std::vector<sema::type*>      user_type_stack_;
+    std::vector<std::string_view> pending_builtin_runtime_;
 };
 
 } // namespace ghoti::gir

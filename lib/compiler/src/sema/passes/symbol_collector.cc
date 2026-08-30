@@ -28,6 +28,8 @@
 #include "compiler/sema/passes/cfg_pass.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/syntax/builtins.hh"
+#include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
 
 namespace ghoti::sema {
@@ -103,6 +105,23 @@ auto symbol_collector::visit(ast::node_id, const ast::asm_expr& asm_node) -> voi
 auto symbol_collector::visit(ast::node_id, const ast::call_expr& call) -> void {
     PROFILE_FUNCTION();
     const default_counter::guard g{in_expr_scope_};
+
+    // `@expect`, `@require`, and `@skip` only make sense inside a `test` block body.
+    switch (const auto fn_tok{call.function->get_token_type()}) {
+    case syntax::token_type_t::BUILTIN_EXPECT:
+    case syntax::token_type_t::BUILTIN_REQUIRE:
+    case syntax::token_type_t::BUILTIN_SKIP:
+        if (!in_test_scope_) {
+            ctx_.diags.emplace_back(
+                fmt::format("'{}' may only be used inside a 'test' block",
+                            syntax::get_builtin_opt(fn_tok).value_or("<builtin>")),
+                error::TEST_BUILTIN_OUTSIDE_TEST,
+                collecting_.ast.location_of(call.function));
+        }
+        break;
+    default: break;
+    }
+
     collect(call.function);
     for (const auto& arg : call.arguments) {
         arg.visit([this](auto arg_id) -> void { collect(arg_id); });
@@ -587,8 +606,9 @@ auto symbol_collector::visit(ast::node_id id, const ast::test_stmt& test) -> voi
     }
 
     // Not a symbol so don't push to the table, track in node instead
-    const auto& block{collecting_.ast.get_as<ast::block_stmt>(test.block)};
-    const auto  scope_idx{visit_scopes(
+    const auto&                  block{collecting_.ast.get_as<ast::block_stmt>(test.block)};
+    const default_counter::guard g_test{in_test_scope_};
+    const auto                   scope_idx{visit_scopes(
         type_kind::BLOCK,
         stdx::iter_pair{.iterable = block, .visitor = [this](const ast::stmt_handle& stmt) -> void {
                             collect(stmt);

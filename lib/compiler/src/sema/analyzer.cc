@@ -317,7 +317,10 @@ auto analyzer::emit_llvm_ir_test_executable(gir::module&                      gi
     std::vector<std::string_view> roots;
     for (const auto* fn : gir_module.get_test_functions()) { roots.emplace_back(fn->get_name()); }
     roots.emplace_back("test_runner");
-    roots.emplace_back("record_failure");
+    // Weak context handlers are invoked from lowered code so pin them here
+    roots.emplace_back("expect_handler");
+    roots.emplace_back("require_handler");
+    roots.emplace_back("skip_handler");
     gir_module.prune_unreachable(roots);
     codegen::llvm_lowering lowering{context, gir_module.get_ast_module().path.string()};
     if (options.target_machine) {

@@ -70,13 +70,20 @@ pub const Test := struct {
     pub func: fn(): bool,
 };
 
+extern const __ghoti_test_take_skipped: fn(): bool;
+
 pub weak const test_runner := fn(tests: []Test): i32 {
     var failures: i32 = 0;
+    var skipped: i32 = 0;
     for (tests) |entry| {
-        if (!entry.func()) {
+        const passed := entry.func();
+        if (__ghoti_test_take_skipped()) {
+            skipped = skipped + 1;
+        } else if (!passed) {
             failures = failures + 1;
         }
     }
+    _ = skipped;
     return failures;
 };
 
@@ -86,5 +93,26 @@ pub weak const panic_handler := fn(msg: []u8, file: []u8, line: u32, column: u32
     _ = line;
     _ = column;
     @trap();
+};
+
+pub weak const expect_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): void {
+    _ = msg;
+    _ = file;
+    _ = line;
+    _ = column;
+};
+
+pub weak const require_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): void {
+    _ = msg;
+    _ = file;
+    _ = line;
+    _ = column;
+};
+
+pub weak const skip_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): void {
+    _ = msg;
+    _ = file;
+    _ = line;
+    _ = column;
 };
 )"

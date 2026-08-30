@@ -143,6 +143,7 @@ class symbol_collector {
     default_counter in_function_scope_;
     default_counter in_loop_scope_;
     default_counter in_label_scope_;
+    default_counter in_test_scope_;
 };
 
 } // namespace ghoti::sema
