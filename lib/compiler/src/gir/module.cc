@@ -12,6 +12,7 @@
 #include <gsl/span>
 #include <stdx/option.hh>
 
+#include "compiler/gir/const_value.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/sema/type.hh"
@@ -98,6 +99,16 @@ auto module::prune_unreachable(gsl::span<const std::string_view> roots) -> void 
     const auto scan_value{[&](const value& v) {
         if (const auto s{v.as_opt<std::string>()}) { note_symbol(*s); }
     }};
+    const auto scan_const_value{[&](this auto&& self, const const_value& cv) -> void {
+        if (const auto s{cv.as_opt<std::string>()}) { note_symbol(*s); }
+        if (const auto st{cv.as_opt<const_struct>()}) {
+            for (const auto& [_, fv] : st->fields) { self(fv); }
+        } else if (const auto arr{cv.as_opt<const_array>()}) {
+            for (const auto& e : arr->elements) { self(e); }
+        } else if (const auto un{cv.as_opt<const_union>()}) {
+            for (const auto& p : un->payload) { self(p); }
+        }
+    }};
 
     // Roots: caller entry points + every non-extern root-module function
     for (const auto root : roots) { enqueue_fn(root); }
@@ -108,6 +119,7 @@ auto module::prune_unreachable(gsl::span<const std::string_view> roots) -> void 
     // Over-approximate: keep anything any global initializer names.
     for (const auto* g : globals_) {
         if (g->init_value) { scan_value(*g->init_value); }
+        if (g->const_init) { scan_const_value(*g->const_init); }
     }
 
     while (!worklist.empty()) {

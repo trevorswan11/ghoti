@@ -188,8 +188,17 @@ auto lexer::read_operator() const noexcept -> stdx::option<token_t> {
 
     // We cannot greedily consume the lexer here since the next token instruction handles that
     if (max_len == 0) { return stdx::none; }
-    return token_t{
-        matched_type, stdx::string::substr(input_, pos_, max_len), start_line, start_col};
+    const auto matched_text{stdx::string::substr(input_, pos_, max_len)};
+
+    // A word-operator must be a whole word to allow e.g. origin to work
+    if (!matched_text.empty() &&
+        (std::isalpha(static_cast<u8>(matched_text.front())) || matched_text.front() == '_') &&
+        pos_ + max_len < input_.size()) {
+        const auto next{static_cast<u8>(input_[pos_ + max_len])};
+        if (std::isalnum(next) || next == '_') { return stdx::none; }
+    }
+
+    return token_t{matched_type, matched_text, start_line, start_col};
 }
 
 auto lexer::read_ident(bool builtin) noexcept -> std::string_view {

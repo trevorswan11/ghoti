@@ -88,6 +88,27 @@ TEST_CASE("Lexing identifiers with leading underscores") {
                });
 }
 
+TEST_CASE("Word operators only match on a whole-word boundary") {
+    test_lexer("origin order andy android or_x and2",
+               {
+                   {token_type_t::IDENT, "origin"},
+                   {token_type_t::IDENT, "order"},
+                   {token_type_t::IDENT, "andy"},
+                   {token_type_t::IDENT, "android"},
+                   {token_type_t::IDENT, "or_x"},
+                   {token_type_t::IDENT, "and2"},
+               });
+
+    test_lexer("a and b or c",
+               {
+                   {token_type_t::IDENT, "a"},
+                   {token_type_t::BOOLEAN_AND, "and"},
+                   {token_type_t::IDENT, "b"},
+                   {token_type_t::BOOLEAN_OR, "or"},
+                   {token_type_t::IDENT, "c"},
+               });
+}
+
 TEST_CASE("Lexing basic language snippet") {
     test_lexer("const five := 5;\n"
                "var ten := 10;\n\n"

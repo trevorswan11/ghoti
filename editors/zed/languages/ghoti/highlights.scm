@@ -48,6 +48,7 @@
 
 ; Labels
 (labeled_statement label: (identifier) @label)
+(labeled_expression label: (identifier) @label)
 (break_statement label: (identifier) @label)
 (continue_statement label: (identifier) @label)
 
