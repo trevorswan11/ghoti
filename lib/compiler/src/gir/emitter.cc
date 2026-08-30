@@ -358,23 +358,32 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                 if (ctx_.generic_functions.get_opt(*sema_type)) { return; }
             }
             return emit_function(id, decl, *fn_expr);
-        } else if (const auto struct_expr{active_ast().get_as_opt<ast::struct_expr>(*decl.value)}) {
-            for (const auto& member : struct_expr->members) {
-                if (const auto member_decl{active_ast().get_as_opt<ast::decl_stmt>(*member)}) {
-                    emit_top_level_decl(*member, *member_decl);
+        } else {
+            const auto struct_expr{active_ast().get_as_opt<ast::struct_expr>(*decl.value)};
+            const auto union_expr{active_ast().get_as_opt<ast::union_expr>(*decl.value)};
+            const auto enum_expr{active_ast().get_as_opt<ast::enum_expr>(*decl.value)};
+            if (struct_expr || union_expr || enum_expr) {
+                // Push the structural type so member fn bodies resolve bare sibling members.
+                const auto owner{active_mod().get_sema_type_opt(*decl.value)};
+                const bool pushed{owner.has_value()};
+                if (pushed) { user_type_stack_.emplace_back(&owner.value()); }
+
+                const auto emit_members{[&](auto members) {
+                    for (const auto& member : members) {
+                        if (const auto md{active_ast().get_as_opt<ast::decl_stmt>(*member)}) {
+                            emit_top_level_decl(*member, *md);
+                        }
+                    }
+                }};
+                if (struct_expr) {
+                    emit_members(struct_expr->members);
+                } else if (union_expr) {
+                    emit_members(union_expr->members);
+                } else {
+                    emit_members(enum_expr->members);
                 }
-            }
-        } else if (const auto union_expr{active_ast().get_as_opt<ast::union_expr>(*decl.value)}) {
-            for (const auto& member : union_expr->members) {
-                if (const auto member_decl{active_ast().get_as_opt<ast::decl_stmt>(*member)}) {
-                    emit_top_level_decl(*member, *member_decl);
-                }
-            }
-        } else if (const auto enum_expr{active_ast().get_as_opt<ast::enum_expr>(*decl.value)}) {
-            for (const auto& member : enum_expr->members) {
-                if (const auto member_decl{active_ast().get_as_opt<ast::decl_stmt>(*member)}) {
-                    emit_top_level_decl(*member, *member_decl);
-                }
+
+                if (pushed) { user_type_stack_.pop_back(); }
             }
         }
     } else if (decl.has_modifier(ast::decl_modifiers::EXTERN)) {
@@ -492,6 +501,11 @@ auto emitter::emit_function(ast::node_id              id,
     const scope_guard           g{scopes_};
     const open_fn_name_guard    fn_name_g{open_fn_names_, std::string{name_ident.name}};
     const open_fn_closure_guard fn_closure_g{open_fn_is_closure_, false};
+
+    // A member fn body resolves bare sibling static `const` members through const_eval
+    const_eval_.set_enclosing_type(user_type_stack_.empty()
+                                       ? stdx::none
+                                       : stdx::option<sema::type&>{*user_type_stack_.back()});
 
     if (fn_expr.self) {
         const auto& self_ident{active_ast().get_as<ast::identifier_expr>(fn_expr.self->name)};
@@ -1262,8 +1276,55 @@ auto emitter::emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> 
     // Not a local binding; may be a top-level const/constexpr global, resolvable at compile time
     if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
 
+    // A module-level / static-member `var` (or otherwise non-foldable) value: load from its global.
+    if (const auto gref{try_global_ref(ident.name)}) {
+        auto& gtype{const_cast<sema::type&>(*gref->type)};
+        return value{builder_.emit_load(*gref, gtype), gtype};
+    }
+    // A bare `var` sibling static member inside a member fn body.
+    if (!user_type_stack_.empty()) {
+        if (const auto gref{try_static_member_ref(*user_type_stack_.back(), ident.name)}) {
+            auto& gtype{const_cast<sema::type&>(*gref->type)};
+            return value{builder_.emit_load(*gref, gtype), gtype};
+        }
+    }
+
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     return value{undefined_val{}, sema_type};
+}
+
+auto emitter::global_ref_in(usize table_idx, std::string_view name) -> stdx::option<value> {
+    const auto sym{ctx_.registry.get_from_opt(table_idx, name)};
+    if (!sym) { return stdx::none; }
+    if (sym->has_kind() && sym->get_kind() != sema::symbol_kind::VALUE) { return stdx::none; }
+    const auto node{sym->get_data().as_opt<sema::symbols::node_t>()};
+    if (!node) { return stdx::none; }
+    const auto decl{active_ast().get_as_opt<ast::decl_stmt>(*node)};
+    // Only a `var` value binding has genuine per-program storage that must be shared
+    if (!decl || !decl->has_modifier(ast::decl_modifiers::VARIABLE) ||
+        decl->has_modifier(ast::decl_modifiers::EXTERN)) {
+        return stdx::none;
+    }
+    const auto ty{active_mod().get_sema_type_opt(*node)};
+    if (!ty || ty->get_kind() == sema::type_kind::TYPE ||
+        ty->get_kind() == sema::type_kind::FUNCTION) {
+        return stdx::none;
+    }
+    const auto addr{builder_.emit_global_addr(std::string{name}, *ty, false)};
+    return value{addr, *ty};
+}
+
+auto emitter::try_global_ref(std::string_view name) -> stdx::option<value> {
+    const auto rt{active_mod().root_table_idx};
+    if (!rt) { return stdx::none; }
+    return global_ref_in(*rt, name);
+}
+
+auto emitter::try_static_member_ref(const sema::type& owner, std::string_view member)
+    -> stdx::option<value> {
+    const auto tbl{owner.get_symbol_table_idx_opt()};
+    if (!tbl) { return stdx::none; }
+    return global_ref_in(*tbl, member);
 }
 
 auto emitter::try_emit_union_field_eq(ast::node_id lhs, ast::node_id rhs)
@@ -2870,6 +2931,15 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                     ASSERT(sema_type, "LValue identifier must have a resolved sema type");
                     return spill_to_temporary(emit_ident(id, ident), *sema_type, true);
                 }
+                // A module-level `var`: its lvalue is the global's address.
+                if (const auto gref{try_global_ref(ident.name)}) { return *gref; }
+                // A bare `var` sibling static member inside a member fn body.
+                if (!user_type_stack_.empty()) {
+                    if (const auto gref{
+                            try_static_member_ref(*user_type_stack_.back(), ident.name)}) {
+                        return *gref;
+                    }
+                }
             }
             ASSERT(binding, "LValue identifier must be bound in scope");
             // Struct/union field mutability is binding-based
@@ -2910,8 +2980,21 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             return lvalue_of_expr(id, *sema_type);
         },
         [&](const ast::dot_expr& dot) -> value {
-            // `<Type>.member` has no runtime object
+            // `<Type>.member` / `@this().member` has no runtime object
             if (dot_object_is_type_namespace(dot)) {
+                const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
+                if (const auto ot{active_mod().get_sema_type_opt(dot.object)}) {
+                    auto* owner{&ot.value()};
+                    if (owner->get_kind() == sema::type_kind::TYPE) {
+                        if (const auto meta{owner->get_data().as_opt<sema::types::meta_type>()}) {
+                            owner = &meta->instance;
+                        }
+                    }
+                    // A `var` static member's lvalue is its global's address.
+                    if (const auto gref{try_static_member_ref(*owner, member_ident.name)}) {
+                        return *gref;
+                    }
+                }
                 const auto st{active_mod().get_sema_type_opt(id)};
                 ASSERT(st, "LValue expression must have a resolved sema type");
                 return lvalue_of_expr(id, *st);
@@ -3570,6 +3653,17 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
             }
         }
         const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
+        // A `var` static member has real storage: load it from its global.
+        auto* owner{obj_type};
+        if (owner->get_kind() == sema::type_kind::TYPE) {
+            if (const auto meta{owner->get_data().as_opt<sema::types::meta_type>()}) {
+                owner = &meta->instance;
+            }
+        }
+        if (const auto gref{try_static_member_ref(*owner, member_ident.name)}) {
+            auto& gtype{const_cast<sema::type&>(*gref->type)};
+            return value{builder_.emit_load(*gref, gtype), gtype};
+        }
         return value{std::string{member_ident.name}, sema_type};
     }
 

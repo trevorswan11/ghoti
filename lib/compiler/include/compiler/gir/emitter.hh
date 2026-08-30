@@ -201,6 +201,11 @@ class emitter {
     auto emit_call(ast::node_id id, const ast::call_expr& call) -> value;
     auto emit_asm(ast::node_id id, const ast::asm_expr& node) -> value;
     auto emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> value;
+    // Lvalue (address) of a `var`-style global backed by a GIR global.
+    [[nodiscard]] auto global_ref_in(usize table_idx, std::string_view name) -> stdx::option<value>;
+    [[nodiscard]] auto try_global_ref(std::string_view name) -> stdx::option<value>;
+    [[nodiscard]] auto try_static_member_ref(const sema::type& owner, std::string_view member)
+        -> stdx::option<value>;
 
     template <stdx::Reference Binding = const local_binding&>
     auto lookup_binding(std::string_view name) noexcept -> stdx::option<Binding> {
@@ -267,8 +272,9 @@ class emitter {
     default_counter            anon_fn_counter_;
     std::vector<std::string>   open_fn_names_;
     std::vector<bool>          open_fn_is_closure_;
-    bool                       needs_panic_runtime_{false};
-    bool                       panic_runtime_emitted_{false};
+    std::vector<sema::type*> user_type_stack_;
+    bool                     needs_panic_runtime_{false};
+    bool                     panic_runtime_emitted_{false};
 };
 
 } // namespace ghoti::gir

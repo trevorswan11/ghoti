@@ -34,6 +34,11 @@ class const_eval {
 
     auto set_module(mod::module& module) noexcept -> void { module_ = &module; }
 
+    // The struct/union/enum whose member body is currently being evaluated
+    auto set_enclosing_type(stdx::option<sema::type&> type) noexcept -> void {
+        enclosing_type_ = type;
+    }
+
     // Node-indexed memoization is unsound across generic instantiations that share AST nodes.
     auto clear_memo() noexcept -> void { memo_cache_.clear(); }
 
@@ -135,6 +140,7 @@ class const_eval {
     std::vector<usize>                               recursion_limit_stack_;
     sema::context&                                   ctx_;
     gsl::not_null<mod::module*>                      module_;
+    stdx::option<sema::type&>                        enclosing_type_;
     std::vector<call_frame>                          call_stack_;
     default_counter                                  recursion_depth_;
     ankerl::unordered_dense::map<usize, const_value> memo_cache_;

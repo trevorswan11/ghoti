@@ -1149,6 +1149,23 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
     if (auto local_val{lookup_local_binding(ident.name)}) { return local_val; }
     if (const auto cx{ctx_.lookup_constexpr_binding(ident.name)}) { return *cx; }
 
+    // A bare identifier inside a member body may name a sibling static `const` member.
+    if (enclosing_type_) {
+        if (const auto tbl{enclosing_type_->get_symbol_table_idx_opt()}) {
+            if (const auto msym{ctx_.registry.get_from_opt(*tbl, ident.name)}) {
+                if (const auto node{msym->get_data().as_opt<sema::symbols::node_t>()}) {
+                    if (const auto mdecl{module_->ast.get_as_opt<ast::decl_stmt>(*node)};
+                        mdecl && mdecl->value &&
+                        (mdecl->has_modifier(ast::decl_modifiers::CONSTANT) ||
+                         mdecl->has_modifier(ast::decl_modifiers::CONSTEXPR)) &&
+                        !module_->ast.get_as_opt<ast::function_expr>(*mdecl->value)) {
+                        return try_eval(*mdecl->value);
+                    }
+                }
+            }
+        }
+    }
+
     if (id.is_valid()) {
         if (const auto sema_type{module_->get_sema_type_opt(id)}) {
             if (sema_type->get_kind() == sema::type_kind::TYPE) {

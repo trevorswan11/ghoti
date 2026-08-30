@@ -31,6 +31,7 @@ enum class instruction_kind : u8 {
     GET_ELEMENT_PTR,
     ADDRESS_OF,
     DEREF,
+    GLOBAL_ADDR,
 
     // Binary arithmetic & bitwise
     ADD,

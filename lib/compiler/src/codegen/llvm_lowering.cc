@@ -80,6 +80,7 @@ llvm_lowering::llvm_lowering(llvm::LLVMContext& context, std::string_view module
       builder_{context_}, types_{context_, *llvm_module_} {}
 
 auto llvm_lowering::lower(const gir::module& gir_mod) -> stdx::box<llvm::Module> {
+    gir_module_.emplace(gir_mod);
     for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
     for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
     for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
@@ -90,6 +91,7 @@ auto llvm_lowering::lower_executable(const gir::module& gir_mod, std::string_vie
     -> stdx::box<llvm::Module> {
     is_executable_  = true;
     user_main_name_ = user_main_name;
+    gir_module_.emplace(gir_mod);
     for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
     for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
     for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
@@ -380,6 +382,7 @@ auto llvm_lowering::lower_test_executable(const gir::module&             gir_mod
     user_main_name_ =
         user_runner_name.transform([](auto sv) { return std::string{sv}; }).value_or(std::string{});
     is_executable_ = true;
+    gir_module_.emplace(gir_mod);
     for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
     for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
     for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
@@ -789,6 +792,7 @@ auto llvm_lowering::lower_instruction(const gir::instruction& inst) -> void {
     case gir::instruction_kind::GET_ELEMENT_PTR: result_val = emit_get_element_ptr(inst); break;
     case gir::instruction_kind::ADDRESS_OF:      result_val = emit_address_of(inst); break;
     case gir::instruction_kind::DEREF:           result_val = emit_deref(inst); break;
+    case gir::instruction_kind::GLOBAL_ADDR:     result_val = emit_global_addr(inst); break;
     case gir::instruction_kind::CONSTANT:        result_val = emit_const(inst); break;
     case gir::instruction_kind::ADD:
     case gir::instruction_kind::SUB:
@@ -1006,6 +1010,22 @@ auto llvm_lowering::emit_deref(const gir::instruction& inst) -> llvm::Value* {
     auto* ptr{lower_value(inst.operands[0])};
     if (inst.result) { set_local(*inst.result, ptr); }
     return ptr;
+}
+
+auto llvm_lowering::emit_global_addr(const gir::instruction& inst) -> llvm::Value* {
+    ASSERT(inst.callee_name, "global_addr requires the global's name");
+    // Every GIR global is lowered before any function body
+    auto* gv{llvm_module_->getNamedGlobal(*inst.callee_name)};
+    if (!gv) {
+        for (const auto* g : gir_module_->get_globals()) {
+            if (g->name == *inst.callee_name) {
+                gv = lower_global(*g);
+                break;
+            }
+        }
+    }
+    if (inst.result) { set_local(*inst.result, gv); }
+    return gv;
 }
 
 auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {

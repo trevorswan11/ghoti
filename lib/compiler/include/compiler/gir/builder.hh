@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -46,6 +47,8 @@ class builder {
     auto emit_load(value src, sema::type& type) -> local_id;
     auto emit_store(local_id dest, value val) -> instruction&;
     auto emit_store(value dest, value val) -> instruction&;
+    // Produces a temporary holding the address of a module-level / static-member global.
+    auto emit_global_addr(std::string name, sema::type& type, bool is_const = false) -> local_id;
     auto emit_get_element_ptr(value base, std::vector<value> indices, sema::type& result_type)
         -> local_id;
     auto emit_address_of(value target, sema::type& result_type) -> local_id;

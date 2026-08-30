@@ -128,6 +128,20 @@ auto builder::emit_deref(value ptr, sema::type& result_type) -> local_id {
     return dest;
 }
 
+auto builder::emit_global_addr(std::string name, sema::type& type, bool is_const) -> local_id {
+    ASSERT(function_, "Cannot emit global_addr instruction without an active function");
+    const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
+    emit_instruction({
+        .kind        = instruction_kind::GLOBAL_ADDR,
+        .type        = type,
+        .result      = dest,
+        .operands    = {},
+        .callee_name = std::move(name),
+        .is_const    = is_const,
+    });
+    return dest;
+}
+
 auto builder::emit_binary(instruction_kind kind, value lhs, value rhs, sema::type& type)
     -> local_id {
     ASSERT(function_, "Cannot emit binary instruction without an active function");

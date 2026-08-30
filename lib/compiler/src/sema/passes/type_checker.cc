@@ -663,6 +663,17 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                                      });
         }
         break;
+    case gir::instruction_kind::GLOBAL_ADDR:
+        // Behaves like an alloca slot: `Type.X = v` / `g = v` stores validate against `is_const`.
+        if (inst.result && inst.type) {
+            locals_.insert_or_assign(*inst.result,
+                                     local_info{
+                                         .type      = inst.type.get(),
+                                         .is_alloca = true,
+                                         .is_const  = inst.is_const,
+                                     });
+        }
+        break;
     case gir::instruction_kind::ADDRESS_OF:
     case gir::instruction_kind::DEREF:
     case gir::instruction_kind::INT_FROM_PTR:

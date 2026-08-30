@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string>
 #include <string_view>
 
 #include <ankerl/unordered_dense.h>
@@ -75,6 +76,7 @@ class llvm_lowering {
     auto emit_get_element_ptr(const gir::instruction& inst) -> llvm::Value*;
     auto emit_address_of(const gir::instruction& inst) -> llvm::Value*;
     auto emit_deref(const gir::instruction& inst) -> llvm::Value*;
+    auto emit_global_addr(const gir::instruction& inst) -> llvm::Value*;
 
     auto emit_binary(const gir::instruction& inst) -> llvm::Value*;
     auto emit_unary(const gir::instruction& inst) -> llvm::Value*;
@@ -102,6 +104,7 @@ class llvm_lowering {
     ankerl::unordered_dense::map<gir::local_id, llvm::Value*>          locals_;
     ankerl::unordered_dense::map<gir::segment_id, llvm::BasicBlock*>   segment_blocks_;
     ankerl::unordered_dense::map<std::string_view, llvm::GlobalValue*> globals_;
+    stdx::option<const gir::module&>                                   gir_module_;
     bool                                                               is_executable_{false};
     std::string                                                        user_main_name_{"main"};
 };

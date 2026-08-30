@@ -77,6 +77,11 @@ auto format_instruction(const instruction& inst) -> std::string {
                            "<missing_dst>");
     case instruction_kind::ALLOCA:
         return fmt::format("{}{} {}", prefix, instruction_kind_name(inst.kind), type_str);
+    case instruction_kind::GLOBAL_ADDR:
+        return fmt::format("{}{} @{}",
+                           prefix,
+                           instruction_kind_name(inst.kind),
+                           inst.callee_name.value_or("<missing_global>"));
     case instruction_kind::LOAD:
         return fmt::format("{}{} {}",
                            prefix,
