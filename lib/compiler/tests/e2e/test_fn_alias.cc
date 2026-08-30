@@ -40,4 +40,22 @@ TEST_CASE("an alias of an alias") {
     )") == 42);
 }
 
+TEST_CASE("module-scope alias of a static member function") {
+    CHECK(helpers::compile_and_run(R"(
+        const Box := struct {
+            n: i32,
+            const of := fn(v: i32): @this() { return .{ .n = v }; };
+        };
+
+        const make := Box.of;
+        const relay := fn(f: fn(i32): Box, x: i32): Box { return f(x); };
+
+        pub const main := fn(): i32 {
+            const a := make(40);        // direct call through the alias
+            const b := relay(make, 2);  // alias passed as a fn-pointer argument
+            return a.n + b.n;
+        };
+    )") == 42);
+}
+
 } // namespace ghoti::tests

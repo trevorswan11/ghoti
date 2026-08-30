@@ -741,8 +741,15 @@ auto const_eval::eval_dot(ast::node_id, const ast::dot_expr& dot) -> stdx::optio
                         if (const auto mdecl{module_->ast.get_as_opt<ast::decl_stmt>(*node)};
                             mdecl && mdecl->value &&
                             (mdecl->has_modifier(ast::decl_modifiers::CONSTANT) ||
-                             mdecl->has_modifier(ast::decl_modifiers::CONSTEXPR)) &&
-                            !module_->ast.get_as_opt<ast::function_expr>(*mdecl->value)) {
+                             mdecl->has_modifier(ast::decl_modifiers::CONSTEXPR))) {
+                            // A static member function decays to a value naming its GIR symbol
+                            if (module_->ast.get_as_opt<ast::function_expr>(*mdecl->value)) {
+                                if (const auto fn_type{module_->get_sema_type_opt(*mdecl->value)};
+                                    fn_type && fn_type->get_kind() == sema::type_kind::FUNCTION) {
+                                    return const_value{std::string{member_name}, *fn_type};
+                                }
+                                return stdx::none;
+                            }
                             return try_eval(*mdecl->value);
                         }
                     }
