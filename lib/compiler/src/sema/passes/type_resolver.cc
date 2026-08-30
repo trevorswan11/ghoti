@@ -450,6 +450,15 @@ template <ast::IndexableID ID>
         return_type = &builtin.return_type;
         break;
     }
+    case token_type_t::BUILTIN_TYPE_NAME: {
+        auto&      arg_type{*get_resolved_call_arg_type(call.arguments[0])};
+        const auto name{ctx_.type_display_name(arg_type)};
+        return_type = &ctx_.get_array(types::mut::CONSTANT,
+                                      true,
+                                      name.size() + 1,
+                                      ctx_.get_builtin_resolved_type(type_kind::U8));
+        break;
+    }
     case token_type_t::BUILTIN_TARGET_OS:       return_type = &ctx_.get_builtin_type("Os"); break;
     case token_type_t::BUILTIN_TARGET_ARCH:     return_type = &ctx_.get_builtin_type("Arch"); break;
     case token_type_t::BUILTIN_TARGET_ABI:      return_type = &ctx_.get_builtin_type("Abi"); break;
@@ -1413,8 +1422,11 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
             fn.self.has_value(), param_types, return_type, fn.variadic);
     }
 
-    return_trackers_.emplace_back(
-        return_tracker{.return_types = {}, .is_auto_return = is_auto_return});
+    return_trackers_.emplace_back(return_tracker{
+        .return_types   = {},
+        .is_auto_return = is_auto_return,
+        .expected_type  = is_auto_return ? stdx::none : stdx::option<type&>{return_type},
+    });
 
     const auto& block{resolving_.ast.get_as<ast::block_stmt>(fn.body)};
     for (const auto& stmt : block) { TRY_RESOLVE(stmt); }
@@ -2483,8 +2495,7 @@ auto type_resolver::validate_union_arms(ast::node_id           match_id,
 auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void {
     PROFILE_FUNCTION();
     TRY_RESOLVE(match.matcher);
-    auto&                  matcher_type{*last_type_.take()};
-    const structural_guard g{implicit_type_stack_, matcher_type};
+    auto& matcher_type{*last_type_.take()};
 
     // The expression must resolve to a single type on pass 3
     stdx::option<type&> first_type;
@@ -2629,7 +2640,11 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
             resolve_symbol_info(*arm.capture, symbol_kind::VALUE);
         }
 
-        if (!arm.pattern.is<ast::discarded>()) { TRY_RESOLVE(arm.pattern); }
+        // The pattern is resolved against the matcher's type
+        if (!arm.pattern.is<ast::discarded>()) {
+            const structural_guard pattern_g{implicit_type_stack_, matcher_type};
+            TRY_RESOLVE(arm.pattern);
+        }
         TRY_RESOLVE(arm.dispatch);
 
         // Only an expr_stmt arm can yield a value (blocks never do, per emit_stmt_as_value); a
@@ -3402,6 +3417,15 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             const auto& decl_ident{resolving_.ast.get_as<ast::identifier_expr>(decl.name)};
             ctx_.generic_functions.set_function_name(resolved_type, decl_ident.name);
         }
+
+        // Remember the declared name of a struct/enum/union so `@typeName` can report it
+        if (decl.value && decl.value->any<ast::struct_expr, ast::union_expr, ast::enum_expr>()) {
+            if (const auto value_type{resolving_.get_sema_type_opt(*decl.value)};
+                value_type && !value_type->is_poison()) {
+                const auto& decl_ident{resolving_.ast.get_as<ast::identifier_expr>(decl.name)};
+                ctx_.user_type_names.try_emplace(&value_type.value(), decl_ident.name);
+            }
+        }
     }
 
     resolving_.set_sema_type_if(decl.name, resolved_type);
@@ -3465,6 +3489,12 @@ auto type_resolver::visit(ast::node_id id, const ast::import_stmt& import_stmt) 
 auto type_resolver::visit(ast::node_id id, const ast::return_stmt& return_stmt) -> void {
     PROFILE_FUNCTION();
     if (return_stmt.expression) {
+        // Make the declared return type the implicit type for the returned expression
+        stdx::option<structural_guard> return_type_guard;
+        if (!return_trackers_.empty() && return_trackers_.back().expected_type) {
+            return_type_guard.emplace(implicit_type_stack_, *return_trackers_.back().expected_type);
+        }
+
         TRY_RESOLVE(*return_stmt.expression);
         auto& return_expr_type{*last_type_.take()};
 
@@ -3839,6 +3869,7 @@ auto type_resolver::instantiate_generic(type&                             callee
     inst_resolver.return_trackers_.emplace_back(return_tracker{
         .return_types   = {},
         .is_auto_return = is_auto_return,
+        .expected_type  = is_auto_return ? stdx::none : stdx::option<type&>{return_type},
     });
 
     const auto  diags_before{ctx_.diags.size()};

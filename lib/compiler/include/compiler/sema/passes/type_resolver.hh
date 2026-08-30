@@ -89,6 +89,7 @@ class type_resolver {
     struct return_tracker {
         std::vector<gsl::not_null<type*>> return_types{};
         bool                              is_auto_return{false};
+        stdx::option<type&>               expected_type;
 
         auto               add_return(type& t) -> void { return_types.emplace_back(&t); }
         [[nodiscard]] auto has_returns() const noexcept -> bool { return !return_types.empty(); }

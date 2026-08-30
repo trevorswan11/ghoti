@@ -64,6 +64,9 @@ struct context {
     constexpr_arg_map            constexpr_instantiation_args;
     body_type_diff_map           instantiation_body_types;
 
+    // Declared names for user struct/enum/union types, for `@typeName`
+    ankerl::unordered_dense::map<const type*, std::string_view> user_type_names;
+
     context(mod::module_manager&         modules,
             symbol_table_registry&       registry,
             type_pool&                   pool,
@@ -88,7 +91,8 @@ struct context {
           user_main_name{other.user_main_name},
           constexpr_binding_frames{other.constexpr_binding_frames},
           constexpr_instantiation_args{other.constexpr_instantiation_args},
-          instantiation_body_types{other.instantiation_body_types} {}
+          instantiation_body_types{other.instantiation_body_types},
+          user_type_names{other.user_type_names} {}
 
     auto operator=(const context& other) -> context& = delete;
     context(context&&) noexcept                      = default;
@@ -152,6 +156,8 @@ struct context {
 
     // A compiler-known target-fact enum by name, from the prelude
     [[nodiscard]] auto get_builtin_type(std::string_view name) -> type&;
+
+    [[nodiscard]] auto type_display_name(const type& t) const -> std::string;
 
     // The bound value of a `constexpr` parameter named `name`, searching innermost frame first
     [[nodiscard]] auto lookup_constexpr_binding(std::string_view name) const

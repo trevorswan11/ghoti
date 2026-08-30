@@ -59,6 +59,11 @@ templ InternalsBuiltinsPage() {
 	<h3>{ "@tagName" }</h3>
 	<pre><code class="language-ghoti">{ `@tagName(expression: auto): [:0]u8` }</code></pre>
 	<p>Returns a null-terminated static string representing the name of the enum or active union tag yielded by the expression.</p>
+	<h3>{ "@typeName" }</h3>
+	<pre><code class="language-ghoti">{ `@typeName(T: auto): [N:0]u8` }</code></pre>
+	<p>
+		Folds at compile time to a fixed-length, null-terminated byte array naming its argument.
+	</p>
 	<h2>Target Information</h2>
 	<h3>{ "@targetOs" }</h3>
 	<pre><code class="language-ghoti">{ `@targetOs(): [:0]u8` }</code></pre>

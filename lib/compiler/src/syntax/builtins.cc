@@ -32,6 +32,7 @@ constexpr auto ALL_BUILTINS_BY_SV{
                                                    builtins::TYPE_OF,
                                                    builtins::THIS,
                                                    builtins::TAG_NAME,
+                                                   builtins::TYPE_NAME,
                                                    builtins::MEMCPY,
                                                    builtins::MEMSET,
                                                    builtins::MEMMOVE,

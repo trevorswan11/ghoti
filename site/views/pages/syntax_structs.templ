@@ -127,4 +127,20 @@ const s2: S = .{ .a = 3 };` }
 	<ul>
 		<li>All member variables that do not have default values associated with their declarations must be initialized in either case</li>
 	</ul>
+	<ul>
+		<li>
+			<code>return</code> takes the function's declared return type, and that context flows
+			through <code>if</code> / <code>match</code> / labeled-loop <code>break</code> expressions
+			sitting in the return position.
+		</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const Point = struct { var x: int; var y: int; };
+
+const make = fn(hi: bool): Point {
+    return if (hi) .{ .x = 1, .y = 2 }; else .{ .x = 0, .y = 0 };
+};` }
+		</code>
+	</pre>
 }

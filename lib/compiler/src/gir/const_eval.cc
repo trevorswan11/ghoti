@@ -1457,6 +1457,23 @@ auto const_eval::eval_builtin(ast::node_id          id,
         }
         return stdx::none;
     }
+    case syntax::token_type_t::BUILTIN_TYPE_NAME: {
+        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
+        const auto&               arg{call.arguments.front()};
+        stdx::option<sema::type&> target_type;
+        if (const auto type_id{arg.as_opt<ast::explicit_type_id>()}) {
+            target_type = module_->get_sema_type_opt(*type_id);
+        } else if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
+            target_type = module_->get_sema_type_opt(*expr_h);
+        }
+        if (!target_type) { return stdx::none; }
+
+        // Match the resolver: a fixed-length, null-terminated byte array (like a string literal).
+        auto  name{ctx_.type_display_name(*target_type)};
+        auto& t_u8{ctx_.get_builtin_resolved_type(sema::type_kind::U8)};
+        auto& arr_type{ctx_.get_array(sema::types::mut::CONSTANT, true, name.size() + 1, t_u8)};
+        return const_value{std::move(name), arr_type};
+    }
     case syntax::token_type_t::BUILTIN_TARGET_OS: {
         const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
         return target_enum_value("Os", facts.os);

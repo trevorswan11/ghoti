@@ -2,6 +2,7 @@
 
 #include <concepts>
 #include <ranges>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -156,6 +157,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::TYPE_OF, params(t_auto), t_type);
     inject_function(bis::THIS, params(), t_type);
     inject_function(bis::TAG_NAME, params(t_auto), t_c_str);
+    inject_function(bis::TYPE_NAME, params(t_auto), t_c_str);
 
     inject_function(bis::MEMCPY, params(t_auto, t_auto), t_void);
     inject_function(bis::MEMSET, params(t_auto, t_auto), t_void);
@@ -265,6 +267,20 @@ auto context::get_builtin_type(std::string_view name) -> type& {
     auto& enum_mod{modules.builtin_module()};
     auto& enum_sym{registry.get(*enum_mod.root_table_idx).get(name)};
     return enum_mod.get_sema_type(enum_sym.get_data().as<symbols::node_t>());
+}
+
+auto context::type_display_name(const type& t) const -> std::string {
+    const type* denoted{&t};
+    if (denoted->get_kind() == type_kind::TYPE) {
+        if (const auto meta{denoted->get_data().as_opt<types::meta_type>()}) {
+            denoted = &meta->instance;
+        }
+    }
+
+    if (const auto it{user_type_names.find(denoted)}; it != user_type_names.end()) {
+        return std::string{it->second};
+    }
+    return denoted->to_string();
 }
 
 } // namespace ghoti::sema
