@@ -27,6 +27,7 @@ struct array_expr {
     bool                      mut_elements;
     explicit_type_id          item_explicit_type;
     std::vector<expr_handle>  items;
+    bool                      is_type_expr{false}; // `[]T` / `[N]T` with no `{ ... }` initializer
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;

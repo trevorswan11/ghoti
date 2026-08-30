@@ -118,7 +118,8 @@ using outer_access_handle      = handle<node_kind::IDENTIFIER_EXPRESSION,
                                         node_kind::MODULE_ACCESS_EXPRESSION,
                                         node_kind::DOT_EXPRESSION>;
 
-using match_pattern_handle = handle<node_kind::CALL_EXPRESSION,
+using match_pattern_handle = handle<node_kind::ARRAY_EXPRESSION,
+                                    node_kind::CALL_EXPRESSION,
                                     node_kind::DOT_EXPRESSION,
                                     node_kind::IDENTIFIER_EXPRESSION,
                                     node_kind::INDEX_EXPRESSION,

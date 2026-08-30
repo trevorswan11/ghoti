@@ -600,11 +600,16 @@ auto formatter::tail_clause(node_id stmt) -> syntax::doc_id {
 auto formatter::visit(node_id, const array_expr& node) -> syntax::doc_id {
     std::vector<syntax::doc_id> head;
     head.emplace_back(doc_manager_.text("["));
-    head.emplace_back(node.size ? format(*node.size) : doc_manager_.text("_"));
+    if (node.size) {
+        head.emplace_back(format(*node.size));
+    } else if (!node.is_type_expr) {
+        head.emplace_back(doc_manager_.text("_"));
+    }
     if (node.null_terminated) { head.emplace_back(doc_manager_.text(":0")); }
     head.emplace_back(doc_manager_.text("]"));
     if (node.mut_elements) { head.emplace_back(doc_manager_.text("mut ")); }
     head.emplace_back(format(node.item_explicit_type));
+    if (node.is_type_expr) { return doc_manager_.concat(std::move(head)); }
 
     std::vector<syntax::doc_id> items;
     items.reserve(node.items.size());

@@ -41,7 +41,7 @@ auto dumper::compare_source_asts(std::string_view s1, std::string_view s2) -> bo
 
 auto dumper::visit(node_id, const array_expr& array) -> void {
     PROFILE_FUNCTION();
-    fmt::println(out_, "ArrayExpression");
+    fmt::println(out_, "ArrayExpression{}", array.is_type_expr ? " (type)" : "");
     {
         const indent::guard g{indent_, false};
         if (array.size) {
@@ -59,10 +59,11 @@ auto dumper::visit(node_id, const array_expr& array) -> void {
     }
 
     {
-        const indent::guard g{indent_, false};
+        const indent::guard g{indent_, array.is_type_expr};
         fmt::print(out_, "{}Type: ", indent_.current_branch());
         dump(array.item_explicit_type);
     }
+    if (array.is_type_expr) { return; }
 
     const indent::guard g{indent_, true};
     fmt::print(out_, "{}Items:", indent_.current_branch());

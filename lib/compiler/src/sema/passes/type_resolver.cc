@@ -112,6 +112,39 @@ namespace {
 
 auto type_resolver::visit(ast::node_id id, const ast::array_expr& array) -> void {
     PROFILE_FUNCTION();
+
+    // `[]T` / `[N]T` with no `{ ... }`: the node is a slice/array type value
+    if (array.is_type_expr) {
+        resolve(array.item_explicit_type);
+        auto& underlying{denoted_type(*last_type_.take())};
+        if (!underlying.is_resolved()) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                incomplete_array_item(resolving_.ast.location_of(array.item_explicit_type))));
+        }
+
+        const auto mutability{array_element_mutability(array.mut_elements)};
+        if (array.size) {
+            gir::const_eval evaluator{ctx_, resolving_};
+            const auto      len_cv{evaluator.try_eval(*array.size)};
+            const auto      len{len_cv ? len_cv->as_uint_opt() : stdx::none};
+            if (!len) {
+                return last_type_.emplace(
+                    ctx_.poison_node(resolving_,
+                                     id,
+                                     "An array-type size must be a compile-time constant",
+                                     error::CONSTEXPR_EVALUATION_FAILED,
+                                     resolving_.ast.location_of(*array.size)));
+            }
+            last_type_.emplace(ctx_.get_array(mutability, array.null_terminated, *len, underlying));
+        } else {
+            last_type_.emplace(ctx_.get_slice(mutability, array.null_terminated, underlying));
+        }
+        resolving_.set_sema_type(id, *last_type_);
+        return;
+    }
+
     for (const auto& item : array.items) { resolve(item); }
     resolve(array.item_explicit_type);
     auto& item_type{*last_type_.take()};
@@ -2653,6 +2686,9 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
             if (node.template is<ast::struct_expr>() || node.template is<ast::enum_expr>() ||
                 node.template is<ast::union_expr>()) {
                 return true;
+            }
+            if (const auto arr{resolving_.ast.get_as_opt<ast::array_expr>(n)}) {
+                return arr->is_type_expr;
             }
             if (const auto addr{resolving_.ast.get_as_opt<ast::address_of_expr>(n)}) {
                 return self(self, *addr->rhs);

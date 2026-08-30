@@ -32,6 +32,7 @@ auto array_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
     auto       null_terminated{false};
 
     stdx::option<expr_handle> size;
+    auto                      slice_shape{false};
     if (!parser.peek_token_is(syntax::token_type_t::RBRACKET)) {
         parser.advance();
         if (!parser.current_token_is(syntax::token_type_t::UNDERSCORE)) {
@@ -44,11 +45,8 @@ auto array_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
             null_terminated = true;
         }
     } else {
-        // There needs to be a token for the size for array literals
-        return make_syntax_err(
-            "Array literals must be initialized with an implicit or explicit size",
-            syntax::error::MISSING_ARRAY_SIZE_TOKEN,
-            start_token);
+        // `[]T` with nothing between the brackets: a slice type, never a literal
+        slice_shape = true;
     }
 
     TRY(parser.expect_peek(syntax::token_type_t::RBRACKET));
@@ -60,6 +58,27 @@ auto array_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
     }
 
     const auto item_type{TRY(explicit_type::parse(parser, true))};
+
+    const auto has_initializer{parser.peek_token_is(syntax::token_type_t::LBRACE)};
+    if (slice_shape && has_initializer) {
+        // `[]T{ ... }` is not a valid slice literal
+        return make_syntax_err(
+            "Array literals must be initialized with an implicit or explicit size",
+            syntax::error::MISSING_ARRAY_SIZE_TOKEN,
+            start_token);
+    }
+
+    // No initializer brace: this expression denotes a slice/array *type* value.
+    if (!has_initializer) {
+        return parser.add_expr<array_expr>(start_token,
+                                           size,
+                                           null_terminated,
+                                           mut_elements,
+                                           item_type,
+                                           std::vector<expr_handle>{},
+                                           true);
+    }
+
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
 
     // Current token is either the LBRACE at the start or a comma before parsing
@@ -75,7 +94,7 @@ auto array_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
 
     TRY(parser.expect_peek(syntax::token_type_t::RBRACE));
     return parser.add_expr<array_expr>(
-        start_token, size, null_terminated, mut_elements, item_type, std::move(items));
+        start_token, size, null_terminated, mut_elements, item_type, std::move(items), false);
 }
 
 namespace {

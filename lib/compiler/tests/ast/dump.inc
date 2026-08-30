@@ -264,11 +264,11 @@ ExpressionStatement
         ├─ ReferenceExpression (AND_MUT)
         │   └─ Operand: IdentifierExpression: r
         ├─ IdentifierExpression: t
-        └─ ExplicitType (modifier: PTR)
-            └─ ArrayType
-                ├─ Dimensions: IdentifierExpression: N
+        └─ AddressOfExpression (CARET)
+            └─ Operand: ArrayExpression (type)
+                ├─ Size: IdentifierExpression: N
                 ├─ Null terminated: true
-                └─ ExplicitType (modifier: VALUE)
+                └─ Type: ExplicitType (modifier: VALUE)
                     └─ IdentifierExpression: u8 (primitive)
 ExpressionStatement
 └─ Expr: ImplicitAccessExpression

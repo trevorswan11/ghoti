@@ -559,6 +559,17 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
 
 auto const_eval::eval_array(ast::node_id id, const ast::array_expr& array)
     -> stdx::option<const_value> {
+    // `[]T` / `[N]T` type expressions fold to the slice/array type the resolver assigned them.
+    if (array.is_type_expr) {
+        if (const auto sema_type{module_->get_sema_type_opt(id)}) {
+            if (const auto meta{sema_type->get_data().as_opt<sema::types::meta_type>()}) {
+                return const_value{meta->instance};
+            }
+            return const_value{*sema_type};
+        }
+        return stdx::none;
+    }
+
     const_array arr;
     arr.elements.reserve(array.items.size());
     for (const auto& item_h : array.items) {

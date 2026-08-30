@@ -1253,6 +1253,7 @@ auto emitter::emit_array(ast::node_id id, const ast::array_expr& arr) -> value {
     PROFILE_FUNCTION();
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Array expression must have a resolved sema type");
+    if (arr.is_type_expr) { return value{void_val{}, *sema_type}; }
 
     const auto array_slot{builder_.emit_alloca(*sema_type)};
     auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
@@ -2035,6 +2036,14 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         }
         if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
             bool is_type_arg{false};
+            // A parameter declared `: type` accepts only a type value
+            if (generic_target_fn && i < generic_target_fn->parameters.size()) {
+                const auto& gp_type{generic_target_fn->parameters[i].explicit_type};
+                if (gp_type.is_valid() &&
+                    gp_type.get_token_type() == syntax::token_type_t::TYPE_TYPE) {
+                    is_type_arg = true;
+                }
+            }
             if (const auto t_opt{active_mod().get_sema_type_opt(*expr_h)}) {
                 if (t_opt->get_kind() == sema::type_kind::TYPE) { is_type_arg = true; }
             } else if (const auto ident{active_ast().get_as_opt<ast::identifier_expr>(*expr_h)}) {

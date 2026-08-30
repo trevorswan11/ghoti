@@ -17,6 +17,10 @@
     - `if constexpr`-style (only the selected arm is checked/emitted)
     - Requires a `_` arm
     - Works per generic `T: type` instantiation
+    - Patterns and scrutinees may be primitives, named types, `^T` / `&T`, and `[]T` / `[N]T`
+- `[]T` and `[N]T` are now valid in value position (a slice/array *type* value)
+    - Usable as `const` aliases and passed to `T: type` parameters
+- A `T: type` parameter accepts any type-denoting argument, including `^Point`, `[]u8`, and local aliases
 - Compile-time config: `@cfg`, `@cfgValue`, `@compileError`; target facts as `builtin` enums; `@cfg` can gate aggregate fields and nested control flow
 - Inline assembly: `asm { ... }` expressions
 - Declaration modifiers: `weak`, `naked`, `threadlocal`, and link-name overrides
