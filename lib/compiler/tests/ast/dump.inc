@@ -77,26 +77,27 @@ ExpressionStatement
 DeclStatement
 ├─ Name: IdentifierExpression: f_ptr
 ├─ Modifiers: VARIABLE
-└─ Type: ExplicitType (modifier: PTR)
-    └─ FunctionExpression
-        ├─ Parameters:
-        │   ├─ Param:
-        │   │   └─ Type: ExplicitType (modifier: REF)
-        │   │       └─ IdentifierExpression: a
-        │   └─ Param:
-        │       └─ Type: ExplicitType (modifier: MUT_PTR)
-        │           └─ IdentifierExpression: B
-        ├─ Variadic: true
-        └─ Returns: ExplicitType (modifier: REF)
-            └─ ArrayType
-                ├─ Dimensions: USizeExpression: 2
-                ├─ Null terminated: false
-                └─ ExplicitType (modifier: VALUE)
-                    └─ ArrayType
-                        ├─ Dimensions: IdentifierExpression: N
-                        ├─ Null terminated: false
-                        └─ ExplicitType (modifier: PTR)
-                            └─ IdentifierExpression: E
+├─ Type: ExplicitType (modifier: PTR)
+│   └─ FunctionExpression
+│       ├─ Parameters:
+│       │   ├─ Param:
+│       │   │   └─ Type: ExplicitType (modifier: REF)
+│       │   │       └─ IdentifierExpression: a
+│       │   └─ Param:
+│       │       └─ Type: ExplicitType (modifier: MUT_PTR)
+│       │           └─ IdentifierExpression: B
+│       ├─ Variadic: true
+│       └─ Returns: ExplicitType (modifier: REF)
+│           └─ ArrayType
+│               ├─ Dimensions: USizeExpression: 2
+│               ├─ Null terminated: false
+│               └─ ExplicitType (modifier: VALUE)
+│                   └─ ArrayType
+│                       ├─ Dimensions: IdentifierExpression: N
+│                       ├─ Null terminated: false
+│                       └─ ExplicitType (modifier: PTR)
+│                           └─ IdentifierExpression: E
+└─ Value: UndefinedExpression
 ExpressionStatement
 └─ Expr: ModuleAccessExpression
     ├─ Outer: ModuleAccessExpression
@@ -325,12 +326,13 @@ ExpressionStatement
 DeclStatement
 ├─ Name: IdentifierExpression: a
 ├─ Modifiers: VARIABLE
-└─ Type: ExplicitType (modifier: VALUE)
-    └─ ArrayType
-        ├─ Dimensions: (slice)
-        ├─ Null terminated: false
-        └─ ExplicitType (modifier: VALUE)
-            └─ IdentifierExpression: i32 (primitive)
+├─ Type: ExplicitType (modifier: VALUE)
+│   └─ ArrayType
+│       ├─ Dimensions: (slice)
+│       ├─ Null terminated: false
+│       └─ ExplicitType (modifier: VALUE)
+│           └─ IdentifierExpression: i32 (primitive)
+└─ Value: UndefinedExpression
 BlockStatement
 └─ <empty>
 DeferStatement
@@ -379,8 +381,9 @@ ExpressionStatement
     │                   └─ DeclStatement
     │                       ├─ Name: IdentifierExpression: d
     │                       ├─ Modifiers: VARIABLE
-    │                       └─ Type: ExplicitType (modifier: VALUE)
-    │                           └─ IdentifierExpression: u32 (primitive)
+    │                       ├─ Type: ExplicitType (modifier: VALUE)
+    │                       │   └─ IdentifierExpression: u32 (primitive)
+    │                       └─ Value: UndefinedExpression
     └─ Members:
         └─ DeclStatement
             ├─ Name: IdentifierExpression: b
@@ -455,28 +458,31 @@ TestStatement
 DeclStatement
 ├─ Name: IdentifierExpression: a
 ├─ Modifiers: VARIABLE
-└─ Type: ExplicitType (modifier: VALUE)
-    └─ CallExpression
-        ├─ Callee: ModuleAccessExpression
-        │   ├─ Outer: IdentifierExpression: std
-        │   └─ Inner: IdentifierExpression: ArrayList
-        └─ Arguments:
-            └─ IdentifierExpression: u8 (primitive)
+├─ Type: ExplicitType (modifier: VALUE)
+│   └─ CallExpression
+│       ├─ Callee: ModuleAccessExpression
+│       │   ├─ Outer: IdentifierExpression: std
+│       │   └─ Inner: IdentifierExpression: ArrayList
+│       └─ Arguments:
+│           └─ IdentifierExpression: u8 (primitive)
+└─ Value: UndefinedExpression
 DeclStatement
 ├─ Name: IdentifierExpression: a
 ├─ Modifiers: VARIABLE
-└─ Type: ExplicitType (modifier: VALUE)
-    └─ ModuleAccessExpression
-        ├─ Outer: IdentifierExpression: std
-        └─ Inner: IdentifierExpression: Io
+├─ Type: ExplicitType (modifier: VALUE)
+│   └─ ModuleAccessExpression
+│       ├─ Outer: IdentifierExpression: std
+│       └─ Inner: IdentifierExpression: Io
+└─ Value: UndefinedExpression
 DeclStatement
 ├─ Name: IdentifierExpression: a
 ├─ Modifiers: VARIABLE
-└─ Type: ExplicitType (modifier: VALUE)
-    └─ CallExpression
-        ├─ Callee: IdentifierExpression: List
-        └─ Arguments:
-            └─ IdentifierExpression: i32 (primitive)
+├─ Type: ExplicitType (modifier: VALUE)
+│   └─ CallExpression
+│       ├─ Callee: IdentifierExpression: List
+│       └─ Arguments:
+│           └─ IdentifierExpression: i32 (primitive)
+└─ Value: UndefinedExpression
 BreakStatement
 ├─ Label: IdentifierExpression: blk
 └─ Value: IdentifierExpression: a

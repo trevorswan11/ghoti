@@ -107,15 +107,17 @@ TEST_CASE("Malformed extern targets") {
                                                  std::pair{0UZ, 7UZ}});
 }
 
-TEST_CASE("Constant requirements") {
+TEST_CASE("Non-extern declarations must be value-initialized") {
     const auto expected_diag = [] -> syntax::diagnostic {
-        return {"Constant non-extern declarations must have an associated value",
-                syntax::error::CONST_DECL_MISSING_VALUE,
+        return {"Non-extern declarations must be value-initialized; use '= undefined' to leave a "
+                "'var' unspecified",
+                syntax::error::DECL_MISSING_VALUE,
                 std::pair{0UZ, 0UZ}};
     };
 
     test_decl_fail({keywords::CONSTANT}, expected_diag(), "a: i32;");
     test_decl_fail({keywords::CONSTEXPR}, expected_diag(), "a: i32;");
+    test_decl_fail({keywords::VAR}, expected_diag(), "a: i32;");
 }
 
 TEST_CASE("Non-terminated decls") {
@@ -142,7 +144,7 @@ TEST_CASE("Illegal deferred statements") {
 
     helpers::test_parser_fail("defer import std;", expected_diag());
     helpers::test_parser_fail("defer return 3;", expected_diag());
-    helpers::test_parser_fail("defer var a: i32;", expected_diag());
+    helpers::test_parser_fail("defer var a: i32 = 2;", expected_diag());
     helpers::test_parser_fail("defer using a = i32;", expected_diag());
 }
 

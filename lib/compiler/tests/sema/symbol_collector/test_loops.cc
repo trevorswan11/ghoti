@@ -106,13 +106,14 @@ TEST_CASE("Non-break collected as separate scope") {
 
 TEST_CASE("Non-break collection shadowing") {
     helpers::test_collector_fail(
-        "const a := for (0..5) |i| { const foo := bar; } else { var a: i32; };",
+        "const a := for (0..5) |i| { const foo := bar; } else { var a: i32 = undefined; };",
         sema::diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:7",
                          sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 59UZ}});
 
     helpers::test_collector_fail(
-        "const a := while (true) : (i += 1) { const foo := bar; } else { var a: i32; };",
+        "const a := while (true) : (i += 1) { const foo := bar; } else { var a: i32 = undefined; "
+        "};",
         sema::diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:7",
                          sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 68UZ}});
@@ -120,25 +121,25 @@ TEST_CASE("Non-break collection shadowing") {
 
 TEST_CASE("Shadowing in loops") {
     helpers::test_collector_fail(
-        "const a := for (0..5) |i| { var a: i32; };",
+        "const a := for (0..5) |i| { var a: i32 = undefined; };",
         sema::diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:7",
                          sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 32UZ}});
 
     helpers::test_collector_fail(
-        "const a := for (0..5) |i| { var i: i32; };",
+        "const a := for (0..5) |i| { var i: i32 = undefined; };",
         sema::diagnostic{"Redeclaration of symbol 'i'; previous declaration here: 1:24",
                          sema::error::IDENTIFIER_REDECLARATION,
                          std::pair{0UZ, 32UZ}});
 
     helpers::test_collector_fail(
-        "const a := loop { var a: i32; };",
+        "const a := loop { var a: i32 = undefined; };",
         sema::diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:7",
                          sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 22UZ}});
 
     helpers::test_collector_fail(
-        "const a := while (true) { var a: i32; };",
+        "const a := while (true) { var a: i32 = undefined; };",
         sema::diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:7",
                          sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 30UZ}});

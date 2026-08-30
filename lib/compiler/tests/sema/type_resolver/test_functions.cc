@@ -149,7 +149,7 @@ TEST_CASE("Deferred return type from user function") {
 }
 
 TEST_CASE("Function explicit type resolution") {
-    auto [ctx, idx]{helpers::resolve_and_check("var foo: fn(^i32, u32): bool;")};
+    auto [ctx, idx]{helpers::resolve_and_check("var foo: fn(^i32, u32): bool = undefined;")};
     const auto [sym, data, type]{ctx->get_type_sym_info<syms::node_t>("foo", idx)};
 
     const auto& expected_type =

@@ -3294,7 +3294,10 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             if (last_type_->is_poison()) { return poison_out(); }
             auto& explicit_type{denoted_type(*last_type_.take())};
             if (explicit_type.get_kind() == type_kind::AUTO) {
-                if (!decl.value) {
+                // `undefined` carries no type, so it cannot drive `auto` inference either.
+                const bool undef_init{decl.value &&
+                                      resolving_.ast.get_as_opt<ast::undefined_expr>(*decl.value)};
+                if (!decl.value || undef_init) {
                     ctx_.poison_symbol(sym,
                                        "Type 'auto' requires an initializer expression",
                                        error::AUTO_WITHOUT_INITIALIZER,

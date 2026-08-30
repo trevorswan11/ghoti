@@ -68,8 +68,8 @@ TEST_CASE("Array resolution with implicit type") {
 
 TEST_CASE("Indexing with single accessors") {
     const auto test_index = [](std::string_view type_mod) -> void {
-        auto [ctx, idx]{
-            helpers::resolve_and_check(fmt::format("var a: {}u32; const b := a[0];", type_mod))};
+        auto [ctx, idx]{helpers::resolve_and_check(
+            fmt::format("var a: {}u32 = undefined; const b := a[0];", type_mod))};
         const auto [sym, sym_data, type]{ctx->get_type_sym_info<syms::node_t>("b", idx)};
         CHECK(type == ctx->get_type(sema::type_kind::U32));
     };
@@ -80,7 +80,7 @@ TEST_CASE("Indexing with single accessors") {
 }
 
 TEST_CASE("Indexing with slice accessor") {
-    auto [ctx, idx]{helpers::resolve_and_check("var a: ^u32; const b := a[0..4];")};
+    auto [ctx, idx]{helpers::resolve_and_check("var a: ^u32 = undefined; const b := a[0..4];")};
     const auto [sym, sym_data, type]{ctx->get_type_sym_info<syms::node_t>("b", idx)};
 
     const auto& i32_type{ctx->get_type(sema::type_kind::U32)};
@@ -99,10 +99,10 @@ TEST_CASE("Well-formed arrays with structural types") {
 
 TEST_CASE("Illegal index target") {
     auto [ctx, idx]{helpers::test_resolver_fail(
-        "var a: u32; const b := a[0];",
+        "var a: u32 = undefined; const b := a[0];",
         sema::diagnostic{"Can only index slices, arrays, and pointers; found 'u32'",
                          sema::error::TYPE_MISMATCH,
-                         std::pair{0UZ, 23UZ}})};
+                         std::pair{0UZ, 35UZ}})};
     ctx->check_poisoned<syms::node_t>("b", idx);
 }
 

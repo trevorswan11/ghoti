@@ -237,11 +237,11 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
 
     const auto parse_binding_for{[&](decl_modifiers m) -> stdx::result<void, syntax::diagnostic> {
         if (m == decl_modifiers::EXTERN) {
-            auto args{TRY(try_parse_binding_args(parser, /*allow_second=*/true))};
+            auto args{TRY(try_parse_binding_args(parser, true))};
             extern_target = args.first;
             if (args.second) { link_name = args.second; }
         } else if (m == decl_modifiers::EXPORT) {
-            auto args{TRY(try_parse_binding_args(parser, /*allow_second=*/false))};
+            auto args{TRY(try_parse_binding_args(parser, false))};
             if (args.first) { link_name = args.first; }
         }
         return {};
@@ -281,13 +281,12 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
                                    syntax::error::EXTERN_VALUE_INITIALIZED,
                                    start_token);
         }
-    } else if ((modifiers_has(modifiers, decl_modifiers::CONSTANT) &&
-                !modifiers_has(modifiers, decl_modifiers::EXTERN)) ||
-               modifiers_has(modifiers, decl_modifiers::CONSTEXPR)) {
-        // Constant decls must be declared with a value unless they are extern
-        return make_syntax_err("Constant non-extern declarations must have an associated value",
-                               syntax::error::CONST_DECL_MISSING_VALUE,
-                               start_token);
+    } else if (!modifiers_has(modifiers, decl_modifiers::EXTERN)) {
+        return make_syntax_err(
+            "Non-extern declarations must be value-initialized; use '= undefined' to leave a "
+            "'var' unspecified",
+            syntax::error::DECL_MISSING_VALUE,
+            start_token);
     }
 
     TRY(parser.expect_semicolon());

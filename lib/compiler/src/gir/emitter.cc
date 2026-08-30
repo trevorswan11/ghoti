@@ -334,6 +334,10 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, const sema::type& dest
     if (dest_type.get_kind() == sema::type_kind::REFERENCE) {
         return emit_expression_id_raw(*expr_id);
     }
+    // `undefined` carries no type of its own; adopt the destination's so codegen can size it.
+    if (active_ast().get_as_opt<ast::undefined_expr>(*expr_id)) {
+        return value{undefined_val{}, const_cast<sema::type&>(dest_type)};
+    }
     return emit_expression(expr_id);
 }
 
@@ -398,7 +402,7 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                         decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
 
     stdx::option<value> init_val;
-    if (decl.value) {
+    if (decl.value && !active_ast().get_as_opt<ast::undefined_expr>(*decl.value)) {
         if (const auto cv{const_eval_.try_eval(*decl.value)}) {
             init_val.emplace(cv->to_gir_value());
         } else if (!is_const) {
@@ -1053,7 +1057,8 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
     }
 
     const auto slot{builder_.emit_alloca(*sema_type, name, is_const)};
-    if (decl.value) {
+    // A fresh alloca is already uninitialized, so `= undefined` needs no store.
+    if (decl.value && !active_ast().get_as_opt<ast::undefined_expr>(*decl.value)) {
         const value val{emit_coerced_expr(*decl.value, *sema_type)};
         builder_.emit_store(slot, val).is_initializer = true;
     }
@@ -1567,7 +1572,8 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                                                       {value{SLICE_LEN_FIELD_INDEX, usize_type}},
                                                       usize_type)};
                     builder_.emit_store(value{field1, usize_type}, len_val).is_initializer = true;
-                    return value{slice_slot, ret_type};
+                    return value{builder_.emit_load(value{slice_slot, ret_type}, ret_type),
+                                 ret_type};
                 }
             }
             break;
@@ -2920,6 +2926,11 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             return value{field_ptr, field_type};
         },
         [&](const ast::index_expr& index) -> value {
+            // `expr[lo..hi]` yields a fresh subslice value; spill it so callers get an address.
+            if (active_ast().get_as_opt<ast::range_expr>(index.index)) {
+                auto& slice_type{active_mod().get_sema_type_opt(id).value()};
+                return spill_to_temporary(emit_slice_range(id, index), slice_type);
+            }
             auto       base_lval{emit_lvalue(index.array)};
             const auto idx_val{emit_expression(index.index)};
             const auto elem_type_opt{active_mod().get_sema_type_opt(id)};
@@ -3563,13 +3574,106 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
     return value{std::string{member_ident.name}, sema_type};
 }
 
-auto emitter::emit_index(ast::node_id id, const ast::index_expr&) -> value {
+auto emitter::emit_index(ast::node_id id, const ast::index_expr& index) -> value {
     PROFILE_FUNCTION();
+    if (active_ast().get_as_opt<ast::range_expr>(index.index)) {
+        return emit_slice_range(id, index);
+    }
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Index expression must have a resolved sema type");
     const auto elem_lval{emit_lvalue(id)};
     const auto loaded{builder_.emit_load(elem_lval, *sema_type)};
     return value{loaded, sema_type};
+}
+
+auto emitter::emit_slice_range(ast::node_id id, const ast::index_expr& index) -> value {
+    PROFILE_FUNCTION();
+    const auto result_type{active_mod().get_sema_type_opt(id)};
+    ASSERT(result_type && result_type->get_kind() == sema::type_kind::SLICE,
+           "A range index must resolve to a slice type");
+    const auto slice_data{result_type->get_data().as_opt<sema::types::slice>()};
+    ASSERT(slice_data, "Slice sema type must carry slice data");
+    auto& elem_type{const_cast<sema::type&>(slice_data->underlying)};
+
+    auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto& ptr_type{ctx_.get_pointer(result_type->is_constant() ? sema::types::mut::CONSTANT
+                                                               : sema::types::mut::MUTABLE,
+                                    elem_type)};
+
+    const auto& range{active_ast().get_as<ast::range_expr>(index.index)};
+    const bool  inclusive{ast::node_id{index.index}.get_token_type() ==
+                         syntax::token_type_t::DOT_DOT_EQ};
+
+    const auto lo{emit_coerced_expr(range.lhs, usize_type)};
+    auto       hi{emit_coerced_expr(range.rhs, usize_type)};
+    if (inclusive) {
+        hi = value{
+            builder_.emit_binary(instruction_kind::ADD, hi, value{u64{1}, usize_type}, usize_type),
+            usize_type};
+    }
+
+    // Base element pointer and (for arrays / slices) the source length.
+    auto  src_lval{emit_lvalue(index.array)};
+    auto* src_type{&active_mod().get_sema_type_opt(index.array).value()};
+    if (const auto ref_d{src_type->get_data().as_opt<sema::types::reference>()}) {
+        src_lval.data = value::data_t{builder_.emit_load(src_lval, *src_type)};
+        src_type      = &const_cast<sema::type&>(ref_d->underlying);
+    }
+
+    value               base_ptr{};
+    stdx::option<value> src_len;
+    if (const auto arr_d{src_type->get_data().as_opt<sema::types::array>()}) {
+        base_ptr =
+            value{builder_.emit_get_element_ptr(src_lval, {value{u64{0}, usize_type}}, ptr_type),
+                  ptr_type};
+        src_len.emplace(value{static_cast<u64>(arr_d->len), usize_type});
+    } else if (src_type->get_data().as_opt<sema::types::slice>()) {
+        const auto ptr_slot{builder_.emit_get_element_ptr(
+            src_lval, {value{SLICE_PTR_FIELD_INDEX, usize_type}}, ptr_type)};
+        base_ptr = value{builder_.emit_load(value{ptr_slot, ptr_type}, ptr_type), ptr_type};
+        const auto len_slot{builder_.emit_get_element_ptr(
+            src_lval, {value{SLICE_LEN_FIELD_INDEX, usize_type}}, usize_type)};
+        src_len.emplace(
+            value{builder_.emit_load(value{len_slot, usize_type}, usize_type), usize_type});
+    } else if (src_type->get_data().as_opt<sema::types::pointer>()) {
+        base_ptr = value{builder_.emit_load(src_lval, *src_type), ptr_type};
+    } else {
+        UNREACHABLE("Range index source must be an array, slice, or pointer");
+    }
+
+    // Bounds check: lo <= hi, and hi <= len when the source length is known.
+    auto fn_opt{builder_.get_function()};
+    ASSERT(fn_opt, "Slice range must be within an active function");
+    auto&      fn{*fn_opt};
+    const auto lo_le_hi{builder_.emit_binary(instruction_kind::LE, lo, hi, bool_type)};
+    value      in_bounds{lo_le_hi, bool_type};
+    if (src_len) {
+        const auto hi_le_len{builder_.emit_binary(instruction_kind::LE, hi, *src_len, bool_type)};
+        in_bounds =
+            value{builder_.emit_binary(
+                      instruction_kind::AND, in_bounds, value{hi_le_len, bool_type}, bool_type),
+                  bool_type};
+    }
+    auto& ok_seg{fn.add_segment()};
+    auto& oob_seg{fn.add_segment()};
+    builder_.emit_cond_goto(in_bounds, ok_seg.get_id(), oob_seg.get_id());
+    builder_.set_segment(oob_seg);
+    emit_panic_call("slice range out of bounds", id);
+    builder_.set_segment(ok_seg);
+
+    const auto new_ptr{builder_.emit_get_element_ptr(base_ptr, {lo}, ptr_type)};
+    const auto new_len{builder_.emit_binary(instruction_kind::SUB, hi, lo, usize_type)};
+
+    const auto slot{builder_.emit_alloca(*result_type)};
+    const auto f0{builder_.emit_get_element_ptr(
+        value{slot, *result_type}, {value{SLICE_PTR_FIELD_INDEX, usize_type}}, ptr_type)};
+    builder_.emit_store(value{f0, ptr_type}, value{new_ptr, ptr_type}).is_initializer = true;
+    const auto f1{builder_.emit_get_element_ptr(
+        value{slot, *result_type}, {value{SLICE_LEN_FIELD_INDEX, usize_type}}, usize_type)};
+    builder_.emit_store(value{f1, usize_type}, value{new_len, usize_type}).is_initializer = true;
+
+    return value{builder_.emit_load(value{slot, *result_type}, *result_type), result_type};
 }
 
 auto emitter::emit_address_of(ast::node_id id, const ast::address_of_expr& addr) -> value {

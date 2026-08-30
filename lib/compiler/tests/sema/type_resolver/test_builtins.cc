@@ -162,7 +162,7 @@ TEST_CASE("Builtins memory operation") {
         [](helpers::sema_test_context& ctx) -> sema::type& {
             return ctx.get_type(sema::type_kind::VOID_);
         },
-        "var a: i32; var b: i32;");
+        "var a: i32 = undefined; var b: i32 = undefined;");
 }
 
 TEST_CASE("Builtin arithmetic") {

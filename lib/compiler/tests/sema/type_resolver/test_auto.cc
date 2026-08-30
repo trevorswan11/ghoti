@@ -75,7 +75,7 @@ TEST_CASE("Declaration auto type inference") {
 }
 
 TEST_CASE("Declaration auto without initializer fails") {
-    helpers::test_resolver_fail("var a: auto;",
+    helpers::test_resolver_fail("var a: auto = undefined;",
                                 sema::diagnostic{"Type 'auto' requires an initializer expression",
                                                  sema::error::AUTO_WITHOUT_INITIALIZER,
                                                  std::pair{0UZ, 0UZ}});
@@ -119,7 +119,7 @@ TEST_CASE("Illegal auto usage in type aliases and function types") {
 
     SECTION("Function pointer type cannot have auto parameter") {
         helpers::test_resolver_fail(
-            "var f: fn(auto): i32;",
+            "var f: fn(auto): i32 = undefined;",
             sema::diagnostic{"Function types cannot have 'auto' parameter types",
                              sema::error::ILLEGAL_AUTO_USAGE,
                              std::pair{0UZ, 10UZ}});
@@ -127,19 +127,19 @@ TEST_CASE("Illegal auto usage in type aliases and function types") {
 
     SECTION("Function pointer type cannot have auto return type") {
         helpers::test_resolver_fail(
-            "var f: fn(i32): auto;",
+            "var f: fn(i32): auto = undefined;",
             sema::diagnostic{"Function types cannot have 'auto' return type",
                              sema::error::ILLEGAL_AUTO_USAGE,
                              std::pair{0UZ, 16UZ}});
     }
 
     SECTION("Array type cannot have auto element type") {
-        helpers::test_resolver_fail("var a: [5]auto;",
+        helpers::test_resolver_fail("var a: [5]auto = undefined;",
                                     sema::diagnostic{"Array elements cannot have type 'auto'",
                                                      sema::error::ILLEGAL_AUTO_USAGE,
                                                      std::pair{0UZ, 10UZ}});
 
-        helpers::test_resolver_fail("var a: []auto;",
+        helpers::test_resolver_fail("var a: []auto = undefined;",
                                     sema::diagnostic{"Array elements cannot have type 'auto'",
                                                      sema::error::ILLEGAL_AUTO_USAGE,
                                                      std::pair{0UZ, 9UZ}});

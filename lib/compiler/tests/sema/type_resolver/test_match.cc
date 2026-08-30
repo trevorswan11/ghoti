@@ -314,8 +314,8 @@ TEST_CASE("Illegal resolved arbitrary matcher type") {
     helpers::test_resolver_fail("match (@typeOf(i32)) { 3 => 5 };", expected_diag("type", 14));
     helpers::test_resolver_fail("match (^4) { 3 => 5 };", expected_diag("pointer", 7));
     helpers::test_resolver_fail("match (&mut 4) { 3 => 5 };", expected_diag("reference", 7));
-    helpers::test_resolver_fail("var a: fn(): void; match (a) { 3 => 5 };",
-                                expected_diag("function", 26));
+    helpers::test_resolver_fail("var a: fn(): void = undefined; match (a) { 3 => 5 };",
+                                expected_diag("function", 38));
     helpers::test_resolver_fail(
         "import std; match (std) { 3 => 5 };",
         helpers::make_vector<mock_file>(mock_file{"std.gh", "pub extern var a: i32;", "std"}),

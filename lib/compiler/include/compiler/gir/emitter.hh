@@ -137,6 +137,8 @@ class emitter {
     }
     auto emit_array(ast::node_id id, const ast::array_expr& array) -> value;
     auto emit_slice_from_array(value arr_lval, const sema::type& arr_type) -> value;
+    // Lowers `expr[lo..{=}hi]` on an array or slice to a bounds-checked `{ptr, len}` subslice.
+    auto emit_slice_range(ast::node_id id, const ast::index_expr& index) -> value;
     auto emit_coerced_expr(ast::expr_handle expr_id, const sema::type& dest_type) -> value;
     auto emit_generic_instantiation(const sema::generic_instantiation_request& req) -> void;
     auto emit_expression_id(ast::node_id id) -> value;

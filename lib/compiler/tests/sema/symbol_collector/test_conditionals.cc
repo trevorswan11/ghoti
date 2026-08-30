@@ -75,22 +75,24 @@ namespace {
 } // namespace
 
 TEST_CASE("If expression inner shadowing") {
-    helpers::test_collector_fail("const a := if (b) { var a: i32; };", expected_diag(24));
-    helpers::test_collector_fail("const a := if (b) { var c: i32; } else { var a: i32; };",
-                                 expected_diag(45));
+    helpers::test_collector_fail("const a := if (b) { var a: i32 = undefined; };",
+                                 expected_diag(24));
+    helpers::test_collector_fail(
+        "const a := if (b) { var c: i32 = undefined; } else { var a: i32 = undefined; };",
+        expected_diag(57));
 }
 
 TEST_CASE("Match shadowing assignee") {
     helpers::test_collector_fail("const a := match (c) { b => |a| b, };", expected_diag(29));
-    helpers::test_collector_fail("const a := match (c) { b => { var a: i32; } };",
+    helpers::test_collector_fail("const a := match (c) { b => { var a: i32 = undefined; } };",
                                  expected_diag(34));
-    helpers::test_collector_fail("const a := match (b) { c => d, _ => { var a: i32; } };",
-                                 expected_diag(42));
+    helpers::test_collector_fail(
+        "const a := match (b) { c => d, _ => { var a: i32 = undefined; } };", expected_diag(42));
 }
 
 TEST_CASE("Match dispatch shadowing") {
     helpers::test_collector_fail(
-        "const a := match (c) { b => |c| { var c: i32; } };",
+        "const a := match (c) { b => |c| { var c: i32 = undefined; } };",
         sema::diagnostic{"Attempt to shadow identifier 'c'; previous declaration here: 1:30",
                          sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 38UZ}});

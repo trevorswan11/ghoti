@@ -82,13 +82,14 @@ TEST_CASE("formatter round-trips leaf statements") {
 }
 
 TEST_CASE("formatter round-trips types") {
-    CHECK(format_source("var a: []i32;") == "var a: []i32;\n");
-    CHECK(format_source("var a: std::ArrayList(u8);") == "var a: std::ArrayList(u8);\n");
-    CHECK(format_source("var a: List(i32);") == "var a: List(i32);\n");
+    CHECK(format_source("var a: []i32 = undefined;") == "var a: []i32 = undefined;\n");
+    CHECK(format_source("var a: std::ArrayList(u8) = undefined;") ==
+          "var a: std::ArrayList(u8) = undefined;\n");
+    CHECK(format_source("var a: List(i32) = undefined;") == "var a: List(i32) = undefined;\n");
     CHECK(format_source("var v: mut volatile i32 = 42;") == "var v: mut volatile i32 = 42;\n");
-    CHECK(format_source("var f: ^fn(&a, ^mut B, ...): ^E;") ==
-          "var f: ^fn(&a, ^mut B, ...): ^E;\n");
-    CHECK(format_source("var a: [N:0]u8;") == "var a: [N:0]u8;\n");
+    CHECK(format_source("var f: ^fn(&a, ^mut B, ...): ^E = undefined;") ==
+          "var f: ^fn(&a, ^mut B, ...): ^E = undefined;\n");
+    CHECK(format_source("var a: [N:0]u8 = undefined;") == "var a: [N:0]u8 = undefined;\n");
 }
 
 TEST_CASE("formatter lays out a function body with K&R braces") {
@@ -285,12 +286,13 @@ TEST_CASE("formatter round trip: precedence and nesting are preserved") {
 }
 
 TEST_CASE("formatter round trip: functions and types") {
-    round_trips("var f_ptr: ^fn(&a, ^mut B, ...): &[0x2uz][N]^E;");
+    round_trips("var f_ptr: ^fn(&a, ^mut B, ...): &[0x2uz][N]^E = undefined;");
     round_trips("fn(^mut this, a: A, b: ^B, ): i32 { c; };");
     round_trips("fn(self): i32 {};");
     round_trips("pub const min := fn(a: auto, b: auto): auto { return if (a < b) a else b; };");
     round_trips("using T = i32; pub using a = ^^i32;");
-    round_trips("var a: std::ArrayList(u8); var a: List(i32); var a: []i32;");
+    round_trips("var a: std::ArrayList(u8) = undefined; var a: List(i32) = undefined; var a: []i32 "
+                "= undefined;");
     round_trips("extern const foo: fn(): i32;");
     round_trips(R"(extern("kernel32") const bar: fn(): void;)");
     round_trips(R"(extern("c", "__errno_location") const errno_loc: fn(): ^mut i32;)");
@@ -309,7 +311,7 @@ TEST_CASE("formatter round trip: aggregates") {
     round_trips("union { a: i32, b: &mut T, };");
     round_trips("enum : u64 { A = 1ul, B = T, C, };");
     round_trips("enum : i64 { A = 2l, const b := fn(&self, a: A): C { c; }; };");
-    round_trips("union { a: struct { b: Foo = bar, pub c: i32, var d: u32; }, "
+    round_trips("union { a: struct { b: Foo = bar, pub c: i32, var d: u32 = undefined; }, "
                 "const b := fn(&self, a: A): C { c; }; };");
     round_trips(R"(const S := struct {
     x: i32,

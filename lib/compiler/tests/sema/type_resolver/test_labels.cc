@@ -18,7 +18,7 @@ namespace syms = sema::symbols;
 
 TEST_CASE("Labeled for loop resolution") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        var arr: []bool;
+        var arr: []bool = undefined;
         const a := outer: for (0..5, blk: { break :blk 2..4; }, arr) |i, j, _| {
             const foo := 39 + j;
             if (foo == 42) { break :outer 27; }
@@ -53,7 +53,7 @@ TEST_CASE("Complex label resolution") {
     helpers::resolve_and_check(
         "const a := do { const foo := 42; } while (blk: { break :blk 42; });");
     helpers::resolve_and_check(R"(
-        var i: i32;
+        var i: i32 = undefined;
         const a := outer: while (blk: { break :blk 42; }) : (i += blk: {
             break :blk 42;
         }) {

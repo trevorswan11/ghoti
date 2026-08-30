@@ -51,7 +51,7 @@ TEST_CASE("Label redeclaration") {
 
 TEST_CASE("Label shadowing") {
     helpers::test_collector_fail(
-        "const a := blk: { var blk: i32; };",
+        "const a := blk: { var blk: i32 = undefined; };",
         sema::diagnostic{"Attempt to shadow identifier 'blk'; previous declaration here: 1:15",
                          sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 22UZ}});

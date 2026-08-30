@@ -43,7 +43,7 @@ TEST_CASE("Constexpr function declaration") {
 
 TEST_CASE("Defer statements respect identifier collection rules") {
     helpers::test_collector_fail(
-        "pub const main := fn(args: [][:0]u8): i32 { defer { var main: i32; } };",
+        "pub const main := fn(args: [][:0]u8): i32 { defer { var main: i32 = undefined; } };",
         sema::diagnostic{"Attempt to shadow identifier 'main'; previous declaration here: 1:11",
                          sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 56UZ}});

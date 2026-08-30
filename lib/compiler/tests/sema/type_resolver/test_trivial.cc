@@ -38,7 +38,8 @@ TEST_CASE("Builtin type resolution") {
 }
 
 TEST_CASE("Nested type resolution") {
-    auto [ctx, idx]{helpers::resolve_and_check("var a: ^^i32; var b: ^^^i32;")};
+    auto [ctx,
+          idx]{helpers::resolve_and_check("var a: ^^i32 = undefined; var b: ^^^i32 = undefined;")};
 
     const auto& i32_ptr =
         ctx->get_type(sema::type_kind::POINTER, ctx->get_type(sema::type_kind::I32));
@@ -51,7 +52,8 @@ TEST_CASE("Nested type resolution") {
 }
 
 TEST_CASE("Type alias resolution") {
-    auto [ctx, idx]{helpers::resolve_and_check("using a = ^bool; var b: a; var c: &a;")};
+    auto [ctx, idx]{helpers::resolve_and_check(
+        "using a = ^bool; var b: a = undefined; var c: &a = undefined;")};
     const auto& bool_ref =
         ctx->get_type(sema::type_kind::POINTER, ctx->get_type(sema::type_kind::BOOL));
 
@@ -64,16 +66,16 @@ TEST_CASE("Type alias resolution") {
 }
 
 TEST_CASE("Unary expression resolution") {
-    helpers::resolve_and_check("var a: ^i32; _ = *a;");
+    helpers::resolve_and_check("var a: ^i32 = undefined; _ = *a;");
     helpers::resolve_and_check("_ = !1;");
     helpers::resolve_and_check("_ = ~1;");
     helpers::resolve_and_check("_ = -1;");
 
     helpers::test_resolver_fail(
-        "var a: i32; _ = *a;",
+        "var a: i32 = undefined; _ = *a;",
         sema::diagnostic{"Cannot dereference non-pointer expression; found 'i32'",
                          sema::error::TYPE_MISMATCH,
-                         std::pair{0UZ, 16UZ}});
+                         std::pair{0UZ, 28UZ}});
 }
 
 TEST_CASE("Undeclared identifier usage") {
@@ -89,8 +91,10 @@ TEST_CASE("Undeclared identifier usage") {
     helpers::test_resolver_fail("using a = ^b;", expected_diag(10));
 }
 
+TEST_CASE("Value-less extern") { helpers::resolve_and_check("extern var errno: i32;"); }
+
 TEST_CASE("Defer & discard statement resolution") {
-    auto [ctx, idx]{helpers::resolve_and_check("fn(): void { defer { var a: i32; } }")};
+    auto [ctx, idx]{helpers::resolve_and_check("fn(): void { defer { var a: i32 = undefined; } }")};
     const auto [sym, _, type]{ctx->get_type_sym_info<syms::node_t>("a", 2)};
     CHECK(type == ctx->get_type(sema::type_kind::I32));
     helpers::resolve_and_check("_ = 1 + 1;");
@@ -109,7 +113,7 @@ TEST_CASE("Call resolution edge cases") {
 TEST_CASE("Loop resolution") {
     helpers::resolve_and_check("const a := loop { const foo := 42; };");
     helpers::test_resolver_fail(
-        "for (23) |_| { var a: i32; }",
+        "for (23) |_| { var a: i32 = undefined; }",
         sema::diagnostic{"Iterables may only be arrays or slices; found 'i32'",
                          sema::error::TYPE_MISMATCH,
                          std::pair{0UZ, 5UZ}});
@@ -117,10 +121,10 @@ TEST_CASE("Loop resolution") {
 
 TEST_CASE("Duplicate test name") {
     helpers::test_resolver_fail(
-        R"(test "TEST ME" { var a: i32; } test "TEST ME" { var a: i32; })",
+        R"(test "TEST ME" { var a: i32 = undefined; } test "TEST ME" { var a: i32 = undefined; })",
         sema::diagnostic{"Duplicate test block named 'TEST ME'; previous declaration here: 1:1",
                          sema::error::DUPLICATE_TEST_NAME,
-                         std::pair{0UZ, 31UZ}});
+                         std::pair{0UZ, 43UZ}});
 }
 
 TEST_CASE("Illegal initializer targets") {
