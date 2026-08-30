@@ -102,4 +102,25 @@ TEST_CASE("The default runner counts failing tests") {
     )") == 2);
 }
 
+TEST_CASE("@skip short-circuits a test and it does not count as a failure") {
+    CHECK(helpers::compile_and_run_tests(R"(
+        test "skipped" {
+            @skip("not ready");
+            @require(false);
+        }
+        test "also skipped, no message" {
+            @skip();
+            @expect(1 == 2);
+        }
+        test "runs" { @expect(true); }
+    )") == 0);
+}
+
+TEST_CASE("@skip in one test does not hide a real failure in another") {
+    CHECK(helpers::compile_and_run_tests(R"(
+        test "skipped" { @skip("later"); }
+        test "genuinely fails" { @require(false); }
+    )") == 1);
+}
+
 } // namespace ghoti::tests

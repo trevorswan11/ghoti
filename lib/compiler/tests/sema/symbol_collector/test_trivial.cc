@@ -7,6 +7,7 @@
 
 #include "compiler/sema/error.hh"
 #include "compiler/syntax/builtins.hh"
+#include "compiler/syntax/token_type.hh"
 #include "helpers/common.hh"
 #include "helpers/sema.hh"
 
@@ -23,6 +24,11 @@ TEST_CASE("Array/Index collection") {
 
 TEST_CASE("Builtin calling collection") {
     for (const auto& builtin : syntax::builtins::ALL_TOKEN_TYPES) {
+        if (builtin == syntax::token_type_t::BUILTIN_EXPECT ||
+            builtin == syntax::token_type_t::BUILTIN_REQUIRE ||
+            builtin == syntax::token_type_t::BUILTIN_SKIP) {
+            continue;
+        }
         const auto input{
             fmt::format("const a := {}(match (b) {{ c => d, e => f }}, g, if (5 <= h) i else j);",
                         *syntax::get_builtin_opt(builtin))};

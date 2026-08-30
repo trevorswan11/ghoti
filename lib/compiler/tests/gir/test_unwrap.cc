@@ -1,32 +1,12 @@
-#include <sstream>
 #include <string>
 #include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "compiler/gir/dumper.hh"
-#include "compiler/gir/emitter.hh"
+#include "helpers/gir.hh"
 #include "helpers/sema.hh"
 
 namespace ghoti::tests {
-
-namespace {
-
-auto dump_named_fn(helpers::sema_test_context& ctx, std::string_view name) -> std::string {
-    gir::emitter emitter{ctx.analyzer.get_ctx(), ctx.root_mod};
-    const auto   gir_mod{emitter.emit()};
-
-    for (const auto* fn : gir_mod.get_functions()) {
-        if (fn->get_name() != name) { continue; }
-        std::ostringstream ss;
-        gir::dumper{ss}.dump(*fn);
-        return std::string{ss.view()};
-    }
-    FAIL("function not found in GIR module");
-    return {};
-}
-
-} // namespace
 
 TEST_CASE("GIR `?` branches on the discriminant and emits a divergent return") {
     // `inner(x)` depends on a parameter, so the `?` cannot be constant-folded away.
@@ -41,9 +21,8 @@ TEST_CASE("GIR `?` branches on the discriminant and emits a divergent return") {
         };
     )")};
 
-    const auto dump_text{dump_named_fn(*ctx, "outer")};
+    const auto dump_text{helpers::dump_named_fn(*ctx, "outer")};
     CHECK(dump_text.find("cond_goto") != std::string::npos);
-    // one `ret` for the propagated union, one for the normal `return R{ .ok = v + 1 }`
     CHECK(dump_text.find("ret") != dump_text.rfind("ret"));
 }
 
@@ -53,7 +32,7 @@ TEST_CASE("GIR `!` guards the discriminant with a panic_handler call") {
         const grab := fn(o: O): i32 { return o!; };
     )")};
 
-    const auto dump_text{dump_named_fn(*ctx, "grab")};
+    const auto dump_text{helpers::dump_named_fn(*ctx, "grab")};
     CHECK(dump_text.find("cond_goto") != std::string::npos);
     CHECK(dump_text.find("panic_handler") != std::string::npos);
 }
@@ -64,7 +43,7 @@ TEST_CASE("GIR reading a tagged-union field is discriminant-guarded") {
         const read_a := fn(u: U): i32 { return u.a; };
     )")};
 
-    const auto dump_text{dump_named_fn(*ctx, "read_a")};
+    const auto dump_text{helpers::dump_named_fn(*ctx, "read_a")};
     CHECK(dump_text.find("cond_goto") != std::string::npos);
     CHECK(dump_text.find("panic_handler") != std::string::npos);
 }

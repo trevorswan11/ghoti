@@ -38,4 +38,25 @@ TEST_CASE("Illegal test location") {
                                                   std::pair{0UZ, 29UZ}});
 }
 
+TEST_CASE("Test-only builtins are rejected outside a test block") {
+    helpers::test_collector_fail(
+        "const a := fn(): void { @expect(true); };",
+        sema::diagnostic{"'@expect' may only be used inside a 'test' block",
+                         sema::error::TEST_BUILTIN_OUTSIDE_TEST,
+                         std::pair{0UZ, 24UZ}});
+    helpers::test_collector_fail(
+        "const a := fn(): void { @require(true); };",
+        sema::diagnostic{"'@require' may only be used inside a 'test' block",
+                         sema::error::TEST_BUILTIN_OUTSIDE_TEST,
+                         std::pair{0UZ, 24UZ}});
+    helpers::test_collector_fail("const a := fn(): void { @skip(\"x\"); };",
+                                 sema::diagnostic{"'@skip' may only be used inside a 'test' block",
+                                                  sema::error::TEST_BUILTIN_OUTSIDE_TEST,
+                                                  std::pair{0UZ, 24UZ}});
+}
+
+TEST_CASE("Test-only builtins collect cleanly inside a test block") {
+    helpers::collect_and_check(R"(test "t" { @expect(a == b); @require(c); @skip("later"); })");
+}
+
 } // namespace ghoti::tests
