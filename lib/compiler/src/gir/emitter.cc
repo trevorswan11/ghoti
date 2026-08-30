@@ -1578,6 +1578,26 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             }
             break;
         }
+        case syntax::token_type_t::BUILTIN_FIELD_PARENT_PTR: {
+            const auto name_h{call.arguments[1].as_opt<ast::expr_handle>()};
+            const auto ptr_h{call.arguments[2].as_opt<ast::expr_handle>()};
+            const auto parent_ptr{ret_type.get_data().as_opt<sema::types::pointer>()};
+            if (name_h && ptr_h && parent_ptr) {
+                const auto& field_name{active_ast().get_as<ast::string_expr>(*name_h).value};
+                const auto& table{ctx_.registry.get(parent_ptr->underlying.get_symbol_table_idx())};
+                const auto  field_idx{table.get_proxy(field_name).index};
+                auto&       usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+
+                std::vector<value> args;
+                args.emplace_back(emit_expression(*ptr_h));
+                args.emplace_back(value{static_cast<u64>(field_idx), usize_type});
+                if (const auto res{
+                        builder_.emit_builtin_call("@fieldParentPtr", std::move(args), ret_type)}) {
+                    return value{*res, ret_type};
+                }
+            }
+            break;
+        }
         case syntax::token_type_t::BUILTIN_PANIC: {
             // The resolver has already checked the message is a compile-time-constant string.
             std::string message{"panic"};
@@ -3539,7 +3559,9 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
         const auto [sym, member_idx]{*proxy};
         auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
 
-        if (const auto st{obj_type->get_data().as_opt<sema::types::struct_t>()}) {
+        // Fields come first in the symbol table; anything past them is a member declaration
+        if (const auto st{obj_type->get_data().as_opt<sema::types::struct_t>()};
+            st && member_idx < st->fields.size()) {
             auto&      field_type{sema_type ? *sema_type : *obj_type};
             const auto field_ptr{builder_.emit_get_element_ptr(
                 base_lval, {value{static_cast<u64>(member_idx), usize_type}}, field_type)};
@@ -3547,7 +3569,8 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
             return value{loaded, field_type};
         }
 
-        if (const auto ut{obj_type->get_data().as_opt<sema::types::union_t>()}) {
+        if (const auto ut{obj_type->get_data().as_opt<sema::types::union_t>()};
+            ut && member_idx < ut->fields.size()) {
             auto& field_type{sema_type ? *sema_type : *obj_type};
             if (ut->is_untagged) {
                 const auto loaded{

@@ -26,6 +26,7 @@ constexpr auto ALL_BUILTINS_BY_SV{
                                                    builtins::PTR_FROM_INT,
                                                    builtins::PTR_FROM_ARRAY,
                                                    builtins::SLICE_FROM_PTR,
+                                                   builtins::FIELD_PARENT_PTR,
                                                    builtins::ALIGN_OF,
                                                    builtins::SIZE_OF,
                                                    builtins::TYPE_OF,

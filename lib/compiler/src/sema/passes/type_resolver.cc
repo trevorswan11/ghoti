@@ -404,6 +404,46 @@ template <ast::IndexableID ID>
                              error::TYPE_MISMATCH,
                              get_call_arg_location(call.arguments[0]));
     }
+    case token_type_t::BUILTIN_FIELD_PARENT_PTR: {
+        auto& parent_type{*get_resolved_call_arg_type(call.arguments[0])};
+        if (!parent_type.get_data().is<types::struct_t>()) {
+            return make_sema_err(fmt::format("'@fieldParentPtr' expects a struct type; found '{}'",
+                                             type_kind_display_name(parent_type.get_kind())),
+                                 error::TYPE_MISMATCH,
+                                 get_call_arg_location(call.arguments[0]));
+        }
+
+        const auto name_expr{call.arguments[1].as_opt<ast::expr_handle>()};
+        const auto name_str{name_expr ? resolving_.ast.get_as_opt<ast::string_expr>(*name_expr)
+                                      : stdx::none};
+        if (!name_str) {
+            return make_sema_err("'@fieldParentPtr' expects a string-literal field name",
+                                 error::TYPE_MISMATCH,
+                                 get_call_arg_location(call.arguments[1]));
+        }
+        const auto& field_table{ctx_.registry.get(parent_type.get_symbol_table_idx())};
+        const auto  field_proxy{field_table.get_proxy_opt(name_str->value)};
+        const auto  struct_data{parent_type.get_data().as<types::struct_t>()};
+        if (!field_proxy || field_proxy->index >= struct_data.fields.size()) {
+            return make_sema_err(
+                fmt::format("'{}' is not a field of the given struct", name_str->value),
+                error::UNKNOWN_FIELD,
+                get_call_arg_location(call.arguments[1]));
+        }
+
+        auto& field_ptr_type{*get_resolved_call_arg_type(call.arguments[2])};
+        if (field_ptr_type.get_kind() != type_kind::POINTER) {
+            return make_sema_err(
+                fmt::format("'@fieldParentPtr' expects a field pointer; found '{}'",
+                            type_kind_display_name(field_ptr_type.get_kind())),
+                error::TYPE_MISMATCH,
+                get_call_arg_location(call.arguments[2]));
+        }
+        const auto mutability{field_ptr_type.is_constant() ? types::mut::CONSTANT
+                                                           : types::mut::MUTABLE};
+        return_type = &ctx_.get_pointer(mutability, parent_type);
+        break;
+    }
     case token_type_t::BUILTIN_TAG_NAME:
     case token_type_t::BUILTIN_TARGET_TRIPLE: {
         ASSERT(builtin.return_type.get_kind() == type_kind::SLICE);
@@ -1339,6 +1379,14 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         TRY_RESOLVE(param.explicit_type);
 
         auto& param_type{denoted_type(*last_type_.take())};
+        // A `type`-typed value is always compile-time known, so `constexpr` adds nothing.
+        if (param.is_constexpr && param_type.get_kind() == type_kind::TYPE) {
+            ctx_.diags.emplace_back(
+                "'constexpr' is redundant on a parameter of type 'type'; type values are "
+                "always compile-time known",
+                error::REDUNDANT_CONSTEXPR,
+                resolving_.ast.location_of(param.name));
+        }
         param_types[param_idx++] = &param_type;
         resolving_.set_sema_type(param.name, param_type);
         resolve_symbol_info(param.name, symbol_kind::VALUE);
@@ -3322,9 +3370,22 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
     // The symbol's kind can be fully resolved with knowledge of the declarations type
     auto&       resolved_type{resolving_.get_sema_type(id)};
     const auto& type_data{resolved_type.get_data()};
+
     if (resolved_type.is_poison()) {
         sym.set_kind(symbol_kind::POISONED);
     } else {
+        const bool literal_type_anno{decl.explicit_type && decl.explicit_type->get_token_type() ==
+                                                               syntax::token_type_t::TYPE_TYPE};
+        if (decl.has_modifier(ast::decl_modifiers::VARIABLE) && literal_type_anno) {
+            ctx_.poison_symbol(sym,
+                               "a 'type' value cannot be stored in a mutable ('var') binding; "
+                               "use 'const', 'constexpr', or 'using' instead",
+                               error::MUTABLE_TYPE_BINDING,
+                               resolving_.ast.location_of(id));
+            resolving_.set_sema_type(decl.name, ctx_.get_poison());
+            return last_type_.emplace(ctx_.poison_node(resolving_, id));
+        }
+
         if (!sym.has_kind()) {
             if (type_data.is<types::builtin_function>() || type_data.is<types::function>()) {
                 sym.set_kind(symbol_kind::CALLABLE);

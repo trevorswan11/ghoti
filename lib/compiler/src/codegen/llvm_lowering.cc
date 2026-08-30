@@ -1494,6 +1494,28 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             return nullptr;
         }
 
+        case syntax::token_type_t::BUILTIN_FIELD_PARENT_PTR: {
+            VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
+            auto* field_ptr{lower_value(inst.operands[0])};
+            if (!field_ptr || !inst.type) { return nullptr; }
+            const auto ptr_data{inst.type->get_data().as_opt<sema::types::pointer>()};
+            if (!ptr_data) { return nullptr; }
+            auto* struct_ty{types_.translate(ptr_data->underlying)};
+            if (!struct_ty || !struct_ty->isStructTy()) { return nullptr; }
+
+            auto* idx_val{lower_value(inst.operands[1])};
+            auto* idx_const{llvm::dyn_cast_or_null<llvm::ConstantInt>(idx_val)};
+            if (!idx_const) { return nullptr; }
+            const auto  field_idx{idx_const->getZExtValue()};
+            const auto& layout{llvm_module_->getDataLayout()};
+            const auto  offset{layout.getStructLayout(llvm::cast<llvm::StructType>(struct_ty))
+                                  ->getElementOffset(static_cast<u32>(field_idx))};
+
+            auto* field_int{builder_.CreatePtrToInt(field_ptr, types_.get_int64_ty(), "fpp.i")};
+            auto* parent_int{builder_.CreateSub(field_int, builder_.getInt64(offset), "fpp.base")};
+            return builder_.CreateIntToPtr(parent_int, types_.get_ptr_ty(), "fpp.p");
+        }
+
         case syntax::token_type_t::BUILTIN_MIN:
         case syntax::token_type_t::BUILTIN_MAX: {
             VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");

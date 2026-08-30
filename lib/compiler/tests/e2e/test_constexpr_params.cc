@@ -1,7 +1,9 @@
 #include <string_view>
+#include <utility>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "compiler/sema/error.hh"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
 
@@ -204,16 +206,13 @@ TEST_CASE("constexpr parameter: @compileError fires only for the offending insta
     )");
 }
 
-TEST_CASE("constexpr parameter: `constexpr` on a `type` parameter is a no-op") {
-    CHECK(helpers::compile_and_run(R"(
-        const zero := fn(constexpr t: type): t {
-            return 0;
-        };
-
-        pub const main := fn(): i32 {
-            return zero(i32) + 42;
-        };
-    )") == 42);
+TEST_CASE("constexpr parameter: `constexpr` on a `type` parameter is redundant") {
+    helpers::test_resolver_fail(
+        "const zero := fn(constexpr t: type): t { return 0; };",
+        sema::diagnostic{"'constexpr' is redundant on a parameter of type 'type'; type values "
+                         "are always compile-time known",
+                         sema::error::REDUNDANT_CONSTEXPR,
+                         std::pair{0UZ, 27UZ}});
 }
 
 TEST_CASE("constexpr parameter: an all-constexpr signature still works") {

@@ -35,6 +35,14 @@ templ InternalsBuiltinsPage() {
 	<h3>{ "@sliceFromPtr" }</h3>
 	<pre><code class="language-ghoti">{ `@sliceFromPtr(expression: auto, len: usize): auto` }</code></pre>
 	<p>Constructs a slice from the pointer-yielding expression and length.</p>
+	<h3>{ "@fieldParentPtr" }</h3>
+	<pre><code class="language-ghoti">{ `@fieldParentPtr(Parent: type, field: [:0]u8, ptr: auto): ^Parent` }</code></pre>
+	<p>
+		Given a pointer to the <code>field</code> member of a <code>Parent</code> struct, returns a pointer to the
+		enclosing <code>Parent</code>. <code>field</code> must be a string literal naming a field of <code>Parent</code>,
+		and <code>ptr</code> must be a pointer. The result mirrors the mutability of <code>ptr</code>. Behaviour is
+		undefined if <code>ptr</code> does not actually point at that field of a live <code>Parent</code>.
+	</p>
 	<h2>Introspection &amp; Metadata</h2>
 	<h3>{ "@alignOf" }</h3>
 	<pre><code class="language-ghoti">{ `@alignOf(expression: auto): usize` }</code></pre>

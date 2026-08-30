@@ -149,6 +149,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::PTR_FROM_INT, params(t_type, t_usize), t_auto);
     inject_function(bis::PTR_FROM_ARRAY, params(t_auto), t_auto);
     inject_function(bis::SLICE_FROM_PTR, params(t_auto, t_usize), t_auto);
+    inject_function(bis::FIELD_PARENT_PTR, params(t_type, t_c_str, t_auto), t_auto);
 
     inject_function(bis::ALIGN_OF, params(t_auto), t_usize);
     inject_function(bis::SIZE_OF, params(t_auto), t_usize);

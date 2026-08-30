@@ -56,6 +56,11 @@ TEST_CASE("a growable buffer over a backing array can append and hand out its it
             buf: [8uz]mut i32,
             len: usize,
 
+            const init := fn(): @this() {
+                var l: @this() = undefined;
+                l.len = 0uz;
+                return l;
+            };
             const push := fn(^mut self, v: i32): void {
                 self.buf[self.len] = v;
                 self.len = self.len + 1uz;
@@ -66,8 +71,7 @@ TEST_CASE("a growable buffer over a backing array can append and hand out its it
         };
 
         pub const main := fn(): i32 {
-            var l: List = undefined;
-            l.len = 0uz;
+            var l := List.init();
             l.push(10);
             l.push(20);
             l.push(12);
