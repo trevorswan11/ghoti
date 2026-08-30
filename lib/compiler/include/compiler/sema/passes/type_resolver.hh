@@ -237,6 +237,9 @@ class type_resolver {
     [[nodiscard]] auto validate_union_arms(ast::node_id, const ast::match_expr&, type&)
         -> stdx::option<diagnostic>;
 
+    // Resolves a `match` whose scrutinee is a compile-time `type` value
+    auto resolve_type_match(ast::node_id, const ast::match_expr&, type& matcher_type) -> void;
+
     auto visit(ast::node_id, const ast::match_expr&) -> void;
     auto visit(ast::node_id, const ast::reference_expr&) -> void;
     auto visit(ast::node_id, const ast::address_of_expr&) -> void;

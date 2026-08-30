@@ -82,6 +82,9 @@ struct module {
     // `if constexpr` node index -> the arm the type resolver folded to
     ankerl::unordered_dense::map<usize, if_branch> if_constexpr_results;
 
+    // `match` (on a compile-time `type`) node index -> the arm index the resolver selected
+    ankerl::unordered_dense::map<usize, usize> match_arm_results;
+
     // Every identifier_expr references and uses encountered during symbol collection/resolution
     std::vector<ast::node_id> identifier_positions;
 

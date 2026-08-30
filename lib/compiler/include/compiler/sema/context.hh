@@ -35,9 +35,11 @@ struct body_type_diff {
     std::vector<std::pair<usize, stdx::option<type&>>> node_types;
     std::vector<std::pair<usize, stdx::option<type&>>> explicit_types;
     std::vector<std::pair<usize, mod::if_branch>>      if_branches;
+    std::vector<std::pair<usize, usize>>               match_arms;
 
     [[nodiscard]] auto empty() const noexcept -> bool {
-        return node_types.empty() && explicit_types.empty() && if_branches.empty();
+        return node_types.empty() && explicit_types.empty() && if_branches.empty() &&
+               match_arms.empty();
     }
 };
 using body_type_diff_map = ankerl::unordered_dense::map<std::string, body_type_diff>;

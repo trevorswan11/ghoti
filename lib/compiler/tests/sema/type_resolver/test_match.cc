@@ -24,6 +24,33 @@ TEST_CASE("Resolving well-formed enum matching") {
     helpers::resolve_and_check("using E = enum { a, b, _ }; _ = match (E) { .a => 5, _ => 6 };");
 }
 
+TEST_CASE("Resolving a match on a compile-time type value") {
+    helpers::resolve_and_check("const T := i32; _ = match (T) { i32 => 1, bool => 2, _ => 0 };");
+    helpers::resolve_and_check("const T := ^i32; _ = match (T) { i32 => 1, ^i32 => 2, _ => 0 };");
+    // A non-selected arm may reference undeclared names; it is never type-checked.
+    helpers::resolve_and_check(
+        "const T := i32; _ = match (T) { i32 => 1, bool => nope_not_real, _ => 0 };");
+}
+
+TEST_CASE("A match on a type requires a catch-all arm") {
+    helpers::test_resolver_fail("const T := i32; _ = match (T) { i32 => 1, bool => 2 };",
+                                sema::diagnostic{"A 'match' on a type requires a catch-all '_' arm",
+                                                 sema::error::ILLEGAL_MATCH_PATTERN,
+                                                 std::pair{0UZ, 20UZ}});
+}
+
+TEST_CASE("A match on a type rejects value patterns and captures") {
+    helpers::test_resolver_fail(
+        "const T := i32; _ = match (T) { 5 => 1, _ => 0 };",
+        sema::diagnostic{"A 'match' on a type expects every arm pattern to be a type",
+                         sema::error::ILLEGAL_MATCH_PATTERN,
+                         std::pair{0UZ, 32UZ}});
+    helpers::test_resolver_fail("const T := i32; _ = match (T) { i32 => |x| 1, _ => 0 };",
+                                sema::diagnostic{"A 'match' on a type cannot bind a capture",
+                                                 sema::error::ILLEGAL_MATCH_PATTERN,
+                                                 std::pair{0UZ, 40UZ}});
+}
+
 TEST_CASE("Resolving well-formed union matching") {
     helpers::resolve_and_check("using U = union { a: i32 }; _ = match (U) { .a => 5 };");
     helpers::resolve_and_check(
@@ -311,7 +338,11 @@ TEST_CASE("Illegal resolved arbitrary matcher type") {
         };
     };
 
-    helpers::test_resolver_fail("match (@typeOf(i32)) { 3 => 5 };", expected_diag("type", 14));
+    // A `type`-valued scrutinee is now a compile-time type match, which needs a `_` arm.
+    helpers::test_resolver_fail("match (@typeOf(i32)) { 3 => 5 };",
+                                sema::diagnostic{"A 'match' on a type requires a catch-all '_' arm",
+                                                 sema::error::ILLEGAL_MATCH_PATTERN,
+                                                 std::pair{0UZ, 0UZ}});
     helpers::test_resolver_fail("match (^4) { 3 => 5 };", expected_diag("pointer", 7));
     helpers::test_resolver_fail("match (&mut 4) { 3 => 5 };", expected_diag("reference", 7));
     helpers::test_resolver_fail("var a: fn(): void = undefined; match (a) { 3 => 5 };",

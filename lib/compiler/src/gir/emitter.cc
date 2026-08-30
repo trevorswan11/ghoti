@@ -197,6 +197,9 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
         for (const auto& [idx, br] : it->second.if_branches) {
             fn_mod.if_constexpr_results.insert_or_assign(idx, br);
         }
+        for (const auto& [idx, arm] : it->second.match_arms) {
+            fn_mod.match_arm_results.insert_or_assign(idx, arm);
+        }
     }
     {
         const scope_guard g{scopes_};
@@ -209,7 +212,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
                 const auto cxit{cx_by_name.find(p_name)};
                 if (cxit == cx_by_name.end()) { continue; }
                 const auto& val{*cxit->second};
-                auto&       btype{val.get_type() ? val.get_type().value() : fn_type};
+                auto&       btype{val.get_type() ? *val.get_type() : fn_type};
                 value       bound{value{void_val{}, btype}};
                 if (val.is<const_closure>()) {
                     bound = value{emit_constexpr_closure(val.as<const_closure>()), btype};
@@ -365,7 +368,7 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                 // Push the structural type so member fn bodies resolve bare sibling members.
                 const auto owner{active_mod().get_sema_type_opt(*decl.value)};
                 const bool pushed{owner.has_value()};
-                if (pushed) { user_type_stack_.emplace_back(&owner.value()); }
+                if (pushed) { user_type_stack_.emplace_back(owner.get()); }
 
                 const auto emit_members{[&](auto members) {
                     for (const auto& member : members) {
@@ -1424,7 +1427,7 @@ auto emitter::sync_tagged_union_tag(ast::node_id assign_lhs) -> void {
 
     const auto obj_type{active_mod().get_sema_type_opt(dot->object)};
     if (!obj_type) { return; }
-    auto* unwrapped{&obj_type.value()};
+    auto* unwrapped{obj_type.get()};
     if (const auto ptr_data{unwrapped->get_data().as_opt<sema::types::pointer>()}) {
         unwrapped = &ptr_data->underlying;
     } else if (const auto ref_data{unwrapped->get_data().as_opt<sema::types::reference>()}) {
@@ -3096,7 +3099,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             if (dot_object_is_type_namespace(dot)) {
                 const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
                 if (const auto ot{active_mod().get_sema_type_opt(dot.object)}) {
-                    auto* owner{&ot.value()};
+                    auto* owner{ot.get()};
                     if (owner->get_kind() == sema::type_kind::TYPE) {
                         if (const auto meta{owner->get_data().as_opt<sema::types::meta_type>()}) {
                             owner = &meta->instance;
@@ -3115,7 +3118,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             auto       base_lval{emit_lvalue(dot.object)};
             const auto obj_type_opt{active_mod().get_sema_type_opt(dot.object)};
             ASSERT(obj_type_opt, "Dot expression object must have a resolved type");
-            auto* obj_type{&obj_type_opt.value()};
+            auto* obj_type{obj_type_opt.get()};
 
             // A reference/pointer-typed field or nested access needs one more indirection unwound
             if (const auto ref_data{obj_type->get_data().as_opt<sema::types::reference>()}) {
@@ -3166,7 +3169,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
         [&](const ast::index_expr& index) -> value {
             // `expr[lo..hi]` yields a fresh subslice value; spill it so callers get an address.
             if (active_ast().get_as_opt<ast::range_expr>(index.index)) {
-                auto& slice_type{active_mod().get_sema_type_opt(id).value()};
+                auto& slice_type{*active_mod().get_sema_type_opt(id)};
                 return spill_to_temporary(emit_slice_range(id, index), slice_type);
             }
             auto       base_lval{emit_lvalue(index.array)};
@@ -3177,7 +3180,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
 
             const auto obj_type_opt{active_mod().get_sema_type_opt(index.array)};
             ASSERT(obj_type_opt, "Index array operand must have a resolved type");
-            auto* obj_type{&obj_type_opt.value()};
+            auto* obj_type{obj_type_opt.get()};
             bool  element_is_const{obj_type->is_constant()};
             if (const auto ref_data{obj_type->get_data().as_opt<sema::types::reference>()}) {
                 auto& ref_underlying{const_cast<sema::type&>(ref_data->underlying)};
@@ -3309,6 +3312,15 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Match expression must have a resolved sema type");
     const bool yields_value{sema_type->get_kind() != sema::type_kind::VOID_};
+
+    // The resolver already selected an arm for a `match` on a compile-time type: emit only it.
+    if (const auto it{active_mod().match_arm_results.find(id.get_index())};
+        it != active_mod().match_arm_results.end()) {
+        const auto& chosen{match.arms[it->second]};
+        if (yields_value) { return emit_stmt_as_value(chosen.dispatch); }
+        emit_stmt(chosen.dispatch);
+        return value{void_val{}, sema_type};
+    }
 
     if (const auto cv{const_eval_.try_eval(id)}) {
         if (const auto i{cv->as_int_opt()}) { return value{*i, sema_type}; }
@@ -3912,7 +3924,7 @@ auto emitter::emit_slice_range(ast::node_id id, const ast::index_expr& index) ->
 
     // Base element pointer and (for arrays / slices) the source length.
     auto  src_lval{emit_lvalue(index.array)};
-    auto* src_type{&active_mod().get_sema_type_opt(index.array).value()};
+    auto* src_type{active_mod().get_sema_type_opt(index.array).get()};
     if (const auto ref_d{src_type->get_data().as_opt<sema::types::reference>()}) {
         src_lval.data = value::data_t{builder_.emit_load(src_lval, *src_type)};
         src_type      = &const_cast<sema::type&>(ref_d->underlying);
