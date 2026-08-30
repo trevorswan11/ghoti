@@ -542,9 +542,18 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
         [&](const ast::struct_expr&) { return const_value{module_->get_sema_type_opt(id)}; },
         [&](const ast::enum_expr&) { return const_value{module_->get_sema_type_opt(id)}; },
         [&](const ast::union_expr&) { return const_value{module_->get_sema_type_opt(id)}; },
-        [&](const ast::dereference_expr& data) { return try_eval(data.rhs); },
-        [&](const ast::reference_expr& data) { return try_eval(data.rhs); },
-        [&](const ast::address_of_expr& data) { return try_eval(data.rhs); },
+        [&](const ast::dereference_expr& data) -> stdx::option<const_value> {
+            if (const auto ref{module_->ast.get_as_opt<ast::reference_expr>(data.rhs)}) {
+                return try_eval(ref->rhs);
+            }
+            if (const auto addr{module_->ast.get_as_opt<ast::address_of_expr>(data.rhs)}) {
+                return try_eval(addr->rhs);
+            }
+            return try_eval(data.rhs);
+        },
+        // A reference / pointer value is an address, not a compile-time constant
+        [&](const ast::reference_expr&) -> stdx::option<const_value> { return stdx::none; },
+        [&](const ast::address_of_expr&) -> stdx::option<const_value> { return stdx::none; },
         [&](ast::grouped_expr) { return try_eval(id); });
 }
 
@@ -652,6 +661,7 @@ auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& 
             }
         }
     }
+    if (!sema_type) { return stdx::none; }
 
     const_struct struct_val;
     for (const auto& item : init.initializers) {
@@ -715,6 +725,30 @@ auto const_eval::eval_dot(ast::node_id, const ast::dot_expr& dot) -> stdx::optio
             sema::error::CONSTEXPR_EVALUATION_FAILED,
             module_->ast.location_of(dot.member));
         return const_value::make_poison();
+    }
+
+    if (const auto type_opt{target_val->as_opt<stdx::option<sema::type&>>()};
+        type_opt && *type_opt) {
+        auto&      type{**type_opt};
+        const auto kind{type.get_kind()};
+        const bool is_structural{kind == sema::type_kind::STRUCT ||
+                                 kind == sema::type_kind::UNION || kind == sema::type_kind::ENUM};
+        if (is_structural) {
+            if (const auto tbl_idx{type.get_symbol_table_idx_opt()}) {
+                const auto& mtable{ctx_.registry.get(*tbl_idx)};
+                if (const auto msym{mtable.get_opt(member_name)}) {
+                    if (const auto node{msym->get_data().as_opt<sema::symbols::node_t>()}) {
+                        if (const auto mdecl{module_->ast.get_as_opt<ast::decl_stmt>(*node)};
+                            mdecl && mdecl->value &&
+                            (mdecl->has_modifier(ast::decl_modifiers::CONSTANT) ||
+                             mdecl->has_modifier(ast::decl_modifiers::CONSTEXPR)) &&
+                            !module_->ast.get_as_opt<ast::function_expr>(*mdecl->value)) {
+                            return try_eval(*mdecl->value);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     return stdx::none;
@@ -1243,6 +1277,10 @@ auto const_eval::eval_builtin(ast::node_id          id,
 
     switch (builtin_type) {
     case syntax::token_type_t::BUILTIN_THIS: {
+        // The call node carries the enclosing structural type
+        if (id.is_valid()) {
+            if (const auto here{module_->get_sema_type_opt(id)}) { return const_value{here}; }
+        }
         if (const auto target_type{module_->get_sema_type_opt(call.function)}) {
             return const_value{target_type};
         }

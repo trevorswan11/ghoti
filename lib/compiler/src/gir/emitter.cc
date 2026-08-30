@@ -2800,7 +2800,10 @@ auto emitter::lvalue_of_expr(ast::node_id id, sema::type& sema_type) -> value {
         auto& referent_type{const_cast<sema::type&>(ref_data->underlying)};
         return value{emit_expression_id_raw(id).data, referent_type};
     }
-    return spill_to_temporary(emit_expression_id_raw(id), sema_type);
+    // Spill using the type the emitted value actually carries
+    auto  val{emit_expression_id_raw(id)};
+    auto& spill_type{val.type ? const_cast<sema::type&>(*val.type) : sema_type};
+    return spill_to_temporary(std::move(val), spill_type);
 }
 
 auto emitter::emit_panic_call(std::string_view message, ast::node_id site) -> void {
@@ -2899,6 +2902,13 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             return lvalue_of_expr(id, *sema_type);
         },
         [&](const ast::dot_expr& dot) -> value {
+            // `<Type>.member` has no runtime object
+            if (dot_object_is_type_namespace(dot)) {
+                const auto st{active_mod().get_sema_type_opt(id)};
+                ASSERT(st, "LValue expression must have a resolved sema type");
+                return lvalue_of_expr(id, *st);
+            }
+
             auto       base_lval{emit_lvalue(dot.object)};
             const auto obj_type_opt{active_mod().get_sema_type_opt(dot.object)};
             ASSERT(obj_type_opt, "Dot expression object must have a resolved type");
@@ -3507,12 +3517,48 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
     return value{loaded, sema_type};
 }
 
+// True when `dot.object` denotes a type used purely as a namespace
+auto emitter::dot_object_is_type_namespace(const ast::dot_expr& dot) -> bool {
+    if (const auto ot{active_mod().get_sema_type_opt(dot.object)};
+        ot && ot->get_kind() == sema::type_kind::TYPE) {
+        return true;
+    }
+    if (const auto call{active_ast().get_as_opt<ast::call_expr>(dot.object)}) {
+        if (const auto fi{active_ast().get_as_opt<ast::identifier_expr>(call->function)}) {
+            return fi->name == "@this";
+        }
+    }
+    if (const auto oi{active_ast().get_as_opt<ast::identifier_expr>(dot.object)}) {
+        if (lookup_binding(oi->name)) { return false; }
+        if (const auto rt{active_mod().root_table_idx}) {
+            if (const auto s{ctx_.registry.get_from_opt(*rt, oi->name)}) {
+                return s->has_kind() && s->get_kind() == sema::symbol_kind::TYPE;
+            }
+        }
+    }
+    return false;
+}
+
 auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
     PROFILE_FUNCTION();
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     const auto raw_obj_type{active_mod().get_sema_type_opt(dot.object)};
     ASSERT(raw_obj_type, "Dot expression object must have a resolved type");
     auto* obj_type{raw_obj_type.get()};
+
+    if (dot_object_is_type_namespace(dot)) {
+        if (const auto cv{const_eval_.try_eval(id)}) {
+            if (const auto i{cv->as_int_opt()}) { return value{*i, sema_type}; }
+            if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
+            if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
+            if (cv->is<const_struct>() || cv->is<const_array>() || cv->is<const_union>() ||
+                cv->is<std::string>()) {
+                return materialize_const(*cv);
+            }
+        }
+        const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
+        return value{std::string{member_ident.name}, sema_type};
+    }
 
     // emit_lvalue(dot.object) addresses the object's own storage; still needs unwinding here
     auto base_lval{emit_lvalue(dot.object)};
@@ -3597,6 +3643,10 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
         if (const auto i{cv->as_int_opt()}) { return value{*i, sema_type}; }
         if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
         if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
+        if (cv->is<const_struct>() || cv->is<const_array>() || cv->is<const_union>() ||
+            cv->is<std::string>()) {
+            return materialize_const(*cv);
+        }
     }
 
     return value{std::string{member_ident.name}, sema_type};
