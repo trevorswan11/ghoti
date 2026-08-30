@@ -94,6 +94,13 @@ namespace {
     return mut_elements ? types::mut::MUTABLE : types::mut::CONSTANT;
 }
 
+[[nodiscard]] auto container_element_mutability(const type& t) -> types::mutability_modifiers {
+    if (const auto def{t.get_data().as_opt<types::deferred_array>()}) {
+        return array_element_mutability(def->array.mut_elements);
+    }
+    return t.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE;
+}
+
 [[nodiscard]] auto denoted_type(type& t) -> type& {
     if (t.get_kind() == type_kind::TYPE) {
         if (const auto meta{t.get_data().as_opt<types::meta_type>()}) { return meta->instance; }
@@ -364,11 +371,12 @@ template <ast::IndexableID ID>
     case token_type_t::BUILTIN_PTR_FROM_ARRAY: {
         auto& array_type{*get_resolved_call_arg_type(call.arguments[0])};
         auto& type_data{array_type.get_data()};
-        // The new type uses a new key to align with normal pointer creation
+        // The result pointer mirrors the array's element mutability: `[N]mut T` -> `^mut T`.
+        const auto mutability{container_element_mutability(array_type)};
         if (const auto array_data{type_data.as_opt<types::array>()}) {
-            return_type = &ctx_.get_pointer(types::mut::CONSTANT, array_data->underlying);
+            return_type = &ctx_.get_pointer(mutability, array_data->underlying);
         } else if (const auto deferred_data{type_data.as_opt<types::deferred_array>()}) {
-            return_type = &ctx_.get_pointer(types::mut::CONSTANT, deferred_data->underlying);
+            return_type = &ctx_.get_pointer(mutability, deferred_data->underlying);
         } else {
             return make_sema_err(fmt::format("Expected an array-yielding expression; found '{}'",
                                              type_kind_display_name(array_type.get_kind())),
@@ -1831,8 +1839,8 @@ auto type_resolver::visit(ast::node_id id, const ast::index_expr& index) -> void
 
     // There may be a slice accessor which results in a slice type and should mirror parent
     if (access_type.get_data().is<types::slice>()) {
-        const auto mutability{target_type->is_constant() ? types::mut::CONSTANT
-                                                         : types::mut::MUTABLE};
+        // The subslice is writable iff the source container's elements are
+        const auto mutability{container_element_mutability(*target_type)};
         last_type_.emplace(ctx_.get_slice(mutability, false, single_item_type));
     } else {
         last_type_.emplace(single_item_type);
@@ -2155,11 +2163,25 @@ auto type_resolver::visit(ast::node_id id, const ast::dot_expr& dot) -> void {
 auto type_resolver::visit(ast::node_id id, const ast::range_expr& range) -> void {
     PROFILE_FUNCTION();
     TRY_RESOLVE(range.lhs);
-    auto& lhs_type{*last_type_.take()};
-    TRY_RESOLVE(range.rhs);
+    auto* lhs_type{last_type_.take()};
+    {
+        // Give a bare integer-literal upper bound the lower bound's type (`s.len .. 0`).
+        const structural_guard g{implicit_type_stack_, *lhs_type};
+        TRY_RESOLVE(range.rhs);
+    }
+    auto& rhs_type{*last_type_.take()};
 
-    // Due to deferred type checking just use one type
-    auto& slice_type{ctx_.get_slice(types::mut::CONSTANT, false, lhs_type)};
+    // ...and give a bare integer-literal lower bound the upper bound's type (`0 .. s.len`).
+    if (is_integer(rhs_type.get_kind())) {
+        if (const auto i32_node{resolving_.ast.get_as_opt<ast::i32_expr>(range.lhs)};
+            i32_node && i32_node->value >= 0) {
+            resolving_.set_sema_type(range.lhs, rhs_type);
+            lhs_type = &rhs_type;
+        }
+    }
+
+    // Due to deferred type checking just use one endpoint's type for the placeholder slice.
+    auto& slice_type{ctx_.get_slice(types::mut::CONSTANT, false, *lhs_type)};
     resolving_.set_sema_type(id, slice_type);
     last_type_.emplace(slice_type);
 }

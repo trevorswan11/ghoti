@@ -404,6 +404,10 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
     stdx::option<value> init_val;
     if (decl.value && !active_ast().get_as_opt<ast::undefined_expr>(*decl.value)) {
         if (const auto cv{const_eval_.try_eval(*decl.value)}) {
+            if (is_const && cv->is<std::string>() && cv->get_type() &&
+                cv->get_type()->get_kind() == sema::type_kind::FUNCTION) {
+                return;
+            }
             init_val.emplace(cv->to_gir_value());
         } else if (!is_const) {
             init_val.emplace(emit_expression(*decl.value));
@@ -1770,6 +1774,10 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             } else {
                 callee_name.emplace(std::string{ident->name});
             }
+        } else if (const auto cv{const_eval_.try_eval(call.function)};
+                   cv && cv->template is<std::string>() && cv->get_type() &&
+                   cv->get_type()->get_kind() == sema::type_kind::FUNCTION) {
+            callee_name.emplace(cv->template as<std::string>());
         } else {
             callee_name.emplace(std::string{ident->name});
         }
@@ -2975,16 +2983,19 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             const auto obj_type_opt{active_mod().get_sema_type_opt(index.array)};
             ASSERT(obj_type_opt, "Index array operand must have a resolved type");
             auto* obj_type{&obj_type_opt.value()};
+            bool  element_is_const{obj_type->is_constant()};
             if (const auto ref_data{obj_type->get_data().as_opt<sema::types::reference>()}) {
                 auto& ref_underlying{const_cast<sema::type&>(ref_data->underlying)};
                 base_lval.data = value::data_t{builder_.emit_load(base_lval, *obj_type)};
                 base_lval.type.emplace(ref_underlying);
-                obj_type = &ref_data->underlying;
+                element_is_const = obj_type->is_constant();
+                obj_type         = &ref_data->underlying;
             } else if (const auto ptr_data{obj_type->get_data().as_opt<sema::types::pointer>()}) {
                 auto& ptr_underlying{const_cast<sema::type&>(ptr_data->underlying)};
                 base_lval.data = value::data_t{builder_.emit_load(base_lval, *obj_type)};
                 base_lval.type.emplace(ptr_underlying);
-                obj_type = &ptr_data->underlying;
+                element_is_const = obj_type->is_constant();
+                obj_type         = &ptr_data->underlying;
             }
 
             if (const auto arr_data{obj_type->get_data().as_opt<sema::types::array>()}) {
@@ -3082,8 +3093,10 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                 return value{elem_ptr, write_elem_type};
             }
 
-            const auto elem_ptr{builder_.emit_get_element_ptr(base_lval, {idx_val}, elem_type)};
-            return value{elem_ptr, elem_type};
+            auto&      write_elem_type{*ctx_.pool.with_const(elem_type, element_is_const)};
+            const auto elem_ptr{
+                builder_.emit_get_element_ptr(base_lval, {idx_val}, write_elem_type)};
+            return value{elem_ptr, write_elem_type};
         },
         [&](const ast::dereference_expr& deref) -> value {
             const auto sema_type{active_mod().get_sema_type_opt(id)};

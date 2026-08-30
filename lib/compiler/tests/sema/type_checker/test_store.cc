@@ -73,6 +73,39 @@ TEST_CASE("Type checker store and assignment validation") {
                              sema::error::ILLEGAL_OPAQUE_TYPE,
                              std::pair{2UZ, 16UZ}});
     }
+
+    SECTION("Indexed store through a mutable pointer succeeds") {
+        helpers::type_check_and_verify(R"(
+            const f := fn(p: ^mut i32): void {
+                p[0] = 42;
+            };
+        )");
+    }
+
+    SECTION("Indexed store through a const pointer fails") {
+        helpers::test_checker_fail(
+            R"(
+            const f := fn(p: ^i32): void {
+                p[0] = 42;
+            };
+        )",
+            sema::diagnostic{"Cannot assign to an element of a non-mutable array or slice",
+                             sema::error::ASSIGNMENT_TO_CONST,
+                             std::pair{2UZ, 23UZ}});
+    }
+
+    SECTION("Writing an element of a const-element array still fails") {
+        helpers::test_checker_fail(
+            R"(
+            const f := fn(): void {
+                var a: [4uz]i32 = [4uz]i32{0, 0, 0, 0};
+                a[0] = 42;
+            };
+        )",
+            sema::diagnostic{"Cannot assign to an element of a non-mutable array or slice",
+                             sema::error::ASSIGNMENT_TO_CONST,
+                             std::pair{3UZ, 23UZ}});
+    }
 }
 
 } // namespace ghoti::tests

@@ -40,6 +40,19 @@ TEST_CASE("Operator type checking") {
                              std::pair{2UZ, 31UZ}});
     }
 
+    SECTION("Comparing two differently-typed integer variables still fails") {
+        helpers::test_checker_fail(
+            R"(
+            const f := fn(a: i32, b: usize): void {
+                _ = a < b;
+            };
+        )",
+            sema::diagnostic{"Relational operator cannot be applied to non-numeric or incompatible "
+                             "types 'i32' and 'usize'",
+                             sema::error::OPERATOR_TYPE_MISMATCH,
+                             std::pair{2UZ, 24UZ}});
+    }
+
     SECTION("Logical negation on non-boolean fails") {
         helpers::test_checker_fail(
             R"(
