@@ -13,6 +13,10 @@
 - Postfix `?` / `!` unwrap operators for `Result` / `Optional`
     - Requires any tagged union in the shape `union { .ok/.some: ..., .err/.none:... }`
 - `if constexpr`: dead branches are no longer resolved or emitted, with per-instantiation pruning
+- `match` on a compile-time `type`: dispatches on exact type identity
+    - `if constexpr`-style (only the selected arm is checked/emitted)
+    - Requires a `_` arm
+    - Works per generic `T: type` instantiation
 - Compile-time config: `@cfg`, `@cfgValue`, `@compileError`; target facts as `builtin` enums; `@cfg` can gate aggregate fields and nested control flow
 - Inline assembly: `asm { ... }` expressions
 - Declaration modifiers: `weak`, `naked`, `threadlocal`, and link-name overrides
