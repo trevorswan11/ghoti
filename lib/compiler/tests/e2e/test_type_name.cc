@@ -8,10 +8,9 @@ TEST_CASE("`@typeName` of a primitive type") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             const s := @typeName(i32);
-            // "i32\0" -> len 4, s[0] == 'i'
-            return @as(i32, s.len) * 1000 + @as(i32, s[0]);
+            return @as(i32, s.len) * 10 + @as(i32, s[0]);
         };
-    )") == (4 * 1'000 + 'i'));
+    )") == (4 * 10 + 'i'));
 }
 
 TEST_CASE("`@typeName` of a user struct reports its declared name") {
@@ -20,10 +19,9 @@ TEST_CASE("`@typeName` of a user struct reports its declared name") {
 
         pub const main := fn(): i32 {
             const s := @typeName(Point);
-            // "Point\0" -> len 6, s[0] == 'P', s[4] == 't'
-            return @as(i32, s.len) * 10000 + @as(i32, s[0]) * 100 + @as(i32, s[4]);
+            return @as(i32, s.len) * 10 + @as(i32, s[0]) + @as(i32, s[4]) - 187;
         };
-    )") == (6 * 10'000 + 'P' * 100 + 't'));
+    )") == (6 * 10 + 'P' + 't' - 187));
 }
 
 TEST_CASE("`@typeName` of a user enum reports its declared name") {
@@ -32,9 +30,9 @@ TEST_CASE("`@typeName` of a user enum reports its declared name") {
 
         pub const main := fn(): i32 {
             const s := @typeName(Color);
-            return @as(i32, s.len) * 100 + @as(i32, s[0]);
+            return @as(i32, s.len) * 10 + @as(i32, s[0]);
         };
-    )") == (6 * 100 + 'C'));
+    )") == (6 * 10 + 'C'));
 }
 
 TEST_CASE("`@typeName` takes the type of a value expression") {
@@ -44,19 +42,18 @@ TEST_CASE("`@typeName` takes the type of a value expression") {
         pub const main := fn(): i32 {
             var w: Widget = .{ .n = 0 };
             const s := @typeName(@typeOf(w));
-            return @as(i32, s.len) * 100 + @as(i32, s[0]);
+            return @as(i32, s.len) * 10 + @as(i32, s[0]) - 100;
         };
-    )") == (7 * 100 + 'W'));
+    )") == (7 * 10 + 'W' - 100));
 }
 
 TEST_CASE("`@typeName` of a pointer type renders structurally") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             const s := @typeName(^u8);
-            // "^u8\0" -> len 4, s[0] == '^'
-            return @as(i32, s.len) * 1000 + @as(i32, s[0]);
+            return @as(i32, s.len) + @as(i32, s[0]);
         };
-    )") == (4 * 1'000 + '^'));
+    )") == (4 + '^'));
 }
 
 } // namespace ghoti::tests

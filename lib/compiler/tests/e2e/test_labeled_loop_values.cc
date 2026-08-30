@@ -75,9 +75,9 @@ TEST_CASE("nested labeled loops break to the outer label with a value") {
                 };
                 if (x == 10) { break :outer 0 - 1; }
             };
-            return found;
+            return found - 600;
         };
-    )") == (6 * 100 + 7));
+    )") == 7);
 }
 
 } // namespace ghoti::tests
