@@ -137,9 +137,10 @@ TEST_CASE("Dead code elimination") {
     codegen::llvm_scope scope;
     llvm::LLVMContext   context;
 
+    // Unsigned arithmetic wraps and carries no runtime safety check
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const dead_calc := fn(a: i64): i64 {
-            var unused: i64 = a * 100l + 42l;
+        pub const dead_calc := fn(a: u64): u64 {
+            var unused: u64 = a * 100ul + 42ul;
             return a;
         };
     )")};
@@ -159,41 +160,41 @@ TEST_CASE("Function inlining") {
     llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const helper := fn(x: i64): i64 {
-            return x * 2l;
+        const helper := fn(x: u64): u64 {
+            return x * 2ul;
         };
 
-        pub const caller := fn(a: i64): i64 {
+        pub const caller := fn(a: u64): u64 {
             return helper(a);
         };
     )")};
+
+    const auto calls_helper{[](const llvm::Function& fn) -> bool {
+        for (const auto& bb : fn) {
+            for (const auto& inst : bb) {
+                if (const auto* call{llvm::dyn_cast<llvm::CallInst>(&inst)}) {
+                    if (const auto* callee{call->getCalledFunction()};
+                        callee && callee->getName() == "helper") {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }};
 
     SECTION("O0 contains call to helper") {
         codegen::optimizer_options options{.level = codegen::opt_level::O0};
         auto                       llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context, options))};
         auto&                      fn{UNWRAP(llvm_mod->getFunction("caller"))};
-
-        bool has_call{false};
-        for (const auto& bb : fn) {
-            for (const auto& inst : bb) {
-                if (llvm::isa<llvm::CallInst>(&inst)) { has_call = true; }
-            }
-        }
-        CHECK(has_call);
+        CHECK(calls_helper(fn));
     }
 
     SECTION("O2 inlines helper into caller") {
         codegen::optimizer_options options{.level = codegen::opt_level::O2};
         auto                       llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context, options))};
         auto&                      fn{UNWRAP(llvm_mod->getFunction("caller"))};
-
-        bool has_call{false};
-        for (const auto& bb : fn) {
-            for (const auto& inst : bb) {
-                if (llvm::isa<llvm::CallInst>(&inst)) { has_call = true; }
-            }
-        }
-        CHECK_FALSE(has_call);
+        CHECK_FALSE(calls_helper(fn));
     }
 }
 

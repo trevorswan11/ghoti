@@ -107,6 +107,14 @@ class llvm_lowering {
                                    std::string_view          handler_name,
                                    gsl::span<const usize, 4> order) -> void;
 
+    auto emit_lowered_panic(std::string_view message, const gir::instruction& inst) -> void;
+    auto emit_arith_guard(llvm::Value* bad, std::string_view message, const gir::instruction& inst)
+        -> void;
+    auto emit_checked_arith(const gir::instruction& inst,
+                            llvm::Value*            lhs,
+                            llvm::Value*            rhs,
+                            bool                    is_signed) -> llvm::Value*;
+
   private:
     llvm::LLVMContext&                                                 context_;
     stdx::box<llvm::Module>                                            llvm_module_;

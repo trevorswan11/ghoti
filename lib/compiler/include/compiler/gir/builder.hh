@@ -53,8 +53,11 @@ class builder {
         -> local_id;
     auto emit_address_of(value target, sema::type& result_type) -> local_id;
     auto emit_deref(value ptr, sema::type& result_type) -> local_id;
-    auto emit_binary(instruction_kind kind, value lhs, value rhs, sema::type& type) -> local_id;
-    auto emit_unary(instruction_kind kind, value operand, sema::type& type) -> local_id;
+    auto
+    emit_binary(instruction_kind kind, value lhs, value rhs, sema::type& type, bool checked = false)
+        -> local_id;
+    auto emit_unary(instruction_kind kind, value operand, sema::type& type, bool checked = false)
+        -> local_id;
     auto emit_cast(instruction_kind kind, value operand, sema::type& target_type) -> local_id;
     auto emit_call(std::string_view callee, std::vector<value> args, sema::type& return_type)
         -> stdx::option<local_id>;

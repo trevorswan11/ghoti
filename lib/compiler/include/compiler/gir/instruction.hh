@@ -226,6 +226,7 @@ struct instruction {
     stdx::option<inline_asm>      asm_info{stdx::none};
     bool                          is_const{false};
     bool                          is_initializer{false};
+    bool                          is_checked{false};
 
     [[nodiscard]] auto is_terminator() const noexcept -> bool { return gir::is_terminator(kind); }
     [[nodiscard]] auto has_result() const noexcept -> bool { return result.has_value(); }

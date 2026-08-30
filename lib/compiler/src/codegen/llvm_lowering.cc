@@ -42,6 +42,7 @@
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
+#include "support/diagnostic.hh"
 
 namespace ghoti::codegen {
 
@@ -591,6 +592,107 @@ auto llvm_lowering::emit_context_handler_call(const gir::instruction&   inst,
     builder_.CreateCall(handler_fn, args);
 }
 
+auto llvm_lowering::emit_lowered_panic(std::string_view message, const gir::instruction& inst)
+    -> void {
+    auto* panic_fn{llvm_module_->getFunction("panic_handler")};
+    if (!panic_fn || panic_fn->getFunctionType()->getNumParams() != 4) {
+        auto* trap{
+            llvm::Intrinsic::getOrInsertDeclaration(llvm_module_.get(), llvm::Intrinsic::trap)};
+        builder_.CreateCall(trap, {});
+        return;
+    }
+
+    auto*      slice_ty{types_.translate_slice_type()};
+    const auto make_slice{[&](std::string_view text) -> llvm::Value* {
+        auto*        gstr{builder_.CreateGlobalString(std::string{text}, "panic.str")};
+        llvm::Value* slice{llvm::UndefValue::get(slice_ty)};
+        slice =
+            builder_.CreateInsertValue(slice, gstr, {static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX)});
+        slice = builder_.CreateInsertValue(
+            slice, builder_.getInt64(text.size()), {static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX)});
+        return slice;
+    }};
+
+    const auto                loc{inst.location.value_or(source_location{})};
+    std::vector<llvm::Value*> args{
+        make_slice(message),
+        make_slice(llvm_module_->getName()),
+        builder_.getInt32(static_cast<u32>(loc.line)),
+        builder_.getInt32(static_cast<u32>(loc.column)),
+    };
+    builder_.CreateCall(panic_fn, args);
+}
+
+auto llvm_lowering::emit_arith_guard(llvm::Value*            bad,
+                                     std::string_view        message,
+                                     const gir::instruction& inst) -> void {
+    auto* cur_fn{builder_.GetInsertBlock()->getParent()};
+    auto* fail_bb{llvm::BasicBlock::Create(context_, "safety.fail", cur_fn)};
+    auto* ok_bb{llvm::BasicBlock::Create(context_, "safety.ok", cur_fn)};
+    builder_.CreateCondBr(bad, fail_bb, ok_bb);
+
+    builder_.SetInsertPoint(fail_bb);
+    emit_lowered_panic(message, inst);
+    builder_.CreateUnreachable();
+
+    builder_.SetInsertPoint(ok_bb);
+}
+
+auto llvm_lowering::emit_checked_arith(const gir::instruction& inst,
+                                       llvm::Value*            lhs,
+                                       llvm::Value*            rhs,
+                                       bool                    is_signed) -> llvm::Value* {
+    auto* int_ty{llvm::dyn_cast<llvm::IntegerType>(lhs->getType())};
+    if (!int_ty) { return nullptr; }
+    const unsigned width{int_ty->getBitWidth()};
+
+    switch (inst.kind) {
+    case gir::instruction_kind::ADD:
+    case gir::instruction_kind::SUB:
+    case gir::instruction_kind::MUL: {
+        if (!is_signed) { return nullptr; } // unsigned wrap is defined
+        const auto id{inst.kind == gir::instruction_kind::ADD ? llvm::Intrinsic::sadd_with_overflow
+                      : inst.kind == gir::instruction_kind::SUB
+                          ? llvm::Intrinsic::ssub_with_overflow
+                          : llvm::Intrinsic::smul_with_overflow};
+        auto*      fn{llvm::Intrinsic::getOrInsertDeclaration(llvm_module_.get(), id, {int_ty})};
+        auto*      pair{builder_.CreateCall(fn, {lhs, rhs})};
+        auto*      overflow{builder_.CreateExtractValue(pair, {1U})};
+
+        std::string_view msg;
+        if (inst.kind == gir::instruction_kind::ADD) {
+            msg = "signed addition overflow";
+        } else if (inst.kind == gir::instruction_kind::SUB) {
+            msg = "signed subtraction overflow";
+        } else {
+            msg = "signed multiplication overflow";
+        }
+        emit_arith_guard(overflow, msg, inst);
+        return builder_.CreateExtractValue(pair, {0U});
+    }
+    case gir::instruction_kind::DIV:
+    case gir::instruction_kind::MOD: {
+        auto* zero{llvm::ConstantInt::get(int_ty, 0)};
+        emit_arith_guard(builder_.CreateICmpEQ(rhs, zero), "integer division by zero", inst);
+        if (is_signed) {
+            auto* int_min{llvm::ConstantInt::get(int_ty, llvm::APInt::getSignedMinValue(width))};
+            auto* neg_one{llvm::ConstantInt::getSigned(int_ty, -1)};
+            auto* edge{builder_.CreateAnd(builder_.CreateICmpEQ(lhs, int_min),
+                                          builder_.CreateICmpEQ(rhs, neg_one))};
+            emit_arith_guard(edge, "signed division overflow", inst);
+        }
+        return nullptr;
+    }
+    case gir::instruction_kind::SHL:
+    case gir::instruction_kind::SHR: {
+        auto* limit{llvm::ConstantInt::get(rhs->getType(), width)};
+        emit_arith_guard(builder_.CreateICmpUGE(rhs, limit), "shift amount out of range", inst);
+        return nullptr;
+    }
+    default: return nullptr;
+    }
+}
+
 auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) -> llvm::Constant* {
     if (!ty) { return nullptr; }
     if (const auto i{cv.as_opt<i64>()}) {
@@ -1138,6 +1240,10 @@ auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {
     const bool is_flt{is_float_type(inst, lhs)};
     const bool is_sgn{is_signed_type(inst)};
 
+    if (inst.is_checked && !is_flt) {
+        if (auto* checked{emit_checked_arith(inst, lhs, rhs, is_sgn)}) { return checked; }
+    }
+
     switch (inst.kind) {
     case gir::instruction_kind::ADD:
         return is_flt ? builder_.CreateFAdd(lhs, rhs, "addtmp")
@@ -1173,6 +1279,14 @@ auto llvm_lowering::emit_unary(const gir::instruction& inst) -> llvm::Value* {
     ASSERT(val, "Unary operand must lower to a non-null LLVM value");
 
     const bool is_flt{is_float_type(inst, val)};
+
+    if (inst.is_checked && !is_flt && inst.kind == gir::instruction_kind::NEG) {
+        if (auto* int_ty{llvm::dyn_cast<llvm::IntegerType>(val->getType())}) {
+            auto* int_min{llvm::ConstantInt::get(
+                int_ty, llvm::APInt::getSignedMinValue(int_ty->getBitWidth()))};
+            emit_arith_guard(builder_.CreateICmpEQ(val, int_min), "signed negation overflow", inst);
+        }
+    }
 
     switch (inst.kind) {
     case gir::instruction_kind::NEG:

@@ -142,27 +142,30 @@ auto builder::emit_global_addr(std::string name, sema::type& type, bool is_const
     return dest;
 }
 
-auto builder::emit_binary(instruction_kind kind, value lhs, value rhs, sema::type& type)
-    -> local_id {
+auto builder::emit_binary(
+    instruction_kind kind, value lhs, value rhs, sema::type& type, bool checked) -> local_id {
     ASSERT(function_, "Cannot emit binary instruction without an active function");
     const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
     emit_instruction({
-        .kind     = kind,
-        .type     = type,
-        .result   = dest,
-        .operands = {std::move(lhs), std::move(rhs)},
+        .kind       = kind,
+        .type       = type,
+        .result     = dest,
+        .operands   = {std::move(lhs), std::move(rhs)},
+        .is_checked = checked,
     });
     return dest;
 }
 
-auto builder::emit_unary(instruction_kind kind, value operand, sema::type& type) -> local_id {
+auto builder::emit_unary(instruction_kind kind, value operand, sema::type& type, bool checked)
+    -> local_id {
     ASSERT(function_, "Cannot emit unary instruction without an active function");
     const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
     emit_instruction({
-        .kind     = kind,
-        .type     = type,
-        .result   = dest,
-        .operands = {std::move(operand)},
+        .kind       = kind,
+        .type       = type,
+        .result     = dest,
+        .operands   = {std::move(operand)},
+        .is_checked = checked,
     });
     return dest;
 }

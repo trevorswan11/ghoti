@@ -1416,7 +1416,7 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
 
     const auto lhs{emit_expression(binary.lhs)};
     const auto rhs{emit_expression(binary.rhs)};
-    return value{builder_.emit_binary(*kind_opt, lhs, rhs, *sema_type), sema_type};
+    return value{emit_checked_binary(*kind_opt, lhs, rhs, *sema_type, id), sema_type};
 }
 
 auto emitter::emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value {
@@ -1428,7 +1428,7 @@ auto emitter::emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value
     ASSERT(sema_type, "Unary expression must have a resolved sema type");
 
     const auto operand{emit_expression(unary.rhs)};
-    const auto dest{builder_.emit_unary(*kind_opt, operand, *sema_type)};
+    const auto dest{emit_checked_unary(*kind_opt, operand, *sema_type, id)};
     return value{dest, sema_type};
 }
 
@@ -1501,7 +1501,7 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
         const auto loaded{builder_.emit_load(lhs_lval, target_type)};
         const auto rhs{emit_expression(assign.rhs)};
         const auto res_val{
-            value{builder_.emit_binary(base_kind, value{loaded, target_type}, rhs, target_type),
+            value{emit_checked_binary(base_kind, value{loaded, target_type}, rhs, target_type, id),
                   target_type}};
         builder_.emit_store(lhs_lval, res_val);
         return res_val;
@@ -3019,6 +3019,31 @@ auto emitter::emit_enum_cast_guard(ast::node_id     site,
     builder_.set_segment(bad_seg);
     emit_panic_call("invalid enum value", site);
     builder_.set_segment(ok_seg);
+}
+
+auto emitter::emit_checked_binary(instruction_kind kind,
+                                  value            lhs,
+                                  value            rhs,
+                                  sema::type&      result_type,
+                                  ast::node_id) -> local_id {
+    // Only integer arithmetic can trap, and only signed +/-/* can overflow.
+    const auto k{result_type.get_kind()};
+    const bool checkable{runtime_safety_ && sema::is_integer(k) &&
+                         (((kind == instruction_kind::ADD || kind == instruction_kind::SUB ||
+                            kind == instruction_kind::MUL) &&
+                           sema::is_signed_integer(k)) ||
+                          kind == instruction_kind::DIV || kind == instruction_kind::MOD ||
+                          kind == instruction_kind::SHL || kind == instruction_kind::SHR)};
+    return builder_.emit_binary(kind, std::move(lhs), std::move(rhs), result_type, checkable);
+}
+
+auto emitter::emit_checked_unary(instruction_kind kind,
+                                 value            operand,
+                                 sema::type&      result_type,
+                                 ast::node_id) -> local_id {
+    const bool checkable{runtime_safety_ && kind == instruction_kind::NEG &&
+                         sema::is_signed_integer(result_type.get_kind())};
+    return builder_.emit_unary(kind, std::move(operand), result_type, checkable);
 }
 
 auto emitter::request_builtin_runtime(std::string_view name) -> void {

@@ -127,6 +127,16 @@ class emitter {
                               const value&     enum_val,
                               const value&     src_val,
                               ast::expr_handle src_expr) -> void;
+
+    auto emit_checked_binary(instruction_kind kind,
+                             value            lhs,
+                             value            rhs,
+                             sema::type&      result_type,
+                             ast::node_id     site) -> local_id;
+    auto emit_checked_unary(instruction_kind kind,
+                            value            operand,
+                            sema::type&      result_type,
+                            ast::node_id     site) -> local_id;
     auto request_builtin_runtime(std::string_view name) -> void;
     auto ensure_builtin_runtime(std::string_view name) -> void;
     auto spill_to_temporary(value val, sema::type& type, bool is_const = false) -> value;
@@ -278,6 +288,8 @@ class emitter {
     std::vector<bool>             open_fn_is_closure_;
     std::vector<sema::type*>      user_type_stack_;
     std::vector<std::string_view> pending_builtin_runtime_;
+    // Cleared by `--unsafe`: gates every runtime safety check the emitter inserts.
+    bool runtime_safety_{true};
 };
 
 } // namespace ghoti::gir
