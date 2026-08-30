@@ -12,17 +12,6 @@
 
 namespace ghoti::tests {
 
-namespace {
-
-[[nodiscard]] auto module_ir(const llvm::Module& mod) -> std::string {
-    std::string              text;
-    llvm::raw_string_ostream os{text};
-    mod.print(os, nullptr);
-    return text;
-}
-
-} // namespace
-
 TEST_CASE("codegen: inline asm lowers to an LLVM InlineAsm call") {
     llvm::LLVMContext context;
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -42,7 +31,7 @@ TEST_CASE("codegen: inline asm lowers to an LLVM InlineAsm call") {
     auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
     CHECK_FALSE(llvm::verifyModule(*llvm_mod, &llvm::errs()));
 
-    const auto ir{module_ir(*llvm_mod)};
+    const auto ir{helpers::ir_text(*llvm_mod)};
     CHECK(ir.contains("call i64 asm sideeffect \"syscall\""));
     CHECK(ir.contains("={rax},{rax},{rdi},{rsi},{rdx},~{rcx},~{r11},~{memory}"));
 }
@@ -62,7 +51,7 @@ TEST_CASE("codegen: noreturn inline asm marks the call and emits unreachable") {
     auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
     CHECK_FALSE(llvm::verifyModule(*llvm_mod, &llvm::errs()));
 
-    const auto ir{module_ir(*llvm_mod)};
+    const auto ir{helpers::ir_text(*llvm_mod)};
     CHECK(ir.contains("asm sideeffect \"syscall\""));
     CHECK(ir.contains("unreachable"));
 }
@@ -82,7 +71,7 @@ TEST_CASE("codegen: rdtsc via result slot returns the scalar") {
     auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
     CHECK_FALSE(llvm::verifyModule(*llvm_mod, &llvm::errs()));
 
-    const auto ir{module_ir(*llvm_mod)};
+    const auto ir{helpers::ir_text(*llvm_mod)};
     CHECK(ir.contains("call i32 asm sideeffect \"rdtsc\", \"={eax}\""));
 }
 

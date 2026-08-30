@@ -95,15 +95,16 @@ auto options::process_raw(const raw_options&   raw,
     for (const auto& dir : raw.library_paths) { library_paths.emplace_back(dir); }
 
     return options{
-        .input_path    = std::move(input_path),
-        .output_path   = std::move(output_path),
-        .target_opts   = std::move(target_opts),
-        .opt_opts      = std::move(opt_opts),
-        .modules       = std::move(modules),
-        .extra_objects = std::move(extra_objects),
-        .library_paths = std::move(library_paths),
-        .libraries     = raw.libraries,
-        .dynamic       = raw.dynamic,
+        .input_path     = std::move(input_path),
+        .output_path    = std::move(output_path),
+        .target_opts    = std::move(target_opts),
+        .opt_opts       = std::move(opt_opts),
+        .modules        = std::move(modules),
+        .extra_objects  = std::move(extra_objects),
+        .library_paths  = std::move(library_paths),
+        .libraries      = raw.libraries,
+        .dynamic        = raw.dynamic,
+        .runtime_safety = !raw.unsafe,
     };
 }
 
@@ -195,6 +196,8 @@ auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_v
         ->default_val(opts.debug_passes);
     subcmd->add_flag("--time-passes", opts.time_passes, "Enable pass execution timing report")
         ->default_val(opts.time_passes);
+    subcmd->add_flag("--unsafe", opts.unsafe, "Disable all runtime safety checks")
+        ->default_val(opts.unsafe);
 }
 
 } // namespace ghoti::cmd::build

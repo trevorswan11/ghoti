@@ -7,6 +7,7 @@
 
 #include "compiler/codegen/llvm_lowering.hh"
 #include "compiler/gir/emitter.hh"
+#include "helpers/codegen.hh"
 #include "helpers/sema.hh"
 
 namespace ghoti::tests {
@@ -78,9 +79,7 @@ TEST_CASE("LLVM lowering volatile load and store") {
     codegen::llvm_lowering lowering{context, "test_volatile"};
     auto                   llvm_mod{lowering.lower(gir_mod)};
     CHECK_FALSE(llvm::verifyModule(*llvm_mod));
-    std::string              ir_str;
-    llvm::raw_string_ostream os{ir_str};
-    llvm_mod->print(os, nullptr);
+    const auto ir_str{helpers::ir_text(*llvm_mod)};
     CHECK(ir_str.contains("volatile"));
 }
 

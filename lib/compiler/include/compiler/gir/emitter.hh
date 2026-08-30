@@ -35,7 +35,7 @@ class emitter {
   public:
     explicit emitter(sema::context& ctx, mod::module& ast_mod) noexcept
         : ctx_{ctx}, ast_module_{ast_mod}, const_eval_{ctx_, ast_mod},
-          gir_module_{ast_mod, ctx_.arena} {}
+          gir_module_{ast_mod, ctx_.arena}, runtime_safety_{ctx.runtime_safety} {}
     ~emitter() = default;
     MAKE_PINNED(emitter);
 

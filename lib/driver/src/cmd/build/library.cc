@@ -31,8 +31,9 @@ auto build_lib::execute() -> stdx::result<void, clap::error> {
     mod::module_manager manager{loader};
     TRY(opts_.setup_module_manager(manager, error_stream_));
 
-    sema::analyzer analyzer{manager, error_stream_, true, opts_.target_opts};
-    auto           module{TRY(opts_.analyze(analyzer, manager, error_stream_))};
+    sema::analyzer analyzer{
+        manager, error_stream_, true, opts_.target_opts, false, opts_.runtime_safety};
+    auto module{TRY(opts_.analyze(analyzer, manager, error_stream_))};
 
     auto gir_mod{analyzer.emit_gir(*module)};
     if (module->is_poisoned()) { return stdx::err{clap::error::COMPILATION_FAILED}; }

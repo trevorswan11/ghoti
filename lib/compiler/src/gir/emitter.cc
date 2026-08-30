@@ -1205,8 +1205,12 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
             return value{nullptr_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::NULLPTR)};
         },
         [&](ast::unreachable_expr) -> value {
-            // Reaching a `unreachable` is a safety-check violation
-            emit_panic_call("reached unreachable code", id);
+            // Reaching a `unreachable` is a safety-check violation; `--unsafe` makes it true UB.
+            if (runtime_safety_) {
+                emit_panic_call("reached unreachable code", id);
+            } else {
+                builder_.emit_unreachable();
+            }
             return value{undefined_val{},
                          ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN)};
         },
@@ -2958,7 +2962,7 @@ auto emitter::emit_enum_cast_guard(ast::node_id     site,
                                    const value&     enum_val,
                                    const value&     src_val,
                                    ast::expr_handle src_expr) -> void {
-    if (!enum_val.type || !src_val.type) { return; }
+    if (!runtime_safety_ || !enum_val.type || !src_val.type) { return; }
 
     // Only integer -> enum casts need guarding
     if (!sema::is_integer(src_val.type->get_kind())) { return; }
@@ -3242,38 +3246,39 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             }
 
             if (const auto arr_data{obj_type->get_data().as_opt<sema::types::array>()}) {
-                auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
-                auto& isize_type{ctx_.get_builtin_resolved_type(sema::type_kind::ISIZE)};
-                auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+                if (runtime_safety_) {
+                    auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+                    auto&      isize_type{ctx_.get_builtin_resolved_type(sema::type_kind::ISIZE)};
+                    auto&      bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+                    const bool is_signed{idx_val.type &&
+                                         (idx_val.type->get_kind() == sema::type_kind::I32 ||
+                                          idx_val.type->get_kind() == sema::type_kind::I64 ||
+                                          idx_val.type->get_kind() == sema::type_kind::ISIZE)};
+                    auto&      index_type{is_signed ? isize_type : usize_type};
 
-                const bool is_signed{idx_val.type &&
-                                     (idx_val.type->get_kind() == sema::type_kind::I32 ||
-                                      idx_val.type->get_kind() == sema::type_kind::I64 ||
-                                      idx_val.type->get_kind() == sema::type_kind::ISIZE)};
-                auto&      index_type{is_signed ? isize_type : usize_type};
+                    value idx_cmp{idx_val};
+                    if (idx_val.type && idx_val.type->get_kind() != index_type.get_kind()) {
+                        const auto cast_idx{
+                            builder_.emit_cast(instruction_kind::WIDEN_CAST, idx_val, index_type)};
+                        idx_cmp = value{cast_idx, index_type};
+                    }
 
-                value idx_cmp{idx_val};
-                if (idx_val.type && idx_val.type->get_kind() != index_type.get_kind()) {
-                    const auto cast_idx{
-                        builder_.emit_cast(instruction_kind::WIDEN_CAST, idx_val, index_type)};
-                    idx_cmp = value{cast_idx, index_type};
+                    const auto bound_val{value{static_cast<u64>(arr_data->len), index_type}};
+                    const auto is_in_bounds{
+                        builder_.emit_binary(instruction_kind::LT, idx_cmp, bound_val, bool_type)};
+
+                    auto fn_opt{builder_.get_function()};
+                    ASSERT(fn_opt, "Bounds check must be within an active function");
+                    auto& valid_seg{fn_opt->add_segment()};
+                    auto& oob_seg{fn_opt->add_segment()};
+
+                    builder_.emit_cond_goto(
+                        value{is_in_bounds, bool_type}, valid_seg.get_id(), oob_seg.get_id());
+
+                    builder_.set_segment(oob_seg);
+                    emit_panic_call("index out of bounds", id);
+                    builder_.set_segment(valid_seg);
                 }
-
-                const auto bound_val{value{static_cast<u64>(arr_data->len), index_type}};
-                const auto is_in_bounds{
-                    builder_.emit_binary(instruction_kind::LT, idx_cmp, bound_val, bool_type)};
-
-                auto fn_opt{builder_.get_function()};
-                ASSERT(fn_opt, "Bounds check must be within an active function");
-                auto& valid_seg{fn_opt->add_segment()};
-                auto& oob_seg{fn_opt->add_segment()};
-
-                builder_.emit_cond_goto(
-                    value{is_in_bounds, bool_type}, valid_seg.get_id(), oob_seg.get_id());
-
-                builder_.set_segment(oob_seg);
-                emit_panic_call("index out of bounds", id);
-                builder_.set_segment(valid_seg);
 
                 auto& write_elem_type{*ctx_.pool.with_const(elem_type, obj_type->is_constant())};
                 const auto elem_ptr{
@@ -3281,8 +3286,6 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                 return value{elem_ptr, write_elem_type};
             } else if (const auto sl_data{obj_type->get_data().as_opt<sema::types::slice>()}) {
                 auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
-                auto& isize_type{ctx_.get_builtin_resolved_type(sema::type_kind::ISIZE)};
-                auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
                 auto& ptr_type{ctx_.get_pointer(obj_type->is_constant() ? sema::types::mut::CONSTANT
                                                                         : sema::types::mut::MUTABLE,
                                                 sl_data->underlying)};
@@ -3291,44 +3294,49 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                     base_lval, {value{SLICE_PTR_FIELD_INDEX, usize_type}}, ptr_type)};
                 const auto ptr_val{builder_.emit_load(value{ptr_slot, ptr_type}, ptr_type)};
 
-                const auto len_slot{builder_.emit_get_element_ptr(
-                    base_lval, {value{SLICE_LEN_FIELD_INDEX, usize_type}}, usize_type)};
-                const auto len_val{builder_.emit_load(value{len_slot, usize_type}, usize_type)};
+                if (runtime_safety_) {
+                    auto& isize_type{ctx_.get_builtin_resolved_type(sema::type_kind::ISIZE)};
+                    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
 
-                const bool is_signed{idx_val.type &&
-                                     (idx_val.type->get_kind() == sema::type_kind::I32 ||
-                                      idx_val.type->get_kind() == sema::type_kind::I64 ||
-                                      idx_val.type->get_kind() == sema::type_kind::ISIZE)};
-                auto&      index_type{is_signed ? isize_type : usize_type};
+                    const auto len_slot{builder_.emit_get_element_ptr(
+                        base_lval, {value{SLICE_LEN_FIELD_INDEX, usize_type}}, usize_type)};
+                    const auto len_val{builder_.emit_load(value{len_slot, usize_type}, usize_type)};
 
-                value idx_cmp{idx_val};
-                if (idx_val.type && idx_val.type->get_kind() != index_type.get_kind()) {
-                    const auto cast_idx{
-                        builder_.emit_cast(instruction_kind::WIDEN_CAST, idx_val, index_type)};
-                    idx_cmp = value{cast_idx, index_type};
+                    const bool is_signed{idx_val.type &&
+                                         (idx_val.type->get_kind() == sema::type_kind::I32 ||
+                                          idx_val.type->get_kind() == sema::type_kind::I64 ||
+                                          idx_val.type->get_kind() == sema::type_kind::ISIZE)};
+                    auto&      index_type{is_signed ? isize_type : usize_type};
+
+                    value idx_cmp{idx_val};
+                    if (idx_val.type && idx_val.type->get_kind() != index_type.get_kind()) {
+                        const auto cast_idx{
+                            builder_.emit_cast(instruction_kind::WIDEN_CAST, idx_val, index_type)};
+                        idx_cmp = value{cast_idx, index_type};
+                    }
+
+                    value bound_val{len_val, usize_type};
+                    if (is_signed) {
+                        const auto cast_len{
+                            builder_.emit_cast(instruction_kind::BIT_CAST, bound_val, isize_type)};
+                        bound_val = value{cast_len, isize_type};
+                    }
+
+                    const auto is_in_bounds{
+                        builder_.emit_binary(instruction_kind::LT, idx_cmp, bound_val, bool_type)};
+
+                    auto fn_opt{builder_.get_function()};
+                    ASSERT(fn_opt, "Bounds check must be within an active function");
+                    auto& valid_seg{fn_opt->add_segment()};
+                    auto& oob_seg{fn_opt->add_segment()};
+
+                    builder_.emit_cond_goto(
+                        value{is_in_bounds, bool_type}, valid_seg.get_id(), oob_seg.get_id());
+
+                    builder_.set_segment(oob_seg);
+                    emit_panic_call("index out of bounds", id);
+                    builder_.set_segment(valid_seg);
                 }
-
-                value bound_val{len_val, usize_type};
-                if (is_signed) {
-                    const auto cast_len{
-                        builder_.emit_cast(instruction_kind::BIT_CAST, bound_val, isize_type)};
-                    bound_val = value{cast_len, isize_type};
-                }
-
-                const auto is_in_bounds{
-                    builder_.emit_binary(instruction_kind::LT, idx_cmp, bound_val, bool_type)};
-
-                auto fn_opt{builder_.get_function()};
-                ASSERT(fn_opt, "Bounds check must be within an active function");
-                auto& valid_seg{fn_opt->add_segment()};
-                auto& oob_seg{fn_opt->add_segment()};
-
-                builder_.emit_cond_goto(
-                    value{is_in_bounds, bool_type}, valid_seg.get_id(), oob_seg.get_id());
-
-                builder_.set_segment(oob_seg);
-                emit_panic_call("index out of bounds", id);
-                builder_.set_segment(valid_seg);
 
                 auto& write_elem_type{*ctx_.pool.with_const(elem_type, obj_type->is_constant())};
                 const auto elem_ptr{builder_.emit_get_element_ptr(
@@ -3564,6 +3572,7 @@ auto emitter::emit_union_active_field_guard(value            union_addr,
                                             std::string_view field_name,
                                             ast::node_id     site) -> void {
     PROFILE_FUNCTION();
+    if (!runtime_safety_) { return; }
     auto fn_opt{builder_.get_function()};
     if (!fn_opt) { return; }
     auto& fn{*fn_opt};
@@ -3607,11 +3616,11 @@ auto emitter::emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> va
 
     auto fn_opt{builder_.get_function()};
     ASSERT(fn_opt, "unwrap must be within an active function");
-    auto& fn{*fn_opt};
+    [[maybe_unused]] auto& fn{*fn_opt};
 
-    auto& i32_type{ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
-    auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
-    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    [[maybe_unused]] auto& i32_type{ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
+    auto&                  usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    [[maybe_unused]] auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
 
     // Address of the scrutinee: reuse its storage when it is an lvalue, else spill the rvalue.
     const bool is_lvalue_shape{active_ast().get_as_opt<ast::identifier_expr>(unwrap.operand) ||
@@ -3623,32 +3632,37 @@ auto emitter::emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> va
                                                                  operand_type,
                                                                  operand_type.is_constant())};
 
-    const auto tag_ptr{builder_.emit_get_element_ptr(
-        operand_addr, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
-    const auto tag_val{builder_.emit_load(value{tag_ptr, i32_type}, i32_type)};
-    const auto is_payload{
-        builder_.emit_binary(instruction_kind::EQ,
-                             value{tag_val, i32_type},
-                             value{static_cast<i64>(layout.payload_idx), i32_type},
-                             bool_type)};
+    // `?` propagation is control flow, not a safety check, so it is always emitted
+    const bool is_propagation{id.get_token_type() == syntax::token_type_t::QUESTION};
+    if (is_propagation || runtime_safety_) {
+        const auto tag_ptr{builder_.emit_get_element_ptr(
+            operand_addr, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
+        const auto tag_val{builder_.emit_load(value{tag_ptr, i32_type}, i32_type)};
+        const auto is_payload{
+            builder_.emit_binary(instruction_kind::EQ,
+                                 value{tag_val, i32_type},
+                                 value{static_cast<i64>(layout.payload_idx), i32_type},
+                                 bool_type)};
 
-    auto& payload_seg{fn.add_segment()};
-    auto& diverge_seg{fn.add_segment()};
-    builder_.emit_cond_goto(
-        value{is_payload, bool_type}, payload_seg.get_id(), diverge_seg.get_id());
+        auto& payload_seg{fn.add_segment()};
+        auto& diverge_seg{fn.add_segment()};
+        builder_.emit_cond_goto(
+            value{is_payload, bool_type}, payload_seg.get_id(), diverge_seg.get_id());
 
-    builder_.set_segment(diverge_seg);
-    if (id.get_token_type() == syntax::token_type_t::QUESTION) {
-        emit_unwrap_propagation(
-            operand_addr, operand_type, layout.diverge_idx, layout.diverge_is_void, id);
-    } else {
-        emit_panic_call(layout.diverge_is_void ? "'!' unwrapped an empty optional"
-                                               : "'!' unwrapped an errored result",
-                        id);
+        builder_.set_segment(diverge_seg);
+        if (is_propagation) {
+            emit_unwrap_propagation(
+                operand_addr, operand_type, layout.diverge_idx, layout.diverge_is_void, id);
+        } else {
+            emit_panic_call(layout.diverge_is_void ? "'!' unwrapped an empty optional"
+                                                   : "'!' unwrapped an errored result",
+                            id);
+        }
+
+        // `diverge_seg` always terminates; execution continues in `payload_seg`.
+        builder_.set_segment(payload_seg);
     }
 
-    // `diverge_seg` always terminates (return / unreachable); execution continues in `payload_seg`.
-    builder_.set_segment(payload_seg);
     const auto payload_ptr{builder_.emit_get_element_ptr(
         operand_addr, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, payload_type)};
     const auto loaded{builder_.emit_load(value{payload_ptr, payload_type}, payload_type)};
@@ -3997,24 +4011,27 @@ auto emitter::emit_slice_range(ast::node_id id, const ast::index_expr& index) ->
     }
 
     // Bounds check: lo <= hi, and hi <= len when the source length is known.
-    auto fn_opt{builder_.get_function()};
-    ASSERT(fn_opt, "Slice range must be within an active function");
-    auto&      fn{*fn_opt};
-    const auto lo_le_hi{builder_.emit_binary(instruction_kind::LE, lo, hi, bool_type)};
-    value      in_bounds{lo_le_hi, bool_type};
-    if (src_len) {
-        const auto hi_le_len{builder_.emit_binary(instruction_kind::LE, hi, *src_len, bool_type)};
-        in_bounds =
-            value{builder_.emit_binary(
-                      instruction_kind::AND, in_bounds, value{hi_le_len, bool_type}, bool_type),
-                  bool_type};
+    if (runtime_safety_) {
+        auto fn_opt{builder_.get_function()};
+        ASSERT(fn_opt, "Slice range must be within an active function");
+        auto&      fn{*fn_opt};
+        const auto lo_le_hi{builder_.emit_binary(instruction_kind::LE, lo, hi, bool_type)};
+        value      in_bounds{lo_le_hi, bool_type};
+        if (src_len) {
+            const auto hi_le_len{
+                builder_.emit_binary(instruction_kind::LE, hi, *src_len, bool_type)};
+            in_bounds =
+                value{builder_.emit_binary(
+                          instruction_kind::AND, in_bounds, value{hi_le_len, bool_type}, bool_type),
+                      bool_type};
+        }
+        auto& ok_seg{fn.add_segment()};
+        auto& oob_seg{fn.add_segment()};
+        builder_.emit_cond_goto(in_bounds, ok_seg.get_id(), oob_seg.get_id());
+        builder_.set_segment(oob_seg);
+        emit_panic_call("slice range out of bounds", id);
+        builder_.set_segment(ok_seg);
     }
-    auto& ok_seg{fn.add_segment()};
-    auto& oob_seg{fn.add_segment()};
-    builder_.emit_cond_goto(in_bounds, ok_seg.get_id(), oob_seg.get_id());
-    builder_.set_segment(oob_seg);
-    emit_panic_call("slice range out of bounds", id);
-    builder_.set_segment(ok_seg);
 
     const auto new_ptr{builder_.emit_get_element_ptr(base_ptr, {lo}, ptr_type)};
     const auto new_len{builder_.emit_binary(instruction_kind::SUB, hi, lo, usize_type)};

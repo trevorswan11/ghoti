@@ -42,6 +42,7 @@ struct raw_options {
     bool                     debug_passes{false};
     bool                     time_passes{false};
     bool                     dynamic{false};
+    bool                     unsafe{false};
 };
 
 struct options {
@@ -54,6 +55,7 @@ struct options {
     std::vector<std::filesystem::path> library_paths{};
     std::vector<std::string>           libraries{};
     bool                               dynamic{false};
+    bool                               runtime_safety{true};
 
     static auto process_raw(const raw_options&   raw,
                             codegen::output_type type,

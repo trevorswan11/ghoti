@@ -60,6 +60,7 @@ struct context {
     stdx::opt_size          prelude_index;
     codegen::target_options target_opts;
     std::string             user_main_name{"main"};
+    bool                    runtime_safety{true};
 
     // For the generic instantiation currently being resolved or emitted.
     std::vector<constexpr_frame> constexpr_binding_frames;
@@ -90,7 +91,7 @@ struct context {
           instantiation_cache{other.instantiation_cache}, arena{other.arena},
           diags{other.diags.create_new()}, error_stream{other.error_stream},
           prelude_index{other.prelude_index}, target_opts{other.target_opts},
-          user_main_name{other.user_main_name},
+          user_main_name{other.user_main_name}, runtime_safety{other.runtime_safety},
           constexpr_binding_frames{other.constexpr_binding_frames},
           constexpr_instantiation_args{other.constexpr_instantiation_args},
           instantiation_body_types{other.instantiation_body_types},

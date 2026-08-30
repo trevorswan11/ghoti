@@ -47,7 +47,8 @@ class analyzer {
                       std::ostream&           error_stream,
                       stdx::option<bool>      in_terminal,
                       codegen::target_options target_opts            = {},
-                      bool                    tolerate_syntax_errors = false) noexcept
+                      bool                    tolerate_syntax_errors = false,
+                      bool                    runtime_safety         = true) noexcept
         : modules_{modules}, pool_{arena_}, error_stream_{error_stream}, in_terminal_{in_terminal},
           tolerate_syntax_errors_{tolerate_syntax_errors}, ctx_{modules_,
                                                                 registry_,
@@ -57,7 +58,9 @@ class analyzer {
                                                                 arena_,
                                                                 diagnostics{in_terminal_},
                                                                 error_stream_,
-                                                                std::move(target_opts)} {}
+                                                                std::move(target_opts)} {
+        ctx_.runtime_safety = runtime_safety;
+    }
     ~analyzer() = default;
     MAKE_MOVE_CONSTRUCTABLE_ONLY(analyzer);
 

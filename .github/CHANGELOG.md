@@ -28,6 +28,12 @@
 - `return` accepts implicit initializers (`return .{ ... }` / `return .variant`) through `if` / `match` / labeled `break`
 - Module-scope `var` globals and `var` / `const` static members are first-class: bare-name / `Type.X` / `@this().X` read, address-of, and assignment; member functions usable as `fn` pointers
 - Non-exhaustive enums: casting an integer to an enum without `_` is range-checked at runtime and panics on an unlisted value
+- Fixed-width integers `i8`, `i16`, `u16` (widen implicitly: `i8`→`i16`→`i32`→`i64`/`isize`, `u8`→`u16`→`u32`→`u64`/`usize`)
+
+## Runtime safety
+- Signed `+ - * -x` overflow, integer division / remainder by zero (signed **and** unsigned), `INT_MIN / -1`, and out-of-range shift amounts now panic at runtime
+- `@addWithOverflow` / `@mulWithOverflow` / `@divTrunc` / ... stay as the unchecked escape hatches; unsigned `+ - *` still wrap
+- `--unsafe` build flag disables *all* runtime safety checks (the above plus bounds checks, enum-cast checks, `!` unwrap, tagged-union field access, `unreachable`)
 
 ## Builtins
 - Added/Fixed `@fieldParentPtr`, `@typeName`, `@src`, `@panic`, `@trap`, `@fnCtx`, `@min`, `@max`, `@divTrunc`, `@divFloor`, `@rem`, `@mod`, `@{add,sub,mul,shl}WithOverflow`, `@clz`, `@ctz`, `@popCount`, `@abs`, `@mulAdd`, `@targetAbi`, `@targetPtrBits`, `@targetEndian`, `@targetFamily`, `@setEvalRecursionLimit`, `@setMainSymbol`, `@cVaStart` / `@cVaArg`
@@ -40,3 +46,4 @@
 - Global `var`s with an initializer are no longer implicitly zeroed
 - Lexer: word operators (`and` / `or`) only match on a whole-word boundary, so identifiers like `origin` lex correctly
 - Formatter: blank lines enforced between aggregates, tests, and functions; fixed a trivia-dropping bug
+- Narrow integers now widen implicitly at call args, returns, assignments, and field inits (previously a codegen crash)

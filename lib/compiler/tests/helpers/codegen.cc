@@ -1,6 +1,7 @@
 #include "helpers/codegen.hh"
 
 #include <filesystem>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -42,6 +43,13 @@ auto harness_post_main(i32) -> void { ghoti::codegen::llvm_shutdown(); }
 }
 
 namespace ghoti::tests::helpers {
+
+auto ir_text(llvm::Module& mod) -> std::string {
+    std::string              out;
+    llvm::raw_string_ostream os{out};
+    mod.print(os, nullptr);
+    return out;
+}
 
 namespace {
 

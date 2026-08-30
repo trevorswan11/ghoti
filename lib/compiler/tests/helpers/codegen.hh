@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -17,6 +18,8 @@
 #include "helpers/sema.hh"
 
 namespace ghoti::tests::helpers {
+
+[[nodiscard]] auto ir_text(llvm::Module& mod) -> std::string;
 
 auto emit_llvm_ir(helpers::sema_test_context&       test_ctx,
                   llvm::LLVMContext&                context,

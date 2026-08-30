@@ -59,6 +59,23 @@ TEST_CASE("build-obj subcommand parser") {
         CHECK(opts.output_path == "bin/out.o");
     }
 
+    SECTION("Runtime safety defaults on and --unsafe turns it off") {
+        {
+            mock_argv    args{"ghoti", "build-obj", "main.gh"};
+            clap::parser parser{args.argc(), args.argv(), std::cerr, false};
+            auto         cmd{UNWRAP(parser.parse())};
+            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+            CHECK(build_cmd.get_opts().runtime_safety);
+        }
+        {
+            mock_argv    args{"ghoti", "build-obj", "--unsafe", "main.gh"};
+            clap::parser parser{args.argc(), args.argv(), std::cerr, false};
+            auto         cmd{UNWRAP(parser.parse())};
+            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+            CHECK_FALSE(build_cmd.get_opts().runtime_safety);
+        }
+    }
+
     SECTION("Target options parsing") {
         mock_argv    args{"ghoti",
                        "build-obj",
