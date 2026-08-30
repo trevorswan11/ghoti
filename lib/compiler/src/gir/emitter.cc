@@ -410,14 +410,20 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
     const auto is_const{decl.has_modifier(ast::decl_modifiers::CONSTANT) ||
                         decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
 
-    stdx::option<value> init_val;
+    stdx::option<value>       init_val;
+    stdx::option<const_value> const_init;
     if (decl.value && !active_ast().get_as_opt<ast::undefined_expr>(*decl.value)) {
-        if (const auto cv{const_eval_.try_eval(*decl.value)}) {
+        if (auto cv{const_eval_.try_eval(*decl.value)}) {
             if (is_const && cv->is<std::string>() && cv->get_type() &&
                 cv->get_type()->get_kind() == sema::type_kind::FUNCTION) {
                 return;
             }
-            init_val.emplace(cv->to_gir_value());
+            // A folded struct/array aggregate cannot round-trip through the scalar `value` variant
+            if (cv->is<const_struct>() || cv->is<const_array>()) {
+                const_init.emplace(std::move(*cv));
+            } else {
+                init_val.emplace(cv->to_gir_value());
+            }
         } else if (!is_const) {
             init_val.emplace(emit_expression(*decl.value));
         }
@@ -428,6 +434,7 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                                    init_val,
                                    linkage,
                                    get_extern_target(active_ast(), decl))};
+    g.const_init      = std::move(const_init);
     g.link_name       = get_link_name(active_ast(), decl);
     g.is_thread_local = decl.has_modifier(ast::decl_modifiers::THREADLOCAL);
     g.is_weak         = decl.has_modifier(ast::decl_modifiers::WEAK);
@@ -1305,13 +1312,14 @@ auto emitter::global_ref_in(usize table_idx, std::string_view name) -> stdx::opt
         decl->has_modifier(ast::decl_modifiers::EXTERN)) {
         return stdx::none;
     }
-    const auto ty{active_mod().get_sema_type_opt(*node)};
-    if (!ty || ty->get_kind() == sema::type_kind::TYPE ||
-        ty->get_kind() == sema::type_kind::FUNCTION) {
+    const auto raw_ty{active_mod().get_sema_type_opt(*node)};
+    if (!raw_ty || raw_ty->get_kind() == sema::type_kind::TYPE ||
+        raw_ty->get_kind() == sema::type_kind::FUNCTION) {
         return stdx::none;
     }
-    const auto addr{builder_.emit_global_addr(std::string{name}, *ty, false)};
-    return value{addr, *ty};
+    auto&      ty{*ctx_.pool.with_const(*raw_ty, false)};
+    const auto addr{builder_.emit_global_addr(std::string{name}, ty, false)};
+    return value{addr, ty};
 }
 
 auto emitter::try_global_ref(std::string_view name) -> stdx::option<value> {

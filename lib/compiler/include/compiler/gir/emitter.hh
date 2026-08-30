@@ -272,9 +272,9 @@ class emitter {
     default_counter            anon_fn_counter_;
     std::vector<std::string>   open_fn_names_;
     std::vector<bool>          open_fn_is_closure_;
-    std::vector<sema::type*> user_type_stack_;
-    bool                     needs_panic_runtime_{false};
-    bool                     panic_runtime_emitted_{false};
+    std::vector<sema::type*>   user_type_stack_;
+    bool                       needs_panic_runtime_{false};
+    bool                       panic_runtime_emitted_{false};
 };
 
 } // namespace ghoti::gir

@@ -29,7 +29,9 @@
 #include <stdx/types.hh>
 
 #include "compiler/ast/attributes.hh"
+#include "compiler/ast/expression.hh"
 #include "compiler/codegen/type_translator.hh"
+#include "compiler/gir/const_value.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/layout.hh"
@@ -81,8 +83,8 @@ llvm_lowering::llvm_lowering(llvm::LLVMContext& context, std::string_view module
 
 auto llvm_lowering::lower(const gir::module& gir_mod) -> stdx::box<llvm::Module> {
     gir_module_.emplace(gir_mod);
-    for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
     for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
+    for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
     for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
     return std::move(llvm_module_);
 }
@@ -92,8 +94,8 @@ auto llvm_lowering::lower_executable(const gir::module& gir_mod, std::string_vie
     is_executable_  = true;
     user_main_name_ = user_main_name;
     gir_module_.emplace(gir_mod);
-    for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
     for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
+    for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
     for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
     emit_main_entry_wrapper(user_main_name_);
     return std::move(llvm_module_);
@@ -383,8 +385,8 @@ auto llvm_lowering::lower_test_executable(const gir::module&             gir_mod
         user_runner_name.transform([](auto sv) { return std::string{sv}; }).value_or(std::string{});
     is_executable_ = true;
     gir_module_.emplace(gir_mod);
-    for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
     for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
+    for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
     for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
     emit_test_entry_wrapper(gir_mod);
     return std::move(llvm_module_);
@@ -550,6 +552,63 @@ auto llvm_lowering::emit_record_failure_call(const gir::instruction& inst) -> vo
     builder_.CreateCall(record_fn, args);
 }
 
+auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) -> llvm::Constant* {
+    if (!ty) { return nullptr; }
+    if (const auto i{cv.as_opt<i64>()}) {
+        return llvm::ConstantInt::get(ty, static_cast<u64>(*i), true);
+    }
+    if (const auto u{cv.as_opt<u64>()}) { return llvm::ConstantInt::get(ty, *u, false); }
+    if (const auto f{cv.as_opt<f64>()}) { return llvm::ConstantFP::get(ty, *f); }
+    if (const auto b{cv.as_opt<bool>()}) { return llvm::ConstantInt::getBool(context_, *b); }
+    if (const auto e{cv.as_opt<gir::const_enum>()}) {
+        return llvm::ConstantInt::get(ty, static_cast<u64>(e->value), true);
+    }
+    if (const auto s{cv.as_opt<std::string>()}) {
+        if (ty->isPointerTy()) {
+            if (auto* fn{resolve_named_function(*s)}) { return fn; }
+            return builder_.CreateGlobalString(*s, "gstr");
+        }
+        if (auto* at{llvm::dyn_cast<llvm::ArrayType>(ty)}) {
+            std::string bytes{*s};
+            bytes.resize(at->getNumElements(), '\0');
+            return llvm::ConstantDataArray::getString(context_, bytes, false);
+        }
+        return llvm::Constant::getNullValue(ty);
+    }
+    if (const auto st{cv.as_opt<gir::const_struct>()}) {
+        auto*      llvm_st{llvm::dyn_cast<llvm::StructType>(ty)};
+        const auto sema_ty{cv.get_type()};
+        const auto sd{sema_ty ? sema_ty->get_data().as_opt<sema::types::struct_t>() : stdx::none};
+        if (!llvm_st || !sd) { return llvm::Constant::getNullValue(ty); }
+        std::vector<llvm::Constant*> elems;
+        elems.reserve(sd->fields.size());
+        for (usize i{0}; i < sd->fields.size() && i < llvm_st->getNumElements(); ++i) {
+            const auto& fname{
+                sd->enclosing.ast.get_as<ast::identifier_expr>(sd->ast_fields[i].name).name};
+            auto* felem_ty{llvm_st->getElementType(static_cast<u32>(i))};
+            if (const auto fv{st->get_field_opt(fname)}) {
+                elems.emplace_back(const_to_llvm(*fv, felem_ty));
+            } else {
+                elems.emplace_back(llvm::Constant::getNullValue(felem_ty));
+            }
+        }
+        return llvm::ConstantStruct::get(llvm_st, elems);
+    }
+    if (const auto arr{cv.as_opt<gir::const_array>()}) {
+        auto* at{llvm::dyn_cast<llvm::ArrayType>(ty)};
+        if (!at) { return llvm::Constant::getNullValue(ty); }
+        auto*                        elem_ty{at->getElementType()};
+        std::vector<llvm::Constant*> elems;
+        elems.reserve(at->getNumElements());
+        for (const auto& elem : arr->elements) { elems.emplace_back(const_to_llvm(elem, elem_ty)); }
+        while (elems.size() < at->getNumElements()) {
+            elems.emplace_back(llvm::Constant::getNullValue(elem_ty));
+        }
+        return llvm::ConstantArray::get(at, elems);
+    }
+    return llvm::Constant::getNullValue(ty);
+}
+
 auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVariable* {
     if (auto* existing{llvm_module_->getGlobalVariable(g.name)}) { return existing; }
 
@@ -563,7 +622,9 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
     }
 
     llvm::Constant* init{nullptr};
-    if (g.init_value) {
+    if (g.const_init) {
+        init = const_to_llvm(*g.const_init, g_type);
+    } else if (g.init_value) {
         auto* init_v{lower_value(*g.init_value, &g.type)};
         if (init_v && llvm::isa<llvm::Constant>(init_v)) {
             init = llvm::cast<llvm::Constant>(init_v);

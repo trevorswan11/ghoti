@@ -16,6 +16,7 @@
 #include <stdx/utility.hh>
 
 #include "compiler/codegen/type_translator.hh"
+#include "compiler/gir/const_value.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/module.hh"
@@ -67,6 +68,7 @@ class llvm_lowering {
     auto declare_function(const gir::function& fn) -> llvm::Function*;
     auto lower_function(const gir::function& fn) -> llvm::Function*;
     auto lower_global(const gir::global_decl& g) -> llvm::GlobalVariable*;
+    auto const_to_llvm(const gir::const_value& cv, llvm::Type* ty) -> llvm::Constant*;
 
     auto resolve_named_function(std::string_view ghoti_name) -> llvm::Function*;
 

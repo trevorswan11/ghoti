@@ -94,4 +94,41 @@ TEST_CASE("bare sibling static-member access in enum and union member bodies") {
     )") == 42);
 }
 
+TEST_CASE("`var` struct global keeps its initializer and is mutable field-by-field") {
+    CHECK(helpers::compile_and_run(R"(
+        const Point := struct { x: i32, y: i32 };
+        var anchor: Point = Point{ .x = 40, .y = 2 };
+
+        pub const main := fn(): i32 {
+            const before := anchor.x + anchor.y;  // 42
+            anchor.y = 100;
+            anchor.x = anchor.x - 40;
+            return before + anchor.x + (anchor.y - 100);
+        };
+    )") == 42);
+}
+
+TEST_CASE("`var` array global keeps its initializer and is mutable element-by-element") {
+    CHECK(helpers::compile_and_run(R"(
+        var grid: [3uz]mut i32 = [3uz]mut i32{7, 8, 9};
+
+        pub const main := fn(): i32 {
+            grid[0] = grid[1] + grid[2] + 25;  // 42
+            return grid[0];
+        };
+    )") == 42);
+}
+
+TEST_CASE("`var` struct global with a function-pointer field") {
+    CHECK(helpers::compile_and_run(R"(
+        const inc := fn(n: i32): i32 { return n + 1; };
+        const VT := struct { step: fn(i32): i32, bias: i32 };
+        var table: VT = VT{ .step = inc, .bias = 5 };
+
+        pub const main := fn(): i32 {
+            return table.step(36) + table.bias;  // 37 + 5
+        };
+    )") == 42);
+}
+
 } // namespace ghoti::tests

@@ -12,6 +12,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/gir/const_value.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/module/module.hh"
@@ -20,15 +21,16 @@
 namespace ghoti::gir {
 
 struct global_decl {
-    std::string         name;
-    sema::type&         type;
-    stdx::option<value> init_value;
-    gir::linkage        linkage{linkage::INTERNAL};
-    std::string         abi_name{"c"};
-    std::string         link_name;
-    bool                is_constant{false};
-    bool                is_thread_local{false};
-    bool                is_weak{false};
+    std::string               name;
+    sema::type&               type;
+    stdx::option<value>       init_value;
+    stdx::option<const_value> const_init;
+    gir::linkage              linkage{linkage::INTERNAL};
+    std::string               abi_name{"c"};
+    std::string               link_name;
+    bool                      is_constant{false};
+    bool                      is_thread_local{false};
+    bool                      is_weak{false};
 };
 
 struct type_decl {
