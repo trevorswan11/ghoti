@@ -340,7 +340,18 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, const sema::type& dest
     if (active_ast().get_as_opt<ast::undefined_expr>(*expr_id)) {
         return value{undefined_val{}, const_cast<sema::type&>(dest_type)};
     }
-    return emit_expression(expr_id);
+
+    const auto val{emit_expression(expr_id)};
+
+    // An integer that is narrower than the destination widens implicitly
+    if (val.type && sema::is_integer(dest_type.get_kind()) &&
+        sema::is_integer(val.type->get_kind()) && val.type->get_kind() != dest_type.get_kind() &&
+        sema::is_implicit_widenable(val.type->get_kind(), dest_type.get_kind())) {
+        auto& widened{const_cast<sema::type&>(dest_type)};
+        return value{builder_.emit_cast(instruction_kind::WIDEN_CAST, val, widened), widened};
+    }
+
+    return val;
 }
 
 auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -> void {

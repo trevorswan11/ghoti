@@ -146,9 +146,12 @@ enum class token_type_t : u8 {
     UNDEFINED,
     ASM,
 
+    I8_TYPE,
+    I16_TYPE,
     I32_TYPE,
     I64_TYPE,
     ISIZE_TYPE,
+    U16_TYPE,
     U32_TYPE,
     U64_TYPE,
     USIZE_TYPE,

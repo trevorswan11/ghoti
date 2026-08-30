@@ -205,8 +205,11 @@ namespace {
 
 auto const_eval::type_align_of(const sema::type& type, usize ptr_size) -> usize {
     switch (type.get_kind()) {
+    case sema::type_kind::I8:
     case sema::type_kind::U8:
     case sema::type_kind::BOOL:      return 1;
+    case sema::type_kind::I16:
+    case sema::type_kind::U16:       return 2;
     case sema::type_kind::I32:
     case sema::type_kind::U32:
     case sema::type_kind::F32:       return 4;
@@ -271,8 +274,11 @@ auto const_eval::type_align_of(const sema::type& type, usize ptr_size) -> usize 
 auto const_eval::type_size_of(const sema::type& type, usize ptr_size) -> usize {
     switch (type.get_kind()) {
     case sema::type_kind::VOID_:     return 0;
+    case sema::type_kind::I8:
     case sema::type_kind::U8:
     case sema::type_kind::BOOL:      return 1;
+    case sema::type_kind::I16:
+    case sema::type_kind::U16:       return 2;
     case sema::type_kind::I32:
     case sema::type_kind::U32:
     case sema::type_kind::F32:       return 4;

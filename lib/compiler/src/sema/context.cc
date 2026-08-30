@@ -78,9 +78,12 @@ auto inject_types(symbol_table& prelude, type_pool& pool) -> void {
     namespace kws = syntax::keywords;
 
     // Primitives
+    inject_type(kws::I8, type_kind::I8);
+    inject_type(kws::I16, type_kind::I16);
     inject_type(kws::I32, type_kind::I32);
     inject_type(kws::I64, type_kind::I64);
     inject_type(kws::ISIZE, type_kind::ISIZE);
+    inject_type(kws::U16, type_kind::U16);
     inject_type(kws::U32, type_kind::U32);
     inject_type(kws::U64, type_kind::U64);
     inject_type(kws::USIZE, type_kind::USIZE);

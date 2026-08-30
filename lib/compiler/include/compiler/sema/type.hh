@@ -27,13 +27,16 @@ namespace ghoti::sema {
 
 enum class type_kind : u8 {
     POISON,
+    I8,
+    I16,
     I32,
     I64,
     ISIZE,
+    U8,
+    U16,
     U32,
     U64,
     USIZE,
-    U8,
     BOOL,
     F32,
     F64,
@@ -64,19 +67,24 @@ enum class type_kind : u8 {
 
 [[nodiscard]] constexpr auto is_integer(type_kind kind) noexcept -> bool {
     switch (kind) {
+    case type_kind::I8:
+    case type_kind::I16:
     case type_kind::I32:
     case type_kind::I64:
     case type_kind::ISIZE:
+    case type_kind::U8:
+    case type_kind::U16:
     case type_kind::U32:
     case type_kind::U64:
-    case type_kind::USIZE:
-    case type_kind::U8:    return true;
+    case type_kind::USIZE: return true;
     default:               return false;
     }
 }
 
 [[nodiscard]] constexpr auto is_signed_integer(type_kind kind) noexcept -> bool {
     switch (kind) {
+    case type_kind::I8:
+    case type_kind::I16:
     case type_kind::I32:
     case type_kind::I64:
     case type_kind::ISIZE: return true;
@@ -86,10 +94,11 @@ enum class type_kind : u8 {
 
 [[nodiscard]] constexpr auto is_unsigned_integer(type_kind kind) noexcept -> bool {
     switch (kind) {
+    case type_kind::U8:
+    case type_kind::U16:
     case type_kind::U32:
     case type_kind::U64:
-    case type_kind::USIZE:
-    case type_kind::U8:    return true;
+    case type_kind::USIZE: return true;
     default:               return false;
     }
 }
@@ -109,8 +118,16 @@ enum class type_kind : u8 {
 [[nodiscard]] constexpr auto is_implicit_widenable(type_kind from, type_kind to) noexcept -> bool {
     switch (from) {
     case type_kind::U8:
+        return to == type_kind::U16 || to == type_kind::U32 || to == type_kind::U64 ||
+               to == type_kind::USIZE;
+    case type_kind::U16:
         return to == type_kind::U32 || to == type_kind::U64 || to == type_kind::USIZE;
     case type_kind::U32: return to == type_kind::U64 || to == type_kind::USIZE;
+    case type_kind::I8:
+        return to == type_kind::I16 || to == type_kind::I32 || to == type_kind::I64 ||
+               to == type_kind::ISIZE;
+    case type_kind::I16:
+        return to == type_kind::I32 || to == type_kind::I64 || to == type_kind::ISIZE;
     case type_kind::I32: return to == type_kind::I64 || to == type_kind::ISIZE;
     case type_kind::F32: return to == type_kind::F64;
     default:             return false;

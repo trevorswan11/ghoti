@@ -27,6 +27,7 @@ class type_translator {
     [[nodiscard]] auto translate_slice_type() -> llvm::StructType*;
 
     [[nodiscard]] auto get_int8_ty() const noexcept -> llvm::IntegerType*;
+    [[nodiscard]] auto get_int16_ty() const noexcept -> llvm::IntegerType*;
     [[nodiscard]] auto get_int32_ty() const noexcept -> llvm::IntegerType*;
     [[nodiscard]] auto get_int64_ty() const noexcept -> llvm::IntegerType*;
     [[nodiscard]] auto get_int1_ty() const noexcept -> llvm::IntegerType*;

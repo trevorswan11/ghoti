@@ -22,7 +22,10 @@ auto type_translator::translate(const sema::type& type) -> llvm::Type* {
     case sema::type_kind::U64:       return get_int64_ty();
     case sema::type_kind::ISIZE:
     case sema::type_kind::USIZE:     return get_usize_ty();
+    case sema::type_kind::I8:
     case sema::type_kind::U8:        return get_int8_ty();
+    case sema::type_kind::I16:
+    case sema::type_kind::U16:       return get_int16_ty();
     case sema::type_kind::BOOL:      return get_int1_ty();
     case sema::type_kind::F32:       return get_float_ty();
     case sema::type_kind::F64:       return get_double_ty();
@@ -74,6 +77,10 @@ auto type_translator::translate_slice_type() -> llvm::StructType* {
 
 auto type_translator::get_int8_ty() const noexcept -> llvm::IntegerType* {
     return llvm::Type::getInt8Ty(context_);
+}
+
+auto type_translator::get_int16_ty() const noexcept -> llvm::IntegerType* {
+    return llvm::Type::getInt16Ty(context_);
 }
 
 auto type_translator::get_int32_ty() const noexcept -> llvm::IntegerType* {
