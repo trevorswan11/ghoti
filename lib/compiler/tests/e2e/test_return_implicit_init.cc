@@ -71,6 +71,25 @@ TEST_CASE("`return` with a bare `.variant` picks up an enum return type") {
     )") == 42);
 }
 
+TEST_CASE("`return .{...}` flows through a labeled loop `break`") {
+    CHECK(helpers::compile_and_run(R"(
+        const Point := struct { x: i32, y: i32 };
+
+        const build := fn(): Point {
+            var i: i32 = 0;
+            return outer: loop {
+                i += 1;
+                if (i == 3) { break :outer .{ .x = 21, .y = 21 }; }
+            };
+        };
+
+        pub const main := fn(): i32 {
+            const p := build();
+            return p.x + p.y;
+        };
+    )") == 42);
+}
+
 TEST_CASE("`return .{...}` for a method returning `@this()`") {
     CHECK(helpers::compile_and_run(R"(
         const Counter := struct {

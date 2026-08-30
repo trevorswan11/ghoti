@@ -2112,9 +2112,10 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
 auto emitter::emit_while(ast::node_id                   id,
                          const ast::while_loop_expr&    while_loop,
                          stdx::option<std::string_view> label,
-                         stdx::option<local_id>         res_slot) -> value {
+                         stdx::option<local_id>         res_slot,
+                         stdx::option<sema::type&>      result_type) -> value {
     PROFILE_FUNCTION();
-    const auto sema_type{active_mod().get_sema_type_opt(id)};
+    const auto sema_type{result_type ? result_type : active_mod().get_sema_type_opt(id)};
     const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
 
     auto fn_opt{builder_.get_function()};
@@ -2194,9 +2195,10 @@ auto emitter::emit_while(ast::node_id                   id,
 auto emitter::emit_do_while(ast::node_id                   id,
                             const ast::do_while_loop_expr& do_while,
                             stdx::option<std::string_view> label,
-                            stdx::option<local_id>         res_slot) -> value {
+                            stdx::option<local_id>         res_slot,
+                            stdx::option<sema::type&>      result_type) -> value {
     PROFILE_FUNCTION();
-    const auto sema_type{active_mod().get_sema_type_opt(id)};
+    const auto sema_type{result_type ? result_type : active_mod().get_sema_type_opt(id)};
     const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
 
     auto fn_opt{builder_.get_function()};
@@ -2246,9 +2248,10 @@ auto emitter::emit_do_while(ast::node_id                   id,
 auto emitter::emit_infinite_loop(ast::node_id                   id,
                                  const ast::infinite_loop_expr& loop,
                                  stdx::option<std::string_view> label,
-                                 stdx::option<local_id>         res_slot) -> value {
+                                 stdx::option<local_id>         res_slot,
+                                 stdx::option<sema::type&>      result_type) -> value {
     PROFILE_FUNCTION();
-    const auto sema_type{active_mod().get_sema_type_opt(id)};
+    const auto sema_type{result_type ? result_type : active_mod().get_sema_type_opt(id)};
     const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
 
     auto fn_opt{builder_.get_function()};
@@ -2293,9 +2296,10 @@ auto emitter::emit_infinite_loop(ast::node_id                   id,
 auto emitter::emit_for(ast::node_id                   id,
                        const ast::for_loop_expr&      for_loop,
                        stdx::option<std::string_view> label,
-                       stdx::option<local_id>         res_slot) -> value {
+                       stdx::option<local_id>         res_slot,
+                       stdx::option<sema::type&>      result_type) -> value {
     PROFILE_FUNCTION();
-    const auto sema_type{active_mod().get_sema_type_opt(id)};
+    const auto sema_type{result_type ? result_type : active_mod().get_sema_type_opt(id)};
     const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
 
     auto fn_opt{builder_.get_function()};
@@ -2604,16 +2608,16 @@ auto emitter::emit_label(ast::node_id id, const ast::label_expr& label) -> value
             return value{void_val{}, sema_type};
         },
         [&](const ast::while_loop_expr& wl) -> value {
-            return emit_while(body_id, wl, label_name, res_slot);
+            return emit_while(body_id, wl, label_name, res_slot, sema_type);
         },
         [&](const ast::do_while_loop_expr& dw) -> value {
-            return emit_do_while(body_id, dw, label_name, res_slot);
+            return emit_do_while(body_id, dw, label_name, res_slot, sema_type);
         },
         [&](const ast::infinite_loop_expr& il) -> value {
-            return emit_infinite_loop(body_id, il, label_name, res_slot);
+            return emit_infinite_loop(body_id, il, label_name, res_slot, sema_type);
         },
         [&](const ast::for_loop_expr& fl) -> value {
-            return emit_for(body_id, fl, label_name, res_slot);
+            return emit_for(body_id, fl, label_name, res_slot, sema_type);
         },
         [&](const ast::block_stmt& block) -> value {
             auto fn_opt{builder_.get_function()};

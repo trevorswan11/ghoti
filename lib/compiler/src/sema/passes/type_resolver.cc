@@ -2351,6 +2351,7 @@ auto type_resolver::visit(ast::node_id id, const ast::label_expr& label) -> void
     ASSERT(result_type.is_resolved(), "The label's inner type should've been resolved");
     label_type.resolve_if<type::data_t>(result_type.get_data());
     resolving_.set_sema_type(label.name, result_type);
+    resolving_.set_sema_type(id, result_type);
     last_type_.emplace(result_type);
 }
 

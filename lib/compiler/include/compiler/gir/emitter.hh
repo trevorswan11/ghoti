@@ -168,20 +168,24 @@ class emitter {
     auto emit_module_access(ast::node_id id, const ast::module_access_expr& mod_access) -> value;
     auto emit_while(ast::node_id                   id,
                     const ast::while_loop_expr&    while_loop,
-                    stdx::option<std::string_view> label    = stdx::none,
-                    stdx::option<local_id>         res_slot = stdx::none) -> value;
+                    stdx::option<std::string_view> label       = stdx::none,
+                    stdx::option<local_id>         res_slot    = stdx::none,
+                    stdx::option<sema::type&>      result_type = stdx::none) -> value;
     auto emit_do_while(ast::node_id                   id,
                        const ast::do_while_loop_expr& do_while,
-                       stdx::option<std::string_view> label    = stdx::none,
-                       stdx::option<local_id>         res_slot = stdx::none) -> value;
+                       stdx::option<std::string_view> label       = stdx::none,
+                       stdx::option<local_id>         res_slot    = stdx::none,
+                       stdx::option<sema::type&>      result_type = stdx::none) -> value;
     auto emit_infinite_loop(ast::node_id                   id,
                             const ast::infinite_loop_expr& loop,
-                            stdx::option<std::string_view> label    = stdx::none,
-                            stdx::option<local_id>         res_slot = stdx::none) -> value;
+                            stdx::option<std::string_view> label       = stdx::none,
+                            stdx::option<local_id>         res_slot    = stdx::none,
+                            stdx::option<sema::type&>      result_type = stdx::none) -> value;
     auto emit_for(ast::node_id                   id,
                   const ast::for_loop_expr&      for_loop,
-                  stdx::option<std::string_view> label    = stdx::none,
-                  stdx::option<local_id>         res_slot = stdx::none) -> value;
+                  stdx::option<std::string_view> label       = stdx::none,
+                  stdx::option<local_id>         res_slot    = stdx::none,
+                  stdx::option<sema::type&>      result_type = stdx::none) -> value;
     auto emit_label(ast::node_id id, const ast::label_expr& label) -> value;
     auto emit_binary(ast::node_id id, const ast::binary_expr& binary) -> value;
     // Detects `union_val == .field` and emits a tag comparison instead of a union-vs-field-type EQ
