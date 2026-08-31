@@ -48,4 +48,38 @@ TEST_CASE("runtime safety off: no arithmetic or bounds guards are emitted") {
     CHECK(ir.find("safety.fail") == std::string::npos);
 }
 
+TEST_CASE("runtime safety on: pointer dereference emits a null-pointer guard") {
+    codegen::llvm_scope scope;
+    llvm::LLVMContext   context;
+
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        pub const f := fn(p: ^i32): i32 {
+            return *p;
+        };
+    )")};
+    CHECK(ctx->analyzer.get_ctx().runtime_safety);
+
+    auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context, {.level = codegen::opt_level::O0}))};
+    const auto ir{helpers::ir_text(*llvm_mod)};
+    CHECK(ir.find("dereference of null pointer") != std::string::npos);
+    CHECK(ir.find("panic_handler") != std::string::npos);
+}
+
+TEST_CASE("runtime safety off: pointer dereference emits no null-pointer guard") {
+    codegen::llvm_scope scope;
+    llvm::LLVMContext   context;
+
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        pub const f := fn(p: ^i32): i32 {
+            return *p;
+        };
+    )")};
+    ctx->analyzer.get_ctx().runtime_safety = false;
+
+    auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context, {.level = codegen::opt_level::O0}))};
+    const auto ir{helpers::ir_text(*llvm_mod)};
+    CHECK(ir.find("dereference of null pointer") == std::string::npos);
+    CHECK(ir.find("panic_handler") == std::string::npos);
+}
+
 } // namespace ghoti::tests

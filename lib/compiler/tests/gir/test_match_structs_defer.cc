@@ -200,7 +200,7 @@ TEST_CASE("GIR address_of and dereference") {
     gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
     const auto   gir_mod{emitter.emit()};
 
-    REQUIRE(gir_mod.get_functions().size() == 1);
+    REQUIRE(gir_mod.get_functions().size() == 2);
     const auto& fn{*gir_mod.get_functions()[0]};
 
     std::ostringstream ss;
