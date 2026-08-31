@@ -60,3 +60,9 @@
 - Narrow integers now widen implicitly at call args, returns, assignments, and field inits (previously a codegen crash)
 - `--emit-gir <file>` / `--emit-llvm-ir <file>` on `build-exe` / `build-obj` / `build-lib` / `test`: write the GIR dump or LLVM IR to a file (both require a path; no dump by default)
 - `const x: T = <non-constant expr>` with a mismatched type is now a type error (previously bound directly to the value, skipping the store check)
+
+# v0.2.1
+
+- Update stdx for compressor fix
+- Address nit in test subcommand description
+- Resolve crash that would occur when invoking the test command on a tree with no test blocks
