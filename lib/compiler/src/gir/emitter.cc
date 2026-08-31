@@ -138,6 +138,7 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
 auto emitter::emit_generic_instantiation(const sema::generic_instantiation_request& req) -> void {
     PROFILE_FUNCTION();
     if (gir_module_.has_function(req.mangled_name)) { return; }
+    if (req.return_type->get_kind() == sema::type_kind::TYPE) { return; }
 
     mod::module& fn_mod{*req.module};
     const auto   fn_expr_opt{fn_mod.ast[req.fn_node_id].visit(

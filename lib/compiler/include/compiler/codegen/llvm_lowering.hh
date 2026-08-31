@@ -76,7 +76,11 @@ class llvm_lowering {
     auto lower_global(const gir::global_decl& g) -> llvm::GlobalVariable*;
     auto const_to_llvm(const gir::const_value& cv, llvm::Type* ty) -> llvm::Constant*;
 
-    auto resolve_named_function(std::string_view ghoti_name) -> llvm::Function*;
+    // Populates `reserved_symbols_` with every explicit `extern`/`export` link name in the module
+    auto ensure_reserved_symbols() -> void;
+    // A private, collision-free `__ghoti.<name>` symbol for an internal definition
+    [[nodiscard]] auto private_symbol_name(std::string_view name) const -> std::string;
+    auto               resolve_named_function(std::string_view ghoti_name) -> llvm::Function*;
 
     auto emit_alloca(const gir::instruction& inst) -> llvm::Value*;
     auto emit_load(const gir::instruction& inst) -> llvm::Value*;
@@ -131,9 +135,11 @@ class llvm_lowering {
     ankerl::unordered_dense::map<gir::local_id, llvm::Value*>          locals_;
     ankerl::unordered_dense::map<gir::segment_id, llvm::BasicBlock*>   segment_blocks_;
     ankerl::unordered_dense::map<std::string_view, llvm::GlobalValue*> globals_;
-    stdx::option<const gir::module&>                                   gir_module_;
-    bool                                                               is_executable_{false};
-    std::string                                                        user_main_name_{"main"};
+    ankerl::unordered_dense::set<std::string>                          reserved_symbols_;
+    bool                             reserved_symbols_built_{false};
+    stdx::option<const gir::module&> gir_module_;
+    bool                             is_executable_{false};
+    std::string                      user_main_name_{"main"};
 };
 
 } // namespace ghoti::codegen

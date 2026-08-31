@@ -750,7 +750,11 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
 }
 
 auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVariable* {
+    if (const auto it{globals_.find(g.name)}; it != globals_.end()) {
+        if (auto* existing{llvm::dyn_cast<llvm::GlobalVariable>(it->second)}) { return existing; }
+    }
     if (auto* existing{llvm_module_->getGlobalVariable(g.name)}) { return existing; }
+    ensure_reserved_symbols();
 
     auto*      g_type{types_.translate(g.type)};
     const bool is_const{g.is_constant};
@@ -775,8 +779,15 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
         init = llvm::Constant::getNullValue(g_type);
     }
 
-    const std::string sym_name{g.link_name.empty() ? g.name : g.link_name};
-    auto*             gvar{
+    std::string sym_name{g.link_name.empty() ? g.name : g.link_name};
+    // A plain (INTERNAL/PUBLIC) ghoti global whose name collides with a C-ABI symbol
+    if (g.link_name.empty() && !g.is_weak &&
+        (llvm_module_->getNamedValue(sym_name) != nullptr ||
+         reserved_symbols_.contains(sym_name))) {
+        sym_name  = private_symbol_name(sym_name);
+        g_linkage = llvm::GlobalValue::InternalLinkage;
+    }
+    auto* gvar{
         new llvm::GlobalVariable{*llvm_module_, g_type, is_const, g_linkage, init, sym_name}};
     if (g.is_thread_local) {
         gvar->setThreadLocalMode(is_executable_ ? llvm::GlobalValue::LocalExecTLSModel
@@ -786,31 +797,31 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
     return gvar;
 }
 
+auto llvm_lowering::ensure_reserved_symbols() -> void {
+    if (reserved_symbols_built_) { return; }
+    reserved_symbols_built_ = true;
+    if (!gir_module_) { return; }
+    for (const auto* f : gir_module_->get_functions()) {
+        if (!f->get_link_name().empty()) { reserved_symbols_.emplace(f->get_link_name()); }
+    }
+    for (const auto* g : gir_module_->get_globals()) {
+        if (!g->link_name.empty()) { reserved_symbols_.emplace(g->link_name); }
+    }
+}
+
+auto llvm_lowering::private_symbol_name(std::string_view name) const -> std::string {
+    auto candidate{fmt::format("__ghoti.{}", name)};
+    for (u32 n{1}; llvm_module_->getNamedValue(candidate) != nullptr; ++n) {
+        candidate = fmt::format("__ghoti.{}.{}", name, n);
+    }
+    return candidate;
+}
+
 auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function* {
     if (const auto it{globals_.find(fn.get_name())}; it != globals_.end()) {
         if (auto* existing{llvm::dyn_cast<llvm::Function>(it->second)}) { return existing; }
     }
-
-    std::string fn_name{fn.get_name()};
-    auto        g_linkage{llvm::GlobalValue::ExternalLinkage};
-    if (fn.get_linkage() == gir::linkage::INTERNAL) {
-        g_linkage = llvm::GlobalValue::InternalLinkage;
-    }
-
-    if (is_executable_ && fn_name == user_main_name_) {
-        fn_name   = "_ghoti_main";
-        g_linkage = llvm::GlobalValue::InternalLinkage;
-    } else if (!fn.get_link_name().empty()) {
-        fn_name = std::string{fn.get_link_name()};
-    }
-
-    if (fn.get_is_weak() && g_linkage != llvm::GlobalValue::InternalLinkage) {
-        g_linkage = (fn.get_linkage() == gir::linkage::EXTERN)
-                        ? llvm::GlobalValue::ExternalWeakLinkage
-                        : llvm::GlobalValue::WeakAnyLinkage;
-    }
-
-    if (auto* existing = llvm_module_->getFunction(fn_name)) { return existing; }
+    ensure_reserved_symbols();
 
     const auto* target_t{&fn.get_type()};
     if (const auto ref{target_t->get_data().as_opt<sema::types::reference>()}) {
@@ -823,6 +834,39 @@ auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function*
     const auto fn_data{target_t->get_data().as_opt<sema::types::function>()};
     ASSERT(fn_data, "Function must have function sema type");
     auto* fn_ty{types_.translate_function_type(*fn_data)};
+
+    std::string fn_name{fn.get_name()};
+    auto        g_linkage{llvm::GlobalValue::ExternalLinkage};
+    if (fn.get_linkage() == gir::linkage::INTERNAL) {
+        g_linkage = llvm::GlobalValue::InternalLinkage;
+    }
+
+    // Whether this function's symbol name is externally meaningful and must be kept verbatim
+    bool fixed_symbol{false};
+    if (is_executable_ && fn_name == user_main_name_) {
+        fn_name      = "_ghoti_main";
+        g_linkage    = llvm::GlobalValue::InternalLinkage;
+        fixed_symbol = true;
+    } else if (!fn.get_link_name().empty()) {
+        fn_name      = std::string{fn.get_link_name()};
+        fixed_symbol = true;
+    }
+
+    if (fn.get_is_weak() && g_linkage != llvm::GlobalValue::InternalLinkage) {
+        g_linkage    = (fn.get_linkage() == gir::linkage::EXTERN)
+                           ? llvm::GlobalValue::ExternalWeakLinkage
+                           : llvm::GlobalValue::WeakAnyLinkage;
+        fixed_symbol = true;
+    }
+
+    auto* existing{llvm_module_->getFunction(fn_name)};
+    if (existing && (fixed_symbol || existing->getFunctionType() == fn_ty)) { return existing; }
+
+    // An internal/pub ghoti definition whose natural name collides with a C-ABI symbol
+    if (!fixed_symbol && (existing != nullptr || reserved_symbols_.contains(fn_name))) {
+        fn_name   = private_symbol_name(fn_name);
+        g_linkage = llvm::GlobalValue::InternalLinkage;
+    }
 
     auto* llvm_fn{llvm::Function::Create(fn_ty, g_linkage, fn_name, llvm_module_.get())};
     llvm_fn->addFnAttr(llvm::Attribute::NoBuiltin);
@@ -1216,8 +1260,12 @@ auto llvm_lowering::emit_deref(const gir::instruction& inst) -> llvm::Value* {
 
 auto llvm_lowering::emit_global_addr(const gir::instruction& inst) -> llvm::Value* {
     ASSERT(inst.callee_name, "global_addr requires the global's name");
-    // Every GIR global is lowered before any function body
-    auto* gv{llvm_module_->getNamedGlobal(*inst.callee_name)};
+    // Resolve by GIR name through `globals_` first to prevent ABI clash
+    llvm::GlobalVariable* gv{nullptr};
+    if (const auto it{globals_.find(*inst.callee_name)}; it != globals_.end()) {
+        gv = llvm::dyn_cast<llvm::GlobalVariable>(it->second);
+    }
+    if (!gv) { gv = llvm_module_->getNamedGlobal(*inst.callee_name); }
     if (!gv) {
         for (const auto* g : gir_module_->get_globals()) {
             if (g->name == *inst.callee_name) {
