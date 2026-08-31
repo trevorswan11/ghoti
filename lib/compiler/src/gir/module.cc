@@ -1,6 +1,7 @@
 #include "compiler/gir/module.hh"
 
 #include <algorithm>
+#include <sstream>
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
 #include <string>
@@ -13,6 +14,7 @@
 #include <stdx/option.hh>
 
 #include "compiler/gir/const_value.hh"
+#include "compiler/gir/dumper.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/sema/type.hh"
@@ -164,6 +166,13 @@ auto module::prune_unreachable(gsl::span<const std::string_view> roots) -> void 
     for (usize i{0}; i < functions_.size(); ++i) {
         if (functions_[i]->get_is_test()) { tests_.emplace_back(i); }
     }
+}
+
+auto module::to_string() const -> std::string {
+    std::ostringstream out;
+    dumper             d{out};
+    d.dump(*this);
+    return std::move(out).str();
 }
 
 } // namespace ghoti::gir

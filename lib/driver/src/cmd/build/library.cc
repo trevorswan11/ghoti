@@ -8,6 +8,7 @@
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
 
+#include "compiler/codegen/error.hh"
 #include "compiler/module/file_loader.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/analyzer.hh"
@@ -37,6 +38,7 @@ auto build_lib::execute() -> stdx::result<void, clap::error> {
 
     auto gir_mod{analyzer.emit_gir(*module)};
     if (module->is_poisoned()) { return stdx::err{clap::error::COMPILATION_FAILED}; }
+    TRY(opts_.emit_debug_artifacts(analyzer, gir_mod, error_stream_));
 
     stdx::result<void, codegen::diagnostic> emit_res;
     if (opts_.dynamic) {

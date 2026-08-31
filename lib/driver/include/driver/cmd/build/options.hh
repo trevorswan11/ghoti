@@ -17,7 +17,8 @@
 #include "compiler/sema/analyzer.hh"
 #include "driver/clap/error.hh"
 
-namespace CLI { class App; } // namespace CLI
+namespace CLI { class App; }           // namespace CLI
+namespace ghoti::gir { class module; } // namespace ghoti::gir
 
 namespace ghoti::cmd::build {
 
@@ -43,6 +44,9 @@ struct raw_options {
     bool                     time_passes{false};
     bool                     dynamic{false};
     bool                     unsafe{false};
+
+    std::string emit_gir_path;
+    std::string emit_llvm_ir_path;
 };
 
 struct options {
@@ -57,9 +61,18 @@ struct options {
     bool                               dynamic{false};
     bool                               runtime_safety{true};
 
+    stdx::option<std::filesystem::path> emit_gir_path{};
+    stdx::option<std::filesystem::path> emit_llvm_ir_path{};
+
     static auto process_raw(const raw_options&   raw,
                             codegen::output_type type,
                             std::ostream& error_stream) -> stdx::result<options, clap::error>;
+
+    // Writes the GIR / LLVM IR dumps requested via --emit-gir / --emit-llvm-ir, if any.
+    [[nodiscard]] auto emit_debug_artifacts(sema::analyzer& analyzer,
+                                            gir::module&    gir_mod,
+                                            std::ostream&   error_stream) const
+        -> stdx::result<void, clap::error>;
 
     // Converts the input path from absolute to relative if needed
     auto make_path_relative() -> void;

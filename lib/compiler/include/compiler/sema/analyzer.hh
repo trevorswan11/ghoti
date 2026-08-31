@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <ostream>
+#include <string>
 #include <string_view>
 
 #include <stdx/arena.hh>
@@ -97,6 +98,11 @@ class analyzer {
                                     llvm::LLVMContext&                context,
                                     const codegen::optimizer_options& options)
         -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic>;
+
+    // Lowers `gir_module` and returns the resulting module's textual LLVM IR.
+    [[nodiscard]] auto emit_llvm_ir_text(gir::module&                      gir_module,
+                                         const codegen::optimizer_options& options)
+        -> stdx::result<std::string, codegen::diagnostic>;
     [[nodiscard]] auto emit_llvm_ir_executable(gir::module&                      gir_module,
                                                llvm::LLVMContext&                context,
                                                const codegen::optimizer_options& options,

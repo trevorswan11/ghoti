@@ -18,7 +18,6 @@
 #include <llvm/IR/Type.h>
 #include <llvm/Support/CodeGen.h>
 #include <llvm/Support/ManagedStatic.h>
-#include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
 #include <stdx/harness/hooks.hh>
 #include <stdx/memory.hh>
@@ -27,6 +26,7 @@
 #include <stdx/types.hh>
 
 #include "compiler/codegen/error.hh"
+#include "compiler/codegen/llvm_lowering.hh"
 #include "compiler/codegen/llvm_scope.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
@@ -44,12 +44,7 @@ auto harness_post_main(i32) -> void { ghoti::codegen::llvm_shutdown(); }
 
 namespace ghoti::tests::helpers {
 
-auto ir_text(llvm::Module& mod) -> std::string {
-    std::string              out;
-    llvm::raw_string_ostream os{out};
-    mod.print(os, nullptr);
-    return out;
-}
+auto ir_text(llvm::Module& mod) -> std::string { return codegen::llvm_lowering::to_ir_string(mod); }
 
 namespace {
 

@@ -4,7 +4,6 @@
 #include <cctype>
 #include <concepts>
 #include <ranges>
-#include <stdx/enum.hh>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -15,6 +14,7 @@
 #include <gsl/pointers>
 #include <gsl/span>
 #include <stdx/assert.hh>
+#include <stdx/enum.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>

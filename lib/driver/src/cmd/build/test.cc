@@ -64,8 +64,9 @@ auto test_cmd::execute() -> stdx::result<void, clap::error> {
     };
 
     auto module{TRY(opts_.analyze(analyzer, manager, error_stream_))};
-    auto gir_mod{analyzer.emit_gir(*module, /*for_test_executable=*/true)};
+    auto gir_mod{analyzer.emit_gir(*module, true)};
     if (module->is_poisoned()) { return stdx::err{clap::error::COMPILATION_FAILED}; }
+    TRY(opts_.emit_debug_artifacts(analyzer, gir_mod, error_stream_));
 
     auto emit_res{analyzer.emit_test_executable(gir_mod,
                                                 opts_.target_opts,

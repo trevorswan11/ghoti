@@ -1,6 +1,7 @@
 #include "driver/cmd/build/options.hh"
 
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <ostream>
 #include <string>
@@ -11,6 +12,7 @@
 
 #include <CLI/CLI.hpp>
 #include <fmt/format.h>
+#include <fmt/ostream.h>
 #include <gsl/pointers>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
@@ -18,6 +20,7 @@
 
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
+#include "compiler/gir/module.hh"
 #include "compiler/module/module.hh"
 #include "compiler/module/stdlib.hh"
 #include "compiler/sema/analyzer.hh"
@@ -94,17 +97,24 @@ auto options::process_raw(const raw_options&   raw,
     library_paths.reserve(raw.library_paths.size());
     for (const auto& dir : raw.library_paths) { library_paths.emplace_back(dir); }
 
+    stdx::option<std::filesystem::path> emit_gir_path;
+    if (!raw.emit_gir_path.empty()) { emit_gir_path.emplace(raw.emit_gir_path); }
+    stdx::option<std::filesystem::path> emit_llvm_ir_path;
+    if (!raw.emit_llvm_ir_path.empty()) { emit_llvm_ir_path.emplace(raw.emit_llvm_ir_path); }
+
     return options{
-        .input_path     = std::move(input_path),
-        .output_path    = std::move(output_path),
-        .target_opts    = std::move(target_opts),
-        .opt_opts       = std::move(opt_opts),
-        .modules        = std::move(modules),
-        .extra_objects  = std::move(extra_objects),
-        .library_paths  = std::move(library_paths),
-        .libraries      = raw.libraries,
-        .dynamic        = raw.dynamic,
-        .runtime_safety = !raw.unsafe,
+        .input_path        = std::move(input_path),
+        .output_path       = std::move(output_path),
+        .target_opts       = std::move(target_opts),
+        .opt_opts          = std::move(opt_opts),
+        .modules           = std::move(modules),
+        .extra_objects     = std::move(extra_objects),
+        .library_paths     = std::move(library_paths),
+        .libraries         = raw.libraries,
+        .dynamic           = raw.dynamic,
+        .runtime_safety    = !raw.unsafe,
+        .emit_gir_path     = std::move(emit_gir_path),
+        .emit_llvm_ir_path = std::move(emit_llvm_ir_path),
     };
 }
 
@@ -198,6 +208,52 @@ auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_v
         ->default_val(opts.time_passes);
     subcmd->add_flag("--unsafe", opts.unsafe, "Disable all runtime safety checks")
         ->default_val(opts.unsafe);
+    subcmd
+        ->add_option("--emit-gir", opts.emit_gir_path, "Write the GIR dump to the given file path")
+        ->type_name("FILE");
+    subcmd
+        ->add_option(
+            "--emit-llvm-ir", opts.emit_llvm_ir_path, "Write the LLVM IR to the given file path")
+        ->type_name("FILE");
+}
+
+auto options::emit_debug_artifacts(sema::analyzer& analyzer,
+                                   gir::module&    gir_mod,
+                                   std::ostream&   error_stream) const
+    -> stdx::result<void, clap::error> {
+    const auto write_file{[&](const std::filesystem::path& path,
+                              std::string_view             contents,
+                              std::string_view label) -> stdx::result<void, clap::error> {
+        std::ofstream out{path, std::ios::binary | std::ios::trunc};
+        if (!out) {
+            return clap::fatal_error(
+                error_stream,
+                fmt::format("could not open '{}' to write {}", path.string(), label),
+                clap::error::IO_ERROR);
+        }
+        fmt::print(out, "{}", contents);
+        if (!out) {
+            return clap::fatal_error(
+                error_stream,
+                fmt::format("failed to write {} to '{}'", label, path.string()),
+                clap::error::IO_ERROR);
+        }
+        return {};
+    }};
+
+    if (emit_gir_path) { TRY(write_file(*emit_gir_path, gir_mod.to_string(), "GIR")); }
+
+    if (emit_llvm_ir_path) {
+        auto ir{analyzer.emit_llvm_ir_text(gir_mod, opt_opts)};
+        if (!ir) {
+            return clap::fatal_error(error_stream,
+                                     ir.error().get_message().value_or(GHOTI_UNKNOWN_ERROR),
+                                     clap::error::COMPILATION_FAILED);
+        }
+        TRY(write_file(*emit_llvm_ir_path, *ir, "LLVM IR"));
+    }
+
+    return {};
 }
 
 } // namespace ghoti::cmd::build

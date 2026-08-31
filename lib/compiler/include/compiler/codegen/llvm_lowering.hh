@@ -45,6 +45,8 @@ class llvm_lowering {
         -> stdx::box<llvm::Module>;
     auto emit_test_entry_wrapper(const gir::module& gir_mod) -> llvm::Function*;
 
+    [[nodiscard]] static auto to_ir_string(const llvm::Module& mod) -> std::string;
+
     [[nodiscard]] auto context(this auto&& self) noexcept -> auto& { return self.context_; }
     [[nodiscard]] auto module(this auto&& self) noexcept -> auto& { return *self.llvm_module_; }
     [[nodiscard]] auto builder() noexcept -> llvm::IRBuilder<>& { return builder_; }

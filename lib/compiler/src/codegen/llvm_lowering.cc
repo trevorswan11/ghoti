@@ -23,6 +23,7 @@
 #include <llvm/IR/Value.h>
 #include <llvm/Support/Alignment.h>
 #include <llvm/Support/Casting.h>
+#include <llvm/Support/raw_ostream.h>
 #include <llvm/TargetParser/Triple.h>
 #include <llvm/Transforms/Utils/ModuleUtils.h>
 #include <stdx/assert.hh>
@@ -83,6 +84,13 @@ namespace {
 llvm_lowering::llvm_lowering(llvm::LLVMContext& context, std::string_view module_name) noexcept
     : context_{context}, llvm_module_{stdx::make_box<llvm::Module>(module_name, context_)},
       builder_{context_}, types_{context_, *llvm_module_} {}
+
+auto llvm_lowering::to_ir_string(const llvm::Module& mod) -> std::string {
+    std::string              out;
+    llvm::raw_string_ostream os{out};
+    mod.print(os, nullptr);
+    return out;
+}
 
 auto llvm_lowering::lower(const gir::module& gir_mod) -> stdx::box<llvm::Module> {
     gir_module_.emplace(gir_mod);

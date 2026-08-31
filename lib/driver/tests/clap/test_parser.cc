@@ -151,6 +151,36 @@ TEST_CASE("build-obj subcommand parser") {
         }
     }
 
+    SECTION("--emit-gir / --emit-llvm-ir capture a file path, absent by default") {
+        {
+            mock_argv    args{"ghoti", "build-obj", "main.gh"};
+            clap::parser parser{args.argc(), args.argv(), std::cerr, false};
+            auto         cmd{UNWRAP(parser.parse())};
+            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+            CHECK_FALSE(build_cmd.get_opts().emit_gir_path);
+            CHECK_FALSE(build_cmd.get_opts().emit_llvm_ir_path);
+        }
+        {
+            mock_argv args{
+                "ghoti", "build-obj", "--emit-gir", "a.gir", "--emit-llvm-ir", "b.ll", "main.gh"};
+            clap::parser parser{args.argc(), args.argv(), std::cerr, false};
+            auto         cmd{UNWRAP(parser.parse())};
+            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+            const auto&  opts{build_cmd.get_opts()};
+            REQUIRE(opts.emit_gir_path);
+            CHECK(*opts.emit_gir_path == "a.gir");
+            REQUIRE(opts.emit_llvm_ir_path);
+            CHECK(*opts.emit_llvm_ir_path == "b.ll");
+        }
+    }
+
+    SECTION("--emit-gir without a path argument is rejected") {
+        mock_argv          args{"ghoti", "build-obj", "main.gh", "--emit-gir"};
+        std::ostringstream error_ss;
+        clap::parser       parser{args.argc(), args.argv(), error_ss, false};
+        CHECK_FALSE(parser.parse());
+    }
+
     SECTION("Module argument parsing (-m / --module)") {
         SECTION("Single module argument") {
             mock_argv    args{"ghoti", "build-obj", "-m", "math,src/math.gh", "main.gh"};

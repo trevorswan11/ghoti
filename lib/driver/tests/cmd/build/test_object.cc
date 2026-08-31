@@ -1,5 +1,8 @@
 #include <filesystem>
 #include <fstream>
+#include <ios>
+#include <sstream>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -236,6 +239,47 @@ TEST_CASE("build_obj command execution") {
         REQUIRE(cmd.execute());
         CHECK(std::filesystem::exists(obj_file));
         CHECK(std::filesystem::file_size(obj_file) > 0);
+    }
+
+    SECTION("--emit-gir / --emit-llvm-ir write the requested dumps") {
+        codegen::llvm_scope scope;
+        tempfile            src_file{"test_emit_src.gh"};
+        tempfile            obj_file{"test_emit_out.o"};
+        tempfile            gir_file{"test_emit_out.gir"};
+        tempfile            ir_file{"test_emit_out.ll"};
+
+        {
+            std::ofstream out{src_file.path};
+            fmt::print(out, R"(
+                pub const add := fn(a: i64, b: i64): i64 {{
+                    return a + b;
+                }};
+            )");
+        }
+
+        cmd::build_obj cmd{{
+            .input_path        = src_file,
+            .output_path       = obj_file,
+            .emit_gir_path     = std::filesystem::path{gir_file.path},
+            .emit_llvm_ir_path = std::filesystem::path{ir_file.path},
+        }};
+        REQUIRE(cmd.execute());
+
+        const auto slurp{[](const std::filesystem::path& p) -> std::string {
+            std::ifstream     in{p, std::ios::binary};
+            std::stringstream ss;
+            ss << in.rdbuf();
+            return ss.str();
+        }};
+
+        REQUIRE(std::filesystem::exists(gir_file.path));
+        const auto gir_text{slurp(gir_file.path)};
+        CHECK(gir_text.contains("fn add("));
+
+        REQUIRE(std::filesystem::exists(ir_file.path));
+        const auto ir{slurp(ir_file.path)};
+        CHECK(ir.contains("define"));
+        CHECK(ir.contains("@add"));
     }
 }
 

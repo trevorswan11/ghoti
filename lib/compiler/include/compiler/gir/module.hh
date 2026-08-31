@@ -97,6 +97,8 @@ class module {
     // Drops every unreferenced `extern` decl and every unreachable imported decl
     auto prune_unreachable(gsl::span<const std::string_view> roots) -> void;
 
+    [[nodiscard]] auto to_string() const -> std::string;
+
   private:
     const mod::module&        ast_module_;
     sema::arena_alloc&        arena_;

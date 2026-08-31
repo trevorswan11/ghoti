@@ -44,6 +44,7 @@ auto build_exe::execute() -> stdx::result<void, clap::error> {
 
     auto gir_mod{analyzer.emit_gir(*module)};
     if (module->is_poisoned()) { return stdx::err{clap::error::COMPILATION_FAILED}; }
+    TRY(opts_.emit_debug_artifacts(analyzer, gir_mod, error_stream_));
 
     auto emit_res{analyzer.emit_executable(gir_mod,
                                            opts_.target_opts,

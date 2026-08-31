@@ -144,6 +144,14 @@ auto analyzer::emit_llvm_ir(gir::module&                      gir_module,
     return llvm_mod;
 }
 
+auto analyzer::emit_llvm_ir_text(gir::module& gir_module, const codegen::optimizer_options& options)
+    -> stdx::result<std::string, codegen::diagnostic> {
+    PROFILE_FUNCTION();
+    llvm::LLVMContext context;
+    auto              llvm_mod{TRY(emit_llvm_ir(gir_module, context, options))};
+    return codegen::llvm_lowering::to_ir_string(*llvm_mod);
+}
+
 auto analyzer::validate_main_entry(const mod::module& root_module) const
     -> stdx::result<void, diagnostic> {
     if (!root_module.root_table_idx) {
