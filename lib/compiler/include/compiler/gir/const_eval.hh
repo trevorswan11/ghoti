@@ -32,7 +32,10 @@ class const_eval {
     ~const_eval() = default;
     MAKE_MOVE_CONSTRUCTABLE_ONLY(const_eval);
 
-    auto set_module(mod::module& module) noexcept -> void { module_ = &module; }
+    auto set_module(mod::module& module) noexcept -> void {
+        if (module_ != &module) { clear_memo(); }
+        module_ = &module;
+    }
 
     // The struct/union/enum whose member body is currently being evaluated
     auto set_enclosing_type(stdx::option<sema::type&> type) noexcept -> void {
