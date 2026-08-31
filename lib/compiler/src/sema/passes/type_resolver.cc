@@ -137,7 +137,8 @@ auto type_resolver::visit(ast::node_id id, const ast::array_expr& array) -> void
                                      error::CONSTEXPR_EVALUATION_FAILED,
                                      resolving_.ast.location_of(*array.size)));
             }
-            last_type_.emplace(ctx_.get_array(mutability, array.null_terminated, *len, underlying));
+            last_type_.emplace(ctx_.get_array(
+                mutability, array.null_terminated, static_cast<usize>(*len), underlying));
         } else {
             last_type_.emplace(ctx_.get_slice(mutability, array.null_terminated, underlying));
         }

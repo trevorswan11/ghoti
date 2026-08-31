@@ -409,7 +409,7 @@ auto const_eval::resolve_deferred_array(const ast::explicit_array_type& array,
     const auto len{cv->as_uint_opt().value_or(0)};
     const auto mutability{array.mut_elements ? sema::types::mut::MUTABLE
                                              : sema::types::mut::CONSTANT};
-    return ctx_.get_array(mutability, array.null_terminated, len, item_type);
+    return ctx_.get_array(mutability, array.null_terminated, static_cast<usize>(len), item_type);
 }
 
 auto const_eval::resolve_deferred_call(const ast::call_expr& call) -> sema::type& {

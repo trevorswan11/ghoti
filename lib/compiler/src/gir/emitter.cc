@@ -3776,10 +3776,10 @@ auto emitter::emit_unwrap_propagation(value             operand_addr,
 
     // A non-void divergent payload is copied across
     if (!diverge_is_void) {
-        auto& src_type{
-            operand_union.get_data().as<sema::types::union_t>().type_at(operand_diverge_idx)};
-        auto& dst_type{
-            ret_type.get_data().as<sema::types::union_t>().type_at(ret_layout.diverge_idx)};
+        auto& src_type{operand_union.get_data().as<sema::types::union_t>().type_at(
+            static_cast<usize>(operand_diverge_idx))};
+        auto& dst_type{ret_type.get_data().as<sema::types::union_t>().type_at(
+            static_cast<usize>(ret_layout.diverge_idx))};
 
         const auto src_ptr{builder_.emit_get_element_ptr(
             operand_addr, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, src_type)};

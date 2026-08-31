@@ -710,7 +710,7 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
         }
         if (auto* at{llvm::dyn_cast<llvm::ArrayType>(ty)}) {
             std::string bytes{*s};
-            bytes.resize(at->getNumElements(), '\0');
+            bytes.resize(static_cast<usize>(at->getNumElements()), '\0');
             return llvm::ConstantDataArray::getString(context_, bytes, false);
         }
         return llvm::Constant::getNullValue(ty);
@@ -739,7 +739,7 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
         if (!at) { return llvm::Constant::getNullValue(ty); }
         auto*                        elem_ty{at->getElementType()};
         std::vector<llvm::Constant*> elems;
-        elems.reserve(at->getNumElements());
+        elems.reserve(static_cast<usize>(at->getNumElements()));
         for (const auto& elem : arr->elements) { elems.emplace_back(const_to_llvm(elem, elem_ty)); }
         while (elems.size() < at->getNumElements()) {
             elems.emplace_back(llvm::Constant::getNullValue(elem_ty));
