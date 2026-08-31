@@ -4,7 +4,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("Dereferencing a null pointer with *p traps at runtime") {
+TEST_CASE("Dereferencing a null pointer with *p traps at runtime", "[.panic]") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             var p: ^i32 = nullptr;
@@ -13,7 +13,7 @@ TEST_CASE("Dereferencing a null pointer with *p traps at runtime") {
     )") != 0);
 }
 
-TEST_CASE("Writing through a null pointer with *p = v traps at runtime") {
+TEST_CASE("Writing through a null pointer with *p = v traps at runtime", "[.panic]") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             var p: ^mut i32 = nullptr;
@@ -23,7 +23,7 @@ TEST_CASE("Writing through a null pointer with *p = v traps at runtime") {
     )") != 0);
 }
 
-TEST_CASE("Reading a field through a null pointer traps at runtime") {
+TEST_CASE("Reading a field through a null pointer traps at runtime", "[.panic]") {
     CHECK(helpers::compile_and_run(R"(
         const Point := struct { x: i32, y: i32 };
         pub const main := fn(): i32 {
@@ -33,7 +33,7 @@ TEST_CASE("Reading a field through a null pointer traps at runtime") {
     )") != 0);
 }
 
-TEST_CASE("Writing a field through a null pointer traps at runtime") {
+TEST_CASE("Writing a field through a null pointer traps at runtime", "[.panic]") {
     CHECK(helpers::compile_and_run(R"(
         const Point := struct { x: i32, y: i32 };
         pub const main := fn(): i32 {
@@ -44,7 +44,7 @@ TEST_CASE("Writing a field through a null pointer traps at runtime") {
     )") != 0);
 }
 
-TEST_CASE("Indexing through a null pointer traps at runtime") {
+TEST_CASE("Indexing through a null pointer traps at runtime", "[.panic]") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             var p: ^i32 = nullptr;
@@ -53,7 +53,7 @@ TEST_CASE("Indexing through a null pointer traps at runtime") {
     )") != 0);
 }
 
-TEST_CASE("A null pointer hidden behind a function parameter still traps on deref") {
+TEST_CASE("A null pointer hidden behind a function parameter still traps on deref", "[.panic]") {
     CHECK(helpers::compile_and_run(R"(
         const deref := fn(q: ^i32): i32 {
             return *q;
@@ -65,7 +65,7 @@ TEST_CASE("A null pointer hidden behind a function parameter still traps on dere
     )") != 0);
 }
 
-TEST_CASE("A null intermediate in a chained field access traps at runtime") {
+TEST_CASE("A null intermediate in a chained field access traps at runtime", "[.panic]") {
     CHECK(helpers::compile_and_run(R"(
         const Node := struct { val: i32, next: ^Node };
         pub const main := fn(): i32 {

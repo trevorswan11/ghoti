@@ -4,7 +4,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("signed overflow of +, -, * traps at runtime") {
+TEST_CASE("signed overflow of +, -, * traps at runtime", "[.panic]") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             var a: i32 = 2000000000;
@@ -28,7 +28,7 @@ TEST_CASE("signed overflow of +, -, * traps at runtime") {
     )") != 0);
 }
 
-TEST_CASE("negating INT_MIN traps") {
+TEST_CASE("negating INT_MIN traps", "[.panic]") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             var a: i32 = 2147483647;
@@ -38,7 +38,7 @@ TEST_CASE("negating INT_MIN traps") {
     )") != 0);
 }
 
-TEST_CASE("integer division and remainder by zero trap (signed and unsigned)") {
+TEST_CASE("integer division and remainder by zero trap (signed and unsigned)", "[.panic]") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 { var a: i32 = 5; var b: i32 = 0; return a / b; };
     )") != 0);
@@ -50,7 +50,7 @@ TEST_CASE("integer division and remainder by zero trap (signed and unsigned)") {
     )") != 0);
 }
 
-TEST_CASE("INT_MIN / -1 traps") {
+TEST_CASE("INT_MIN / -1 traps", "[.panic]") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             var a: i8 = -128;
@@ -60,7 +60,7 @@ TEST_CASE("INT_MIN / -1 traps") {
     )") != 0);
 }
 
-TEST_CASE("out-of-range shift amount traps") {
+TEST_CASE("out-of-range shift amount traps", "[.panic]") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 { var x: i32 = 1; var s: i32 = 40; return x << s; };
     )") != 0);
