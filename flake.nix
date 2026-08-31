@@ -10,6 +10,7 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     templ-flake.url = "github:a-h/templ";
+    rust-overlay.url = "github:oxalica/rust-overlay";
   };
 
   outputs =
@@ -19,6 +20,7 @@
       zig-flake,
       zls-flake,
       templ-flake,
+      rust-overlay,
       ...
     }:
     flake-utils.lib.eachDefaultSystem (
@@ -32,6 +34,17 @@
               zig = zig-flake.packages.${system}."0.16.0";
               zls = zls-flake.packages.${system}.default;
             })
+            rust-overlay.overlays.default
+          ];
+        };
+        rustToolchain = pkgs.rust-bin.stable.latest.minimal.override {
+          extensions = [
+            "rust-analyzer"
+            "clippy"
+            "rustfmt"
+          ];
+          targets = [
+            "wasm32-wasip2"
           ];
         };
       in
@@ -45,6 +58,7 @@
             gopls
             templ
             prettier
+            rustToolchain
           ]
           ++ (with llvmPackages_21; [
             clang-tools

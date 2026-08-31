@@ -66,3 +66,6 @@
 - Update stdx for compressor fix
 - Address nit in test subcommand description
 - Resolve crash that would occur when invoking the test command on a tree with no test blocks
+
+# v0.3.0
+
