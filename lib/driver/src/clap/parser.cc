@@ -174,7 +174,11 @@ auto parser::setup_fmt_subcmd() -> gsl::not_null<CLI::App*> {
 auto parser::setup_test_subcmd() -> gsl::not_null<CLI::App*> {
     auto* sub{app_.add_subcommand("test", "Run tests in ghoti source file")};
     sub->add_option("input_file", test_opts_.input, "Input source file (.gh)")->required();
-    cmd::build::setup_flags(sub, test_opts_, stdx::none);
+    cmd::build::setup_flags(
+        sub, test_opts_, "Output test binary path (kept on disk instead of run from a temp file)");
+    // Trailing positionals (typically after `--`) are forwarded to the test binary's argv.
+    sub->add_option(
+        "test_args", test_opts_.forwarded_args, "Arguments forwarded to the test executable");
     return sub;
 }
 

@@ -5,6 +5,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #include <fmt/base.h>
 #include <fmt/format.h>
@@ -36,7 +37,8 @@ auto test_cmd::execute() -> stdx::result<void, clap::error> {
     }
 
     opts_.make_path_relative();
-    if (opts_.output_path.empty()) {
+    // Without an explicit `-o`, always build to a fresh temp path that is cleaned post-run
+    if (!opts_.output_explicit) {
         const auto default_ext{codegen::get_default_output_extension(
             codegen::output_type::EXECUTABLE, opts_.target_opts.triple_str)};
         const auto temp_stem{tempfile::make_temp_path("ghoti_test")};
@@ -64,6 +66,13 @@ auto test_cmd::execute() -> stdx::result<void, clap::error> {
     };
 
     auto module{TRY(opts_.analyze(analyzer, manager, error_stream_))};
+
+    // A hand-written `test_runner` override must match the forced entry signature.
+    if (auto val_res{analyzer.validate_test_entry(*module)}; !val_res) {
+        fmt::println(error_stream_, "{}", val_res.error());
+        return stdx::err{clap::error::COMPILATION_FAILED};
+    }
+
     auto gir_mod{analyzer.emit_gir(*module, true)};
     if (module->is_poisoned()) { return stdx::err{clap::error::COMPILATION_FAILED}; }
     TRY(opts_.emit_debug_artifacts(analyzer, gir_mod, error_stream_));
@@ -83,12 +92,15 @@ auto test_cmd::execute() -> stdx::result<void, clap::error> {
                                  clap::error::COMPILATION_FAILED);
     }
 
-    // Execute the test executable
+    std::vector<std::string> child_argv{opts_.output_path.string()};
+    child_argv.insert(child_argv.end(), opts_.forwarded_args.begin(), opts_.forwarded_args.end());
+
     stdx::option<u32> exit_code_opt;
-    {
-        tempfile        test_exe{std::in_place, opts_.output_path};
-        const mock_argv args{opts_.output_path.string()};
-        exit_code_opt = spawn_child(args);
+    if (opts_.output_explicit) {
+        exit_code_opt = spawn_child(mock_argv{std::move(child_argv)});
+    } else {
+        tempfile test_exe{std::in_place, opts_.output_path};
+        exit_code_opt = spawn_child(mock_argv{std::move(child_argv)});
     }
 
     if (!exit_code_opt) {

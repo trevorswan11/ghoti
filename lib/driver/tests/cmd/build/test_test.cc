@@ -1,11 +1,13 @@
 #include <filesystem>
 #include <fstream>
+#include <system_error>
 
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/ostream.h>
 #include <stdx/types.hh>
 
 #include "compiler/codegen/llvm_scope.hh"
+#include "compiler/codegen/target.hh"
 #include "driver/clap/error.hh"
 #include "driver/cmd/build/test.hh"
 #include "support/tempfile.hh"
@@ -180,6 +182,94 @@ TEST_CASE("test command execution") {
             .input_path = src_file,
         }};
         CHECK(!cmd.execute());
+    }
+
+    SECTION("A `test_runner` missing the args parameter is rejected") {
+        codegen::llvm_scope scope;
+        tempfile            src_file{"test_driver_bad_runner_arity.gh"};
+
+        {
+            std::ofstream out{src_file.path};
+            fmt::print(out, R"(
+                test "noop" {{ @expect(true); }}
+
+                pub const test_runner := fn(tests: []builtin::Test): i32 {{
+                    _ = tests;
+                    return 0;
+                }};
+            )");
+        }
+
+        cmd::test_cmd cmd{{.input_path = src_file}};
+        CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::COMPILATION_FAILED);
+    }
+
+    SECTION("A `test_runner` with the wrong return type is rejected") {
+        codegen::llvm_scope scope;
+        tempfile            src_file{"test_driver_bad_runner_ret.gh"};
+
+        {
+            std::ofstream out{src_file.path};
+            fmt::print(out, R"(
+                test "noop" {{ @expect(true); }}
+
+                pub const test_runner := fn(args: [][:0]u8, tests: []builtin::Test): void {{
+                    _ = args;
+                    _ = tests;
+                }};
+            )");
+        }
+
+        cmd::test_cmd cmd{{.input_path = src_file}};
+        CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::COMPILATION_FAILED);
+    }
+
+    SECTION("`forwarded_args` reach the test binary's argv") {
+        codegen::llvm_scope scope;
+        tempfile            src_file{"test_driver_forward_args.gh"};
+
+        {
+            std::ofstream out{src_file.path};
+            fmt::print(out, R"(
+                test "noop" {{ @expect(true); }}
+
+                pub const test_runner := fn(args: [][:0]u8, tests: []builtin::Test): i32 {{
+                    _ = tests;
+                    if (args.len == 3) {{ return 0; }} // args passed through from runtime
+                    if (args.len == 0) {{ return 0; }} // empty fallback on windows due to sysroot
+                    return 4;
+                }};
+            )");
+        }
+
+        cmd::test_cmd cmd{{
+            .input_path     = src_file,
+            .forwarded_args = {"alpha", "beta"},
+        }};
+        REQUIRE(cmd.execute());
+    }
+
+    SECTION("-o writes the test binary to the given path and keeps it") {
+        codegen::llvm_scope scope;
+        tempfile            src_file{"test_driver_keep_binary.gh"};
+        tempfile            out_path{"kept_test_binary"};
+        out_path.path.replace_extension(
+            codegen::get_default_output_extension(codegen::output_type::EXECUTABLE));
+
+        {
+            std::ofstream out{src_file.path};
+            fmt::print(out, "test \"noop\" {{ @expect(true); }}");
+        }
+
+        cmd::test_cmd cmd{{
+            .input_path      = src_file,
+            .output_path     = out_path,
+            .output_explicit = true,
+        }};
+        REQUIRE(cmd.execute());
+
+        std::error_code ec;
+        CHECK(std::filesystem::exists(out_path, ec));
     }
 }
 

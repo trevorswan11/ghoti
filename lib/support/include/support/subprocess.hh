@@ -32,6 +32,12 @@ class mock_argv {
         pointers_.emplace_back(nullptr);
     }
 
+    explicit mock_argv(std::vector<std::string> args) : strings_{std::move(args)} {
+        pointers_.reserve(strings_.size() + 1);
+        for (auto& s : strings_) { pointers_.emplace_back(s.data()); }
+        pointers_.emplace_back(nullptr);
+    }
+
     [[nodiscard]] auto argv() const noexcept -> char** { return pointers_.data(); }
     template <stdx::NumericIntegral I = i32> [[nodiscard]] auto argc() const noexcept -> I {
         return static_cast<I>(strings_.size());

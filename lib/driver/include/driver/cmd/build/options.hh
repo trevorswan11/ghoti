@@ -39,6 +39,7 @@ struct raw_options {
     std::vector<std::string> extra_objects;
     std::vector<std::string> library_paths;
     std::vector<std::string> libraries;
+    std::vector<std::string> forwarded_args;
     bool                     release{false};
     bool                     debug_passes{false};
     bool                     time_passes{false};
@@ -58,8 +59,10 @@ struct options {
     std::vector<std::filesystem::path> extra_objects{};
     std::vector<std::filesystem::path> library_paths{};
     std::vector<std::string>           libraries{};
+    std::vector<std::string>           forwarded_args{};
     bool                               dynamic{false};
     bool                               runtime_safety{true};
+    bool output_explicit{false}; // `ghoti test` only: true when `-o/--output` was given
 
     stdx::option<std::filesystem::path> emit_gir_path{};
     stdx::option<std::filesystem::path> emit_llvm_ir_path{};

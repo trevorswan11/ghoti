@@ -47,6 +47,16 @@ namespace {
     return tempfile{std::in_place, temp_obj_path};
 }
 
+[[nodiscard]] auto is_argv_slice_type(const type* t) noexcept -> bool {
+    if (!t || t->get_kind() != type_kind::SLICE) { return false; }
+    const auto outer{t->get_data().as_opt<types::slice>()};
+    if (!outer || outer->null_terminated || outer->underlying.get_kind() != type_kind::SLICE) {
+        return false;
+    }
+    const auto inner{outer->underlying.get_data().as_opt<types::slice>()};
+    return inner && inner->null_terminated && inner->underlying.get_kind() == type_kind::U8;
+}
+
 [[nodiscard]] auto export_roots(const gir::module& mod) -> std::vector<std::string_view> {
     std::vector<std::string_view> roots;
     for (const auto* fn : mod.get_functions()) {
@@ -205,21 +215,7 @@ auto analyzer::validate_main_entry(const mod::module& root_module) const
 
     const auto& fn_data{sema_type.get_data().as<types::function>()};
     if (fn_data.params.size() == 1) {
-        const auto* param_type{fn_data.params.front()};
-        bool        valid_param{false};
-        if (param_type && param_type->get_kind() == type_kind::SLICE) {
-            const auto outer_slice{param_type->get_data().as_opt<types::slice>()};
-            if (outer_slice && !outer_slice->null_terminated &&
-                outer_slice->underlying.get_kind() == type_kind::SLICE) {
-                const auto inner_slice{outer_slice->underlying.get_data().as_opt<types::slice>()};
-                if (inner_slice->null_terminated &&
-                    inner_slice->underlying.get_kind() == type_kind::U8) {
-                    valid_param = true;
-                }
-            }
-        }
-
-        if (!valid_param) {
+        if (!is_argv_slice_type(fn_data.params.front())) {
             return make_sema_err("'main' parameter must have type '[][:0]u8'",
                                  error::TYPE_MISMATCH,
                                  main_sym.get_symbol_location(root_module));
@@ -237,6 +233,61 @@ auto analyzer::validate_main_entry(const mod::module& root_module) const
         return make_sema_err("'main' return type must be 'void' or 'i32'",
                              error::TYPE_MISMATCH,
                              main_sym.get_symbol_location(root_module));
+    }
+
+    return {};
+}
+
+auto analyzer::validate_test_entry(const mod::module& root_module) const
+    -> stdx::result<void, diagnostic> {
+    if (!root_module.root_table_idx) {
+        return make_sema_err("missing root module", error::MODULE_LOAD_ERROR);
+    }
+
+    // No user-defined `test_runner` -> the `weak` `builtin` default is used,
+    const auto& root_table{registry_.get(*root_module.root_table_idx)};
+    const auto  runner_sym_opt{root_table.get_opt("test_runner")};
+    if (!runner_sym_opt) { return {}; }
+
+    const auto&                runner_sym{*runner_sym_opt};
+    constexpr std::string_view want{
+        "'test_runner' must have signature 'fn(args: [][:0]u8, tests: []Test): i32'"};
+    const auto loc{runner_sym.get_symbol_location(root_module)};
+
+    if (runner_sym.get_kind_opt() != symbol_kind::CALLABLE) {
+        return make_sema_err(
+            fmt::format("{} (it is not a function)", want), error::TYPE_MISMATCH, loc);
+    }
+
+    const auto node_sym{runner_sym.get_data().as_opt<symbols::node_t>()};
+    if (!node_sym) {
+        return make_sema_err(fmt::format("{} (it must be a user-defined function)", want),
+                             error::TYPE_MISMATCH,
+                             loc);
+    }
+
+    const auto sema_type_opt{root_module.get_sema_type_opt(*node_sym)};
+    if (!sema_type_opt || sema_type_opt->get_kind() != type_kind::FUNCTION) {
+        return make_sema_err(fmt::format("{}", want), error::TYPE_MISMATCH, loc);
+    }
+
+    const auto& fn_data{sema_type_opt->get_data().as<types::function>()};
+    if (fn_data.params.size() != 2 || !is_argv_slice_type(fn_data.params[0]) ||
+        fn_data.params[1] == nullptr || fn_data.params[1]->get_kind() != type_kind::SLICE) {
+        return make_sema_err(fmt::format("{}", want), error::TYPE_MISMATCH, loc);
+    }
+
+    const auto tests_slice{fn_data.params[1]->get_data().as_opt<types::slice>()};
+    if (!tests_slice || tests_slice->null_terminated ||
+        tests_slice->underlying.get_kind() != type_kind::STRUCT) {
+        return make_sema_err(fmt::format("{} (the second parameter must be '[]Test')", want),
+                             error::TYPE_MISMATCH,
+                             loc);
+    }
+
+    if (fn_data.return_type.get_kind() != type_kind::I32) {
+        return make_sema_err(
+            fmt::format("{} (it must return 'i32')", want), error::TYPE_MISMATCH, loc);
     }
 
     return {};

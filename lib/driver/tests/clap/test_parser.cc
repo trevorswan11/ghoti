@@ -1,6 +1,10 @@
+#include <algorithm>
+#include <array>
 #include <iostream>
 #include <sstream>
+#include <string>
 #include <string_view>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
@@ -12,6 +16,7 @@
 #include "driver/cmd/build/executable.hh"
 #include "driver/cmd/build/library.hh"
 #include "driver/cmd/build/object.hh"
+#include "driver/cmd/build/test.hh"
 #include "driver/cmd/repl/shell.hh"
 #include "support/subprocess.hh"
 #include "support/test.hh"
@@ -281,6 +286,44 @@ TEST_CASE("test subcommand parser") {
         mock_argv    args{"ghoti", "test", "my_test.gh"};
         clap::parser p{args.argc(), args.argv(), std::cerr, false};
         CHECK(p.parse());
+    }
+
+    SECTION("no forwarded args and not output-explicit by default") {
+        mock_argv    args{"ghoti", "test", "my_test.gh"};
+        clap::parser p{args.argc(), args.argv(), std::cerr, false};
+        auto         cmd{UNWRAP(p.parse())};
+        const auto&  opts{UNWRAP(dynamic_cast<cmd::test_cmd*>(cmd.get())).get_opts()};
+        CHECK(opts.input_path == "my_test.gh");
+        CHECK(opts.forwarded_args.empty());
+        CHECK_FALSE(opts.output_explicit);
+    }
+
+    SECTION("args after -- are forwarded to the test binary") {
+        mock_argv    args{"ghoti", "test", "my_test.gh", "--", "alpha", "--beta"};
+        clap::parser p{args.argc(), args.argv(), std::cerr, false};
+        auto         cmd{UNWRAP(p.parse())};
+        const auto&  opts{UNWRAP(dynamic_cast<cmd::test_cmd*>(cmd.get())).get_opts()};
+        CHECK(opts.input_path == "my_test.gh");
+        REQUIRE(opts.forwarded_args.size() == 2);
+        CHECK(opts.forwarded_args[0] == "alpha");
+        CHECK(opts.forwarded_args[1] == "--beta");
+    }
+
+    SECTION("bare trailing args are forwarded too") {
+        mock_argv    args{"ghoti", "test", "my_test.gh", "one", "two"};
+        clap::parser p{args.argc(), args.argv(), std::cerr, false};
+        auto         cmd{UNWRAP(p.parse())};
+        const auto&  opts{UNWRAP(dynamic_cast<cmd::test_cmd*>(cmd.get())).get_opts()};
+        CHECK(std::ranges::equal(opts.forwarded_args, std::array{"one", "two"}));
+    }
+
+    SECTION("-o marks the output explicit and keeps the path") {
+        mock_argv    args{"ghoti", "test", "-o", "built_test.exe", "my_test.gh"};
+        clap::parser p{args.argc(), args.argv(), std::cerr, false};
+        auto         cmd{UNWRAP(p.parse())};
+        const auto&  opts{UNWRAP(dynamic_cast<cmd::test_cmd*>(cmd.get())).get_opts()};
+        CHECK(opts.output_path == "built_test.exe");
+        CHECK(opts.output_explicit);
     }
 }
 

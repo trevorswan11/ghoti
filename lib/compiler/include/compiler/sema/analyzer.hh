@@ -94,6 +94,11 @@ class analyzer {
     [[nodiscard]] auto validate_main_entry(const mod::module& root_module) const
         -> stdx::result<void, diagnostic>;
 
+    // Checks a user-defined `test_runner` override has sig `fn(args: [][:0]u8, tests: []Test): i32`
+    // A no-op when the module relies on the `weak` `builtin` default.
+    [[nodiscard]] auto validate_test_entry(const mod::module& root_module) const
+        -> stdx::result<void, diagnostic>;
+
     [[nodiscard]] auto emit_llvm_ir(gir::module&                      gir_module,
                                     llvm::LLVMContext&                context,
                                     const codegen::optimizer_options& options)

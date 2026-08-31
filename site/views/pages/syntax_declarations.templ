@@ -108,6 +108,10 @@ extern constexpr a: i32; // Illegal, inherently contradictory` }
 		<li>The <code>test</code> keyword is used to declare top-level unit test blocks that are compiled into test runner executables.</li>
 		<li>Tests can optionally take a string literal description, or be declared without a description string.</li>
 		<li>Test blocks contain standard statement blocks and are automatically executed by the test runner.</li>
+		<li>
+			The runner entry point is <code>test_runner(args: [][:0]u8, tests: []Test): i32</code>; it receives the process
+			arguments (as <code>main</code> does) plus the discovered tests. A <code>weak</code> default is provided.
+		</li>
 	</ul>
 	<pre>
 		<code class="language-ghoti">

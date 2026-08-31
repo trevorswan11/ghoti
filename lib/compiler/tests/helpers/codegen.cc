@@ -142,7 +142,9 @@ auto compile_and_run(std::string_view source, const std::vector<mock_file>& impo
     return UNWRAP(spawn_child(args));
 }
 
-auto compile_and_run_tests(std::string_view source, const std::vector<mock_file>& imports) -> u32 {
+auto compile_and_run_tests(std::string_view                source,
+                           const std::vector<mock_file>&   imports,
+                           const std::vector<std::string>& extra_args) -> u32 {
     auto  ctx_idx{type_check_and_verify(source, imports)};
     auto& test_ctx{*ctx_idx.first};
 
@@ -155,8 +157,9 @@ auto compile_and_run_tests(std::string_view source, const std::vector<mock_file>
     if (!emitted) { fmt::println("{}", emitted.error()); }
     REQUIRE(emitted);
 
-    const mock_argv args{exe_file.path.string()};
-    return UNWRAP(spawn_child(args));
+    std::vector<std::string> child_argv{exe_file.path.string()};
+    child_argv.insert(child_argv.end(), extra_args.begin(), extra_args.end());
+    return UNWRAP(spawn_child(mock_argv{std::move(child_argv)}));
 }
 
 } // namespace ghoti::tests::helpers

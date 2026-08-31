@@ -7,6 +7,9 @@
 - `test` blocks now compile and run: `ghoti test` command, per-test functions, and test metadata (`builtin::Test`)
 - `@expect` / `@require` assertions and `@skip()` (rejected outside a `test` block)
 - Weak `test_runner` / `panic_handler` / `expect_handler` / `require_handler` / `skip_handler` hooks in the `builtin` module for running & failure/skip reporting
+    - `test_runner`'s signature is `fn(args: [][:0]u8, tests: []Test): i32`
+- `ghoti test <file> -- <args>` (or bare trailing args) forwards `<args>` to the compiled test binary's `argv`
+- `ghoti test -o <path>` writes the test binary to `<path>` and keeps it, instead of building to a temp file that is deleted after the run
 
 ## Language
 - `constexpr` function parameters
