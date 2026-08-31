@@ -412,25 +412,44 @@ auto const_eval::resolve_deferred_array(const ast::explicit_array_type& array,
     return ctx_.get_array(mutability, array.null_terminated, static_cast<usize>(len), item_type);
 }
 
-auto const_eval::resolve_deferred_call(const ast::call_expr& call) -> sema::type& {
+auto const_eval::try_resolve_deferred_call(const ast::call_expr& call)
+    -> stdx::option<sema::type&> {
     const auto val{eval_call(ast::node_id::make_invalid(), call)};
-    if (val) {
-        if (const auto type_opt{val->as_opt<stdx::option<sema::type&>>()}) {
-            if (*type_opt) { return **type_opt; }
-        }
-        if (const auto sema_type{val->get_type()}) {
-            if (sema_type->get_kind() == sema::type_kind::TYPE) {
-                if (const auto meta{sema_type->get_data().as_opt<sema::types::meta_type>()}) {
-                    return meta->instance;
-                }
-            }
-            return *sema_type;
-        }
+    if (!val) { return stdx::none; }
+    if (const auto type_opt{val->as_opt<stdx::option<sema::type&>>()}) {
+        if (*type_opt) { return **type_opt; }
     }
+    if (const auto sema_type{val->get_type()}) {
+        if (sema_type->get_kind() == sema::type_kind::TYPE) {
+            if (const auto meta{sema_type->get_data().as_opt<sema::types::meta_type>()}) {
+                return meta->instance;
+            }
+        }
+        return *sema_type;
+    }
+    return stdx::none;
+}
+
+auto const_eval::resolve_deferred_call(const ast::call_expr& call) -> sema::type& {
+    if (const auto resolved{try_resolve_deferred_call(call)}) { return *resolved; }
     ctx_.diags.emplace_back("Failed to evaluate compile-time type constructor function",
                             sema::error::CONSTEXPR_EVALUATION_FAILED,
                             module_->ast.location_of(call.function));
     return ctx_.get_poison();
+}
+
+auto const_eval::force_deferred_call(sema::type& maybe_deferred) -> sema::type& {
+    const auto deferred{maybe_deferred.get_data().as_opt<sema::types::deferred_call>()};
+    if (!deferred) { return maybe_deferred; }
+    const auto resolved{try_resolve_deferred_call(deferred->call)};
+    if (!resolved) { return maybe_deferred; }
+    // Only an aggregate result needs to be pinned early
+    switch (resolved->get_kind()) {
+    case sema::type_kind::STRUCT:
+    case sema::type_kind::UNION:
+    case sema::type_kind::ENUM:   return *resolved;
+    default:                      return maybe_deferred;
+    }
 }
 
 auto const_eval::lookup_local_binding(std::string_view name) const noexcept

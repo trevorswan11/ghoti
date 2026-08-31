@@ -58,6 +58,9 @@ class const_eval {
     // Forces a single possibly-deferred array type to its concrete resolved form
     [[nodiscard]] auto force_deferred_array(sema::type& maybe_deferred) -> sema::type&;
 
+    // Forces a `fn(...): type` deferred-call type to the type it produces
+    [[nodiscard]] auto force_deferred_call(sema::type& maybe_deferred) -> sema::type&;
+
     [[nodiscard]] static auto type_align_of(const sema::type& type, usize ptr_size) -> usize;
     [[nodiscard]] static auto type_size_of(const sema::type& type, usize ptr_size) -> usize;
 
@@ -74,6 +77,9 @@ class const_eval {
     auto               force_deferred_indirection_underlying(sema::type& maybe_indirection) -> void;
     auto               force_deferred_array_elements(gsl::span<sema::type*> elements) -> void;
     auto               resolve_deferred_call(const ast::call_expr& call) -> sema::type&;
+    // As above but yields `none` instead of a diagnostic when the call cannot be evaluated yet.
+    [[nodiscard]] auto try_resolve_deferred_call(const ast::call_expr& call)
+        -> stdx::option<sema::type&>;
 
     auto eval_node(ast::node_id id) -> stdx::option<const_value>;
     auto eval_binary(ast::node_id id, const ast::binary_expr& binary) -> stdx::option<const_value>;

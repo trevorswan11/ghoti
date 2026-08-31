@@ -902,6 +902,52 @@ namespace {
     return false;
 }
 
+// The node index of the first `return` in `block` that hands back a fresh `struct`/`union`/`enum`
+[[nodiscard]] auto returned_aggregate_literal(const ast::AST& ast, const ast::block_stmt& block)
+    -> stdx::option<usize> {
+    for (const auto& stmt : block) {
+        const auto ret{ast.get_as_opt<ast::return_stmt>(stmt)};
+        if (!ret || !ret->expression) { continue; }
+        const auto& expr{*ret->expression};
+        if (ast.get_as_opt<ast::struct_expr>(expr) || ast.get_as_opt<ast::union_expr>(expr) ||
+            ast.get_as_opt<ast::enum_expr>(expr)) {
+            return expr.get_index();
+        }
+    }
+    return stdx::none;
+}
+
+// Copies an anonymous aggregate `sema::type` into a fresh pool entry, keyed by `disc` so repeated
+// requests for the same instantiation share one type
+[[nodiscard]] auto clone_anonymous_aggregate(context& ctx, type& src, std::string_view disc)
+    -> type& {
+    types::key_t key{src.get_kind(), src.get_key().get_mut()};
+    key.imprint(disc);
+    auto& fresh{*ctx.pool[key]};
+    if (fresh.is_resolved()) { return fresh; }
+    if (src.has_symbol_table_idx()) { fresh.set_symbol_table_idx(src.get_symbol_table_idx()); }
+    src.get_data().visit(
+        [](const auto&) { UNREACHABLE("clone_anonymous_aggregate on a non-aggregate type"); },
+        [&](const types::struct_t& s) {
+            fresh.resolve<types::struct_t>(s.fields,
+                                           s.ast_fields,
+                                           s.members,
+                                           s.enclosing,
+                                           s.is_c_abi,
+                                           s.is_packed,
+                                           s.field_alignments);
+        },
+        [&](const types::union_t& u) {
+            fresh.resolve<types::union_t>(
+                u.fields, u.ast_fields, u.members, u.enclosing, u.is_untagged);
+        },
+        [&](const types::enum_t& e) {
+            fresh.resolve<types::enum_t>(
+                e.ast_enumerations, e.non_exhaustive, e.underlying, e.members, e.enclosing);
+        });
+    return fresh;
+}
+
 // Mangles a type such that it will not conflict with any other monomorphized instance
 [[nodiscard]] auto mangle_arg_type(const type& t) -> std::string {
     if (const auto meta{t.get_data().as_opt<types::meta_type>()}) {
@@ -2383,6 +2429,11 @@ auto type_resolver::visit(ast::node_id id, const ast::initializer_expr& init) ->
                              resolving_.ast.location_of(id)));
     }
 
+    if (object_type_opt->get_data().is<types::deferred_call>()) {
+        gir::const_eval evaluator{ctx_, resolving_};
+        object_type_opt.emplace(evaluator.force_deferred_call(*object_type_opt));
+    }
+
     type& object_type{*object_type_opt};
     if (!object_type.is_resolved()) {
         return last_type_.emplace(ctx_.poison_node(resolving_,
@@ -3709,7 +3760,13 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
         if (decl.explicit_type) {
             resolve(*decl.explicit_type);
             if (last_type_->is_poison()) { return poison_out(); }
-            auto& explicit_type{denoted_type(*last_type_.take())};
+            auto* explicit_type_p{&denoted_type(*last_type_.take())};
+            // `const x: MakesAType() = ...`
+            if (explicit_type_p->get_data().is<types::deferred_call>()) {
+                gir::const_eval evaluator{ctx_, resolving_};
+                explicit_type_p = &evaluator.force_deferred_call(*explicit_type_p);
+            }
+            auto& explicit_type{*explicit_type_p};
             if (explicit_type.get_kind() == type_kind::AUTO) {
                 // `undefined` carries no type, so it cannot drive `auto` inference either.
                 const bool undef_init{decl.value &&
@@ -3943,7 +4000,13 @@ auto type_resolver::visit(ast::node_id id, const ast::using_stmt& using_stmt) ->
     sym->set_status(symbol_status::RESOLVING);
     resolve(using_stmt.explicit_type);
     if (last_type_->is_poison()) { return poison_out(); }
-    auto& explicit_type{*last_type_.take()};
+    auto* explicit_type_p{last_type_.take()};
+    // `using X = MakesAType()`
+    if (explicit_type_p->get_data().is<types::deferred_call>()) {
+        gir::const_eval evaluator{ctx_, resolving_};
+        explicit_type_p = &evaluator.force_deferred_call(*explicit_type_p);
+    }
+    auto& explicit_type{*explicit_type_p};
     if (explicit_type.get_kind() == type_kind::AUTO) {
         last_type_.emplace(ctx_.poison_node(resolving_,
                                             id,
@@ -4229,7 +4292,8 @@ auto type_resolver::instantiate_generic(type&                             callee
 
     const auto  diags_before{ctx_.diags.size()};
     const auto& block{fn_mod.ast.get_as<ast::block_stmt>(fn_expr.body)};
-    bool        resolved_poison{false};
+
+    bool resolved_poison{false};
     for (const auto& stmt : block) {
         inst_resolver.resolve(stmt);
         if (inst_resolver.last_type_->is_poison()) { resolved_poison = true; }
@@ -4263,7 +4327,6 @@ auto type_resolver::instantiate_generic(type&                             callee
 
     auto tracker{std::move(inst_resolver.return_trackers_.back())};
     inst_resolver.return_trackers_.pop_back();
-    auto& deduced_return_type{is_auto_return ? tracker.deduced_return_type(ctx_) : return_type};
 
     auto mangled_name =
         fmt::format("{}__{}",
@@ -4275,30 +4338,51 @@ auto type_resolver::instantiate_generic(type&                             callee
     // Distinct `constexpr` argument values must produce distinct symbols.
     for (const auto& cx : constexpr_args) { mangled_name += fmt::format("_cx{}", cx.mangle()); }
 
-    // Hand the folded values to the emitter out-of-band
-    if (!constexpr_args.empty()) {
-        ctx_.constexpr_instantiation_args.insert_or_assign(
-            mangled_name,
-            std::vector<gir::const_value>(constexpr_args.begin(), constexpr_args.end()));
-    }
-    if (!typing.empty()) {
-        ctx_.instantiation_body_types.insert_or_assign(mangled_name, std::move(typing));
+    // A `fn(...): type` generic is a type constructor and its instantiation is the type the body
+    const bool is_type_ctor{!is_auto_return && return_type.get_kind() == type_kind::TYPE &&
+                            tracker.has_returns()};
+    type* deduced_return_type{(is_auto_return || is_type_ctor) ? &tracker.deduced_return_type(ctx_)
+                                                               : &return_type};
+
+    // Copy into a per-instantiation type so `Option(i32)` and `Option(u8)` don't alias each other
+    if (is_type_ctor) {
+        const auto k{deduced_return_type->get_kind()};
+        if (k == type_kind::STRUCT || k == type_kind::UNION || k == type_kind::ENUM) {
+            if (const auto agg_idx{returned_aggregate_literal(fn_mod.ast, block)}) {
+                deduced_return_type = &clone_anonymous_aggregate(
+                    ctx_, *deduced_return_type, fmt::format("{}#{}", mangled_name, *agg_idx));
+            }
+        }
     }
 
-    generic_instantiation_request req{
-        .generic_fn_type = &callee_type,
-        .arg_types       = inst_param_types,
-        .return_type     = &deduced_return_type,
-        .mangled_name    = mangled_name,
-        .fn_node_id      = fn_info.node_id,
-        .module          = &fn_mod,
-    };
+    // A type constructor has no runtime body -- its whole result is `deduced_return_type`. Skip
+    // the emit-time plumbing and don't register a GIR instantiation for it.
+    if (!is_type_ctor) {
+        // Hand the folded values to the emitter out-of-band
+        if (!constexpr_args.empty()) {
+            ctx_.constexpr_instantiation_args.insert_or_assign(
+                mangled_name,
+                std::vector<gir::const_value>(constexpr_args.begin(), constexpr_args.end()));
+        }
+        if (!typing.empty()) {
+            ctx_.instantiation_body_types.insert_or_assign(mangled_name, std::move(typing));
+        }
 
-    fn_mod.generic_instantiations.emplace_back(req);
-    if (&resolving_ != &fn_mod) { resolving_.generic_instantiations.emplace_back(req); }
+        generic_instantiation_request req{
+            .generic_fn_type = &callee_type,
+            .arg_types       = inst_param_types,
+            .return_type     = deduced_return_type,
+            .mangled_name    = mangled_name,
+            .fn_node_id      = fn_info.node_id,
+            .module          = &fn_mod,
+        };
+
+        fn_mod.generic_instantiations.emplace_back(req);
+        if (&resolving_ != &fn_mod) { resolving_.generic_instantiations.emplace_back(req); }
+    }
 
     return generic_instantiation_entry{
-        .return_type  = &deduced_return_type,
+        .return_type  = deduced_return_type,
         .mangled_name = std::move(mangled_name),
     };
 }

@@ -368,6 +368,8 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
             if (const auto fn_data{sema_type->get_data().as_opt<sema::types::function>()}) {
                 // Generic templates will be emitted via monomorphized instantiations
                 if (ctx_.generic_functions.get_opt(*sema_type)) { return; }
+                // A `fn(...): type` is a compile-time type constructor with no runtime body.
+                if (fn_data->return_type.get_kind() == sema::type_kind::TYPE) { return; }
             }
             return emit_function(id, decl, *fn_expr);
         } else {
