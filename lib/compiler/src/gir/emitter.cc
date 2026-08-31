@@ -112,8 +112,7 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
     collect_imported(collect_imported, ast_module_);
 
     // The compiler-provided `builtin` module is injected into the prelude, not imported
-    if (include_builtin_test_runtime && !gir_module_.get_test_functions().empty() &&
-        ctx_.modules.has_builtin_module()) {
+    if (include_builtin_test_runtime && ctx_.modules.has_builtin_module()) {
         auto& builtin_mod{ctx_.modules.builtin_module()};
         if (visited.insert(&builtin_mod).second) { imported_mods.emplace_back(&builtin_mod); }
     }

@@ -489,7 +489,7 @@ auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod, bool rec
 
     // The runner is always `test_runner(args: [][:0]u8, tests: []Test): i32`
     auto* runner_fn{llvm_module_->getFunction("test_runner")};
-    ASSERT(runner_fn, "a `test_runner` (builtin weak default or user override) must be linked");
+    VERIFY(runner_fn, "a `test_runner` (builtin weak default or user override) must be linked");
 
     auto* args_slice_val{emit_argv_slice(main_fn, recover_args)};
     auto* test_slice_val{builder_.CreateLoad(slice_ty, test_slice_gvar, "tests.slice")};

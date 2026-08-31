@@ -45,6 +45,25 @@ TEST_CASE("test command execution") {
         REQUIRE(cmd.execute());
     }
 
+    SECTION("Source file with no test blocks compiles, runs, and exits cleanly") {
+        codegen::llvm_scope scope;
+        tempfile            src_file{"test_driver_no_tests.gh"};
+
+        {
+            std::ofstream out{src_file.path};
+            fmt::print(out, R"(
+                pub const add := fn(a: i32, b: i32): i32 {{
+                    return a + b;
+                }};
+            )");
+        }
+
+        cmd::test_cmd cmd{{
+            .input_path = src_file,
+        }};
+        REQUIRE(cmd.execute());
+    }
+
     SECTION("Test file with failing assertion returns non-zero exit code") {
         codegen::llvm_scope scope;
         tempfile            src_file{"test_driver_fail.gh"};
