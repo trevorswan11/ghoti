@@ -30,9 +30,16 @@
 - Module-scope `var` globals and `var` / `const` static members are first-class: bare-name / `Type.X` / `@this().X` read, address-of, and assignment; member functions usable as `fn` pointers
 - Non-exhaustive enums: casting an integer to an enum without `_` is range-checked at runtime and panics on an unlisted value
 - Fixed-width integers `i8`, `i16`, `u16` (widen implicitly: `i8`→`i16`→`i32`→`i64`/`isize`, `u8`→`u16`→`u32`→`u64`/`usize`)
+- Pointer truthiness: a `^T` is non-null-tested in boolean position
+    - `if (ptr)`, `while (ptr)`, `do…while (ptr)`, `!ptr`, and `and` / `or` operands
+    - Implicit coercion (`const b: bool = ptr`, passing a pointer to a `bool` parameter) is still rejected
+- Explicit `@as(bool, ptr)`; `@as(bool, x)` also accepts an integer (`x != 0`)
+- Reference-typed struct and union fields are allowed; they are rejected in `extern` struct / union
 
 ## Runtime safety
 - Signed `+ - * -x` overflow, integer division / remainder by zero (signed **and** unsigned), `INT_MIN / -1`, and out-of-range shift amounts now panic at runtime
+- Dereferencing a null `^T` panics: through `*p`, `p.field`, `p[i]`, and `p[lo..hi]` (reads and writes)
+    - `&T` references are exempt (non-null by construction)
 - `@addWithOverflow` / `@mulWithOverflow` / `@divTrunc` / ... stay as the unchecked escape hatches; unsigned `+ - *` still wrap
 - `--unsafe` build flag disables *all* runtime safety checks (the above plus bounds checks, enum-cast checks, `!` unwrap, tagged-union field access, `unreachable`)
 
@@ -48,3 +55,5 @@
 - Lexer: word operators (`and` / `or`) only match on a whole-word boundary, so identifiers like `origin` lex correctly
 - Formatter: blank lines enforced between aggregates, tests, and functions; fixed a trivia-dropping bug
 - Narrow integers now widen implicitly at call args, returns, assignments, and field inits (previously a codegen crash)
+- `--emit-gir <file>` / `--emit-llvm-ir <file>` on `build-exe` / `build-obj` / `build-lib` / `test`: write the GIR dump or LLVM IR to a file (both require a path; no dump by default)
+- `const x: T = <non-constant expr>` with a mismatched type is now a type error (previously bound directly to the value, skipping the store check)
