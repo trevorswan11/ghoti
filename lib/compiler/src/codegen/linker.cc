@@ -291,6 +291,8 @@ auto reset_linker_context() -> void {
     llvm::llvm_shutdown();
 }
 
+auto has_windows_argv_sysroot() -> bool { return windows_sysroot_lib_dir().has_value(); }
+
 auto link_executable(const std::filesystem::path& object_file,
                      const std::filesystem::path& output_file,
                      const target_options&        target_opts,

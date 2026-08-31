@@ -20,6 +20,9 @@ struct extra_linker_options {
     bool needs_windows_argv_apis{false};
 };
 
+// True when an import-lib directory for the Windows Win32 APIs (kernel32 / shell32) is configured
+[[nodiscard]] auto has_windows_argv_sysroot() -> bool;
+
 [[nodiscard]] auto link_executable(const std::filesystem::path& object_file,
                                    const std::filesystem::path& output_file,
                                    const target_options&        target_opts,

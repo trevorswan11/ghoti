@@ -72,7 +72,8 @@ pub const Test := struct {
 
 extern const __ghoti_test_take_skipped: fn(): bool;
 
-pub weak const test_runner := fn(tests: []Test): i32 {
+pub weak const test_runner := fn(args: [][:0]u8, tests: []Test): i32 {
+    _ = args;
     var failures: i32 = 0;
     var skipped: i32 = 0;
     for (tests) |entry| {

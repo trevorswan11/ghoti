@@ -143,7 +143,8 @@ TEST_CASE("test command execution") {
                     @require(false);
                 }}
 
-                pub const test_runner := fn(tests: []builtin::Test): i32 {{
+                pub const test_runner := fn(args: [][:0]u8, tests: []builtin::Test): i32 {{
+                    _ = args;
                     _ = tests;
                     return 0;
                 }};
@@ -167,7 +168,8 @@ TEST_CASE("test command execution") {
                     @expect(true);
                 }}
 
-                pub const test_runner := fn(tests: []builtin::Test): i32 {{
+                pub const test_runner := fn(args: [][:0]u8, tests: []builtin::Test): i32 {{
+                    _ = args;
                     _ = tests;
                     return 12;
                 }};

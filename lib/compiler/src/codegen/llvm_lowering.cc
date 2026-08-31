@@ -140,15 +140,36 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
     auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", main_fn)};
     builder_.SetInsertPoint(entry_bb);
 
-    auto* slice_ty{types_.translate_slice_type()};
+    // Nothing reads args unless user main takes the `[][:0]u8` parameter.
+    const bool takes_arg{user_fn->getFunctionType()->getNumParams() == 1};
+    auto*      outer_val{emit_argv_slice(main_fn, takes_arg)};
+
+    if (user_fn->getReturnType()->isVoidTy()) {
+        if (takes_arg) {
+            builder_.CreateCall(user_fn, {outer_val});
+        } else {
+            builder_.CreateCall(user_fn, {});
+        }
+        builder_.CreateRet(builder_.getInt32(0));
+    } else {
+        auto* ret_val{takes_arg ? builder_.CreateCall(user_fn, {outer_val}, "main.res")
+                                : builder_.CreateCall(user_fn, {}, "main.res")};
+        auto* ret_i32{builder_.CreateIntCast(ret_val, types_.get_int32_ty(), true, "main.res.i32")};
+        builder_.CreateRet(ret_i32);
+    }
+
+    return main_fn;
+}
+
+auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_args) -> llvm::Value* {
+    auto*              slice_ty{types_.translate_slice_type()};
+    const llvm::Triple triple{llvm_module_->getTargetTriple()};
 
     // Windows raw PE entry point
     if (triple.isOSWindows()) {
         // BaseThreadInitThunk calls entry with no argc/argv, unlike the POSIX path below.
-        const bool takes_arg{user_fn->getFunctionType()->getNumParams() == 1};
-
         llvm::Value* outer_val{nullptr};
-        if (!takes_arg) {
+        if (!want_real_args) {
             // Nothing reads args -- skip the WinAPI calls entirely and pass an empty slice
             auto* outer_slice{builder_.CreateAlloca(slice_ty, nullptr, "outer.slice")};
             auto* outer_data{builder_.CreateStructGEP(
@@ -200,10 +221,10 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
                                                  max_args_v,
                                                  "argc.bounded")};
 
-            auto* loop_cond{llvm::BasicBlock::Create(context_, "wargs.cond", main_fn)};
-            auto* loop_body{llvm::BasicBlock::Create(context_, "wargs.body", main_fn)};
-            auto* loop_inc{llvm::BasicBlock::Create(context_, "wargs.inc", main_fn)};
-            auto* loop_end{llvm::BasicBlock::Create(context_, "wargs.end", main_fn)};
+            auto* loop_cond{llvm::BasicBlock::Create(context_, "wargs.cond", entry_fn)};
+            auto* loop_body{llvm::BasicBlock::Create(context_, "wargs.body", entry_fn)};
+            auto* loop_inc{llvm::BasicBlock::Create(context_, "wargs.inc", entry_fn)};
+            auto* loop_end{llvm::BasicBlock::Create(context_, "wargs.end", entry_fn)};
 
             auto* i_var{builder_.CreateAlloca(types_.get_int64_ty(), nullptr, "wi")};
             builder_.CreateStore(builder_.getInt64(0), i_var);
@@ -270,26 +291,12 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
             outer_val = builder_.CreateLoad(slice_ty, outer_slice, "outer.val");
         }
 
-        if (user_fn->getReturnType()->isVoidTy()) {
-            if (takes_arg) {
-                builder_.CreateCall(user_fn, {outer_val});
-            } else {
-                builder_.CreateCall(user_fn, {});
-            }
-            builder_.CreateRet(builder_.getInt32(0));
-        } else {
-            auto* ret_val{takes_arg ? builder_.CreateCall(user_fn, {outer_val}, "main.res")
-                                    : builder_.CreateCall(user_fn, {}, "main.res")};
-            auto* ret_i32{
-                builder_.CreateIntCast(ret_val, types_.get_int32_ty(), true, "main.res.i32")};
-            builder_.CreateRet(ret_i32);
-        }
-        return main_fn;
+        return outer_val;
     }
 
-    auto* argc{main_fn->getArg(0)};
+    auto* argc{entry_fn->getArg(0)};
     argc->setName("argc");
-    auto* argv{main_fn->getArg(1)};
+    auto* argv{entry_fn->getArg(1)};
     argv->setName("argv");
 
     auto* raw_argc_i64{builder_.CreateSExt(argc, types_.get_int64_ty(), "argc.i64")};
@@ -300,10 +307,10 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
     auto* argc_i64{builder_.CreateSelect(
         builder_.CreateICmpSLT(raw_argc_i64, max_args), raw_argc_i64, max_args, "argc.bounded")};
 
-    auto* loop_cond{llvm::BasicBlock::Create(context_, "loop.cond", main_fn)};
-    auto* loop_body{llvm::BasicBlock::Create(context_, "loop.body", main_fn)};
-    auto* loop_inc{llvm::BasicBlock::Create(context_, "loop.inc", main_fn)};
-    auto* loop_end{llvm::BasicBlock::Create(context_, "loop.end", main_fn)};
+    auto* loop_cond{llvm::BasicBlock::Create(context_, "loop.cond", entry_fn)};
+    auto* loop_body{llvm::BasicBlock::Create(context_, "loop.body", entry_fn)};
+    auto* loop_inc{llvm::BasicBlock::Create(context_, "loop.inc", entry_fn)};
+    auto* loop_end{llvm::BasicBlock::Create(context_, "loop.end", entry_fn)};
 
     auto* i_var{builder_.CreateAlloca(types_.get_int64_ty(), nullptr, "i")};
     builder_.CreateStore(builder_.getInt64(0), i_var);
@@ -321,9 +328,9 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
     auto* str_ptr{builder_.CreateLoad(types_.get_ptr_ty(), argv_elem_ptr, "str.ptr")};
 
     // Calculate strlen(str_ptr) via a sub-loop
-    auto* str_len_cond{llvm::BasicBlock::Create(context_, "strlen.cond", main_fn)};
-    auto* str_len_body{llvm::BasicBlock::Create(context_, "strlen.body", main_fn)};
-    auto* str_len_end{llvm::BasicBlock::Create(context_, "strlen.end", main_fn)};
+    auto* str_len_cond{llvm::BasicBlock::Create(context_, "strlen.cond", entry_fn)};
+    auto* str_len_body{llvm::BasicBlock::Create(context_, "strlen.body", entry_fn)};
+    auto* str_len_end{llvm::BasicBlock::Create(context_, "strlen.end", entry_fn)};
 
     auto* len_var{builder_.CreateAlloca(types_.get_int64_ty(), nullptr, "str.len")};
     builder_.CreateStore(builder_.getInt64(0), len_var);
@@ -368,30 +375,12 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
         slice_ty, outer_slice, static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX), "outer.len")};
     builder_.CreateStore(slice_array, outer_data);
     builder_.CreateStore(argc_i64, outer_len);
-    auto* outer_val{builder_.CreateLoad(slice_ty, outer_slice, "outer.val")};
-
-    // Call user main
-    const bool takes_arg{user_fn->getFunctionType()->getNumParams() == 1};
-    if (user_fn->getReturnType()->isVoidTy()) {
-        if (takes_arg) {
-            builder_.CreateCall(user_fn, {outer_val});
-        } else {
-            builder_.CreateCall(user_fn, {});
-        }
-        builder_.CreateRet(builder_.getInt32(0));
-    } else {
-        auto* ret_val{takes_arg ? builder_.CreateCall(user_fn, {outer_val}, "main.res")
-                                : builder_.CreateCall(user_fn, {}, "main.res")};
-        auto* ret_i32{builder_.CreateIntCast(ret_val, types_.get_int32_ty(), true, "main.res.i32")};
-        builder_.CreateRet(ret_i32);
-    }
-
-    return main_fn;
+    return builder_.CreateLoad(slice_ty, outer_slice, "outer.val");
 }
 
 auto llvm_lowering::lower_test_executable(const gir::module&             gir_mod,
-                                          stdx::option<std::string_view> user_runner_name)
-    -> stdx::box<llvm::Module> {
+                                          stdx::option<std::string_view> user_runner_name,
+                                          bool recover_args) -> stdx::box<llvm::Module> {
     user_main_name_ =
         user_runner_name.transform([](auto sv) { return std::string{sv}; }).value_or(std::string{});
     is_executable_ = true;
@@ -400,12 +389,14 @@ auto llvm_lowering::lower_test_executable(const gir::module&             gir_mod
     define_test_take_skipped();
     for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
     for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
-    emit_test_entry_wrapper(gir_mod);
+    emit_test_entry_wrapper(gir_mod, recover_args);
     return std::move(llvm_module_);
 }
 
-auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod) -> llvm::Function* {
-    auto* main_fn_ty{llvm::FunctionType::get(types_.get_int32_ty(), {}, false)};
+auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod, bool recover_args)
+    -> llvm::Function* {
+    auto* main_fn_ty{llvm::FunctionType::get(
+        types_.get_int32_ty(), {types_.get_int32_ty(), types_.get_ptr_ty()}, false)};
     auto* main_fn{llvm::Function::Create(
         main_fn_ty, llvm::Function::ExternalLinkage, "main", llvm_module_.get())};
     main_fn->addFnAttr(llvm::Attribute::NoBuiltin);
@@ -496,13 +487,13 @@ auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod) -> llvm:
     auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", main_fn)};
     builder_.SetInsertPoint(entry_bb);
 
-    // The runner is always `test_runner(tests: []Test): i32`. `builtin` provides a
-    // `weak` default; a non-weak `test_runner` in the build overrides it at link time.
+    // The runner is always `test_runner(args: [][:0]u8, tests: []Test): i32`
     auto* runner_fn{llvm_module_->getFunction("test_runner")};
     ASSERT(runner_fn, "a `test_runner` (builtin weak default or user override) must be linked");
 
+    auto* args_slice_val{emit_argv_slice(main_fn, recover_args)};
     auto* test_slice_val{builder_.CreateLoad(slice_ty, test_slice_gvar, "tests.slice")};
-    auto* call_res{builder_.CreateCall(runner_fn, {test_slice_val})};
+    auto* call_res{builder_.CreateCall(runner_fn, {args_slice_val, test_slice_val})};
     if (runner_fn->getReturnType()->isIntegerTy(32)) {
         builder_.CreateRet(call_res);
     } else {

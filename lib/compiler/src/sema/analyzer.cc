@@ -12,6 +12,7 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/TargetParser/Triple.h>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
@@ -331,11 +332,15 @@ auto analyzer::emit_llvm_ir_test_executable(gir::module&                      gi
     roots.emplace_back("skip_handler");
     gir_module.prune_unreachable(roots);
     codegen::llvm_lowering lowering{context, gir_module.get_ast_module().path.string()};
+    bool                   recover_args{true};
     if (options.target_machine) {
         lowering.module().setDataLayout(options.target_machine->createDataLayout());
         lowering.module().setTargetTriple(options.target_machine->getTargetTriple());
+        // A freestanding Windows entry recovers argv through kernel32 / shell32
+        const llvm::Triple triple{options.target_machine->getTargetTriple()};
+        recover_args = !triple.isOSWindows() || codegen::has_windows_argv_sysroot();
     }
-    auto llvm_mod{lowering.lower_test_executable(gir_module, stdx::none)};
+    auto llvm_mod{lowering.lower_test_executable(gir_module, stdx::none, recover_args)};
 
     std::string              err_str;
     llvm::raw_string_ostream os{err_str};
