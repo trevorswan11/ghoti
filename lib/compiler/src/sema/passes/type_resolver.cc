@@ -3421,6 +3421,18 @@ namespace {
                       location};
 }
 
+[[nodiscard]] auto extern_reference_field(std::string_view       kind,
+                                          std::string_view       name,
+                                          const source_location& location) -> diagnostic {
+    return diagnostic{
+        fmt::format("extern {} field '{}' cannot have a reference type; an 'extern' aggregate "
+                    "has no ABI representation for references, use a raw pointer ('^T') instead",
+                    kind,
+                    name),
+        error::ILLEGAL_REFERENCE_FIELD,
+        location};
+}
+
 } // namespace
 
 template <ast::IndexableID ID>
@@ -3467,6 +3479,14 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
                 resolving_,
                 id,
                 incomplete_field(ident.name, resolving_.ast.location_of(field.explicit_type))));
+        }
+
+        if (struct_expr.is_extern && field_type->get_kind() == type_kind::REFERENCE) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                extern_reference_field(
+                    "struct", ident.name, resolving_.ast.location_of(field.explicit_type))));
         }
 
         resolving_.set_sema_type(field.name, *field_type);
@@ -3540,6 +3560,14 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
                 resolving_,
                 id,
                 incomplete_field(ident.name, resolving_.ast.location_of(field.explicit_type))));
+        }
+
+        if (union_expr.is_extern && field_type.get_kind() == type_kind::REFERENCE) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                extern_reference_field(
+                    "union", ident.name, resolving_.ast.location_of(field.explicit_type))));
         }
 
         resolving_.set_sema_type(field.name, field_type);

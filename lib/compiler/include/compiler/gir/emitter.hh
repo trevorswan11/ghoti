@@ -128,6 +128,7 @@ class emitter {
                               const value&     src_val,
                               ast::expr_handle src_expr) -> void;
 
+    auto emit_null_pointer_check(value ptr, ast::node_id site) -> void;
     auto emit_checked_binary(instruction_kind kind,
                              value            lhs,
                              value            rhs,
@@ -137,6 +138,9 @@ class emitter {
                             value            operand,
                             sema::type&      result_type,
                             ast::node_id     site) -> local_id;
+
+    auto pointer_to_bool(value ptr, bool invert) -> value;
+    auto coerce_condition(value cond) -> value;
     auto request_builtin_runtime(std::string_view name) -> void;
     auto ensure_builtin_runtime(std::string_view name) -> void;
     auto spill_to_temporary(value val, sema::type& type, bool is_const = false) -> value;

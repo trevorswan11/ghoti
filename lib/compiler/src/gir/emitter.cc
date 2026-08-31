@@ -111,8 +111,7 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
     };
     collect_imported(collect_imported, ast_module_);
 
-    // The compiler-provided `builtin` module is injected into the prelude rather than
-    // `import`ed, so the traversal above never reaches it
+    // The compiler-provided `builtin` module is injected into the prelude, not imported
     if (include_builtin_test_runtime && !gir_module_.get_test_functions().empty() &&
         ctx_.modules.has_builtin_module()) {
         auto& builtin_mod{ctx_.modules.builtin_module()};
@@ -1072,6 +1071,18 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         }
 
         const value val{emit_coerced_expr(*decl.value, *sema_type)};
+
+        // A non-foldable `const` binds directly to its initializer's value, bypassing the
+        // store-typecheck a `var` alloca would get; re-check the annotated type here.
+        if (decl.explicit_type && val.type && !sema::is_assignable(*val.type, *sema_type)) {
+            ctx_.diags.emplace_back(
+                fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
+                            sema::type_kind_display_name(val.type->get_kind()),
+                            sema::type_kind_display_name(sema_type->get_kind())),
+                sema::error::TYPE_MISMATCH,
+                active_ast().location_of(*decl.value));
+        }
+
         if (const auto lid{val.as_opt<local_id>()}) {
             scopes_.back().bindings.emplace(name,
                                             local_binding{
@@ -1434,6 +1445,10 @@ auto emitter::emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value
     ASSERT(sema_type, "Unary expression must have a resolved sema type");
 
     const auto operand{emit_expression(unary.rhs)};
+    if (op_type == syntax::token_type_t::BANG && operand.type &&
+        operand.type->get_kind() == sema::type_kind::POINTER) {
+        return pointer_to_bool(operand, true);
+    }
     const auto dest{emit_checked_unary(*kind_opt, operand, *sema_type, id)};
     return value{dest, sema_type};
 }
@@ -1588,7 +1603,25 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             if (call.arguments.size() >= 2) {
                 if (const auto op_expr{call.arguments[1].as_opt<ast::expr_handle>()}) {
                     const auto operand{emit_expression(*op_expr)};
-                    auto       cast_kind{instruction_kind::WIDEN_CAST};
+
+                    // `@as(bool, x)` tests a pointer or integer against its zero value.
+                    if (fn_token == syntax::token_type_t::BUILTIN_AS &&
+                        ret_type.get_kind() == sema::type_kind::BOOL && operand.type) {
+                        const auto operand_kind{operand.type->get_kind()};
+                        if (operand_kind == sema::type_kind::POINTER) {
+                            return pointer_to_bool(operand, false);
+                        }
+                        if (sema::is_integer(operand_kind)) {
+                            auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+                            return value{builder_.emit_binary(instruction_kind::NE,
+                                                              operand,
+                                                              value{u64{0}, *operand.type},
+                                                              bool_type),
+                                         bool_type};
+                        }
+                    }
+
+                    auto cast_kind{instruction_kind::WIDEN_CAST};
                     if (fn_token == syntax::token_type_t::BUILTIN_BIT_CAST) {
                         cast_kind = instruction_kind::BIT_CAST;
                     } else if (fn_token == syntax::token_type_t::BUILTIN_PTR_CAST ||
@@ -2204,7 +2237,7 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
 
     stdx::option<local_id> res_slot;
     if (yields_value) { res_slot.emplace(builder_.emit_alloca(*sema_type)); }
-    const auto cond_val{emit_expression(if_expr.condition)};
+    const auto cond_val{coerce_condition(emit_expression(if_expr.condition))};
 
     auto&                  consequence_seg{fn.add_segment()};
     stdx::option<segment&> alternate_seg_ptr;
@@ -2285,7 +2318,7 @@ auto emitter::emit_while(ast::node_id                   id,
 
         // Cond segment
         builder_.set_segment(cond_seg);
-        const auto cond_val{emit_expression(while_loop.condition)};
+        const auto cond_val{coerce_condition(emit_expression(while_loop.condition))};
         const auto false_target{non_break_seg ? non_break_seg->get_id() : exit_seg.get_id()};
         builder_.emit_cond_goto(cond_val, body_seg.get_id(), false_target);
 
@@ -2370,7 +2403,7 @@ auto emitter::emit_do_while(ast::node_id                   id,
 
         // Cond segment
         builder_.set_segment(cond_seg);
-        const auto cond_val{emit_expression(do_while.condition)};
+        const auto cond_val{coerce_condition(emit_expression(do_while.condition))};
         builder_.emit_cond_goto(cond_val, body_seg.get_id(), exit_seg.get_id());
     }
 
@@ -2793,7 +2826,7 @@ auto emitter::emit_logical_and(ast::node_id, const ast::binary_expr& binary) -> 
     auto&      bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
     const auto res_slot{builder_.emit_alloca(bool_type)};
     builder_.emit_store(res_slot, value{false, bool_type});
-    const auto lhs_val{emit_expression(binary.lhs)};
+    const auto lhs_val{coerce_condition(emit_expression(binary.lhs))};
 
     auto fn_opt{builder_.get_function()};
     ASSERT(fn_opt, "Logical AND must be within an active function");
@@ -2805,7 +2838,7 @@ auto emitter::emit_logical_and(ast::node_id, const ast::binary_expr& binary) -> 
     builder_.emit_cond_goto(lhs_val, rhs_seg.get_id(), merge_seg.get_id());
 
     builder_.set_segment(rhs_seg);
-    const auto rhs_val{emit_expression(binary.rhs)};
+    const auto rhs_val{coerce_condition(emit_expression(binary.rhs))};
     builder_.emit_store(res_slot, rhs_val);
     if (const auto cur_seg{builder_.get_segment()}; cur_seg && !cur_seg->has_terminator()) {
         builder_.emit_goto(merge_seg.get_id());
@@ -2822,7 +2855,7 @@ auto emitter::emit_logical_or(ast::node_id, const ast::binary_expr& binary) -> v
     const auto res_slot{builder_.emit_alloca(bool_type)};
     builder_.emit_store(res_slot, value{true, bool_type});
 
-    const auto lhs_val{emit_expression(binary.lhs)};
+    const auto lhs_val{coerce_condition(emit_expression(binary.lhs))};
 
     auto fn_opt{builder_.get_function()};
     ASSERT(fn_opt, "Logical OR must be within an active function");
@@ -2833,7 +2866,7 @@ auto emitter::emit_logical_or(ast::node_id, const ast::binary_expr& binary) -> v
     builder_.emit_cond_goto(lhs_val, merge_seg.get_id(), rhs_seg.get_id());
 
     builder_.set_segment(rhs_seg);
-    const auto rhs_val{emit_expression(binary.rhs)};
+    const auto rhs_val{coerce_condition(emit_expression(binary.rhs))};
     builder_.emit_store(res_slot, rhs_val);
     if (const auto cur_seg{builder_.get_segment()}; cur_seg && !cur_seg->has_terminator()) {
         builder_.emit_goto(merge_seg.get_id());
@@ -2960,6 +2993,27 @@ auto emitter::emit_panic_call(std::string_view message, ast::node_id site) -> vo
     request_builtin_runtime("panic_handler");
 }
 
+auto emitter::emit_null_pointer_check(value ptr, ast::node_id site) -> void {
+    if (!runtime_safety_ || !ptr.type || ptr.type->get_kind() != sema::type_kind::POINTER) {
+        return;
+    }
+    auto fn_opt{builder_.get_function()};
+    if (!fn_opt) { return; }
+
+    auto&      bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto&      null_type{ctx_.get_builtin_resolved_type(sema::type_kind::NULLPTR)};
+    const auto is_null{builder_.emit_binary(
+        instruction_kind::EQ, std::move(ptr), value{nullptr_val{}, null_type}, bool_type)};
+
+    auto& bad_seg{fn_opt->add_segment()};
+    auto& ok_seg{fn_opt->add_segment()};
+    builder_.emit_cond_goto(value{is_null, bool_type}, bad_seg.get_id(), ok_seg.get_id());
+
+    builder_.set_segment(bad_seg);
+    emit_panic_call("dereference of null pointer", site);
+    builder_.set_segment(ok_seg);
+}
+
 auto emitter::emit_enum_cast_guard(ast::node_id     site,
                                    const value&     enum_val,
                                    const value&     src_val,
@@ -3050,6 +3104,22 @@ auto emitter::emit_checked_unary(instruction_kind kind,
     const bool checkable{runtime_safety_ && kind == instruction_kind::NEG &&
                          sema::is_signed_integer(result_type.get_kind())};
     return builder_.emit_unary(kind, std::move(operand), result_type, checkable);
+}
+
+auto emitter::pointer_to_bool(value ptr, bool invert) -> value {
+    auto&      bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto&      null_type{ctx_.get_builtin_resolved_type(sema::type_kind::NULLPTR)};
+    const auto op{invert ? instruction_kind::EQ : instruction_kind::NE};
+    return value{
+        builder_.emit_binary(op, std::move(ptr), value{nullptr_val{}, null_type}, bool_type),
+        bool_type};
+}
+
+auto emitter::coerce_condition(value cond) -> value {
+    if (cond.type && cond.type->get_kind() == sema::type_kind::POINTER) {
+        return pointer_to_bool(std::move(cond), false);
+    }
+    return cond;
 }
 
 auto emitter::request_builtin_runtime(std::string_view name) -> void {
@@ -3181,7 +3251,9 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             } else if (const auto ptr_data{obj_type->get_data().as_opt<sema::types::pointer>()}) {
                 auto& ptr_underlying{
                     *ctx_.pool.with_const(ptr_data->underlying, obj_type->is_constant())};
-                base_lval.data = value::data_t{builder_.emit_load(base_lval, *obj_type)};
+                const value loaded_ptr{builder_.emit_load(base_lval, *obj_type), *obj_type};
+                emit_null_pointer_check(loaded_ptr, id);
+                base_lval.data = loaded_ptr.data;
                 base_lval.type.emplace(ptr_underlying);
                 obj_type = &ptr_underlying;
             }
@@ -3240,8 +3312,10 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                 element_is_const = obj_type->is_constant();
                 obj_type         = &ref_data->underlying;
             } else if (const auto ptr_data{obj_type->get_data().as_opt<sema::types::pointer>()}) {
-                auto& ptr_underlying{const_cast<sema::type&>(ptr_data->underlying)};
-                base_lval.data = value::data_t{builder_.emit_load(base_lval, *obj_type)};
+                auto&       ptr_underlying{const_cast<sema::type&>(ptr_data->underlying)};
+                const value loaded_ptr{builder_.emit_load(base_lval, *obj_type), *obj_type};
+                emit_null_pointer_check(loaded_ptr, id);
+                base_lval.data = loaded_ptr.data;
                 base_lval.type.emplace(ptr_underlying);
                 element_is_const = obj_type->is_constant();
                 obj_type         = &ptr_data->underlying;
@@ -3358,7 +3432,9 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             const auto ptr_type{active_mod().get_sema_type_opt(*deref.rhs)};
             auto&      referent_type{
                 *ctx_.pool.with_const(*sema_type, ptr_type && ptr_type->is_constant())};
-            return value{emit_expression_id_raw(*deref.rhs).data, referent_type};
+            const auto raw_ptr{emit_expression_id_raw(*deref.rhs)};
+            emit_null_pointer_check(raw_ptr, id);
+            return value{raw_ptr.data, referent_type};
         });
 }
 
@@ -3869,7 +3945,9 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
     // emit_lvalue(dot.object) addresses the object's own storage; still needs unwinding here
     auto base_lval{emit_lvalue(dot.object)};
     if (const auto ptr_data{obj_type->get_data().as_opt<sema::types::pointer>()}) {
-        base_lval.data = value::data_t{builder_.emit_load(base_lval, *obj_type)};
+        const value loaded_ptr{builder_.emit_load(base_lval, *obj_type), *obj_type};
+        emit_null_pointer_check(loaded_ptr, id);
+        base_lval.data = loaded_ptr.data;
         base_lval.type.emplace(ptr_data->underlying);
         obj_type = &ptr_data->underlying;
     } else if (const auto ref_data{obj_type->get_data().as_opt<sema::types::reference>()}) {
@@ -4021,7 +4099,9 @@ auto emitter::emit_slice_range(ast::node_id id, const ast::index_expr& index) ->
         src_len.emplace(
             value{builder_.emit_load(value{len_slot, usize_type}, usize_type), usize_type});
     } else if (src_type->get_data().as_opt<sema::types::pointer>()) {
-        base_ptr = value{builder_.emit_load(src_lval, *src_type), ptr_type};
+        const value loaded_ptr{builder_.emit_load(src_lval, *src_type), *src_type};
+        emit_null_pointer_check(loaded_ptr, id);
+        base_ptr = value{loaded_ptr.data, ptr_type};
     } else {
         UNREACHABLE("Range index source must be an array, slice, or pointer");
     }
@@ -4079,6 +4159,7 @@ auto emitter::emit_dereference(ast::node_id id, const ast::dereference_expr& der
     ASSERT(sema_type, "Dereference expression must have a resolved sema type");
     const auto ptr_val{emit_expression_id_raw(*deref.rhs)};
     auto&      elem_type{*sema_type};
+    emit_null_pointer_check(ptr_val, id);
     const auto loaded{builder_.emit_load(ptr_val, elem_type)};
     return value{loaded, sema_type};
 }
