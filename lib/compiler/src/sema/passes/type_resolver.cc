@@ -3328,9 +3328,13 @@ auto type_resolver::visit(ast::node_id id, const ast::address_of_expr& adr_of) -
     }
     auto& rhs_type{*last_type_.take()};
 
-    auto& new_type{ctx_.get_pointer(ref_addr_of_is_mutable(id), rhs_type)};
-    new_type.resolve_if<types::pointer>(rhs_type);
+    gsl::not_null<type*> pointee{&rhs_type};
+    if (const auto ref{rhs_type.get_data().as_opt<types::reference>()}) {
+        pointee = &ref->underlying;
+    }
 
+    auto& new_type{ctx_.get_pointer(ref_addr_of_is_mutable(id), *pointee)};
+    new_type.resolve_if<types::pointer>(*pointee);
     resolving_.set_sema_type(id, new_type);
     last_type_.emplace(new_type);
 }

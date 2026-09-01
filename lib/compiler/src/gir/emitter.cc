@@ -4233,6 +4233,14 @@ auto emitter::emit_address_of(ast::node_id id, const ast::address_of_expr& addr)
     PROFILE_FUNCTION();
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Address of expression must have a resolved sema type");
+
+    // `^r` on a reference aliases the referent, cannot have a pointer to a reference
+    if (const auto rhs_type{active_mod().get_sema_type_opt(*addr.rhs)};
+        rhs_type && rhs_type->get_kind() == sema::type_kind::REFERENCE) {
+        const auto ref_val{emit_expression_id_raw(*addr.rhs)};
+        return value{ref_val.data, sema_type};
+    }
+
     const auto target{emit_lvalue(addr.rhs)};
     auto&      res_type{*sema_type};
     const auto ptr{builder_.emit_address_of(target, res_type)};
