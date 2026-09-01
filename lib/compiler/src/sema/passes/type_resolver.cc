@@ -997,7 +997,7 @@ auto register_type_ctor_members(context&         ctx,
         if (ty) { ty.emplace(remap_type(ctx, *ty, src_agg, clone)); }
     }
     if (!typing.empty()) {
-        ctx.instantiation_body_types.insert_or_assign(std::string{ctor_mangled}, std::move(typing));
+        ctx.instantiation_cache.set_body_type_diff(std::string{ctor_mangled}, std::move(typing));
     }
     ctx.generic_functions.set_type_ctor_member_prefix(clone, std::string{ctor_mangled});
 }
@@ -1011,6 +1011,7 @@ auto register_type_ctor_members(context&         ctx,
     auto& fresh{*ctx.pool[key]};
     if (fresh.is_resolved()) { return fresh; }
     if (src.has_symbol_table_idx()) { fresh.set_symbol_table_idx(src.get_symbol_table_idx()); }
+    ctx.generic_functions.set_clone_disc(fresh, std::string{disc});
 
     // Rebind so distinct instantiations of a `fn(T): type` ctor do not alias each other's shape
     const auto rebind{[&](gsl::span<type*> types) -> gsl::span<type*> {
@@ -1043,47 +1044,65 @@ auto register_type_ctor_members(context&         ctx,
     return fresh;
 }
 
+// Replaces characters that are meaningful in a discriminator but undesirable in a symbol name.
+[[nodiscard]] auto sanitize_mangled(std::string_view s) -> std::string {
+    std::string out;
+    out.reserve(s.size());
+    for (const char c : s) {
+        if (c == '#' || c == '.' || c == ':') {
+            out += '_';
+        } else {
+            out += c;
+        }
+    }
+    return out;
+}
+
 // Mangles a type such that it will not conflict with any other monomorphized instance
-[[nodiscard]] auto mangle_arg_type(const type& t) -> std::string {
+[[nodiscard]] auto mangle_arg_type(const generic_function_registry& reg, const type& t)
+    -> std::string {
     if (const auto meta{t.get_data().as_opt<types::meta_type>()}) {
-        return "type_" + mangle_arg_type(meta->instance);
+        return "type_" + mangle_arg_type(reg, meta->instance);
     }
     const auto& data{t.get_data()};
     switch (t.get_kind()) {
     case type_kind::STRUCT:
     case type_kind::UNION:
     case type_kind::ENUM:
-    case type_kind::CLOSURE:
-        // Aggregate declarations have unique symbol tables per type so this is safe
-        if (t.has_symbol_table_idx()) {
-            return fmt::format(
-                "{}{}", type_kind_display_name(t.get_kind()), t.get_symbol_table_idx());
+    case type_kind::CLOSURE: {
+        const auto kind_name{type_kind_display_name(t.get_kind())};
+        if (const auto disc{reg.get_clone_disc(t)}) {
+            return fmt::format("{}${}", kind_name, sanitize_mangled(*disc));
         }
-        return std::string{type_kind_display_name(t.get_kind())};
+        if (t.has_symbol_table_idx()) {
+            return fmt::format("{}{}", kind_name, t.get_symbol_table_idx());
+        }
+        return std::string{kind_name};
+    }
     case type_kind::FUNCTION: {
         const auto& fn{data.as<types::function>()};
         return fmt::format("fn_{}__{}",
-                           fmt::join(fn.params | std::views::transform([](const auto* p) {
-                                         return mangle_arg_type(*p);
+                           fmt::join(fn.params | std::views::transform([&](const auto* p) {
+                                         return mangle_arg_type(reg, *p);
                                      }),
                                      "_"),
-                           mangle_arg_type(fn.return_type));
+                           mangle_arg_type(reg, fn.return_type));
     }
     case type_kind::ARRAY: {
         const auto& arr{data.as<types::array>()};
-        return fmt::format("array{}_{}", arr.len, mangle_arg_type(arr.underlying));
+        return fmt::format("array{}_{}", arr.len, mangle_arg_type(reg, arr.underlying));
     }
     case type_kind::SLICE: {
         const auto& sl{data.as<types::slice>()};
-        return fmt::format("slice_{}", mangle_arg_type(sl.underlying));
+        return fmt::format("slice_{}", mangle_arg_type(reg, sl.underlying));
     }
     case type_kind::POINTER: {
         const auto& p{data.as<types::pointer>()};
-        return fmt::format("ptr_{}", mangle_arg_type(p.underlying));
+        return fmt::format("ptr_{}", mangle_arg_type(reg, p.underlying));
     }
     case type_kind::REFERENCE: {
         const auto& r{data.as<types::reference>()};
-        return fmt::format("ref_{}", mangle_arg_type(r.underlying));
+        return fmt::format("ref_{}", mangle_arg_type(reg, r.underlying));
     }
     default: return std::string{type_kind_display_name(t.get_kind())};
     }
@@ -1985,25 +2004,38 @@ auto type_resolver::register_non_generic_type_ctor_members(type&                
     if (k != type_kind::STRUCT && k != type_kind::UNION && k != type_kind::ENUM) { return; }
     if (ctx_.generic_functions.get_type_ctor_member_prefix(result)) { return; }
 
-    // Only a same-module `Ctor()` (bare identifier) is handled; the member AST lives here.
-    const auto fn_ident{resolving_.ast.get_as_opt<ast::identifier_expr>(ctor_call.function)};
-    if (!fn_ident || !resolving_.root_table_idx) { return; }
-    const auto sym{ctx_.registry.get_from_opt(*resolving_.root_table_idx, fn_ident->name)};
-    if (!sym) { return; }
-    const auto node{sym->get_data().as_opt<symbols::node_t>()};
+    // Resolve the constructor's declaration and its owning module from `Ctor()` or `mod::Ctor()`.
+    mod::module*          owner_mod{nullptr};
+    stdx::option<symbol&> ctor_sym;
+    if (const auto fn_ident{resolving_.ast.get_as_opt<ast::identifier_expr>(ctor_call.function)}) {
+        if (!resolving_.root_table_idx) { return; }
+        owner_mod = &resolving_;
+        ctor_sym  = ctx_.registry.get_from_opt(*resolving_.root_table_idx, fn_ident->name);
+    } else if (const auto mac{
+                   resolving_.ast.get_as_opt<ast::module_access_expr>(ctor_call.function)}) {
+        const auto mod_type{resolving_.get_sema_type_opt(mac->outer)};
+        const auto m_data{mod_type ? mod_type->get_data().as_opt<types::module>() : stdx::none};
+        if (!m_data || !m_data->imported.root_table_idx) { return; }
+        owner_mod = &m_data->imported;
+        const auto& inner{resolving_.ast.get_as<ast::identifier_expr>(mac->inner)};
+        ctor_sym = ctx_.registry.get_from_opt(*owner_mod->root_table_idx, inner.name);
+    }
+    if (!owner_mod || !ctor_sym) { return; }
+
+    const auto node{ctor_sym->get_data().as_opt<symbols::node_t>()};
     if (!node) { return; }
-    const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
+    const auto decl{owner_mod->ast.get_as_opt<ast::decl_stmt>(*node)};
     if (!decl || !decl->value) { return; }
-    const auto fn_expr{resolving_.ast.get_as_opt<ast::function_expr>(*decl->value)};
+    const auto fn_expr{owner_mod->ast.get_as_opt<ast::function_expr>(*decl->value)};
     if (!fn_expr) { return; }
 
-    const auto& block{resolving_.ast.get_as<ast::block_stmt>(fn_expr->body)};
-    const auto  agg_node{returned_aggregate_node(resolving_.ast, block)};
+    const auto& block{owner_mod->ast.get_as<ast::block_stmt>(fn_expr->body)};
+    const auto  agg_node{returned_aggregate_node(owner_mod->ast, block)};
     if (!agg_node) { return; }
 
     const auto prefix{fmt::format(
         "tc{}", result.has_symbol_table_idx() ? result.get_symbol_table_idx() : usize{0})};
-    register_type_ctor_members(ctx_, resolving_, *agg_node, result, result, prefix, {});
+    register_type_ctor_members(ctx_, *owner_mod, *agg_node, result, result, prefix, {});
 }
 
 template <ast::IndexableID ID>
@@ -4556,8 +4588,8 @@ auto type_resolver::instantiate_generic(type&                             callee
     auto mangled_name =
         fmt::format("{}__{}",
                     fn_info.name.value_or("fn"),
-                    fmt::join(concrete_args | std::views::transform([](const auto& arg) {
-                                  return mangle_arg_type(*arg);
+                    fmt::join(concrete_args | std::views::transform([&](const auto& arg) {
+                                  return mangle_arg_type(ctx_.generic_functions, *arg);
                               }),
                               "_"));
     // Distinct `constexpr` argument values must produce distinct symbols.
@@ -4589,12 +4621,12 @@ auto type_resolver::instantiate_generic(type&                             callee
     if (!is_type_ctor) {
         // Hand the folded values to the emitter out-of-band
         if (!constexpr_args.empty()) {
-            ctx_.constexpr_instantiation_args.insert_or_assign(
+            ctx_.instantiation_cache.set_constexpr_args(
                 mangled_name,
                 std::vector<gir::const_value>(constexpr_args.begin(), constexpr_args.end()));
         }
         if (!typing.empty()) {
-            ctx_.instantiation_body_types.insert_or_assign(mangled_name, std::move(typing));
+            ctx_.instantiation_cache.set_body_type_diff(mangled_name, std::move(typing));
         }
 
         generic_instantiation_request req{

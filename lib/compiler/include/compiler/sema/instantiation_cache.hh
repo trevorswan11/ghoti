@@ -1,7 +1,9 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
@@ -16,9 +18,33 @@
 #include "compiler/gir/const_value.hh"
 #include "compiler/sema/generic.hh"
 
+namespace ghoti::mod { enum class if_branch : u8; } // namespace ghoti::mod
+
 namespace ghoti::sema {
 
 class type;
+
+// Constexpr argument values per monomorphization, keyed by mangled name
+using constexpr_arg_map = ankerl::unordered_dense::map<std::string,
+                                                       std::vector<gir::const_value>,
+                                                       stdx::string_transparent_hash,
+                                                       stdx::string_transparent_eq>;
+
+// Per-monomorphization body typing, replayed at emit time: `[n]T` with a `constexpr n`, and the
+// `@this()` shape of a `fn(T): type` constructor's member functions.
+struct body_type_diff {
+    std::vector<std::pair<usize, stdx::option<type&>>> node_types;
+    std::vector<std::pair<usize, stdx::option<type&>>> explicit_types;
+    std::vector<std::pair<usize, mod::if_branch>>      if_branches;
+    std::vector<std::pair<usize, usize>>               match_arms;
+
+    [[nodiscard]] auto empty() const noexcept -> bool {
+        return node_types.empty() && explicit_types.empty() && if_branches.empty() &&
+               match_arms.empty();
+    }
+};
+using body_type_diff_map = ankerl::unordered_dense::
+    map<std::string, body_type_diff, stdx::string_transparent_hash, stdx::string_transparent_eq>;
 
 struct generic_instantiation_key {
     gsl::not_null<type*>              generic_fn_type;
@@ -70,8 +96,35 @@ class generic_instantiation_cache {
                        });
     }
 
+    // Emit-time replay data, keyed by mangled instantiation name
+    auto set_body_type_diff(std::string key, body_type_diff diff) -> void {
+        body_type_diffs_.insert_or_assign(std::move(key), std::move(diff));
+    }
+
+    [[nodiscard]] auto get_body_type_diff(std::string_view key) const noexcept
+        -> stdx::option<const body_type_diff&> {
+        if (const auto it{body_type_diffs_.find(std::string{key})}; it != body_type_diffs_.end()) {
+            return it->second;
+        }
+        return stdx::none;
+    }
+
+    auto set_constexpr_args(std::string key, std::vector<gir::const_value> args) -> void {
+        constexpr_args_.insert_or_assign(std::move(key), std::move(args));
+    }
+
+    [[nodiscard]] auto get_constexpr_args(std::string_view key) const noexcept
+        -> stdx::option<const std::vector<gir::const_value>&> {
+        if (const auto it{constexpr_args_.find(std::string{key})}; it != constexpr_args_.end()) {
+            return it->second;
+        }
+        return stdx::none;
+    }
+
   private:
     ankerl::unordered_dense::map<generic_instantiation_key, generic_instantiation_entry> cache_;
+    body_type_diff_map body_type_diffs_;
+    constexpr_arg_map  constexpr_args_;
 };
 
 } // namespace ghoti::sema

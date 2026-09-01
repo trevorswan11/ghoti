@@ -27,23 +27,6 @@ namespace ghoti::sema {
 
 using constexpr_frame = ankerl::unordered_dense::map<std::string_view, gir::const_value>;
 
-// Constexpr argument values per monomorphization, keyed by mangled name
-using constexpr_arg_map = ankerl::unordered_dense::map<std::string, std::vector<gir::const_value>>;
-
-// Per-monomorphization body typing to facilitate `[n]T` with a `constexpr n`
-struct body_type_diff {
-    std::vector<std::pair<usize, stdx::option<type&>>> node_types;
-    std::vector<std::pair<usize, stdx::option<type&>>> explicit_types;
-    std::vector<std::pair<usize, mod::if_branch>>      if_branches;
-    std::vector<std::pair<usize, usize>>               match_arms;
-
-    [[nodiscard]] auto empty() const noexcept -> bool {
-        return node_types.empty() && explicit_types.empty() && if_branches.empty() &&
-               match_arms.empty();
-    }
-};
-using body_type_diff_map = ankerl::unordered_dense::map<std::string, body_type_diff>;
-
 // A contextual wrapper around sematic steps
 //
 // Owns its own diagnostic list
@@ -62,10 +45,8 @@ struct context {
     std::string             user_main_name{"main"};
     bool                    runtime_safety{true};
 
-    // For the generic instantiation currently being resolved or emitted.
+    // For the generic instantiation currently being resolved or emitted
     std::vector<constexpr_frame> constexpr_binding_frames;
-    constexpr_arg_map            constexpr_instantiation_args;
-    body_type_diff_map           instantiation_body_types;
 
     // Declared names for user struct/enum/union types, for `@typeName`
     ankerl::unordered_dense::map<const type*, std::string_view> user_type_names;
@@ -93,8 +74,6 @@ struct context {
           prelude_index{other.prelude_index}, target_opts{other.target_opts},
           user_main_name{other.user_main_name}, runtime_safety{other.runtime_safety},
           constexpr_binding_frames{other.constexpr_binding_frames},
-          constexpr_instantiation_args{other.constexpr_instantiation_args},
-          instantiation_body_types{other.instantiation_body_types},
           user_type_names{other.user_type_names} {}
 
     auto operator=(const context& other) -> context& = delete;

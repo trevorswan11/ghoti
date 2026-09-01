@@ -3,6 +3,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "helpers/codegen.hh"
+#include "helpers/sema.hh"
 
 namespace ghoti::tests {
 
@@ -213,6 +214,65 @@ TEST_CASE("E2E: type constructor members with `&mut self` and sibling-method cal
             return b.twice();   // (10 + 5) * 2
         };
     )") == 30);
+}
+
+TEST_CASE("E2E: a cross-module non-generic `fn(): type` with member functions") {
+    constexpr std::string_view LIB{R"(
+        pub const Make := fn(): type {
+            return struct {
+                item: i32,
+                pub const of      := fn(v: i32): @this() { return .{ .item = v }; };
+                pub const doubled := fn(^self): i32 { return self.item + self.item; };
+            };
+        };
+    )"};
+    const auto                 exit_code{helpers::compile_and_run(
+        R"(
+            import "lib.gh" as lib;
+            using M = lib::Make();
+            pub const main := fn(): i32 {
+                const a := M.of(21);
+                return a.doubled();
+            };
+        )",
+        {helpers::mock_file{"lib.gh", LIB, "lib"}})};
+    CHECK(exit_code == 42);
+}
+
+TEST_CASE("E2E: a cross-module generic type constructor, two instantiations, methods distinct") {
+    constexpr std::string_view VEC{R"(
+        pub const Vec := fn(T: type): type {
+            return struct {
+                item: T,
+                pub const make    := fn(v: T): @this() { return .{ .item = v }; };
+                pub const doubled := fn(^self): T { return self.item + self.item; };
+            };
+        };
+    )"};
+    const auto                 exit_code{helpers::compile_and_run(
+        R"(
+            import "vec.gh" as v;
+            using VI = v::Vec(i32);
+            using VL = v::Vec(i64);
+            pub const main := fn(): i32 {
+                const a := VI.make(3);
+                const b := VL.make(7);
+                return @as(i32, a.doubled()) + @as(i32, b.doubled());   // 6 + 14
+            };
+        )",
+        {helpers::mock_file{"vec.gh", VEC, "v"}})};
+    CHECK(exit_code == 20);
+}
+
+TEST_CASE("E2E: two instantiations of the same constructor passed to another generic") {
+    CHECK(helpers::compile_and_run(R"(
+        const Box := fn(T: type): type { return struct { v: T }; };
+        const boxSize := fn(B: type): i32 { return @as(i32, @sizeOf(B)); };
+
+        pub const main := fn(): i32 {
+            return boxSize(Box(i32)) * 10 + boxSize(Box(i64));   // 4*10 + 8
+        };
+    )") == 48);
 }
 
 TEST_CASE("E2E: a generic type constructor without member functions still resolves") {

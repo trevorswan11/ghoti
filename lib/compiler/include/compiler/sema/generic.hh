@@ -81,9 +81,23 @@ class generic_function_registry {
         return stdx::none;
     }
 
+    // For `mangle_arg_type` to distinguish e.g. `foo(Vec(i32))` from `foo(Vec(i64))`.
+    auto set_clone_disc(const type& clone, std::string disc) -> void {
+        clone_discs_.insert_or_assign(&clone, std::move(disc));
+    }
+
+    [[nodiscard]] auto get_clone_disc(const type& clone) const noexcept
+        -> stdx::option<std::string_view> {
+        if (const auto it{clone_discs_.find(&clone)}; it != clone_discs_.end()) {
+            return std::string_view{it->second};
+        }
+        return stdx::none;
+    }
+
   private:
     ankerl::unordered_dense::map<type*, generic_function_info> registry_;
     ankerl::unordered_dense::map<const type*, std::string>     type_ctor_member_prefixes_;
+    ankerl::unordered_dense::map<const type*, std::string>     clone_discs_;
 };
 
 struct generic_instantiation_request {
@@ -99,7 +113,7 @@ struct generic_instantiation_request {
 struct type_ctor_member_emit {
     gsl::not_null<type*> owner_clone; // the per-instantiation aggregate type
     ast::node_id         member_decl;
-    std::string          gir_name;   // `<ctor-mangled>::<member>`, the emitted GIR symbol
+    std::string          gir_name;   // `<ctor-mangled>.<member>`, the emitted GIR symbol
     std::string          typing_key; // key into `context::instantiation_body_types`; may be ""
 };
 

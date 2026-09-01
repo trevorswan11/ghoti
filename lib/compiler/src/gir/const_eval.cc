@@ -1312,21 +1312,34 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
         }
     }
 
+    // Resolve `Ctor(...)` (same module) or `mod::Ctor(...)` (imported module) to (module, decl).
+    stdx::option<mod::module&>  callee_mod;
+    stdx::option<sema::symbol&> callee_sym;
     if (const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(call.function)}) {
-        if (!module_->root_table_idx) { return stdx::none; }
-        const auto& table{ctx_.registry.get(*module_->root_table_idx)};
+        if (module_->root_table_idx) {
+            callee_mod.emplace(*module_);
+            callee_sym = ctx_.registry.get_from_opt(*module_->root_table_idx, ident->name);
+        }
+    } else if (const auto mac{module_->ast.get_as_opt<ast::module_access_expr>(call.function)}) {
+        if (const auto mod_ty{module_->get_sema_type_opt(mac->outer)}) {
+            if (const auto m_data{mod_ty->get_data().as_opt<sema::types::module>()}) {
+                if (m_data->imported.root_table_idx) {
+                    callee_mod.emplace(m_data->imported);
+                    const auto& inner{module_->ast.get_as<ast::identifier_expr>(mac->inner)};
+                    callee_sym =
+                        ctx_.registry.get_from_opt(*callee_mod->root_table_idx, inner.name);
+                }
+            }
+        }
+    }
 
-        const auto sym{table.get_opt(ident->name)};
-        if (!sym) { return stdx::none; }
-        const auto node{sym->get_data().as_opt<sema::symbols::node_t>()};
-        if (!node) { return stdx::none; }
-        const auto decl{module_->ast.get_as_opt<ast::decl_stmt>(*node)};
-        if (!decl) { return stdx::none; }
-
-        if ((decl->has_modifier(ast::decl_modifiers::CONSTEXPR) ||
-             decl->has_modifier(ast::decl_modifiers::CONSTANT)) &&
-            decl->value) {
-            if (const auto fn_expr{module_->ast.get_as_opt<ast::function_expr>(*decl->value)}) {
+    if (callee_mod && callee_sym) {
+        const auto node{callee_sym->get_data().as_opt<sema::symbols::node_t>()};
+        const auto decl{node ? callee_mod->ast.get_as_opt<ast::decl_stmt>(*node) : stdx::none};
+        if (decl && decl->value &&
+            (decl->has_modifier(ast::decl_modifiers::CONSTEXPR) ||
+             decl->has_modifier(ast::decl_modifiers::CONSTANT))) {
+            if (const auto fn_expr{callee_mod->ast.get_as_opt<ast::function_expr>(*decl->value)}) {
                 std::vector<const_value> args;
                 for (const auto& arg : call.arguments) {
                     if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
@@ -1335,7 +1348,11 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                         args.emplace_back(*arg_val);
                     }
                 }
-                return eval_constexpr_fn(id, *fn_expr, args);
+                auto* const prev{module_.get()};
+                if (callee_mod != prev) { set_module(*callee_mod); }
+                auto res{eval_constexpr_fn(id, *fn_expr, args)};
+                if (callee_mod != prev) { set_module(*prev); }
+                return res;
             }
         }
     }

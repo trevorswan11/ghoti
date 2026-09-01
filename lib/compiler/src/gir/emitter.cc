@@ -179,14 +179,13 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
     // Re-bind `constexpr` parameters so `const_eval` folds them the same way it did at resolution
     sema::constexpr_frame                                                             cx_frame;
     ankerl::unordered_dense::map<std::string_view, gsl::not_null<const const_value*>> cx_by_name;
-    if (const auto it{ctx_.constexpr_instantiation_args.find(req.mangled_name)};
-        it != ctx_.constexpr_instantiation_args.end()) {
+    if (const auto cx_args{ctx_.instantiation_cache.get_constexpr_args(req.mangled_name)}) {
         usize cx_i{0};
         for (const auto& param : fn_expr.parameters) {
-            if (!param.is_constexpr || cx_i >= it->second.size()) { continue; }
+            if (!param.is_constexpr || cx_i >= cx_args->size()) { continue; }
             const auto& p_name{fn_mod.ast.get_as<ast::identifier_expr>(param.name).name};
-            cx_frame.insert_or_assign(p_name, it->second[cx_i]);
-            cx_by_name.emplace(p_name, &it->second[cx_i]);
+            cx_frame.insert_or_assign(p_name, (*cx_args)[cx_i]);
+            cx_by_name.emplace(p_name, &(*cx_args)[cx_i]);
             ++cx_i;
         }
     }
@@ -194,18 +193,17 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
 
     // Replay this monomorphization's body typing onto the shared AST nodes before emitting
     const_eval_.clear_memo();
-    if (const auto it{ctx_.instantiation_body_types.find(req.mangled_name)};
-        it != ctx_.instantiation_body_types.end()) {
-        for (const auto& [idx, ty] : it->second.node_types) {
+    if (const auto diff{ctx_.instantiation_cache.get_body_type_diff(req.mangled_name)}) {
+        for (const auto& [idx, ty] : diff->node_types) {
             fn_mod.sema_side_tables.node_types.values[idx] = ty;
         }
-        for (const auto& [idx, ty] : it->second.explicit_types) {
+        for (const auto& [idx, ty] : diff->explicit_types) {
             fn_mod.sema_side_tables.explicit_types.values[idx] = ty;
         }
-        for (const auto& [idx, br] : it->second.if_branches) {
+        for (const auto& [idx, br] : diff->if_branches) {
             fn_mod.if_constexpr_results.insert_or_assign(idx, br);
         }
-        for (const auto& [idx, arm] : it->second.match_arms) {
+        for (const auto& [idx, arm] : diff->match_arms) {
             fn_mod.match_arm_results.insert_or_assign(idx, arm);
         }
     }
@@ -292,18 +290,17 @@ auto emitter::emit_type_ctor_member(mod::module& owner_mod, const sema::type_cto
 
     // Replay this constructor instantiation's body typing onto the shared AST nodes so
     // `@this()` / `.{ ... }` / `^self` resolve to the right shape.
-    if (const auto it{ctx_.instantiation_body_types.find(tcm.typing_key)};
-        it != ctx_.instantiation_body_types.end()) {
-        for (const auto& [idx, ty] : it->second.node_types) {
+    if (const auto diff{ctx_.instantiation_cache.get_body_type_diff(tcm.typing_key)}) {
+        for (const auto& [idx, ty] : diff->node_types) {
             owner_mod.sema_side_tables.node_types.values[idx] = ty;
         }
-        for (const auto& [idx, ty] : it->second.explicit_types) {
+        for (const auto& [idx, ty] : diff->explicit_types) {
             owner_mod.sema_side_tables.explicit_types.values[idx] = ty;
         }
-        for (const auto& [idx, br] : it->second.if_branches) {
+        for (const auto& [idx, br] : diff->if_branches) {
             owner_mod.if_constexpr_results.insert_or_assign(idx, br);
         }
-        for (const auto& [idx, arm] : it->second.match_arms) {
+        for (const auto& [idx, arm] : diff->match_arms) {
             owner_mod.match_arm_results.insert_or_assign(idx, arm);
         }
     }
