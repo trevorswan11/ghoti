@@ -2,7 +2,6 @@
 
 #include <concepts>
 #include <filesystem>
-#include <functional>
 #include <ostream>
 #include <string>
 #include <string_view>
@@ -75,6 +74,9 @@ struct module {
     stdx::opt_size                                   root_table_idx;
     module_state                                     state{module_state::PARSED};
     std::vector<sema::generic_instantiation_request> generic_instantiations;
+
+    // Member functions of `fn(...): type` constructor results defined in this module
+    std::vector<sema::type_ctor_member_emit> type_ctor_member_emits;
 
     // `@cfgValue` node index -> the cfg pass's evaluated verdict
     ankerl::unordered_dense::map<usize, cfg_value_result> cfg_value_results;
@@ -185,6 +187,20 @@ struct module {
         }
     }
 
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto get_resolved_symbol_owner_opt(ID id) const noexcept -> stdx::opt_size {
+        if constexpr (ast::IndexableNodeID<ID>) {
+            return sema_side_tables.resolved_symbol_owners[id];
+        }
+        return {};
+    }
+
+    template <ast::IndexableID ID> auto set_resolved_symbol_owner(ID id, usize owner_idx) -> void {
+        if constexpr (ast::IndexableNodeID<ID>) {
+            sema_side_tables.resolved_symbol_owners[id].emplace(owner_idx);
+        }
+    }
+
     [[nodiscard]] auto get_sema_type_opt(this auto&&                 self,
                                          const ast::match_expr::arm& arm) noexcept {
         return self.sema_side_tables.match_arm_types[arm.pattern];
@@ -262,9 +278,11 @@ struct module {
 
 class module_manager {
   public:
-    using module_name_map = ankerl::unordered_dense::
-        map<std::string, std::filesystem::path, stdx::string_transparent_hash, std::equal_to<>>;
-    using module_table = ankerl::unordered_dense::map<std::filesystem::path, stdx::box<module>>;
+    using module_name_map = ankerl::unordered_dense::map<std::string,
+                                                         std::filesystem::path,
+                                                         stdx::string_transparent_hash,
+                                                         stdx::string_transparent_eq>;
+    using module_table    = ankerl::unordered_dense::map<std::filesystem::path, stdx::box<module>>;
     MAKE_ITERATOR(modules, module_table, modules_)
 
   public:

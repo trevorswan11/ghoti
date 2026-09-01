@@ -189,6 +189,24 @@ class type_resolver {
     template <ast::IndexableID ID> auto resolve_symbol(ID, symbol&) -> void;
     template <ast::IndexableID ID> auto resolve_ident(ID, const ast::identifier_expr&) -> void;
 
+    // Records, for the reference node `ref_id`, the symbol-table index `owner_table_idx` that
+    // owns `sym`, iff `sym` names a top-level function or `var` global
+    auto record_symbol_owner(ast::node_id       ref_id,
+                             usize              owner_table_idx,
+                             const mod::module& target_mod,
+                             const symbol&      sym) -> void;
+
+    // Unwraps pointer/reference wrappers, then resolves `member` in the aggregate's
+    // own symbol table.
+    auto record_member_owner(ast::node_id ref_id, type& object_type, ast::identifier_handle member)
+        -> void;
+
+    // If `call` invokes a member function of a `fn(...): type` constructor result, pins the call
+    // to that instantiation's mangled member symbol so the emitter targets the right monomorph.
+    auto record_type_ctor_member_call(ast::node_id call_id, const ast::call_expr& call) -> void;
+    auto register_non_generic_type_ctor_members(type& result, const ast::call_expr& ctor_call)
+        -> void;
+
     [[nodiscard]] auto get_resolved_symbol_type(symbol::data_t& symbol_data) -> type&;
 
     // Infers how a closure should store one free variable, given how it's used in the body.

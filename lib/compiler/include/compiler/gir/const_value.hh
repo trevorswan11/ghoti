@@ -1,6 +1,5 @@
 #pragma once
 
-#include <functional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -35,7 +34,7 @@ struct const_array {
 
 struct const_struct {
     using fields_map_t = ankerl::unordered_dense::
-        map<std::string, const_value, stdx::string_transparent_hash, std::equal_to<>>;
+        map<std::string, const_value, stdx::string_transparent_hash, stdx::string_transparent_eq>;
 
     fields_map_t       fields;
     [[nodiscard]] auto get_field_opt(std::string_view name) const noexcept

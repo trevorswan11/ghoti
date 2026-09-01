@@ -473,6 +473,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::decl_stmt& decl) -> voi
     auto&      sym{ctx_.registry.get_from(table_idx_, name)};
     const auto value{*decl.value};
     if (value.any<ast::enum_expr, ast::union_expr, ast::struct_expr>()) {
+        pending_type_name_ = name;
         if (decl.has_modifier(ast::decl_modifiers::CONSTEXPR)) {
             ctx_.diags.emplace_back(
                 fmt::format("All {}s are implicitly constexpr", value->display_name()),
@@ -499,6 +500,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::decl_stmt& decl) -> voi
     }
 
     collect(value);
+    pending_type_name_ = {};
     if (last_type_) { collecting_.set_sema_type(value, *last_type_.take()); }
 }
 

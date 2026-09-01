@@ -21,6 +21,7 @@
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/module.hh"
+#include "compiler/gir/symbol_scoping.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/generic.hh"
@@ -84,9 +85,15 @@ class emitter {
     auto emit_top_level_using(ast::node_id id, const ast::using_stmt& using_stmt) -> void;
     auto emit_top_level_test(ast::node_id id, const ast::test_stmt& test) -> void;
 
-    auto emit_function(ast::node_id              id,
-                       const ast::decl_stmt&     decl,
-                       const ast::function_expr& fn_expr) -> void;
+    auto emit_function(ast::node_id                   id,
+                       const ast::decl_stmt&          decl,
+                       const ast::function_expr&      fn_expr,
+                       stdx::option<std::string_view> name_override = stdx::none) -> void;
+
+    // Emits one member function of a `fn(...): type` constructor's result as a method of its
+    // per-instantiation aggregate type. Registered by the resolver in `type_ctor_member_emits`.
+    auto emit_type_ctor_member(mod::module& owner_mod, const sema::type_ctor_member_emit& tcm)
+        -> void;
     auto emit_anonymous_function(ast::node_id id, const ast::function_expr& fn_expr) -> std::string;
     // Like emit_anonymous_function, but pre-binds `name` to itself so the body can self-recurse
     auto emit_named_local_function(std::string_view          name,
@@ -276,6 +283,27 @@ class emitter {
         return self.active_module_->ast;
     }
 
+    // The symbol table that owns a definition currently being emitted: the enclosing aggregate
+    // literal's table for a member, otherwise the active module's root table.
+    [[nodiscard]] auto current_owner_table_idx() const noexcept -> usize {
+        if (!user_type_stack_.empty()) { return user_type_stack_.back()->get_symbol_table_idx(); }
+        return *active_module_->root_table_idx;
+    }
+
+    // The GIR name a definition named `bare` in the current owner scope should be emitted under.
+    [[nodiscard]] auto def_symbol_name(std::string_view bare) const -> std::string {
+        return symbol_scoping_.name_for(current_owner_table_idx(), bare);
+    }
+
+    // The GIR name a reference at `ref_id` should target, honouring a resolver-recorded owner.
+    [[nodiscard]] auto ref_symbol_name(ast::node_id ref_id, std::string_view bare) const
+        -> std::string {
+        if (const auto owner{active_module_->get_resolved_symbol_owner_opt(ref_id)}) {
+            return symbol_scoping_.name_for(*owner, bare);
+        }
+        return std::string{bare};
+    }
+
   private:
     sema::context&                ctx_;
     mod::module&                  ast_module_;
@@ -292,8 +320,8 @@ class emitter {
     std::vector<bool>             open_fn_is_closure_;
     std::vector<sema::type*>      user_type_stack_;
     std::vector<std::string_view> pending_builtin_runtime_;
-    // Cleared by `--unsafe`: gates every runtime safety check the emitter inserts.
-    bool runtime_safety_{true};
+    symbol_scoping                symbol_scoping_;
+    bool                          runtime_safety_{true};
 };
 
 } // namespace ghoti::gir

@@ -796,7 +796,8 @@ auto const_eval::eval_dot(ast::node_id, const ast::dot_expr& dot) -> stdx::optio
                             if (module_->ast.get_as_opt<ast::function_expr>(*mdecl->value)) {
                                 if (const auto fn_type{module_->get_sema_type_opt(*mdecl->value)};
                                     fn_type && fn_type->get_kind() == sema::type_kind::FUNCTION) {
-                                    return const_value{std::string{member_name}, *fn_type};
+                                    return const_value{scoped_symbol_name(*tbl_idx, member_name),
+                                                       *fn_type};
                                 }
                                 return stdx::none;
                             }
@@ -864,63 +865,60 @@ auto const_eval::eval_module_access(ast::node_id, const ast::module_access_expr&
     -> stdx::option<const_value> {
     const auto& inner_name{module_->ast.get_as<ast::identifier_expr>(mod_access.inner).name};
 
-    if (const auto outer_ident{module_->ast.get_as_opt<ast::identifier_expr>(mod_access.outer)}) {
-        if (module_->root_table_idx) {
-            const auto& table{ctx_.registry.get(*module_->root_table_idx)};
-            if (const auto sym{table.get_opt(outer_ident->name)}) {
-                if (const auto node{sym->get_data().as_opt<sema::symbols::node_t>()}) {
-                    if (const auto decl{module_->ast.get_as_opt<ast::decl_stmt>(*node)}) {
-                        if (decl->value) {
-                            if (const auto en_expr{
-                                    module_->ast.get_as_opt<ast::enum_expr>(*decl->value)}) {
-                                for (usize idx{0}; idx < en_expr->enumerations.size(); ++idx) {
-                                    const auto& e{en_expr->enumerations[idx]};
-                                    const auto& vname{
-                                        module_->ast.get_as<ast::identifier_expr>(e.name).name};
-                                    if (vname == inner_name) {
-                                        i64 val{static_cast<i64>(idx)};
-                                        if (e.value) {
-                                            if (const auto ev{try_eval(*e.value)}) {
-                                                val = ev->as_int_opt().value_or(val);
-                                            }
-                                        }
-                                        return const_value{
-                                            const_enum{std::string{inner_name}, val},
-                                            module_->get_sema_type_opt(*decl->value)};
-                                    }
-                                }
-                            }
-                        }
-                    } else if (const auto node_sym{sym->get_kind_opt()};
-                               node_sym && *node_sym == sema::symbol_kind::MODULE) {
-                        if (const auto sema_type{module_->get_sema_type_opt(*node)}) {
-                            if (const auto m_data{
-                                    sema_type->get_data().as_opt<sema::types::module>()}) {
-                                auto& inner_mod{m_data->imported};
-                                if (inner_mod.root_table_idx) {
-                                    const auto& inner_table{
-                                        ctx_.registry.get(*inner_mod.root_table_idx)};
-                                    if (const auto inner_sym{inner_table.get_opt(inner_name)}) {
-                                        if (const auto inner_node{
-                                                inner_sym->get_data()
-                                                    .as_opt<sema::symbols::node_t>()}) {
-                                            if (const auto inner_decl{
-                                                    inner_mod.ast.get_as_opt<ast::decl_stmt>(
-                                                        *inner_node)}) {
-                                                if (inner_decl->value) {
-                                                    const_eval inner_eval{ctx_, inner_mod};
-                                                    return inner_eval.try_eval(*inner_decl->value);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+    const auto outer_ident{module_->ast.get_as_opt<ast::identifier_expr>(mod_access.outer)};
+    if (!outer_ident || !module_->root_table_idx) { return stdx::none; }
+    const auto& table{ctx_.registry.get(*module_->root_table_idx)};
+
+    const auto sym{table.get_opt(outer_ident->name)};
+    if (!sym) { return stdx::none; }
+    const auto node{sym->get_data().as_opt<sema::symbols::node_t>()};
+    if (!node) { return stdx::none; }
+
+    if (const auto decl{module_->ast.get_as_opt<ast::decl_stmt>(*node)}) {
+        if (!decl->value) { return stdx::none; }
+        const auto en_expr{module_->ast.get_as_opt<ast::enum_expr>(*decl->value)};
+        if (!en_expr) { return stdx::none; }
+
+        for (usize idx{0}; idx < en_expr->enumerations.size(); ++idx) {
+            const auto& e{en_expr->enumerations[idx]};
+            const auto& vname{module_->ast.get_as<ast::identifier_expr>(e.name).name};
+            if (vname == inner_name) {
+                i64 val{static_cast<i64>(idx)};
+                if (e.value) {
+                    if (const auto ev{try_eval(*e.value)}) { val = ev->as_int_opt().value_or(val); }
                 }
+                return const_value{const_enum{std::string{inner_name}, val},
+                                   module_->get_sema_type_opt(*decl->value)};
             }
         }
+    } else if (const auto node_sym{sym->get_kind_opt()};
+               node_sym && *node_sym == sema::symbol_kind::MODULE) {
+        const auto sema_type{module_->get_sema_type_opt(*node)};
+        if (!sema_type) { return stdx::none; }
+        const auto m_data{sema_type->get_data().as_opt<sema::types::module>()};
+        if (!m_data || !m_data->imported.root_table_idx) { return stdx::none; }
+        auto&       inner_mod{m_data->imported};
+        const auto& inner_table{ctx_.registry.get(*inner_mod.root_table_idx)};
+
+        const auto inner_sym{inner_table.get_opt(inner_name)};
+        if (!inner_sym) { return stdx::none; }
+        const auto inner_node{inner_sym->get_data().as_opt<sema::symbols::node_t>()};
+        if (!inner_node) { return stdx::none; }
+        const auto inner_decl{inner_mod.ast.get_as_opt<ast::decl_stmt>(*inner_node)};
+        if (!inner_decl || !inner_decl->value) { return stdx::none; }
+
+        // A plain cross-module function decays to a value naming its GIR symbol
+        if (inner_mod.ast.get_as_opt<ast::function_expr>(*inner_decl->value)) {
+            const auto fn_type{inner_mod.get_sema_type_opt(*inner_decl->value)};
+            if (fn_type && fn_type->get_kind() == sema::type_kind::FUNCTION) {
+                return const_value{scoped_symbol_name(*inner_mod.root_table_idx, inner_name),
+                                   *fn_type};
+            }
+            return stdx::none;
+        }
+        const_eval inner_eval{ctx_, inner_mod};
+        inner_eval.set_symbol_scoping(symbol_scoping_);
+        return inner_eval.try_eval(*inner_decl->value);
     }
 
     return stdx::none;
@@ -1276,7 +1274,8 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
             if (decl->value && module_->ast.get_as_opt<ast::function_expr>(*decl->value)) {
                 if (const auto fn_type{module_->get_sema_type_opt(*decl->value)};
                     fn_type && fn_type->get_kind() == sema::type_kind::FUNCTION) {
-                    return const_value{std::string{ident.name}, *fn_type};
+                    return const_value{scoped_symbol_name(*module_->root_table_idx, ident.name),
+                                       *fn_type};
                 }
             }
             if (decl->has_modifier(ast::decl_modifiers::CONSTEXPR) ||

@@ -68,8 +68,22 @@ class generic_function_registry {
         }
     }
 
+    auto set_type_ctor_member_prefix(const type& clone, std::string prefix) -> void {
+        type_ctor_member_prefixes_.insert_or_assign(&clone, std::move(prefix));
+    }
+
+    [[nodiscard]] auto get_type_ctor_member_prefix(const type& clone) const noexcept
+        -> stdx::option<std::string_view> {
+        if (const auto it{type_ctor_member_prefixes_.find(&clone)};
+            it != type_ctor_member_prefixes_.end()) {
+            return std::string_view{it->second};
+        }
+        return stdx::none;
+    }
+
   private:
     ankerl::unordered_dense::map<type*, generic_function_info> registry_;
+    ankerl::unordered_dense::map<const type*, std::string>     type_ctor_member_prefixes_;
 };
 
 struct generic_instantiation_request {
@@ -79,6 +93,14 @@ struct generic_instantiation_request {
     std::string                 mangled_name;
     ast::node_id                fn_node_id;
     gsl::not_null<mod::module*> module;
+};
+
+// One `const m := fn ...` member of an aggregate returned by a `fn(...): type` constructor
+struct type_ctor_member_emit {
+    gsl::not_null<type*> owner_clone; // the per-instantiation aggregate type
+    ast::node_id         member_decl;
+    std::string          gir_name;   // `<ctor-mangled>::<member>`, the emitted GIR symbol
+    std::string          typing_key; // key into `context::instantiation_body_types`; may be ""
 };
 
 struct generic_instantiation_entry {

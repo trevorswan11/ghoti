@@ -30,6 +30,7 @@
 #include "compiler/gir/layout.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/gir/segment.hh"
+#include "compiler/gir/symbol_scoping.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
@@ -84,11 +85,6 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
             [&](const ast::test_stmt& test) { emit_top_level_test(id, test); });
     };
 
-    for (const auto root_id : ast_module_.ast) { emit_top_level_stmt(ast_module_, root_id); }
-    for (const auto& inst : ast_module_.generic_instantiations) {
-        emit_generic_instantiation(inst);
-    }
-
     // Traverse all transitively imported modules reachable from ast_module_
     std::vector<mod::module*>                  imported_mods;
     ankerl::unordered_dense::set<mod::module*> visited;
@@ -115,6 +111,18 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
         if (visited.insert(&builtin_mod).second) { imported_mods.emplace_back(&builtin_mod); }
     }
 
+    // With every participating module known, decide which same-named symbols must be qualified.
+    symbol_scoping_ = symbol_scoping::build(ctx_, ast_module_, imported_mods);
+    const_eval_.set_symbol_scoping(symbol_scoping_);
+
+    for (const auto root_id : ast_module_.ast) { emit_top_level_stmt(ast_module_, root_id); }
+    for (const auto& inst : ast_module_.generic_instantiations) {
+        emit_generic_instantiation(inst);
+    }
+    for (const auto& tcm : ast_module_.type_ctor_member_emits) {
+        emit_type_ctor_member(ast_module_, tcm);
+    }
+
     gir_module_.mark_import_boundary();
 
     for (auto* other_mod : imported_mods) {
@@ -124,6 +132,9 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
         for (const auto root_id : other_mod->ast) { emit_top_level_stmt(*other_mod, root_id); }
         for (const auto& inst : other_mod->generic_instantiations) {
             emit_generic_instantiation(inst);
+        }
+        for (const auto& tcm : other_mod->type_ctor_member_emits) {
+            emit_type_ctor_member(*other_mod, tcm);
         }
         active_module_ = prev_module;
         const_eval_.set_module(*prev_module);
@@ -261,6 +272,45 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
             }
         }
     }
+
+    active_module_ = prev_module;
+    if (prev_module) { const_eval_.set_module(*prev_module); }
+}
+
+auto emitter::emit_type_ctor_member(mod::module& owner_mod, const sema::type_ctor_member_emit& tcm)
+    -> void {
+    PROFILE_FUNCTION();
+    if (gir_module_.has_function(tcm.gir_name)) { return; }
+
+    const auto& decl{owner_mod.ast.get_as<ast::decl_stmt>(tcm.member_decl)};
+    const auto  fn_expr{owner_mod.ast.get_as_opt<ast::function_expr>(*decl.value)};
+    if (!fn_expr) { return; }
+
+    auto prev_module{std::exchange(active_module_, &owner_mod)};
+    const_eval_.set_module(owner_mod);
+    const_eval_.clear_memo();
+
+    // Replay this constructor instantiation's body typing onto the shared AST nodes so
+    // `@this()` / `.{ ... }` / `^self` resolve to the right shape.
+    if (const auto it{ctx_.instantiation_body_types.find(tcm.typing_key)};
+        it != ctx_.instantiation_body_types.end()) {
+        for (const auto& [idx, ty] : it->second.node_types) {
+            owner_mod.sema_side_tables.node_types.values[idx] = ty;
+        }
+        for (const auto& [idx, ty] : it->second.explicit_types) {
+            owner_mod.sema_side_tables.explicit_types.values[idx] = ty;
+        }
+        for (const auto& [idx, br] : it->second.if_branches) {
+            owner_mod.if_constexpr_results.insert_or_assign(idx, br);
+        }
+        for (const auto& [idx, arm] : it->second.match_arms) {
+            owner_mod.match_arm_results.insert_or_assign(idx, arm);
+        }
+    }
+
+    user_type_stack_.emplace_back(tcm.owner_clone);
+    emit_function(tcm.member_decl, decl, *fn_expr, tcm.gir_name);
+    user_type_stack_.pop_back();
 
     active_module_ = prev_module;
     if (prev_module) { const_eval_.set_module(*prev_module); }
@@ -417,7 +467,8 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
         }
     }
 
-    if (gir_module_.has_global(name)) { return; }
+    const auto global_gir_name{def_symbol_name(name)};
+    if (gir_module_.has_global(global_gir_name)) { return; }
 
     const auto is_const{decl.has_modifier(ast::decl_modifiers::CONSTANT) ||
                         decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
@@ -440,7 +491,7 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
             init_val.emplace(emit_expression(*decl.value));
         }
     }
-    auto& g{gir_module_.add_global(std::string{name},
+    auto& g{gir_module_.add_global(global_gir_name,
                                    *sema_type,
                                    is_const,
                                    init_val,
@@ -494,23 +545,24 @@ auto emitter::emit_top_level_test(ast::node_id id, const ast::test_stmt& test) -
     }
 }
 
-auto emitter::emit_function(ast::node_id              id,
-                            const ast::decl_stmt&     decl,
-                            const ast::function_expr& fn_expr) -> void {
+auto emitter::emit_function(ast::node_id                   id,
+                            const ast::decl_stmt&          decl,
+                            const ast::function_expr&      fn_expr,
+                            stdx::option<std::string_view> name_override) -> void {
     PROFILE_FUNCTION();
     const auto& name_ident{active_ast().get_as<ast::identifier_expr>(decl.name)};
-    if (gir_module_.has_function(name_ident.name)) { return; }
+    const auto  gir_name{name_override ? std::string{*name_override}
+                                       : def_symbol_name(name_ident.name)};
+    if (gir_module_.has_function(gir_name)) { return; }
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Function declaration must have a resolved sema type");
 
     const auto is_constexpr{decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
-    auto&      fn{gir_module_.add_function(std::string{name_ident.name},
-                                      *sema_type,
-                                      false,
-                                      is_constexpr,
-                                      fn_expr.variadic,
-                                      get_decl_linkage(decl))};
-    fn.set_link_name(get_link_name(active_ast(), decl));
+    // A name-override emit is a per-instantiation monomorph
+    const auto linkage{name_override ? gir::linkage::INTERNAL : get_decl_linkage(decl)};
+    auto&      fn{gir_module_.add_function(
+        gir_name, *sema_type, false, is_constexpr, fn_expr.variadic, linkage)};
+    if (!name_override) { fn.set_link_name(get_link_name(active_ast(), decl)); }
     fn.set_weak(decl.has_modifier(ast::decl_modifiers::WEAK));
     fn.set_naked(fn_expr.is_naked);
     fn.set_calling_conv(fn_expr.conv);
@@ -518,7 +570,7 @@ auto emitter::emit_function(ast::node_id              id,
     auto& entry{fn.add_segment()};
     builder_.set_insert_point(fn, entry);
     const scope_guard           g{scopes_};
-    const open_fn_name_guard    fn_name_g{open_fn_names_, std::string{name_ident.name}};
+    const open_fn_name_guard    fn_name_g{open_fn_names_, gir_name};
     const open_fn_closure_guard fn_closure_g{open_fn_is_closure_, false};
 
     // A member fn body resolves bare sibling static `const` members through const_eval
@@ -1351,7 +1403,8 @@ auto emitter::global_ref_in(usize table_idx, std::string_view name) -> stdx::opt
         return stdx::none;
     }
     auto&      ty{*ctx_.pool.with_const(*raw_ty, false)};
-    const auto addr{builder_.emit_global_addr(std::string{name}, ty, false)};
+    const auto addr{
+        builder_.emit_global_addr(symbol_scoping_.name_for(table_idx, name), ty, false)};
     return value{addr, ty};
 }
 
@@ -1973,6 +2026,40 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             indirect_callee.emplace(callee_val);
         } else {
             callee_name.emplace(fmt::format("anonymous_fn{}", anon_fn_counter_++));
+        }
+    }
+
+    // A member call whose receiver is a `fn(...): type` constructor instantiation targets that
+    // instantiation's monomorphized member
+    if (callee_name && !indirect_callee && !resolved_generic_target) {
+        stdx::option<sema::type&>      recv_type;
+        stdx::option<std::string_view> member_nm;
+        if (dot_call) {
+            recv_type = active_mod().get_sema_type_opt(dot_call->object);
+            member_nm = active_ast().get_as<ast::identifier_expr>(dot_call->member).name;
+        } else if (const auto imp{
+                       active_ast().get_as_opt<ast::implicit_access_expr>(call.function)}) {
+            if (!user_type_stack_.empty()) { recv_type.emplace(*user_type_stack_.back()); }
+            member_nm = active_ast().get_as<ast::identifier_expr>(imp->member).name;
+        }
+        if (recv_type && member_nm) {
+            auto* t{recv_type.get()};
+            if (const auto m{t->get_data().as_opt<sema::types::meta_type>()}) { t = &m->instance; }
+            if (const auto p{t->get_data().as_opt<sema::types::pointer>()}) { t = &p->underlying; }
+            if (const auto r{t->get_data().as_opt<sema::types::reference>()}) {
+                t = &r->underlying;
+            }
+            if (const auto prefix{ctx_.generic_functions.get_type_ctor_member_prefix(*t)}) {
+                callee_name.emplace(fmt::format("{}.{}", *prefix, *member_nm));
+                resolved_generic_target = true;
+            }
+        }
+    }
+
+    // Disambiguate a direct call whose target the resolver bound to a specific module/type
+    if (callee_name && !indirect_callee && !resolved_generic_target) {
+        if (const auto owner{active_mod().get_resolved_symbol_owner_opt(call.function)}) {
+            callee_name.emplace(symbol_scoping_.name_for(*owner, *callee_name));
         }
     }
 
@@ -3941,7 +4028,7 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
             auto& gtype{const_cast<sema::type&>(*gref->type)};
             return value{builder_.emit_load(*gref, gtype), gtype};
         }
-        return value{std::string{member_ident.name}, sema_type};
+        return value{ref_symbol_name(id, member_ident.name), sema_type};
     }
 
     // emit_lvalue(dot.object) addresses the object's own storage; still needs unwinding here
@@ -4035,7 +4122,7 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
         }
     }
 
-    return value{std::string{member_ident.name}, sema_type};
+    return value{ref_symbol_name(id, member_ident.name), sema_type};
 }
 
 auto emitter::emit_index(ast::node_id id, const ast::index_expr& index) -> value {
@@ -4181,7 +4268,7 @@ auto emitter::emit_implicit_access(ast::node_id id, const ast::implicit_access_e
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
     const auto& ident{active_ast().get_as<ast::identifier_expr>(imp.member)};
-    return value{std::string{ident.name}, sema_type};
+    return value{ref_symbol_name(id, ident.name), sema_type};
 }
 
 auto emitter::emit_module_access(ast::node_id id, const ast::module_access_expr& mod_access)
@@ -4190,7 +4277,7 @@ auto emitter::emit_module_access(ast::node_id id, const ast::module_access_expr&
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
     const auto& inner_ident{active_ast().get_as<ast::identifier_expr>(mod_access.inner)};
-    return value{std::string{inner_ident.name}, sema_type};
+    return value{ref_symbol_name(id, inner_ident.name), sema_type};
 }
 
 } // namespace ghoti::gir

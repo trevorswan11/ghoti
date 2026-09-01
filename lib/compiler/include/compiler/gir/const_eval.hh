@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -16,6 +17,7 @@
 #include "compiler/ast/statement.hh"
 #include "compiler/ast/type.hh"
 #include "compiler/gir/const_value.hh"
+#include "compiler/gir/symbol_scoping.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/symbol.hh"
@@ -40,6 +42,17 @@ class const_eval {
     // The struct/union/enum whose member body is currently being evaluated
     auto set_enclosing_type(stdx::option<sema::type&> type) noexcept -> void {
         enclosing_type_ = type;
+    }
+
+    // The emitter's program-wide symbol-naming policy
+    auto set_symbol_scoping(stdx::option<const symbol_scoping&> scoping) noexcept -> void {
+        symbol_scoping_ = scoping;
+    }
+
+    [[nodiscard]] auto scoped_symbol_name(usize owner_table_idx, std::string_view bare) const
+        -> std::string {
+        if (symbol_scoping_) { return symbol_scoping_->name_for(owner_table_idx, bare); }
+        return std::string{bare};
     }
 
     // Node-indexed memoization is unsound across generic instantiations that share AST nodes.
@@ -150,6 +163,7 @@ class const_eval {
     sema::context&                                   ctx_;
     gsl::not_null<mod::module*>                      module_;
     stdx::option<sema::type&>                        enclosing_type_;
+    stdx::option<const symbol_scoping&>              symbol_scoping_;
     std::vector<call_frame>                          call_stack_;
     default_counter                                  recursion_depth_;
     ankerl::unordered_dense::map<usize, const_value> memo_cache_;

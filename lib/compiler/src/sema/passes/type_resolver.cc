@@ -902,19 +902,104 @@ namespace {
     return false;
 }
 
-// The node index of the first `return` in `block` that hands back a fresh `struct`/`union`/`enum`
-[[nodiscard]] auto returned_aggregate_literal(const ast::AST& ast, const ast::block_stmt& block)
-    -> stdx::option<usize> {
+// Returns `t` with every occurrence of `from` replaced by `to`, looking through pointer,
+// reference, and function types. Returns `t` unchanged (same object) when nothing matched.
+[[nodiscard]] auto remap_type(context& ctx, type& t, const type& from, type& to) -> type& {
+    if (&t == &from) { return to; }
+    auto& data{t.get_data()};
+    if (const auto p{data.as_opt<types::pointer>()}) {
+        auto& u{remap_type(ctx, p->underlying, from, to)};
+        if (&u == &p->underlying) { return t; }
+        return ctx.get_pointer(t.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE, u);
+    }
+    if (const auto r{data.as_opt<types::reference>()}) {
+        auto& u{remap_type(ctx, r->underlying, from, to)};
+        if (&u == &r->underlying) { return t; }
+        return ctx.get_reference(t.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE, u);
+    }
+    if (const auto fn{data.as_opt<types::function>()}) {
+        bool changed{false};
+        auto new_params{ctx.pool.get_many_unsafe(fn->params.size())};
+        for (usize i{0}; i < fn->params.size(); ++i) {
+            auto& np{remap_type(ctx, *fn->params[i], from, to)};
+            new_params[i] = &np;
+            changed |= &np != fn->params[i];
+        }
+        auto& new_ret{remap_type(ctx, fn->return_type, from, to)};
+        if (!changed && &new_ret == &fn->return_type) { return t; }
+
+        types::key_t key{type_kind::FUNCTION, t.get_key().get_mut()};
+        for (auto* p : new_params) { key.imprint(*p); }
+        key.imprint(new_ret);
+        key.imprint(static_cast<u64>(fn->has_self));
+        key.imprint(static_cast<u64>(fn->is_variadic));
+        auto& nt{*ctx.pool[key]};
+        nt.resolve_if<types::function>(fn->has_self, new_params, new_ret, fn->is_variadic);
+        return nt;
+    }
+    return t;
+}
+
+// The node id of the struct/union/enum literal a `fn(...): type` body returns, if any.
+[[nodiscard]] auto returned_aggregate_node(const ast::AST& ast, const ast::block_stmt& block)
+    -> stdx::option<ast::node_id> {
     for (const auto& stmt : block) {
         const auto ret{ast.get_as_opt<ast::return_stmt>(stmt)};
         if (!ret || !ret->expression) { continue; }
-        const auto& expr{*ret->expression};
-        if (ast.get_as_opt<ast::struct_expr>(expr) || ast.get_as_opt<ast::union_expr>(expr) ||
-            ast.get_as_opt<ast::enum_expr>(expr)) {
-            return expr.get_index();
-        }
+        const ast::node_id expr{*ret->expression};
+        if (expr.any<ast::struct_expr, ast::union_expr, ast::enum_expr>()) { return expr; }
     }
     return stdx::none;
+}
+
+[[nodiscard]] auto aggregate_member_list(const ast::AST& ast, ast::node_id agg)
+    -> stdx::option<const ast::member_list&> {
+    if (const auto s{ast.get_as_opt<ast::struct_expr>(agg)}) { return s->members; }
+    if (const auto u{ast.get_as_opt<ast::union_expr>(agg)}) { return u->members; }
+    if (const auto e{ast.get_as_opt<ast::enum_expr>(agg)}) { return e->members; }
+    return stdx::none;
+}
+
+// Records one `context::type_ctor_member_emit` per `const m := fn ...` member of the aggregate
+// returned by a `fn(...): type` constructor.
+auto register_type_ctor_members(context&         ctx,
+                                mod::module&     fn_mod,
+                                ast::node_id     agg_node,
+                                type&            src_agg,
+                                type&            clone,
+                                std::string_view ctor_mangled,
+                                body_type_diff   typing) -> void {
+    const auto members{aggregate_member_list(fn_mod.ast, agg_node)};
+    if (!members) { return; }
+
+    bool any_fn_member{false};
+    for (const auto& m : *members) {
+        const auto decl{fn_mod.ast.get_as_opt<ast::decl_stmt>(*m)};
+        if (!decl || !decl->value) { continue; }
+        if (!fn_mod.ast.get_as_opt<ast::function_expr>(*decl->value)) { continue; }
+        const auto& name{fn_mod.ast.get_as<ast::identifier_expr>(decl->name).name};
+        fn_mod.type_ctor_member_emits.emplace_back<type_ctor_member_emit>({
+            .owner_clone = &clone,
+            .member_decl = *m,
+            .gir_name    = fmt::format("{}.{}", ctor_mangled, name),
+            .typing_key  = std::string{ctor_mangled},
+        });
+        any_fn_member = true;
+    }
+    if (!any_fn_member) { return; }
+
+    // The replay must place `@this()` / `.{ ... }` / `^self` nodes at `clone`, not the shared
+    // literal type that later instantiations overwrite.
+    for (auto& [_, ty] : typing.node_types) {
+        if (ty) { ty.emplace(remap_type(ctx, *ty, src_agg, clone)); }
+    }
+    for (auto& [_, ty] : typing.explicit_types) {
+        if (ty) { ty.emplace(remap_type(ctx, *ty, src_agg, clone)); }
+    }
+    if (!typing.empty()) {
+        ctx.instantiation_body_types.insert_or_assign(std::string{ctor_mangled}, std::move(typing));
+    }
+    ctx.generic_functions.set_type_ctor_member_prefix(clone, std::string{ctor_mangled});
 }
 
 // Copies an anonymous aggregate `sema::type` into a fresh pool entry, keyed by `disc` so repeated
@@ -926,12 +1011,22 @@ namespace {
     auto& fresh{*ctx.pool[key]};
     if (fresh.is_resolved()) { return fresh; }
     if (src.has_symbol_table_idx()) { fresh.set_symbol_table_idx(src.get_symbol_table_idx()); }
+
+    // Rebind so distinct instantiations of a `fn(T): type` ctor do not alias each other's shape
+    const auto rebind{[&](gsl::span<type*> types) -> gsl::span<type*> {
+        auto out{ctx.pool.get_many_unsafe(types.size())};
+        for (usize i{0}; i < types.size(); ++i) {
+            out[i] = &remap_type(ctx, *types[i], src, fresh);
+        }
+        return out;
+    }};
+
     src.get_data().visit(
         [](const auto&) { UNREACHABLE("clone_anonymous_aggregate on a non-aggregate type"); },
         [&](const types::struct_t& s) {
-            fresh.resolve<types::struct_t>(s.fields,
+            fresh.resolve<types::struct_t>(rebind(s.fields),
                                            s.ast_fields,
-                                           s.members,
+                                           rebind(s.members),
                                            s.enclosing,
                                            s.is_c_abi,
                                            s.is_packed,
@@ -939,11 +1034,11 @@ namespace {
         },
         [&](const types::union_t& u) {
             fresh.resolve<types::union_t>(
-                u.fields, u.ast_fields, u.members, u.enclosing, u.is_untagged);
+                rebind(u.fields), u.ast_fields, rebind(u.members), u.enclosing, u.is_untagged);
         },
         [&](const types::enum_t& e) {
             fresh.resolve<types::enum_t>(
-                e.ast_enumerations, e.non_exhaustive, e.underlying, e.members, e.enclosing);
+                e.ast_enumerations, e.non_exhaustive, e.underlying, rebind(e.members), e.enclosing);
         });
     return fresh;
 }
@@ -1006,6 +1101,8 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
         return last_type_.emplace(ctx_.poison_node(resolving_, id));
     }
     resolving_.set_sema_type(call.function, callee_type);
+
+    if constexpr (std::same_as<ID, ast::node_id>) { record_type_ctor_member_call(id, call); }
 
     // Verify that the type in the function is callable and store the return type
     auto&                                callee_data{callee_type.get_data()};
@@ -1817,6 +1914,98 @@ template <ast::IndexableID ID> auto type_resolver::resolve_symbol(ID id, symbol&
 
 VISITOR_TEMPLATE_INIT(type_resolver, resolve_symbol, symbol&)
 
+auto type_resolver::record_symbol_owner(ast::node_id       ref_id,
+                                        usize              owner_table_idx,
+                                        const mod::module& target_mod,
+                                        const symbol&      sym) -> void {
+    const auto node{sym.get_data().as_opt<symbols::node_t>()};
+    if (!node) { return; }
+    const auto decl{target_mod.ast.get_as_opt<ast::decl_stmt>(*node)};
+    if (!decl || !decl->value) { return; }
+
+    // Only a direct reference to a named function decays to a bare GIR symbol name at a call
+    // or value site
+    if (!target_mod.ast.get_as_opt<ast::function_expr>(*decl->value).has_value()) { return; }
+    resolving_.set_resolved_symbol_owner(ref_id, owner_table_idx);
+}
+
+auto type_resolver::record_member_owner(ast::node_id           ref_id,
+                                        type&                  object_type,
+                                        ast::identifier_handle member) -> void {
+    type* target{&object_type};
+    if (const auto meta{target->get_data().as_opt<types::meta_type>()}) {
+        target = &meta->instance;
+    }
+    if (const auto ptr{target->get_data().as_opt<types::pointer>()}) { target = &ptr->underlying; }
+    if (const auto ref{target->get_data().as_opt<types::reference>()}) {
+        target = &ref->underlying;
+    }
+    if (const auto fn{target->get_data().as_opt<types::function>()}) { target = &fn->return_type; }
+
+    const auto enclosing{target->get_data().visit(
+        [](const types::struct_t& s) -> stdx::option<const mod::module&> { return s.enclosing; },
+        [](const types::union_t& u) -> stdx::option<const mod::module&> { return u.enclosing; },
+        [](const types::enum_t& e) -> stdx::option<const mod::module&> { return e.enclosing; },
+        [](const auto&) -> stdx::option<const mod::module&> { return stdx::none; })};
+    if (!enclosing || !target->has_symbol_table_idx()) { return; }
+
+    const auto  table_idx{target->get_symbol_table_idx()};
+    const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(member)};
+    if (const auto sym{ctx_.registry.get_from_opt(table_idx, member_ident.name)}) {
+        record_symbol_owner(ref_id, table_idx, *enclosing, *sym);
+    }
+}
+
+auto type_resolver::record_type_ctor_member_call(ast::node_id call_id, const ast::call_expr& call)
+    -> void {
+    stdx::option<std::string_view> member_name;
+    stdx::option<type&>            obj_type;
+    if (const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(call.function)}) {
+        member_name.emplace(resolving_.ast.get_as<ast::identifier_expr>(dot->member).name);
+        obj_type = resolving_.get_sema_type_opt(dot->object);
+    } else if (const auto imp{
+                   resolving_.ast.get_as_opt<ast::implicit_access_expr>(call.function)}) {
+        member_name.emplace(resolving_.ast.get_as<ast::identifier_expr>(imp->member).name);
+        obj_type = implicit_type_stack_.peek();
+    }
+    if (!member_name || !obj_type) { return; }
+
+    type* t{obj_type.get()};
+    if (const auto meta{t->get_data().as_opt<types::meta_type>()}) { t = &meta->instance; }
+
+    if (const auto prefix{ctx_.generic_functions.get_type_ctor_member_prefix(*t)}) {
+        resolving_.set_generic_call_target(call_id, fmt::format("{}.{}", *prefix, *member_name));
+    }
+}
+
+auto type_resolver::register_non_generic_type_ctor_members(type&                 result,
+                                                           const ast::call_expr& ctor_call)
+    -> void {
+    const auto k{result.get_kind()};
+    if (k != type_kind::STRUCT && k != type_kind::UNION && k != type_kind::ENUM) { return; }
+    if (ctx_.generic_functions.get_type_ctor_member_prefix(result)) { return; }
+
+    // Only a same-module `Ctor()` (bare identifier) is handled; the member AST lives here.
+    const auto fn_ident{resolving_.ast.get_as_opt<ast::identifier_expr>(ctor_call.function)};
+    if (!fn_ident || !resolving_.root_table_idx) { return; }
+    const auto sym{ctx_.registry.get_from_opt(*resolving_.root_table_idx, fn_ident->name)};
+    if (!sym) { return; }
+    const auto node{sym->get_data().as_opt<symbols::node_t>()};
+    if (!node) { return; }
+    const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
+    if (!decl || !decl->value) { return; }
+    const auto fn_expr{resolving_.ast.get_as_opt<ast::function_expr>(*decl->value)};
+    if (!fn_expr) { return; }
+
+    const auto& block{resolving_.ast.get_as<ast::block_stmt>(fn_expr->body)};
+    const auto  agg_node{returned_aggregate_node(resolving_.ast, block)};
+    if (!agg_node) { return; }
+
+    const auto prefix{fmt::format(
+        "tc{}", result.has_symbol_table_idx() ? result.get_symbol_table_idx() : usize{0})};
+    register_type_ctor_members(ctx_, resolving_, *agg_node, result, result, prefix, {});
+}
+
 template <ast::IndexableID ID>
 auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> void {
     const auto name{ident.name};
@@ -1868,6 +2057,12 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
             for (usize i{owner_idx + 1}; i < open_function_nodes_.size(); ++i) {
                 resolving_.add_capture(open_function_nodes_[i], name, usage);
             }
+        }
+    }
+
+    if constexpr (std::same_as<ID, ast::node_id>) {
+        if (const auto located{ctx_.registry.lookup_with_table(table_stack_, name)}) {
+            record_symbol_owner(id, located->table_idx, resolving_, located->symbol);
         }
     }
 
@@ -2291,6 +2486,9 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
 
     // The structural resolver returns poisoned types in error conditions which can be bubbled here
     auto& member_type{*result.value()};
+    if constexpr (std::same_as<ID, ast::node_id>) {
+        if (!member_type.is_poison()) { record_member_owner(id, object_type, dot.member); }
+    }
     resolving_.set_sema_type(dot.member, member_type);
     resolving_.set_sema_type(id, member_type);
     last_type_.emplace(member_type);
@@ -3270,6 +3468,9 @@ auto type_resolver::visit(ast::node_id id, const ast::implicit_access_expr& impl
     }
 
     auto& member_type{*result.value()};
+    if (!member_type.is_poison()) {
+        record_member_owner(id, *implicit_type, implicit_access.member);
+    }
     resolving_.set_sema_type(implicit_access.member, member_type);
     resolving_.set_sema_type(id, member_type);
     last_type_.emplace(member_type);
@@ -3421,6 +3622,10 @@ auto type_resolver::resolve_module_access(ID id, const ast::module_access_expr& 
         resolving_.set_identifier_definition(access.inner,
                                              {inner_mod.path, sym->get_symbol_span(inner_mod)});
         resolving_.add_identifier_position(access.inner);
+
+        if constexpr (std::same_as<ID, ast::node_id>) {
+            record_symbol_owner(id, *inner_mod.root_table_idx, inner_mod, *sym);
+        }
 
         auto& ident_type{inner_mod.get_sema_type(*symbol_node)};
         resolving_.set_sema_type(access.inner, ident_type);
@@ -3763,8 +3968,10 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             auto* explicit_type_p{&denoted_type(*last_type_.take())};
             // `const x: MakesAType() = ...`
             if (explicit_type_p->get_data().is<types::deferred_call>()) {
+                const auto& dc_call{explicit_type_p->get_data().as<types::deferred_call>().call};
                 gir::const_eval evaluator{ctx_, resolving_};
                 explicit_type_p = &evaluator.force_deferred_call(*explicit_type_p);
+                register_non_generic_type_ctor_members(*explicit_type_p, dc_call);
             }
             auto& explicit_type{*explicit_type_p};
             if (explicit_type.get_kind() == type_kind::AUTO) {
@@ -4003,8 +4210,10 @@ auto type_resolver::visit(ast::node_id id, const ast::using_stmt& using_stmt) ->
     auto* explicit_type_p{last_type_.take()};
     // `using X = MakesAType()`
     if (explicit_type_p->get_data().is<types::deferred_call>()) {
+        const auto&     dc_call{explicit_type_p->get_data().as<types::deferred_call>().call};
         gir::const_eval evaluator{ctx_, resolving_};
         explicit_type_p = &evaluator.force_deferred_call(*explicit_type_p);
+        register_non_generic_type_ctor_members(*explicit_type_p, dc_call);
     }
     auto& explicit_type{*explicit_type_p};
     if (explicit_type.get_kind() == type_kind::AUTO) {
@@ -4360,13 +4569,17 @@ auto type_resolver::instantiate_generic(type&                             callee
     type* deduced_return_type{(is_auto_return || is_type_ctor) ? &tracker.deduced_return_type(ctx_)
                                                                : &return_type};
 
-    // Copy into a per-instantiation type so `Option(i32)` and `Option(u8)` don't alias each other
+    // Copy into a per-instantiation type so `T(i32)` and `T(u8)` don't alias each other
     if (is_type_ctor) {
         const auto k{deduced_return_type->get_kind()};
         if (k == type_kind::STRUCT || k == type_kind::UNION || k == type_kind::ENUM) {
-            if (const auto agg_idx{returned_aggregate_literal(fn_mod.ast, block)}) {
-                deduced_return_type = &clone_anonymous_aggregate(
-                    ctx_, *deduced_return_type, fmt::format("{}#{}", mangled_name, *agg_idx));
+            if (const auto agg_node{returned_aggregate_node(fn_mod.ast, block)}) {
+                auto& src_agg{*deduced_return_type};
+                auto& clone{clone_anonymous_aggregate(
+                    ctx_, src_agg, fmt::format("{}#{}", mangled_name, agg_node->get_index()))};
+                register_type_ctor_members(
+                    ctx_, fn_mod, *agg_node, src_agg, clone, mangled_name, std::move(typing));
+                deduced_return_type = &clone;
             }
         }
     }

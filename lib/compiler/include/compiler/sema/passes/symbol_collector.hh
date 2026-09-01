@@ -2,6 +2,7 @@
 
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <gsl/pointers>
 #include <stdx/option.hh>
@@ -113,9 +114,24 @@ class symbol_collector {
     [[nodiscard]] auto visit_scopes(type_kind kind, IterPairs&&... pairs) -> usize {
         const auto  new_idx{ctx_.registry.create()};
         const scope s{table_stack_, new_idx, table_idx_};
+
+        // A struct/union/enum body is its own namespace
+        const bool is_aggregate{kind == type_kind::STRUCT || kind == type_kind::UNION ||
+                                kind == type_kind::ENUM};
+        if (is_aggregate) {
+            // A member may legitimately share a name with a declaration in an enclosing scope
+            aggregate_table_stack_.emplace_back(new_idx, std::exchange(pending_type_name_, {}));
+        }
+
+        const auto agg_cleanup{gsl::finally([this, is_aggregate] {
+            if (is_aggregate) { aggregate_table_stack_.pop_back(); }
+        })};
+
         (..., [&pairs] -> void {
             for (const auto& item : pairs.iterable) { pairs.visitor(item); }
         }());
+
+        if (is_aggregate) {}
         last_type_.emplace(ctx_.pool[{kind, types::mut::CONSTANT, new_idx}]);
         return new_idx;
     }
@@ -123,8 +139,18 @@ class symbol_collector {
     template <typename SymbolicVariant, typename... Args>
     auto try_declare(std::string_view name, Args&&... args) -> bool {
         const SymbolicVariant node{std::forward<Args>(args)...};
-        return ctx_.try_result(ctx_.registry.is_shadowing(table_stack_, collecting_, name, node)) &&
-               ctx_.try_result(ctx_.registry.insert_into(table_idx_, collecting_, name, node));
+
+        // Names declared directly into an aggregate's own table are namespaced by that type
+        const bool into_aggregate{!aggregate_table_stack_.empty() &&
+                                  aggregate_table_stack_.back().first == table_idx_};
+        const bool shadows_own_type{into_aggregate &&
+                                    !aggregate_table_stack_.back().second.empty() &&
+                                    name == aggregate_table_stack_.back().second};
+        if ((!into_aggregate || shadows_own_type) &&
+            !ctx_.try_result(ctx_.registry.is_shadowing(table_stack_, collecting_, name, node))) {
+            return false;
+        }
+        return ctx_.try_result(ctx_.registry.insert_into(table_idx_, collecting_, name, node));
     }
 
     symbol_collector(mod::module& collecting, context& ctx)
@@ -144,6 +170,12 @@ class symbol_collector {
     default_counter in_loop_scope_;
     default_counter in_label_scope_;
     default_counter in_test_scope_;
+
+    // The struct/union/enum tables currently being populated (innermost last)
+    std::vector<std::pair<usize, std::string_view>> aggregate_table_stack_;
+
+    // Set by `visit(decl_stmt)` immediately before descending into an aggregate value
+    std::string_view pending_type_name_;
 };
 
 } // namespace ghoti::sema

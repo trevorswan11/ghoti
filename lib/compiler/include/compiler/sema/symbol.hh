@@ -336,6 +336,25 @@ class symbol_table_registry {
         usize                                 depth;
     };
 
+    template <typename Self> struct table_result {
+        stdx::const_dispatch_t<Self, symbol>& symbol;
+        usize                                 table_idx;
+    };
+
+    // Like `lookup`, but also reports the absolute registry index of the table it was found in
+    template <typename Self>
+    [[nodiscard]] auto lookup_with_table(this Self&&               self,
+                                         const symbol_table_stack& stack,
+                                         std::string_view          name) noexcept
+        -> stdx::option<table_result<Self>> {
+        for (const auto idx : stack | std::views::reverse) {
+            if (auto symbol{self.tables_[idx].get_opt(name)}) {
+                return table_result<Self>{*symbol, idx};
+            }
+        }
+        return stdx::none;
+    }
+
     // Identical to `lookup`, but also reports the resolving stack depth
     template <typename Self>
     [[nodiscard]] auto lookup_with_depth(this Self&&               self,

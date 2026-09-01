@@ -139,4 +139,91 @@ TEST_CASE("E2E: @sizeOf / @alignOf resolve a `fn(bool): type` alias selecting a 
     )") == 8 + 8 + 4 + 4);
 }
 
+TEST_CASE("E2E: a single generic type constructor instantiation with a member function") {
+    CHECK(helpers::compile_and_run(R"(
+        const Vec := fn(T: type): type {
+            return struct {
+                item: T,
+                const make := fn(v: T): @this() { return .{ .item = v }; };
+            };
+        };
+
+        pub const main := fn(): i32 {
+            const a := Vec(i32).make(41);
+            return a.item + 1;
+        };
+    )") == 42);
+}
+
+TEST_CASE("E2E: two instantiations of a generic type constructor do not alias their methods") {
+    CHECK(helpers::compile_and_run(R"(
+        const Vec := fn(T: type): type {
+            return struct {
+                item: T,
+                const make    := fn(v: T): @this() { return .{ .item = v }; };
+                const doubled := fn(^self): T { return self.item + self.item; };
+            };
+        };
+
+        using VI = Vec(i32);
+        using VL = Vec(i64);
+
+        pub const main := fn(): i32 {
+            const a := VI.make(3);
+            const b := VL.make(7);
+            return @as(i32, a.doubled()) + @as(i32, b.doubled());   // 6 + 14
+        };
+    )") == 20);
+}
+
+TEST_CASE("E2E: a non-generic `fn(): type` result with member functions") {
+    CHECK(helpers::compile_and_run(R"(
+        const Make := fn(): type {
+            return struct {
+                item: i32,
+                const of      := fn(v: i32): @this() { return .{ .item = v }; };
+                const doubled := fn(^self): i32 { return self.item + self.item; };
+            };
+        };
+        using M = Make();
+
+        pub const main := fn(): i32 {
+            const a := M.of(21);
+            return a.doubled();
+        };
+    )") == 42);
+}
+
+TEST_CASE("E2E: type constructor members with `&mut self` and sibling-method calls") {
+    CHECK(helpers::compile_and_run(R"(
+        const Box := fn(T: type): type {
+            return struct {
+                v: T,
+                const make  := fn(x: T): @this() { return .{ .v = x }; };
+                const get   := fn(^self): T { return self.v; };
+                const bump  := fn(&mut self, by: T): void { self.v = self.v + by; };
+                const twice := fn(^self): T { return self.get() + self.get(); };
+            };
+        };
+        using BI = Box(i32);
+
+        pub const main := fn(): i32 {
+            var b := BI.make(10);
+            b.bump(5);
+            return b.twice();   // (10 + 5) * 2
+        };
+    )") == 30);
+}
+
+TEST_CASE("E2E: a generic type constructor without member functions still resolves") {
+    CHECK(helpers::compile_and_run(R"(
+        const Pair := fn(A: type, B: type): type { return struct { a: A, b: B }; };
+
+        pub const main := fn(): i32 {
+            const p: Pair(i32, i32) = .{ .a = 4, .b = 3 };
+            return p.a + p.b;
+        };
+    )") == 7);
+}
+
 } // namespace ghoti::tests
