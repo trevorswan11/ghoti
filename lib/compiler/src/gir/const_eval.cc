@@ -1371,6 +1371,10 @@ auto const_eval::eval_builtin(ast::node_id          id,
         }
         if (!target_type) { return stdx::none; }
 
+        if (const auto dc{target_type->get_data().as_opt<sema::types::deferred_call>()}) {
+            if (const auto r{try_resolve_deferred_call(dc->call)}) { target_type.emplace(*r); }
+        }
+
         const auto ptr_size{
             codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? usize{8}
                                                                                       : usize{4}};
@@ -1400,6 +1404,10 @@ auto const_eval::eval_builtin(ast::node_id          id,
             target_type = module_->get_sema_type_opt(*expr_h);
         }
         if (!target_type) { return stdx::none; }
+
+        if (const auto dc{target_type->get_data().as_opt<sema::types::deferred_call>()}) {
+            if (const auto r{try_resolve_deferred_call(dc->call)}) { target_type.emplace(*r); }
+        }
 
         const auto ptr_size{
             codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? usize{8}

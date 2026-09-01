@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <array>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -14,6 +16,7 @@ namespace ghoti::tests {
 using helpers::enum_variants;
 using helpers::run_cfg;
 using helpers::struct_fields;
+using helpers::struct_members;
 
 TEST_CASE("cfg: a selected struct @cfg block splices its fields at the group's position") {
     constexpr std::string_view src{R"(
@@ -75,6 +78,31 @@ TEST_CASE("cfg: block and single forms both work in an enum body") {
     )"};
     CHECK(run_cfg(src).codes.empty());
     CHECK(enum_variants(src, "Tag") == std::vector<std::string>{"A", "B", "C", "D", "F"});
+}
+
+TEST_CASE("cfg: @cfg gates aggregate members, splicing selected decls at the group position") {
+    constexpr std::string_view src{R"(
+        const S := struct {
+            a: i32,
+            const always := 1;
+            @cfg(ptr_bits >= 8) { const wide := 2; }
+            else                { const narrow := 3; }
+            @cfg(ptr_bits == 7) const dead := 4;
+        };
+    )"};
+    CHECK(run_cfg(src).codes.empty());
+    CHECK(std::ranges::equal(struct_members(src, "S"), std::array{"always", "wide"}));
+}
+
+TEST_CASE("cfg: a @cfgValue constant gates aggregate members") {
+    constexpr std::string_view src{R"(
+        const KEEP := @cfgValue(ptr_bits == 64);
+        const S := struct {
+            x: i32,
+            @cfg(KEEP) { using Word = u64; const bits := 64; }
+        };
+    )"};
+    CHECK(std::ranges::equal(struct_members(src, "S"), std::array{"Word", "bits"}));
 }
 
 TEST_CASE("cfg: a bad predicate inside an aggregate @cfg is reported") {

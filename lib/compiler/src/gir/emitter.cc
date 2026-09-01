@@ -95,15 +95,13 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
     visited.insert(&ast_module_);
 
     auto collect_imported = [&](auto& self, mod::module& cur) -> void {
-        for (const auto root_id : cur.ast) {
-            if (cur.ast[root_id].is<ast::import_stmt>()) {
-                if (const auto sema_type{cur.get_sema_type_opt(root_id)}) {
-                    if (const auto m_data{sema_type->get_data().as_opt<sema::types::module>()}) {
-                        auto& dep{m_data->imported};
-                        if (visited.insert(&dep).second) {
-                            imported_mods.emplace_back(&dep);
-                            self(self, dep);
-                        }
+        for (const auto import_id : cur.import_nodes) {
+            if (const auto sema_type{cur.get_sema_type_opt(import_id)}) {
+                if (const auto m_data{sema_type->get_data().as_opt<sema::types::module>()}) {
+                    auto& dep{m_data->imported};
+                    if (visited.insert(&dep).second) {
+                        imported_mods.emplace_back(&dep);
+                        self(self, dep);
                     }
                 }
             }
@@ -932,7 +930,9 @@ auto emitter::emit_stmt(const ast::stmt_handle& stmt) -> void {
         [&](const ast::expr_stmt& expr_st) { emit_expression_id(expr_st.expression); },
         [&](const ast::break_stmt& brk) { emit_break(stmt_id, brk); },
         [&](const ast::continue_stmt& cnt) { emit_continue(stmt_id, cnt); },
-        [&](const ast::discard_stmt& discard) { emit_expression(discard.discarded); });
+        [&](const ast::discard_stmt& discard) { emit_expression(discard.discarded); },
+        // A local `import` only brings a name into scope; the module is emitted separately.
+        [&](const ast::import_stmt&) {});
 }
 
 auto emitter::emit_stmt_as_value(const ast::stmt_handle& stmt) -> value {

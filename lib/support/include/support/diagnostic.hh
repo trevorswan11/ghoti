@@ -208,6 +208,17 @@ template <Diagnostic D> class diagnostic_list {
         diagnostics_.emplace_back(std::forward<Args>(args)...);
     }
 
+    // Moves every diagnostic at or after `from` into a new list, keeping the terminal behavior.
+    [[nodiscard]] auto split_off(usize from) -> diagnostic_list {
+        diagnostic_list rest{in_terminal_};
+        if (from >= diagnostics_.size()) { return rest; }
+        for (usize i{from}; i < diagnostics_.size(); ++i) {
+            rest.diagnostics_.push_back(diagnostics_[i]);
+        }
+        diagnostics_.erase(diagnostics_.begin() + static_cast<idiff>(from), diagnostics_.end());
+        return rest;
+    }
+
     operator gsl::span<const D>() const { return diagnostics_; }
 
     // Creates a new list with the same terminal behavior

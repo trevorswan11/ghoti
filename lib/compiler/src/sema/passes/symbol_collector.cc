@@ -556,6 +556,7 @@ auto symbol_collector::collect_import_payload(const ast::import_stmt& import_stm
 
 auto symbol_collector::visit(ast::node_id id, const ast::import_stmt& import_stmt) -> void {
     PROFILE_FUNCTION();
+    collecting_.import_nodes.emplace_back(id);
     auto [alias, mod_result]{collect_import_payload(import_stmt)};
 
     // Only set the table index if the module exists

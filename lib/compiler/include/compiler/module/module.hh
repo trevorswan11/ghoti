@@ -88,6 +88,9 @@ struct module {
     // Every identifier_expr references and uses encountered during symbol collection/resolution
     std::vector<ast::node_id> identifier_positions;
 
+    // Every `import` node in this module, at any nesting depth
+    std::vector<ast::node_id> import_nodes;
+
     diagnotic_list_variant diagnostics{stdx::monostate{}};
 
     // A permanent copy of the syntax diagnostics found at parse time, if any

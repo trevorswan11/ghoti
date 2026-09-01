@@ -332,6 +332,15 @@ TEST_CASE("formatter round trip: @cfg groups inside aggregate bodies") {
     round_trips("const E := enum { A, @cfg(os == .windows) { B, C } @cfg(os == .linux) D, F, };");
 }
 
+TEST_CASE("formatter round trip: @cfg groups gating aggregate members") {
+    round_trips("const S := struct { a: i32, const k := 1; "
+                "@cfg(os == .linux) { const l := fn(): i32 { return 1; }; } };");
+    round_trips("const S := struct { a: i32, @cfg(ptr_bits == 64) { using W = u64; } "
+                "else { using W = u32; } };");
+    round_trips("const E := enum { A, @cfg(os == .linux) { const tag := 1; } "
+                "else { const tag := 2; } };");
+}
+
 TEST_CASE("formatter round trip: control flow") {
     round_trips("if (a) { b; } else { c; };");
     round_trips("if constexpr (a) { b; };");

@@ -113,6 +113,18 @@ TEST_CASE("E2E cfg: a selected struct @cfg block contributes real, ordered field
     )") == 10);
 }
 
+TEST_CASE("E2E cfg: @cfg selects an aggregate member and its methods stay callable") {
+    CHECK(helpers::compile_and_run(R"(
+        const S := struct {
+            n: i32,
+            @cfg(ptr_bits == 64) { const scale := fn(v: i32): i32 { return v * 2; }; }
+            else                 { const scale := fn(v: i32): i32 { return v * 3; }; }
+        };
+
+        pub const main := fn(): i32 { return S.scale(21); };
+    )") == 42);
+}
+
 TEST_CASE("E2E cfg: an unselected struct @cfg block drops its fields; else wins") {
     CHECK(helpers::compile_and_run(R"(
         const S := struct {

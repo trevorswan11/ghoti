@@ -313,4 +313,8 @@ struct cfg_outcome {
 [[nodiscard]] auto enum_variants(std::string_view input, std::string_view name)
     -> std::vector<std::string>;
 
+// The post-cfg-pass member names of the first `const <name> := struct { ... }` root.
+[[nodiscard]] auto struct_members(std::string_view input, std::string_view name)
+    -> std::vector<std::string>;
+
 } // namespace ghoti::tests::helpers

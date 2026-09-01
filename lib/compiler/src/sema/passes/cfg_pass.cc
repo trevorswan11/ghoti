@@ -652,14 +652,17 @@ auto cfg_pass::recurse_into_expr(ast::expr_handle expr) -> void {
         },
         [&](ast::struct_expr& node) {
             flatten_cfg_groups(node.cfg_groups, node.fields);
+            flatten_cfg_groups(node.member_cfg_groups, node.members);
             recurse_into_members(node.members);
         },
         [&](ast::union_expr& node) {
             flatten_cfg_groups(node.cfg_groups, node.fields);
+            flatten_cfg_groups(node.member_cfg_groups, node.members);
             recurse_into_members(node.members);
         },
         [&](ast::enum_expr& node) {
             flatten_cfg_groups(node.cfg_groups, node.enumerations);
+            flatten_cfg_groups(node.member_cfg_groups, node.members);
             recurse_into_members(node.members);
         },
         [](const auto&) {});

@@ -123,4 +123,20 @@ TEST_CASE("E2E: a `fn(bool): type` that selects between existing named types") {
     )") == 7);
 }
 
+TEST_CASE("E2E: @sizeOf / @alignOf resolve a `fn(bool): type` alias selecting a primitive") {
+    CHECK(helpers::compile_and_run(R"(
+        const choose := fn(wide: bool): type {
+            if (wide) { return i64; }
+            return i32;
+        };
+        using T = choose(true);
+        using U = choose(false);
+
+        pub const main := fn(): i32 {
+            return @as(i32, @sizeOf(T)) + @as(i32, @alignOf(T))
+                 + @as(i32, @sizeOf(U)) + @as(i32, @alignOf(U));
+        };
+    )") == 8 + 8 + 4 + 4);
+}
+
 } // namespace ghoti::tests

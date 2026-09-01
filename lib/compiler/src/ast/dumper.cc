@@ -221,16 +221,22 @@ auto dumper::visit(node_id, const enum_expr& enum_expr) -> void {
     }
 
     const auto has_members{!enum_expr.members.empty()};
+    const auto has_member_cfg{!enum_expr.member_cfg_groups.empty()};
     {
-        const indent::guard g{indent_, !has_members};
+        const indent::guard g{indent_, !has_members && !has_member_cfg};
         fmt::println(
             out_, "{}Non-Exhaustive: {}", indent_.current_branch(), enum_expr.non_exhaustive);
     }
 
     if (has_members) {
-        const indent::guard g{indent_, true};
+        const indent::guard g{indent_, !has_member_cfg};
         fmt::println(out_, "{}Members:", indent_.current_branch());
         dump_node_list(enum_expr.members);
+    }
+
+    if (has_member_cfg) {
+        const indent::guard g{indent_, true};
+        dump_cfg_groups(enum_expr.member_cfg_groups);
     }
 }
 
@@ -709,15 +715,21 @@ auto dumper::visit(node_id, const struct_expr& node) -> void {
         });
     }
 
+    const auto has_member_cfg{!node.member_cfg_groups.empty()};
     if (has_cfg) {
-        const indent::guard g{indent_, !has_members};
+        const indent::guard g{indent_, !has_members && !has_member_cfg};
         dump_cfg_groups(node.cfg_groups);
     }
 
     if (has_members) {
-        const indent::guard g{indent_, true};
+        const indent::guard g{indent_, !has_member_cfg};
         fmt::println(out_, "{}Members:", indent_.current_branch());
         dump_node_list(node.members);
+    }
+
+    if (has_member_cfg) {
+        const indent::guard g{indent_, true};
+        dump_cfg_groups(node.member_cfg_groups);
     }
 }
 
@@ -758,15 +770,21 @@ auto dumper::visit(node_id, const union_expr& node) -> void {
         });
     }
 
+    const auto has_member_cfg{!node.member_cfg_groups.empty()};
     if (has_cfg) {
-        const indent::guard g{indent_, !has_members};
+        const indent::guard g{indent_, !has_members && !has_member_cfg};
         dump_cfg_groups(node.cfg_groups);
     }
 
     if (has_members) {
-        const indent::guard g{indent_, true};
+        const indent::guard g{indent_, !has_member_cfg};
         fmt::println(out_, "{}Members:", indent_.current_branch());
         dump_node_list(node.members);
+    }
+
+    if (has_member_cfg) {
+        const indent::guard g{indent_, true};
+        dump_cfg_groups(node.member_cfg_groups);
     }
 }
 

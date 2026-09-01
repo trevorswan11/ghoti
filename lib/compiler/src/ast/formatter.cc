@@ -260,6 +260,60 @@ auto formatter::is_function_or_aggregate_node(node_id id) const -> bool {
     return false;
 }
 
+auto formatter::format_member_cfg_group(const cfg_item_group<member_handle>& group)
+    -> syntax::doc_id {
+    std::vector<syntax::doc_id> parts;
+    for (usize a{0}; a < group.arms.size(); ++a) {
+        const auto& arm{group.arms[a]};
+        if (a != 0) { parts.emplace_back(doc_manager_.text(" else ")); }
+        if (arm.predicate) {
+            parts.emplace_back(doc_manager_.text("@cfg ("));
+            parts.emplace_back(format(*arm.predicate));
+            parts.emplace_back(doc_manager_.text(") "));
+        }
+        std::vector<syntax::doc_id> items;
+        items.reserve(arm.items.size());
+        for (const auto& item : arm.items) { items.emplace_back(format(item)); }
+        parts.emplace_back(doc_manager_.group(doc_manager_.concat({
+            doc_manager_.text("{"),
+            doc_manager_.nest(doc_manager_.concat(
+                {doc_manager_.line(), doc_manager_.join(std::move(items), doc_manager_.line())})),
+            doc_manager_.line(),
+            doc_manager_.text("}"),
+        })));
+    }
+    return doc_manager_.concat(std::move(parts));
+}
+
+auto formatter::format_members(std::vector<syntax::doc_id>&                      entries,
+                               const member_list&                                members,
+                               const std::vector<cfg_item_group<member_handle>>& cfg_groups)
+    -> void {
+    const auto flush_cfg{[&](usize position) -> void {
+        for (const auto& group : cfg_groups) {
+            if (group.position == position) {
+                entries.emplace_back(format_member_cfg_group(group));
+            }
+        }
+    }};
+
+    flush_cfg(0);
+    for (usize i{0}; i < members.size(); ++i) {
+        const auto& member{members[i]};
+        auto        leading{consume_leading_comments(ast_.location_of(member).line)};
+        auto        member_doc{format(member)};
+        auto        trailing{consume_trailing_comment(ast_.end_location_of(member).line)};
+        if (trailing != doc_manager_.nil()) {
+            member_doc = doc_manager_.concat({member_doc, trailing});
+        }
+        if (leading != doc_manager_.nil()) {
+            member_doc = doc_manager_.concat({leading, member_doc});
+        }
+        entries.emplace_back(member_doc);
+        flush_cfg(i + 1);
+    }
+}
+
 auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
     std::vector<syntax::doc_id> head;
     if (node.is_extern) { head.emplace_back(doc_manager_.text("extern ")); }
@@ -324,21 +378,7 @@ auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
     }
 
     const auto field_count{entries.size()};
-    for (const auto& member : node.members) {
-        const auto& start_loc{ast_.location_of(member)};
-        auto        leading{consume_leading_comments(start_loc.line)};
-
-        auto       member_doc{format(member)};
-        const auto end_line{ast_.end_location_of(member).line};
-        auto       trailing{consume_trailing_comment(end_line)};
-        if (trailing != doc_manager_.nil()) {
-            member_doc = doc_manager_.concat({member_doc, trailing});
-        }
-        if (leading != doc_manager_.nil()) {
-            member_doc = doc_manager_.concat({leading, member_doc});
-        }
-        entries.emplace_back(member_doc);
-    }
+    format_members(entries, node.members, node.member_cfg_groups);
 
     head.emplace_back(aggregate_body(std::move(entries), field_count));
     return doc_manager_.concat(std::move(head));
@@ -399,21 +439,7 @@ auto formatter::format_union(const union_expr& node) -> syntax::doc_id {
         flush_cfg_groups(i + 1);
     }
     const auto field_count{entries.size()};
-    for (const auto& member : node.members) {
-        const auto& start_loc{ast_.location_of(member)};
-        auto        leading{consume_leading_comments(start_loc.line)};
-
-        auto       member_doc{format(member)};
-        const auto end_line{ast_.end_location_of(member).line};
-        auto       trailing{consume_trailing_comment(end_line)};
-        if (trailing != doc_manager_.nil()) {
-            member_doc = doc_manager_.concat({member_doc, trailing});
-        }
-        if (leading != doc_manager_.nil()) {
-            member_doc = doc_manager_.concat({leading, member_doc});
-        }
-        entries.emplace_back(member_doc);
-    }
+    format_members(entries, node.members, node.member_cfg_groups);
 
     head.emplace_back(aggregate_body(std::move(entries), field_count));
     return doc_manager_.concat(std::move(head));
@@ -476,21 +502,7 @@ auto formatter::format_enum(const enum_expr& node) -> syntax::doc_id {
         entries.emplace_back(non_ex);
     }
     const auto value_count{entries.size()};
-    for (const auto& member : node.members) {
-        const auto& start_loc{ast_.location_of(member)};
-        auto        leading{consume_leading_comments(start_loc.line)};
-
-        auto       member_doc{format(member)};
-        const auto end_line{ast_.end_location_of(member).line};
-        auto       trailing{consume_trailing_comment(end_line)};
-        if (trailing != doc_manager_.nil()) {
-            member_doc = doc_manager_.concat({member_doc, trailing});
-        }
-        if (leading != doc_manager_.nil()) {
-            member_doc = doc_manager_.concat({leading, member_doc});
-        }
-        entries.emplace_back(member_doc);
-    }
+    format_members(entries, node.members, node.member_cfg_groups);
 
     if (node.underlying) {
         head.emplace_back(doc_manager_.text(": "));

@@ -433,4 +433,25 @@ TEST_CASE("Implicit access as the left operand still rejects for enums") {
                          std::pair{0UZ, 77UZ}});
 }
 
+TEST_CASE("A type error inside an imported generic body is attributed to the defining module") {
+    constexpr std::string_view dep_gh{
+        R"(pub const project := fn(x: auto): i32 { return x + undeclared_only_here; };)"};
+
+    auto [ctx, idx]{helpers::resolve(
+        R"(import "dep.gh" as dep; const r := dep::project(5);)",
+        helpers::make_vector<mock_file>(mock_file{.path = "dep.gh", .source = dep_gh}))};
+
+    auto& dep_module{*UNWRAP(ctx->manager.try_get_file_module("dep.gh"))};
+
+    // The instantiation-body error is attributed to dep.gh (the defining module)...
+    REQUIRE(dep_module.diagnostics.is<sema::diagnostics>());
+    const auto& diags{UNWRAP(dep_module.diagnostics.as_opt<sema::diagnostics>())};
+    CHECK(diags.begin() != diags.end());
+    for (const auto& d : diags) {
+        const auto loc{UNWRAP(d.to_formattable().location)};
+        const auto [line, _]{dep_module.source.get_diagnostic_strings(loc)};
+        CHECK(line != "<invalid line>");
+    }
+}
+
 } // namespace ghoti::tests

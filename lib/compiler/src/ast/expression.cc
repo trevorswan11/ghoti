@@ -357,22 +357,103 @@ namespace {
         [](const auto&) -> stdx::option<std::string_view> { return stdx::none; });
 }
 
-[[nodiscard]] auto parse_members(syntax::parser& parser)
+template <typename Item>
+[[nodiscard]] auto
+parse_aggregate_cfg_group(syntax::parser& parser,
+                          usize           position,
+                          stdx::result<Item, syntax::diagnostic> (*parse_one)(syntax::parser&))
+    -> stdx::result<cfg_item_group<Item>, syntax::diagnostic> {
+    using tt    = syntax::token_type_t;
+    using group = cfg_item_group<Item>;
+    using arm   = typename group::arm;
+
+    // Current token is `)` (just after a predicate) or `else`; peek is `{` or an item.
+    const auto parse_body = [&] -> stdx::result<std::vector<Item>, syntax::diagnostic> {
+        std::vector<Item> items;
+        if (parser.peek_token_is(tt::LBRACE)) {
+            parser.advance(); // current == {
+            while (!parser.peek_token_is(tt::RBRACE) && !parser.peek_token_is(tt::END)) {
+                if (parser.peek_token_is(tt::COMMA)) {
+                    parser.advance();
+                    continue;
+                }
+                items.emplace_back(TRY(parse_one(parser)));
+            }
+            TRY(parser.expect_peek(tt::RBRACE));
+        } else {
+            items.emplace_back(TRY(parse_one(parser)));
+        }
+        return items;
+    };
+
+    std::vector<arm> arms;
+    arms.emplace_back(
+        arm{stdx::option<expr_handle>{TRY(parser.parse_cfg_predicate())}, TRY(parse_body())});
+
+    while (parser.peek_token_is(tt::ELSE)) {
+        parser.advance(); // current == else
+        if (parser.peek_token_is(tt::BUILTIN_CFG)) {
+            parser.advance(); // current == @cfg
+            auto predicate{TRY(parser.parse_cfg_predicate())};
+            arms.emplace_back(arm{stdx::option<expr_handle>{predicate}, TRY(parse_body())});
+        } else {
+            arms.emplace_back(arm{stdx::none, TRY(parse_body())});
+            break; // a predicate-less `else` terminates the chain
+        }
+    }
+
+    return group{position, std::move(arms)};
+}
+
+// Parses one aggregate member (peek is its first token) and validates it.
+[[nodiscard]] auto parse_one_member(syntax::parser& parser)
+    -> stdx::result<member_handle, syntax::diagnostic> {
+    parser.advance();
+    auto       parsed{TRY(parser.parse_statement())};
+    const auto member{TRY(deconstruct_member(parser, parsed))};
+    if (const auto err_msg{validate_member_decl(parser, member)}) {
+        return make_syntax_err(
+            std::string{*err_msg}, syntax::error::INVALID_MEMBER, parser.get_location_of(*member));
+    }
+    return member;
+}
+
+using member_cfg_group = cfg_item_group<member_handle>;
+
+// Reports whether its first @cfg arm holds members rather than fields/variants
+[[nodiscard]] auto cfg_group_targets_members(syntax::parser& parser) -> bool {
+    using tt = syntax::token_type_t;
+    syntax::parser::transaction tx{parser};
+    parser.advance(); // current == @cfg
+    if (!parser.peek_token_is(tt::LPAREN)) { return false; }
+    parser.advance(); // current == (
+    usize depth{1};
+    while (depth > 0 && !parser.current_token_is(tt::END)) {
+        parser.advance();
+        if (parser.current_token_is(tt::LPAREN)) {
+            ++depth;
+        } else if (parser.current_token_is(tt::RPAREN)) {
+            --depth;
+        }
+    }
+    if (parser.peek_token_is(tt::LBRACE)) { parser.advance(); }
+    if (parser.peek_token_is(tt::PUBLIC)) { parser.advance(); }
+    return parser.get_peek_token().is_member_token();
+}
+
+[[nodiscard]] auto parse_members(syntax::parser& parser, std::vector<member_cfg_group>& cfg_groups)
     -> stdx::result<member_list, syntax::diagnostic> {
     member_list members;
     while (!parser.peek_token_is(syntax::token_type_t::RBRACE) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
-        parser.advance();
-        auto parsed_member{TRY(parser.parse_statement())};
-
-        // Downcast the parsed member into the specific member variant and check
-        const auto member{TRY(deconstruct_member(parser, parsed_member))};
-        if (const auto err_msg{validate_member_decl(parser, member)}) {
-            return make_syntax_err(std::string{*err_msg},
-                                   syntax::error::INVALID_MEMBER,
-                                   parser.get_location_of(*member));
+        if (parser.peek_token_is(syntax::token_type_t::BUILTIN_CFG)) {
+            parser.advance(); // current == @cfg
+            cfg_groups.emplace_back(TRY(parse_aggregate_cfg_group<member_handle>(
+                parser, members.size(), parse_one_member)));
+            if (parser.peek_token_is(syntax::token_type_t::COMMA)) { parser.advance(); }
+            continue;
         }
-        members.emplace_back(member);
+        members.emplace_back(TRY(parse_one_member(parser)));
     }
     return members;
 }
@@ -441,54 +522,6 @@ namespace {
     return enum_expr::enumeration{ident, value};
 }
 
-template <typename Item>
-[[nodiscard]] auto
-parse_aggregate_cfg_group(syntax::parser& parser,
-                          usize           position,
-                          stdx::result<Item, syntax::diagnostic> (*parse_one)(syntax::parser&))
-    -> stdx::result<cfg_item_group<Item>, syntax::diagnostic> {
-    using tt    = syntax::token_type_t;
-    using group = cfg_item_group<Item>;
-    using arm   = typename group::arm;
-
-    // Current token is `)` (just after a predicate) or `else`; peek is `{` or an item.
-    const auto parse_body = [&] -> stdx::result<std::vector<Item>, syntax::diagnostic> {
-        std::vector<Item> items;
-        if (parser.peek_token_is(tt::LBRACE)) {
-            parser.advance(); // current == {
-            while (!parser.peek_token_is(tt::RBRACE) && !parser.peek_token_is(tt::END)) {
-                if (parser.peek_token_is(tt::COMMA)) {
-                    parser.advance();
-                    continue;
-                }
-                items.emplace_back(TRY(parse_one(parser)));
-            }
-            TRY(parser.expect_peek(tt::RBRACE));
-        } else {
-            items.emplace_back(TRY(parse_one(parser)));
-        }
-        return items;
-    };
-
-    std::vector<arm> arms;
-    arms.emplace_back(
-        arm{stdx::option<expr_handle>{TRY(parser.parse_cfg_predicate())}, TRY(parse_body())});
-
-    while (parser.peek_token_is(tt::ELSE)) {
-        parser.advance(); // current == else
-        if (parser.peek_token_is(tt::BUILTIN_CFG)) {
-            parser.advance(); // current == @cfg
-            auto predicate{TRY(parser.parse_cfg_predicate())};
-            arms.emplace_back(arm{stdx::option<expr_handle>{predicate}, TRY(parse_body())});
-        } else {
-            arms.emplace_back(arm{stdx::none, TRY(parse_body())});
-            break; // a predicate-less `else` terminates the chain
-        }
-    }
-
-    return group{position, std::move(arms)};
-}
-
 } // namespace
 
 auto enum_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
@@ -508,7 +541,8 @@ auto enum_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synta
     while (!parser.peek_token_is(syntax::token_type_t::RBRACE) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
         if (parser.peek_token_is(syntax::token_type_t::BUILTIN_CFG)) {
-            parser.advance(); // current == @cfg
+            if (cfg_group_targets_members(parser)) { break; } // handled by parse_members
+            parser.advance();                                 // current == @cfg
             cfg_groups.emplace_back(TRY(parse_aggregate_cfg_group<enumeration>(
                 parser, enumerations.size(), parse_enumeration)));
             if (parser.peek_token_is(syntax::token_type_t::COMMA)) { parser.advance(); }
@@ -548,7 +582,8 @@ auto enum_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synta
         parser.advance();
     }
 
-    auto members{TRY(parse_members(parser))};
+    std::vector<member_cfg_group> member_cfg_groups;
+    auto                          members{TRY(parse_members(parser, member_cfg_groups))};
     TRY(parser.expect_peek(syntax::token_type_t::RBRACE));
 
     // Validate here so that there aren't 3 errors spawning from an empty enum with decls
@@ -562,7 +597,8 @@ auto enum_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synta
                                       std::move(enumerations),
                                       std::move(cfg_groups),
                                       non_exhaustive,
-                                      std::move(members));
+                                      std::move(members),
+                                      std::move(member_cfg_groups));
 }
 
 auto for_loop_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
@@ -1294,7 +1330,8 @@ auto struct_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
     while (!parser.peek_token_is(syntax::token_type_t::RBRACE) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
         if (parser.peek_token_is(syntax::token_type_t::BUILTIN_CFG)) {
-            parser.advance(); // current == @cfg
+            if (cfg_group_targets_members(parser)) { break; } // handled by parse_members
+            parser.advance();                                 // current == @cfg
             cfg_groups.emplace_back(
                 TRY(parse_aggregate_cfg_group<field>(parser, fields.size(), parse_struct_field)));
             if (parser.peek_token_is(syntax::token_type_t::COMMA)) { parser.advance(); }
@@ -1344,12 +1381,14 @@ auto struct_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
         parser.advance();
     }
 
-    auto members{TRY(parse_members(parser))};
+    std::vector<member_cfg_group> member_cfg_groups;
+    auto                          members{TRY(parse_members(parser, member_cfg_groups))};
     TRY(parser.expect_peek(syntax::token_type_t::RBRACE));
     return parser.add_expr<struct_expr>(start_token,
                                         std::move(fields),
                                         std::move(cfg_groups),
                                         std::move(members),
+                                        std::move(member_cfg_groups),
                                         is_extern,
                                         is_packed);
 }
@@ -1364,7 +1403,8 @@ auto union_expr::parse(syntax::parser& parser, bool is_extern)
     while (!parser.peek_token_is(syntax::token_type_t::RBRACE) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
         if (parser.peek_token_is(syntax::token_type_t::BUILTIN_CFG)) {
-            parser.advance(); // current == @cfg
+            if (cfg_group_targets_members(parser)) { break; } // handled by parse_members
+            parser.advance();                                 // current == @cfg
             cfg_groups.emplace_back(
                 TRY(parse_aggregate_cfg_group<field>(parser, fields.size(), parse_union_field)));
             if (parser.peek_token_is(syntax::token_type_t::COMMA)) { parser.advance(); }
@@ -1388,7 +1428,8 @@ auto union_expr::parse(syntax::parser& parser, bool is_extern)
         parser.advance();
     }
 
-    auto members{TRY(parse_members(parser))};
+    std::vector<member_cfg_group> member_cfg_groups;
+    auto                          members{TRY(parse_members(parser, member_cfg_groups))};
     TRY(parser.expect_peek(syntax::token_type_t::RBRACE));
 
     // Validate here so that there aren't 3 errors spawning from an empty union with decls
@@ -1397,8 +1438,12 @@ auto union_expr::parse(syntax::parser& parser, bool is_extern)
                                syntax::error::EMPTY_UNION,
                                start_token);
     }
-    return parser.add_expr<union_expr>(
-        start_token, std::move(fields), std::move(cfg_groups), std::move(members), is_extern);
+    return parser.add_expr<union_expr>(start_token,
+                                       std::move(fields),
+                                       std::move(cfg_groups),
+                                       std::move(members),
+                                       std::move(member_cfg_groups),
+                                       is_extern);
 }
 
 auto parse_modified_struct_or_union(syntax::parser& parser)

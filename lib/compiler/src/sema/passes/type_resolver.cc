@@ -4306,7 +4306,15 @@ auto type_resolver::instantiate_generic(type&                             callee
         inst_resolver.resolve(stmt);
         if (inst_resolver.last_type_->is_poison()) { resolved_poison = true; }
     }
-    if (ctx_.diags.size() > diags_before || resolved_poison) { return stdx::none; }
+    if (ctx_.diags.size() > diags_before || resolved_poison) {
+        // Attribute diags here to `fn_mod`so they print against the defining file
+        if (ctx_.diags.size() > diags_before && &fn_mod != &resolving_ &&
+            !fn_mod.diagnostics.is<sema::diagnostics>()) {
+            fn_mod.error_out(ctx_.diags.split_off(diags_before),
+                             mod::module_state::POISONED_TYPE_RESOLVED);
+        }
+        return stdx::none;
+    }
 
     // Diff the side tables against the snapshot: everything this instantiation's body/signature
     // resolved, to be replayed at emit time.

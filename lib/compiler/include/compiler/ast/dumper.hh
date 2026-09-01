@@ -1,7 +1,9 @@
 #pragma once
 
+#include <concepts>
 #include <ostream>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 #include <fmt/ostream.h>
@@ -137,7 +139,11 @@ class dumper {
                 }
                 dump_container(arm.items, [this](const auto& item) -> void {
                     fmt::print(out_, "{}Item: ", indent_.current_branch());
-                    dump(item.name);
+                    if constexpr (std::same_as<std::decay_t<decltype(item)>, member_handle>) {
+                        dump(*item);
+                    } else {
+                        dump(item.name);
+                    }
                 });
             });
         });

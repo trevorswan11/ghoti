@@ -10,6 +10,7 @@
 
 #include "compiler/ast/ast.hh"
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/ast/primitive.hh"
 #include "compiler/ast/statement.hh"
@@ -61,6 +62,13 @@ class formatter {
     [[nodiscard]] auto format_struct(const struct_expr& node) -> syntax::doc_id;
     [[nodiscard]] auto format_union(const union_expr& node) -> syntax::doc_id;
     [[nodiscard]] auto format_enum(const enum_expr& node) -> syntax::doc_id;
+
+    auto format_members(std::vector<syntax::doc_id>&                      entries,
+                        const member_list&                                members,
+                        const std::vector<cfg_item_group<member_handle>>& cfg_groups) -> void;
+
+    [[nodiscard]] auto format_member_cfg_group(const cfg_item_group<member_handle>& group)
+        -> syntax::doc_id;
     [[nodiscard]] auto aggregate_body(std::vector<syntax::doc_id> entries, usize comma_count)
         -> syntax::doc_id;
 

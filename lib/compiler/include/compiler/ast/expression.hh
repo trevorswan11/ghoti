@@ -104,13 +104,15 @@ struct enum_expr {
         stdx::option<expr_handle> value;
     };
 
-    using cfg_group = cfg_item_group<enumeration>;
+    using cfg_group        = cfg_item_group<enumeration>;
+    using member_cfg_group = cfg_item_group<member_handle>;
 
     stdx::option<identifier_handle> underlying;
     std::vector<enumeration>        enumerations;
     std::vector<cfg_group>          cfg_groups;
     bool                            non_exhaustive;
     member_list                     members;
+    std::vector<member_cfg_group>   member_cfg_groups;
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;
@@ -369,13 +371,15 @@ struct struct_expr {
         }
     };
 
-    using cfg_group = cfg_item_group<field>;
+    using cfg_group        = cfg_item_group<field>;
+    using member_cfg_group = cfg_item_group<member_handle>;
 
-    std::vector<field>     fields;
-    std::vector<cfg_group> cfg_groups;
-    member_list            members;
-    bool                   is_extern{false};
-    bool                   is_packed{false};
+    std::vector<field>            fields;
+    std::vector<cfg_group>        cfg_groups;
+    member_list                   members;
+    std::vector<member_cfg_group> member_cfg_groups;
+    bool                          is_extern{false};
+    bool                          is_packed{false};
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic> {
@@ -392,12 +396,14 @@ struct union_expr {
         stdx::option<expr_handle> explicit_alignment;
     };
 
-    using cfg_group = cfg_item_group<field>;
+    using cfg_group        = cfg_item_group<field>;
+    using member_cfg_group = cfg_item_group<member_handle>;
 
-    std::vector<field>     fields;
-    std::vector<cfg_group> cfg_groups;
-    member_list            members;
-    bool                   is_extern{false};
+    std::vector<field>            fields;
+    std::vector<cfg_group>        cfg_groups;
+    member_list                   members;
+    std::vector<member_cfg_group> member_cfg_groups;
+    bool                          is_extern{false};
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic> {

@@ -220,4 +220,25 @@ auto enum_variants(std::string_view input, std::string_view name) -> std::vector
     return {};
 }
 
+auto struct_members(std::string_view input, std::string_view name) -> std::vector<std::string> {
+    auto [ctx, idx]{helpers::collect(input)};
+    for (const auto root : ctx->root_mod.ast) {
+        const auto decl{ctx->root_mod.ast.get_as_opt<ast::decl_stmt>(root)};
+        if (!decl || !decl->value) { continue; }
+        if (ctx->root_mod.ast.get_as<ast::identifier_expr>(decl->name).name != name) { continue; }
+        const auto se{ctx->root_mod.ast.get_as_opt<ast::struct_expr>(*decl->value)};
+        if (!se) { break; }
+        std::vector<std::string> out;
+        for (const auto& member : se->members) {
+            if (const auto md{ctx->root_mod.ast.get_as_opt<ast::decl_stmt>(*member)}) {
+                out.emplace_back(ctx->root_mod.ast.get_as<ast::identifier_expr>(md->name).name);
+            } else if (const auto mu{ctx->root_mod.ast.get_as_opt<ast::using_stmt>(*member)}) {
+                out.emplace_back(ctx->root_mod.ast.get_as<ast::identifier_expr>(mu->alias).name);
+            }
+        }
+        return out;
+    }
+    return {};
+}
+
 } // namespace ghoti::tests::helpers
