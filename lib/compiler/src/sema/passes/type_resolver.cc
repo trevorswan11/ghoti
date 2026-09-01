@@ -4237,9 +4237,10 @@ auto type_resolver::instantiate_generic(type&                             callee
         this_type_guard.emplace(inst_resolver.user_type_stack_, *fn_info.enclosing_type);
     }
     // `constexpr` parameters are erased from the monomorph's signature.
-    const auto rt_param_count{static_cast<usize>(
+    const auto      rt_param_count{static_cast<usize>(
         std::ranges::count_if(fn_expr.parameters, [](const auto& p) { return !p.is_constexpr; }))};
-    auto       inst_param_types{ctx_.pool.get_many_unsafe(rt_param_count)};
+    auto            inst_param_types{ctx_.pool.get_many_unsafe(rt_param_count)};
+    constexpr_frame type_param_frame;
     for (usize i{0};
          const auto& [arg_type, param] : std::views::zip(concrete_args, fn_expr.parameters)) {
         inst_resolver.resolve(param.explicit_type);
@@ -4274,12 +4275,19 @@ auto type_resolver::instantiate_generic(type&                             callee
                 }
             }
             fn_mod.set_sema_type(param.explicit_type, resolved_param_type);
+            if (resolved_param_type.get_kind() == type_kind::TYPE) {
+                const auto& p_name{fn_mod.ast.get_as<ast::identifier_expr>(param.name).name};
+                type_param_frame.insert_or_assign(p_name,
+                                                  gir::const_value{denoted_type(*body_p_type)});
+            }
         } else {
             fn_mod.set_sema_type(param.explicit_type, *decl_p_type);
         }
         fn_mod.set_sema_type(param.name, *body_p_type);
         if (!param.is_constexpr) { inst_param_types[i++] = decl_p_type; }
     }
+    const constexpr_frame_guard type_param_guard{ctx_.constexpr_binding_frames,
+                                                 std::move(type_param_frame)};
     inst_resolver.resolve(fn_expr.explicit_return_type);
     if (inst_resolver.last_type_->is_poison()) { return stdx::none; }
     auto&      return_type{*inst_resolver.last_type_.take()};
