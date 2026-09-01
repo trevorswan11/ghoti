@@ -67,5 +67,15 @@
 - Address nit in test subcommand description
 - Resolve crash that would occur when invoking the test command on a tree with no test blocks
 
-# v0.3.0
+# v0.2.2
 
+- Same-named `pub` functions, `var` globals, and aggregate methods declared in different modules or types no longer collapse onto one symbol
+- A struct / union / enum member or field may now share a name with an unrelated declaration in an enclosing scope (it is only ever reached through `.`)
+    - Reusing the enclosing type's own name is still rejected
+- A `fn(...): type` constructor whose returned aggregate has `const` function members now compiles
+    - Each instantiation gets its own copies of those members (`Vec(i32).make` and `Vec(i64).make` are distinct functions), including `^self` / `&mut self` receivers and calls between sibling members
+- Non-generic (`fn(): type`) constructors with member functions, and both generic and non-generic constructors used across a module boundary (`lib::Make()`, `v::Vec(i32)`), are supported
+- `mod::Ctor()` for a non-generic `fn(): type` constructor now resolves at compile time
+    - Previously only a bare-identifier `Ctor()` did
+- Passing two instantiations of the same generic type constructor to another generic (`foo(Vec(i32))` vs `foo(Vec(i64))`) no longer produces a single shared monomorph
+- Per-monomorphization body typing and folded `constexpr` arguments now survive cross-module resolution, fixing `[n]T` with a `constexpr n` and type-constructor member `@this()` shapes across module boundaries
