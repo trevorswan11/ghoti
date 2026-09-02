@@ -1,0 +1,64 @@
+// References:
+// <sys/fcntl.h> and its transitive includes
+import "../result.gh" as result;
+
+pub using Handle = i32;
+pub using Errno = i32;
+
+extern("System", "__error") const sys_errno_loc: fn(): ^mut Errno;
+extern("System", "read") const sys_read: fn(Handle, ^mut u8, usize): isize;
+extern("System", "write") const sys_write: fn(Handle, ^u8, usize): isize;
+extern("System", "close") const sys_close: fn(Handle): i32;
+extern("System", "open") const sys_open: fn(^u8, i32, ...): i32;
+extern("System", "lseek") const sys_lseek: fn(i32, i64, i32): i64;
+
+pub const O_RDONLY: i32 = 0x0000; // open for reading only
+pub const O_WRONLY: i32 = 0x0001; // open for writing only
+pub const O_RDWR: i32 = 0x0002; // open for reading and writing
+pub const O_ACCMODE: i32 = 0x0003; // mask for above modes
+pub const O_NONBLOCK: i32 = 0x0004; // no delay
+pub const O_APPEND: i32 = 0x0008; // set append mode
+pub const O_CREAT: i32 = 0x0200; // create if nonexistant
+pub const O_TRUNC: i32 = 0x0400; // truncate to zero length
+pub const O_EXCL: i32 = 0x0800; // error if already exists
+pub const O_CLOEXEC: i32 = 0x1000000; // implicitly set FD_CLOEXEC
+pub const O_DIRECTORY: i32 = 0x100000;
+
+pub const SEEK_SET: i32 = 0; // set file offset to offset
+pub const SEEK_CUR: i32 = 1; // set file offset to current plus offset
+pub const SEEK_END: i32 = 2; // set file offset to EOF plus offset
+
+pub using Mode = u16;
+
+pub const stdin: Handle = 0;
+pub const stdout: Handle = 1;
+pub const stderr: Handle = 2;
+
+constexpr R := fn(T: type): type {
+    return result::Result(T, Errno);
+};
+
+pub const write := fn(h: Handle, buf: []u8): R(usize) {
+    const r := sys_write(h, buf.ptr, buf.len);
+    return if (r < 0) .{ .err = *sys_errno_loc() } else .{ .ok = @as(usize, r) };
+};
+
+pub const read := fn(h: Handle, buf: []mut u8): R(usize) {
+    const r := sys_read(h, buf.ptr, buf.len);
+    return if (r < 0) .{ .err = *sys_errno_loc() } else .{ .ok = @as(usize, r) };
+};
+
+pub const open := fn(path: [:0]u8, flags: i32, mode: Mode): R(Handle) {
+    const fd := sys_open(path.ptr, flags, @as(i32, mode));
+    return if (fd < 0) .{ .err = *sys_errno_loc() } else .{ .ok = fd };
+};
+
+pub const close := fn(h: Handle): R(void) {
+    const r := sys_close(h);
+    return if (r < 0) .{ .err = *sys_errno_loc() } else .{ .ok = {} };
+};
+
+pub const lseek := fn(h: Handle, off: i64, whence: i32): R(i64) {
+    const r := sys_lseek(h, off, whence);
+    return if (r < 0) .{ .err = *sys_errno_loc() } else .{ .ok = r };
+};

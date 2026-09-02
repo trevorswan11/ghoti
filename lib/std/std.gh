@@ -1,1 +1,7 @@
 pub const version := "0.3.0";
+
+import "result.gh" as result;
+
+pub constexpr Result := result::Result;
+
+pub import "os/darwin.gh" as darwin;
