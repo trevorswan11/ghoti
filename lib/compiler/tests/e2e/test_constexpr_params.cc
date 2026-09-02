@@ -73,7 +73,7 @@ TEST_CASE("constexpr parameter: a compile-time function reference") {
     CHECK(helpers::compile_and_run(R"(
         const inc := fn(x: i32): i32 { return x + 1; };
 
-        const apply := fn(constexpr f: fn(i32): i32, v: i32): i32 {
+        const apply := fn(constexpr f: fn(n: i32): i32, v: i32): i32 {
             return f(f(v));
         };
 
@@ -85,7 +85,7 @@ TEST_CASE("constexpr parameter: a compile-time function reference") {
 
 TEST_CASE("constexpr parameter: a local function reference") {
     CHECK(helpers::compile_and_run(R"(
-        const apply := fn(constexpr f: fn(i32): i32, v: i32): i32 { return f(f(v)); };
+        const apply := fn(constexpr f: fn(n: i32): i32, v: i32): i32 { return f(f(v)); };
 
         pub const main := fn(): i32 {
             const dec := fn(x: i32): i32 { return x - 1; };
@@ -97,7 +97,7 @@ TEST_CASE("constexpr parameter: a local function reference") {
 
 TEST_CASE("constexpr parameter: a closure with compile-time captures") {
     CHECK(helpers::compile_and_run(R"(
-        const apply := fn(constexpr f: fn(i32): i32, v: i32): i32 { return f(v); };
+        const apply := fn(constexpr f: fn(n: i32): i32, v: i32): i32 { return f(v); };
 
         pub const main := fn(): i32 {
             const k: i32 = 10;
@@ -109,7 +109,7 @@ TEST_CASE("constexpr parameter: a closure with compile-time captures") {
 
 TEST_CASE("constexpr parameter: an anonymous capturing closure literal") {
     CHECK(helpers::compile_and_run(R"(
-        const apply := fn(constexpr f: fn(i32): i32, v: i32): i32 { return f(f(v)); };
+        const apply := fn(constexpr f: fn(n: i32): i32, v: i32): i32 { return f(f(v)); };
 
         pub const main := fn(): i32 {
             const step: i32 = 3;
@@ -120,7 +120,7 @@ TEST_CASE("constexpr parameter: an anonymous capturing closure literal") {
 
 TEST_CASE("constexpr closure: distinct captured values monomorphize apart") {
     CHECK(helpers::compile_and_run(R"(
-        const apply := fn(constexpr f: fn(i32): i32, v: i32): i32 { return f(v); };
+        const apply := fn(constexpr f: fn(n: i32): i32, v: i32): i32 { return f(v); };
 
         pub const main := fn(): i32 {
             const a: i32 = 10;
@@ -134,7 +134,7 @@ TEST_CASE("constexpr closure: distinct captured values monomorphize apart") {
 
 TEST_CASE("constexpr closure: invoked at comptime and runtime in the body") {
     CHECK(helpers::compile_and_run(R"(
-        const use := fn(constexpr f: fn(i32): i32, v: i32): i32 {
+        const use := fn(constexpr f: fn(n: i32): i32, v: i32): i32 {
             if constexpr (f(1) == 5) { return f(v) + 100; }
             return f(v);
         };
@@ -148,7 +148,7 @@ TEST_CASE("constexpr closure: invoked at comptime and runtime in the body") {
 
 TEST_CASE("constexpr closure: a runtime capture is rejected") {
     helpers::expect_compile_error(R"(
-        const apply := fn(constexpr f: fn(i32): i32, v: i32): i32 { return f(v); };
+        const apply := fn(constexpr f: fn(n: i32): i32, v: i32): i32 { return f(v); };
 
         pub const main := fn(): i32 {
             var k: i32 = 10;

@@ -314,6 +314,14 @@ auto emitter::emit_type_ctor_member(mod::module& owner_mod, const sema::type_cto
         }
     }
 
+    // Make this constructor instantiation's `constexpr` parameter values visible to the bodyA
+    sema::constexpr_frame ctor_frame;
+    if (const auto bindings{ctx_.instantiation_cache.get_type_ctor_bindings(tcm.typing_key)}) {
+        for (const auto& [name, val] : *bindings) { ctor_frame.insert_or_assign(name, val); }
+    }
+    const constexpr_frame_guard ctor_binding_guard{ctx_.constexpr_binding_frames,
+                                                   std::move(ctor_frame)};
+
     user_type_stack_.emplace_back(tcm.owner_clone);
     emit_function(tcm.member_decl, decl, *fn_expr, tcm.gir_name);
     user_type_stack_.pop_back();
@@ -1388,6 +1396,11 @@ auto emitter::emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> 
     }
 
     const auto sema_type{active_mod().get_sema_type_opt(id)};
+    // A bare reference to a sibling `const fn` static member inside a member body lowers to the
+    // same function symbol `Type.member` would, not an `undefined` fn value.
+    if (sema_type && sema_type->get_kind() == sema::type_kind::FUNCTION) {
+        return value{ref_symbol_name(id, ident.name), sema_type};
+    }
     return value{undefined_val{}, sema_type};
 }
 
@@ -2143,20 +2156,23 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                "Closure implementation signature must have self");
         args.emplace_back(value{binding->id, const_cast<sema::type&>(*fn_data->params[0])});
     } else if (has_implicit_self && !fn_data->params.empty()) {
-        const auto& self_param_type{*fn_data->params[0]};
-        const auto  obj_expr_h{dot_call->object};
-        const auto  obj_type{active_mod().get_sema_type_opt(obj_expr_h)};
+        auto&      self_param_type{const_cast<sema::type&>(*fn_data->params[0])};
+        const auto obj_expr_h{dot_call->object};
+        const auto obj_type{active_mod().get_sema_type_opt(obj_expr_h)};
+        const auto self_kind{self_param_type.get_kind()};
 
-        if (self_param_type.get_kind() == sema::type_kind::POINTER ||
-            self_param_type.get_kind() == sema::type_kind::REFERENCE) {
+        // The receiver of a `&self`/`^self` method needs the same adjustment a `&`/`^`
+        // argument gets
+        if (self_kind == sema::type_kind::POINTER || self_kind == sema::type_kind::REFERENCE) {
             if (obj_type && (obj_type->get_kind() == sema::type_kind::POINTER ||
                              obj_type->get_kind() == sema::type_kind::REFERENCE)) {
-                args.emplace_back(emit_expression(obj_expr_h));
+                // A `^T`/`&T` receiver already yields an address, so pass its raw
+                // value retyped to the self-param mode
+                args.emplace_back(value{emit_expression_id_raw(*obj_expr_h).data, self_param_type});
             } else {
-                const auto obj_lval{emit_lvalue(obj_expr_h)};
-                const auto addr{
-                    builder_.emit_address_of(obj_lval, const_cast<sema::type&>(self_param_type))};
-                args.emplace_back(value{addr, const_cast<sema::type&>(self_param_type)});
+                // Anything else is an lvalue to take the address of.
+                const auto addr{builder_.emit_address_of(emit_lvalue(obj_expr_h), self_param_type)};
+                args.emplace_back(value{addr, self_param_type});
             }
         } else {
             args.emplace_back(emit_expression(obj_expr_h));
@@ -2588,9 +2604,15 @@ auto emitter::emit_for(ast::node_id                   id,
         const auto iter_id{*iter_handle};
         if (const auto range{active_ast().get_as_opt<ast::range_expr>(iter_id)}) {
             const bool inclusive{iter_id.get_token_type() == syntax::token_type_t::DOT_DOT_EQ};
+            auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
 
-            const auto start_val{emit_expression(range->lhs)};
-            const auto end_val{emit_expression(range->rhs)};
+            // A missing lower bound counts from `0`; a missing upper bound (`for (arr, lo..)`)
+            // leans on a sibling iterable to stop the loop.
+            const auto start_val{range->lhs ? emit_expression(*range->lhs)
+                                            : value{u64{0}, usize_type}};
+            const bool open_upper{!range->rhs};
+            const auto end_val{open_upper ? value{u64{0}, usize_type}
+                                          : emit_expression(*range->rhs)};
             auto*      elem_type{start_val.type ? &*start_val.type
                                                 : &ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
 
@@ -2598,13 +2620,14 @@ auto emitter::emit_for(ast::node_id                   id,
             builder_.emit_store(slot, start_val);
 
             iter_infos.emplace_back<iterable_info>({
-                .is_range     = true,
-                .is_inclusive = inclusive,
-                .var_slot     = slot,
-                .elem_type    = elem_type,
-                .end_val      = end_val,
-                .capture_name = cap_name,
-                .capture_type = cap_type,
+                .is_range         = true,
+                .is_inclusive     = inclusive,
+                .range_open_upper = open_upper,
+                .var_slot         = slot,
+                .elem_type        = elem_type,
+                .end_val          = end_val,
+                .capture_name     = cap_name,
+                .capture_type     = cap_type,
             });
         } else {
             const auto arr_val{emit_lvalue(iter_handle)};
@@ -2674,6 +2697,8 @@ auto emitter::emit_for(ast::node_id                   id,
 
         value cond_val{true, bool_type};
         for (bool first{true}; const auto& info : iter_infos) {
+            // An open-upper range (`for (arr, lo..)`) contributes no stop condition of its own.
+            if (info.is_range && info.range_open_upper) { continue; }
             auto&      var_type{info.is_range ? *info.elem_type
                                               : ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
             const auto cur_val{builder_.emit_load(info.var_slot, var_type)};
@@ -3603,8 +3628,9 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
         // Test one pattern of the arm; the arm is taken if any of its patterns match.
         const auto emit_pattern_test{[&](ast::node_id pat_id) -> value {
             if (const auto range{active_ast().get_as_opt<ast::range_expr>(pat_id)}) {
-                const auto start_val{emit_expression(range->lhs)};
-                const auto end_val{emit_expression(range->rhs)};
+                ASSERT(range->lhs && range->rhs, "A range pattern needs both endpoints");
+                const auto start_val{emit_expression(*range->lhs)};
+                const auto end_val{emit_expression(*range->rhs)};
                 const auto ge_cond{
                     builder_.emit_binary(instruction_kind::GE, matcher_val, start_val, bool_type)};
                 const auto le_kind{pat_id.get_token_type() == syntax::token_type_t::DOT_DOT_EQ
@@ -3644,7 +3670,8 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
         builder_.set_segment(arm_body_seg);
         {
             const scope_guard arm_guard{scopes_};
-            if (arm.capture) {
+            // `|_|` is an anonymous capture: it consumes the arm's payload slot but binds nothing.
+            if (arm.capture && arm.capture->is<ast::identifier_expr>()) {
                 const auto& cap_ident{active_ast().get_as<ast::identifier_expr>(*arm.capture)};
                 auto&       cap_type{active_mod()
                                    .get_sema_type_opt(*arm.capture)
@@ -3710,7 +3737,11 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
 
             if (yields_value && res_slot) {
                 const auto arm_val{emit_stmt_as_value(arm.dispatch)};
-                builder_.emit_store(*res_slot, arm_val);
+                // A block body that diverges (`|e| { return e; }`, `_ => { return N; }`) already
+                // terminated the segment; storing its `void` result would outlive the terminator.
+                if (const auto seg{builder_.get_segment()}; seg && !seg->has_terminator()) {
+                    builder_.emit_store(*res_slot, arm_val);
+                }
             } else {
                 emit_stmt(arm.dispatch);
             }
@@ -4180,13 +4211,10 @@ auto emitter::emit_slice_range(ast::node_id id, const ast::index_expr& index) ->
     const bool  inclusive{ast::node_id{index.index}.get_token_type() ==
                          syntax::token_type_t::DOT_DOT_EQ};
 
-    const auto lo{emit_coerced_expr(range.lhs, usize_type)};
-    auto       hi{emit_coerced_expr(range.rhs, usize_type)};
-    if (inclusive) {
-        hi = value{
-            builder_.emit_binary(instruction_kind::ADD, hi, value{u64{1}, usize_type}, usize_type),
-            usize_type};
-    }
+    // An omitted lower bound is `0`; an omitted upper bound is the source length, filled in once
+    // it is known below.
+    const auto lo{range.lhs ? emit_coerced_expr(*range.lhs, usize_type)
+                            : value{u64{0}, usize_type}};
 
     // Base element pointer and (for arrays / slices) the source length.
     auto  src_lval{emit_lvalue(index.array)};
@@ -4217,6 +4245,19 @@ auto emitter::emit_slice_range(ast::node_id id, const ast::index_expr& index) ->
         base_ptr = value{loaded_ptr.data, ptr_type};
     } else {
         UNREACHABLE("Range index source must be an array, slice, or pointer");
+    }
+
+    value hi{};
+    if (range.rhs) {
+        hi = emit_coerced_expr(*range.rhs, usize_type);
+        if (inclusive) {
+            hi = value{builder_.emit_binary(
+                           instruction_kind::ADD, hi, value{u64{1}, usize_type}, usize_type),
+                       usize_type};
+        }
+    } else {
+        ASSERT(src_len, "An open-ended `..` upper bound needs a known source length");
+        hi = *src_len;
     }
 
     // Bounds check: lo <= hi, and hi <= len when the source length is known.

@@ -30,6 +30,14 @@ using constexpr_arg_map = ankerl::unordered_dense::map<std::string,
                                                        stdx::string_transparent_hash,
                                                        stdx::string_transparent_eq>;
 
+// A `fn(...): type` constructor's `constexpr` parameters, name -> folded value, so its aggregate's
+// member functions can read them at emit time. Keyed by the constructor's mangled name.
+using type_ctor_binding_map =
+    ankerl::unordered_dense::map<std::string,
+                                 std::vector<std::pair<std::string, gir::const_value>>,
+                                 stdx::string_transparent_hash,
+                                 stdx::string_transparent_eq>;
+
 // Per-monomorphization body typing, replayed at emit time: `[n]T` with a `constexpr n`, and the
 // `@this()` shape of a `fn(T): type` constructor's member functions.
 struct body_type_diff {
@@ -121,10 +129,26 @@ class generic_instantiation_cache {
         return stdx::none;
     }
 
+    auto set_type_ctor_bindings(std::string                                           key,
+                                std::vector<std::pair<std::string, gir::const_value>> bindings)
+        -> void {
+        type_ctor_bindings_.insert_or_assign(std::move(key), std::move(bindings));
+    }
+
+    [[nodiscard]] auto get_type_ctor_bindings(std::string_view key) const noexcept
+        -> stdx::option<const std::vector<std::pair<std::string, gir::const_value>>&> {
+        if (const auto it{type_ctor_bindings_.find(std::string{key})};
+            it != type_ctor_bindings_.end()) {
+            return it->second;
+        }
+        return stdx::none;
+    }
+
   private:
     ankerl::unordered_dense::map<generic_instantiation_key, generic_instantiation_entry> cache_;
-    body_type_diff_map body_type_diffs_;
-    constexpr_arg_map  constexpr_args_;
+    body_type_diff_map    body_type_diffs_;
+    constexpr_arg_map     constexpr_args_;
+    type_ctor_binding_map type_ctor_bindings_;
 };
 
 } // namespace ghoti::sema

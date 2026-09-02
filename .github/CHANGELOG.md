@@ -104,3 +104,12 @@
     - Captures can be used if all patterns are the same type
 - Add profiling hooks to various steps in the compilation pipeline
     - Enabled by building with -Dprofile
+
+## alpha.3
+- Add support for open ranges
+    - Use `..` for a new slice
+    - Use `..arr.len` for 0 to len (or use `..=arr.len`)
+    - Use `lower..` for lower to len
+    - These new range syntax only work in subscript operators and as for loop iterables when bounded by a real iterable
+- Fixed a bug where whitespace around comments would be accidentally lost
+- Fixed a few crashes in the compiler with match arm returns and function pointers

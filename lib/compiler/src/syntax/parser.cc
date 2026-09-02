@@ -265,6 +265,8 @@ constexpr auto PREFIX_FNS = [] -> auto {
     fns[token_type_t::CARET]            = ast::address_of_expr::parse;
     fns[token_type_t::CARET_MUT]        = ast::address_of_expr::parse;
     fns[token_type_t::DOT]              = ast::implicit_access_expr::parse;
+    fns[token_type_t::DOT_DOT]          = ast::range_expr::parse; // `..hi` / `..` in `[]`
+    fns[token_type_t::DOT_DOT_EQ]       = ast::range_expr::parse; // `..=hi` in `[]`
     fns[token_type_t::BOOLEAN_TRUE]     = ast::bool_expr::parse;
     fns[token_type_t::BOOLEAN_FALSE]    = ast::bool_expr::parse;
     fns[token_type_t::UNDEFINED]        = ast::undefined_expr::parse;

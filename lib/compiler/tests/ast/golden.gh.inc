@@ -9,7 +9,7 @@ R"([_:0]^N{a, b, c, d, e, 3, "54" };
     constexpr SIZE := 2uz;
     { a; b; 2; c; };
     while (true) : (i += 1) {a;} else return b;
-    var f_ptr: ^fn(&a, ^mut B, ...): &[0x2uz][N]^E = undefined;
+    var f_ptr: ^fn(x: &a, y: ^mut B, ...): &[0x2uz][N]^E = undefined;
     A::B::C;
     struct { var a: Foo = bar; const b := fn(^mut this, a: A, b: ^B): C { c; }; };
     &a; &mut b; *a;

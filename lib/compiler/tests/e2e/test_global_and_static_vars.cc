@@ -122,7 +122,7 @@ TEST_CASE("`var` array global keeps its initializer and is mutable element-by-el
 TEST_CASE("`var` struct global with a function-pointer field") {
     CHECK(helpers::compile_and_run(R"(
         const inc := fn(n: i32): i32 { return n + 1; };
-        const VT := struct { step: fn(i32): i32, bias: i32 };
+        const VT := struct { step: fn(n: i32): i32, bias: i32 };
         var table: VT = VT{ .step = inc, .bias = 5 };
 
         pub const main := fn(): i32 {

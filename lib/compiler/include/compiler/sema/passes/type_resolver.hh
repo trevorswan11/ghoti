@@ -169,6 +169,11 @@ class type_resolver {
     [[nodiscard]] auto get_call_arg_location(const ast::call_expr::argument& arg)
         -> source_location;
 
+    // Whether the outermost callee of `call` resolves to a `@discardable` declaration
+    [[nodiscard]] auto callee_is_discardable(const ast::call_expr& call) const -> bool;
+    // Errors on a non-`void` call result dropped in statement position
+    auto check_unused_result(ast::node_id stmt_id, const ast::expr_stmt& stmt) -> void;
+
     [[nodiscard]] auto local_const_fn_ref(ast::expr_handle expr) -> stdx::option<gir::const_value>;
     [[nodiscard]] auto constexpr_closure_value(ast::expr_handle expr)
         -> stdx::option<gir::const_value>;
@@ -361,6 +366,8 @@ class type_resolver {
 
     bool in_mutating_context_{false};
     bool for_generic_instantiation_{false};
+    bool in_subscript_index_{false};
+    bool in_for_iterable_{false};
 
     named_test_map_t     named_tests_;
     structural_validator struct_validator_;

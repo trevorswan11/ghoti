@@ -36,7 +36,7 @@ TEST_CASE("A mutable-reference-capturing closure mutates the enclosing local") {
 
 TEST_CASE("A capturing closure is passed to a fn(T): U generic parameter and called through it") {
     CHECK(helpers::compile_and_run(R"(
-        const apply := fn(T: type, val: T, func: fn(T): T): T {
+        const apply := fn(T: type, val: T, func: fn(x: T): T): T {
             return func(val);
         };
 
@@ -52,7 +52,7 @@ TEST_CASE("A capturing closure is passed to a fn(T): U generic parameter and cal
 
 TEST_CASE("A plain function still works when passed to a fn(T): U generic parameter") {
     CHECK(helpers::compile_and_run(R"(
-        const apply := fn(T: type, val: T, func: fn(T): T): T {
+        const apply := fn(T: type, val: T, func: fn(x: T): T): T {
             return func(val);
         };
 
@@ -69,7 +69,7 @@ TEST_CASE("A plain function still works when passed to a fn(T): U generic parame
 TEST_CASE("map over a slice with Ctx parameter") {
     SECTION("By mutable reference") {
         CHECK(helpers::compile_and_run(R"(
-        const map := fn(T: type, arr: []mut T, Ctx: type, func: fn(T, Ctx): T, ctx: Ctx): void {
+        const map := fn(T: type, arr: []mut T, Ctx: type, func: fn(x: T, c: Ctx): T, ctx: Ctx): void {
             for (arr) |&mut v| {
                 v = func(v, ctx);
             }
@@ -89,7 +89,7 @@ TEST_CASE("map over a slice with Ctx parameter") {
 
     SECTION("By mutable pointer") {
         CHECK(helpers::compile_and_run(R"(
-        const map := fn(T: type, arr: []mut T, Ctx: type, func: fn(T, Ctx): T, ctx: Ctx): void {
+        const map := fn(T: type, arr: []mut T, Ctx: type, func: fn(x: T, c: Ctx): T, ctx: Ctx): void {
             for (arr) |^mut v| {
                 *v = func(*v, ctx);
             }
@@ -110,7 +110,7 @@ TEST_CASE("map over a slice with Ctx parameter") {
 
 TEST_CASE("map over a slice with a capturing closure, no explicit Ctx parameter needed") {
     CHECK(helpers::compile_and_run(R"(
-        const map := fn(T: type, arr: []mut T, func: fn(T): T): void {
+        const map := fn(T: type, arr: []mut T, func: fn(x: T): T): void {
             var i: usize = 0;
             while (i < arr.len) : (i += 1uz) {
                 arr[i] = func(arr[i]);
@@ -243,7 +243,7 @@ TEST_CASE("An array can hold distinct non-capturing functions sharing one signat
         };
 
         pub const main := fn(): i32 {
-            const fns := [3]fn(i32): i32{double_it, square_it, negate_it};
+            const fns := [3]fn(n: i32): i32{double_it, square_it, negate_it};
             return fns[0](3) + fns[1](3) + fns[2](3);
         };
     )") == 6 + 9 + -3);

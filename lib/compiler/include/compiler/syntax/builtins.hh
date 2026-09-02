@@ -88,6 +88,9 @@ constexpr builtin_t COMPILE_ERROR{"@compileError", token_type_t::BUILTIN_COMPILE
 constexpr builtin_t CFG{"@cfg", token_type_t::BUILTIN_CFG};
 constexpr builtin_t CFG_VALUE{"@cfgValue", token_type_t::BUILTIN_CFG_VALUE};
 
+// A declaration-level attribute, not a callable builtin: `@discardable const f := fn ...`.
+constexpr builtin_t DISCARDABLE{"@discardable", token_type_t::BUILTIN_DISCARDABLE};
+
 constexpr auto ALL_TOKEN_TYPES{
     stdx::enum_range<token_type_t::BUILTIN_ALIGN_CAST, token_type_t::BUILTIN_COMPILE_ERROR>()};
 
@@ -156,6 +159,7 @@ constexpr std::array ALL_BUILTINS{
     builtins::SKIP,
     builtins::CFG,
     builtins::CFG_VALUE,
+    builtins::DISCARDABLE,
     builtins::COMPILE_ERROR,
 };
 

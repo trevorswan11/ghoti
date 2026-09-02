@@ -6,7 +6,7 @@ namespace ghoti::tests {
 
 TEST_CASE("A plain function still satisfies a fn(T): U generic parameter") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const apply := fn(T: type, val: T, func: fn(T): T): T {
+        const apply := fn(T: type, val: T, func: fn(x: T): T): T {
             return func(val);
         };
 
@@ -22,7 +22,7 @@ TEST_CASE("A plain function still satisfies a fn(T): U generic parameter") {
 
 TEST_CASE("A capturing closure satisfies a fn(T): U generic parameter") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const apply := fn(T: type, val: T, func: fn(T): T): T {
+        const apply := fn(T: type, val: T, func: fn(x: T): T): T {
             return func(val);
         };
 
@@ -38,7 +38,7 @@ TEST_CASE("A capturing closure satisfies a fn(T): U generic parameter") {
 
 TEST_CASE("A closure whose signature does not match the declared fn(T): U shape is rejected") {
     auto [ctx, idx]{helpers::resolve(R"(
-        const apply := fn(T: type, val: T, func: fn(T): T): T {
+        const apply := fn(T: type, val: T, func: fn(x: T): T): T {
             return func(val);
         };
 
@@ -55,7 +55,7 @@ TEST_CASE("A closure whose signature does not match the declared fn(T): U shape 
 
 TEST_CASE("A non-generic-looking function with a plain fn(...) parameter still accepts a closure") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const apply_once := fn(func: fn(i32): i32): i32 {
+        const apply_once := fn(func: fn(n: i32): i32): i32 {
             return func(5);
         };
 
@@ -72,7 +72,7 @@ TEST_CASE("A non-generic-looking function with a plain fn(...) parameter still a
 TEST_CASE("A non-generic-looking function with a plain fn(...) parameter still accepts a "
           "plain function") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const apply_once := fn(func: fn(i32): i32): i32 {
+        const apply_once := fn(func: fn(n: i32): i32): i32 {
             return func(5);
         };
 

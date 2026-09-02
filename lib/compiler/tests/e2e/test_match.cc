@@ -233,6 +233,74 @@ TEST_CASE("A range match arm accepts runtime endpoints") {
     )") == 1);
 }
 
+TEST_CASE("A match arm with a diverging block body does not poison the result type") {
+    SECTION("Capturing arm returns, other arm yields a value") {
+        CHECK(helpers::compile_and_run(R"(
+            const U := union { ok: i32, err: i32 };
+            const pick := fn(u: U): i32 {
+                const v := match (u) {
+                    .ok  => |h| h + 1,
+                    .err => |e| { return e * 100; },
+                };
+                return v;
+            };
+            pub const main := fn(): i32 {
+                return pick(U{ .ok = 7 }) + pick(U{ .err = 2 });
+            };
+        )") == 208);
+    }
+
+    SECTION("Catch-all arm returns on a runtime scrutinee") {
+        CHECK(helpers::compile_and_run(R"(
+            const pick := fn(n: i32): i32 {
+                const v := match (n) {
+                    1 => 10,
+                    _ => { return 99; },
+                };
+                return v + 1;
+            };
+            pub const main := fn(): i32 { return pick(5); };
+        )") == 99);
+    }
+}
+
+TEST_CASE("An anonymous `|_|` match arm capture consumes the payload and binds nothing") {
+    SECTION("Over an i32 union arm, in value position") {
+        CHECK(helpers::compile_and_run(R"(
+            const U := union { ok: i32, err: i32 };
+            const f := fn(x: i32): U {
+                return if (x < 0) U{ .err = x }; else U{ .ok = x };
+            };
+            pub const main := fn(): i32 {
+                return match (f(3)) { .ok => |_| 0, .err => |e| e };
+            };
+        )") == 0);
+    }
+
+    SECTION("Over a void union arm") {
+        CHECK(helpers::compile_and_run(R"(
+            const U := union { ok: void, err: i32 };
+            pub const main := fn(): i32 {
+                return match (U{ .ok = {} }) { .ok => |_| 7, .err => |e| e };
+            };
+        )") == 7);
+    }
+
+    SECTION("In statement position") {
+        CHECK(helpers::compile_and_run(R"(
+            const U := union { ok: i32, err: i32 };
+            pub const main := fn(): i32 {
+                var out: i32 = 0;
+                match (U{ .ok = 9 }) {
+                    .ok => |_| { out = 5; },
+                    .err => |_| { out = 1; },
+                };
+                return out;
+            };
+        )") == 5);
+    }
+}
+
 TEST_CASE("A direct `union == .field` comparison checks the active field") {
     SECTION("True when the field is active") {
         CHECK(helpers::compile_and_run(R"(

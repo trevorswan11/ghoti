@@ -61,6 +61,7 @@ class emitter {
     struct iterable_info {
         bool                           is_range{false};
         bool                           is_inclusive{false};
+        bool                           range_open_upper{false};
         local_id                       var_slot;
         stdx::option<sema::type&>      elem_type;
         value                          end_val{};

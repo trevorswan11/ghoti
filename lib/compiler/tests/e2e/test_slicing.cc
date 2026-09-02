@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "helpers/codegen.hh"
+#include "helpers/sema.hh"
 
 namespace ghoti::tests {
 
@@ -38,6 +39,62 @@ TEST_CASE("`slice[lo..=hi]` is inclusive and re-slices a slice") {
             return sum(sl[1uz..=3uz]) + @as(i32, sl[0uz..2uz].len);
         };
     )") == 42 + 2);
+}
+
+TEST_CASE("open-ended range subscripts fill the missing endpoint from the operand") {
+    SECTION("over a fixed array") {
+        CHECK(helpers::compile_and_run(std::string{SUM_HELPER} + R"(
+            pub const main := fn(): i32 {
+                var arr := [5uz]mut i32{1, 2, 4, 8, 16};
+                var lo: usize = 2uz;
+                var hi: usize = 4uz;
+                return sum(arr[lo..])            // 4 + 8 + 16 = 28
+                     + sum(arr[..hi])            // 1 + 2 + 4 + 8 = 15
+                     + @as(i32, arr[..].len);    // 5
+            };
+        )") == 28 + 15 + 5);
+    }
+
+    SECTION("over a slice, with an inclusive upper bound") {
+        CHECK(helpers::compile_and_run(std::string{SUM_HELPER} + R"(
+            pub const main := fn(): i32 {
+                var arr := [4uz]mut i32{5, 10, 20, 7};
+                var sl: []i32 = arr;
+                return sum(sl[1uz..])           // 10 + 20 + 7 = 37
+                     + sum(sl[..=1uz]);         // 5 + 10 = 15
+            };
+        )") == 37 + 15);
+    }
+
+    SECTION("as a for-loop iterable") {
+        CHECK(helpers::compile_and_run(R"(
+            pub const main := fn(): i32 {
+                var arr := [4uz]mut i32{3, 4, 5, 6};
+                var acc: i32 = 0;
+                for (arr[1uz..]) |v| { acc = acc + v; }
+                return acc;
+            };
+        )") == 15);
+    }
+}
+
+TEST_CASE("an inclusive range with no upper bound is rejected") {
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            var arr := [3uz]mut i32{1, 2, 3};
+            var lo: usize = 0uz;
+            return @as(i32, arr[lo..=].len);
+        };
+    )");
+}
+
+TEST_CASE("an open-ended range outside a subscript is rejected") {
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            const r := 2uz..;
+            return 0;
+        };
+    )");
 }
 
 TEST_CASE("`@sliceFromPtr(ptr, len)` builds a usable slice") {

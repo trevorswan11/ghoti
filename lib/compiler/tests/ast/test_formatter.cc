@@ -87,8 +87,8 @@ TEST_CASE("formatter round-trips types") {
           "var a: std::ArrayList(u8) = undefined;\n");
     CHECK(format_source("var a: List(i32) = undefined;") == "var a: List(i32) = undefined;\n");
     CHECK(format_source("var v: mut volatile i32 = 42;") == "var v: mut volatile i32 = 42;\n");
-    CHECK(format_source("var f: ^fn(&a, ^mut B, ...): ^E = undefined;") ==
-          "var f: ^fn(&a, ^mut B, ...): ^E = undefined;\n");
+    CHECK(format_source("var f: ^fn(x: &a, y: ^mut B, ...): ^E = undefined;") ==
+          "var f: ^fn(x: &a, y: ^mut B, ...): ^E = undefined;\n");
     CHECK(format_source("var a: [N:0]u8 = undefined;") == "var a: [N:0]u8 = undefined;\n");
 }
 
@@ -295,7 +295,7 @@ TEST_CASE("formatter round trip: precedence and nesting are preserved") {
 }
 
 TEST_CASE("formatter round trip: functions and types") {
-    round_trips("var f_ptr: ^fn(&a, ^mut B, ...): &[0x2uz][N]^E = undefined;");
+    round_trips("var f_ptr: ^fn(x: &a, y: ^mut B, ...): &[0x2uz][N]^E = undefined;");
     round_trips("fn(^mut this, a: A, b: ^B, ): i32 { c; };");
     round_trips("fn(self): i32 {};");
     round_trips("pub const min := fn(a: auto, b: auto): auto { return if (a < b) a else b; };");
@@ -310,6 +310,8 @@ TEST_CASE("formatter round trip: functions and types") {
     round_trips("pub threadlocal var tls_state: i64 = 0l;");
     round_trips("weak extern const maybe: fn(): void;");
     round_trips("pub weak const overridable := fn(): i32 { return 1; };");
+    round_trips("@discardable extern const puts: fn(s: ^u8): i32;");
+    round_trips("pub @discardable const log := fn(msg: i32): i32 { return msg; };");
     round_trips("pub const stub := naked fn(): void {};");
     round_trips("pub const handler := fn() callconv(.win64): void {};");
     round_trips("const cb := fn(x: i32) callconv(.stdcall): i32 { return x; };");
@@ -451,6 +453,41 @@ TEST_CASE("formatter preserves trailing comments on statements without extra bla
 )"};
 
     CHECK(format_source(source) == source);
+}
+
+TEST_CASE("formatter keeps the blank line before a leading comment group") {
+    constexpr std::string_view top_level{R"(const a: i32 = 2;
+
+// some comment
+const b: i32 = 3;
+)"};
+    CHECK(format_source(top_level) == top_level);
+
+    constexpr std::string_view in_block{R"(const f := fn(): void {
+    var a := 1;
+
+    // some comment
+    var b := 2;
+};
+)"};
+    CHECK(format_source(in_block) == in_block);
+
+    constexpr std::string_view two_comments{R"(const a: i32 = 2;
+
+// first
+
+// second
+const b: i32 = 3;
+)"};
+    CHECK(format_source(two_comments) == two_comments);
+
+    constexpr std::string_view no_blank{R"(const a: i32 = 2;
+// some comment
+const b: i32 = 3;
+)"};
+    CHECK(format_source(no_blank) == no_blank);
+
+    CHECK(format_source("// file header\nconst a := 1;\n") == "// file header\nconst a := 1;\n");
 }
 
 constexpr std::string_view corpus{

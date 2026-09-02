@@ -85,3 +85,5 @@ __cmake_systeminformation/
 .DS_Store
 debug.gh
 .env
+tmp/
+docs/

@@ -102,11 +102,11 @@ TEST_CASE("a pointer/slice type passes through a `T: type` parameter") {
 
 TEST_CASE("match on a function-type literal") {
     CHECK(helpers::compile_and_run(R"(
-        const T := fn(i32): void;
+        const T := fn(n: i32): void;
         pub const main := fn(): i32 {
             return match (T) {
-                fn(i32): i32  => 1,
-                fn(i32): void => 8,
+                fn(n: i32): i32  => 1,
+                fn(n: i32): void => 8,
                 fn(): void    => 2,
                 _             => 0,
             };
@@ -118,12 +118,12 @@ TEST_CASE("a function-type match arm works across multiple generic instantiation
     CHECK(helpers::compile_and_run(R"(
         const kind := fn(T: type): i32 {
             return match (T) {
-                fn(i32): void => 1,
+                fn(n: i32): void => 1,
                 _             => 0,
             };
         };
         pub const main := fn(): i32 {
-            const F := fn(i32): void;
+            const F := fn(n: i32): void;
             return kind(F) * 100 + kind(i32) * 10 + kind(F);
         };
     )") == 101);

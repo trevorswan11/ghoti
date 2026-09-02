@@ -129,7 +129,7 @@ TEST_CASE("GIR array literal stack allocation and initialization") {
 
 TEST_CASE("GIR extern decls default to the \"c\" ABI target") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        extern const puts: fn(^u8): i32;
+        extern const puts: fn(s: ^u8): i32;
     )")};
 
     gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
@@ -279,7 +279,7 @@ TEST_CASE("GIR indirect call formatting") {
             return x + 1;
         };
         const call_indirect := fn(): i32 {
-            var fptr: ^fn(i32): i32 = target;
+            var fptr: ^fn(n: i32): i32 = target;
             return fptr(42);
         };
     )")};

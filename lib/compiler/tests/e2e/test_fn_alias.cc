@@ -21,7 +21,7 @@ TEST_CASE("passing a module-scope function alias as a `fn`-pointer argument") {
         const dbl := fn(n: i32): i32 { return n * 2; };
         const twice := dbl;
 
-        const apply := fn(f: fn(i32): i32, x: i32): i32 { return f(x); };
+        const apply := fn(f: fn(n: i32): i32, x: i32): i32 { return f(x); };
 
         pub const main := fn(): i32 {
             return apply(twice, 21);
@@ -49,7 +49,7 @@ TEST_CASE("module-scope alias of a static member function") {
         };
 
         const make := Box.of;
-        const relay := fn(f: fn(i32): Box, x: i32): Box { return f(x); };
+        const relay := fn(f: fn(n: i32): Box, x: i32): Box { return f(x); };
 
         pub const main := fn(): i32 {
             const a := make(40);        // direct call through the alias
@@ -85,7 +85,7 @@ TEST_CASE("unbound method reference passed as a `fn`-pointer argument") {
             const get := fn(&self): i32 { return self.n; };
         };
 
-        const relay := fn(f: fn(&Box): i32, r: &Box): i32 { return f(r); };
+        const relay := fn(f: fn(r: &Box): i32, r: &Box): i32 { return f(r); };
 
         pub const main := fn(): i32 {
             const b := Box{ .n = 42 };
@@ -103,6 +103,48 @@ TEST_CASE("a bodyless `fn(...)` type expression names a callable type") {
 
         pub const main := fn(): i32 {
             return apply(add, 40, 2);
+        };
+    )") == 42);
+}
+
+TEST_CASE("a no-self struct-member `const fn` stored into a `fn`-pointer field is callable") {
+    CHECK(helpers::compile_and_run(R"(
+        using Thunk = fn(ctx: ^u8, k: i32): i32;
+
+        const Erased := struct {
+            ctx: ^u8,
+            thunk: Thunk,
+            pub const call := fn(&self, k: i32): i32 { return self.thunk(self.ctx, k); };
+        };
+
+        const Box := struct {
+            val: i32,
+            const addThunk := fn(ctx: ^u8, k: i32): i32 {
+                return @ptrCast(^Box, ctx).val + k;
+            };
+            pub const erased := fn(^self): Erased {
+                return Erased{ .ctx = @ptrCast(^u8, self), .thunk = addThunk };
+            };
+        };
+
+        pub const main := fn(): i32 {
+            var b := Box{ .val = 100 };
+            const e := b.erased();
+            return e.call(5);
+        };
+    )") == 105);
+}
+
+TEST_CASE("a function type carries named parameters") {
+    CHECK(helpers::compile_and_run(R"(
+        using BinOp = fn(lhs: i32, rhs: i32): i32;
+
+        const add := fn(a: i32, b: i32): i32 { return a + b; };
+
+        const apply := fn(op: BinOp, x: i32, y: i32): i32 { return op(x, y); };
+
+        pub const main := fn(): i32 {
+            return apply(add, 19, 23);
         };
     )") == 42);
 }

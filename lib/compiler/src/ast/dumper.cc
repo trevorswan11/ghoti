@@ -471,7 +471,21 @@ auto dumper::visit(node_id id, const dot_expr& node) -> void {
     }
 }
 
-MAKE_INFIX_DUMP(range_expr, RangeExpression, Lower, Upper)
+auto dumper::visit(node_id id, const range_expr& node) -> void {
+    PROFILE_FUNCTION();
+    fmt::println(out_, "RangeExpression ({})", magic_enum::enum_name(id.get_token_type()));
+    const auto side{[&](std::string_view label, const stdx::option<expr_handle>& side, bool last) {
+        const indent::guard g{indent_, last};
+        fmt::print(out_, "{}{}: ", indent_.current_branch(), label);
+        if (side) {
+            dump(*side);
+        } else {
+            fmt::println(out_, "(open)");
+        }
+    }};
+    side("Lower", node.lhs, false);
+    side("Upper", node.rhs, true);
+}
 
 auto dumper::visit(node_id, const initializer_expr& init) -> void {
     PROFILE_FUNCTION();
@@ -1038,8 +1052,17 @@ auto dumper::visit(explicit_type_id, const explicit_function_type& function) -> 
     if (!function.parameter_types.empty()) {
         const indent::guard g{indent_, false};
         fmt::println(out_, "{}Parameters:", indent_.current_branch());
-        dump_container(function.parameter_types, [this](explicit_type_id type) -> void {
-            fmt::println(out_, "{}Param:", indent_.current_branch());
+        usize param_idx{0};
+        dump_container(function.parameter_types, [&](explicit_type_id type) -> void {
+            const auto name{
+                param_idx < function.parameter_names.size()
+                    ? ast_.get_as<identifier_expr>(function.parameter_names[param_idx]).name
+                    : std::string_view{}};
+            ++param_idx;
+            fmt::println(out_,
+                         "{}Param{}:",
+                         indent_.current_branch(),
+                         name.empty() ? std::string{} : fmt::format(" ({})", name));
             {
                 const indent::guard g_type{indent_, true};
                 fmt::print(out_, "{}Type: ", indent_.current_branch());

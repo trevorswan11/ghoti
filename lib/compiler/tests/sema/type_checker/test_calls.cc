@@ -63,7 +63,7 @@ TEST_CASE("Function call type checking") {
 
     SECTION("Valid call to extern function succeeds") {
         helpers::type_check_and_verify(R"(
-            extern const puts: fn(^u8): i32;
+            extern const puts: fn(s: ^u8): i32;
             const f := fn(msg: ^u8): i32 {
                 return puts(msg);
             };
@@ -73,7 +73,7 @@ TEST_CASE("Function call type checking") {
     SECTION("Call to extern function with wrong argument type fails") {
         helpers::test_checker_fail(
             R"(
-            extern const puts: fn(^u8): i32;
+            extern const puts: fn(s: ^u8): i32;
             const f := fn(): i32 {
                 return puts(42);
             };
@@ -97,7 +97,7 @@ TEST_CASE("Function call type checking") {
 
     SECTION("Valid extern variadic function call succeeds") {
         helpers::type_check_and_verify(R"(
-            extern const printf: fn(^u8, ...): i32;
+            extern const printf: fn(s: ^u8, ...): i32;
             const f := fn(msg: ^u8): i32 {
                 return printf(msg, 42, 3.14);
             };
@@ -107,7 +107,7 @@ TEST_CASE("Function call type checking") {
     SECTION("Variadic function call with too few arguments fails with ARITY_MISMATCH") {
         helpers::test_checker_fail(
             R"(
-            extern const printf: fn(^u8, ...): i32;
+            extern const printf: fn(s: ^u8, ...): i32;
             const f := fn(): i32 {
                 return printf();
             };
@@ -120,7 +120,7 @@ TEST_CASE("Function call type checking") {
     SECTION("Variadic function call with incompatible fixed argument fails") {
         helpers::test_checker_fail(
             R"(
-            extern const printf: fn(^u8, ...): i32;
+            extern const printf: fn(s: ^u8, ...): i32;
             const f := fn(): i32 {
                 return printf(123, 456);
             };
@@ -148,7 +148,7 @@ TEST_CASE("Function call type checking") {
                 return x + 1;
             };
             const f := fn(): i32 {
-                var fptr: ^fn(i32): i32 = target;
+                var fptr: ^fn(n: i32): i32 = target;
                 return fptr(42);
             };
         )");
@@ -161,7 +161,7 @@ TEST_CASE("Function call type checking") {
                 return x + 1;
             };
             const f := fn(): i32 {
-                var fptr: ^fn(i32): i32 = target;
+                var fptr: ^fn(n: i32): i32 = target;
                 return fptr();
             };
         )",

@@ -7,7 +7,7 @@ namespace ghoti::tests {
 TEST_CASE("Illegal usage of const capture") {
     SECTION("By const reference") {
         helpers::expect_compile_error(R"(
-            const map := fn(T: type, arr: []mut T, Ctx: type, func: fn(T, Ctx): T, ctx: Ctx): void {
+            const map := fn(T: type, arr: []mut T, Ctx: type, func: fn(x: T, c: Ctx): T, ctx: Ctx): void {
                 for (arr) |&v| {
                     v = func(v, ctx);
                 }
@@ -27,7 +27,7 @@ TEST_CASE("Illegal usage of const capture") {
 
     SECTION("By const pointer") {
         helpers::expect_compile_error(R"(
-        const map := fn(T: type, arr: []mut T, Ctx: type, func: fn(T, Ctx): T, ctx: Ctx): void {
+        const map := fn(T: type, arr: []mut T, Ctx: type, func: fn(x: T, c: Ctx): T, ctx: Ctx): void {
             for (arr) |^v| {
                 *v = func(*v, ctx);
             }

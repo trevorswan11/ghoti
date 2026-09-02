@@ -310,9 +310,15 @@ auto symbol_collector::visit(ast::node_id, const ast::cfg_stmt&) -> void {
         collect(node.rhs);                                                          \
     }
 
-MAKE_INFIX_COLLECTOR(range_expr)
 MAKE_INFIX_COLLECTOR(assignment_expr)
 MAKE_INFIX_COLLECTOR(binary_expr)
+
+auto symbol_collector::visit(ast::node_id, const ast::range_expr& node) -> void {
+    PROFILE_FUNCTION();
+    const default_counter::guard g{in_expr_scope_};
+    if (node.lhs) { collect(*node.lhs); }
+    if (node.rhs) { collect(*node.rhs); }
+}
 
 auto symbol_collector::visit(ast::node_id, const ast::initializer_expr& init) -> void {
     PROFILE_FUNCTION();

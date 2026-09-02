@@ -158,7 +158,8 @@ constexpr auto LEGAL_MODIFIERS{
         modifier_mapping{syntax::token_type_t::EXTERN, decl_modifiers::EXTERN},
         modifier_mapping{syntax::token_type_t::EXPORT, decl_modifiers::EXPORT},
         modifier_mapping{syntax::token_type_t::THREADLOCAL, decl_modifiers::THREADLOCAL},
-        modifier_mapping{syntax::token_type_t::WEAK, decl_modifiers::WEAK})};
+        modifier_mapping{syntax::token_type_t::WEAK, decl_modifiers::WEAK},
+        modifier_mapping{syntax::token_type_t::BUILTIN_DISCARDABLE, decl_modifiers::DISCARDABLE})};
 
 [[nodiscard]] constexpr auto validate_modifiers(decl_modifiers modifiers) noexcept
     -> stdx::option<std::string> {

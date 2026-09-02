@@ -119,18 +119,18 @@ TEST_CASE("Illegal auto usage in type aliases and function types") {
 
     SECTION("Function pointer type cannot have auto parameter") {
         helpers::test_resolver_fail(
-            "var f: fn(auto): i32 = undefined;",
+            "var f: fn(x: auto): i32 = undefined;",
             sema::diagnostic{"Function types cannot have 'auto' parameter types",
                              sema::error::ILLEGAL_AUTO_USAGE,
-                             std::pair{0UZ, 10UZ}});
+                             std::pair{0UZ, 13UZ}});
     }
 
     SECTION("Function pointer type cannot have auto return type") {
         helpers::test_resolver_fail(
-            "var f: fn(i32): auto = undefined;",
+            "var f: fn(n: i32): auto = undefined;",
             sema::diagnostic{"Function types cannot have 'auto' return type",
                              sema::error::ILLEGAL_AUTO_USAGE,
-                             std::pair{0UZ, 16UZ}});
+                             std::pair{0UZ, 19UZ}});
     }
 
     SECTION("Array type cannot have auto element type") {

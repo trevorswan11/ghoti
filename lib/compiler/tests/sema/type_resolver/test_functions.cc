@@ -149,7 +149,7 @@ TEST_CASE("Deferred return type from user function") {
 }
 
 TEST_CASE("Function explicit type resolution") {
-    auto [ctx, idx]{helpers::resolve_and_check("var foo: fn(^i32, u32): bool = undefined;")};
+    auto [ctx, idx]{helpers::resolve_and_check("var foo: fn(p: ^i32, n: u32): bool = undefined;")};
     const auto [sym, data, type]{ctx->get_type_sym_info<syms::node_t>("foo", idx)};
 
     const auto& expected_type =
@@ -418,7 +418,7 @@ TEST_CASE("Two distinct non-capturing functions with the same signature share on
         const square_it := fn(x: i32): i32 {
             return x * x;
         };
-        const fns := [2]fn(i32): i32{double_it, square_it};
+        const fns := [2]fn(n: i32): i32{double_it, square_it};
     )");
 }
 

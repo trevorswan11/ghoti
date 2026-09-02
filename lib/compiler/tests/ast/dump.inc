@@ -80,10 +80,10 @@ DeclStatement
 ├─ Type: ExplicitType (modifier: PTR)
 │   └─ FunctionExpression
 │       ├─ Parameters:
-│       │   ├─ Param:
+│       │   ├─ Param (x):
 │       │   │   └─ Type: ExplicitType (modifier: REF)
 │       │   │       └─ IdentifierExpression: a
-│       │   └─ Param:
+│       │   └─ Param (y):
 │       │       └─ Type: ExplicitType (modifier: MUT_PTR)
 │       │           └─ IdentifierExpression: B
 │       ├─ Variadic: true

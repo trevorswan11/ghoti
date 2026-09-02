@@ -25,8 +25,9 @@ auto explicit_function_type::parse(syntax::parser& parser, bool allow_trailing_b
     TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
 
     // Parse the definition now that we're at the fn token
-    std::vector<explicit_type_id> parameter_types;
-    bool                          variadic{false};
+    std::vector<explicit_type_id>  parameter_types;
+    std::vector<identifier_handle> parameter_names;
+    bool                           variadic{false};
     if (parser.peek_token_is(syntax::token_type_t::RPAREN)) {
         parser.advance();
     } else {
@@ -37,6 +38,18 @@ auto explicit_function_type::parse(syntax::parser& parser, bool allow_trailing_b
                 variadic = true;
                 break;
             }
+
+            // Every non-variadic parameter must be named, e.g. `fn(status: i32, done: ^bool):
+            // void`, so the type reads clearly and the formatter can round-trip it.
+            if (!parser.peek_token_is(syntax::token_type_t::IDENT)) {
+                return make_syntax_err(
+                    "Function type parameters must be named (e.g. `fn(x: i32): i32`)",
+                    syntax::error::FN_TYPE_PARAMETER_UNNAMED,
+                    parser.get_peek_token());
+            }
+            parser.advance();
+            parameter_names.emplace_back(TRY(identifier_expr::parse(parser)));
+            TRY(parser.expect_peek(syntax::token_type_t::COLON));
 
             // There are no default values for parameters, and they must be explicitly typed
             auto type{TRY(explicit_type::parse(parser))};
@@ -67,6 +80,7 @@ auto explicit_function_type::parse(syntax::parser& parser, bool allow_trailing_b
     }
 
     return explicit_function_type{.parameter_types      = std::move(parameter_types),
+                                  .parameter_names      = std::move(parameter_names),
                                   .variadic             = variadic,
                                   .explicit_return_type = return_type};
 }

@@ -332,4 +332,64 @@ TEST_CASE("E2E: a generic type constructor without member functions still resolv
     )") == 7);
 }
 
+TEST_CASE("E2E: a type constructor's members read its `constexpr` value parameters") {
+    SECTION("a scalar `constexpr` parameter") {
+        CHECK(helpers::compile_and_run(R"(
+            const Box := fn(T: type, constexpr tag: i32): type {
+                return struct {
+                    val: T,
+                    pub const tagged := fn(&self): i32 { return self.val + tag; };
+                };
+            };
+
+            using B = Box(i32, 100);
+
+            pub const main := fn(): i32 {
+                var b: B = .{ .val = 5 };
+                return b.tagged();
+            };
+        )") == 105);
+    }
+
+    SECTION("a `constexpr` function-value parameter") {
+        CHECK(helpers::compile_and_run(R"(
+            const dbl := fn(x: i32): i32 { return x * 2; };
+
+            const Wrap := fn(T: type, constexpr f: fn(x: i32): i32): type {
+                return struct {
+                    val: T,
+                    pub const apply := fn(&self): i32 { return f(self.val); };
+                };
+            };
+
+            using W = Wrap(i32, dbl);
+
+            pub const main := fn(): i32 {
+                var w: W = .{ .val = 21 };
+                return w.apply();
+            };
+        )") == 42);
+    }
+
+    SECTION("two instantiations keep distinct constexpr values") {
+        CHECK(helpers::compile_and_run(R"(
+            const Box := fn(T: type, constexpr tag: i32): type {
+                return struct {
+                    val: T,
+                    pub const tagged := fn(&self): i32 { return self.val + tag; };
+                };
+            };
+
+            using B10 = Box(i32, 10);
+            using B20 = Box(i32, 20);
+
+            pub const main := fn(): i32 {
+                var a: B10 = .{ .val = 1 };
+                var b: B20 = .{ .val = 1 };
+                return a.tagged() * 100 + b.tagged();
+            };
+        )") == 11 * 100 + 21);
+    }
+}
+
 } // namespace ghoti::tests

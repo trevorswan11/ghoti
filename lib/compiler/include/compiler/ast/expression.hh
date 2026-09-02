@@ -267,10 +267,17 @@ struct dot_expr {
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
-// The operator is stored in the nodes id
-DECLARE_INFIX_EXPRESSION(range_expr)
-
 #undef DECLARE_INFIX_EXPRESSION
+
+struct range_expr {
+    stdx::option<expr_handle> lhs;
+    stdx::option<expr_handle> rhs;
+
+    [[nodiscard]] static auto parse(syntax::parser& parser, expr_handle lhs)
+        -> stdx::result<expr_handle, syntax::diagnostic>;
+    [[nodiscard]] static auto parse(syntax::parser& parser)
+        -> stdx::result<expr_handle, syntax::diagnostic>;
+};
 
 struct initializer_expr {
     struct initializer {

@@ -79,9 +79,11 @@ auto type::to_string() const -> std::string {
             if (fn.is_variadic) { params_str += params_str.empty() ? "..." : ", ..."; }
             return fmt::format("fn({}): {}", params_str, fn.return_type.to_string());
         },
+        [](types::closure_t c) { return fmt::format("closure {}", c.signature.to_string()); },
         [](types::module mod) {
             return fmt::format("module {}", mod.imported.path.stem().string());
         },
+        [](types::enum_t e) { return fmt::format("enum : {}", e.underlying.to_string()); },
         [this](const auto&) {
             return fmt::format("{}{}", leaf_qualifier(*this), type_kind_display_name(get_kind()));
         });

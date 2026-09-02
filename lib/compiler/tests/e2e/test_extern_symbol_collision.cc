@@ -11,7 +11,7 @@ namespace {
 
 // Unreferenced, so DCE drops it before linking.
 constexpr std::string_view SYS_MODULE{R"(
-    extern("ghoti_fake_libc", "read") const raw_read: fn(i32): i32;
+    extern("ghoti_fake_libc", "read") const raw_read: fn(n: i32): i32;
 
     pub const read := fn(fd: i32): i32 { return fd * 2; };
 )"};
@@ -20,7 +20,7 @@ constexpr std::string_view SYS_MODULE{R"(
 
 TEST_CASE("E2E: a function named like an `extern` link name in the same module") {
     CHECK(helpers::compile_and_run(R"(
-        extern("ghoti_fake_libc", "write") const raw_write: fn(i32): i32;
+        extern("ghoti_fake_libc", "write") const raw_write: fn(n: i32): i32;
 
         const write := fn(n: i32): i32 { return n + 1; };
 
@@ -34,7 +34,7 @@ TEST_CASE("E2E: the colliding function may be declared before the `extern`") {
     CHECK(helpers::compile_and_run(R"(
         const write := fn(n: i32): i32 { return n + 1; };
 
-        extern("ghoti_fake_libc", "write") const raw_write: fn(i32): i32;
+        extern("ghoti_fake_libc", "write") const raw_write: fn(n: i32): i32;
 
         pub const main := fn(): i32 {
             return write(41);

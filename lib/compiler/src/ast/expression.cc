@@ -1053,7 +1053,38 @@ auto dot_expr::parse(syntax::parser& parser, expr_handle outer)
     return parser.add_expr<dot_expr>(start_token, outer, inner);
 }
 
-MAKE_INFIX_PARSER(range_expr)
+namespace {
+
+// A `..` / `..=` upper bound is present unless the operator is immediately followed by a token
+// that cannot start an expression (`]`, `)`, `,`, `;`, `}` — the subscript / list terminators).
+[[nodiscard]] auto parse_range_upper(syntax::parser& parser, syntax::bind_precedence prec)
+    -> stdx::result<stdx::option<expr_handle>, syntax::diagnostic> {
+    if (!syntax::parser::get_prefix_fn_opt(parser.get_peek_token().type)) {
+        return stdx::option<expr_handle>{};
+    }
+    parser.advance();
+    return stdx::option<expr_handle>{TRY(parser.parse_expression(prec))};
+}
+
+} // namespace
+
+auto range_expr::parse(syntax::parser& parser, expr_handle lhs)
+    -> stdx::result<expr_handle, syntax::diagnostic> {
+    PROFILE_FUNCTION();
+    const auto op_token{parser.get_current_token()};
+    const auto lhs_start{parser.get_location_of(*lhs)};
+    const auto prec{parser.get_current_precedence().first};
+    const auto rhs{TRY(parse_range_upper(parser, prec))};
+    return parser.add_expr<range_expr>(lhs_start, op_token, stdx::option<expr_handle>{lhs}, rhs);
+}
+
+auto range_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
+    PROFILE_FUNCTION();
+    const auto op_token{parser.get_current_token()};
+    const auto prec{parser.get_current_precedence().first};
+    const auto rhs{TRY(parse_range_upper(parser, prec))};
+    return parser.add_expr<range_expr>(op_token, stdx::option<expr_handle>{}, rhs);
+}
 
 auto unwrap_expr::parse(syntax::parser& parser, expr_handle lhs)
     -> stdx::result<expr_handle, syntax::diagnostic> {

@@ -58,7 +58,7 @@ struct continue_stmt {
         -> stdx::result<stmt_handle, syntax::diagnostic>;
 };
 
-enum class decl_modifiers : u8 {
+enum class decl_modifiers : u16 {
     VARIABLE    = 1 << 0,
     CONSTANT    = 1 << 1,
     CONSTEXPR   = 1 << 2,
@@ -67,6 +67,7 @@ enum class decl_modifiers : u8 {
     EXPORT      = 1 << 5,
     THREADLOCAL = 1 << 6,
     WEAK        = 1 << 7,
+    DISCARDABLE = 1 << 8,
 };
 
 MAKE_ENUM_OPERATORS(decl_modifiers)

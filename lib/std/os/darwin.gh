@@ -6,11 +6,11 @@ pub using Handle = i32;
 pub using Errno = i32;
 
 extern("System", "__error") const sys_errno_loc: fn(): ^mut Errno;
-extern("System", "read") const sys_read: fn(Handle, ^mut u8, usize): isize;
-extern("System", "write") const sys_write: fn(Handle, ^u8, usize): isize;
-extern("System", "close") const sys_close: fn(Handle): i32;
-extern("System", "open") const sys_open: fn(^u8, i32, ...): i32;
-extern("System", "lseek") const sys_lseek: fn(i32, i64, i32): i64;
+extern("System", "read") const sys_read: fn(fd: Handle, buf: ^mut u8, count: usize): isize;
+extern("System", "write") const sys_write: fn(fd: Handle, buf: ^u8, count: usize): isize;
+extern("System", "close") const sys_close: fn(fd: Handle): i32;
+extern("System", "open") const sys_open: fn(path: ^u8, flags: i32, ...): i32;
+extern("System", "lseek") const sys_lseek: fn(fd: i32, offset: i64, whence: i32): i64;
 
 pub const O_RDONLY: i32 = 0x0000; // open for reading only
 pub const O_WRONLY: i32 = 0x0001; // open for writing only

@@ -1,7 +1,7 @@
 R"(type Real = f64
 const MAX_SIZE: usize = 100
 const Point: struct = struct
-const Color: enum = enum
+const Color: enum : i32 = enum : i32
 fn compute_point(p: struct) -> i32
   seg 0:
     %0 = alloca i32
@@ -38,7 +38,7 @@ fn compute_point(p: struct) -> i32
     store %19, %0
     ret i32 %17
 
-fn match_color(c: enum) -> i32
+fn match_color(c: enum : i32) -> i32
   seg 0:
     %0 = alloca i32
     %1 = eq bool param.0, 0

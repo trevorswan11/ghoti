@@ -237,6 +237,8 @@ enum class token_type_t : u8 {
     BUILTIN_CFG,
     BUILTIN_CFG_VALUE,
 
+    BUILTIN_DISCARDABLE,
+
     ILLEGAL,
 };
 

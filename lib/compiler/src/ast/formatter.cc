@@ -116,7 +116,8 @@ auto formatter::init_trivia() -> void {
     }
 }
 
-auto formatter::consume_leading_comments(usize before_line) -> syntax::doc_id {
+auto formatter::consume_leading_comments(usize before_line, bool allow_leading_blank)
+    -> syntax::doc_id {
     if (comment_idx_ >= comments_.size()) { return doc_manager_.nil(); }
 
     std::vector<syntax::doc_id> docs;
@@ -125,7 +126,9 @@ auto formatter::consume_leading_comments(usize before_line) -> syntax::doc_id {
         if (c.line >= before_line) { break; }
         if (!c.consumed) {
             comments_[comment_idx_].consumed = true;
-            if (c.is_leading_blank && !docs.empty()) {
+            // A blank line before the first comment of a leading group is kept only when the
+            // caller says a sibling precedes it (mid-stream), matching consume_dangling_comments.
+            if (c.is_leading_blank && (!docs.empty() || allow_leading_blank)) {
                 docs.emplace_back(doc_manager_.hard_line());
             }
             docs.emplace_back(doc_manager_.text(c.text));
@@ -197,7 +200,7 @@ auto formatter::format() -> void {
         const auto& start_loc{ast_.location_of(id)};
         const auto& end_loc{ast_.end_location_of(id)};
 
-        auto leading{consume_leading_comments(start_loc.line)};
+        auto leading{consume_leading_comments(start_loc.line, previous.is_valid())};
         if (leading != doc_manager_.nil()) { doc_manager_.add_root(leading); }
 
         if (previous.is_valid() &&
@@ -300,9 +303,10 @@ auto formatter::format_members(std::vector<syntax::doc_id>&                     
     flush_cfg(0);
     for (usize i{0}; i < members.size(); ++i) {
         const auto& member{members[i]};
-        auto        leading{consume_leading_comments(ast_.location_of(member).line)};
-        auto        member_doc{format(member)};
-        auto        trailing{consume_trailing_comment(ast_.end_location_of(member).line)};
+        // i != 0 only: the field→first-member gap already gets a blank from aggregate_body.
+        auto leading{consume_leading_comments(ast_.location_of(member).line, i != 0)};
+        auto member_doc{format(member)};
+        auto trailing{consume_trailing_comment(ast_.end_location_of(member).line)};
         if (trailing != doc_manager_.nil()) {
             member_doc = doc_manager_.concat({member_doc, trailing});
         }
@@ -350,7 +354,7 @@ auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
     for (usize i{0}; i < node.fields.size(); ++i) {
         const auto& field{node.fields[i]};
         const auto& start_loc{ast_.location_of(field.name)};
-        auto        leading{consume_leading_comments(start_loc.line)};
+        auto        leading{consume_leading_comments(start_loc.line, !entries.empty())};
 
         const auto end_line{field.default_value
                                 ? ast_.end_location_of(*field.default_value).line
@@ -415,7 +419,7 @@ auto formatter::format_union(const union_expr& node) -> syntax::doc_id {
     for (usize i{0}; i < node.fields.size(); ++i) {
         const auto& [name, explicit_type, explicit_alignment]{node.fields[i]};
         const auto& start_loc{ast_.location_of(name)};
-        auto        leading{consume_leading_comments(start_loc.line)};
+        auto        leading{consume_leading_comments(start_loc.line, !entries.empty())};
 
         const auto end_line{explicit_alignment ? ast_.end_location_of(*explicit_alignment).line
                                                : ast_.end_location_of(explicit_type).line};
@@ -470,7 +474,7 @@ auto formatter::format_enum(const enum_expr& node) -> syntax::doc_id {
     for (usize i{0}; i < node.enumerations.size(); ++i) {
         const auto& enumeration{node.enumerations[i]};
         const auto& start_loc{ast_.location_of(enumeration.name)};
-        auto        leading{consume_leading_comments(start_loc.line)};
+        auto        leading{consume_leading_comments(start_loc.line, !entries.empty())};
 
         auto       enum_doc{variant_item(enumeration)};
         const auto end_line{enumeration.value ? ast_.end_location_of(*enumeration.value).line
@@ -539,6 +543,9 @@ auto formatter::decl_prefix(const decl_stmt& node) -> syntax::doc_id {
     std::vector<syntax::doc_id> parts;
     if (node.has_modifier(decl_modifiers::PUBLIC)) {
         parts.emplace_back(doc_manager_.text("pub "));
+    }
+    if (node.has_modifier(decl_modifiers::DISCARDABLE)) {
+        parts.emplace_back(doc_manager_.text("@discardable "));
     }
     if (node.has_modifier(decl_modifiers::EXPORT)) {
         if (node.link_name) {
@@ -840,9 +847,9 @@ auto formatter::visit(node_id, const dot_expr& node) -> syntax::doc_id {
 }
 
 auto formatter::visit(node_id id, const range_expr& node) -> syntax::doc_id {
-    return doc_manager_.concat({format(node.lhs),
+    return doc_manager_.concat({node.lhs ? format(*node.lhs) : doc_manager_.nil(),
                                 doc_manager_.text(operator_spelling(id.get_token_type())),
-                                format(node.rhs)});
+                                node.rhs ? format(*node.rhs) : doc_manager_.nil()});
 }
 
 auto formatter::visit(node_id, const initializer_expr& node) -> syntax::doc_id {
@@ -874,7 +881,7 @@ auto formatter::visit(node_id id, const match_expr& node) -> syntax::doc_id {
     std::vector<syntax::doc_id> arms;
     for (const auto& arm : node.arms) {
         const auto& start_loc{ast_.location_of(arm.primary_pattern())};
-        auto        leading{consume_leading_comments(start_loc.line)};
+        auto        leading{consume_leading_comments(start_loc.line, !arms.empty())};
 
         std::vector<syntax::doc_id> parts;
         for (usize p{0}; p < arm.patterns.size(); ++p) {
@@ -1059,7 +1066,7 @@ auto formatter::visit(node_id id, const block_stmt& node) -> syntax::doc_id {
         const auto& stmt_start{ast_.location_of(*stmt)};
         const auto& stmt_end{ast_.end_location_of(*stmt)};
 
-        auto leading{consume_leading_comments(stmt_start.line)};
+        auto leading{consume_leading_comments(stmt_start.line, !body.empty())};
 
         if (!body.empty()) {
             body.emplace_back(doc_manager_.hard_line());
@@ -1226,8 +1233,15 @@ auto formatter::visit(explicit_type_id id, const call_expr& node) -> syntax::doc
 
 auto formatter::visit(explicit_type_id id, const explicit_function_type& node) -> syntax::doc_id {
     std::vector<syntax::doc_id> params;
-    params.reserve(node.parameter_types.size());
-    for (const auto type : node.parameter_types) { params.emplace_back(format(type)); }
+    params.reserve(node.parameter_types.size() + (node.variadic ? 1 : 0));
+    for (usize i{0}; i < node.parameter_types.size(); ++i) {
+        auto entry{i < node.parameter_names.size()
+                       ? doc_manager_.concat({format(node.parameter_names[i]),
+                                              doc_manager_.text(": "),
+                                              format(node.parameter_types[i])})
+                       : format(node.parameter_types[i])};
+        params.emplace_back(std::move(entry));
+    }
     if (node.variadic) { params.emplace_back(doc_manager_.text("...")); }
 
     return with_modifier(id,

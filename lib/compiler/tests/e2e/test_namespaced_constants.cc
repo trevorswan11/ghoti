@@ -34,7 +34,7 @@ TEST_CASE("address of a scalar static member constant") {
 TEST_CASE("address of an aggregate static member constant (vtable singleton)") {
     CHECK(helpers::compile_and_run(R"(
         const inc := fn(n: i32): i32 { return n + 1; };
-        const VTable := struct { step: fn(i32): i32 };
+        const VTable := struct { step: fn(n: i32): i32 };
 
         const Widget := struct {
             const table := VTable{ .step = inc };

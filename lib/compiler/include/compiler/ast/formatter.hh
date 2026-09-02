@@ -165,7 +165,8 @@ class formatter {
     auto visit(explicit_type_id, const explicit_array_type&) -> syntax::doc_id;
 
     auto init_trivia() -> void;
-    auto consume_leading_comments(usize before_line) -> syntax::doc_id;
+    auto consume_leading_comments(usize before_line, bool allow_leading_blank = false)
+        -> syntax::doc_id;
     auto consume_trailing_comment(usize line) -> syntax::doc_id;
     auto consume_dangling_comments(usize brace_line) -> syntax::doc_id;
     auto consume_remaining_comments() -> syntax::doc_id;

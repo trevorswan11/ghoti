@@ -25,9 +25,10 @@ struct explicit_array_type {
 };
 
 struct explicit_function_type {
-    std::vector<explicit_type_id> parameter_types;
-    bool                          variadic;
-    explicit_type_id              explicit_return_type;
+    std::vector<explicit_type_id>  parameter_types;
+    std::vector<identifier_handle> parameter_names;
+    bool                           variadic;
+    explicit_type_id               explicit_return_type;
 
     // allow_trailing_brace lets an aggregate literal's own '{' follow without misreading it
     [[nodiscard]] static auto parse(syntax::parser& parser, bool allow_trailing_brace = false)

@@ -1100,8 +1100,9 @@ auto const_eval::match_pattern(const ast::match_pattern_handle& pattern_h,
     }
 
     if (const auto range{module_->ast.get_as_opt<ast::range_expr>(pattern_id)}) {
-        const auto start_val{try_eval(range->lhs)};
-        const auto end_val{try_eval(range->rhs)};
+        if (!range->lhs || !range->rhs) { return false; }
+        const auto start_val{try_eval(*range->lhs)};
+        const auto end_val{try_eval(*range->rhs)};
         if (start_val && end_val) {
             const auto target_int{target.as_int_opt()};
             const auto start_int{start_val->as_int_opt()};
@@ -1974,8 +1975,9 @@ auto const_eval::eval_for(ast::node_id, const ast::for_loop_expr& loop)
         const auto               iterable_id{*iterable_handle};
 
         if (const auto range{module_->ast.get_as_opt<ast::range_expr>(iterable_id)}) {
-            const auto start_val{try_eval(range->lhs)};
-            const auto end_val{try_eval(range->rhs)};
+            if (!range->lhs || !range->rhs) { return stdx::none; }
+            const auto start_val{try_eval(*range->lhs)};
+            const auto end_val{try_eval(*range->rhs)};
             if (!start_val || !end_val) { return stdx::none; }
 
             const auto start_opt{start_val->as_int_opt()};

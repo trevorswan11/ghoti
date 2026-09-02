@@ -69,8 +69,9 @@ auto token_t::is_decl_token() const noexcept -> bool {
     case token_type_t::EXTERN:
     case token_type_t::EXPORT:
     case token_type_t::THREADLOCAL:
-    case token_type_t::WEAK:        return true;
-    default:                        return false;
+    case token_type_t::WEAK:
+    case token_type_t::BUILTIN_DISCARDABLE: return true;
+    default:                                return false;
     }
 }
 

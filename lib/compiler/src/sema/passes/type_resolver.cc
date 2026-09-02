@@ -1518,10 +1518,34 @@ auto type_resolver::visit(ast::node_id id, const ast::for_loop_expr& for_expr) -
     {
         const scope s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
 
+        // A `for (arr, lo..) |v, i|` open-upper range needs a sibling array/slice to stop the loop.
+        bool has_open_upper_range{false};
+        bool has_bounding_iterable{false};
+        for (const auto& iterable : for_expr.iterables) {
+            const auto rng{resolving_.ast.get_as_opt<ast::range_expr>(iterable)};
+            if (rng && !rng->rhs) {
+                has_open_upper_range = true;
+            } else {
+                has_bounding_iterable = true;
+            }
+        }
+        if (has_open_upper_range && !has_bounding_iterable) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                "An open-ended range loop needs an array or slice iterable to bound it, e.g. "
+                "`for (arr, 0..) |v, i|`",
+                error::ILLEGAL_OPEN_RANGE,
+                resolving_.ast.location_of(id)));
+        }
+
         // The captures must be paired with the iterables inner types (shallow type check)
         for (const auto& [capture, iterable] :
              std::views::zip(for_expr.captures, for_expr.iterables)) {
-            TRY_RESOLVE(iterable);
+            {
+                const mutating_context_guard for_iter_g{in_for_iterable_, true};
+                TRY_RESOLVE(iterable);
+            }
             auto& iterable_type{*last_type_.take()};
             resolving_.set_sema_type(iterable, iterable_type);
 
@@ -2232,9 +2256,24 @@ auto type_resolver::visit(ast::node_id id, const ast::index_expr& index) -> void
     }
 
     auto& single_item_type{*last_type_.take()};
+
+    // An open-ended range index (`x[lo..]`, `x[..hi]`, `x[..]`) needs `operand.len`, which a bare
+    // pointer does not have.
+    if (const auto range{resolving_.ast.get_as_opt<ast::range_expr>(index.index)};
+        range && (!range->lhs || !range->rhs) && array_data.is<types::pointer>()) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             "An open-ended range needs a known length; index a pointer with an "
+                             "explicit `lo..hi` range instead",
+                             error::ILLEGAL_OPEN_RANGE,
+                             resolving_.ast.location_of(index.index)));
+    }
+
     {
-        auto&                  usize_type{ctx_.get_builtin_resolved_type(type_kind::USIZE)};
-        const structural_guard g{implicit_type_stack_, usize_type};
+        auto&                        usize_type{ctx_.get_builtin_resolved_type(type_kind::USIZE)};
+        const structural_guard       g{implicit_type_stack_, usize_type};
+        const mutating_context_guard subscript_g{in_subscript_index_, true};
         TRY_RESOLVE(index.index);
     }
     auto& access_type{*last_type_.take()};
@@ -2567,21 +2606,46 @@ auto type_resolver::visit(ast::node_id id, const ast::dot_expr& dot) -> void {
 
 auto type_resolver::visit(ast::node_id id, const ast::range_expr& range) -> void {
     PROFILE_FUNCTION();
-    TRY_RESOLVE(range.lhs);
-    auto* lhs_type{last_type_.take()};
-    {
+    auto& usize_type{ctx_.get_builtin_resolved_type(type_kind::USIZE)};
+
+    // An omitted endpoint is filled from context: the indexed operand inside `[]`, or a sibling
+    // iterable of a `for` loop. It is meaningless anywhere else.
+    if ((!range.lhs || !range.rhs) && !in_subscript_index_ && !in_for_iterable_) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            "An open-ended range is only valid inside a subscript (`x[lo..]`, `x[..hi]`, `x[..]`) "
+            "or a `for` loop paired with an array or slice",
+            error::ILLEGAL_OPEN_RANGE,
+            resolving_.ast.location_of(id)));
+    }
+    if (!range.rhs && id.get_token_type() == syntax::token_type_t::DOT_DOT_EQ) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             "An inclusive range `..=` requires an upper bound",
+                             error::ILLEGAL_OPEN_RANGE,
+                             resolving_.ast.location_of(id)));
+    }
+
+    type* lhs_type{&usize_type};
+    if (range.lhs) {
+        TRY_RESOLVE(*range.lhs);
+        lhs_type = last_type_.take();
+    }
+    if (range.rhs) {
         // Give a bare integer-literal upper bound the lower bound's type (`s.len .. 0`).
         const structural_guard g{implicit_type_stack_, *lhs_type};
-        TRY_RESOLVE(range.rhs);
-    }
-    auto& rhs_type{*last_type_.take()};
+        TRY_RESOLVE(*range.rhs);
+        auto& rhs_type{*last_type_.take()};
 
-    // ...and give a bare integer-literal lower bound the upper bound's type (`0 .. s.len`).
-    if (is_integer(rhs_type.get_kind())) {
-        if (const auto i32_node{resolving_.ast.get_as_opt<ast::i32_expr>(range.lhs)};
-            i32_node && i32_node->value >= 0) {
-            resolving_.set_sema_type(range.lhs, rhs_type);
-            lhs_type = &rhs_type;
+        // ...and give a bare integer-literal lower bound the upper bound's type (`0 .. s.len`).
+        if (range.lhs && is_integer(rhs_type.get_kind())) {
+            if (const auto i32_node{resolving_.ast.get_as_opt<ast::i32_expr>(*range.lhs)};
+                i32_node && i32_node->value >= 0) {
+                resolving_.set_sema_type(*range.lhs, rhs_type);
+                lhs_type = &rhs_type;
+            }
         }
     }
 
@@ -3440,11 +3504,21 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                     resolving_.ast.location_of(*pattern)));
             }
 
+            if (range && (!range->lhs || !range->rhs)) {
+                return last_type_.emplace(
+                    ctx_.poison_node(resolving_,
+                                     id,
+                                     "A range pattern needs both endpoints; open-ended ranges are "
+                                     "only valid inside a subscript",
+                                     error::ILLEGAL_MATCH_PATTERN,
+                                     resolving_.ast.location_of(*pattern)));
+            }
+
             {
                 const structural_guard pattern_g{implicit_type_stack_, matcher_type};
                 if (range) {
-                    TRY_RESOLVE(range->lhs);
-                    TRY_RESOLVE(range->rhs);
+                    TRY_RESOLVE(*range->lhs);
+                    TRY_RESOLVE(*range->rhs);
                 } else {
                     TRY_RESOLVE(pattern);
                 }
@@ -3454,8 +3528,8 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
             if (range) {
                 const bool inclusive{(*pattern).get_token_type() ==
                                      syntax::token_type_t::DOT_DOT_EQ};
-                const auto lo{interval_probe.try_eval(range->lhs)};
-                const auto hi{interval_probe.try_eval(range->rhs)};
+                const auto lo{interval_probe.try_eval(*range->lhs)};
+                const auto hi{interval_probe.try_eval(*range->rhs)};
                 if (!lo || !hi) { continue; }
                 const auto lo_i{lo->as_int_opt()};
                 const auto hi_i{hi->as_int_opt()};
@@ -4283,6 +4357,20 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
     if (resolved_type.is_poison()) {
         sym.set_kind(symbol_kind::POISONED);
     } else {
+        if (decl.has_modifier(ast::decl_modifiers::DISCARDABLE)) {
+            const auto fn_d{type_data.as_opt<types::function>()};
+            if (!fn_d && !type_data.is<types::builtin_function>()) {
+                ctx_.diags.emplace_back("'@discardable' may only be applied to a function",
+                                        error::ILLEGAL_DISCARDABLE,
+                                        resolving_.ast.location_of(id));
+            } else if (fn_d && fn_d->return_type.get_kind() == type_kind::VOID_) {
+                ctx_.diags.emplace_back(
+                    "'@discardable' has no effect on a function that returns 'void'",
+                    error::ILLEGAL_DISCARDABLE,
+                    resolving_.ast.location_of(id));
+            }
+        }
+
         const bool literal_type_anno{decl.explicit_type && decl.explicit_type->get_token_type() ==
                                                                syntax::token_type_t::TYPE_TYPE};
         if (decl.has_modifier(ast::decl_modifiers::VARIABLE) && literal_type_anno) {
@@ -4339,10 +4427,83 @@ auto type_resolver::visit(ast::node_id id, const ast::discard_stmt& discard) -> 
     last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
 }
 
+auto type_resolver::callee_is_discardable(const ast::call_expr& call) const -> bool {
+    const mod::module* home{&resolving_};
+    ast::node_id       fn_node{*call.function};
+
+    for (int hops{0}; hops < 16; ++hops) {
+        stdx::option<symbol&> sym;
+        if (const auto ident{home->ast.get_as_opt<ast::identifier_expr>(fn_node)}) {
+            sym = (home == &resolving_) ? ctx_.registry.lookup(table_stack_, ident->name)
+                                        : stdx::option<symbol&>{};
+            if (!sym && home->root_table_idx) {
+                sym = ctx_.registry.get_from_opt(*home->root_table_idx, ident->name);
+            }
+        } else if (const auto mac{home->ast.get_as_opt<ast::module_access_expr>(fn_node)}) {
+            const auto outer_type{home->get_sema_type_opt(mac->outer)};
+            const auto m_data{outer_type ? outer_type->get_data().as_opt<types::module>()
+                                         : stdx::none};
+            if (!m_data || !m_data->imported.root_table_idx) { return false; }
+            const auto& inner_ident{home->ast.get_as<ast::identifier_expr>(mac->inner)};
+            sym  = ctx_.registry.get_from_opt(*m_data->imported.root_table_idx, inner_ident.name);
+            home = &m_data->imported;
+        } else {
+            return false;
+        }
+        if (!sym) { return false; }
+
+        const auto node{sym->get_data().as_opt<symbols::node_t>()};
+        if (!node) { return false; }
+        const auto decl{home->ast.get_as_opt<ast::decl_stmt>(*node)};
+        if (!decl) { return false; }
+        if (decl->has_modifier(ast::decl_modifiers::DISCARDABLE)) { return true; }
+
+        // Follow a direct `const g := f` / `const g := m::f` re-export to the real declaration.
+        if (decl->value && (home->ast.get_as_opt<ast::identifier_expr>(*decl->value) ||
+                            home->ast.get_as_opt<ast::module_access_expr>(*decl->value))) {
+            fn_node = *decl->value;
+            continue;
+        }
+        return false;
+    }
+    return false;
+}
+
+auto type_resolver::check_unused_result(ast::node_id stmt_id, const ast::expr_stmt& stmt) -> void {
+    const auto value_type{resolving_.get_sema_type_opt(stmt.expression)};
+    if (!value_type || value_type->is_poison()) { return; }
+    switch (value_type->get_kind()) {
+    case type_kind::VOID_:
+    case type_kind::NORETURN:
+    case type_kind::AUTO:     return;
+    default:                  break;
+    }
+
+    // Only a call whose result is thrown away is flagged; a bare `a + b;` is left alone for now.
+    const auto call{resolving_.ast.get_as_opt<ast::call_expr>(*stmt.expression)};
+    const auto unwrap{resolving_.ast.get_as_opt<ast::unwrap_expr>(*stmt.expression)};
+    if (!call && !unwrap) { return; }
+    if (call) {
+        // `@builtin(...)` calls (`@expect`, `@memcpy`, …) are their own category, not covered.
+        if (const auto fn_ty{resolving_.get_sema_type_opt(call->function)};
+            fn_ty && fn_ty->get_data().is<types::builtin_function>()) {
+            return;
+        }
+        if (callee_is_discardable(*call)) { return; }
+    }
+
+    ctx_.diags.emplace_back(
+        "result of this call is unused; bind it, pass it on, `_ =` it, or mark the callee "
+        "'@discardable'",
+        error::UNUSED_RESULT,
+        resolving_.ast.location_of(stmt_id));
+}
+
 auto type_resolver::visit(ast::node_id id, const ast::expr_stmt& expr) -> void {
     PROFILE_FUNCTION();
     TRY_RESOLVE(expr.expression);
     resolving_.set_sema_type(expr.expression, *last_type_.take());
+    check_unused_result(id, expr);
     last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
 }
 
@@ -4847,12 +5008,32 @@ auto type_resolver::instantiate_generic(type&                             callee
     // Distinct `constexpr` argument values must produce distinct symbols.
     for (const auto& cx : constexpr_args) { mangled_name += fmt::format("_cx{}", cx.mangle()); }
 
-    // A `fn(...): type` generic is a type constructor: every parameter is a type and the body
-    // returns the type it builds. A dependent value parameter rules that out.
+    // A `fn(...): type` generic is a type constructor: every parameter is a `type` or a
+    // `constexpr` value (erased from `inst_param_types`), and the body returns the type it builds.
     const bool all_params_are_types{std::ranges::all_of(
         inst_param_types, [](const type* p) { return p->get_kind() == type_kind::TYPE; })};
     const bool is_type_ctor{!is_auto_return && return_type.get_kind() == type_kind::TYPE &&
                             tracker.has_returns() && all_params_are_types};
+
+    // Force constexpr param if constructing a type (inspo from zig)
+    if (!is_type_ctor && !is_auto_return && return_type.get_kind() == type_kind::TYPE &&
+        tracker.has_returns() && !all_params_are_types) {
+        for (const auto& param : fn_expr.parameters) {
+            if (param.is_constexpr) { continue; }
+            const auto pty{fn_mod.get_sema_type_opt(param.explicit_type)};
+            if (pty && pty->get_kind() != type_kind::TYPE) {
+                const auto& pn{fn_mod.ast.get_as<ast::identifier_expr>(param.name).name};
+                ctx_.diags.emplace_back(
+                    fmt::format(
+                        "a `fn(...): type` constructor cannot take a plain value parameter; "
+                        "mark '{}' `constexpr` so it is known at instantiation time",
+                        pn),
+                    error::TYPE_MISMATCH,
+                    fn_mod.ast.location_of(param.name));
+                return stdx::none;
+            }
+        }
+    }
     type* deduced_return_type{(is_auto_return || is_type_ctor) ? &tracker.deduced_return_type(ctx_)
                                                                : &return_type};
 
@@ -4866,13 +5047,28 @@ auto type_resolver::instantiate_generic(type&                             callee
                     ctx_, src_agg, fmt::format("{}#{}", mangled_name, agg_node->get_index()))};
                 register_type_ctor_members(
                     ctx_, fn_mod, *agg_node, src_agg, clone, mangled_name, std::move(typing));
+
+                // Hand this instantiation's `constexpr` parameter values to the member emit
+                std::vector<std::pair<std::string, gir::const_value>> ctor_bindings;
+                for (usize p_idx{0}, cx_i{0}; p_idx < fn_expr.parameters.size(); ++p_idx) {
+                    if (!fn_expr.parameters[p_idx].is_constexpr) { continue; }
+                    if (cx_i >= constexpr_args.size()) { break; }
+                    const auto& p_name{
+                        fn_mod.ast.get_as<ast::identifier_expr>(fn_expr.parameters[p_idx].name)
+                            .name};
+                    ctor_bindings.emplace_back(std::string{p_name}, constexpr_args[cx_i]);
+                    ++cx_i;
+                }
+                if (!ctor_bindings.empty()) {
+                    ctx_.instantiation_cache.set_type_ctor_bindings(mangled_name,
+                                                                    std::move(ctor_bindings));
+                }
                 deduced_return_type = &clone;
             }
         }
     }
 
-    // A type constructor has no runtime body -- its whole result is `deduced_return_type`. Skip
-    // the emit-time plumbing and don't register a GIR instantiation for it.
+    // A type constructor has no runtime body
     if (!is_type_ctor) {
         // Hand the folded values to the emitter out-of-band
         if (!constexpr_args.empty()) {

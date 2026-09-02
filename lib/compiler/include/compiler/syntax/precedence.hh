@@ -10,6 +10,7 @@ namespace ghoti::syntax {
 enum class bind_precedence : u8 {
     LOWEST           = 0,
     ASSIGNMENT       = 10,
+    RANGE            = 15,
     BOOL_AND_OR      = 20,
     BOOL_EQUIV       = 30,
     BOOL_LT_GT       = 40,
@@ -17,7 +18,6 @@ enum class bind_precedence : u8 {
     MUL_DIV          = 60,
     EXPONENT         = 70,
     PREFIX           = 80,
-    RANGE            = 90,
     INITIALIZATION   = 100,
     TYPE             = 110,
     SCOPE_RESOLUTION = 120,
