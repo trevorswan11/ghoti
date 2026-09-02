@@ -29,11 +29,14 @@ TEST_CASE("completion_items lists keywords and top-level declarations") {
     const auto module{UNWRAP(session->analyze(path))};
 
     const auto items = lsp::completion_items(*module, {0, 0});
-    CHECK(lsp::has_field(items, "label", "const"));  // keyword
-    CHECK(lsp::has_field(items, "label", "fn"));     // keyword
-    CHECK(lsp::has_field(items, "label", "answer")); // top-level constant
-    CHECK(lsp::has_field(items, "label", "add"));    // top-level function
-    CHECK(lsp::has_field(items, "label", "point"));  // top-level struct
+    CHECK(lsp::has_field(items, "label", "const"));     // keyword
+    CHECK(lsp::has_field(items, "label", "fn"));        // keyword
+    CHECK(lsp::has_field(items, "label", "answer"));    // top-level constant
+    CHECK(lsp::has_field(items, "label", "add"));       // top-level function
+    CHECK(lsp::has_field(items, "label", "point"));     // top-level struct
+    CHECK(lsp::has_field(items, "label", "@typeName")); // builtin
+    CHECK(lsp::has_field(items, "label", "@as"));       // builtin
+    CHECK(lsp::has_field(items, "label", "@cfg"));      // special-form builtin
 }
 
 TEST_CASE("completion_items still surfaces valid top-level declarations around a syntax error") {

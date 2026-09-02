@@ -328,6 +328,86 @@ TEST_CASE("Illegal resolved builtin matcher type") {
     }
 }
 
+TEST_CASE("Resolving well-formed range matching") {
+    helpers::resolve_and_check("var x: i32 = 0; _ = match (x) { 0..5 => 1, 5..10 => 2, _ => 0 };");
+    helpers::resolve_and_check("var x: u8 = 0; _ = match (x) { 0..=4 => |v| v, _ => 0 };");
+    helpers::resolve_and_check(
+        "var x: i32 = 0; var lo := 1; var hi := 8; _ = match (x) { lo..hi => 1, _ => 0 };");
+}
+
+TEST_CASE("Resolving a 'match constexpr'") {
+    helpers::resolve_and_check(
+        "const T := i32; _ = match constexpr (T) { i32 => 1, bool => not_real, _ => 0 };");
+    helpers::resolve_and_check(
+        "constexpr N := 2; _ = match constexpr (N) { 1 => 10, 2 => 20, 3 => bad, _ => 0 };");
+    helpers::resolve_and_check(
+        "constexpr N := 2; _ = match constexpr (N) { 1, 2 => |v| v, _ => 0 };");
+}
+
+TEST_CASE("Illegal 'match constexpr'") {
+    helpers::test_resolver_fail(
+        "var x: i32 = 0; _ = match constexpr (x) { 1 => 2, _ => 0 };",
+        sema::diagnostic{"'match constexpr' requires a compile-time-known scrutinee",
+                         sema::error::CONSTEXPR_EVALUATION_FAILED,
+                         std::pair{0UZ, 37UZ}});
+    helpers::test_resolver_fail(
+        "constexpr N := 9; _ = match constexpr (N) { 1 => 10, 2 => 20 };",
+        sema::diagnostic{"'match constexpr' has no arm matching the scrutinee and no '_' arm",
+                         sema::error::CONSTEXPR_EVALUATION_FAILED,
+                         std::pair{0UZ, 22UZ}});
+    helpers::test_resolver_fail(
+        "const T := i32; _ = match constexpr (T) { i32 => |t| 1, _ => 0 };",
+        sema::diagnostic{"'match constexpr' on a type value cannot bind a capture",
+                         sema::error::ILLEGAL_MATCH_PATTERN,
+                         std::pair{0UZ, 50UZ}});
+    helpers::test_resolver_fail(
+        "constexpr N := 1; _ = match constexpr (N) { 1 => |&mut v| v, _ => 0 };",
+        sema::diagnostic{"'match constexpr' captures cannot use a reference or pointer modifier",
+                         sema::error::ILLEGAL_MATCH_PATTERN,
+                         std::pair{0UZ, 55UZ}});
+}
+
+TEST_CASE("Resolving multi-value match arms") {
+    helpers::resolve_and_check("var x: i32 = 0; _ = match (x) { 1, 2, 3 => |v| v, _ => 0 };");
+    helpers::resolve_and_check("var x: i32 = 0; _ = match (x) { 0, 5..9 => |v| v, _ => 0 };");
+    helpers::resolve_and_check("using U = union { a: i32, b: i32 }; var u := U{ .a = 1 }; "
+                               "_ = match (u) { .a, .b => |v| v };");
+}
+
+TEST_CASE("A multi-variant capture requires one shared payload type") {
+    helpers::test_resolver_fail(
+        "using U = union { a: i32, b: bool }; var u := U{ .a = 1 }; "
+        "_ = match (u) { .a, .b => |v| v };",
+        sema::diagnostic{"A capture on a multi-variant match arm requires every listed "
+                         "variant to carry the same payload type",
+                         sema::error::ILLEGAL_MATCH_PATTERN,
+                         std::pair{0UZ, 86UZ}});
+}
+
+TEST_CASE("Multi-value arms still reject overlapping constants") {
+    helpers::test_resolver_fail("var x: i32 = 0; _ = match (x) { 0, 4 => 1, 4..8 => 2, _ => 0 };",
+                                sema::diagnostic{"This match arm pattern overlaps an earlier arm",
+                                                 sema::error::ILLEGAL_MATCH_PATTERN,
+                                                 std::pair{0UZ, 43UZ}});
+}
+
+TEST_CASE("Illegal range match arms") {
+    helpers::test_resolver_fail(
+        "var b := true; _ = match (b) { 0..1 => 1, _ => 0 };",
+        sema::diagnostic{"Range patterns are not allowed when matching on 'bool'",
+                         sema::error::ILLEGAL_MATCH_PATTERN,
+                         std::pair{0UZ, 26UZ}});
+    helpers::test_resolver_fail(
+        "var x: i32 = 0; _ = match (x) { 5..1 => 1, _ => 0 };",
+        sema::diagnostic{"Range pattern is empty; its lower bound exceeds its upper bound",
+                         sema::error::ILLEGAL_MATCH_PATTERN,
+                         std::pair{0UZ, 32UZ}});
+    helpers::test_resolver_fail("var x: i32 = 0; _ = match (x) { 0..5 => 1, 3 => 2, _ => 0 };",
+                                sema::diagnostic{"This match arm pattern overlaps an earlier arm",
+                                                 sema::error::ILLEGAL_MATCH_PATTERN,
+                                                 std::pair{0UZ, 43UZ}});
+}
+
 TEST_CASE("Illegal resolved arbitrary matcher type") {
     const auto expected_diag = [](std::string_view kind, usize col) -> sema::diagnostic {
         return {

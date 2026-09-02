@@ -191,6 +191,21 @@ auto target_facts::resolve(stdx::option<std::string_view> triple_str) -> target_
     return resolve(resolve_target_triple(triple_str));
 }
 
+auto can_emit_freestanding_entry(const llvm::Triple& triple) -> bool {
+    // Every non-Linux target links a crt that provides the process entry point.
+    if (!triple.isOSLinux()) { return true; }
+    switch (triple.getArch()) {
+    case llvm::Triple::x86_64:
+    case llvm::Triple::aarch64:
+    case llvm::Triple::riscv64:
+    case llvm::Triple::riscv32:
+    case llvm::Triple::arm:
+    case llvm::Triple::thumb:
+    case llvm::Triple::loongarch64: return true;
+    default:                        return false;
+    }
+}
+
 auto get_default_output_extension(output_type type, stdx::option<std::string_view> triple_str)
     -> std::string_view {
     const auto triple{resolve_target_triple(triple_str)};

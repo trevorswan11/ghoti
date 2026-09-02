@@ -75,7 +75,10 @@ namespace {
 
 auto emitter::emit(bool include_builtin_test_runtime) -> module {
     PROFILE_FUNCTION();
-    const_eval_.resolve_all_deferred_types();
+    {
+        PROFILE_SCOPE("emitter: resolve deferred types");
+        const_eval_.resolve_all_deferred_types();
+    }
 
     const auto emit_top_level_stmt = [&](mod::module& module, ast::node_id id) {
         return module.ast[id].visit(
@@ -115,29 +118,35 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
     symbol_scoping_ = symbol_scoping::build(ctx_, ast_module_, imported_mods);
     const_eval_.set_symbol_scoping(symbol_scoping_);
 
-    for (const auto root_id : ast_module_.ast) { emit_top_level_stmt(ast_module_, root_id); }
-    for (const auto& inst : ast_module_.generic_instantiations) {
-        emit_generic_instantiation(inst);
-    }
-    for (const auto& tcm : ast_module_.type_ctor_member_emits) {
-        emit_type_ctor_member(ast_module_, tcm);
+    {
+        PROFILE_SCOPE("emitter: emit root module");
+        for (const auto root_id : ast_module_.ast) { emit_top_level_stmt(ast_module_, root_id); }
+        for (const auto& inst : ast_module_.generic_instantiations) {
+            emit_generic_instantiation(inst);
+        }
+        for (const auto& tcm : ast_module_.type_ctor_member_emits) {
+            emit_type_ctor_member(ast_module_, tcm);
+        }
     }
 
     gir_module_.mark_import_boundary();
 
-    for (auto* other_mod : imported_mods) {
-        if (!other_mod || other_mod->is_poisoned() || other_mod->is_errored()) { continue; }
-        auto prev_module{std::exchange(active_module_, other_mod)};
-        const_eval_.set_module(*other_mod);
-        for (const auto root_id : other_mod->ast) { emit_top_level_stmt(*other_mod, root_id); }
-        for (const auto& inst : other_mod->generic_instantiations) {
-            emit_generic_instantiation(inst);
+    {
+        PROFILE_SCOPE("emitter: emit imported modules");
+        for (auto* other_mod : imported_mods) {
+            if (!other_mod || other_mod->is_poisoned() || other_mod->is_errored()) { continue; }
+            auto prev_module{std::exchange(active_module_, other_mod)};
+            const_eval_.set_module(*other_mod);
+            for (const auto root_id : other_mod->ast) { emit_top_level_stmt(*other_mod, root_id); }
+            for (const auto& inst : other_mod->generic_instantiations) {
+                emit_generic_instantiation(inst);
+            }
+            for (const auto& tcm : other_mod->type_ctor_member_emits) {
+                emit_type_ctor_member(*other_mod, tcm);
+            }
+            active_module_ = prev_module;
+            const_eval_.set_module(*prev_module);
         }
-        for (const auto& tcm : other_mod->type_ctor_member_emits) {
-            emit_type_ctor_member(*other_mod, tcm);
-        }
-        active_module_ = prev_module;
-        const_eval_.set_module(*prev_module);
     }
 
     for (const auto name : pending_builtin_runtime_) { ensure_builtin_runtime(name); }
@@ -3530,13 +3539,18 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
     ASSERT(sema_type, "Match expression must have a resolved sema type");
     const bool yields_value{sema_type->get_kind() != sema::type_kind::VOID_};
 
-    // The resolver already selected an arm for a `match` on a compile-time type: emit only it.
+    // The resolver already selected an arm (`match` on a compile-time type, or `match constexpr`).
+    stdx::opt_size forced_arm;
     if (const auto it{active_mod().match_arm_results.find(id.get_index())};
         it != active_mod().match_arm_results.end()) {
-        const auto& chosen{match.arms[it->second]};
-        if (yields_value) { return emit_stmt_as_value(chosen.dispatch); }
-        emit_stmt(chosen.dispatch);
-        return value{void_val{}, sema_type};
+        forced_arm.emplace(it->second);
+        // With no capture there is nothing to bind: emit only the chosen dispatch.
+        if (!match.arms[it->second].capture) {
+            const auto& chosen{match.arms[it->second]};
+            if (yields_value) { return emit_stmt_as_value(chosen.dispatch); }
+            emit_stmt(chosen.dispatch);
+            return value{void_val{}, sema_type};
+        }
     }
 
     if (const auto cv{const_eval_.try_eval(id)}) {
@@ -3576,42 +3590,55 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
         }
     }
 
-    for (const auto& arm : match.arms) {
-        auto& arm_body_seg{fn.add_segment()};
-        auto& next_arm_seg{fn.add_segment()};
+    for (usize arm_idx{0}; arm_idx < match.arms.size(); ++arm_idx) {
+        if (forced_arm && arm_idx != *forced_arm) { continue; }
+        const auto& arm{match.arms[arm_idx]};
+        auto&       arm_body_seg{fn.add_segment()};
+        auto&       next_arm_seg{fn.add_segment()};
 
-        const auto pattern_node_id{*arm.pattern};
-        const auto is_discard{pattern_node_id.get_token_type() ==
-                                  syntax::token_type_t::UNDERSCORE ||
-                              active_ast()[pattern_node_id].template is<ast::discarded>()};
+        const auto primary_id{*arm.primary_pattern()};
+        const auto is_discard{primary_id.get_token_type() == syntax::token_type_t::UNDERSCORE ||
+                              active_ast()[primary_id].template is<ast::discarded>()};
 
-        if (is_discard) {
-            builder_.emit_goto(arm_body_seg.get_id());
-        } else if (const auto range{active_ast().get_as_opt<ast::range_expr>(pattern_node_id)}) {
-            const auto start_val{emit_expression(range->lhs)};
-            const auto end_val{emit_expression(range->rhs)};
-
-            const auto ge_cond{
-                builder_.emit_binary(instruction_kind::GE, matcher_val, start_val, bool_type)};
-            const auto is_inclusive{pattern_node_id.get_token_type() ==
-                                    syntax::token_type_t::DOT_DOT_EQ};
-            const auto le_kind{is_inclusive ? instruction_kind::LE : instruction_kind::LT};
-            const auto le_cond{builder_.emit_binary(le_kind, matcher_val, end_val, bool_type)};
-            const auto in_range{builder_.emit_binary(instruction_kind::AND,
-                                                     value{ge_cond, bool_type},
-                                                     value{le_cond, bool_type},
-                                                     bool_type)};
-            builder_.emit_cond_goto(
-                value{in_range, bool_type}, arm_body_seg.get_id(), next_arm_seg.get_id());
-        } else {
+        // Test one pattern of the arm; the arm is taken if any of its patterns match.
+        const auto emit_pattern_test{[&](ast::node_id pat_id) -> value {
+            if (const auto range{active_ast().get_as_opt<ast::range_expr>(pat_id)}) {
+                const auto start_val{emit_expression(range->lhs)};
+                const auto end_val{emit_expression(range->rhs)};
+                const auto ge_cond{
+                    builder_.emit_binary(instruction_kind::GE, matcher_val, start_val, bool_type)};
+                const auto le_kind{pat_id.get_token_type() == syntax::token_type_t::DOT_DOT_EQ
+                                       ? instruction_kind::LE
+                                       : instruction_kind::LT};
+                const auto le_cond{builder_.emit_binary(le_kind, matcher_val, end_val, bool_type)};
+                return value{builder_.emit_binary(instruction_kind::AND,
+                                                  value{ge_cond, bool_type},
+                                                  value{le_cond, bool_type},
+                                                  bool_type),
+                             bool_type};
+            }
             const auto is_eq{union_data && !union_data->is_untagged
-                                 ? emit_union_tag_eq(*matcher_addr, pattern_node_id)
+                                 ? emit_union_tag_eq(*matcher_addr, pat_id)
                                  : builder_.emit_binary(instruction_kind::EQ,
                                                         matcher_val,
-                                                        emit_expression_id(pattern_node_id),
+                                                        emit_expression_id(pat_id),
                                                         bool_type)};
-            builder_.emit_cond_goto(
-                value{is_eq, bool_type}, arm_body_seg.get_id(), next_arm_seg.get_id());
+            return value{is_eq, bool_type};
+        }};
+
+        if (forced_arm || is_discard) {
+            // The arm was already selected at compile time, or it is the catch-all.
+            builder_.emit_goto(arm_body_seg.get_id());
+        } else {
+            stdx::option<value> matched;
+            for (const auto& pat : arm.patterns) {
+                const auto test{emit_pattern_test(*pat)};
+                matched = matched ? value{builder_.emit_binary(
+                                              instruction_kind::OR, *matched, test, bool_type),
+                                          bool_type}
+                                  : test;
+            }
+            builder_.emit_cond_goto(*matched, arm_body_seg.get_id(), next_arm_seg.get_id());
         }
 
         builder_.set_segment(arm_body_seg);

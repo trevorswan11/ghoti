@@ -2,6 +2,7 @@
 #include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
+#include <stdx/types.hh>
 
 #include "compiler/ast/dumper.hh"
 #include "compiler/syntax/error.hh"

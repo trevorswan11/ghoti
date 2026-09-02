@@ -31,6 +31,28 @@ templ SyntaxMatchPage() {
 		</li>
 		<li>Arms of match expressions must be comma separated and there may be a trailing comma</li>
 		<li>Loops are expressions and must be terminated by a semicolon</li>
+		<li>
+			An arm may list several comma-separated patterns; the arm is taken when the scrutinee matches any of them
+			<ul>
+				<li>A single capture is shared by every listed pattern</li>
+				<li>For a union or enum, every listed variant must carry the same payload type to bind a capture</li>
+			</ul>
+		</li>
+		<li>
+			A range may be used as a pattern: <code>lo..hi</code> (exclusive) or <code>lo..=hi</code> (inclusive)
+			<ul>
+				<li>Endpoints may be any expression, including runtime values (<code>a..c</code>, <code>5..=arr.len</code>)</li>
+				<li>When both endpoints are compile-time constants, the range may not overlap another constant arm</li>
+				<li>A range never satisfies exhaustiveness on its own, so a catch-all <code>_</code> is still required</li>
+			</ul>
+		</li>
+		<li>
+			<code>{ "match constexpr (x) { ... }" }</code> selects its arm at compile time, exactly like <code>{ "if constexpr" }</code>
+			<ul>
+				<li>The scrutinee must be compile-time known</li>
+				<li>Only the selected arm is type-checked; the others may reference undeclared names</li>
+			</ul>
+		</li>
 	</ul>
-	<pre><code class="language-ghoti">{ "match (a) { 2 => { c; }, _ => d }; // Standard match on a non-union value\nmatch (a) { .b => |b| { c; } }; // Match on a union value that has a field `b`" }</code></pre>
+	<pre><code class="language-ghoti">{ "match (a) { 2 => { c; }, _ => d }; // Standard match on a non-union value\nmatch (a) { .b => |b| { c; } }; // Match on a union value that has a field `b`\nmatch (n) { 1, 2, 3 => |v| v * 2, 4..8 => 0, _ => -1 }; // Multi-value and range arms\nmatch constexpr (@typeOf(x)) { i32 => small(), _ => big() }; // Compile-time arm selection" }</code></pre>
 }

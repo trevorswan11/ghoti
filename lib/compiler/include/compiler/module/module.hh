@@ -153,7 +153,7 @@ struct module {
     }
 
     [[nodiscard]] auto has_sema_type(const ast::match_expr::arm& arm) const noexcept -> bool {
-        return sema_side_tables.match_arm_types[arm.pattern].has_value();
+        return sema_side_tables.match_arm_types[arm.primary_pattern()].has_value();
     }
 
     template <ast::IndexableID ID>
@@ -203,7 +203,7 @@ struct module {
 
     [[nodiscard]] auto get_sema_type_opt(this auto&&                 self,
                                          const ast::match_expr::arm& arm) noexcept {
-        return self.sema_side_tables.match_arm_types[arm.pattern];
+        return self.sema_side_tables.match_arm_types[arm.primary_pattern()];
     }
 
     [[nodiscard]] auto get_sema_type(const ast::match_expr::arm& arm) const noexcept -> auto& {
@@ -232,7 +232,7 @@ struct module {
     }
 
     auto set_sema_type(const ast::match_expr::arm& arm, sema::type& type) noexcept -> void {
-        sema_side_tables.match_arm_types[arm.pattern].emplace(type);
+        sema_side_tables.match_arm_types[arm.primary_pattern()].emplace(type);
     }
 
     // Records that `function_id` implicitly captures `name` merging with any existing entry

@@ -38,7 +38,23 @@ templ SyntaxFunctionsPage() {
 			</ul>
 		</li>
 		<li>There are no default parameters</li>
+		<li>
+			A parameter's type may depend on an earlier parameter, and the return type may depend on any parameter
+			<ul>
+				<li>Earlier parameters are in scope for later parameter types and for the return type</li>
+				<li>Builtins like <code>{ "@typeOf" }</code> and type-constructor calls may be used in those positions</li>
+			</ul>
+		</li>
 	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const Box := fn(T: type): type { return struct { val: T }; };
+
+const rewrap := fn(a: auto, b: Box(@typeOf(a))): @typeOf(b) {
+    return b;
+};` }
+		</code>
+	</pre>
 	<pre>
 		<code class="language-ghoti">
 			{ `const foo := fn(a: &i32): u64 {

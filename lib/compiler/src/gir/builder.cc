@@ -7,6 +7,7 @@
 
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
+#include <stdx/profiler.hh>
 #include <stdx/types.hh>
 
 #include "compiler/gir/function.hh"
@@ -17,12 +18,14 @@
 namespace ghoti::gir {
 
 auto builder::emit_instruction(instruction inst) -> instruction& {
+    PROFILE_FUNCTION();
     ASSERT(segment_, "Cannot emit instruction without an active segment");
     if (!inst.location && location_) { inst.location = location_; }
     return segment_->append(std::move(inst));
 }
 
 auto builder::emit_alloca(sema::type& type, std::string_view, bool is_const) -> local_id {
+    PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit alloca without an active function");
     const auto slot{function_->next_local_id(local_kind::ALLOCA)};
     emit_instruction({
@@ -36,6 +39,7 @@ auto builder::emit_alloca(sema::type& type, std::string_view, bool is_const) -> 
 }
 
 auto builder::emit_load(local_id src, sema::type& type) -> local_id {
+    PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit load without an active function");
     const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
     emit_instruction({
@@ -48,6 +52,7 @@ auto builder::emit_load(local_id src, sema::type& type) -> local_id {
 }
 
 auto builder::emit_load(value src, sema::type& type) -> local_id {
+    PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit load without an active function");
     const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
     emit_instruction({
@@ -60,6 +65,7 @@ auto builder::emit_load(value src, sema::type& type) -> local_id {
 }
 
 auto builder::emit_store(local_id dest, value val) -> instruction& {
+    PROFILE_FUNCTION();
     const auto val_type{val.type};
     return emit_instruction({
         .kind     = instruction_kind::STORE,
@@ -70,6 +76,7 @@ auto builder::emit_store(local_id dest, value val) -> instruction& {
 }
 
 auto builder::emit_store(value dest, value val) -> instruction& {
+    PROFILE_FUNCTION();
     const auto val_type{val.type};
     if (const auto dest_local{dest.as_opt<local_id>()}) {
         return emit_instruction({
@@ -89,6 +96,7 @@ auto builder::emit_store(value dest, value val) -> instruction& {
 
 auto builder::emit_get_element_ptr(value base, std::vector<value> indices, sema::type& result_type)
     -> local_id {
+    PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit GEP instruction without an active function");
     const auto         dest{function_->next_local_id(local_kind::TEMPORARY)};
     std::vector<value> operands;
@@ -105,6 +113,7 @@ auto builder::emit_get_element_ptr(value base, std::vector<value> indices, sema:
 }
 
 auto builder::emit_address_of(value target, sema::type& result_type) -> local_id {
+    PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit address_of instruction without an active function");
     const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
     emit_instruction({
@@ -117,6 +126,7 @@ auto builder::emit_address_of(value target, sema::type& result_type) -> local_id
 }
 
 auto builder::emit_deref(value ptr, sema::type& result_type) -> local_id {
+    PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit deref instruction without an active function");
     const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
     emit_instruction({
@@ -129,6 +139,7 @@ auto builder::emit_deref(value ptr, sema::type& result_type) -> local_id {
 }
 
 auto builder::emit_global_addr(std::string name, sema::type& type, bool is_const) -> local_id {
+    PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit global_addr instruction without an active function");
     const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
     emit_instruction({
@@ -144,6 +155,7 @@ auto builder::emit_global_addr(std::string name, sema::type& type, bool is_const
 
 auto builder::emit_binary(
     instruction_kind kind, value lhs, value rhs, sema::type& type, bool checked) -> local_id {
+    PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit binary instruction without an active function");
     const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
     emit_instruction({
@@ -158,6 +170,7 @@ auto builder::emit_binary(
 
 auto builder::emit_unary(instruction_kind kind, value operand, sema::type& type, bool checked)
     -> local_id {
+    PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit unary instruction without an active function");
     const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
     emit_instruction({
@@ -171,6 +184,7 @@ auto builder::emit_unary(instruction_kind kind, value operand, sema::type& type,
 }
 
 auto builder::emit_cast(instruction_kind kind, value operand, sema::type& target_type) -> local_id {
+    PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit cast instruction without an active function");
     const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
     emit_instruction({
@@ -184,6 +198,7 @@ auto builder::emit_cast(instruction_kind kind, value operand, sema::type& target
 
 auto builder::emit_call(std::string_view callee, std::vector<value> args, sema::type& return_type)
     -> stdx::option<local_id> {
+    PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit call instruction without an active function");
     if (return_type.get_kind() != sema::type_kind::VOID_) {
         const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
@@ -210,6 +225,7 @@ auto builder::emit_call(std::string_view callee, std::vector<value> args, sema::
 auto builder::emit_builtin_call(std::string_view   callee,
                                 std::vector<value> args,
                                 sema::type&        return_type) -> stdx::option<local_id> {
+    PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit builtin call instruction without an active function");
     if (return_type.get_kind() != sema::type_kind::VOID_) {
         const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
@@ -235,6 +251,7 @@ auto builder::emit_builtin_call(std::string_view   callee,
 
 auto builder::emit_indirect_call(value callee, std::vector<value> args, sema::type& return_type)
     -> stdx::option<local_id> {
+    PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit indirect call instruction without an active function");
     args.insert(args.begin(), std::move(callee));
     if (return_type.get_kind() != sema::type_kind::VOID_) {
@@ -261,6 +278,7 @@ auto builder::emit_indirect_call(value callee, std::vector<value> args, sema::ty
 
 auto builder::emit_inline_asm(inline_asm info, std::vector<value> inputs, sema::type& result_type)
     -> stdx::option<local_id> {
+    PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit inline asm without an active function");
     stdx::option<local_id> dest;
     if (info.has_result_slot) { dest = function_->next_local_id(local_kind::TEMPORARY); }
@@ -275,6 +293,7 @@ auto builder::emit_inline_asm(inline_asm info, std::vector<value> inputs, sema::
 }
 
 auto builder::emit_return(stdx::option<value> val) -> instruction& {
+    PROFILE_FUNCTION();
     if (val) {
         const auto val_type{val->type};
         return emit_instruction({
@@ -293,6 +312,7 @@ auto builder::emit_return(stdx::option<value> val) -> instruction& {
 }
 
 auto builder::emit_goto(segment_id target_segment) -> instruction& {
+    PROFILE_FUNCTION();
     return emit_instruction({
         .kind           = instruction_kind::GOTO,
         .target_segment = target_segment,
@@ -301,6 +321,7 @@ auto builder::emit_goto(segment_id target_segment) -> instruction& {
 
 auto builder::emit_cond_goto(value cond, segment_id true_segment, segment_id false_segment)
     -> instruction& {
+    PROFILE_FUNCTION();
     return emit_instruction({
         .kind          = instruction_kind::COND_GOTO,
         .operands      = {std::move(cond)},
@@ -310,6 +331,7 @@ auto builder::emit_cond_goto(value cond, segment_id true_segment, segment_id fal
 }
 
 auto builder::emit_unreachable() -> instruction& {
+    PROFILE_FUNCTION();
     return emit_instruction({
         .kind = instruction_kind::UNREACHABLE,
     });

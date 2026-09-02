@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <stdx/option.hh>
+#include <stdx/profiler.hh>
 #include <stdx/types.hh>
 
 #include "compiler/ast/ast.hh"
@@ -136,6 +137,7 @@ constexpr std::array<std::string_view, 2>  ENDIAN_MEMBERS{"little", "big"};
 } // namespace
 
 auto cfg_pass::run(mod::module& module, context& ctx) -> bool {
+    PROFILE_FUNCTION();
     cfg_pass pass{module, ctx};
     pass.gather_cfg_values(module.ast.roots_mut());
     for (const auto& [name, node] : pass.cfg_value_decls_) { pass.resolve_cfg_value(node); }
@@ -144,6 +146,7 @@ auto cfg_pass::run(mod::module& module, context& ctx) -> bool {
 }
 
 auto cfg_pass::gather_cfg_values(const std::vector<ast::node_id>& list) -> void {
+    PROFILE_FUNCTION();
     for (const auto id : list) {
         const auto decl{module_.ast.get_as_opt<ast::decl_stmt>(id)};
         if (!decl || !decl->value) { continue; }
@@ -155,6 +158,7 @@ auto cfg_pass::gather_cfg_values(const std::vector<ast::node_id>& list) -> void 
 }
 
 auto cfg_pass::resolve_cfg_value(ast::node_id node) -> stdx::option<cfg_value> {
+    PROFILE_FUNCTION();
     const auto key{node.get_index()};
     if (const auto done{cfg_value_cache_.find(key)}; done != cfg_value_cache_.end()) {
         return done->second;
@@ -215,6 +219,7 @@ auto cfg_pass::resolve_cfg_value(ast::node_id node) -> stdx::option<cfg_value> {
 }
 
 auto cfg_pass::is_compile_error_call(ast::expr_handle h) -> bool {
+    PROFILE_FUNCTION();
     const ast::node_id id{h};
     if (id.get_kind() != ast::node_kind::CALL_EXPRESSION) { return false; }
     const auto& call{module_.ast.get_as<ast::call_expr>(id)};
@@ -223,6 +228,7 @@ auto cfg_pass::is_compile_error_call(ast::expr_handle h) -> bool {
 
 // Every guard arm (and the `_ =>` fallback) must yield the same `constexpr` type
 auto cfg_pass::check_guard_arm_types(ast::node_id node, const ast::cfg_value_expr& expr) -> bool {
+    PROFILE_FUNCTION();
     stdx::option<cfg_value> common;
     bool                    ok{true};
 
@@ -262,11 +268,13 @@ auto cfg_pass::atom_value_str(std::string_view atom) const -> std::string_view {
 }
 
 auto cfg_pass::atom_value(std::string_view atom) -> cfg_value {
+    PROFILE_FUNCTION();
     if (atom == "ptr_bits") { return cfg_value{static_cast<i64>(facts_.ptr_bits)}; }
     return cfg_value{cfgval::member{atom_value_str(atom)}};
 }
 
 auto cfg_pass::int_literal(ast::expr_handle h) -> stdx::option<i64> {
+    PROFILE_FUNCTION();
     return module_.ast[h].visit(
         [](const auto&) -> stdx::option<i64> { return stdx::none; },
         [](const ast::i32_expr& e) -> stdx::option<i64> { return e.value; },
@@ -279,6 +287,7 @@ auto cfg_pass::int_literal(ast::expr_handle h) -> stdx::option<i64> {
 }
 
 auto cfg_pass::eval_term(ast::expr_handle h) -> stdx::option<cfg_value> {
+    PROFILE_FUNCTION();
     const ast::node_id id{h};
     switch (id.get_kind()) {
     case ast::node_kind::IDENTIFIER_EXPRESSION: {
@@ -327,6 +336,7 @@ auto cfg_pass::eval_term(ast::expr_handle h) -> stdx::option<cfg_value> {
 }
 
 auto cfg_pass::eval_predicate(ast::expr_handle h) -> stdx::option<bool> {
+    PROFILE_FUNCTION();
     const ast::node_id id{h};
 
     if (id.get_kind() == ast::node_kind::UNARY_EXPRESSION) {
@@ -359,6 +369,7 @@ auto cfg_pass::eval_predicate(ast::expr_handle h) -> stdx::option<bool> {
 }
 
 auto cfg_pass::classify_operand(ast::expr_handle h) -> operand {
+    PROFILE_FUNCTION();
     const ast::node_id id{h};
     switch (id.get_kind()) {
     case ast::node_kind::IDENTIFIER_EXPRESSION: {
@@ -403,6 +414,7 @@ auto cfg_pass::eval_comparison(ast::node_id     at,
                                token_type_t     op,
                                ast::expr_handle lhs_h,
                                ast::expr_handle rhs_h) -> stdx::option<bool> {
+    PROFILE_FUNCTION();
     const bool was_ok{ok_};
     auto       lhs{classify_operand(lhs_h)};
     auto       rhs{classify_operand(rhs_h)};
@@ -522,6 +534,7 @@ auto cfg_pass::eval_comparison(ast::node_id     at,
 }
 
 auto cfg_pass::compile_error_message(const ast::call_expr& call) -> stdx::option<std::string_view> {
+    PROFILE_FUNCTION();
     if (call.arguments.empty()) { return stdx::none; }
     const auto arg{call.arguments.front().as_opt<ast::expr_handle>()};
     if (!arg) { return stdx::none; }
@@ -537,6 +550,7 @@ auto cfg_pass::compile_error_message(const ast::call_expr& call) -> stdx::option
 }
 
 auto cfg_pass::fire_compile_error(ast::node_id at, const ast::call_expr& call) -> void {
+    PROFILE_FUNCTION();
     ok_ = false;
     if (const auto message{compile_error_message(call)}) {
         return ctx_.diags.emplace_back(
@@ -551,6 +565,7 @@ auto cfg_pass::fire_compile_error(ast::node_id at, const ast::call_expr& call) -
 }
 
 auto cfg_pass::fire_eager_compile_errors(const std::vector<ast::stmt_handle>& items) -> void {
+    PROFILE_FUNCTION();
     for (const auto item : items) {
         const auto expr_stmt{module_.ast.get_as_opt<ast::expr_stmt>(item)};
         if (!expr_stmt) { continue; }
@@ -563,6 +578,7 @@ auto cfg_pass::fire_eager_compile_errors(const std::vector<ast::stmt_handle>& it
 }
 
 auto cfg_pass::rewrite_items(std::vector<ast::stmt_handle>& list) -> void {
+    PROFILE_FUNCTION();
     std::vector<ast::stmt_handle> out;
     out.reserve(list.size());
     for (const auto stmt : list) {
@@ -582,6 +598,7 @@ auto cfg_pass::rewrite_items(std::vector<ast::stmt_handle>& list) -> void {
 }
 
 auto cfg_pass::rewrite_roots(std::vector<ast::node_id>& roots) -> void {
+    PROFILE_FUNCTION();
     std::vector<ast::stmt_handle> as_items;
     as_items.reserve(roots.size());
     for (const auto id : roots) { as_items.emplace_back(ast::stmt_handle{id}); }
@@ -590,6 +607,7 @@ auto cfg_pass::rewrite_roots(std::vector<ast::node_id>& roots) -> void {
 }
 
 auto cfg_pass::recurse_into_bodies(ast::stmt_handle stmt) -> void {
+    PROFILE_FUNCTION();
     const ast::node_id id{stmt};
     if (id.get_kind() == ast::node_kind::BLOCK_STATEMENT) {
         rewrite_items(module_.ast.get_as_mut<ast::block_stmt>(id).statements);
@@ -608,10 +626,12 @@ auto cfg_pass::recurse_into_bodies(ast::stmt_handle stmt) -> void {
 }
 
 auto cfg_pass::recurse_into_block(ast::block_handle block) -> void {
+    PROFILE_FUNCTION();
     rewrite_items(module_.ast.get_as_mut<ast::block_stmt>(ast::node_id{block}).statements);
 }
 
 auto cfg_pass::recurse_into_members(const ast::member_list& members) -> void {
+    PROFILE_FUNCTION();
     for (const auto member : members) {
         const ast::node_id mid{member};
         if (const auto decl{module_.ast.get_as_opt<ast::decl_stmt>(mid)}; decl && decl->value) {
@@ -621,6 +641,7 @@ auto cfg_pass::recurse_into_members(const ast::member_list& members) -> void {
 }
 
 auto cfg_pass::recurse_into_expr(ast::expr_handle expr) -> void {
+    PROFILE_FUNCTION();
     module_.ast[expr].visit(
         [&](const ast::function_expr& fn) {
             if (!fn.is_type_expr) { recurse_into_block(fn.body); }

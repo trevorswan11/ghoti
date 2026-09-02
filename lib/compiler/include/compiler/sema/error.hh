@@ -73,6 +73,7 @@ enum class error : u8 {
     UNWRAP_RETURN_TYPE_MISMATCH,
     UNWRAP_OUTSIDE_FUNCTION,
     TEST_BUILTIN_OUTSIDE_TEST,
+    ILLEGAL_LOCAL_DECL_MODIFIER,
 };
 
 using diagnostic  = diagnostic<error>;

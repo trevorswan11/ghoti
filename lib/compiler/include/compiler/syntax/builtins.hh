@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <string_view>
 
 #include <stdx/enum.hh>
@@ -94,6 +95,69 @@ constexpr auto SPECIAL_FORM_TOKEN_TYPES{
     stdx::enum_range<token_type_t::BUILTIN_CFG, token_type_t::BUILTIN_CFG_VALUE>()};
 
 } // namespace builtins
+
+// Single source of truth for every `@builtin` spelling
+constexpr std::array ALL_BUILTINS{
+    builtins::ALIGN_CAST,
+    builtins::PTR_CAST,
+    builtins::BIT_CAST,
+    builtins::CONST_CAST,
+    builtins::VOLATILE_CAST,
+    builtins::AS,
+    builtins::INT_FROM_PTR,
+    builtins::PTR_FROM_INT,
+    builtins::PTR_FROM_ARRAY,
+    builtins::SLICE_FROM_PTR,
+    builtins::FIELD_PARENT_PTR,
+    builtins::ALIGN_OF,
+    builtins::SIZE_OF,
+    builtins::TYPE_OF,
+    builtins::THIS,
+    builtins::TAG_NAME,
+    builtins::TYPE_NAME,
+    builtins::MEMCPY,
+    builtins::MEMSET,
+    builtins::MEMMOVE,
+    builtins::MUL_ADD,
+    builtins::CLZ,
+    builtins::CTZ,
+    builtins::POP_COUNT,
+    builtins::ABS,
+    builtins::MIN,
+    builtins::MAX,
+    builtins::DIV_TRUNC,
+    builtins::DIV_FLOOR,
+    builtins::REM,
+    builtins::MOD,
+    builtins::ADD_WITH_OVERFLOW,
+    builtins::SUB_WITH_OVERFLOW,
+    builtins::MUL_WITH_OVERFLOW,
+    builtins::SHL_WITH_OVERFLOW,
+    builtins::C_VA_START,
+    builtins::C_VA_ARG,
+    builtins::C_VA_COPY,
+    builtins::C_VA_END,
+    builtins::ALIGNAS,
+    builtins::TARGET_OS,
+    builtins::TARGET_ARCH,
+    builtins::TARGET_TRIPLE,
+    builtins::TARGET_ABI,
+    builtins::TARGET_PTR_BITS,
+    builtins::TARGET_ENDIAN,
+    builtins::TARGET_FAMILY,
+    builtins::SET_EVAL_RECURSION_LIMIT,
+    builtins::SET_MAIN_SYMBOL,
+    builtins::PANIC,
+    builtins::TRAP,
+    builtins::FN_CTX,
+    builtins::SRC,
+    builtins::EXPECT,
+    builtins::REQUIRE,
+    builtins::SKIP,
+    builtins::CFG,
+    builtins::CFG_VALUE,
+    builtins::COMPILE_ERROR,
+};
 
 [[nodiscard]] auto get_builtin_opt(token_type_t tt) noexcept -> stdx::option<std::string_view>;
 [[nodiscard]] auto get_builtin_opt(std::string_view sv) noexcept -> stdx::option<token_type_t>;

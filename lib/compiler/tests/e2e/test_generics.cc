@@ -24,8 +24,6 @@ TEST_CASE("@this() resolves correctly inside a generic function's body") {
 }
 
 TEST_CASE("a static member fn returning its own struct type (with an array field)") {
-    // Regression: `emit_dot` used to GEP the member's symbol-table index as if it were a
-    // struct field, so `List.init()` on a struct with fields before the member crashed codegen.
     CHECK(helpers::compile_and_run(R"(
         const List := struct {
             buf: [4uz]mut i32,

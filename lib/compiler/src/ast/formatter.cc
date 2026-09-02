@@ -873,11 +873,14 @@ auto formatter::visit(node_id id, const match_expr& node) -> syntax::doc_id {
 
     std::vector<syntax::doc_id> arms;
     for (const auto& arm : node.arms) {
-        const auto& start_loc{ast_.location_of(arm.pattern)};
+        const auto& start_loc{ast_.location_of(arm.primary_pattern())};
         auto        leading{consume_leading_comments(start_loc.line)};
 
         std::vector<syntax::doc_id> parts;
-        parts.emplace_back(format(arm.pattern));
+        for (usize p{0}; p < arm.patterns.size(); ++p) {
+            if (p != 0) { parts.emplace_back(doc_manager_.text(", ")); }
+            parts.emplace_back(format(arm.patterns[p]));
+        }
         parts.emplace_back(doc_manager_.text(" => "));
         if (arm.capture) {
             parts.emplace_back(doc_manager_.text("|"));
@@ -899,7 +902,7 @@ auto formatter::visit(node_id id, const match_expr& node) -> syntax::doc_id {
     if (dangling != doc_manager_.nil()) { arms.emplace_back(dangling); }
 
     return doc_manager_.concat({
-        doc_manager_.text("match ("),
+        doc_manager_.text(node.is_constexpr ? "match constexpr (" : "match ("),
         format(node.matcher),
         doc_manager_.text(") "),
         doc_manager_.delimited("{", "}", std::move(arms), true, true),

@@ -1,5 +1,6 @@
 #include "compiler/sema/analyzer.hh"
 
+#include <array>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -7,6 +8,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <gsl/util>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -67,6 +69,16 @@ namespace {
     }
     return roots;
 }
+
+constexpr std::array supported_archs{
+    "x86_64",
+    "aarch64",
+    "riscv32",
+    "riscv64",
+    "arm",
+    "thumb",
+    "loongarch64",
+};
 
 } // namespace
 
@@ -334,8 +346,20 @@ auto analyzer::emit_llvm_ir_executable(gir::module&                      gir_mod
     gir_module.prune_unreachable(roots);
     codegen::llvm_lowering lowering{context, gir_module.get_ast_module().path.string()};
     if (options.target_machine) {
+        const llvm::Triple triple{options.target_machine->getTargetTriple()};
+        if (!codegen::can_emit_freestanding_entry(triple)) {
+            return codegen::make_codegen_err(
+                fmt::format(
+                    "cannot build an executable for target '{}': ghoti links no C runtime "
+                    "on Linux and has no freestanding entry point for the '{}' architecture "
+                    "(supported: {})",
+                    triple.str(),
+                    codegen::normalized_target_arch(triple),
+                    fmt::join(supported_archs, ", ")),
+                codegen::error::UNSUPPORTED_TARGET);
+        }
         lowering.module().setDataLayout(options.target_machine->createDataLayout());
-        lowering.module().setTargetTriple(options.target_machine->getTargetTriple());
+        lowering.module().setTargetTriple(triple);
     }
     auto llvm_mod{lowering.lower_executable(gir_module, effective_main_name)};
 
@@ -385,10 +409,20 @@ auto analyzer::emit_llvm_ir_test_executable(gir::module&                      gi
     codegen::llvm_lowering lowering{context, gir_module.get_ast_module().path.string()};
     bool                   recover_args{true};
     if (options.target_machine) {
-        lowering.module().setDataLayout(options.target_machine->createDataLayout());
-        lowering.module().setTargetTriple(options.target_machine->getTargetTriple());
-        // A freestanding Windows entry recovers argv through kernel32 / shell32
         const llvm::Triple triple{options.target_machine->getTargetTriple()};
+        if (!codegen::can_emit_freestanding_entry(triple)) {
+            return codegen::make_codegen_err(
+                fmt::format("cannot build a test executable for target '{}': ghoti links no C "
+                            "runtime on Linux and has no freestanding entry point for the '{}' "
+                            "architecture (supported: {})",
+                            triple.str(),
+                            codegen::normalized_target_arch(triple),
+                            fmt::join(supported_archs, ", ")),
+                codegen::error::UNSUPPORTED_TARGET);
+        }
+        lowering.module().setDataLayout(options.target_machine->createDataLayout());
+        lowering.module().setTargetTriple(triple);
+        // A freestanding Windows entry recovers argv through kernel32 / shell32
         recover_args = !triple.isOSWindows() || codegen::has_windows_argv_sysroot();
     }
     auto llvm_mod{lowering.lower_test_executable(gir_module, stdx::none, recover_args)};

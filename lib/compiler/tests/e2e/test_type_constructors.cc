@@ -31,6 +31,52 @@ TEST_CASE("E2E: a generic `union` type constructor is usable as a return type") 
     )") == 41);
 }
 
+TEST_CASE("E2E: a later parameter and the return type depend on an earlier parameter's type") {
+    CHECK(helpers::compile_and_run(R"(
+        const pick := fn(a: auto, b: @typeOf(a)): @typeOf(b) {
+            return a + b;
+        };
+
+        pub const main := fn(): i32 {
+            const x: i32 = 7;
+            return pick(x, 2);
+        };
+    )") == 9);
+}
+
+TEST_CASE("E2E: a later parameter's type is a type-constructor call over an earlier parameter") {
+    CHECK(helpers::compile_and_run(R"(
+        const Box := fn(T: type): type { return struct { val: T }; };
+
+        const unbox := fn(a: auto, b: Box(@typeOf(a))): i32 {
+            return b.val;
+        };
+
+        pub const main := fn(): i32 {
+            const x: i32 = 0;
+            const boxed: Box(i32) = .{ .val = 9 };
+            return unbox(x, boxed);
+        };
+    )") == 9);
+}
+
+TEST_CASE("E2E: the return type may also be a type-constructor call over an earlier parameter") {
+    CHECK(helpers::compile_and_run(R"(
+        const Box := fn(T: type): type { return struct { val: T }; };
+
+        const rewrap := fn(a: auto, b: Box(@typeOf(a))): @typeOf(b) {
+            return b;
+        };
+
+        pub const main := fn(): i32 {
+            const x: i32 = 0;
+            const boxed: Box(i32) = .{ .val = 9 };
+            const out := rewrap(x, boxed);
+            return out.val;
+        };
+    )") == 9);
+}
+
 TEST_CASE("E2E: two structurally distinct instantiations of a generic `struct` constructor") {
     CHECK(helpers::compile_and_run(R"(
         const Box := fn(T: type): type { return struct { val: T }; };

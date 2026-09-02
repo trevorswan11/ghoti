@@ -8,6 +8,7 @@
 #include <gsl/span>
 #include <stdx/hash.hh>
 #include <stdx/option.hh>
+#include <stdx/profiler.hh>
 #include <stdx/types.hh>
 
 #include "compiler/ast/ast.hh"
@@ -107,12 +108,14 @@ auto scan_module(scan_state& st, const mod::module& mod) -> void {
 } // namespace
 
 auto symbol_scoping::key_of(usize owner_table_idx, std::string_view name) -> std::string {
+    PROFILE_FUNCTION();
     return fmt::format("{}{}{}", owner_table_idx, SEP, name);
 }
 
 auto symbol_scoping::build(const sema::context&          ctx,
                            const mod::module&            entry_mod,
                            gsl::span<mod::module* const> deps) -> symbol_scoping {
+    PROFILE_FUNCTION();
     symbol_scoping   policy;
     name_count_map_t name_counts;
     str_set_t        weak_names;

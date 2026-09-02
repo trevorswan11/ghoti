@@ -526,7 +526,7 @@ auto dumper::visit(node_id, const label_expr& label) -> void {
 
 auto dumper::visit(node_id, const match_expr& match) -> void {
     PROFILE_FUNCTION();
-    fmt::println(out_, "MatchExpression");
+    fmt::println(out_, "MatchExpression{}", match.is_constexpr ? " (constexpr)" : "");
     {
         const indent::guard g{indent_, false};
         fmt::print(out_, "{}Matcher: ", indent_.current_branch());
@@ -548,8 +548,10 @@ auto dumper::visit(node_id, const match_expr& match) -> void {
 
             {
                 const indent::guard g_inner{indent_, false};
-                fmt::print(out_, "{}Pattern: ", indent_.current_branch());
-                dump(arm.pattern);
+                for (const auto& pattern : arm.patterns) {
+                    fmt::print(out_, "{}Pattern: ", indent_.current_branch());
+                    dump(pattern);
+                }
             }
 
             if (arm.capture) {

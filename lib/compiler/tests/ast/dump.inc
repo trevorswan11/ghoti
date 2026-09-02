@@ -171,6 +171,57 @@ ExpressionStatement
             └─ Dispatch: ExpressionStatement
                 └─ Expr: IdentifierExpression: d
 ExpressionStatement
+└─ Expr: MatchExpression (constexpr)
+    ├─ Matcher: IdentifierExpression: a
+    └─ Arms:
+        ├─ Arm:
+        │   ├─ Pattern: IdentifierExpression: b
+        │   ├─ Capture: c (modifier: VALUE)
+        │   └─ Dispatch: ExpressionStatement
+        │       └─ Expr: IdentifierExpression: d
+        └─ Catch-All Arm:
+            ├─ Pattern: <discarded>
+            └─ Dispatch: ExpressionStatement
+                └─ Expr: IdentifierExpression: e
+ExpressionStatement
+└─ Expr: MatchExpression
+    ├─ Matcher: IdentifierExpression: a
+    └─ Arms:
+        ├─ Arm:
+        │   ├─ Pattern: RangeExpression (DOT_DOT)
+        │   │   ├─ Lower: I32Expression: 1
+        │   │   └─ Upper: I32Expression: 8
+        │   └─ Dispatch: ExpressionStatement
+        │       └─ Expr: IdentifierExpression: f
+        ├─ Arm:
+        │   ├─ Pattern: RangeExpression (DOT_DOT_EQ)
+        │   │   ├─ Lower: I32Expression: 8
+        │   │   └─ Upper: I32Expression: 16
+        │   ├─ Capture: g (modifier: VALUE)
+        │   └─ Dispatch: ExpressionStatement
+        │       └─ Expr: IdentifierExpression: h
+        └─ Catch-All Arm:
+            ├─ Pattern: <discarded>
+            └─ Dispatch: ExpressionStatement
+                └─ Expr: IdentifierExpression: i
+ExpressionStatement
+└─ Expr: MatchExpression
+    ├─ Matcher: IdentifierExpression: a
+    └─ Arms:
+        ├─ Arm:
+        │   ├─ Pattern: IdentifierExpression: b
+        │   ├─ Pattern: IdentifierExpression: c
+        │   ├─ Pattern: RangeExpression (DOT_DOT)
+        │   │   ├─ Lower: I32Expression: 1
+        │   │   └─ Upper: I32Expression: 4
+        │   ├─ Capture: d (modifier: VALUE)
+        │   └─ Dispatch: ExpressionStatement
+        │       └─ Expr: IdentifierExpression: e
+        └─ Catch-All Arm:
+            ├─ Pattern: <discarded>
+            └─ Dispatch: ExpressionStatement
+                └─ Expr: IdentifierExpression: f
+ExpressionStatement
 └─ Expr: InfiniteLoopExpression
     └─ ExpressionStatement
         └─ Expr: IdentifierExpression: a

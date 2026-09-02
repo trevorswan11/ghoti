@@ -217,6 +217,7 @@ auto add_wasm_args(std::vector<std::string>&   args,
 
 // Default to ELF for Linux and other Unix-like systems
 auto add_elf_args(std::vector<std::string>&   args,
+                  const llvm::Triple&         triple,
                   const std::string&          obj_path_str,
                   const std::string&          out_path_str,
                   const extra_linker_options& linker_opts,
@@ -233,8 +234,9 @@ auto add_elf_args(std::vector<std::string>&   args,
     args.emplace_back("-o");
     args.emplace_back(out_path_str);
     if (!is_dylib) {
+        // Linux gets a freestanding `_start` synthesized in codegen (no crt/libc)
         args.emplace_back("-e");
-        args.emplace_back("main");
+        args.emplace_back(triple.isOSLinux() ? "_start" : "main");
     }
 }
 
@@ -313,7 +315,7 @@ auto link_executable(const std::filesystem::path& object_file,
     } else if (triple.isWasm()) {
         add_wasm_args(args, obj_path_str, out_path_str, linker_opts, false);
     } else {
-        add_elf_args(args, obj_path_str, out_path_str, linker_opts, false);
+        add_elf_args(args, triple, obj_path_str, out_path_str, linker_opts, false);
     }
     TRY(run_link(triple, args));
 
@@ -394,7 +396,7 @@ auto link_dynamic_library(const std::filesystem::path& object_file,
     } else if (triple.isWasm()) {
         add_wasm_args(args, obj_path_str, out_path_str, linker_opts, true);
     } else {
-        add_elf_args(args, obj_path_str, out_path_str, linker_opts, true);
+        add_elf_args(args, triple, obj_path_str, out_path_str, linker_opts, true);
     }
     TRY(run_link(triple, args));
 

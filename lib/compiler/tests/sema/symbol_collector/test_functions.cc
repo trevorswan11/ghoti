@@ -57,6 +57,32 @@ TEST_CASE("Function basic param redeclaration") {
                          std::pair{0UZ, 14UZ}});
 }
 
+TEST_CASE("Module-scope-only modifiers are rejected on a function-local declaration") {
+    helpers::test_collector_fail(
+        "const f := fn(): void { pub const x := 5; };",
+        sema::diagnostic{"Modifier 'pub' cannot be used on a declaration local to a function",
+                         sema::error::ILLEGAL_LOCAL_DECL_MODIFIER,
+                         std::pair{0UZ, 24UZ}});
+
+    helpers::test_collector_fail(
+        "const f := fn(): void { weak extern const g: i32; };",
+        sema::diagnostic{
+            "Modifiers 'extern', 'weak' cannot be used on a declaration local to a function",
+            sema::error::ILLEGAL_LOCAL_DECL_MODIFIER,
+            std::pair{0UZ, 24UZ}});
+}
+
+TEST_CASE("Aggregate static members keep their visibility modifier inside a type constructor") {
+    helpers::collect_and_check(R"(
+        const Make := fn(): type {
+            return struct {
+                item: i32,
+                pub const of := fn(v: i32): @this() { return .{ .item = v }; };
+            };
+        };
+)");
+}
+
 TEST_CASE("Function self param redeclaration") {
     helpers::test_collector_fail(
         "const f := fn(f): void {};",

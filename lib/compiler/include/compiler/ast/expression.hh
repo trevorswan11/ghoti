@@ -306,16 +306,23 @@ struct label_expr {
 
 struct match_expr {
     struct arm {
-        match_pattern_handle                   pattern;
+        // One arm may list several patterns (`a, b, 1..8 => ...`) or a single discard
+        std::vector<match_pattern_handle>      patterns;
         stdx::option<discardable_ident_handle> capture;
         // Only meaningful when `capture` holds a real (non-discarded) identifier
         type_modifier modifier;
         stmt_handle   dispatch;
+
+        // The canonical pattern used for side-table keying and diagnostic locations.
+        [[nodiscard]] auto primary_pattern() const noexcept -> match_pattern_handle {
+            return patterns.front();
+        }
     };
 
     expr_handle      matcher;
     std::vector<arm> arms;
     stdx::opt_size   catch_all_idx;
+    bool             is_constexpr{false};
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;

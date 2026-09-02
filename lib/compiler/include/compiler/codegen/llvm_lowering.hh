@@ -109,6 +109,9 @@ class llvm_lowering {
     // elements) for an entry function
     auto emit_argv_slice(llvm::Function* entry_fn, bool want_real_args) -> llvm::Value*;
 
+    // Emits a freestanding ELF `_start` (Linux, no crt/libc)
+    auto emit_freestanding_start(llvm::Function* main_fn) -> void;
+
     auto get_or_create_test_failed_flag() -> llvm::GlobalVariable*;
     auto get_or_create_test_skipped_flag() -> llvm::GlobalVariable*;
     auto define_test_take_skipped() -> void;

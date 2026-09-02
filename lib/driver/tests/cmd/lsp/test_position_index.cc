@@ -130,6 +130,27 @@ TEST_CASE("hover-style type resolution works on a slice's .len member access") {
     CHECK(type.to_string() == "usize");
 }
 
+TEST_CASE("hover-style type resolution names the module on an import alias and its uses") {
+    mod::overlay_loader         loader;
+    const std::filesystem::path helper_path{"helper.gh"};
+    const std::filesystem::path main_path{"main.gh"};
+    CHECK(loader.add(helper_path, "pub const value := 42;\n"));
+    CHECK(loader.add(main_path,
+                     "import \"helper.gh\" as helper;\n"
+                     "pub const x := helper::value;\n"));
+
+    auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
+    const auto module{UNWRAP(session->analyze(main_path))};
+
+    const auto  alias_id{UNWRAP(lsp::identifier_at(*module, {0, 25}))};
+    const auto& alias_type{UNWRAP(module->get_sema_type_opt(alias_id))};
+    CHECK(alias_type.to_string() == "module helper");
+
+    const auto  use_id{UNWRAP(lsp::identifier_at(*module, {1, 18}))};
+    const auto& use_type{UNWRAP(module->get_sema_type_opt(use_id))};
+    CHECK(use_type.to_string() == "module helper");
+}
+
 TEST_CASE("hover-style type resolution shows the null-terminated sentinel on array/slice types") {
     mod::overlay_loader         loader;
     const std::filesystem::path path{"test_position_index_null_terminated.gh"};

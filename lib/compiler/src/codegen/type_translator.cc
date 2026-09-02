@@ -8,6 +8,7 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Type.h>
 #include <stdx/assert.hh>
+#include <stdx/profiler.hh>
 #include <stdx/types.hh>
 
 #include "compiler/sema/type.hh"
@@ -15,6 +16,7 @@
 namespace ghoti::codegen {
 
 auto type_translator::translate(const sema::type& type) -> llvm::Type* {
+    PROFILE_FUNCTION();
     switch (type.get_kind()) {
     case sema::type_kind::I32:
     case sema::type_kind::U32:       return get_int32_ty();
@@ -60,6 +62,7 @@ auto type_translator::translate(const sema::type& type) -> llvm::Type* {
 
 auto type_translator::translate_function_type(const sema::types::function& fn)
     -> llvm::FunctionType* {
+    PROFILE_FUNCTION();
     auto*                    ret_ty{translate(fn.return_type)};
     std::vector<llvm::Type*> param_types;
     param_types.reserve(fn.params.size());
@@ -71,6 +74,7 @@ auto type_translator::translate_function_type(const sema::types::function& fn)
 }
 
 auto type_translator::translate_slice_type() -> llvm::StructType* {
+    PROFILE_FUNCTION();
     const std::vector<llvm::Type*> elements{get_ptr_ty(), get_usize_ty()};
     return llvm::StructType::get(context_, elements);
 }
@@ -116,15 +120,18 @@ auto type_translator::get_ptr_ty() const noexcept -> llvm::PointerType* {
 }
 
 auto type_translator::translate_slice(const sema::types::slice&) -> llvm::Type* {
+    PROFILE_FUNCTION();
     return translate_slice_type();
 }
 
 auto type_translator::translate_array(const sema::types::array& a) -> llvm::Type* {
+    PROFILE_FUNCTION();
     return llvm::ArrayType::get(translate(a.underlying), a.len);
 }
 
 auto type_translator::translate_struct(const sema::types::struct_t& s, const sema::type& original)
     -> llvm::Type* {
+    PROFILE_FUNCTION();
     if (const auto it{struct_cache_.find(&original)}; it != struct_cache_.end()) {
         return it->second;
     }
@@ -141,6 +148,7 @@ auto type_translator::translate_struct(const sema::types::struct_t& s, const sem
 
 auto type_translator::translate_union(const sema::types::union_t& u, const sema::type& original)
     -> llvm::Type* {
+    PROFILE_FUNCTION();
     if (const auto it{union_cache_.find(&original)}; it != union_cache_.end()) {
         return it->second;
     }
@@ -180,11 +188,13 @@ auto type_translator::translate_union(const sema::types::union_t& u, const sema:
 }
 
 auto type_translator::translate_enum(const sema::types::enum_t& e) -> llvm::Type* {
+    PROFILE_FUNCTION();
     return translate(e.underlying);
 }
 
 auto type_translator::translate_closure(const sema::types::closure_t& c, const sema::type& original)
     -> llvm::Type* {
+    PROFILE_FUNCTION();
     if (const auto it{closure_cache_.find(&original)}; it != closure_cache_.end()) {
         return it->second;
     }

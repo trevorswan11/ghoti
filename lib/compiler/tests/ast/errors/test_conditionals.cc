@@ -88,6 +88,21 @@ TEST_CASE("Illegal match catch-all") {
                            std::pair{0UZ, 18UZ}});
 }
 
+TEST_CASE("Catch-all cannot be part of a multi-value match arm") {
+    helpers::test_parser_fail(
+        "match (a) { _, b => c, };",
+        syntax::diagnostic{"A catch-all '_' arm cannot list additional patterns",
+                           syntax::error::ILLEGAL_MATCH_CATCH_ALL,
+                           0,
+                           15});
+    helpers::test_parser_fail(
+        "match (a) { b, _ => c, };",
+        syntax::diagnostic{"A catch-all '_' arm cannot list additional patterns",
+                           syntax::error::ILLEGAL_MATCH_CATCH_ALL,
+                           0,
+                           15});
+}
+
 TEST_CASE("Illegal match arm capture modifier on a discarded capture") {
     helpers::test_parser_fail("match (a) { b => |&mut _| c, };",
                               syntax::diagnostic{syntax::error::ILLEGAL_IDENTIFIER, 0, 23});

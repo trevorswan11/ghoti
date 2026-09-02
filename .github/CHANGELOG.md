@@ -81,3 +81,26 @@
 - Per-monomorphization body typing and folded `constexpr` arguments now survive cross-module resolution, fixing `[n]T` with a `constexpr n` and type-constructor member `@this()` shapes across module boundaries
 - `^r` on a reference-typed value now yields `^T` aliasing the referent (like C++ `&ref`), instead of `^&T` pointing at the reference's own storage
     - `&r` on an already-reference value is still rejected
+
+# v0.3.0
+
+## alpha.1
+- Fix a bug where cross module re-exported symbols would break codegen (#199)
+- Fix a bug where the LSP would not autocomplete builtin functions (#193)
+- Fix a bug where the LSP would not show type information above import statement identifiers (#192)
+- Fix a bug where functions would show the GIR '->' return type notation instead of the ':' one in LSP hover (#195)
+- Fix a bug where mutability and volatile modifiers would not be included in the stringified representations of types (#194)
+- Prevent unsupported declaration modifiers from being used in local functions
+
+## alpha.2
+- Add support for freestanding linux (excluding powerpc64le / powerpc)
+    - Previously segfaulted due to _start never being defined
+- Add `match constexpr` construct for multi-pattern constexpr-pruned 'branching'
+    - Pattern are checked to make sure conditions do not overlap
+    - Same semantics as `if constexpr`, only resolves the types in the chosen arm
+- Add ranges to match expression parser
+    - Was handled in emitter but I had missed it in the allowed pattern handles
+- Allow multiple patterns to be used in a match arm
+    - Captures can be used if all patterns are the same type
+- Add profiling hooks to various steps in the compilation pipeline
+    - Enabled by building with -Dprofile

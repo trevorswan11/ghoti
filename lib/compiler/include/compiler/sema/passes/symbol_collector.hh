@@ -136,13 +136,17 @@ class symbol_collector {
         return new_idx;
     }
 
+    // Whether a name declared right now would land directly in a struct/union/enum body
+    [[nodiscard]] auto declaring_into_aggregate() const -> bool {
+        return !aggregate_table_stack_.empty() && aggregate_table_stack_.back().first == table_idx_;
+    }
+
     template <typename SymbolicVariant, typename... Args>
     auto try_declare(std::string_view name, Args&&... args) -> bool {
         const SymbolicVariant node{std::forward<Args>(args)...};
 
         // Names declared directly into an aggregate's own table are namespaced by that type
-        const bool into_aggregate{!aggregate_table_stack_.empty() &&
-                                  aggregate_table_stack_.back().first == table_idx_};
+        const bool into_aggregate{declaring_into_aggregate()};
         const bool shadows_own_type{into_aggregate &&
                                     !aggregate_table_stack_.back().second.empty() &&
                                     name == aggregate_table_stack_.back().second};

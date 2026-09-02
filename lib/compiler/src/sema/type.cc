@@ -14,6 +14,7 @@
 #include <stdx/fixed/enum_map.hh>
 #include <stdx/types.hh>
 
+#include "compiler/module/module.hh"
 #include "support/string_utils.hh"
 
 namespace ghoti::sema {
@@ -21,6 +22,18 @@ namespace ghoti::sema {
 namespace {
 
 using type_mapping = std::pair<type_kind, std::string_view>;
+
+// The qualifier a `^`/`&`/`[]` container spells before its element
+auto container_qualifier(const type& container) -> std::string_view {
+    if (container.is_volatile()) { return container.is_constant() ? "volatile " : "mut volatile "; }
+    return container.is_constant() ? "" : "mut ";
+}
+
+// A bare `volatile T` / `mut volatile T` type carries its qualifier on its own key
+auto leaf_qualifier(const type& leaf) -> std::string_view {
+    if (!leaf.is_volatile()) { return ""; }
+    return leaf.is_constant() ? "volatile " : "mut volatile ";
+}
 
 constexpr auto TYPE_KIND_NAMES{[] {
     stdx::fixed::enum_map<type_kind, string_utils::lowercase_str<32>> map{};
@@ -40,24 +53,38 @@ auto type_kind_display_name(type_kind kind) noexcept -> std::string_view {
 
 auto type::to_string() const -> std::string {
     return data_.visit(
-        [](types::pointer ptr) { return fmt::format("^{}", ptr.underlying.to_string()); },
-        [](types::reference ref) { return fmt::format("&{}", ref.underlying.to_string()); },
-        [](types::slice slice) {
-            return fmt::format(
-                "[{}]{}", slice.null_terminated ? ":0" : "", slice.underlying.to_string());
+        [this](types::pointer ptr) {
+            return fmt::format("^{}{}", container_qualifier(*this), ptr.underlying.to_string());
         },
-        [](types::array arr) {
-            return fmt::format(
-                "[{}{}]{}", arr.len, arr.null_terminated ? ":0" : "", arr.underlying.to_string());
+        [this](types::reference ref) {
+            return fmt::format("&{}{}", container_qualifier(*this), ref.underlying.to_string());
+        },
+        [this](types::slice slice) {
+            return fmt::format("[{}]{}{}",
+                               slice.null_terminated ? ":0" : "",
+                               container_qualifier(*this),
+                               slice.underlying.to_string());
+        },
+        [this](types::array arr) {
+            return fmt::format("[{}{}]{}{}",
+                               arr.len,
+                               arr.null_terminated ? ":0" : "",
+                               container_qualifier(*this),
+                               arr.underlying.to_string());
         },
         [](types::function fn) {
             auto params_str{fmt::to_string(fmt::join(
                 fn.params | std::views::transform([](type* param) { return param->to_string(); }),
                 ", "))};
             if (fn.is_variadic) { params_str += params_str.empty() ? "..." : ", ..."; }
-            return fmt::format("fn({}) -> {}", params_str, fn.return_type.to_string());
+            return fmt::format("fn({}): {}", params_str, fn.return_type.to_string());
         },
-        [this](const auto&) { return std::string{type_kind_display_name(get_kind())}; });
+        [](types::module mod) {
+            return fmt::format("module {}", mod.imported.path.stem().string());
+        },
+        [this](const auto&) {
+            return fmt::format("{}{}", leaf_qualifier(*this), type_kind_display_name(get_kind()));
+        });
 }
 
 auto type_pool::get_or_emplace(const types::key_t& key) -> gsl::not_null<type*> {

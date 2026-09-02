@@ -1,9 +1,13 @@
 #include "compiler/sema/passes/symbol_collector.hh"
 
+#include <array>
+#include <stdx/fixed/vector.hh>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <gsl/pointers>
 #include <gsl/span>
 #include <stdx/assert.hh>
@@ -29,10 +33,33 @@
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
+#include "compiler/syntax/keywords.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
 
 namespace ghoti::sema {
+
+namespace {
+
+// Modifiers that only mean something on a module-scope (or aggregate static-member) declarations
+auto function_local_illegal_modifiers(const ast::decl_stmt& decl) {
+    using ast::decl_modifiers;
+    static constexpr std::array<std::pair<decl_modifiers, std::string_view>, 5> disallowed{{
+        {decl_modifiers::PUBLIC, syntax::keywords::PUBLIC.name},
+        {decl_modifiers::EXTERN, syntax::keywords::EXTERN.name},
+        {decl_modifiers::EXPORT, syntax::keywords::EXPORT.name},
+        {decl_modifiers::THREADLOCAL, syntax::keywords::THREADLOCAL.name},
+        {decl_modifiers::WEAK, syntax::keywords::WEAK.name},
+    }};
+
+    stdx::fixed::vector<std::string_view, disallowed.size()> found;
+    for (const auto& [flag, spelling] : disallowed) {
+        if (decl.has_modifier(flag)) { found.emplace_back(spelling); }
+    }
+    return found;
+}
+
+} // namespace
 
 auto symbol_collector::collect_symbols(mod::module& module, context& ctx) -> mod::module_state {
     PROFILE_FUNCTION();
@@ -321,7 +348,7 @@ auto symbol_collector::visit(ast::node_id, const ast::match_expr& match) -> void
         const auto  new_idx{ctx_.registry.create()};
         const scope s{table_stack_, new_idx, table_idx_};
 
-        collect(arm.pattern);
+        for (const auto& pattern : arm.patterns) { collect(pattern); }
         if (arm.capture && (*arm.capture)->get_kind() == ast::node_kind::IDENTIFIER_EXPRESSION) {
             const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(*arm.capture)};
             try_declare<symbols::match_capture>(ident.name, *arm.capture);
@@ -466,6 +493,18 @@ auto symbol_collector::visit(ast::node_id id, const ast::decl_stmt& decl) -> voi
     const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(decl.name)};
     const auto  name{ident.name};
     collecting_.add_identifier_position(decl.name);
+
+    if (in_function_scope_ && !declaring_into_aggregate()) {
+        if (const auto illegal{function_local_illegal_modifiers(decl)}; !illegal.empty()) {
+            ctx_.diags.emplace_back(
+                fmt::format("Modifier{} '{}' cannot be used on a declaration local to a function",
+                            illegal.size() > 1 ? "s" : "",
+                            fmt::join(illegal, "', '")),
+                error::ILLEGAL_LOCAL_DECL_MODIFIER,
+                collecting_.ast.location_of(id));
+        }
+    }
+
     if (!try_declare<symbols::node_t>(name, id)) { return; };
     if (!decl.value) { return; }
 
@@ -574,7 +613,8 @@ auto symbol_collector::visit(ast::node_id id, const ast::import_stmt& import_stm
         collect_symbols(*imported_mod, new_ctx);
     }
 
-    if (import_stmt.alias) { collecting_.add_identifier_position(*import_stmt.alias); }
+    const auto [name_handle, _]{import_stmt.get_name(collecting_.ast)};
+    collecting_.add_identifier_position(name_handle);
     try_declare<symbols::node_t>(alias, id);
     if (imported_mod && !imported_mod->is_errored()) {
         // Its much easier for other steps to get the enclosing module if we resolve now

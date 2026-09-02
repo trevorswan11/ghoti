@@ -10,6 +10,7 @@
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/module/module.hh"
+#include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/keywords.hh"
 #include "support/diagnostic.hh"
 
@@ -82,6 +83,13 @@ auto completion_items(const mod::module& module, source_location target) -> nloh
         out.push_back({
             {"label", std::string{keyword.name}},
             {"kind", completion_kind::KEYWORD},
+        });
+    }
+
+    for (const auto& builtin : syntax::ALL_BUILTINS) {
+        out.push_back({
+            {"label", std::string{builtin.name}},
+            {"kind", completion_kind::FUNCTION},
         });
     }
 

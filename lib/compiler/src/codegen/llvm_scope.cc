@@ -19,6 +19,7 @@
 #include <llvm/Target/TargetMachine.h>
 #include <stdx/enum.hh>
 #include <stdx/harness/hooks.hh>
+#include <stdx/profiler.hh>
 #include <stdx/utility.hh>
 
 #include "compiler/codegen/linker.hh"
@@ -29,6 +30,7 @@
 namespace ghoti::codegen {
 
 auto llvm_init_warmup() -> void {
+    PROFILE_FUNCTION();
     stdx::untracked_scope untracked_guard;
     codegen::initialize_all_targets();
     using namespace std::string_view_literals;

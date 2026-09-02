@@ -29,6 +29,7 @@
 #include <stdx/assert.hh>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
+#include <stdx/profiler.hh>
 #include <stdx/types.hh>
 
 #include "compiler/ast/attributes.hh"
@@ -86,6 +87,7 @@ llvm_lowering::llvm_lowering(llvm::LLVMContext& context, std::string_view module
       builder_{context_}, types_{context_, *llvm_module_} {}
 
 auto llvm_lowering::to_ir_string(const llvm::Module& mod) -> std::string {
+    PROFILE_FUNCTION();
     std::string              out;
     llvm::raw_string_ostream os{out};
     mod.print(os, nullptr);
@@ -93,26 +95,47 @@ auto llvm_lowering::to_ir_string(const llvm::Module& mod) -> std::string {
 }
 
 auto llvm_lowering::lower(const gir::module& gir_mod) -> stdx::box<llvm::Module> {
+    PROFILE_FUNCTION();
     gir_module_.emplace(gir_mod);
-    for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
-    for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
-    for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
+    {
+        PROFILE_SCOPE("llvm_lowering: declare functions");
+        for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
+    }
+    {
+        PROFILE_SCOPE("llvm_lowering: lower globals");
+        for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
+    }
+    {
+        PROFILE_SCOPE("llvm_lowering: lower functions");
+        for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
+    }
     return std::move(llvm_module_);
 }
 
 auto llvm_lowering::lower_executable(const gir::module& gir_mod, std::string_view user_main_name)
     -> stdx::box<llvm::Module> {
+    PROFILE_FUNCTION();
     is_executable_  = true;
     user_main_name_ = user_main_name;
     gir_module_.emplace(gir_mod);
-    for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
-    for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
-    for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
+    {
+        PROFILE_SCOPE("llvm_lowering: declare functions");
+        for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
+    }
+    {
+        PROFILE_SCOPE("llvm_lowering: lower globals");
+        for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
+    }
+    {
+        PROFILE_SCOPE("llvm_lowering: lower functions");
+        for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
+    }
     emit_main_entry_wrapper(user_main_name_);
     return std::move(llvm_module_);
 }
 
 auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> llvm::Function* {
+    PROFILE_FUNCTION();
     auto* user_fn{llvm_module_->getFunction("_ghoti_main")};
     if (!user_fn) { user_fn = llvm_module_->getFunction(user_main_name); }
     ASSERT(user_fn, "User main function not found in LLVM module");
@@ -158,10 +181,110 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
         builder_.CreateRet(ret_i32);
     }
 
+    if (triple.isOSLinux()) { emit_freestanding_start(main_fn); }
     return main_fn;
 }
 
+auto llvm_lowering::emit_freestanding_start(llvm::Function* main_fn) -> void {
+    PROFILE_FUNCTION();
+    const llvm::Triple triple{llvm_module_->getTargetTriple()};
+
+    std::string asm_text;
+    switch (triple.getArch()) {
+    case llvm::Triple::x86_64:
+        asm_text = "xorl %ebp, %ebp\n\t"    // mark the outermost frame
+                   "movq (%rsp), %rdi\n\t"  // argc
+                   "leaq 8(%rsp), %rsi\n\t" // argv
+                   "andq $$-16, %rsp\n\t"   // realign for the SysV call
+                   "call main\n\t"
+                   "movl %eax, %edi\n\t"  // exit code <- main()'s return
+                   "movl $$231, %eax\n\t" // __NR_exit_group
+                   "syscall\n\t"
+                   "ud2\n\t";
+        break;
+    case llvm::Triple::aarch64:
+        asm_text = "mov x29, xzr\n\t"
+                   "mov x30, xzr\n\t"
+                   "ldr x0, [sp]\n\t"   // argc (read before realigning sp)
+                   "add x1, sp, #8\n\t" // argv
+                   "mov x2, sp\n\t"
+                   "and x2, x2, #-16\n\t"
+                   "mov sp, x2\n\t"
+                   "bl main\n\t"
+                   "mov w8, #94\n\t" // __NR_exit_group
+                   "svc #0\n\t"
+                   "brk #0\n\t";
+        break;
+    case llvm::Triple::riscv64:
+        asm_text = "li s0, 0\n\t"
+                   "ld a0, 0(sp)\n\t"   // argc
+                   "addi a1, sp, 8\n\t" // argv
+                   "andi sp, sp, -16\n\t"
+                   "call main\n\t"
+                   "li a7, 94\n\t" // __NR_exit_group  (asm-generic table)
+                   "ecall\n\t"
+                   "unimp\n\t";
+        break;
+    case llvm::Triple::riscv32:
+        asm_text = "li s0, 0\n\t"
+                   "lw a0, 0(sp)\n\t"   // argc (32-bit word)
+                   "addi a1, sp, 4\n\t" // argv
+                   "andi sp, sp, -16\n\t"
+                   "call main\n\t"
+                   "li a7, 94\n\t" // __NR_exit_group  (asm-generic table)
+                   "ecall\n\t"
+                   "unimp\n\t";
+        break;
+    case llvm::Triple::arm:
+    case llvm::Triple::thumb:
+        // One template for A32 and T32. The kernel delivers an 8-byte aligned sp at
+        // entry (AAPCS), so no realign is needed before the call to `main`
+        asm_text = "ldr r0, [sp, #0]\n\t" // argc
+                   "add r1, sp, #4\n\t"   // argv
+                   "bl main\n\t"
+                   "movs r7, #248\n\t" // __NR_exit_group  (ARM EABI)
+                   "svc #0\n\t"
+                   "udf #0\n\t";
+        break;
+    case llvm::Triple::loongarch64:
+        // LoongArch registers are spelled `$a0` etc.; `$` is the operand sigil in
+        // an LLVM asm string, so each one is escaped as `$$`.
+        asm_text = "move $$fp, $$zero\n\t"
+                   "ld.d $$a0, $$sp, 0\n\t"   // argc
+                   "addi.d $$a1, $$sp, 8\n\t" // argv
+                   "bl main\n\t"
+                   "ori $$a7, $$zero, 94\n\t" // __NR_exit_group  (asm-generic table)
+                   "syscall 0\n\t"
+                   "break 0\n\t";
+        break;
+    default:
+        // Linux arch with a diagnostic before lowering runs. Kept as a safe no-op.
+        return;
+    }
+
+    auto* void_ty{llvm::Type::getVoidTy(context_)};
+    auto* start_ty{llvm::FunctionType::get(void_ty, false)};
+    auto* start_fn{llvm::Function::Create(
+        start_ty, llvm::Function::ExternalLinkage, "_start", llvm_module_.get())};
+    start_fn->addFnAttr(llvm::Attribute::Naked);
+    start_fn->addFnAttr(llvm::Attribute::NoInline);
+    start_fn->addFnAttr(llvm::Attribute::NoUnwind);
+    start_fn->addFnAttr(llvm::Attribute::NoBuiltin);
+    start_fn->addFnAttr("no-stack-arg-probe", "true");
+
+    auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", start_fn)};
+    builder_.SetInsertPoint(entry_bb);
+
+    auto* asm_ty{llvm::FunctionType::get(void_ty, false)};
+    auto* start_asm{
+        llvm::InlineAsm::get(asm_ty, asm_text, "~{memory}", true, false, llvm::InlineAsm::AD_ATT)};
+    builder_.CreateCall(start_asm, {});
+    builder_.CreateUnreachable();
+    llvm::appendToUsed(*llvm_module_, {start_fn, main_fn});
+}
+
 auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_args) -> llvm::Value* {
+    PROFILE_FUNCTION();
     auto*              slice_ty{types_.translate_slice_type()};
     const llvm::Triple triple{llvm_module_->getTargetTriple()};
 
@@ -381,6 +504,7 @@ auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_arg
 auto llvm_lowering::lower_test_executable(const gir::module&             gir_mod,
                                           stdx::option<std::string_view> user_runner_name,
                                           bool recover_args) -> stdx::box<llvm::Module> {
+    PROFILE_FUNCTION();
     user_main_name_ =
         user_runner_name.transform([](auto sv) { return std::string{sv}; }).value_or(std::string{});
     is_executable_ = true;
@@ -395,6 +519,7 @@ auto llvm_lowering::lower_test_executable(const gir::module&             gir_mod
 
 auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod, bool recover_args)
     -> llvm::Function* {
+    PROFILE_FUNCTION();
     auto* main_fn_ty{llvm::FunctionType::get(
         types_.get_int32_ty(), {types_.get_int32_ty(), types_.get_ptr_ty()}, false)};
     auto* main_fn{llvm::Function::Create(
@@ -500,10 +625,14 @@ auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod, bool rec
         builder_.CreateRet(builder_.getInt32(0));
     }
 
+    // Same freestanding-entry story as a normal executable (see emit_main_entry_wrapper).
+    if (triple.isOSLinux()) { emit_freestanding_start(main_fn); }
+
     return main_fn;
 }
 
 auto llvm_lowering::get_or_create_test_failed_flag() -> llvm::GlobalVariable* {
+    PROFILE_FUNCTION();
     if (auto* gvar{llvm_module_->getGlobalVariable("__ghoti_test_failed", true)}) { return gvar; }
     return new llvm::GlobalVariable(*llvm_module_,
                                     builder_.getInt1Ty(),
@@ -514,6 +643,7 @@ auto llvm_lowering::get_or_create_test_failed_flag() -> llvm::GlobalVariable* {
 }
 
 auto llvm_lowering::get_or_create_test_skipped_flag() -> llvm::GlobalVariable* {
+    PROFILE_FUNCTION();
     if (auto* gvar{llvm_module_->getGlobalVariable("__ghoti_test_skipped", true)}) { return gvar; }
     return new llvm::GlobalVariable(*llvm_module_,
                                     builder_.getInt1Ty(),
@@ -524,6 +654,7 @@ auto llvm_lowering::get_or_create_test_skipped_flag() -> llvm::GlobalVariable* {
 }
 
 auto llvm_lowering::define_test_take_skipped() -> void {
+    PROFILE_FUNCTION();
     auto* i1_ty{builder_.getInt1Ty()};
     auto* fn{llvm_module_->getFunction("__ghoti_test_take_skipped")};
     if (!fn) {
@@ -548,6 +679,7 @@ auto llvm_lowering::define_test_take_skipped() -> void {
 auto llvm_lowering::emit_context_handler_call(const gir::instruction&   inst,
                                               std::string_view          handler_name,
                                               gsl::span<const usize, 4> order) -> void {
+    PROFILE_FUNCTION();
     auto* handler_fn{llvm_module_->getFunction(handler_name)};
     if (!handler_fn) { return; }
 
@@ -593,6 +725,7 @@ auto llvm_lowering::emit_context_handler_call(const gir::instruction&   inst,
 
 auto llvm_lowering::emit_lowered_panic(std::string_view message, const gir::instruction& inst)
     -> void {
+    PROFILE_FUNCTION();
     auto* panic_fn{llvm_module_->getFunction("panic_handler")};
     if (!panic_fn || panic_fn->getFunctionType()->getNumParams() != 4) {
         auto* trap{
@@ -625,6 +758,7 @@ auto llvm_lowering::emit_lowered_panic(std::string_view message, const gir::inst
 auto llvm_lowering::emit_arith_guard(llvm::Value*            bad,
                                      std::string_view        message,
                                      const gir::instruction& inst) -> void {
+    PROFILE_FUNCTION();
     auto* cur_fn{builder_.GetInsertBlock()->getParent()};
     auto* fail_bb{llvm::BasicBlock::Create(context_, "safety.fail", cur_fn)};
     auto* ok_bb{llvm::BasicBlock::Create(context_, "safety.ok", cur_fn)};
@@ -641,6 +775,7 @@ auto llvm_lowering::emit_checked_arith(const gir::instruction& inst,
                                        llvm::Value*            lhs,
                                        llvm::Value*            rhs,
                                        bool                    is_signed) -> llvm::Value* {
+    PROFILE_FUNCTION();
     auto* int_ty{llvm::dyn_cast<llvm::IntegerType>(lhs->getType())};
     if (!int_ty) { return nullptr; }
     const unsigned width{int_ty->getBitWidth()};
@@ -693,6 +828,7 @@ auto llvm_lowering::emit_checked_arith(const gir::instruction& inst,
 }
 
 auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) -> llvm::Constant* {
+    PROFILE_FUNCTION();
     if (!ty) { return nullptr; }
     if (const auto i{cv.as_opt<i64>()}) {
         return llvm::ConstantInt::get(ty, static_cast<u64>(*i), true);
@@ -750,6 +886,7 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
 }
 
 auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVariable* {
+    PROFILE_FUNCTION();
     if (const auto it{globals_.find(g.name)}; it != globals_.end()) {
         if (auto* existing{llvm::dyn_cast<llvm::GlobalVariable>(it->second)}) { return existing; }
     }
@@ -798,6 +935,7 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
 }
 
 auto llvm_lowering::ensure_reserved_symbols() -> void {
+    PROFILE_FUNCTION();
     if (reserved_symbols_built_) { return; }
     reserved_symbols_built_ = true;
     if (!gir_module_) { return; }
@@ -818,6 +956,7 @@ auto llvm_lowering::private_symbol_name(std::string_view name) const -> std::str
 }
 
 auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function* {
+    PROFILE_FUNCTION();
     if (const auto it{globals_.find(fn.get_name())}; it != globals_.end()) {
         if (auto* existing{llvm::dyn_cast<llvm::Function>(it->second)}) { return existing; }
     }
@@ -890,6 +1029,7 @@ auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function*
 }
 
 auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
+    PROFILE_FUNCTION();
     auto* llvm_fn{declare_function(fn)};
     if (fn.get_linkage() == gir::linkage::EXTERN || fn.get_segments().empty()) { return llvm_fn; }
     clear_locals();
@@ -971,6 +1111,7 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
 
 auto llvm_lowering::lower_value(const gir::value& val, const sema::type* expected_type)
     -> llvm::Value* {
+    PROFILE_FUNCTION();
     return val.data.visit(
         [this](gir::local_id loc) -> llvm::Value* {
             const auto it{locals_.find(loc)};
@@ -1029,6 +1170,7 @@ auto llvm_lowering::lower_value(const gir::value& val, const sema::type* expecte
 }
 
 auto llvm_lowering::lower_instruction(const gir::instruction& inst) -> void {
+    PROFILE_FUNCTION();
     llvm::Value* result_val{nullptr};
 
     switch (inst.kind) {
@@ -1077,6 +1219,7 @@ auto llvm_lowering::lower_instruction(const gir::instruction& inst) -> void {
 }
 
 auto llvm_lowering::emit_alloca(const gir::instruction& inst) -> llvm::Value* {
+    PROFILE_FUNCTION();
     ASSERT(inst.type, "Alloca requires a type");
     auto* elem_ty{types_.translate(*inst.type)};
     if (elem_ty->isVoidTy()) {
@@ -1091,6 +1234,7 @@ auto llvm_lowering::emit_alloca(const gir::instruction& inst) -> llvm::Value* {
 }
 
 auto llvm_lowering::emit_load(const gir::instruction& inst) -> llvm::Value* {
+    PROFILE_FUNCTION();
     ASSERT(!inst.operands.empty(), "Load requires a pointer operand");
     ASSERT(inst.type, "Load requires a target type");
     auto* elem_ty{types_.translate(*inst.type)};
@@ -1116,6 +1260,7 @@ auto llvm_lowering::emit_load(const gir::instruction& inst) -> llvm::Value* {
 }
 
 auto llvm_lowering::emit_store(const gir::instruction& inst) -> void {
+    PROFILE_FUNCTION();
     const auto is_volatile{inst.is_volatile()};
     if (inst.operands.size() >= 2) {
         auto* dest_ptr{lower_value(inst.operands[0])};
@@ -1137,6 +1282,7 @@ auto llvm_lowering::emit_store(const gir::instruction& inst) -> void {
 }
 
 auto llvm_lowering::emit_get_element_ptr(const gir::instruction& inst) -> llvm::Value* {
+    PROFILE_FUNCTION();
     ASSERT(inst.operands.size() >= 2, "GEP requires base and at least one index");
     auto* base_ptr{lower_value(inst.operands[0])};
     ASSERT(base_ptr, "GEP base pointer must be non-null");
@@ -1245,6 +1391,7 @@ auto llvm_lowering::emit_get_element_ptr(const gir::instruction& inst) -> llvm::
 }
 
 auto llvm_lowering::emit_address_of(const gir::instruction& inst) -> llvm::Value* {
+    PROFILE_FUNCTION();
     ASSERT(!inst.operands.empty(), "AddressOf requires an operand");
     auto* val{lower_value(inst.operands[0])};
     if (inst.result) { set_local(*inst.result, val); }
@@ -1252,6 +1399,7 @@ auto llvm_lowering::emit_address_of(const gir::instruction& inst) -> llvm::Value
 }
 
 auto llvm_lowering::emit_deref(const gir::instruction& inst) -> llvm::Value* {
+    PROFILE_FUNCTION();
     ASSERT(!inst.operands.empty(), "Deref requires an operand");
     auto* ptr{lower_value(inst.operands[0])};
     if (inst.result) { set_local(*inst.result, ptr); }
@@ -1259,6 +1407,7 @@ auto llvm_lowering::emit_deref(const gir::instruction& inst) -> llvm::Value* {
 }
 
 auto llvm_lowering::emit_global_addr(const gir::instruction& inst) -> llvm::Value* {
+    PROFILE_FUNCTION();
     ASSERT(inst.callee_name, "global_addr requires the global's name");
     // Resolve by GIR name through `globals_` first to prevent ABI clash
     llvm::GlobalVariable* gv{nullptr};
@@ -1279,6 +1428,7 @@ auto llvm_lowering::emit_global_addr(const gir::instruction& inst) -> llvm::Valu
 }
 
 auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {
+    PROFILE_FUNCTION();
     ASSERT(inst.operands.size() >= 2, "Binary instruction requires at least 2 operands");
     auto* lhs{lower_value(inst.operands[0])};
     auto* rhs{lower_value(inst.operands[1])};
@@ -1321,6 +1471,7 @@ auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {
 }
 
 auto llvm_lowering::emit_unary(const gir::instruction& inst) -> llvm::Value* {
+    PROFILE_FUNCTION();
     ASSERT(!inst.operands.empty(), "Unary instruction requires an operand");
     auto* val{lower_value(inst.operands[0])};
     ASSERT(val, "Unary operand must lower to a non-null LLVM value");
@@ -1345,6 +1496,7 @@ auto llvm_lowering::emit_unary(const gir::instruction& inst) -> llvm::Value* {
 }
 
 auto llvm_lowering::emit_comparison(const gir::instruction& inst) -> llvm::Value* {
+    PROFILE_FUNCTION();
     ASSERT(inst.operands.size() >= 2, "Comparison requires 2 operands");
     auto* lhs{lower_value(inst.operands[0])};
     auto* rhs{lower_value(inst.operands[1])};
@@ -1389,6 +1541,7 @@ auto llvm_lowering::emit_comparison(const gir::instruction& inst) -> llvm::Value
 }
 
 auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
+    PROFILE_FUNCTION();
     ASSERT(!inst.operands.empty(), "Cast instruction requires an operand");
     ASSERT(inst.type, "Cast instruction requires a target type");
     auto* val{lower_value(inst.operands[0])};
@@ -1425,6 +1578,7 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
 }
 
 auto llvm_lowering::emit_const(const gir::instruction& inst) -> llvm::Value* {
+    PROFILE_FUNCTION();
     ASSERT(!inst.operands.empty(), "Const instruction requires an operand");
     auto* val{lower_value(inst.operands[0], inst.type ? &*inst.type : nullptr)};
     if (inst.result) { set_local(*inst.result, val); }
@@ -1432,6 +1586,7 @@ auto llvm_lowering::emit_const(const gir::instruction& inst) -> llvm::Value* {
 }
 
 auto llvm_lowering::resolve_named_function(std::string_view ghoti_name) -> llvm::Function* {
+    PROFILE_FUNCTION();
     if (const auto it{globals_.find(ghoti_name)}; it != globals_.end()) {
         if (auto* fn{llvm::dyn_cast<llvm::Function>(it->second)}) { return fn; }
     }
@@ -1439,6 +1594,7 @@ auto llvm_lowering::resolve_named_function(std::string_view ghoti_name) -> llvm:
 }
 
 auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
+    PROFILE_FUNCTION();
     if (inst.callee_name) {
         if (auto* callee_fn{resolve_named_function(*inst.callee_name)}) {
             std::vector<llvm::Value*> args;
@@ -1530,6 +1686,7 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
 }
 
 auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Value* {
+    PROFILE_FUNCTION();
     stdx::option<syntax::token_type_t> builtin_tok;
     if (inst.callee_name) {
         builtin_tok = syntax::get_builtin_opt(*inst.callee_name);
@@ -1922,6 +2079,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
 }
 
 auto llvm_lowering::emit_inline_asm(const gir::instruction& inst) -> llvm::Value* {
+    PROFILE_FUNCTION();
     ASSERT(inst.asm_info, "INLINE_ASM instruction requires asm_info");
     const auto& info{*inst.asm_info};
 
@@ -1985,6 +2143,7 @@ auto llvm_lowering::emit_inline_asm(const gir::instruction& inst) -> llvm::Value
 }
 
 auto llvm_lowering::emit_ret(const gir::instruction& inst) -> void {
+    PROFILE_FUNCTION();
     if (inst.operands.empty() || (inst.type && inst.type->get_kind() == sema::type_kind::VOID_)) {
         builder_.CreateRetVoid();
         return;
@@ -2012,6 +2171,7 @@ auto llvm_lowering::emit_ret(const gir::instruction& inst) -> void {
 }
 
 auto llvm_lowering::emit_goto(const gir::instruction& inst) -> void {
+    PROFILE_FUNCTION();
     ASSERT(inst.target_segment, "GOTO instruction requires a target segment");
     const auto it{segment_blocks_.find(*inst.target_segment)};
     ASSERT(it != segment_blocks_.end(), "Target segment block not found");
@@ -2019,6 +2179,7 @@ auto llvm_lowering::emit_goto(const gir::instruction& inst) -> void {
 }
 
 auto llvm_lowering::emit_cond_goto(const gir::instruction& inst) -> void {
+    PROFILE_FUNCTION();
     ASSERT(inst.true_segment && inst.false_segment,
            "COND_GOTO requires true and false target segments");
     ASSERT(!inst.operands.empty(), "COND_GOTO requires condition operand");

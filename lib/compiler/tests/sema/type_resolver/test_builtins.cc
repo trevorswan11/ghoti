@@ -134,6 +134,32 @@ TEST_CASE("typeOf denotes the wrapped type in a value's or parameter's explicit 
     CHECK(decl_type("call_echo") == i32_type);
 }
 
+TEST_CASE("A return type may depend on a parameter whose type depends on an earlier parameter") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const chain := fn(a: auto, b: @typeOf(a)): @typeOf(b) { return b; };
+        const call_chain := chain(1, 2);
+    )")};
+
+    const auto& i32_type{ctx->get_type(sema::type_kind::I32)};
+    const auto [sym, _, node, type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("call_chain", idx)};
+    CHECK(type == i32_type);
+}
+
+TEST_CASE("A later parameter's type may be a type-constructor call over an earlier parameter") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const Box := fn(T: type): type { return struct { val: T }; };
+        const unbox := fn(a: auto, b: Box(@typeOf(a))): i32 { return b.val; };
+        const boxed: Box(i32) = .{ .val = 2 };
+        const call_unbox := unbox(1, boxed);
+    )")};
+
+    const auto& i32_type{ctx->get_type(sema::type_kind::I32)};
+    const auto [sym, _, node, type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("call_unbox", idx)};
+    CHECK(type == i32_type);
+}
+
 TEST_CASE("Builtin pointer conversions") {
     test_builtin_resolve(
         bis::PTR_FROM_ARRAY,

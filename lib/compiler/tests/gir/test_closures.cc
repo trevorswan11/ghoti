@@ -35,7 +35,7 @@ TEST_CASE("A VALUE capture loads once at env-construction and once at call time"
     const auto dump{helpers::dump_gir(ctx_idx)};
 
     CHECK(dump.contains("fn closure"));
-    CHECK(dump.contains("self: &closure"));
+    CHECK(dump.contains("self: &mut closure"));
     CHECK(dump.contains("alloca closure"));
 }
 
@@ -51,9 +51,9 @@ TEST_CASE("A MUT_REF capture loads the reference once and reads/writes through i
     const auto dump{dump_gir(ctx_idx)};
 
     CHECK(dump.contains("alloca closure"));
-    CHECK(dump.contains("get_element_ptr &i32"));
+    CHECK(dump.contains("get_element_ptr &mut i32"));
     CHECK(dump.contains("fn closure"));
-    CHECK(dump.contains("self: &closure"));
+    CHECK(dump.contains("self: &mut closure"));
 }
 
 TEST_CASE("A capture forwarded through an intermediate function reaches the innermost closure") {
@@ -71,7 +71,7 @@ TEST_CASE("A capture forwarded through an intermediate function reaches the inne
 
     CHECK(dump.contains("alloca closure"));
     CHECK(dump.contains("fn closure"));
-    CHECK(dump.contains("self: &closure"));
+    CHECK(dump.contains("self: &mut closure"));
 }
 
 } // namespace ghoti::tests

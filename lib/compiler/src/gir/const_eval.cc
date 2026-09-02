@@ -15,6 +15,7 @@
 #include <llvm/TargetParser/Triple.h>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
+#include <stdx/profiler.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
@@ -92,6 +93,7 @@ template <typename T>
 } // namespace
 
 auto const_eval::try_eval(ast::node_id id) -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     if (const auto sema_ty{module_->get_sema_type_opt(id)}) {
         if (sema_ty->is_volatile()) { return stdx::none; }
     }
@@ -112,6 +114,7 @@ auto const_eval::try_eval(ast::node_id id) -> stdx::option<const_value> {
 }
 
 auto const_eval::eval(ast::node_id id) -> const_value {
+    PROFILE_FUNCTION();
     auto res{try_eval(id)};
     if (!res || res->is_poison()) {
         ctx_.diags.emplace_back("Expression cannot be evaluated as a compile-time constant",
@@ -123,6 +126,7 @@ auto const_eval::eval(ast::node_id id) -> const_value {
 }
 
 auto const_eval::eval_type_dim(ast::node_id id) -> stdx::option<usize> {
+    PROFILE_FUNCTION();
     const auto val{eval(id)};
     if (val.is_poison()) { return stdx::none; }
 
@@ -144,6 +148,7 @@ auto const_eval::eval_type_dim(ast::node_id id) -> stdx::option<usize> {
 }
 
 auto const_eval::resolve_all_deferred_calls() -> void {
+    PROFILE_FUNCTION();
     for (auto& type_opt : module_->sema_side_tables.explicit_types.values) {
         if (!type_opt) { continue; }
         if (const auto def{type_opt->get_data().as_opt<sema::types::deferred_call>()}) {
@@ -160,6 +165,7 @@ auto const_eval::resolve_all_deferred_calls() -> void {
 }
 
 auto const_eval::resolve_all_deferred_arrays() -> void {
+    PROFILE_FUNCTION();
     resolve_all_deferred_calls();
 
     for (auto& type_opt : module_->sema_side_tables.explicit_types.values) {
@@ -204,6 +210,7 @@ namespace {
 } // namespace
 
 auto const_eval::type_align_of(const sema::type& type, usize ptr_size) -> usize {
+    PROFILE_FUNCTION();
     switch (type.get_kind()) {
     case sema::type_kind::I8:
     case sema::type_kind::U8:
@@ -272,6 +279,7 @@ auto const_eval::type_align_of(const sema::type& type, usize ptr_size) -> usize 
 }
 
 auto const_eval::type_size_of(const sema::type& type, usize ptr_size) -> usize {
+    PROFILE_FUNCTION();
     switch (type.get_kind()) {
     case sema::type_kind::VOID_:     return 0;
     case sema::type_kind::I8:
@@ -357,6 +365,7 @@ auto const_eval::type_size_of(const sema::type& type, usize ptr_size) -> usize {
 }
 
 auto const_eval::force_deferred_array(sema::type& maybe_deferred) -> sema::type& {
+    PROFILE_FUNCTION();
     const auto deferred{maybe_deferred.get_data().as_opt<sema::types::deferred_array>()};
     if (!deferred) { return maybe_deferred; }
     if (auto concrete{resolve_deferred_array(deferred->array, deferred->underlying)}) {
@@ -366,10 +375,12 @@ auto const_eval::force_deferred_array(sema::type& maybe_deferred) -> sema::type&
 }
 
 auto const_eval::force_deferred_array_elements(gsl::span<sema::type*> elements) -> void {
+    PROFILE_FUNCTION();
     for (auto& element : elements) { element = &force_deferred_array(*element); }
 }
 
 auto const_eval::force_deferred_aggregate_fields(sema::type& maybe_aggregate) -> void {
+    PROFILE_FUNCTION();
     if (const auto st{maybe_aggregate.get_data().as_opt<sema::types::struct_t>()}) {
         force_deferred_array_elements(st->fields);
         return;
@@ -380,6 +391,7 @@ auto const_eval::force_deferred_aggregate_fields(sema::type& maybe_aggregate) ->
 }
 
 auto const_eval::force_deferred_indirection_underlying(sema::type& maybe_indirection) -> void {
+    PROFILE_FUNCTION();
     if (const auto ref_data{maybe_indirection.get_data().as_opt<sema::types::reference>()}) {
         auto& underlying{const_cast<sema::type&>(ref_data->underlying)};
         maybe_indirection.resolve<sema::types::reference>(force_deferred_array(underlying));
@@ -392,6 +404,7 @@ auto const_eval::force_deferred_indirection_underlying(sema::type& maybe_indirec
 }
 
 auto const_eval::force_deferred_function_params(sema::type& maybe_fn) -> void {
+    PROFILE_FUNCTION();
     const auto fn_data{maybe_fn.get_data().as_opt<sema::types::function>()};
     if (!fn_data) { return; }
 
@@ -403,6 +416,7 @@ auto const_eval::force_deferred_function_params(sema::type& maybe_fn) -> void {
 
 auto const_eval::resolve_deferred_array(const ast::explicit_array_type& array,
                                         sema::type& item_type) -> stdx::option<sema::type&> {
+    PROFILE_FUNCTION();
     ASSERT(array.dimension, "Deferred array type must have a dimension");
     const auto cv{try_eval(*array.dimension)};
     if (!cv || cv->is_poison()) { return stdx::none; }
@@ -414,6 +428,7 @@ auto const_eval::resolve_deferred_array(const ast::explicit_array_type& array,
 
 auto const_eval::try_resolve_deferred_call(const ast::call_expr& call)
     -> stdx::option<sema::type&> {
+    PROFILE_FUNCTION();
     const auto val{eval_call(ast::node_id::make_invalid(), call)};
     if (!val) { return stdx::none; }
     if (const auto type_opt{val->as_opt<stdx::option<sema::type&>>()}) {
@@ -431,6 +446,7 @@ auto const_eval::try_resolve_deferred_call(const ast::call_expr& call)
 }
 
 auto const_eval::resolve_deferred_call(const ast::call_expr& call) -> sema::type& {
+    PROFILE_FUNCTION();
     if (const auto resolved{try_resolve_deferred_call(call)}) { return *resolved; }
     ctx_.diags.emplace_back("Failed to evaluate compile-time type constructor function",
                             sema::error::CONSTEXPR_EVALUATION_FAILED,
@@ -439,6 +455,7 @@ auto const_eval::resolve_deferred_call(const ast::call_expr& call) -> sema::type
 }
 
 auto const_eval::force_deferred_call(sema::type& maybe_deferred) -> sema::type& {
+    PROFILE_FUNCTION();
     const auto deferred{maybe_deferred.get_data().as_opt<sema::types::deferred_call>()};
     if (!deferred) { return maybe_deferred; }
     const auto resolved{try_resolve_deferred_call(deferred->call)};
@@ -461,6 +478,7 @@ auto const_eval::lookup_local_binding(std::string_view name) const noexcept
 }
 
 auto const_eval::set_local_binding(std::string_view name, const_value val) -> bool {
+    PROFILE_FUNCTION();
     for (auto& frame : call_stack_ | std::views::reverse) {
         if (auto it{frame.bindings.find(name)}; it != frame.bindings.end()) {
             it->second = std::move(val);
@@ -471,6 +489,7 @@ auto const_eval::set_local_binding(std::string_view name, const_value val) -> bo
 }
 
 auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     if (!id.is_valid()) { return stdx::none; }
 
     return module_->ast[id].visit(
@@ -584,6 +603,7 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
 
 auto const_eval::eval_array(ast::node_id id, const ast::array_expr& array)
     -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     // `[]T` / `[N]T` type expressions fold to the slice/array type the resolver assigned them.
     if (array.is_type_expr) {
         if (const auto sema_type{module_->get_sema_type_opt(id)}) {
@@ -608,6 +628,7 @@ auto const_eval::eval_array(ast::node_id id, const ast::array_expr& array)
 
 auto const_eval::eval_index(ast::node_id id, const ast::index_expr& index_expr)
     -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     const auto target_val{try_eval(index_expr.array)};
     const auto idx_val{try_eval(index_expr.index)};
     if (!target_val || !idx_val) { return stdx::none; }
@@ -652,6 +673,7 @@ auto const_eval::eval_index(ast::node_id id, const ast::index_expr& index_expr)
 
 auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& init)
     -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     const auto sema_type{module_->get_sema_type_opt(id)};
 
     if (sema_type) {
@@ -726,6 +748,7 @@ auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& 
 }
 
 auto const_eval::eval_dot(ast::node_id, const ast::dot_expr& dot) -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     const auto& member_name{module_->ast.get_as<ast::identifier_expr>(dot.member).name};
 
     if (const auto obj_ident{module_->ast.get_as_opt<ast::identifier_expr>(dot.object)}) {
@@ -814,6 +837,7 @@ auto const_eval::eval_dot(ast::node_id, const ast::dot_expr& dot) -> stdx::optio
 
 auto const_eval::target_enum_value(std::string_view enum_name, std::string_view member)
     -> const_value {
+    PROFILE_FUNCTION();
     auto&      enum_type{ctx_.get_builtin_type(enum_name)};
     const auto en{enum_type.get_data().as_opt<sema::types::enum_t>()};
 
@@ -834,6 +858,7 @@ auto const_eval::target_enum_value(std::string_view enum_name, std::string_view 
 
 auto const_eval::eval_implicit_access(ast::node_id id, const ast::implicit_access_expr& implicit)
     -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     const auto& member_name{module_->ast.get_as<ast::identifier_expr>(implicit.member).name};
     const auto  sema_type{module_->get_sema_type_opt(id)};
 
@@ -861,9 +886,86 @@ auto const_eval::eval_implicit_access(ast::node_id id, const ast::implicit_acces
     return stdx::none;
 }
 
+auto const_eval::resolve_module_chain(ast::node_id node) -> stdx::option<mod::module&> {
+    PROFILE_FUNCTION();
+    // Base case: a bare identifier naming an imported module in the current scope.
+    if (const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(node)}) {
+        if (!module_->root_table_idx) { return stdx::none; }
+        const auto& table{ctx_.registry.get(*module_->root_table_idx)};
+        const auto  sym{table.get_opt(ident->name)};
+        if (!sym) { return stdx::none; }
+        const auto kind{sym->get_kind_opt()};
+        if (!kind || *kind != sema::symbol_kind::MODULE) { return stdx::none; }
+        const auto snode{sym->get_data().as_opt<sema::symbols::node_t>()};
+        if (!snode) { return stdx::none; }
+        const auto sema_type{module_->get_sema_type_opt(*snode)};
+        if (!sema_type) { return stdx::none; }
+        const auto m_data{sema_type->get_data().as_opt<sema::types::module>()};
+        if (!m_data) { return stdx::none; }
+        return m_data->imported;
+    }
+
+    // Recursive case: `<outer>::<segment>` where `<outer>` itself names a module and
+    // `<segment>` is a module re-exported from it.
+    if (const auto nested{module_->ast.get_as_opt<ast::module_access_expr>(node)}) {
+        const auto outer_mod{resolve_module_chain(nested->outer)};
+        if (!outer_mod || !outer_mod->root_table_idx) { return stdx::none; }
+        const auto& seg_name{module_->ast.get_as<ast::identifier_expr>(nested->inner).name};
+        const auto& table{ctx_.registry.get(*outer_mod->root_table_idx)};
+        const auto  sym{table.get_opt(seg_name)};
+        if (!sym) { return stdx::none; }
+        const auto kind{sym->get_kind_opt()};
+        if (!kind || *kind != sema::symbol_kind::MODULE) { return stdx::none; }
+        const auto snode{sym->get_data().as_opt<sema::symbols::node_t>()};
+        if (!snode) { return stdx::none; }
+        const auto sema_type{outer_mod->get_sema_type_opt(*snode)};
+        if (!sema_type) { return stdx::none; }
+        const auto m_data{sema_type->get_data().as_opt<sema::types::module>()};
+        if (!m_data) { return stdx::none; }
+        return m_data->imported;
+    }
+
+    return stdx::none;
+}
+
+auto const_eval::eval_module_member(mod::module& target_mod, std::string_view member)
+    -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
+    if (!target_mod.root_table_idx) { return stdx::none; }
+    const auto& table{ctx_.registry.get(*target_mod.root_table_idx)};
+
+    const auto sym{table.get_opt(member)};
+    if (!sym) { return stdx::none; }
+    const auto node{sym->get_data().as_opt<sema::symbols::node_t>()};
+    if (!node) { return stdx::none; }
+    const auto decl{target_mod.ast.get_as_opt<ast::decl_stmt>(*node)};
+    if (!decl || !decl->value) { return stdx::none; }
+
+    // A plain cross-module function decays to a value naming its GIR symbol
+    if (target_mod.ast.get_as_opt<ast::function_expr>(*decl->value)) {
+        const auto fn_type{target_mod.get_sema_type_opt(*decl->value)};
+        if (fn_type && fn_type->get_kind() == sema::type_kind::FUNCTION) {
+            return const_value{scoped_symbol_name(*target_mod.root_table_idx, member), *fn_type};
+        }
+        return stdx::none;
+    }
+
+    const_eval inner_eval{ctx_, target_mod};
+    inner_eval.set_symbol_scoping(symbol_scoping_);
+    return inner_eval.try_eval(*decl->value);
+}
+
 auto const_eval::eval_module_access(ast::node_id, const ast::module_access_expr& mod_access)
     -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     const auto& inner_name{module_->ast.get_as<ast::identifier_expr>(mod_access.inner).name};
+
+    // Resolve the outer prefix to a module, then read inner from it
+    if (module_->ast.get_as_opt<ast::module_access_expr>(mod_access.outer)) {
+        const auto target_mod{resolve_module_chain(mod_access.outer)};
+        if (!target_mod) { return stdx::none; }
+        return eval_module_member(*target_mod, inner_name);
+    }
 
     const auto outer_ident{module_->ast.get_as_opt<ast::identifier_expr>(mod_access.outer)};
     if (!outer_ident || !module_->root_table_idx) { return stdx::none; }
@@ -896,29 +998,8 @@ auto const_eval::eval_module_access(ast::node_id, const ast::module_access_expr&
         const auto sema_type{module_->get_sema_type_opt(*node)};
         if (!sema_type) { return stdx::none; }
         const auto m_data{sema_type->get_data().as_opt<sema::types::module>()};
-        if (!m_data || !m_data->imported.root_table_idx) { return stdx::none; }
-        auto&       inner_mod{m_data->imported};
-        const auto& inner_table{ctx_.registry.get(*inner_mod.root_table_idx)};
-
-        const auto inner_sym{inner_table.get_opt(inner_name)};
-        if (!inner_sym) { return stdx::none; }
-        const auto inner_node{inner_sym->get_data().as_opt<sema::symbols::node_t>()};
-        if (!inner_node) { return stdx::none; }
-        const auto inner_decl{inner_mod.ast.get_as_opt<ast::decl_stmt>(*inner_node)};
-        if (!inner_decl || !inner_decl->value) { return stdx::none; }
-
-        // A plain cross-module function decays to a value naming its GIR symbol
-        if (inner_mod.ast.get_as_opt<ast::function_expr>(*inner_decl->value)) {
-            const auto fn_type{inner_mod.get_sema_type_opt(*inner_decl->value)};
-            if (fn_type && fn_type->get_kind() == sema::type_kind::FUNCTION) {
-                return const_value{scoped_symbol_name(*inner_mod.root_table_idx, inner_name),
-                                   *fn_type};
-            }
-            return stdx::none;
-        }
-        const_eval inner_eval{ctx_, inner_mod};
-        inner_eval.set_symbol_scoping(symbol_scoping_);
-        return inner_eval.try_eval(*inner_decl->value);
+        if (!m_data) { return stdx::none; }
+        return eval_module_member(m_data->imported, inner_name);
     }
 
     return stdx::none;
@@ -926,6 +1007,7 @@ auto const_eval::eval_module_access(ast::node_id, const ast::module_access_expr&
 
 auto const_eval::eval_match(ast::node_id id, const ast::match_expr& match)
     -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     const auto matcher_val{try_eval(match.matcher)};
     if (!matcher_val) { return stdx::none; }
 
@@ -938,7 +1020,10 @@ auto const_eval::eval_match(ast::node_id id, const ast::match_expr& match)
     };
 
     for (const auto& arm : match.arms) {
-        if (match_pattern(arm.pattern, *matcher_val)) {
+        const bool arm_matches{std::ranges::any_of(arm.patterns, [&](const auto& pattern) {
+            return match_pattern(pattern, *matcher_val);
+        })};
+        if (arm_matches) {
             if (arm.capture && arm.capture->template is<ast::identifier_expr>()) {
                 const auto& ident{module_->ast.get_as<ast::identifier_expr>(*arm.capture)};
                 if (!call_stack_.empty()) {
@@ -971,6 +1056,7 @@ auto const_eval::eval_match(ast::node_id id, const ast::match_expr& match)
 
 auto const_eval::eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap)
     -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     const auto operand{try_eval(unwrap.operand)};
     if (!operand) { return stdx::none; }
 
@@ -994,6 +1080,7 @@ auto const_eval::eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap)
 
 auto const_eval::match_pattern(const ast::match_pattern_handle& pattern_h,
                                const const_value&               target) -> bool {
+    PROFILE_FUNCTION();
     const auto pattern_id{*pattern_h};
 
     if (pattern_h.is<ast::discarded>()) { return true; }
@@ -1020,7 +1107,10 @@ auto const_eval::match_pattern(const ast::match_pattern_handle& pattern_h,
             const auto start_int{start_val->as_int_opt()};
             const auto end_int{end_val->as_int_opt()};
             if (target_int && start_int && end_int) {
-                return *target_int >= *start_int && *target_int < *end_int;
+                const bool inclusive{pattern_id.get_token_type() ==
+                                     syntax::token_type_t::DOT_DOT_EQ};
+                return *target_int >= *start_int &&
+                       (inclusive ? *target_int <= *end_int : *target_int < *end_int);
             }
         }
     }
@@ -1033,6 +1123,7 @@ auto const_eval::match_pattern(const ast::match_pattern_handle& pattern_h,
 auto const_eval::eval_assignment(ast::node_id                id,
                                  const ast::assignment_expr& assign,
                                  syntax::token_type_t        op_type) -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(assign.lhs)};
     if (!ident) { return stdx::none; }
 
@@ -1062,6 +1153,7 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
                                     const const_value&   lhs,
                                     const const_value&   rhs,
                                     ast::node_id         id) -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
 
     const auto on_div_zero = [&](std::string_view msg) -> const_value {
@@ -1138,6 +1230,7 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
 
 auto const_eval::eval_binary(ast::node_id id, const ast::binary_expr& binary)
     -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     const auto op_type{id.get_token_type()};
 
     // Short-circuit logical operators
@@ -1172,6 +1265,7 @@ auto const_eval::eval_binary(ast::node_id id, const ast::binary_expr& binary)
 
 auto const_eval::eval_unary(ast::node_id id, const ast::unary_expr& unary)
     -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     const auto val{try_eval(unary.rhs)};
     if (!val) { return stdx::none; }
 
@@ -1194,6 +1288,7 @@ auto const_eval::eval_unary(ast::node_id id, const ast::unary_expr& unary)
 
 auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
     -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     if (auto local_val{lookup_local_binding(ident.name)}) { return local_val; }
     if (const auto cx{ctx_.lookup_constexpr_binding(ident.name)}) { return *cx; }
 
@@ -1290,6 +1385,7 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
 
 auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
     -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     const auto fn_token{call.function->get_token_type()};
     if (syntax::get_builtin_opt(fn_token)) { return eval_builtin(id, call, fn_token); }
 
@@ -1363,6 +1459,7 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
 auto const_eval::eval_builtin(ast::node_id          id,
                               const ast::call_expr& call,
                               syntax::token_type_t  builtin_type) -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
 
     switch (builtin_type) {
@@ -1690,6 +1787,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
 }
 
 auto const_eval::lookup_bound_callable(std::string_view name) -> stdx::option<bound_callable> {
+    PROFILE_FUNCTION();
     // Find a constexpr callable value bound to `name` (call frame first, then constexpr frame).
     stdx::option<const const_value&> v;
     for (auto& fr : std::views::reverse(call_stack_)) {
@@ -1731,6 +1829,7 @@ auto const_eval::eval_constexpr_fn(ast::node_id                      call_id,
                                    const std::vector<const_value>&   args,
                                    stdx::option<const const_struct&> captures)
     -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     VERIFY(fn_expr.parameters.size() == args.size(),
            "Constexpr function args count must match parameters count");
 
@@ -1765,6 +1864,7 @@ auto const_eval::eval_constexpr_fn(ast::node_id                      call_id,
 }
 
 auto const_eval::eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     return module_->ast[*stmt].visit(
         [&](const auto&) -> stdx::option<const_value> { return stdx::none; },
         [&](const ast::block_stmt& data) { return eval_block(*stmt, data); },
@@ -1793,13 +1893,14 @@ auto const_eval::eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_v
                 module_->ast[expr_id].template is<ast::match_expr>()) {
                 return try_eval(expr_id);
             }
-            static_cast<void>(try_eval(expr_id));
+            DISCARD(try_eval(expr_id));
             return stdx::none;
         });
 }
 
 auto const_eval::eval_block(ast::node_id, const ast::block_stmt& block)
     -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     for (const auto& stmt : block.statements) {
         if (const auto res{eval_stmt(stmt)}) { return res; }
     }
@@ -1807,6 +1908,7 @@ auto const_eval::eval_block(ast::node_id, const ast::block_stmt& block)
 }
 
 auto const_eval::eval_decl(ast::node_id, const ast::decl_stmt& decl) -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     if (decl.value && !call_stack_.empty()) {
         if (const auto val{try_eval(*decl.value)}) {
             const auto& ident{module_->ast.get_as<ast::identifier_expr>(decl.name)};
@@ -1817,6 +1919,7 @@ auto const_eval::eval_decl(ast::node_id, const ast::decl_stmt& decl) -> stdx::op
 }
 
 auto const_eval::eval_if(ast::node_id, const ast::if_expr& if_expr) -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     const auto cond{try_eval(if_expr.condition)};
     if (!cond || !cond->is<bool>()) { return stdx::none; }
 
@@ -1830,6 +1933,7 @@ auto const_eval::eval_if(ast::node_id, const ast::if_expr& if_expr) -> stdx::opt
 
 auto const_eval::eval_while(ast::node_id, const ast::while_loop_expr& loop)
     -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     while (true) {
         const auto cond{try_eval(loop.condition)};
         if (!cond || !cond->is<bool>()) { return stdx::none; }
@@ -1837,13 +1941,14 @@ auto const_eval::eval_while(ast::node_id, const ast::while_loop_expr& loop)
 
         if (const auto body_res{eval_stmt(loop.block)}) { return body_res; }
 
-        if (loop.continuation) { static_cast<void>(try_eval(*loop.continuation)); }
+        if (loop.continuation) { DISCARD(try_eval(*loop.continuation)); }
     }
     return stdx::none;
 }
 
 auto const_eval::eval_do_while(ast::node_id, const ast::do_while_loop_expr& loop)
     -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     while (true) {
         if (const auto body_res{eval_stmt(loop.block)}) { return body_res; }
 
@@ -1856,6 +1961,7 @@ auto const_eval::eval_do_while(ast::node_id, const ast::do_while_loop_expr& loop
 
 auto const_eval::eval_for(ast::node_id, const ast::for_loop_expr& loop)
     -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
     VERIFY(loop.iterables.size() == loop.captures.size(),
            "For loop iterables and captures must match in count");
     if (loop.iterables.empty()) { return stdx::none; }

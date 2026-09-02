@@ -85,9 +85,8 @@ struct target_facts {
 
 [[nodiscard]] auto get_default_output_extension(
     output_type type, stdx::option<std::string_view> triple_str = stdx::none) -> std::string_view;
-
+[[nodiscard]] auto can_emit_freestanding_entry(const llvm::Triple& triple) -> bool;
 [[nodiscard]] auto to_llvm_codegen_opt_level(opt_level level) noexcept -> llvm::CodeGenOptLevel;
-
 [[nodiscard]] auto create_target_machine(const target_options& options)
     -> stdx::result<stdx::box<llvm::TargetMachine>, diagnostic>;
 

@@ -61,6 +61,11 @@ class const_eval {
     // Attempt to evaluate node as a compile-time constant. Returns none if non-constant.
     [[nodiscard]] auto try_eval(ast::node_id id) -> stdx::option<const_value>;
 
+    [[nodiscard]] auto arm_pattern_matches(const ast::match_pattern_handle& pattern,
+                                           const const_value&               target) -> bool {
+        return match_pattern(pattern, target);
+    }
+
     // Evaluate and assert. Emits CONSTEXPR_EVALUATION_FAILED and returns poison on failure.
     [[nodiscard]] auto eval(ast::node_id id) -> const_value;
 
@@ -148,6 +153,13 @@ class const_eval {
     auto eval_implicit_access(ast::node_id id, const ast::implicit_access_expr& implicit)
         -> stdx::option<const_value>;
     auto eval_module_access(ast::node_id id, const ast::module_access_expr& mod_access)
+        -> stdx::option<const_value>;
+
+    // Resolves a (possibly chained) module-access operand to the imported module it names
+    auto resolve_module_chain(ast::node_id node) -> stdx::option<mod::module&>;
+
+    // Evaluates `member`, looked up in `target_mod`'s root scope, as a cross-module constant.
+    auto eval_module_member(mod::module& target_mod, std::string_view member)
         -> stdx::option<const_value>;
     auto eval_match(ast::node_id id, const ast::match_expr& match) -> stdx::option<const_value>;
     auto eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> stdx::option<const_value>;
