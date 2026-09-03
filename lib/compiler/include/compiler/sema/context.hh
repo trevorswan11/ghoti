@@ -19,6 +19,7 @@
 #include "compiler/module/module.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
+#include "compiler/sema/impl_registry.hh"
 #include "compiler/sema/instantiation_cache.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
@@ -36,6 +37,7 @@ struct context {
     type_pool&                   pool;
     generic_function_registry&   generic_functions;
     generic_instantiation_cache& instantiation_cache;
+    impl_registry&               impls;
     arena_alloc&                 arena;
 
     diagnostics             diags;
@@ -56,20 +58,22 @@ struct context {
             type_pool&                   pool,
             generic_function_registry&   generic_functions,
             generic_instantiation_cache& instantiation_cache,
+            impl_registry&               impls,
             arena_alloc&                 arena,
             diagnostics                  diags,
             std::ostream&                error_stream,
             codegen::target_options      target_opts = {}) noexcept
         : modules{modules}, registry{registry}, pool{pool}, generic_functions{generic_functions},
-          instantiation_cache{instantiation_cache}, arena{arena}, diags{std::move(diags)},
-          error_stream{error_stream}, target_opts{std::move(target_opts)} {}
+          instantiation_cache{instantiation_cache}, impls{impls}, arena{arena},
+          diags{std::move(diags)}, error_stream{error_stream}, target_opts{std::move(target_opts)} {
+    }
     ~context() = default;
 
     // Creates a copy with identical data but a new diagnostic list
     context(const context& other)
         : modules{other.modules}, registry{other.registry}, pool{other.pool},
           generic_functions{other.generic_functions},
-          instantiation_cache{other.instantiation_cache}, arena{other.arena},
+          instantiation_cache{other.instantiation_cache}, impls{other.impls}, arena{other.arena},
           diags{other.diags.create_new()}, error_stream{other.error_stream},
           prelude_index{other.prelude_index}, target_opts{other.target_opts},
           user_main_name{other.user_main_name}, runtime_safety{other.runtime_safety},

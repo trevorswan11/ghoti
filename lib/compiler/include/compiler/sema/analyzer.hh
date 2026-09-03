@@ -19,6 +19,7 @@
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
+#include "compiler/sema/impl_registry.hh"
 #include "compiler/sema/instantiation_cache.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
@@ -56,6 +57,7 @@ class analyzer {
                                                                 pool_,
                                                                 generic_functions_,
                                                                 instantiation_cache_,
+                                                                impl_registry_,
                                                                 arena_,
                                                                 diagnostics{in_terminal_},
                                                                 error_stream_,
@@ -197,6 +199,7 @@ class analyzer {
     type_pool                   pool_;
     generic_function_registry   generic_functions_;
     generic_instantiation_cache instantiation_cache_;
+    impl_registry               impl_registry_{arena_};
     std::ostream&               error_stream_;
     stdx::option<bool>          in_terminal_;
     bool                        tolerate_syntax_errors_;

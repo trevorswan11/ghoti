@@ -203,6 +203,8 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::TRAP, params(), t_noreturn);
     inject_function(bis::COMPILE_ERROR, params(t_c_str), t_noreturn);
 
+    // `@implements(T | value, I)` -> bool (constexpr)
+    inject_function(bis::IMPLEMENTS, params(t_auto, t_auto), t_bool);
     inject_function(bis::FN_CTX, params(), t_auto);
 
     inject_function(bis::SRC, params(), t_auto);

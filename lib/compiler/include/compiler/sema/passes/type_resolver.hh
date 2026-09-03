@@ -27,6 +27,7 @@
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
+#include "compiler/sema/impl_registry.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
@@ -61,6 +62,13 @@ class type_resolver {
     template <ast::IndexableID ID> auto resolve(ID id) -> void {
         resolving_.ast[id].visit([&](const auto& data) -> void { visit(id, data); });
     }
+
+    // Resolves `I` / `T` for every non-parameterized `impl` root and records a skeleton in the
+    // impl registry, so `@implements` and method resolution see impls regardless of source order.
+    auto pre_register_impls() -> void;
+    auto resolve_impl_type_ref(ast::explicit_type_id ref) -> type&;
+    auto resolve_impl_method_access(const type& target, std::string_view name, source_location loc)
+        -> stdx::option<stdx::result<gsl::not_null<type*>, diagnostic>>;
 
   private:
     using scope = symbol_table_stack::scope;
@@ -296,7 +304,9 @@ class type_resolver {
     template <ast::IndexableID ID> auto visit(ID, const ast::struct_expr&) -> void;
     template <ast::IndexableID ID> auto visit(ID, const ast::union_expr&) -> void;
     template <ast::IndexableID ID> auto visit(ID, const ast::interface_expr&) -> void;
-    auto                                visit(ast::node_id, const ast::while_loop_expr&) -> void;
+    auto resolve_required_method_type(const ast::function_expr& fn, type& self_placeholder)
+        -> type&;
+    auto visit(ast::node_id, const ast::while_loop_expr&) -> void;
 
     auto visit(ast::node_id, const ast::block_stmt&) -> void;
 
@@ -313,6 +323,9 @@ class type_resolver {
     auto visit(ast::node_id, const ast::discard_stmt&) -> void;
     auto visit(ast::node_id, const ast::expr_stmt&) -> void;
     auto visit(ast::node_id, const ast::impl_stmt&) -> void;
+    // Checks required methods present & signature-compatible, required associated items bound, no
+    // stray members.
+    auto check_impl_conformance(const impl_record& rec, const types::interface_t& iface) -> void;
     auto visit(ast::node_id, const ast::import_stmt&) -> void;
     auto visit(ast::node_id, const ast::return_stmt&) -> void;
     auto visit(ast::node_id, const ast::test_stmt&) -> void;

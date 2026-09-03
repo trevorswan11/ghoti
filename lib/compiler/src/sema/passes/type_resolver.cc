@@ -38,6 +38,7 @@
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
+#include "compiler/sema/impl_registry.hh"
 #include "compiler/sema/instantiation_cache.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
@@ -60,6 +61,7 @@ auto type_resolver::resolve_types(mod::module& module, context& ctx) -> mod::mod
         ctx.inject_prelude();
 
         type_resolver resolver{module, ctx};
+        resolver.pre_register_impls();
         for (const auto& node : module.ast) { resolver.resolve(node); }
 
         if (!ctx.diags.empty()) {
@@ -106,6 +108,30 @@ namespace {
         if (const auto meta{t.get_data().as_opt<types::meta_type>()}) { return meta->instance; }
     }
     return t;
+}
+
+// The module a user-defined type was declared in, or null for a builtin / structural type.
+[[nodiscard]] auto declaring_module_of(const type& t) -> stdx::option<const mod::module&> {
+    const auto& d{t.get_data()};
+    if (const auto s{d.as_opt<types::struct_t>()}) { return s->enclosing; }
+    if (const auto u{d.as_opt<types::union_t>()}) { return u->enclosing; }
+    if (const auto e{d.as_opt<types::enum_t>()}) { return e->enclosing; }
+    if (const auto i{d.as_opt<types::interface_t>()}) { return i->enclosing; }
+    return stdx::none;
+}
+
+// An impl `self` must borrow at least as strongly as the requirement.
+[[nodiscard]] auto self_binding_compatible(const type& required, const type& provided) -> bool {
+    const bool req_ptr{required.get_data().is<types::pointer>()};
+    const bool req_ref{required.get_data().is<types::reference>()};
+    const bool got_ptr{provided.get_data().is<types::pointer>()};
+    const bool got_ref{provided.get_data().is<types::reference>()};
+
+    // `&mut`/`^mut` requirement needs a mutable impl; pointer vs reference must agree; by-value
+    // needs by-value.
+    if (req_ptr) { return got_ptr && (required.is_constant() || !provided.is_constant()); }
+    if (req_ref) { return got_ref && (required.is_constant() || !provided.is_constant()); }
+    return !got_ptr && !got_ref;
 }
 
 } // namespace
@@ -497,6 +523,14 @@ template <ast::IndexableID ID>
     case token_type_t::BUILTIN_TAG_NAME:
     case token_type_t::BUILTIN_TARGET_TRIPLE: {
         ASSERT(builtin.return_type.get_kind() == type_kind::SLICE);
+        return_type = &builtin.return_type;
+        break;
+    }
+    case token_type_t::BUILTIN_IMPLEMENTS: {
+        // `@implements(T | value, I)` -> constexpr bool. The value is produced by const-eval.
+        DISCARD(get_resolved_call_arg_type(call.arguments[0]));
+        DISCARD(get_resolved_call_arg_type(call.arguments[1]));
+        ASSERT(builtin.return_type.get_kind() == type_kind::BOOL);
         return_type = &builtin.return_type;
         break;
     }
@@ -2387,6 +2421,51 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
     resolving_.set_sema_type(id, *last_type_);
 }
 
+// Looks `name` up among the methods attached to `target` by `impl` blocks. Returns:
+//   - `none`               : no such extension method is visible
+//   - `ok(fn type)`        : exactly one visible method
+//   - `err(AMBIGUOUS_...)` : more than one visible method with this name
+auto type_resolver::resolve_impl_method_access(const type&      target,
+                                               std::string_view name,
+                                               source_location  loc)
+    -> stdx::option<stdx::result<gsl::not_null<type*>, diagnostic>> {
+    const auto                              candidates{ctx_.impls.methods_of(target)};
+    std::vector<const impl_record::method*> visible;
+    bool                                    hidden_by_seal{false};
+    for (const auto& em : candidates) {
+        if (em.method->name != name || !em.method->fn_type) { continue; }
+        // A non-`pub` trait-impl method is sealed to the interface's declaring module.
+        if (em.record->interface_type && !em.method->is_pub) {
+            if (declaring_module_of(*em.record->interface_type) != &resolving_) {
+                hidden_by_seal = true;
+                continue;
+            }
+        }
+        visible.emplace_back(em.method.get());
+    }
+
+    if (visible.size() == 1) {
+        return stdx::result<gsl::not_null<type*>, diagnostic>{
+            gsl::not_null<type*>{const_cast<type*>(visible.front()->fn_type.get())}};
+    }
+
+    if (visible.size() > 1) {
+        return stdx::result<gsl::not_null<type*>, diagnostic>{stdx::err{diagnostic{
+            fmt::format("call to `{}` is ambiguous: it is provided by more than one `impl`", name),
+            error::AMBIGUOUS_METHOD,
+            loc}}};
+    }
+
+    if (hidden_by_seal) {
+        return stdx::result<gsl::not_null<type*>, diagnostic>{stdx::err{diagnostic{
+            fmt::format("`{}` is a sealed interface method and is not callable from this module",
+                        name),
+            error::SEALED_METHOD,
+            loc}}};
+    }
+    return stdx::none;
+}
+
 auto type_resolver::resolve_structural_access(type&                          object_type,
                                               ast::identifier_handle         member,
                                               source_location                object_location,
@@ -2407,6 +2486,17 @@ auto type_resolver::resolve_structural_access(type&                          obj
     auto&      object_data{target_type->get_data()};
     const auto enum_type{object_data.as_opt<types::enum_t>()};
     const auto struct_type{object_data.as_opt<types::struct_t>()};
+
+    // A method reached on an interface-typed receiver resolves against the interface's set.
+    if (const auto iface{object_data.as_opt<types::interface_t>()}) {
+        const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(member)};
+        for (usize i{0}; i < iface->method_names.size(); ++i) {
+            if (iface->method_names[i] == member_ident.name) { return iface->method_sigs[i]; }
+        }
+        return make_sema_err(fmt::format("interface has no member named '{}'", member_ident.name),
+                             error::UNDECLARED_IDENTIFIER,
+                             resolving_.ast.location_of(member));
+    }
     const auto union_type{object_data.as_opt<types::union_t>()};
     const auto slice_type{object_data.as_opt<types::slice>()};
     const auto array_type{object_data.as_opt<types::array>()};
@@ -2444,6 +2534,11 @@ auto type_resolver::resolve_structural_access(type&                          obj
     }
 
     if (!enum_type && !struct_type && !union_type) {
+        const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(member)};
+        if (auto ext{resolve_impl_method_access(
+                *target_type, member_ident.name, resolving_.ast.location_of(member))}) {
+            return std::move(*ext);
+        }
         return make_sema_err(
             fmt::format(
                 "Can only access inner objects inside of structs, unions, and enums; found '{}'",
@@ -2461,6 +2556,10 @@ auto type_resolver::resolve_structural_access(type&                          obj
     auto        symbol_proxy{table.get_proxy_opt(member_ident.name)};
 
     if (!symbol_proxy) {
+        if (auto ext{resolve_impl_method_access(
+                *target_type, member_ident.name, resolving_.ast.location_of(member))}) {
+            return std::move(*ext);
+        }
         return make_sema_err(
             object_name
                 .transform([&](std::string_view name) -> std::string {
@@ -2523,7 +2622,14 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
         return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(result).error()));
     }
 
-    if (object_type.get_kind() == type_kind::SLICE) {
+    const auto unwrap_ref = [](type& t) -> type& {
+        if (const auto p{t.get_data().as_opt<types::pointer>()}) { return p->underlying; }
+        if (const auto r{t.get_data().as_opt<types::reference>()}) { return r->underlying; }
+        return t;
+    };
+
+    if (object_type.get_kind() == type_kind::SLICE ||
+        unwrap_ref(object_type).get_kind() == type_kind::INTERFACE) {
         auto& member_type{**result};
         resolving_.set_sema_type(dot.member, member_type);
         resolving_.set_sema_type(id, member_type);
@@ -4195,28 +4301,142 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
 
 VISITOR_TEMPLATE_INIT(type_resolver, visit, const ast::union_expr&)
 
+// Builds the `types::function` for a bodyless interface requirement
+auto type_resolver::resolve_required_method_type(const ast::function_expr& fn,
+                                                 type& self_placeholder) -> type& {
+    const auto param_count{fn.parameters.size() + (fn.self ? 1UZ : 0UZ)};
+    auto       params{ctx_.pool.get_many_unsafe(param_count)};
+    usize      idx{0};
+
+    if (fn.self) {
+        type* self_ty{&self_placeholder};
+        if (const auto mut{mutability_from_type_modifier(fn.self->modifier)}) {
+            self_ty = fn.self->modifier.is_ptr() ? &ctx_.get_pointer(*mut, self_placeholder)
+                                                 : &ctx_.get_reference(*mut, self_placeholder);
+        }
+        params[idx++] = self_ty;
+    }
+    for (const auto& param : fn.parameters) {
+        resolve(param.explicit_type);
+        params[idx++] = &denoted_type(*last_type_.take());
+    }
+    resolve(fn.explicit_return_type);
+    auto& return_type{denoted_type(*last_type_.take())};
+
+    types::key_t key{type_kind::FUNCTION, types::mut::CONSTANT};
+    for (const auto* p : params) { key.imprint(*p); }
+    key.imprint(return_type);
+    auto& fn_type{*ctx_.pool[key]};
+    fn_type.resolve_if<types::function>(fn.self.has_value(), params, return_type, fn.variadic);
+    return fn_type;
+}
+
 template <ast::IndexableID ID>
 auto type_resolver::visit(ID id, const ast::interface_expr& iface) -> void {
     PROFILE_FUNCTION();
     auto& iface_type{resolving_.get_sema_type(id)};
 
-    // TODO: Method-signature resolution (with associated-type scoping) and full conformance
-    // checking
+    const auto method_count{iface.methods.size()};
+    auto       method_sigs{ctx_.arena.make_span<type*>(method_count)};
+    auto       method_src{ctx_.arena.make_span<usize>(method_count)};
+    auto       method_names{ctx_.arena.make_span<std::string_view>(method_count)};
+    auto       method_is_pub{ctx_.arena.make_span<bool>(method_count)};
+
     {
-        const scope s{table_stack_, iface_type.get_symbol_table_idx(), table_idx_};
+        const scope            s{table_stack_, iface_type.get_symbol_table_idx(), table_idx_};
+        const structural_guard g{user_type_stack_, iface_type};
+
         for (const auto& at : iface.assoc_types) {
             TRY_RESOLVE(at.annotation);
+            auto& annotation{*last_type_.take()};
+            if (annotation.get_kind() != type_kind::TYPE && !annotation.is_poison()) {
+                return last_type_.emplace(ctx_.poison_node(
+                    resolving_,
+                    id,
+                    fmt::format("associated type `{}` must be annotated `: type`",
+                                resolving_.ast.get_as<ast::identifier_expr>(*at.name).name),
+                    error::TYPE_MISMATCH,
+                    resolving_.ast.location_of(at.annotation)));
+            }
+            resolving_.set_sema_type(at.name, annotation);
+            resolve_symbol_info(at.name, symbol_kind::TYPE);
+            if (at.default_type) { TRY_RESOLVE(*at.default_type); }
+        }
+
+        for (const auto& ac : iface.assoc_consts) {
+            TRY_RESOLVE(ac.explicit_type);
+            auto& const_type{denoted_type(*last_type_.take())};
+            resolving_.set_sema_type(ac.name, const_type);
+            resolve_symbol_info(ac.name, symbol_kind::VALUE);
+        }
+
+        // Build the method signatures only (params / return / self) requirements-first, so
+        // `requirement_count` partitions the arrays.
+        usize      out{0};
+        const auto emit_pass{[&](bool want_required) -> void {
+            for (usize src{0}; src < iface.methods.size(); ++src) {
+                const auto& m{iface.methods[src]};
+                const auto& fn{resolving_.ast.get_as<ast::function_expr>(*m.signature)};
+                if (fn.is_type_expr != want_required) { continue; }
+
+                method_sigs[out]   = &resolve_required_method_type(fn, iface_type);
+                method_src[out]    = src;
+                method_names[out]  = resolving_.ast.get_as<ast::identifier_expr>(*m.name).name;
+                method_is_pub[out] = m.is_public();
+                ++out;
+            }
+        }};
+        emit_pass(true);
+
+        // Default-method *bodies* are resolved after the interface type is committed, so
+        // `self.method(...)` inside them can see the set.
+        const auto requirement_count{out};
+        emit_pass(false);
+
+        auto assoc_type_names{ctx_.arena.make_span<std::string_view>(iface.assoc_types.size())};
+        for (usize i{0}; const auto& at : iface.assoc_types) {
+            assoc_type_names[i++] = resolving_.ast.get_as<ast::identifier_expr>(*at.name).name;
+        }
+        auto assoc_const_names{ctx_.arena.make_span<std::string_view>(iface.assoc_consts.size())};
+        for (usize i{0}; const auto& ac : iface.assoc_consts) {
+            assoc_const_names[i++] = resolving_.ast.get_as<ast::identifier_expr>(*ac.name).name;
+        }
+
+        committable_resolution<types::interface_t> resolution{iface_type,
+                                                              method_sigs,
+                                                              method_src,
+                                                              method_names,
+                                                              method_is_pub,
+                                                              requirement_count,
+                                                              assoc_type_names,
+                                                              assoc_const_names,
+                                                              iface.methods,
+                                                              iface.assoc_types,
+                                                              iface.assoc_consts,
+                                                              resolving_};
+        resolution.commit();
+
+        // With the interface type committed, default-method bodies and defaulted associated
+        // items can now resolve `self.method(...)` / `Self`-typed references against the set.
+        for (const auto& at : iface.assoc_types) {
             if (at.default_type) { TRY_RESOLVE(*at.default_type); }
         }
         for (const auto& ac : iface.assoc_consts) {
-            TRY_RESOLVE(ac.explicit_type);
-            if (ac.default_value) { TRY_RESOLVE(*ac.default_value); }
+            if (ac.default_value) {
+                const structural_guard inner{implicit_type_stack_,
+                                             resolving_.get_sema_type(ac.name)};
+                TRY_RESOLVE(*ac.default_value);
+            }
+        }
+        for (const auto& m : iface.methods) {
+            const auto& fn{resolving_.ast.get_as<ast::function_expr>(*m.signature)};
+            if (!fn.is_type_expr) {
+                resolve(m.signature);
+                DISCARD(last_type_.take());
+            }
         }
     }
 
-    committable_resolution<types::interface_t> resolution{
-        iface_type, iface.methods, iface.assoc_types, iface.assoc_consts, resolving_};
-    resolution.commit();
     last_type_.emplace(iface_type);
 }
 
@@ -4350,6 +4570,21 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                 register_non_generic_type_ctor_members(*explicit_type_p, dc_call);
             }
             auto& explicit_type{*explicit_type_p};
+            if (explicit_type.get_kind() == type_kind::INTERFACE) {
+                const auto iname{ctx_.type_display_name(explicit_type)};
+                ctx_.poison_symbol(
+                    sym,
+                    fmt::format("`{}` is an interface and cannot be stored by value; use "
+                                "`&dyn {}`, `^dyn {}`, or an `impl {}` parameter",
+                                iname,
+                                iname,
+                                iname,
+                                iname),
+                    error::INTERFACE_NOT_A_VALUE,
+                    resolving_.ast.location_of(*decl.explicit_type));
+                resolving_.set_sema_type(decl.name, ctx_.get_poison());
+                return last_type_.emplace(ctx_.poison_node(resolving_, id));
+            }
             if (explicit_type.get_kind() == type_kind::AUTO) {
                 // `undefined` carries no type, so it cannot drive `auto` inference either.
                 const bool undef_init{decl.value &&
@@ -4649,28 +4884,241 @@ auto type_resolver::visit(ast::node_id id, const ast::test_stmt& test) -> void {
     last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
 }
 
+// Resolves an `impl` target/interface reference and, if it names an as-yet-unresolved aggregate,
+// forces that aggregate's declaration to resolve so the impl registry can key on final identity.
+auto type_resolver::resolve_impl_type_ref(ast::explicit_type_id ref) -> type& {
+    resolve(ref);
+    auto&      t{denoted_type(*last_type_.take())};
+    const auto k{t.get_kind()};
+    if (!is_aggregate(k) || t.is_resolved()) { return t; }
+
+    // A forward reference to a not-yet-resolved aggregate: drive its decl to completion.
+    if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(ref)}) {
+        if (const auto lookup{ctx_.registry.lookup(table_stack_, ident->name)}) {
+            if (const auto node{lookup->get_data().as_opt<symbols::node_t>()}) {
+                if (const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
+                    decl && decl->value) {
+                    resolve(*decl->value);
+                    last_type_.reset();
+                }
+            }
+        }
+    }
+    return t;
+}
+
+auto type_resolver::pre_register_impls() -> void {
+    PROFILE_FUNCTION();
+    for (const auto root : resolving_.ast) {
+        const auto impl{resolving_.ast.get_as_opt<ast::impl_stmt>(root)};
+        if (!impl) { continue; }
+        if (!impl->impl_params.empty()) { continue; } // TODO: parameterized
+
+        auto&       impl_type{resolving_.get_sema_type(root)};
+        const scope s{table_stack_, impl_type.get_symbol_table_idx(), table_idx_};
+
+        stdx::option<const type&> interface_type;
+        if (impl->interface_type) {
+            auto& it{resolve_impl_type_ref(*impl->interface_type)};
+            if (it.is_poison()) { continue; }
+            interface_type.emplace(it);
+        }
+        auto& target{resolve_impl_type_ref(impl->target_type)};
+        if (target.is_poison()) { continue; }
+
+        // A trait impl is legal in the module that declares `I` or `T`
+        stdx::option<const mod::module&> here{resolving_};
+        const auto iface_mod{interface_type ? declaring_module_of(*interface_type) : stdx::none};
+        const auto target_mod{declaring_module_of(target)};
+        if (interface_type) {
+            if (iface_mod != here && target_mod != here) {
+                ctx_.diags.emplace_back(
+                    "`impl I for T` is only allowed in the module that declares `I` or `T`",
+                    error::ORPHAN_IMPL,
+                    resolving_.ast.location_of(root));
+                continue;
+            }
+        } else if (target_mod != here) {
+            ctx_.diags.emplace_back(
+                "an inherent `impl T` requires `T` to be declared in this module",
+                error::ORPHAN_IMPL,
+                resolving_.ast.location_of(root));
+            continue;
+        }
+
+        impl_record rec{
+            .interface_type = interface_type,
+            .target_type    = target,
+            .site           = root,
+            .enclosing      = here,
+            .body_scope_idx = impl_type.get_symbol_table_idx(),
+        };
+        for (const auto& member : impl->members) {
+            const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*member)};
+            if (!decl || !decl->value || !decl->value->is<ast::function_expr>()) { continue; }
+            rec.methods.emplace_back<impl_record::method>({
+                .name    = resolving_.ast.get_as<ast::identifier_expr>(*decl->name).name,
+                .decl    = *member,
+                .fn_type = stdx::none,
+                .is_pub  = decl->has_modifier(ast::decl_modifiers::PUBLIC),
+            });
+        }
+
+        auto recorded{ctx_.impls.record(std::move(rec))};
+        if (!recorded) {
+            const auto prior_loc{resolving_.ast.location_of(recorded.error())};
+            ctx_.diags.emplace_back(
+                fmt::format("duplicate `impl` for this type; previous impl here: {}", prior_loc),
+                error::DUPLICATE_IMPL,
+                resolving_.ast.location_of(root));
+        }
+    }
+}
+
 auto type_resolver::visit(ast::node_id id, const ast::impl_stmt& impl) -> void {
     PROFILE_FUNCTION();
     auto&       impl_type{resolving_.get_sema_type(id)};
     const scope s{table_stack_, impl_type.get_symbol_table_idx(), table_idx_};
+    auto&       void_type{ctx_.get_builtin_resolved_type(type_kind::VOID_)};
 
-    auto& void_type{ctx_.get_builtin_resolved_type(type_kind::VOID_)};
-
-    // A parameterized `impl(P) ...` is re-instantiated per monomorphization of its target
+    // Parameterized `impl(P) ...` is re-instantiated per monomorphization of its target
     if (!impl.impl_params.empty()) { return last_type_.emplace(void_type); }
+
+    const auto rec{ctx_.impls.find_by_site(id)};
+
     if (impl.interface_type) { TRY_RESOLVE(*impl.interface_type); }
     TRY_RESOLVE(impl.target_type);
-
-    // Give `self` / `@this()` inside member fns something to resolve against.
     auto& target{denoted_type(*last_type_)};
+
     {
-        // TODO: Conformance checks
         stdx::option<structural_guard> guard;
         if (!target.is_poison()) { guard.emplace(user_type_stack_, target); }
         for (const auto& member : impl.members) { TRY_RESOLVE(*member); }
     }
 
+    if (rec) {
+        // Fill each impl method's resolved function type from its member decl.
+        for (auto& m : rec->methods) {
+            if (const auto t{resolving_.get_sema_type_opt(m.decl)}) { m.fn_type = &*t; }
+        }
+        if (rec->interface_type != nullptr && !target.is_poison()) {
+            if (const auto iface{rec->interface_type->get_data().as_opt<types::interface_t>()}) {
+                check_impl_conformance(*rec, *iface);
+            }
+        }
+    }
+
     last_type_.emplace(void_type);
+}
+
+auto type_resolver::check_impl_conformance(const impl_record& rec, const types::interface_t& iface)
+    -> void {
+    PROFILE_FUNCTION();
+    const auto  site_loc{resolving_.ast.location_of(rec.site)};
+    const auto  iface_name{ctx_.type_display_name(*rec.interface_type)};
+    const auto  target_name{ctx_.type_display_name(*rec.target_type)};
+    const auto& body_table{ctx_.registry.get(rec.body_scope_idx)};
+
+    for (usize i{0}; i < iface.requirement_count; ++i) {
+        const auto name{iface.method_names[i]};
+        const auto supplied{rec.find_method(name)};
+        if (!supplied) {
+            ctx_.diags.emplace_back(fmt::format("`{}` does not implement `{}`: missing method `{}`",
+                                                target_name,
+                                                iface_name,
+                                                name),
+                                    error::MISSING_IMPL_METHOD,
+                                    site_loc);
+            continue;
+        }
+        const auto method_loc{resolving_.ast.location_of(supplied->decl)};
+        const auto expected{iface.method_sigs[i]->get_data().as_opt<types::function>()};
+        const auto got{supplied->fn_type ? supplied->fn_type->get_data().as_opt<types::function>()
+                                         : stdx::none};
+        if (!expected || !got) { continue; }
+
+        if (expected->has_self != got->has_self || expected->params.size() != got->params.size() ||
+            expected->is_variadic != got->is_variadic) {
+            ctx_.diags.emplace_back(
+                fmt::format("method `{}` does not match the signature required by `{}` "
+                            "(parameter count or `self` differs)",
+                            name,
+                            iface_name),
+                error::IMPL_SIGNATURE_MISMATCH,
+                method_loc);
+            continue;
+        }
+        if (expected->has_self && !self_binding_compatible(*expected->params[0], *got->params[0])) {
+            ctx_.diags.emplace_back(
+                fmt::format(
+                    "method `{}`: `self` binding is not compatible with the requirement in `{}`",
+                    name,
+                    iface_name),
+                error::IMPL_SELF_MISMATCH,
+                method_loc);
+        }
+
+        const usize first_param{expected->has_self ? 1UZ : 0UZ};
+        for (usize p{first_param}; p < expected->params.size(); ++p) {
+            auto& want{*expected->params[p]};
+            auto& have{*got->params[p]};
+            if (want.get_kind() == type_kind::TYPE) { continue; } // associated / Self slot
+            if (!is_same_unqualified(want, have) && !is_assignable(have, want)) {
+                ctx_.diags.emplace_back(
+                    fmt::format(
+                        "method `{}`: parameter {} type does not match the requirement in `{}`",
+                        name,
+                        p - first_param + 1,
+                        iface_name),
+                    error::IMPL_SIGNATURE_MISMATCH,
+                    method_loc);
+            }
+        }
+
+        if (expected->return_type.get_kind() != type_kind::TYPE &&
+            !is_same_unqualified(expected->return_type, got->return_type)) {
+            ctx_.diags.emplace_back(
+                fmt::format("method `{}`: return type does not match the requirement in `{}`",
+                            name,
+                            iface_name),
+                error::IMPL_SIGNATURE_MISMATCH,
+                method_loc);
+        }
+    }
+
+    // Every required associated type must be bound by the impl or defaulted by the interface.
+    for (usize i{0}; i < iface.assoc_type_names.size(); ++i) {
+        const bool defaulted{iface.ast_assoc_types[i].default_type.has_value()};
+        if (!defaulted && !body_table.has(iface.assoc_type_names[i])) {
+            ctx_.diags.emplace_back(
+                fmt::format("`{}` does not implement `{}`: associated type `{}` is not bound",
+                            target_name,
+                            iface_name,
+                            iface.assoc_type_names[i]),
+                error::MISSING_IMPL_METHOD,
+                site_loc);
+        }
+    }
+
+    // A trait impl may not carry members outside the interface's contract.
+    for (const auto& entry : body_table) {
+        const auto member_name{entry.first};
+        bool       is_item{false};
+        is_item |= std::ranges::contains(iface.method_names, member_name);
+        is_item |= std::ranges::contains(iface.assoc_type_names, member_name);
+        is_item |= std::ranges::contains(iface.assoc_const_names, member_name);
+        if (!is_item) {
+            ctx_.diags.emplace_back(
+                fmt::format(
+                    "`{}` is not a member of interface `{}`; put unrelated items in an inherent "
+                    "`impl {}` block",
+                    member_name,
+                    iface_name,
+                    target_name),
+                error::UNKNOWN_IMPL_MEMBER,
+                site_loc);
+        }
+    }
 }
 
 auto type_resolver::visit(ast::node_id id, const ast::using_stmt& using_stmt) -> void {

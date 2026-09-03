@@ -436,19 +436,35 @@ template <ast::IndexableID ID>
 auto symbol_collector::visit(ID id, const ast::interface_expr& iface) -> void {
     PROFILE_FUNCTION();
 
-    // TODO: Resolve and check method sig conformance; currently left as raw AST
-    const auto scope_idx{
-        visit_scopes(type_kind::INTERFACE,
-                     stdx::iter_pair{iface.assoc_types,
-                                     [this](const ast::interface_expr::assoc_type& at) -> void {
-                                         collect(at.annotation);
-                                         if (at.default_type) { collect(*at.default_type); }
-                                     }},
-                     stdx::iter_pair{iface.assoc_consts,
-                                     [this](const ast::interface_expr::assoc_const& ac) -> void {
-                                         collect(ac.explicit_type);
-                                         if (ac.default_value) { collect(*ac.default_value); }
-                                     }})};
+    // Associated types / consts become in-scope symbols of the interface body so method
+    // signatures and default bodies can name them
+    const auto scope_idx{visit_scopes(
+        type_kind::INTERFACE,
+        stdx::iter_pair{
+            iface.assoc_types,
+            [this](const ast::interface_expr::assoc_type& at) -> void {
+                collect(at.annotation);
+                if (at.default_type) { collect(*at.default_type); }
+                const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(at.name)};
+                collecting_.add_identifier_position(at.name);
+                try_declare<symbols::parameter>(
+                    ident.name, ast::function_expr::parameter{at.name, at.annotation, false});
+            }},
+        stdx::iter_pair{
+            iface.assoc_consts,
+            [this](const ast::interface_expr::assoc_const& ac) -> void {
+                collect(ac.explicit_type);
+                if (ac.default_value) { collect(*ac.default_value); }
+                const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(ac.name)};
+                collecting_.add_identifier_position(ac.name);
+                try_declare<symbols::parameter>(
+                    ident.name, ast::function_expr::parameter{ac.name, ac.explicit_type, false});
+            }},
+        stdx::iter_pair{iface.methods, [this](const ast::interface_expr::method& m) -> void {
+                            const auto& fn{
+                                collecting_.ast.get_as<ast::function_expr>(*m.signature)};
+                            if (!fn.is_type_expr) { collect(m.signature); }
+                        }})};
     last_type_->set_symbol_table_idx(scope_idx);
     collecting_.set_sema_type(id, *last_type_);
 }

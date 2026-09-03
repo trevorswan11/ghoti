@@ -262,10 +262,23 @@ struct function {
 
 // Carries no storage and is never a value type; it only describes a contract
 struct interface_t {
+    gsl::span<type*>            method_sigs;        // resolved `types::function` per method
+    gsl::span<usize>            method_src_indices; // index into `ast_methods`
+    gsl::span<std::string_view> method_names;
+    gsl::span<bool>             method_is_pub; // false => sealed to `enclosing`
+    usize                       requirement_count{0};
+
+    gsl::span<std::string_view> assoc_type_names;
+    gsl::span<std::string_view> assoc_const_names;
+
     gsl::span<const ast::interface_expr::method>      ast_methods;
     gsl::span<const ast::interface_expr::assoc_type>  ast_assoc_types;
     gsl::span<const ast::interface_expr::assoc_const> ast_assoc_consts;
     const mod::module&                                enclosing;
+
+    [[nodiscard]] auto method_decl(usize i) const -> const ast::interface_expr::method& {
+        return ast_methods[method_src_indices[i]];
+    }
 };
 
 // How a closure stores one of its captured free variables in its environment

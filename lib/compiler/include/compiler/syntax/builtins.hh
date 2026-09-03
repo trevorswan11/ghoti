@@ -80,6 +80,7 @@ constexpr builtin_t TRAP{"@trap", token_type_t::BUILTIN_TRAP};
 constexpr builtin_t FN_CTX{"@fnCtx", token_type_t::BUILTIN_FN_CTX};
 
 constexpr builtin_t SRC{"@src", token_type_t::BUILTIN_SRC};
+constexpr builtin_t IMPLEMENTS{"@implements", token_type_t::BUILTIN_IMPLEMENTS};
 constexpr builtin_t EXPECT{"@expect", token_type_t::BUILTIN_EXPECT};
 constexpr builtin_t REQUIRE{"@require", token_type_t::BUILTIN_REQUIRE};
 constexpr builtin_t SKIP{"@skip", token_type_t::BUILTIN_SKIP};
@@ -154,6 +155,7 @@ constexpr std::array ALL_BUILTINS{
     builtins::TRAP,
     builtins::FN_CTX,
     builtins::SRC,
+    builtins::IMPLEMENTS,
     builtins::EXPECT,
     builtins::REQUIRE,
     builtins::SKIP,

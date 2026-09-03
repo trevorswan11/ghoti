@@ -1542,6 +1542,39 @@ auto const_eval::eval_builtin(ast::node_id          id,
         }
         return stdx::none;
     }
+    case syntax::token_type_t::BUILTIN_IMPLEMENTS: {
+        VERIFY(call.arguments.size() == 2, "Arity mismatch not verified during resolution");
+        const auto arg_type{[&](const ast::call_expr::argument& a) -> stdx::option<sema::type&> {
+            if (const auto tid{a.as_opt<ast::explicit_type_id>()}) {
+                return module_->get_sema_type_opt(*tid);
+            }
+            if (const auto eh{a.as_opt<ast::expr_handle>()}) {
+                return module_->get_sema_type_opt(*eh);
+            }
+            return stdx::none;
+        }};
+
+        const auto denote{[](sema::type& t) -> sema::type& {
+            if (t.get_kind() == sema::type_kind::TYPE) {
+                if (const auto m{t.get_data().as_opt<sema::types::meta_type>()}) {
+                    return m->instance;
+                }
+            }
+            return t;
+        }};
+
+        auto t0{arg_type(call.arguments[0])};
+        auto t1{arg_type(call.arguments[1])};
+        if (!t0 || !t1) { return stdx::none; }
+
+        auto& target{denote(*t0)};
+        auto& iface{denote(*t1)};
+        auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+        if (iface.get_kind() != sema::type_kind::INTERFACE) {
+            return const_value{false, bool_type};
+        }
+        return const_value{ctx_.impls.implements(target, iface), bool_type};
+    }
     case syntax::token_type_t::BUILTIN_ABS: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
