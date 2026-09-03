@@ -116,7 +116,7 @@ TEST_CASE("Type translate function types") {
     params[1] = &f64_t;
 
     auto& fn_t{*pool[{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT}]};
-    fn_t.resolve<sema::types::function>(false, params, bool_t, false);
+    fn_t.resolve<sema::types::function>(params, bool_t, false, false);
     auto* fn_llvm{translator.translate(fn_t)};
     CHECK(fn_llvm->isPointerTy());
 

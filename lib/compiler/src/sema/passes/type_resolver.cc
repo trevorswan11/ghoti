@@ -6060,6 +6060,31 @@ auto type_resolver::instantiate_generic(type&                             callee
         return stdx::none;
     }
 
+    // A `[n]T` local whose dimension is a `constexpr` parameter resolves to a single shared
+    // `deferred_array` pool entry that cannot carry a per-instantiation length
+    std::vector<std::pair<stdx::option<type&>*, type*>> folded_array_slots;
+    {
+        gir::const_eval dim_folder{ctx_, fn_mod};
+        const auto      fold_deferred_arrays{[&](auto& slots) {
+            for (auto& slot : slots) {
+                if (!slot || !slot->get_data().template as_opt<types::deferred_array>()) {
+                    continue;
+                }
+                auto* const original{slot.get()};
+                if (auto& forced{dim_folder.force_deferred_array(*slot)}; &forced != original) {
+                    folded_array_slots.emplace_back(&slot, original);
+                    slot.emplace(forced);
+                }
+            }
+        }};
+
+        // Fold every deferred array now, while this instantiation's `constexpr` bindings are in
+        // scope, the concrete `[N]T`lands in this instantiation's diff and is replayed at emit
+        // time
+        fold_deferred_arrays(fn_mod.sema_side_tables.node_types.values);
+        fold_deferred_arrays(fn_mod.sema_side_tables.explicit_types.values);
+    }
+
     // Diff the side tables against the snapshot: everything this instantiation's body/signature
     // resolved, to be replayed at emit time.
     body_type_diff typing;
@@ -6072,6 +6097,7 @@ auto type_resolver::instantiate_generic(type&                             callee
     }};
     collect(fn_mod.sema_side_tables.node_types.values, snap_nodes, typing.node_types);
     collect(fn_mod.sema_side_tables.explicit_types.values, snap_types, typing.explicit_types);
+    for (const auto& [slot, original] : folded_array_slots) { slot->emplace(*original); }
     for (const auto& [idx, br] : fn_mod.if_constexpr_results) {
         const auto prev{snap_ifs.find(idx)};
         if (prev == snap_ifs.end() || prev->second != br) {

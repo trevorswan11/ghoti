@@ -408,10 +408,13 @@ auto const_eval::force_deferred_function_params(sema::type& maybe_fn) -> void {
     const auto fn_data{maybe_fn.get_data().as_opt<sema::types::function>()};
     if (!fn_data) { return; }
 
-    force_deferred_array_elements(fn_data->params);
+    // Copy the fields out before `resolve` re-emplaces `data_` and invalidates `fn_data`.
+    const auto params{fn_data->params};
+    const auto has_self{fn_data->has_self};
+    const auto is_variadic{fn_data->is_variadic};
+    force_deferred_array_elements(params);
     auto& return_type{force_deferred_array(fn_data->return_type)};
-    maybe_fn.resolve<sema::types::function>(
-        fn_data->has_self, fn_data->params, return_type, fn_data->is_variadic);
+    maybe_fn.resolve<sema::types::function>(params, return_type, has_self, is_variadic);
 }
 
 auto const_eval::resolve_deferred_array(const ast::explicit_array_type& array,

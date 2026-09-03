@@ -392,4 +392,91 @@ TEST_CASE("E2E: a type constructor's members read its `constexpr` value paramete
     }
 }
 
+TEST_CASE("E2E: a type constructor member sizes a local `[n]T` from a `constexpr` parameter") {
+    SECTION("the array length folds from the constructor's `constexpr` binding") {
+        CHECK(helpers::compile_and_run(R"(
+            const Vec := fn(constexpr n: usize): type {
+                return struct {
+                    head: i32,
+                    const probe := fn(&self): i32 {
+                        var buf: [n]i32 = undefined;
+                        const b0: i32 = buf[0];
+                        return b0 - b0 + self.head + @as(i32, n);
+                    };
+                };
+            };
+
+            pub const main := fn(): i32 {
+                var v: Vec(9) = .{ .head = 33 };
+                return v.probe();
+            };
+        )") == 42);
+    }
+
+    SECTION("a `[n]mut T` local is writable and reads back what was stored") {
+        CHECK(helpers::compile_and_run(R"(
+            const Vec := fn(constexpr n: usize): type {
+                return struct {
+                    head: i32,
+                    const sum := fn(&self): i32 {
+                        var buf: [n]mut i32 = undefined;
+                        var i: usize = 0;
+                        while (i < n) { buf[i] = @as(i32, i) * 2; i = i + 1; }
+                        var acc: i32 = 0;
+                        var j: usize = 0;
+                        while (j < n) { acc = acc + buf[j]; j = j + 1; }
+                        return acc + self.head;
+                    };
+                };
+            };
+
+            pub const main := fn(): i32 {
+                var v: Vec(5) = .{ .head = 3 };
+                return v.sum();   // (0+2+4+6+8) + 3
+            };
+        )") == 23);
+    }
+
+    SECTION("two instantiations keep independent array lengths") {
+        CHECK(helpers::compile_and_run(R"(
+            const Vec := fn(constexpr n: usize): type {
+                return struct {
+                    pad: i32,
+                    const fill := fn(&self): i32 {
+                        var buf: [n]mut i32 = undefined;
+                        var i: usize = 0;
+                        while (i < n) { buf[i] = @as(i32, i); i = i + 1; }
+                        var acc: i32 = 0;
+                        var j: usize = 0;
+                        while (j < n) { acc = acc + buf[j]; j = j + 1; }
+                        return acc;
+                    };
+                };
+            };
+
+            pub const main := fn(): i32 {
+                var a: Vec(3) = .{ .pad = 0 };
+                var b: Vec(5) = .{ .pad = 0 };
+                return a.fill() * 100 + b.fill();   // (0+1+2)*100 + (0+1+2+3+4)
+            };
+        )") == 3 * 100 + 10);
+    }
+}
+
+TEST_CASE("E2E: a plain generic fn sizes a local `[n]mut T` from a `constexpr` parameter") {
+    CHECK(helpers::compile_and_run(R"(
+        const probe := fn(constexpr n: usize, head: i32): i32 {
+            var buf: [n]mut i32 = undefined;
+            var i: usize = 0;
+            while (i < n) { buf[i] = @as(i32, i) * 2; i = i + 1; }
+            var acc: i32 = 0;
+            var j: usize = 0;
+            while (j < n) { acc = acc + buf[j]; j = j + 1; }
+            return acc + head + @as(i32, n);
+        };
+
+        pub const main := fn(): i32 { return probe(5, 3); };   // (0+2+4+6+8) + 3 + 5
+    )") == 28);
+}
+
 } // namespace ghoti::tests
