@@ -75,4 +75,9 @@ R"([_:0]^N{a, b, c, d, e, 3, "54" };
     asm u32 { template: "rdtsc", outputs: ("={eax}" = _), options: (volatile) };
     asm { template: "mov %0, %1", outputs: ("=r" = dst), inputs: ("r" = src) };
     a?; b!;
+    const IMark := interface {};
+    const IW := interface { E: type; I: type = u8; const cap: usize = 4096; pub const write := fn(&mut self, b: []u8): E; const dbg := fn(&self): []u8; pub const writeAll := fn(&mut self, b: []u8): E { return self.write(b); }; };
+    impl File { pub const fromRaw := fn(fd: i32): @this() { return .{ .fd = fd }; }; }
+    impl IW for File { pub const write := fn(&mut self, b: []u8): E { c; }; }
+    impl(H: type) Buf(H) { pub const make := fn(raw: H): @this() { return .{ .h = raw }; }; }
 )"

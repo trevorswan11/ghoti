@@ -818,4 +818,193 @@ ExpressionStatement
 ExpressionStatement
 └─ Expr: UnwrapExpression (BANG)
     └─ Operand: IdentifierExpression: b
+DeclStatement
+├─ Name: IdentifierExpression: IMark
+├─ Modifiers: CONSTANT
+├─ Type: (inferred)
+└─ Value: InterfaceExpression
+DeclStatement
+├─ Name: IdentifierExpression: IW
+├─ Modifiers: CONSTANT
+├─ Type: (inferred)
+└─ Value: InterfaceExpression
+    ├─ AssociatedTypes:
+    │   ├─ AssociatedType:
+    │   │   ├─ Name: IdentifierExpression: E
+    │   │   └─ Annotation: ExplicitType (modifier: VALUE)
+    │   │       └─ IdentifierExpression: type
+    │   └─ AssociatedType:
+    │       ├─ Name: IdentifierExpression: I
+    │       ├─ Annotation: ExplicitType (modifier: VALUE)
+    │       │   └─ IdentifierExpression: type
+    │       └─ Default: ExplicitType (modifier: VALUE)
+    │           └─ IdentifierExpression: u8 (primitive)
+    ├─ AssociatedConsts:
+    │   └─ AssociatedConst:
+    │       ├─ Name: IdentifierExpression: cap
+    │       ├─ Type: ExplicitType (modifier: VALUE)
+    │       │   └─ IdentifierExpression: usize (primitive)
+    │       └─ Default: I32Expression: 4096
+    └─ Methods:
+        ├─ Method (kind: required, visibility: pub)
+        │   ├─ Name: IdentifierExpression: write
+        │   └─ Signature: FunctionExpression
+        │       ├─ Self: self (modifier: MUT_REF)
+        │       ├─ Parameters:
+        │       │   └─ Param:
+        │       │       ├─ Name: IdentifierExpression: b
+        │       │       └─ Type: ExplicitType (modifier: VALUE)
+        │       │           └─ ArrayType
+        │       │               ├─ Dimensions: (slice)
+        │       │               ├─ Null terminated: false
+        │       │               └─ ExplicitType (modifier: VALUE)
+        │       │                   └─ IdentifierExpression: u8 (primitive)
+        │       ├─ Variadic: false
+        │       ├─ Move: false
+        │       ├─ Naked: false
+        │       ├─ CallConv: c
+        │       ├─ Returns: ExplicitType (modifier: VALUE)
+        │       │   └─ IdentifierExpression: E
+        ├─ Method (kind: required, visibility: sealed)
+        │   ├─ Name: IdentifierExpression: dbg
+        │   └─ Signature: FunctionExpression
+        │       ├─ Self: self (modifier: REF)
+        │       ├─ Variadic: false
+        │       ├─ Move: false
+        │       ├─ Naked: false
+        │       ├─ CallConv: c
+        │       ├─ Returns: ExplicitType (modifier: VALUE)
+        │       │   └─ ArrayType
+        │       │       ├─ Dimensions: (slice)
+        │       │       ├─ Null terminated: false
+        │       │       └─ ExplicitType (modifier: VALUE)
+        │       │           └─ IdentifierExpression: u8 (primitive)
+        └─ Method (kind: default, visibility: pub)
+            ├─ Name: IdentifierExpression: writeAll
+            └─ Signature: FunctionExpression
+                ├─ Self: self (modifier: MUT_REF)
+                ├─ Parameters:
+                │   └─ Param:
+                │       ├─ Name: IdentifierExpression: b
+                │       └─ Type: ExplicitType (modifier: VALUE)
+                │           └─ ArrayType
+                │               ├─ Dimensions: (slice)
+                │               ├─ Null terminated: false
+                │               └─ ExplicitType (modifier: VALUE)
+                │                   └─ IdentifierExpression: u8 (primitive)
+                ├─ Variadic: false
+                ├─ Move: false
+                ├─ Naked: false
+                ├─ CallConv: c
+                ├─ Returns: ExplicitType (modifier: VALUE)
+                │   └─ IdentifierExpression: E
+                └─ Body: BlockStatement
+                    └─ ReturnStatement
+                        └─ Value: CallExpression
+                            ├─ Callee: DotExpression (DOT)
+                            │   ├─ Object: IdentifierExpression: self
+                            │   └─ Member: IdentifierExpression: write
+                            └─ Arguments:
+                                └─ IdentifierExpression: b
+ImplStatement
+├─ Kind: inherent
+├─ Target: ExplicitType (modifier: VALUE)
+│   └─ IdentifierExpression: File
+└─ Members:
+    └─ DeclStatement
+        ├─ Name: IdentifierExpression: fromRaw
+        ├─ Modifiers: CONSTANT|PUBLIC
+        ├─ Type: (inferred)
+        └─ Value: FunctionExpression
+            ├─ Parameters:
+            │   └─ Param:
+            │       ├─ Name: IdentifierExpression: fd
+            │       └─ Type: ExplicitType (modifier: VALUE)
+            │           └─ IdentifierExpression: i32 (primitive)
+            ├─ Variadic: false
+            ├─ Move: false
+            ├─ Naked: false
+            ├─ CallConv: c
+            ├─ Returns: ExplicitType (modifier: VALUE)
+            │   └─ CallExpression
+            │       └─ Callee: IdentifierExpression: @this (builtin)
+            └─ Body: BlockStatement
+                └─ ReturnStatement
+                    └─ Value: Initializer Expression:
+                        ├─ Object Type: <inferred>
+                        └─ Initializers:
+                            └─ Initializer:
+                                ├─ Member: ImplicitAccessExpression
+                                │   └─ Member: IdentifierExpression: fd
+                                └─ Value: IdentifierExpression: fd
+ImplStatement
+├─ Kind: trait
+├─ Interface: ExplicitType (modifier: VALUE)
+│   └─ IdentifierExpression: IW
+├─ Target: ExplicitType (modifier: VALUE)
+│   └─ IdentifierExpression: File
+└─ Members:
+    └─ DeclStatement
+        ├─ Name: IdentifierExpression: write
+        ├─ Modifiers: CONSTANT|PUBLIC
+        ├─ Type: (inferred)
+        └─ Value: FunctionExpression
+            ├─ Self: self (modifier: MUT_REF)
+            ├─ Parameters:
+            │   └─ Param:
+            │       ├─ Name: IdentifierExpression: b
+            │       └─ Type: ExplicitType (modifier: VALUE)
+            │           └─ ArrayType
+            │               ├─ Dimensions: (slice)
+            │               ├─ Null terminated: false
+            │               └─ ExplicitType (modifier: VALUE)
+            │                   └─ IdentifierExpression: u8 (primitive)
+            ├─ Variadic: false
+            ├─ Move: false
+            ├─ Naked: false
+            ├─ CallConv: c
+            ├─ Returns: ExplicitType (modifier: VALUE)
+            │   └─ IdentifierExpression: E
+            └─ Body: BlockStatement
+                └─ ExpressionStatement
+                    └─ Expr: IdentifierExpression: c
+ImplStatement
+├─ Kind: inherent
+├─ Parameters:
+│   └─ Param:
+│       ├─ Name: IdentifierExpression: H
+│       └─ Type: ExplicitType (modifier: VALUE)
+│           └─ IdentifierExpression: type
+├─ Target: ExplicitType (modifier: VALUE)
+│   └─ CallExpression
+│       ├─ Callee: IdentifierExpression: Buf
+│       └─ Arguments:
+│           └─ IdentifierExpression: H
+└─ Members:
+    └─ DeclStatement
+        ├─ Name: IdentifierExpression: make
+        ├─ Modifiers: CONSTANT|PUBLIC
+        ├─ Type: (inferred)
+        └─ Value: FunctionExpression
+            ├─ Parameters:
+            │   └─ Param:
+            │       ├─ Name: IdentifierExpression: raw
+            │       └─ Type: ExplicitType (modifier: VALUE)
+            │           └─ IdentifierExpression: H
+            ├─ Variadic: false
+            ├─ Move: false
+            ├─ Naked: false
+            ├─ CallConv: c
+            ├─ Returns: ExplicitType (modifier: VALUE)
+            │   └─ CallExpression
+            │       └─ Callee: IdentifierExpression: @this (builtin)
+            └─ Body: BlockStatement
+                └─ ReturnStatement
+                    └─ Value: Initializer Expression:
+                        ├─ Object Type: <inferred>
+                        └─ Initializers:
+                            └─ Initializer:
+                                ├─ Member: ImplicitAccessExpression
+                                │   └─ Member: IdentifierExpression: h
+                                └─ Value: IdentifierExpression: raw
 )"

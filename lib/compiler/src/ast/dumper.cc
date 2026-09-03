@@ -816,6 +816,7 @@ auto dumper::visit(node_id, const interface_expr& node) -> void {
         const indent::guard g{indent_, !has_assoc_consts && !has_methods};
         fmt::println(out_, "{}AssociatedTypes:", indent_.current_branch());
         dump_container(node.assoc_types, [this](const interface_expr::assoc_type& at) -> void {
+            fmt::println(out_, "{}AssociatedType:", indent_.current_branch());
             {
                 const indent::guard g_name{indent_, false};
                 fmt::print(out_, "{}Name: ", indent_.current_branch());
@@ -838,6 +839,7 @@ auto dumper::visit(node_id, const interface_expr& node) -> void {
         const indent::guard g{indent_, !has_methods};
         fmt::println(out_, "{}AssociatedConsts:", indent_.current_branch());
         dump_container(node.assoc_consts, [this](const interface_expr::assoc_const& ac) -> void {
+            fmt::println(out_, "{}AssociatedConst:", indent_.current_branch());
             {
                 const indent::guard g_name{indent_, false};
                 fmt::print(out_, "{}Name: ", indent_.current_branch());
