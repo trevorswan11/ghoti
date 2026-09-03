@@ -70,6 +70,9 @@ class type_resolver {
     // Records a parameterized `impl(P) [I for] Ctor(P)` root, keyed on its base ctor, for later
     // per-monomorphization expansion.
     auto register_parameterized_impl(ast::node_id root, const ast::impl_stmt& impl) -> void;
+    // Resolves a parameterized impl body once against opaque sentinels + dummy `constexpr`
+    // values and stores the result on the shared `impl_registry`
+    auto build_param_impl_template(const ast::impl_stmt& impl, ast::node_id site) -> void;
     auto resolve_impl_type_ref(ast::explicit_type_id ref) -> type&;
     auto resolve_impl_method_access(const type& target, std::string_view name, source_location loc)
         -> stdx::option<stdx::result<gsl::not_null<type*>, diagnostic>>;
@@ -80,9 +83,12 @@ class type_resolver {
     // materialized concrete target `concrete`, remapping its template typing and recording one
     // `impl_record` + emit entries per method
     auto instantiate_impls_for(type&                  concrete,
+                               const mod::module&     base_mod,
                                ast::node_id           base_ctor_fn,
                                gsl::span<type* const> ctor_args,
-                               std::string_view       ctor_mangled) -> void;
+                               gsl::span<const std::pair<std::string, gir::const_value>> ctor_cx,
+                               const ast::function_expr&                                 base_fn,
+                               std::string_view ctor_mangled) -> void;
 
   private:
     using scope = symbol_table_stack::scope;
@@ -405,17 +411,12 @@ class type_resolver {
     bool                      in_for_iterable_{false};
     stdx::opt_size            pending_impl_method_owner_;
     stdx::option<std::string> pending_param_impl_target_;
-    ankerl::unordered_dense::map<const type*, ankerl::unordered_dense::set<usize>>
-        expanded_param_impls_;
 
-    // The template resolution of a parameterized `impl(P) ...` body
-    struct param_impl_template {
-        stdx::option<const type&>            abstract_target{};
-        stdx::option<const type&>            sentinel{};
-        std::vector<std::pair<usize, type*>> node_types{};
-        std::vector<std::pair<usize, type*>> explicit_types{};
-    };
-    ankerl::unordered_dense::map<usize, param_impl_template> param_impl_templates_;
+    // Distinct opaque `type` sentinel used to stand in for one parameterized-impl type param
+    // during its template resolution, keyed on the param's name-node index. The template itself
+    // and the per-target expansion set live on the shared `impl_registry` so a monomorphization
+    // triggered from any consuming module can find them.
+    auto param_impl_sentinel(usize disc) -> type&;
 
     impl_param_bound_map_t impl_param_bounds_;
     named_test_map_t       named_tests_;

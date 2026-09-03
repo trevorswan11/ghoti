@@ -3,8 +3,10 @@
 #include <algorithm>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
+#include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
@@ -67,7 +69,23 @@ struct parameterized_impl {
     std::vector<stdx::opt_size> param_to_ctor_arg{};
 };
 
+// Lives on  the shared registry so a monomorphization triggered from any consuming module can remap
+struct param_impl_template {
+    stdx::option<const type&>            abstract_target{};
+    std::vector<const type*>             sentinels{}; // per impl param; null for a constexpr one
+    std::vector<std::pair<usize, type*>> node_types{};
+    std::vector<std::pair<usize, type*>> explicit_types{};
+};
+
 class impl_registry {
+  public:
+    using template_param_map =
+        ankerl::unordered_dense::map<const parameterized_impl*, param_impl_template>;
+    using param_worklist = ankerl::unordered_dense::set<const parameterized_impl*>;
+    using expanded_param_map =
+        ankerl::unordered_dense::map<const type*,
+                                     ankerl::unordered_dense::set<const parameterized_impl*>>;
+
   public:
     explicit impl_registry(arena_alloc& arena) noexcept : arena_{arena} {}
     ~impl_registry() = default;
@@ -95,6 +113,29 @@ class impl_registry {
     [[nodiscard]] auto param_records(this auto&& self) noexcept -> auto& {
         return self.param_records_;
     }
+    [[nodiscard]] auto param_record_by_site(ast::node_id       site,
+                                            const mod::module& enclosing) noexcept
+        -> stdx::option<parameterized_impl&>;
+
+    // The shared template resolution of a parameterized impl (see `param_impl_template`).
+    auto set_template(const parameterized_impl& pimpl, param_impl_template tmpl) -> void {
+        templates_.insert_or_assign(&pimpl, std::move(tmpl));
+    }
+    [[nodiscard]] auto get_template(const parameterized_impl& pimpl) const
+        -> const param_impl_template* {
+        const auto it{templates_.find(&pimpl)};
+        return it == templates_.end() ? nullptr : &it->second;
+    }
+    // Records that `pimpl` has been expanded onto `target`; returns false if it already was.
+    [[nodiscard]] auto mark_expanded(const type& target, const parameterized_impl& pimpl) -> bool {
+        return expanded_[&target].emplace(&pimpl).second;
+    }
+
+    // Re-entrancy guard for `build_param_impl_template`
+    [[nodiscard]] auto begin_build(const parameterized_impl& pimpl) -> bool {
+        return building_.emplace(&pimpl).second;
+    }
+    auto end_build(const parameterized_impl& pimpl) -> void { building_.erase(&pimpl); }
 
     // Every method reachable on `target` through any impl (inherent or trait). A name carried by
     // two records appears twice
@@ -105,6 +146,9 @@ class impl_registry {
     arena_alloc&                     arena_;
     std::vector<impl_record*>        records_;
     std::vector<parameterized_impl*> param_records_;
+    template_param_map               templates_;
+    expanded_param_map               expanded_;
+    param_worklist                   building_;
 };
 
 } // namespace ghoti::sema

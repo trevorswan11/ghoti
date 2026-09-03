@@ -254,9 +254,9 @@ struct struct_t {
 };
 
 struct function {
-    bool             has_self;
     gsl::span<type*> params;
     type&            return_type;
+    bool             has_self;
     bool             is_variadic{false};
 };
 

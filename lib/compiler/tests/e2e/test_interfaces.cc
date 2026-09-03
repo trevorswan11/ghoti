@@ -3,6 +3,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "helpers/codegen.hh"
+#include "helpers/sema.hh"
+#include "support/test.hh"
 
 namespace ghoti::tests {
 
@@ -146,6 +148,87 @@ TEST_CASE("a parameterized trait impl over a local ctor dispatches statically") 
             return b.show();
         };
     )") == 42);
+}
+
+TEST_CASE("a parameterized impl with two type parameters remaps each independently") {
+    CHECK(helpers::compile_and_run(R"(
+        const Pair := fn(A: type, B: type): type { return struct { a: A, b: B }; };
+        impl(A: type, B: type) Pair(A, B) {
+            pub const first := fn(&self): A { return self.a; };
+            pub const second := fn(&self): B { return self.b; };
+        }
+        pub const main := fn(): i32 {
+            var p: Pair(i32, i64) = .{ .a = 30, .b = 12 };
+            return p.first() + @as(i32, p.second());
+        };
+    )") == 42);
+}
+
+TEST_CASE("a parameterized impl folds a `constexpr` parameter into its method bodies") {
+    CHECK(helpers::compile_and_run(R"(
+        const Ring := fn(constexpr sz: usize): type { return struct { head: usize }; };
+        impl(constexpr n: usize) Ring(n) {
+            pub const capacity := fn(&self): usize { return n; };
+            pub const half := fn(&self): usize { return n / 2; };
+        }
+        pub const main := fn(): i32 {
+            var r: Ring(28) = .{ .head = 0 };
+            return @as(i32, r.capacity()) + @as(i32, r.half());
+        };
+    )") == 42);
+}
+
+TEST_CASE("a parameterized impl mixes a type and a `constexpr` parameter") {
+    CHECK(helpers::compile_and_run(R"(
+        const Slot := fn(T: type, constexpr tag: i32): type { return struct { val: T }; };
+        impl(T: type, constexpr tag: i32) Slot(T, tag) {
+            pub const tagged := fn(&self): T { return self.val + tag; };
+        }
+        pub const main := fn(): i32 {
+            var s: Slot(i32, 2) = .{ .val = 40 };
+            return s.tagged();
+        };
+    )") == 42);
+}
+
+TEST_CASE("a `constexpr` parameterized-impl param drives a runtime loop bound") {
+    CHECK(helpers::compile_and_run(R"(
+        const Counter := fn(constexpr limit: usize): type { return struct { base: i32 }; };
+        impl(constexpr n: usize) Counter(n) {
+            pub const upto := fn(&self): i32 {
+                var acc: i32 = self.base;
+                var i: usize = 0;
+                while (i < n) { acc = acc + 1; i = i + 1; }
+                return acc;
+            };
+        }
+        pub const main := fn(): i32 {
+            var c: Counter(9) = .{ .base = 33 };
+            return c.upto();
+        };
+    )") == 42);
+}
+
+TEST_CASE("a parameterized impl in a library module is used from the consumer") {
+    CHECK(helpers::compile_and_run(
+              R"(
+        import "shapes.gh" as shapes;
+        pub const main := fn(): i32 {
+            var s: shapes::Scaled(i32) = .{ .base = 42 };
+            return s.size();
+        };
+    )",
+              helpers::make_vector<helpers::mock_file>(helpers::mock_file{
+                  "shapes.gh",
+                  R"(
+            pub const Scaled := fn(T: type): type { return struct { base: T }; };
+            pub const Measure := interface { pub const size := fn(&self): i32; };
+            impl(T: type) Measure for Scaled(T) {
+                pub const size := fn(&self): i32 { return self.base; };
+            }
+        )",
+                  "shapes",
+              })) == 42);
 }
 
 } // namespace ghoti::tests

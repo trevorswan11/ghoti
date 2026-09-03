@@ -941,38 +941,61 @@ namespace {
 // reference, and function types. Returns `t` unchanged (same object) when nothing matched.
 [[nodiscard]] auto remap_type(context& ctx, type& t, const type& from, type& to) -> type& {
     if (&t == &from) { return to; }
-    auto& data{t.get_data()};
-    if (const auto p{data.as_opt<types::pointer>()}) {
-        auto& u{remap_type(ctx, p->underlying, from, to)};
-        if (&u == &p->underlying) { return t; }
-        return ctx.get_pointer(t.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE, u);
-    }
-    if (const auto r{data.as_opt<types::reference>()}) {
-        auto& u{remap_type(ctx, r->underlying, from, to)};
-        if (&u == &r->underlying) { return t; }
-        return ctx.get_reference(t.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE, u);
-    }
-    if (const auto fn{data.as_opt<types::function>()}) {
-        bool changed{false};
-        auto new_params{ctx.pool.get_many_unsafe(fn->params.size())};
-        for (usize i{0}; i < fn->params.size(); ++i) {
-            auto& np{remap_type(ctx, *fn->params[i], from, to)};
-            new_params[i] = &np;
-            changed |= &np != fn->params[i];
-        }
-        auto& new_ret{remap_type(ctx, fn->return_type, from, to)};
-        if (!changed && &new_ret == &fn->return_type) { return t; }
+    return t.get_data().visit(
+        [&](types::pointer p) -> type& {
+            auto& u{remap_type(ctx, p.underlying, from, to)};
+            if (&u == &p.underlying) { return t; }
+            return ctx.get_pointer(t.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE, u);
+        },
+        [&](types::reference r) -> type& {
+            auto& u{remap_type(ctx, r.underlying, from, to)};
+            if (&u == &r.underlying) { return t; }
+            return ctx.get_reference(t.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE,
+                                     u);
+        },
+        [&](types::slice sl) -> type& {
+            auto& u{remap_type(ctx, sl.underlying, from, to)};
+            if (&u == &sl.underlying) { return t; }
+            return ctx.get_slice(t.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE,
+                                 sl.null_terminated,
+                                 u);
+        },
+        [&](types::array ar) -> type& {
+            auto& u{remap_type(ctx, ar.underlying, from, to)};
+            if (&u == &ar.underlying) { return t; }
+            return ctx.get_array(t.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE,
+                                 ar.null_terminated,
+                                 ar.len,
+                                 u);
+        },
+        [&](types::deferred_array da) -> type& {
+            auto& u{remap_type(ctx, da.underlying, from, to)};
+            if (&u == &da.underlying) { return t; }
+            auto& nt{*ctx.pool[{type_kind::TYPE, t.get_key().get_mut(), &da.array, &u}]};
+            nt.resolve_if<types::deferred_array>(da.array, u);
+            return nt;
+        },
+        [&](types::function fn) -> type& {
+            bool changed{false};
+            auto new_params{ctx.pool.get_many_unsafe(fn.params.size())};
+            for (usize i{0}; i < fn.params.size(); ++i) {
+                auto& np{remap_type(ctx, *fn.params[i], from, to)};
+                new_params[i] = &np;
+                changed |= &np != fn.params[i];
+            }
+            auto& new_ret{remap_type(ctx, fn.return_type, from, to)};
+            if (!changed && &new_ret == &fn.return_type) { return t; }
 
-        types::key_t key{type_kind::FUNCTION, t.get_key().get_mut()};
-        for (auto* p : new_params) { key.imprint(*p); }
-        key.imprint(new_ret);
-        key.imprint(static_cast<u64>(fn->has_self));
-        key.imprint(static_cast<u64>(fn->is_variadic));
-        auto& nt{*ctx.pool[key]};
-        nt.resolve_if<types::function>(fn->has_self, new_params, new_ret, fn->is_variadic);
-        return nt;
-    }
-    return t;
+            types::key_t key{type_kind::FUNCTION, t.get_key().get_mut()};
+            for (auto* p : new_params) { key.imprint(*p); }
+            key.imprint(new_ret);
+            key.imprint(static_cast<u64>(fn.has_self));
+            key.imprint(static_cast<u64>(fn.is_variadic));
+            auto& nt{*ctx.pool[key]};
+            nt.resolve_if<types::function>(new_params, new_ret, fn.has_self, fn.is_variadic);
+            return nt;
+        },
+        [&t](const auto&) -> type& { return t; });
 }
 
 // The node id of the struct/union/enum literal a `fn(...): type` body returns, if any.
@@ -1716,7 +1739,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         fn_key.imprint(return_type);
         auto& fn_type{*ctx_.pool[fn_key]};
         fn_type.resolve_if<types::function>(
-            fn.self.has_value(), fn_param_types, return_type, fn.variadic);
+            fn_param_types, return_type, fn.self.has_value(), fn.variadic);
 
         auto& meta{*ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, fn_type}]};
         meta.resolve_if<types::meta_type>(fn_type);
@@ -1812,7 +1835,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     // A `constexpr` parameter makes the function a template, monomorphized per value
     if (any_param_generic(param_types) || any_param_constexpr(fn)) {
         fn_type.resolve<types::function>(
-            fn.self.has_value(), param_types, return_type, fn.variadic);
+            param_types, return_type, fn.self.has_value(), fn.variadic);
         ctx_.generic_functions.register_function(
             fn_type, resolving_, id, fn, stdx::none, user_type_stack_.peek());
         register_impl_param_bounds(fn_type, fn);
@@ -1824,7 +1847,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     // A known return type lets a recursive call inside the body resolve against this signature
     if (!is_auto_return) {
         fn_type.resolve<types::function>(
-            fn.self.has_value(), param_types, return_type, fn.variadic);
+            param_types, return_type, fn.self.has_value(), fn.variadic);
     }
 
     return_trackers_.emplace_back(return_tracker{
@@ -1842,7 +1865,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     auto& deduced_return_type{is_auto_return ? tracker.deduced_return_type(ctx_) : return_type};
     if (is_auto_return) {
         fn_type.resolve<types::function>(
-            fn.self.has_value(), param_types, deduced_return_type, fn.variadic);
+            param_types, deduced_return_type, fn.self.has_value(), fn.variadic);
         resolving_.set_sema_type(fn.explicit_return_type, deduced_return_type);
     }
 
@@ -2003,7 +2026,7 @@ auto type_resolver::attach_closure_type(ast::node_id fn_id, type& fn_type, bool 
 
     auto* impl_sig{ctx_.pool[{type_kind::FUNCTION, types::mut::CONSTANT, idx, true}].get()};
     impl_sig->resolve<types::function>(
-        true, impl_params, public_sig.return_type, public_sig.is_variadic);
+        impl_params, public_sig.return_type, true, public_sig.is_variadic);
 
     closure_type->resolve<types::closure_t>(capture_span, fn_type, *impl_sig);
     resolving_.set_sema_type(fn_id, *closure_type);
@@ -4484,7 +4507,7 @@ auto type_resolver::resolve_required_method_type(const ast::function_expr& fn,
     for (const auto* p : params) { key.imprint(*p); }
     key.imprint(return_type);
     auto& fn_type{*ctx_.pool[key]};
-    fn_type.resolve_if<types::function>(fn.self.has_value(), params, return_type, fn.variadic);
+    fn_type.resolve_if<types::function>(params, return_type, fn.self.has_value(), fn.variadic);
     return fn_type;
 }
 
@@ -5179,6 +5202,15 @@ namespace {
 
 } // namespace
 
+auto type_resolver::param_impl_sentinel(usize disc) -> type& {
+    auto& s{*ctx_.pool[{type_kind::TYPE,
+                        types::mut::CONSTANT,
+                        std::string_view{"pimpl.sentinel"},
+                        static_cast<u64>(disc)}]};
+    if (!s.is_resolved()) { s.resolve<types::builtin_type>(); }
+    return s;
+}
+
 auto type_resolver::register_parameterized_impl(ast::node_id root, const ast::impl_stmt& impl)
     -> void {
     PROFILE_FUNCTION();
@@ -5275,57 +5307,97 @@ auto type_resolver::register_parameterized_impl(ast::node_id root, const ast::im
     });
 }
 
-auto type_resolver::instantiate_impls_for(type&                  concrete,
-                                          ast::node_id           base_ctor_fn,
-                                          gsl::span<type* const> ctor_args,
-                                          std::string_view       ctor_mangled) -> void {
+auto type_resolver::instantiate_impls_for(
+    type&                                                     concrete,
+    const mod::module&                                        base_mod,
+    ast::node_id                                              base_ctor_fn,
+    gsl::span<type* const>                                    ctor_args,
+    gsl::span<const std::pair<std::string, gir::const_value>> ctor_cx,
+    const ast::function_expr&                                 base_fn,
+    std::string_view                                          ctor_mangled) -> void {
     PROFILE_FUNCTION();
     for (auto* pimpl : ctx_.impls.param_records()) {
         if (pimpl->base_ctor_fn.get_index() != base_ctor_fn.get_index() ||
             pimpl->base_ctor_fn.get_kind() != base_ctor_fn.get_kind()) {
             continue;
         }
-
-        // Bind each impl param to the concrete ctor argument it names
-        std::vector<type*> bound_params(pimpl->param_to_ctor_arg.size(), nullptr);
-        bool               ok{true};
-        for (usize i{0}; i < pimpl->param_to_ctor_arg.size(); ++i) {
-            const auto slot{pimpl->param_to_ctor_arg[i]};
-            if (!slot || *slot >= ctor_args.size() || !ctor_args[*slot] ||
-                ctor_args[*slot]->get_kind() == type_kind::TYPE || ctor_args[*slot]->is_poison()) {
-                ok = false;
-                break;
-            }
-            bound_params[i] = ctor_args[*slot];
-        }
-
-        // A still-abstract `type`  argument means this is not a real monomorphization
-        if (!ok) { continue; }
-
-        // One expansion per (parameterized-impl site, concrete target).
-        if (!expanded_param_impls_[&concrete].emplace(pimpl->site.get_index()).second) { continue; }
         if (!pimpl->enclosing) { continue; }
-
         auto&      impl_mod{const_cast<mod::module&>(*pimpl->enclosing)};
         const auto impl_stmt{impl_mod.ast.get_as_opt<ast::impl_stmt>(pimpl->site)};
         if (!impl_stmt) { continue; }
 
-        const auto tmpl_it{param_impl_templates_.find(pimpl->site.get_index())};
-        if (tmpl_it == param_impl_templates_.end()) { continue; } // template pass never ran
-        const auto& tmpl{tmpl_it->second};
-        if (!tmpl.abstract_target || !tmpl.sentinel) { continue; }
+        // Bind each impl param: a type param -> the concrete ctor argument type
+        std::vector<type*> type_bounds(pimpl->param_to_ctor_arg.size(), nullptr);
+        std::vector<std::pair<std::string, gir::const_value>> cx_bindings;
+        bool                                                  ok{true};
+        for (usize i{0}; i < pimpl->param_to_ctor_arg.size(); ++i) {
+            const auto slot{pimpl->param_to_ctor_arg[i]};
+            if (!slot || *slot >= ctor_args.size() || *slot >= base_fn.parameters.size()) {
+                ok = false;
+                break;
+            }
+            if (i < impl_stmt->impl_params.size() && impl_stmt->impl_params[i].is_constexpr) {
+                const auto& cx_name{
+                    base_mod.ast.get_as<ast::identifier_expr>(base_fn.parameters[*slot].name).name};
+                const auto it{std::ranges::find(
+                    ctor_cx, cx_name, [](const auto& p) { return std::string_view{p.first}; })};
+                if (it == ctor_cx.end()) {
+                    ok = false;
+                    break;
+                }
 
-        // Only a single impl parameter is monomorphized through one shared sentinel today.
-        if (bound_params.size() != 1) {
-            ctx_.diags.emplace_back(
-                "a parameterized `impl` with more than one parameter is not yet supported",
-                error::STATIC_REQUIREMENT_UNSUPPORTED,
-                impl_mod.ast.location_of(pimpl->site));
-            continue;
+                cx_bindings.emplace_back(
+                    std::string{
+                        impl_mod.ast.get_as<ast::identifier_expr>(impl_stmt->impl_params[i].name)
+                            .name},
+                    it->second);
+            } else {
+                auto* arg{ctor_args[*slot]};
+                // A still-abstract `type` argument means this is not a real monomorphization.
+                if (!arg || arg->get_kind() == type_kind::TYPE || arg->is_poison()) {
+                    ok = false;
+                    break;
+                }
+                if (i < type_bounds.size()) { type_bounds[i] = arg; }
+            }
         }
+        if (!ok) { continue; }
+
+        // The impl's own module may not have run its template pass yet (a consumer reached this
+        // ctor first). Build it now against that module so expansion is order-independent.
+        auto tmpl_p{ctx_.impls.get_template(*pimpl)};
+        if (!tmpl_p) {
+            if (&impl_mod == &resolving_) {
+                const scope s{table_stack_,
+                              resolving_.get_sema_type(pimpl->site).get_symbol_table_idx(),
+                              table_idx_};
+                build_param_impl_template(*impl_stmt, pimpl->site);
+            } else {
+                symbol_table_stack stk;
+                stk.push(*ctx_.prelude_index);
+                if (impl_mod.root_table_idx) { stk.push(*impl_mod.root_table_idx); }
+                stk.push(pimpl->body_scope_idx);
+                type_resolver sub{impl_mod, ctx_, pimpl->body_scope_idx, std::move(stk)};
+                sub.for_generic_instantiation_ = true;
+                sub.build_param_impl_template(*impl_stmt, pimpl->site);
+            }
+            tmpl_p = ctx_.impls.get_template(*pimpl);
+        }
+        if (!tmpl_p) { continue; }
+        const auto& tmpl{*tmpl_p};
+        if (!tmpl.abstract_target || tmpl.sentinels.size() != type_bounds.size()) { continue; }
+
+        // One expansion per (parameterized impl, concrete target).
+        if (!ctx_.impls.mark_expanded(concrete, *pimpl)) { continue; }
+
         const auto remap_one{[&](type* t) -> type* {
-            auto& a{remap_type(ctx_, *t, *tmpl.abstract_target, concrete)};
-            return &remap_type(ctx_, a, *tmpl.sentinel, *bound_params[0]);
+            type* r{&remap_type(ctx_, *t, *tmpl.abstract_target, concrete)};
+            for (usize i{0}; i < tmpl.sentinels.size() && i < type_bounds.size(); ++i) {
+                if (tmpl.sentinels[i] && type_bounds[i]) {
+                    r = &remap_type(ctx_, *r, *tmpl.sentinels[i], *type_bounds[i]);
+                }
+            }
+            return r;
         }};
 
         // Build this monomorphization's typing by remapping the template.
@@ -5340,6 +5412,9 @@ auto type_resolver::instantiate_impls_for(type&                  concrete,
         const auto typing_key{fmt::format("pimpl{}#{}", pimpl->site.get_index(), ctor_mangled)};
         if (!typing.empty()) {
             ctx_.instantiation_cache.set_body_type_diff(typing_key, std::move(typing));
+        }
+        if (!cx_bindings.empty()) {
+            ctx_.instantiation_cache.set_type_ctor_bindings(typing_key, std::move(cx_bindings));
         }
 
         impl_record rec{
@@ -5379,7 +5454,7 @@ auto type_resolver::instantiate_impls_for(type&                  concrete,
         }
 
         auto* stored{recorded->get()};
-        if (trait && &impl_mod == &resolving_ && stored->interface_type) {
+        if (trait && stored->interface_type) {
             if (const auto iface{stored->interface_type->get_data().as_opt<types::interface_t>()}) {
                 check_impl_conformance(*stored, *iface);
             }
@@ -5396,6 +5471,76 @@ auto type_resolver::instantiate_impls_for(type&                  concrete,
     }
 }
 
+auto type_resolver::build_param_impl_template(const ast::impl_stmt& impl, ast::node_id site)
+    -> void {
+    PROFILE_FUNCTION();
+    // `pimpl` is absent for an unanchored `impl(P) BareType` (no base ctor to key on). We still
+    // resolve the body here so its symbols settle; there is just nothing to expand later.
+    const auto pimpl{ctx_.impls.param_record_by_site(site, resolving_)};
+    if (pimpl) {
+        if (ctx_.impls.get_template(*pimpl)) { return; }
+        // Resolving the abstract `Ctor(...)` target below re-enters expansion for this same
+        // impl; bail on that recursive entry. Cleared once the template is stored.
+        if (!ctx_.impls.begin_build(*pimpl)) { return; }
+    }
+
+    // Bind each type param to its own opaque sentinel `type` and each `constexpr` param to a
+    // dummy value, then resolve the target + members once
+    std::vector<const type*> sentinels;
+    sentinels.reserve(impl.impl_params.size());
+    constexpr_frame cx_dummy;
+    for (const auto& p : impl.impl_params) {
+        if (p.is_constexpr) {
+            resolve(p.explicit_type);
+            auto& pty{last_type_ && !last_type_->is_poison()
+                          ? denoted_type(*last_type_)
+                          : ctx_.get_builtin_resolved_type(type_kind::USIZE)};
+            resolving_.set_sema_type(p.name, pty);
+            resolve_symbol_info(p.name, symbol_kind::VALUE);
+            sentinels.emplace_back(nullptr);
+            cx_dummy.insert_or_assign(resolving_.ast.get_as<ast::identifier_expr>(p.name).name,
+                                      gir::const_value{u64{1}, pty});
+        } else {
+            auto& sentinel{param_impl_sentinel((*p.name).get_index())};
+            resolving_.set_sema_type(p.name, sentinel);
+            resolve_symbol_info(p.name, symbol_kind::TYPE);
+            sentinels.emplace_back(&sentinel);
+        }
+    }
+    const constexpr_frame_guard cx_guard{ctx_.constexpr_binding_frames, std::move(cx_dummy)};
+
+    const auto snap_nodes{resolving_.sema_side_tables.node_types.values};
+    const auto snap_types{resolving_.sema_side_tables.explicit_types.values};
+    const auto diags_before{ctx_.diags.size()};
+
+    if (impl.interface_type) { resolve(*impl.interface_type); }
+    resolve(impl.target_type);
+    stdx::option<const type&>      abstract_target;
+    stdx::option<structural_guard> guard;
+    if (last_type_ && !last_type_->is_poison()) {
+        auto& t{denoted_type(*last_type_)};
+        abstract_target.emplace(t);
+        guard.emplace(user_type_stack_, t);
+    }
+    for (const auto& member : impl.members) { resolve(*member); }
+    if (ctx_.diags.size() > diags_before) { DISCARD(ctx_.diags.split_off(diags_before)); }
+
+    param_impl_template tmpl{.abstract_target = abstract_target, .sentinels = std::move(sentinels)};
+    const auto          collect{[](const auto& live, const auto& snap, auto& out) {
+        for (usize i{0}; i < live.size(); ++i) {
+            if (!live[i]) { continue; }
+            const bool changed{i >= snap.size() || !snap[i] || snap[i].get() != live[i].get()};
+            if (changed) { out.emplace_back(i, live[i].get()); }
+        }
+    }};
+    if (!pimpl) { return; } // unanchored: members resolved, nothing to store
+
+    collect(resolving_.sema_side_tables.node_types.values, snap_nodes, tmpl.node_types);
+    collect(resolving_.sema_side_tables.explicit_types.values, snap_types, tmpl.explicit_types);
+    ctx_.impls.set_template(*pimpl, std::move(tmpl));
+    ctx_.impls.end_build(*pimpl);
+}
+
 auto type_resolver::visit(ast::node_id id, const ast::impl_stmt& impl) -> void {
     PROFILE_FUNCTION();
     auto&       impl_type{resolving_.get_sema_type(id)};
@@ -5404,42 +5549,7 @@ auto type_resolver::visit(ast::node_id id, const ast::impl_stmt& impl) -> void {
 
     // Parameterized `impl(P) ...` is re-instantiated per monomorphization of its target.
     if (!impl.impl_params.empty()) {
-        // Run a *template* pass: bind each impl param to one opaque sentinel `type`, resolve the
-        // target and members once, and record the resulting node typings
-        auto& sentinel{ctx_.get_builtin_resolved_type(type_kind::TYPE)};
-        for (const auto& p : impl.impl_params) {
-            resolving_.set_sema_type(p.name, sentinel);
-            resolve_symbol_info(p.name, symbol_kind::TYPE);
-        }
-
-        const auto snap_nodes{resolving_.sema_side_tables.node_types.values};
-        const auto snap_types{resolving_.sema_side_tables.explicit_types.values};
-        const auto diags_before{ctx_.diags.size()};
-
-        if (impl.interface_type) { resolve(*impl.interface_type); }
-        resolve(impl.target_type);
-        stdx::option<const type&>      abstract_target;
-        stdx::option<structural_guard> guard;
-        if (last_type_ && !last_type_->is_poison()) {
-            auto& t{denoted_type(*last_type_)};
-            abstract_target.emplace(t);
-            guard.emplace(user_type_stack_, t);
-        }
-        for (const auto& member : impl.members) { resolve(*member); }
-        if (ctx_.diags.size() > diags_before) { DISCARD(ctx_.diags.split_off(diags_before)); }
-
-        param_impl_template tmpl{.abstract_target = abstract_target, .sentinel = &sentinel};
-        const auto          collect{[](const auto& live, const auto& snap, auto& out) {
-            for (usize i{0}; i < live.size(); ++i) {
-                if (!live[i]) { continue; }
-                const bool changed{i >= snap.size() || !snap[i] || snap[i].get() != live[i].get()};
-                if (changed) { out.emplace_back(i, live[i].get()); }
-            }
-        }};
-        collect(resolving_.sema_side_tables.node_types.values, snap_nodes, tmpl.node_types);
-        collect(resolving_.sema_side_tables.explicit_types.values, snap_types, tmpl.explicit_types);
-        param_impl_templates_.insert_or_assign(id.get_index(), std::move(tmpl));
-
+        build_param_impl_template(impl, id);
         return last_type_.emplace(void_type);
     }
 
@@ -5473,7 +5583,10 @@ auto type_resolver::visit(ast::node_id id, const ast::impl_stmt& impl) -> void {
 auto type_resolver::check_impl_conformance(const impl_record& rec, const types::interface_t& iface)
     -> void {
     PROFILE_FUNCTION();
-    const auto  site_loc{resolving_.ast.location_of(rec.site)};
+    // A parameterized impl may be conformance-checked while a different module is being
+    // resolved (at the point its target first monomorphizes), so read AST from where it lives.
+    const auto& cmod{rec.enclosing ? *rec.enclosing : resolving_};
+    const auto  site_loc{cmod.ast.location_of(rec.site)};
     const auto  iface_name{ctx_.type_display_name(*rec.interface_type)};
     const auto  target_name{ctx_.type_display_name(*rec.target_type)};
     const auto& body_table{ctx_.registry.get(rec.body_scope_idx)};
@@ -5490,7 +5603,7 @@ auto type_resolver::check_impl_conformance(const impl_record& rec, const types::
                                     site_loc);
             continue;
         }
-        const auto method_loc{resolving_.ast.location_of(supplied->decl)};
+        const auto method_loc{cmod.ast.location_of(supplied->decl)};
         const auto expected{iface.method_sigs[i]->get_data().as_opt<types::function>()};
         const auto got{supplied->fn_type ? supplied->fn_type->get_data().as_opt<types::function>()
                                          : stdx::none};
@@ -5572,7 +5685,7 @@ auto type_resolver::check_impl_conformance(const impl_record& rec, const types::
         is_item |= std::ranges::contains(iface.assoc_type_names, member_name);
         is_item |= std::ranges::contains(iface.assoc_const_names, member_name);
 
-        const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
+        const auto decl{cmod.ast.get_as_opt<ast::decl_stmt>(*node)};
         if (decl && decl->has_modifier(ast::decl_modifiers::VARIABLE)) { is_item = true; }
 
         if (!is_item) {
@@ -5747,7 +5860,7 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_function
     if (fn.variadic) { fn_key.imprint(fn.variadic); }
 
     auto& resolved_fn{*ctx_.pool[fn_key]};
-    resolved_fn.resolve_if<types::function>(false, param_types, return_type, fn.variadic);
+    resolved_fn.resolve_if<types::function>(param_types, return_type, false, fn.variadic);
 
     auto& final_type{apply_explicit_modifiers(id, resolved_fn)};
     resolving_.set_sema_type(id, final_type);
@@ -6036,15 +6149,23 @@ auto type_resolver::instantiate_generic(type&                             callee
                     ctor_bindings.emplace_back(std::string{p_name}, constexpr_args[cx_i]);
                     ++cx_i;
                 }
+                deduced_return_type = &clone;
+
+                // Expand any parameterized `impl(P) [I for] Ctor(P)` onto this instantiation
+                // (before `ctor_bindings` is moved -- the impl needs the ctor's folded values).
+                if (!ctx_.impls.param_records().empty()) {
+                    instantiate_impls_for(clone,
+                                          fn_mod,
+                                          fn_info.node_id,
+                                          concrete_args,
+                                          ctor_bindings,
+                                          fn_expr,
+                                          mangled_name);
+                }
+
                 if (!ctor_bindings.empty()) {
                     ctx_.instantiation_cache.set_type_ctor_bindings(mangled_name,
                                                                     std::move(ctor_bindings));
-                }
-                deduced_return_type = &clone;
-
-                // Expand any parameterized `impl(P) [I for] Ctor(P)` onto this instantiation.
-                if (!ctx_.impls.param_records().empty()) {
-                    instantiate_impls_for(clone, fn_info.node_id, concrete_args, mangled_name);
                 }
             }
         }

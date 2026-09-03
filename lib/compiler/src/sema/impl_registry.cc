@@ -36,6 +36,17 @@ auto impl_registry::record_parameterized(parameterized_impl pimpl)
     return gsl::not_null{stored};
 }
 
+auto impl_registry::param_record_by_site(ast::node_id site, const mod::module& enclosing) noexcept
+    -> stdx::option<parameterized_impl&> {
+    for (auto* p : param_records_) {
+        if (p->site.get_index() == site.get_index() && p->site.get_kind() == site.get_kind() &&
+            p->enclosing == &enclosing) {
+            return *p;
+        }
+    }
+    return stdx::none;
+}
+
 auto impl_registry::find_by_site(ast::node_id site) noexcept -> stdx::option<impl_record&> {
     for (auto* r : records_) {
         if (r->site.get_index() == site.get_index() && r->site.get_kind() == site.get_kind()) {

@@ -363,4 +363,64 @@ TEST_CASE("a parameterized impl anchored on neither its ctor nor its interface i
                              sema::error::ORPHAN_IMPL));
 }
 
+TEST_CASE("a parameterized impl with several type params conforms per instantiation") {
+    helpers::resolve_and_check(R"(
+        const Both := interface {
+            pub const lhs := fn(&self): i32;
+            pub const rhs := fn(&self): i32;
+        };
+        const Pair := fn(A: type, B: type): type { return struct { a: A, b: B }; };
+        impl(A: type, B: type) Both for Pair(A, B) {
+            pub const lhs := fn(&self): i32 { return self.a; };
+            pub const rhs := fn(&self): i32 { return self.b; };
+        }
+        const use := fn(): i32 {
+            var p: Pair(i32, i32) = .{ .a = 1, .b = 2 };
+            return p.lhs() + p.rhs();
+        };
+)");
+}
+
+TEST_CASE("a `constexpr` parameterized-impl param resolves as a value and an array dimension") {
+    helpers::resolve_and_check(R"(
+        const Buf := fn(constexpr cap: usize): type { return struct { head: i32 }; };
+        impl(constexpr n: usize) Buf(n) {
+            pub const cap := fn(&self): usize { return n; };
+            pub const scratch := fn(&self): i32 {
+                var tmp: [n]i32 = undefined;
+                const first: i32 = tmp[0];
+                return first - first + self.head + @as(i32, n / 2);
+            };
+        }
+        const use := fn(): i32 {
+            var b: Buf(8) = .{ .head = 1 };
+            return @as(i32, b.cap()) + b.scratch();
+        };
+)");
+}
+
+TEST_CASE("a parameterized impl anchored on a local interface may target a foreign ctor") {
+    auto [ctx, idx]{helpers::resolve(
+        R"(
+        import "other.gh" as other;
+        const Named := interface { pub const label := fn(&self): i32; };
+        impl(T: type) Named for other::Bag(T) {
+            pub const label := fn(&self): i32 { return self.v; };
+        }
+        const use := fn(): i32 {
+            var b: other::Bag(i32) = .{ .v = 7 };
+            return b.label();
+        };
+)",
+        helpers::make_vector<helpers::mock_file>(helpers::mock_file{
+            .path   = "other.gh",
+            .source = "pub const Bag := fn(T: type): type { return struct { v: i32 }; };",
+        }))};
+    std::vector<sema::error> codes;
+    if (const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()}) {
+        for (const auto& d : *diags) { codes.emplace_back(d.get_error()); }
+    }
+    CHECK(codes.empty());
+}
+
 } // namespace ghoti::tests

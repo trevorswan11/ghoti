@@ -183,7 +183,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
     for (const auto& param_type : req.arg_types) { fn_key.imprint(*param_type); }
     fn_key.imprint(*req.return_type);
     auto& fn_type{*ctx_.pool[fn_key]};
-    fn_type.resolve_if<sema::types::function>(false, req.arg_types, *req.return_type, false);
+    fn_type.resolve_if<sema::types::function>(req.arg_types, *req.return_type, false, false);
 
     auto& fn{gir_module_.add_function(req.mangled_name, fn_type, false, false)};
     auto& entry{fn.add_segment()};
@@ -661,7 +661,7 @@ auto emitter::emit_top_level_test(ast::node_id id, const ast::test_stmt& test) -
     auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
     auto& test_fn_type{*ctx_.pool[{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT}]};
     test_fn_type.resolve_if<sema::types::function>(
-        false, gsl::span<sema::type*>{}, bool_type, false);
+        gsl::span<sema::type*>{}, bool_type, false, false);
 
     const auto test_desc{test.description
                              .transform([&](ast::string_handle h) {
