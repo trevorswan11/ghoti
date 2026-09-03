@@ -75,6 +75,8 @@ struct param_impl_template {
     std::vector<const type*>             sentinels{}; // per impl param; null for a constexpr one
     std::vector<std::pair<usize, type*>> node_types{};
     std::vector<std::pair<usize, type*>> explicit_types{};
+    std::vector<ast::node_id>            constexpr_if_nodes{}; // verdict depends on an impl param
+    std::vector<ast::node_id> constexpr_match_nodes{};         // verdict depends on an impl param
 };
 
 class impl_registry {

@@ -29,6 +29,7 @@
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
 #include "compiler/sema/impl_registry.hh"
+#include "compiler/sema/instantiation_cache.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
@@ -73,6 +74,14 @@ class type_resolver {
     // Resolves a parameterized impl body once against opaque sentinels + dummy `constexpr`
     // values and stores the result on the shared `impl_registry`
     auto build_param_impl_template(const ast::impl_stmt& impl, ast::node_id site) -> void;
+    // Folds each parameter-dependent `if constexpr` / `match constexpr` recorded in `tmpl` with
+    // this instantiation's real bindings, appending the verdicts to `typing`.
+    auto
+    refold_param_impl_branches(mod::module&                                              impl_mod,
+                               const param_impl_template&                                tmpl,
+                               body_type_diff&                                           typing,
+                               gsl::span<const std::pair<std::string, gir::const_value>> bindings)
+        -> void;
     auto resolve_impl_type_ref(ast::explicit_type_id ref) -> type&;
     auto resolve_impl_method_access(const type& target, std::string_view name, source_location loc)
         -> stdx::option<stdx::result<gsl::not_null<type*>, diagnostic>>;
@@ -299,6 +308,10 @@ class type_resolver {
 
     // Resolves a `match constexpr`: folds the scrutinee, type-checks only the selected arm
     auto resolve_constexpr_match(ast::node_id, const ast::match_expr&, type& matcher_type) -> void;
+    // Template-mode: type-resolve every arm of a `match constexpr` without folding, so
+    // `instantiate_impls_for` can pick the arm per instantiation.
+    auto resolve_constexpr_match_all_arms(ast::node_id, const ast::match_expr&, type& matcher_type)
+        -> void;
 
     auto visit(ast::node_id, const ast::match_expr&) -> void;
     auto visit(ast::node_id, const ast::reference_expr&) -> void;
@@ -405,10 +418,15 @@ class type_resolver {
     std::vector<ast::node_id> open_function_nodes_;
     std::vector<bool>         self_recursive_flags_;
 
-    bool                      in_mutating_context_{false};
-    bool                      for_generic_instantiation_{false};
-    bool                      in_subscript_index_{false};
-    bool                      in_for_iterable_{false};
+    bool in_mutating_context_{false};
+    bool for_generic_instantiation_{false};
+    bool in_subscript_index_{false};
+    bool in_for_iterable_{false};
+    // Set only while `build_param_impl_template` resolves a parameterized-impl body against
+    // sentinel / dummy parameter values
+    bool                      building_param_template_{false};
+    std::vector<ast::node_id> template_constexpr_ifs_;
+    std::vector<ast::node_id> template_constexpr_matches_;
     stdx::opt_size            pending_impl_method_owner_;
     stdx::option<std::string> pending_param_impl_target_;
 

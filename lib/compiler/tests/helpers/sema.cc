@@ -1,5 +1,6 @@
 #include "helpers/sema.hh"
 
+#include <algorithm>
 #include <filesystem>
 #include <ostream>
 #include <string>
@@ -239,6 +240,20 @@ auto struct_members(std::string_view input, std::string_view name) -> std::vecto
         return out;
     }
     return {};
+}
+
+auto resolver_error_codes(std::string_view src) -> std::vector<sema::error> {
+    auto [ctx, idx]{helpers::resolve(src)};
+    std::vector<sema::error> codes;
+    if (const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()}) {
+        for (const auto& d : *diags) { codes.emplace_back(d.get_error()); }
+    }
+    return codes;
+}
+
+auto raised(std::string_view src, sema::error code) -> bool {
+    const auto codes{resolver_error_codes(src)};
+    return std::ranges::contains(codes, code);
 }
 
 } // namespace ghoti::tests::helpers

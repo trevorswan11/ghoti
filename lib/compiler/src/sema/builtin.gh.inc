@@ -96,6 +96,14 @@ pub weak const panic_handler := fn(msg: []u8, file: []u8, line: u32, column: u32
     @trap();
 };
 
+pub weak const assert_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): void {
+    _ = msg;
+    _ = file;
+    _ = line;
+    _ = column;
+    @trap();
+};
+
 pub weak const expect_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): void {
     _ = msg;
     _ = file;

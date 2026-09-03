@@ -85,6 +85,9 @@ constexpr builtin_t EXPECT{"@expect", token_type_t::BUILTIN_EXPECT};
 constexpr builtin_t REQUIRE{"@require", token_type_t::BUILTIN_REQUIRE};
 constexpr builtin_t SKIP{"@skip", token_type_t::BUILTIN_SKIP};
 
+constexpr builtin_t ASSERT{"@assert", token_type_t::BUILTIN_ASSERT};
+constexpr builtin_t VERIFY{"@verify", token_type_t::BUILTIN_VERIFY};
+
 constexpr builtin_t COMPILE_ERROR{"@compileError", token_type_t::BUILTIN_COMPILE_ERROR};
 constexpr builtin_t CFG{"@cfg", token_type_t::BUILTIN_CFG};
 constexpr builtin_t CFG_VALUE{"@cfgValue", token_type_t::BUILTIN_CFG_VALUE};
@@ -159,6 +162,8 @@ constexpr std::array ALL_BUILTINS{
     builtins::EXPECT,
     builtins::REQUIRE,
     builtins::SKIP,
+    builtins::ASSERT,
+    builtins::VERIFY,
     builtins::CFG,
     builtins::CFG_VALUE,
     builtins::DISCARDABLE,

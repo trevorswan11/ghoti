@@ -1756,6 +1756,41 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             builder_.SetInsertPoint(cont_bb);
             return nullptr;
         }
+        case syntax::token_type_t::BUILTIN_ASSERT:
+        case syntax::token_type_t::BUILTIN_VERIFY: {
+            const bool is_verify{*builtin_tok == syntax::token_type_t::BUILTIN_VERIFY};
+            if (inst.operands.empty()) { return nullptr; }
+            auto* cond_val{lower_value(inst.operands[0])};
+            if (!cond_val) { return nullptr; }
+            if (cond_val->getType()->isIntegerTy() &&
+                cond_val->getType()->getIntegerBitWidth() != 1) {
+                cond_val = builder_.CreateICmpNE(
+                    cond_val, llvm::Constant::getNullValue(cond_val->getType()), "tobool");
+            }
+
+            auto* cur_fn{builder_.GetInsertBlock()->getParent()};
+            auto* fail_bb{llvm::BasicBlock::Create(
+                context_, is_verify ? "verify.fail" : "assert.fail", cur_fn)};
+            auto* cont_bb{llvm::BasicBlock::Create(
+                context_, is_verify ? "verify.cont" : "assert.cont", cur_fn)};
+            builder_.CreateCondBr(cond_val, cont_bb, fail_bb);
+
+            builder_.SetInsertPoint(fail_bb);
+            if (is_verify) {
+                std::string_view msg{"verification failed"};
+                if (inst.operands.size() > 4) {
+                    if (const auto s{inst.operands[4].as_opt<std::string>()}) { msg = *s; }
+                }
+                emit_lowered_panic(msg, inst);
+                builder_.CreateUnreachable();
+            } else {
+                emit_context_handler_call(inst, "assert_handler", std::array{4UZ, 1UZ, 2UZ, 3UZ});
+                builder_.CreateBr(cont_bb);
+            }
+
+            builder_.SetInsertPoint(cont_bb);
+            return nullptr;
+        }
         case syntax::token_type_t::BUILTIN_SKIP: {
             builder_.CreateStore(builder_.getInt1(true), get_or_create_test_skipped_flag());
             emit_context_handler_call(inst, "skip_handler", std::array{0UZ, 1UZ, 2UZ, 3UZ});

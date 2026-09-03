@@ -2007,6 +2007,49 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             if (is_expect && local_res) { return value{*local_res, ret_type}; }
             return value{void_val{}, ret_type};
         }
+        case syntax::token_type_t::BUILTIN_ASSERT:
+        case syntax::token_type_t::BUILTIN_VERIFY: {
+            const bool is_verify{fn_token == syntax::token_type_t::BUILTIN_VERIFY};
+
+            // A comptime-known-true condition needs no check
+            if (!call.arguments.empty()) {
+                if (const auto ch{call.arguments[0].as_opt<ast::expr_handle>()}) {
+                    if (const auto cv{const_eval_.try_eval(*ch)}) {
+                        if (const auto b{cv->as_opt<bool>()}; b && *b) {
+                            return value{void_val{}, ret_type};
+                        }
+                    }
+                }
+            }
+            if (!is_verify && !runtime_safety_) { return value{void_val{}, ret_type}; }
+
+            std::string message{is_verify ? "verification failed" : "assertion failed"};
+            if (call.arguments.size() > 1) {
+                if (const auto mh{call.arguments[1].as_opt<ast::expr_handle>()}) {
+                    if (const auto se{active_ast().get_as_opt<ast::string_expr>(*mh)}) {
+                        message = std::string{se->value};
+                    } else if (const auto mv{const_eval_.try_eval(*mh)}) {
+                        if (const auto s{mv->as_opt<std::string>()}) { message = *s; }
+                    }
+                }
+            }
+
+            const auto loc{active_ast().location_of(id)};
+            auto&      u32_type{ctx_.get_builtin_resolved_type(sema::type_kind::U32)};
+
+            std::vector<value> args;
+            args.emplace_back(emit_expression(*call.arguments[0].as_opt<ast::expr_handle>()));
+            args.emplace_back(
+                const_value::make_string(ctx_, active_mod().path.string()).to_gir_value());
+            args.emplace_back(value{static_cast<u64>(loc.line), u32_type});
+            args.emplace_back(value{static_cast<u64>(loc.column), u32_type});
+            args.emplace_back(const_value::make_string(ctx_, message).to_gir_value());
+
+            request_builtin_runtime(is_verify ? "panic_handler" : "assert_handler");
+            builder_.emit_builtin_call(
+                is_verify ? "@verify" : "@assert", std::move(args), ret_type);
+            return value{void_val{}, ret_type};
+        }
         case syntax::token_type_t::BUILTIN_SKIP: {
             // `@skip(["msg"])` marks the enclosing test as skipped and returns from it.
             stdx::option<value> msg_val;

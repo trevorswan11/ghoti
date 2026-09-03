@@ -231,4 +231,37 @@ TEST_CASE("a parameterized impl in a library module is used from the consumer") 
               })) == 42);
 }
 
+TEST_CASE("`if constexpr` on a parameterized-impl `constexpr` param folds per instantiation") {
+    CHECK(helpers::compile_and_run(R"(
+        const Buf := fn(constexpr cap: usize): type { return struct { head: i32 }; };
+        impl(constexpr n: usize) Buf(n) {
+            pub const kind := fn(&self): i32 {
+                if constexpr (n > 4) { return 100 + self.head; }
+                return self.head;
+            };
+        }
+        pub const main := fn(): i32 {
+            var big: Buf(8) = .{ .head = 1 };
+            var small: Buf(2) = .{ .head = 5 };
+            return big.kind() + small.kind();
+        };
+    )") == 106);
+}
+
+TEST_CASE("`match constexpr` on a parameterized-impl `constexpr` param selects per instantiation") {
+    CHECK(helpers::compile_and_run(R"(
+        const Buf := fn(constexpr cap: usize): type { return struct { head: i32 }; };
+        impl(constexpr n: usize) Buf(n) {
+            pub const bucket := fn(&self): i32 {
+                return match constexpr (n) { 0 => 0, 1 => 10, _ => 99 } + self.head;
+            };
+        }
+        pub const main := fn(): i32 {
+            var one: Buf(1) = .{ .head = 2 };
+            var many: Buf(7) = .{ .head = 0 };
+            return one.bucket() + many.bucket();
+        };
+    )") == 111);
+}
+
 } // namespace ghoti::tests

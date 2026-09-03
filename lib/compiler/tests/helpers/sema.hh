@@ -317,4 +317,7 @@ struct cfg_outcome {
 [[nodiscard]] auto struct_members(std::string_view input, std::string_view name)
     -> std::vector<std::string>;
 
+[[nodiscard]] auto resolver_error_codes(std::string_view src) -> std::vector<sema::error>;
+[[nodiscard]] auto raised(std::string_view src, sema::error code) -> bool;
+
 } // namespace ghoti::tests::helpers

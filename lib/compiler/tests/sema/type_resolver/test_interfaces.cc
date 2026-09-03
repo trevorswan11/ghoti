@@ -17,21 +17,6 @@ namespace syms = sema::symbols;
 
 namespace {
 
-// Resolves `src` and returns every sema error code the module raised (empty if it resolved clean).
-[[nodiscard]] auto resolver_error_codes(std::string_view src) -> std::vector<sema::error> {
-    auto [ctx, idx]{helpers::resolve(src)};
-    std::vector<sema::error> codes;
-    if (const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()}) {
-        for (const auto& d : *diags) { codes.push_back(d.get_error()); }
-    }
-    return codes;
-}
-
-[[nodiscard]] auto raised(std::string_view src, sema::error code) -> bool {
-    const auto codes{resolver_error_codes(src)};
-    return std::ranges::find(codes, code) != codes.end();
-}
-
 [[nodiscard]] auto
 raised_with_import(std::string_view src, std::string_view other_source, sema::error code) -> bool {
     auto [ctx, idx]{helpers::resolve(src,
@@ -140,34 +125,34 @@ TEST_CASE("a conforming trait impl passes and its method is callable") {
 }
 
 TEST_CASE("a missing requirement is reported") {
-    CHECK(raised(R"(
+    CHECK(helpers::raised(R"(
         const W := interface { pub const write := fn(&mut self): void; pub const flush := fn(&mut self): void; };
         const F := struct { x: i32 };
         impl W for F { pub const write := fn(&mut self): void {}; }
 )",
-                 sema::error::MISSING_IMPL_METHOD));
+                          sema::error::MISSING_IMPL_METHOD));
 }
 
 TEST_CASE("a wrong self binding is reported") {
-    CHECK(raised(R"(
+    CHECK(helpers::raised(R"(
         const W := interface { pub const write := fn(&mut self): void; };
         const F := struct { x: i32 };
         impl W for F { pub const write := fn(&self): void {}; }
 )",
-                 sema::error::IMPL_SELF_MISMATCH));
+                          sema::error::IMPL_SELF_MISMATCH));
 }
 
 TEST_CASE("a wrong return type is reported") {
-    CHECK(raised(R"(
+    CHECK(helpers::raised(R"(
         const W := interface { pub const size := fn(&self): usize; };
         const F := struct { x: i32 };
         impl W for F { pub const size := fn(&self): bool { return true; }; }
 )",
-                 sema::error::IMPL_SIGNATURE_MISMATCH));
+                          sema::error::IMPL_SIGNATURE_MISMATCH));
 }
 
 TEST_CASE("a stray member in a trait impl is reported") {
-    CHECK(raised(R"(
+    CHECK(helpers::raised(R"(
         const W := interface { pub const write := fn(&mut self): void; };
         const F := struct { x: i32 };
         impl W for F {
@@ -175,7 +160,7 @@ TEST_CASE("a stray member in a trait impl is reported") {
             pub const extra := fn(&self): void {};
         }
 )",
-                 sema::error::UNKNOWN_IMPL_MEMBER));
+                          sema::error::UNKNOWN_IMPL_MEMBER));
 }
 
 TEST_CASE("the orphan rule rejects an inherent impl on a foreign type") {
@@ -187,13 +172,13 @@ impl other::Foreign { pub const f := fn(&self): void {}; }
 }
 
 TEST_CASE("two trait impls for the same (I, T) pair are a duplicate") {
-    CHECK(raised(R"(
+    CHECK(helpers::raised(R"(
         const W := interface { pub const f := fn(&self): void; };
         const F := struct { x: i32 };
         impl W for F { pub const f := fn(&self): void {}; }
         impl W for F { pub const f := fn(&self): void {}; }
 )",
-                 sema::error::DUPLICATE_IMPL));
+                          sema::error::DUPLICATE_IMPL));
 }
 
 TEST_CASE("@implements evaluates to the right constexpr bool") {
@@ -223,11 +208,11 @@ TEST_CASE("@implements also accepts a value as its first argument") {
 }
 
 TEST_CASE("an interface cannot be stored by value") {
-    CHECK(raised(R"(
+    CHECK(helpers::raised(R"(
         const W := interface { pub const f := fn(&self): void; };
         var w: W = undefined;
 )",
-                 sema::error::INTERFACE_NOT_A_VALUE));
+                          sema::error::INTERFACE_NOT_A_VALUE));
 }
 
 TEST_CASE("an inherent impl method is callable on an instance") {
@@ -241,18 +226,18 @@ TEST_CASE("an inherent impl method is callable on an instance") {
 }
 
 TEST_CASE("an inherent impl member may not shadow a native member or another impl member") {
-    CHECK(raised(R"(
+    CHECK(helpers::raised(R"(
         const P := struct { x: i32, const m := fn(&self): i32 { return x; }; };
         impl P { pub const m := fn(&self): i32 { return 0; }; }
 )",
-                 sema::error::DUPLICATE_MEMBER));
+                          sema::error::DUPLICATE_MEMBER));
 
-    CHECK(raised(R"(
+    CHECK(helpers::raised(R"(
         const P := struct { x: i32 };
         impl P { pub const m := fn(&self): i32 { return 1; }; }
         impl P { pub const m := fn(&self): i32 { return 2; }; }
 )",
-                 sema::error::DUPLICATE_MEMBER));
+                          sema::error::DUPLICATE_MEMBER));
 }
 
 TEST_CASE("a default method resolves on the implementing type") {
@@ -276,13 +261,13 @@ TEST_CASE("an `impl I` parameter accepts a conforming argument and rejects a non
         const go := fn(f: &File): i32 { return dump(f, 3); };
 )");
 
-    CHECK(raised(R"(
+    CHECK(helpers::raised(R"(
         const W := interface { pub const write := fn(&self): void; };
         const Nope := struct { x: i32 };
         const dump := fn(w: &impl W): void { w.write(); };
         const go := fn(n: &Nope): void { dump(n); };
 )",
-                 sema::error::UNSATISFIED_BOUND));
+                          sema::error::UNSATISFIED_BOUND));
 }
 
 TEST_CASE("a static `var` is allowed inside a trait impl") {
@@ -297,12 +282,12 @@ TEST_CASE("a static `var` is allowed inside a trait impl") {
 }
 
 TEST_CASE("an `impl (A + B)` bound with a shared associated item is rejected") {
-    CHECK(raised(R"(
+    CHECK(helpers::raised(R"(
         const A := interface { Item: type; pub const a := fn(&self): void; };
         const B := interface { Item: type; pub const b := fn(&self): void; };
         const use := fn(x: &impl (A + B)): void { x.a(); };
 )",
-                 sema::error::CONFLICTING_ASSOC));
+                          sema::error::CONFLICTING_ASSOC));
 }
 
 TEST_CASE("an `impl (A + B)` parameter requires both interfaces") {
@@ -316,7 +301,7 @@ TEST_CASE("an `impl (A + B)` parameter requires both interfaces") {
         const go := fn(d: &Dev): i32 { return tee(d); };
 )");
 
-    CHECK(raised(R"(
+    CHECK(helpers::raised(R"(
         const R := interface { pub const rd := fn(&self): i32; };
         const W := interface { pub const wr := fn(&self): i32; };
         const HalfDev := struct { a: i32 };
@@ -324,7 +309,7 @@ TEST_CASE("an `impl (A + B)` parameter requires both interfaces") {
         const tee := fn(x: &impl (R + W)): i32 { return x.rd(); };
         const go := fn(d: &HalfDev): i32 { return tee(d); };
 )",
-                 sema::error::UNSATISFIED_BOUND));
+                          sema::error::UNSATISFIED_BOUND));
 }
 
 TEST_CASE("a parameterized inherent impl expands for each concrete instantiation") {

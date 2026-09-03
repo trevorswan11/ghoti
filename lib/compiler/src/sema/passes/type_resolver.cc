@@ -326,9 +326,11 @@ template <ast::IndexableID ID>
     using syntax::token_type_t;
     const auto  is_expect_or_require{builtin_id == token_type_t::BUILTIN_EXPECT ||
                                     builtin_id == token_type_t::BUILTIN_REQUIRE};
+    const auto  is_assert_or_verify{builtin_id == token_type_t::BUILTIN_ASSERT ||
+                                   builtin_id == token_type_t::BUILTIN_VERIFY};
     const auto  is_skip{builtin_id == token_type_t::BUILTIN_SKIP};
     const auto& params{builtin.params};
-    if (is_expect_or_require) {
+    if (is_expect_or_require || is_assert_or_verify) {
         if (call.arguments.empty() || call.arguments.size() > 2) {
             return make_sema_err(
                 fmt::format("Builtin expects 1 or 2 arguments, found {}", call.arguments.size()),
@@ -755,6 +757,63 @@ template <ast::IndexableID ID>
     }
     case token_type_t::BUILTIN_EXPECT:
     case token_type_t::BUILTIN_REQUIRE: {
+        return_type = &builtin.return_type;
+        break;
+    }
+    case token_type_t::BUILTIN_ASSERT:
+    case token_type_t::BUILTIN_VERIFY: {
+        const auto* name{builtin_id == token_type_t::BUILTIN_VERIFY ? "@verify" : "@assert"};
+        const auto  cond_expr{call.arguments[0].as_opt<ast::expr_handle>()};
+
+        gir::const_eval evaluator{ctx_, resolving_};
+
+        // An optional message must be a compile-time-constant string
+        std::string msg_text;
+        if (call.arguments.size() > 1) {
+            bool ok{false};
+            if (const auto mh{call.arguments[1].as_opt<ast::expr_handle>()}) {
+                if (const auto se{resolving_.ast.get_as_opt<ast::string_expr>(*mh)}) {
+                    msg_text = se->value;
+                    ok       = true;
+                } else if (const auto mv{evaluator.try_eval(*mh)}) {
+                    if (const auto s{mv->as_opt<std::string>()}) {
+                        msg_text = *s;
+                        ok       = true;
+                    }
+                }
+            }
+            if (!ok) {
+                return make_sema_err(
+                    fmt::format("{} message must be a compile-time-constant string", name),
+                    error::CONSTEXPR_EVALUATION_FAILED,
+                    get_call_arg_location(call.arguments[1]));
+            }
+        }
+
+        if (cond_expr) {
+            if (const auto ct{resolving_.get_sema_type_opt(*cond_expr)};
+                ct && !ct->is_poison() && ct->get_kind() != type_kind::BOOL) {
+                return make_sema_err(
+                    fmt::format("{} condition must be `bool`, found `{}` (wrap it in `@as(bool, "
+                                "...)` if that is intended)",
+                                name,
+                                ctx_.type_display_name(*ct)),
+                    error::TYPE_MISMATCH,
+                    get_call_arg_location(call.arguments[0]));
+            }
+
+            // A comptime-known-false condition is a compile error at the call site.
+            if (const auto cv{evaluator.try_eval(*cond_expr)}) {
+                if (const auto b{cv->as_opt<bool>()}; b && !*b) {
+                    ctx_.diags.emplace_back(
+                        fmt::format("{} failed at compile time{}",
+                                    name,
+                                    msg_text.empty() ? "" : fmt::format(": {}", msg_text)),
+                        error::STATIC_ASSERTION_FAILED,
+                        resolving_.ast.location_of(call.function));
+                }
+            }
+        }
         return_type = &builtin.return_type;
         break;
     }
@@ -1429,7 +1488,9 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
 
             auto& return_type{*inst_res->return_type};
             auto  mangled_name{inst_res->mangled_name};
-            ctx_.instantiation_cache.insert(std::move(key), return_type, mangled_name);
+            if (!building_param_template_) {
+                ctx_.instantiation_cache.insert(std::move(key), return_type, mangled_name);
+            }
             resolving_.set_generic_call_target(id, mangled_name);
             resolving_.set_sema_type(id, return_type);
             return last_type_.emplace(return_type);
@@ -2272,8 +2333,11 @@ auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void 
     PROFILE_FUNCTION();
     TRY_RESOLVE(if_expr.condition);
 
-    // Opportunistic fold of an `if constexpr` condition to try to not resolve dead code
-    if (if_expr.constexpr_condition) {
+    // Inside a parameterized-impl template the verdict of an `if constexpr` that rides on an
+    // impl parameter is unknown here: resolve both arms, fold per instantiation later.
+    if (if_expr.constexpr_condition && building_param_template_) {
+        template_constexpr_ifs_.emplace_back(id);
+    } else if (if_expr.constexpr_condition) {
         gir::const_eval evaluator{ctx_, resolving_};
         if (const auto cond_cv{evaluator.try_eval(if_expr.condition)}) {
             if (const auto folded{cond_cv->as_opt<bool>()}) {
@@ -3515,11 +3579,41 @@ auto type_resolver::resolve_constexpr_match(ast::node_id           id,
     last_type_.emplace(*result_type);
 }
 
+auto type_resolver::resolve_constexpr_match_all_arms(ast::node_id           id,
+                                                     const ast::match_expr& match,
+                                                     type&                  matcher_type) -> void {
+    PROFILE_FUNCTION();
+    type* result_type{&ctx_.get_builtin_resolved_type(type_kind::VOID_)};
+    for (const auto& arm : match.arms) {
+        auto&       arm_scope_type{resolving_.get_sema_type(arm)};
+        const scope arm_scope{table_stack_, arm_scope_type.get_symbol_table_idx(), table_idx_};
+        if (arm.capture && arm.capture->is<ast::identifier_expr>() && arm.modifier.is_value()) {
+            resolving_.set_sema_type(*arm.capture, denoted_type(matcher_type));
+            resolve_symbol_info(*arm.capture, symbol_kind::VALUE);
+        }
+        resolve(arm.dispatch);
+        if (last_type_ && !last_type_->is_poison()) {
+            if (const auto es{resolving_.ast.get_as_opt<ast::expr_stmt>(arm.dispatch)}) {
+                if (const auto inner{resolving_.get_sema_type_opt(es->expression)};
+                    inner && !inner->is_poison() && inner->get_kind() != type_kind::VOID_) {
+                    result_type = inner.get();
+                }
+            }
+        }
+    }
+    resolving_.set_sema_type(id, *result_type);
+    last_type_.emplace(*result_type);
+}
+
 auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void {
     PROFILE_FUNCTION();
     TRY_RESOLVE(match.matcher);
     auto& matcher_type{*last_type_.take()};
 
+    if (match.is_constexpr && building_param_template_) {
+        template_constexpr_matches_.emplace_back(id);
+        return resolve_constexpr_match_all_arms(id, match, matcher_type);
+    }
     // `match constexpr` folds its scrutinee and type-checks only the arm it selects.
     if (match.is_constexpr) { return resolve_constexpr_match(id, match, matcher_type); }
 
@@ -5409,6 +5503,10 @@ auto type_resolver::instantiate_impls_for(
             typing.explicit_types.emplace_back(idx, remap_one(ty));
         }
 
+        if (!tmpl.constexpr_if_nodes.empty() || !tmpl.constexpr_match_nodes.empty()) {
+            refold_param_impl_branches(impl_mod, tmpl, typing, cx_bindings);
+        }
+
         const auto typing_key{fmt::format("pimpl{}#{}", pimpl->site.get_index(), ctor_mangled)};
         if (!typing.empty()) {
             ctx_.instantiation_cache.set_body_type_diff(typing_key, std::move(typing));
@@ -5471,6 +5569,68 @@ auto type_resolver::instantiate_impls_for(
     }
 }
 
+auto type_resolver::refold_param_impl_branches(
+    mod::module&                                              impl_mod,
+    const param_impl_template&                                tmpl,
+    body_type_diff&                                           typing,
+    gsl::span<const std::pair<std::string, gir::const_value>> bindings) -> void {
+    PROFILE_FUNCTION();
+    auto& node_tbl{impl_mod.sema_side_tables.node_types.values};
+    auto& type_tbl{impl_mod.sema_side_tables.explicit_types.values};
+    std::vector<std::pair<usize, stdx::option<type&>>> saved_nodes;
+    std::vector<std::pair<usize, stdx::option<type&>>> saved_types;
+    for (const auto& [idx, ty] : typing.node_types) {
+        if (idx >= node_tbl.size()) { continue; }
+        saved_nodes.emplace_back(idx, node_tbl[idx]);
+        node_tbl[idx] = ty;
+    }
+
+    for (const auto& [idx, ty] : typing.explicit_types) {
+        if (idx >= type_tbl.size()) { continue; }
+        saved_types.emplace_back(idx, type_tbl[idx]);
+        type_tbl[idx] = ty;
+    }
+
+    {
+        constexpr_frame frame;
+        for (const auto& [name, val] : bindings) { frame.insert_or_assign(name, val); }
+        const constexpr_frame_guard fg{ctx_.constexpr_binding_frames, std::move(frame)};
+        gir::const_eval             ev{ctx_, impl_mod};
+        ev.clear_memo();
+        for (const auto node : tmpl.constexpr_if_nodes) {
+            const auto if_expr{impl_mod.ast.get_as_opt<ast::if_expr>(node)};
+            if (!if_expr) { continue; }
+            const auto cv{ev.try_eval(*if_expr->condition)};
+            const auto verdict{cv ? cv->as_opt<bool>() : stdx::none};
+            if (!verdict) { continue; }
+            typing.if_branches.emplace_back(node.get_index(),
+                                            *verdict ? mod::if_branch::CONSEQUENCE
+                                                     : mod::if_branch::ALTERNATE);
+        }
+
+        for (const auto node : tmpl.constexpr_match_nodes) {
+            const auto match{impl_mod.ast.get_as_opt<ast::match_expr>(node)};
+            if (!match) { continue; }
+            const auto scrutinee{ev.try_eval(*match->matcher)};
+            if (!scrutinee || scrutinee->is_poison()) { continue; }
+            stdx::opt_size selected;
+            for (usize i{0}; i < match->arms.size() && !selected; ++i) {
+                if (match->catch_all_idx && i == *match->catch_all_idx) { continue; }
+                for (const auto& pattern : match->arms[i].patterns) {
+                    if (ev.arm_pattern_matches(pattern, *scrutinee)) {
+                        selected.emplace(i);
+                        break;
+                    }
+                }
+            }
+            if (!selected) { selected = match->catch_all_idx; }
+            if (selected) { typing.match_arms.emplace_back(node.get_index(), *selected); }
+        }
+    }
+    for (const auto& [idx, ty] : saved_nodes) { node_tbl[idx] = ty; }
+    for (const auto& [idx, ty] : saved_types) { type_tbl[idx] = ty; }
+}
+
 auto type_resolver::build_param_impl_template(const ast::impl_stmt& impl, ast::node_id site)
     -> void {
     PROFILE_FUNCTION();
@@ -5511,22 +5671,44 @@ auto type_resolver::build_param_impl_template(const ast::impl_stmt& impl, ast::n
 
     const auto snap_nodes{resolving_.sema_side_tables.node_types.values};
     const auto snap_types{resolving_.sema_side_tables.explicit_types.values};
+    const auto snap_ifs{resolving_.if_constexpr_results};
+    const auto snap_matches{resolving_.match_arm_results};
     const auto diags_before{ctx_.diags.size()};
 
     if (impl.interface_type) { resolve(*impl.interface_type); }
-    resolve(impl.target_type);
     stdx::option<const type&>      abstract_target;
     stdx::option<structural_guard> guard;
+    {
+        const mutating_context_guard tmode{building_param_template_, true};
+        resolve(impl.target_type);
+    }
     if (last_type_ && !last_type_->is_poison()) {
         auto& t{denoted_type(*last_type_)};
         abstract_target.emplace(t);
         guard.emplace(user_type_stack_, t);
     }
-    for (const auto& member : impl.members) { resolve(*member); }
-    if (ctx_.diags.size() > diags_before) { DISCARD(ctx_.diags.split_off(diags_before)); }
 
-    param_impl_template tmpl{.abstract_target = abstract_target, .sentinels = std::move(sentinels)};
-    const auto          collect{[](const auto& live, const auto& snap, auto& out) {
+    // Member `if constexpr` / `match constexpr` verdicts that ride on an impl parameter are
+    // decided per instantiation; resolve every arm now and record nothing
+    auto outer_ifs{std::exchange(template_constexpr_ifs_, {})};
+    auto outer_matches{std::exchange(template_constexpr_matches_, {})};
+    {
+        const mutating_context_guard tmode{building_param_template_, true};
+        for (const auto& member : impl.members) { resolve(*member); }
+    }
+    auto body_ifs{std::exchange(template_constexpr_ifs_, std::move(outer_ifs))};
+    auto body_matches{std::exchange(template_constexpr_matches_, std::move(outer_matches))};
+    if (ctx_.diags.size() > diags_before) { DISCARD(ctx_.diags.split_off(diags_before)); }
+    resolving_.if_constexpr_results = snap_ifs;
+    resolving_.match_arm_results    = snap_matches;
+
+    param_impl_template tmpl{
+        .abstract_target       = abstract_target,
+        .sentinels             = std::move(sentinels),
+        .constexpr_if_nodes    = std::move(body_ifs),
+        .constexpr_match_nodes = std::move(body_matches),
+    };
+    const auto collect{[](const auto& live, const auto& snap, auto& out) {
         for (usize i{0}; i < live.size(); ++i) {
             if (!live[i]) { continue; }
             const bool changed{i >= snap.size() || !snap[i] || snap[i].get() != live[i].get()};

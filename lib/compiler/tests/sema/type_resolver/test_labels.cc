@@ -27,7 +27,7 @@ TEST_CASE("Labeled for loop resolution") {
             if (foo + 1 == 42) { break :outer 26; }
         };
     )")};
-    CHECK(ctx->analyzer.get_registry().size() == 25);
+    CHECK(ctx->analyzer.get_registry().size() == 26);
 
     const auto& i32_type{ctx->get_type(sema::type_kind::I32)};
     const auto [a_sym, a_sym_data, a_type]{ctx->get_type_sym_info<syms::node_t>("a", idx)};
