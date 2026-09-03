@@ -128,6 +128,9 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
         for (const auto& tcm : ast_module_.type_ctor_member_emits) {
             emit_type_ctor_member(ast_module_, tcm);
         }
+        for (const auto& tcm : ast_module_.impl_ctor_member_emits) {
+            emit_type_ctor_member(ast_module_, tcm);
+        }
     }
 
     gir_module_.mark_import_boundary();
@@ -143,6 +146,9 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
                 emit_generic_instantiation(inst);
             }
             for (const auto& tcm : other_mod->type_ctor_member_emits) {
+                emit_type_ctor_member(*other_mod, tcm);
+            }
+            for (const auto& tcm : other_mod->impl_ctor_member_emits) {
                 emit_type_ctor_member(*other_mod, tcm);
             }
             active_module_ = prev_module;

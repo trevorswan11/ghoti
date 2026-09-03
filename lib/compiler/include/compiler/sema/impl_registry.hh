@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -34,6 +35,10 @@ struct impl_record {
     usize                            body_scope_idx; // the impl block's own symbol table
     std::vector<method>              methods{};
 
+    // Set for a record produced by expanding an `impl(P) ...` for one concrete target
+    bool        from_parameterized{false};
+    std::string gir_prefix{}; // The per-instantiation symbol prefix
+
     template <typename Self>
     [[nodiscard]] auto find_method(this Self&& self, std::string_view name) noexcept
         -> stdx::option<stdx::const_dispatch_t<Self, method>&> {
@@ -49,6 +54,17 @@ struct impl_record {
 struct extension_method {
     gsl::not_null<const impl_record*>         record;
     gsl::not_null<const impl_record::method*> method;
+};
+
+// A `impl(P: type, ...) [I for] Ctor(P) { ... }` held un-expanded
+struct parameterized_impl {
+    ast::node_id                     site;           // the `impl_stmt`
+    stdx::option<const type&>        interface_type; // none for an inherent parameterized impl
+    ast::node_id                     base_ctor_fn;   // the generic ctor's `function_expr` node
+    stdx::option<const mod::module&> enclosing;      // module the impl body lives in
+    usize                            body_scope_idx; // the impl block's own symbol table
+    // none here means the param could not be matched positionally; the impl is skipped
+    std::vector<stdx::opt_size> param_to_ctor_arg{};
 };
 
 class impl_registry {
@@ -74,14 +90,21 @@ class impl_registry {
     [[nodiscard]] auto find_by_site(ast::node_id site) noexcept -> stdx::option<impl_record&>;
     [[nodiscard]] auto implements(const type& target, const type& iface) const noexcept -> bool;
 
+    // Parameterized `impl(P) ...` blocks, held un-expanded until a concrete target materializes.
+    auto record_parameterized(parameterized_impl pimpl) -> gsl::not_null<parameterized_impl*>;
+    [[nodiscard]] auto param_records(this auto&& self) noexcept -> auto& {
+        return self.param_records_;
+    }
+
     // Every method reachable on `target` through any impl (inherent or trait). A name carried by
     // two records appears twice
     [[nodiscard]] auto methods_of(const type& target) const -> std::vector<extension_method>;
     [[nodiscard]] auto records(this auto&& self) noexcept -> auto& { return self.records_; }
 
   private:
-    arena_alloc&              arena_;
-    std::vector<impl_record*> records_;
+    arena_alloc&                     arena_;
+    std::vector<impl_record*>        records_;
+    std::vector<parameterized_impl*> param_records_;
 };
 
 } // namespace ghoti::sema

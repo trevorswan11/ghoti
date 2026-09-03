@@ -631,16 +631,19 @@ auto symbol_collector::visit(ast::node_id id, const ast::expr_stmt& expr) -> voi
 auto symbol_collector::visit(ast::node_id id, const ast::impl_stmt& impl) -> void {
     PROFILE_FUNCTION();
 
-    // TODO: Coherence, the impl registry, and per-monomorphization expansion of parameterized
-    // `impl(P) ...` blocks
+    // Coherence + the impl registry are populated in `type_resolver::pre_register_impls`.
     const auto  new_idx{ctx_.registry.create()};
     const scope s{table_stack_, new_idx, table_idx_};
 
-    if (impl.impl_params.empty()) {
-        if (impl.interface_type) { collect(*impl.interface_type); }
-        collect(impl.target_type);
-        for (const auto& member : impl.members) { collect(*member); }
+    for (const auto& param : impl.impl_params) {
+        if (const auto ident{collecting_.ast.get_as_opt<ast::identifier_expr>(param.name)}) {
+            try_declare<symbols::parameter>(ident->name, param);
+        }
     }
+
+    if (impl.interface_type) { collect(*impl.interface_type); }
+    collect(impl.target_type);
+    for (const auto& member : impl.members) { collect(*member); }
 
     last_type_.emplace(ctx_.pool[{type_kind::BLOCK, types::mut::CONSTANT, new_idx}]);
     last_type_->set_symbol_table_idx(new_idx);

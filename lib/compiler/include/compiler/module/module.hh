@@ -78,6 +78,9 @@ struct module {
     // Member functions of `fn(...): type` constructor results defined in this module
     std::vector<sema::type_ctor_member_emit> type_ctor_member_emits;
 
+    // Methods contributed by a parameterized `impl(P) ...` in this module
+    std::vector<sema::type_ctor_member_emit> impl_ctor_member_emits;
+
     // `@cfgValue` node index -> the cfg pass's evaluated verdict
     ankerl::unordered_dense::map<usize, cfg_value_result> cfg_value_results;
 

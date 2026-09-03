@@ -1164,7 +1164,16 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
         return last_type_.emplace(callee_type);
     }
 
-    if constexpr (std::same_as<ID, ast::node_id>) { record_type_ctor_member_call(id, call); }
+    if constexpr (std::same_as<ID, ast::node_id>) {
+        record_type_ctor_member_call(id, call);
+
+        // A `.`-method belonging to a parameterized-impl expansion is emitted under a
+        // per-instantiation symbol
+        if (pending_param_impl_target_) {
+            resolving_.set_generic_call_target(id, std::move(*pending_param_impl_target_));
+            pending_param_impl_target_.reset();
+        }
+    }
 
     // Verify that the type in the function is callable and store the return type
     auto&                                callee_data{callee_type.get_data()};
@@ -2534,7 +2543,13 @@ auto type_resolver::resolve_impl_method_access(const type&      target,
     if (visible.size() == 1) {
         for (const auto& em : candidates) {
             if (em.method == visible.front()) {
-                pending_impl_method_owner_.emplace(em.record->body_scope_idx);
+                if (em.record->from_parameterized) {
+                    // A parameterized-impl method is emitted under a per-instantiation symbol
+                    pending_param_impl_target_.emplace(
+                        fmt::format("{}.{}", em.record->gir_prefix, name));
+                } else {
+                    pending_impl_method_owner_.emplace(em.record->body_scope_idx);
+                }
                 break;
             }
         }
@@ -2546,7 +2561,7 @@ auto type_resolver::resolve_impl_method_access(const type&      target,
     // is rebuilt with `self` bound to the concrete target so the call and the emitted body agree.
     if (visible.empty()) {
         for (const auto* rec : ctx_.impls.records()) {
-            if (!rec->target_type || &*rec->target_type != &target || !rec->interface_type) {
+            if (!rec->target_type || rec->target_type != &target || !rec->interface_type) {
                 continue;
             }
             const auto iface{rec->interface_type->get_data().as_opt<types::interface_t>()};
@@ -2737,6 +2752,7 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
     }
 
     pending_impl_method_owner_.reset();
+    pending_param_impl_target_.reset();
     auto result{resolve_structural_access(object_type,
                                           dot.member,
                                           resolving_.ast.location_of(dot.object),
@@ -2745,13 +2761,17 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
         return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(result).error()));
     }
 
-    // An `impl`-attached method: pin the call target to the impl block's symbol table so the
-    // emitter names it the same way `emit_top_level_impl` does.
-    if (pending_impl_method_owner_) {
-        if constexpr (std::same_as<ID, ast::node_id>) {
-            resolving_.set_resolved_symbol_owner(id, *pending_impl_method_owner_);
+    // An `impl`-attached method: pin the call target so the emitter names it the same way
+    // `emit_top_level_impl` (inherent/trait) or `instantiate_impls_for` (parameterized) does.
+    if (pending_impl_method_owner_ || pending_param_impl_target_) {
+        if (pending_impl_method_owner_) {
+            if constexpr (std::same_as<ID, ast::node_id>) {
+                resolving_.set_resolved_symbol_owner(id, *pending_impl_method_owner_);
+            }
+
+            // `pending_param_impl_target_` is left set for `resolve_call`
+            pending_impl_method_owner_.reset();
         }
-        pending_impl_method_owner_.reset();
         auto& member_type{**result};
         resolving_.set_sema_type(dot.member, member_type);
         resolving_.set_sema_type(id, member_type);
@@ -5049,7 +5069,10 @@ auto type_resolver::pre_register_impls() -> void {
     for (const auto root : resolving_.ast) {
         const auto impl{resolving_.ast.get_as_opt<ast::impl_stmt>(root)};
         if (!impl) { continue; }
-        if (!impl->impl_params.empty()) { continue; } // TODO: parameterized
+        if (!impl->impl_params.empty()) {
+            register_parameterized_impl(root, *impl);
+            continue;
+        }
 
         auto&       impl_type{resolving_.get_sema_type(root)};
         const scope s{table_stack_, impl_type.get_symbol_table_idx(), table_idx_};
@@ -5109,7 +5132,7 @@ auto type_resolver::pre_register_impls() -> void {
                 bool clashes{native.has(m.name)};
                 for (const auto* other : ctx_.impls.records()) {
                     if (other->interface_type || !other->target_type ||
-                        &*other->target_type != &target) {
+                        other->target_type != &target) {
                         continue;
                     }
                     clashes = clashes || other->find_method(m.name).has_value();
@@ -5138,14 +5161,287 @@ auto type_resolver::pre_register_impls() -> void {
     }
 }
 
+namespace {
+
+// The bare identifier naming a `call_expr` argument, if it is one (`Ctor(T)` → "T" at slot 0).
+[[nodiscard]] auto ctor_arg_ident(const mod::module& mod, const ast::call_expr::argument& arg)
+    -> stdx::option<std::string_view> {
+    return arg.visit(
+        [&](ast::expr_handle h) -> stdx::option<std::string_view> {
+            if (const auto id{mod.ast.get_as_opt<ast::identifier_expr>(*h)}) { return id->name; }
+            return stdx::none;
+        },
+        [&](ast::explicit_type_id t) -> stdx::option<std::string_view> {
+            if (const auto id{mod.ast.get_as_opt<ast::identifier_expr>(t)}) { return id->name; }
+            return stdx::none;
+        });
+}
+
+} // namespace
+
+auto type_resolver::register_parameterized_impl(ast::node_id root, const ast::impl_stmt& impl)
+    -> void {
+    PROFILE_FUNCTION();
+    auto&       impl_type{resolving_.get_sema_type(root)};
+    const scope s{table_stack_, impl_type.get_symbol_table_idx(), table_idx_};
+
+    // Peel `Ctor(<impl params>)` down to `Ctor` and note which arg slot each impl param fills.
+    const auto tgt_call{resolving_.ast.get_as_opt<ast::call_expr>(impl.target_type)};
+    std::vector<stdx::option<std::string_view>> ctor_arg_names;
+    if (tgt_call) {
+        for (const auto& a : tgt_call->arguments) {
+            ctor_arg_names.emplace_back(ctor_arg_ident(resolving_, a));
+        }
+    }
+
+    // Resolve the base ctor identifier to its generic `function_expr` node + declaring module.
+    stdx::option<const mod::module&> base_mod;
+    stdx::option<ast::node_id>       base_ctor_fn;
+    if (tgt_call) {
+        if (const auto id{resolving_.ast.get_as_opt<ast::identifier_expr>(*tgt_call->function)}) {
+            if (const auto sym{ctx_.registry.lookup(table_stack_, id->name)}) {
+                if (const auto n{sym->get_data().as_opt<symbols::node_t>()}) {
+                    if (const auto d{resolving_.ast.get_as_opt<ast::decl_stmt>(*n)};
+                        d && d->value) {
+                        base_mod.emplace(resolving_);
+                        base_ctor_fn.emplace(*d->value);
+                    }
+                }
+            }
+        } else if (const auto mac{
+                       resolving_.ast.get_as_opt<ast::module_access_expr>(*tgt_call->function)}) {
+            resolve(mac->outer); // the module alias is not otherwise typed this early
+            if (const auto mod_type{resolving_.get_sema_type_opt(mac->outer)}) {
+                if (const auto md{mod_type->get_data().as_opt<types::module>()};
+                    md && md->imported.root_table_idx) {
+                    const auto& inner{resolving_.ast.get_as<ast::identifier_expr>(mac->inner)};
+                    if (const auto sym{
+                            ctx_.registry.get_from_opt(*md->imported.root_table_idx, inner.name)}) {
+                        if (const auto n{sym->get_data().as_opt<symbols::node_t>()}) {
+                            if (const auto d{md->imported.ast.get_as_opt<ast::decl_stmt>(*n)};
+                                d && d->value) {
+                                base_mod.emplace(md->imported);
+                                base_ctor_fn.emplace(*d->value);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (!base_mod || !base_ctor_fn) { return; } // cannot anchor: skip quietly
+
+    stdx::option<const type&> iface_type;
+    if (impl.interface_type) {
+        auto& it{resolve_impl_type_ref(*impl.interface_type)};
+        if (it.is_poison()) { return; }
+        iface_type.emplace(it);
+    }
+
+    // The base ctor OR the interface must be declared in this module.
+    const auto iface_mod{iface_type ? declaring_module_of(*iface_type) : stdx::none};
+    if (base_mod != &resolving_ && iface_mod != &resolving_) {
+        ctx_.diags.emplace_back(
+            "a parameterized `impl` must be anchored in this module: its base type constructor "
+            "or its interface must be declared here",
+            error::ORPHAN_IMPL,
+            resolving_.ast.location_of(root));
+        return;
+    }
+
+    std::vector<stdx::opt_size> mapping;
+    mapping.reserve(impl.impl_params.size());
+    for (const auto& p : impl.impl_params) {
+        stdx::opt_size slot;
+        if (const auto pn{resolving_.ast.get_as_opt<ast::identifier_expr>(p.name)}) {
+            for (usize i{0}; i < ctor_arg_names.size(); ++i) {
+                if (ctor_arg_names[i] && *ctor_arg_names[i] == pn->name) {
+                    slot.emplace(i);
+                    break;
+                }
+            }
+        }
+        mapping.emplace_back(slot);
+    }
+
+    stdx::option<const mod::module&> here{resolving_};
+    ctx_.impls.record_parameterized(parameterized_impl{
+        .site              = root,
+        .interface_type    = iface_type,
+        .base_ctor_fn      = *base_ctor_fn,
+        .enclosing         = here,
+        .body_scope_idx    = impl_type.get_symbol_table_idx(),
+        .param_to_ctor_arg = std::move(mapping),
+    });
+}
+
+auto type_resolver::instantiate_impls_for(type&                  concrete,
+                                          ast::node_id           base_ctor_fn,
+                                          gsl::span<type* const> ctor_args,
+                                          std::string_view       ctor_mangled) -> void {
+    PROFILE_FUNCTION();
+    for (auto* pimpl : ctx_.impls.param_records()) {
+        if (pimpl->base_ctor_fn.get_index() != base_ctor_fn.get_index() ||
+            pimpl->base_ctor_fn.get_kind() != base_ctor_fn.get_kind()) {
+            continue;
+        }
+
+        // Bind each impl param to the concrete ctor argument it names
+        std::vector<type*> bound_params(pimpl->param_to_ctor_arg.size(), nullptr);
+        bool               ok{true};
+        for (usize i{0}; i < pimpl->param_to_ctor_arg.size(); ++i) {
+            const auto slot{pimpl->param_to_ctor_arg[i]};
+            if (!slot || *slot >= ctor_args.size() || !ctor_args[*slot] ||
+                ctor_args[*slot]->get_kind() == type_kind::TYPE || ctor_args[*slot]->is_poison()) {
+                ok = false;
+                break;
+            }
+            bound_params[i] = ctor_args[*slot];
+        }
+
+        // A still-abstract `type`  argument means this is not a real monomorphization
+        if (!ok) { continue; }
+
+        // One expansion per (parameterized-impl site, concrete target).
+        if (!expanded_param_impls_[&concrete].emplace(pimpl->site.get_index()).second) { continue; }
+        if (!pimpl->enclosing) { continue; }
+
+        auto&      impl_mod{const_cast<mod::module&>(*pimpl->enclosing)};
+        const auto impl_stmt{impl_mod.ast.get_as_opt<ast::impl_stmt>(pimpl->site)};
+        if (!impl_stmt) { continue; }
+
+        const auto tmpl_it{param_impl_templates_.find(pimpl->site.get_index())};
+        if (tmpl_it == param_impl_templates_.end()) { continue; } // template pass never ran
+        const auto& tmpl{tmpl_it->second};
+        if (!tmpl.abstract_target || !tmpl.sentinel) { continue; }
+
+        // Only a single impl parameter is monomorphized through one shared sentinel today.
+        if (bound_params.size() != 1) {
+            ctx_.diags.emplace_back(
+                "a parameterized `impl` with more than one parameter is not yet supported",
+                error::STATIC_REQUIREMENT_UNSUPPORTED,
+                impl_mod.ast.location_of(pimpl->site));
+            continue;
+        }
+        const auto remap_one{[&](type* t) -> type* {
+            auto& a{remap_type(ctx_, *t, *tmpl.abstract_target, concrete)};
+            return &remap_type(ctx_, a, *tmpl.sentinel, *bound_params[0]);
+        }};
+
+        // Build this monomorphization's typing by remapping the template.
+        body_type_diff typing;
+        for (const auto& [idx, ty] : tmpl.node_types) {
+            typing.node_types.emplace_back(idx, remap_one(ty));
+        }
+        for (const auto& [idx, ty] : tmpl.explicit_types) {
+            typing.explicit_types.emplace_back(idx, remap_one(ty));
+        }
+
+        const auto typing_key{fmt::format("pimpl{}#{}", pimpl->site.get_index(), ctor_mangled)};
+        if (!typing.empty()) {
+            ctx_.instantiation_cache.set_body_type_diff(typing_key, std::move(typing));
+        }
+
+        impl_record rec{
+            .interface_type     = pimpl->interface_type,
+            .target_type        = concrete,
+            .site               = pimpl->site,
+            .enclosing          = pimpl->enclosing,
+            .body_scope_idx     = pimpl->body_scope_idx,
+            .from_parameterized = true,
+            .gir_prefix         = typing_key,
+        };
+        for (const auto& member : impl_stmt->members) {
+            const auto decl{impl_mod.ast.get_as_opt<ast::decl_stmt>(*member)};
+            if (!decl || !decl->value || !decl->value->is<ast::function_expr>()) { continue; }
+            impl_record::method m{
+                .name    = impl_mod.ast.get_as<ast::identifier_expr>(*decl->name).name,
+                .decl    = *member,
+                .fn_type = stdx::none,
+                .is_pub  = decl->has_modifier(ast::decl_modifiers::PUBLIC),
+            };
+            if (const auto t{impl_mod.get_sema_type_opt(*decl->value)}) {
+                m.fn_type = remap_one(const_cast<type*>(t.get()));
+            }
+            rec.methods.emplace_back(std::move(m));
+        }
+
+        const bool trait{pimpl->interface_type.has_value()};
+        auto       recorded{ctx_.impls.record(std::move(rec))};
+        if (!recorded) {
+            ctx_.diags.emplace_back(
+                fmt::format("parameterized `impl` yields a duplicate for this instantiation; "
+                            "previous impl here: {}",
+                            impl_mod.ast.location_of(recorded.error())),
+                error::DUPLICATE_IMPL,
+                impl_mod.ast.location_of(pimpl->site));
+            continue;
+        }
+
+        auto* stored{recorded->get()};
+        if (trait && &impl_mod == &resolving_ && stored->interface_type) {
+            if (const auto iface{stored->interface_type->get_data().as_opt<types::interface_t>()}) {
+                check_impl_conformance(*stored, *iface);
+            }
+        }
+
+        for (const auto& m : stored->methods) {
+            impl_mod.impl_ctor_member_emits.emplace_back<type_ctor_member_emit>({
+                .owner_clone = &concrete,
+                .member_decl = m.decl,
+                .gir_name    = fmt::format("{}.{}", stored->gir_prefix, m.name),
+                .typing_key  = typing_key,
+            });
+        }
+    }
+}
+
 auto type_resolver::visit(ast::node_id id, const ast::impl_stmt& impl) -> void {
     PROFILE_FUNCTION();
     auto&       impl_type{resolving_.get_sema_type(id)};
     const scope s{table_stack_, impl_type.get_symbol_table_idx(), table_idx_};
     auto&       void_type{ctx_.get_builtin_resolved_type(type_kind::VOID_)};
 
-    // Parameterized `impl(P) ...` is re-instantiated per monomorphization of its target
-    if (!impl.impl_params.empty()) { return last_type_.emplace(void_type); }
+    // Parameterized `impl(P) ...` is re-instantiated per monomorphization of its target.
+    if (!impl.impl_params.empty()) {
+        // Run a *template* pass: bind each impl param to one opaque sentinel `type`, resolve the
+        // target and members once, and record the resulting node typings
+        auto& sentinel{ctx_.get_builtin_resolved_type(type_kind::TYPE)};
+        for (const auto& p : impl.impl_params) {
+            resolving_.set_sema_type(p.name, sentinel);
+            resolve_symbol_info(p.name, symbol_kind::TYPE);
+        }
+
+        const auto snap_nodes{resolving_.sema_side_tables.node_types.values};
+        const auto snap_types{resolving_.sema_side_tables.explicit_types.values};
+        const auto diags_before{ctx_.diags.size()};
+
+        if (impl.interface_type) { resolve(*impl.interface_type); }
+        resolve(impl.target_type);
+        stdx::option<const type&>      abstract_target;
+        stdx::option<structural_guard> guard;
+        if (last_type_ && !last_type_->is_poison()) {
+            auto& t{denoted_type(*last_type_)};
+            abstract_target.emplace(t);
+            guard.emplace(user_type_stack_, t);
+        }
+        for (const auto& member : impl.members) { resolve(*member); }
+        if (ctx_.diags.size() > diags_before) { DISCARD(ctx_.diags.split_off(diags_before)); }
+
+        param_impl_template tmpl{.abstract_target = abstract_target, .sentinel = &sentinel};
+        const auto          collect{[](const auto& live, const auto& snap, auto& out) {
+            for (usize i{0}; i < live.size(); ++i) {
+                if (!live[i]) { continue; }
+                const bool changed{i >= snap.size() || !snap[i] || snap[i].get() != live[i].get()};
+                if (changed) { out.emplace_back(i, live[i].get()); }
+            }
+        }};
+        collect(resolving_.sema_side_tables.node_types.values, snap_nodes, tmpl.node_types);
+        collect(resolving_.sema_side_tables.explicit_types.values, snap_types, tmpl.explicit_types);
+        param_impl_templates_.insert_or_assign(id.get_index(), std::move(tmpl));
+
+        return last_type_.emplace(void_type);
+    }
 
     const auto rec{ctx_.impls.find_by_site(id)};
 
@@ -5162,7 +5458,7 @@ auto type_resolver::visit(ast::node_id id, const ast::impl_stmt& impl) -> void {
     if (rec) {
         // Fill each impl method's resolved function type from its member decl.
         for (auto& m : rec->methods) {
-            if (const auto t{resolving_.get_sema_type_opt(m.decl)}) { m.fn_type = &*t; }
+            if (const auto t{resolving_.get_sema_type_opt(m.decl)}) { m.fn_type.emplace(*t); }
         }
         if (rec->interface_type != nullptr && !target.is_poison()) {
             if (const auto iface{rec->interface_type->get_data().as_opt<types::interface_t>()}) {
@@ -5266,13 +5562,17 @@ auto type_resolver::check_impl_conformance(const impl_record& rec, const types::
     // A  static `var` is allowed for 'global' state but other members are not allowed
     for (const auto& entry : body_table) {
         const auto member_name{entry.first};
-        bool       is_item{false};
+
+        // A parameterized `impl(P) ...` keeps its type params in this same scope
+        const auto node{entry.second.symbol.get_data().as_opt<symbols::node_t>()};
+        if (!node) { continue; }
+
+        bool is_item{false};
         is_item |= std::ranges::contains(iface.method_names, member_name);
         is_item |= std::ranges::contains(iface.assoc_type_names, member_name);
         is_item |= std::ranges::contains(iface.assoc_const_names, member_name);
 
-        const auto node{entry.second.symbol.get_data().as_opt<symbols::node_t>()};
-        const auto decl{node ? resolving_.ast.get_as_opt<ast::decl_stmt>(*node) : stdx::none};
+        const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
         if (decl && decl->has_modifier(ast::decl_modifiers::VARIABLE)) { is_item = true; }
 
         if (!is_item) {
@@ -5741,6 +6041,11 @@ auto type_resolver::instantiate_generic(type&                             callee
                                                                     std::move(ctor_bindings));
                 }
                 deduced_return_type = &clone;
+
+                // Expand any parameterized `impl(P) [I for] Ctor(P)` onto this instantiation.
+                if (!ctx_.impls.param_records().empty()) {
+                    instantiate_impls_for(clone, fn_info.node_id, concrete_args, mangled_name);
+                }
             }
         }
     }

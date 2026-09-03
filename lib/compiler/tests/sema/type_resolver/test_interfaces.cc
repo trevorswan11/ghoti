@@ -51,14 +51,14 @@ raised_with_import(std::string_view src, std::string_view other_source, sema::er
 
 TEST_CASE("interface resolves to an interface_t carrying its members") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-const W := interface {
-    Error: type;
-    Item: type = u8;
-    const cap: usize = 4096;
-    pub const write := fn(&mut self, b: []u8): usize;
-    const dbg := fn(&self): []u8;
-    pub const writeAll := fn(&mut self, b: []u8): usize { return self.write(b); };
-};
+        const W := interface {
+            Error: type;
+            Item: type = u8;
+            const cap: usize = 4096;
+            pub const write := fn(&mut self, b: []u8): usize;
+            const dbg := fn(&self): []u8;
+            pub const writeAll := fn(&mut self, b: []u8): usize { return self.write(b); };
+        };
 )")};
 
     const auto [sym, data, type]{ctx->get_type_sym_info<syms::node_t>("W", idx)};
@@ -92,88 +92,88 @@ const Alias := W;
 
 TEST_CASE("an inherent impl block resolves in phase 1") {
     helpers::resolve_and_check(R"(
-const S := struct { x: i32 };
+        const S := struct { x: i32 };
 
-impl S {
-    pub const fromRaw := fn(v: i32): @this() { return .{ .x = v }; };
-}
+        impl S {
+            pub const fromRaw := fn(v: i32): @this() { return .{ .x = v }; };
+        }
 )");
 }
 
 TEST_CASE("a trait impl block resolves in phase 1") {
     helpers::resolve_and_check(R"(
-const S := struct { x: i32 };
-const W := interface { pub const write := fn(&mut self): void; };
+        const S := struct { x: i32 };
+        const W := interface { pub const write := fn(&mut self): void; };
 
-impl W for S {
-    pub const write := fn(&mut self): void {};
-}
+        impl W for S {
+            pub const write := fn(&mut self): void {};
+        }
 )");
 }
 
 TEST_CASE("a parameterized impl is accepted but left un-resolved in phase 1") {
     helpers::resolve_and_check(R"(
-const S := struct { x: i32 };
+        const S := struct { x: i32 };
 
-impl(P: type) S {
-    pub const tag := fn(): void {};
-}
+        impl(P: type) S {
+            pub const tag := fn(): void {};
+        }
 )");
 }
 
 TEST_CASE("a conforming trait impl passes and its method is callable") {
     helpers::resolve_and_check(R"(
-const W := interface {
-    pub const write := fn(&mut self, b: []u8): usize;
-    pub const flush := fn(&mut self): void;
-};
-const File := struct { fd: i32 };
-impl W for File {
-    pub const write := fn(&mut self, b: []u8): usize { return b.len; };
-    pub const flush := fn(&mut self): void {};
-}
-const use := fn(f: &mut File): usize {
-    f.flush();
-    return f.write("hi");
-};
+        const W := interface {
+            pub const write := fn(&mut self, b: []u8): usize;
+            pub const flush := fn(&mut self): void;
+        };
+        const File := struct { fd: i32 };
+        impl W for File {
+            pub const write := fn(&mut self, b: []u8): usize { return b.len; };
+            pub const flush := fn(&mut self): void {};
+        }
+        const use := fn(f: &mut File): usize {
+            f.flush();
+            return f.write("hi");
+        };
 )");
 }
 
 TEST_CASE("a missing requirement is reported") {
     CHECK(raised(R"(
-const W := interface { pub const write := fn(&mut self): void; pub const flush := fn(&mut self): void; };
-const F := struct { x: i32 };
-impl W for F { pub const write := fn(&mut self): void {}; }
+        const W := interface { pub const write := fn(&mut self): void; pub const flush := fn(&mut self): void; };
+        const F := struct { x: i32 };
+        impl W for F { pub const write := fn(&mut self): void {}; }
 )",
                  sema::error::MISSING_IMPL_METHOD));
 }
 
 TEST_CASE("a wrong self binding is reported") {
     CHECK(raised(R"(
-const W := interface { pub const write := fn(&mut self): void; };
-const F := struct { x: i32 };
-impl W for F { pub const write := fn(&self): void {}; }
+        const W := interface { pub const write := fn(&mut self): void; };
+        const F := struct { x: i32 };
+        impl W for F { pub const write := fn(&self): void {}; }
 )",
                  sema::error::IMPL_SELF_MISMATCH));
 }
 
 TEST_CASE("a wrong return type is reported") {
     CHECK(raised(R"(
-const W := interface { pub const size := fn(&self): usize; };
-const F := struct { x: i32 };
-impl W for F { pub const size := fn(&self): bool { return true; }; }
+        const W := interface { pub const size := fn(&self): usize; };
+        const F := struct { x: i32 };
+        impl W for F { pub const size := fn(&self): bool { return true; }; }
 )",
                  sema::error::IMPL_SIGNATURE_MISMATCH));
 }
 
 TEST_CASE("a stray member in a trait impl is reported") {
     CHECK(raised(R"(
-const W := interface { pub const write := fn(&mut self): void; };
-const F := struct { x: i32 };
-impl W for F {
-    pub const write := fn(&mut self): void {};
-    pub const extra := fn(&self): void {};
-}
+        const W := interface { pub const write := fn(&mut self): void; };
+        const F := struct { x: i32 };
+        impl W for F {
+            pub const write := fn(&mut self): void {};
+            pub const extra := fn(&self): void {};
+        }
 )",
                  sema::error::UNKNOWN_IMPL_MEMBER));
 }
@@ -188,143 +188,179 @@ impl other::Foreign { pub const f := fn(&self): void {}; }
 
 TEST_CASE("two trait impls for the same (I, T) pair are a duplicate") {
     CHECK(raised(R"(
-const W := interface { pub const f := fn(&self): void; };
-const F := struct { x: i32 };
-impl W for F { pub const f := fn(&self): void {}; }
-impl W for F { pub const f := fn(&self): void {}; }
+        const W := interface { pub const f := fn(&self): void; };
+        const F := struct { x: i32 };
+        impl W for F { pub const f := fn(&self): void {}; }
+        impl W for F { pub const f := fn(&self): void {}; }
 )",
                  sema::error::DUPLICATE_IMPL));
 }
 
 TEST_CASE("@implements evaluates to the right constexpr bool") {
     helpers::resolve_and_check(R"(
-const W := interface { pub const f := fn(&self): void; };
-const Yes := struct { x: i32 };
-const No := struct { y: i32 };
-impl W for Yes { pub const f := fn(&self): void {}; }
+        const W := interface { pub const f := fn(&self): void; };
+        const Yes := struct { x: i32 };
+        const No := struct { y: i32 };
+        impl W for Yes { pub const f := fn(&self): void {}; }
 
-const check := fn(): void {
-    if constexpr (!@implements(Yes, W)) { @compileError("Yes should implement W"); }
-    if constexpr (@implements(No, W)) { @compileError("No must not implement W"); }
-    if constexpr (@implements(i32, W)) { @compileError("i32 must not implement W"); }
-};
+        const check := fn(): void {
+            if constexpr (!@implements(Yes, W)) { @compileError("Yes should implement W"); }
+            if constexpr (@implements(No, W)) { @compileError("No must not implement W"); }
+            if constexpr (@implements(i32, W)) { @compileError("i32 must not implement W"); }
+        };
 )");
 }
 
 TEST_CASE("@implements also accepts a value as its first argument") {
     helpers::resolve_and_check(R"(
-const W := interface { pub const f := fn(&self): void; };
-const Yes := struct { x: i32 };
-impl W for Yes { pub const f := fn(&self): void {}; }
-const check := fn(y: Yes): void {
-    if constexpr (!@implements(y, W)) { @compileError("value form should agree"); }
-};
+        const W := interface { pub const f := fn(&self): void; };
+        const Yes := struct { x: i32 };
+        impl W for Yes { pub const f := fn(&self): void {}; }
+        const check := fn(y: Yes): void {
+            if constexpr (!@implements(y, W)) { @compileError("value form should agree"); }
+        };
 )");
 }
 
 TEST_CASE("an interface cannot be stored by value") {
     CHECK(raised(R"(
-const W := interface { pub const f := fn(&self): void; };
-var w: W = undefined;
+        const W := interface { pub const f := fn(&self): void; };
+        var w: W = undefined;
 )",
                  sema::error::INTERFACE_NOT_A_VALUE));
 }
 
 TEST_CASE("an inherent impl method is callable on an instance") {
     helpers::resolve_and_check(R"(
-const P := struct { x: i32, y: i32 };
-impl P {
-    pub const sum := fn(&self): i32 { return self.x + self.y; };
-}
-const go := fn(p: &P): i32 { return p.sum(); };
+        const P := struct { x: i32, y: i32 };
+        impl P {
+            pub const sum := fn(&self): i32 { return self.x + self.y; };
+        }
+        const go := fn(p: &P): i32 { return p.sum(); };
 )");
 }
 
 TEST_CASE("an inherent impl member may not shadow a native member or another impl member") {
     CHECK(raised(R"(
-const P := struct { x: i32, const m := fn(&self): i32 { return x; }; };
-impl P { pub const m := fn(&self): i32 { return 0; }; }
+        const P := struct { x: i32, const m := fn(&self): i32 { return x; }; };
+        impl P { pub const m := fn(&self): i32 { return 0; }; }
 )",
                  sema::error::DUPLICATE_MEMBER));
 
     CHECK(raised(R"(
-const P := struct { x: i32 };
-impl P { pub const m := fn(&self): i32 { return 1; }; }
-impl P { pub const m := fn(&self): i32 { return 2; }; }
+        const P := struct { x: i32 };
+        impl P { pub const m := fn(&self): i32 { return 1; }; }
+        impl P { pub const m := fn(&self): i32 { return 2; }; }
 )",
                  sema::error::DUPLICATE_MEMBER));
 }
 
 TEST_CASE("a default method resolves on the implementing type") {
     helpers::resolve_and_check(R"(
-const It := interface {
-    pub const next := fn(&mut self): i32;
-    pub const twice := fn(&mut self): i32 { return self.next() + self.next(); };
-};
-const Src := struct { v: i32 };
-impl It for Src { pub const next := fn(&mut self): i32 { return self.v; }; }
-const run := fn(s: &mut Src): i32 { return s.twice(); };
+        const It := interface {
+            pub const next := fn(&mut self): i32;
+            pub const twice := fn(&mut self): i32 { return self.next() + self.next(); };
+        };
+        const Src := struct { v: i32 };
+        impl It for Src { pub const next := fn(&mut self): i32 { return self.v; }; }
+        const run := fn(s: &mut Src): i32 { return s.twice(); };
 )");
 }
 
 TEST_CASE("an `impl I` parameter accepts a conforming argument and rejects a non-conforming one") {
     helpers::resolve_and_check(R"(
-const W := interface { pub const write := fn(&self, n: i32): i32; };
-const File := struct { fd: i32 };
-impl W for File { pub const write := fn(&self, n: i32): i32 { return self.fd + n; }; }
-const dump := fn(w: &impl W, n: i32): i32 { return w.write(n); };
-const go := fn(f: &File): i32 { return dump(f, 3); };
+        const W := interface { pub const write := fn(&self, n: i32): i32; };
+        const File := struct { fd: i32 };
+        impl W for File { pub const write := fn(&self, n: i32): i32 { return self.fd + n; }; }
+        const dump := fn(w: &impl W, n: i32): i32 { return w.write(n); };
+        const go := fn(f: &File): i32 { return dump(f, 3); };
 )");
 
     CHECK(raised(R"(
-const W := interface { pub const write := fn(&self): void; };
-const Nope := struct { x: i32 };
-const dump := fn(w: &impl W): void { w.write(); };
-const go := fn(n: &Nope): void { dump(n); };
+        const W := interface { pub const write := fn(&self): void; };
+        const Nope := struct { x: i32 };
+        const dump := fn(w: &impl W): void { w.write(); };
+        const go := fn(n: &Nope): void { dump(n); };
 )",
                  sema::error::UNSATISFIED_BOUND));
 }
 
 TEST_CASE("a static `var` is allowed inside a trait impl") {
     helpers::resolve_and_check(R"(
-const W := interface { pub const write := fn(&mut self): void; };
-const F := struct { x: i32 };
-impl W for F {
-    var calls: i32 = 0;
-    pub const write := fn(&mut self): void {};
-}
+        const W := interface { pub const write := fn(&mut self): void; };
+        const F := struct { x: i32 };
+        impl W for F {
+            var calls: i32 = 0;
+            pub const write := fn(&mut self): void {};
+        }
 )");
 }
 
 TEST_CASE("an `impl (A + B)` bound with a shared associated item is rejected") {
     CHECK(raised(R"(
-const A := interface { Item: type; pub const a := fn(&self): void; };
-const B := interface { Item: type; pub const b := fn(&self): void; };
-const use := fn(x: &impl (A + B)): void { x.a(); };
+        const A := interface { Item: type; pub const a := fn(&self): void; };
+        const B := interface { Item: type; pub const b := fn(&self): void; };
+        const use := fn(x: &impl (A + B)): void { x.a(); };
 )",
                  sema::error::CONFLICTING_ASSOC));
 }
 
 TEST_CASE("an `impl (A + B)` parameter requires both interfaces") {
     helpers::resolve_and_check(R"(
-const R := interface { pub const rd := fn(&self): i32; };
-const W := interface { pub const wr := fn(&self): i32; };
-const Dev := struct { a: i32, b: i32 };
-impl R for Dev { pub const rd := fn(&self): i32 { return self.a; }; }
-impl W for Dev { pub const wr := fn(&self): i32 { return self.b; }; }
-const tee := fn(x: &impl (R + W)): i32 { return x.rd() + x.wr(); };
-const go := fn(d: &Dev): i32 { return tee(d); };
+        const R := interface { pub const rd := fn(&self): i32; };
+        const W := interface { pub const wr := fn(&self): i32; };
+        const Dev := struct { a: i32, b: i32 };
+        impl R for Dev { pub const rd := fn(&self): i32 { return self.a; }; }
+        impl W for Dev { pub const wr := fn(&self): i32 { return self.b; }; }
+        const tee := fn(x: &impl (R + W)): i32 { return x.rd() + x.wr(); };
+        const go := fn(d: &Dev): i32 { return tee(d); };
 )");
 
     CHECK(raised(R"(
-const R := interface { pub const rd := fn(&self): i32; };
-const W := interface { pub const wr := fn(&self): i32; };
-const HalfDev := struct { a: i32 };
-impl R for HalfDev { pub const rd := fn(&self): i32 { return self.a; }; }
-const tee := fn(x: &impl (R + W)): i32 { return x.rd(); };
-const go := fn(d: &HalfDev): i32 { return tee(d); };
+        const R := interface { pub const rd := fn(&self): i32; };
+        const W := interface { pub const wr := fn(&self): i32; };
+        const HalfDev := struct { a: i32 };
+        impl R for HalfDev { pub const rd := fn(&self): i32 { return self.a; }; }
+        const tee := fn(x: &impl (R + W)): i32 { return x.rd(); };
+        const go := fn(d: &HalfDev): i32 { return tee(d); };
 )",
                  sema::error::UNSATISFIED_BOUND));
+}
+
+TEST_CASE("a parameterized inherent impl expands for each concrete instantiation") {
+    helpers::resolve_and_check(R"(
+        const Box := fn(T: type): type { return struct { v: T }; };
+        impl(T: type) Box(T) {
+            pub const get := fn(&self): T { return self.v; };
+        }
+        const use := fn(): i32 {
+            var b: Box(i32) = .{ .v = 7 };
+            return b.get();
+        };
+)");
+}
+
+TEST_CASE("a parameterized trait impl over a local ctor conforms and its method is callable") {
+    helpers::resolve_and_check(R"(
+        const Show := interface { pub const show := fn(&self): i32; };
+        const Box := fn(T: type): type { return struct { v: T }; };
+        impl(T: type) Show for Box(T) {
+            pub const show := fn(&self): i32 { return self.v; };
+        }
+        const use := fn(): i32 {
+            var b: Box(i32) = .{ .v = 5 };
+            return b.show();
+        };
+)");
+}
+
+TEST_CASE("a parameterized impl anchored on neither its ctor nor its interface is an orphan") {
+    CHECK(raised_with_import(R"(
+        import "other.gh" as other;
+        impl(T: type) other::Bag(T) { pub const peek := fn(&self): T { return self.v; }; }
+)",
+                             R"(pub const Bag := fn(T: type): type { return struct { v: T }; };)",
+                             sema::error::ORPHAN_IMPL));
 }
 
 } // namespace ghoti::tests

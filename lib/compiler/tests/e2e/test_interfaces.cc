@@ -107,4 +107,45 @@ TEST_CASE("an `impl (A + B)` intersection parameter uses both interfaces") {
     )") == 42);
 }
 
+TEST_CASE("a parameterized inherent impl adds a method to every instantiation of its ctor") {
+    CHECK(helpers::compile_and_run(R"(
+        const Box := fn(T: type): type { return struct { val: T }; };
+        impl(T: type) Box(T) {
+            pub const doubled := fn(&self): T { return self.val + self.val; };
+        }
+        pub const main := fn(): i32 {
+            var b: Box(i32) = .{ .val = 21 };
+            return b.doubled();
+        };
+    )") == 42);
+}
+
+TEST_CASE("one parameterized-impl method set serves repeated uses of the same instantiation") {
+    CHECK(helpers::compile_and_run(R"(
+        const Box := fn(T: type): type { return struct { val: T }; };
+        impl(T: type) Box(T) {
+            pub const get := fn(&self): T { return self.val; };
+        }
+        pub const main := fn(): i32 {
+            var a: Box(i32) = .{ .val = 20 };
+            var b: Box(i32) = .{ .val = 22 };
+            return a.get() + b.get();
+        };
+    )") == 42);
+}
+
+TEST_CASE("a parameterized trait impl over a local ctor dispatches statically") {
+    CHECK(helpers::compile_and_run(R"(
+        const Show := interface { pub const show := fn(&self): i32; };
+        const Box := fn(T: type): type { return struct { val: T }; };
+        impl(T: type) Show for Box(T) {
+            pub const show := fn(&self): i32 { return self.val; };
+        }
+        pub const main := fn(): i32 {
+            var b: Box(i32) = .{ .val = 42 };
+            return b.show();
+        };
+    )") == 42);
+}
+
 } // namespace ghoti::tests

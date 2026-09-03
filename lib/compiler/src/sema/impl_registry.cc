@@ -29,6 +29,13 @@ auto impl_registry::record(impl_record rec)
     return gsl::not_null{stored};
 }
 
+auto impl_registry::record_parameterized(parameterized_impl pimpl)
+    -> gsl::not_null<parameterized_impl*> {
+    auto* stored{arena_.make<parameterized_impl>(std::move(pimpl)).get()};
+    param_records_.emplace_back(stored);
+    return gsl::not_null{stored};
+}
+
 auto impl_registry::find_by_site(ast::node_id site) noexcept -> stdx::option<impl_record&> {
     for (auto* r : records_) {
         if (r->site.get_index() == site.get_index() && r->site.get_kind() == site.get_kind()) {
