@@ -2445,8 +2445,35 @@ auto type_resolver::resolve_impl_method_access(const type&      target,
     }
 
     if (visible.size() == 1) {
+        for (const auto& em : candidates) {
+            if (em.method == visible.front()) {
+                pending_impl_method_owner_.emplace(em.record->body_scope_idx);
+                break;
+            }
+        }
         return stdx::result<gsl::not_null<type*>, diagnostic>{
             gsl::not_null<type*>{const_cast<type*>(visible.front()->fn_type.get())}};
+    }
+
+    // An interface default method the target inherits (not overridden by its impl). The signature
+    // is rebuilt with `self` bound to the concrete target so the call and the emitted body agree.
+    if (visible.empty()) {
+        for (const auto* rec : ctx_.impls.records()) {
+            if (!rec->target_type || &*rec->target_type != &target || !rec->interface_type) {
+                continue;
+            }
+            const auto iface{rec->interface_type->get_data().as_opt<types::interface_t>()};
+            if (!iface) { continue; }
+            for (usize i{iface->requirement_count}; i < iface->method_names.size(); ++i) {
+                if (iface->method_names[i] != name) { continue; }
+                if (rec->find_method(name).has_value()) { continue; } // overridden
+                const auto& fn{
+                    resolving_.ast.get_as<ast::function_expr>(*iface->method_decl(i).signature)};
+                pending_impl_method_owner_.emplace(rec->body_scope_idx);
+                return stdx::result<gsl::not_null<type*>, diagnostic>{gsl::not_null<type*>{
+                    &resolve_required_method_type(fn, const_cast<type&>(target))}};
+            }
+        }
     }
 
     if (visible.size() > 1) {
@@ -2614,12 +2641,27 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
     if (last_type_->is_poison()) { return resolving_.set_sema_type(id, *last_type_); }
     auto& object_type{*last_type_.take()};
 
+    pending_impl_method_owner_.reset();
     auto result{resolve_structural_access(object_type,
                                           dot.member,
                                           resolving_.ast.location_of(dot.object),
                                           get_rightmost_name(dot.object))};
     if (!result) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(result).error()));
+    }
+
+    // An `impl`-attached method: pin the call target to the impl block's symbol table so the
+    // emitter names it the same way `emit_top_level_impl` does.
+    if (pending_impl_method_owner_) {
+        if constexpr (std::same_as<ID, ast::node_id>) {
+            resolving_.set_resolved_symbol_owner(id, *pending_impl_method_owner_);
+        }
+        pending_impl_method_owner_.reset();
+        auto& member_type{**result};
+        resolving_.set_sema_type(dot.member, member_type);
+        resolving_.set_sema_type(id, member_type);
+        resolving_.add_identifier_position(dot.member);
+        return last_type_.emplace(member_type);
     }
 
     const auto unwrap_ref = [](type& t) -> type& {
@@ -4962,6 +5004,32 @@ auto type_resolver::pre_register_impls() -> void {
                 .fn_type = stdx::none,
                 .is_pub  = decl->has_modifier(ast::decl_modifiers::PUBLIC),
             });
+        }
+
+        // An inherent `impl T` member may not shadow a native member of `T` or a member
+        // already added by another inherent `impl T` block.
+        if (!interface_type && target.has_symbol_table_idx()) {
+            const auto& native{ctx_.registry.get(target.get_symbol_table_idx())};
+            for (const auto& m : rec.methods) {
+                bool clashes{native.has(m.name)};
+                for (const auto* other : ctx_.impls.records()) {
+                    if (other->interface_type || !other->target_type ||
+                        &*other->target_type != &target) {
+                        continue;
+                    }
+                    clashes = clashes || other->find_method(m.name).has_value();
+                }
+
+                if (clashes) {
+                    ctx_.diags.emplace_back(
+                        fmt::format("`{}` is already a member of `{}`; an inherent `impl` may not "
+                                    "redefine it",
+                                    m.name,
+                                    ctx_.type_display_name(target)),
+                        error::DUPLICATE_MEMBER,
+                        resolving_.ast.location_of(m.decl));
+                }
+            }
         }
 
         auto recorded{ctx_.impls.record(std::move(rec))};

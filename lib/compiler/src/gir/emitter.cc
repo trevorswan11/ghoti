@@ -85,6 +85,7 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
             [&](const auto&) {},
             [&](const ast::decl_stmt& decl) { emit_top_level_decl(id, decl); },
             [&](const ast::using_stmt& using_stmt) { emit_top_level_using(id, using_stmt); },
+            [&](const ast::impl_stmt& impl) { emit_top_level_impl(id, impl); },
             [&](const ast::test_stmt& test) { emit_top_level_test(id, test); });
     };
 
@@ -422,6 +423,8 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
     const auto  sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Top-level declaration must have a resolved sema type");
     if (sema_type->get_kind() == sema::type_kind::TYPE) { return; }
+    // An `interface` decl is a pure compile-time contract with no runtime storage or body.
+    if (sema_type->get_kind() == sema::type_kind::INTERFACE) { return; }
 
     const auto linkage{get_decl_linkage(decl)};
 
@@ -523,6 +526,126 @@ auto emitter::emit_top_level_using(ast::node_id, const ast::using_stmt& using_st
     const auto  sema_type{active_mod().get_sema_type_opt(using_stmt.explicit_type)};
     ASSERT(sema_type, "Using statement explicit type must be resolved");
     gir_module_.add_type(std::string{name_ident.name}, *sema_type);
+}
+
+auto emitter::emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -> void {
+    PROFILE_FUNCTION();
+    if (!impl.impl_params.empty()) { return; } // parameterized: Phase 2.x
+
+    stdx::option<const sema::impl_record&> rec;
+    for (const auto* r : ctx_.impls.records()) {
+        if (r->enclosing && &*r->enclosing == &active_mod() &&
+            r->site.get_index() == id.get_index() && r->site.get_kind() == id.get_kind()) {
+            rec.emplace(r);
+            break;
+        }
+    }
+    if (!rec || !rec->target_type) { return; }
+
+    auto*            target{const_cast<sema::type*>(rec->target_type.get())};
+    const type_guard target_guard{user_type_stack_, target};
+
+    for (const auto& member : impl.members) {
+        const auto md{active_ast().get_as_opt<ast::decl_stmt>(*member)};
+        if (!md || !md->value) { continue; }
+        const auto& mname{active_ast().get_as<ast::identifier_expr>(md->name).name};
+        const auto  gir_name{symbol_scoping_.name_for(rec->body_scope_idx, mname)};
+
+        if (const auto fx{active_ast().get_as_opt<ast::function_expr>(*md->value)}) {
+            emit_function(*member, *md, *fx, std::string_view{gir_name});
+        } else {
+            // A static `const`/`var` member or `using` alias: emit under the impl's scope.
+            emit_top_level_decl(*member, *md);
+        }
+    }
+
+    // Interface default methods the impl inherits: emit the default body once for this target.
+    if (rec->interface_type) {
+        if (const auto iface{rec->interface_type->get_data().as_opt<sema::types::interface_t>()}) {
+            for (usize i{iface->requirement_count}; i < iface->method_names.size(); ++i) {
+                const auto name{iface->method_names[i]};
+                if (rec->find_method(name).has_value()) { continue; } // overridden
+                const auto& method{iface->method_decl(i)};
+                const auto  fx{active_ast().get_as_opt<ast::function_expr>(*method.signature)};
+                if (!fx || fx->is_type_expr) { continue; }
+                emit_impl_default_method(symbol_scoping_.name_for(rec->body_scope_idx, name),
+                                         rec->body_scope_idx,
+                                         *method.signature,
+                                         *fx);
+            }
+        }
+    }
+}
+
+auto emitter::emit_impl_default_method(std::string_view          gir_name,
+                                       usize                     impl_scope_idx,
+                                       ast::node_id              sig_id,
+                                       const ast::function_expr& fn_expr) -> void {
+    PROFILE_FUNCTION();
+    if (gir_module_.has_function(std::string{gir_name})) { return; }
+    const auto sema_type{active_mod().get_sema_type_opt(sig_id)};
+    if (!sema_type) { return; }
+
+    auto* target{user_type_stack_.empty() ? nullptr : user_type_stack_.back()};
+    if (target == nullptr) { return; }
+
+    auto& fn{gir_module_.add_function(
+        std::string{gir_name}, *sema_type, false, false, fn_expr.variadic, gir::linkage::INTERNAL)};
+    auto& entry{fn.add_segment()};
+    builder_.set_insert_point(fn, entry);
+
+    const scope_guard        g{scopes_};
+    const open_fn_name_guard fn_name_g{open_fn_names_, std::string{gir_name}};
+    const_eval_.set_enclosing_type(stdx::option<sema::type&>{*target});
+
+    if (fn_expr.self) {
+        const auto& self_ident{active_ast().get_as<ast::identifier_expr>(fn_expr.self->name)};
+        const auto  mod{fn_expr.self->modifier};
+        sema::type* self_type{target};
+        if (mod.is_mutable_ref()) {
+            self_type = &ctx_.get_reference(sema::types::mut::MUTABLE, *target);
+        } else if (mod.is_const_ref()) {
+            self_type = &ctx_.get_reference(sema::types::mut::CONSTANT, *target);
+        } else if (mod.is_mutable_ptr()) {
+            self_type = &ctx_.get_pointer(sema::types::mut::MUTABLE, *target);
+        } else if (mod.is_const_ptr()) {
+            self_type = &ctx_.get_pointer(sema::types::mut::CONSTANT, *target);
+        }
+        auto& self_slot{fn.add_param(std::string{self_ident.name}, *self_type)};
+        scopes_.back().bindings.emplace(self_ident.name,
+                                        local_binding{
+                                            .id        = self_slot.id,
+                                            .type      = *self_type,
+                                            .is_alloca = false,
+                                            .const_val = stdx::none,
+                                        });
+    }
+    for (const auto& param : fn_expr.parameters) {
+        const auto& p_ident{active_ast().get_as<ast::identifier_expr>(param.name)};
+        const auto  p_type{active_mod().get_sema_type_opt(param.name)};
+        if (!p_type) { continue; }
+        auto&      p_slot{fn.add_param(std::string{p_ident.name}, *p_type)};
+        const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
+        scopes_.back().bindings.emplace(
+            p_ident.name,
+            local_binding{
+                .id = p_slot.id, .type = *p_type, .is_alloca = p_spilled, .const_val = stdx::none});
+    }
+
+    emitting_impl_default_scope_.emplace(impl_scope_idx);
+    emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
+    emitting_impl_default_scope_.reset();
+
+    if (const auto cur_seg{builder_.get_segment()}) {
+        if (!cur_seg->has_terminator()) {
+            if (const auto fd{sema_type->get_data().as_opt<sema::types::function>()};
+                fd && fd->return_type.get_kind() != sema::type_kind::VOID_) {
+                builder_.emit_return(value{undefined_val{}, fd->return_type});
+            } else {
+                builder_.emit_return();
+            }
+        }
+    }
 }
 
 auto emitter::emit_top_level_test(ast::node_id id, const ast::test_stmt& test) -> void {
@@ -2019,6 +2142,10 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         if (fn_d && !fn_d->has_self) {
             const auto callee_val{emit_expression(call.function)};
             indirect_callee.emplace(callee_val);
+        } else if (emitting_impl_default_scope_) {
+            // Inside an inherited default body: `self.method(...)` targets this impl's method.
+            callee_name.emplace(
+                symbol_scoping_.name_for(*emitting_impl_default_scope_, member_ident.name));
         } else {
             callee_name.emplace(std::string{member_ident.name});
         }
@@ -2086,6 +2213,21 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             fn_data = cl_data->impl_signature.get_data().as_opt<sema::types::function>();
         } else {
             fn_data = fn_type_opt->get_data().as_opt<sema::types::function>();
+        }
+    }
+
+    // Inside an inherited default body, `self.method(...)` was sema-resolved against the abstract
+    // interface (`self: &interface`).
+    if (emitting_impl_default_scope_ && dot_call) {
+        const auto mn{active_ast().get_as<ast::identifier_expr>(dot_call->member).name};
+        for (const auto* r : ctx_.impls.records()) {
+            if (r->body_scope_idx != *emitting_impl_default_scope_) { continue; }
+            if (const auto m{r->find_method(mn)}; m && m->fn_type) {
+                // Retarget its signature to this impl's concrete method so the
+                // implicit-self argument is typed for the real target.
+                fn_data = m->fn_type->get_data().as_opt<sema::types::function>();
+            }
+            break;
         }
     }
 

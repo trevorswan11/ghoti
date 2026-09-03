@@ -379,10 +379,11 @@ class type_resolver {
     std::vector<ast::node_id> open_function_nodes_;
     std::vector<bool>         self_recursive_flags_;
 
-    bool in_mutating_context_{false};
-    bool for_generic_instantiation_{false};
-    bool in_subscript_index_{false};
-    bool in_for_iterable_{false};
+    bool           in_mutating_context_{false};
+    bool           for_generic_instantiation_{false};
+    bool           in_subscript_index_{false};
+    bool           in_for_iterable_{false};
+    stdx::opt_size pending_impl_method_owner_;
 
     named_test_map_t     named_tests_;
     structural_validator struct_validator_;

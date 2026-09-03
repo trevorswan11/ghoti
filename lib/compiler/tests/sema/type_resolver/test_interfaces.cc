@@ -240,4 +240,31 @@ const go := fn(p: &P): i32 { return p.sum(); };
 )");
 }
 
+TEST_CASE("an inherent impl member may not shadow a native member or another impl member") {
+    CHECK(raised(R"(
+const P := struct { x: i32, const m := fn(&self): i32 { return x; }; };
+impl P { pub const m := fn(&self): i32 { return 0; }; }
+)",
+                 sema::error::DUPLICATE_MEMBER));
+
+    CHECK(raised(R"(
+const P := struct { x: i32 };
+impl P { pub const m := fn(&self): i32 { return 1; }; }
+impl P { pub const m := fn(&self): i32 { return 2; }; }
+)",
+                 sema::error::DUPLICATE_MEMBER));
+}
+
+TEST_CASE("a default method resolves on the implementing type") {
+    helpers::resolve_and_check(R"(
+const It := interface {
+    pub const next := fn(&mut self): i32;
+    pub const twice := fn(&mut self): i32 { return self.next() + self.next(); };
+};
+const Src := struct { v: i32 };
+impl It for Src { pub const next := fn(&mut self): i32 { return self.v; }; }
+const run := fn(s: &mut Src): i32 { return s.twice(); };
+)");
+}
+
 } // namespace ghoti::tests

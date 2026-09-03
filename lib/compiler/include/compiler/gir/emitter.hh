@@ -80,11 +80,22 @@ class emitter {
     using open_fn_name_guard    = ghoti::scope_guard<std::vector<std::string>>;
     using open_fn_closure_guard = ghoti::scope_guard<std::vector<bool>>;
     using constexpr_frame_guard = ghoti::scope_guard<std::vector<sema::constexpr_frame>>;
+    using type_guard            = ghoti::scope_guard<std::vector<sema::type*>>;
 
   private:
     auto emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -> void;
     auto emit_top_level_using(ast::node_id id, const ast::using_stmt& using_stmt) -> void;
     auto emit_top_level_test(ast::node_id id, const ast::test_stmt& test) -> void;
+    // Emits the member functions of an `impl [I for] T { ... }` block under names scoped to the
+    // impl's own symbol table, plus any interface default methods the impl inherits.
+    auto emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -> void;
+    // Emits one inherited interface default-method body for a concrete impl target. `self` is
+    // retyped to the target and bare `self.method(...)` calls in the body are redirected to the
+    // impl's own methods.
+    auto emit_impl_default_method(std::string_view          gir_name,
+                                  usize                     impl_scope_idx,
+                                  ast::node_id              sig_id,
+                                  const ast::function_expr& fn_expr) -> void;
 
     auto emit_function(ast::node_id                   id,
                        const ast::decl_stmt&          decl,
@@ -323,6 +334,10 @@ class emitter {
     std::vector<std::string_view> pending_builtin_runtime_;
     symbol_scoping                symbol_scoping_;
     bool                          runtime_safety_{true};
+
+    // While emitting an inherited interface default-method body: bare `self.method(...)` calls
+    // are rewritten to target this impl's own methods (its body symbol table).
+    stdx::opt_size emitting_impl_default_scope_;
 };
 
 } // namespace ghoti::gir
