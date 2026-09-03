@@ -79,4 +79,32 @@ TEST_CASE("a type can implement two different interfaces") {
     )") == 42);
 }
 
+TEST_CASE("an `impl I` bounded generic parameter dispatches to the argument's impl") {
+    CHECK(helpers::compile_and_run(R"(
+        const Doubler := interface { pub const apply := fn(&self, n: i32): i32; };
+        const Twice := struct { k: i32 };
+        impl Doubler for Twice { pub const apply := fn(&self, n: i32): i32 { return n * self.k; }; }
+        const run := fn(d: &impl Doubler, n: i32): i32 { return d.apply(n); };
+        pub const main := fn(): i32 {
+            var t := Twice{ .k = 3 };
+            return run(&t, 14);
+        };
+    )") == 42);
+}
+
+TEST_CASE("an `impl (A + B)` intersection parameter uses both interfaces") {
+    CHECK(helpers::compile_and_run(R"(
+        const R := interface { pub const rd := fn(&self): i32; };
+        const W := interface { pub const wr := fn(&self): i32; };
+        const Dev := struct { a: i32, b: i32 };
+        impl R for Dev { pub const rd := fn(&self): i32 { return self.a; }; }
+        impl W for Dev { pub const wr := fn(&self): i32 { return self.b; }; }
+        const tee := fn(x: &impl (R + W)): i32 { return x.rd() + x.wr(); };
+        pub const main := fn(): i32 {
+            var d := Dev{ .a = 19, .b = 23 };
+            return tee(&d);
+        };
+    )") == 42);
+}
+
 } // namespace ghoti::tests

@@ -267,4 +267,64 @@ const run := fn(s: &mut Src): i32 { return s.twice(); };
 )");
 }
 
+TEST_CASE("an `impl I` parameter accepts a conforming argument and rejects a non-conforming one") {
+    helpers::resolve_and_check(R"(
+const W := interface { pub const write := fn(&self, n: i32): i32; };
+const File := struct { fd: i32 };
+impl W for File { pub const write := fn(&self, n: i32): i32 { return self.fd + n; }; }
+const dump := fn(w: &impl W, n: i32): i32 { return w.write(n); };
+const go := fn(f: &File): i32 { return dump(f, 3); };
+)");
+
+    CHECK(raised(R"(
+const W := interface { pub const write := fn(&self): void; };
+const Nope := struct { x: i32 };
+const dump := fn(w: &impl W): void { w.write(); };
+const go := fn(n: &Nope): void { dump(n); };
+)",
+                 sema::error::UNSATISFIED_BOUND));
+}
+
+TEST_CASE("a static `var` is allowed inside a trait impl") {
+    helpers::resolve_and_check(R"(
+const W := interface { pub const write := fn(&mut self): void; };
+const F := struct { x: i32 };
+impl W for F {
+    var calls: i32 = 0;
+    pub const write := fn(&mut self): void {};
+}
+)");
+}
+
+TEST_CASE("an `impl (A + B)` bound with a shared associated item is rejected") {
+    CHECK(raised(R"(
+const A := interface { Item: type; pub const a := fn(&self): void; };
+const B := interface { Item: type; pub const b := fn(&self): void; };
+const use := fn(x: &impl (A + B)): void { x.a(); };
+)",
+                 sema::error::CONFLICTING_ASSOC));
+}
+
+TEST_CASE("an `impl (A + B)` parameter requires both interfaces") {
+    helpers::resolve_and_check(R"(
+const R := interface { pub const rd := fn(&self): i32; };
+const W := interface { pub const wr := fn(&self): i32; };
+const Dev := struct { a: i32, b: i32 };
+impl R for Dev { pub const rd := fn(&self): i32 { return self.a; }; }
+impl W for Dev { pub const wr := fn(&self): i32 { return self.b; }; }
+const tee := fn(x: &impl (R + W)): i32 { return x.rd() + x.wr(); };
+const go := fn(d: &Dev): i32 { return tee(d); };
+)");
+
+    CHECK(raised(R"(
+const R := interface { pub const rd := fn(&self): i32; };
+const W := interface { pub const wr := fn(&self): i32; };
+const HalfDev := struct { a: i32 };
+impl R for HalfDev { pub const rd := fn(&self): i32 { return self.a; }; }
+const tee := fn(x: &impl (R + W)): i32 { return x.rd(); };
+const go := fn(d: &HalfDev): i32 { return tee(d); };
+)",
+                 sema::error::UNSATISFIED_BOUND));
+}
+
 } // namespace ghoti::tests

@@ -2,6 +2,7 @@
 
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <stdx/option.hh>
 #include <stdx/result.hh>
@@ -178,6 +179,19 @@ class parser {
     // Records that `id` was wrapped in a `( )` pair the parser is about to discard.
     auto mark_parenthesized(ast::node_id id) -> void { ast_->add_parenthesization(id); }
 
+    // `explicit_type::parse` stashes the interface list of an `impl I` / `impl (A + B)` parameter
+    // type here; `function_expr::parse` picks it up right after and associates it with the param.
+    auto set_pending_impl_bound(std::vector<ast::explicit_type_id> interfaces) -> void {
+        pending_impl_bound_.emplace(std::move(interfaces));
+    }
+
+    [[nodiscard]] auto take_pending_impl_bound()
+        -> stdx::option<std::vector<ast::explicit_type_id>> {
+        auto out{std::move(pending_impl_bound_)};
+        pending_impl_bound_.reset();
+        return out;
+    }
+
   private:
     // Bounds recursive-descent depth so deep nesting reports a diagnostic, not a stack overflow.
     static constexpr u32 MAX_EXPRESSION_DEPTH{512};
@@ -199,6 +213,8 @@ class parser {
     token_t                 peek_token_;
     stdx::option<ast::AST&> ast_;
     depth_counter           expr_depth_;
+
+    stdx::option<std::vector<ast::explicit_type_id>> pending_impl_bound_;
 };
 
 } // namespace ghoti::syntax

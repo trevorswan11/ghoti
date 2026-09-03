@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include <ankerl/unordered_dense.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <gsl/pointers>
@@ -1155,6 +1156,14 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
     }
     resolving_.set_sema_type(call.function, callee_type);
 
+    // A call whose callee is still generic (e.g. `w.write(...)` where `w: &impl I` desugared to
+    // `&auto`) only resolves once the enclosing generic is instantiated.
+    if (callee_type.get_kind() == type_kind::AUTO) {
+        resolve_call_args(call.arguments);
+        resolving_.set_sema_type(id, callee_type);
+        return last_type_.emplace(callee_type);
+    }
+
     if constexpr (std::same_as<ID, ast::node_id>) { record_type_ctor_member_call(id, call); }
 
     // Verify that the type in the function is callable and store the return type
@@ -1303,6 +1312,35 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 auto& placeholder{*ctx_.pool[{type_kind::AUTO, types::mut::CONSTANT}]};
                 resolving_.set_sema_type(id, placeholder);
                 return last_type_.emplace(placeholder);
+            }
+
+            // Enforce `impl I` / `impl (A + B)` parameter bounds now the arguments are concrete.
+            if (const auto it{impl_param_bounds_.find(&callee_type)};
+                it != impl_param_bounds_.end()) {
+                for (const auto& [pidx, ifaces] : it->second) {
+                    if (pidx >= concrete_arg_types.size()) { continue; }
+                    gsl::not_null bound_t{&denoted_type(*concrete_arg_types[pidx])};
+                    if (const auto p{bound_t->get_data().as_opt<types::pointer>()}) {
+                        bound_t = &p->underlying;
+                    } else if (const auto r{bound_t->get_data().as_opt<types::reference>()}) {
+                        bound_t = &r->underlying;
+                    }
+
+                    for (const auto* iface : ifaces) {
+                        if (ctx_.impls.implements(*bound_t, *iface)) { continue; }
+                        const auto& pname{resolving_.ast.get_as<ast::identifier_expr>(
+                            *fn_info_opt->fn_expr->parameters[pidx].name)};
+                        return last_type_.emplace(ctx_.poison_node(
+                            resolving_,
+                            id,
+                            fmt::format("`{}` does not implement `{}` required by parameter `{}`",
+                                        ctx_.type_display_name(*bound_t),
+                                        ctx_.type_display_name(*iface),
+                                        pname.name),
+                            error::UNSATISFIED_BOUND,
+                            get_call_arg_location(call.arguments[pidx])));
+                    }
+                }
             }
 
             // Fold the argument supplied for each `constexpr` parameter to a compile-time value
@@ -1768,6 +1806,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
             fn.self.has_value(), param_types, return_type, fn.variadic);
         ctx_.generic_functions.register_function(
             fn_type, resolving_, id, fn, stdx::none, user_type_stack_.peek());
+        register_impl_param_bounds(fn_type, fn);
         return last_type_.emplace(fn_type);
     }
 
@@ -2425,6 +2464,54 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
 //   - `none`               : no such extension method is visible
 //   - `ok(fn type)`        : exactly one visible method
 //   - `err(AMBIGUOUS_...)` : more than one visible method with this name
+auto type_resolver::register_impl_param_bounds(type& fn_type, const ast::function_expr& fn)
+    -> void {
+    if (fn.impl_bounds.empty()) { return; }
+    std::vector<std::pair<u32, std::vector<const type*>>> entries;
+    for (const auto& b : fn.impl_bounds) {
+        std::vector<const type*> ifaces;
+        for (const auto tid : b.interfaces) {
+            resolve(tid);
+            auto& t{denoted_type(*last_type_.take())};
+            if (t.get_kind() == type_kind::INTERFACE) {
+                ifaces.emplace_back(&t);
+            } else if (!t.is_poison()) {
+                ctx_.diags.emplace_back(
+                    fmt::format("an `impl` parameter bound must name an interface; found `{}`",
+                                ctx_.type_display_name(t)),
+                    error::TYPE_MISMATCH,
+                    resolving_.ast.location_of(tid));
+            }
+        }
+
+        // An intersection bound whose interfaces share an associated-item name is rejected
+        if (ifaces.size() > 1) {
+            ankerl::unordered_dense::map<std::string_view, usize> assoc_counts;
+            for (const auto* iface : ifaces) {
+                if (const auto it{iface->get_data().as_opt<types::interface_t>()}) {
+                    for (const auto n : it->assoc_type_names) { ++assoc_counts[n]; }
+                    for (const auto n : it->assoc_const_names) { ++assoc_counts[n]; }
+                }
+            }
+
+            for (const auto& [aname, count] : assoc_counts) {
+                if (count > 1) {
+                    ctx_.diags.emplace_back(
+                        fmt::format("interfaces in this `impl (...)` bound both declare an "
+                                    "associated item `{}`; split the parameter or use a "
+                                    "sub-interface",
+                                    aname),
+                        error::CONFLICTING_ASSOC,
+                        resolving_.ast.location_of(b.interfaces.front()));
+                }
+            }
+        }
+
+        if (!ifaces.empty()) { entries.emplace_back(b.param_index, std::move(ifaces)); }
+    }
+    if (!entries.empty()) { impl_param_bounds_.emplace(&fn_type, std::move(entries)); }
+}
+
 auto type_resolver::resolve_impl_method_access(const type&      target,
                                                std::string_view name,
                                                source_location  loc)
@@ -2640,6 +2727,14 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
     resolve(dot.object);
     if (last_type_->is_poison()) { return resolving_.set_sema_type(id, *last_type_); }
     auto& object_type{*last_type_.take()};
+
+    // Desugared to auto and needs to be deferred like the call handler
+    if (is_generic_type(object_type)) {
+        auto& placeholder{*ctx_.pool[{type_kind::AUTO, types::mut::CONSTANT}]};
+        resolving_.set_sema_type(dot.member, placeholder);
+        resolving_.set_sema_type(id, placeholder);
+        return last_type_.emplace(placeholder);
+    }
 
     pending_impl_method_owner_.reset();
     auto result{resolve_structural_access(object_type,
@@ -5168,13 +5263,18 @@ auto type_resolver::check_impl_conformance(const impl_record& rec, const types::
         }
     }
 
-    // A trait impl may not carry members outside the interface's contract.
+    // A  static `var` is allowed for 'global' state but other members are not allowed
     for (const auto& entry : body_table) {
         const auto member_name{entry.first};
         bool       is_item{false};
         is_item |= std::ranges::contains(iface.method_names, member_name);
         is_item |= std::ranges::contains(iface.assoc_type_names, member_name);
         is_item |= std::ranges::contains(iface.assoc_const_names, member_name);
+
+        const auto node{entry.second.symbol.get_data().as_opt<symbols::node_t>()};
+        const auto decl{node ? resolving_.ast.get_as_opt<ast::decl_stmt>(*node) : stdx::none};
+        if (decl && decl->has_modifier(ast::decl_modifiers::VARIABLE)) { is_item = true; }
+
         if (!is_item) {
             ctx_.diags.emplace_back(
                 fmt::format(
@@ -5463,7 +5563,18 @@ auto type_resolver::instantiate_generic(type&                             callee
         type* body_p_type{arg_type}; // contextual type meaning in the function body
         if (inst_resolver.last_type_ && !inst_resolver.last_type_->is_poison()) {
             auto& resolved_param_type{denoted_type(*inst_resolver.last_type_.take())};
-            if (resolved_param_type.get_kind() != type_kind::AUTO) {
+            // `&auto` / `^auto` (from `impl I` sugar) has no concrete shape yet
+            const auto strips_to_auto{[](auto&& self, const type& t) -> bool {
+                if (t.get_kind() == type_kind::AUTO) { return true; }
+                if (const auto p{t.get_data().as_opt<types::pointer>()}) {
+                    return self(self, p->underlying);
+                }
+                if (const auto r{t.get_data().as_opt<types::reference>()}) {
+                    return self(self, r->underlying);
+                }
+                return false;
+            }};
+            if (!strips_to_auto(strips_to_auto, resolved_param_type)) {
                 decl_p_type = &resolved_param_type;
                 if (resolved_param_type.get_kind() != type_kind::TYPE) {
                     body_p_type = &resolved_param_type;

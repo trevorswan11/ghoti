@@ -165,6 +165,13 @@ struct function_expr {
         bool              is_constexpr{false};
     };
 
+    // The parameter's `auto` type must infer to a type that implements every interface in
+    // `interfaces`.
+    struct impl_bound {
+        u32                           param_index;
+        std::vector<explicit_type_id> interfaces; // `w: impl I` / `w: impl (A + B)`
+    };
+
     stdx::option<self_parameter> self;
     std::vector<parameter>       parameters;
     explicit_type_id             explicit_return_type;
@@ -174,6 +181,7 @@ struct function_expr {
     bool                         is_naked{false};
     calling_convention           conv{calling_convention::C};
     bool                         is_type_expr{false};
+    std::vector<impl_bound>      impl_bounds{};
 
     // Parse the function as a value. Meant for the parser LUT
     [[nodiscard]] static auto parse(syntax::parser& parser)

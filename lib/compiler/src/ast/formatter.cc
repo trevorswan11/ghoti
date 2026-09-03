@@ -791,17 +791,39 @@ auto formatter::visit(node_id, const for_loop_expr& node) -> syntax::doc_id {
 }
 
 auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
+    // `impl I` / `impl (A + B)` parameters are stored desugared to `auto`; re-render the sugar.
+    const auto impl_bound_for{[&](usize idx) -> syntax::doc_id {
+        for (const auto& b : node.impl_bounds) {
+            if (b.param_index != idx) { continue; }
+            std::vector<syntax::doc_id> parts;
+            for (usize i{0}; i < b.interfaces.size(); ++i) {
+                if (i != 0) { parts.emplace_back(doc_manager_.text(" + ")); }
+                parts.emplace_back(format(b.interfaces[i]));
+            }
+            if (b.interfaces.size() == 1) {
+                return doc_manager_.concat({doc_manager_.text("impl "), parts.front()});
+            }
+            return doc_manager_.concat({doc_manager_.text("impl ("),
+                                        doc_manager_.concat(std::move(parts)),
+                                        doc_manager_.text(")")});
+        }
+        return doc_manager_.nil();
+    }};
+
     std::vector<syntax::doc_id> params;
     if (node.self) {
         params.emplace_back(doc_manager_.concat(
             {doc_manager_.text(modifier_prefix(node.self->modifier)), format(node.self->name)}));
     }
-    for (const auto& param : node.parameters) {
-        params.emplace_back(
-            doc_manager_.concat({doc_manager_.text(param.is_constexpr ? "constexpr " : ""),
-                                 format(param.name),
-                                 doc_manager_.text(": "),
-                                 format(param.explicit_type)}));
+    for (usize idx{0}; idx < node.parameters.size(); ++idx) {
+        const auto& param{node.parameters[idx]};
+        auto        bound{impl_bound_for(idx)};
+        params.emplace_back(doc_manager_.concat(
+            {doc_manager_.text(param.is_constexpr ? "constexpr " : ""),
+             format(param.name),
+             doc_manager_.text(": "),
+             bound == doc_manager_.nil() ? format(param.explicit_type)
+                                         : with_modifier(param.explicit_type, bound)}));
     }
     if (node.variadic) { params.emplace_back(doc_manager_.text("...")); }
 

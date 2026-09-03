@@ -340,6 +340,18 @@ auto dumper::visit(node_id, const function_expr& function) -> void {
         dump(function.explicit_return_type);
     }
 
+    if (!function.impl_bounds.empty()) {
+        const indent::guard g{indent_, false};
+        fmt::println(out_, "{}ImplBounds:", indent_.current_branch());
+        dump_container(function.impl_bounds, [this](const function_expr::impl_bound& b) -> void {
+            fmt::println(out_, "{}Param {}:", indent_.current_branch(), b.param_index);
+            dump_container(b.interfaces, [this](explicit_type_id iface) -> void {
+                fmt::print(out_, "{}", indent_.current_branch());
+                dump(iface);
+            });
+        });
+    }
+
     if (!function.is_type_expr) {
         const indent::guard g{indent_, true};
         fmt::print(out_, "{}Body: ", indent_.current_branch());

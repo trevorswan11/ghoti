@@ -14,6 +14,7 @@
 #include "compiler/syntax/error.hh"
 #include "compiler/syntax/parser.hh"
 #include "compiler/syntax/precedence.hh"
+#include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
 
 namespace ghoti::ast {
@@ -96,6 +97,35 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
         modifier = TRY(type_modifier::parse(parser, modifier_token));
     } else if (!modifier.is_value()) {
         parser.advance();
+    }
+
+    // `impl I` / `impl (A + B)` parameter sugar: parse the interface list and desugar the type to
+    // `auto`, stashing the bound for `function_expr::parse` to attach to its parameter.
+    if (parser.peek_token_is(syntax::token_type_t::IMPL)) {
+        parser.advance(); // current == impl
+        std::vector<explicit_type_id> interfaces;
+        if (parser.peek_token_is(syntax::token_type_t::LPAREN)) {
+            parser.advance(); // current == (
+            while (!parser.peek_token_is(syntax::token_type_t::RPAREN) &&
+                   !parser.peek_token_is(syntax::token_type_t::END)) {
+                interfaces.emplace_back(TRY(explicit_type::parse(parser, allow_trailing_brace)));
+                if (parser.peek_token_is(syntax::token_type_t::PLUS)) {
+                    parser.advance();
+                } else {
+                    break;
+                }
+            }
+            TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
+        } else {
+            interfaces.emplace_back(TRY(explicit_type::parse(parser, allow_trailing_brace)));
+        }
+        parser.set_pending_impl_bound(std::move(interfaces));
+
+        // The resolver infers the concrete type from the call argument and enforces the interface
+        // bound.
+        const syntax::token_t auto_token{
+            syntax::token_type_t::AUTO_TYPE, "auto", modifier_token.line, modifier_token.column};
+        return parser.add_type<identifier_expr>(auto_token, modifier, identifier_expr{"auto"});
     }
 
     // The array dimension of a type are only present conditionally

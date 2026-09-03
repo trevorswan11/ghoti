@@ -739,9 +739,10 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
     TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
 
     // Parse the definition now that we're at the fn token
-    stdx::option<self_parameter> self;
-    std::vector<parameter>       parameters;
-    bool                         variadic{false};
+    stdx::option<self_parameter>           self;
+    std::vector<parameter>                 parameters;
+    std::vector<function_expr::impl_bound> impl_bounds;
+    bool                                   variadic{false};
     if (parser.peek_token_is(syntax::token_type_t::RPAREN)) {
         parser.advance();
     } else if (TRY(try_parse_variadic_fn(parser))) {
@@ -818,6 +819,12 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
                 }
             }
 
+            if (auto bound{parser.take_pending_impl_bound()}) {
+                impl_bounds.emplace_back(function_expr::impl_bound{
+                    .param_index = static_cast<u32>(parameters.size()),
+                    .interfaces  = std::move(*bound),
+                });
+            }
             parameters.emplace_back(name, explicit_type, is_constexpr);
             if (!parser.peek_token_is(syntax::token_type_t::RPAREN)) {
                 TRY(parser.expect_peek(syntax::token_type_t::COMMA));
@@ -842,7 +849,8 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
                                               is_move,
                                               is_naked,
                                               conv,
-                                              true);
+                                              true,
+                                              std::move(impl_bounds));
     }
 
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
@@ -856,7 +864,8 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
                                           is_move,
                                           is_naked,
                                           conv,
-                                          false);
+                                          false,
+                                          std::move(impl_bounds));
 }
 
 auto grouped_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {

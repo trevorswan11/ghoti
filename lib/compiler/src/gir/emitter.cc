@@ -553,8 +553,9 @@ auto emitter::emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -
 
         if (const auto fx{active_ast().get_as_opt<ast::function_expr>(*md->value)}) {
             emit_function(*member, *md, *fx, std::string_view{gir_name});
-        } else {
-            // A static `const`/`var` member or `using` alias: emit under the impl's scope.
+        } else if (const auto block_ty{active_mod().get_sema_type_opt(id)}) {
+            // A static member goes in the impl block's own table so refs agree
+            const type_guard scope_guard{user_type_stack_, block_ty.get()};
             emit_top_level_decl(*member, *md);
         }
     }

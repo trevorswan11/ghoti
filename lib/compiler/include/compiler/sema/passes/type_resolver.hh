@@ -69,6 +69,8 @@ class type_resolver {
     auto resolve_impl_type_ref(ast::explicit_type_id ref) -> type&;
     auto resolve_impl_method_access(const type& target, std::string_view name, source_location loc)
         -> stdx::option<stdx::result<gsl::not_null<type*>, diagnostic>>;
+    // Resolves and records the interface bounds of a generic function's `impl I` parameters.
+    auto register_impl_param_bounds(type& fn_type, const ast::function_expr& fn) -> void;
 
   private:
     using scope = symbol_table_stack::scope;
@@ -160,6 +162,12 @@ class type_resolver {
         type& type_;
         bool  committed_{false};
     };
+
+    // `impl I` / `impl (A + B)` parameter bounds, mapping generic fn type to the interface types it
+    // must implement.
+    using impl_param_bound_map_t =
+        ankerl::unordered_dense::map<const type*,
+                                     std::vector<std::pair<u32, std::vector<const type*>>>>;
 
   private:
     auto visit(ast::node_id, const ast::array_expr&) -> void;
@@ -385,10 +393,11 @@ class type_resolver {
     bool           in_for_iterable_{false};
     stdx::opt_size pending_impl_method_owner_;
 
-    named_test_map_t     named_tests_;
-    structural_validator struct_validator_;
-    structural_validator enum_validator_;
-    structural_validator union_validator_;
+    impl_param_bound_map_t impl_param_bounds_;
+    named_test_map_t       named_tests_;
+    structural_validator   struct_validator_;
+    structural_validator   enum_validator_;
+    structural_validator   union_validator_;
 
     context&                    ctx_;
     stdx::option<type&>         last_type_;
