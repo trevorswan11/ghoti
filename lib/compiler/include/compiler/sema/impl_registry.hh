@@ -69,14 +69,11 @@ struct parameterized_impl {
     std::vector<stdx::opt_size> param_to_ctor_arg{};
 };
 
-// Lives on  the shared registry so a monomorphization triggered from any consuming module can remap
+// Lives on the shared registry so a monomorphization triggered from any consuming module can remap
+// the impl's method signatures. Method bodies are re-resolved per instantiation, not remapped.
 struct param_impl_template {
-    stdx::option<const type&>            abstract_target{};
-    std::vector<const type*>             sentinels{}; // per impl param; null for a constexpr one
-    std::vector<std::pair<usize, type*>> node_types{};
-    std::vector<std::pair<usize, type*>> explicit_types{};
-    std::vector<ast::node_id>            constexpr_if_nodes{}; // verdict depends on an impl param
-    std::vector<ast::node_id> constexpr_match_nodes{};         // verdict depends on an impl param
+    stdx::option<const type&> abstract_target{};
+    std::vector<const type*>  sentinels{}; // per impl param; null for a constexpr one
 };
 
 class impl_registry {

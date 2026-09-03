@@ -264,4 +264,57 @@ TEST_CASE("`match constexpr` on a parameterized-impl `constexpr` param selects p
     )") == 111);
 }
 
+TEST_CASE("a dead `if constexpr` arm in a parameterized-impl body is never resolved") {
+    // The `big` arm reads a field that does not exist; it must not be type-checked for
+    // `Tag(false)`.
+    CHECK(helpers::compile_and_run(R"(
+        const Tag := fn(constexpr big: bool): type { return struct { v: i32 }; };
+        impl(constexpr big: bool) Tag(big) {
+            pub const describe := fn(&self): i32 {
+                if constexpr (big) { return self.v + self.missing_field; }
+                return self.v;
+            };
+        }
+        pub const main := fn(): i32 {
+            var s: Tag(false) = .{ .v = 42 };
+            return s.describe();
+        };
+    )") == 42);
+}
+
+TEST_CASE("a dead `match constexpr` arm in a parameterized-impl body is never resolved") {
+    CHECK(helpers::compile_and_run(R"(
+        const Tag := fn(constexpr mode: i32): type { return struct { v: i32 }; };
+        impl(constexpr mode: i32) Tag(mode) {
+            pub const run := fn(&self): i32 {
+                return match constexpr (mode) {
+                    0 => self.v,
+                    _ => self.v + self.only_when_nonzero,
+                };
+            };
+        }
+        pub const main := fn(): i32 {
+            var s: Tag(0) = .{ .v = 42 };
+            return s.run();
+        };
+    )") == 42);
+}
+
+TEST_CASE("an `impl (A + B + C)` intersection parameter accepts three interfaces") {
+    CHECK(helpers::compile_and_run(R"(
+        const A := interface { pub const a := fn(&self): i32; };
+        const B := interface { pub const b := fn(&self): i32; };
+        const C := interface { pub const c := fn(&self): i32; };
+        const Dev := struct { n: i32 };
+        impl A for Dev { pub const a := fn(&self): i32 { return self.n; }; }
+        impl B for Dev { pub const b := fn(&self): i32 { return self.n * 2; }; }
+        impl C for Dev { pub const c := fn(&self): i32 { return self.n * 3; }; }
+        const sum := fn(x: &impl (A + B + C)): i32 { return x.a() + x.b() + x.c(); };
+        pub const main := fn(): i32 {
+            var d := Dev{ .n = 7 };
+            return sum(&d);
+        };
+    )") == 42);
+}
+
 } // namespace ghoti::tests

@@ -151,4 +151,22 @@ class generic_instantiation_cache {
     type_ctor_binding_map type_ctor_bindings_;
 };
 
+// Snapshots a module's typing side tables so a scoped body resolution can be diffed back out as a
+// replayable `body_type_diff`
+struct body_typing_snapshot {
+    explicit body_typing_snapshot(const mod::module& m)
+        : nodes{m.sema_side_tables.node_types.values},
+          types{m.sema_side_tables.explicit_types.values}, ifs{m.if_constexpr_results},
+          matches{m.match_arm_results} {}
+
+    // Folds every still-deferred `[n]T` under the active `constexpr` frame, then records each
+    // side-table entry the resolution changed into `out`.
+    auto diff_into(context& ctx, mod::module& m, body_type_diff& out) const -> void;
+
+    std::vector<stdx::option<type&>>                    nodes;
+    std::vector<stdx::option<type&>>                    types;
+    ankerl::unordered_dense::map<usize, mod::if_branch> ifs;
+    ankerl::unordered_dense::map<usize, usize>          matches;
+};
+
 } // namespace ghoti::sema

@@ -71,17 +71,19 @@ class type_resolver {
     // Records a parameterized `impl(P) [I for] Ctor(P)` root, keyed on its base ctor, for later
     // per-monomorphization expansion.
     auto register_parameterized_impl(ast::node_id root, const ast::impl_stmt& impl) -> void;
-    // Resolves a parameterized impl body once against opaque sentinels + dummy `constexpr`
-    // values and stores the result on the shared `impl_registry`
+    // Resolves a parameterized impl once against opaque sentinels + dummy `constexpr` values to
+    // record its abstract target + method signatures on the shared `impl_registry`
     auto build_param_impl_template(const ast::impl_stmt& impl, ast::node_id site) -> void;
-    // Folds each parameter-dependent `if constexpr` / `match constexpr` recorded in `tmpl` with
-    // this instantiation's real bindings, appending the verdicts to `typing`.
+    // Re-resolves a parameterized impl's method bodies for one monomorphization, binding its
+    // impl params to concrete types / folded `constexpr` values, and diffs the result into `out`.
     auto
-    refold_param_impl_branches(mod::module&                                              impl_mod,
-                               const param_impl_template&                                tmpl,
-                               body_type_diff&                                           typing,
-                               gsl::span<const std::pair<std::string, gir::const_value>> bindings)
-        -> void;
+         resolve_param_impl_bodies(mod::module&                                              impl_mod,
+                                   const ast::impl_stmt&                                     impl,
+                                   usize                                                     body_scope,
+                                   type&                                                     concrete,
+                                   gsl::span<type* const>                                    type_bounds,
+                                   gsl::span<const std::pair<std::string, gir::const_value>> cx_bindings,
+                                   body_type_diff& out) -> void;
     auto resolve_impl_type_ref(ast::explicit_type_id ref) -> type&;
     auto resolve_impl_method_access(const type& target, std::string_view name, source_location loc)
         -> stdx::option<stdx::result<gsl::not_null<type*>, diagnostic>>;
@@ -308,10 +310,6 @@ class type_resolver {
 
     // Resolves a `match constexpr`: folds the scrutinee, type-checks only the selected arm
     auto resolve_constexpr_match(ast::node_id, const ast::match_expr&, type& matcher_type) -> void;
-    // Template-mode: type-resolve every arm of a `match constexpr` without folding, so
-    // `instantiate_impls_for` can pick the arm per instantiation.
-    auto resolve_constexpr_match_all_arms(ast::node_id, const ast::match_expr&, type& matcher_type)
-        -> void;
 
     auto visit(ast::node_id, const ast::match_expr&) -> void;
     auto visit(ast::node_id, const ast::reference_expr&) -> void;
@@ -422,11 +420,8 @@ class type_resolver {
     bool for_generic_instantiation_{false};
     bool in_subscript_index_{false};
     bool in_for_iterable_{false};
-    // Set only while `build_param_impl_template` resolves a parameterized-impl body against
-    // sentinel / dummy parameter values
+    // Sskips `if`/`match constexpr` folding and the throwaway `Ctor(<dummy>)` cache insert
     bool                      building_param_template_{false};
-    std::vector<ast::node_id> template_constexpr_ifs_;
-    std::vector<ast::node_id> template_constexpr_matches_;
     stdx::opt_size            pending_impl_method_owner_;
     stdx::option<std::string> pending_param_impl_target_;
 

@@ -2333,11 +2333,15 @@ auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void 
     PROFILE_FUNCTION();
     TRY_RESOLVE(if_expr.condition);
 
-    // Inside a parameterized-impl template the verdict of an `if constexpr` that rides on an
-    // impl parameter is unknown here: resolve both arms, fold per instantiation later.
+    // The template pass has no real impl-param values; leave an `if constexpr` unresolved here so
+    // config-specific dead arms never poison. `resolve_param_impl_bodies` folds it per instance.
     if (if_expr.constexpr_condition && building_param_template_) {
-        template_constexpr_ifs_.emplace_back(id);
-    } else if (if_expr.constexpr_condition) {
+        auto& void_t{ctx_.get_builtin_resolved_type(type_kind::VOID_)};
+        resolving_.set_sema_type(id, void_t);
+        return last_type_.emplace(void_t);
+    }
+
+    if (if_expr.constexpr_condition) {
         gir::const_eval evaluator{ctx_, resolving_};
         if (const auto cond_cv{evaluator.try_eval(if_expr.condition)}) {
             if (const auto folded{cond_cv->as_opt<bool>()}) {
@@ -3579,41 +3583,19 @@ auto type_resolver::resolve_constexpr_match(ast::node_id           id,
     last_type_.emplace(*result_type);
 }
 
-auto type_resolver::resolve_constexpr_match_all_arms(ast::node_id           id,
-                                                     const ast::match_expr& match,
-                                                     type&                  matcher_type) -> void {
-    PROFILE_FUNCTION();
-    type* result_type{&ctx_.get_builtin_resolved_type(type_kind::VOID_)};
-    for (const auto& arm : match.arms) {
-        auto&       arm_scope_type{resolving_.get_sema_type(arm)};
-        const scope arm_scope{table_stack_, arm_scope_type.get_symbol_table_idx(), table_idx_};
-        if (arm.capture && arm.capture->is<ast::identifier_expr>() && arm.modifier.is_value()) {
-            resolving_.set_sema_type(*arm.capture, denoted_type(matcher_type));
-            resolve_symbol_info(*arm.capture, symbol_kind::VALUE);
-        }
-        resolve(arm.dispatch);
-        if (last_type_ && !last_type_->is_poison()) {
-            if (const auto es{resolving_.ast.get_as_opt<ast::expr_stmt>(arm.dispatch)}) {
-                if (const auto inner{resolving_.get_sema_type_opt(es->expression)};
-                    inner && !inner->is_poison() && inner->get_kind() != type_kind::VOID_) {
-                    result_type = inner.get();
-                }
-            }
-        }
-    }
-    resolving_.set_sema_type(id, *result_type);
-    last_type_.emplace(*result_type);
-}
-
 auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void {
     PROFILE_FUNCTION();
     TRY_RESOLVE(match.matcher);
     auto& matcher_type{*last_type_.take()};
 
+    // See `visit(if_expr)`: skip a `match constexpr` in the template pass so a config-specific
+    // dead arm never poisons; `resolve_param_impl_bodies` selects the arm per instantiation.
     if (match.is_constexpr && building_param_template_) {
-        template_constexpr_matches_.emplace_back(id);
-        return resolve_constexpr_match_all_arms(id, match, matcher_type);
+        auto& void_t{ctx_.get_builtin_resolved_type(type_kind::VOID_)};
+        resolving_.set_sema_type(id, void_t);
+        return last_type_.emplace(void_t);
     }
+
     // `match constexpr` folds its scrutinee and type-checks only the arm it selects.
     if (match.is_constexpr) { return resolve_constexpr_match(id, match, matcher_type); }
 
@@ -5484,6 +5466,8 @@ auto type_resolver::instantiate_impls_for(
         // One expansion per (parameterized impl, concrete target).
         if (!ctx_.impls.mark_expanded(concrete, *pimpl)) { continue; }
 
+        // Method signatures are remapped (pure substitution); method bodies are re-resolved below
+        // against real bindings so `if constexpr` / dependent types behave as everywhere else.
         const auto remap_one{[&](type* t) -> type* {
             type* r{&remap_type(ctx_, *t, *tmpl.abstract_target, concrete)};
             for (usize i{0}; i < tmpl.sentinels.size() && i < type_bounds.size(); ++i) {
@@ -5494,17 +5478,25 @@ auto type_resolver::instantiate_impls_for(
             return r;
         }};
 
-        // Build this monomorphization's typing by remapping the template.
         body_type_diff typing;
-        for (const auto& [idx, ty] : tmpl.node_types) {
-            typing.node_types.emplace_back(idx, remap_one(ty));
-        }
-        for (const auto& [idx, ty] : tmpl.explicit_types) {
-            typing.explicit_types.emplace_back(idx, remap_one(ty));
-        }
+        resolve_param_impl_bodies(impl_mod,
+                                  *impl_stmt,
+                                  pimpl->body_scope_idx,
+                                  concrete,
+                                  type_bounds,
+                                  cx_bindings,
+                                  typing);
 
-        if (!tmpl.constexpr_if_nodes.empty() || !tmpl.constexpr_match_nodes.empty()) {
-            refold_param_impl_branches(impl_mod, tmpl, typing, cx_bindings);
+        // Fold each method's remapped signature into the replay so emit sees the concrete
+        // `fn(...)` type; `emit_function` reads the decl-stmt node, so key that and the `fn` expr.
+        for (const auto& member : impl_stmt->members) {
+            const auto decl{impl_mod.ast.get_as_opt<ast::decl_stmt>(*member)};
+            if (!decl || !decl->value || !decl->value->is<ast::function_expr>()) { continue; }
+            if (const auto t{impl_mod.get_sema_type_opt(*decl->value)}) {
+                auto* remapped{remap_one(const_cast<type*>(t.get()))};
+                typing.node_types.emplace_back((*member).get_index(), remapped);
+                typing.node_types.emplace_back(decl->value->get_index(), remapped);
+            }
         }
 
         const auto typing_key{fmt::format("pimpl{}#{}", pimpl->site.get_index(), ctor_mangled)};
@@ -5569,66 +5561,99 @@ auto type_resolver::instantiate_impls_for(
     }
 }
 
-auto type_resolver::refold_param_impl_branches(
+auto type_resolver::resolve_param_impl_bodies(
     mod::module&                                              impl_mod,
-    const param_impl_template&                                tmpl,
-    body_type_diff&                                           typing,
-    gsl::span<const std::pair<std::string, gir::const_value>> bindings) -> void {
+    const ast::impl_stmt&                                     impl,
+    usize                                                     body_scope,
+    type&                                                     concrete,
+    gsl::span<type* const>                                    type_bounds,
+    gsl::span<const std::pair<std::string, gir::const_value>> cx_bindings,
+    body_type_diff&                                           out) -> void {
     PROFILE_FUNCTION();
-    auto& node_tbl{impl_mod.sema_side_tables.node_types.values};
-    auto& type_tbl{impl_mod.sema_side_tables.explicit_types.values};
-    std::vector<std::pair<usize, stdx::option<type&>>> saved_nodes;
-    std::vector<std::pair<usize, stdx::option<type&>>> saved_types;
-    for (const auto& [idx, ty] : typing.node_types) {
-        if (idx >= node_tbl.size()) { continue; }
-        saved_nodes.emplace_back(idx, node_tbl[idx]);
-        node_tbl[idx] = ty;
-    }
 
-    for (const auto& [idx, ty] : typing.explicit_types) {
-        if (idx >= type_tbl.size()) { continue; }
-        saved_types.emplace_back(idx, type_tbl[idx]);
-        type_tbl[idx] = ty;
-    }
-
-    {
-        constexpr_frame frame;
-        for (const auto& [name, val] : bindings) { frame.insert_or_assign(name, val); }
-        const constexpr_frame_guard fg{ctx_.constexpr_binding_frames, std::move(frame)};
-        gir::const_eval             ev{ctx_, impl_mod};
-        ev.clear_memo();
-        for (const auto node : tmpl.constexpr_if_nodes) {
-            const auto if_expr{impl_mod.ast.get_as_opt<ast::if_expr>(node)};
-            if (!if_expr) { continue; }
-            const auto cv{ev.try_eval(*if_expr->condition)};
-            const auto verdict{cv ? cv->as_opt<bool>() : stdx::none};
-            if (!verdict) { continue; }
-            typing.if_branches.emplace_back(node.get_index(),
-                                            *verdict ? mod::if_branch::CONSEQUENCE
-                                                     : mod::if_branch::ALTERNATE);
-        }
-
-        for (const auto node : tmpl.constexpr_match_nodes) {
-            const auto match{impl_mod.ast.get_as_opt<ast::match_expr>(node)};
-            if (!match) { continue; }
-            const auto scrutinee{ev.try_eval(*match->matcher)};
-            if (!scrutinee || scrutinee->is_poison()) { continue; }
-            stdx::opt_size selected;
-            for (usize i{0}; i < match->arms.size() && !selected; ++i) {
-                if (match->catch_all_idx && i == *match->catch_all_idx) { continue; }
-                for (const auto& pattern : match->arms[i].patterns) {
-                    if (ev.arm_pattern_matches(pattern, *scrutinee)) {
-                        selected.emplace(i);
-                        break;
-                    }
-                }
+    // Bind each impl param to its concrete meaning for this monomorphization: a type param to the
+    // ctor argument type (as a resolvable symbol + a `const_eval` frame entry), a `constexpr`
+    // param to its folded value.
+    constexpr_frame frame;
+    for (usize i{0}; i < impl.impl_params.size(); ++i) {
+        const auto& pname{impl_mod.ast.get_as<ast::identifier_expr>(impl.impl_params[i].name).name};
+        if (impl.impl_params[i].is_constexpr) {
+            const auto it{std::ranges::find(
+                cx_bindings, pname, [](const auto& p) { return std::string_view{p.first}; })};
+            if (it != cx_bindings.end()) { frame.insert_or_assign(pname, it->second); }
+        } else if (i < type_bounds.size() && type_bounds[i]) {
+            auto& concrete_arg{denoted_type(*type_bounds[i])};
+            frame.insert_or_assign(pname, gir::const_value{concrete_arg});
+            impl_mod.set_sema_type(impl.impl_params[i].name, concrete_arg);
+            if (const auto s{ctx_.registry.get_from_opt(body_scope, pname)}) {
+                s->set_status(symbol_status::RESOLVED);
             }
-            if (!selected) { selected = match->catch_all_idx; }
-            if (selected) { typing.match_arms.emplace_back(node.get_index(), *selected); }
         }
     }
-    for (const auto& [idx, ty] : saved_nodes) { node_tbl[idx] = ty; }
-    for (const auto& [idx, ty] : saved_types) { type_tbl[idx] = ty; }
+    const constexpr_frame_guard frame_guard{ctx_.constexpr_binding_frames, std::move(frame)};
+
+    const body_typing_snapshot snap{impl_mod};
+    for (const auto& member : impl.members) {
+        const auto decl{impl_mod.ast.get_as_opt<ast::decl_stmt>(*member)};
+        if (!decl || !decl->value || !decl->value->is<ast::function_expr>()) { continue; }
+        const auto& fn_expr{impl_mod.ast.get_as<ast::function_expr>(*decl->value)};
+        const auto  fn_type{impl_mod.get_sema_type_opt(*decl->value)};
+        if (!fn_type || !fn_type->has_symbol_table_idx()) { continue; }
+        const auto fn_table{fn_type->get_symbol_table_idx()};
+
+        // A fresh sub-resolver rooted at the member's own scope (under the impl body scope, so
+        // impl params resolve), re-resolving params + body like `instantiate_generic`.
+        symbol_table_stack stk;
+        stk.push(*ctx_.prelude_index);
+        if (impl_mod.root_table_idx) { stk.push(*impl_mod.root_table_idx); }
+        stk.push(body_scope);
+        stk.push(fn_table);
+        type_resolver inst{impl_mod, ctx_, fn_table, std::move(stk)};
+        inst.for_generic_instantiation_ = true;
+        const structural_guard this_guard{inst.user_type_stack_, concrete};
+
+        const auto mark_resolved{[&](ast::identifier_handle name) {
+            const auto& n{impl_mod.ast.get_as<ast::identifier_expr>(name).name};
+            if (const auto s{ctx_.registry.get_from_opt(fn_table, n)}) {
+                s->set_kind(symbol_kind::VALUE);
+                s->set_status(symbol_status::RESOLVED);
+            }
+        }};
+
+        // `self` binds to the monomorphized target, wrapped per its `&` / `^` / `mut` modifier.
+        if (fn_expr.self) {
+            type* self_t{&concrete};
+            if (const auto m{mutability_from_type_modifier(fn_expr.self->modifier)}) {
+                self_t = fn_expr.self->modifier.is_ptr() ? &ctx_.get_pointer(*m, concrete)
+                                                         : &ctx_.get_reference(*m, concrete);
+            }
+            impl_mod.set_sema_type(fn_expr.self->name, *self_t);
+            mark_resolved(fn_expr.self->name);
+        }
+
+        for (const auto& param : fn_expr.parameters) {
+            inst.resolve(param.explicit_type);
+            if (inst.last_type_ && !inst.last_type_->is_poison()) {
+                impl_mod.set_sema_type(param.name, denoted_type(*inst.last_type_.take()));
+            }
+            mark_resolved(param.name);
+        }
+        inst.resolve(fn_expr.explicit_return_type);
+        auto&      ret{inst.last_type_ && !inst.last_type_->is_poison()
+                           ? denoted_type(*inst.last_type_.take())
+                           : ctx_.get_builtin_resolved_type(type_kind::VOID_)};
+        const bool auto_ret{ret.get_kind() == type_kind::AUTO};
+        inst.return_trackers_.emplace_back(return_tracker{
+            .return_types   = {},
+            .is_auto_return = auto_ret,
+            .expected_type  = auto_ret ? stdx::none : stdx::option<type&>{ret},
+        });
+        for (const auto& stmt : impl_mod.ast.get_as<ast::block_stmt>(fn_expr.body)) {
+            inst.resolve(stmt);
+        }
+        inst.return_trackers_.pop_back();
+    }
+    snap.diff_into(ctx_, impl_mod, out);
 }
 
 auto type_resolver::build_param_impl_template(const ast::impl_stmt& impl, ast::node_id site)
@@ -5669,57 +5694,32 @@ auto type_resolver::build_param_impl_template(const ast::impl_stmt& impl, ast::n
     }
     const constexpr_frame_guard cx_guard{ctx_.constexpr_binding_frames, std::move(cx_dummy)};
 
-    const auto snap_nodes{resolving_.sema_side_tables.node_types.values};
-    const auto snap_types{resolving_.sema_side_tables.explicit_types.values};
-    const auto snap_ifs{resolving_.if_constexpr_results};
-    const auto snap_matches{resolving_.match_arm_results};
-    const auto diags_before{ctx_.diags.size()};
+    // The sentinel/dummy resolution only has to yield the abstract target + a signature per
+    // method; its diags are noise and its `if constexpr` folds are redone per instantiation.
+    const auto                   snap_ifs{resolving_.if_constexpr_results};
+    const auto                   snap_matches{resolving_.match_arm_results};
+    const auto                   diags_before{ctx_.diags.size()};
+    const mutating_context_guard tmode{building_param_template_, true};
 
     if (impl.interface_type) { resolve(*impl.interface_type); }
     stdx::option<const type&>      abstract_target;
     stdx::option<structural_guard> guard;
-    {
-        const mutating_context_guard tmode{building_param_template_, true};
-        resolve(impl.target_type);
-    }
+    resolve(impl.target_type);
     if (last_type_ && !last_type_->is_poison()) {
         auto& t{denoted_type(*last_type_)};
         abstract_target.emplace(t);
         guard.emplace(user_type_stack_, t);
     }
+    for (const auto& member : impl.members) { resolve(*member); }
 
-    // Member `if constexpr` / `match constexpr` verdicts that ride on an impl parameter are
-    // decided per instantiation; resolve every arm now and record nothing
-    auto outer_ifs{std::exchange(template_constexpr_ifs_, {})};
-    auto outer_matches{std::exchange(template_constexpr_matches_, {})};
-    {
-        const mutating_context_guard tmode{building_param_template_, true};
-        for (const auto& member : impl.members) { resolve(*member); }
-    }
-    auto body_ifs{std::exchange(template_constexpr_ifs_, std::move(outer_ifs))};
-    auto body_matches{std::exchange(template_constexpr_matches_, std::move(outer_matches))};
     if (ctx_.diags.size() > diags_before) { DISCARD(ctx_.diags.split_off(diags_before)); }
     resolving_.if_constexpr_results = snap_ifs;
     resolving_.match_arm_results    = snap_matches;
 
-    param_impl_template tmpl{
-        .abstract_target       = abstract_target,
-        .sentinels             = std::move(sentinels),
-        .constexpr_if_nodes    = std::move(body_ifs),
-        .constexpr_match_nodes = std::move(body_matches),
-    };
-    const auto collect{[](const auto& live, const auto& snap, auto& out) {
-        for (usize i{0}; i < live.size(); ++i) {
-            if (!live[i]) { continue; }
-            const bool changed{i >= snap.size() || !snap[i] || snap[i].get() != live[i].get()};
-            if (changed) { out.emplace_back(i, live[i].get()); }
-        }
-    }};
     if (!pimpl) { return; } // unanchored: members resolved, nothing to store
-
-    collect(resolving_.sema_side_tables.node_types.values, snap_nodes, tmpl.node_types);
-    collect(resolving_.sema_side_tables.explicit_types.values, snap_types, tmpl.explicit_types);
-    ctx_.impls.set_template(*pimpl, std::move(tmpl));
+    ctx_.impls.set_template(
+        *pimpl,
+        param_impl_template{.abstract_target = abstract_target, .sentinels = std::move(sentinels)});
     ctx_.impls.end_build(*pimpl);
 }
 
@@ -6099,16 +6099,11 @@ auto type_resolver::instantiate_generic(type&                             callee
                                         gsl::span<type*>                  concrete_args,
                                         gsl::span<const gir::const_value> constexpr_args)
     -> stdx::option<generic_instantiation_entry> {
-    mod::module& fn_mod{*fn_info.module};
-    const auto&  fn_expr{*fn_info.fn_expr};
-    const auto   fn_type{fn_info.fn_type};
-    const auto   fn_table_idx{fn_type->get_symbol_table_idx()};
-
-    // Snapshot the shared side tables so this typing can be captured as a diff and replayed
-    const auto snap_nodes{fn_mod.sema_side_tables.node_types.values};
-    const auto snap_types{fn_mod.sema_side_tables.explicit_types.values};
-    const auto snap_ifs{fn_mod.if_constexpr_results};
-    const auto snap_matches{fn_mod.match_arm_results};
+    mod::module&               fn_mod{*fn_info.module};
+    const auto&                fn_expr{*fn_info.fn_expr};
+    const auto                 fn_type{fn_info.fn_type};
+    const auto                 fn_table_idx{fn_type->get_symbol_table_idx()};
+    const body_typing_snapshot snap{fn_mod};
 
     // Bind each `constexpr` parameter to its folded value while this instantiation's body is
     // resolved, so `const_eval` folds it there. `constexpr_args` is in parameter order.
@@ -6242,56 +6237,10 @@ auto type_resolver::instantiate_generic(type&                             callee
         return stdx::none;
     }
 
-    // A `[n]T` local whose dimension is a `constexpr` parameter resolves to a single shared
-    // `deferred_array` pool entry that cannot carry a per-instantiation length
-    std::vector<std::pair<stdx::option<type&>*, type*>> folded_array_slots;
-    {
-        gir::const_eval dim_folder{ctx_, fn_mod};
-        const auto      fold_deferred_arrays{[&](auto& slots) {
-            for (auto& slot : slots) {
-                if (!slot || !slot->get_data().template as_opt<types::deferred_array>()) {
-                    continue;
-                }
-                auto* const original{slot.get()};
-                if (auto& forced{dim_folder.force_deferred_array(*slot)}; &forced != original) {
-                    folded_array_slots.emplace_back(&slot, original);
-                    slot.emplace(forced);
-                }
-            }
-        }};
-
-        // Fold every deferred array now, while this instantiation's `constexpr` bindings are in
-        // scope, the concrete `[N]T`lands in this instantiation's diff and is replayed at emit
-        // time
-        fold_deferred_arrays(fn_mod.sema_side_tables.node_types.values);
-        fold_deferred_arrays(fn_mod.sema_side_tables.explicit_types.values);
-    }
-
-    // Diff the side tables against the snapshot: everything this instantiation's body/signature
-    // resolved, to be replayed at emit time.
+    // Diff the side tables against the snapshot (folding any `constexpr`-sized `[n]T` first): all
+    // this instantiation's body/signature typing, to be replayed at emit time.
     body_type_diff typing;
-    const auto     collect{[](const auto& live, const auto& snap, auto& out) {
-        for (usize i{0}; i < live.size(); ++i) {
-            if (!live[i]) { continue; }
-            const bool changed{i >= snap.size() || !snap[i] || snap[i].get() != live[i].get()};
-            if (changed) { out.emplace_back(i, live[i]); }
-        }
-    }};
-    collect(fn_mod.sema_side_tables.node_types.values, snap_nodes, typing.node_types);
-    collect(fn_mod.sema_side_tables.explicit_types.values, snap_types, typing.explicit_types);
-    for (const auto& [slot, original] : folded_array_slots) { slot->emplace(*original); }
-    for (const auto& [idx, br] : fn_mod.if_constexpr_results) {
-        const auto prev{snap_ifs.find(idx)};
-        if (prev == snap_ifs.end() || prev->second != br) {
-            typing.if_branches.emplace_back(idx, br);
-        }
-    }
-    for (const auto& [idx, arm] : fn_mod.match_arm_results) {
-        const auto prev{snap_matches.find(idx)};
-        if (prev == snap_matches.end() || prev->second != arm) {
-            typing.match_arms.emplace_back(idx, arm);
-        }
-    }
+    snap.diff_into(ctx_, fn_mod, typing);
 
     auto tracker{std::move(inst_resolver.return_trackers_.back())};
     inst_resolver.return_trackers_.pop_back();
