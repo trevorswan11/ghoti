@@ -267,8 +267,8 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             const auto lhs_t{get_operand_type(inst.operands[0])};
             const auto rhs_t{get_operand_type(inst.operands[1])};
             if (lhs_t && rhs_t && !lhs_t->is_poison() && !rhs_t->is_poison()) {
-                // Aggregates lower to LLVM structs/arrays, which have no '=='/'!=' semantics.
-                if (is_aggregate(lhs_t->get_kind()) || is_aggregate(rhs_t->get_kind())) {
+                // Structurals lower to LLVM structs/arrays, which have no '=='/'!=' semantics.
+                if (is_structural(lhs_t->get_kind()) || is_structural(rhs_t->get_kind())) {
                     emit_diagnostic(
                         fmt::format("Comparison operator cannot be applied to aggregate types "
                                     "'{}' and '{}'",

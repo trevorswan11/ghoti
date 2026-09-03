@@ -51,6 +51,7 @@ enum class type_kind : u8 {
     ENUM,
     STRUCT,
     UNION,
+    INTERFACE,
     FUNCTION,
     CLOSURE,
     LABEL,
@@ -139,6 +140,7 @@ enum class type_kind : u8 {
     case type_kind::VOID_:
     case type_kind::NORETURN:
     case type_kind::OPAQUE:
+    case type_kind::INTERFACE:
     case type_kind::BLOCK:
     case type_kind::MODULE:
     case type_kind::LABEL:
@@ -149,7 +151,19 @@ enum class type_kind : u8 {
     }
 }
 
+// Excludes implicitly structural types like closures, slices, and arrays
 [[nodiscard]] constexpr auto is_aggregate(type_kind kind) noexcept -> bool {
+    switch (kind) {
+    case type_kind::STRUCT:
+    case type_kind::UNION:
+    case type_kind::ENUM:
+    case type_kind::INTERFACE: return true;
+    default:                   return false;
+    }
+}
+
+// Excludes interfaces and integral aliases like enums
+[[nodiscard]] constexpr auto is_structural(type_kind kind) noexcept -> bool {
     switch (kind) {
     case type_kind::STRUCT:
     case type_kind::UNION:
@@ -244,6 +258,14 @@ struct function {
     gsl::span<type*> params;
     type&            return_type;
     bool             is_variadic{false};
+};
+
+// Carries no storage and is never a value type; it only describes a contract
+struct interface_t {
+    gsl::span<const ast::interface_expr::method>      ast_methods;
+    gsl::span<const ast::interface_expr::assoc_type>  ast_assoc_types;
+    gsl::span<const ast::interface_expr::assoc_const> ast_assoc_consts;
+    const mod::module&                                enclosing;
 };
 
 // How a closure stores one of its captured free variables in its environment
@@ -382,6 +404,7 @@ class type {
                                  types::enum_t,
                                  types::union_t,
                                  types::struct_t,
+                                 types::interface_t,
                                  types::module,
                                  types::function,
                                  types::closure_t,

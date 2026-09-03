@@ -150,6 +150,7 @@ auto parser::parse_statement(semicolon_behavior behavior)
     case token_type_t::CONTINUE:    return ast::continue_stmt::parse(*this);
     case token_type_t::DEFER:       return ast::defer_stmt::parse(*this);
     case token_type_t::UNDERSCORE:  return ast::discard_stmt::parse(*this);
+    case token_type_t::IMPL:        return ast::impl_stmt::parse(*this);
     case token_type_t::IMPORT:      return ast::import_stmt::parse(*this);
     case token_type_t::RETURN:      return ast::return_stmt::parse(*this);
     case token_type_t::TEST:        return ast::test_stmt::parse(*this);
@@ -282,6 +283,7 @@ constexpr auto PREFIX_FNS = [] -> auto {
     fns[token_type_t::NAKED]            = ast::parse_naked_function_expr;
     fns[token_type_t::STRUCT]           = ast::struct_expr::parse;
     fns[token_type_t::UNION]            = ast::union_expr::parse;
+    fns[token_type_t::INTERFACE]        = ast::interface_expr::parse;
     fns[token_type_t::EXTERN]           = ast::parse_modified_struct_or_union;
     fns[token_type_t::PACKED]           = ast::parse_modified_struct_or_union;
     fns[token_type_t::ENUM]             = ast::enum_expr::parse;

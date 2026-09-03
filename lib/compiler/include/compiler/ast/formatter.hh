@@ -62,6 +62,7 @@ class formatter {
     [[nodiscard]] auto format_struct(const struct_expr& node) -> syntax::doc_id;
     [[nodiscard]] auto format_union(const union_expr& node) -> syntax::doc_id;
     [[nodiscard]] auto format_enum(const enum_expr& node) -> syntax::doc_id;
+    [[nodiscard]] auto format_interface(const interface_expr& node) -> syntax::doc_id;
 
     auto format_members(std::vector<syntax::doc_id>&                      entries,
                         const member_list&                                members,
@@ -137,6 +138,7 @@ class formatter {
     auto visit(node_id, const module_access_expr&) -> syntax::doc_id;
     auto visit(node_id, const struct_expr&) -> syntax::doc_id;
     auto visit(node_id, const union_expr&) -> syntax::doc_id;
+    auto visit(node_id, const interface_expr&) -> syntax::doc_id;
     auto visit(node_id, const while_loop_expr&) -> syntax::doc_id;
     auto visit(node_id, const cfg_value_expr&) -> syntax::doc_id;
     auto visit(node_id, const block_stmt&) -> syntax::doc_id;
@@ -147,6 +149,7 @@ class formatter {
     auto visit(node_id, const defer_stmt&) -> syntax::doc_id;
     auto visit(node_id, const discard_stmt&) -> syntax::doc_id;
     auto visit(node_id, const expr_stmt&) -> syntax::doc_id;
+    auto visit(node_id, const impl_stmt&) -> syntax::doc_id;
     auto visit(node_id, const import_stmt&) -> syntax::doc_id;
     auto visit(node_id, const return_stmt&) -> syntax::doc_id;
     auto visit(node_id, const test_stmt&) -> syntax::doc_id;
@@ -162,6 +165,7 @@ class formatter {
     auto visit(explicit_type_id, const struct_expr&) -> syntax::doc_id;
     auto visit(explicit_type_id, const enum_expr&) -> syntax::doc_id;
     auto visit(explicit_type_id, const union_expr&) -> syntax::doc_id;
+    auto visit(explicit_type_id, const interface_expr&) -> syntax::doc_id;
     auto visit(explicit_type_id, const explicit_array_type&) -> syntax::doc_id;
 
     auto init_trivia() -> void;

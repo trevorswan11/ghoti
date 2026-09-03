@@ -478,6 +478,71 @@ auto test_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
     return parser.add_stmt<test_stmt>(start_token, description, block);
 }
 
+namespace {
+
+// Parses an optional `(P: type, constexpr n: usize, ...)` parameter list after `impl`.
+[[nodiscard]] auto parse_impl_params(syntax::parser& parser)
+    -> stdx::result<std::vector<function_expr::parameter>, syntax::diagnostic> {
+    using tt = syntax::token_type_t;
+    std::vector<function_expr::parameter> params;
+    if (!parser.peek_token_is(tt::LPAREN)) { return params; }
+
+    parser.advance(); // current == (
+    while (!parser.peek_token_is(tt::RPAREN) && !parser.peek_token_is(tt::END)) {
+        parser.advance(); // current == first token of the parameter
+
+        bool is_constexpr{false};
+        if (parser.current_token_is(tt::CONSTEXPR)) {
+            is_constexpr = true;
+            parser.advance();
+        }
+
+        const identifier_handle name{TRY(identifier_expr::parse(parser))};
+        const auto [param_type, initialized]{TRY(explicit_type::parse_opt_init(parser))};
+        if (initialized || !param_type) {
+            return make_syntax_err("`impl` parameters must be explicitly typed and may not have "
+                                   "default values",
+                                   syntax::error::ILLEGAL_EXPLICIT_TYPE,
+                                   parser.get_current_token());
+        }
+
+        params.emplace_back(name, *param_type, is_constexpr);
+        if (!parser.peek_token_is(tt::RPAREN)) { TRY(parser.expect_peek(tt::COMMA)); }
+    }
+    TRY(parser.expect_peek(tt::RPAREN));
+    return params;
+}
+
+} // namespace
+
+auto impl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
+    PROFILE_FUNCTION();
+    using tt = syntax::token_type_t;
+    const auto start_token{parser.get_current_token()};
+
+    auto impl_params{TRY(parse_impl_params(parser))};
+
+    const auto first_type{TRY(explicit_type::parse(parser))};
+
+    stdx::option<explicit_type_id> interface_type;
+    explicit_type_id               target_type{first_type};
+    if (parser.peek_token_is(tt::FOR)) {
+        parser.advance(); // current == for
+        interface_type.emplace(first_type);
+        target_type = TRY(explicit_type::parse(parser));
+    }
+
+    if (!parser.peek_token_is(tt::LBRACE)) {
+        return make_syntax_err("`impl` blocks require a `{ ... }` body",
+                               syntax::error::IMPL_MISSING_TARGET,
+                               parser.get_peek_token());
+    }
+    auto members{TRY(parse_member_block(parser))};
+
+    return parser.add_stmt<impl_stmt>(
+        start_token, std::move(impl_params), interface_type, target_type, std::move(members));
+}
+
 auto using_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
     // A start token of public is guaranteed to be followed by an import
     PROFILE_FUNCTION();

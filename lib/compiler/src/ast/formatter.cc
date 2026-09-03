@@ -240,10 +240,10 @@ auto formatter::blank_line_between(node_id before, node_id after) const -> bool 
 auto formatter::is_function_or_aggregate_node(node_id id) const -> bool {
     const auto is_aggregate = [this](auto id) {
         return ast_.get_as_opt<struct_expr>(id) || ast_.get_as_opt<union_expr>(id) ||
-               ast_.get_as_opt<struct_expr>(id);
+               ast_.get_as_opt<struct_expr>(id) || ast_.get_as_opt<interface_expr>(id);
     };
 
-    if (ast_.get_as_opt<test_stmt>(id)) { return true; }
+    if (ast_.get_as_opt<test_stmt>(id) || ast_.get_as_opt<impl_stmt>(id)) { return true; }
     if (ast_.get_as_opt<function_expr>(id) || is_aggregate(id)) { return true; }
     if (const auto decl{ast_.get_as_opt<decl_stmt>(id)}) {
         if (decl->value &&
@@ -515,6 +515,48 @@ auto formatter::format_enum(const enum_expr& node) -> syntax::doc_id {
     }
     head.emplace_back(aggregate_body(std::move(entries), value_count));
     return doc_manager_.concat(std::move(head));
+}
+
+auto formatter::format_interface(const interface_expr& node) -> syntax::doc_id {
+    std::vector<syntax::doc_id> entries;
+
+    for (const auto& at : node.assoc_types) {
+        std::vector<syntax::doc_id> parts{
+            format(at.name), doc_manager_.text(": "), format(at.annotation)};
+        if (at.default_type) {
+            parts.emplace_back(doc_manager_.text(" = "));
+            parts.emplace_back(format(*at.default_type));
+        }
+        parts.emplace_back(doc_manager_.text(";"));
+        entries.emplace_back(doc_manager_.concat(std::move(parts)));
+    }
+
+    for (const auto& ac : node.assoc_consts) {
+        std::vector<syntax::doc_id> parts{doc_manager_.text("const "),
+                                          format(ac.name),
+                                          doc_manager_.text(": "),
+                                          format(ac.explicit_type)};
+        if (ac.default_value) {
+            parts.emplace_back(doc_manager_.text(" = "));
+            parts.emplace_back(format(*ac.default_value));
+        }
+        parts.emplace_back(doc_manager_.text(";"));
+        entries.emplace_back(doc_manager_.concat(std::move(parts)));
+    }
+
+    for (const auto& m : node.methods) {
+        std::vector<syntax::doc_id> parts;
+        if (m.is_public()) { parts.emplace_back(doc_manager_.text("pub ")); }
+        parts.emplace_back(doc_manager_.text("const "));
+        parts.emplace_back(format(m.name));
+        parts.emplace_back(doc_manager_.text(" := "));
+        parts.emplace_back(format(*m.signature));
+        parts.emplace_back(doc_manager_.text(";"));
+        entries.emplace_back(doc_manager_.concat(std::move(parts)));
+    }
+
+    return doc_manager_.concat(
+        {doc_manager_.text("interface "), aggregate_body(std::move(entries), 0)});
 }
 
 auto formatter::aggregate_body(std::vector<syntax::doc_id> entries, usize comma_count)
@@ -984,6 +1026,10 @@ auto formatter::visit(node_id, const union_expr& node) -> syntax::doc_id {
     return format_union(node);
 }
 
+auto formatter::visit(node_id, const interface_expr& node) -> syntax::doc_id {
+    return format_interface(node);
+}
+
 auto formatter::visit(node_id, const while_loop_expr& node) -> syntax::doc_id {
     return doc_manager_.concat({
         doc_manager_.text("while ("),
@@ -1191,6 +1237,60 @@ auto formatter::visit(node_id, const test_stmt& node) -> syntax::doc_id {
     });
 }
 
+namespace {
+
+// `impl` bodies always break like a `test { ... }` block rather than collapsing inline.
+[[nodiscard]] auto force_broken_body(syntax::doc_manager& dm, std::vector<syntax::doc_id> entries)
+    -> syntax::doc_id {
+    if (entries.empty()) { return dm.text("{}"); }
+
+    std::vector<syntax::doc_id> body;
+    for (usize i{0}; i < entries.size(); ++i) {
+        if (i != 0) { body.emplace_back(dm.hard_line()); }
+        body.emplace_back(entries[i]);
+    }
+    return dm.concat({
+        dm.text("{"),
+        dm.nest(dm.concat({dm.hard_line(), dm.concat(std::move(body))})),
+        dm.hard_line(),
+        dm.text("}"),
+    });
+}
+
+} // namespace
+
+auto formatter::visit(node_id, const impl_stmt& node) -> syntax::doc_id {
+    std::vector<syntax::doc_id> head{doc_manager_.text("impl")};
+
+    if (!node.impl_params.empty()) {
+        std::vector<syntax::doc_id> params;
+        params.reserve(node.impl_params.size());
+        for (const auto& param : node.impl_params) {
+            params.emplace_back(
+                doc_manager_.concat({doc_manager_.text(param.is_constexpr ? "constexpr " : ""),
+                                     format(param.name),
+                                     doc_manager_.text(": "),
+                                     format(param.explicit_type)}));
+        }
+        head.emplace_back(doc_manager_.delimited("(", ")", std::move(params), false, false));
+    }
+
+    head.emplace_back(doc_manager_.text(" "));
+    if (node.interface_type) {
+        head.emplace_back(format(*node.interface_type));
+        head.emplace_back(doc_manager_.text(" for "));
+    }
+    head.emplace_back(format(node.target_type));
+    head.emplace_back(doc_manager_.text(" "));
+
+    std::vector<syntax::doc_id>                entries;
+    std::vector<cfg_item_group<member_handle>> no_cfg;
+    format_members(entries, node.members, no_cfg);
+    head.emplace_back(force_broken_body(doc_manager_, std::move(entries)));
+
+    return doc_manager_.concat(std::move(head));
+}
+
 auto formatter::visit(node_id id, const using_stmt& node) -> syntax::doc_id {
     return doc_manager_.concat({
         using_stmt::is_public(id) ? doc_manager_.text("pub ") : doc_manager_.nil(),
@@ -1267,6 +1367,10 @@ auto formatter::visit(explicit_type_id id, const enum_expr& node) -> syntax::doc
 
 auto formatter::visit(explicit_type_id id, const union_expr& node) -> syntax::doc_id {
     return with_modifier(id, format_union(node));
+}
+
+auto formatter::visit(explicit_type_id id, const interface_expr& node) -> syntax::doc_id {
+    return with_modifier(id, format_interface(node));
 }
 
 auto formatter::visit(explicit_type_id id, const explicit_array_type& node) -> syntax::doc_id {

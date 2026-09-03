@@ -87,6 +87,8 @@ enum class error : u8 {
     CFG_VALUE_MISSING_ARGUMENT,
     CFG_VALUE_DUPLICATE_FALLBACK,
     CFG_VALUE_EMPTY_GUARD,
+    ILLEGAL_INTERFACE_MEMBER,
+    IMPL_MISSING_TARGET,
 };
 
 using diagnostic  = diagnostic<error>;

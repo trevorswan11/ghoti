@@ -81,6 +81,7 @@ class symbol_collector {
     auto visit(ast::node_id, const ast::unreachable_expr&) -> void;
     auto visit(ast::node_id, const ast::module_access_expr&) -> void;
     template <ast::IndexableID ID> auto visit(ID, const ast::struct_expr&) -> void;
+    template <ast::IndexableID ID> auto visit(ID, const ast::interface_expr&) -> void;
     template <ast::IndexableID ID> auto visit(ID, const ast::union_expr&) -> void;
     auto                                visit(ast::node_id, const ast::while_loop_expr&) -> void;
     auto                                visit(ast::node_id, ast::discarded) noexcept -> void {}
@@ -93,6 +94,7 @@ class symbol_collector {
     auto visit(ast::node_id, const ast::defer_stmt&) -> void;
     auto visit(ast::node_id, const ast::discard_stmt&) -> void;
     auto visit(ast::node_id, const ast::expr_stmt&) -> void;
+    auto visit(ast::node_id, const ast::impl_stmt&) -> void;
 
     [[nodiscard]] auto collect_import_payload(const ast::import_stmt& import_stmt)
         -> std::pair<std::string_view, stdx::result<gsl::not_null<mod::module*>, mod::diagnostic>>;
@@ -115,23 +117,22 @@ class symbol_collector {
         const auto  new_idx{ctx_.registry.create()};
         const scope s{table_stack_, new_idx, table_idx_};
 
-        // A struct/union/enum body is its own namespace
-        const bool is_aggregate{kind == type_kind::STRUCT || kind == type_kind::UNION ||
-                                kind == type_kind::ENUM};
-        if (is_aggregate) {
+        // A struct/union/enum/interface body is its own namespace
+        const auto is_agg{is_aggregate(kind)};
+        if (is_agg) {
             // A member may legitimately share a name with a declaration in an enclosing scope
             aggregate_table_stack_.emplace_back(new_idx, std::exchange(pending_type_name_, {}));
         }
 
-        const auto agg_cleanup{gsl::finally([this, is_aggregate] {
-            if (is_aggregate) { aggregate_table_stack_.pop_back(); }
+        const auto agg_cleanup{gsl::finally([this, is_agg] {
+            if (is_agg) { aggregate_table_stack_.pop_back(); }
         })};
 
         (..., [&pairs] -> void {
             for (const auto& item : pairs.iterable) { pairs.visitor(item); }
         }());
 
-        if (is_aggregate) {}
+        if (is_agg) {}
         last_type_.emplace(ctx_.pool[{kind, types::mut::CONSTANT, new_idx}]);
         return new_idx;
     }

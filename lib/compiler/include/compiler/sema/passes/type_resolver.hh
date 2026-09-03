@@ -295,6 +295,7 @@ class type_resolver {
 
     template <ast::IndexableID ID> auto visit(ID, const ast::struct_expr&) -> void;
     template <ast::IndexableID ID> auto visit(ID, const ast::union_expr&) -> void;
+    template <ast::IndexableID ID> auto visit(ID, const ast::interface_expr&) -> void;
     auto                                visit(ast::node_id, const ast::while_loop_expr&) -> void;
 
     auto visit(ast::node_id, const ast::block_stmt&) -> void;
@@ -311,6 +312,7 @@ class type_resolver {
     auto visit(ast::node_id, const ast::defer_stmt&) -> void;
     auto visit(ast::node_id, const ast::discard_stmt&) -> void;
     auto visit(ast::node_id, const ast::expr_stmt&) -> void;
+    auto visit(ast::node_id, const ast::impl_stmt&) -> void;
     auto visit(ast::node_id, const ast::import_stmt&) -> void;
     auto visit(ast::node_id, const ast::return_stmt&) -> void;
     auto visit(ast::node_id, const ast::test_stmt&) -> void;

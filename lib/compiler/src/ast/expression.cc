@@ -1597,4 +1597,96 @@ auto while_loop_expr::parse(syntax::parser& parser)
     return parser.add_expr<while_loop_expr>(start_token, condition, continuation, block, non_break);
 }
 
+auto parse_member_block(syntax::parser& parser) -> stdx::result<member_list, syntax::diagnostic> {
+    PROFILE_FUNCTION();
+    using tt = syntax::token_type_t;
+    TRY(parser.expect_peek(tt::LBRACE));
+
+    std::vector<member_cfg_group> member_cfg_groups;
+    auto                          members{TRY(parse_members(parser, member_cfg_groups))};
+    TRY(parser.expect_peek(tt::RBRACE));
+
+    if (!member_cfg_groups.empty()) {
+        return make_syntax_err("`@cfg` member groups are not supported inside `impl` blocks",
+                               syntax::error::ILLEGAL_INTERFACE_MEMBER,
+                               parser.get_current_token());
+    }
+    return members;
+}
+
+auto interface_expr::parse(syntax::parser& parser)
+    -> stdx::result<expr_handle, syntax::diagnostic> {
+    PROFILE_FUNCTION();
+    using tt = syntax::token_type_t;
+    const auto start_token{parser.get_current_token()};
+    TRY(parser.expect_peek(tt::LBRACE));
+
+    std::vector<assoc_type>  assoc_types;
+    std::vector<assoc_const> assoc_consts;
+    std::vector<method>      methods;
+
+    while (!parser.peek_token_is(tt::RBRACE) && !parser.peek_token_is(tt::END)) {
+        bool is_pub{false};
+        if (parser.peek_token_is(tt::PUBLIC)) {
+            parser.advance();
+            is_pub = true;
+        }
+
+        if (parser.peek_token_is(tt::CONSTANT)) {
+            parser.advance(); // current == const
+            TRY(parser.expect_peek(tt::IDENT));
+            identifier_handle name{TRY(identifier_expr::parse(parser))};
+
+            if (parser.peek_token_is(tt::WALRUS)) {
+                parser.advance(); // current == :=
+                TRY(parser.expect_peek(tt::FUNCTION));
+                const auto signature{TRY(function_expr::parse(parser))};
+                if (is_pub) { name->set_token_type(tt::PUBLIC); }
+                methods.emplace_back(method{name, signature});
+            } else if (parser.peek_token_is(tt::COLON)) {
+                if (is_pub) {
+                    return make_syntax_err("Associated `const`s may not be marked `pub`",
+                                           syntax::error::ILLEGAL_INTERFACE_MEMBER,
+                                           parser.get_current_token());
+                }
+                parser.advance(); // current == :
+                const auto                annotation{TRY(explicit_type::parse(parser))};
+                stdx::option<expr_handle> default_value;
+                if (parser.peek_token_is(tt::ASSIGN)) {
+                    parser.advance(2);
+                    default_value.emplace(TRY(parser.parse_expression()));
+                }
+                assoc_consts.emplace_back(assoc_const{name, annotation, default_value});
+            } else {
+                return make_syntax_err(
+                    "Interface members must be `const name := fn(...)` or `const N: T`",
+                    syntax::error::ILLEGAL_INTERFACE_MEMBER,
+                    parser.get_peek_token());
+            }
+            TRY(parser.expect_semicolon());
+        } else if (!is_pub && parser.peek_token_is(tt::IDENT)) {
+            parser.advance(); // current == Name
+            identifier_handle name{TRY(identifier_expr::parse(parser))};
+            TRY(parser.expect_peek(tt::COLON));
+            const auto annotation{TRY(explicit_type::parse(parser))};
+
+            stdx::option<explicit_type_id> default_type;
+            if (parser.peek_token_is(tt::ASSIGN)) {
+                parser.advance();
+                default_type.emplace(TRY(explicit_type::parse(parser)));
+            }
+            assoc_types.emplace_back(assoc_type{name, annotation, default_type});
+            TRY(parser.expect_semicolon());
+        } else {
+            return make_syntax_err("Illegal interface member",
+                                   syntax::error::ILLEGAL_INTERFACE_MEMBER,
+                                   parser.get_peek_token());
+        }
+    }
+
+    TRY(parser.expect_peek(tt::RBRACE));
+    return parser.add_expr<interface_expr>(
+        start_token, std::move(assoc_types), std::move(assoc_consts), std::move(methods));
+}
+
 } // namespace ghoti::ast

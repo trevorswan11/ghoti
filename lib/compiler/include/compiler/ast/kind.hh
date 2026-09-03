@@ -51,6 +51,7 @@ enum class node_kind : u8 {
     MODULE_ACCESS_EXPRESSION,
     STRUCT_EXPRESSION,
     UNION_EXPRESSION,
+    INTERFACE_EXPRESSION,
     WHILE_LOOP_EXPRESSION,
 
     BLOCK_STATEMENT,
@@ -61,6 +62,7 @@ enum class node_kind : u8 {
     DEFER_STATEMENT,
     DISCARD_STATEMENT,
     EXPRESSION_STATEMENT,
+    IMPL_STATEMENT,
     IMPORT_STATEMENT,
     RETURN_STATEMENT,
     TEST_STATEMENT,
@@ -113,6 +115,7 @@ enum class node_kind : u8 {
     X(module_access_expr)   \
     X(struct_expr)          \
     X(union_expr)           \
+    X(interface_expr)       \
     X(while_loop_expr)
 
 #define FOREACH_AST_STMT(X) \
@@ -124,6 +127,7 @@ enum class node_kind : u8 {
     X(defer_stmt)           \
     X(discard_stmt)         \
     X(expr_stmt)            \
+    X(impl_stmt)            \
     X(import_stmt)          \
     X(return_stmt)          \
     X(test_stmt)            \
@@ -150,6 +154,7 @@ enum class explicit_type_kind : u8 {
     STRUCT,
     ENUM,
     UNION,
+    INTERFACE,
     ARRAY,
 };
 
@@ -163,6 +168,7 @@ enum class explicit_type_kind : u8 {
     X(struct_expr)            \
     X(enum_expr)              \
     X(union_expr)             \
+    X(interface_expr)         \
     X(explicit_array_type)
 
 class explicit_type_id;
@@ -226,6 +232,7 @@ NODE_KIND_OF_TRAIT(unreachable_expr, UNREACHABLE_EXPRESSION)
 NODE_KIND_OF_TRAIT(module_access_expr, MODULE_ACCESS_EXPRESSION)
 NODE_KIND_OF_TRAIT(struct_expr, STRUCT_EXPRESSION)
 NODE_KIND_OF_TRAIT(union_expr, UNION_EXPRESSION)
+NODE_KIND_OF_TRAIT(interface_expr, INTERFACE_EXPRESSION)
 NODE_KIND_OF_TRAIT(while_loop_expr, WHILE_LOOP_EXPRESSION)
 
 NODE_KIND_OF_TRAIT(block_stmt, BLOCK_STATEMENT)
@@ -236,6 +243,7 @@ NODE_KIND_OF_TRAIT(decl_stmt, DECL_STATEMENT)
 NODE_KIND_OF_TRAIT(defer_stmt, DEFER_STATEMENT)
 NODE_KIND_OF_TRAIT(discard_stmt, DISCARD_STATEMENT)
 NODE_KIND_OF_TRAIT(expr_stmt, EXPRESSION_STATEMENT)
+NODE_KIND_OF_TRAIT(impl_stmt, IMPL_STATEMENT)
 NODE_KIND_OF_TRAIT(import_stmt, IMPORT_STATEMENT)
 NODE_KIND_OF_TRAIT(return_stmt, RETURN_STATEMENT)
 NODE_KIND_OF_TRAIT(test_stmt, TEST_STATEMENT)
@@ -267,6 +275,7 @@ KIND_OF_TRAIT(explicit_type_id, RECURSIVE)
 KIND_OF_TRAIT(struct_expr, STRUCT)
 KIND_OF_TRAIT(enum_expr, ENUM)
 KIND_OF_TRAIT(union_expr, UNION)
+KIND_OF_TRAIT(interface_expr, INTERFACE)
 KIND_OF_TRAIT(explicit_array_type, ARRAY)
 
 #undef KIND_OF_TRAIT

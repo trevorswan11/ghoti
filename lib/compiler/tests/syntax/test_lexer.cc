@@ -271,6 +271,15 @@ TEST_CASE("Lexing keywords") {
                });
 }
 
+TEST_CASE("Lexing interface / impl / dyn keywords") {
+    test_lexer("impl interface dyn",
+               {
+                   {token_type_t::IMPL, "impl"},
+                   {token_type_t::INTERFACE, "interface"},
+                   {token_type_t::DYN, "dyn"},
+               });
+}
+
 TEST_CASE("Lexing comments") {
     test_lexer("const five := 5;\n"
                "var ten_10 := 10;\n\n"

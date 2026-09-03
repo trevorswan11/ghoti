@@ -29,6 +29,7 @@ using type_variant = stdx::variant<identifier_expr,
                                    struct_expr,
                                    enum_expr,
                                    union_expr,
+                                   interface_expr,
                                    explicit_array_type>;
 
 #define AST_TYPE_VISITOR_NOOP(Class, NodeType) \

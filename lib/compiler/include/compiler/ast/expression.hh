@@ -430,6 +430,42 @@ struct union_expr {
 [[nodiscard]] auto parse_modified_struct_or_union(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic>;
 
+[[nodiscard]] auto parse_member_block(syntax::parser& parser)
+    -> stdx::result<member_list, syntax::diagnostic>;
+
+struct interface_expr {
+    // `Name: type;` (required) or `Name: type = T;` (defaulted)
+    struct assoc_type {
+        identifier_handle              name;
+        explicit_type_id               annotation;
+        stdx::option<explicit_type_id> default_type;
+    };
+
+    // `const N: T;` (required) or `const N: T = expr;` (defaulted).
+    struct assoc_const {
+        identifier_handle         name;
+        explicit_type_id          explicit_type;
+        stdx::option<expr_handle> default_value;
+    };
+
+    // Bodyless signature is a requirement; one with a body is a default method.
+    struct method {
+        identifier_handle name; // Publicity hides in here
+        function_handle   signature;
+
+        [[nodiscard]] constexpr auto is_public() const noexcept -> bool {
+            return name->get_token_type() == syntax::token_type_t::PUBLIC;
+        }
+    };
+
+    std::vector<assoc_type>  assoc_types;
+    std::vector<assoc_const> assoc_consts;
+    std::vector<method>      methods;
+
+    [[nodiscard]] static auto parse(syntax::parser& parser)
+        -> stdx::result<expr_handle, syntax::diagnostic>;
+};
+
 struct while_loop_expr {
     expr_handle               condition;
     stdx::option<expr_handle> continuation;

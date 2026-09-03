@@ -804,6 +804,82 @@ auto dumper::visit(node_id, const union_expr& node) -> void {
     }
 }
 
+auto dumper::visit(node_id, const interface_expr& node) -> void {
+    PROFILE_FUNCTION();
+    fmt::println(out_, "InterfaceExpression");
+
+    const auto has_assoc_types{!node.assoc_types.empty()};
+    const auto has_assoc_consts{!node.assoc_consts.empty()};
+    const auto has_methods{!node.methods.empty()};
+
+    if (has_assoc_types) {
+        const indent::guard g{indent_, !has_assoc_consts && !has_methods};
+        fmt::println(out_, "{}AssociatedTypes:", indent_.current_branch());
+        dump_container(node.assoc_types, [this](const interface_expr::assoc_type& at) -> void {
+            {
+                const indent::guard g_name{indent_, false};
+                fmt::print(out_, "{}Name: ", indent_.current_branch());
+                dump(at.name);
+            }
+            {
+                const indent::guard g_ann{indent_, !at.default_type.has_value()};
+                fmt::print(out_, "{}Annotation: ", indent_.current_branch());
+                dump(at.annotation);
+            }
+            if (at.default_type) {
+                const indent::guard g_def{indent_, true};
+                fmt::print(out_, "{}Default: ", indent_.current_branch());
+                dump(*at.default_type);
+            }
+        });
+    }
+
+    if (has_assoc_consts) {
+        const indent::guard g{indent_, !has_methods};
+        fmt::println(out_, "{}AssociatedConsts:", indent_.current_branch());
+        dump_container(node.assoc_consts, [this](const interface_expr::assoc_const& ac) -> void {
+            {
+                const indent::guard g_name{indent_, false};
+                fmt::print(out_, "{}Name: ", indent_.current_branch());
+                dump(ac.name);
+            }
+            {
+                const indent::guard g_type{indent_, !ac.default_value.has_value()};
+                fmt::print(out_, "{}Type: ", indent_.current_branch());
+                dump(ac.explicit_type);
+            }
+            if (ac.default_value) {
+                const indent::guard g_def{indent_, true};
+                fmt::print(out_, "{}Default: ", indent_.current_branch());
+                dump(*ac.default_value);
+            }
+        });
+    }
+
+    if (has_methods) {
+        const indent::guard g{indent_, true};
+        fmt::println(out_, "{}Methods:", indent_.current_branch());
+        dump_container(node.methods, [this](const interface_expr::method& m) -> void {
+            const auto& fn{ast_.get_as<function_expr>(*m.signature)};
+            fmt::println(out_,
+                         "{}Method (kind: {}, visibility: {})",
+                         indent_.current_branch(),
+                         fn.is_type_expr ? "required" : "default",
+                         m.is_public() ? "pub" : "sealed");
+            {
+                const indent::guard g_name{indent_, false};
+                fmt::print(out_, "{}Name: ", indent_.current_branch());
+                dump(m.name);
+            }
+            {
+                const indent::guard g_sig{indent_, true};
+                fmt::print(out_, "{}Signature: ", indent_.current_branch());
+                dump(*m.signature);
+            }
+        });
+    }
+}
+
 auto dumper::visit(node_id, const while_loop_expr& while_expr) -> void {
     PROFILE_FUNCTION();
     fmt::println(out_, "WhileLoopExpression");
@@ -954,6 +1030,61 @@ MAKE_BASIC_STMT_DUMP(defer_stmt, DeferStatement, Deferred, deferred)
 MAKE_BASIC_STMT_DUMP(discard_stmt, DiscardStatement, Discarded, discarded)
 MAKE_BASIC_STMT_DUMP(expr_stmt, ExpressionStatement, Expr, expression)
 
+auto dumper::visit(node_id, const impl_stmt& node) -> void {
+    PROFILE_FUNCTION();
+    fmt::println(out_, "ImplStatement");
+
+    const auto has_params{!node.impl_params.empty()};
+    const auto has_members{!node.members.empty()};
+
+    {
+        const indent::guard g{indent_, false};
+        fmt::println(out_,
+                     "{}Kind: {}",
+                     indent_.current_branch(),
+                     node.interface_type ? "trait" : "inherent");
+    }
+
+    if (has_params) {
+        const indent::guard g{indent_, false};
+        fmt::println(out_, "{}Parameters:", indent_.current_branch());
+        dump_container(node.impl_params, [this](const function_expr::parameter& parameter) -> void {
+            fmt::println(out_,
+                         "{}Param{}:",
+                         indent_.current_branch(),
+                         parameter.is_constexpr ? " (constexpr)" : "");
+            {
+                const indent::guard g_name{indent_, false};
+                fmt::print(out_, "{}Name: ", indent_.current_branch());
+                dump(*parameter.name);
+            }
+            {
+                const indent::guard g_type{indent_, true};
+                fmt::print(out_, "{}Type: ", indent_.current_branch());
+                dump(parameter.explicit_type);
+            }
+        });
+    }
+
+    if (node.interface_type) {
+        const indent::guard g{indent_, false};
+        fmt::print(out_, "{}Interface: ", indent_.current_branch());
+        dump(*node.interface_type);
+    }
+
+    {
+        const indent::guard g{indent_, !has_members};
+        fmt::print(out_, "{}Target: ", indent_.current_branch());
+        dump(node.target_type);
+    }
+
+    if (has_members) {
+        const indent::guard g{indent_, true};
+        fmt::println(out_, "{}Members:", indent_.current_branch());
+        dump_node_list(node.members);
+    }
+}
+
 auto dumper::visit(node_id id, const import_stmt& import_stmt) -> void {
     PROFILE_FUNCTION();
     fmt::println(out_, "ImportStatement");
@@ -1092,6 +1223,7 @@ auto dumper::visit(explicit_type_id, const explicit_type_id& recursive) -> void 
 MAKE_EXPLICIT_TYPE_DUMP(struct_expr)
 MAKE_EXPLICIT_TYPE_DUMP(enum_expr)
 MAKE_EXPLICIT_TYPE_DUMP(union_expr)
+MAKE_EXPLICIT_TYPE_DUMP(interface_expr)
 
 auto dumper::visit(explicit_type_id, const explicit_array_type& array) -> void {
     PROFILE_FUNCTION();

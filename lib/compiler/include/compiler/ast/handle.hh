@@ -108,6 +108,7 @@ using expr_handle = handle<node_kind::ARRAY_EXPRESSION,
                            node_kind::MODULE_ACCESS_EXPRESSION,
                            node_kind::STRUCT_EXPRESSION,
                            node_kind::UNION_EXPRESSION,
+                           node_kind::INTERFACE_EXPRESSION,
                            node_kind::WHILE_LOOP_EXPRESSION>;
 
 using identifier_handle        = handle<node_kind::IDENTIFIER_EXPRESSION>;
@@ -117,6 +118,7 @@ using string_handle            = handle<node_kind::STRING_EXPRESSION>;
 using outer_access_handle      = handle<node_kind::IDENTIFIER_EXPRESSION,
                                         node_kind::MODULE_ACCESS_EXPRESSION,
                                         node_kind::DOT_EXPRESSION>;
+using function_handle          = handle<node_kind::FUNCTION_EXPRESSION>;
 
 using match_pattern_handle = handle<node_kind::ARRAY_EXPRESSION,
                                     node_kind::CALL_EXPRESSION,
@@ -150,6 +152,7 @@ using stmt_handle = handle<node_kind::BLOCK_STATEMENT,
                            node_kind::DEFER_STATEMENT,
                            node_kind::DISCARD_STATEMENT,
                            node_kind::EXPRESSION_STATEMENT,
+                           node_kind::IMPL_STATEMENT,
                            node_kind::IMPORT_STATEMENT,
                            node_kind::RETURN_STATEMENT,
                            node_kind::BREAK_STATEMENT,

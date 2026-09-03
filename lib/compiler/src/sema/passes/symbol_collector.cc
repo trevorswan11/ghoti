@@ -432,6 +432,29 @@ auto symbol_collector::visit(ID id, const ast::union_expr& union_expr) -> void {
 
 VISITOR_TEMPLATE_INIT(symbol_collector, visit, const ast::union_expr&)
 
+template <ast::IndexableID ID>
+auto symbol_collector::visit(ID id, const ast::interface_expr& iface) -> void {
+    PROFILE_FUNCTION();
+
+    // TODO: Resolve and check method sig conformance; currently left as raw AST
+    const auto scope_idx{
+        visit_scopes(type_kind::INTERFACE,
+                     stdx::iter_pair{iface.assoc_types,
+                                     [this](const ast::interface_expr::assoc_type& at) -> void {
+                                         collect(at.annotation);
+                                         if (at.default_type) { collect(*at.default_type); }
+                                     }},
+                     stdx::iter_pair{iface.assoc_consts,
+                                     [this](const ast::interface_expr::assoc_const& ac) -> void {
+                                         collect(ac.explicit_type);
+                                         if (ac.default_value) { collect(*ac.default_value); }
+                                     }})};
+    last_type_->set_symbol_table_idx(scope_idx);
+    collecting_.set_sema_type(id, *last_type_);
+}
+
+VISITOR_TEMPLATE_INIT(symbol_collector, visit, const ast::interface_expr&)
+
 auto symbol_collector::visit(ast::node_id id, const ast::while_loop_expr& while_expr) -> void {
     PROFILE_FUNCTION();
 
@@ -517,7 +540,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::decl_stmt& decl) -> voi
     // Valued decls should be evaluated to get shallow types
     auto&      sym{ctx_.registry.get_from(table_idx_, name)};
     const auto value{*decl.value};
-    if (value.any<ast::enum_expr, ast::union_expr, ast::struct_expr>()) {
+    if (value.any<ast::enum_expr, ast::union_expr, ast::struct_expr, ast::interface_expr>()) {
         pending_type_name_ = name;
         if (decl.has_modifier(ast::decl_modifiers::CONSTEXPR)) {
             ctx_.diags.emplace_back(
@@ -587,6 +610,25 @@ auto symbol_collector::visit(ast::node_id id, const ast::expr_stmt& expr) -> voi
         }
     }
     collect(expr.expression);
+}
+
+auto symbol_collector::visit(ast::node_id id, const ast::impl_stmt& impl) -> void {
+    PROFILE_FUNCTION();
+
+    // TODO: Coherence, the impl registry, and per-monomorphization expansion of parameterized
+    // `impl(P) ...` blocks
+    const auto  new_idx{ctx_.registry.create()};
+    const scope s{table_stack_, new_idx, table_idx_};
+
+    if (impl.impl_params.empty()) {
+        if (impl.interface_type) { collect(*impl.interface_type); }
+        collect(impl.target_type);
+        for (const auto& member : impl.members) { collect(*member); }
+    }
+
+    last_type_.emplace(ctx_.pool[{type_kind::BLOCK, types::mut::CONSTANT, new_idx}]);
+    last_type_->set_symbol_table_idx(new_idx);
+    collecting_.set_sema_type(id, *last_type_.take());
 }
 
 auto symbol_collector::collect_import_payload(const ast::import_stmt& import_stmt)

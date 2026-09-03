@@ -67,6 +67,9 @@ constexpr keyword_t NORETURN{"noreturn", token_type_t::NORETURN};
 constexpr keyword_t NULLPTR{"nullptr", token_type_t::NULLPTR};
 constexpr keyword_t USING{"using", token_type_t::USING};
 constexpr keyword_t TEST{"test", token_type_t::TEST};
+constexpr keyword_t IMPL{"impl", token_type_t::IMPL};
+constexpr keyword_t INTERFACE{"interface", token_type_t::INTERFACE};
+constexpr keyword_t DYN{"dyn", token_type_t::DYN};
 constexpr keyword_t ASM{"asm", token_type_t::ASM};
 constexpr keyword_t UNDEFINED{"undefined", token_type_t::UNDEFINED};
 constexpr keyword_t UNREACHABLE{"unreachable", token_type_t::UNREACHABLE};
@@ -97,6 +100,7 @@ constexpr std::array ALL_KEYWORDS{
     keywords::MOVE,        keywords::PACKED,       keywords::NORETURN,
     keywords::NULLPTR,     keywords::USING,        keywords::TEST,
     keywords::UNDEFINED,   keywords::UNREACHABLE,  keywords::ASM,
+    keywords::IMPL,        keywords::INTERFACE,    keywords::DYN,
 };
 
 constexpr std::array ALL_PRIMITIVES{

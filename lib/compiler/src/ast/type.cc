@@ -222,6 +222,10 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
         id.emplace(parser.add_type<union_expr>(
             modifier_token, modifier, parser.get_node<union_expr>(*user)));
         break;
+    case node_kind::INTERFACE_EXPRESSION:
+        id.emplace(parser.add_type<interface_expr>(
+            modifier_token, modifier, parser.get_node<interface_expr>(*user)));
+        break;
     default: break;
     }
 

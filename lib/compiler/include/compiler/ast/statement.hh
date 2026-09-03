@@ -11,6 +11,7 @@
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/syntax/error.hh"
@@ -142,6 +143,16 @@ struct return_stmt {
 struct test_stmt {
     stdx::option<string_handle> description;
     block_handle                block;
+
+    [[nodiscard]] static auto parse(syntax::parser& parser)
+        -> stdx::result<stmt_handle, syntax::diagnostic>;
+};
+
+struct impl_stmt {
+    std::vector<function_expr::parameter> impl_params;
+    stdx::option<explicit_type_id>        interface_type;
+    explicit_type_id                      target_type;
+    member_list                           members;
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<stmt_handle, syntax::diagnostic>;

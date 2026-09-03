@@ -47,6 +47,7 @@ auto type_translator::translate(const sema::type& type) -> llvm::Type* {
     case sema::type_kind::CLOSURE:
         return translate_closure(type.get_data().as<sema::types::closure_t>(), type);
     case sema::type_kind::OPAQUE:
+    case sema::type_kind::INTERFACE:
     case sema::type_kind::TYPE:
     case sema::type_kind::MODULE:
     case sema::type_kind::LABEL:

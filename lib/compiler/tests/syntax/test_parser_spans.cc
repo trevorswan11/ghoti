@@ -2,6 +2,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
+#include <stdx/types.hh>
 
 #include "compiler/ast/ast.hh"
 #include "compiler/ast/expression.hh"
@@ -109,6 +110,65 @@ TEST_CASE("a block_stmt's span ends just past its closing brace") {
 
     CHECK(end.line == 2);
     CHECK(end.column == 1);
+}
+
+TEST_CASE("interface_expr records associated items and required vs default methods") {
+    auto ast{parse(R"(const W := interface {
+    Error: type;
+    Item: type = u8;
+    const cap: usize = 4096;
+    pub const write := fn(&mut self, b: []u8): R;
+    const dbg := fn(&self): []u8;
+    pub const writeAll := fn(&mut self, b: []u8): R { return self.write(b); };
+};
+)")};
+
+    const auto& decl{ast.get_as<ast::decl_stmt>(*ast.begin())};
+    REQUIRE(decl.value);
+    const auto& iface{ast.get_as<ast::interface_expr>(*decl.value)};
+
+    REQUIRE(iface.assoc_types.size() == 2);
+    CHECK_FALSE(iface.assoc_types[0].default_type.has_value());
+    CHECK(iface.assoc_types[1].default_type.has_value());
+
+    REQUIRE(iface.assoc_consts.size() == 1);
+    CHECK(iface.assoc_consts[0].default_value.has_value());
+
+    REQUIRE(iface.methods.size() == 3);
+    CHECK(iface.methods[0].is_public());
+    CHECK_FALSE(iface.methods[1].is_public());
+    CHECK(ast.get_as<ast::function_expr>(*iface.methods[0].signature).is_type_expr);
+    CHECK_FALSE(ast.get_as<ast::function_expr>(*iface.methods[2].signature).is_type_expr);
+}
+
+TEST_CASE("impl_stmt distinguishes trait, inherent, and parameterized forms") {
+    auto        inherent{parse("impl File { pub const f := fn(&self): void {}; }")};
+    const auto& i0{inherent.get_as<ast::impl_stmt>(*inherent.begin())};
+    CHECK_FALSE(i0.interface_type.has_value());
+    CHECK(i0.impl_params.empty());
+    CHECK(i0.members.size() == 1);
+
+    auto trait{
+        parse("impl Writer for File { pub const write := fn(&mut self, b: []u8): R { c; }; }")};
+    const auto& i1{trait.get_as<ast::impl_stmt>(*trait.begin())};
+    CHECK(i1.interface_type.has_value());
+
+    auto        param{parse("impl(H: type) Writer(H) { const cap := 8; }\n")};
+    const auto& i2{param.get_as<ast::impl_stmt>(*param.begin())};
+    REQUIRE(i2.impl_params.size() == 1);
+    CHECK_FALSE(i2.interface_type.has_value());
+}
+
+TEST_CASE("impl and interface parse errors recover") {
+    const auto parse_errs{[](std::string_view source) -> usize {
+        syntax::parser p{source};
+        ast::AST       parsed;
+        return p.consume(parsed).size();
+    }};
+
+    CHECK(parse_errs("impl Foo;\n") > 0);                   // missing `{ ... }` body
+    CHECK(parse_errs("impl for Bar {}\n") > 0);             // missing interface before `for`
+    CHECK(parse_errs("const I := interface { x };\n") > 0); // malformed member
 }
 
 } // namespace ghoti::tests

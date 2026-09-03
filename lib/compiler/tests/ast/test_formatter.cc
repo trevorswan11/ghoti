@@ -333,6 +333,82 @@ TEST_CASE("formatter round trip: aggregates") {
 };)");
 }
 
+TEST_CASE("formatter keeps small interfaces inline and breaks ones with bodies") {
+    CHECK(format_source("const M := interface {};") == "const M := interface {};\n");
+    CHECK(
+        format_source("const W := interface { pub const write := fn(&mut self, b: []u8): R; };") ==
+        "const W := interface { pub const write := fn(&mut self, b: []u8): R; };\n");
+
+    CHECK(format_source(
+              "const W := interface { Error: type; const cap: usize = 4096; "
+              "pub const write := fn(&mut self, b: []u8): R; "
+              "const dbg := fn(&self): []u8; "
+              "pub const writeAll := fn(&mut self, b: []u8): R { return self.write(b); }; };") ==
+          R"(const W := interface {
+    Error: type;
+    const cap: usize = 4096;
+    pub const write := fn(&mut self, b: []u8): R;
+    const dbg := fn(&self): []u8;
+    pub const writeAll := fn(&mut self, b: []u8): R {
+        return self.write(b);
+    };
+};
+)");
+}
+
+TEST_CASE("formatter round trips impl blocks with no trailing semicolon") {
+    CHECK(
+        format_source(
+            "impl File { pub const fromRaw := fn(fd: i32): @this() { return .{ .fd = fd }; }; }") ==
+        R"(impl File {
+    pub const fromRaw := fn(fd: i32): @this() {
+        return .{ .fd = fd };
+    };
+}
+)");
+
+    CHECK(format_source("impl Writer for File { pub const write := fn(&mut self, b: []u8): R "
+                        "{ return os::write(self.fd, b); }; }") ==
+          R"(impl Writer for File {
+    pub const write := fn(&mut self, b: []u8): R {
+        return os::write(self.fd, b);
+    };
+}
+)");
+
+    CHECK(format_source("impl(H: type) Writer(H) { pub const fromRaw := fn(raw: H): @this() "
+                        "{ return .{ .handle = raw }; }; }") ==
+          R"(impl(H: type) Writer(H) {
+    pub const fromRaw := fn(raw: H): @this() {
+        return .{ .handle = raw };
+    };
+}
+)");
+}
+
+TEST_CASE("formatter puts a blank line between an impl block and adjacent items") {
+    CHECK(format_source("impl A for B { pub const f := fn(&self): void {}; }\nconst x := 1;") ==
+          R"(impl A for B {
+    pub const f := fn(&self): void {};
+}
+
+const x := 1;
+)");
+}
+
+TEST_CASE("formatter round trip: interfaces and impls") {
+    round_trips("const M := interface {};");
+    round_trips("const W := interface { Item: type = u8; const n: usize; "
+                "pub const next := fn(&mut self): Item; "
+                "const seal := fn(&self): void; "
+                "pub const drain := fn(&mut self): void { self.seal(); }; };");
+    round_trips("using X = interface { pub const f := fn(^self): i32; };");
+    round_trips("impl File { pub const make := fn(): @this() { return .{}; }; }");
+    round_trips("impl Writer for File { pub const write := fn(&mut self, b: []u8): R { c; }; }");
+    round_trips("impl(T: type) Debug for Box(T) { pub const fmt := fn(&self): void {}; }");
+    round_trips("impl(H: type, constexpr n: usize) Buf(H) { const cap := n; }");
+}
+
 TEST_CASE("formatter round trip: @cfg groups inside aggregate bodies") {
     round_trips("const S := struct { dev: u64, @cfg(os == .linux) { uid: u32, gid: u32 } "
                 "mode: u32, };");

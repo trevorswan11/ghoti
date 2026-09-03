@@ -84,6 +84,7 @@ class dumper {
     auto visit(node_id, const module_access_expr&) -> void;
     auto visit(node_id, const struct_expr&) -> void;
     auto visit(node_id, const union_expr&) -> void;
+    auto visit(node_id, const interface_expr&) -> void;
     auto visit(node_id, const while_loop_expr&) -> void;
     auto visit(node_id, const cfg_value_expr&) -> void;
     auto visit(node_id, const block_stmt&) -> void;
@@ -94,6 +95,7 @@ class dumper {
     auto visit(node_id, const defer_stmt&) -> void;
     auto visit(node_id, const discard_stmt&) -> void;
     auto visit(node_id, const expr_stmt&) -> void;
+    auto visit(node_id, const impl_stmt&) -> void;
     auto visit(node_id, const import_stmt&) -> void;
     auto visit(node_id, const return_stmt&) -> void;
     auto visit(node_id, const test_stmt&) -> void;
@@ -109,6 +111,7 @@ class dumper {
     auto visit(explicit_type_id, const struct_expr&) -> void;
     auto visit(explicit_type_id, const enum_expr&) -> void;
     auto visit(explicit_type_id, const union_expr&) -> void;
+    auto visit(explicit_type_id, const interface_expr&) -> void;
     auto visit(explicit_type_id, const explicit_array_type&) -> void;
 
     template <typename T, typename Func> void dump_container(const T& container, Func&& func) {

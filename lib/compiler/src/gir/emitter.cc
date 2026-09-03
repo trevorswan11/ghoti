@@ -1104,13 +1104,8 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                         decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
 
     // Aggregates need one stable address across every use; only non-aggregates can skip storage.
-    const auto sema_kind{sema_type->get_kind()};
-    const auto is_aggregate{
-        sema_kind == sema::type_kind::ARRAY || sema_kind == sema::type_kind::SLICE ||
-        sema_kind == sema::type_kind::STRUCT || sema_kind == sema::type_kind::UNION ||
-        sema_kind == sema::type_kind::CLOSURE};
-
-    if (is_const && decl.value && !is_aggregate) {
+    const auto is_structural{sema::is_structural(sema_type->get_kind())};
+    if (is_const && decl.value && !is_structural) {
         // A local plain function is emitted with a synthetic name; pre-bind `name` to it so a
         // self-referential call (by name or @fnCtx()) inside its own body resolves correctly
         if (const auto fn_expr{active_ast().get_as_opt<ast::function_expr>(*decl.value)}) {

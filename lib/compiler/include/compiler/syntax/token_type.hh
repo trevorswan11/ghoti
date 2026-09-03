@@ -145,6 +145,9 @@ enum class token_type_t : u8 {
     TEST,
     UNDEFINED,
     ASM,
+    IMPL,
+    INTERFACE,
+    DYN,
 
     I8_TYPE,
     I16_TYPE,

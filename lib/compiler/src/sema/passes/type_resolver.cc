@@ -1822,10 +1822,9 @@ namespace {
             return (fn_ty && fn_ty->is_resolved()) ? fn_ty : stdx::none;
         }
 
-        const auto is_aggregate{decl->value->is<ast::struct_expr>() ||
-                                decl->value->is<ast::union_expr>() ||
-                                decl->value->is<ast::enum_expr>()};
-        if ((!mod || (!mod->is_ptr() && !mod->is_ref())) && !is_aggregate) { return stdx::none; }
+        const auto is_agg{decl->value->is<ast::struct_expr>() ||
+                          decl->value->is<ast::union_expr>() || decl->value->is<ast::enum_expr>()};
+        if ((!mod || (!mod->is_ptr() && !mod->is_ref())) && !is_agg) { return stdx::none; }
         return target_mod.get_sema_type_opt(*decl->value);
     }
 
@@ -4196,6 +4195,33 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
 
 VISITOR_TEMPLATE_INIT(type_resolver, visit, const ast::union_expr&)
 
+template <ast::IndexableID ID>
+auto type_resolver::visit(ID id, const ast::interface_expr& iface) -> void {
+    PROFILE_FUNCTION();
+    auto& iface_type{resolving_.get_sema_type(id)};
+
+    // TODO: Method-signature resolution (with associated-type scoping) and full conformance
+    // checking
+    {
+        const scope s{table_stack_, iface_type.get_symbol_table_idx(), table_idx_};
+        for (const auto& at : iface.assoc_types) {
+            TRY_RESOLVE(at.annotation);
+            if (at.default_type) { TRY_RESOLVE(*at.default_type); }
+        }
+        for (const auto& ac : iface.assoc_consts) {
+            TRY_RESOLVE(ac.explicit_type);
+            if (ac.default_value) { TRY_RESOLVE(*ac.default_value); }
+        }
+    }
+
+    committable_resolution<types::interface_t> resolution{
+        iface_type, iface.methods, iface.assoc_types, iface.assoc_consts, resolving_};
+    resolution.commit();
+    last_type_.emplace(iface_type);
+}
+
+VISITOR_TEMPLATE_INIT(type_resolver, visit, const ast::interface_expr&)
+
 auto type_resolver::visit(ast::node_id id, const ast::while_loop_expr& while_loop) -> void {
     PROFILE_FUNCTION();
     TRY_RESOLVE(while_loop.condition);
@@ -4621,6 +4647,30 @@ auto type_resolver::visit(ast::node_id id, const ast::test_stmt& test) -> void {
     const auto& block{resolving_.ast.get_as<ast::block_stmt>(test.block)};
     for (const auto& stmt : block) { TRY_RESOLVE(stmt); }
     last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
+}
+
+auto type_resolver::visit(ast::node_id id, const ast::impl_stmt& impl) -> void {
+    PROFILE_FUNCTION();
+    auto&       impl_type{resolving_.get_sema_type(id)};
+    const scope s{table_stack_, impl_type.get_symbol_table_idx(), table_idx_};
+
+    auto& void_type{ctx_.get_builtin_resolved_type(type_kind::VOID_)};
+
+    // A parameterized `impl(P) ...` is re-instantiated per monomorphization of its target
+    if (!impl.impl_params.empty()) { return last_type_.emplace(void_type); }
+    if (impl.interface_type) { TRY_RESOLVE(*impl.interface_type); }
+    TRY_RESOLVE(impl.target_type);
+
+    // Give `self` / `@this()` inside member fns something to resolve against.
+    auto& target{denoted_type(*last_type_)};
+    {
+        // TODO: Conformance checks
+        stdx::option<structural_guard> guard;
+        if (!target.is_poison()) { guard.emplace(user_type_stack_, target); }
+        for (const auto& member : impl.members) { TRY_RESOLVE(*member); }
+    }
+
+    last_type_.emplace(void_type);
 }
 
 auto type_resolver::visit(ast::node_id id, const ast::using_stmt& using_stmt) -> void {
