@@ -106,6 +106,10 @@
     - Enabled by building with -Dprofile
 
 ## alpha.3
+
+This is a heavily rust inspired release, sorry if that's not your thing!
+
+### General
 - Add support for open ranges
     - Use `..` for a new slice
     - Use `..arr.len` for 0 to len (or use `..=arr.len`)
@@ -113,3 +117,41 @@
     - These new range syntax only work in subscript operators and as for loop iterables when bounded by a real iterable
 - Fixed a bug where whitespace around comments would be accidentally lost
 - Fixed a few crashes in the compiler with match arm returns and function pointers
+
+### Interfaces
+
+- `const W := interface { ... }` — a new type-expression prefix beside `struct` / `enum` / `union`. An interface is a first-class `type` value: `constexpr`-composable, `using`-aliasable, re-exportable, usable as a `T: type` argument
+- Interface body members:
+    - **Required methods**: bodyless `[pub] const name := fn(<self>[, params]): <ret>;`; the `self` form (`self` / `&self` / `^self` / `&mut self` / `^mut self`) is the minimum an impl must provide
+    - **Default methods**: same with a body; an impl inherits it unless it provides its own. Default bodies are monomorphized per implementing type
+    - **Associated types**: `Name: type;` or `Name: type = Default;`
+    - **Associated `const`s**: `const N: T;` or `const N: T = expr;` (`constexpr`-evaluated; may not depend on `@this()`)
+    - **`pub` / sealed**: a `pub` member is the external contract; a non-`pub` member is *sealed*: still required of every impl, but only callable from within the interface's declaring module
+    - Zero-member marker interfaces are legal (`@implements` tag only)
+- An `interface` is **not** a value type: a bare `w: Writer` binding is `error::INTERFACE_NOT_A_VALUE`. It may appear only as `&dyn I` / `^dyn I` or via the `impl I` parameter sugar
+    - `&dyn I` / `^dyn I`: two-word fat pointers (`{ data, vtable }`) for run-time heterogeneity; implicit `&mut T` → `&mut dyn I` coercion at call args / assignments / returns / field inits; call-like associated-type binding (`&dyn Iterator(Item = u8)`); one lazily-emitted vtable `const` global per `(I, T)`
+- `@this()` inside an interface body denotes the implementing type; inside an impl body it is the target type
+
+### `impl` blocks
+
+- New statement keyword `impl`: a pure statement with no trailing `;`, like `test { ... }`
+    - **Trait impl** `impl I for T { ... }`: binds associated types (`using Error = ...`), overrides associated const defaults, supplies the required methods. After it, both `t.method(x)` and `T.method(&t, x)` resolve
+    - **Inherent impl** `impl T { ... }`: attaches free-standing methods / statics / aliases to a locally-anchored type declared elsewhere. Multiple inherent blocks coexist as long as no member name collides (`error::DUPLICATE_MEMBER`)
+    - **Parameterized impl** `impl(P: type, ..., constexpr n: T, ...) [I for] Ctor(P, n) { ... }`: re-instantiated per monomorphization of `Ctor`, its methods added to every concrete instantiation. Multiple parameters (type and `constexpr`), mixed, are supported; works across module boundaries regardless of which module first materializes the instantiation
+- **`impl I` parameter sugar** — `fn f(w: &mut impl Writer)` desugars to a generic function with a synthetic `type` parameter plus a compiler-internal conformance check; a non-conforming argument is `error::UNSATISFIED_BOUND`. Fully monomorphized, zero runtime cost
+- **Intersection bounds** — `fn f(x: &mut impl (Reader + Writer))` requires the synthetic param to satisfy every listed interface; the method set is their union.
+    - A same-named method from two interfaces makes a bare call `error::AMBIGUOUS_METHOD`; a shared associated-item name is `error::CONFLICTING_ASSOC`
+- Static `var` inside a trait impl is allowed — lowers to an `(I, T)`-keyed module global
+
+### Coherence
+
+- **Orphan rule** — `impl I for T` is accepted only in the module that declares `I` or the module that declares the base type constructor of `T`; otherwise `error::ORPHAN_IMPL`. An impl parameter does not count as local
+- **Uniqueness** — at most one `impl I for T` program-wide, keyed on canonical `type*` identity (never on name), so `a::Writer` and `b::Writer` are independent and a single type may implement both. A duplicate is `error::DUPLICATE_IMPL`
+- Conformance failures are precise: `MISSING_IMPL_METHOD`, `IMPL_SIGNATURE_MISMATCH`, `IMPL_SELF_MISMATCH`, `UNKNOWN_IMPL_MEMBER`
+
+### Builtins
+
+- `@implements(T | value, I)` — a `constexpr bool` is-a predicate usable anywhere a `constexpr` bool is (not tied to `test` blocks). The first argument may be a type or a value; `I` may be an intersection `(A + B)`. Returns `false` for a non-conforming argument, never errors
+- `@assert(cond[, msg])`: advisory runtime/comptime assertion calling a new weak `builtin::assert_handler`; comptime-false is a compile error; stripped by `--unsafe`
+- `@verify(cond[, msg])`: enforced assertion: comptime-false is a compile error, and the runtime check is **never** elided (not by `--unsafe`, not at any `-O` level)
+    - On failure it delegates to the existing weak `builtin::panic_handler`

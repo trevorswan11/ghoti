@@ -64,6 +64,11 @@ templ InternalsBuiltinsPage() {
 	<p>
 		Folds at compile time to a fixed-length, null-terminated byte array naming its argument.
 	</p>
+	<h3>{ "@implements" }</h3>
+	<pre><code class="language-ghoti">{ `@implements(T_or_value: auto, I: type): bool` }</code></pre>
+	<p>
+		A <code>constexpr</code> is-a predicate. The first argument may be a type or a value (a value is treated as <code>{ "@typeOf(value)" }</code>); <code>I</code> is an interface or an intersection <code>(A + B)</code>. Folds to <code>true</code> when the type implements every interface named, <code>false</code> otherwise.
+	</p>
 	<h2>Target Information</h2>
 	<h3>{ "@targetOs" }</h3>
 	<pre><code class="language-ghoti">{ `@targetOs(): [:0]u8` }</code></pre>
@@ -152,4 +157,14 @@ templ InternalsBuiltinsPage() {
 	<h3>{ "@panic" }</h3>
 	<pre><code class="language-ghoti">{ `@panic(message: [:0]u8): noreturn` }</code></pre>
 	<p>Immediately terminates execution and panics with the provided message.</p>
+	<h3>{ "@assert" }</h3>
+	<pre><code class="language-ghoti">{ `@assert(cond: bool, msg: []u8 = "assertion failed"): void` }</code></pre>
+	<p>
+		An advisory assertion. A comptime-known-false <code>cond</code> is a compile error; a comptime-known-true one emits nothing. Otherwise it emits a runtime check that, on failure, calls the weak <code>{ "builtin::assert_handler" }</code> hook with source location and the message. <code>{ "@assert" }</code> is stripped by <code>--unsafe</code> and its false path carries no semantic guarantee.
+	</p>
+	<h3>{ "@verify" }</h3>
+	<pre><code class="language-ghoti">{ `@verify(cond: bool, msg: []u8 = "verification failed"): void` }</code></pre>
+	<p>
+		An enforced assertion. Same front end as <code>{ "@assert" }</code> (comptime-known-false is a compile error), but the runtime check is <strong>never</strong> elided. On failure it delegates to the same weak <code>{ "builtin::panic_handler" }</code> that <code>{ "@panic" }</code> uses; a <code>{ "@verify" }</code> failure <em>is</em> a panic. Use it for invariants the program's correctness or safety depends on.
+	</p>
 }

@@ -1,0 +1,169 @@
+package pages
+
+templ SyntaxInterfacesPage() {
+	<h1>Interfaces</h1>
+	<ul>
+		<li>
+			An interface is declared with the standard declaration syntax and the <code>interface</code> type-expression prefix, akin to <code>struct</code> / <code>enum</code> / <code>union</code>
+			<ul>
+				<li>The declaration must be <code>const</code></li>
+				<li>An interface is a first-class <code>type</code> value: <code>constexpr</code>-composable, <code>using</code>-aliasable, re-exportable, and usable as a <code>T: type</code> argument</li>
+			</ul>
+		</li>
+		<li>
+			An interface body holds, in order:
+			<ul>
+				<li><strong>Associated types</strong>: <code>Name: type;</code> (required) or <code>Name: type = Default;</code> (defaulted)</li>
+				<li><strong>Associated constants</strong>: <code>const N: T;</code> (required) or <code>const N: T = expr;</code> (defaulted); <code>constexpr</code>-evaluated and may not depend on <code>{ "@this()" }</code></li>
+				<li><strong>Required methods</strong>: a bodyless <code>const</code> function declaration with a mandatory <code>self</code> parameter: <code>pub const write := fn(&amp;mut self, b: []u8): usize;</code></li>
+				<li><strong>Default methods</strong>: the same, but with a body; an implementer that omits the name inherits it, one that provides the name overrides it</li>
+			</ul>
+		</li>
+		<li>
+			The <code>self</code> parameter of a requirement is the <em>minimum</em> an implementer must provide (<code>self</code>, <code>&amp;self</code>, <code>^self</code>, <code>&amp;mut self</code>, <code>^mut self</code>)
+		</li>
+		<li>
+			Members carry visibility:
+			<ul>
+				<li>A <code>pub</code> member is the external contract meaning it is callable on implementers from any module</li>
+				<li>A non-<code>pub</code> member is <em>sealed</em>: still required of every implementer, but only nameable from within the interface's declaring module</li>
+			</ul>
+		</li>
+		<li>An <code>interface {  }</code> with zero members is legal and useful as an <code>{ "@implements" }</code> tag</li>
+		<li>An interface never contributes storage; it has no fields</li>
+		<li>
+			An interface is <strong>not</strong> a value type
+			<ul>
+				<li>A bare <code>w: Writer</code> binding is rejected</li>
+				<li>An interface may appear in value position only as <code>&amp;dyn I</code> / <code>^dyn I</code>, or through the <code>impl I</code> parameter sugar</li>
+			</ul>
+		</li>
+		<li>Inside an interface body, <code>{ "@this()" }</code> denotes the implementing type</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const Writer := interface {
+    Error: type;                       // required associated type
+    const preferred_chunk: usize = 4096;   // defaulted associated const
+
+    pub const write := fn(&mut self, bytes: []u8): usize;   // requirement
+    const debugName := fn(&self): []u8;                     // sealed requirement
+
+    pub const writeAll := fn(&mut self, bytes: []u8): usize {   // default method
+        var off: usize = 0;
+        while (off < bytes.len) { off = off + self.write(bytes[off..]); }
+        return off;
+    };
+};
+
+const Marker := interface {};   // zero-member marker interface` }
+		</code>
+	</pre>
+	<h2>impl blocks</h2>
+	<ul>
+		<li><code>impl</code> is a statement keyword. Like <code>test { "{ ... }" }</code> it takes no trailing <code>;</code></li>
+		<li>
+			<strong>Trait impl</strong>: <code>{ "impl I for T { ... }" }</code>
+			<ul>
+				<li>Binds each associated type with <code>using Name = ...</code> and overrides associated const defaults with <code>const N := ...</code></li>
+				<li>Supplies every required method; omitting a defaulted method inherits the interface's body</li>
+				<li>Inside the block <code>self</code> has type <code>T</code>; bare sibling names resolve against <code>T</code>, the interface's associated items, and the other methods in the block</li>
+				<li>After the impl, both <code>t.method(x)</code> and <code>T.method(&amp;t, x)</code> resolve</li>
+				<li>A trait impl satisfies a contract and nothing more: a <code>const</code> / <code>using</code> whose name is not an associated item of <code>I</code> is rejected. A static <code>var</code> is the one exception (it lowers to an <code>(I, T)</code>-keyed global)</li>
+			</ul>
+		</li>
+		<li>
+			<strong>Inherent impl</strong>: <code>impl T { "{ ... }" }</code>
+			<ul>
+				<li>No interface: attaches free-standing methods, statics, and aliases to a type declared elsewhere</li>
+				<li>Legal only when <code>T</code> is locally anchored (canonically declared in this module, or a local alias / instantiation with at least one local type argument)</li>
+				<li>Multiple inherent <code>impl T</code> blocks coexist as long as no two declare the same member name and none collides with a name in <code>T</code>'s original body</li>
+			</ul>
+		</li>
+		<li>
+			<strong>Parameterized impl</strong>: <code>impl(P: type, ..., constexpr n: T, ...) [I for] Ctor(P, n) { "{ ... }" }</code>
+			<ul>
+				<li>The parenthesized list uses the generic-parameter grammar (<code>P: type</code>, <code>constexpr n: usize</code>, …) and its parameters are in scope throughout the block</li>
+				<li>The block is re-instantiated per monomorphization of <code>Ctor</code>; its methods are added to every concrete instantiation</li>
+				<li>Coherence is checked against the <em>base</em> constructor and the interface (with a trait impl): an impl parameter is not "local", so a fully-foreign inherent <code>impl(T) foreign::Ctor(T)</code> is rejected</li>
+			</ul>
+		</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const File := struct { fd: i32 };
+
+impl Writer for File {
+    using Error = i32;                 // bind the associated type
+    const preferred_chunk := 8192;     // override the default
+
+    pub const write := fn(&mut self, bytes: []u8): usize { return bytes.len; };
+    const debugName := fn(&self): []u8 { return "File"; };
+    // writeAll omitted -> inherited from the interface default
+}
+
+impl File {                           // inherent: unrelated helpers
+    pub const fromRaw := fn(fd: i32): @this() { return .{ .fd = fd }; };
+}
+
+const Box := fn(T: type): type { return struct { val: T }; };
+impl(T: type) Box(T) {               // one method per Box(...) instantiation
+    pub const get := fn(&self): T { return self.val; };
+}` }
+		</code>
+	</pre>
+	<h2>Coherence</h2>
+	<ul>
+		<li>
+			<strong>Orphan rule</strong>: <code>{ "impl I for T" }</code> is accepted only while compiling the module that declares <code>I</code> or the module that declares the base type constructor of <code>T</code>
+		</li>
+		<li>
+			<strong>Uniqueness</strong>: at most one <code>{ "impl I for T" }</code> across the whole program. Identity is the canonical type, never the name, so <code>a::Writer</code> and <code>b::Writer</code> are independent interfaces and one type may implement both
+		</li>
+		<li>
+			<strong>Method-name clash</strong>: when a type ends up with two same-named methods from two impls visible in one scope, then a bare call is a hard error; the qualified / <code>&amp;dyn</code>-coerced forms always resolve
+		</li>
+	</ul>
+	<h2>Static dispatch</h2>
+	<ul>
+		<li>
+			<strong><code>impl I</code> parameter sugar</strong>: <code>fn f(w: &amp;mut impl Writer)</code> desugars to a generic function with a synthetic <code>type</code> parameter plus a compiler-internal conformance check. Fully monomorphized, zero runtime cost. Valid in parameter position only (no <code>-&gt; impl I</code> return)
+		</li>
+		<li>
+			<strong>Intersection bounds</strong>: <code>fn f(x: &amp;mut impl (Reader + Writer))</code> requires the synthetic parameter to satisfy every listed interface; the callable method set is their union
+			<ul>
+				<li>A same-named method contributed by two interfaces in the set makes a bare <code>x.method()</code> ambiguous and must be qualified</li>
+				<li>A shared associated-item name across the set is rejected</li>
+			</ul>
+		</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const dump := fn(w: &mut impl Writer, msg: []u8): usize {
+    return w.writeAll(msg);
+};
+
+pub const main := fn(): i32 {
+    var f := File{ .fd = 1 };
+    return @as(i32, dump(&f, "hi"));
+};` }
+		</code>
+	</pre>
+	<h2>{ "" }</h2>
+	<ul>
+		<li><code>{ "@implements(T | value, I)" }</code> is a <code>constexpr bool</code> is-a predicate, usable anywhere a <code>constexpr</code> bool is — not tied to <code>test</code> blocks</li>
+		<li>The first argument may be a type or a value (a value is treated as <code>{ "@typeOf(value)" }</code>)</li>
+		<li><code>I</code> may be an intersection: <code>{ "@implements(File, (Reader + Writer))" }</code></li>
+		<li>It returns <code>false</code> on a non-conforming argument</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const encode := fn(T: type, v: T): []u8 {
+    if constexpr (!@implements(T, Writer)) {
+        @compileError("encode requires T: Writer");
+    }
+    return v.debugName();
+};` }
+		</code>
+	</pre>
+}

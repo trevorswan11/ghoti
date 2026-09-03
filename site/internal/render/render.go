@@ -31,6 +31,7 @@ var Nav = []NavSection{
 			{Title: "Enums", Slug: "syntax/enums", Component: pages.SyntaxEnumsPage},
 			{Title: "Functions", Slug: "syntax/functions", Component: pages.SyntaxFunctionsPage},
 			{Title: "Imports", Slug: "syntax/imports", Component: pages.SyntaxImportsPage},
+			{Title: "Interfaces", Slug: "syntax/interfaces", Component: pages.SyntaxInterfacesPage},
 			{Title: "Loops", Slug: "syntax/loops", Component: pages.SyntaxLoopsPage},
 			{Title: "Match", Slug: "syntax/match", Component: pages.SyntaxMatchPage},
 			{Title: "Structs", Slug: "syntax/structs", Component: pages.SyntaxStructsPage},
