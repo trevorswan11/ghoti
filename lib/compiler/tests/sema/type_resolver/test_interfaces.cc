@@ -446,4 +446,59 @@ TEST_CASE("`dyn` on a non-interface is a type error") {
                           sema::error::TYPE_MISMATCH));
 }
 
+TEST_CASE("`&dyn I` binds an associated type with the call-like form") {
+    helpers::resolve_and_check(R"(
+        const Iter := interface { Item: type; pub const next := fn(&mut self): Item; };
+        const use := fn(it: &mut dyn Iter(Item = u8)): void { _ = it; };
+)");
+}
+
+TEST_CASE("`&dyn I` with an unbound, undefaulted associated type is rejected") {
+    CHECK(helpers::raised(R"(
+        const Iter := interface { Item: type; pub const next := fn(&mut self): Item; };
+        const use := fn(it: &mut dyn Iter): void { _ = it; };
+)",
+                          sema::error::DYN_UNBOUND_ASSOC));
+}
+
+TEST_CASE("`&dyn I` accepts a defaulted associated type without a binding") {
+    helpers::resolve_and_check(R"(
+        const Iter := interface { Item: type = u8; pub const next := fn(&mut self): Item; };
+        const use := fn(it: &mut dyn Iter): void { _ = it; };
+)");
+}
+
+TEST_CASE("binding an associated type the interface does not declare is rejected") {
+    CHECK(helpers::raised(R"(
+        const Iter := interface { Item: type = u8; pub const next := fn(&mut self): Item; };
+        const use := fn(it: &mut dyn Iter(Key = u8)): void { _ = it; };
+)",
+                          sema::error::DYN_UNBOUND_ASSOC));
+}
+
+TEST_CASE("a by-value-`self` method makes an interface not `dyn`-safe") {
+    CHECK(helpers::raised(R"(
+        const Consume := interface { pub const take := fn(self): i32; };
+        const use := fn(x: &dyn Consume): void { _ = x; };
+)",
+                          sema::error::DYN_BY_VALUE_SELF));
+}
+
+TEST_CASE("a method call resolves through a `&dyn I` receiver") {
+    helpers::resolve_and_check(R"(
+        const W := interface { pub const wr := fn(&self): i32; };
+        const use := fn(w: &dyn W): i32 { return w.wr(); };
+)");
+}
+
+TEST_CASE("`&mut T` coerces to a `&mut dyn I` parameter") {
+    helpers::resolve_and_check(R"(
+        const W := interface { pub const wr := fn(&self): i32; };
+        const File := struct { fd: i32 };
+        impl W for File { pub const wr := fn(&self): i32 { return self.fd; }; }
+        const sink := fn(w: &dyn W): i32 { return w.wr(); };
+        const use := fn(): i32 { var f := File{ .fd = 7 }; return sink(&f); };
+)");
+}
+
 } // namespace ghoti::tests

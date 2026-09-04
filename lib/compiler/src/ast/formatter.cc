@@ -1408,8 +1408,17 @@ auto formatter::visit(explicit_type_id id, const explicit_array_type& node) -> s
 }
 
 auto formatter::visit(explicit_type_id id, const explicit_dyn_type& node) -> syntax::doc_id {
-    return with_modifier(
-        id, doc_manager_.concat({doc_manager_.text("dyn "), format(node.interface_type)}));
+    std::vector<syntax::doc_id> parts{doc_manager_.text("dyn "), format(node.interface_type)};
+    if (!node.assoc_bindings.empty()) {
+        std::vector<syntax::doc_id> binds;
+        binds.reserve(node.assoc_bindings.size());
+        for (const auto& b : node.assoc_bindings) {
+            binds.emplace_back(
+                doc_manager_.concat({format(b.name), doc_manager_.text(" = "), format(b.type)}));
+        }
+        parts.emplace_back(doc_manager_.delimited("(", ")", std::move(binds), false, false));
+    }
+    return with_modifier(id, doc_manager_.concat(std::move(parts)));
 }
 
 } // namespace ghoti::ast

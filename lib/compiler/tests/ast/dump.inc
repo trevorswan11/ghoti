@@ -1017,7 +1017,7 @@ DeclStatement
     │   │   ├─ Name: IdentifierExpression: w
     │   │   └─ Type: ExplicitType (modifier: MUT_REF)
     │   │       └─ DynType
-    │   │           └─ ExplicitType (modifier: VALUE)
+    │   │           └─ Interface: ExplicitType (modifier: VALUE)
     │   │               └─ ModuleAccessExpression
     │   │                   ├─ Outer: IdentifierExpression: io
     │   │                   └─ Inner: IdentifierExpression: Writer
@@ -1025,7 +1025,12 @@ DeclStatement
     │       ├─ Name: IdentifierExpression: x
     │       └─ Type: ExplicitType (modifier: PTR)
     │           └─ DynType
-    │               └─ ExplicitType (modifier: VALUE)
+    │               ├─ Bindings:
+    │               │   └─ Binding:
+    │               │       ├─ Name: IdentifierExpression: E
+    │               │       └─ Type: ExplicitType (modifier: VALUE)
+    │               │           └─ IdentifierExpression: i32 (primitive)
+    │               └─ Interface: ExplicitType (modifier: VALUE)
     │                   └─ IdentifierExpression: IW
     ├─ Variadic: false
     ├─ Move: false

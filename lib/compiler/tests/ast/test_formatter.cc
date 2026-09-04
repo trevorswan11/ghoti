@@ -93,6 +93,10 @@ TEST_CASE("formatter round-trips types") {
     CHECK(format_source("var w: &dyn Writer = undefined;") == "var w: &dyn Writer = undefined;\n");
     CHECK(format_source("var w: ^mut dyn io::Writer = undefined;") ==
           "var w: ^mut dyn io::Writer = undefined;\n");
+    CHECK(format_source("var it: &dyn Iterator(Item = u8) = undefined;") ==
+          "var it: &dyn Iterator(Item = u8) = undefined;\n");
+    CHECK(format_source("var m: &dyn Map(Key = []u8, Value = i32) = undefined;") ==
+          "var m: &dyn Map(Key = []u8, Value = i32) = undefined;\n");
 }
 
 TEST_CASE("formatter lays out a function body with K&R braces") {

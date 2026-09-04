@@ -89,9 +89,44 @@ auto explicit_function_type::parse(syntax::parser& parser, bool allow_trailing_b
 auto explicit_dyn_type::parse(syntax::parser& parser, bool allow_trailing_brace)
     -> stdx::result<explicit_dyn_type, syntax::diagnostic> {
     PROFILE_FUNCTION();
-    // TODO: assoc-binding lists
-    const auto interface_type{TRY(explicit_type::parse(parser, allow_trailing_brace))};
-    return explicit_dyn_type{.interface_type = interface_type, .assoc_bindings = {}};
+    // current == `dyn`
+    parser.advance(); // current == first name token
+    const auto  name_start{parser.get_current_token()};
+    expr_handle name{TRY(identifier_expr::parse(parser))};
+    while (parser.peek_token_is(syntax::token_type_t::COLON_COLON)) {
+        parser.advance(); // current == ::
+        name = TRY(module_access_expr::parse(parser, name));
+    }
+    const type_modifier value_mod{};
+    const auto          interface_type{
+        name.is<module_access_expr>()
+                     ? parser.add_type<module_access_expr>(
+                  name_start, value_mod, parser.get_node<module_access_expr>(*name))
+                     : parser.add_type<identifier_expr>(
+                  name_start, value_mod, parser.get_node<identifier_expr>(*name))};
+
+    std::vector<explicit_dyn_type::assoc_binding> assoc_bindings;
+    if (parser.peek_token_is(syntax::token_type_t::LPAREN)) {
+        parser.advance(); // current == (
+        while (!parser.peek_token_is(syntax::token_type_t::RPAREN) &&
+               !parser.peek_token_is(syntax::token_type_t::END)) {
+            TRY(parser.expect_peek(syntax::token_type_t::IDENT));
+            const auto binding_name{TRY(identifier_expr::parse(parser))};
+            TRY(parser.expect_peek(syntax::token_type_t::ASSIGN));
+            auto binding_type{TRY(explicit_type::parse(parser, allow_trailing_brace))};
+            assoc_bindings.emplace_back(binding_name, binding_type);
+            if (parser.peek_token_is(syntax::token_type_t::COMMA)) {
+                parser.advance();
+            } else {
+                break;
+            }
+        }
+        TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
+    }
+    return explicit_dyn_type{
+        .interface_type = interface_type,
+        .assoc_bindings = std::move(assoc_bindings),
+    };
 }
 
 auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)

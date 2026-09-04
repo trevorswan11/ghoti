@@ -80,5 +80,5 @@ R"([_:0]^N{a, b, c, d, e, 3, "54" };
     impl File { pub const fromRaw := fn(fd: i32): @this() { return .{ .fd = fd }; }; }
     impl IW for File { pub const write := fn(&mut self, b: []u8): E { c; }; }
     impl(H: type) Buf(H) { pub const make := fn(raw: H): @this() { return .{ .h = raw }; }; }
-    const useDyn := fn(w: &mut dyn io::Writer, x: ^dyn IW): void { c; };
+    const useDyn := fn(w: &mut dyn io::Writer, x: ^dyn IW(E = i32)): void { c; };
 )"

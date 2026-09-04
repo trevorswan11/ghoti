@@ -2717,6 +2717,28 @@ auto type_resolver::resolve_structural_access(type&                          obj
                              error::UNDECLARED_IDENTIFIER,
                              resolving_.ast.location_of(member));
     }
+
+    // `w.method(...)` on a `&dyn I` resolves against `I`'s method set
+    if (const auto dyn{object_data.as_opt<types::dyn_t>()}) {
+        const auto& iface{dyn->interface.get_data().as<types::interface_t>()};
+        const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(member)};
+        for (usize i{0}; i < iface.method_names.size(); ++i) {
+            if (iface.method_names[i] != member_ident.name) { continue; }
+            if (!iface.method_is_pub[i] && &iface.enclosing != &resolving_) {
+                return make_sema_err(
+                    fmt::format("`{}` is a sealed interface method and is not callable here",
+                                member_ident.name),
+                    error::SEALED_METHOD,
+                    resolving_.ast.location_of(member));
+            }
+            return iface.method_sigs[i];
+        }
+        return make_sema_err(fmt::format("`dyn {}` has no method `{}`",
+                                         ctx_.type_display_name(dyn->interface),
+                                         member_ident.name),
+                             error::UNDECLARED_IDENTIFIER,
+                             resolving_.ast.location_of(member));
+    }
     const auto union_type{object_data.as_opt<types::union_t>()};
     const auto slice_type{object_data.as_opt<types::slice>()};
     const auto array_type{object_data.as_opt<types::array>()};
@@ -6107,9 +6129,71 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type
                              error::TYPE_MISMATCH,
                              resolving_.ast.location_of(dyn.interface_type)));
     }
+    const auto& iface{iface_type.get_data().as<types::interface_t>()};
 
-    auto& dyn_type{*ctx_.pool[{type_kind::DYN, types::mut::CONSTANT, &iface_type}]};
-    dyn_type.resolve_if<types::dyn_t>(iface_type);
+    // Resolve the `(Assoc = T, ...)` list into per-associated-type slots in interface order.
+    auto bindings{ctx_.arena.make_span<type*>(iface.assoc_type_names.size())};
+    std::ranges::fill(bindings, nullptr);
+    for (const auto& ab : dyn.assoc_bindings) {
+        const auto& bname{resolving_.ast.get_as<ast::identifier_expr>(ab.name).name};
+        const auto  slot{std::ranges::find(iface.assoc_type_names, bname)};
+        if (slot == iface.assoc_type_names.end()) {
+            ctx_.diags.emplace_back(
+                fmt::format("`{}` has no associated type `{}`",
+                            ctx_.type_display_name(iface_type),
+                            bname),
+                error::DYN_UNBOUND_ASSOC,
+                resolving_.ast.location_of(ab.name));
+            continue;
+        }
+        TRY_RESOLVE(ab.type);
+        bindings[static_cast<usize>(slot - iface.assoc_type_names.begin())] =
+            &denoted_type(*last_type_.take());
+    }
+
+    // `dyn`-safety: every associated type must be pinned here or defaulted by the interface.
+    for (usize i{0}; i < iface.assoc_type_names.size(); ++i) {
+        if (!bindings[i] && !iface.ast_assoc_types[i].default_type) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("`&dyn {}` needs associated type `{}` bound: write `dyn {}({} = ...)`",
+                            ctx_.type_display_name(iface_type),
+                            iface.assoc_type_names[i],
+                            ctx_.type_display_name(iface_type),
+                            iface.assoc_type_names[i]),
+                error::DYN_UNBOUND_ASSOC,
+                resolving_.ast.location_of(id)));
+        }
+    }
+
+    // `dyn`-safety: no method may take `self` by value (it has no vtable slot).
+    for (usize i{0}; i < iface.method_names.size(); ++i) {
+        const auto fn{iface.method_sigs[i]->get_data().as_opt<types::function>()};
+        if (fn && fn->has_self && !fn->params.empty()) {
+            const auto self_kind{fn->params[0]->get_kind()};
+            if (self_kind != type_kind::POINTER && self_kind != type_kind::REFERENCE) {
+                return last_type_.emplace(ctx_.poison_node(
+                    resolving_,
+                    id,
+                    fmt::format("`{}` is not `dyn`-safe: method `{}` takes `self` by value",
+                                ctx_.type_display_name(iface_type),
+                                iface.method_names[i]),
+                    error::DYN_BY_VALUE_SELF,
+                    resolving_.ast.location_of(id)));
+            }
+        }
+    }
+
+    types::key_t key{type_kind::DYN, types::mut::CONSTANT, &iface_type};
+    for (usize i{0}; i < bindings.size(); ++i) {
+        if (bindings[i]) {
+            key.imprint(static_cast<u64>(i + 1));
+            key.imprint(*bindings[i]);
+        }
+    }
+    auto& dyn_type{*ctx_.pool[key]};
+    dyn_type.resolve_if<types::dyn_t>(iface_type, bindings);
 
     // `dyn I` is unsized: legal only as the referent of `&` / `^`.
     auto& final_type{apply_explicit_modifiers(id, dyn_type)};
@@ -6129,10 +6213,13 @@ auto type_resolver::instantiate_generic(type&                             callee
                                         gsl::span<type*>                  concrete_args,
                                         gsl::span<const gir::const_value> constexpr_args)
     -> stdx::option<generic_instantiation_entry> {
-    mod::module&               fn_mod{*fn_info.module};
-    const auto&                fn_expr{*fn_info.fn_expr};
-    const auto                 fn_type{fn_info.fn_type};
-    const auto                 fn_table_idx{fn_type->get_symbol_table_idx()};
+    mod::module& fn_mod{*fn_info.module};
+    const auto&  fn_expr{*fn_info.fn_expr};
+    const auto   fn_type{fn_info.fn_type};
+    const auto   fn_table_idx{fn_type->get_symbol_table_idx()};
+
+    // Snapshot the shared side tables so this instantiation's typing is captured as a replayable
+    // diff
     const body_typing_snapshot snap{fn_mod};
 
     // Bind each `constexpr` parameter to its folded value while this instantiation's body is

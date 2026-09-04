@@ -283,9 +283,9 @@ struct interface_t {
     }
 };
 
-// `dyn I` — the unsized referent of a `&dyn I` / `^dyn I` fat pointer
 struct dyn_t {
-    type& interface; // the `types::interface_t` this object is erased to
+    type&            interface;      // the `types::interface_t` this object is erased to
+    gsl::span<type*> assoc_bindings; // bound assoc types in interface order
 };
 
 // How a closure stores one of its captured free variables in its environment

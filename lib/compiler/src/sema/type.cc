@@ -255,6 +255,10 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
                 return false;
             }
             if (src.is_constant() && !dest.is_constant()) { return false; }
+            // `^T` -> `^dyn I`: the concrete `T`'s conformance is enforced at coercion lowering.
+            if (p_dest->underlying.get_kind() == type_kind::DYN) {
+                return is_aggregate(p_src->underlying.get_kind());
+            }
             return is_same_unqualified(p_src->underlying, p_dest->underlying);
         }
         // &S to &T must be const correct
@@ -266,6 +270,9 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
                 return false;
             }
             if (src.is_constant() && !dest.is_constant()) { return false; }
+            if (r_dest->underlying.get_kind() == type_kind::DYN) {
+                return is_aggregate(r_src->underlying.get_kind());
+            }
             return is_same_unqualified(r_src->underlying, r_dest->underlying);
         }
         // []S to []T must be const and null term correct

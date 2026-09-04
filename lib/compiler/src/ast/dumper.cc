@@ -1268,9 +1268,27 @@ auto dumper::visit(explicit_type_id, const explicit_array_type& array) -> void {
 auto dumper::visit(explicit_type_id, const explicit_dyn_type& dyn) -> void {
     PROFILE_FUNCTION();
     fmt::println(out_, "{}DynType", indent_.current_branch());
+    if (!dyn.assoc_bindings.empty()) {
+        const indent::guard g{indent_, false};
+        fmt::println(out_, "{}Bindings:", indent_.current_branch());
+        dump_container(dyn.assoc_bindings,
+                       [this](const explicit_dyn_type::assoc_binding& b) -> void {
+                           fmt::println(out_, "{}Binding:", indent_.current_branch());
+                           {
+                               const indent::guard g_name{indent_, false};
+                               fmt::print(out_, "{}Name: ", indent_.current_branch());
+                               dump(b.name);
+                           }
+                           {
+                               const indent::guard g_type{indent_, true};
+                               fmt::print(out_, "{}Type: ", indent_.current_branch());
+                               dump(b.type);
+                           }
+                       });
+    }
     {
         const indent::guard g{indent_, true};
-        fmt::print(out_, "{}", indent_.current_branch());
+        fmt::print(out_, "{}Interface: ", indent_.current_branch());
         dump(dyn.interface_type);
     }
 }
