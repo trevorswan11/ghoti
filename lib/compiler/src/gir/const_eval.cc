@@ -517,7 +517,12 @@ auto const_eval::force_deferred_call(sema::type& maybe_deferred) -> sema::type& 
     const auto deferred{maybe_deferred.get_data().as_opt<sema::types::deferred_call>()};
     if (!deferred) { return maybe_deferred; }
     const auto resolved{try_resolve_deferred_call(deferred->call)};
-    if (!resolved) { return maybe_deferred; }
+    if (!resolved) {
+        ctx_.diags.emplace_back("Failed to evaluate compile-time type constructor function",
+                                sema::error::CONSTEXPR_EVALUATION_FAILED,
+                                module_->ast.location_of(deferred->call.function));
+        return ctx_.get_poison();
+    }
     // Only an aggregate result needs to be pinned early
     switch (resolved->get_kind()) {
     case sema::type_kind::STRUCT:
