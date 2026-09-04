@@ -449,13 +449,34 @@ auto emitter::emit_dyn_coercion(ast::expr_handle src, const sema::type& fat_type
 
 auto emitter::emit_coerced_expr(ast::expr_handle expr_id, const sema::type& dest_type) -> value {
     PROFILE_FUNCTION();
-    // `&T` / `^T` -> `&dyn I` / `^dyn I`: build the fat pointer.
-    if (const auto p{dest_type.get_data().as_opt<sema::types::pointer>()};
-        p && p->underlying.get_kind() == sema::type_kind::DYN) {
-        return emit_dyn_coercion(expr_id, dest_type);
-    } else if (const auto r{dest_type.get_data().as_opt<sema::types::reference>()};
-               r && r->underlying.get_kind() == sema::type_kind::DYN) {
-        return emit_dyn_coercion(expr_id, dest_type);
+    // Build the fat pointer for `&T` / `^T` -> `&dyn I` / `^dyn I`
+    const auto dest_dyn{[&] -> stdx::option<const sema::type&> {
+        if (const auto p{dest_type.get_data().as_opt<sema::types::pointer>()}) {
+            return p->underlying.get_kind() == sema::type_kind::DYN
+                       ? stdx::option<const sema::type&>{p->underlying}
+                       : stdx::none;
+        }
+        if (const auto r{dest_type.get_data().as_opt<sema::types::reference>()}) {
+            return r->underlying.get_kind() == sema::type_kind::DYN
+                       ? stdx::option<const sema::type&>{r->underlying}
+                       : stdx::none;
+        }
+        return stdx::none;
+    }()};
+
+    if (dest_dyn) {
+        const auto                      src_ty{active_mod().get_sema_type_opt(*expr_id)};
+        stdx::option<const sema::type&> src_ref;
+        if (src_ty) {
+            if (const auto p{src_ty->get_data().as_opt<sema::types::pointer>()}) {
+                src_ref.emplace(p->underlying);
+            } else if (const auto r{src_ty->get_data().as_opt<sema::types::reference>()}) {
+                src_ref.emplace(r->underlying);
+            }
+        }
+        if (src_ref && src_ref->get_kind() != sema::type_kind::DYN) {
+            return emit_dyn_coercion(expr_id, dest_type);
+        }
     }
 
     if (dest_type.get_kind() == sema::type_kind::SLICE) {
@@ -2904,6 +2925,7 @@ auto emitter::emit_for(ast::node_id                   id,
             cap_name.emplace(active_ast().get_as<ast::identifier_expr>(capture.payload).name);
             cap_type = active_mod().get_sema_type_opt(capture.payload);
         }
+        const bool alias_capture{capture.modifier.is_ref() || capture.modifier.is_ptr()};
 
         const auto iter_id{*iter_handle};
         if (const auto range{active_ast().get_as_opt<ast::range_expr>(iter_id)}) {
@@ -2932,6 +2954,7 @@ auto emitter::emit_for(ast::node_id                   id,
                 .end_val          = end_val,
                 .capture_name     = cap_name,
                 .capture_type     = cap_type,
+                .alias_capture    = alias_capture,
             });
         } else {
             const auto arr_val{emit_lvalue(iter_handle)};
@@ -2963,14 +2986,15 @@ auto emitter::emit_for(ast::node_id                   id,
             }
 
             iter_infos.emplace_back<iterable_info>({
-                .is_range     = false,
-                .is_inclusive = false,
-                .var_slot     = idx_slot,
-                .elem_type    = elem_type,
-                .end_val      = end_val,
-                .capture_name = cap_name,
-                .arr_val      = arr_val,
-                .capture_type = cap_type,
+                .is_range      = false,
+                .is_inclusive  = false,
+                .var_slot      = idx_slot,
+                .elem_type     = elem_type,
+                .end_val       = end_val,
+                .capture_name  = cap_name,
+                .arr_val       = arr_val,
+                .capture_type  = cap_type,
+                .alias_capture = alias_capture,
             });
         }
     }
@@ -3065,11 +3089,9 @@ auto emitter::emit_for(ast::node_id                   id,
                     continue;
                 }
 
-                // `|&v|`/`|&mut v|` and `|^v|`/`|^mut v|` alias the element's own address
-                const auto capture_kind{info.capture_type ? info.capture_type->get_kind()
-                                                          : sema::type_kind::POISON};
-                if (capture_kind == sema::type_kind::REFERENCE ||
-                    capture_kind == sema::type_kind::POINTER) {
+                // `|&v|`/`|&mut v|` and `|^v|`/`|^mut v|` alias the element's own address; a plain
+                // `|v|` binds by value even when the element type is itself a `&`/`^`.
+                if (info.alias_capture && info.capture_type) {
                     const auto capture_slot{builder_.emit_alloca(*info.capture_type)};
                     builder_.emit_store(capture_slot, value{elem_addr, *info.capture_type})
                         .is_initializer = true;

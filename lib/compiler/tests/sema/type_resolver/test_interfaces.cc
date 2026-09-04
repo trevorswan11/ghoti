@@ -32,6 +32,17 @@ raised_with_import(std::string_view src, std::string_view other_source, sema::er
     return std::ranges::find(codes, code) != codes.end();
 }
 
+// Runs the full resolve + GIR + type-check pipeline and reports whether `code` was raised.
+[[nodiscard]] auto checker_raised(std::string_view src, sema::error code) -> bool {
+    auto [ctx, idx]{helpers::type_check(src)};
+    if (const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()}) {
+        for (const auto& d : *diags) {
+            if (d.get_error() == code) { return true; }
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 TEST_CASE("interface resolves to an interface_t carrying its members") {
@@ -498,6 +509,61 @@ TEST_CASE("`&mut T` coerces to a `&mut dyn I` parameter") {
         impl W for File { pub const wr := fn(&self): i32 { return self.fd; }; }
         const sink := fn(w: &dyn W): i32 { return w.wr(); };
         const use := fn(): i32 { var f := File{ .fd = 7 }; return sink(&f); };
+)");
+}
+
+TEST_CASE("`&dyn I(A = x, B = y)` binds multiple associated types") {
+    helpers::resolve_and_check(R"(
+        const Map := interface {
+            Key: type;
+            Value: type;
+            pub const at := fn(&self, k: Key): Value;
+        };
+        const use := fn(m: &dyn Map(Key = []u8, Value = i32)): void { _ = m; };
+)");
+}
+
+TEST_CASE("`&dyn A` is not assignable to `&dyn B`") {
+    CHECK(checker_raised(R"(
+        const A := interface { pub const a := fn(&self): i32; };
+        const B := interface { pub const b := fn(&self): i32; };
+        const use := fn(x: &dyn A): void { var y: &dyn B = x; _ = y; };
+)",
+                         sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("a method absent from the interface is not callable through `&dyn I`") {
+    CHECK(helpers::raised(R"(
+        const W := interface { pub const wr := fn(&self): i32; };
+        const use := fn(w: &dyn W): i32 { return w.flush(); };
+)",
+                          sema::error::UNDECLARED_IDENTIFIER));
+}
+
+TEST_CASE("a sealed method is not callable through `&dyn I` from another module") {
+    CHECK(raised_with_import(
+        R"(
+        import "other.gh" as m;
+        const use := fn(x: &dyn m::Sealed): i32 { return x.hidden(); };
+)",
+        R"(pub const Sealed := interface {
+               pub const shown := fn(&self): i32;
+               const hidden := fn(&self): i32;
+           };)",
+        sema::error::SEALED_METHOD));
+}
+
+TEST_CASE("`&dyn I` binding an associated type twice keeps the last binding valid") {
+    helpers::resolve_and_check(R"(
+        const Src := interface { Item: type; pub const get := fn(&self): Item; };
+        const use := fn(s: &dyn Src(Item = i32)): i32 { return s.get(); };
+)");
+}
+
+TEST_CASE("`@this()` behind a reference stays `dyn`-safe") {
+    helpers::resolve_and_check(R"(
+        const Chain := interface { pub const next := fn(&self): &@this(); };
+        const use := fn(c: &dyn Chain): void { _ = c; };
 )");
 }
 

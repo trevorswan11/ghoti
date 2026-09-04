@@ -117,6 +117,10 @@ auto module::prune_unreachable(gsl::span<const std::string_view> roots) -> void 
     for (usize i{0}; i < import_boundary_fn_ && i < functions_.size(); ++i) {
         if (!is_extern(functions_[i]->get_linkage())) { enqueue_fn(functions_[i]->get_name()); }
     }
+    // A `&dyn I` vtable references its impl methods only through a synthesised global; keep them.
+    for (const auto& vt : ast_module_.dyn_vtables) {
+        for (const auto& slot : vt.slots) { enqueue_fn(slot); }
+    }
 
     // Over-approximate: keep anything any global initializer names.
     for (const auto* g : globals_) {

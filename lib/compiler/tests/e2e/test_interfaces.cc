@@ -346,6 +346,75 @@ TEST_CASE("a `^dyn I` fat pointer carries a default method through its vtable") 
     )") == 36);
 }
 
+TEST_CASE("`&dyn I` dispatches across a module boundary") {
+    CHECK(helpers::compile_and_run(
+              R"(
+            import "sh.gh" as sh;
+            const measure := fn(x: &dyn sh::Shape): i32 { return x.area(); };
+            pub const main := fn(): i32 {
+                var q: sh::Sq = .{ .s = 7 };
+                return measure(&q) - 7;
+            };
+        )",
+              {helpers::mock_file{
+                  "sh.gh",
+                  R"(pub const Shape := interface { pub const area := fn(&self): i32; };
+                     pub const Sq := struct { s: i32 };
+                     impl Shape for Sq { pub const area := fn(&self): i32 { return self.s * self.s; }; })",
+                  "sh"}}) == 42);
+}
+
+TEST_CASE("`[]^dyn I` iterates a heterogeneous collection through the vtable") {
+    CHECK(helpers::compile_and_run(R"(
+        const N := interface { pub const v := fn(&self): i32; };
+        const A := struct { a: i32 };
+        impl N for A { pub const v := fn(&self): i32 { return self.a; }; }
+        const sumAll := fn(xs: []^dyn N): i32 {
+            var total: i32 = 0;
+            for (xs) |x| { total = total + x.v(); }
+            return total;
+        };
+        pub const main := fn(): i32 {
+            var p := A{ .a = 10 };
+            var q := A{ .a = 32 };
+            var arr: [2]^dyn N = .{ ^p, ^q };
+            return sumAll(arr[..]);
+        };
+    )") == 42);
+}
+
+TEST_CASE("`&dyn I(Assoc = T)` substitutes the associated type in method signatures") {
+    CHECK(helpers::compile_and_run(R"(
+        const Src := interface { Item: type; pub const first := fn(&self): Item; };
+        const Box := struct { v: i32 };
+        impl Src for Box {
+            using Item = i32;
+            pub const first := fn(&self): Item { return self.v; };
+        }
+        const takeFirst := fn(s: &dyn Src(Item = i32)): i32 { return s.first(); };
+        pub const main := fn(): i32 {
+            var b := Box{ .v = 42 };
+            return takeFirst(&b);
+        };
+    )") == 42);
+}
+
+TEST_CASE("two impls of the same interface keep distinct methods under static and dyn dispatch") {
+    CHECK(helpers::compile_and_run(R"(
+        const N := interface { pub const get := fn(&self): i32; };
+        const A := struct { x: i32 };
+        const B := struct { y: i32 };
+        impl N for A { pub const get := fn(&self): i32 { return self.x; }; }
+        impl N for B { pub const get := fn(&self): i32 { return self.y * 10; }; }
+        const dyn_get := fn(n: &dyn N): i32 { return n.get(); };
+        pub const main := fn(): i32 {
+            var a := A{ .x = 1 };
+            var b := B{ .y = 2 };
+            return a.get() + b.get() + dyn_get(&a) + dyn_get(&b);
+        };
+    )") == 42);
+}
+
 TEST_CASE("a `&dyn I` argument coerces from a plain `&mut T`") {
     CHECK(helpers::compile_and_run(R"(
         const N := interface { pub const bump := fn(&mut self): i32; };
@@ -357,6 +426,93 @@ TEST_CASE("a `&dyn I` argument coerces from a plain `&mut T`") {
             return run(&mut c);
         };
     )") == 41);
+}
+
+TEST_CASE("a `^dyn I` stored in a struct field dispatches when used later") {
+    CHECK(helpers::compile_and_run(R"(
+        const N := interface { pub const get := fn(&self): i32; };
+        const Src := struct { v: i32 };
+        impl N for Src { pub const get := fn(&self): i32 { return self.v; }; }
+        const Holder := struct { inner: ^dyn N };
+        const readHeld := fn(h: &Holder): i32 { return h.inner.get(); };
+        pub const main := fn(): i32 {
+            var s := Src{ .v = 42 };
+            var h := Holder{ .inner = ^s };
+            return readHeld(&h);
+        };
+    )") == 42);
+}
+
+TEST_CASE("several methods dispatch through one `&dyn I`") {
+    CHECK(helpers::compile_and_run(R"(
+        const Vec := interface {
+            pub const x := fn(&self): i32;
+            pub const y := fn(&self): i32;
+            pub const z := fn(&self): i32;
+        };
+        const P := struct { a: i32, b: i32, c: i32 };
+        impl Vec for P {
+            pub const x := fn(&self): i32 { return self.a; };
+            pub const y := fn(&self): i32 { return self.b; };
+            pub const z := fn(&self): i32 { return self.c; };
+        }
+        const norm := fn(v: &dyn Vec): i32 { return v.x() + v.y() + v.z(); };
+        pub const main := fn(): i32 {
+            var p := P{ .a = 12, .b = 14, .c = 16 };
+            return norm(&p);
+        };
+    )") == 42);
+}
+
+TEST_CASE("a `&dyn I` passes through two call layers") {
+    CHECK(helpers::compile_and_run(R"(
+        const N := interface { pub const get := fn(&self): i32; };
+        const T := struct { v: i32 };
+        impl N for T { pub const get := fn(&self): i32 { return self.v; }; }
+        const inner := fn(n: &dyn N): i32 { return n.get(); };
+        const outer := fn(n: &dyn N): i32 { return inner(n) + 1; };
+        pub const main := fn(): i32 {
+            var t := T{ .v = 41 };
+            return outer(&t);
+        };
+    )") == 42);
+}
+
+TEST_CASE("a `&mut dyn I` method mutates state observed by a later `&dyn I` call") {
+    CHECK(helpers::compile_and_run(R"(
+        const Acc := interface {
+            pub const add := fn(&mut self, n: i32): void;
+            pub const total := fn(&self): i32;
+        };
+        const Sum := struct { s: i32 };
+        impl Acc for Sum {
+            pub const add := fn(&mut self, n: i32): void { self.s = self.s + n; };
+            pub const total := fn(&self): i32 { return self.s; };
+        }
+        const fill := fn(a: &mut dyn Acc): void { a.add(20); a.add(22); };
+        pub const main := fn(): i32 {
+            var sum := Sum{ .s = 0 };
+            fill(&mut sum);
+            var view: &dyn Acc = &sum;
+            return view.total();
+        };
+    )") == 42);
+}
+
+TEST_CASE("a `&dyn I` default method calls a required method through the same vtable") {
+    CHECK(helpers::compile_and_run(R"(
+        const Countable := interface {
+            pub const count := fn(&self): i32;
+            pub const isEmpty := fn(&self): i32 { if (self.count() == 0) { return 1; } return 0; };
+        };
+        const Bag := struct { n: i32 };
+        impl Countable for Bag { pub const count := fn(&self): i32 { return self.n; }; }
+        const check := fn(c: &dyn Countable): i32 { return c.count() * 10 + c.isEmpty(); };
+        pub const main := fn(): i32 {
+            var b := Bag{ .n = 4 };
+            return check(&b) + 2;
+        };
+    )") == 42);
 }
 
 } // namespace ghoti::tests

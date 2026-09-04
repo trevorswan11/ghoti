@@ -126,6 +126,22 @@ auto symbol_scoping::build(const sema::context&          ctx,
         if (dep) { scan_module(st, *dep); }
     }
 
+    // Every `impl [I for] T` method is emitted under a name scoped to the impl's body table;
+    // register them so a name shared by two impls scopes.
+    for (const auto* rec : ctx.impls.records()) {
+        const auto note{[&](std::string_view name) {
+            name_counts[std::string{name}] += 1;
+            policy.scopable_defs_.emplace(key_of(rec->body_scope_idx, name));
+        }};
+        if (rec->interface_type) {
+            if (const auto it{rec->interface_type->get_data().as_opt<sema::types::interface_t>()}) {
+                for (const auto n : it->method_names) { note(n); }
+                continue;
+            }
+        }
+        for (const auto& m : rec->methods) { note(m.name); }
+    }
+
     for (const auto& [name, count] : name_counts) {
         if (count > 1 && !weak_names.contains(name)) { policy.collided_names_.emplace(name); }
     }

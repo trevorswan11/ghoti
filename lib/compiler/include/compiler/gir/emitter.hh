@@ -68,6 +68,7 @@ class emitter {
         stdx::option<std::string_view> capture_name;
         stdx::option<value>            arr_val{};
         stdx::option<sema::type&>      capture_type;
+        bool alias_capture{false}; // the capture was written `|&x|`/`|^x|`
     };
 
     struct scope_frame {

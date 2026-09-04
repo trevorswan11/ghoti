@@ -2718,7 +2718,8 @@ auto type_resolver::resolve_structural_access(type&                          obj
                              resolving_.ast.location_of(member));
     }
 
-    // `w.method(...)` on a `&dyn I` resolves against `I`'s method set
+    // `w.method(...)` on a `&dyn I` resolves against `I`'s method set, with associated types
+    // substituted for the `dyn I(Assoc = T)` bindings.
     if (const auto dyn{object_data.as_opt<types::dyn_t>()}) {
         const auto& iface{dyn->interface.get_data().as<types::interface_t>()};
         const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(member)};
@@ -2731,7 +2732,14 @@ auto type_resolver::resolve_structural_access(type&                          obj
                     error::SEALED_METHOD,
                     resolving_.ast.location_of(member));
             }
-            return iface.method_sigs[i];
+            type* sig{iface.method_sigs[i]};
+            for (usize k{0}; k < dyn->assoc_bindings.size() && k < iface.ast_assoc_types.size();
+                 ++k) {
+                if (!dyn->assoc_bindings[k]) { continue; }
+                auto& ph{assoc_type_placeholder((*iface.ast_assoc_types[k].name).get_index())};
+                sig = &remap_type(ctx_, *sig, ph, *dyn->assoc_bindings[k]);
+            }
+            return gsl::not_null<type*>{sig};
         }
         return make_sema_err(fmt::format("`dyn {}` has no method `{}`",
                                          ctx_.type_display_name(dyn->interface),
@@ -4636,7 +4644,10 @@ auto type_resolver::visit(ID id, const ast::interface_expr& iface) -> void {
                     error::TYPE_MISMATCH,
                     resolving_.ast.location_of(at.annotation)));
             }
-            resolving_.set_sema_type(at.name, annotation);
+            auto& placeholder{annotation.is_poison()
+                                  ? annotation
+                                  : assoc_type_placeholder((*at.name).get_index())};
+            resolving_.set_sema_type(at.name, placeholder);
             resolve_symbol_info(at.name, symbol_kind::TYPE);
             if (at.default_type) { TRY_RESOLVE(*at.default_type); }
         }
@@ -5304,6 +5315,17 @@ auto type_resolver::param_impl_sentinel(usize disc) -> type& {
     auto& s{*ctx_.pool[{type_kind::TYPE,
                         types::mut::CONSTANT,
                         std::string_view{"pimpl.sentinel"},
+                        static_cast<u64>(disc)}]};
+    if (!s.is_resolved()) { s.resolve<types::builtin_type>(); }
+    return s;
+}
+
+// A distinct opaque `type` standing in for one interface associated type inside its method
+// signatures, keyed on the assoc's name-node index so `&dyn I(Assoc = T)` can substitute `T`.
+auto type_resolver::assoc_type_placeholder(usize disc) -> type& {
+    auto& s{*ctx_.pool[{type_kind::TYPE,
+                        types::mut::CONSTANT,
+                        std::string_view{"iface.assoc"},
                         static_cast<u64>(disc)}]};
     if (!s.is_resolved()) { s.resolve<types::builtin_type>(); }
     return s;
@@ -6138,12 +6160,11 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type
         const auto& bname{resolving_.ast.get_as<ast::identifier_expr>(ab.name).name};
         const auto  slot{std::ranges::find(iface.assoc_type_names, bname)};
         if (slot == iface.assoc_type_names.end()) {
-            ctx_.diags.emplace_back(
-                fmt::format("`{}` has no associated type `{}`",
-                            ctx_.type_display_name(iface_type),
-                            bname),
-                error::DYN_UNBOUND_ASSOC,
-                resolving_.ast.location_of(ab.name));
+            ctx_.diags.emplace_back(fmt::format("`{}` has no associated type `{}`",
+                                                ctx_.type_display_name(iface_type),
+                                                bname),
+                                    error::DYN_UNBOUND_ASSOC,
+                                    resolving_.ast.location_of(ab.name));
             continue;
         }
         TRY_RESOLVE(ab.type);
@@ -6151,9 +6172,11 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type
             &denoted_type(*last_type_.take());
     }
 
-    // `dyn`-safety: every associated type must be pinned here or defaulted by the interface.
+    // `dyn`-safety: every associated type must be pinned here or defaulted; fill defaulted slots
+    // so `dyn_t.assoc_bindings` is complete for method-signature substitution.
     for (usize i{0}; i < iface.assoc_type_names.size(); ++i) {
-        if (!bindings[i] && !iface.ast_assoc_types[i].default_type) {
+        if (bindings[i]) { continue; }
+        if (!iface.ast_assoc_types[i].default_type) {
             return last_type_.emplace(ctx_.poison_node(
                 resolving_,
                 id,
@@ -6165,23 +6188,33 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type
                 error::DYN_UNBOUND_ASSOC,
                 resolving_.ast.location_of(id)));
         }
+        TRY_RESOLVE(*iface.ast_assoc_types[i].default_type);
+        bindings[i] = &denoted_type(*last_type_.take());
     }
 
-    // `dyn`-safety: no method may take `self` by value (it has no vtable slot).
+    // `dyn`-safety: a method must take `self` by `&`/`^` and must not mention `@this()` directly
+    const auto is_dyn_unsafe_slot{
+        [&](const type& t) { return t.get_kind() == type_kind::INTERFACE; }};
     for (usize i{0}; i < iface.method_names.size(); ++i) {
         const auto fn{iface.method_sigs[i]->get_data().as_opt<types::function>()};
-        if (fn && fn->has_self && !fn->params.empty()) {
-            const auto self_kind{fn->params[0]->get_kind()};
-            if (self_kind != type_kind::POINTER && self_kind != type_kind::REFERENCE) {
-                return last_type_.emplace(ctx_.poison_node(
-                    resolving_,
-                    id,
-                    fmt::format("`{}` is not `dyn`-safe: method `{}` takes `self` by value",
-                                ctx_.type_display_name(iface_type),
-                                iface.method_names[i]),
-                    error::DYN_BY_VALUE_SELF,
-                    resolving_.ast.location_of(id)));
-            }
+        if (!fn) { continue; }
+        bool unsafe{fn->has_self && !fn->params.empty() &&
+                    fn->params[0]->get_kind() != type_kind::POINTER &&
+                    fn->params[0]->get_kind() != type_kind::REFERENCE};
+        for (usize p{fn->has_self ? 1UZ : 0UZ}; !unsafe && p < fn->params.size(); ++p) {
+            unsafe = is_dyn_unsafe_slot(*fn->params[p]);
+        }
+        unsafe = unsafe || is_dyn_unsafe_slot(fn->return_type);
+        if (unsafe) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("`{}` is not `dyn`-safe: method `{}` passes `self`, `@this()`, or an "
+                            "unbound associated type by value",
+                            ctx_.type_display_name(iface_type),
+                            iface.method_names[i]),
+                error::DYN_BY_VALUE_SELF,
+                resolving_.ast.location_of(id)));
         }
     }
 

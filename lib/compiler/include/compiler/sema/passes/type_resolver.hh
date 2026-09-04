@@ -431,6 +431,8 @@ class type_resolver {
     // and the per-target expansion set live on the shared `impl_registry` so a monomorphization
     // triggered from any consuming module can find them.
     auto param_impl_sentinel(usize disc) -> type&;
+    // Opaque `type` placeholder for one interface associated type in its method signatures.
+    auto assoc_type_placeholder(usize disc) -> type&;
 
     impl_param_bound_map_t impl_param_bounds_;
     named_test_map_t       named_tests_;
