@@ -1,7 +1,7 @@
 id = "ghoti"
 name = "Ghoti"
 description = "Ghoti language support: syntax highlighting and the ghoti lsp language server."
-version = "0.2.0"
+version = "0.3.0"
 schema_version = 1
 authors = ["Trevor Swan"]
 repository = "https://github.com/trevorswan11/ghoti"
@@ -12,4 +12,4 @@ language = "Ghoti"
 
 [grammars.ghoti]
 repository = "https://github.com/trevorswan11/tree-sitter-ghoti"
-commit = "1c56db2d5165b6ceb63871a4b28a8a11576bf822"
+commit = "38fbb20b7470ff36576f2a8a691eeb0d2e46a387"
