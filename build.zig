@@ -260,6 +260,9 @@ fn addArtifacts(b: *std.Build, config: struct {
     const cli11 = b.dependency("cli11", .{});
     const cli11_inc = cli11.path("include");
 
+    const boost_int128 = b.dependency("boost_int128", .{});
+    const boost_int128_inc = boost_int128.path("include");
+
     const replxx_dep = replxx.build(b, .{
         .target = target,
         .optimize = config.optimize,
@@ -272,6 +275,7 @@ fn addArtifacts(b: *std.Build, config: struct {
             .target = target,
             .optimize = config.optimize,
             .include_paths = &.{b.path(ProjectPaths.support.inc)},
+            .system_include_paths = &.{boost_int128_inc},
             .cxx = .{
                 .files = try stdx.utils.collectFiles(b, ProjectPaths.support.src, .{}),
                 .flags = config.cxx_flags,
@@ -301,6 +305,7 @@ fn addArtifacts(b: *std.Build, config: struct {
 
     var compiler_system_includes: stdx.ArrayList(std.Build.LazyPath) = .fromSlice(b, llvm_includes.includes);
     compiler_system_includes.appendSlice(lld_includes.includes);
+    compiler_system_includes.append(boost_int128_inc);
     var compiler_config_headers: stdx.ArrayList(*std.Build.Step.ConfigHeader) = .fromSlice(b, llvm_includes.config_headers);
     compiler_config_headers.appendSlice(lld_includes.config_headers);
     compiler_config_headers.append(config_h);
@@ -341,7 +346,7 @@ fn addArtifacts(b: *std.Build, config: struct {
                 b.path(ProjectPaths.compiler.inc),
                 b.path(ProjectPaths.support.inc),
             },
-            .system_include_paths = &.{cli11_inc},
+            .system_include_paths = &.{ cli11_inc, boost_int128_inc },
             .config_headers = &.{config_h},
             .link_libraries = &.{ libcompiler, libstdx, replxx_dep.artifact },
             .cxx = .{
@@ -366,7 +371,7 @@ fn addArtifacts(b: *std.Build, config: struct {
             .files = &.{ProjectPaths.ghoti},
             .flags = config.cxx_flags,
         },
-        .system_include_paths = &.{cli11_inc},
+        .system_include_paths = &.{ cli11_inc, boost_int128_inc },
         .link_libraries = &.{ libdriver, libstdx, replxx_dep.artifact },
     }, .{
         .name = "ghoti",
@@ -398,7 +403,7 @@ fn addArtifacts(b: *std.Build, config: struct {
             },
             .link_libraries = &.{libsupport},
             .config_headers = &.{config_h},
-            .system_include_paths = &.{cli11_inc},
+            .system_include_paths = &.{ cli11_inc, boost_int128_inc },
             .executable_config = .{
                 .name = "support",
                 .behavior = config.behavior orelse .{
@@ -462,7 +467,7 @@ fn addArtifacts(b: *std.Build, config: struct {
             },
             .fail_on_leak = false,
             .config_headers = &.{config_h},
-            .system_include_paths = &.{cli11_inc},
+            .system_include_paths = &.{ cli11_inc, boost_int128_inc },
             .executable_config = .{
                 .name = "driver",
                 .behavior = config.behavior orelse .{

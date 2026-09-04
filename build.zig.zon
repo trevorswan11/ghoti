@@ -42,6 +42,10 @@
             .hash = "N-V-__8AAFo6FADbZ1JQ7LPdl743CwRi8TYtXnj_23IuzHTs",
             .lazy = true,
         },
+        .boost_int128 = .{
+            .url = "https://github.com/boostorg/int128/archive/refs/tags/v4.0.0.tar.gz",
+            .hash = "N-V-__8AACFt7ACusyHguEOqbrb--bHBJGb6-7NbqS8f3__r",
+        },
     },
     .paths = .{
         "ghoti",

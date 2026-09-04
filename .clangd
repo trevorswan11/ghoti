@@ -10,7 +10,7 @@ Diagnostics:
     Suppress: [static_non_static]
     MissingIncludes: Strict
     Includes:
-        IgnoreHeader: [".*__chrono/.*", "<chrono>"]
+        IgnoreHeader: [".*__chrono/.*", "<chrono>", ".*boost/.*"]
 
 Style:
     QuotedHeaders: ["lib/.*", "fuzz/.*"]
