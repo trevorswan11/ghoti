@@ -117,6 +117,14 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
         if (visited.insert(&builtin_mod).second) { imported_mods.emplace_back(&builtin_mod); }
     }
 
+    {
+        PROFILE_SCOPE("emitter: resolve deferred types in imported modules");
+        for (auto* m : imported_mods) {
+            const_eval evaluator{ctx_, *m};
+            evaluator.resolve_all_deferred_types();
+        }
+    }
+
     // With every participating module known, decide which same-named symbols must be qualified.
     symbol_scoping_ = symbol_scoping::build(ctx_, ast_module_, imported_mods);
     const_eval_.set_symbol_scoping(symbol_scoping_);

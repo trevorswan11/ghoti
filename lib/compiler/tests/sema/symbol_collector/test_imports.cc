@@ -41,10 +41,10 @@ TEST_CASE("Import aliases correctly used") {
 }
 
 TEST_CASE("Public import query") {
-    auto [ctx, idx]{
-        helpers::collect_and_check("pub import std;",
-                                   helpers::make_vector<mock_file>(mock_file{
-                                       .path = "std.gh", .source = "var a: i32;", .name = "std"}))};
+    auto [ctx, idx]{helpers::collect_and_check(
+        "pub import std;",
+        helpers::make_vector<mock_file>(
+            mock_file{.path = "std.gh", .source = "var a: i32 = undefined;", .name = "std"}))};
 
     auto&       table{UNWRAP(ctx->analyzer.get_table_opt(idx))};
     const auto& std_import{UNWRAP(table.get_opt("std"))};

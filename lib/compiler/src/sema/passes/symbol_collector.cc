@@ -686,13 +686,16 @@ auto symbol_collector::visit(ast::node_id id, const ast::import_stmt& import_stm
         auto& sym{ctx_.registry.get_from(table_idx_, alias)};
         sym.set_status(symbol_status::RESOLVED);
         sym.set_kind(symbol_kind::MODULE);
-    } else {
+    } else if (imported_mod) {
         ctx_.poison_symbol(ctx_.registry.get_from(table_idx_, alias),
                            fmt::format("Import '{}' failed to resolve because its file "
                                        "contains syntax errors",
                                        alias),
                            error::IMPORTED_MODULE_CONTAINS_ERRORS,
                            collecting_.ast.location_of(*import_stmt.payload));
+        ctx_.poison_node(collecting_, id);
+    } else {
+        ctx_.poison_symbol(ctx_.registry.get_from(table_idx_, alias));
         ctx_.poison_node(collecting_, id);
     }
 }
