@@ -182,6 +182,12 @@ auto options::analyze(sema::analyzer&      analyzer,
     if (module->is_poisoned() || module->is_errored()) {
         return stdx::err{clap::error::COMPILATION_FAILED};
     }
+    // A `-m`-registered library module (or a transitively-imported one) is parsed lazily and
+    // may fail independently of the entry module's own state
+    if (manager.any_errored()) {
+        manager.print_all_diagnostics(error_stream);
+        return stdx::err{clap::error::COMPILATION_FAILED};
+    }
     return module;
 }
 

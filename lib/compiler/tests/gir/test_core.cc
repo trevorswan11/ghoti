@@ -133,8 +133,8 @@ TEST_CASE("GIR function management and local ID allocation") {
 
     sema::arena_alloc arena;
     sema::type_pool   pool{arena};
-    auto&             i32_type{*pool[{sema::type_kind::I32, sema::types::mut::CONSTANT}]};
-    auto&             fn_type{*pool[{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT}]};
+    auto& i32_type{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
+    auto& fn_type{*pool[{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT}]};
 
     function fn{arena, "compute", fn_type};
     CHECK(fn.get_name() == "compute");
@@ -170,7 +170,9 @@ TEST_CASE("GIR module container and arena allocation") {
     auto [ctx, idx]{helpers::resolve_and_check("const a: i32 = 42;")};
     gir::module gir_mod{ctx->root_mod, ctx->analyzer.get_arena()};
 
-    auto& i32_type{*ctx->analyzer.get_pool()[{sema::type_kind::I32, sema::types::mut::CONSTANT}]};
+    auto& i32_type{
+        *ctx->analyzer
+             .get_pool()[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
     auto& fn_type{
         *ctx->analyzer.get_pool()[{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT}]};
 

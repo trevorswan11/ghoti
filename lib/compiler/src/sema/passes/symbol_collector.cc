@@ -89,15 +89,8 @@ auto symbol_collector::collect_symbols(mod::module& module, context& ctx) -> mod
     X(dot_expr)                 \
     X(implicit_access_expr)     \
     X(string_expr)              \
-    X(i32_expr)                 \
-    X(i64_expr)                 \
-    X(isize_expr)               \
-    X(u32_expr)                 \
-    X(u64_expr)                 \
-    X(usize_expr)               \
-    X(u8_expr)                  \
-    X(f32_expr)                 \
-    X(f64_expr)                 \
+    X(int_literal_expr)         \
+    X(float_literal_expr)       \
     X(bool_expr)                \
     X(void_expr)                \
     X(undefined_expr)           \

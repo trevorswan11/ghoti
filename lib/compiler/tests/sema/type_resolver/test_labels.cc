@@ -29,7 +29,7 @@ TEST_CASE("Labeled for loop resolution") {
     )")};
     CHECK(ctx->analyzer.get_registry().size() == 26);
 
-    const auto& i32_type{ctx->get_type(sema::type_kind::I32)};
+    const auto& i32_type{ctx->get_int_type(32, true)};
     const auto [a_sym, a_sym_data, a_type]{ctx->get_type_sym_info<syms::node_t>("a", idx)};
     CHECK(a_type == i32_type);
 
@@ -78,10 +78,10 @@ _ = blk: {
         const auto [_, data]{ctx->get_symbol<syms::label>("blk", idx + 1)};
         const auto yield_types{data.get_yield_types()};
         CHECK(yield_types.size() == 4);
-        CHECK(*yield_types[0] == ctx->get_type(sema::type_kind::I32));
+        CHECK(*yield_types[0] == ctx->get_type(sema::type_kind::CONSTEXPR_INT));
         CHECK(*yield_types[1] == ctx->get_type(sema::type_kind::BOOL));
         CHECK(*yield_types[2] ==
-              ctx->get_type(sema::type_kind::ARRAY, true, 4, ctx->get_type(sema::type_kind::U8)));
+              ctx->get_type(sema::type_kind::ARRAY, true, 4, ctx->get_int_type(8, false)));
         CHECK(*yield_types[3] == ctx->get_type(sema::type_kind::VOID_));
     }
 

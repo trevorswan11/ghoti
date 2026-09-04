@@ -72,7 +72,7 @@ TEST_CASE("Implicit numeric widening conversions") {
             const val_i64: i64 = val_i32;
             const val_isize: isize = val_i32;
 
-            const val_f32: f32 = 3.14f;
+            const val_f32: f32 = 3.14f32;
             const val_f64: f64 = val_f32;
         };
     )");

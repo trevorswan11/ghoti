@@ -18,23 +18,21 @@ namespace ghoti::codegen {
 auto type_translator::translate(const sema::type& type) -> llvm::Type* {
     PROFILE_FUNCTION();
     switch (type.get_kind()) {
-    case sema::type_kind::I32:
-    case sema::type_kind::U32:       return get_int32_ty();
-    case sema::type_kind::I64:
-    case sema::type_kind::U64:       return get_int64_ty();
+    case sema::type_kind::INT:             return llvm::IntegerType::get(context_, sema::int_width(type));
     case sema::type_kind::ISIZE:
-    case sema::type_kind::USIZE:     return get_usize_ty();
-    case sema::type_kind::I8:
-    case sema::type_kind::U8:        return get_int8_ty();
-    case sema::type_kind::I16:
-    case sema::type_kind::U16:       return get_int16_ty();
-    case sema::type_kind::BOOL:      return get_int1_ty();
-    case sema::type_kind::F32:       return get_float_ty();
-    case sema::type_kind::F64:       return get_double_ty();
+    case sema::type_kind::USIZE:           return get_usize_ty();
+    case sema::type_kind::BOOL:            return get_int1_ty();
+    case sema::type_kind::F16:             return llvm::Type::getHalfTy(context_);
+    case sema::type_kind::F32:             return get_float_ty();
+    case sema::type_kind::F64:             return get_double_ty();
+    case sema::type_kind::F80:             return llvm::Type::getX86_FP80Ty(context_);
+    case sema::type_kind::F128:            return llvm::Type::getFP128Ty(context_);
+    case sema::type_kind::CONSTEXPR_INT:   return get_int32_ty();
+    case sema::type_kind::CONSTEXPR_FLOAT: return get_double_ty();
     case sema::type_kind::VOID_:
-    case sema::type_kind::NORETURN:  return get_void_ty();
+    case sema::type_kind::NORETURN:        return get_void_ty();
     case sema::type_kind::POINTER:
-    case sema::type_kind::REFERENCE: {
+    case sema::type_kind::REFERENCE:       {
         // `&dyn I` / `^dyn I` is a fat pointer: `{ data: ptr, vtable: ptr }`.
         const auto        p{type.get_data().as_opt<sema::types::pointer>()};
         const auto        r{type.get_data().as_opt<sema::types::reference>()};
@@ -152,6 +150,16 @@ auto type_translator::translate_struct(const sema::types::struct_t& s, const sem
         return it->second;
     }
 
+    // A bit-packed `packed struct` is a bare backing integer, not an aggregate.
+    if (s.is_bit_packed()) {
+        const auto bits{
+            sema::packed_backing_bits(s, module_.getDataLayout().getPointerSizeInBits())};
+        ASSERT(bits, "a bit-packed struct must have an eligible, in-range layout");
+        auto* int_ty{llvm::IntegerType::get(context_, *bits)};
+        struct_cache_[&original] = int_ty;
+        return int_ty;
+    }
+
     auto* struct_ty{llvm::StructType::create(context_)};
     struct_cache_[&original] = struct_ty;
 
@@ -170,6 +178,16 @@ auto type_translator::translate_union(const sema::types::union_t& u, const sema:
     }
 
     const auto& dl{module_.getDataLayout()};
+
+    // A bit-packed `packed union` is a bare backing integer wide enough for its largest field.
+    if (u.is_bit_packed()) {
+        const auto bits{sema::packed_union_backing_bits(u, dl.getPointerSizeInBits())};
+        ASSERT(bits, "a bit-packed union must have an eligible, in-range layout");
+        auto* int_ty{llvm::IntegerType::get(context_, *bits)};
+        union_cache_[&original] = int_ty;
+        return int_ty;
+    }
+
     if (u.is_untagged) {
         u64 max_size{0};
         for (const auto* field : u.fields) {

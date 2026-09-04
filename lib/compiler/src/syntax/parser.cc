@@ -253,9 +253,8 @@ constexpr auto PREFIX_FNS = [] -> auto {
     stdx::fixed::enum_map<token_type_t, parser::prefix_fn> fns;
 
     fns[token_type_t::IDENT]            = ast::identifier_expr::parse;
-    fns[token_type_t::U8]               = ast::u8_expr::parse;
-    fns[token_type_t::F32]              = ast::f32_expr::parse;
-    fns[token_type_t::F64]              = ast::f64_expr::parse;
+    fns[token_type_t::U8]               = ast::int_literal_expr::parse;
+    fns[token_type_t::REAL]             = ast::float_literal_expr::parse;
     fns[token_type_t::BANG]             = ast::unary_expr::parse;
     fns[token_type_t::NOT]              = ast::unary_expr::parse;
     fns[token_type_t::MINUS]            = ast::unary_expr::parse;
@@ -295,16 +294,8 @@ constexpr auto PREFIX_FNS = [] -> auto {
     fns[token_type_t::DO]               = ast::do_while_loop_expr::parse;
     fns[token_type_t::LOOP]             = ast::infinite_loop_expr::parse;
 
-    for (const auto tt : stdx::enum_range<token_type_t::INT_2, token_type_t::UZINT_16>()) {
-        using token_type::integer_category;
-        switch (token_type::to_int_category(tt)) {
-        case integer_category::SIGNED_BASE:   fns[tt] = ast::i32_expr::parse; break;
-        case integer_category::SIGNED_WIDE:   fns[tt] = ast::i64_expr::parse; break;
-        case integer_category::SIGNED_SIZE:   fns[tt] = ast::isize_expr::parse; break;
-        case integer_category::UNSIGNED_BASE: fns[tt] = ast::u32_expr::parse; break;
-        case integer_category::UNSIGNED_WIDE: fns[tt] = ast::u64_expr::parse; break;
-        case integer_category::UNSIGNED_SIZE: fns[tt] = ast::usize_expr::parse; break;
-        }
+    for (const auto tt : stdx::enum_range<token_type_t::INT_2, token_type_t::INT_16>()) {
+        fns[tt] = ast::int_literal_expr::parse;
     }
 
     for (const auto tt : ALL_PRIMITIVES) { fns[tt] = ast::identifier_expr::parse; }

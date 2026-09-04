@@ -55,7 +55,7 @@ TEST_CASE("a binary_expr's span starts at its lhs, not its operator") {
     REQUIRE(decl.value);
     const auto& bin{ast.get_as<ast::binary_expr>(*decl.value)};
     const auto& start{ast.location_of(*decl.value)};
-    CHECK(bin.rhs.is<ast::i32_expr>());
+    CHECK(bin.rhs.is<ast::int_literal_expr>());
 
     CHECK(start.line == 0);
     CHECK(start.column == 11);

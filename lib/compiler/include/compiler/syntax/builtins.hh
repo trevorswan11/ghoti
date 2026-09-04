@@ -30,6 +30,7 @@ constexpr builtin_t FIELD_PARENT_PTR{"@fieldParentPtr", token_type_t::BUILTIN_FI
 
 constexpr builtin_t ALIGN_OF{"@alignOf", token_type_t::BUILTIN_ALIGN_OF};
 constexpr builtin_t SIZE_OF{"@sizeOf", token_type_t::BUILTIN_SIZE_OF};
+constexpr builtin_t BIT_SIZE_OF{"@bitSizeOf", token_type_t::BUILTIN_BIT_SIZE_OF};
 constexpr builtin_t TYPE_OF{"@typeOf", token_type_t::BUILTIN_TYPE_OF};
 constexpr builtin_t THIS{"@this", token_type_t::BUILTIN_THIS};
 constexpr builtin_t TAG_NAME{"@tagName", token_type_t::BUILTIN_TAG_NAME};
@@ -119,6 +120,7 @@ constexpr std::array ALL_BUILTINS{
     builtins::FIELD_PARENT_PTR,
     builtins::ALIGN_OF,
     builtins::SIZE_OF,
+    builtins::BIT_SIZE_OF,
     builtins::TYPE_OF,
     builtins::THIS,
     builtins::TAG_NAME,

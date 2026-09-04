@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-A hand-crafted systems programming language.
+A compiled systems language combining modern, dual-mode polymorphism with transparent low-level control
 <br/>
 <a href="https://github.com/trevorswan11/ghoti/issues/new?labels=bug&template=bug-report.md">Report Bug</a>
 &middot;
@@ -18,12 +18,12 @@ Ghoti is a compiled systems language powered by LLVM, C++, and Zig. It attempts 
 
 ### Why Ghoti?
 
-- Procedural & structural
 - Low-level with transparent memory layout
 - Manually manged memory
 - Immutability by default
-- Sophisticated `constexpr` evaluation with first-class types
+- Compile-time evaluation: Sophisticated `constexpr` evaluation with first-class types
 - Clear Semantics: No overloading, variable shadowing, or macros
+- Flexible polymorphism: Choose between zero-cost static dispatch via `impl` monomorphization or explicit dynamic dispatch using fat-pointer `dyn`
 
 ### What's With the Name?
 
@@ -56,8 +56,6 @@ Many build functions heavily reference [allyourcodebase](https://github.com/ally
 - Learn for the sake of learning
 - Experiment freely
 - KISS & DRY
-
-Development speed is _not_ and _will never be_ a core principle of ghoti.
 
 ### Hello, World!
 ```ghoti

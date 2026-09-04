@@ -142,6 +142,7 @@ auto lexer::lu_builtin(std::string_view ident) noexcept -> token_type_t {
 }
 
 auto lexer::lu_ident(std::string_view ident) noexcept -> token_type_t {
+    if (token_type::is_int_type_lexeme(ident)) { return token_type_t::INT_TYPE; }
     return get_keyword_opt(ident).value_or(token_type_t::IDENT);
 }
 
@@ -213,29 +214,6 @@ auto lexer::read_ident(bool builtin) noexcept -> std::string_view {
 
     return stdx::string::substr(input_, start, pos_ - start);
 }
-
-enum class number_suffix : u8 {
-    UNSIGNED = 1 << 0,
-    WIDE     = 1 << 1,
-    SIZE     = 2 << 2,
-};
-
-namespace {
-
-constexpr auto operator|=(number_suffix& lhs, number_suffix rhs) noexcept -> number_suffix& {
-    lhs = static_cast<number_suffix>(std::to_underlying(lhs) | std::to_underlying(rhs));
-    return lhs;
-}
-
-constexpr auto operator&(number_suffix lhs, number_suffix rhs) noexcept -> number_suffix {
-    return static_cast<number_suffix>(std::to_underlying(lhs) & std::to_underlying(rhs));
-}
-
-constexpr auto suffix_has(number_suffix suffix, number_suffix flag) noexcept -> bool {
-    return static_cast<bool>(suffix & flag);
-}
-
-} // namespace
 
 auto lexer::read_number() noexcept -> token_t {
     const auto start{pos_};
@@ -330,75 +308,55 @@ auto lexer::read_number() noexcept -> token_t {
                 start_col};
     }
 
-    number_suffix suffix{};
-    auto          forced_float{false};
+    // Consume for diagnostics, the parser validates the exact grammar
+    const auto suffix_start{pos_};
     if (pos_ < input_.size()) {
-        auto c{current_byte_};
-        if (c == 'f' || c == 'F') {
-            forced_float = true;
-            read_character();
-        } else if (!(passed_decimal || passed_exponent)) {
-            if (c == 'u' || c == 'U') {
-                suffix |= number_suffix::UNSIGNED;
+        switch (current_byte_) {
+        case 'u':
+        case 'U':
+        case 'i':
+        case 'I':
+        case 'z':
+        case 'Z':
+        case 'l':
+        case 'L':
+        case 'f':
+        case 'F':
+            while (pos_ < input_.size() &&
+                   (std::isalpha(static_cast<u8>(current_byte_)) ||
+                    (pos_ > suffix_start && std::isdigit(static_cast<u8>(current_byte_))))) {
                 read_character();
             }
-
-            c = current_byte_;
-            if (c == 'z' || c == 'Z') {
-                suffix |= number_suffix::SIZE;
-                read_character();
-            } else if (c == 'l' || c == 'L') {
-                suffix |= number_suffix::WIDE;
-                read_character();
-            }
+            break;
+        default: break;
         }
     }
+    const auto suffix{stdx::string::substr(input_, suffix_start, pos_ - suffix_start)};
 
-    // Total validation
     const auto length{pos_ - start};
-    auto       type{token_type_t::ILLEGAL};
+    const auto lexeme{stdx::string::substr(input_, start, length)};
     if (length == 0) {
-        return {type, stdx::string::substr(input_, start, 1), start_line, start_col};
+        return {
+            token_type_t::ILLEGAL, stdx::string::substr(input_, start, 1), start_line, start_col};
     }
 
-    if (input_[pos_ - 1] == '.') {
-        return {type, stdx::string::substr(input_, start, length), start_line, start_col};
+    // A trailing bare '.' or a fractional non-decimal literal is malformed.
+    if (input_[pos_ - 1] == '.' || (passed_decimal && base != numeric_base::DECIMAL)) {
+        return {token_type_t::ILLEGAL, lexeme, start_line, start_col};
     }
 
-    if (passed_decimal && (base != numeric_base::DECIMAL)) {
-        return {type, stdx::string::substr(input_, start, length), start_line, start_col};
-    }
-
-    // Determine the input type
-    if (passed_decimal || passed_exponent || forced_float) {
+    const bool has_float_suffix{!suffix.empty() &&
+                                (suffix.front() == 'f' || suffix.front() == 'F')};
+    if (passed_decimal || passed_exponent || has_float_suffix) {
         if (base != numeric_base::DECIMAL) {
-            return {type, stdx::string::substr(input_, start, length), start_line, start_col};
+            return {token_type_t::ILLEGAL, lexeme, start_line, start_col};
         }
-        type = forced_float ? token_type_t::F32 : token_type_t::F64;
-    } else {
-        // Use an offset to increment the actual token type based on its base and width
-        auto offset{base_idx(base)};
-        if (std::to_underlying(suffix) == 0) {
-            type = token_type_t::INT_2;
-        } else {
-            if (suffix_has(suffix, number_suffix::WIDE)) {
-                type = token_type_t::LINT_2;
-            } else if (suffix_has(suffix, number_suffix::SIZE)) {
-                type = token_type_t::ZINT_2;
-            } else {
-                type = token_type_t::INT_2;
-            }
-
-            // We can just bump the offset for unsigned
-            if (suffix_has(suffix, number_suffix::UNSIGNED)) {
-                offset += std::to_underlying(token_type_t::UINT_2) -
-                          std::to_underlying(token_type_t::INT_2);
-            }
-        }
-        type = static_cast<token_type_t>(std::to_underlying(type) + offset);
+        return {token_type_t::REAL, lexeme, start_line, start_col};
     }
 
-    return {type, stdx::string::substr(input_, start, length), start_line, start_col};
+    const auto type{
+        static_cast<token_type_t>(std::to_underlying(token_type_t::INT_2) + base_idx(base))};
+    return {type, lexeme, start_line, start_col};
 }
 
 auto lexer::read_escape() noexcept -> char {

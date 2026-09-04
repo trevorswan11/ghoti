@@ -391,6 +391,7 @@ auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
 auto formatter::format_union(const union_expr& node) -> syntax::doc_id {
     std::vector<syntax::doc_id> head;
     if (node.is_extern) { head.emplace_back(doc_manager_.text("extern ")); }
+    if (node.is_packed) { head.emplace_back(doc_manager_.text("packed ")); }
     head.emplace_back(doc_manager_.text("union "));
 
     const auto field_item{[&](const union_expr::field& field) -> syntax::doc_id {
@@ -1020,15 +1021,8 @@ auto formatter::visit(node_id, const implicit_access_expr& node) -> syntax::doc_
     }
 
 MAKE_VERBATIM_FORMAT(string_expr, node.spelling)
-MAKE_VERBATIM_FORMAT(i32_expr, node.spelling)
-MAKE_VERBATIM_FORMAT(i64_expr, node.spelling)
-MAKE_VERBATIM_FORMAT(isize_expr, node.spelling)
-MAKE_VERBATIM_FORMAT(u32_expr, node.spelling)
-MAKE_VERBATIM_FORMAT(u64_expr, node.spelling)
-MAKE_VERBATIM_FORMAT(usize_expr, node.spelling)
-MAKE_VERBATIM_FORMAT(u8_expr, node.spelling)
-MAKE_VERBATIM_FORMAT(f32_expr, node.spelling)
-MAKE_VERBATIM_FORMAT(f64_expr, node.spelling)
+MAKE_VERBATIM_FORMAT(int_literal_expr, node.spelling)
+MAKE_VERBATIM_FORMAT(float_literal_expr, node.spelling)
 MAKE_VERBATIM_FORMAT(bool_expr,
                      id.get_token_type() == syntax::token_type_t::BOOLEAN_TRUE ? "true" : "false")
 MAKE_VERBATIM_FORMAT(void_expr, "{}")

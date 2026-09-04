@@ -90,7 +90,7 @@ TEST_CASE("Full sema pipeline") {
         CHECK(main_type_data.params.size() == 1);
 
         // Verify the parameter type
-        const auto& u8_type{ctx->get_type(sema::type_kind::U8)};
+        const auto& u8_type{ctx->get_int_type(8, false)};
         const auto& u8_slice_type{ctx->get_type(sema::type_kind::SLICE, true, u8_type)};
         const auto& u8_slice_slice_type =
             ctx->get_type(sema::type_kind::SLICE, false, u8_slice_type);
@@ -112,7 +112,7 @@ TEST_CASE("Full sema pipeline") {
         // Verify the return type
         {
             const auto& return_type{main_type_data.return_type};
-            CHECK(return_type == ctx->get_type(sema::type_kind::I32));
+            CHECK(return_type == ctx->get_int_type(32, true));
         }
 
         // Verify the function body
@@ -167,7 +167,7 @@ TEST_CASE("Full sema pipeline") {
 
         // Verify the parameter type
         const auto& u8_slice_type =
-            ctx->get_type(sema::type_kind::SLICE, false, ctx->get_type(sema::type_kind::U8));
+            ctx->get_type(sema::type_kind::SLICE, false, ctx->get_int_type(8, false));
 
         // Verify the parameter type & symbol
         {

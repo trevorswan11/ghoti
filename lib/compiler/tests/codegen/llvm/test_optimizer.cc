@@ -31,10 +31,10 @@ TEST_CASE("Optimizer over non trivial function at all levels") {
             auto [ctx, idx]{helpers::resolve_and_check(R"(
                 pub const calc := fn(a: i64, b: i64): i64 {
                     var sum: i64 = a;
-                    var i: i64 = 0l;
+                    var i: i64 = 0i64;
                     while (i < b) {
                         sum = sum + i;
-                        i = i + 1l;
+                        i = i + 1i64;
                     };
                     return sum;
                 };
@@ -59,8 +59,8 @@ TEST_CASE("Optimizing, folding, and propagating constants") {
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         pub const fold_me := fn(x: i64): i64 {
-            var a: i64 = x * 0l;
-            var b: i64 = a + 42l;
+            var a: i64 = x * 0i64;
+            var b: i64 = a + 42i64;
             return b;
         };
     )")};
@@ -140,7 +140,7 @@ TEST_CASE("Dead code elimination") {
     // Unsigned arithmetic wraps and carries no runtime safety check
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         pub const dead_calc := fn(a: u64): u64 {
-            var unused: u64 = a * 100ul + 42ul;
+            var unused: u64 = a * 100u64 + 42u64;
             return a;
         };
     )")};
@@ -161,7 +161,7 @@ TEST_CASE("Function inlining") {
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const helper := fn(x: u64): u64 {
-            return x * 2ul;
+            return x * 2u64;
         };
 
         pub const caller := fn(a: u64): u64 {

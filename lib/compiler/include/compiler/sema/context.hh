@@ -96,6 +96,12 @@ struct context {
     // Gets the already-resolved poison type from the pool
     [[nodiscard]] auto get_poison() -> type&;
 
+    // Pools and resolves the arbitrary-width integer type `iN` / `uN`
+    [[nodiscard]] auto get_int(u16                              bits,
+                               bool                             is_signed,
+                               types::mut::mutability_modifiers mutability = types::mut::CONSTANT)
+        -> type&;
+
     // Calls resolve_if on the resulting type
     [[nodiscard]] auto get_pointer(types::mut::mutability_modifiers mutability, type& underlying)
         -> type&;

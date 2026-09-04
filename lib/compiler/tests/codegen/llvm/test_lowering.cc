@@ -24,11 +24,11 @@ TEST_CASE("E2E LLVM Emission: Arithmetic, Loops and Multi-Function Calls") {
         };
 
         pub const compute := fn(n: i64): i64 {
-            var sum: i64 = 0l;
-            var i: i64 = 1l;
+            var sum: i64 = 0i64;
+            var i: i64 = 1i64;
             while (i <= n) {
                 sum = add(sum, i);
-                i = i + 1l;
+                i = i + 1i64;
             };
             return sum;
         };

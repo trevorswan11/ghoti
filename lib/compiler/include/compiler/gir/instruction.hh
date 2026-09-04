@@ -20,6 +20,7 @@
 
 #include "compiler/sema/type.hh"
 #include "support/diagnostic.hh"
+#include "support/int128.hh"
 
 namespace ghoti::gir {
 
@@ -164,6 +165,8 @@ struct value {
     using data_t = stdx::variant<local_id,
                                  i64,
                                  u64,
+                                 i128,
+                                 u128,
                                  f64,
                                  bool,
                                  std::string,

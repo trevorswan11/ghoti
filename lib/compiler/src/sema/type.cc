@@ -1,5 +1,6 @@
 #include "compiler/sema/type.hh"
 
+#include <algorithm>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -10,11 +11,14 @@
 #include <gsl/pointers>
 #include <gsl/span>
 #include <magic_enum/magic_enum.hpp>
+#include <stdx/assert.hh>
 #include <stdx/enum.hh>
 #include <stdx/fixed/enum_map.hh>
+#include <stdx/option.hh>
 #include <stdx/types.hh>
 
 #include "compiler/module/module.hh"
+#include "support/int128.hh"
 #include "support/string_utils.hh"
 
 namespace ghoti::sema {
@@ -61,7 +65,189 @@ auto type_kind_display_name(type_kind kind) noexcept -> std::string_view {
     return TYPE_KIND_NAMES[kind];
 }
 
+auto type_kind_display_name(const type& t) -> std::string {
+    if (const auto info{as_integer(t)}) {
+        return fmt::format("{}{}", info->is_signed ? 'i' : 'u', info->bits);
+    }
+    return std::string{type_kind_display_name(t.get_kind())};
+}
+
+auto as_integer(const type& t) noexcept -> stdx::option<types::integer> {
+    if (t.get_kind() != type_kind::INT) { return stdx::none; }
+    if (const auto info{t.get_data().as_opt<types::integer>()}) { return *info; }
+    // Unresolved pooled twin: recover identity from the key's mirrored fields.
+    return types::integer{t.get_key().get_int_bits(), t.get_key().get_int_signed()};
+}
+
+auto int_width(const type& t) noexcept -> u16 {
+    const auto info{as_integer(t)};
+    ASSERT(info, "int_width requires an INT type");
+    return info->bits;
+}
+
+auto is_i32(const type& t) noexcept -> bool {
+    const auto info{as_integer(t)};
+    return info && info->bits == 32 && info->is_signed;
+}
+
+auto constexpr_int_fits(i128 value, const type& target, u32 ptr_bits) noexcept -> bool {
+    u16  bits{0};
+    bool is_signed{false};
+    switch (target.get_kind()) {
+    case type_kind::INT: {
+        const auto info{as_integer(target)};
+        if (!info) { return true; }
+        bits      = info->bits;
+        is_signed = info->is_signed;
+        break;
+    }
+    case type_kind::ISIZE:
+        bits      = static_cast<u16>(ptr_bits);
+        is_signed = true;
+        break;
+    case type_kind::USIZE: bits = static_cast<u16>(ptr_bits); break;
+    default:               return true; // not a concrete integer target
+    }
+    if (bits == 0) { return false; }
+    if (bits >= 128) { return true; }
+
+    if (is_signed) {
+        const i128 max{(i128{1} << (bits - 1)) - 1};
+        const i128 min{-(i128{1} << (bits - 1))};
+        return value >= min && value <= max;
+    }
+    if (value < 0) { return false; }
+    const u128 umax{bits >= 128 ? ~u128{0} : ((u128{1} << bits) - 1)};
+    return static_cast<u128>(value) <= umax;
+}
+
+auto packed_field_bits(const type& t, u32 ptr_bits) noexcept -> stdx::option<u32> {
+    switch (t.get_kind()) {
+    case type_kind::INT:       return int_width(t);
+    case type_kind::BOOL:      return 1U;
+    case type_kind::ISIZE:
+    case type_kind::USIZE:
+    case type_kind::POINTER:
+    case type_kind::REFERENCE: return ptr_bits;
+    case type_kind::F16:
+    case type_kind::F32:
+    case type_kind::F64:
+    case type_kind::F80:
+    case type_kind::F128:      return float_bits(t.get_kind());
+    case type_kind::ENUM:
+        if (const auto e{t.get_data().as_opt<types::enum_t>()}) {
+            return packed_field_bits(e->underlying, ptr_bits);
+        }
+        return stdx::none;
+    case type_kind::STRUCT:
+        if (const auto st{t.get_data().as_opt<types::struct_t>()}; st && st->is_bit_packed()) {
+            return packed_backing_bits(*st, ptr_bits);
+        }
+        return stdx::none;
+    case type_kind::UNION:
+        if (const auto ut{t.get_data().as_opt<types::union_t>()}; ut && ut->is_bit_packed()) {
+            return packed_union_backing_bits(*ut, ptr_bits);
+        }
+        return stdx::none;
+    case type_kind::ARRAY:
+        if (const auto arr{t.get_data().as_opt<types::array>()}) {
+            if (const auto elem{packed_field_bits(arr->underlying, ptr_bits)}) {
+                const u64 total{static_cast<u64>(*elem) * arr->len};
+                if (total <= 65'535) { return static_cast<u32>(total); }
+            }
+        }
+        return stdx::none;
+    default: return stdx::none;
+    }
+}
+
+auto packed_backing_bits(const types::struct_t& s, u32 ptr_bits) noexcept -> stdx::option<u32> {
+    u64 total{0};
+    for (const auto* field : s.fields) {
+        if (!field) { continue; }
+        const auto bits{packed_field_bits(*field, ptr_bits)};
+        if (!bits) { return stdx::none; }
+        total += *bits;
+    }
+    if (total < 1 || total > 65'535) { return stdx::none; }
+    return static_cast<u32>(total);
+}
+
+auto packed_field_offset(const types::struct_t& s, usize idx, u32 ptr_bits) noexcept -> u32 {
+    u64 offset{0};
+    for (usize i{0}; i < idx && i < s.fields.size(); ++i) {
+        if (s.fields[i] != nullptr) {
+            offset += packed_field_bits(*s.fields[i], ptr_bits).value_or(0);
+        }
+    }
+    return static_cast<u32>(offset);
+}
+
+auto packed_union_backing_bits(const types::union_t& u, u32 ptr_bits) noexcept
+    -> stdx::option<u32> {
+    u64 widest{0};
+    for (const auto* field : u.fields) {
+        if (!field) { continue; }
+        const auto bits{packed_field_bits(*field, ptr_bits)};
+        if (!bits) { return stdx::none; }
+        widest = std::max<u64>(widest, *bits);
+    }
+    if (widest < 1 || widest > 65'535) { return stdx::none; }
+    return static_cast<u32>(widest);
+}
+
+auto is_signed_integer(const type& t) noexcept -> bool {
+    if (const auto info{as_integer(t)}) { return info->is_signed; }
+    return t.get_kind() == type_kind::ISIZE;
+}
+
+auto is_unsigned_integer(const type& t) noexcept -> bool {
+    if (const auto info{as_integer(t)}) { return !info->is_signed; }
+    return t.get_kind() == type_kind::USIZE;
+}
+
+auto is_implicit_widenable(const type& from, const type& to) noexcept -> bool {
+    const auto from_kind{from.get_kind()};
+    const auto to_kind{to.get_kind()};
+
+    // An unsuffixed integer literal coerces to any concrete integer or float
+    if (from_kind == type_kind::CONSTEXPR_INT) { return is_numeric(to_kind); }
+    if (from_kind == type_kind::CONSTEXPR_FLOAT) {
+        return is_float(to_kind) || to_kind == type_kind::CONSTEXPR_FLOAT;
+    }
+    // A concrete numeric also flows into a `constexpr_*` slot
+    if (to_kind == type_kind::CONSTEXPR_INT) { return is_integer(from_kind); }
+    if (to_kind == type_kind::CONSTEXPR_FLOAT) {
+        return is_float(from_kind) || is_integer(from_kind);
+    }
+
+    // A float widens to any wider float (`f16 -> f32 -> f64 -> f80 -> f128`).
+    if (is_float(from_kind)) {
+        return is_float(to_kind) && float_bits(from_kind) < float_bits(to_kind);
+    }
+
+    const auto from_int{as_integer(from)};
+    if (!from_int) { return false; }
+
+    // Narrow integers widen into the same-signedness pointer-sized type, mirroring the
+    // pre-unification pair table (`i8..i32 -> isize`, `u8..u32 -> usize`).
+    if (to_kind == type_kind::ISIZE) { return from_int->is_signed && from_int->bits < 64; }
+    if (to_kind == type_kind::USIZE) { return !from_int->is_signed && from_int->bits < 64; }
+
+    const auto to_int{as_integer(to)};
+    if (!to_int) { return false; }
+    if (to_int->bits <= from_int->bits) { return false; }
+    if (from_int->is_signed) { return to_int->is_signed; }
+    return true; // uW widens to any wider iV or uV
+}
+
 auto type::to_string() const -> std::string {
+    // An INT's width lives on the key, so it stringifies even before the payload is resolved.
+    if (get_kind() == type_kind::INT) {
+        const auto info{as_integer(*this)};
+        return fmt::format(
+            "{}{}{}", leaf_qualifier(*this), info->is_signed ? 'i' : 'u', info->bits);
+    }
     return data_.visit(
         [this](types::pointer ptr) {
             return fmt::format("^{}{}", container_qualifier(*this), ptr.underlying.to_string());
@@ -162,6 +348,7 @@ auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {
 
     const auto kind{a.get_kind()};
     switch (kind) {
+    case type_kind::INT:       return as_integer(a) == as_integer(b);
     case type_kind::BOOL:
     case type_kind::VOID_:
     case type_kind::UNDEFINED:
@@ -232,7 +419,7 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
     // nullptr is assignable to any pointer type, but never to a reference
     if (src.get_kind() == type_kind::NULLPTR) { return dest.get_kind() == type_kind::POINTER; }
 
-    if (is_implicit_widenable(src.get_kind(), dest.get_kind())) { return true; }
+    if (is_implicit_widenable(src, dest)) { return true; }
     const auto src_kind{src.get_kind()};
     const auto dest_kind{dest.get_kind()};
 

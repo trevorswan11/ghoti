@@ -36,61 +36,93 @@ templ InternalsLiteralsPage() {
 	<p>In all of these cases, the underscore has no impact on the resulting value of the numeric literal. Internally, the underscores are stripped out before constexpr evaluation and code generation.</p>
 	<p>It is recommended to use underscores in numbers when there is a logical grouping of digits for your use case. They are implemented in such a way that there is a high amount of freedom for the programmer to convey the most meaning with their code.</p>
 	<h3>Trailing Numeric Literals</h3>
-	<p>To designate the true type of a numeric literal, you may use the following suffixes that were also discussed in the <a href="/doc/syntax/types">type</a> documentation.</p>
+	<p>To pin the exact type of a numeric literal, you may use the following suffixes. They are also discussed in the <a href="/doc/syntax/types">type</a> documentation.</p>
+	<p>An <em>unsuffixed</em> integer literal has type <a href="/doc/syntax/types"><code>constexpr_int</code></a>: it is compile-time known, coerces to any concrete numeric type it fits (integer <em>or</em> float), and folds at 128-bit precision. An unsuffixed real literal is likewise <code>constexpr_float</code> and coerces to any concrete float. A suffix removes that flexibility and fixes the type outright.</p>
+	<ul>
+		<li>A <code>constexpr_int</code> whose folded value does not fit its concrete integer target is a compile error (no silent wrap); a leading <code>-</code> can still bring <code>-(2<sup>N-1</sup>)</code> into range.</li>
+		<li>An un-anchored <code>constexpr_int</code> / <code>constexpr_float</code> materializes as <code>i32</code> / <code>f64</code> at a <code>var</code> binding, a generic / <code>auto</code> parameter, an inferred return type, a struct field, or any runtime use. An un-annotated <code>const</code> keeps the constexpr type, so <code>const k := 5;</code> can still coerce to <code>u64</code> later.</li>
+	</ul>
 	<h4>Integer Suffixes</h4>
 	<table>
 		<thead>
 			<tr>
 				<th>Suffix</th>
 				<th>Type</th>
+				<th>Example</th>
 			</tr>
 		</thead>
 		<tbody>
 			<tr>
 				<td>None</td>
-				<td><code>i32</code></td>
+				<td><code>constexpr_int</code> (materializes as <code>i32</code>)</td>
+				<td><code>42</code></td>
 			</tr>
 			<tr>
-				<td><code>l</code></td>
-				<td><code>i64</code></td>
+				<td><code>i&lt;W&gt;</code></td>
+				<td><code>iW</code>: a signed integer exactly <code>W</code> bits wide (1-65535)</td>
+				<td><code>1i9</code>, <code>-3i128</code></td>
+			</tr>
+			<tr>
+				<td><code>u&lt;W&gt;</code></td>
+				<td><code>uW</code>: an unsigned integer exactly <code>W</code> bits wide (1-65535)</td>
+				<td><code>7u8</code>, <code>255u65535</code></td>
 			</tr>
 			<tr>
 				<td><code>z</code></td>
 				<td><code>isize</code></td>
-			</tr>
-			<tr>
-				<td><code>u</code></td>
-				<td><code>u32</code></td>
-			</tr>
-			<tr>
-				<td><code>ul</code></td>
-				<td><code>u64</code></td>
+				<td><code>7z</code></td>
 			</tr>
 			<tr>
 				<td><code>uz</code></td>
 				<td><code>usize</code></td>
+				<td><code>7uz</code></td>
 			</tr>
 		</tbody>
 	</table>
+	<p>The old <code>l</code> / <code>L</code> (long), bare <code>u</code>, bare <code>i</code>, and <code>ul</code> suffixes have been removed. Write the width you mean: <code>1i64</code> instead of <code>1l</code>, <code>1u32</code> instead of <code>1u</code>.</p>
 	<h4>Float Suffixes</h4>
 	<table>
 		<thead>
 			<tr>
 				<th>Suffix</th>
 				<th>Type</th>
+				<th>Example</th>
 			</tr>
 		</thead>
 		<tbody>
 			<tr>
-				<td><code>f</code></td>
-				<td><code>f32</code></td>
+				<td>None</td>
+				<td><code>constexpr_float</code> (materializes as <code>f64</code>)</td>
+				<td><code>3.14</code></td>
 			</tr>
 			<tr>
-				<td>None</td>
+				<td><code>f16</code></td>
+				<td><code>f16</code> (IEEE-754 half)</td>
+				<td><code>1.5f16</code></td>
+			</tr>
+			<tr>
+				<td><code>f32</code></td>
+				<td><code>f32</code> (IEEE-754 single)</td>
+				<td><code>1.5f32</code></td>
+			</tr>
+			<tr>
 				<td><code>f64</code></td>
+				<td><code>f64</code> (IEEE-754 double)</td>
+				<td><code>1.5f64</code></td>
+			</tr>
+			<tr>
+				<td><code>f80</code></td>
+				<td><code>f80</code> (x86 80-bit extended; x86 targets only)</td>
+				<td><code>1.5f80</code></td>
+			</tr>
+			<tr>
+				<td><code>f128</code></td>
+				<td><code>f128</code> (IEEE-754 quad)</td>
+				<td><code>1.5f128</code></td>
 			</tr>
 		</tbody>
 	</table>
+	<p>The old bare <code>f</code> / <code>F</code> suffix has been removed; use <code>f32</code> explicitly.</p>
 	<h3>Integer Bases</h3>
 	<p>Integer literals may be prefixed to denote a base:</p>
 	<table>

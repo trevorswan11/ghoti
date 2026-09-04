@@ -121,6 +121,11 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - A reference is a borrow, not a storable slot. Use a raw pointer (`^T`)
 - A `[N]&T` / `[]&T` value that still arises (e.g. through a type parameter) decays implicitly to `[N]^T` / `[]^T`, preserving mutability (`&mut` → `^mut`); it never silently gains mutability
 - `impl` (inherent and trait, with default methods, associated types, `&mut self` mutation, and `&dyn` dispatch) is verified to work on every aggregate kind: `enum`, `union`, `extern struct`, `packed struct`, `extern union`, `extern packed struct`
+- Integer types are now arbitrary width (u123, i3343, etc.) up to 65535
+    - Support for `u`, `ul`, `l` suffixes has been removed in favor of `1i2` and friends
+    - u0/i0 is not supported
+- Adding half, quad, and f80 (x86 only) to floating point types
+- Added `constexpr_int` and `constexpr_float` for more explicit coercion rules
 
 ### C ABI hardening
 

@@ -11,7 +11,7 @@ namespace ghoti::tests {
 TEST_CASE("Exact type identity and error recovery") {
     auto [ctx, idx]{helpers::resolve_and_check("const x := 42;")};
 
-    auto& i32_t{ctx->get_type(sema::type_kind::I32)};
+    auto& i32_t{ctx->get_int_type(32, true)};
     auto& f32_t{ctx->get_type(sema::type_kind::F32)};
     auto& bool_t{ctx->get_type(sema::type_kind::BOOL)};
     auto& undef_t{ctx->get_type(sema::type_kind::UNDEFINED)};
@@ -46,12 +46,12 @@ TEST_CASE("Exact type identity and error recovery") {
 TEST_CASE("Numeric implicit widening table") {
     auto [ctx, idx]{helpers::resolve_and_check("const x := 42;")};
 
-    auto& u8_t{ctx->get_type(sema::type_kind::U8)};
-    auto& u32_t{ctx->get_type(sema::type_kind::U32)};
-    auto& u64_t{ctx->get_type(sema::type_kind::U64)};
+    auto& u8_t{ctx->get_int_type(8, false)};
+    auto& u32_t{ctx->get_int_type(32, false)};
+    auto& u64_t{ctx->get_int_type(64, false)};
     auto& usize_t{ctx->get_type(sema::type_kind::USIZE)};
-    auto& i32_t{ctx->get_type(sema::type_kind::I32)};
-    auto& i64_t{ctx->get_type(sema::type_kind::I64)};
+    auto& i32_t{ctx->get_int_type(32, true)};
+    auto& i64_t{ctx->get_int_type(64, true)};
     auto& isize_t{ctx->get_type(sema::type_kind::ISIZE)};
     auto& f32_t{ctx->get_type(sema::type_kind::F32)};
     auto& f64_t{ctx->get_type(sema::type_kind::F64)};
@@ -92,8 +92,8 @@ TEST_CASE("Numeric implicit widening table") {
 TEST_CASE("Const correctness for values and pointers") {
     auto [ctx, idx]{helpers::resolve_and_check("const x := 42;")};
 
-    auto& i32_mut{ctx->get_type<sema::types::mut::MUTABLE>(sema::type_kind::I32)};
-    auto& i32_const{ctx->get_type<sema::types::mut::CONSTANT>(sema::type_kind::I32)};
+    auto& i32_mut{ctx->get_int_type<sema::types::mut::MUTABLE>(32, true)};
+    auto& i32_const{ctx->get_int_type<sema::types::mut::CONSTANT>(32, true)};
 
     auto& ptr_to_mut_i32{ctx->analyzer.get_ctx().get_pointer(sema::types::mut::MUTABLE, i32_mut)};
     auto& ptr_to_const_i32{
@@ -117,7 +117,7 @@ TEST_CASE("nullptr assignability") {
     auto [ctx, idx]{helpers::resolve_and_check("const x := 42;")};
 
     auto& nullptr_t{ctx->get_type(sema::type_kind::NULLPTR)};
-    auto& i32_mut{ctx->get_type<sema::types::mut::MUTABLE>(sema::type_kind::I32)};
+    auto& i32_mut{ctx->get_int_type<sema::types::mut::MUTABLE>(32, true)};
     auto& ptr_to_i32{ctx->analyzer.get_ctx().get_pointer(sema::types::mut::MUTABLE, i32_mut)};
     auto& ref_to_i32{ctx->analyzer.get_ctx().get_reference(sema::types::mut::MUTABLE, i32_mut)};
 
@@ -141,8 +141,8 @@ TEST_CASE("nullptr assignability") {
 TEST_CASE("Slice and array coercions") {
     auto [ctx, idx]{helpers::resolve_and_check("const x := 42;")};
 
-    auto& u8_mut{ctx->get_type<sema::types::mut::MUTABLE>(sema::type_kind::U8)};
-    auto& u8_const{ctx->get_type<sema::types::mut::CONSTANT>(sema::type_kind::U8)};
+    auto& u8_mut{ctx->get_int_type<sema::types::mut::MUTABLE>(8, false)};
+    auto& u8_const{ctx->get_int_type<sema::types::mut::CONSTANT>(8, false)};
 
     auto& slice_mut{ctx->analyzer.get_ctx().get_slice(sema::types::mut::MUTABLE, false, u8_mut)};
     auto& slice_const{

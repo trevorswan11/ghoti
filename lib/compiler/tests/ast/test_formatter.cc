@@ -15,8 +15,8 @@ TEST_CASE("formatter round-trips simple declarations") {
     CHECK(format_source(R"(const version := "0.0.1";)") == "const version := \"0.0.1\";\n");
     CHECK(format_source("pub  const   x:i32=42;") == "pub const x: i32 = 42;\n");
     CHECK(format_source("constexpr SIZE:=2uz;") == "constexpr SIZE := 2uz;\n");
-    CHECK(format_source("var a := 3u;") == "var a := 3u;\n");
-    CHECK(format_source("var a := 1l;") == "var a := 1l;\n");
+    CHECK(format_source("var a := 3u32;") == "var a := 3u32;\n");
+    CHECK(format_source("var a := 1i64;") == "var a := 1i64;\n");
     CHECK(format_source("var a := 2.3;") == "var a := 2.3;\n");
     CHECK(format_source("var a := 'a';") == "var a := 'a';\n");
 }
@@ -25,7 +25,7 @@ TEST_CASE("formatter preserves numeric literal base, separators, and suffix verb
     CHECK(format_source("var a := 0x2Fuz;") == "var a := 0x2Fuz;\n");
     CHECK(format_source("var a := 0b00_11_00_11;") == "var a := 0b00_11_00_11;\n");
     CHECK(format_source("var a := 1_000_000;") == "var a := 1_000_000;\n");
-    CHECK(format_source("var a := 0o17ul;") == "var a := 0o17ul;\n");
+    CHECK(format_source("var a := 0o17u64;") == "var a := 0o17u64;\n");
     CHECK(format_source("var a := 2.5e10;") == "var a := 2.5e10;\n");
     CHECK(format_source(R"(var a := '\n';)") == "var a := '\\n';\n");
 }
@@ -118,8 +118,8 @@ TEST_CASE("formatter keeps small aggregates inline and breaks ones with bodies")
           "const P := struct { x: i32, y: i32 };\n");
     CHECK(format_source("const U := union { a: i32, b: i32 };") ==
           "const U := union { a: i32, b: i32 };\n");
-    CHECK(format_source("const E := enum : u64 { A = 1ul, B, C };") ==
-          "const E := enum : u64 { A = 1ul, B, C };\n");
+    CHECK(format_source("const E := enum : u64 { A = 1u64, B, C };") ==
+          "const E := enum : u64 { A = 1u64, B, C };\n");
 
     CHECK(format_source("const S := struct { x: i32, const m := fn(): i32 { return x; }; };") ==
           R"(const S := struct {
@@ -176,10 +176,10 @@ TEST_CASE("formatter puts a hard line between fields and members in aggregates")
 };
 )");
 
-    CHECK(
-        format_source("const E := enum : i64 { A = 2l, const b := fn(&self, a: A): C { c; }; };") ==
-        R"(const E := enum : i64 {
-    A = 2l,
+    CHECK(format_source(
+              "const E := enum : i64 { A = 2i64, const b := fn(&self, a: A): C { c; }; };") ==
+          R"(const E := enum : i64 {
+    A = 2i64,
 
     const b := fn(&self, a: A): C {
         c;
@@ -270,7 +270,7 @@ TEST_CASE("formatter round trip: declarations and literals") {
     round_trips("var a: i32 = undefined;");
     round_trips("var v: mut volatile i32 = 42;");
     round_trips("const v: volatile i32 = 42;");
-    round_trips("var a := 0x2Fuz; var b := 0b00_11_00_11; var c := 1_000; var d := 2.3f;");
+    round_trips("var a := 0x2Fuz; var b := 0b00_11_00_11; var c := 1_000; var d := 2.3f32;");
     round_trips(R"('\n'; '\r'; '\t'; '\\'; '\''; '\0';)");
 }
 
@@ -314,7 +314,7 @@ TEST_CASE("formatter round trip: functions and types") {
     round_trips(R"(extern("c", "__errno_location") const errno_loc: fn(): ^mut i32;)");
     round_trips(R"(export("ghoti_add") const add := fn(a: i32, b: i32): i32 { return a + b; };)");
     round_trips("threadlocal var tls_counter: i32 = 0;");
-    round_trips("pub threadlocal var tls_state: i64 = 0l;");
+    round_trips("pub threadlocal var tls_state: i64 = 0i64;");
     round_trips("weak extern const maybe: fn(): void;");
     round_trips("pub weak const overridable := fn(): i32 { return 1; };");
     round_trips("@discardable extern const puts: fn(s: ^u8): i32;");
@@ -327,8 +327,8 @@ TEST_CASE("formatter round trip: functions and types") {
 TEST_CASE("formatter round trip: aggregates") {
     round_trips("struct { var a: Foo = bar; const b := fn(^mut this, a: A, b: ^B): C { c; }; };");
     round_trips("union { a: i32, b: &mut T, };");
-    round_trips("enum : u64 { A = 1ul, B = T, C, };");
-    round_trips("enum : i64 { A = 2l, const b := fn(&self, a: A): C { c; }; };");
+    round_trips("enum : u64 { A = 1u64, B = T, C, };");
+    round_trips("enum : i64 { A = 2i64, const b := fn(&self, a: A): C { c; }; };");
     round_trips("union { a: struct { b: Foo = bar, pub c: i32, var d: u32 = undefined; }, "
                 "const b := fn(&self, a: A): C { c; }; };");
     round_trips(R"(const S := struct {

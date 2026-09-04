@@ -56,7 +56,9 @@ namespace {
         return false;
     }
     const auto inner{outer->underlying.get_data().as_opt<types::slice>()};
-    return inner && inner->null_terminated && inner->underlying.get_kind() == type_kind::U8;
+    if (!inner || !inner->null_terminated) { return false; }
+    const auto elem{as_integer(inner->underlying)};
+    return elem && elem->bits == 8 && !elem->is_signed;
 }
 
 [[nodiscard]] auto export_roots(const gir::module& mod) -> std::vector<std::string_view> {
@@ -241,7 +243,7 @@ auto analyzer::validate_main_entry(const mod::module& root_module) const
     }
 
     const auto ret_kind{fn_data.return_type.get_kind()};
-    if (ret_kind != type_kind::VOID_ && ret_kind != type_kind::I32) {
+    if (ret_kind != type_kind::VOID_ && !is_i32(fn_data.return_type)) {
         return make_sema_err("'main' return type must be 'void' or 'i32'",
                              error::TYPE_MISMATCH,
                              main_sym.get_symbol_location(root_module));
@@ -297,7 +299,7 @@ auto analyzer::validate_test_entry(const mod::module& root_module) const
                              loc);
     }
 
-    if (fn_data.return_type.get_kind() != type_kind::I32) {
+    if (!is_i32(fn_data.return_type)) {
         return make_sema_err(
             fmt::format("{} (it must return 'i32')", want), error::TYPE_MISMATCH, loc);
     }

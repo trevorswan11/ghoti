@@ -15,11 +15,11 @@ TEST_CASE("Well-formed integer / float builtins resolve") {
             return @divTrunc(a, b) + @divFloor(a, b) + @rem(a, b) + @mod(a, b);
         };
         const k := fn(a: u32, b: u32): bool {
-            var out: u32 = 0u;
+            var out: u32 = 0u32;
             return @addWithOverflow(a, b, &mut out);
         };
         const p := fn(a: u32, b: u32): bool {
-            var out: u32 = 0u;
+            var out: u32 = 0u32;
             return @mulWithOverflow(a, b, ^mut out); // a `^mut T` pointer is also accepted
         };
     )");

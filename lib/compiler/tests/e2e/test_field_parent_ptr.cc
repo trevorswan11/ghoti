@@ -29,7 +29,7 @@ TEST_CASE("`@fieldParentPtr` recovers a struct pointer from a non-first-member f
 
         pub const main := fn(): i32 {
             var o: Outer = undefined;
-            o.lead = 7l;
+            o.lead = 7i64;
             o.pad  = 9;
             o.inner.a = 20;
             o.inner.b = 22;

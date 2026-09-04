@@ -1,4 +1,5 @@
 #include <string>
+#include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -15,29 +16,39 @@ namespace {
 
 } // namespace
 
-TEST_CASE("Signed integer overflow") {
-    helpers::test_parser_fail("0xFFFFFFFFFFFFFFFFFFF;",
+TEST_CASE("Integer literal overflow past the 128-bit compile-time cap") {
+    // 33 hex digits => 132 bits, past the u128 evaluation domain.
+    helpers::test_parser_fail("0x1FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF;",
                               overflow_error(syntax::error::INTEGER_OVERFLOW));
-    helpers::test_parser_fail("0xFFFFFFFFFFFFFFFFFFFl;",
+    helpers::test_parser_fail("0x1FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFu64;",
                               overflow_error(syntax::error::INTEGER_OVERFLOW));
-    helpers::test_parser_fail("0xFFFFFFFFFFFFFFFFz;",
+    helpers::test_parser_fail("0x1FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFz;",
                               overflow_error(syntax::error::INTEGER_OVERFLOW));
 }
 
-TEST_CASE("Unsigned integer overflow") {
-    helpers::test_parser_fail("0xFFFFFFFFFFFFFFFFu;",
-                              overflow_error(syntax::error::INTEGER_OVERFLOW));
-    helpers::test_parser_fail("0xFFFFFFFFFFFFFFFFFul;",
-                              overflow_error(syntax::error::INTEGER_OVERFLOW));
-    helpers::test_parser_fail("0xFFFFFFFFFFFFFFFFFuz;",
-                              overflow_error(syntax::error::INTEGER_OVERFLOW));
+TEST_CASE("Removed and malformed literal suffixes are rejected") {
+    const auto err = [](std::string_view msg, syntax::error e) {
+        return syntax::diagnostic{std::string{msg}, e, 0, 0};
+    };
+    constexpr auto needs_width{"integer literal suffix needs a width, e.g. 42u8"};
+
+    helpers::test_parser_fail("42u;", err(needs_width, syntax::error::INVALID_NUMBER_LITERAL));
+    helpers::test_parser_fail("42i;", err(needs_width, syntax::error::INVALID_NUMBER_LITERAL));
+    helpers::test_parser_fail("42u0;", err(needs_width, syntax::error::INVALID_NUMBER_LITERAL));
+    helpers::test_parser_fail(
+        "1.0f;",
+        err("float literal suffix needs a width, e.g. 1.0f32; valid widths are 16/32/64/80/128",
+            syntax::error::FLOAT_OVERFLOW));
+}
+
+TEST_CASE("Character escape errors") {
     helpers::test_parser_fail("'\\f';",
                               syntax::diagnostic{syntax::error::UNKNOWN_CHARACTER_ESCAPE, 0, 0});
 }
 
 TEST_CASE("Floating point overflow") {
-    helpers::test_parser_fail("1023.234612e234000f;",
-                              overflow_error(syntax::error::FLOAT_OVERFLOW));
+    helpers::test_parser_fail("1023.234612e234000f64;",
+                              overflow_error(syntax::error::DOUBLE_OVERFLOW));
     helpers::test_parser_fail("1023.234612e234000;",
                               overflow_error(syntax::error::DOUBLE_OVERFLOW));
 }

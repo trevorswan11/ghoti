@@ -16,6 +16,7 @@
 #include "compiler/gir/module.hh"
 #include "compiler/gir/segment.hh"
 #include "compiler/sema/type.hh"
+#include "support/int128.hh"
 
 namespace ghoti::gir {
 
@@ -37,6 +38,8 @@ auto format_value(const value& val) -> std::string {
         [](void_val) { return "void"; },
         [](undefined_val) { return "undefined"; },
         [](nullptr_val) { return "nullptr"; },
+        [](i128 v) { return to_string(v); },
+        [](u128 v) { return to_string(v); },
         [](auto v) { return fmt::format("{}", v); });
 }
 

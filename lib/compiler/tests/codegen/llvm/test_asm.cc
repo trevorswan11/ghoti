@@ -16,11 +16,11 @@ TEST_CASE("codegen: inline asm lowers to an LLVM InlineAsm call") {
     llvm::LLVMContext context;
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         pub const sys_write := fn(fd: i64, buf: ^u8, len: usize): i64 {
-            var ret: i64 = 0l;
+            var ret: i64 = 0i64;
             asm {
                 template: "syscall",
                 outputs: ("={rax}" = ret),
-                inputs: ("{rax}" = 1l, "{rdi}" = fd, "{rsi}" = buf, "{rdx}" = len),
+                inputs: ("{rax}" = 1i64, "{rdi}" = fd, "{rsi}" = buf, "{rdx}" = len),
                 clobbers: ("rcx", "r11", "memory"),
                 options: (volatile),
             };
@@ -42,7 +42,7 @@ TEST_CASE("codegen: noreturn inline asm marks the call and emits unreachable") {
         pub const halt := fn(code: i64): void {
             asm {
                 template: "syscall",
-                inputs: ("{rax}" = 60l, "{rdi}" = code),
+                inputs: ("{rax}" = 60i64, "{rdi}" = code),
                 options: (volatile, noreturn),
             };
         };

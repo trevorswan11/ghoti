@@ -18,6 +18,7 @@
 #include "compiler/gir/instruction.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/type.hh"
+#include "support/int128.hh"
 
 namespace ghoti::gir {
 
@@ -45,7 +46,7 @@ auto const_closure::operator==(const const_closure& other) const noexcept -> boo
 }
 
 auto const_value::make_string(sema::context& ctx, std::string str) -> const_value {
-    auto& t_u8{ctx.get_builtin_resolved_type(sema::type_kind::U8)};
+    auto& t_u8{ctx.get_int(8, false)};
     auto& t_c_str{ctx.get_slice(sema::types::mut::CONSTANT, true, t_u8)};
     return const_value{std::string{str}, t_c_str};
 }
@@ -118,6 +119,8 @@ auto const_value::mangle() const -> std::string {
     return data_.visit(
         [](i64 v) { return std::to_string(v); },
         [](u64 v) { return std::to_string(v); },
+        [](i128 v) { return to_string(v); },
+        [](u128 v) { return to_string(v); },
         [](f64 v) { return fmt::format("{}", v); },
         [](bool v) -> std::string { return v ? "true" : "false"; },
         [](const std::string& v) {

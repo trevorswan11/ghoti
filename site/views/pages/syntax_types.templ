@@ -130,6 +130,7 @@ a.b;   // Syntactic sugar
 	<ul>
 		<li>You can get the type of a value by using the <code>{ "@typeOf" }</code> builtin</li>
 		<li>You can get the size of a type (in bytes) by using the <code>{ "@sizeOf" }</code> builtin</li>
+		<li>You can get the exact bit width of a type by using the <code>{ "@bitSizeOf" }</code> builtin &mdash; for <code>iN</code>/<code>uN</code> this is <code>N</code>, for a bit-packed <code>packed</code> aggregate it is the backing-integer width, and for everything else it is <code>{ "@sizeOf" }(T) * 8</code></li>
 		<li>You can get the align of a type by using the <code>{ "@alignOf" }</code> builtin</li>
 	</ul>
 	<h2>User-Defined Types</h2>
@@ -160,26 +161,59 @@ a.b;   // Syntactic sugar
 		</code>
 	</pre>
 	<h2>Primitive Types</h2>
+	<h3>Integers</h3>
 	<ul>
-		<li><code>i32</code>: A 32-bit signed integer, represented by a standalone number</li>
-		<li><code>i64</code>: A 64-bit signed integer, represented by a <code>l</code> suffixed number</li>
-		<li><code>isize</code>: A platform specific signed integer equivalent to ptrdiff_t (64-bit on 64-bit systems), represented by a <code>z</code> suffixed number</li>
-		<li><code>u32</code>: A 32-bit unsigned integer, represented by a <code>u</code> suffixed number</li>
-		<li><code>u64</code>: A 64-bit unsigned integer, represented by a <code>ul</code> suffixed number</li>
-		<li><code>usize</code>: A platform specific unsigned integer equivalent to size_t (64-bit on 64-bit systems), represented by a <code>uz</code> suffixed number</li>
-		<li><code>f32</code>: A 32-bit floating point, represented by a <code>f</code> suffixed number (base-10), decimal, or scientific notation</li>
-		<li><code>f64</code>: A 64-bit floating point, represented by a standalone decimal or scientific notation</li>
 		<li>
-			<code>u8</code>: An unsigned 8-bit value, typically used for characters (i.e. <code>'a'</code>) or ascii values
+			<code>i&lt;N&gt;</code> / <code>u&lt;N&gt;</code>: A signed or unsigned integer of any width <code>N</code> from 1 to 65535 bits &mdash; <code>i1</code>, <code>u3</code>, <code>i17</code>, <code>u32</code>, <code>u100</code>, <code>i128</code>, &hellip; up to <code>u65535</code>
+			<ul>
+				<li>The familiar widths (<code>i8</code>/<code>i16</code>/<code>i32</code>/<code>i64</code> and their <code>u</code> counterparts) are simply the common cases; there is nothing special about them</li>
+				<li>An <code>iN</code>/<code>uN</code> literal is written with a width suffix, e.g. <code>7u8</code>, <code>1i9</code>, <code>255u65535</code></li>
+				<li>An arithmetic operation on <code>uN</code> wraps modulo 2<sup>N</sup>; on <code>iN</code> it is two's-complement over <code>N</code> bits</li>
+				<li>A value implicitly widens to a same-signed integer of greater or equal width; narrowing needs an explicit <code>{ "@as" }</code></li>
+				<li>Only the C-ABI widths (<code>i8/16/32/64</code>, <code>u8/16/32/64</code>) may cross an <code>extern</code> boundary</li>
+			</ul>
+		</li>
+		<li><code>isize</code> / <code>usize</code>: Platform-width signed/unsigned integers equivalent to <code>ptrdiff_t</code> / <code>size_t</code> (64-bit on 64-bit targets), written with the <code>z</code> / <code>uz</code> suffix</li>
+		<li>
+			An <em>unsuffixed</em> integer literal (e.g. <code>42</code>) has type <code>constexpr_int</code>: compile-time known, coercible to any concrete numeric type it fits, materializing as <code>i32</code> when left un-anchored
+		</li>
+		<li>
+			<code>u8</code> doubles as the character/byte type &mdash; a character literal such as <code>'a'</code> has type <code>u8</code>
 			<ul>
 				<li>There is no string type in ghoti. Instead you must use an array or slice of bytes (i.e. <code>[]u8</code> or <code>[N]u8</code>)</li>
 			</ul>
 		</li>
+	</ul>
+	<h3>Floating point</h3>
+	<ul>
+		<li><code>f16</code>: IEEE-754 binary16 (half), written with the <code>f16</code> suffix</li>
+		<li><code>f32</code>: IEEE-754 binary32 (single), written with the <code>f32</code> suffix</li>
+		<li><code>f64</code>: IEEE-754 binary64 (double), written with the <code>f64</code> suffix or an unsuffixed real literal</li>
+		<li><code>f80</code>: x86 80-bit extended precision &mdash; available on x86 / x86-64 targets only; using it elsewhere is a compile error. Written with the <code>f80</code> suffix</li>
+		<li><code>f128</code>: IEEE-754 binary128 (quad), written with the <code>f128</code> suffix</li>
+		<li>
+			An unsuffixed real literal (e.g. <code>3.14</code>) has type <code>constexpr_float</code>, materializing as <code>f64</code> when left un-anchored
+			<ul>
+				<li><code>f80</code> and <code>f128</code> constant expressions are <em>not</em> folded at compile time (folding them at <code>f64</code> would silently lose precision); such expressions must be evaluated at runtime</li>
+			</ul>
+		</li>
+	</ul>
+	<h3>Other</h3>
+	<ul>
 		<li><code>bool</code>: True (<code>true</code>) or false (<code>false</code>)</li>
 		<li><code>void</code>: The unit type, this can be declared using empty curly braces <code>{ "{}" }</code></li>
 	</ul>
 	<h2>Special Types</h2>
 	<ul>
+		<li>
+			<code>constexpr_int</code> / <code>constexpr_float</code>: The type of an unsuffixed integer / real literal and of pure constexpr arithmetic over them
+			<ul>
+				<li>Compile-time known; folds at 128-bit (int) / <code>f64</code> (float) precision</li>
+				<li>Coerces implicitly to any concrete numeric type it fits &mdash; an out-of-range <code>constexpr_int</code> is a compile error, not a silent wrap</li>
+				<li>Materializes as <code>i32</code> / <code>f64</code> at a <code>var</code> binding, a generic / <code>auto</code> parameter, an inferred return type, a struct field, or any un-anchored runtime use; an un-annotated <code>const</code> keeps the constexpr type</li>
+				<li>Spellable in type position &mdash; mainly to alias what <code>{ "@typeOf" }</code> of an unsuffixed literal yields</li>
+			</ul>
+		</li>
 		<li>
 			<code>type</code>: A type encapsulating the information presented in this documentation
 			<ul>

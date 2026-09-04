@@ -275,15 +275,10 @@ auto cfg_pass::atom_value(std::string_view atom) -> cfg_value {
 
 auto cfg_pass::int_literal(ast::expr_handle h) -> stdx::option<i64> {
     PROFILE_FUNCTION();
-    return module_.ast[h].visit(
-        [](const auto&) -> stdx::option<i64> { return stdx::none; },
-        [](const ast::i32_expr& e) -> stdx::option<i64> { return e.value; },
-        [](const ast::i64_expr& e) -> stdx::option<i64> { return e.value; },
-        [](const ast::isize_expr& e) -> stdx::option<i64> { return e.value; },
-        [](const ast::u32_expr& e) -> stdx::option<i64> { return static_cast<i64>(e.value); },
-        [](const ast::u64_expr& e) -> stdx::option<i64> { return static_cast<i64>(e.value); },
-        [](const ast::usize_expr& e) -> stdx::option<i64> { return static_cast<i64>(e.value); },
-        [](const ast::u8_expr& e) -> stdx::option<i64> { return e.value; });
+    return module_.ast[h].visit([](const auto&) -> stdx::option<i64> { return stdx::none; },
+                                [](const ast::int_literal_expr& e) -> stdx::option<i64> {
+                                    return static_cast<i64>(e.value);
+                                });
 }
 
 auto cfg_pass::eval_term(ast::expr_handle h) -> stdx::option<cfg_value> {

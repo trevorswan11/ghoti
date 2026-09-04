@@ -16,6 +16,7 @@
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/ast/statement.hh"
+#include "compiler/codegen/target.hh"
 #include "compiler/gir/builder.hh"
 #include "compiler/gir/const_eval.hh"
 #include "compiler/gir/const_value.hh"
@@ -28,6 +29,7 @@
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
+#include "support/int128.hh"
 #include "support/scope_guard.hh"
 
 namespace ghoti::gir {
@@ -36,7 +38,8 @@ class emitter {
   public:
     explicit emitter(sema::context& ctx, mod::module& ast_mod) noexcept
         : ctx_{ctx}, ast_module_{ast_mod}, const_eval_{ctx_, ast_mod},
-          gir_module_{ast_mod, ctx_.arena}, runtime_safety_{ctx.runtime_safety} {}
+          gir_module_{ast_mod, ctx_.arena}, runtime_safety_{ctx.runtime_safety},
+          target_ptr_bits_{codegen::target_facts::resolve(ctx.target_opts.triple_str).ptr_bits} {}
     ~emitter() = default;
     MAKE_PINNED(emitter);
 
@@ -238,9 +241,68 @@ class emitter {
     // Keeps a tagged union's runtime discriminant in sync with a direct `union.field = ...` write
     auto sync_tagged_union_tag(ast::node_id assign_lhs) -> void;
     auto emit_assignment(ast::node_id id, const ast::assignment_expr& assign) -> value;
-    auto emit_call(ast::node_id id, const ast::call_expr& call) -> value;
-    auto emit_asm(ast::node_id id, const ast::asm_expr& node) -> value;
-    auto emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> value;
+
+    // Bit-packed `packed struct`/`packed union` field access: shift/mask over the backing int.
+    [[nodiscard]] auto emit_packed_field_read(value                        backing_addr,
+                                              const sema::types::struct_t& st,
+                                              usize                        field_idx,
+                                              sema::type&                  field_type) -> value;
+    [[nodiscard]] auto emit_packed_field_extract(value                        backing,
+                                                 const sema::types::struct_t& st,
+                                                 usize                        field_idx,
+                                                 sema::type&                  field_type) -> value;
+    auto               emit_packed_field_write(value                        backing_addr,
+                                               const sema::types::struct_t& st,
+                                               usize                        field_idx,
+                                               sema::type&                  field_type,
+                                               value                        new_field_val) -> void;
+    [[nodiscard]] auto emit_packed_field_read(value                       backing_addr,
+                                              const sema::types::union_t& ut,
+                                              sema::type&                 field_type) -> value;
+    auto               emit_packed_field_write(value                       backing_addr,
+                                               const sema::types::union_t& ut,
+                                               sema::type&                 field_type,
+                                               value                       new_field_val) -> void;
+    [[nodiscard]] auto
+    emit_packed_bits_extract(value backing, u32 n, u32 offset, u32 fbits, sema::type& field_type)
+        -> value;
+    auto               emit_packed_bits_insert(value       backing_addr,
+                                               u32         n,
+                                               u32         offset,
+                                               u32         fbits,
+                                               sema::type& field_type,
+                                               value       new_field_val) -> void;
+    [[nodiscard]] auto emit_packed_bits_merge(value       old_backing,
+                                              u32         n,
+                                              u32         offset,
+                                              u32         fbits,
+                                              sema::type& field_type,
+                                              value       new_field_val) -> value;
+
+    // The bit layout of one field within its bit-packed enclosing aggregate.
+    struct packed_field_layout {
+        u32         n{1};      // backing-integer width of the enclosing aggregate
+        u32         offset{0}; // LSB-first bit offset of the field (always 0 for a union)
+        u32         fbits{1};  // width of the field
+        usize       field_idx{0};
+        sema::type* field_type{nullptr};
+    };
+    [[nodiscard]] auto packed_layout_of(const ast::dot_expr& dot) -> packed_field_layout;
+
+    // The i64/u64/i128/u128 payload of a compile-time integer `value`, as a 128-bit signed
+    // int; none when `v` has no integer payload.
+    [[nodiscard]] static auto folded_int(const value& v) noexcept -> stdx::option<i128>;
+    // Emits a `LITERAL_OUT_OF_RANGE` diagnostic at `at` if the `constexpr_int` `v` does not
+    // fit `target` (a concrete integer type). Returns `v` retyped to `target`.
+    [[nodiscard]] auto coerce_constexpr_int(value v, sema::type& target, ast::node_id at) -> value;
+    auto               emit_packed_store(const ast::dot_expr& dot, value field_val) -> void;
+    [[nodiscard]] auto emit_packed_field_assign(ast::node_id                id,
+                                                const ast::dot_expr&        dot,
+                                                const ast::assignment_expr& assign,
+                                                syntax::token_type_t        op_type) -> value;
+    auto               emit_call(ast::node_id id, const ast::call_expr& call) -> value;
+    auto               emit_asm(ast::node_id id, const ast::asm_expr& node) -> value;
+    auto               emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> value;
     // Lvalue (address) of a `var`-style global backed by a GIR global.
     [[nodiscard]] auto global_ref_in(usize table_idx, std::string_view name) -> stdx::option<value>;
     [[nodiscard]] auto try_global_ref(std::string_view name) -> stdx::option<value>;
@@ -337,6 +399,7 @@ class emitter {
     std::vector<std::string_view> pending_builtin_runtime_;
     symbol_scoping                symbol_scoping_;
     bool                          runtime_safety_{true};
+    u32                           target_ptr_bits_{64};
 
     // While emitting an inherited interface default-method body: bare `self.method(...)` calls
     // are rewritten to target this impl's own methods (its body symbol table).

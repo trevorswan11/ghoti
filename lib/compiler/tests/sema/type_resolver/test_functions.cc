@@ -30,7 +30,7 @@ TEST_CASE("Function declaration and call type resolution") {
         const result := a(1, ^int, "Hello, World");
     )")};
 
-    const auto& i32_type{ctx->get_type(sema::type_kind::I32)};
+    const auto& i32_type{ctx->get_int_type(32, true)};
     const auto& bool_type{ctx->get_type(sema::type_kind::BOOL)};
 
     const auto [a_decl_sym, a_decl_sym_data, a_decl_node_data, a_decl_type]{
@@ -56,7 +56,7 @@ TEST_CASE("Function declaration and call type resolution") {
         CHECK(c_meta_data.instance == i32_type);
 
         const auto& u8_slice =
-            ctx->get_type(sema::type_kind::SLICE, true, ctx->get_type(sema::type_kind::U8));
+            ctx->get_type(sema::type_kind::SLICE, true, ctx->get_int_type(8, false));
         check_param_type("d", u8_slice);
 
         const auto& fn{
@@ -90,7 +90,7 @@ TEST_CASE("Function declaration and call type resolution") {
         const auto last_arg{UNWRAP(call.arguments[2].as_opt<ast::expr_handle>())};
         const auto str_size{ctx->get_string_literal_size(last_arg)};
 
-        const auto& u8_type{ctx->get_type(sema::type_kind::U8)};
+        const auto& u8_type{ctx->get_int_type(8, false)};
         const auto& null_string_type =
             ctx->get_type(sema::type_kind::ARRAY, true, str_size, u8_type);
 
@@ -154,8 +154,8 @@ TEST_CASE("Function explicit type resolution") {
 
     const auto& expected_type =
         ctx->get_type(sema::type_kind::FUNCTION,
-                      ctx->get_type(sema::type_kind::POINTER, ctx->get_type(sema::type_kind::I32)),
-                      ctx->get_type(sema::type_kind::U32),
+                      ctx->get_type(sema::type_kind::POINTER, ctx->get_int_type(32, true)),
+                      ctx->get_int_type(32, false),
                       ctx->get_type(sema::type_kind::BOOL));
     CHECK(type == expected_type);
 }
@@ -179,7 +179,7 @@ TEST_CASE("Function with syntactically ambiguous arguments") {
     };
 
     namespace mut = sema::types::mut;
-    const auto& i32_type{ctx->get_type(sema::type_kind::I32)};
+    const auto& i32_type{ctx->get_int_type(32, true)};
     const auto& i32_const_ptr{ctx->get_type(sema::type_kind::POINTER, i32_type)};
 
     check_ambiguous("a", i32_const_ptr);
@@ -393,8 +393,8 @@ TEST_CASE("A closure's .thunk resolves to a callable thunk including the self pa
     REQUIRE(thunk_type.get_kind() == sema::type_kind::FUNCTION);
     const auto& fn_data{UNWRAP(thunk_type.get_data().as_opt<sema::types::function>())};
     REQUIRE(fn_data.params.size() == 2);
-    CHECK(fn_data.params[1]->get_kind() == sema::type_kind::I32);
-    CHECK(fn_data.return_type.get_kind() == sema::type_kind::I32);
+    CHECK(sema::is_i32(*fn_data.params[1]));
+    CHECK(sema::is_i32(fn_data.return_type));
 }
 
 TEST_CASE("Accessing an unknown field on a closure is rejected") {

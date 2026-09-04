@@ -30,6 +30,13 @@ auto context::get_poison() -> type& {
     return poison;
 }
 
+auto context::get_int(u16 bits, bool is_signed, types::mut::mutability_modifiers mutability)
+    -> type& {
+    auto& type{*pool[{type_kind::INT, mutability, bits, is_signed}]};
+    type.resolve_if<types::integer>(bits, is_signed);
+    return type;
+}
+
 auto context::get_pointer(types::mut::mutability_modifiers mutability, type& underlying) -> type& {
     auto& type{*pool[{type_kind::POINTER, mutability, underlying}]};
     type.resolve_if<types::pointer>(underlying);
@@ -64,32 +71,31 @@ namespace {
 
 auto inject_types(symbol_table& prelude, type_pool& pool) -> void {
     PROFILE_FUNCTION();
-    const auto inject_type = [&](const syntax::keyword_t& keyword, type_kind kind) -> void {
-        auto& type{*pool[{kind, types::mut::CONSTANT}]};
-        ASSERT(!type.is_resolved(), "Builtin types should only be resolved once");
-        type.resolve<types::builtin_type>();
-
+    const auto register_symbol = [&](const syntax::keyword_t& keyword, type& type) -> void {
         prelude.insert_unchecked(keyword.name, symbols::builtin{keyword, type});
         auto& symbol{prelude.get(keyword.name)};
         symbol.set_kind(symbol_kind::TYPE);
         symbol.set_status(symbol_status::RESOLVED);
     };
 
+    const auto inject_type = [&](const syntax::keyword_t& keyword, type_kind kind) -> void {
+        auto& type{*pool[{kind, types::mut::CONSTANT}]};
+        ASSERT(!type.is_resolved(), "Builtin types should only be resolved once");
+        type.resolve<types::builtin_type>();
+        register_symbol(keyword, type);
+    };
+
     namespace kws = syntax::keywords;
 
-    // Primitives
-    inject_type(kws::I8, type_kind::I8);
-    inject_type(kws::I16, type_kind::I16);
-    inject_type(kws::I32, type_kind::I32);
-    inject_type(kws::I64, type_kind::I64);
     inject_type(kws::ISIZE, type_kind::ISIZE);
-    inject_type(kws::U16, type_kind::U16);
-    inject_type(kws::U32, type_kind::U32);
-    inject_type(kws::U64, type_kind::U64);
     inject_type(kws::USIZE, type_kind::USIZE);
+    inject_type(kws::F16, type_kind::F16);
     inject_type(kws::F32, type_kind::F32);
     inject_type(kws::F64, type_kind::F64);
-    inject_type(kws::U8, type_kind::U8);
+    inject_type(kws::F80, type_kind::F80);
+    inject_type(kws::F128, type_kind::F128);
+    inject_type(kws::CONSTEXPR_INT, type_kind::CONSTEXPR_INT);
+    inject_type(kws::CONSTEXPR_FLOAT, type_kind::CONSTEXPR_FLOAT);
     inject_type(kws::BOOL, type_kind::BOOL);
     inject_type(kws::VOID, type_kind::VOID_);
 
@@ -138,9 +144,9 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     auto& t_bool{*pool[{type_kind::BOOL, types::mut::CONSTANT}]};
 
     // C-string
-    auto& t_u8{*pool[{type_kind::U8, types::mut::CONSTANT}]};
+    auto& t_u8{*pool[{type_kind::INT, types::mut::CONSTANT, u16{8}, false}]};
     auto& t_c_str{*pool[{type_kind::SLICE, types::mut::CONSTANT, true, t_u8}]};
-    t_c_str.resolve_if<types::slice>(*pool[{type_kind::U8, types::mut::CONSTANT}], true);
+    t_c_str.resolve_if<types::slice>(t_u8, true);
 
     inject_function(bis::ALIGN_CAST, params(t_type, t_auto), t_auto);
     inject_function(bis::PTR_CAST, params(t_type, t_auto), t_auto);
@@ -157,6 +163,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
 
     inject_function(bis::ALIGN_OF, params(t_auto), t_usize);
     inject_function(bis::SIZE_OF, params(t_auto), t_usize);
+    inject_function(bis::BIT_SIZE_OF, params(t_auto), t_usize);
     inject_function(bis::TYPE_OF, params(t_auto), t_type);
     inject_function(bis::THIS, params(), t_type);
     inject_function(bis::TAG_NAME, params(t_auto), t_c_str);

@@ -116,6 +116,14 @@ auto module_manager::print_all_diagnostics(std::ostream& os) const -> void {
     }
 }
 
+auto module_manager::any_errored() const noexcept -> bool {
+    // This is necessary as the module itself is lazily checked
+    for (const auto& [path, mod] : modules_) {
+        if (mod->is_poisoned() || mod->is_errored()) { return true; }
+    }
+    return false;
+}
+
 auto module_manager::try_get(const std::filesystem::path& path)
     -> stdx::result<gsl::not_null<module*>, diagnostic> {
     // Prevent re-parsing by checking the map, safe as pointers are stable

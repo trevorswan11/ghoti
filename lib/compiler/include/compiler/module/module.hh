@@ -317,7 +317,9 @@ class module_manager {
         -> stdx::result<void, diagnostic>;
 
     // Prints every poisoned/errored module's diagnostics
-    auto               print_all_diagnostics(std::ostream& os) const -> void;
+    auto print_all_diagnostics(std::ostream& os) const -> void;
+    // True if any module ever loaded through this manager is poisoned or errored
+    [[nodiscard]] auto any_errored() const noexcept -> bool;
     [[nodiscard]] auto get_or_create_builtin_module(std::string_view source) -> module&;
 
     [[nodiscard]] auto builtin_module() -> module& {

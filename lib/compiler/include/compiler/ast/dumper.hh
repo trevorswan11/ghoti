@@ -67,15 +67,8 @@ class dumper {
     auto visit(node_id, const unwrap_expr&) -> void;
     auto visit(node_id, const implicit_access_expr&) -> void;
     auto visit(node_id, const string_expr&) -> void;
-    auto visit(node_id, const i32_expr&) -> void;
-    auto visit(node_id, const i64_expr&) -> void;
-    auto visit(node_id, const isize_expr&) -> void;
-    auto visit(node_id, const u32_expr&) -> void;
-    auto visit(node_id, const u64_expr&) -> void;
-    auto visit(node_id, const usize_expr&) -> void;
-    auto visit(node_id, const u8_expr&) -> void;
-    auto visit(node_id, const f32_expr&) -> void;
-    auto visit(node_id, const f64_expr&) -> void;
+    auto visit(node_id, const int_literal_expr&) -> void;
+    auto visit(node_id, const float_literal_expr&) -> void;
     auto visit(node_id, const bool_expr&) -> void;
     auto visit(node_id, const void_expr&) -> void;
     auto visit(node_id, const undefined_expr&) -> void;

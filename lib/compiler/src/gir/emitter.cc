@@ -1,6 +1,7 @@
 #include "compiler/gir/emitter.hh"
 
 #include <algorithm>
+#include <limits>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -39,6 +40,7 @@
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
+#include "support/int128.hh"
 
 namespace ghoti::gir {
 
@@ -447,6 +449,26 @@ auto emitter::emit_dyn_coercion(ast::expr_handle src, const sema::type& fat_type
     return value{builder_.emit_load(value{slot, dyn_mut}, fat_mut), fat_mut};
 }
 
+auto emitter::folded_int(const value& v) noexcept -> stdx::option<i128> {
+    if (const auto x{v.as_opt<i64>()}) { return static_cast<i128>(*x); }
+    if (const auto x{v.as_opt<i128>()}) { return *x; }
+    if (const auto x{v.as_opt<u64>()}) { return static_cast<i128>(*x); }
+    if (const auto x{v.as_opt<u128>()}) { return static_cast<i128>(*x); }
+    return stdx::none;
+}
+
+auto emitter::coerce_constexpr_int(value v, sema::type& target, ast::node_id at) -> value {
+    if (const auto folded{folded_int(v)};
+        folded && !sema::constexpr_int_fits(*folded, target, target_ptr_bits_)) {
+        ctx_.diags.emplace_back(fmt::format("integer literal is out of range for type '{}'",
+                                            sema::type_kind_display_name(target)),
+                                sema::error::LITERAL_OUT_OF_RANGE,
+                                active_ast().location_of(at));
+    }
+    v.type.emplace(target);
+    return v;
+}
+
 auto emitter::emit_coerced_expr(ast::expr_handle expr_id, const sema::type& dest_type) -> value {
     PROFILE_FUNCTION();
     // Build the fat pointer for `&T` / `^T` -> `&dyn I` / `^dyn I`
@@ -497,10 +519,37 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, const sema::type& dest
 
     const auto val{emit_expression(expr_id)};
 
-    // An integer that is narrower than the destination widens implicitly
-    if (val.type && sema::is_integer(dest_type.get_kind()) &&
-        sema::is_integer(val.type->get_kind()) && val.type->get_kind() != dest_type.get_kind() &&
-        sema::is_implicit_widenable(val.type->get_kind(), dest_type.get_kind())) {
+    // A `constexpr_int` / `constexpr_float` value already carries its exact numeric payload;
+    // coercing it to a concrete peer is a pure retype
+    if (val.type && sema::is_constexpr_numeric(val.type->get_kind()) &&
+        sema::is_numeric(dest_type.get_kind())) {
+        auto& concrete{const_cast<sema::type&>(dest_type)};
+        if (sema::is_float(dest_type.get_kind()) &&
+            val.type->get_kind() == sema::type_kind::CONSTEXPR_INT) {
+            // int literal -> float context: convert the payload to floating point.
+            if (const auto iv{val.as_opt<i64>()}) { return value{static_cast<f64>(*iv), concrete}; }
+            if (const auto uv{val.as_opt<u64>()}) { return value{static_cast<f64>(*uv), concrete}; }
+            if (const auto iv{val.as_opt<i128>()}) {
+                return value{static_cast<f64>(*iv), concrete};
+            }
+            if (const auto uv{val.as_opt<u128>()}) {
+                return value{static_cast<f64>(*uv), concrete};
+            }
+        }
+        // Reject a compile-time integer that does not fit its concrete integer target.
+        if (val.type->get_kind() == sema::type_kind::CONSTEXPR_INT &&
+            sema::is_integer(dest_type.get_kind())) {
+            return coerce_constexpr_int(val, concrete, *expr_id);
+        }
+        return value{val.data, concrete};
+    }
+
+    // A numeric value narrower than the destination widens implicitly (`iW`->`iV`, `f32`->`f64`,
+    // ...)
+    if (val.type && sema::is_numeric(dest_type.get_kind()) &&
+        sema::is_numeric(val.type->get_kind()) &&
+        !sema::is_same_unqualified(*val.type, dest_type) &&
+        sema::is_implicit_widenable(*val.type, dest_type)) {
         auto& widened{const_cast<sema::type&>(dest_type)};
         return value{builder_.emit_cast(instruction_kind::WIDEN_CAST, val, widened), widened};
     }
@@ -1316,6 +1365,11 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
     ASSERT(sema_type, "Local declaration must have a resolved sema type");
     if (sema_type->get_kind() == sema::type_kind::TYPE) { return; }
 
+    if (decl.value &&
+        decl.value->any<ast::struct_expr, ast::union_expr, ast::enum_expr, ast::interface_expr>()) {
+        return;
+    }
+
     const auto is_const{decl.has_modifier(ast::decl_modifiers::CONSTANT) ||
                         decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
 
@@ -1338,12 +1392,19 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         }
 
         if (const auto cv{const_eval_.try_eval(*decl.value)}) {
+            auto bound{cv->to_gir_value()};
+            // `const x: iN = <constexpr literal>` : range-check and pin the concrete type.
+            if (decl.explicit_type && bound.type &&
+                bound.type->get_kind() == sema::type_kind::CONSTEXPR_INT &&
+                sema::is_integer(sema_type->get_kind())) {
+                bound = coerce_constexpr_int(bound, *sema_type, *decl.value);
+            }
             scopes_.back().bindings.emplace(name,
                                             local_binding{
                                                 .id        = {0, local_kind::TEMPORARY},
                                                 .type      = *sema_type,
                                                 .is_alloca = false,
-                                                .const_val = cv->to_gir_value(),
+                                                .const_val = bound,
                                                 .is_const  = true,
                                             });
             return;
@@ -1356,8 +1417,8 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         if (decl.explicit_type && val.type && !sema::is_assignable(*val.type, *sema_type)) {
             ctx_.diags.emplace_back(
                 fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
-                            sema::type_kind_display_name(val.type->get_kind()),
-                            sema::type_kind_display_name(sema_type->get_kind())),
+                            sema::type_kind_display_name(*val.type),
+                            sema::type_kind_display_name(*sema_type)),
                 sema::error::TYPE_MISMATCH,
                 active_ast().location_of(*decl.value));
         }
@@ -1439,43 +1500,32 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
         [&](const auto&) -> value {
             UNREACHABLE("Unhandled expression node variant in emit_expression_id");
         },
-        [&](ast::i32_expr data) -> value {
+        [&](const ast::int_literal_expr& data) -> value {
             const auto sema_type{active_mod().get_sema_type_opt(id)};
-            return value{static_cast<i64>(data.value),
+            auto&      t{sema_type ? *sema_type : ctx_.get_int(32, true)};
+            // An unsuffixed integer literal in a float context is a float constant.
+            if (sema::is_float(t.get_kind()) || t.get_kind() == sema::type_kind::CONSTEXPR_FLOAT) {
+                return value{static_cast<f64>(static_cast<i128>(data.value)), t};
+            }
+            if (sema::is_unsigned_integer(t)) {
+                const u128 v{data.value};
+                if (v <= static_cast<u128>(std::numeric_limits<u64>::max())) {
+                    return value{static_cast<u64>(v), t};
+                }
+                return value{v, t};
+            }
+            const auto v{static_cast<i128>(data.value)};
+            if (v >= static_cast<i128>(std::numeric_limits<i64>::min()) &&
+                v <= static_cast<i128>(std::numeric_limits<i64>::max())) {
+                return value{static_cast<i64>(v), t};
+            }
+            return value{v, t};
+        },
+        [&](const ast::float_literal_expr& data) -> value {
+            const auto sema_type{active_mod().get_sema_type_opt(id)};
+            return value{data.value,
                          sema_type ? *sema_type
-                                   : ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
-        },
-        [&](ast::i64_expr data) -> value {
-            return value{static_cast<i64>(data.value),
-                         ctx_.get_builtin_resolved_type(sema::type_kind::I64)};
-        },
-        [&](ast::isize_expr data) -> value {
-            return value{static_cast<i64>(data.value),
-                         ctx_.get_builtin_resolved_type(sema::type_kind::ISIZE)};
-        },
-        [&](ast::u8_expr data) -> value {
-            return value{static_cast<u64>(data.value),
-                         ctx_.get_builtin_resolved_type(sema::type_kind::U8)};
-        },
-        [&](ast::u32_expr data) -> value {
-            return value{static_cast<u64>(data.value),
-                         ctx_.get_builtin_resolved_type(sema::type_kind::U32)};
-        },
-        [&](ast::u64_expr data) -> value {
-            return value{static_cast<u64>(data.value),
-                         ctx_.get_builtin_resolved_type(sema::type_kind::U64)};
-        },
-        [&](ast::usize_expr data) -> value {
-            return value{static_cast<u64>(data.value),
-                         ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
-        },
-        [&](ast::f32_expr data) -> value {
-            return value{static_cast<f64>(data.value),
-                         ctx_.get_builtin_resolved_type(sema::type_kind::F32)};
-        },
-        [&](ast::f64_expr data) -> value {
-            return value{static_cast<f64>(data.value),
-                         ctx_.get_builtin_resolved_type(sema::type_kind::F64)};
+                                   : ctx_.get_builtin_resolved_type(sema::type_kind::F64)};
         },
         [&](ast::bool_expr) -> value {
             return value{id.get_token_type() == syntax::token_type_t::BOOLEAN_TRUE,
@@ -1673,7 +1723,7 @@ auto emitter::try_emit_union_field_eq(ast::node_id lhs, ast::node_id rhs)
 
 // Compares a tagged union's runtime discriminant (index 0) against a `.field` pattern's ordinal.
 auto emitter::emit_union_tag_eq(value union_addr, ast::node_id member_pattern_id) -> local_id {
-    auto&      i32_type{ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
+    auto&      i32_type{ctx_.get_int(32, true)};
     auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
     const auto tag_ptr{builder_.emit_get_element_ptr(
         union_addr, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
@@ -1760,7 +1810,7 @@ auto emitter::sync_tagged_union_tag(ast::node_id assign_lhs) -> void {
     ASSERT(proxy, "Union field write must reference a valid field");
 
     const auto union_addr{emit_lvalue(dot->object)};
-    auto&      i32_type{ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
+    auto&      i32_type{ctx_.get_int(32, true)};
     auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
     const auto tag_ptr{builder_.emit_get_element_ptr(
         union_addr, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
@@ -1769,11 +1819,277 @@ auto emitter::sync_tagged_union_tag(ast::node_id assign_lhs) -> void {
         .is_initializer = true;
 }
 
+auto emitter::emit_packed_field_read(value                        backing_addr,
+                                     const sema::types::struct_t& st,
+                                     usize                        field_idx,
+                                     sema::type&                  field_type) -> value {
+    const auto  n{sema::packed_backing_bits(st, target_ptr_bits_).value_or(1)};
+    auto&       backing_ty{ctx_.get_int(static_cast<u16>(n), false)};
+    const value backing{builder_.emit_load(backing_addr, backing_ty), backing_ty};
+    return emit_packed_field_extract(backing, st, field_idx, field_type);
+}
+
+// Slice one field's value out of an already-loaded `packed struct` backing integer.
+auto emitter::emit_packed_field_extract(value                        backing,
+                                        const sema::types::struct_t& st,
+                                        usize                        field_idx,
+                                        sema::type&                  field_type) -> value {
+    const auto n{sema::packed_backing_bits(st, target_ptr_bits_).value_or(1)};
+    const auto offset{sema::packed_field_offset(st, field_idx, target_ptr_bits_)};
+    const auto fbits{sema::packed_field_bits(field_type, target_ptr_bits_).value_or(n)};
+    return emit_packed_bits_extract(backing, n, offset, fbits, field_type);
+}
+
+// Every field of a bit-packed `packed union` sits at bit offset 0.
+auto emitter::emit_packed_field_read(value                       backing_addr,
+                                     const sema::types::union_t& ut,
+                                     sema::type&                 field_type) -> value {
+    const auto  n{sema::packed_union_backing_bits(ut, target_ptr_bits_).value_or(1)};
+    const auto  fbits{sema::packed_field_bits(field_type, target_ptr_bits_).value_or(n)};
+    auto&       backing_ty{ctx_.get_int(static_cast<u16>(n), false)};
+    const value backing{builder_.emit_load(backing_addr, backing_ty), backing_ty};
+    return emit_packed_bits_extract(backing, n, 0, fbits, field_type);
+}
+
+auto emitter::emit_packed_field_write(value                       backing_addr,
+                                      const sema::types::union_t& ut,
+                                      sema::type&                 field_type,
+                                      value                       new_field_val) -> void {
+    const auto n{sema::packed_union_backing_bits(ut, target_ptr_bits_).value_or(1)};
+    const auto fbits{sema::packed_field_bits(field_type, target_ptr_bits_).value_or(n)};
+    emit_packed_bits_insert(backing_addr, n, 0, fbits, field_type, new_field_val);
+}
+
+// Slice `fbits` bits starting at `offset` out of `backing` and reinterpret them as `field_type`
+auto emitter::emit_packed_bits_extract(
+    value backing, u32 n, u32 offset, u32 fbits, sema::type& field_type) -> value {
+    auto& backing_ty{ctx_.get_int(static_cast<u16>(n), false)};
+
+    const value shifted{
+        offset == 0
+            ? backing
+            : value{builder_.emit_binary(
+                        instruction_kind::SHR, backing, value{u64{offset}, backing_ty}, backing_ty),
+                    backing_ty}};
+
+    const auto kind{field_type.get_kind()};
+    if (kind == sema::type_kind::INT) {
+        return value{builder_.emit_cast(instruction_kind::WIDEN_CAST, shifted, field_type),
+                     field_type};
+    }
+
+    auto&       fbits_uint{ctx_.get_int(static_cast<u16>(fbits), false)};
+    const value narrowed{builder_.emit_cast(instruction_kind::WIDEN_CAST, shifted, fbits_uint),
+                         fbits_uint};
+    if (sema::is_float(kind) || kind == sema::type_kind::BOOL || kind == sema::type_kind::STRUCT ||
+        kind == sema::type_kind::UNION) {
+        // `bool` is `i1`, a nested `packed` aggregate is its own `iN`: reinterpret the bits.
+        return value{builder_.emit_cast(instruction_kind::BIT_CAST, narrowed, field_type),
+                     field_type};
+    }
+    if (kind == sema::type_kind::POINTER || kind == sema::type_kind::REFERENCE) {
+        return value{builder_.emit_cast(instruction_kind::PTR_FROM_INT, narrowed, field_type),
+                     field_type};
+    }
+    // enum / usize / isize: the field-width integer is the value.
+    return value{builder_.emit_cast(instruction_kind::WIDEN_CAST, narrowed, field_type),
+                 field_type};
+}
+
+auto emitter::emit_packed_field_write(value                        backing_addr,
+                                      const sema::types::struct_t& st,
+                                      usize                        field_idx,
+                                      sema::type&                  field_type,
+                                      value                        new_field_val) -> void {
+    const auto n{sema::packed_backing_bits(st, target_ptr_bits_).value_or(1)};
+    const auto offset{sema::packed_field_offset(st, field_idx, target_ptr_bits_)};
+    const auto fbits{sema::packed_field_bits(field_type, target_ptr_bits_).value_or(n)};
+    emit_packed_bits_insert(backing_addr, n, offset, fbits, field_type, new_field_val);
+}
+
+// Read-modify-write `fbits` bits at `offset` of the `n`-bit backing integer at `backing_addr`
+// with `new_field_val` reinterpreted from `field_type`.
+auto emitter::emit_packed_bits_insert(
+    value backing_addr, u32 n, u32 offset, u32 fbits, sema::type& field_type, value new_field_val)
+    -> void {
+    auto&       backing_ty{ctx_.get_int(static_cast<u16>(n), false)};
+    const value old_backing{builder_.emit_load(backing_addr, backing_ty), backing_ty};
+    const value merged{
+        emit_packed_bits_merge(old_backing, n, offset, fbits, field_type, new_field_val)};
+    builder_.emit_store(backing_addr, merged);
+}
+
+// The `n`-bit backing integer that is `old_backing` with `fbits` bits at
+// `offset` replaced by `new_field_val` reinterpreted from `field_type` (for nested writes)
+auto emitter::emit_packed_bits_merge(
+    value old_backing, u32 n, u32 offset, u32 fbits, sema::type& field_type, value new_field_val)
+    -> value {
+    auto& backing_ty{ctx_.get_int(static_cast<u16>(n), false)};
+    auto& fbits_uint{ctx_.get_int(static_cast<u16>(fbits), false)};
+
+    const auto kind{field_type.get_kind()};
+    value      as_fbits{new_field_val};
+    if (sema::is_float(kind) || kind == sema::type_kind::BOOL || kind == sema::type_kind::STRUCT ||
+        kind == sema::type_kind::UNION) {
+        // `bool` is `i1`, a nested `packed` aggregate is its own `iN`: reinterpret the bits.
+        as_fbits = value{builder_.emit_cast(instruction_kind::BIT_CAST, new_field_val, fbits_uint),
+                         fbits_uint};
+    } else if (kind == sema::type_kind::POINTER || kind == sema::type_kind::REFERENCE) {
+        as_fbits =
+            value{builder_.emit_cast(instruction_kind::INT_FROM_PTR, new_field_val, fbits_uint),
+                  fbits_uint};
+    } else {
+        as_fbits =
+            value{builder_.emit_cast(instruction_kind::WIDEN_CAST, new_field_val, fbits_uint),
+                  fbits_uint};
+    }
+
+    const value zexted{builder_.emit_cast(instruction_kind::WIDEN_CAST, as_fbits, backing_ty),
+                       backing_ty};
+    const value shifted{
+        offset == 0
+            ? zexted
+            : value{builder_.emit_binary(
+                        instruction_kind::SHL, zexted, value{u64{offset}, backing_ty}, backing_ty),
+                    backing_ty}};
+
+    const u128 field_mask{fbits >= 128 ? ~u128{0} : ((u128{1} << fbits) - 1)};
+    const u128 all_ones{n >= 128 ? ~u128{0} : ((u128{1} << n) - 1)};
+    const u128 mask{(field_mask << offset) & all_ones};
+    const u128 inv_mask{all_ones ^ mask};
+
+    const value bits_in{
+        builder_.emit_binary(instruction_kind::AND, shifted, value{mask, backing_ty}, backing_ty),
+        backing_ty};
+    const value cleared{
+        builder_.emit_binary(
+            instruction_kind::AND, old_backing, value{inv_mask, backing_ty}, backing_ty),
+        backing_ty};
+    return value{builder_.emit_binary(instruction_kind::OR, cleared, bits_in, backing_ty),
+                 backing_ty};
+}
+
+namespace {
+
+// Peels one `^`/`&` layer off `t`.
+[[nodiscard]] auto peel_ptr_ref(const sema::type& t) -> const sema::type& {
+    if (const auto p{t.get_data().as_opt<sema::types::pointer>()}) { return p->underlying; }
+    if (const auto r{t.get_data().as_opt<sema::types::reference>()}) { return r->underlying; }
+    return t;
+}
+
+[[nodiscard]] auto is_bit_packed_agg(const sema::type& t) -> bool {
+    if (const auto st{t.get_data().as_opt<sema::types::struct_t>()}) { return st->is_bit_packed(); }
+    if (const auto ut{t.get_data().as_opt<sema::types::union_t>()}) { return ut->is_bit_packed(); }
+    return false;
+}
+
+} // namespace
+
+// The bit layout of `dot`'s field within its (bit-packed) enclosing aggregate.
+auto emitter::packed_layout_of(const ast::dot_expr& dot) -> packed_field_layout {
+    const auto& obj_ty{peel_ptr_ref(*active_mod().get_sema_type_opt(dot.object))};
+    const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
+    const auto& table{ctx_.registry.get(obj_ty.get_symbol_table_idx())};
+    const auto  field_idx{table.get_proxy(member_ident.name).index};
+    auto&       field_type{active_mod()
+                         .get_sema_type_opt(dot.member)
+                         .value_or(*active_mod().get_sema_type_opt(dot.object))};
+
+    if (const auto st{obj_ty.get_data().as_opt<sema::types::struct_t>()}) {
+        const auto n{sema::packed_backing_bits(*st, target_ptr_bits_).value_or(1)};
+        return {
+            .n          = n,
+            .offset     = sema::packed_field_offset(*st, field_idx, target_ptr_bits_),
+            .fbits      = sema::packed_field_bits(field_type, target_ptr_bits_).value_or(n),
+            .field_idx  = field_idx,
+            .field_type = &field_type,
+        };
+    }
+    const auto& ut{obj_ty.get_data().as<sema::types::union_t>()};
+    const auto  n{sema::packed_union_backing_bits(ut, target_ptr_bits_).value_or(1)};
+    return {
+        .n          = n,
+        .offset     = 0,
+        .fbits      = sema::packed_field_bits(field_type, target_ptr_bits_).value_or(n),
+        .field_idx  = field_idx,
+        .field_type = &field_type,
+    };
+}
+
+auto emitter::emit_packed_store(const ast::dot_expr& dot, value field_val) -> void {
+    const auto layout{packed_layout_of(dot)};
+
+    const auto inner{active_ast().get_as_opt<ast::dot_expr>(dot.object)};
+    if (inner && is_bit_packed_agg(peel_ptr_ref(*active_mod().get_sema_type_opt(inner->object)))) {
+        auto&       backing_ty{ctx_.get_int(static_cast<u16>(layout.n), false)};
+        const value old_obj{emit_expression(dot.object).data, backing_ty};
+        const value new_obj{emit_packed_bits_merge(
+            old_obj, layout.n, layout.offset, layout.fbits, *layout.field_type, field_val)};
+        emit_packed_store(*inner, new_obj);
+        return;
+    }
+
+    auto base_lval{emit_lvalue(dot.object)};
+    if (const auto obj_t{active_mod().get_sema_type_opt(dot.object)}) {
+        if (obj_t->get_data().as_opt<sema::types::pointer>() ||
+            obj_t->get_data().as_opt<sema::types::reference>()) {
+            base_lval.data = value::data_t{builder_.emit_load(base_lval, *obj_t)};
+        }
+    }
+    emit_packed_bits_insert(
+        base_lval, layout.n, layout.offset, layout.fbits, *layout.field_type, field_val);
+}
+
+auto emitter::emit_packed_field_assign(ast::node_id                id,
+                                       const ast::dot_expr&        dot,
+                                       const ast::assignment_expr& assign,
+                                       syntax::token_type_t        op_type) -> value {
+    PROFILE_FUNCTION();
+    const auto layout{packed_layout_of(dot)};
+    auto&      field_type{*layout.field_type};
+
+    value new_field{};
+    if (op_type == syntax::token_type_t::ASSIGN) {
+        new_field = emit_coerced_expr(assign.rhs, field_type);
+    } else {
+        auto&       backing_ty{ctx_.get_int(static_cast<u16>(layout.n), false)};
+        const value backing{emit_expression(dot.object).data, backing_ty};
+        const auto  old_field{
+            emit_packed_bits_extract(backing, layout.n, layout.offset, layout.fbits, field_type)};
+        auto base_tok{op_type};
+        if (const auto b{syntax::token_type::get_compound_base_op(op_type)}) { base_tok = *b; }
+        const auto base_kind{map_binary_op(base_tok).value_or(instruction_kind::ADD)};
+        const auto rhs{emit_expression(assign.rhs)};
+        new_field =
+            value{emit_checked_binary(base_kind, old_field, rhs, field_type, id), field_type};
+    }
+
+    emit_packed_store(dot, new_field);
+    return new_field;
+}
+
 auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assign) -> value {
     PROFILE_FUNCTION();
     const auto op_type{id.get_token_type()};
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Assignment expression must have a resolved sema type");
+
+    // A field write on a bit-packed struct is a read-modify-write of the backing integer.
+    if (const auto dot{active_ast().get_as_opt<ast::dot_expr>(assign.lhs)}) {
+        if (const auto ot{active_mod().get_sema_type_opt(dot->object)}) {
+            const sema::type* u{ot.get()};
+            if (const auto p{u->get_data().as_opt<sema::types::pointer>()}) {
+                u = &p->underlying;
+            } else if (const auto r{u->get_data().as_opt<sema::types::reference>()}) {
+                u = &r->underlying;
+            }
+            if (is_bit_packed_agg(*u)) {
+                return emit_packed_field_assign(id, *dot, assign, op_type);
+            }
+        }
+    }
+
     sync_tagged_union_tag(assign.lhs);
     auto lhs_lval{emit_lvalue(assign.lhs)};
     ASSERT(lhs_lval.type, "Assignment LHS must have a resolved type");
@@ -1802,7 +2118,9 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
     case syntax::token_type_t::XOR_ASSIGN:
     case syntax::token_type_t::SHL_ASSIGN:
     case syntax::token_type_t::SHR_ASSIGN:     {
-        const auto base_kind{map_binary_op(op_type).value_or(instruction_kind::ADD)};
+        auto base_tok{op_type};
+        if (const auto b{syntax::token_type::get_compound_base_op(op_type)}) { base_tok = *b; }
+        const auto base_kind{map_binary_op(base_tok).value_or(instruction_kind::ADD)};
         auto&      target_type{*lhs_lval.type};
         const auto loaded{builder_.emit_load(lhs_lval, target_type)};
         const auto rhs{emit_expression(assign.rhs)};
@@ -1896,7 +2214,8 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                         if (operand_kind == sema::type_kind::POINTER) {
                             return pointer_to_bool(operand, false);
                         }
-                        if (sema::is_integer(operand_kind)) {
+                        if (sema::is_integer(operand_kind) ||
+                            sema::is_constexpr_int(operand_kind)) {
                             auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
                             return value{builder_.emit_binary(instruction_kind::NE,
                                                               operand,
@@ -2064,7 +2383,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         case syntax::token_type_t::BUILTIN_SRC: {
             // `@src()` yields a `builtin::SourceLocation` aggregate
             const auto         loc{active_ast().location_of(id)};
-            auto&              u32_type{ctx_.get_builtin_resolved_type(sema::type_kind::U32)};
+            auto&              u32_type{ctx_.get_int(32, false)};
             std::vector<value> args;
             args.emplace_back(
                 const_value::make_string(ctx_, active_mod().path.string()).to_gir_value());
@@ -2076,6 +2395,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             return value{void_val{}, ret_type};
         }
         case syntax::token_type_t::BUILTIN_SIZE_OF:
+        case syntax::token_type_t::BUILTIN_BIT_SIZE_OF:
         case syntax::token_type_t::BUILTIN_ALIGN_OF:
         case syntax::token_type_t::BUILTIN_TYPE_OF:
         case syntax::token_type_t::BUILTIN_TYPE_NAME:
@@ -2104,7 +2424,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             }
 
             const auto loc{active_ast().location_of(id)};
-            auto&      u32_type{ctx_.get_builtin_resolved_type(sema::type_kind::U32)};
+            auto&      u32_type{ctx_.get_int(32, false)};
 
             std::vector<value> args;
             args.emplace_back(std::move(cond_val));
@@ -2151,7 +2471,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             }
 
             const auto loc{active_ast().location_of(id)};
-            auto&      u32_type{ctx_.get_builtin_resolved_type(sema::type_kind::U32)};
+            auto&      u32_type{ctx_.get_int(32, false)};
 
             std::vector<value> args;
             args.emplace_back(emit_expression(*call.arguments[0].as_opt<ast::expr_handle>()));
@@ -2176,7 +2496,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             }
 
             const auto loc{active_ast().location_of(id)};
-            auto&      u32_type{ctx_.get_builtin_resolved_type(sema::type_kind::U32)};
+            auto&      u32_type{ctx_.get_int(32, false)};
             auto&      void_type{ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
             auto&      bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
 
@@ -2969,8 +3289,7 @@ auto emitter::emit_for(ast::node_id                   id,
             const bool open_upper{!range->rhs};
             const auto end_val{open_upper ? value{u64{0}, usize_type}
                                           : emit_expression(*range->rhs)};
-            auto*      elem_type{start_val.type ? &*start_val.type
-                                                : &ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
+            auto*      elem_type{start_val.type ? &*start_val.type : &ctx_.get_int(32, true)};
 
             const auto slot{builder_.emit_alloca(*elem_type, cap_name.value_or(""))};
             builder_.emit_store(slot, start_val);
@@ -2992,9 +3311,8 @@ auto emitter::emit_for(ast::node_id                   id,
             const auto idx_slot{builder_.emit_alloca(usize_type)};
             builder_.emit_store(idx_slot, value{static_cast<u64>(0), usize_type});
 
-            stdx::option<sema::type&> elem_type{
-                ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
-            value end_val{static_cast<u64>(0), usize_type};
+            stdx::option<sema::type&> elem_type{ctx_.get_int(32, true)};
+            value                     end_val{static_cast<u64>(0), usize_type};
 
             if (arr_val.type) {
                 // The container's own mutability governs element const correctness
@@ -3422,7 +3740,7 @@ auto emitter::materialize_const(const const_value& cv) -> value {
             const auto [sym, field_idx]{*proxy};
             auto& field_type{union_data->type_at(field_idx)};
 
-            auto&      i32_type{ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
+            auto&      i32_type{ctx_.get_int(32, true)};
             const auto tag_ptr{builder_.emit_get_element_ptr(
                 value{slot, type}, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
             builder_
@@ -3455,7 +3773,7 @@ auto emitter::lvalue_of_expr(ast::node_id id, sema::type& sema_type) -> value {
 
 auto emitter::emit_panic_call(std::string_view message, ast::node_id site) -> void {
     const auto loc{active_ast().location_of(site)};
-    auto&      u32_type{ctx_.get_builtin_resolved_type(sema::type_kind::U32)};
+    auto&      u32_type{ctx_.get_int(32, false)};
     auto&      noreturn_type{ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN)};
 
     std::vector<value> args;
@@ -3509,7 +3827,7 @@ auto emitter::emit_enum_cast_guard(ast::node_id     site,
         i64         disc{static_cast<i64>(idx)};
         if (enumeration.value) {
             if (const auto ev{const_eval_.try_eval(*enumeration.value)}) {
-                disc = ev->as_int_opt().value_or(disc);
+                disc = static_cast<i64>(ev->as_int_opt().value_or(disc));
             }
         }
         discriminants.emplace_back(disc);
@@ -3567,7 +3885,7 @@ auto emitter::emit_checked_binary(instruction_kind kind,
     const bool checkable{runtime_safety_ && sema::is_integer(k) &&
                          (((kind == instruction_kind::ADD || kind == instruction_kind::SUB ||
                             kind == instruction_kind::MUL) &&
-                           sema::is_signed_integer(k)) ||
+                           sema::is_signed_integer(result_type)) ||
                           kind == instruction_kind::DIV || kind == instruction_kind::MOD ||
                           kind == instruction_kind::SHL || kind == instruction_kind::SHR)};
     return builder_.emit_binary(kind, std::move(lhs), std::move(rhs), result_type, checkable);
@@ -3578,7 +3896,7 @@ auto emitter::emit_checked_unary(instruction_kind kind,
                                  sema::type&      result_type,
                                  ast::node_id) -> local_id {
     const bool checkable{runtime_safety_ && kind == instruction_kind::NEG &&
-                         sema::is_signed_integer(result_type.get_kind())};
+                         sema::is_signed_integer(result_type)};
     return builder_.emit_unary(kind, std::move(operand), result_type, checkable);
 }
 
@@ -3735,7 +4053,16 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             }
 
             const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
-            u64         member_idx{0};
+            if (const auto st{obj_type->get_data().as_opt<sema::types::struct_t>()};
+                st && st->is_bit_packed()) {
+                // A bit-packed field has no address; `&p.field` is rejected during resolution.
+                UNREACHABLE("lvalue of a bit-packed struct field should be unreachable");
+            }
+            if (const auto ut{obj_type->get_data().as_opt<sema::types::union_t>()};
+                ut && ut->is_bit_packed()) {
+                UNREACHABLE("lvalue of a bit-packed union field should be unreachable");
+            }
+            u64 member_idx{0};
             if (obj_type->get_kind() == sema::type_kind::SLICE) {
                 member_idx =
                     member_ident.name == "ptr" ? SLICE_PTR_FIELD_INDEX : SLICE_LEN_FIELD_INDEX;
@@ -3802,10 +4129,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                     auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
                     auto&      isize_type{ctx_.get_builtin_resolved_type(sema::type_kind::ISIZE)};
                     auto&      bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
-                    const bool is_signed{idx_val.type &&
-                                         (idx_val.type->get_kind() == sema::type_kind::I32 ||
-                                          idx_val.type->get_kind() == sema::type_kind::I64 ||
-                                          idx_val.type->get_kind() == sema::type_kind::ISIZE)};
+                    const bool is_signed{idx_val.type && sema::is_signed_integer(*idx_val.type)};
                     auto&      index_type{is_signed ? isize_type : usize_type};
 
                     value idx_cmp{idx_val};
@@ -3854,10 +4178,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                         base_lval, {value{SLICE_LEN_FIELD_INDEX, usize_type}}, usize_type)};
                     const auto len_val{builder_.emit_load(value{len_slot, usize_type}, usize_type)};
 
-                    const bool is_signed{idx_val.type &&
-                                         (idx_val.type->get_kind() == sema::type_kind::I32 ||
-                                          idx_val.type->get_kind() == sema::type_kind::I64 ||
-                                          idx_val.type->get_kind() == sema::type_kind::ISIZE)};
+                    const bool is_signed{idx_val.type && sema::is_signed_integer(*idx_val.type)};
                     auto&      index_type{is_signed ? isize_type : usize_type};
 
                     value idx_cmp{idx_val};
@@ -3935,7 +4256,7 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
     }
 
     if (const auto cv{const_eval_.try_eval(id)}) {
-        if (const auto i{cv->as_int_opt()}) { return value{*i, sema_type}; }
+        if (const auto i{cv->as_int_opt()}) { return value{static_cast<i64>(*i), sema_type}; }
         if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
         if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
     }
@@ -4029,9 +4350,8 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
             // `|_|` is an anonymous capture: it consumes the arm's payload slot but binds nothing.
             if (arm.capture && arm.capture->is<ast::identifier_expr>()) {
                 const auto& cap_ident{active_ast().get_as<ast::identifier_expr>(*arm.capture)};
-                auto&       cap_type{active_mod()
-                                   .get_sema_type_opt(*arm.capture)
-                                   .value_or(ctx_.get_builtin_resolved_type(sema::type_kind::I32))};
+                auto&       cap_type{
+                    active_mod().get_sema_type_opt(*arm.capture).value_or(ctx_.get_int(32, true))};
                 ASSERT(matcher_addr, "A capturing arm must have a computed matcher address");
 
                 // Unwrap a ref/ptr modifier to the type used to address the aliased storage.
@@ -4155,7 +4475,7 @@ auto emitter::emit_union_active_field_guard(value            union_addr,
     if (!fn_opt) { return; }
     auto& fn{*fn_opt};
 
-    auto& i32_type{ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
+    auto& i32_type{ctx_.get_int(32, true)};
     auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
     auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
 
@@ -4196,7 +4516,7 @@ auto emitter::emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> va
     ASSERT(fn_opt, "unwrap must be within an active function");
     [[maybe_unused]] auto& fn{*fn_opt};
 
-    [[maybe_unused]] auto& i32_type{ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
+    [[maybe_unused]] auto& i32_type{ctx_.get_int(32, true)};
     auto&                  usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
     [[maybe_unused]] auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
 
@@ -4261,7 +4581,7 @@ auto emitter::emit_unwrap_propagation(value             operand_addr,
 
     const auto ret_layout{unwrap_layout_of(ctx_, ret_type)};
 
-    auto& i32_type{ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
+    auto& i32_type{ctx_.get_int(32, true)};
     auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
 
     builder_.set_location(active_ast().location_of(site));
@@ -4303,7 +4623,7 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
     ASSERT(sema_type, "Initializer expression must have a resolved sema type");
 
     if (const auto cv{const_eval_.try_eval(id)}) {
-        if (const auto i{cv->as_int_opt()}) { return value{*i, sema_type}; }
+        if (const auto i{cv->as_int_opt()}) { return value{static_cast<i64>(*i), sema_type}; }
         if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
         if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
     }
@@ -4326,6 +4646,26 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
     }
 
     if (const auto ut{sema_type->get_data().as_opt<sema::types::union_t>()}) {
+        if (ut->is_bit_packed()) {
+            // Backing integer: zero it, then OR the single set field in at bit offset 0.
+            const auto  n{sema::packed_union_backing_bits(*ut, target_ptr_bits_).value_or(1)};
+            auto&       backing_ty{ctx_.get_int(static_cast<u16>(n), false)};
+            const auto& table{ctx_.registry.get(sema_type->get_symbol_table_idx())};
+            builder_.emit_store(value{struct_slot, backing_ty}, value{u64{0}, backing_ty})
+                .is_initializer = true;
+            for (const auto& [accessor, val_expr] : init.initializers) {
+                const auto& imp{active_ast().get_as<ast::implicit_access_expr>(*accessor)};
+                const auto& name{active_ast().get_as<ast::identifier_expr>(imp.member).name};
+                const auto  proxy{table.get_proxy_opt(name)};
+                ASSERT(proxy, "Member must exist in union symbol table");
+                auto&      field_type{ut->type_at(proxy->index)};
+                const auto val{emit_coerced_expr(val_expr, field_type)};
+                emit_packed_field_write(value{struct_slot, backing_ty}, *ut, field_type, val);
+            }
+            const auto loaded{builder_.emit_load(value{struct_slot, *sema_type}, *sema_type)};
+            return value{loaded, sema_type};
+        }
+
         if (ut->is_untagged) {
             for (const auto& [accessor, val_expr] : init.initializers) {
                 auto& field_type{active_mod().get_sema_type_opt(*val_expr).value_or(*sema_type)};
@@ -4346,7 +4686,7 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
         ASSERT(proxy, "Member must exist in union symbol table");
         const auto [sym, field_idx]{*proxy};
 
-        auto&      i32_type{ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
+        auto&      i32_type{ctx_.get_int(32, true)};
         const auto tag_ptr{
             builder_.emit_get_element_ptr(value{struct_slot, *sema_type},
                                           {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}},
@@ -4369,6 +4709,28 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
     const auto st{sema_type->get_data().as_opt<sema::types::struct_t>()};
     ASSERT(st, "Initializer target must be a struct type");
     const auto& table{ctx_.registry.get(sema_type->get_symbol_table_idx())};
+
+    // A bit-packed struct is a single backing integer: zero it, then OR each field instead of GEP
+    if (st->is_bit_packed()) {
+        const auto n{sema::packed_backing_bits(*st, target_ptr_bits_).value_or(1)};
+        auto&      backing_ty{ctx_.get_int(static_cast<u16>(n), false)};
+        builder_.emit_store(value{struct_slot, backing_ty}, value{u64{0}, backing_ty})
+            .is_initializer = true;
+        for (const auto& [accessor, val_expr] : init.initializers) {
+            const auto& imp{active_ast().get_as<ast::implicit_access_expr>(*accessor)};
+            const auto& name{active_ast().get_as<ast::identifier_expr>(imp.member).name};
+            const auto  proxy{table.get_proxy_opt(name)};
+            ASSERT(proxy, "Member must exist in struct symbol table");
+            const auto [sym, field_idx]{*proxy};
+            auto&      field_type{st->type_at(field_idx)};
+            const auto val{emit_coerced_expr(val_expr, field_type)};
+            emit_packed_field_write(
+                value{struct_slot, backing_ty}, *st, field_idx, field_type, val);
+        }
+        const auto loaded{builder_.emit_load(value{struct_slot, *sema_type}, *sema_type)};
+        return value{loaded, sema_type};
+    }
+
     for (const auto& [accessor, val_expr] : init.initializers) {
         const auto& imp{active_ast().get_as<ast::implicit_access_expr>(*accessor)};
         const auto& name{active_ast().get_as<ast::identifier_expr>(imp.member).name};
@@ -4419,7 +4781,7 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
 
     if (dot_object_is_type_namespace(dot)) {
         if (const auto cv{const_eval_.try_eval(id)}) {
-            if (const auto i{cv->as_int_opt()}) { return value{*i, sema_type}; }
+            if (const auto i{cv->as_int_opt()}) { return value{static_cast<i64>(*i), sema_type}; }
             if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
             if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
             if (cv->is<const_struct>() || cv->is<const_array>() || cv->is<const_union>() ||
@@ -4440,6 +4802,31 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
             return value{builder_.emit_load(*gref, gtype), gtype};
         }
         return value{ref_symbol_name(id, member_ident.name), sema_type};
+    }
+
+    // A directly-held bit-packed struct value has no addressable fields
+    if (const auto st{obj_type->get_data().as_opt<sema::types::struct_t>()};
+        st && st->is_bit_packed()) {
+        const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
+        const auto& table{ctx_.registry.get(obj_type->get_symbol_table_idx())};
+        const auto  proxy{table.get_proxy_opt(member_ident.name)};
+        ASSERT(proxy, "Member must exist in bit-packed struct symbol table");
+        const auto  n{sema::packed_backing_bits(*st, target_ptr_bits_).value_or(1)};
+        auto&       backing_ty{ctx_.get_int(static_cast<u16>(n), false)};
+        const value backing{emit_expression(dot.object).data, backing_ty};
+        auto&       field_type{sema_type ? *sema_type : const_cast<sema::type&>(*obj_type)};
+        return emit_packed_field_extract(backing, *st, proxy->index, field_type);
+    }
+    if (const auto ut{obj_type->get_data().as_opt<sema::types::union_t>()};
+        ut && ut->is_bit_packed()) {
+        const auto n{sema::packed_union_backing_bits(*ut, target_ptr_bits_).value_or(1)};
+        const auto fbits{
+            sema::packed_field_bits(sema_type ? *sema_type : *obj_type, target_ptr_bits_)
+                .value_or(n)};
+        auto&       backing_ty{ctx_.get_int(static_cast<u16>(n), false)};
+        const value backing{emit_expression(dot.object).data, backing_ty};
+        auto&       field_type{sema_type ? *sema_type : const_cast<sema::type&>(*obj_type)};
+        return emit_packed_bits_extract(backing, n, 0, fbits, field_type);
     }
 
     // emit_lvalue(dot.object) addresses the object's own storage; still needs unwinding here
@@ -4497,7 +4884,10 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
         // Fields come first in the symbol table; anything past them is a member declaration
         if (const auto st{obj_type->get_data().as_opt<sema::types::struct_t>()};
             st && member_idx < st->fields.size()) {
-            auto&      field_type{sema_type ? *sema_type : *obj_type};
+            auto& field_type{sema_type ? *sema_type : *obj_type};
+            if (st->is_bit_packed()) {
+                return emit_packed_field_read(base_lval, *st, member_idx, field_type);
+            }
             const auto field_ptr{builder_.emit_get_element_ptr(
                 base_lval, {value{static_cast<u64>(member_idx), usize_type}}, field_type)};
             const auto loaded{builder_.emit_load(value{field_ptr, field_type}, field_type)};
@@ -4507,6 +4897,7 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
         if (const auto ut{obj_type->get_data().as_opt<sema::types::union_t>()};
             ut && member_idx < ut->fields.size()) {
             auto& field_type{sema_type ? *sema_type : *obj_type};
+            if (ut->is_bit_packed()) { return emit_packed_field_read(base_lval, *ut, field_type); }
             if (ut->is_untagged) {
                 const auto loaded{
                     builder_.emit_load(value{base_lval.data, field_type}, field_type)};
@@ -4524,7 +4915,7 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
     }
 
     if (const auto cv{const_eval_.try_eval(id)}) {
-        if (const auto i{cv->as_int_opt()}) { return value{*i, sema_type}; }
+        if (const auto i{cv->as_int_opt()}) { return value{static_cast<i64>(*i), sema_type}; }
         if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
         if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
         if (cv->is<const_struct>() || cv->is<const_array>() || cv->is<const_union>() ||

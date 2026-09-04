@@ -34,15 +34,8 @@ enum class node_kind : u8 {
     DEREFERENCE_EXPRESSION,
     IMPLICIT_ACCESS_EXPRESSION,
     STRING_EXPRESSION,
-    I32_EXPRESSION,
-    I64_EXPRESSION,
-    ISIZE_EXPRESSION,
-    U32_EXPRESSION,
-    U64_EXPRESSION,
-    USIZE_EXPRESSION,
-    U8_EXPRESSION,
-    F32_EXPRESSION,
-    F64_EXPRESSION,
+    INT_LITERAL_EXPRESSION,
+    FLOAT_LITERAL_EXPRESSION,
     BOOL_EXPRESSION,
     VOID_EXPRESSION,
     UNDEFINED_EXPRESSION,
@@ -98,15 +91,8 @@ enum class node_kind : u8 {
     X(address_of_expr)      \
     X(implicit_access_expr) \
     X(string_expr)          \
-    X(i32_expr)             \
-    X(i64_expr)             \
-    X(isize_expr)           \
-    X(u32_expr)             \
-    X(u64_expr)             \
-    X(usize_expr)           \
-    X(u8_expr)              \
-    X(f32_expr)             \
-    X(f64_expr)             \
+    X(int_literal_expr)     \
+    X(float_literal_expr)   \
     X(bool_expr)            \
     X(void_expr)            \
     X(undefined_expr)       \
@@ -218,15 +204,8 @@ NODE_KIND_OF_TRAIT(dereference_expr, DEREFERENCE_EXPRESSION)
 NODE_KIND_OF_TRAIT(address_of_expr, ADDRESS_OF_EXPRESSION)
 NODE_KIND_OF_TRAIT(implicit_access_expr, IMPLICIT_ACCESS_EXPRESSION)
 NODE_KIND_OF_TRAIT(string_expr, STRING_EXPRESSION)
-NODE_KIND_OF_TRAIT(i32_expr, I32_EXPRESSION)
-NODE_KIND_OF_TRAIT(i64_expr, I64_EXPRESSION)
-NODE_KIND_OF_TRAIT(isize_expr, ISIZE_EXPRESSION)
-NODE_KIND_OF_TRAIT(u32_expr, U32_EXPRESSION)
-NODE_KIND_OF_TRAIT(u64_expr, U64_EXPRESSION)
-NODE_KIND_OF_TRAIT(usize_expr, USIZE_EXPRESSION)
-NODE_KIND_OF_TRAIT(u8_expr, U8_EXPRESSION)
-NODE_KIND_OF_TRAIT(f32_expr, F32_EXPRESSION)
-NODE_KIND_OF_TRAIT(f64_expr, F64_EXPRESSION)
+NODE_KIND_OF_TRAIT(int_literal_expr, INT_LITERAL_EXPRESSION)
+NODE_KIND_OF_TRAIT(float_literal_expr, FLOAT_LITERAL_EXPRESSION)
 NODE_KIND_OF_TRAIT(bool_expr, BOOL_EXPRESSION)
 NODE_KIND_OF_TRAIT(void_expr, VOID_EXPRESSION)
 NODE_KIND_OF_TRAIT(undefined_expr, UNDEFINED_EXPRESSION)

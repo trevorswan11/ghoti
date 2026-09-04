@@ -39,7 +39,7 @@ TEST_CASE("Builtin calling collection") {
 TEST_CASE("Initializer collection") {
     helpers::collect_and_check("const a := T{ .b = 2 };");
     helpers::collect_and_check("const a: T = .{ .b = 2 };");
-    helpers::collect_and_check("const a := T{ .b = 3u + v, .c = if (5 <= h) i else j };");
+    helpers::collect_and_check("const a := T{ .b = 3u32 + v, .c = if (5 <= h) i else j };");
 }
 
 TEST_CASE("Discard statement collection") {

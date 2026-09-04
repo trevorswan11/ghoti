@@ -53,23 +53,21 @@ namespace bis = syntax::builtins;
 TEST_CASE("Builtin 'safe' casts") {
     const auto bi{GENERATE(bis::ALIGN_CAST, bis::PTR_CAST, bis::BIT_CAST, bis::AS)};
     test_builtin_resolve(bi, "i32, 23UZ", [](helpers::sema_test_context& ctx) -> sema::type& {
-        return ctx.get_type(sema::type_kind::I32);
+        return ctx.get_int_type(32, true);
     });
 }
 
 TEST_CASE("Builtin 'unsafe' casts") {
     test_builtin_resolve(
-        bis::CONST_CAST, "^23", [](helpers::sema_test_context& ctx) -> sema::type& {
+        bis::CONST_CAST, "^23i32", [](helpers::sema_test_context& ctx) -> sema::type& {
             return ctx.get_type<sema::types::mut::MUTABLE>(sema::type_kind::POINTER,
-                                                           ctx.get_type(sema::type_kind::I32));
+                                                           ctx.get_int_type(32, true));
         });
 
     test_builtin_resolve(
         bis::VOLATILE_CAST,
         "v",
-        [](helpers::sema_test_context& ctx) -> sema::type& {
-            return ctx.get_type(sema::type_kind::I32);
-        },
+        [](helpers::sema_test_context& ctx) -> sema::type& { return ctx.get_int_type(32, true); },
         "const v: volatile i32 = 23;");
 }
 
@@ -83,11 +81,11 @@ TEST_CASE("Builtin bit/byte operations") {
 
 TEST_CASE("Builtin type introspection") {
     test_builtin_resolve(bis::TYPE_OF, "i32", [](helpers::sema_test_context& ctx) -> sema::type& {
-        return ctx.get_type(sema::type_kind::TYPE, ctx.get_type(sema::type_kind::I32));
+        return ctx.get_type(sema::type_kind::TYPE, ctx.get_int_type(32, true));
     });
 
     test_builtin_resolve(bis::TAG_NAME, "123", [](helpers::sema_test_context& ctx) -> sema::type& {
-        return ctx.get_type(sema::type_kind::SLICE, true, ctx.get_type(sema::type_kind::U8));
+        return ctx.get_type(sema::type_kind::SLICE, true, ctx.get_int_type(8, false));
     });
 }
 
@@ -119,7 +117,8 @@ TEST_CASE("typeOf denotes the wrapped type in a value's or parameter's explicit 
         const call_echo := echo(1, 2);
     )")};
 
-    const auto& i32_type{ctx->get_type(sema::type_kind::I32)};
+    const auto& i32_type{ctx->get_int_type(32, true)};
+    const auto& cx_int{ctx->get_type(sema::type_kind::CONSTEXPR_INT)};
     const auto& bool_type{ctx->get_type(sema::type_kind::BOOL)};
 
     const auto decl_type = [&](std::string_view name) -> const sema::type& {
@@ -128,8 +127,8 @@ TEST_CASE("typeOf denotes the wrapped type in a value's or parameter's explicit 
         return type;
     };
 
-    CHECK(decl_type("Alias") == ctx->get_type(sema::type_kind::TYPE, i32_type));
-    CHECK(decl_type("via_alias") == i32_type);
+    CHECK(decl_type("Alias") == ctx->get_type(sema::type_kind::TYPE, cx_int));
+    CHECK(decl_type("via_alias") == cx_int);
     CHECK(decl_type("direct") == bool_type);
     CHECK(decl_type("call_echo") == i32_type);
 }
@@ -140,7 +139,7 @@ TEST_CASE("A return type may depend on a parameter whose type depends on an earl
         const call_chain := chain(1, 2);
     )")};
 
-    const auto& i32_type{ctx->get_type(sema::type_kind::I32)};
+    const auto& i32_type{ctx->get_int_type(32, true)};
     const auto [sym, _, node, type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("call_chain", idx)};
     CHECK(type == i32_type);
@@ -154,7 +153,7 @@ TEST_CASE("A later parameter's type may be a type-constructor call over an earli
         const call_unbox := unbox(1, boxed);
     )")};
 
-    const auto& i32_type{ctx->get_type(sema::type_kind::I32)};
+    const auto& i32_type{ctx->get_int_type(32, true)};
     const auto [sym, _, node, type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("call_unbox", idx)};
     CHECK(type == i32_type);
@@ -165,18 +164,18 @@ TEST_CASE("Builtin pointer conversions") {
         bis::PTR_FROM_ARRAY,
         "a",
         [](helpers::sema_test_context& ctx) -> sema::type& {
-            return ctx.get_type(sema::type_kind::POINTER, ctx.get_type(sema::type_kind::I32));
+            return ctx.get_type(sema::type_kind::POINTER, ctx.get_int_type(32, true));
         },
         "var a := [_]i32{0, 1, 2};");
 
     test_builtin_resolve(
-        bis::PTR_FROM_INT, "^i32, 0xc0ffeeul", [](helpers::sema_test_context& ctx) -> sema::type& {
-            return ctx.get_type(sema::type_kind::POINTER, ctx.get_type(sema::type_kind::I32));
+        bis::PTR_FROM_INT, "^i32, 0xc0ffeeu64", [](helpers::sema_test_context& ctx) -> sema::type& {
+            return ctx.get_type(sema::type_kind::POINTER, ctx.get_int_type(32, true));
         });
 
     test_builtin_resolve(
-        bis::SLICE_FROM_PTR, "^1, 20UZ", [](helpers::sema_test_context& ctx) -> sema::type& {
-            return ctx.get_type(sema::type_kind::SLICE, false, ctx.get_type(sema::type_kind::I32));
+        bis::SLICE_FROM_PTR, "^1i32, 20UZ", [](helpers::sema_test_context& ctx) -> sema::type& {
+            return ctx.get_type(sema::type_kind::SLICE, false, ctx.get_int_type(32, true));
         });
 }
 
@@ -192,7 +191,7 @@ TEST_CASE("Builtins memory operation") {
 }
 
 TEST_CASE("Builtin arithmetic") {
-    test_builtin_resolve(bis::ABS, "2.34f", [](helpers::sema_test_context& ctx) -> sema::type& {
+    test_builtin_resolve(bis::ABS, "2.34f32", [](helpers::sema_test_context& ctx) -> sema::type& {
         return ctx.get_type(sema::type_kind::F32);
     });
 }
@@ -233,25 +232,25 @@ TEST_CASE("Builtin function arity mismatch") {
 TEST_CASE("Const cast quick type checking") {
     helpers::test_resolver_fail(
         "const foo := @constCast(1);",
-        sema::diagnostic{"Expected pointer, reference, slice, or array type; found 'i32'",
+        sema::diagnostic{"Expected pointer, reference, slice, or array type; found 'constexpr_int'",
                          sema::error::TYPE_MISMATCH,
                          std::pair{0UZ, 24UZ}});
 }
 
 TEST_CASE("Other builtin quick type mismatch") {
     helpers::test_resolver_fail(
-        "const foo := @ptrFromArray(1);",
+        "const foo := @ptrFromArray(1i32);",
         sema::diagnostic{"Expected an array-yielding expression; found 'i32'",
                          sema::error::TYPE_MISMATCH,
                          std::pair{0UZ, 27UZ}});
 
-    helpers::test_resolver_fail("const foo := @ptrFromInt(i32, 0xdeadbeeful);",
+    helpers::test_resolver_fail("const foo := @ptrFromInt(i32, 0xdeadbeefu64);",
                                 sema::diagnostic{"Expected a pointer type; found 'i32'",
                                                  sema::error::TYPE_MISMATCH,
                                                  std::pair{0UZ, 25UZ}});
 
     helpers::test_resolver_fail(
-        "const foo := @sliceFromPtr(1, 20UZ);",
+        "const foo := @sliceFromPtr(1i32, 20UZ);",
         sema::diagnostic{"Expected a pointer-yielding expression; found 'i32'",
                          sema::error::TYPE_MISMATCH,
                          std::pair{0UZ, 27UZ}});
@@ -277,9 +276,7 @@ TEST_CASE("Builtin C va builtins resolution") {
     test_builtin_resolve(
         bis::C_VA_ARG,
         "ap, i32",
-        [](helpers::sema_test_context& ctx) -> sema::type& {
-            return ctx.get_type(sema::type_kind::I32);
-        },
+        [](helpers::sema_test_context& ctx) -> sema::type& { return ctx.get_int_type(32, true); },
         "const ap: ^mut opaque = undefined;");
 
     test_builtin_resolve(

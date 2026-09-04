@@ -426,12 +426,13 @@ struct union_expr {
     member_list                   members;
     std::vector<member_cfg_group> member_cfg_groups;
     bool                          is_extern{false};
+    bool                          is_packed{false};
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic> {
-        return parse(parser, false);
+        return parse(parser, false, false);
     }
-    [[nodiscard]] static auto parse(syntax::parser& parser, bool is_extern)
+    [[nodiscard]] static auto parse(syntax::parser& parser, bool is_extern, bool is_packed)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 

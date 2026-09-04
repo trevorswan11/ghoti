@@ -15,34 +15,32 @@ namespace ghoti::tests {
 namespace syms = sema::symbols;
 
 TEST_CASE("Builtin type resolution") {
-    const auto check_bi_type = [](std::string_view value, sema::type_kind expected_kind) -> void {
+    const auto check_bi_type = [](std::string_view value, std::string_view expected_name) -> void {
         auto [ctx, idx]{helpers::resolve_and_check(fmt::format("const a := {};", value))};
         const auto [sym, data, type]{ctx->get_type_sym_info<syms::node_t>("a", idx)};
-        CHECK(type == ctx->get_type(expected_kind));
+        CHECK(sema::type_kind_display_name(type) == expected_name);
     };
 
-    using tk = sema::type_kind;
-    check_bi_type("1", tk::I32);
-    check_bi_type("1l", tk::I64);
-    check_bi_type("1z", tk::ISIZE);
-    check_bi_type("1u", tk::U32);
-    check_bi_type("1ul", tk::U64);
-    check_bi_type("1UZ", tk::USIZE);
-    check_bi_type("'1'", tk::U8);
-    check_bi_type("true", tk::BOOL);
-    check_bi_type("{}", tk::VOID_);
-    check_bi_type("undefined", tk::UNDEFINED);
-    check_bi_type("unreachable", tk::NORETURN);
-    check_bi_type("1.0f", tk::F32);
-    check_bi_type("1.0", tk::F64);
+    check_bi_type("1", "constexpr_int"); // unsuffixed: stays constexpr in an un-annotated const
+    check_bi_type("1i64", "i64");
+    check_bi_type("1z", "isize");
+    check_bi_type("1u32", "u32");
+    check_bi_type("1u64", "u64");
+    check_bi_type("1UZ", "usize");
+    check_bi_type("'1'", "u8");
+    check_bi_type("true", "bool");
+    check_bi_type("{}", "void");
+    check_bi_type("undefined", "undefined");
+    check_bi_type("unreachable", "noreturn");
+    check_bi_type("1.0f32", "f32");
+    check_bi_type("1.0", "constexpr_float");
 }
 
 TEST_CASE("Nested type resolution") {
     auto [ctx,
           idx]{helpers::resolve_and_check("var a: ^^i32 = undefined; var b: ^^^i32 = undefined;")};
 
-    const auto& i32_ptr =
-        ctx->get_type(sema::type_kind::POINTER, ctx->get_type(sema::type_kind::I32));
+    const auto& i32_ptr = ctx->get_type(sema::type_kind::POINTER, ctx->get_int_type(32, true));
     const auto& i32_ptr_ptr{ctx->get_type(sema::type_kind::POINTER, i32_ptr)};
 
     const auto [a_sym, a_sym_data, a_type]{ctx->get_type_sym_info<syms::node_t>("a", idx)};
@@ -96,7 +94,7 @@ TEST_CASE("Value-less extern") { helpers::resolve_and_check("extern var errno: i
 TEST_CASE("Defer & discard statement resolution") {
     auto [ctx, idx]{helpers::resolve_and_check("fn(): void { defer { var a: i32 = undefined; } }")};
     const auto [sym, _, type]{ctx->get_type_sym_info<syms::node_t>("a", 2)};
-    CHECK(type == ctx->get_type(sema::type_kind::I32));
+    CHECK(type == ctx->get_int_type(32, true));
     helpers::resolve_and_check("_ = 1 + 1;");
 }
 
@@ -114,7 +112,7 @@ TEST_CASE("Loop resolution") {
     helpers::resolve_and_check("const a := loop { const foo := 42; };");
     helpers::test_resolver_fail(
         "for (23) |_| { var a: i32 = undefined; }",
-        sema::diagnostic{"Iterables may only be arrays or slices; found 'i32'",
+        sema::diagnostic{"Iterables may only be arrays or slices; found 'constexpr_int'",
                          sema::error::TYPE_MISMATCH,
                          std::pair{0UZ, 5UZ}});
 }

@@ -39,8 +39,7 @@ TEST_CASE("Emitter top-level globals and type declarations") {
     // Verify types
     REQUIRE(gir_mod.get_types().size() == 1);
     CHECK(gir_mod.get_types()[0]->name == "Count");
-    CHECK(gir_mod.get_types()[0]->type ==
-          ctx->analyzer.get_ctx().get_builtin_resolved_type(sema::type_kind::I32));
+    CHECK(gir_mod.get_types()[0]->type == ctx->analyzer.get_ctx().get_int(32, true));
 
     // Verify globals
     REQUIRE(gir_mod.get_globals().size() == 2);

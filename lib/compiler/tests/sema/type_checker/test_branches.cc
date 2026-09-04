@@ -68,7 +68,7 @@ TEST_CASE("Branch and control flow type checking") {
                 return y;
             };
         )",
-            sema::diagnostic{"Type mismatch in store: cannot assign 'bool' to 'i32'",
+            sema::diagnostic{"Type mismatch in store: cannot assign 'bool' to 'constexpr_int'",
                              sema::error::TYPE_MISMATCH,
                              std::pair{4UZ, 25UZ}});
     }

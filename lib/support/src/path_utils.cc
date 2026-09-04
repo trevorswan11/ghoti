@@ -80,9 +80,11 @@ auto percent_encode(std::string_view s) -> std::string {
 auto uri_to_path(std::string_view uri) -> stdx::option<std::filesystem::path> {
     PROFILE_FUNCTION();
     constexpr std::string_view scheme{"file://"};
-    if (uri.size() < scheme.size() || uri.substr(0, scheme.size()) != scheme) { return stdx::none; }
+    if (uri.size() < scheme.size() || stdx::string::substr(uri, 0, scheme.size()) != scheme) {
+        return stdx::none;
+    }
 
-    auto decoded{percent_decode(uri.substr(scheme.size()))};
+    auto decoded{percent_decode(stdx::string::substr(uri, scheme.size()))};
 #if GHOTI_WINDOWS
     // `file:///C:/...` carries a leading slash before the drive letter that Windows paths lack
     if (decoded.size() >= 3 && decoded[0] == '/' &&

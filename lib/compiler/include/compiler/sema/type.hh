@@ -3,6 +3,7 @@
 #include <concepts>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
@@ -22,24 +23,23 @@
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/type.hh"
 #include "compiler/module/module.hh"
+#include "support/int128.hh"
 
 namespace ghoti::sema {
 
 enum class type_kind : u8 {
     POISON,
-    I8,
-    I16,
-    I32,
-    I64,
+    INT,
     ISIZE,
-    U8,
-    U16,
-    U32,
-    U64,
     USIZE,
     BOOL,
+    F16,
     F32,
     F64,
+    F80,
+    F128,
+    CONSTEXPR_INT,
+    CONSTEXPR_FLOAT,
     VOID_,
     UNDEFINED,
     NULLPTR,
@@ -67,74 +67,63 @@ enum class type_kind : u8 {
 
 [[nodiscard]] auto type_kind_display_name(type_kind kind) noexcept -> std::string_view;
 
+class type;
+
+// Spelled-out name of a type, honoring an INT type's width (`i32`, `u17`, ...).
+[[nodiscard]] auto type_kind_display_name(const type& t) -> std::string;
+
 [[nodiscard]] constexpr auto is_integer(type_kind kind) noexcept -> bool {
     switch (kind) {
-    case type_kind::I8:
-    case type_kind::I16:
-    case type_kind::I32:
-    case type_kind::I64:
+    case type_kind::INT:
     case type_kind::ISIZE:
-    case type_kind::U8:
-    case type_kind::U16:
-    case type_kind::U32:
-    case type_kind::U64:
     case type_kind::USIZE: return true;
     default:               return false;
     }
 }
 
-[[nodiscard]] constexpr auto is_signed_integer(type_kind kind) noexcept -> bool {
-    switch (kind) {
-    case type_kind::I8:
-    case type_kind::I16:
-    case type_kind::I32:
-    case type_kind::I64:
-    case type_kind::ISIZE: return true;
-    default:               return false;
-    }
-}
-
-[[nodiscard]] constexpr auto is_unsigned_integer(type_kind kind) noexcept -> bool {
-    switch (kind) {
-    case type_kind::U8:
-    case type_kind::U16:
-    case type_kind::U32:
-    case type_kind::U64:
-    case type_kind::USIZE: return true;
-    default:               return false;
-    }
-}
+[[nodiscard]] auto is_signed_integer(const type& t) noexcept -> bool;
+[[nodiscard]] auto is_unsigned_integer(const type& t) noexcept -> bool;
 
 [[nodiscard]] constexpr auto is_float(type_kind kind) noexcept -> bool {
     switch (kind) {
+    case type_kind::F16:
     case type_kind::F32:
-    case type_kind::F64: return true;
-    default:             return false;
+    case type_kind::F64:
+    case type_kind::F80:
+    case type_kind::F128: return true;
+    default:              return false;
     }
 }
 
+[[nodiscard]] constexpr auto float_bits(type_kind kind) noexcept -> u16 {
+    switch (kind) {
+    case type_kind::F16:  return 16;
+    case type_kind::F32:  return 32;
+    case type_kind::F64:  return 64;
+    case type_kind::F80:  return 80;
+    case type_kind::F128: return 128;
+    default:              return 0;
+    }
+}
+
+[[nodiscard]] constexpr auto is_constexpr_int(type_kind kind) noexcept -> bool {
+    return kind == type_kind::CONSTEXPR_INT;
+}
+
+[[nodiscard]] constexpr auto is_constexpr_float(type_kind kind) noexcept -> bool {
+    return kind == type_kind::CONSTEXPR_FLOAT;
+}
+
+[[nodiscard]] constexpr auto is_constexpr_numeric(type_kind kind) noexcept -> bool {
+    return is_constexpr_int(kind) || is_constexpr_float(kind);
+}
+
+// A constexpr literal counts as numeric for arithmetic, comparison, and coercion purposes.
 [[nodiscard]] constexpr auto is_numeric(type_kind kind) noexcept -> bool {
-    return is_integer(kind) || is_float(kind);
+    return is_integer(kind) || is_float(kind) || is_constexpr_numeric(kind);
 }
 
-[[nodiscard]] constexpr auto is_implicit_widenable(type_kind from, type_kind to) noexcept -> bool {
-    switch (from) {
-    case type_kind::U8:
-        return to == type_kind::U16 || to == type_kind::U32 || to == type_kind::U64 ||
-               to == type_kind::USIZE;
-    case type_kind::U16:
-        return to == type_kind::U32 || to == type_kind::U64 || to == type_kind::USIZE;
-    case type_kind::U32: return to == type_kind::U64 || to == type_kind::USIZE;
-    case type_kind::I8:
-        return to == type_kind::I16 || to == type_kind::I32 || to == type_kind::I64 ||
-               to == type_kind::ISIZE;
-    case type_kind::I16:
-        return to == type_kind::I32 || to == type_kind::I64 || to == type_kind::ISIZE;
-    case type_kind::I32: return to == type_kind::I64 || to == type_kind::ISIZE;
-    case type_kind::F32: return to == type_kind::F64;
-    default:             return false;
-    }
-}
+[[nodiscard]] auto is_implicit_widenable(const type& from, const type& to) noexcept -> bool;
 
 [[nodiscard]] constexpr auto is_value_type(type_kind kind) noexcept -> bool {
     switch (kind) {
@@ -188,6 +177,13 @@ struct poison {};
 
 using builtin_type = stdx::monostate;
 
+struct integer {
+    u16  bits;
+    bool is_signed;
+
+    [[nodiscard]] constexpr auto operator==(const integer&) const noexcept -> bool = default;
+};
+
 struct slice {
     type& underlying;
     bool  null_terminated;
@@ -229,6 +225,12 @@ struct union_t {
     gsl::span<type*>                        members;
     const mod::module&                      enclosing;
     bool                                    is_untagged{false};
+    bool                                    is_c_abi{false};
+    bool                                    is_packed{false};
+
+    [[nodiscard]] constexpr auto is_bit_packed() const noexcept -> bool {
+        return is_packed && !is_c_abi;
+    }
 
     // The index location entirely depends on the number of fields which always come first
     [[nodiscard]] auto type_at(usize idx) const noexcept -> type& {
@@ -246,6 +248,10 @@ struct struct_t {
     bool                                     is_c_abi{false};
     bool                                     is_packed{false};
     gsl::span<u64>                           field_alignments;
+
+    [[nodiscard]] constexpr auto is_bit_packed() const noexcept -> bool {
+        return is_packed && !is_c_abi;
+    }
 
     // The index location entirely depends on the number of fields which always come first
     [[nodiscard]] auto type_at(usize idx) const noexcept -> type& {
@@ -346,12 +352,31 @@ class key_t {
     constexpr key_t(type_kind kind, mutability_modifiers mut, Markers&&... markers) noexcept
         : kind_{kind}, mut_{mut} {
         (..., markers_.combine(markers));
+        // An `INT` key spells its identity as `(bits, is_signed)` markers; mirror them into
+        // named fields so width/signedness survive even on an unresolved pooled twin.
+        if constexpr (sizeof...(Markers) == 2 &&
+                      (std::integral<std::remove_cvref_t<Markers>> && ...)) {
+            if (kind == type_kind::INT) {
+                const u64 packed[]{static_cast<u64>(markers)...};
+                int_bits_   = static_cast<u16>(packed[0]);
+                int_signed_ = packed[1] != 0;
+            }
+        }
     }
 
     MAKE_GETTER(kind, type_kind)
     MAKE_GETTER(mut, mutability_modifiers)
+    MAKE_GETTER(int_bits, u16)
+    MAKE_GETTER(int_signed, bool)
 
-    auto set_kind(type_kind kind) noexcept -> void { kind_ = kind; }
+    auto set_kind(type_kind kind) noexcept -> void {
+        kind_ = kind;
+        // Repurposing a copied `INT` key to another kind must drop its width identity.
+        if (kind != type_kind::INT) {
+            int_bits_   = 0;
+            int_signed_ = false;
+        }
+    }
     auto set_mut(mutability_modifiers mut) noexcept -> void { mut_ = mut; }
 
     // This is a high quality hash for the purposes of `unordered_dense`
@@ -371,7 +396,11 @@ class key_t {
         markers_.combine(marker);
     }
 
-    constexpr auto clear_markers() noexcept -> void { markers_ = {}; }
+    constexpr auto clear_markers() noexcept -> void {
+        markers_    = {};
+        int_bits_   = 0;
+        int_signed_ = false;
+    }
 
     [[nodiscard]] constexpr auto operator==(const key_t&) const noexcept -> bool = default;
 
@@ -381,6 +410,8 @@ class key_t {
   private:
     type_kind            kind_;
     mutability_modifiers mut_;
+    u16                  int_bits_{0};
+    bool                 int_signed_{false};
     stdx::hasher         markers_;
 
     friend class sema::type;
@@ -417,6 +448,7 @@ class type {
     using data_t = stdx::variant<types::unresolved,
                                  types::poison,
                                  types::builtin_type,
+                                 types::integer,
                                  types::slice,
                                  types::array,
                                  types::pointer,
@@ -515,6 +547,37 @@ class type {
 };
 
 static_assert(stdx::TriviallyDestructible<type>);
+
+// `{bits, is_signed}` of a resolved `type_kind::INT`, or none for any other kind.
+[[nodiscard]] auto as_integer(const type& t) noexcept -> stdx::option<types::integer>;
+
+// Bit width of a resolved `type_kind::INT`; asserts the kind.
+[[nodiscard]] auto int_width(const type& t) noexcept -> u16;
+
+[[nodiscard]] auto is_i32(const type& t) noexcept -> bool;
+
+// Whether the compile-time integer `value` (two's-complement, up to 128 bits) is representable
+// in the concrete integer type `target`
+[[nodiscard]] auto constexpr_int_fits(i128 value, const type& target, u32 ptr_bits) noexcept
+    -> bool;
+
+// Bit width of `t` when used as a field of a bit-packed `packed struct`/`packed union`, or
+// none when `t` is not packed-eligible. `ptr_bits` sizes pointer-like fields.
+[[nodiscard]] auto packed_field_bits(const type& t, u32 ptr_bits) noexcept -> stdx::option<u32>;
+
+// Total backing width `N` of a bit-packed `packed struct`: the sum of its field widths.
+// None if any field is ineligible or the sum exceeds 65535.
+[[nodiscard]] auto packed_backing_bits(const types::struct_t& s, u32 ptr_bits) noexcept
+    -> stdx::option<u32>;
+
+// LSB-first bit offset of field `idx` in a bit-packed `packed struct`.
+[[nodiscard]] auto packed_field_offset(const types::struct_t& s, usize idx, u32 ptr_bits) noexcept
+    -> u32;
+
+// Backing width `N` of a bit-packed `packed union`: the width of its widest field (every
+// field is laid out at bit offset 0). None if any field is ineligible or `N` exceeds 65535.
+[[nodiscard]] auto packed_union_backing_bits(const types::union_t& u, u32 ptr_bits) noexcept
+    -> stdx::option<u32>;
 
 // All associated type lifetimes are tied to the pool
 class type_pool {

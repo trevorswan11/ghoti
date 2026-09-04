@@ -71,7 +71,7 @@ TEST_CASE("A read-only primitive capture is recorded as READ and inferred VALUE"
     REQUIRE(cl.captures.size() == 1);
     CHECK(cl.captures[0].name == "offset");
     CHECK(cl.captures[0].mode == sema::types::capture_mode::VALUE);
-    CHECK(cl.captures[0].captured_type->get_kind() == sema::type_kind::I32);
+    CHECK(sema::is_i32(*cl.captures[0].captured_type));
 }
 
 TEST_CASE("Assigning to a captured variable records MUTATED usage and infers MUT_REF") {

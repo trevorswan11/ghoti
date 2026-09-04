@@ -22,15 +22,15 @@ TEST_CASE("Declaration auto type inference") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         var a: auto = 42;
         const b: auto = true;
-        var c := 100l;
+        var c := 100i64;
         const d := false;
         var s := "hello";
     )")};
 
-    const auto& i32_type{ctx->get_type(sema::type_kind::I32)};
-    const auto& i64_type{ctx->get_type(sema::type_kind::I64)};
+    const auto& i32_type{ctx->get_int_type(32, true)};
+    const auto& i64_type{ctx->get_int_type(64, true)};
     const auto& bool_type{ctx->get_type(sema::type_kind::BOOL)};
-    const auto& u8_type{ctx->get_type(sema::type_kind::U8)};
+    const auto& u8_type{ctx->get_int_type(8, false)};
     const auto& str_type{ctx->get_type(sema::type_kind::ARRAY, true, 6UZ, u8_type)};
 
     SECTION("Explicit auto variable declaration adopts value type") {
@@ -98,7 +98,7 @@ TEST_CASE("Illegal auto usage in structural types") {
 
         const auto [a_sym, a_sym_data, a_type]{ctx->get_type_sym_info<syms::struct_field>(
             "a", struct_idx, stdx::none, &syms::struct_field::name)};
-        CHECK(a_type == ctx->get_type(sema::type_kind::I32));
+        CHECK(a_type == ctx->get_int_type(32, true));
     }
 
     SECTION("Union field cannot have auto") {
@@ -158,11 +158,11 @@ TEST_CASE("Function return type auto inference") {
         const auto [f_sym, f_sym_data, f_node, f_type, f_type_data]{
             ctx->get_full_sym_info<syms::node_t, ast::decl_stmt, sema::types::function>("f", idx)};
         CHECK(f_sym.get_kind_opt() == sema::symbol_kind::CALLABLE);
-        CHECK(f_type_data.return_type == ctx->get_type(sema::type_kind::I32));
+        CHECK(f_type_data.return_type == ctx->get_int_type(32, true));
 
         const auto [r_sym, r_sym_data, r_node, r_type]{
             ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("result", idx)};
-        CHECK(r_type == ctx->get_type(sema::type_kind::I32));
+        CHECK(r_type == ctx->get_int_type(32, true));
     }
 
     SECTION("Infers void when function body has no return statements") {
@@ -212,7 +212,7 @@ TEST_CASE("Function return type auto inference") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
             const outer := fn(): auto {
                 const inner := fn(): auto {
-                    return 100l;
+                    return 100i64;
                 };
                 return inner();
             };
@@ -222,11 +222,11 @@ TEST_CASE("Function return type auto inference") {
         const auto [out_sym, out_sym_data, out_node, out_type, out_type_data]{
             ctx->get_full_sym_info<syms::node_t, ast::decl_stmt, sema::types::function>("outer",
                                                                                         idx)};
-        CHECK(out_type_data.return_type == ctx->get_type(sema::type_kind::I64));
+        CHECK(out_type_data.return_type == ctx->get_int_type(64, true));
 
         const auto [r_sym, r_sym_data, r_node, r_type]{
             ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("result", idx)};
-        CHECK(r_type == ctx->get_type(sema::type_kind::I64));
+        CHECK(r_type == ctx->get_int_type(64, true));
     }
 
     SECTION("Infers return type from constexpr conditional branches") {
@@ -242,7 +242,7 @@ TEST_CASE("Function return type auto inference") {
 
         const auto [f_sym, f_sym_data, f_node, f_type, f_type_data]{
             ctx->get_full_sym_info<syms::node_t, ast::decl_stmt, sema::types::function>("f", idx)};
-        CHECK(f_type_data.return_type == ctx->get_type(sema::type_kind::I32));
+        CHECK(f_type_data.return_type == ctx->get_int_type(32, true));
     }
 }
 
@@ -258,7 +258,7 @@ TEST_CASE("Generic function instantiation and deduplication") {
 
         const auto [r1_sym, r1_sym_data, r1_node, r1_type]{
             ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("r1", idx)};
-        CHECK(r1_type == ctx->get_type(sema::type_kind::I32));
+        CHECK(r1_type == ctx->get_int_type(32, true));
 
         const auto [r2_sym, r2_sym_data, r2_node, r2_type]{
             ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("r2", idx)};
@@ -280,11 +280,11 @@ TEST_CASE("Generic function instantiation and deduplication") {
 
         const auto [a_sym, a_sym_data, a_node, a_type]{
             ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("a", idx)};
-        CHECK(a_type == ctx->get_type(sema::type_kind::I32));
+        CHECK(a_type == ctx->get_int_type(32, true));
 
         const auto [b_sym, b_sym_data, b_node, b_type]{
             ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("b", idx)};
-        CHECK(b_type == ctx->get_type(sema::type_kind::I32));
+        CHECK(b_type == ctx->get_int_type(32, true));
 
         CHECK(ctx->root_mod.generic_instantiations.size() == 1);
         CHECK(ctx->root_mod.generic_instantiations[0].mangled_name == "id__i32");
@@ -296,16 +296,16 @@ TEST_CASE("Generic function instantiation and deduplication") {
                 return a + b;
             };
             const r1 := add(1, 2);
-            const r2 := add(10l, 20l);
+            const r2 := add(10i64, 20i64);
         )")};
 
         const auto [r1_sym, r1_sym_data, r1_node, r1_type]{
             ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("r1", idx)};
-        CHECK(r1_type == ctx->get_type(sema::type_kind::I32));
+        CHECK(r1_type == ctx->get_int_type(32, true));
 
         const auto [r2_sym, r2_sym_data, r2_node, r2_type]{
             ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("r2", idx)};
-        CHECK(r2_type == ctx->get_type(sema::type_kind::I64));
+        CHECK(r2_type == ctx->get_int_type(64, true));
 
         CHECK(ctx->root_mod.generic_instantiations.size() == 2);
         CHECK(ctx->root_mod.generic_instantiations[0].mangled_name == "add__i32_i32");
@@ -322,7 +322,7 @@ TEST_CASE("Generic function instantiation and deduplication") {
 
         const auto [r_sym, r_sym_data, r_node, r_type]{
             ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("r", idx)};
-        CHECK(r_type == ctx->get_type(sema::type_kind::I32));
+        CHECK(r_type == ctx->get_int_type(32, true));
 
         CHECK(ctx->root_mod.generic_instantiations.size() == 1);
         CHECK(ctx->root_mod.generic_instantiations[0].mangled_name == "choose__bool_i32");
@@ -360,14 +360,14 @@ TEST_CASE("Cross-module generic function instantiation") {
             import "math.gh" as math;
             const a := math::identity(42);
             const b := math::identity(true);
-            const c := math::double_val(100l);
+            const c := math::double_val(100i64);
         )",
         helpers::make_vector<helpers::mock_file>(
             helpers::mock_file{.path = "math.gh", .source = math_gh}))};
 
     const auto [a_sym, a_sym_data, a_node, a_type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("a", idx)};
-    CHECK(a_type == ctx->get_type(sema::type_kind::I32));
+    CHECK(a_type == ctx->get_int_type(32, true));
 
     const auto [b_sym, b_sym_data, b_node, b_type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("b", idx)};
@@ -375,7 +375,7 @@ TEST_CASE("Cross-module generic function instantiation") {
 
     const auto [c_sym, c_sym_data, c_node, c_type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("c", idx)};
-    CHECK(c_type == ctx->get_type(sema::type_kind::I64));
+    CHECK(c_type == ctx->get_int_type(64, true));
 }
 
 TEST_CASE("Generic functions with complex types and chaining") {
@@ -391,7 +391,7 @@ TEST_CASE("Generic functions with complex types and chaining") {
 
         const auto [px_sym, px_sym_data, px_node, px_type]{
             ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("px", idx)};
-        CHECK(px_type == ctx->get_type(sema::type_kind::I32));
+        CHECK(px_type == ctx->get_int_type(32, true));
     }
 
     SECTION("Generic function indexing slice/array") {
@@ -405,7 +405,7 @@ TEST_CASE("Generic functions with complex types and chaining") {
 
         const auto [c_sym, c_sym_data, c_node, c_type]{
             ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("c", idx)};
-        CHECK(c_type == ctx->get_type(sema::type_kind::U8));
+        CHECK(c_type == ctx->get_int_type(8, false));
     }
 
     SECTION("Generic function with explicit non-auto return type") {
@@ -434,7 +434,7 @@ TEST_CASE("Generic functions with complex types and chaining") {
 
         const auto [res_sym, res_sym_data, res_node, res_type]{
             ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("res", idx)};
-        CHECK(res_type == ctx->get_type(sema::type_kind::I32));
+        CHECK(res_type == ctx->get_int_type(32, true));
     }
 }
 
@@ -451,15 +451,15 @@ TEST_CASE("Dereferencing pointer and reference expressions") {
 
     const auto [p_sym, _, p_decl, p_type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("val_p", idx)};
-    CHECK(p_type.get_kind() == sema::type_kind::I32);
+    CHECK(sema::is_i32(p_type));
 
     const auto [r_sym, _r, r_decl, r_type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("val_r", idx)};
-    CHECK(r_type.get_kind() == sema::type_kind::I32);
+    CHECK(sema::is_i32(r_type));
 
     const auto [pp_sym, _pp, pp_decl, pp_type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("val_pp", idx)};
-    CHECK(pp_type.get_kind() == sema::type_kind::I32);
+    CHECK(sema::is_i32(pp_type));
 }
 
 } // namespace ghoti::tests

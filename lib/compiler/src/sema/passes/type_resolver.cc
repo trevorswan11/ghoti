@@ -173,9 +173,15 @@ auto type_resolver::visit(ast::node_id id, const ast::array_expr& array) -> void
         return;
     }
 
-    for (const auto& item : array.items) { resolve(item); }
+    // Resolve the element type first so each item can be typed against it
     resolve(array.item_explicit_type);
     auto& item_type{*last_type_.take()};
+    if (item_type.is_resolved() && item_type.get_kind() != type_kind::AUTO) {
+        const structural_guard g{implicit_type_stack_, item_type};
+        for (const auto& item : array.items) { resolve(item); }
+    } else {
+        for (const auto& item : array.items) { resolve(item); }
+    }
 
     if (!item_type.is_resolved()) {
         return last_type_.emplace(ctx_.poison_node(
@@ -404,7 +410,7 @@ template <ast::IndexableID ID>
         } else {
             return make_sema_err(
                 fmt::format("Expected pointer, reference, slice, or array type; found '{}'",
-                            type_kind_display_name(expr_type.get_kind())),
+                            type_kind_display_name(expr_type)),
                 error::TYPE_MISMATCH,
                 get_call_arg_location(call.arguments[0]));
         }
@@ -418,6 +424,7 @@ template <ast::IndexableID ID>
     case token_type_t::BUILTIN_INT_FROM_PTR:
     case token_type_t::BUILTIN_ALIGN_OF:
     case token_type_t::BUILTIN_SIZE_OF:
+    case token_type_t::BUILTIN_BIT_SIZE_OF:
     case token_type_t::BUILTIN_CLZ:
     case token_type_t::BUILTIN_CTZ:
     case token_type_t::BUILTIN_POP_COUNT:    {
@@ -477,7 +484,7 @@ template <ast::IndexableID ID>
             return_type = &ctx_.get_pointer(mutability, deferred_data->underlying);
         } else {
             return make_sema_err(fmt::format("Expected an array-yielding expression; found '{}'",
-                                             type_kind_display_name(array_type.get_kind())),
+                                             type_kind_display_name(array_type)),
                                  error::TYPE_MISMATCH,
                                  get_call_arg_location(call.arguments[0]));
         }
@@ -490,7 +497,7 @@ template <ast::IndexableID ID>
             break;
         }
         return make_sema_err(fmt::format("Expected a pointer type; found '{}'",
-                                         type_kind_display_name(requested_output.get_kind())),
+                                         type_kind_display_name(requested_output)),
                              error::TYPE_MISMATCH,
                              get_call_arg_location(call.arguments[0]));
     }
@@ -506,7 +513,7 @@ template <ast::IndexableID ID>
         }
 
         return make_sema_err(fmt::format("Expected a pointer-yielding expression; found '{}'",
-                                         type_kind_display_name(ptr_type.get_kind())),
+                                         type_kind_display_name(ptr_type)),
                              error::TYPE_MISMATCH,
                              get_call_arg_location(call.arguments[0]));
     }
@@ -514,7 +521,7 @@ template <ast::IndexableID ID>
         auto& parent_type{*get_resolved_call_arg_type(call.arguments[0])};
         if (!parent_type.get_data().is<types::struct_t>()) {
             return make_sema_err(fmt::format("'@fieldParentPtr' expects a struct type; found '{}'",
-                                             type_kind_display_name(parent_type.get_kind())),
+                                             type_kind_display_name(parent_type)),
                                  error::TYPE_MISMATCH,
                                  get_call_arg_location(call.arguments[0]));
         }
@@ -541,7 +548,7 @@ template <ast::IndexableID ID>
         if (field_ptr_type.get_kind() != type_kind::POINTER) {
             return make_sema_err(
                 fmt::format("'@fieldParentPtr' expects a field pointer; found '{}'",
-                            type_kind_display_name(field_ptr_type.get_kind())),
+                            type_kind_display_name(field_ptr_type)),
                 error::TYPE_MISMATCH,
                 get_call_arg_location(call.arguments[2]));
         }
@@ -567,10 +574,8 @@ template <ast::IndexableID ID>
     case token_type_t::BUILTIN_TYPE_NAME: {
         auto&      arg_type{*get_resolved_call_arg_type(call.arguments[0])};
         const auto name{ctx_.type_display_name(arg_type)};
-        return_type = &ctx_.get_array(types::mut::CONSTANT,
-                                      true,
-                                      name.size() + 1,
-                                      ctx_.get_builtin_resolved_type(type_kind::U8));
+        return_type =
+            &ctx_.get_array(types::mut::CONSTANT, true, name.size() + 1, ctx_.get_int(8, false));
         break;
     }
     case token_type_t::BUILTIN_TARGET_OS:       return_type = &ctx_.get_builtin_type("Os"); break;
@@ -638,19 +643,19 @@ template <ast::IndexableID ID>
     case token_type_t::BUILTIN_DIV_FLOOR:
     case token_type_t::BUILTIN_REM:
     case token_type_t::BUILTIN_MOD:       {
-        auto&      lhs_type{*get_resolved_call_arg_type(call.arguments[0])};
-        auto&      rhs_type{*get_resolved_call_arg_type(call.arguments[1])};
+        auto&      lhs_type{constexpr_numeric_view(*get_resolved_call_arg_type(call.arguments[0]))};
+        auto&      rhs_type{constexpr_numeric_view(*get_resolved_call_arg_type(call.arguments[1]))};
         const bool floats_ok{builtin_id == token_type_t::BUILTIN_MIN ||
                              builtin_id == token_type_t::BUILTIN_MAX};
         const auto accepts{
             [&](type_kind k) -> bool { return floats_ok ? is_numeric(k) : is_integer(k); }};
-        if (!accepts(lhs_type.get_kind()) || lhs_type.get_kind() != rhs_type.get_kind()) {
+        if (!accepts(lhs_type.get_kind()) || !is_same_unqualified(lhs_type, rhs_type)) {
             return make_sema_err(
                 fmt::format("'{}' expects two operands of the same {} type; found '{}' and '{}'",
                             *syntax::get_builtin_opt(builtin_id),
                             floats_ok ? "numeric" : "integer",
-                            type_kind_display_name(lhs_type.get_kind()),
-                            type_kind_display_name(rhs_type.get_kind())),
+                            type_kind_display_name(lhs_type),
+                            type_kind_display_name(rhs_type)),
                 error::OPERATOR_TYPE_MISMATCH,
                 get_call_arg_location(call.arguments[0]));
         }
@@ -664,13 +669,13 @@ template <ast::IndexableID ID>
         auto& lhs_type{*get_resolved_call_arg_type(call.arguments[0])};
         auto& rhs_type{*get_resolved_call_arg_type(call.arguments[1])};
         auto& out_type{*get_resolved_call_arg_type(call.arguments[2])};
-        if (!is_integer(lhs_type.get_kind()) || lhs_type.get_kind() != rhs_type.get_kind()) {
+        if (!is_integer(lhs_type.get_kind()) || !is_same_unqualified(lhs_type, rhs_type)) {
             return make_sema_err(
                 fmt::format("'{}' expects two integer operands of the same type; found '{}' and "
                             "'{}'",
                             *syntax::get_builtin_opt(builtin_id),
-                            type_kind_display_name(lhs_type.get_kind()),
-                            type_kind_display_name(rhs_type.get_kind())),
+                            type_kind_display_name(lhs_type),
+                            type_kind_display_name(rhs_type)),
                 error::OPERATOR_TYPE_MISMATCH,
                 get_call_arg_location(call.arguments[0]));
         }
@@ -681,12 +686,12 @@ template <ast::IndexableID ID>
                                    : out_ptr ? &out_ptr->underlying
                                              : nullptr};
         if (!out_underlying || out_type.is_constant() ||
-            out_underlying->get_kind() != lhs_type.get_kind()) {
+            !is_same_unqualified(*out_underlying, lhs_type)) {
             return make_sema_err(
                 fmt::format("'{}' expects its third argument to be a '&mut {}' result reference; "
                             "found '{}'",
                             *syntax::get_builtin_opt(builtin_id),
-                            type_kind_display_name(lhs_type.get_kind()),
+                            type_kind_display_name(lhs_type),
                             out_type.to_string()),
                 error::TYPE_MISMATCH,
                 get_call_arg_location(call.arguments[2]));
@@ -870,6 +875,14 @@ auto type_resolver::resolve_call_args(gsl::span<const ast::call_expr::argument> 
         });
     }
     return any_poison ? resolve_result::POISONED : resolve_result::OK;
+}
+
+auto type_resolver::constexpr_numeric_view(type& t) -> type& {
+    switch (t.get_kind()) {
+    case type_kind::CONSTEXPR_INT:   return ctx_.get_int(32, true);
+    case type_kind::CONSTEXPR_FLOAT: return ctx_.get_builtin_resolved_type(type_kind::F64);
+    default:                         return t;
+    }
 }
 
 auto type_resolver::get_resolved_call_arg_type(const ast::call_expr::argument& arg)
@@ -1178,8 +1191,13 @@ auto register_type_ctor_members(context&         ctx,
                                            s.field_alignments);
         },
         [&](const types::union_t& u) {
-            fresh.resolve<types::union_t>(
-                rebind(u.fields), u.ast_fields, rebind(u.members), u.enclosing, u.is_untagged);
+            fresh.resolve<types::union_t>(rebind(u.fields),
+                                          u.ast_fields,
+                                          rebind(u.members),
+                                          u.enclosing,
+                                          u.is_untagged,
+                                          u.is_c_abi,
+                                          u.is_packed);
         },
         [&](const types::enum_t& e) {
             fresh.resolve<types::enum_t>(
@@ -1210,11 +1228,12 @@ auto register_type_ctor_members(context&         ctx,
     }
     const auto& data{t.get_data()};
     switch (t.get_kind()) {
+    case type_kind::INT:     return type_kind_display_name(t); // `i32`, `u17`, ... (width-distinct)
     case type_kind::STRUCT:
     case type_kind::UNION:
     case type_kind::ENUM:
     case type_kind::CLOSURE: {
-        const auto kind_name{type_kind_display_name(t.get_kind())};
+        const auto kind_name{type_kind_display_name(t)};
         if (const auto disc{reg.get_clone_disc(t)}) {
             return fmt::format("{}${}", kind_name, sanitize_mangled(*disc));
         }
@@ -1248,7 +1267,7 @@ auto register_type_ctor_members(context&         ctx,
         const auto& r{data.as<types::reference>()};
         return fmt::format("ref_{}", mangle_arg_type(reg, r.underlying));
     }
-    default: return std::string{type_kind_display_name(t.get_kind())};
+    default: return std::string{type_kind_display_name(t)};
     }
 }
 
@@ -1397,7 +1416,9 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                         if (param_type->get_kind() == type_kind::TYPE) {
                             return denoted_type(*arg_type);
                         }
-                        return arg_type;
+                        // A `constexpr_*` literal argument materializes before it binds a
+                        // generic `T` / `auto` parameter, keeping instantiations concrete.
+                        return &constexpr_numeric_view(*arg_type);
                     });
                 if (!result_arg_type) { any_arg_poison = true; }
                 concrete_arg_types[i++] = result_arg_type.take();
@@ -1617,7 +1638,7 @@ auto type_resolver::visit(ID id, const ast::enum_expr& enum_expr) -> void {
 
     // The underlying type defaults to an i32 as it would in C or C++
     auto& underlying_type{enum_expr.underlying ? resolving_.get_sema_type(*enum_expr.underlying)
-                                               : ctx_.get_builtin_resolved_type(type_kind::I32)};
+                                               : ctx_.get_int(32, true)};
 
     for (const auto& [name, value] : enum_expr.enumerations) {
         if (value) { TRY_RESOLVE(*value); }
@@ -1755,7 +1776,7 @@ auto type_resolver::visit(ast::node_id id, const ast::for_loop_expr& for_expr) -
                     resolving_,
                     id,
                     fmt::format("Iterables may only be arrays or slices; found '{}'",
-                                type_kind_display_name(iterable_type.get_kind())),
+                                type_kind_display_name(iterable_type)),
                     error::TYPE_MISMATCH,
                     resolving_.ast.location_of(iterable)));
             }
@@ -2121,13 +2142,28 @@ auto type_resolver::attach_closure_type(ast::node_id fn_id, type& fn_type, bool 
     return *closure_type;
 }
 
+auto type_resolver::target_has_x86_fp80() const -> bool {
+    const auto arch{codegen::target_facts::resolve(ctx_.target_opts.triple_str).arch};
+    return arch == "x86_64" || arch == "x86";
+}
+
 template <ast::IndexableID ID> auto type_resolver::resolve_symbol(ID id, symbol& sym) -> void {
     auto& symbol_data{sym.get_data()};
     switch (sym.get_status()) {
-    case symbol_status::RESOLVED:
+    case symbol_status::RESOLVED: {
         // Identifier handles are not unique in the tree, but their symbol can be used to find root
-        resolving_.set_sema_type(id, get_resolved_symbol_type(symbol_data));
+        auto& resolved{get_resolved_symbol_type(symbol_data)};
+        if (resolved.get_kind() == type_kind::F80 && !target_has_x86_fp80()) {
+            return last_type_.emplace(
+                ctx_.poison_node(resolving_,
+                                 id,
+                                 "the 'f80' type is only available on x86 and x86_64 targets",
+                                 error::UNSUPPORTED_TARGET,
+                                 resolving_.ast.location_of(id)));
+        }
+        resolving_.set_sema_type(id, resolved);
         break;
+    }
     case symbol_status::RESOLVING:
         if (const auto forwarded_type{forward_type(resolving_, stdx::none, sym)}) {
             resolving_.set_sema_type_if(id, *forwarded_type);
@@ -2289,7 +2325,28 @@ auto type_resolver::register_non_generic_type_ctor_members(type&                
 template <ast::IndexableID ID>
 auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> void {
     const auto name{ident.name};
-    auto       lookup{ctx_.registry.lookup_with_depth(table_stack_, name)};
+
+    // `iN` / `uN` are primitive integer types, not looked-up symbols.
+    if (syntax::token_type::is_int_type_lexeme(name)) {
+        u64 width{0};
+        for (const char c : name.substr(1)) {
+            width = width * 10 + static_cast<u64>(c - '0');
+            if (width > 65'535) { break; }
+        }
+        if (width < 1 || width > 65'535) {
+            return last_type_.emplace(
+                ctx_.poison_node(resolving_,
+                                 id,
+                                 fmt::format("Integer width must be 1..65535; found '{}'", name),
+                                 error::TYPE_MISMATCH,
+                                 resolving_.ast.location_of(id)));
+        }
+        auto& int_type{ctx_.get_int(static_cast<u16>(width), name.front() == 'i')};
+        resolving_.set_sema_type(id, int_type);
+        return last_type_.emplace(int_type);
+    }
+
+    auto lookup{ctx_.registry.lookup_with_depth(table_stack_, name)};
 
     // Check for an undeclared identifier and poison the ident
     if (!lookup) {
@@ -2449,7 +2506,7 @@ auto type_resolver::visit(ast::node_id id, const ast::index_expr& index) -> void
             ctx_.poison_node(resolving_,
                              id,
                              fmt::format("Can only index slices, arrays, and pointers; found '{}'",
-                                         type_kind_display_name(array_type.get_kind())),
+                                         type_kind_display_name(array_type)),
                              error::TYPE_MISMATCH,
                              resolving_.ast.location_of(index.array)));
     }
@@ -2561,12 +2618,20 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
     }
     auto& rhs_type{*last_type_.take()};
 
-    if (is_integer(rhs_type.get_kind())) {
-        if (const auto i32_node{resolving_.ast.get_as_opt<ast::i32_expr>(binary.lhs)}) {
-            if (i32_node->value >= 0) {
-                resolving_.set_sema_type(binary.lhs, rhs_type);
-                lhs_type = &rhs_type;
-            }
+    // Peer typing for `constexpr_int` / `constexpr_float` operands
+    {
+        const auto lk{lhs_type->get_kind()};
+        const auto rk{rhs_type.get_kind()};
+        if (is_constexpr_numeric(lk) && is_numeric(rk) && !is_constexpr_numeric(rk)) {
+            resolving_.set_sema_type(binary.lhs, rhs_type);
+            lhs_type = &rhs_type;
+        } else if (is_constexpr_numeric(rk) && is_numeric(lk) && !is_constexpr_numeric(lk)) {
+            resolving_.set_sema_type(binary.rhs, *lhs_type);
+        } else if (is_constexpr_numeric(lk) && is_constexpr_numeric(rk) && lk != rk) {
+            auto& promoted{ctx_.get_builtin_resolved_type(type_kind::CONSTEXPR_FLOAT)};
+            resolving_.set_sema_type(binary.lhs, promoted);
+            resolving_.set_sema_type(binary.rhs, promoted);
+            lhs_type = &promoted;
         }
     }
 
@@ -2819,7 +2884,7 @@ auto type_resolver::resolve_structural_access(type&                          obj
         return make_sema_err(
             fmt::format(
                 "Can only access inner objects inside of structs, unions, and enums; found '{}'",
-                type_kind_display_name(target_type->get_kind())),
+                type_kind_display_name(*target_type)),
             error::TYPE_MISMATCH,
             object_location);
     }
@@ -3051,13 +3116,17 @@ auto type_resolver::visit(ast::node_id id, const ast::range_expr& range) -> void
 
         // ...and give a bare integer-literal lower bound the upper bound's type (`0 .. s.len`).
         if (range.lhs && is_integer(rhs_type.get_kind())) {
-            if (const auto i32_node{resolving_.ast.get_as_opt<ast::i32_expr>(*range.lhs)};
-                i32_node && i32_node->value >= 0) {
+            if (const auto lit{resolving_.ast.get_as_opt<ast::int_literal_expr>(*range.lhs)};
+                lit && lit->width == 0 && !lit->is_size) {
                 resolving_.set_sema_type(*range.lhs, rhs_type);
                 lhs_type = &rhs_type;
             }
         }
     }
+
+    // A range over unsuffixed literal bounds (`0..5`) iterates concrete integers, not
+    // `constexpr_int`.
+    lhs_type = &constexpr_numeric_view(*lhs_type);
 
     // Due to deferred type checking just use one endpoint's type for the placeholder slice.
     auto& slice_type{ctx_.get_slice(types::mut::CONSTANT, false, *lhs_type)};
@@ -3249,7 +3318,7 @@ auto type_resolver::visit(ast::node_id id, const ast::initializer_expr& init) ->
                              id,
                              fmt::format("Only struct and union types may be used in "
                                          "initializer expressions; found '{}'",
-                                         type_kind_display_name(object_type.get_kind())),
+                                         type_kind_display_name(object_type)),
                              error::TYPE_MISMATCH,
                              resolving_.ast.location_of(id)));
     }
@@ -3304,7 +3373,7 @@ auto type_resolver::visit(ast::node_id id, const ast::label_expr& label) -> void
     }
 
     // The last type inherits the result type to help propagation of poison
-    auto& result_type{*label_data.get_yield_types()[0]};
+    auto& result_type{constexpr_numeric_view(*label_data.get_yield_types()[0])};
     ASSERT(result_type.is_resolved(), "The label's inner type should've been resolved");
     label_type.resolve_if<type::data_t>(result_type.get_data());
     resolving_.set_sema_type(label.name, result_type);
@@ -3678,6 +3747,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                 return self(self, *ref->rhs);
             }
             if (const auto id_e{resolving_.ast.get_as_opt<ast::identifier_expr>(n)}) {
+                if (syntax::token_type::is_int_type_lexeme(id_e->name)) { return true; }
                 const auto sym{ctx_.registry.lookup(table_stack_, id_e->name)};
                 if (!sym) { return false; }
                 if (sym->has_kind() && sym->get_kind() == symbol_kind::TYPE) { return true; }
@@ -3743,20 +3813,24 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
         if (auto diag{validate_union_arms(id, match, matcher_type)}; diag) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(diag).value()));
         }
-    } else if (matcher_data.is<types::builtin_type>()) {
+    } else if (matcher_data.is<types::builtin_type>() || matcher_data.is<types::integer>()) {
         // It's assumed that any sufficiently large type cannot be fully enumerated
         stdx::option<u16> required_arm_count;
         switch (matcher_type.get_kind()) {
-        case type_kind::I32:
-        case type_kind::I64:
+        case type_kind::INT:
+            // Only an 8-bit unsigned integer is small enough to enumerate exhaustively.
+            if (const auto info{as_integer(matcher_type)};
+                info && info->bits == 8 && !info->is_signed) {
+                required_arm_count.emplace(256);
+            }
+            break;
         case type_kind::ISIZE:
-        case type_kind::U32:
-        case type_kind::U64:
-        case type_kind::USIZE: break;
-        case type_kind::U8:    required_arm_count.emplace(256); break;
-        case type_kind::BOOL:  required_arm_count.emplace(2); break;
+        case type_kind::USIZE:
+        case type_kind::CONSTEXPR_INT: break;
+        case type_kind::BOOL:          required_arm_count.emplace(2); break;
         case type_kind::F32:
         case type_kind::F64:
+        case type_kind::CONSTEXPR_FLOAT:
             return last_type_.emplace(
                 ctx_.poison_node(resolving_,
                                  id,
@@ -3780,7 +3854,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                 resolving_,
                 id,
                 fmt::format("Can only match on integers, bytes, and booleans; found '{}'",
-                            type_kind_display_name(matcher_type.get_kind())),
+                            type_kind_display_name(matcher_type)),
                 sema::error::TYPE_MISMATCH,
                 resolving_.ast.location_of(match.matcher)));
         default: UNREACHABLE("Builtin types should never take this type kind");
@@ -3821,7 +3895,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                     id,
                     fmt::format("Matching on type '{}' requires a catch all arm with "
                                 "a pattern of '_' or exactly {} patterned arms",
-                                type_kind_display_name(matcher_type.get_kind()),
+                                type_kind_display_name(matcher_type),
                                 *required_arm_count),
                     sema::error::TYPE_MISMATCH,
                     resolving_.ast.location_of(match.matcher)));
@@ -3834,7 +3908,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                     id,
                     fmt::format(
                         "Matching on type '{}' requires a catch all arm with a pattern of '_'",
-                        type_kind_display_name(matcher_type.get_kind())),
+                        type_kind_display_name(matcher_type)),
                     sema::error::TYPE_MISMATCH,
                     resolving_.ast.location_of(match.matcher)));
             }
@@ -3844,7 +3918,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
             resolving_,
             id,
             fmt::format("Can only match on enums, unions, and certain primitive types; found '{}'",
-                        type_kind_display_name(matcher_type.get_kind())),
+                        type_kind_display_name(matcher_type)),
             sema::error::TYPE_MISMATCH,
             resolving_.ast.location_of(match.matcher)));
     }
@@ -3857,8 +3931,9 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
     };
     std::vector<arm_interval> const_intervals;
     gir::const_eval           interval_probe{ctx_, resolving_};
-    const bool                scalar_match{matcher_data.is<types::builtin_type>() &&
-                            matcher_type.get_kind() != type_kind::BOOL};
+    const bool                scalar_match{
+        (matcher_data.is<types::builtin_type>() || matcher_data.is<types::integer>()) &&
+        matcher_type.get_kind() != type_kind::BOOL};
 
     // Each arm was assigned a new scope index on the first pass
     for (const auto& arm : match.arms) {
@@ -3952,8 +4027,9 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                 const auto lo_i{lo->as_int_opt()};
                 const auto hi_i{hi->as_int_opt()};
                 if (!lo_i || !hi_i) { continue; }
-                const i64 hi_closed{inclusive ? *hi_i : *hi_i - 1};
-                if (hi_closed < *lo_i) {
+                const auto lo_closed{static_cast<i64>(*lo_i)};
+                const i64  hi_closed{static_cast<i64>(inclusive ? *hi_i : *hi_i - 1)};
+                if (hi_closed < lo_closed) {
                     return last_type_.emplace(ctx_.poison_node(
                         resolving_,
                         id,
@@ -3961,10 +4037,11 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                         error::ILLEGAL_MATCH_PATTERN,
                         resolving_.ast.location_of(*pattern)));
                 }
-                const_intervals.emplace_back(*lo_i, hi_closed, pattern);
+                const_intervals.emplace_back(lo_closed, hi_closed, pattern);
             } else if (const auto pv{interval_probe.try_eval(*pattern)}) {
                 if (const auto v{pv->as_int_opt()}) {
-                    const_intervals.emplace_back(*v, *v, pattern);
+                    const_intervals.emplace_back(
+                        static_cast<i64>(*v), static_cast<i64>(*v), pattern);
                 }
             }
         }
@@ -4024,6 +4101,27 @@ namespace {
 
 } // namespace
 
+namespace {
+
+// `&p.field` / `^p.field` is rejected on packed aggregates as they are just integers
+[[nodiscard]] auto rhs_is_packed_field(const mod::module& mod, auto rhs) -> bool {
+    const auto dot{mod.ast.template get_as_opt<ast::dot_expr>(rhs)};
+    if (!dot) { return false; }
+    const auto obj_t{mod.get_sema_type_opt(dot->object)};
+    if (!obj_t) { return false; }
+    const type* ot{obj_t.get()};
+    if (const auto p{ot->get_data().as_opt<types::pointer>()}) {
+        ot = &p->underlying;
+    } else if (const auto r{ot->get_data().as_opt<types::reference>()}) {
+        ot = &r->underlying;
+    }
+    if (const auto st{ot->get_data().as_opt<types::struct_t>()}) { return st->is_bit_packed(); }
+    if (const auto ut{ot->get_data().as_opt<types::union_t>()}) { return ut->is_bit_packed(); }
+    return false;
+}
+
+} // namespace
+
 auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> void {
     PROFILE_FUNCTION();
     {
@@ -4032,6 +4130,15 @@ auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> vo
         TRY_RESOLVE(ref.rhs);
     }
     auto& rhs_type{*last_type_.take()};
+
+    if (rhs_is_packed_field(resolving_, ref.rhs)) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            "cannot take a reference to a field of a 'packed struct'; copy it into a local first",
+            error::ILLEGAL_PACKED_FIELD_ADDRESS,
+            resolving_.ast.location_of(id)));
+    }
 
     // References already behave like values
     if (rhs_type.get_kind() == type_kind::REFERENCE) {
@@ -4060,6 +4167,15 @@ auto type_resolver::visit(ast::node_id id, const ast::address_of_expr& adr_of) -
     }
     auto& rhs_type{*last_type_.take()};
 
+    if (rhs_is_packed_field(resolving_, adr_of.rhs)) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            "cannot take the address of a field of a 'packed struct'; copy it into a local first",
+            error::ILLEGAL_PACKED_FIELD_ADDRESS,
+            resolving_.ast.location_of(id)));
+    }
+
     gsl::not_null<type*> pointee{&rhs_type};
     if (const auto ref{rhs_type.get_data().as_opt<types::reference>()}) {
         pointee = &ref->underlying;
@@ -4087,7 +4203,7 @@ auto type_resolver::visit(ast::node_id id, const ast::dereference_expr& deref) -
             ctx_.poison_node(resolving_,
                              id,
                              fmt::format("Cannot dereference non-pointer expression; found '{}'",
-                                         type_kind_display_name(rhs_type.get_kind())),
+                                         type_kind_display_name(rhs_type)),
                              error::TYPE_MISMATCH,
                              resolving_.ast.location_of(id)));
     }
@@ -4249,10 +4365,8 @@ auto type_resolver::visit(ast::node_id id, const ast::string_expr& string) -> vo
     PROFILE_FUNCTION();
 
     // String literals are null terminated since they can be trivially shortened to non null
-    auto& type{ctx_.get_array(types::mut::CONSTANT,
-                              true,
-                              string.value.size() + 1,
-                              ctx_.get_builtin_resolved_type(type_kind::U8))};
+    auto& type{ctx_.get_array(
+        types::mut::CONSTANT, true, string.value.size() + 1, ctx_.get_int(8, false))};
 
     // String literals with the same size will always have the same type
     resolving_.set_sema_type(id, type);
@@ -4267,33 +4381,71 @@ auto type_resolver::visit(ast::node_id id, const ast::string_expr& string) -> vo
         resolving_.set_sema_type(id, *last_type_);                             \
     }
 
-auto type_resolver::visit(ast::node_id id, const ast::i32_expr& expr) -> void {
+auto type_resolver::visit(ast::node_id id, const ast::int_literal_expr& expr) -> void {
     PROFILE_FUNCTION();
-    auto* resolved_type{&ctx_.get_builtin_resolved_type(type_kind::I32)};
-    if (expr.value >= 0) {
-        if (const auto implicit_type{implicit_type_stack_.peek()}) {
-            const auto kind{implicit_type->get_kind()};
-            if (is_integer(kind)) { resolved_type = implicit_type.get(); }
+    type* resolved{nullptr};
+    if (expr.is_size) {
+        resolved =
+            &ctx_.get_builtin_resolved_type(expr.is_signed ? type_kind::ISIZE : type_kind::USIZE);
+    } else if (expr.width != 0) {
+        resolved = &ctx_.get_int(expr.width, expr.is_signed);
+    } else {
+        // An unsuffixed integer literal is `constexpr_int` and coerces freely
+        resolved = &ctx_.get_builtin_resolved_type(type_kind::CONSTEXPR_INT);
+        if (const auto implicit_type{implicit_type_stack_.peek()};
+            implicit_type &&
+            (is_integer(implicit_type->get_kind()) || is_float(implicit_type->get_kind()))) {
+            // Adopt the concrete context only when the literal's magnitude fits it
+            const auto ptr_bits{
+                codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
+            if (is_float(implicit_type->get_kind()) ||
+                constexpr_int_fits(static_cast<i128>(expr.value), *implicit_type, ptr_bits)) {
+                resolved = implicit_type.get();
+            }
         }
     }
-    last_type_.emplace(*resolved_type);
-    last_type_->resolve_if<types::builtin_type>();
+    last_type_.emplace(*resolved);
     resolving_.set_sema_type(id, *last_type_);
 }
 
-MAKE_PRIMITIVE_RESOLVER(i64_expr, I64)
-MAKE_PRIMITIVE_RESOLVER(isize_expr, ISIZE)
-MAKE_PRIMITIVE_RESOLVER(u32_expr, U32)
-MAKE_PRIMITIVE_RESOLVER(u64_expr, U64)
-MAKE_PRIMITIVE_RESOLVER(usize_expr, USIZE)
-MAKE_PRIMITIVE_RESOLVER(u8_expr, U8)
+auto type_resolver::visit(ast::node_id id, const ast::float_literal_expr& expr) -> void {
+    PROFILE_FUNCTION();
+    type_kind kind{type_kind::F64};
+    switch (expr.width) {
+    case 16:  kind = type_kind::F16; break;
+    case 32:  kind = type_kind::F32; break;
+    case 80:  kind = type_kind::F80; break;
+    case 128: kind = type_kind::F128; break;
+    default:  kind = type_kind::F64; break; // 0 (width-less) and 64
+    }
+
+    if (kind == type_kind::F80 && !target_has_x86_fp80()) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             "the 'f80' type is only available on x86 and x86_64 targets",
+                             error::UNSUPPORTED_TARGET,
+                             resolving_.ast.location_of(id)));
+    }
+
+    // An unsuffixed real literal is `constexpr_float` and coerces freely
+    type* resolved{expr.width == 0 ? &ctx_.get_builtin_resolved_type(type_kind::CONSTEXPR_FLOAT)
+                                   : &ctx_.get_builtin_resolved_type(kind)};
+    if (expr.width == 0) {
+        if (const auto implicit_type{implicit_type_stack_.peek()};
+            implicit_type && is_float(implicit_type->get_kind())) {
+            resolved = implicit_type.get();
+        }
+    }
+    last_type_.emplace(*resolved);
+    resolving_.set_sema_type(id, *last_type_);
+}
+
 MAKE_PRIMITIVE_RESOLVER(bool_expr, BOOL)
 MAKE_PRIMITIVE_RESOLVER(void_expr, VOID_)
 MAKE_PRIMITIVE_RESOLVER(undefined_expr, UNDEFINED)
 MAKE_PRIMITIVE_RESOLVER(nullptr_expr, NULLPTR)
 MAKE_PRIMITIVE_RESOLVER(unreachable_expr, NORETURN)
-MAKE_PRIMITIVE_RESOLVER(f32_expr, F32)
-MAKE_PRIMITIVE_RESOLVER(f64_expr, F64)
 
 template <ast::IndexableID ID>
 auto type_resolver::resolve_module_access(ID id, const ast::module_access_expr& access) -> void {
@@ -4407,7 +4559,7 @@ auto type_resolver::resolve_module_access(ID id, const ast::module_access_expr& 
             resolving_,
             id,
             fmt::format("Use the dot operator '.' to access {} fields; found module access '::'",
-                        type_kind_display_name(outer_type.get_kind())),
+                        type_kind_display_name(outer_type)),
             error::TYPE_MISMATCH,
             resolving_.ast.location_of(access.outer)));
     }
@@ -4416,7 +4568,7 @@ auto type_resolver::resolve_module_access(ID id, const ast::module_access_expr& 
         resolving_,
         id,
         fmt::format("Module access operator '::' can only be applied to modules; found '{}'",
-                    type_kind_display_name(outer_type.get_kind())),
+                    type_kind_display_name(outer_type)),
         error::TYPE_MISMATCH,
         resolving_.ast.location_of(access.outer)));
 }
@@ -4532,6 +4684,8 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
                     illegal_auto_field(
                         "Struct", ident.name, resolving_.ast.location_of(field.explicit_type))));
             }
+            // A field type inferred from an unsuffixed literal default materializes.
+            field_type = &constexpr_numeric_view(*field_type);
         } else if (field.default_value) {
             const structural_guard inner_g{implicit_type_stack_, *field_type};
             TRY_RESOLVE(*field.default_value);
@@ -4542,6 +4696,30 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
                 resolving_,
                 id,
                 incomplete_field(ident.name, resolving_.ast.location_of(field.explicit_type))));
+        }
+
+        // A bit-packed `packed struct` may only hold packed-eligible fields
+        if (struct_expr.is_packed && !struct_expr.is_extern &&
+            !sema::packed_field_bits(*field_type, 64)) { // 64 is technically arbitrary here
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("field '{}' of type '{}' cannot appear in a 'packed struct'; only "
+                            "integers, floats, 'bool', enums, pointers, packed aggregates, and "
+                            "fixed arrays of those are allowed",
+                            ident.name,
+                            ctx_.type_display_name(*field_type)),
+                error::ILLEGAL_PACKED_FIELD,
+                resolving_.ast.location_of(field.explicit_type)));
+        }
+        if (struct_expr.is_packed && !struct_expr.is_extern && field.explicit_alignment) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("a 'packed struct' field cannot specify 'alignas' (field '{}')",
+                            ident.name),
+                error::ILLEGAL_PACKED_FIELD,
+                resolving_.ast.location_of(field.explicit_type)));
         }
 
         if (struct_expr.is_extern) {
@@ -4580,6 +4758,24 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
         }
         field_alignments[i++] = align_val;
     }
+
+    if (struct_expr.is_packed && !struct_expr.is_extern) {
+        u64 total_bits{0};
+        for (const auto* ft : field_types) {
+            total_bits += ft ? sema::packed_field_bits(*ft, 64).value_or(0) : 0;
+        }
+        if (total_bits < 1 || total_bits > 128) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("a 'packed struct' backing width of {} bits is unsupported (the "
+                            "current limit is 128 bits)",
+                            total_bits),
+                error::ILLEGAL_PACKED_FIELD,
+                resolving_.ast.location_of(id)));
+        }
+    }
+
     committable_resolution<types::struct_t> resolution{struct_type,
                                                        field_types,
                                                        struct_expr.fields,
@@ -4643,15 +4839,62 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
             }
         }
 
+        // A bit-packed `packed union` may only hold packed-eligible fields
+        if (union_expr.is_packed && !union_expr.is_extern &&
+            !sema::packed_field_bits(field_type, 64)) { // here too
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("field '{}' of type '{}' cannot appear in a 'packed union'; only "
+                            "integers, floats, 'bool', enums, pointers, packed aggregates, and "
+                            "fixed arrays of those are allowed",
+                            ident.name,
+                            ctx_.type_display_name(field_type)),
+                error::ILLEGAL_PACKED_FIELD,
+                resolving_.ast.location_of(field.explicit_type)));
+        }
+        if (union_expr.is_packed && !union_expr.is_extern && field.explicit_alignment) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("a 'packed union' field cannot specify 'alignas' (field '{}')",
+                            ident.name),
+                error::ILLEGAL_PACKED_FIELD,
+                resolving_.ast.location_of(field.explicit_type)));
+        }
+
         resolving_.set_sema_type(field.name, field_type);
         sym->set_kind(symbol_kind::VALUE);
         sym->set_status(symbol_status::RESOLVED);
         field_types[i++] = &field_type;
     }
 
+    if (union_expr.is_packed && !union_expr.is_extern) {
+        u64 widest{0};
+        for (const auto* ft : field_types) {
+            widest = std::max<u64>(widest, ft ? sema::packed_field_bits(*ft, 64).value_or(0) : 0);
+        }
+        if (widest < 1 || widest > 128) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("a 'packed union' backing width of {} bits is unsupported (the "
+                            "current limit is 128 bits)",
+                            widest),
+                error::ILLEGAL_PACKED_FIELD,
+                resolving_.ast.location_of(id)));
+        }
+    }
+
     auto member_types{ctx_.pool.get_many_unsafe(union_expr.members.size())};
-    committable_resolution<types::union_t> resolution{
-        union_type, field_types, union_expr.fields, member_types, resolving_, union_expr.is_extern};
+    committable_resolution<types::union_t> resolution{union_type,
+                                                      field_types,
+                                                      union_expr.fields,
+                                                      member_types,
+                                                      resolving_,
+                                                      union_expr.is_extern || union_expr.is_packed,
+                                                      union_expr.is_extern,
+                                                      union_expr.is_packed};
     if (!resolve_members(member_types, union_expr.members)) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id));
     }
@@ -4972,6 +5215,18 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             resolve(*decl.value);
             if (last_type_->is_poison()) { return poison_out(); }
             resolving_.set_sema_type_if(id, *last_type_.take());
+        }
+
+        // A `var` (or explicit `: auto`) binding whose inferred type is `constexpr_*` has no
+        // stable place to stay constexpr: materialize it to its runtime peer now
+        const bool wants_concrete{decl.has_modifier(ast::decl_modifiers::VARIABLE) ||
+                                  (decl.explicit_type && decl.explicit_type->get_token_type() ==
+                                                             syntax::token_type_t::AUTO_TYPE)};
+        if (wants_concrete) {
+            auto& dt{resolving_.get_sema_type(id)};
+            if (is_constexpr_numeric(dt.get_kind())) {
+                resolving_.set_sema_type(id, constexpr_numeric_view(dt));
+            }
         }
     }
 
@@ -6094,6 +6349,15 @@ auto type_resolver::apply_explicit_modifiers(ast::explicit_type_id id, type& inn
 
 auto type_resolver::visit(ast::explicit_type_id id, const ast::identifier_expr& ident) -> void {
     PROFILE_FUNCTION();
+
+    // `iN` / `uN` resolve straight to a pooled integer type, no symbol lookup.
+    if (syntax::token_type::is_int_type_lexeme(ident.name)) {
+        resolve_ident(id, ident);
+        auto& resolved{apply_explicit_modifiers(id, *last_type_.take())};
+        resolving_.set_sema_type(id, resolved);
+        return last_type_.emplace(resolved);
+    }
+
     auto symbol_opt{ctx_.registry.lookup(table_stack_, ident.name)};
     if (!symbol_opt) {
         return last_type_.emplace(

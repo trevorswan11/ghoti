@@ -77,12 +77,11 @@ TEST_CASE("Resolving capturing match arms") {
                          return ctx.get_type(sema::type_kind::ENUM, 1);
                      });
 
-    test_arm_capture("using U = union { a: i32 }; _ = match (U) { .a => |a| 5 };",
-                     "a",
-                     2,
-                     [](helpers::sema_test_context& ctx) -> auto& {
-                         return ctx.get_type(sema::type_kind::I32);
-                     });
+    test_arm_capture(
+        "using U = union { a: i32 }; _ = match (U) { .a => |a| 5 };",
+        "a",
+        2,
+        [](helpers::sema_test_context& ctx) -> auto& { return ctx.get_int_type(32, true); });
 }
 
 TEST_CASE("Resolving well-formed builtin-type matching") {
@@ -263,11 +262,11 @@ TEST_CASE("Illegal match arms with primitives") {
             };
         };
 
-        helpers::test_resolver_fail("match (1) { 3 => 5 };", expected_diag("i32"));
-        helpers::test_resolver_fail("match (1l) { 3 => 5 };", expected_diag("i64"));
+        helpers::test_resolver_fail("match (1) { 3 => 5 };", expected_diag("constexpr_int"));
+        helpers::test_resolver_fail("match (1i64) { 3 => 5 };", expected_diag("i64"));
         helpers::test_resolver_fail("match (1z) { 3 => 5 };", expected_diag("isize"));
-        helpers::test_resolver_fail("match (1u) { 3 => 5 };", expected_diag("u32"));
-        helpers::test_resolver_fail("match (1ul) { 3 => 5 };", expected_diag("u64"));
+        helpers::test_resolver_fail("match (1u32) { 3 => 5 };", expected_diag("u32"));
+        helpers::test_resolver_fail("match (1u64) { 3 => 5 };", expected_diag("u64"));
         helpers::test_resolver_fail("match (1UZ) { 3 => 5 };", expected_diag("usize"));
     }
 
@@ -300,7 +299,7 @@ TEST_CASE("Illegal resolved builtin matcher type") {
             };
         };
 
-        helpers::test_resolver_fail("match (2.3f) { 3 => 5 };", expected_diag());
+        helpers::test_resolver_fail("match (2.3f32) { 3 => 5 };", expected_diag());
         helpers::test_resolver_fail("match (2.3) { 3 => 5 };", expected_diag());
     }
 

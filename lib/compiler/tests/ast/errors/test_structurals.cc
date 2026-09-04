@@ -34,10 +34,10 @@ TEST_CASE("Empty enum with decl") {
 }
 
 TEST_CASE("Out of order enum") {
-    helpers::test_parser_fail("enum : i64 { A = 2l const b := fn(&self, a: A): C { c; }; B = 2l };",
+    helpers::test_parser_fail("enum : i64 { A = 2 const b := fn(&self, a: A): C { c; }; B = 2 };",
                               syntax::diagnostic{"Expected token SEMICOLON, found RBRACE",
                                                  syntax::error::UNEXPECTED_TOKEN,
-                                                 std::pair{0UZ, 65UZ}});
+                                                 std::pair{0UZ, 63UZ}});
 }
 
 TEST_CASE("Illegal struct members") {

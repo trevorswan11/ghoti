@@ -24,30 +24,8 @@ enum class token_type_t : u8 {
     INT_8,
     INT_10,
     INT_16,
-    LINT_2,
-    LINT_8,
-    LINT_10,
-    LINT_16,
-    ZINT_2,
-    ZINT_8,
-    ZINT_10,
-    ZINT_16,
 
-    UINT_2,
-    UINT_8,
-    UINT_10,
-    UINT_16,
-    ULINT_2,
-    ULINT_8,
-    ULINT_10,
-    ULINT_16,
-    UZINT_2,
-    UZINT_8,
-    UZINT_10,
-    UZINT_16,
-
-    F32,
-    F64,
+    REAL,
     STRING,
     U8,
 
@@ -149,18 +127,16 @@ enum class token_type_t : u8 {
     INTERFACE,
     DYN,
 
-    I8_TYPE,
-    I16_TYPE,
-    I32_TYPE,
-    I64_TYPE,
+    INT_TYPE, // `iN` / `uN` for N in 1..65535; width and sign carried in the lexeme
     ISIZE_TYPE,
-    U16_TYPE,
-    U32_TYPE,
-    U64_TYPE,
     USIZE_TYPE,
-    U8_TYPE,
+    F16_TYPE,
     F32_TYPE,
     F64_TYPE,
+    F80_TYPE,
+    F128_TYPE,
+    CONSTEXPR_INT_TYPE,
+    CONSTEXPR_FLOAT_TYPE,
     BOOL_TYPE,
     VOID_TYPE,
 
@@ -192,6 +168,7 @@ enum class token_type_t : u8 {
     BUILTIN_FIELD_PARENT_PTR,
     BUILTIN_ALIGN_OF,
     BUILTIN_SIZE_OF,
+    BUILTIN_BIT_SIZE_OF,
     BUILTIN_TYPE_OF,
     BUILTIN_THIS,
     BUILTIN_TAG_NAME,
@@ -267,87 +244,25 @@ enum class numeric_base : u8 {
 
 namespace token_type {
 
-enum class integer_category : u8 {
-    SIGNED_BASE,
-    SIGNED_WIDE,
-    SIGNED_SIZE,
-    UNSIGNED_BASE,
-    UNSIGNED_WIDE,
-    UNSIGNED_SIZE,
-};
-
-[[nodiscard]] consteval auto to_int_category(token_type_t tt) noexcept -> integer_category {
-    switch (tt) {
-    case token_type_t::INT_2:
-    case token_type_t::INT_8:
-    case token_type_t::INT_10:
-    case token_type_t::INT_16:   return integer_category::SIGNED_BASE;
-    case token_type_t::LINT_2:
-    case token_type_t::LINT_8:
-    case token_type_t::LINT_10:
-    case token_type_t::LINT_16:  return integer_category::SIGNED_WIDE;
-    case token_type_t::ZINT_2:
-    case token_type_t::ZINT_8:
-    case token_type_t::ZINT_10:
-    case token_type_t::ZINT_16:  return integer_category::SIGNED_SIZE;
-    case token_type_t::UINT_2:
-    case token_type_t::UINT_8:
-    case token_type_t::UINT_10:
-    case token_type_t::UINT_16:  return integer_category::UNSIGNED_BASE;
-    case token_type_t::ULINT_2:
-    case token_type_t::ULINT_8:
-    case token_type_t::ULINT_10:
-    case token_type_t::ULINT_16: return integer_category::UNSIGNED_WIDE;
-    case token_type_t::UZINT_2:
-    case token_type_t::UZINT_8:
-    case token_type_t::UZINT_10:
-    case token_type_t::UZINT_16: return integer_category::UNSIGNED_SIZE;
-    default:                     UNREACHABLE("Int-ness is assumed in this function");
-    }
-}
-
 [[nodiscard]] auto to_base(token_type_t tt) noexcept -> stdx::option<numeric_base>;
 [[nodiscard]] auto misc_from_char(char c) noexcept -> stdx::option<token_type_t>;
 
-[[nodiscard]] constexpr auto is_i32(token_type_t tt) noexcept -> bool {
+[[nodiscard]] constexpr auto is_int(token_type_t tt) noexcept -> bool {
     return token_type_t::INT_2 <= tt && tt <= token_type_t::INT_16;
 }
 
-[[nodiscard]] constexpr auto is_i64(token_type_t tt) noexcept -> bool {
-    return token_type_t::LINT_2 <= tt && tt <= token_type_t::LINT_16;
-}
-
-[[nodiscard]] constexpr auto is_isize_int(token_type_t tt) noexcept -> bool {
-    return token_type_t::ZINT_2 <= tt && tt <= token_type_t::ZINT_16;
-}
-
-[[nodiscard]] constexpr auto is_u32(token_type_t tt) noexcept -> bool {
-    return token_type_t::UINT_2 <= tt && tt <= token_type_t::UINT_16;
-}
-
-[[nodiscard]] constexpr auto is_u64(token_type_t tt) noexcept -> bool {
-    return token_type_t::ULINT_2 <= tt && tt <= token_type_t::ULINT_16;
-}
-
-[[nodiscard]] constexpr auto is_usize_int(token_type_t tt) noexcept -> bool {
-    return token_type_t::UZINT_2 <= tt && tt <= token_type_t::UZINT_16;
-}
-
-[[nodiscard]] constexpr auto is_int(token_type_t tt) noexcept -> bool {
-    return token_type_t::INT_2 <= tt && tt <= token_type_t::UZINT_16;
-}
-
 [[nodiscard]] constexpr auto is_number(token_type_t tt) noexcept -> bool {
-    return is_int(tt) || tt == token_type_t::F32 || tt == token_type_t::F64;
+    return is_int(tt) || tt == token_type_t::REAL;
 }
 
 [[nodiscard]] auto is_primitive(token_type_t type) noexcept -> bool;
 
+// Whether `s` has the shape of an arbitrary-width integer type: `i`/`u` then `[1-9][0-9]*`
+[[nodiscard]] auto is_int_type_lexeme(std::string_view s) noexcept -> bool;
+
 // Check whether the token is an ident, primitive type, or builtin function.
 [[nodiscard]] auto is_valid_ident(token_type_t type) noexcept -> bool;
 [[nodiscard]] auto is_valid_identifier_name(std::string_view name) noexcept -> bool;
-
-auto suffix_length(token_type_t tt) noexcept -> usize;
 
 [[nodiscard]] constexpr auto get_compound_base_op(syntax::token_type_t tok) noexcept
     -> stdx::option<syntax::token_type_t> {

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <limits>
 #include <ranges>
 #include <stdx/type_traits.hh>
 #include <string>
@@ -37,10 +38,33 @@
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
+#include "support/int128.hh"
 
 namespace ghoti::gir {
 
 namespace {
+
+// Compile-time integer results evaluate at 128-bit width but store in the narrowest
+// arm that holds them, so the common (<=64-bit) case is unchanged for every consumer.
+template <typename T>
+[[nodiscard]] auto make_scalar_const(T v, stdx::option<sema::type&> t) -> const_value {
+    if constexpr (std::is_floating_point_v<T>) {
+        return const_value{v, t};
+    } else if constexpr (std::is_signed_v<T>) {
+        const auto w{static_cast<i128>(v)};
+        if (w >= static_cast<i128>(std::numeric_limits<i64>::min()) &&
+            w <= static_cast<i128>(std::numeric_limits<u64>::max())) {
+            return const_value{static_cast<i64>(w), t};
+        }
+        return const_value{w, t};
+    } else {
+        const auto w{static_cast<u128>(v)};
+        if (w <= static_cast<u128>(std::numeric_limits<u64>::max())) {
+            return const_value{static_cast<u64>(w), t};
+        }
+        return const_value{w, t};
+    }
+}
 
 template <typename T>
 [[nodiscard]] auto fold_binary_arithmetic(syntax::token_type_t      op_type,
@@ -50,35 +74,35 @@ template <typename T>
                                           sema::type&               bool_type,
                                           auto&& on_div_zero) -> stdx::option<const_value> {
     switch (op_type) {
-    case syntax::token_type_t::PLUS:  return const_value{l + r, res_type};
-    case syntax::token_type_t::MINUS: return const_value{l - r, res_type};
-    case syntax::token_type_t::STAR:  return const_value{l * r, res_type};
+    case syntax::token_type_t::PLUS:  return make_scalar_const(l + r, res_type);
+    case syntax::token_type_t::MINUS: return make_scalar_const(l - r, res_type);
+    case syntax::token_type_t::STAR:  return make_scalar_const(l * r, res_type);
     case syntax::token_type_t::SLASH:
         if (r == 0) { return on_div_zero("Division by zero in compile-time constant expression"); }
-        return const_value{l / r, res_type};
+        return make_scalar_const(l / r, res_type);
     case syntax::token_type_t::PERCENT:
         if constexpr (std::is_integral_v<T>) {
             if (r == 0) {
                 return on_div_zero("Modulo by zero in compile-time constant expression");
             }
-            return const_value{l % r, res_type};
+            return make_scalar_const(l % r, res_type);
         } else {
             return stdx::none;
         }
     case syntax::token_type_t::BW_AND:
-        if constexpr (std::is_integral_v<T>) { return const_value{l & r, res_type}; }
+        if constexpr (std::is_integral_v<T>) { return make_scalar_const(l & r, res_type); }
         return stdx::none;
     case syntax::token_type_t::BW_OR:
-        if constexpr (std::is_integral_v<T>) { return const_value{l | r, res_type}; }
+        if constexpr (std::is_integral_v<T>) { return make_scalar_const(l | r, res_type); }
         return stdx::none;
     case syntax::token_type_t::CARET:
-        if constexpr (std::is_integral_v<T>) { return const_value{l ^ r, res_type}; }
+        if constexpr (std::is_integral_v<T>) { return make_scalar_const(l ^ r, res_type); }
         return stdx::none;
     case syntax::token_type_t::SHL:
-        if constexpr (std::is_integral_v<T>) { return const_value{l << r, res_type}; }
+        if constexpr (std::is_integral_v<T>) { return make_scalar_const(l << r, res_type); }
         return stdx::none;
     case syntax::token_type_t::SHR:
-        if constexpr (std::is_integral_v<T>) { return const_value{l >> r, res_type}; }
+        if constexpr (std::is_integral_v<T>) { return make_scalar_const(l >> r, res_type); }
         return stdx::none;
     case syntax::token_type_t::EQ:    return const_value{l == r, bool_type};
     case syntax::token_type_t::NEQ:   return const_value{l != r, bool_type};
@@ -197,6 +221,16 @@ auto const_eval::resolve_all_deferred_types() -> void { resolve_all_deferred_arr
 
 namespace {
 
+[[nodiscard]] auto int_abi_bytes(u16 bits) -> usize {
+    if (bits <= 8) { return 1; }
+    if (bits <= 16) { return 2; }
+    if (bits <= 32) { return 4; }
+    if (bits <= 64) { return 8; }
+    usize bytes{1};
+    while (bytes * 8 < bits) { bytes *= 2; }
+    return bytes;
+}
+
 [[nodiscard]] auto capture_field_align(const sema::types::closure_capture& capture, usize ptr_size)
     -> usize {
     return const_eval::type_align_of(*capture.storage_type, ptr_size);
@@ -212,23 +246,21 @@ namespace {
 auto const_eval::type_align_of(const sema::type& type, usize ptr_size) -> usize {
     PROFILE_FUNCTION();
     switch (type.get_kind()) {
-    case sema::type_kind::I8:
-    case sema::type_kind::U8:
-    case sema::type_kind::BOOL:      return 1;
-    case sema::type_kind::I16:
-    case sema::type_kind::U16:       return 2;
-    case sema::type_kind::I32:
-    case sema::type_kind::U32:
-    case sema::type_kind::F32:       return 4;
-    case sema::type_kind::I64:
-    case sema::type_kind::U64:
-    case sema::type_kind::F64:       return 8;
+    case sema::type_kind::INT:             return int_abi_bytes(sema::int_width(type));
+    case sema::type_kind::BOOL:            return 1;
+    case sema::type_kind::F16:             return 2;
+    case sema::type_kind::F32:             return 4;
+    case sema::type_kind::CONSTEXPR_INT:   return 4; // materializes as i32
+    case sema::type_kind::F64:
+    case sema::type_kind::CONSTEXPR_FLOAT: return 8; // materializes as f64
+    case sema::type_kind::F80:
+    case sema::type_kind::F128:            return 16;
     case sema::type_kind::ISIZE:
     case sema::type_kind::USIZE:
     case sema::type_kind::POINTER:
     case sema::type_kind::REFERENCE:
     case sema::type_kind::FUNCTION:
-    case sema::type_kind::SLICE:     return ptr_size;
+    case sema::type_kind::SLICE:           return ptr_size;
     case sema::type_kind::ARRAY:
         if (const auto arr{type.get_data().as_opt<sema::types::array>()}) {
             return type_align_of(arr->underlying, ptr_size);
@@ -239,6 +271,12 @@ auto const_eval::type_align_of(const sema::type& type, usize ptr_size) -> usize 
         UNREACHABLE("type_kind::ARRAY associated with improper type");
     case sema::type_kind::STRUCT:
         if (const auto st{type.get_data().as_opt<sema::types::struct_t>()}) {
+            if (st->is_bit_packed()) {
+                if (const auto bits{
+                        sema::packed_backing_bits(*st, static_cast<u32>(ptr_size) * 8)}) {
+                    return int_abi_bytes(static_cast<u16>(*bits));
+                }
+            }
             return std::ranges::fold_left(st->fields | std::views::filter([](const auto* f) {
                                               return f != nullptr;
                                           }) | std::views::transform([ptr_size](const auto* f) {
@@ -250,6 +288,12 @@ auto const_eval::type_align_of(const sema::type& type, usize ptr_size) -> usize 
         UNREACHABLE("type_kind::STRUCT associated with improper type");
     case sema::type_kind::UNION:
         if (const auto un{type.get_data().as_opt<sema::types::union_t>()}) {
+            if (un->is_bit_packed()) {
+                if (const auto bits{
+                        sema::packed_union_backing_bits(*un, static_cast<u32>(ptr_size) * 8)}) {
+                    return int_abi_bytes(static_cast<u16>(*bits));
+                }
+            }
             return std::ranges::fold_left(un->fields | std::views::filter([](const auto* f) {
                                               return f != nullptr;
                                           }) | std::views::transform([ptr_size](const auto* f) {
@@ -281,24 +325,22 @@ auto const_eval::type_align_of(const sema::type& type, usize ptr_size) -> usize 
 auto const_eval::type_size_of(const sema::type& type, usize ptr_size) -> usize {
     PROFILE_FUNCTION();
     switch (type.get_kind()) {
-    case sema::type_kind::VOID_:     return 0;
-    case sema::type_kind::I8:
-    case sema::type_kind::U8:
-    case sema::type_kind::BOOL:      return 1;
-    case sema::type_kind::I16:
-    case sema::type_kind::U16:       return 2;
-    case sema::type_kind::I32:
-    case sema::type_kind::U32:
-    case sema::type_kind::F32:       return 4;
-    case sema::type_kind::I64:
-    case sema::type_kind::U64:
-    case sema::type_kind::F64:       return 8;
+    case sema::type_kind::VOID_:           return 0;
+    case sema::type_kind::INT:             return int_abi_bytes(sema::int_width(type));
+    case sema::type_kind::BOOL:            return 1;
+    case sema::type_kind::F16:             return 2;
+    case sema::type_kind::F32:             return 4;
+    case sema::type_kind::CONSTEXPR_INT:   return 4; // materializes as i32
+    case sema::type_kind::F64:
+    case sema::type_kind::CONSTEXPR_FLOAT: return 8; // materializes as f64
+    case sema::type_kind::F80:
+    case sema::type_kind::F128:            return 16;
     case sema::type_kind::ISIZE:
     case sema::type_kind::USIZE:
     case sema::type_kind::POINTER:
     case sema::type_kind::REFERENCE:
-    case sema::type_kind::FUNCTION:  return ptr_size;
-    case sema::type_kind::SLICE:     return 2 * ptr_size;
+    case sema::type_kind::FUNCTION:        return ptr_size;
+    case sema::type_kind::SLICE:           return 2 * ptr_size;
     case sema::type_kind::ARRAY:
         if (const auto arr{type.get_data().as_opt<sema::types::array>()}) {
             const auto elem_size{type_size_of(arr->underlying, ptr_size)};
@@ -311,6 +353,12 @@ auto const_eval::type_size_of(const sema::type& type, usize ptr_size) -> usize {
         UNREACHABLE("type_kind::ARRAY associated with improper type");
     case sema::type_kind::STRUCT:
         if (const auto st{type.get_data().as_opt<sema::types::struct_t>()}) {
+            if (st->is_bit_packed()) {
+                if (const auto bits{
+                        sema::packed_backing_bits(*st, static_cast<u32>(ptr_size) * 8)}) {
+                    return int_abi_bytes(static_cast<u16>(*bits));
+                }
+            }
             usize current_offset{0};
             usize max_align{1};
             for (const auto* field : st->fields) {
@@ -329,6 +377,12 @@ auto const_eval::type_size_of(const sema::type& type, usize ptr_size) -> usize {
         UNREACHABLE("type_kind::STRUCT associated with improper type");
     case sema::type_kind::UNION:
         if (const auto un{type.get_data().as_opt<sema::types::union_t>()}) {
+            if (un->is_bit_packed()) {
+                if (const auto bits{
+                        sema::packed_union_backing_bits(*un, static_cast<u32>(ptr_size) * 8)}) {
+                    return int_abi_bytes(static_cast<u16>(*bits));
+                }
+            }
             usize max_size{0};
             usize max_align{1};
             for (const auto* field : un->fields) {
@@ -497,43 +551,32 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
 
     return module_->ast[id].visit(
         [](const auto&) -> stdx::option<const_value> { return stdx::none; },
-        [&](ast::i32_expr data) {
+        [&](const ast::int_literal_expr& data) -> stdx::option<const_value> {
             const auto sema_type{module_->get_sema_type_opt(id)};
-            return const_value{static_cast<i64>(data.value),
+            auto&      t{sema_type ? *sema_type : ctx_.get_int(32, true)};
+            // An unsuffixed integer literal used in a float context folds to a float value.
+            if (sema::is_float(t.get_kind()) || t.get_kind() == sema::type_kind::CONSTEXPR_FLOAT) {
+                if (t.get_kind() == sema::type_kind::F80 || t.get_kind() == sema::type_kind::F128) {
+                    return stdx::none;
+                }
+                return make_scalar_const(static_cast<f64>(static_cast<i128>(data.value)), t);
+            }
+            if (sema::is_unsigned_integer(t)) {
+                return make_scalar_const(static_cast<u128>(data.value), t);
+            }
+            return make_scalar_const(static_cast<i128>(data.value), t);
+        },
+        [&](const ast::float_literal_expr& data) -> stdx::option<const_value> {
+            // `f80`/`f128` cannot be represented exactly at compile time; refuse to fold
+            if (data.width == 80 || data.width == 128) { return stdx::none; }
+            const auto sema_type{module_->get_sema_type_opt(id)};
+            if (sema_type && (sema_type->get_kind() == sema::type_kind::F80 ||
+                              sema_type->get_kind() == sema::type_kind::F128)) {
+                return stdx::none;
+            }
+            return const_value{data.value,
                                sema_type ? *sema_type
-                                         : ctx_.get_builtin_resolved_type(sema::type_kind::I32)};
-        },
-        [&](ast::i64_expr data) {
-            return const_value{static_cast<i64>(data.value),
-                               ctx_.get_builtin_resolved_type(sema::type_kind::I64)};
-        },
-        [&](ast::isize_expr data) {
-            return const_value{static_cast<i64>(data.value),
-                               ctx_.get_builtin_resolved_type(sema::type_kind::ISIZE)};
-        },
-        [&](ast::u8_expr data) {
-            return const_value{static_cast<u64>(data.value),
-                               ctx_.get_builtin_resolved_type(sema::type_kind::U8)};
-        },
-        [&](ast::u32_expr data) {
-            return const_value{static_cast<u64>(data.value),
-                               ctx_.get_builtin_resolved_type(sema::type_kind::U32)};
-        },
-        [&](ast::u64_expr data) {
-            return const_value{static_cast<u64>(data.value),
-                               ctx_.get_builtin_resolved_type(sema::type_kind::U64)};
-        },
-        [&](ast::usize_expr data) {
-            return const_value{static_cast<u64>(data.value),
-                               ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
-        },
-        [&](ast::f32_expr data) {
-            return const_value{static_cast<f64>(data.value),
-                               ctx_.get_builtin_resolved_type(sema::type_kind::F32)};
-        },
-        [&](ast::f64_expr data) {
-            return const_value{static_cast<f64>(data.value),
-                               ctx_.get_builtin_resolved_type(sema::type_kind::F64)};
+                                         : ctx_.get_builtin_resolved_type(sema::type_kind::F64)};
         },
         [&](ast::bool_expr) {
             return const_value{id.get_token_type() == syntax::token_type_t::BOOLEAN_TRUE,
@@ -667,8 +710,7 @@ auto const_eval::eval_index(ast::node_id id, const ast::index_expr& index_expr)
                 module_->ast.location_of(id));
             return const_value::make_poison();
         }
-        return const_value{static_cast<u64>(static_cast<u8>((*str)[idx])),
-                           ctx_.get_builtin_resolved_type(sema::type_kind::U8)};
+        return const_value{static_cast<u64>(static_cast<u8>((*str)[idx])), ctx_.get_int(8, false)};
     }
 
     return stdx::none;
@@ -771,7 +813,7 @@ auto const_eval::eval_dot(ast::node_id, const ast::dot_expr& dot) -> stdx::optio
                                     i64 val{static_cast<i64>(idx)};
                                     if (e.value) {
                                         if (const auto ev{try_eval(*e.value)}) {
-                                            val = ev->as_int_opt().value_or(val);
+                                            val = static_cast<i64>(ev->as_int_opt().value_or(val));
                                         }
                                     }
                                     return const_value{const_enum{std::string{member_name}, val},
@@ -876,7 +918,7 @@ auto const_eval::eval_implicit_access(ast::node_id id, const ast::implicit_acces
                     auto val{static_cast<i64>(idx)};
                     if (e.value) {
                         if (const auto ev{try_eval(*e.value)}) {
-                            val = ev->as_int_opt().value_or(val);
+                            val = static_cast<i64>(ev->as_int_opt().value_or(val));
                         }
                     }
                     return const_value{const_enum{std::string{member_name}, val}, sema_type};
@@ -990,7 +1032,9 @@ auto const_eval::eval_module_access(ast::node_id, const ast::module_access_expr&
             if (vname == inner_name) {
                 i64 val{static_cast<i64>(idx)};
                 if (e.value) {
-                    if (const auto ev{try_eval(*e.value)}) { val = ev->as_int_opt().value_or(val); }
+                    if (const auto ev{try_eval(*e.value)}) {
+                        val = static_cast<i64>(ev->as_int_opt().value_or(val));
+                    }
                 }
                 return const_value{const_enum{std::string{inner_name}, val},
                                    module_->get_sema_type_opt(*decl->value)};
@@ -1167,15 +1211,47 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
         return const_value::make_poison();
     };
 
+    const auto is_wide_arm    = [](const const_value& v) { return v.is<i128>() || v.is<u128>(); };
+    const auto is_narrow_int  = [](const const_value& v) { return v.is<i64>() || v.is<u64>(); };
+    const auto is_signed_wide = [](const const_value& v) { return v.is<i64>() || v.is<i128>(); };
+
     if (lhs.is<f64>() || rhs.is<f64>()) {
-        const auto l{lhs.is<f64>() ? lhs.as<f64>()
-                                   : (lhs.is<i64>() ? static_cast<f64>(lhs.as<i64>())
-                                                    : static_cast<f64>(lhs.as<u64>()))};
-        const auto r{rhs.is<f64>() ? rhs.as<f64>()
-                                   : (rhs.is<i64>() ? static_cast<f64>(rhs.as<i64>())
-                                                    : static_cast<f64>(rhs.as<u64>()))};
+        const auto to_f64 = [](const const_value& v) -> f64 {
+            if (v.is<f64>()) { return v.as<f64>(); }
+            if (const auto u{v.as_uint_opt()}) { return static_cast<f64>(*u); }
+            return static_cast<f64>(v.as_int_opt().value_or(0));
+        };
         const auto res_type{lhs.get_type() ? lhs.get_type() : rhs.get_type()};
-        return fold_binary_arithmetic(op_type, l, r, res_type, bool_type, on_div_zero);
+        // `f80`/`f128` results cannot be represented exactly at compile time; refuse to fold (D3).
+        if (res_type && (res_type->get_kind() == sema::type_kind::F80 ||
+                         res_type->get_kind() == sema::type_kind::F128)) {
+            return stdx::none;
+        }
+        return fold_binary_arithmetic(
+            op_type, to_f64(lhs), to_f64(rhs), res_type, bool_type, on_div_zero);
+    }
+
+    // A wide (128-bit) operand pulls the whole operation into the 128-bit comptime domain.
+    if ((is_wide_arm(lhs) || is_wide_arm(rhs)) && (is_wide_arm(lhs) || is_narrow_int(lhs)) &&
+        (is_wide_arm(rhs) || is_narrow_int(rhs))) {
+        const auto res_type{lhs.get_type() ? lhs.get_type() : rhs.get_type()};
+        const bool unsigned_op{
+            (lhs.is<u64>() || lhs.is<u128>() || rhs.is<u64>() || rhs.is<u128>()) &&
+            !is_signed_wide(lhs)};
+        if (unsigned_op) {
+            return fold_binary_arithmetic(op_type,
+                                          lhs.as_uint_opt().value_or(0),
+                                          rhs.as_uint_opt().value_or(0),
+                                          res_type,
+                                          bool_type,
+                                          on_div_zero);
+        }
+        return fold_binary_arithmetic(op_type,
+                                      lhs.as_int_opt().value_or(0),
+                                      rhs.as_int_opt().value_or(0),
+                                      res_type,
+                                      bool_type,
+                                      on_div_zero);
     }
 
     const auto is_unsigned{(lhs.is<u64>() || rhs.is<u64>()) && !lhs.is<i64>()};
@@ -1295,6 +1371,18 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
     PROFILE_FUNCTION();
     if (auto local_val{lookup_local_binding(ident.name)}) { return local_val; }
     if (const auto cx{ctx_.lookup_constexpr_binding(ident.name)}) { return *cx; }
+
+    // `iN` / `uN` name a primitive integer type; yield it as a compile-time type value.
+    if (syntax::token_type::is_int_type_lexeme(ident.name)) {
+        u64 width{0};
+        for (const char c : ident.name.substr(1)) {
+            width = width * 10 + static_cast<u64>(c - '0');
+            if (width > 65'535) { break; }
+        }
+        if (width >= 1 && width <= 65'535) {
+            return const_value{ctx_.get_int(static_cast<u16>(width), ident.name.front() == 'i')};
+        }
+    }
 
     // A bare identifier inside a member body may name a sibling static `const` member.
     if (enclosing_type_) {
@@ -1536,6 +1624,57 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto al{type_align_of(*target_type, ptr_size)};
         return const_value{static_cast<u64>(al), usize_type};
     }
+    case syntax::token_type_t::BUILTIN_BIT_SIZE_OF: {
+        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
+        const auto&               arg{call.arguments.front()};
+        stdx::option<sema::type&> target_type;
+        if (const auto type_id{arg.as_opt<ast::explicit_type_id>()}) {
+            target_type = module_->get_sema_type_opt(*type_id);
+        } else if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
+            target_type = module_->get_sema_type_opt(*expr_h);
+        }
+        if (!target_type) { return stdx::none; }
+
+        if (const auto dc{target_type->get_data().as_opt<sema::types::deferred_call>()}) {
+            if (const auto r{try_resolve_deferred_call(dc->call)}) { target_type.emplace(*r); }
+        }
+        // `@bitSizeOf(@typeOf(x))` hands us a `meta_type`; unwrap to the denoted type.
+        if (target_type->get_kind() == sema::type_kind::TYPE) {
+            if (const auto m{target_type->get_data().as_opt<sema::types::meta_type>()}) {
+                target_type.emplace(m->instance);
+            }
+        }
+
+        const auto ptr_size{
+            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? usize{8}
+                                                                                      : usize{4}};
+        const auto ptr_bits{static_cast<u32>(ptr_size) * 8};
+
+        const auto kind{target_type->get_kind()};
+        if (kind == sema::type_kind::INT) {
+            return const_value{static_cast<u64>(sema::int_width(*target_type)), usize_type};
+        }
+        if (kind == sema::type_kind::ISIZE || kind == sema::type_kind::USIZE) {
+            return const_value{static_cast<u64>(ptr_bits), usize_type};
+        }
+        if (kind == sema::type_kind::BOOL) { return const_value{u64{1}, usize_type}; }
+        if (sema::is_float(kind)) {
+            return const_value{static_cast<u64>(sema::float_bits(kind)), usize_type};
+        }
+        if (const auto st{target_type->get_data().as_opt<sema::types::struct_t>()};
+            st && st->is_bit_packed()) {
+            if (const auto n{sema::packed_backing_bits(*st, ptr_bits)}) {
+                return const_value{static_cast<u64>(*n), usize_type};
+            }
+        }
+        if (const auto ut{target_type->get_data().as_opt<sema::types::union_t>()};
+            ut && ut->is_bit_packed()) {
+            if (const auto n{sema::packed_union_backing_bits(*ut, ptr_bits)}) {
+                return const_value{static_cast<u64>(*n), usize_type};
+            }
+        }
+        return const_value{static_cast<u64>(type_size_of(*target_type, ptr_size) * 8), usize_type};
+    }
     case syntax::token_type_t::BUILTIN_TYPE_OF: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto& arg{call.arguments.front()};
@@ -1740,7 +1879,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
 
         // Match the resolver: a fixed-length, null-terminated byte array (like a string literal).
         auto  name{ctx_.type_display_name(*target_type)};
-        auto& t_u8{ctx_.get_builtin_resolved_type(sema::type_kind::U8)};
+        auto& t_u8{ctx_.get_int(8, false)};
         auto& arr_type{ctx_.get_array(sema::types::mut::CONSTANT, true, name.size() + 1, t_u8)};
         return const_value{std::move(name), arr_type};
     }
@@ -1777,7 +1916,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto   loc{id.is_valid() ? module_->ast.location_of(id)
                                        : module_->ast.location_of(call.function)};
         const_struct src_struct;
-        auto&        t_u32{ctx_.get_builtin_resolved_type(sema::type_kind::U32)};
+        auto&        t_u32{ctx_.get_int(32, false)};
         src_struct.fields["file"]   = const_value::make_string(ctx_, module_->path.string());
         src_struct.fields["line"]   = const_value{static_cast<u64>(loc.line), t_u32};
         src_struct.fields["column"] = const_value{static_cast<u64>(loc.column), t_u32};

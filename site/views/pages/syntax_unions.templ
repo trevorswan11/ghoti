@@ -11,11 +11,19 @@ templ SyntaxUnionsPage() {
 			</ul>
 		</li>
 		<li>
-			Unions can be annotated with the extern layout modifier:
+			Unions can be annotated with layout modifiers:
 			<ul>
 				<li><code>extern union { "{ ... }" }</code>: Enforces C ABI union layout rules for C interop.</li>
 				<li>
 					As with <code>extern</code> structs, an <code>extern</code> union field may not contain a reference or a <code>dyn</code> fat pointer, transitively through pointers, arrays, slices, or function-pointer signatures. Use a raw pointer <code>^T</code> instead
+				</li>
+				<li>
+					<code>packed union { "{ ... }" }</code>: A <em>bit-packed</em> union. The whole union becomes a single backing integer <code>iN</code> whose width <code>N</code> is the width of its widest field (<code>max { "@bitSizeOf" }(field)</code>); every field is laid out at bit offset 0, so writing one field overwrites the low bits the others share.
+					<ul>
+						<li>Field eligibility, the 128-bit cap, the <code>{ "@alignas" }</code> ban, and the <code>&amp;u.field</code> address error all match a bit-packed <code>packed struct</code>.</li>
+						<li>A bit-packed union carries no active-field tag &mdash; it is a raw reinterpreting view, like a C union. <code>{ "@bitSizeOf" }(U)</code> is <code>N</code>; <code>{ "@sizeOf" }(U)</code> is the backing integer's ABI byte size.</li>
+						<li><code>extern packed union { "{ ... }" }</code> keeps C-ABI byte semantics and is not bit-packed.</li>
+					</ul>
 				</li>
 			</ul>
 		</li>

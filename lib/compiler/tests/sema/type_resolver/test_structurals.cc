@@ -47,7 +47,7 @@ pub const BarS := struct {
 }
 
 [[nodiscard]] auto u8_slice_type(helpers::sema_test_context& ctx) -> sema::type& {
-    return ctx.get_type(sema::type_kind::SLICE, false, ctx.get_type(sema::type_kind::U8));
+    return ctx.get_type(sema::type_kind::SLICE, false, ctx.get_int_type(8, false));
 }
 
 [[nodiscard]] auto bar_fn_type(helpers::sema_test_context& ctx, usize table_idx) -> sema::type& {
@@ -95,17 +95,17 @@ const func := other::BarE.bar;
 
 TEST_CASE("Union resolved access") {
     auto [ctx, idx]{setup_access_test(R"(
-var u1: other::BarU = .{ .A = 1, };
-const u2 := other::BarU{ .A = 1, };
-const u3 := u1.bar('a');
+var ua: other::BarU = .{ .A = 1, };
+const ub := other::BarU{ .A = 1, };
+const uc := ua.bar('a');
 
 const func := other::BarU.bar;
 )")};
 
     const auto& union_type{ctx->get_type(sema::type_kind::UNION, 5)};
-    check_access_decl(*ctx, idx, "u1", union_type);
-    check_access_decl(*ctx, idx, "u2", union_type);
-    check_access_decl(*ctx, idx, "u3", u8_slice_type(*ctx));
+    check_access_decl(*ctx, idx, "ua", union_type);
+    check_access_decl(*ctx, idx, "ub", union_type);
+    check_access_decl(*ctx, idx, "uc", u8_slice_type(*ctx));
     check_access_decl(*ctx, idx, "func", bar_fn_type(*ctx, 6));
 }
 
@@ -121,7 +121,7 @@ const func := other::BarS.bar;
 )")};
 
     const auto& struct_type{ctx->get_type(sema::type_kind::STRUCT, 7)};
-    const auto& member_type{ctx->get_type(sema::type_kind::I32)};
+    const auto& member_type{ctx->get_int_type(32, true)};
 
     check_access_decl(*ctx, idx, "s1", struct_type);
     check_access_decl(*ctx, idx, "s2", struct_type);
@@ -373,10 +373,7 @@ TEST_CASE("Initializer expression in various resolution contexts") {
             const l := s.len;
         )")};
         check_access_decl(
-            *ctx,
-            idx,
-            "p",
-            ctx->get_type(sema::type_kind::POINTER, ctx->get_type(sema::type_kind::U8)));
+            *ctx, idx, "p", ctx->get_type(sema::type_kind::POINTER, ctx->get_int_type(8, false)));
         check_access_decl(*ctx, idx, "l", ctx->get_type(sema::type_kind::USIZE));
     }
 }
@@ -395,19 +392,19 @@ TEST_CASE("Struct field access through dereferenced pointer and reference") {
 
     const auto [px_sym, _, px_decl, px_type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("px", idx)};
-    CHECK(px_type.get_kind() == sema::type_kind::I32);
+    CHECK(sema::is_i32(px_type));
 
     const auto [px_d_sym, _pd, px_d_decl, px_d_type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("px_d", idx)};
-    CHECK(px_d_type.get_kind() == sema::type_kind::I32);
+    CHECK(sema::is_i32(px_d_type));
 
     const auto [ry_sym, _r, ry_decl, ry_type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("ry", idx)};
-    CHECK(ry_type.get_kind() == sema::type_kind::I32);
+    CHECK(sema::is_i32(ry_type));
 
     const auto [ry_d_sym, _rd, ry_d_decl, ry_d_type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("ry_d", idx)};
-    CHECK(ry_d_type.get_kind() == sema::type_kind::I32);
+    CHECK(sema::is_i32(ry_d_type));
 }
 
 TEST_CASE("Implicit access as the left operand of a binary expression is rejected") {

@@ -21,12 +21,12 @@ TEST_CASE("Type translate primitive types") {
     sema::arena_alloc arena;
     sema::type_pool   pool{arena};
 
-    auto& i32_t{*pool[{sema::type_kind::I32, sema::types::mut::CONSTANT}]};
-    auto& i64_t{*pool[{sema::type_kind::I64, sema::types::mut::CONSTANT}]};
+    auto& i32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
+    auto& i64_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{64}, true}]};
     auto& isize_t{*pool[{sema::type_kind::ISIZE, sema::types::mut::CONSTANT}]};
-    auto& u8_t{*pool[{sema::type_kind::U8, sema::types::mut::CONSTANT}]};
-    auto& u32_t{*pool[{sema::type_kind::U32, sema::types::mut::CONSTANT}]};
-    auto& u64_t{*pool[{sema::type_kind::U64, sema::types::mut::CONSTANT}]};
+    auto& u8_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{8}, false}]};
+    auto& u32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, false}]};
+    auto& u64_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{64}, false}]};
     auto& usize_t{*pool[{sema::type_kind::USIZE, sema::types::mut::CONSTANT}]};
     auto& f32_t{*pool[{sema::type_kind::F32, sema::types::mut::CONSTANT}]};
     auto& f64_t{*pool[{sema::type_kind::F64, sema::types::mut::CONSTANT}]};
@@ -54,7 +54,7 @@ TEST_CASE("Type translate pointer and reference types") {
     sema::arena_alloc arena;
     sema::type_pool   pool{arena};
 
-    auto& i32_t{*pool[{sema::type_kind::I32, sema::types::mut::CONSTANT}]};
+    auto& i32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
     auto& ptr_t{*pool[{sema::type_kind::POINTER, sema::types::mut::CONSTANT, &i32_t}]};
     ptr_t.resolve<sema::types::pointer>(i32_t);
 
@@ -78,7 +78,7 @@ TEST_CASE("Type translate array and slice types") {
     sema::arena_alloc arena;
     sema::type_pool   pool{arena};
 
-    auto& i32_t{*pool[{sema::type_kind::I32, sema::types::mut::CONSTANT}]};
+    auto& i32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
     auto& arr_t{*pool[{sema::type_kind::ARRAY, sema::types::mut::CONSTANT, &i32_t, 5UZ}]};
     arr_t.resolve<sema::types::array>(i32_t, 5UZ, false);
 
@@ -107,7 +107,7 @@ TEST_CASE("Type translate function types") {
     sema::arena_alloc arena;
     sema::type_pool   pool{arena};
 
-    auto& i32_t{*pool[{sema::type_kind::I32, sema::types::mut::CONSTANT}]};
+    auto& i32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
     auto& f64_t{*pool[{sema::type_kind::F64, sema::types::mut::CONSTANT}]};
     auto& bool_t{*pool[{sema::type_kind::BOOL, sema::types::mut::CONSTANT}]};
 
@@ -265,12 +265,8 @@ TEST_CASE("Type translate packed struct types") {
     const auto [packed_sym, packed_data, packed_type]{
         ctx->get_type_sym_info<sema::symbols::node_t>("PackedHeader", idx)};
     auto* packed_llvm{translator.translate(packed_type)};
-    REQUIRE(packed_llvm->isStructTy());
-    auto* struct_ty{llvm::cast<llvm::StructType>(packed_llvm)};
-    CHECK(struct_ty->isPacked());
-    REQUIRE(struct_ty->getNumElements() == 2);
-    CHECK(struct_ty->getElementType(0)->isIntegerTy(8));
-    CHECK(struct_ty->getElementType(1)->isIntegerTy(32));
+    REQUIRE(packed_llvm->isIntegerTy());
+    CHECK(llvm::cast<llvm::IntegerType>(packed_llvm)->getBitWidth() == 40);
 }
 
 } // namespace ghoti::tests

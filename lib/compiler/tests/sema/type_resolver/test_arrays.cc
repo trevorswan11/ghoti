@@ -35,7 +35,7 @@ TEST_CASE("Array resolution with explicit type") {
     CHECK(et_type == array_type);
 
     // The actual value type is properly typed
-    const auto& item_type{ctx->get_type(sema::type_kind::I32)};
+    const auto& item_type{ctx->get_int_type(32, true)};
     const auto& array_literal_type{ctx->get_type(sema::type_kind::ARRAY, false, 2, item_type)};
     const auto& value_type{UNWRAP(ctx->root_mod.get_sema_type_opt(*node_data.value))};
     CHECK(value_type == array_literal_type);
@@ -57,7 +57,7 @@ TEST_CASE("Array resolution with implicit type") {
     const auto [sym, sym_data, node_data, type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("a", idx)};
 
-    const auto& item_type{ctx->get_type(sema::type_kind::U64)};
+    const auto& item_type{ctx->get_int_type(64, false)};
     const auto& array_literal_type{ctx->get_type(sema::type_kind::ARRAY, false, 4, item_type)};
     CHECK(type == array_literal_type);
     const auto& ident_type{UNWRAP(ctx->root_mod.get_sema_type_opt(node_data.name))};
@@ -71,7 +71,7 @@ TEST_CASE("Indexing with single accessors") {
         auto [ctx, idx]{helpers::resolve_and_check(
             fmt::format("var a: {}u32 = undefined; const b := a[0];", type_mod))};
         const auto [sym, sym_data, type]{ctx->get_type_sym_info<syms::node_t>("b", idx)};
-        CHECK(type == ctx->get_type(sema::type_kind::U32));
+        CHECK(type == ctx->get_int_type(32, false));
     };
 
     test_index("[]");
@@ -83,7 +83,7 @@ TEST_CASE("Indexing with slice accessor") {
     auto [ctx, idx]{helpers::resolve_and_check("var a: ^u32 = undefined; const b := a[0..4];")};
     const auto [sym, sym_data, type]{ctx->get_type_sym_info<syms::node_t>("b", idx)};
 
-    const auto& i32_type{ctx->get_type(sema::type_kind::U32)};
+    const auto& i32_type{ctx->get_int_type(32, false)};
     const auto& slice_type{ctx->get_type(sema::type_kind::SLICE, false, i32_type)};
     CHECK(type == slice_type);
 }

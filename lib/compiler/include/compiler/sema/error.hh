@@ -96,6 +96,10 @@ enum class error : u8 {
     DYN_UNBOUND_ASSOC,
     DYN_BY_VALUE_SELF,
     STATIC_REQUIREMENT_UNSUPPORTED,
+    UNSUPPORTED_TARGET,
+    ILLEGAL_PACKED_FIELD,
+    ILLEGAL_PACKED_FIELD_ADDRESS,
+    LITERAL_OUT_OF_RANGE,
 };
 
 using diagnostic  = diagnostic<error>;

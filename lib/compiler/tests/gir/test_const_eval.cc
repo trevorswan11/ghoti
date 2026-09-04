@@ -292,7 +292,7 @@ TEST_CASE("Array dimension resolution constant eval") {
     CHECK(resolved_type.get_kind() == sema::type_kind::ARRAY);
     const auto arr_data{UNWRAP(resolved_type.get_data().as_opt<sema::types::array>())};
     CHECK(arr_data.len == 8);
-    CHECK(arr_data.underlying.get_kind() == sema::type_kind::U8);
+    CHECK(sema::type_kind_display_name(arr_data.underlying) == "u8");
 }
 
 TEST_CASE("Const eval function evaluation") {
@@ -532,10 +532,10 @@ TEST_CASE("Resolve deferred call returning type") {
     evaluator.resolve_all_deferred_types();
 
     const auto& resolved_a{UNWRAP(ctx->root_mod.get_sema_type_opt(node_a.explicit_type))};
-    CHECK(resolved_a.get_kind() == sema::type_kind::I64);
+    CHECK(sema::type_kind_display_name(resolved_a) == "i64");
 
     const auto& resolved_b{UNWRAP(ctx->root_mod.get_sema_type_opt(node_b.explicit_type))};
-    CHECK(resolved_b.get_kind() == sema::type_kind::I32);
+    CHECK(sema::type_kind_display_name(resolved_b) == "i32");
 }
 
 TEST_CASE("Division by zero failure handling in constant eval") {

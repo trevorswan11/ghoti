@@ -126,11 +126,11 @@ TEST_CASE("Lexing basic language snippet") {
                    {token_type_t::VAR, "var"},        {token_type_t::IDENT, "add"},
                    {token_type_t::WALRUS, ":="},      {token_type_t::FUNCTION, "fn"},
                    {token_type_t::LPAREN, "("},       {token_type_t::IDENT, "x"},
-                   {token_type_t::COLON, ":"},        {token_type_t::I32_TYPE, "i32"},
+                   {token_type_t::COLON, ":"},        {token_type_t::INT_TYPE, "i32"},
                    {token_type_t::COMMA, ","},        {token_type_t::IDENT, "y"},
-                   {token_type_t::COLON, ":"},        {token_type_t::I32_TYPE, "i32"},
+                   {token_type_t::COLON, ":"},        {token_type_t::INT_TYPE, "i32"},
                    {token_type_t::RPAREN, ")"},       {token_type_t::COLON, ":"},
-                   {token_type_t::I32_TYPE, "i32"},   {token_type_t::LBRACE, "{"},
+                   {token_type_t::INT_TYPE, "i32"},   {token_type_t::LBRACE, "{"},
                    {token_type_t::RETURN, "return"},  {token_type_t::IDENT, "x"},
                    {token_type_t::PLUS, "+"},         {token_type_t::IDENT, "y"},
                    {token_type_t::SEMICOLON, ";"},    {token_type_t::RBRACE, "}"},
@@ -142,20 +142,20 @@ TEST_CASE("Lexing basic language snippet") {
                    {token_type_t::SEMICOLON, ";"},    {token_type_t::VAR, "var"},
                    {token_type_t::IDENT, "fs"},       {token_type_t::COLON, ":"},
                    {token_type_t::F64_TYPE, "f64"},   {token_type_t::ASSIGN, "="},
-                   {token_type_t::F64, "4.2"},        {token_type_t::SEMICOLON, ";"},
+                   {token_type_t::REAL, "4.2"},       {token_type_t::SEMICOLON, ";"},
                });
 }
 
 TEST_CASE("Lexing numbers") {
-    test_lexer("0 123 3.14 42.0 1e20 1.e-3 2.3901E4f 1e.",
+    test_lexer("0 123 3.14 42.0 1e20 1.e-3 2.3901E4f32 1e.",
                {
                    {token_type_t::INT_10, "0"},
                    {token_type_t::INT_10, "123"},
-                   {token_type_t::F64, "3.14"},
-                   {token_type_t::F64, "42.0"},
-                   {token_type_t::F64, "1e20"},
-                   {token_type_t::F64, "1.e-3"},
-                   {token_type_t::F32, "2.3901E4f"},
+                   {token_type_t::REAL, "3.14"},
+                   {token_type_t::REAL, "42.0"},
+                   {token_type_t::REAL, "1e20"},
+                   {token_type_t::REAL, "1.e-3"},
+                   {token_type_t::REAL, "2.3901E4f32"},
                    {token_type_t::INT_10, "1"},
                    {token_type_t::IDENT, "e"},
                    {token_type_t::DOT, "."},
@@ -163,19 +163,18 @@ TEST_CASE("Lexing numbers") {
 }
 
 TEST_CASE("Lexing illegal floats") {
-    test_lexer(".0 1..2 3.4.5 3.4u 5f",
+    // Suffix characters attach to the number; the parser validates the suffix grammar.
+    test_lexer(".0 1..2 3.4.5 5f32",
                {
                    {token_type_t::DOT, "."},
                    {token_type_t::INT_10, "0"},
                    {token_type_t::INT_10, "1"},
                    {token_type_t::DOT_DOT, ".."},
                    {token_type_t::INT_10, "2"},
-                   {token_type_t::F64, "3.4"},
+                   {token_type_t::REAL, "3.4"},
                    {token_type_t::DOT, "."},
                    {token_type_t::INT_10, "5"},
-                   {token_type_t::F64, "3.4"},
-                   {token_type_t::IDENT, "u"},
-                   {token_type_t::F32, "5f"},
+                   {token_type_t::REAL, "5f32"},
                });
 }
 
@@ -194,51 +193,45 @@ TEST_CASE("Lexing signed int variants") {
                });
 }
 
-TEST_CASE("Lexing unsigned int variants") {
-    test_lexer("0b1010u 0b1010uz 0o17u 0o17uz 0O17u 42u 42UZ 0x2AU 0X2Au 123ufoo 0bu 0xu 0ou",
+TEST_CASE("Lexing int suffixes attach to the number token") {
+    test_lexer("0b1010u8 0b1010uz 0o17i9 0o17uz 42u32 42UZ 0x2Au64 123u16foo 0bu 0xu",
                {
-                   {token_type_t::UINT_2, "0b1010u"},
-                   {token_type_t::UZINT_2, "0b1010uz"},
-                   {token_type_t::UINT_8, "0o17u"},
-                   {token_type_t::UZINT_8, "0o17uz"},
-                   {token_type_t::UINT_8, "0O17u"},
-                   {token_type_t::UINT_10, "42u"},
-                   {token_type_t::UZINT_10, "42UZ"},
-                   {token_type_t::UINT_16, "0x2AU"},
-                   {token_type_t::UINT_16, "0X2Au"},
-                   {token_type_t::UINT_10, "123u"},
-                   {token_type_t::IDENT, "foo"},
+                   {token_type_t::INT_2, "0b1010u8"},
+                   {token_type_t::INT_2, "0b1010uz"},
+                   {token_type_t::INT_8, "0o17i9"},
+                   {token_type_t::INT_8, "0o17uz"},
+                   {token_type_t::INT_10, "42u32"},
+                   {token_type_t::INT_10, "42UZ"},
+                   {token_type_t::INT_16, "0x2Au64"},
+                   {token_type_t::INT_10, "123u16foo"},
                    {token_type_t::ILLEGAL, "0b"},
                    {token_type_t::IDENT, "u"},
                    {token_type_t::ILLEGAL, "0x"},
-                   {token_type_t::IDENT, "u"},
-                   {token_type_t::ILLEGAL, "0o"},
                    {token_type_t::IDENT, "u"},
                });
 }
 
 TEST_CASE("Lexing int bit-width variants") {
-    test_lexer("2 2l 2z 2u 2ul 2uz",
+    test_lexer("2 2i64 2z 2u8 2uz",
                {
                    {token_type_t::INT_10, "2"},
-                   {token_type_t::LINT_10, "2l"},
-                   {token_type_t::ZINT_10, "2z"},
-                   {token_type_t::UINT_10, "2u"},
-                   {token_type_t::ULINT_10, "2ul"},
-                   {token_type_t::UZINT_10, "2uz"},
+                   {token_type_t::INT_10, "2i64"},
+                   {token_type_t::INT_10, "2z"},
+                   {token_type_t::INT_10, "2u8"},
+                   {token_type_t::INT_10, "2uz"},
                });
 }
 
 TEST_CASE("Lexing underscore-separated numbers") {
-    test_lexer("0_1 123_2 3.14_159 42.0_11f 0b11_00_11 0xEEEE_FFFFuz 0o7_233u",
+    test_lexer("0_1 123_2 3.14_159 42.0_11f32 0b11_00_11 0xEEEE_FFFFuz 0o7_233u8",
                {
                    {token_type_t::INT_10, "0_1"},
                    {token_type_t::INT_10, "123_2"},
-                   {token_type_t::F64, "3.14_159"},
-                   {token_type_t::F32, "42.0_11f"},
+                   {token_type_t::REAL, "3.14_159"},
+                   {token_type_t::REAL, "42.0_11f32"},
                    {token_type_t::INT_2, "0b11_00_11"},
-                   {token_type_t::UZINT_16, "0xEEEE_FFFFuz"},
-                   {token_type_t::UINT_8, "0o7_233u"},
+                   {token_type_t::INT_16, "0xEEEE_FFFFuz"},
+                   {token_type_t::INT_8, "0o7_233u8"},
                });
 }
 
@@ -260,11 +253,11 @@ TEST_CASE("Lexing keywords") {
                    {token_type_t::BOOLEAN_AND, "and"},  {token_type_t::BOOLEAN_OR, "or"},
                    {token_type_t::PUBLIC, "pub"},       {token_type_t::EXTERN, "extern"},
                    {token_type_t::EXPORT, "export"},    {token_type_t::VOLATILE, "volatile"},
-                   {token_type_t::MUT, "mut"},          {token_type_t::I32_TYPE, "i32"},
-                   {token_type_t::I64_TYPE, "i64"},     {token_type_t::ISIZE_TYPE, "isize"},
-                   {token_type_t::U32_TYPE, "u32"},     {token_type_t::U64_TYPE, "u64"},
+                   {token_type_t::MUT, "mut"},          {token_type_t::INT_TYPE, "i32"},
+                   {token_type_t::INT_TYPE, "i64"},     {token_type_t::ISIZE_TYPE, "isize"},
+                   {token_type_t::INT_TYPE, "u32"},     {token_type_t::INT_TYPE, "u64"},
                    {token_type_t::USIZE_TYPE, "usize"}, {token_type_t::F32_TYPE, "f32"},
-                   {token_type_t::F64_TYPE, "f64"},     {token_type_t::U8_TYPE, "u8"},
+                   {token_type_t::F64_TYPE, "f64"},     {token_type_t::INT_TYPE, "u8"},
                    {token_type_t::BOOL_TYPE, "bool"},   {token_type_t::VOID_TYPE, "void"},
                    {token_type_t::TYPE_TYPE, "type"},   {token_type_t::TEST, "test"},
                    {token_type_t::ASM, "asm"},
@@ -285,7 +278,7 @@ TEST_CASE("Lexing comments") {
                "var ten_10 := 10;\n\n"
                "// BOL\n"
                "var result := add(five, ten); // EOL\n"
-               "var four_and_some := 4.2f;",
+               "var four_and_some := 4.2f32;",
                {
                    {token_type_t::CONSTANT, "const"}, {token_type_t::IDENT, "five"},
                    {token_type_t::WALRUS, ":="},      {token_type_t::INT_10, "5"},
@@ -299,7 +292,7 @@ TEST_CASE("Lexing comments") {
                    {token_type_t::IDENT, "ten"},      {token_type_t::RPAREN, ")"},
                    {token_type_t::SEMICOLON, ";"},    {token_type_t::COMMENT, " EOL"},
                    {token_type_t::VAR, "var"},        {token_type_t::IDENT, "four_and_some"},
-                   {token_type_t::WALRUS, ":="},      {token_type_t::F32, "4.2f"},
+                   {token_type_t::WALRUS, ":="},      {token_type_t::REAL, "4.2f32"},
                    {token_type_t::SEMICOLON, ";"},
                });
 }
@@ -348,7 +341,7 @@ TEST_CASE("Lexing string literals") {
             {token_type_t::LBRACKET, "["},
             {token_type_t::NULL_TERMINATED, ":0"},
             {token_type_t::RBRACKET, "]"},
-            {token_type_t::U8_TYPE, "u8"},
+            {token_type_t::INT_TYPE, "u8"},
             {token_type_t::ASSIGN, "="},
             {token_type_t::STRING, R"("Hello\n, World!\0")"},
             {token_type_t::SEMICOLON, ";"},

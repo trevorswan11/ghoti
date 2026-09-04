@@ -27,9 +27,17 @@ templ SyntaxStructsPage() {
 		<li>
 			Structs can be annotated with layout modifiers:
 			<ul>
-				<li><code>packed struct { "{ ... }" }</code>: Removes padding bytes between fields, creating a tightly packed byte layout.</li>
+				<li>
+					<code>packed struct { "{ ... }" }</code>: A Zig-style <em>bit-packed</em> struct. The whole struct becomes a single backing integer <code>iN</code> whose width <code>N</code> is the sum of its fields' bit sizes (<code>{ "@bitSizeOf" }</code> of each field). Field <em>k</em> occupies bits <code>[offset_k, offset_k + { "@bitSizeOf" }(field_k))</code> with <code>offset_0 = 0</code>, laid out least-significant-bit first in declaration order.
+					<ul>
+						<li>Fields must be bit-packable: integers, floats, <code>bool</code>, enums, pointers, other bit-packed <code>packed</code> aggregates, and fixed arrays of those. A slice, plain struct, function type, etc. is rejected.</li>
+						<li>A <code>packed struct</code> field may not carry <code>{ "@alignas" }</code>, and the backing width is currently capped at 128 bits.</li>
+						<li>A field has no address of its own: <code>&amp;p.field</code> / <code>^p.field</code> is a compile error. Read/write of a field lowers to shift-and-mask over the backing integer.</li>
+						<li><code>{ "@sizeOf" }(P)</code> is the backing integer's ABI byte size; <code>{ "@bitSizeOf" }(P)</code> is <code>N</code>.</li>
+					</ul>
+				</li>
 				<li><code>extern struct { "{ ... }" }</code>: Enforces C ABI struct layout and alignment rules for C interop.</li>
-				<li><code>extern packed struct { "{ ... }" }</code>: Combines both C ABI compatibility and packed byte layout rules.</li>
+				<li><code>extern packed struct { "{ ... }" }</code>: C-ABI <code>__attribute__((packed))</code> &mdash; byte-offset semantics with padding removed. This is <em>not</em> bit-packed; fields keep their own addresses and may use <code>{ "@alignas" }</code>.</li>
 				<li>
 					An <code>extern</code> struct field may not contain a reference or a <code>dyn</code> fat pointer, since neither has a C ABI representation
 					<ul>
@@ -73,14 +81,15 @@ templ SyntaxStructsPage() {
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const PackedHeader := packed struct {
-    @alignas(1) pub magic: u32,
-    pub payload_len: u16,
+			{ `const Rgb565 := packed struct {   // backed by a u16: 5 + 6 + 5 bits, red in the low bits
+    red: u5,
+    green: u6,
+    blue: u5,
 };
 
 const Foo := struct {           // Standard declaration with type inference
     bar: i32,                   // Private field without default value (must appear in initializer list)
-    pub boo: u32 = 4u,          // Public field with default value
+    pub boo: u32 = 4u32,        // Public field with default value
 
     pub var foo := 3.4;         // Decl variables are struct globals and are not instance specific
     const baz: []u8 = "baz";  // Constant decl, must be initialized in-line

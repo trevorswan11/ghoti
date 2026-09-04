@@ -134,7 +134,13 @@ class type_resolver {
         [[nodiscard]] auto has_returns() const noexcept -> bool { return !return_types.empty(); }
         [[nodiscard]] auto deduced_return_type(context& ctx) const noexcept -> type& {
             if (return_types.empty()) { return ctx.get_builtin_resolved_type(type_kind::VOID_); }
-            return *return_types.front();
+            auto& first{*return_types.front()};
+            // An inferred (`: auto`) return type never stays `constexpr_*`: pin it to its peer.
+            if (first.get_kind() == type_kind::CONSTEXPR_INT) { return ctx.get_int(32, true); }
+            if (first.get_kind() == type_kind::CONSTEXPR_FLOAT) {
+                return ctx.get_builtin_resolved_type(type_kind::F64);
+            }
+            return first;
         }
     };
 
@@ -211,6 +217,8 @@ class type_resolver {
     auto resolve_call_args(gsl::span<const ast::call_expr::argument> args) -> resolve_result;
     [[nodiscard]] auto get_resolved_call_arg_type(const ast::call_expr::argument& arg)
         -> gsl::not_null<type*>;
+    // Views a `constexpr_int` / `constexpr_float` as the concrete type it materializes to
+    [[nodiscard]] auto constexpr_numeric_view(type& t) -> type&;
     [[nodiscard]] auto get_call_arg_location(const ast::call_expr::argument& arg)
         -> source_location;
 
@@ -319,15 +327,8 @@ class type_resolver {
     auto visit(ast::node_id, const ast::unwrap_expr&) -> void;
     auto visit(ast::node_id, const ast::implicit_access_expr&) -> void;
     auto visit(ast::node_id, const ast::string_expr&) -> void;
-    auto visit(ast::node_id, const ast::i32_expr&) -> void;
-    auto visit(ast::node_id, const ast::i64_expr&) -> void;
-    auto visit(ast::node_id, const ast::isize_expr&) -> void;
-    auto visit(ast::node_id, const ast::u32_expr&) -> void;
-    auto visit(ast::node_id, const ast::u64_expr&) -> void;
-    auto visit(ast::node_id, const ast::usize_expr&) -> void;
-    auto visit(ast::node_id, const ast::u8_expr&) -> void;
-    auto visit(ast::node_id, const ast::f32_expr&) -> void;
-    auto visit(ast::node_id, const ast::f64_expr&) -> void;
+    auto visit(ast::node_id, const ast::int_literal_expr&) -> void;
+    auto visit(ast::node_id, const ast::float_literal_expr&) -> void;
     auto visit(ast::node_id, const ast::bool_expr&) -> void;
     auto visit(ast::node_id, const ast::void_expr&) -> void;
     auto visit(ast::node_id, const ast::undefined_expr&) -> void;
@@ -406,6 +407,8 @@ class type_resolver {
           ctx_{ctx} {
         VERIFY(ctx.prelude_index, "TypeResolver must be used after prelude-injection");
     }
+
+    [[nodiscard]] auto target_has_x86_fp80() const -> bool;
 
   private:
     mod::module&              resolving_;

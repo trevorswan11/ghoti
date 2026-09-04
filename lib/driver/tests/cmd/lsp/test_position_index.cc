@@ -30,7 +30,7 @@ TEST_CASE("identifier_at finds a reference and its declaration through the side 
 
     const auto  id{UNWRAP(lsp::identifier_at(*module, {1, 15}))};
     const auto& type{UNWRAP(module->get_sema_type_opt(id))};
-    CHECK(type.to_string() == "i32");
+    CHECK(type.to_string() == "constexpr_int");
 
     // get_symbol_span resolves to the declared name itself, not the whole `pub const` statement
     const auto def_loc{UNWRAP(module->get_identifier_definition(id))};
@@ -58,7 +58,7 @@ TEST_CASE("hover-style type resolution still works around an unrelated syntax er
 
     const auto  id{UNWRAP(lsp::identifier_at(*module, {1, 15}))};
     const auto& type{UNWRAP(module->get_sema_type_opt(id))};
-    CHECK(type.to_string() == "i32");
+    CHECK(type.to_string() == "constexpr_int");
 
     const auto def_loc{UNWRAP(module->get_identifier_definition(id))};
     CHECK(def_loc.span.start.line == 0);

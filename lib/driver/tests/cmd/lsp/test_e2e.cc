@@ -93,7 +93,7 @@ TEST_CASE("ghoti lsp answers initialize/didOpen/hover/shutdown over a real child
                            },
                        });
     const auto hover_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
-    CHECK(hover_resp.at("result").at("contents").at("value") == "i32");
+    CHECK(hover_resp.at("result").at("contents").at("value") == "constexpr_int");
 
     lsp::write_message(proc.stdin_stream(),
                        {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "shutdown"}});
@@ -396,7 +396,7 @@ TEST_CASE("ghoti lsp reports both a syntax error and a sema error in the same fi
                            },
                        });
     const auto hover_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
-    CHECK(hover_resp.at("result").at("contents").at("value") == "i32");
+    CHECK(hover_resp.at("result").at("contents").at("value") == "constexpr_int");
 
     lsp::write_message(proc.stdin_stream(),
                        {

@@ -45,26 +45,45 @@
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/diagnostic.hh"
+#include "support/int128.hh"
 
 namespace ghoti::codegen {
 
 namespace {
 
+// A `constexpr_float` materializes as `f64`; a `constexpr_int` as `i32`.
+[[nodiscard]] auto materialized_is_float(sema::type_kind k) noexcept -> bool {
+    return sema::is_float(k) || k == sema::type_kind::CONSTEXPR_FLOAT;
+}
+
 [[nodiscard]] auto is_float_type(const gir::instruction&    inst,
                                  stdx::option<llvm::Value&> val) noexcept -> bool {
-    if (!inst.operands.empty() && inst.operands[0].type) {
-        return sema::is_float(inst.operands[0].type->get_kind());
+    // Any float (or `constexpr_float`) operand makes the operation floating point.
+    for (const auto& op : inst.operands) {
+        if (op.type && materialized_is_float(op.type->get_kind())) { return true; }
     }
-    if (inst.type) { return sema::is_float(inst.type->get_kind()); }
+    if (!inst.operands.empty() && inst.operands[0].type &&
+        sema::is_integer(inst.operands[0].type->get_kind())) {
+        return false;
+    }
+    if (inst.type) { return materialized_is_float(inst.type->get_kind()); }
     return val && val->getType()->isFloatingPointTy();
 }
 
 [[nodiscard]] auto is_signed_type(const gir::instruction& inst) noexcept -> bool {
     if (!inst.operands.empty() && inst.operands[0].type) {
-        return sema::is_signed_integer(inst.operands[0].type->get_kind());
+        if (inst.operands[0].type->get_kind() == sema::type_kind::CONSTEXPR_INT) { return true; }
+        return sema::is_signed_integer(*inst.operands[0].type);
     }
-    if (inst.type) { return sema::is_signed_integer(inst.type->get_kind()); }
+    if (inst.type) { return sema::is_signed_integer(*inst.type); }
     return false;
+}
+
+// Build an integer constant of `ty`'s width from a full 128-bit value.
+[[nodiscard]] auto wide_int_constant(u128 v, llvm::Type* ty) -> llvm::Constant* {
+    const std::array<u64, 2> words{static_cast<u64>(v), static_cast<u64>(v >> 64)};
+    const llvm::APInt        value{128, words};
+    return llvm::ConstantInt::get(ty->getContext(), value.zextOrTrunc(ty->getIntegerBitWidth()));
 }
 
 [[nodiscard]] auto to_llvm_callconv(ast::calling_convention conv) noexcept
@@ -860,6 +879,8 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
         return llvm::ConstantInt::get(ty, static_cast<u64>(*i), true);
     }
     if (const auto u{cv.as_opt<u64>()}) { return llvm::ConstantInt::get(ty, *u, false); }
+    if (const auto w{cv.as_opt<i128>()}) { return wide_int_constant(static_cast<u128>(*w), ty); }
+    if (const auto w{cv.as_opt<u128>()}) { return wide_int_constant(*w, ty); }
     if (const auto f{cv.as_opt<f64>()}) { return llvm::ConstantFP::get(ty, *f); }
     if (const auto b{cv.as_opt<bool>()}) { return llvm::ConstantInt::getBool(context_, *b); }
     if (const auto e{cv.as_opt<gir::const_enum>()}) {
@@ -1155,6 +1176,18 @@ auto llvm_lowering::lower_value(const gir::value& val, const sema::type* expecte
                      : val.type    ? types_.translate(*val.type)
                                    : types_.get_int64_ty()};
             return llvm::ConstantInt::get(ty, u, false);
+        },
+        [this, &val, expected_type](i128 w) -> llvm::Value* {
+            auto* ty{expected_type ? types_.translate(*expected_type)
+                     : val.type    ? types_.translate(*val.type)
+                                   : types_.get_int64_ty()};
+            return wide_int_constant(static_cast<u128>(w), ty);
+        },
+        [this, &val, expected_type](u128 w) -> llvm::Value* {
+            auto* ty{expected_type ? types_.translate(*expected_type)
+                     : val.type    ? types_.translate(*val.type)
+                                   : types_.get_int64_ty()};
+            return wide_int_constant(w, ty);
         },
         [this, &val, expected_type](f64 f) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
@@ -1589,7 +1622,7 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
                                         : builder_.CreateUIToFP(val, target_ty, "uitofp");
         }
         if (src_is_flt && !dst_is_flt) {
-            const bool dst_is_sgn{sema::is_signed_integer(inst.type->get_kind())};
+            const bool dst_is_sgn{sema::is_signed_integer(*inst.type)};
             return dst_is_sgn ? builder_.CreateFPToSI(val, target_ty, "fptosi")
                               : builder_.CreateFPToUI(val, target_ty, "fptoui");
         }
@@ -2031,7 +2064,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             auto* b{lower_value(inst.operands[1])};
             if (!a || !b) { return nullptr; }
             const bool is_max{*builtin_tok == syntax::token_type_t::BUILTIN_MAX};
-            const bool is_signed{inst.type && sema::is_signed_integer(inst.type->get_kind())};
+            const bool is_signed{inst.type && sema::is_signed_integer(*inst.type)};
             if (a->getType()->isFloatingPointTy()) {
                 auto  id{is_max ? llvm::Intrinsic::maxnum : llvm::Intrinsic::minnum};
                 auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
@@ -2051,7 +2084,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             auto* a{lower_value(inst.operands[0])};
             auto* b{lower_value(inst.operands[1])};
             if (!a || !b) { return nullptr; }
-            const bool is_signed{inst.type && sema::is_signed_integer(inst.type->get_kind())};
+            const bool is_signed{inst.type && sema::is_signed_integer(*inst.type)};
             const bool is_rem{*builtin_tok == syntax::token_type_t::BUILTIN_REM};
             if (is_rem) {
                 return is_signed ? builder_.CreateSRem(a, b) : builder_.CreateURem(a, b);
@@ -2065,7 +2098,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             auto* a{lower_value(inst.operands[0])};
             auto* b{lower_value(inst.operands[1])};
             if (!a || !b) { return nullptr; }
-            const bool is_signed{inst.type && sema::is_signed_integer(inst.type->get_kind())};
+            const bool is_signed{inst.type && sema::is_signed_integer(*inst.type)};
             const bool is_mod{*builtin_tok == syntax::token_type_t::BUILTIN_MOD};
             if (!is_signed) {
                 return is_mod ? builder_.CreateURem(a, b) : builder_.CreateUDiv(a, b);
@@ -2101,7 +2134,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             auto* out_ptr{lower_value(inst.operands[2])};
             if (!a || !b || !out_ptr) { return nullptr; }
             const bool is_signed{inst.operands[0].type &&
-                                 sema::is_signed_integer(inst.operands[0].type->get_kind())};
+                                 sema::is_signed_integer(*inst.operands[0].type)};
 
             llvm::Value* result{nullptr};
             llvm::Value* overflow{nullptr};

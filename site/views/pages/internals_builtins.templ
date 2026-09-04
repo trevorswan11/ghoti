@@ -52,7 +52,18 @@ templ InternalsBuiltinsPage() {
 	<p>Computes the alignment of the provided expression in bytes.</p>
 	<h3>{ "@sizeOf" }</h3>
 	<pre><code class="language-ghoti">{ `@sizeOf(expression: auto): usize` }</code></pre>
-	<p>Computes the size of the provided expression in bytes.</p>
+	<p>Computes the size of the provided expression in bytes (its ABI allocation size, so a 9-bit <code>u9</code> reports <code>2</code>).</p>
+	<h3>{ "@bitSizeOf" }</h3>
+	<pre><code class="language-ghoti">{ `@bitSizeOf(expression: auto): usize` }</code></pre>
+	<p>Computes the exact bit width of the provided type or value, which is distinct from <code>{ "@sizeOf" }</code>'s ABI byte size:</p>
+	<ul>
+		<li><code>iN</code> / <code>uN</code> &rarr; <code>N</code></li>
+		<li><code>usize</code> / <code>isize</code> &rarr; the target pointer width</li>
+		<li><code>bool</code> &rarr; <code>1</code></li>
+		<li><code>f16</code> / <code>f32</code> / <code>f64</code> / <code>f80</code> / <code>f128</code> &rarr; <code>16</code> / <code>32</code> / <code>64</code> / <code>80</code> / <code>128</code></li>
+		<li>a bit-packed <code>packed struct</code> / <code>packed union</code> &rarr; the backing-integer width</li>
+		<li>anything else &rarr; <code>{ "@sizeOf" }(T) * 8</code></li>
+	</ul>
 	<h3>{ "@typeOf" }</h3>
 	<pre><code class="language-ghoti">{ `@typeOf(expression: auto): type` }</code></pre>
 	<p>Returns the type of the provided expression.</p>

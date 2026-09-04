@@ -125,7 +125,7 @@ TEST_CASE("build_lib command execution") {
             std::ofstream out{lib_src.path};
             fmt::print(out, R"(
                 pub const compute := fn(x: i64): i64 {{
-                    return x + 100l;
+                    return x + 100;
                 }};
             )");
         }

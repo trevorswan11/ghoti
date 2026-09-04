@@ -65,15 +65,8 @@ class symbol_collector {
     auto                                visit(ast::node_id, const ast::unwrap_expr&) -> void;
     auto visit(ast::node_id, const ast::implicit_access_expr&) -> void;
     auto visit(ast::node_id, const ast::string_expr&) -> void;
-    auto visit(ast::node_id, const ast::i32_expr&) -> void;
-    auto visit(ast::node_id, const ast::i64_expr&) -> void;
-    auto visit(ast::node_id, const ast::isize_expr&) -> void;
-    auto visit(ast::node_id, const ast::u32_expr&) -> void;
-    auto visit(ast::node_id, const ast::u64_expr&) -> void;
-    auto visit(ast::node_id, const ast::usize_expr&) -> void;
-    auto visit(ast::node_id, const ast::u8_expr&) -> void;
-    auto visit(ast::node_id, const ast::f32_expr&) -> void;
-    auto visit(ast::node_id, const ast::f64_expr&) -> void;
+    auto visit(ast::node_id, const ast::int_literal_expr&) -> void;
+    auto visit(ast::node_id, const ast::float_literal_expr&) -> void;
     auto visit(ast::node_id, const ast::bool_expr&) -> void;
     auto visit(ast::node_id, const ast::void_expr&) -> void;
     auto visit(ast::node_id, const ast::undefined_expr&) -> void;

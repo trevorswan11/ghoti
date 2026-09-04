@@ -637,15 +637,16 @@ auto dumper::visit(node_id, const implicit_access_expr& implicit_access) -> void
     }
 
 MAKE_LEAF_DUMP(string_expr, StringExpression)
-MAKE_LEAF_DUMP(i32_expr, I32Expression)
-MAKE_LEAF_DUMP(i64_expr, I64Expression)
-MAKE_LEAF_DUMP(isize_expr, ISizeExpression)
-MAKE_LEAF_DUMP(u32_expr, U32Expression)
-MAKE_LEAF_DUMP(u64_expr, U64Expression)
-MAKE_LEAF_DUMP(usize_expr, USizeExpression)
-MAKE_LEAF_DUMP(u8_expr, U8Expression)
-MAKE_LEAF_DUMP(f32_expr, F32Expression)
-MAKE_LEAF_DUMP(f64_expr, F64Expression)
+
+auto dumper::visit(node_id, const int_literal_expr& node) -> void {
+    PROFILE_FUNCTION();
+    fmt::println(out_, "IntLiteralExpression: {}", node.spelling);
+}
+
+auto dumper::visit(node_id, const float_literal_expr& node) -> void {
+    PROFILE_FUNCTION();
+    fmt::println(out_, "FloatLiteralExpression: {}", node.spelling);
+}
 
 auto dumper::visit(node_id id, const bool_expr&) -> void {
     PROFILE_FUNCTION();
@@ -771,6 +772,10 @@ auto dumper::visit(node_id, const union_expr& node) -> void {
     {
         const indent::guard g{indent_, false};
         fmt::println(out_, "{}Extern: {}", indent_.current_branch(), node.is_extern);
+    }
+    {
+        const indent::guard g{indent_, false};
+        fmt::println(out_, "{}Packed: {}", indent_.current_branch(), node.is_packed);
     }
     {
         const indent::guard g{indent_, !has_cfg && !has_members};

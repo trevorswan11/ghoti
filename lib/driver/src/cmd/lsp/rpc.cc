@@ -29,7 +29,7 @@ auto try_parse_content_length(std::string_view line) -> stdx::option<usize> {
     constexpr std::string_view prefix{"Content-Length:"};
     if (!string_utils::starts_with_ci(line, prefix)) { return stdx::none; }
 
-    auto value{line.substr(prefix.size())};
+    auto value{stdx::string::substr(line, prefix.size())};
     while (!value.empty() && value.front() == ' ') { value.remove_prefix(1); }
 
     usize      length{0};

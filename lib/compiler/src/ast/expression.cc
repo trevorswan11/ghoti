@@ -1463,7 +1463,7 @@ auto struct_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
                                         is_packed);
 }
 
-auto union_expr::parse(syntax::parser& parser, bool is_extern)
+auto union_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
@@ -1513,7 +1513,8 @@ auto union_expr::parse(syntax::parser& parser, bool is_extern)
                                        std::move(cfg_groups),
                                        std::move(members),
                                        std::move(member_cfg_groups),
-                                       is_extern);
+                                       is_extern,
+                                       is_packed);
 }
 
 auto parse_modified_struct_or_union(syntax::parser& parser)
@@ -1547,12 +1548,7 @@ auto parse_modified_struct_or_union(syntax::parser& parser)
 
     if (parser.peek_token_is(syntax::token_type_t::UNION)) {
         parser.advance();
-        if (is_packed) {
-            return make_syntax_err("Unions cannot be declared with `packed`",
-                                   syntax::error::ILLEGAL_EXPLICIT_TYPE,
-                                   start_token);
-        }
-        return union_expr::parse(parser, is_extern);
+        return union_expr::parse(parser, is_extern, is_packed);
     }
 
     return make_syntax_err("Expected `struct` or `union` after declaration modifiers",

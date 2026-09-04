@@ -121,15 +121,8 @@ class formatter {
     auto visit(node_id, const unwrap_expr&) -> syntax::doc_id;
     auto visit(node_id, const implicit_access_expr&) -> syntax::doc_id;
     auto visit(node_id, const string_expr&) -> syntax::doc_id;
-    auto visit(node_id, const i32_expr&) -> syntax::doc_id;
-    auto visit(node_id, const i64_expr&) -> syntax::doc_id;
-    auto visit(node_id, const isize_expr&) -> syntax::doc_id;
-    auto visit(node_id, const u32_expr&) -> syntax::doc_id;
-    auto visit(node_id, const u64_expr&) -> syntax::doc_id;
-    auto visit(node_id, const usize_expr&) -> syntax::doc_id;
-    auto visit(node_id, const u8_expr&) -> syntax::doc_id;
-    auto visit(node_id, const f32_expr&) -> syntax::doc_id;
-    auto visit(node_id, const f64_expr&) -> syntax::doc_id;
+    auto visit(node_id, const int_literal_expr&) -> syntax::doc_id;
+    auto visit(node_id, const float_literal_expr&) -> syntax::doc_id;
     auto visit(node_id, const bool_expr&) -> syntax::doc_id;
     auto visit(node_id, const void_expr&) -> syntax::doc_id;
     auto visit(node_id, const undefined_expr&) -> syntax::doc_id;

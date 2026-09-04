@@ -34,18 +34,15 @@ constexpr keyword_t WHILE{"while", token_type_t::WHILE};
 constexpr keyword_t CONTINUE{"continue", token_type_t::CONTINUE};
 constexpr keyword_t BREAK{"break", token_type_t::BREAK};
 constexpr keyword_t IMPORT{"import", token_type_t::IMPORT};
-constexpr keyword_t I8{"i8", token_type_t::I8_TYPE};
-constexpr keyword_t I16{"i16", token_type_t::I16_TYPE};
-constexpr keyword_t I32{"i32", token_type_t::I32_TYPE};
-constexpr keyword_t I64{"i64", token_type_t::I64_TYPE};
 constexpr keyword_t ISIZE{"isize", token_type_t::ISIZE_TYPE};
-constexpr keyword_t U16{"u16", token_type_t::U16_TYPE};
-constexpr keyword_t U32{"u32", token_type_t::U32_TYPE};
-constexpr keyword_t U64{"u64", token_type_t::U64_TYPE};
 constexpr keyword_t USIZE{"usize", token_type_t::USIZE_TYPE};
+constexpr keyword_t F16{"f16", token_type_t::F16_TYPE};
 constexpr keyword_t F32{"f32", token_type_t::F32_TYPE};
 constexpr keyword_t F64{"f64", token_type_t::F64_TYPE};
-constexpr keyword_t U8{"u8", token_type_t::U8_TYPE};
+constexpr keyword_t F80{"f80", token_type_t::F80_TYPE};
+constexpr keyword_t F128{"f128", token_type_t::F128_TYPE};
+constexpr keyword_t CONSTEXPR_INT{"constexpr_int", token_type_t::CONSTEXPR_INT_TYPE};
+constexpr keyword_t CONSTEXPR_FLOAT{"constexpr_float", token_type_t::CONSTEXPR_FLOAT_TYPE};
 constexpr keyword_t BOOL{"bool", token_type_t::BOOL_TYPE};
 constexpr keyword_t VOID{"void", token_type_t::VOID_TYPE};
 constexpr keyword_t TYPE{"type", token_type_t::TYPE_TYPE};
@@ -81,41 +78,38 @@ constexpr keyword_t UNREACHABLE{"unreachable", token_type_t::UNREACHABLE};
 
 // Single source of truth for every reserved word
 constexpr std::array ALL_KEYWORDS{
-    keywords::FN,          keywords::VAR,          keywords::CONSTANT,
-    keywords::CONSTEXPR,   keywords::STRUCT,       keywords::ENUM,
-    keywords::UNION,       keywords::BOOLEAN_TRUE, keywords::BOOLEAN_FALSE,
-    keywords::IF,          keywords::ELSE,         keywords::DO,
-    keywords::MATCH,       keywords::RETURN,       keywords::DEFER,
-    keywords::LOOP,        keywords::FOR,          keywords::WHILE,
-    keywords::CONTINUE,    keywords::BREAK,        keywords::IMPORT,
-    keywords::I8,          keywords::I16,          keywords::I32,
-    keywords::I64,         keywords::ISIZE,        keywords::U16,
-    keywords::U32,         keywords::U64,          keywords::USIZE,
-    keywords::F32,         keywords::F64,          keywords::U8,
-    keywords::BOOL,        keywords::VOID,         keywords::TYPE,
-    keywords::AUTO,        keywords::OPAQUE,       keywords::AS,
-    keywords::PUBLIC,      keywords::EXTERN,       keywords::EXPORT,
-    keywords::THREADLOCAL, keywords::WEAK,         keywords::NAKED,
-    keywords::CALLCONV,    keywords::VOLATILE,     keywords::MUT,
-    keywords::MOVE,        keywords::PACKED,       keywords::NORETURN,
-    keywords::NULLPTR,     keywords::USING,        keywords::TEST,
-    keywords::UNDEFINED,   keywords::UNREACHABLE,  keywords::ASM,
-    keywords::IMPL,        keywords::INTERFACE,    keywords::DYN,
+    keywords::FN,          keywords::VAR,           keywords::CONSTANT,
+    keywords::CONSTEXPR,   keywords::STRUCT,        keywords::ENUM,
+    keywords::UNION,       keywords::BOOLEAN_TRUE,  keywords::BOOLEAN_FALSE,
+    keywords::IF,          keywords::ELSE,          keywords::DO,
+    keywords::MATCH,       keywords::RETURN,        keywords::DEFER,
+    keywords::LOOP,        keywords::FOR,           keywords::WHILE,
+    keywords::CONTINUE,    keywords::BREAK,         keywords::IMPORT,
+    keywords::ISIZE,       keywords::USIZE,         keywords::F16,
+    keywords::F32,         keywords::F64,           keywords::F80,
+    keywords::F128,        keywords::CONSTEXPR_INT, keywords::CONSTEXPR_FLOAT,
+    keywords::BOOL,        keywords::VOID,          keywords::TYPE,
+    keywords::AUTO,        keywords::OPAQUE,        keywords::AS,
+    keywords::PUBLIC,      keywords::EXTERN,        keywords::EXPORT,
+    keywords::THREADLOCAL, keywords::WEAK,          keywords::NAKED,
+    keywords::CALLCONV,    keywords::VOLATILE,      keywords::MUT,
+    keywords::MOVE,        keywords::PACKED,        keywords::NORETURN,
+    keywords::NULLPTR,     keywords::USING,         keywords::TEST,
+    keywords::UNDEFINED,   keywords::UNREACHABLE,   keywords::ASM,
+    keywords::IMPL,        keywords::INTERFACE,     keywords::DYN,
 };
 
 constexpr std::array ALL_PRIMITIVES{
-    keywords::I8.type,
-    keywords::I16.type,
-    keywords::I32.type,
-    keywords::I64.type,
+    token_type_t::INT_TYPE,
     keywords::ISIZE.type,
-    keywords::U16.type,
-    keywords::U32.type,
-    keywords::U64.type,
     keywords::USIZE.type,
+    keywords::F16.type,
     keywords::F32.type,
     keywords::F64.type,
-    keywords::U8.type,
+    keywords::F80.type,
+    keywords::F128.type,
+    keywords::CONSTEXPR_INT.type,
+    keywords::CONSTEXPR_FLOAT.type,
     keywords::BOOL.type,
     keywords::VOID.type,
 };

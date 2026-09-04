@@ -39,12 +39,18 @@ auto test_common_decl_collection(const sema::symbol_table_registry& registry,
     CHECK(node.is<ast::decl_stmt>());
 }
 
-sema_test_context::sema_test_context(const std::vector<mock_file>& imports,
-                                     const std::filesystem::path&  root_path,
-                                     std::string_view              input,
-                                     std::ostream&                 error_stream)
+sema_test_context::sema_test_context(const std::vector<mock_file>&  imports,
+                                     const std::filesystem::path&   root_path,
+                                     std::string_view               input,
+                                     std::ostream&                  error_stream,
+                                     stdx::option<std::string_view> target_triple)
     : loader{stdx::make_box<mod::memory_loader>()}, manager{*loader},
-      analyzer{manager, error_stream, false}, root_mod{[&] -> auto& {
+      analyzer{manager,
+               error_stream,
+               false,
+               codegen::target_options{.triple_str = target_triple.transform(
+                                           [](std::string_view s) { return std::string{s}; })}},
+      root_mod{[&] -> auto& {
           loader->add(root_path, std::string{input});
           for (const auto& mock : imports) {
               loader->add(mock.path, std::string{mock.source});
@@ -121,6 +127,16 @@ auto resolve_and_check(std::string_view input, const std::vector<mock_file>& imp
     check_errors<sema::diagnostics>(ctx->root_mod);
     ctx->verify_registry_resolved();
 
+    return {std::move(ctx), idx};
+}
+
+auto resolve_for_target(std::string_view input, std::string_view target_triple) -> ctx_idx_pair {
+    auto ctx{stdx::make_box<sema_test_context>(
+        std::vector<mock_file>{}, TEST_FILENAME, input, std::cerr, target_triple)};
+    check_errors<syntax::diagnostics>(ctx->root_mod);
+    ctx->analyzer.collect_symbols(ctx->root_mod);
+    ctx->analyzer.resolve_types(ctx->root_mod);
+    const usize idx{UNWRAP(ctx->root_mod.root_table_idx)};
     return {std::move(ctx), idx};
 }
 

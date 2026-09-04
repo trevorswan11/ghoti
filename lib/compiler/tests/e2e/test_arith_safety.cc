@@ -46,7 +46,7 @@ TEST_CASE("integer division and remainder by zero trap (signed and unsigned)", "
         pub const main := fn(): i32 { var a: i32 = 5; var b: i32 = 0; return a % b; };
     )") != 0);
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 { var a: u32 = 5u; var b: u32 = 0u; return @as(i32, a / b); };
+        pub const main := fn(): i32 { var a: u32 = 5u32; var b: u32 = 0u32; return @as(i32, a / b); };
     )") != 0);
 }
 

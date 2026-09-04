@@ -14,6 +14,10 @@
 
 ; Types
 (primitive_type) @type.builtin
+; Arbitrary-width integers (iN / uN, N = 1..65535), extended floats, and the
+; constexpr literal types the grammar may still lex as plain identifiers.
+((identifier) @type.builtin
+  (#match? @type.builtin "^([iu](size|[1-9][0-9]{0,4})|f(16|32|64|80|128)|constexpr_(int|float))$"))
 (identifier) @type
   (#match? @type "^[A-Z]")
 
