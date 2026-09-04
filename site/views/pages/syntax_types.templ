@@ -169,6 +169,7 @@ a.b;   // Syntactic sugar
 				<li>The familiar widths (<code>i8</code>/<code>i16</code>/<code>i32</code>/<code>i64</code> and their <code>u</code> counterparts) are simply the common cases; there is nothing special about them</li>
 				<li>An <code>iN</code>/<code>uN</code> literal is written with a width suffix, e.g. <code>7u8</code>, <code>1i9</code>, <code>255u65535</code></li>
 				<li>An arithmetic operation on <code>uN</code> wraps modulo 2<sup>N</sup>; on <code>iN</code> it is two's-complement over <code>N</code> bits</li>
+				<li>The wrapping operators <code>+% -% *% &lt;&lt;%</code> (binary), their compound forms <code>+%= -%= *%= &lt;&lt;%=</code>, and prefix <code>-%</code> always wrap silently. They never trap, even with <code>--runtime-safety</code> on. Otherwise they behave exactly like the plain operator. See the <a href="/doc/internals/builtins">builtins</a> page for <code>{ "@addWithOverflow" }</code> and friends, the overflow-flag form of the same operation</li>
 				<li>A value implicitly widens to a same-signed integer of greater or equal width; narrowing needs an explicit <code>{ "@as" }</code></li>
 				<li>Only the C-ABI widths (<code>i8/16/32/64</code>, <code>u8/16/32/64</code>) may cross an <code>extern</code> boundary</li>
 			</ul>

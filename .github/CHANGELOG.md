@@ -85,6 +85,7 @@
 # v0.3.0
 
 ## alpha.1
+
 - Fix a bug where cross module re-exported symbols would break codegen (#199)
 - Fix a bug where the LSP would not autocomplete builtin functions (#193)
 - Fix a bug where the LSP would not show type information above import statement identifiers (#192)
@@ -93,6 +94,7 @@
 - Prevent unsupported declaration modifiers from being used in local functions
 
 ## alpha.2
+
 - Add support for freestanding linux (excluding powerpc64le / powerpc)
     - Previously segfaulted due to _start never being defined
 - Add `match constexpr` construct for multi-pattern constexpr-pruned 'branching'
@@ -110,6 +112,7 @@
 This is a heavily rust inspired release, sorry if that's not your thing!
 
 ### General
+
 - Add support for open ranges
     - Use `..` for a new slice
     - Use `..arr.len` for 0 to len (or use `..=arr.len`)
@@ -126,6 +129,13 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - u0/i0 is not supported
 - Adding half, quad, and f80 (x86 only) to floating point types
 - Added `constexpr_int` and `constexpr_float` for more explicit coercion rules
+- Add atomic builtins
+    - These new builtins take in auto params and are type-checked strongly
+    - They are not very ergonomic to call outright and are meant to be called through the standard library once an abstraction is in place
+- Allow `@tagName` to be used at runtime
+- Non-exhaustive enums are supported by `@tagName` properly now
+    - A value not in the enum's discriminator set is represented by a `"_"`
+- Function types must now have parameter names next to their types
 
 ### C ABI hardening
 
@@ -185,3 +195,5 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `&dyn I` works across a module boundary
 - Two impls of the same interface on different local types no longer collide on their emitted method symbol (previously the second impl's method was silently dropped) 
     - This also fixes the equivalent static-dispatch case
+
+## alpha.4

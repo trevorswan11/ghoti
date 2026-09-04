@@ -318,7 +318,7 @@ struct module {
     mod::module& imported;
 };
 
-constexpr usize MAX_BUILTIN_PARAMS{4};
+constexpr usize MAX_BUILTIN_PARAMS{7}; // `@cmpxchgWeak`/`@cmpxchgStrong` need the most, at 7
 using builtin_params = stdx::fixed::vector<gsl::not_null<type*>, MAX_BUILTIN_PARAMS>;
 
 struct builtin_function {

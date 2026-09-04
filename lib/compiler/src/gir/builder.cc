@@ -224,27 +224,36 @@ auto builder::emit_call(std::string_view callee, std::vector<value> args, sema::
 
 auto builder::emit_builtin_call(std::string_view   callee,
                                 std::vector<value> args,
-                                sema::type&        return_type) -> stdx::option<local_id> {
+                                sema::type&        return_type,
+                                stdx::option<u8>   atomic_op,
+                                stdx::option<u8>   atomic_order,
+                                stdx::option<u8>   atomic_fail_order) -> stdx::option<local_id> {
     PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit builtin call instruction without an active function");
     if (return_type.get_kind() != sema::type_kind::VOID_) {
         const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
         emit_instruction({
-            .kind        = instruction_kind::BUILTIN_CALL,
-            .type        = return_type,
-            .result      = dest,
-            .operands    = std::move(args),
-            .callee_name = std::string{callee},
+            .kind              = instruction_kind::BUILTIN_CALL,
+            .type              = return_type,
+            .result            = dest,
+            .operands          = std::move(args),
+            .callee_name       = std::string{callee},
+            .atomic_op         = atomic_op,
+            .atomic_order      = atomic_order,
+            .atomic_fail_order = atomic_fail_order,
         });
         return dest;
     }
 
     emit_instruction({
-        .kind        = instruction_kind::BUILTIN_CALL,
-        .type        = return_type,
-        .result      = stdx::none,
-        .operands    = std::move(args),
-        .callee_name = std::string{callee},
+        .kind              = instruction_kind::BUILTIN_CALL,
+        .type              = return_type,
+        .result            = stdx::none,
+        .operands          = std::move(args),
+        .callee_name       = std::string{callee},
+        .atomic_op         = atomic_op,
+        .atomic_order      = atomic_order,
+        .atomic_fail_order = atomic_fail_order,
     });
     return stdx::none;
 }

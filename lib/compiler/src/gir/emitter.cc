@@ -1776,7 +1776,10 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
 
     const auto lhs{emit_expression(binary.lhs)};
     const auto rhs{emit_expression(binary.rhs)};
-    return value{emit_checked_binary(*kind_opt, lhs, rhs, *sema_type, id), sema_type};
+    return value{
+        emit_checked_binary(
+            *kind_opt, lhs, rhs, *sema_type, id, syntax::token_type::is_wrapping_op(op_type)),
+        sema_type};
 }
 
 auto emitter::emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value {
@@ -1787,12 +1790,14 @@ auto emitter::emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value
     ASSERT(kind_opt, "Unary operator must be mapped to instruction kind");
     ASSERT(sema_type, "Unary expression must have a resolved sema type");
 
+    if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
     const auto operand{emit_expression(unary.rhs)};
     if (op_type == syntax::token_type_t::BANG && operand.type &&
         operand.type->get_kind() == sema::type_kind::POINTER) {
         return pointer_to_bool(operand, true);
     }
-    const auto dest{emit_checked_unary(*kind_opt, operand, *sema_type, id)};
+    const auto dest{emit_checked_unary(
+        *kind_opt, operand, *sema_type, id, syntax::token_type::is_wrapping_op(op_type))};
     return value{dest, sema_type};
 }
 
@@ -2069,8 +2074,13 @@ auto emitter::emit_packed_field_assign(ast::node_id                id,
         if (const auto b{syntax::token_type::get_compound_base_op(op_type)}) { base_tok = *b; }
         const auto base_kind{map_binary_op(base_tok).value_or(instruction_kind::ADD)};
         const auto rhs{emit_expression(assign.rhs)};
-        new_field =
-            value{emit_checked_binary(base_kind, old_field, rhs, field_type, id), field_type};
+        new_field = value{emit_checked_binary(base_kind,
+                                              old_field,
+                                              rhs,
+                                              field_type,
+                                              id,
+                                              syntax::token_type::is_wrapping_op(base_tok)),
+                          field_type};
     }
 
     emit_packed_store(dot, new_field);
@@ -2117,24 +2127,32 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
 
     switch (op_type) {
     case syntax::token_type_t::PLUS_ASSIGN:
+    case syntax::token_type_t::PLUS_PERCENT_ASSIGN:
     case syntax::token_type_t::MINUS_ASSIGN:
+    case syntax::token_type_t::MINUS_PERCENT_ASSIGN:
     case syntax::token_type_t::STAR_ASSIGN:
+    case syntax::token_type_t::STAR_PERCENT_ASSIGN:
     case syntax::token_type_t::SLASH_ASSIGN:
     case syntax::token_type_t::PERCENT_ASSIGN:
     case syntax::token_type_t::BW_AND_ASSIGN:
     case syntax::token_type_t::BW_OR_ASSIGN:
     case syntax::token_type_t::XOR_ASSIGN:
     case syntax::token_type_t::SHL_ASSIGN:
-    case syntax::token_type_t::SHR_ASSIGN:     {
+    case syntax::token_type_t::SHL_PERCENT_ASSIGN:
+    case syntax::token_type_t::SHR_ASSIGN:           {
         auto base_tok{op_type};
         if (const auto b{syntax::token_type::get_compound_base_op(op_type)}) { base_tok = *b; }
         const auto base_kind{map_binary_op(base_tok).value_or(instruction_kind::ADD)};
         auto&      target_type{*lhs_lval.type};
         const auto loaded{builder_.emit_load(lhs_lval, target_type)};
         const auto rhs{emit_expression(assign.rhs)};
-        const auto res_val{
-            value{emit_checked_binary(base_kind, value{loaded, target_type}, rhs, target_type, id),
-                  target_type}};
+        const auto res_val{value{emit_checked_binary(base_kind,
+                                                     value{loaded, target_type},
+                                                     rhs,
+                                                     target_type,
+                                                     id,
+                                                     syntax::token_type::is_wrapping_op(base_tok)),
+                                 target_type}};
         builder_.emit_store(lhs_lval, res_val);
         return res_val;
     }
@@ -2413,6 +2431,26 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
             break;
         }
+        case syntax::token_type_t::BUILTIN_TAG_NAME: {
+            if (const auto cv{const_eval_.try_eval(id)}) {
+                // A bare string constant's `to_gir_value()` carries only a data pointer
+                if (const auto s{cv->as_opt<std::string>()}) {
+                    return materialize_string_slice(*s, ret_type);
+                }
+                return cv->to_gir_value();
+            }
+            if (!call.arguments.empty()) {
+                if (const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()}) {
+                    if (auto operand_type{active_mod().get_sema_type_opt(*expr_h)}) {
+                        if (const auto res{
+                                emit_runtime_tag_name(*expr_h, *operand_type, ret_type)}) {
+                            return *res;
+                        }
+                    }
+                }
+            }
+            break;
+        }
         case syntax::token_type_t::BUILTIN_EXPECT:
         case syntax::token_type_t::BUILTIN_REQUIRE: {
             const auto is_expect{fn_token == syntax::token_type_t::BUILTIN_EXPECT};
@@ -2562,6 +2600,70 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                 return value{*res, ret_type};
             }
             return value{void_val{}, ret_type};
+        }
+        case syntax::token_type_t::BUILTIN_ATOMIC_LOAD:
+        case syntax::token_type_t::BUILTIN_ATOMIC_STORE:
+        case syntax::token_type_t::BUILTIN_ATOMIC_RMW:
+        case syntax::token_type_t::BUILTIN_CMPXCHG_WEAK:
+        case syntax::token_type_t::BUILTIN_CMPXCHG_STRONG:
+        case syntax::token_type_t::BUILTIN_FENCE:          {
+            const auto name{*syntax::get_builtin_opt(fn_token)};
+
+            // The order/op arguments are compile-time enum constants, sema-verified already
+            const auto eval_order = [&](usize arg_idx) -> u8 {
+                const auto expr_h{*call.arguments[arg_idx].as_opt<ast::expr_handle>()};
+                const auto val{const_eval_.try_eval(expr_h)};
+                const auto en{val ? val->as_opt<const_enum>() : stdx::none};
+                ASSERT(en, "Atomic builtin order/op argument must fold to a const_enum");
+                return static_cast<u8>(en->value);
+            };
+
+            if (fn_token == syntax::token_type_t::BUILTIN_FENCE) {
+                builder_.emit_builtin_call(name, {}, ret_type, stdx::none, eval_order(0));
+                return value{void_val{}, ret_type};
+            }
+
+            const bool  has_t_arg{fn_token != syntax::token_type_t::BUILTIN_ATOMIC_STORE};
+            const usize ptr_idx{has_t_arg ? 1UZ : 0UZ};
+
+            std::vector<value> args;
+            args.emplace_back(emit_expression(*call.arguments[ptr_idx].as_opt<ast::expr_handle>()));
+
+            switch (fn_token) {
+            case syntax::token_type_t::BUILTIN_ATOMIC_LOAD: {
+                const auto order{eval_order(2)};
+                const auto res{
+                    builder_.emit_builtin_call(name, std::move(args), ret_type, stdx::none, order)};
+                return res ? value{*res, ret_type} : value{void_val{}, ret_type};
+            }
+            case syntax::token_type_t::BUILTIN_ATOMIC_STORE: {
+                args.emplace_back(emit_expression(*call.arguments[1].as_opt<ast::expr_handle>()));
+                const auto order{eval_order(2)};
+                builder_.emit_builtin_call(name, std::move(args), ret_type, stdx::none, order);
+                return value{void_val{}, ret_type};
+            }
+            case syntax::token_type_t::BUILTIN_ATOMIC_RMW: {
+                const auto op{eval_order(2)};
+                args.emplace_back(emit_expression(*call.arguments[3].as_opt<ast::expr_handle>()));
+                const auto order{eval_order(4)};
+                const auto res{
+                    builder_.emit_builtin_call(name, std::move(args), ret_type, op, order)};
+                return res ? value{*res, ret_type} : value{void_val{}, ret_type};
+            }
+            case syntax::token_type_t::BUILTIN_CMPXCHG_WEAK:
+            case syntax::token_type_t::BUILTIN_CMPXCHG_STRONG: {
+                args.emplace_back(emit_expression(*call.arguments[2].as_opt<ast::expr_handle>()));
+                args.emplace_back(emit_expression(*call.arguments[3].as_opt<ast::expr_handle>()));
+                const auto succ{eval_order(4)};
+                const auto fail{eval_order(5)};
+                args.emplace_back(
+                    emit_expression_id_raw(*call.arguments[6].as_opt<ast::expr_handle>()));
+                const auto res{builder_.emit_builtin_call(
+                    name, std::move(args), ret_type, stdx::none, succ, fail)};
+                return res ? value{*res, ret_type} : value{void_val{}, ret_type};
+            }
+            default: UNREACHABLE("Unhandled atomic builtin");
+            }
         }
         default: {
             if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
@@ -3816,6 +3918,29 @@ auto emitter::emit_null_pointer_check(value ptr, ast::node_id site) -> void {
     builder_.set_segment(ok_seg);
 }
 
+auto emitter::enum_discriminants(const sema::types::enum_t& en) -> std::vector<i64> {
+    std::vector<i64> discriminants;
+    discriminants.reserve(en.ast_enumerations.size());
+
+    // A variant's initializer node is only valid against the enum's defining module's AST arena,
+    // which may differ from whichever module `const_eval_` is currently scoped to
+    auto&      enclosing_mod{const_cast<mod::module&>(en.enclosing)};
+    const_eval enclosing_eval{ctx_, enclosing_mod};
+    enclosing_eval.set_symbol_scoping(symbol_scoping_);
+
+    for (usize idx{0}; idx < en.ast_enumerations.size(); ++idx) {
+        const auto& enumeration{en.ast_enumerations[idx]};
+        i64         disc{static_cast<i64>(idx)};
+        if (enumeration.value) {
+            if (const auto ev{enclosing_eval.try_eval(*enumeration.value)}) {
+                disc = static_cast<i64>(ev->as_int_opt().value_or(disc));
+            }
+        }
+        discriminants.emplace_back(disc);
+    }
+    return discriminants;
+}
+
 auto emitter::emit_enum_cast_guard(ast::node_id     site,
                                    const value&     enum_val,
                                    const value&     src_val,
@@ -3827,19 +3952,7 @@ auto emitter::emit_enum_cast_guard(ast::node_id     site,
     const auto en{enum_val.type->get_data().as_opt<sema::types::enum_t>()};
     if (!en || en->non_exhaustive) { return; }
 
-    // Gather the enum's listed discriminant values, mirroring const-eval's ordinal model.
-    std::vector<i64> discriminants;
-    discriminants.reserve(en->ast_enumerations.size());
-    for (usize idx{0}; idx < en->ast_enumerations.size(); ++idx) {
-        const auto& enumeration{en->ast_enumerations[idx]};
-        i64         disc{static_cast<i64>(idx)};
-        if (enumeration.value) {
-            if (const auto ev{const_eval_.try_eval(*enumeration.value)}) {
-                disc = static_cast<i64>(ev->as_int_opt().value_or(disc));
-            }
-        }
-        discriminants.emplace_back(disc);
-    }
+    const std::vector<i64> discriminants{enum_discriminants(*en)};
     if (discriminants.empty()) { return; }
 
     // A compile-time-known value that already lands on a variant needs no runtime check.
@@ -3887,14 +4000,126 @@ auto emitter::emit_enum_cast_guard(ast::node_id     site,
     builder_.set_segment(ok_seg);
 }
 
+auto emitter::materialize_string_slice(std::string_view text, sema::type& slice_type) -> value {
+    auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    auto& slice_data{slice_type.get_data().as<sema::types::slice>()};
+    // Mutable, even though the slice itself may be `[]const u8`: this only types the scratch
+    // field address used to initialize `slot`, not the loaded result handed back to the caller.
+    auto&      elem_ptr_type{ctx_.get_pointer(sema::types::mut::MUTABLE, slice_data.underlying)};
+    const auto slot{builder_.emit_alloca(slice_type)};
+
+    // A slice value can't be written with a single `store`
+    const auto ptr_field{builder_.emit_get_element_ptr(
+        value{slot, slice_type}, {value{SLICE_PTR_FIELD_INDEX, usize_type}}, elem_ptr_type)};
+    builder_.emit_store(value{ptr_field, elem_ptr_type}, value{std::string{text}, elem_ptr_type})
+        .is_initializer = true;
+    const auto len_field{builder_.emit_get_element_ptr(
+        value{slot, slice_type}, {value{SLICE_LEN_FIELD_INDEX, usize_type}}, usize_type)};
+    builder_
+        .emit_store(value{len_field, usize_type}, value{static_cast<u64>(text.size()), usize_type})
+        .is_initializer = true;
+
+    return value{builder_.emit_load(value{slot, slice_type}, slice_type), slice_type};
+}
+
+auto emitter::emit_runtime_tag_name(ast::expr_handle operand_expr,
+                                    sema::type&      operand_type,
+                                    sema::type&      ret_type) -> stdx::option<value> {
+    const auto en{operand_type.get_data().as_opt<sema::types::enum_t>()};
+    const auto ut{operand_type.get_data().as_opt<sema::types::union_t>()};
+    if ((!en) && (!ut || ut->is_untagged)) { return stdx::none; }
+
+    auto fn_opt{builder_.get_function()};
+    if (!fn_opt) { return stdx::none; }
+    auto& fn{*fn_opt};
+
+    auto&      bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    auto&      merge_seg{fn.add_segment()};
+    const auto res_slot{builder_.emit_alloca(ret_type)};
+
+    const auto store_name{[&](std::string_view name) {
+        builder_.emit_store(value{res_slot, ret_type}, materialize_string_slice(name, ret_type));
+    }};
+
+    // Tests one discriminant/tag value; if it matches, stores `name` and joins the merge
+    // segment, mirroring `emit_match`'s per-arm dispatch shape.
+    const auto emit_named_case{[&](value cond, std::string_view name) {
+        auto& body_seg{fn.add_segment()};
+        auto& next_seg{fn.add_segment()};
+        builder_.emit_cond_goto(cond, body_seg.get_id(), next_seg.get_id());
+
+        builder_.set_segment(body_seg);
+        store_name(name);
+        builder_.emit_goto(merge_seg.get_id());
+
+        builder_.set_segment(next_seg);
+    }};
+
+    if (en) {
+        const auto  operand_val{emit_expression(operand_expr)};
+        auto&       underlying{en->underlying};
+        const value raw_val{builder_.emit_cast(instruction_kind::BIT_CAST, operand_val, underlying),
+                            underlying};
+        const auto  discriminants{enum_discriminants(*en)};
+        for (usize idx{0}; idx < en->ast_enumerations.size(); ++idx) {
+            const auto& vname{
+                en->enclosing.ast.get_as<ast::identifier_expr>(en->ast_enumerations[idx].name)
+                    .name};
+            const value rhs{static_cast<u64>(discriminants[idx]), underlying};
+            const auto  eq{builder_.emit_binary(instruction_kind::EQ, raw_val, rhs, bool_type)};
+            emit_named_case(value{eq, bool_type}, vname);
+        }
+
+        if (en->non_exhaustive) {
+            // A non-exhaustive enum may legitimately hold a raw value with no listed variant.
+            store_name("_");
+            builder_.emit_goto(merge_seg.get_id());
+        } else {
+            // Every valid value of an exhaustive enum was just tested above.
+            builder_.emit_unreachable();
+        }
+    } else {
+        // Address of the scrutinee: reuse its storage when it is an lvalue, else spill the rvalue.
+        const bool is_lvalue_shape{active_ast().get_as_opt<ast::identifier_expr>(operand_expr) ||
+                                   active_ast().get_as_opt<ast::dot_expr>(operand_expr) ||
+                                   active_ast().get_as_opt<ast::index_expr>(operand_expr) ||
+                                   active_ast().get_as_opt<ast::dereference_expr>(operand_expr)};
+        const auto operand_addr{is_lvalue_shape ? emit_lvalue(operand_expr)
+                                                : spill_to_temporary(emit_expression(operand_expr),
+                                                                     operand_type,
+                                                                     operand_type.is_constant())};
+
+        auto&       i32_type{ctx_.get_int(32, true)};
+        const auto  tag_ptr{builder_.emit_get_element_ptr(
+            operand_addr, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
+        const value tag_val{builder_.emit_load(value{tag_ptr, i32_type}, i32_type), i32_type};
+
+        for (usize idx{0}; idx < ut->ast_fields.size(); ++idx) {
+            const auto& fname{
+                ut->enclosing.ast.get_as<ast::identifier_expr>(ut->ast_fields[idx].name).name};
+            const value rhs{static_cast<u64>(idx), i32_type};
+            const auto  eq{builder_.emit_binary(instruction_kind::EQ, tag_val, rhs, bool_type)};
+            emit_named_case(value{eq, bool_type}, fname);
+        }
+
+        // Every tag a well-formed tagged union can hold names one of its declared fields.
+        builder_.emit_unreachable();
+    }
+
+    builder_.set_segment(merge_seg);
+    return value{builder_.emit_load(value{res_slot, ret_type}, ret_type), ret_type};
+}
+
 auto emitter::emit_checked_binary(instruction_kind kind,
                                   value            lhs,
                                   value            rhs,
                                   sema::type&      result_type,
-                                  ast::node_id) -> local_id {
+                                  ast::node_id,
+                                  bool wrapping) -> local_id {
     // Only integer arithmetic can trap, and only signed +/-/* can overflow.
     const auto k{result_type.get_kind()};
-    const bool checkable{runtime_safety_ && sema::is_integer(k) &&
+    const bool checkable{!wrapping && runtime_safety_ && sema::is_integer(k) &&
                          (((kind == instruction_kind::ADD || kind == instruction_kind::SUB ||
                             kind == instruction_kind::MUL) &&
                            sema::is_signed_integer(result_type)) ||
@@ -3906,8 +4131,9 @@ auto emitter::emit_checked_binary(instruction_kind kind,
 auto emitter::emit_checked_unary(instruction_kind kind,
                                  value            operand,
                                  sema::type&      result_type,
-                                 ast::node_id) -> local_id {
-    const bool checkable{runtime_safety_ && kind == instruction_kind::NEG &&
+                                 ast::node_id,
+                                 bool wrapping) -> local_id {
+    const bool checkable{!wrapping && runtime_safety_ && kind == instruction_kind::NEG &&
                          sema::is_signed_integer(result_type)};
     return builder_.emit_unary(kind, std::move(operand), result_type, checkable);
 }

@@ -90,6 +90,13 @@ constexpr builtin_t SKIP{"@skip", token_type_t::BUILTIN_SKIP};
 constexpr builtin_t ASSERT{"@assert", token_type_t::BUILTIN_ASSERT};
 constexpr builtin_t VERIFY{"@verify", token_type_t::BUILTIN_VERIFY};
 
+constexpr builtin_t ATOMIC_LOAD{"@atomicLoad", token_type_t::BUILTIN_ATOMIC_LOAD};
+constexpr builtin_t ATOMIC_STORE{"@atomicStore", token_type_t::BUILTIN_ATOMIC_STORE};
+constexpr builtin_t ATOMIC_RMW{"@atomicRmw", token_type_t::BUILTIN_ATOMIC_RMW};
+constexpr builtin_t CMPXCHG_WEAK{"@cmpxchgWeak", token_type_t::BUILTIN_CMPXCHG_WEAK};
+constexpr builtin_t CMPXCHG_STRONG{"@cmpxchgStrong", token_type_t::BUILTIN_CMPXCHG_STRONG};
+constexpr builtin_t FENCE{"@fence", token_type_t::BUILTIN_FENCE};
+
 constexpr builtin_t COMPILE_ERROR{"@compileError", token_type_t::BUILTIN_COMPILE_ERROR};
 constexpr builtin_t CFG{"@cfg", token_type_t::BUILTIN_CFG};
 constexpr builtin_t CFG_VALUE{"@cfgValue", token_type_t::BUILTIN_CFG_VALUE};
@@ -168,6 +175,12 @@ constexpr std::array ALL_BUILTINS{
     builtins::ASSERT,
     builtins::VERIFY,
     builtins::DYN_CAST,
+    builtins::ATOMIC_LOAD,
+    builtins::ATOMIC_STORE,
+    builtins::ATOMIC_RMW,
+    builtins::CMPXCHG_WEAK,
+    builtins::CMPXCHG_STRONG,
+    builtins::FENCE,
     builtins::CFG,
     builtins::CFG_VALUE,
     builtins::DISCARDABLE,

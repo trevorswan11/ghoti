@@ -222,6 +222,17 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::ASSERT, params(t_bool, t_c_str), t_void);
     inject_function(bis::VERIFY, params(t_bool, t_c_str), t_void);
     inject_function(bis::DYN_CAST, params(t_type, t_auto), t_auto);
+
+    // Prelude enums aren't resolved until `inject_builtin_module` runs so use auto here
+    inject_function(bis::ATOMIC_LOAD, params(t_type, t_auto, t_auto), t_auto);
+    inject_function(bis::ATOMIC_STORE, params(t_auto, t_auto, t_auto), t_void);
+    inject_function(bis::ATOMIC_RMW, params(t_type, t_auto, t_auto, t_auto, t_auto), t_auto);
+    inject_function(
+        bis::CMPXCHG_WEAK, params(t_type, t_auto, t_auto, t_auto, t_auto, t_auto, t_auto), t_bool);
+    inject_function(bis::CMPXCHG_STRONG,
+                    params(t_type, t_auto, t_auto, t_auto, t_auto, t_auto, t_auto),
+                    t_bool);
+    inject_function(bis::FENCE, params(t_auto), t_void);
 }
 
 constexpr std::string_view BUILTIN_MODULE_SOURCE{

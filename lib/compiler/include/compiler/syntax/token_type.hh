@@ -46,6 +46,11 @@ enum class token_type_t : u8 {
     NOT,
     CARET,
 
+    PLUS_PERCENT,
+    MINUS_PERCENT,
+    STAR_PERCENT,
+    SHL_PERCENT,
+
     PLUS_ASSIGN,
     MINUS_ASSIGN,
     STAR_ASSIGN,
@@ -57,6 +62,11 @@ enum class token_type_t : u8 {
     SHR_ASSIGN,
     NOT_ASSIGN,
     XOR_ASSIGN,
+
+    PLUS_PERCENT_ASSIGN,
+    MINUS_PERCENT_ASSIGN,
+    STAR_PERCENT_ASSIGN,
+    SHL_PERCENT_ASSIGN,
 
     LT,
     LT_EQ,
@@ -216,6 +226,12 @@ enum class token_type_t : u8 {
     BUILTIN_ASSERT,
     BUILTIN_VERIFY,
     BUILTIN_DYN_CAST,
+    BUILTIN_ATOMIC_LOAD,
+    BUILTIN_ATOMIC_STORE,
+    BUILTIN_ATOMIC_RMW,
+    BUILTIN_CMPXCHG_WEAK,
+    BUILTIN_CMPXCHG_STRONG,
+    BUILTIN_FENCE,
     BUILTIN_COMPILE_ERROR,
 
     BUILTIN_CFG,
@@ -267,17 +283,31 @@ namespace token_type {
 [[nodiscard]] constexpr auto get_compound_base_op(syntax::token_type_t tok) noexcept
     -> stdx::option<syntax::token_type_t> {
     switch (tok) {
-    case syntax::token_type_t::PLUS_ASSIGN:    return syntax::token_type_t::PLUS;
-    case syntax::token_type_t::MINUS_ASSIGN:   return syntax::token_type_t::MINUS;
-    case syntax::token_type_t::STAR_ASSIGN:    return syntax::token_type_t::STAR;
-    case syntax::token_type_t::SLASH_ASSIGN:   return syntax::token_type_t::SLASH;
-    case syntax::token_type_t::PERCENT_ASSIGN: return syntax::token_type_t::PERCENT;
-    case syntax::token_type_t::BW_AND_ASSIGN:  return syntax::token_type_t::BW_AND;
-    case syntax::token_type_t::BW_OR_ASSIGN:   return syntax::token_type_t::BW_OR;
-    case syntax::token_type_t::XOR_ASSIGN:     return syntax::token_type_t::CARET;
-    case syntax::token_type_t::SHL_ASSIGN:     return syntax::token_type_t::SHL;
-    case syntax::token_type_t::SHR_ASSIGN:     return syntax::token_type_t::SHR;
-    default:                                   return stdx::none;
+    case syntax::token_type_t::PLUS_ASSIGN:          return syntax::token_type_t::PLUS;
+    case syntax::token_type_t::MINUS_ASSIGN:         return syntax::token_type_t::MINUS;
+    case syntax::token_type_t::STAR_ASSIGN:          return syntax::token_type_t::STAR;
+    case syntax::token_type_t::SLASH_ASSIGN:         return syntax::token_type_t::SLASH;
+    case syntax::token_type_t::PERCENT_ASSIGN:       return syntax::token_type_t::PERCENT;
+    case syntax::token_type_t::BW_AND_ASSIGN:        return syntax::token_type_t::BW_AND;
+    case syntax::token_type_t::BW_OR_ASSIGN:         return syntax::token_type_t::BW_OR;
+    case syntax::token_type_t::XOR_ASSIGN:           return syntax::token_type_t::CARET;
+    case syntax::token_type_t::SHL_ASSIGN:           return syntax::token_type_t::SHL;
+    case syntax::token_type_t::SHR_ASSIGN:           return syntax::token_type_t::SHR;
+    case syntax::token_type_t::PLUS_PERCENT_ASSIGN:  return syntax::token_type_t::PLUS_PERCENT;
+    case syntax::token_type_t::MINUS_PERCENT_ASSIGN: return syntax::token_type_t::MINUS_PERCENT;
+    case syntax::token_type_t::STAR_PERCENT_ASSIGN:  return syntax::token_type_t::STAR_PERCENT;
+    case syntax::token_type_t::SHL_PERCENT_ASSIGN:   return syntax::token_type_t::SHL_PERCENT;
+    default:                                         return stdx::none;
+    }
+}
+
+[[nodiscard]] constexpr auto is_wrapping_op(syntax::token_type_t tok) noexcept -> bool {
+    switch (tok) {
+    case syntax::token_type_t::PLUS_PERCENT:
+    case syntax::token_type_t::MINUS_PERCENT:
+    case syntax::token_type_t::STAR_PERCENT:
+    case syntax::token_type_t::SHL_PERCENT:   return true;
+    default:                                  return false;
     }
 }
 

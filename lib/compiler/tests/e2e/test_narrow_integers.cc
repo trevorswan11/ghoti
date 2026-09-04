@@ -45,4 +45,20 @@ TEST_CASE("narrow integers widen implicitly at call sites and returns") {
     )") == 25);
 }
 
+TEST_CASE("a narrow signed type's exact MIN literal stores and compares at the right width") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            var a: i8 = -128;
+            var b: i16 = -32768;
+            var c: i32 = -2147483648;
+            var d: i4 = -8;
+            if (@as(i32, a) != -128) { return 1; }
+            if (@as(i32, b) != -32768) { return 2; }
+            if (c != -2147483648) { return 3; }
+            if (@as(i32, d) != -8) { return 4; }
+            return 0;
+        };
+    )") == 0);
+}
+
 } // namespace ghoti::tests

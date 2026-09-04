@@ -56,6 +56,11 @@ pub const Abi := enum {
 pub const Family := enum { unix, windows, wasm, other, _ };
 pub const Endian := enum { little, big };
 
+pub const MemoryOrder := enum { relaxed, acquire, release, acq_rel, seq_cst };
+pub const AtomicRmwOp := enum {
+    xchg, add, sub, band, nand, bor, bxor, max, min, umax, umin,
+};
+
 pub const SourceLocation := struct {
     pub file: []u8,
     pub line: u32,

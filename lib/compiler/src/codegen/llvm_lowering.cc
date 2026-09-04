@@ -22,6 +22,7 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Value.h>
 #include <llvm/Support/Alignment.h>
+#include <llvm/Support/AtomicOrdering.h>
 #include <llvm/Support/Casting.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/TargetParser/Triple.h>
@@ -96,6 +97,60 @@ namespace {
     case ast::calling_convention::X86_FASTCALL: return llvm::CallingConv::X86_FastCall;
     case ast::calling_convention::AAPCS:        return llvm::CallingConv::ARM_AAPCS;
     default:                                    return llvm::CallingConv::C;
+    }
+}
+
+enum memory_order_t : u8 {
+    mo_relaxed = 0,
+    mo_acquire = 1,
+    mo_release = 2,
+    mo_acq_rel = 3,
+    mo_seq_cst = 4,
+};
+
+// `ord` is a `MemoryOrder` enum ordinal as folded from the atomic builtin
+[[nodiscard]] auto to_llvm_ordering(u8 ord) noexcept -> llvm::AtomicOrdering {
+    switch (ord) {
+    case mo_relaxed: return llvm::AtomicOrdering::Monotonic;
+    case mo_acquire: return llvm::AtomicOrdering::Acquire;
+    case mo_release: return llvm::AtomicOrdering::Release;
+    case mo_acq_rel: return llvm::AtomicOrdering::AcquireRelease;
+    case mo_seq_cst:
+    default:         return llvm::AtomicOrdering::SequentiallyConsistent;
+    }
+}
+
+// Weak enum mirroring builtin.gh.inc
+enum atomic_rmw_op_t : u8 {
+    rmw_xchg = 0,
+    rmw_add  = 1,
+    rmw_sub  = 2,
+    rmw_band = 3,
+    rmw_nand = 4,
+    rmw_bor  = 5,
+    rmw_bxor = 6,
+    rmw_max  = 7,
+    rmw_min  = 8,
+    rmw_umax = 9,
+    rmw_umin = 10,
+};
+
+// `op` is an `AtomicRmwOp` enum ordinal
+[[nodiscard]] auto to_llvm_rmw_op(u8 op) noexcept -> llvm::AtomicRMWInst::BinOp {
+    using Op = llvm::AtomicRMWInst::BinOp;
+    switch (op) {
+    case rmw_xchg: return Op::Xchg;
+    case rmw_add:  return Op::Add;
+    case rmw_sub:  return Op::Sub;
+    case rmw_band: return Op::And;
+    case rmw_nand: return Op::Nand;
+    case rmw_bor:  return Op::Or;
+    case rmw_bxor: return Op::Xor;
+    case rmw_max:  return Op::Max;
+    case rmw_min:  return Op::Min;
+    case rmw_umax: return Op::UMax;
+    case rmw_umin:
+    default:       return Op::UMin;
     }
 }
 
@@ -2167,6 +2222,60 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             }
             builder_.CreateStore(result, out_ptr);
             return overflow;
+        }
+
+        case syntax::token_type_t::BUILTIN_ATOMIC_LOAD: {
+            VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
+            auto* ptr{lower_value(inst.operands[0])};
+            if (!ptr || !inst.type) { return nullptr; }
+            auto* load{builder_.CreateLoad(types_.translate(*inst.type), ptr)};
+            load->setAtomic(to_llvm_ordering(inst.atomic_order.value_or(0)));
+            return load;
+        }
+        case syntax::token_type_t::BUILTIN_ATOMIC_STORE: {
+            VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
+            auto* ptr{lower_value(inst.operands[0])};
+            auto* val{lower_value(inst.operands[1])};
+            if (!ptr || !val) { return nullptr; }
+            auto* store{builder_.CreateStore(val, ptr)};
+            store->setAtomic(to_llvm_ordering(inst.atomic_order.value_or(0)));
+            return nullptr;
+        }
+        case syntax::token_type_t::BUILTIN_ATOMIC_RMW: {
+            VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
+            auto* ptr{lower_value(inst.operands[0])};
+            auto* val{lower_value(inst.operands[1])};
+            if (!ptr || !val) { return nullptr; }
+            return builder_.CreateAtomicRMW(to_llvm_rmw_op(inst.atomic_op.value_or(0)),
+                                            ptr,
+                                            val,
+                                            llvm::MaybeAlign(),
+                                            to_llvm_ordering(inst.atomic_order.value_or(0)));
+        }
+        case syntax::token_type_t::BUILTIN_CMPXCHG_WEAK:
+        case syntax::token_type_t::BUILTIN_CMPXCHG_STRONG: {
+            VERIFY(inst.operands.size() >= 4, "Arity mismatch not verified during resolution");
+            auto* ptr{lower_value(inst.operands[0])};
+            auto* expected{lower_value(inst.operands[1])};
+            auto* new_val{lower_value(inst.operands[2])};
+            auto* out_ptr{lower_value(inst.operands[3])};
+            if (!ptr || !expected || !new_val || !out_ptr) { return nullptr; }
+            auto* cmpxchg{
+                builder_.CreateAtomicCmpXchg(ptr,
+                                             expected,
+                                             new_val,
+                                             llvm::MaybeAlign(),
+                                             to_llvm_ordering(inst.atomic_order.value_or(0)),
+                                             to_llvm_ordering(inst.atomic_fail_order.value_or(0)))};
+            cmpxchg->setWeak(*builtin_tok == syntax::token_type_t::BUILTIN_CMPXCHG_WEAK);
+            auto* cx_result{builder_.CreateExtractValue(cmpxchg, {0U})};
+            auto* success{builder_.CreateExtractValue(cmpxchg, {1U})};
+            builder_.CreateStore(cx_result, out_ptr);
+            return success;
+        }
+        case syntax::token_type_t::BUILTIN_FENCE: {
+            builder_.CreateFence(to_llvm_ordering(inst.atomic_order.value_or(0)));
+            return nullptr;
         }
 
         default: break;

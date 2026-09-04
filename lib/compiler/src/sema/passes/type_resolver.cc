@@ -1,6 +1,7 @@
 #include "compiler/sema/passes/type_resolver.hh"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <concepts>
 #include <ranges>
@@ -46,6 +47,7 @@
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
+#include "compiler/syntax/operators.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/diagnostic.hh"
 
@@ -319,6 +321,47 @@ auto type_resolver::visit(ast::node_id id, const ast::asm_expr& node) -> void {
     resolving_.set_sema_type(id, node_type);
     last_type_.emplace(node_type);
 }
+
+namespace {
+
+// Bit width of a scalar type usable as an atomic operand, or none if the kind isn't supported.
+[[nodiscard]] auto atomic_operand_width(const type& t, u32 ptr_bits) noexcept -> stdx::option<u32> {
+    switch (t.get_kind()) {
+    case type_kind::INT:     return u32{int_width(t)};
+    case type_kind::ISIZE:
+    case type_kind::USIZE:
+    case type_kind::POINTER: return ptr_bits;
+    case type_kind::BOOL:    return u32{8};
+    case type_kind::F16:
+    case type_kind::F32:
+    case type_kind::F64:
+    case type_kind::F80:
+    case type_kind::F128:    return u32{float_bits(t.get_kind())};
+    default:                 return stdx::none;
+    }
+}
+
+[[nodiscard]] auto is_valid_memory_order_name(std::string_view name) noexcept -> bool {
+    return name == "relaxed" || name == "acquire" || name == "release" || name == "acq_rel" ||
+           name == "seq_cst";
+}
+
+// A total order over `MemoryOrder` matching C++11 [atomics.types.operations]
+[[nodiscard]] auto memory_order_rank(std::string_view name) noexcept -> i32 {
+    if (name == "relaxed") { return 0; }
+    if (name == "acquire" || name == "release") { return 1; }
+    if (name == "acq_rel") { return 2; }
+    if (name == "seq_cst") { return 3; }
+    return -1;
+}
+
+[[nodiscard]] auto is_valid_atomic_rmw_op_name(std::string_view name) noexcept -> bool {
+    static constexpr std::array names{
+        "xchg", "add", "sub", "band", "nand", "bor", "bxor", "max", "min", "umax", "umin"};
+    return std::ranges::contains(names, name);
+}
+
+} // namespace
 
 template <ast::IndexableID ID>
 [[nodiscard]] auto type_resolver::resolve_builtin_call(ID                             id,
@@ -700,6 +743,213 @@ template <ast::IndexableID ID>
         return_type = &ctx_.get_builtin_resolved_type(type_kind::BOOL);
         break;
     }
+    case token_type_t::BUILTIN_ATOMIC_LOAD:
+    case token_type_t::BUILTIN_ATOMIC_STORE:
+    case token_type_t::BUILTIN_ATOMIC_RMW:
+    case token_type_t::BUILTIN_CMPXCHG_WEAK:
+    case token_type_t::BUILTIN_CMPXCHG_STRONG:
+    case token_type_t::BUILTIN_FENCE:          {
+        const auto builtin_name{*syntax::get_builtin_opt(builtin_id)};
+
+        if (builtin_id == token_type_t::BUILTIN_FENCE) {
+            const auto order{resolve_const_enum_arg(call.arguments[0], builtin_name, "order")};
+            if (!order) { return stdx::err{order.error()}; }
+            if (!is_valid_memory_order_name(order->name)) {
+                return make_sema_err(fmt::format("'{}' cannot use memory order '{}'; a fence "
+                                                 "accepts relaxed, acquire, release, acq_rel, "
+                                                 "or seq_cst",
+                                                 builtin_name,
+                                                 order->name),
+                                     error::TYPE_MISMATCH,
+                                     get_call_arg_location(call.arguments[0]));
+            }
+            return_type = &ctx_.get_builtin_resolved_type(type_kind::VOID_);
+            break;
+        }
+
+        // `@atomicStore` has no leading `T: type` argument; `T` is `ptr`'s pointee instead.
+        const bool  has_t_arg{builtin_id != token_type_t::BUILTIN_ATOMIC_STORE};
+        const usize ptr_idx{has_t_arg ? 1UZ : 0UZ};
+
+        auto&      ptr_type{*get_resolved_call_arg_type(call.arguments[ptr_idx])};
+        const auto ptr_data{ptr_type.get_data().as_opt<types::pointer>()};
+        if (!ptr_data) {
+            return make_sema_err(fmt::format("'{}' expects 'ptr' to be a pointer ('^T' / '^mut "
+                                             "T'); found '{}'",
+                                             builtin_name,
+                                             type_kind_display_name(ptr_type)),
+                                 error::TYPE_MISMATCH,
+                                 get_call_arg_location(call.arguments[ptr_idx]));
+        }
+        auto& t{has_t_arg ? *get_resolved_call_arg_type(call.arguments[0]) : ptr_data->underlying};
+
+        const bool needs_mut_ptr{builtin_id != token_type_t::BUILTIN_ATOMIC_LOAD};
+        if (needs_mut_ptr && ptr_type.is_constant()) {
+            return make_sema_err(
+                fmt::format(
+                    "'{}' expects 'ptr' to point to a mutable location ('^mut {}'); found '{}'",
+                    builtin_name,
+                    type_kind_display_name(t),
+                    ptr_type.to_string()),
+                error::TYPE_MISMATCH,
+                get_call_arg_location(call.arguments[ptr_idx]));
+        }
+        if (!is_same_unqualified(ptr_data->underlying, t)) {
+            return make_sema_err(fmt::format("'{}' expects 'ptr' to point to '{}'; found '{}'",
+                                             builtin_name,
+                                             type_kind_display_name(t),
+                                             ptr_type.to_string()),
+                                 error::TYPE_MISMATCH,
+                                 get_call_arg_location(call.arguments[ptr_idx]));
+        }
+
+        const auto width{atomic_operand_width(t, target_ptr_bits())};
+        const bool width_ok{width && (*width == 8 || *width == 16 || *width == 32 || *width == 64 ||
+                                      (*width == 128 && target_has_128bit_atomics()))};
+        if (!width_ok) {
+            return make_sema_err(
+                fmt::format("'{}' operand type '{}' has no native atomic width on this target; "
+                            "8/16/32/64 bits are always supported, 128 only on x86_64/aarch64",
+                            builtin_name,
+                            type_kind_display_name(t)),
+                error::TYPE_MISMATCH,
+                get_call_arg_location(call.arguments[ptr_idx]));
+        }
+
+        // Every non-`ptr`/order/op operand (`val`, `expected`, `new`) must agree with `T`.
+        const auto check_matches_t = [&](usize            arg_idx,
+                                         std::string_view name) -> stdx::option<diagnostic> {
+            auto&      arg_type{*get_resolved_call_arg_type(call.arguments[arg_idx])};
+            const bool ok{
+                is_same_unqualified(arg_type, t) ||
+                (arg_type.get_kind() == type_kind::CONSTEXPR_INT && is_integer(t.get_kind())) ||
+                (arg_type.get_kind() == type_kind::CONSTEXPR_FLOAT && is_float(t.get_kind()))};
+            if (ok) { return stdx::none; }
+            return diagnostic{fmt::format("'{}' expects '{}' to be '{}'; found '{}'",
+                                          builtin_name,
+                                          name,
+                                          type_kind_display_name(t),
+                                          type_kind_display_name(arg_type)),
+                              error::TYPE_MISMATCH,
+                              get_call_arg_location(call.arguments[arg_idx])};
+        };
+
+        switch (builtin_id) {
+        case token_type_t::BUILTIN_ATOMIC_LOAD: {
+            const auto order{resolve_const_enum_arg(call.arguments[2], builtin_name, "order")};
+            if (!order) { return stdx::err{order.error()}; }
+            if (order->name != "relaxed" && order->name != "acquire" && order->name != "seq_cst") {
+                return make_sema_err(
+                    fmt::format("'{}' cannot use memory order '{}'; loads accept relaxed, "
+                                "acquire, or seq_cst",
+                                builtin_name,
+                                order->name),
+                    error::TYPE_MISMATCH,
+                    get_call_arg_location(call.arguments[2]));
+            }
+            return_type = &t;
+            break;
+        }
+        case token_type_t::BUILTIN_ATOMIC_STORE: {
+            if (auto diag{check_matches_t(1, "val")}) { return stdx::err{std::move(*diag)}; }
+            const auto order{resolve_const_enum_arg(call.arguments[2], builtin_name, "order")};
+            if (!order) { return stdx::err{order.error()}; }
+            if (order->name != "relaxed" && order->name != "release" && order->name != "seq_cst") {
+                return make_sema_err(
+                    fmt::format("'{}' cannot use memory order '{}'; stores accept relaxed, "
+                                "release, or seq_cst",
+                                builtin_name,
+                                order->name),
+                    error::TYPE_MISMATCH,
+                    get_call_arg_location(call.arguments[2]));
+            }
+            return_type = &ctx_.get_builtin_resolved_type(type_kind::VOID_);
+            break;
+        }
+        case token_type_t::BUILTIN_ATOMIC_RMW: {
+            const auto op{resolve_const_enum_arg(call.arguments[2], builtin_name, "op")};
+            if (!op) { return stdx::err{op.error()}; }
+            if (!is_valid_atomic_rmw_op_name(op->name)) {
+                return make_sema_err(fmt::format("'{}' has no atomic RMW operation named '{}'",
+                                                 builtin_name,
+                                                 op->name),
+                                     error::TYPE_MISMATCH,
+                                     get_call_arg_location(call.arguments[2]));
+            }
+            if (auto diag{check_matches_t(3, "val")}) { return stdx::err{std::move(*diag)}; }
+            const auto order{resolve_const_enum_arg(call.arguments[4], builtin_name, "order")};
+            if (!order) { return stdx::err{order.error()}; }
+            if (!is_valid_memory_order_name(order->name)) {
+                return make_sema_err(
+                    fmt::format("'{}' cannot use memory order '{}'", builtin_name, order->name),
+                    error::TYPE_MISMATCH,
+                    get_call_arg_location(call.arguments[4]));
+            }
+            return_type = &t;
+            break;
+        }
+        case token_type_t::BUILTIN_CMPXCHG_WEAK:
+        case token_type_t::BUILTIN_CMPXCHG_STRONG: {
+            if (auto diag{check_matches_t(2, "expected")}) { return stdx::err{std::move(*diag)}; }
+            if (auto diag{check_matches_t(3, "new")}) { return stdx::err{std::move(*diag)}; }
+
+            const auto succ{resolve_const_enum_arg(call.arguments[4], builtin_name, "succ_order")};
+            if (!succ) { return stdx::err{succ.error()}; }
+            if (!is_valid_memory_order_name(succ->name)) {
+                return make_sema_err(fmt::format("'{}' cannot use success memory order '{}'",
+                                                 builtin_name,
+                                                 succ->name),
+                                     error::TYPE_MISMATCH,
+                                     get_call_arg_location(call.arguments[4]));
+            }
+            const auto fail{resolve_const_enum_arg(call.arguments[5], builtin_name, "fail_order")};
+            if (!fail) { return stdx::err{fail.error()}; }
+            if (fail->name == "release" || fail->name == "acq_rel") {
+                return make_sema_err(
+                    fmt::format("'{}' cannot use failure memory order '{}'; 'fail_order' may not "
+                                "be release or acq_rel",
+                                builtin_name,
+                                fail->name),
+                    error::TYPE_MISMATCH,
+                    get_call_arg_location(call.arguments[5]));
+            }
+            if (!is_valid_memory_order_name(fail->name) ||
+                memory_order_rank(fail->name) > memory_order_rank(succ->name)) {
+                return make_sema_err(
+                    fmt::format("'{}' failure memory order '{}' may not be stronger than its "
+                                "success order '{}'",
+                                builtin_name,
+                                fail->name,
+                                succ->name),
+                    error::TYPE_MISMATCH,
+                    get_call_arg_location(call.arguments[5]));
+            }
+
+            // `out` follows the `_withOverflow` convention: `&mut T` or `^mut T`.
+            auto&       out_type{*get_resolved_call_arg_type(call.arguments[6])};
+            const auto  out_ref{out_type.get_data().as_opt<types::reference>()};
+            const auto  out_ptr{out_type.get_data().as_opt<types::pointer>()};
+            const type* out_underlying{out_ref   ? &out_ref->underlying
+                                       : out_ptr ? &out_ptr->underlying
+                                                 : nullptr};
+            if (!out_underlying || out_type.is_constant() ||
+                !is_same_unqualified(*out_underlying, t)) {
+                return make_sema_err(
+                    fmt::format("'{}' expects its 'out' argument to be a '&mut {}' result "
+                                "reference; found '{}'",
+                                builtin_name,
+                                type_kind_display_name(t),
+                                out_type.to_string()),
+                    error::TYPE_MISMATCH,
+                    get_call_arg_location(call.arguments[6]));
+            }
+            return_type = &ctx_.get_builtin_resolved_type(type_kind::BOOL);
+            break;
+        }
+        default: UNREACHABLE("Unhandled atomic builtin");
+        }
+        break;
+    }
     case token_type_t::BUILTIN_C_VA_START:
     case token_type_t::BUILTIN_C_VA_COPY:
     case token_type_t::BUILTIN_C_VA_END:   {
@@ -910,6 +1160,30 @@ auto type_resolver::get_resolved_call_arg_type(const ast::call_expr::argument& a
 
 auto type_resolver::get_call_arg_location(const ast::call_expr::argument& arg) -> source_location {
     return arg.visit([this](auto id) -> source_location { return resolving_.ast.location_of(id); });
+}
+
+auto type_resolver::resolve_const_enum_arg(const ast::call_expr::argument& arg,
+                                           std::string_view                builtin_name,
+                                           std::string_view                what)
+    -> stdx::result<gir::const_enum, diagnostic> {
+    const auto loc{get_call_arg_location(arg)};
+    const auto expr_h{arg.as_opt<ast::expr_handle>()};
+    if (!expr_h) {
+        return make_sema_err(
+            fmt::format("'{}' expects '{}' to be a compile-time constant", builtin_name, what),
+            error::TYPE_MISMATCH,
+            loc);
+    }
+    gir::const_eval ce{ctx_, resolving_};
+    const auto      val{ce.try_eval(*expr_h)};
+    const auto      en{val ? val->as_opt<gir::const_enum>() : stdx::none};
+    if (!en) {
+        return make_sema_err(
+            fmt::format("'{}' expects '{}' to be a compile-time constant", builtin_name, what),
+            error::TYPE_MISMATCH,
+            loc);
+    }
+    return *en;
 }
 
 auto type_resolver::local_const_fn_ref(ast::expr_handle expr) -> stdx::option<gir::const_value> {
@@ -2161,6 +2435,15 @@ auto type_resolver::target_has_x86_fp80() const -> bool {
     return arch == "x86_64" || arch == "x86";
 }
 
+auto type_resolver::target_ptr_bits() const -> u32 {
+    return codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits;
+}
+
+auto type_resolver::target_has_128bit_atomics() const -> bool {
+    const auto arch{codegen::target_facts::resolve(ctx_.target_opts.triple_str).arch};
+    return arch == "x86_64" || arch == "aarch64";
+}
+
 template <ast::IndexableID ID> auto type_resolver::resolve_symbol(ID id, symbol& sym) -> void {
     auto& symbol_data{sym.get_data()};
     switch (sym.get_status()) {
@@ -2594,6 +2877,15 @@ auto type_resolver::visit(ast::node_id, const ast::cfg_stmt&) -> void {
     UNREACHABLE("cfg_stmt must be removed by the cfg pass before type resolution");
 }
 
+namespace {
+
+// True only for concrete integer, or width-less `constexpr_int`
+[[nodiscard]] auto wrapping_operand_ok(const type& t) noexcept -> bool {
+    return is_integer(t.get_kind()) || t.get_kind() == type_kind::CONSTEXPR_INT;
+}
+
+} // namespace
+
 auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -> void {
     PROFILE_FUNCTION();
     {
@@ -2604,6 +2896,28 @@ auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -
     {
         const structural_guard g{implicit_type_stack_, lhs_type};
         TRY_RESOLVE(assign.rhs);
+    }
+    auto& rhs_type{*last_type_};
+
+    switch (id.get_token_type()) {
+    case syntax::token_type_t::PLUS_PERCENT_ASSIGN:
+    case syntax::token_type_t::MINUS_PERCENT_ASSIGN:
+    case syntax::token_type_t::STAR_PERCENT_ASSIGN:
+    case syntax::token_type_t::SHL_PERCENT_ASSIGN:
+        if (!lhs_type.is_poison() && !rhs_type.is_poison() &&
+            (!wrapping_operand_ok(lhs_type) || !wrapping_operand_ok(rhs_type))) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("operator '{}' expects two integer operands; found '{}' and '{}'",
+                            *syntax::get_operator_opt(id.get_token_type()),
+                            ctx_.type_display_name(lhs_type),
+                            ctx_.type_display_name(rhs_type)),
+                error::OPERATOR_TYPE_MISMATCH,
+                resolving_.ast.location_of(id)));
+        }
+        break;
+    default: break;
     }
 
     // Only pass 3 can verify assignment allowance due to mutability semantics
@@ -2660,6 +2974,25 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
     case syntax::token_type_t::BOOLEAN_OR:
         last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::BOOL));
         break;
+    case syntax::token_type_t::PLUS_PERCENT:
+    case syntax::token_type_t::MINUS_PERCENT:
+    case syntax::token_type_t::STAR_PERCENT:
+    case syntax::token_type_t::SHL_PERCENT:   {
+        if (!lhs_type->is_poison() && !rhs_type.is_poison() &&
+            (!wrapping_operand_ok(*lhs_type) || !wrapping_operand_ok(rhs_type))) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("operator '{}' expects two integer operands; found '{}' and '{}'",
+                            *syntax::get_operator_opt(id.get_token_type()),
+                            ctx_.type_display_name(*lhs_type),
+                            ctx_.type_display_name(rhs_type)),
+                error::OPERATOR_TYPE_MISMATCH,
+                resolving_.ast.location_of(id)));
+        }
+        last_type_.emplace(lhs_type);
+        break;
+    }
     default: last_type_.emplace(lhs_type); break;
     }
 
@@ -4229,6 +4562,20 @@ auto type_resolver::visit(ast::node_id id, const ast::unary_expr& node) -> void 
     TRY_RESOLVE(node.rhs);
     if (id.get_token_type() == syntax::token_type_t::BANG) {
         last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::BOOL));
+    } else if (id.get_token_type() == syntax::token_type_t::MINUS_PERCENT) {
+        // Mirrors plain unary '-': signed integers only with overflow safety
+        auto&      operand_type{*last_type_};
+        const bool ok{operand_type.get_kind() == type_kind::CONSTEXPR_INT ||
+                      is_signed_integer(operand_type)};
+        if (!operand_type.is_poison() && !ok) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("operator '-%' expects a signed integer operand; found '{}'",
+                            ctx_.type_display_name(operand_type)),
+                error::OPERATOR_TYPE_MISMATCH,
+                resolving_.ast.location_of(id)));
+        }
     }
     resolving_.set_sema_type(id, *last_type_);
 }
@@ -4628,9 +4975,20 @@ namespace {
 struct cabi_offenders {
     bool has_dyn{false};
     bool has_ref{false};
+    bool has_nonabi_scalar{false};
 };
 
+// A leaf integer/float width with no defined C ABI representation
+[[nodiscard]] auto is_nonabi_scalar(const type& t) noexcept -> bool {
+    if (t.get_kind() == type_kind::INT) {
+        const auto bits{int_width(t)};
+        return bits != 8 && bits != 16 && bits != 32 && bits != 64;
+    }
+    return t.get_kind() == type_kind::F16 || t.get_kind() == type_kind::F128;
+}
+
 [[nodiscard]] auto scan_cabi_offenders(const type& t, cabi_offenders acc = {}) -> cabi_offenders {
+    if (is_nonabi_scalar(t)) { acc.has_nonabi_scalar = true; }
     return t.get_data().visit(
         [&acc](types::dyn_t) {
             acc.has_dyn = true;
@@ -4659,6 +5017,31 @@ struct cabi_offenders {
                     "pointer has no C ABI representation",
                     kind,
                     name),
+        error::ILLEGAL_REFERENCE_FIELD,
+        location};
+}
+
+[[nodiscard]] auto cabi_nonabi_scalar_field(std::string_view       kind,
+                                            std::string_view       name,
+                                            std::string_view       type_name,
+                                            const source_location& location) -> diagnostic {
+    return diagnostic{
+        fmt::format("extern {} field '{}' has type '{}', which has no C ABI representation; "
+                    "extern signatures accept 8/16/32/64-bit integers, usize/isize, bool, f32, "
+                    "f64, f80",
+                    kind,
+                    name,
+                    type_name),
+        error::ILLEGAL_REFERENCE_FIELD,
+        location};
+}
+
+[[nodiscard]] auto cabi_nonabi_scalar(std::string_view type_name, const source_location& location)
+    -> diagnostic {
+    return diagnostic{
+        fmt::format("'{}' has no C ABI representation; extern signatures accept 8/16/32/64-bit "
+                    "integers, usize/isize, bool, f32, f64, f80",
+                    type_name),
         error::ILLEGAL_REFERENCE_FIELD,
         location};
 }
@@ -4715,7 +5098,7 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
 
         // A bit-packed `packed struct` may only hold packed-eligible fields
         if (struct_expr.is_packed && !struct_expr.is_extern &&
-            !sema::packed_field_bits(*field_type, 64)) { // 64 is technically arbitrary here
+            !sema::packed_field_bits(*field_type, target_ptr_bits())) {
             return last_type_.emplace(ctx_.poison_node(
                 resolving_,
                 id,
@@ -4748,6 +5131,13 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
                 return last_type_.emplace(ctx_.poison_node(
                     resolving_, id, extern_reference_field("struct", ident.name, loc)));
             }
+            if (bad.has_nonabi_scalar) {
+                return last_type_.emplace(ctx_.poison_node(
+                    resolving_,
+                    id,
+                    cabi_nonabi_scalar_field(
+                        "struct", ident.name, ctx_.type_display_name(*field_type), loc)));
+            }
         }
 
         resolving_.set_sema_type(field.name, *field_type);
@@ -4777,7 +5167,7 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
     if (struct_expr.is_packed && !struct_expr.is_extern) {
         u64 total_bits{0};
         for (const auto* ft : field_types) {
-            total_bits += ft ? sema::packed_field_bits(*ft, 64).value_or(0) : 0;
+            total_bits += ft ? sema::packed_field_bits(*ft, target_ptr_bits()).value_or(0) : 0;
         }
         if (total_bits < 1 || total_bits > 128) {
             return last_type_.emplace(ctx_.poison_node(
@@ -4852,11 +5242,18 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
                 return last_type_.emplace(ctx_.poison_node(
                     resolving_, id, extern_reference_field("union", ident.name, loc)));
             }
+            if (bad.has_nonabi_scalar) {
+                return last_type_.emplace(ctx_.poison_node(
+                    resolving_,
+                    id,
+                    cabi_nonabi_scalar_field(
+                        "union", ident.name, ctx_.type_display_name(field_type), loc)));
+            }
         }
 
         // A bit-packed `packed union` may only hold packed-eligible fields
         if (union_expr.is_packed && !union_expr.is_extern &&
-            !sema::packed_field_bits(field_type, 64)) { // here too
+            !sema::packed_field_bits(field_type, target_ptr_bits())) {
             return last_type_.emplace(ctx_.poison_node(
                 resolving_,
                 id,
@@ -4885,9 +5282,11 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
     }
 
     if (union_expr.is_packed && !union_expr.is_extern) {
-        u64 widest{0};
+        u64        widest{0};
+        const auto ptr_bits{target_ptr_bits()};
         for (const auto* ft : field_types) {
-            widest = std::max<u64>(widest, ft ? sema::packed_field_bits(*ft, 64).value_or(0) : 0);
+            widest =
+                std::max<u64>(widest, ft ? sema::packed_field_bits(*ft, ptr_bits).value_or(0) : 0);
         }
         if (widest < 1 || widest > 128) {
             return last_type_.emplace(ctx_.poison_node(
@@ -5257,6 +5656,19 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
     if (resolved_type.is_poison()) {
         sym.set_kind(symbol_kind::POISONED);
     } else {
+        // No field-level path covers `extern` fn signatures / globals themselves; check here.
+        if (decl.has_modifier(ast::decl_modifiers::EXTERN)) {
+            const auto bad{scan_cabi_offenders(resolved_type)};
+            if (bad.has_nonabi_scalar) {
+                const auto loc{decl.explicit_type ? resolving_.ast.location_of(*decl.explicit_type)
+                                                  : resolving_.ast.location_of(id)};
+                ctx_.poison_symbol(sym,
+                                   cabi_nonabi_scalar(ctx_.type_display_name(resolved_type), loc));
+                resolving_.set_sema_type(decl.name, ctx_.get_poison());
+                return last_type_.emplace(ctx_.poison_node(resolving_, id));
+            }
+        }
+
         [&] {
             if (!decl.has_modifier(ast::decl_modifiers::DISCARDABLE)) { return; }
             if (type_data.is<types::builtin_function>()) { return; }

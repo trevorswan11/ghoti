@@ -28,6 +28,8 @@ constexpr std::string_view LEAF{R"(
 
     pub const Tag := enum { red, green, blue };
 
+    pub const Level := enum { low = 10, mid = 20, high = 30, _ };
+    pub const to_level := fn(v: i32): Level { return @as(Level, v); };
     pub const Box := fn(T: type): type { return struct { pub val: T }; };
 )"};
 
@@ -126,6 +128,25 @@ TEST_CASE("E2E: a re-exported `enum` matches by variant through the chain") {
                     .red => 1,
                     .green => 42,
                     .blue => 3,
+                };
+            };
+        )",
+        chain_files())};
+    CHECK(exit_code == 42);
+}
+
+TEST_CASE(
+    "E2E: a re-exported `enum` with explicit discriminants matches correctly through the chain") {
+    const auto exit_code{helpers::compile_and_run(
+        R"(
+            import "top.gh" as top;
+            pub const main := fn(): i32 {
+                const lvl: top::top_mid::leaf::Level = top::top_mid::leaf::to_level(20);
+                return match (lvl) {
+                    .low => 1,
+                    .mid => 42,
+                    .high => 3,
+                    _ => 99,
                 };
             };
         )",

@@ -61,9 +61,16 @@ class builder {
     auto emit_cast(instruction_kind kind, value operand, sema::type& target_type) -> local_id;
     auto emit_call(std::string_view callee, std::vector<value> args, sema::type& return_type)
         -> stdx::option<local_id>;
+
+    // `atomic_op`/`atomic_order`/`atomic_fail_order` carry an atomic builtin's compile-time
+    // `AtomicRmwOp`/`MemoryOrder` enum ordinals; unused by every other builtin.
     auto emit_builtin_call(std::string_view   callee,
                            std::vector<value> args,
-                           sema::type&        return_type) -> stdx::option<local_id>;
+                           sema::type&        return_type,
+                           stdx::option<u8>   atomic_op         = stdx::none,
+                           stdx::option<u8>   atomic_order      = stdx::none,
+                           stdx::option<u8>   atomic_fail_order = stdx::none)
+        -> stdx::option<local_id>;
     auto emit_indirect_call(value callee, std::vector<value> args, sema::type& return_type)
         -> stdx::option<local_id>;
     auto emit_inline_asm(inline_asm info, std::vector<value> inputs, sema::type& result_type)

@@ -284,6 +284,9 @@ TEST_CASE("formatter round trip: operators and grouping") {
     round_trips("A::B::C; a.b; a..b; a..=b;");
     round_trips("&a; &mut b; *a; ^mut a; ^a;");
     round_trips("@as(i32, a); .a; .{ .a = 3 }; TT{ .adfasf = a }; .{};");
+    round_trips("_ = a +% b - c *% d + e <<% f;");
+    round_trips("_ = -%a;");
+    round_trips("var x: u8 = 0; x +%= 1; x -%= 1; x *%= 2; x <<%= 1;");
 }
 
 TEST_CASE("formatter round trip: precedence and nesting are preserved") {

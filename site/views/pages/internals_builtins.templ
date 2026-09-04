@@ -152,7 +152,51 @@ templ InternalsBuiltinsPage() {
 	<p>Integer-only. A zero divisor in a compile-time constant expression is an error.</p>
 	<h3>{ "@addWithOverflow / @subWithOverflow / @mulWithOverflow / @shlWithOverflow" }</h3>
 	<pre><code class="language-ghoti">{ `@addWithOverflow(a: T, b: T, result: &mut T): bool` }</code></pre>
-	<p>Integer-only. Writes the wrapped result through <code>result</code> and returns whether the operation overflowed.</p>
+	<p>Integer-only. Writes the wrapped result through <code>result</code> and returns whether the operation overflowed. For the same wrapped value without the overflow flag, use the wrapping operators <code>+% -% *% &lt;&lt;%</code> (see the <a href="/doc/syntax/types">types</a> page). Unlike the plain operators, they never trap under <code>--runtime-safety</code>.</p>
+	<h2>Atomics</h2>
+	<p>
+		The order and (for <code>{ "@atomicRmw" }</code>) op arguments below are <code>{ "MemoryOrder" }</code> / <code>{ "AtomicRmwOp" }</code> members, both compiler-provided enums that must be referenced through the <code>{ "builtin" }</code> module; e.g. <code>{ "builtin::MemoryOrder.seq_cst" }</code>, <code>{ "builtin::AtomicRmwOp.add" }</code> &mdash; and given as a compile-time constant; a runtime value is a compile error.
+	</p>
+	<pre>
+		<code class="language-ghoti">
+			{ `pub const MemoryOrder := enum { relaxed, acquire, release, acq_rel, seq_cst };
+pub const AtomicRmwOp := enum {
+    xchg, add, sub, band, nand, bor, bxor, max, min, umax, umin,
+};` }
+		</code>
+	</pre>
+	<p><code>{ "ptr" }</code> is the atomic memory location itself (e.g. <code>{ "^mut i32" }</code>), evaluated as a normal expression &mdash; no <code>{ "&" }</code> needed. Every operand's width must be a native atomic width for the target: 8/16/32/64 bits always, 128 only on x86_64/aarch64.</p>
+	<h3>{ "@atomicLoad / @atomicStore" }</h3>
+	<pre>
+		<code class="language-ghoti">
+			{ `@atomicLoad(T: type, ptr: auto, order: MemoryOrder): T
+@atomicStore(ptr: auto, val: auto, order: MemoryOrder): void` }
+		</code>
+	</pre>
+	<p>
+		<code>{ "@atomicLoad" }</code> accepts <code>{ "relaxed" }</code>, <code>{ "acquire" }</code>, or <code>{ "seq_cst" }</code>. <code>{ "@atomicStore" }</code> accepts <code>{ "relaxed" }</code>, <code>{ "release" }</code>, or <code>{ "seq_cst" }</code>. Any other order is a compile error.
+	</p>
+	<h3>{ "@atomicRmw" }</h3>
+	<pre><code class="language-ghoti">{ `@atomicRmw(T: type, ptr: auto, op: AtomicRmwOp, val: auto, order: MemoryOrder): T` }</code></pre>
+	<p>Atomically applies <code>{ "op" }</code> to <code>{ "*ptr" }</code> and <code>{ "val" }</code>, storing the result and returning <code>{ "*ptr" }</code>'s <em>previous</em> value. Any <code>{ "MemoryOrder" }</code> is accepted.</p>
+	<h3>{ "@cmpxchgWeak / @cmpxchgStrong" }</h3>
+	<pre>
+		<code class="language-ghoti">
+			{ `@cmpxchgWeak(T: type, ptr: auto, expected: auto, new: auto,
+             succ_order: MemoryOrder, fail_order: MemoryOrder, out: auto): bool
+@cmpxchgStrong(T: type, ptr: auto, expected: auto, new: auto,
+               succ_order: MemoryOrder, fail_order: MemoryOrder, out: auto): bool` }
+		</code>
+	</pre>
+	<p>
+		Compares <code>{ "*ptr" }</code> against <code>{ "expected" }</code>; if equal, atomically stores <code>{ "new" }</code> and returns <code>{ "true" }</code> (<strong>success</strong>). If not equal, no store happens and the function returns <code>{ "false" }</code> &mdash; the inverse sense of <code>{ "@addWithOverflow" }</code>'s bool, which signals failure. Either way, <code>{ "*ptr" }</code>'s current value (matched or not) is written through <code>{ "out" }</code>, which follows the same <code>{ "&mut T" }</code> / <code>{ "^mut T" }</code> convention as <code>{ "@addWithOverflow" }</code>'s result slot.
+	</p>
+	<p>
+		<code>{ "fail_order" }</code> may not be <code>{ "release" }</code> or <code>{ "acq_rel" }</code>, and may not be stronger than <code>{ "succ_order" }</code>. The <code>{ "weak" }</code> form may spuriously fail even when <code>{ "*ptr" }</code> does equal <code>{ "expected" }</code> (typically cheaper in a retry loop on some targets); <code>{ "strong" }</code> never does.
+	</p>
+	<h3>{ "@fence" }</h3>
+	<pre><code class="language-ghoti">{ `@fence(order: MemoryOrder): void` }</code></pre>
+	<p>A standalone memory fence. Any <code>{ "MemoryOrder" }</code> is accepted; a <code>{ "relaxed" }</code> fence is a legal no-op.</p>
 	<h2>Self-Recursion</h2>
 	<h3>{ "@fnCtx" }</h3>
 	<pre><code class="language-ghoti">{ `@fnCtx(): auto` }</code></pre>
