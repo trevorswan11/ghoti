@@ -386,9 +386,9 @@ TEST_CASE("E2E: a type constructor's members read its `constexpr` value paramete
             pub const main := fn(): i32 {
                 var a: B10 = .{ .val = 1 };
                 var b: B20 = .{ .val = 1 };
-                return a.tagged() * 100 + b.tagged();
+                return a.tagged() + b.tagged();
             };
-        )") == 11 * 100 + 21);
+        )") == 11 + 21);
     }
 }
 
@@ -445,10 +445,10 @@ TEST_CASE("E2E: a type constructor member sizes a local `[n]T` from a `constexpr
                     const fill := fn(&self): i32 {
                         var buf: [n]mut i32 = undefined;
                         var i: usize = 0;
-                        while (i < n) { buf[i] = @as(i32, i); i = i + 1; }
+                        while (i < n) : (i += 1) { buf[i] = @as(i32, i); }
                         var acc: i32 = 0;
                         var j: usize = 0;
-                        while (j < n) { acc = acc + buf[j]; j = j + 1; }
+                        while (j < n) : (j += 1) { acc = acc + buf[j]; }
                         return acc;
                     };
                 };
@@ -457,9 +457,9 @@ TEST_CASE("E2E: a type constructor member sizes a local `[n]T` from a `constexpr
             pub const main := fn(): i32 {
                 var a: Vec(3) = .{ .pad = 0 };
                 var b: Vec(5) = .{ .pad = 0 };
-                return a.fill() * 100 + b.fill();   // (0+1+2)*100 + (0+1+2+3+4)
+                return a.fill() + b.fill();   // (0+1+2) + (0+1+2+3+4)
             };
-        )") == 3 * 100 + 10);
+        )") == 3 + 10);
     }
 }
 

@@ -1,4 +1,5 @@
 #include <string>
+#include <utility>
 
 #include <catch2/catch_test_macros.hpp>
 #include <llvm/IR/LLVMContext.h>
@@ -6,6 +7,7 @@
 #include <llvm/IR/Verifier.h>
 
 #include "compiler/sema/error.hh"
+#include "ghoti/config.h"
 #include "helpers/codegen.hh"
 #include "helpers/common.hh"
 #include "helpers/sema.hh"
@@ -52,6 +54,7 @@ TEST_CASE("@sizeOf of the extended float types") {
     )") == 0);
 }
 
+#if GHOTI_ASM_HOST_X86_64
 TEST_CASE("f80 is accepted on the x86-64 host") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
@@ -62,6 +65,7 @@ TEST_CASE("f80 is accepted on the x86-64 host") {
         };
     )") == 0);
 }
+#endif
 
 TEST_CASE("f80 is rejected on non-x86 targets") {
     auto [ctx,
