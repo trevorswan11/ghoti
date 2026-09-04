@@ -117,10 +117,20 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - These new range syntax only work in subscript operators and as for loop iterables when bounded by a real iterable
 - Fixed a bug where whitespace around comments would be accidentally lost
 - Fixed a few crashes in the compiler with match arm returns and function pointers
+- Writing `[N]&T` / `[]&T` is now an error
+    - A reference is a borrow, not a storable slot. Use a raw pointer (`^T`)
+- A `[N]&T` / `[]&T` value that still arises (e.g. through a type parameter) decays implicitly to `[N]^T` / `[]^T`, preserving mutability (`&mut` → `^mut`); it never silently gains mutability
+- `impl` (inherent and trait, with default methods, associated types, `&mut self` mutation, and `&dyn` dispatch) is verified to work on every aggregate kind: `enum`, `union`, `extern struct`, `packed struct`, `extern union`, `extern packed struct`
+
+### C ABI hardening
+
+- An `extern` struct / union field may not involve `dyn` in any form (`^dyn I`, `[]^dyn I`, `^^dyn I`, ...) as a fat pointer has no C ABI representation
+- The `extern`-aggregate reference check is now transitive: a reference nested behind a pointer / array / slice, or in a function-pointer parameter or return (`^&i32`, `^fn(x: &i32): void`), is rejected, not just a top-level `&T` field
 
 ### Interfaces
 
-- `const W := interface { ... }` — a new type-expression prefix beside `struct` / `enum` / `union`. An interface is a first-class `type` value: `constexpr`-composable, `using`-aliasable, re-exportable, usable as a `T: type` argument
+- `const W := interface { ... }`: a new type-expression prefix beside `struct` / `enum` / `union`.
+    - An interface is a first-class `type` value: `constexpr`-composable, `using`-aliasable, re-exportable, usable as a `T: type` argument
 - Interface body members:
     - **Required methods**: bodyless `[pub] const name := fn(<self>[, params]): <ret>;`; the `self` form (`self` / `&self` / `^self` / `&mut self` / `^mut self`) is the minimum an impl must provide
     - **Default methods**: same with a body; an impl inherits it unless it provides its own. Default bodies are monomorphized per implementing type
@@ -138,20 +148,35 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - **Trait impl** `impl I for T { ... }`: binds associated types (`using Error = ...`), overrides associated const defaults, supplies the required methods. After it, both `t.method(x)` and `T.method(&t, x)` resolve
     - **Inherent impl** `impl T { ... }`: attaches free-standing methods / statics / aliases to a locally-anchored type declared elsewhere. Multiple inherent blocks coexist as long as no member name collides (`error::DUPLICATE_MEMBER`)
     - **Parameterized impl** `impl(P: type, ..., constexpr n: T, ...) [I for] Ctor(P, n) { ... }`: re-instantiated per monomorphization of `Ctor`, its methods added to every concrete instantiation. Multiple parameters (type and `constexpr`), mixed, are supported; works across module boundaries regardless of which module first materializes the instantiation
-- **`impl I` parameter sugar** — `fn f(w: &mut impl Writer)` desugars to a generic function with a synthetic `type` parameter plus a compiler-internal conformance check; a non-conforming argument is `error::UNSATISFIED_BOUND`. Fully monomorphized, zero runtime cost
-- **Intersection bounds** — `fn f(x: &mut impl (Reader + Writer))` requires the synthetic param to satisfy every listed interface; the method set is their union.
+- **`impl I` parameter sugar**: `fn f(w: &mut impl Writer)` desugars to a generic function with a synthetic `type` parameter plus a compiler-internal conformance check; a non-conforming argument is `error::UNSATISFIED_BOUND`. Fully monomorphized, zero runtime cost
+- **Intersection bounds**: `fn f(x: &mut impl (Reader + Writer))` requires the synthetic param to satisfy every listed interface; the method set is their union.
     - A same-named method from two interfaces makes a bare call `error::AMBIGUOUS_METHOD`; a shared associated-item name is `error::CONFLICTING_ASSOC`
-- Static `var` inside a trait impl is allowed — lowers to an `(I, T)`-keyed module global
+- Static `var` inside a trait impl is allowed
+    - Lowers to an `(I, T)`-keyed module global
 
 ### Coherence
 
-- **Orphan rule** — `impl I for T` is accepted only in the module that declares `I` or the module that declares the base type constructor of `T`; otherwise `error::ORPHAN_IMPL`. An impl parameter does not count as local
-- **Uniqueness** — at most one `impl I for T` program-wide, keyed on canonical `type*` identity (never on name), so `a::Writer` and `b::Writer` are independent and a single type may implement both. A duplicate is `error::DUPLICATE_IMPL`
+- **Orphan rule**: `impl I for T` is accepted only in the module that declares `I` or the module that declares the base type constructor of `T`; otherwise `error::ORPHAN_IMPL`. An impl parameter does not count as local
+- **Uniqueness**: at most one `impl I for T` program-wide, keyed on canonical `type*` identity (never on name), so `a::Writer` and `b::Writer` are independent and a single type may implement both. A duplicate is `error::DUPLICATE_IMPL`
 - Conformance failures are precise: `MISSING_IMPL_METHOD`, `IMPL_SIGNATURE_MISMATCH`, `IMPL_SELF_MISMATCH`, `UNKNOWN_IMPL_MEMBER`
 
 ### Builtins
 
-- `@implements(T | value, I)` — a `constexpr bool` is-a predicate usable anywhere a `constexpr` bool is (not tied to `test` blocks). The first argument may be a type or a value; `I` may be an intersection `(A + B)`. Returns `false` for a non-conforming argument, never errors
+- `@implements(T | value, I)`: a `constexpr bool` is-a predicate usable anywhere a `constexpr` bool is (not tied to `test` blocks). The first argument may be a type or a value; `I` may be an intersection `(A + B)`. Returns `false` for a non-conforming argument, never errors
 - `@assert(cond[, msg])`: advisory runtime/comptime assertion calling a new weak `builtin::assert_handler`; comptime-false is a compile error; stripped by `--unsafe`
 - `@verify(cond[, msg])`: enforced assertion: comptime-false is a compile error, and the runtime check is **never** elided (not by `--unsafe`, not at any `-O` level)
     - On failure it delegates to the existing weak `builtin::panic_handler`
+
+### Dynamic dispatch: `dyn I`
+
+- `&dyn I` / `^dyn I` / `&mut dyn I` are fully implemented end to end
+    - A two-word fat pointer `{ data, vtable }`, a lazily-emitted private `const` vtable per `(I, T)` impl, and vtable-indexed call lowering.
+    - Default methods are dispatched through the vtable too
+- **Coercion**: a `&T` / `^T` (where `T` implements `I`) implicitly becomes a `&dyn I` / `^dyn I` at call arguments, assignments, returns, and field initializers, building the fat pointer inline. `&dyn A` never coerces to `&dyn B`
+- **Associated-type binding**: `&dyn Iterator(Item = u8)`, `&dyn Map(Key = []u8, Value = i32)`. Every associated type of the interface must be pinned here or defaulted (`error::DYN_UNBOUND_ASSOC`); the binding is substituted into the method signatures, so `it.next()` through `&dyn Iterator(Item = u8)` is typed `u8`
+- **`dyn`-safety**: a method that takes `self` by value, or names `@this()` outside a `&` / `^`, makes the interface not `dyn`-safe (`error::DYN_BY_VALUE_SELF`); such an interface is still fine for static dispatch
+- **`@dynCast(^T | &T, w)`**: an **unsafe**, unchecked `dyn` → concrete recovery: reinterprets `w`'s erased `data` pointer as the target pointer/reference type. No RTTI; the caller owns the risk
+- `[]^dyn I` heterogeneous collections iterate correctly; a plain `|x|` for-loop capture of a pointer element (including a fat pointer) is now read by value, not aliased
+- `&dyn I` works across a module boundary
+- Two impls of the same interface on different local types no longer collide on their emitted method symbol (previously the second impl's method was silently dropped) 
+    - This also fixes the equivalent static-dispatch case

@@ -30,6 +30,13 @@ templ SyntaxStructsPage() {
 				<li><code>packed struct { "{ ... }" }</code>: Removes padding bytes between fields, creating a tightly packed byte layout.</li>
 				<li><code>extern struct { "{ ... }" }</code>: Enforces C ABI struct layout and alignment rules for C interop.</li>
 				<li><code>extern packed struct { "{ ... }" }</code>: Combines both C ABI compatibility and packed byte layout rules.</li>
+				<li>
+					An <code>extern</code> struct field may not contain a reference or a <code>dyn</code> fat pointer, since neither has a C ABI representation
+					<ul>
+						<li>The check is transitive: a reference or <code>dyn</code> reached through a pointer, array, slice, or function-pointer parameter / return type is rejected as well</li>
+						<li>A raw pointer <code>^T</code> is fine; rewrite <code>&amp;T</code> fields as <code>^T</code></li>
+					</ul>
+				</li>
 			</ul>
 		</li>
 		<li>

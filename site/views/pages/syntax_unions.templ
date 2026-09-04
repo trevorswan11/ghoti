@@ -14,6 +14,9 @@ templ SyntaxUnionsPage() {
 			Unions can be annotated with the extern layout modifier:
 			<ul>
 				<li><code>extern union { "{ ... }" }</code>: Enforces C ABI union layout rules for C interop.</li>
+				<li>
+					As with <code>extern</code> structs, an <code>extern</code> union field may not contain a reference or a <code>dyn</code> fat pointer, transitively through pointers, arrays, slices, or function-pointer signatures. Use a raw pointer <code>^T</code> instead
+				</li>
 			</ul>
 		</li>
 		<li>

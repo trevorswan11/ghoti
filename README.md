@@ -23,7 +23,7 @@ Ghoti is a compiled systems language powered by LLVM, C++, and Zig. It attempts 
 - Manually manged memory
 - Immutability by default
 - Sophisticated `constexpr` evaluation with first-class types
-- WYSIWYG: No overloading, variable shadowing, or macros
+- Clear Semantics: No overloading, variable shadowing, or macros
 
 ### What's With the Name?
 

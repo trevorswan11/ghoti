@@ -149,9 +149,46 @@ pub const main := fn(): i32 {
 };` }
 		</code>
 	</pre>
-	<h2>{ "" }</h2>
+	<h2>Dynamic dispatch: <code>dyn I</code></h2>
 	<ul>
-		<li><code>{ "@implements(T | value, I)" }</code> is a <code>constexpr bool</code> is-a predicate, usable anywhere a <code>constexpr</code> bool is — not tied to <code>test</code> blocks</li>
+		<li>
+			<code>dyn I</code> is an <strong>unsized</strong> type: it is legal only as the referent of <code>&amp;</code> / <code>^</code>. Valid: <code>&amp;dyn I</code>, <code>&amp;mut dyn I</code>, <code>^dyn I</code>, <code>^mut dyn I</code>, <code>[]^dyn I</code>, <code>struct { "{ w: ^dyn I }" }</code>. Invalid: a bare <code>dyn I</code>, <code>[]dyn I</code>, a <code>dyn I</code> field
+		</li>
+		<li>
+			A <code>&amp;dyn I</code> / <code>^dyn I</code> is a <strong>two-word fat pointer</strong>: <code>{ "{ data: ^opaque, vtable: ^const <vtable-of-I> }" }</code>. The compiler emits one lazily-materialized private <code>const</code> vtable per <code>(I, T)</code> impl; a <code>dyn</code>-callable method loads its slot from the vtable and calls it indirectly with <code>data</code> in place of <code>self</code>. Non-overridden default methods occupy a slot too, monomorphized for <code>T</code>
+		</li>
+		<li>
+			<strong>Coercion</strong> is implicit: a <code>&amp;T</code> / <code>^T</code> (where <code>T</code> implements <code>I</code>) becomes a <code>&amp;dyn I</code> / <code>^dyn I</code> at call arguments, assignments, returns, and field initializers. <code>{ "@as(&mut dyn Writer, &mut file)" }</code> is the explicit form. <code>&amp;dyn A</code> never coerces to <code>&amp;dyn B</code> (no sub-interface hierarchy)
+		</li>
+		<li>
+			<strong>Associated-type binding</strong>: an interface with an unbound, undefaulted associated type must have it pinned at the use site with the call-like form: <code>&amp;dyn Iterator(Item = u8)</code>, <code>&amp;dyn Map(Key = []u8, Value = i32)</code>. The binding is substituted into the method signatures, so <code>it.next()</code> through <code>&amp;dyn Iterator(Item = u8)</code> is typed <code>u8</code>. An unbound associated type is an error
+		</li>
+		<li>
+			An interface is <strong><code>dyn</code>-safe</strong> only if every method takes <code>self</code> by <code>&amp;</code> / <code>^</code> and names <code>{ "@this()" }</code> only behind <code>&amp;</code> / <code>^</code>. A by-value <code>self</code> (or a bare <code>{ "@this()" }</code> parameter / return) makes the interface not <code>dyn</code>-safe; it is still usable for static dispatch
+		</li>
+		<li>
+			<code>{ "@dynCast(^T | &mut T, w)" }</code> recovers a concrete pointer/reference from a <code>&amp;dyn I</code> / <code>^dyn I</code>. It is <strong>unsafe and unchecked</strong>: it reinterprets <code>w</code>'s erased <code>data</code> pointer with no RTTI. If <code>w</code> does not actually point at a <code>T</code>, behavior is undefined
+		</li>
+		<li>A <code>dyn</code> fat pointer has <strong>no C ABI</strong> and hence is rejected in every <code>extern</code> struct / union field, in any nesting</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const write_all := fn(w: &mut dyn Writer, bytes: []u8): usize {
+    return w.writeAll(bytes);   // vtable dispatch
+};
+
+pub const main := fn(): i32 {
+    var f := File{ .fd = 1 };
+    var n := write_all(&mut f, "hi");   // &mut File -> &mut dyn Writer
+
+    var again: ^File = @dynCast(^File, &f);   // unsafe recovery
+    return @as(i32, n + again.fd);
+};` }
+		</code>
+	</pre>
+	<h2>{ "@implements" }</h2>
+	<ul>
+		<li><code>{ "@implements(T | value, I)" }</code> is a <code>constexpr bool</code> is-a predicate, usable anywhere a <code>constexpr</code> bool is</li>
 		<li>The first argument may be a type or a value (a value is treated as <code>{ "@typeOf(value)" }</code>)</li>
 		<li><code>I</code> may be an intersection: <code>{ "@implements(File, (Reader + Writer))" }</code></li>
 		<li>It returns <code>false</code> on a non-conforming argument</li>

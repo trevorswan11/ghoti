@@ -31,6 +31,12 @@ templ SyntaxArraysPage() {
 			</ul>
 		</li>
 		<li>If you have a pointer and its size, you can recreate a ghoti-style slice using the <code>{ "@sliceFromPtr" }</code> builtin</li>
+		<li>
+			An array or slice element may not be a reference: writing <code>[N]&amp;T</code> / <code>[]&amp;T</code> is an error (you must use the equivalent pointer type).
+			<ul>
+				<li>A <code>[N]&amp;T</code> / <code>[]&amp;T</code> value that still arises indirectly (for example through a <code>T: type</code> parameter) decays implicitly to <code>[N]^T</code> / <code>[]^T</code>, preserving mutability (<code>&amp;mut</code> -> <code>^mut</code>); it never silently gains mutability</li>
+			</ul>
+		</li>
 	</ul>
 	<h2>Types</h2>
 	<ul>

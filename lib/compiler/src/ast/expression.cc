@@ -1064,8 +1064,6 @@ auto dot_expr::parse(syntax::parser& parser, expr_handle outer)
 
 namespace {
 
-// A `..` / `..=` upper bound is present unless the operator is immediately followed by a token
-// that cannot start an expression (`]`, `)`, `,`, `;`, `}` — the subscript / list terminators).
 [[nodiscard]] auto parse_range_upper(syntax::parser& parser, syntax::bind_precedence prec)
     -> stdx::result<stdx::option<expr_handle>, syntax::diagnostic> {
     if (!syntax::parser::get_prefix_fn_opt(parser.get_peek_token().type)) {

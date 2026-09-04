@@ -22,6 +22,9 @@ templ InternalsBuiltinsPage() {
 	<h3>{ "@as" }</h3>
 	<pre><code class="language-ghoti">{ `@as(T: type, expression: auto): T` }</code></pre>
 	<p>Coerces the value of <code>expression</code> into a value of type <code>T</code>.</p>
+	<h3>{ "@dynCast" }</h3>
+	<pre><code class="language-ghoti">{ `@dynCast(T: type, expression: auto): T` }</code></pre>
+	<p><strong>Unsafe.</strong> Recovers a concrete pointer or reference from a <code>&amp;dyn I</code> / <code>^dyn I</code> fat pointer: <code>T</code> must be a pointer/reference type and <code>expression</code> a <code>&amp;dyn</code> / <code>^dyn</code>. It reinterprets the erased <code>data</code> pointer with <strong>no runtime type check</strong>. If <code>expression</code> does not actually point at the underlying type of <code>T</code>, behavior is undefined. The caller acknowledges the risk.</p>
 	<h2>Pointer Operations</h2>
 	<h3>{ "@intFromPtr" }</h3>
 	<pre><code class="language-ghoti">{ `@intFromPtr(expression: auto): usize` }</code></pre>
