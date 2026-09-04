@@ -35,6 +35,16 @@ auto leaf_qualifier(const type& leaf) -> std::string_view {
     return leaf.is_constant() ? "volatile " : "mut volatile ";
 }
 
+// `[N]&T` / `[]&T` decays element-wise to `[N]^T` / `[]^T`: same referent, no mutability gain.
+[[nodiscard]] auto ref_elem_decays_to_ptr(const type& src_elem, const type& dest_elem) noexcept
+    -> bool {
+    const auto r{src_elem.get_data().as_opt<types::reference>()};
+    const auto p{dest_elem.get_data().as_opt<types::pointer>()};
+    if (!r || !p) { return false; }
+    if (r->underlying.is_constant() && !p->underlying.is_constant()) { return false; }
+    return is_same_unqualified(r->underlying, p->underlying);
+}
+
 constexpr auto TYPE_KIND_NAMES{[] {
     stdx::fixed::enum_map<type_kind, string_utils::lowercase_str<32>> map{};
     for (const auto kind : stdx::enum_range<type_kind>()) {
@@ -285,7 +295,8 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
                 return false;
             }
             if (src.is_constant() && !dest.is_constant()) { return false; }
-            return is_same_unqualified(s_src->underlying, s_dest->underlying);
+            return is_same_unqualified(s_src->underlying, s_dest->underlying) ||
+                   ref_elem_decays_to_ptr(s_src->underlying, s_dest->underlying);
         }
         case type_kind::ARRAY: {
             const auto a_src{src.get_data().as_opt<types::array>()};
@@ -298,7 +309,8 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
                 return false;
             }
             if (src.is_constant() && !dest.is_constant()) { return false; }
-            return is_same_unqualified(a_src->underlying, a_dest->underlying);
+            return is_same_unqualified(a_src->underlying, a_dest->underlying) ||
+                   ref_elem_decays_to_ptr(a_src->underlying, a_dest->underlying);
         }
         default: break;
         }
@@ -312,7 +324,8 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
         if (s_dest->null_terminated && !a_src->null_terminated) { return false; }
         if (a_src->underlying.is_constant() && !s_dest->underlying.is_constant()) { return false; }
         if (src.is_constant() && !dest.is_constant()) { return false; }
-        return is_same_unqualified(a_src->underlying, s_dest->underlying);
+        return is_same_unqualified(a_src->underlying, s_dest->underlying) ||
+               ref_elem_decays_to_ptr(a_src->underlying, s_dest->underlying);
     }
 
     // Function to Function Pointer coercion: fn(...) -> ^fn(...) / ^mut fn(...)

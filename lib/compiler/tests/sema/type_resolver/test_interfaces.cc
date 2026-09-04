@@ -567,4 +567,33 @@ TEST_CASE("`@this()` behind a reference stays `dyn`-safe") {
 )");
 }
 
+TEST_CASE("a `dyn` fat pointer cannot appear in an extern aggregate field") {
+    CHECK(helpers::raised(R"(
+        const W := interface { pub const wr := fn(&self): i32; };
+        const S := extern struct { w: ^dyn W, n: i32 };
+)",
+                          sema::error::ILLEGAL_REFERENCE_FIELD));
+    CHECK(helpers::raised(R"(
+        const W := interface { pub const wr := fn(&self): i32; };
+        const U := extern union { w: &dyn W, n: i32 };
+)",
+                          sema::error::ILLEGAL_REFERENCE_FIELD));
+    CHECK(helpers::raised(R"(
+        const W := interface { pub const wr := fn(&self): i32; };
+        const S := extern packed struct { w: ^^dyn W };
+)",
+                          sema::error::ILLEGAL_REFERENCE_FIELD));
+}
+
+TEST_CASE("a reference nested inside an extern struct field is rejected") {
+    CHECK(helpers::raised("const S := extern struct { p: ^&i32 };",
+                          sema::error::ILLEGAL_REFERENCE_FIELD));
+    CHECK(helpers::raised("const S := extern struct { f: ^fn(x: &i32): void };",
+                          sema::error::ILLEGAL_REFERENCE_FIELD));
+}
+
+TEST_CASE("a raw pointer field in an extern struct is still fine") {
+    helpers::resolve_and_check("const S := extern struct { p: ^i32, q: ^^u8 };");
+}
+
 } // namespace ghoti::tests

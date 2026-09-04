@@ -36,8 +36,8 @@ auto type_translator::translate(const sema::type& type) -> llvm::Type* {
     case sema::type_kind::POINTER:
     case sema::type_kind::REFERENCE: {
         // `&dyn I` / `^dyn I` is a fat pointer: `{ data: ptr, vtable: ptr }`.
-        const auto p{type.get_data().as_opt<sema::types::pointer>()};
-        const auto r{type.get_data().as_opt<sema::types::reference>()};
+        const auto        p{type.get_data().as_opt<sema::types::pointer>()};
+        const auto        r{type.get_data().as_opt<sema::types::reference>()};
         const sema::type* referent{p ? &p->underlying : r ? &r->underlying : nullptr};
         if (referent && referent->get_kind() == sema::type_kind::DYN) {
             return translate_dyn_fat_ptr();
@@ -45,9 +45,9 @@ auto type_translator::translate(const sema::type& type) -> llvm::Type* {
         return get_ptr_ty();
     }
     case sema::type_kind::FUNCTION:
-    case sema::type_kind::NULLPTR:   return get_ptr_ty();
-    case sema::type_kind::SLICE:     return translate_slice(type.get_data().as<sema::types::slice>());
-    case sema::type_kind::ARRAY:     return translate_array(type.get_data().as<sema::types::array>());
+    case sema::type_kind::NULLPTR:  return get_ptr_ty();
+    case sema::type_kind::SLICE:    return translate_slice(type.get_data().as<sema::types::slice>());
+    case sema::type_kind::ARRAY:    return translate_array(type.get_data().as<sema::types::array>());
     case sema::type_kind::STRUCT:
         return translate_struct(type.get_data().as<sema::types::struct_t>(), type);
     case sema::type_kind::UNION:
@@ -67,8 +67,8 @@ auto type_translator::translate(const sema::type& type) -> llvm::Type* {
     // These should never survive to codegen; treat reaching here as an internal-compiler error.
     case sema::type_kind::POISON:
     case sema::type_kind::UNDEFINED: UNREACHABLE("POISON/UNDEFINED type reached codegen");
+    default:                         UNREACHABLE("Unhandled type kind in codegen::type_translator");
     }
-    UNREACHABLE("Unhandled type kind in codegen::type_translator");
 }
 
 auto type_translator::translate_function_type(const sema::types::function& fn)

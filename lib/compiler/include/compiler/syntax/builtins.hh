@@ -20,6 +20,7 @@ constexpr builtin_t BIT_CAST{"@bitCast", token_type_t::BUILTIN_BIT_CAST};
 constexpr builtin_t CONST_CAST{"@constCast", token_type_t::BUILTIN_CONST_CAST};
 constexpr builtin_t VOLATILE_CAST{"@volatileCast", token_type_t::BUILTIN_VOLATILE_CAST};
 constexpr builtin_t AS{"@as", token_type_t::BUILTIN_AS};
+constexpr builtin_t DYN_CAST{"@dynCast", token_type_t::BUILTIN_DYN_CAST};
 
 constexpr builtin_t INT_FROM_PTR{"@intFromPtr", token_type_t::BUILTIN_INT_FROM_PTR};
 constexpr builtin_t PTR_FROM_INT{"@ptrFromInt", token_type_t::BUILTIN_PTR_FROM_INT};
@@ -164,6 +165,7 @@ constexpr std::array ALL_BUILTINS{
     builtins::SKIP,
     builtins::ASSERT,
     builtins::VERIFY,
+    builtins::DYN_CAST,
     builtins::CFG,
     builtins::CFG_VALUE,
     builtins::DISCARDABLE,

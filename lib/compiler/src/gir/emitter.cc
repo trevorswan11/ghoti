@@ -1932,6 +1932,36 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             }
             break;
         }
+        case syntax::token_type_t::BUILTIN_DYN_CAST: {
+            // `@dynCast(^T, w)` -> `w`'s erased `data` pointer, retyped. No RTTI check.
+            if (call.arguments.size() >= 2) {
+                if (const auto op_expr{call.arguments[1].as_opt<ast::expr_handle>()}) {
+                    const auto        src_ty{active_mod().get_sema_type_opt(*op_expr)};
+                    const sema::type* dyn_ty{nullptr};
+                    if (src_ty) {
+                        if (const auto p{src_ty->get_data().as_opt<sema::types::pointer>()}) {
+                            dyn_ty = &p->underlying;
+                        } else if (const auto r{
+                                       src_ty->get_data().as_opt<sema::types::reference>()}) {
+                            dyn_ty = &r->underlying;
+                        }
+                    }
+                    if (!dyn_ty) { break; }
+                    auto& dyn_mut{const_cast<sema::type&>(*dyn_ty)};
+                    auto& ptr_ty{
+                        ctx_.get_pointer(sema::types::mut::CONSTANT,
+                                         ctx_.get_builtin_resolved_type(sema::type_kind::OPAQUE))};
+                    auto&      usize_ty{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+                    const auto fat{value{emit_expression_id_raw(*op_expr).data, dyn_mut}};
+                    const auto slot{builder_.emit_alloca(dyn_mut)};
+                    builder_.emit_store(value{slot, dyn_mut}, fat);
+                    const auto d_ptr{builder_.emit_get_element_ptr(
+                        value{slot, dyn_mut}, {value{u64{0}, usize_ty}}, ptr_ty)};
+                    return value{builder_.emit_load(value{d_ptr, ptr_ty}, ret_type), ret_type};
+                }
+            }
+            break;
+        }
         case syntax::token_type_t::BUILTIN_INT_FROM_PTR: {
             if (!call.arguments.empty()) {
                 if (const auto op_expr{call.arguments[0].as_opt<ast::expr_handle>()}) {

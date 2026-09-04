@@ -515,4 +515,68 @@ TEST_CASE("a `&dyn I` default method calls a required method through the same vt
     )") == 42);
 }
 
+TEST_CASE("`impl` works on every aggregate kind (enum, union, extern, packed)") {
+    CHECK(helpers::compile_and_run(R"(
+        const N := interface {
+            pub const v := fn(&self): i32;
+            pub const twice := fn(&self): i32 { return self.v() * 2; };
+        };
+        const Dir := enum : i32 { A = 3, B = 7 };
+        impl N for Dir { pub const v := fn(&self): i32 { return 1; }; }
+        const Tag := union { i: i32, f: f32 };
+        impl N for Tag { pub const v := fn(&self): i32 { return self.i; }; }
+        const Ext := extern struct { a: i32, b: i32 };
+        impl N for Ext { pub const v := fn(&self): i32 { return self.a; }; }
+        const Pk := packed struct { a: i32, b: i32 };
+        impl Pk { pub const sum := fn(&self): i32 { return self.a + self.b; }; }
+        const EU := extern union { a: i32, b: f32 };
+        impl EU { pub const geti := fn(&self): i32 { return self.a; }; }
+        const EPk := extern packed struct { a: i32, b: u8 };
+        impl EPk { pub const geta := fn(&self): i32 { return self.a; }; }
+        pub const main := fn(): i32 {
+            var d := Dir.A;
+            var t: Tag = .{ .i = 5 };
+            var e: Ext = .{ .a = 6, .b = 0 };
+            var p: Pk = .{ .a = 4, .b = 3 };
+            var u: EU = .{ .a = 8 };
+            var q: EPk = .{ .a = 3, .b = 0 };
+            var view: &dyn N = &t;
+            return d.twice() + view.v() + e.v() + p.sum() + u.geti() + q.geta();
+        };
+    )") == 2 + 5 + 6 + 7 + 8 + 3);
+}
+
+TEST_CASE("`@dynCast` recovers a concrete pointer from a `&dyn I`") {
+    CHECK(helpers::compile_and_run(R"(
+        const N := interface { pub const v := fn(&self): i32; };
+        const T := struct { a: i32, b: i32 };
+        impl N for T { pub const v := fn(&self): i32 { return self.a; }; }
+        const back := fn(w: &dyn N): i32 {
+            var t: ^T = @dynCast(^T, w);
+            return t.a + t.b;
+        };
+        pub const main := fn(): i32 {
+            var x := T{ .a = 20, .b = 22 };
+            return back(&x);
+        };
+    )") == 42);
+}
+
+TEST_CASE("`@dynCast` to `&mut T` allows mutating through the recovered reference") {
+    CHECK(helpers::compile_and_run(R"(
+        const N := interface { pub const get := fn(&self): i32; };
+        const Cell := struct { n: i32 };
+        impl N for Cell { pub const get := fn(&self): i32 { return self.n; }; }
+        const bump := fn(w: &mut dyn N): void {
+            var c: &mut Cell = @dynCast(&mut Cell, w);
+            c.n = c.n + 1;
+        };
+        pub const main := fn(): i32 {
+            var cell := Cell{ .n = 41 };
+            bump(&mut cell);
+            return cell.n;
+        };
+    )") == 42);
+}
+
 } // namespace ghoti::tests

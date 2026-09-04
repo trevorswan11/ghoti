@@ -365,6 +365,33 @@ template <ast::IndexableID ID>
         return_type = get_resolved_call_arg_type(call.arguments[0]);
         break;
     }
+    case token_type_t::BUILTIN_DYN_CAST: {
+        // reinterpret `w`'s erased data pointer, unchecked.
+        auto& target{*get_resolved_call_arg_type(call.arguments[0])};
+        if (target.get_kind() != type_kind::POINTER && target.get_kind() != type_kind::REFERENCE) {
+            return make_sema_err(
+                "`@dynCast` target must be a pointer or reference type (`^T` / `&T`)",
+                error::TYPE_MISMATCH,
+                get_call_arg_location(call.arguments[0]));
+        }
+        auto&               src{*get_resolved_call_arg_type(call.arguments[1])};
+        stdx::option<type&> src_referent{src};
+        if (const auto p{src.get_data().as_opt<types::pointer>()}) {
+            src_referent.emplace(p->underlying);
+        }
+        if (const auto r{src.get_data().as_opt<types::reference>()}) {
+            src_referent.emplace(r->underlying);
+        }
+        if (src_referent->get_kind() != type_kind::DYN) {
+            return make_sema_err(
+                fmt::format("`@dynCast` source must be a `&dyn I` / `^dyn I`; found `{}`",
+                            ctx_.type_display_name(src)),
+                error::TYPE_MISMATCH,
+                get_call_arg_location(call.arguments[1]));
+        }
+        return_type = &target;
+        break;
+    }
     case token_type_t::BUILTIN_CONST_CAST: {
         // Pointer/reference/slice/array is checked since it is an invariant of the cast
         auto&      expr_type{*get_resolved_call_arg_type(call.arguments[0])};
@@ -4431,6 +4458,44 @@ namespace {
         location};
 }
 
+struct cabi_offenders {
+    bool has_dyn{false};
+    bool has_ref{false};
+};
+
+[[nodiscard]] auto scan_cabi_offenders(const type& t, cabi_offenders acc = {}) -> cabi_offenders {
+    return t.get_data().visit(
+        [&acc](types::dyn_t) {
+            acc.has_dyn = true;
+            return acc;
+        },
+        [&acc](types::reference r) {
+            acc.has_ref = true;
+            return scan_cabi_offenders(r.underlying, acc);
+        },
+        [acc](types::pointer p) { return scan_cabi_offenders(p.underlying, acc); },
+        [acc](types::slice sl) { return scan_cabi_offenders(sl.underlying, acc); },
+        [acc](types::array ar) { return scan_cabi_offenders(ar.underlying, acc); },
+        [&acc](types::function fn) {
+            for (const auto* param : fn.params) { acc = scan_cabi_offenders(*param, acc); }
+            return scan_cabi_offenders(fn.return_type, acc);
+        },
+        [acc](types::deferred_array da) { return scan_cabi_offenders(da.underlying, acc); },
+        [acc](const auto&) { return acc; });
+}
+
+[[nodiscard]] auto cabi_dyn_field(std::string_view       kind,
+                                  std::string_view       name,
+                                  const source_location& location) -> diagnostic {
+    return diagnostic{
+        fmt::format("extern {} field '{}' cannot involve `dyn` in any form; a `&dyn` / `^dyn` fat "
+                    "pointer has no C ABI representation",
+                    kind,
+                    name),
+        error::ILLEGAL_REFERENCE_FIELD,
+        location};
+}
+
 } // namespace
 
 template <ast::IndexableID ID>
@@ -4479,12 +4544,17 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
                 incomplete_field(ident.name, resolving_.ast.location_of(field.explicit_type))));
         }
 
-        if (struct_expr.is_extern && field_type->get_kind() == type_kind::REFERENCE) {
-            return last_type_.emplace(ctx_.poison_node(
-                resolving_,
-                id,
-                extern_reference_field(
-                    "struct", ident.name, resolving_.ast.location_of(field.explicit_type))));
+        if (struct_expr.is_extern) {
+            const auto bad{scan_cabi_offenders(*field_type)};
+            const auto loc{resolving_.ast.location_of(field.explicit_type)};
+            if (bad.has_dyn) {
+                return last_type_.emplace(
+                    ctx_.poison_node(resolving_, id, cabi_dyn_field("struct", ident.name, loc)));
+            }
+            if (bad.has_ref) {
+                return last_type_.emplace(ctx_.poison_node(
+                    resolving_, id, extern_reference_field("struct", ident.name, loc)));
+            }
         }
 
         resolving_.set_sema_type(field.name, *field_type);
@@ -4560,12 +4630,17 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
                 incomplete_field(ident.name, resolving_.ast.location_of(field.explicit_type))));
         }
 
-        if (union_expr.is_extern && field_type.get_kind() == type_kind::REFERENCE) {
-            return last_type_.emplace(ctx_.poison_node(
-                resolving_,
-                id,
-                extern_reference_field(
-                    "union", ident.name, resolving_.ast.location_of(field.explicit_type))));
+        if (union_expr.is_extern) {
+            const auto bad{scan_cabi_offenders(field_type)};
+            const auto loc{resolving_.ast.location_of(field.explicit_type)};
+            if (bad.has_dyn) {
+                return last_type_.emplace(
+                    ctx_.poison_node(resolving_, id, cabi_dyn_field("union", ident.name, loc)));
+            }
+            if (bad.has_ref) {
+                return last_type_.emplace(ctx_.poison_node(
+                    resolving_, id, extern_reference_field("union", ident.name, loc)));
+            }
         }
 
         resolving_.set_sema_type(field.name, field_type);
@@ -6113,6 +6188,16 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_array_ty
                              "Array elements cannot have type 'auto'",
                              error::ILLEGAL_AUTO_USAGE,
                              resolving_.ast.location_of(array.inner_explicit_type)));
+    }
+
+    // A reference is a borrow, not a storable slot: writing `[N]&T` / `[]&T` is illegal
+    if (array.inner_explicit_type.get_modifier().is_ref()) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            "an array or slice element cannot be a reference; use a raw pointer (`^T`)",
+            error::ILLEGAL_REFERENCE_FIELD,
+            resolving_.ast.location_of(array.inner_explicit_type)));
     }
 
     const auto null_terminated{array.null_terminated};

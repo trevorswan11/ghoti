@@ -214,6 +214,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
 
     inject_function(bis::ASSERT, params(t_bool, t_c_str), t_void);
     inject_function(bis::VERIFY, params(t_bool, t_c_str), t_void);
+    inject_function(bis::DYN_CAST, params(t_type, t_auto), t_auto);
 }
 
 constexpr std::string_view BUILTIN_MODULE_SOURCE{
