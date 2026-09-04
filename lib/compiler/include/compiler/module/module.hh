@@ -81,6 +81,13 @@ struct module {
     // Methods contributed by a parameterized `impl(P) ...` in this module
     std::vector<sema::type_ctor_member_emit> impl_ctor_member_emits;
 
+    // One per `(I, T)` whose `&dyn I` fat pointer is built in this module
+    struct dyn_vtable {
+        std::string              symbol;
+        std::vector<std::string> slots;
+    };
+    std::vector<dyn_vtable> dyn_vtables;
+
     // `@cfgValue` node index -> the cfg pass's evaluated verdict
     ankerl::unordered_dense::map<usize, cfg_value_result> cfg_value_results;
 

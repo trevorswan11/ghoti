@@ -74,6 +74,8 @@ class llvm_lowering {
     auto declare_function(const gir::function& fn) -> llvm::Function*;
     auto lower_function(const gir::function& fn) -> llvm::Function*;
     auto lower_global(const gir::global_decl& g) -> llvm::GlobalVariable*;
+    // Emits one private constant `[N x ptr]` global per `(I, T)` `&dyn I` coercion in the module.
+    auto lower_dyn_vtables(const gir::module& gir_mod) -> void;
     auto const_to_llvm(const gir::const_value& cv, llvm::Type* ty) -> llvm::Constant*;
 
     // Populates `reserved_symbols_` with every explicit `extern`/`export` link name in the module

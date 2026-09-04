@@ -25,6 +25,7 @@ class type_translator {
     [[nodiscard]] auto translate_function_type(const sema::types::function& fn)
         -> llvm::FunctionType*;
     [[nodiscard]] auto translate_slice_type() -> llvm::StructType*;
+    [[nodiscard]] auto translate_dyn_fat_ptr() -> llvm::StructType*;
 
     [[nodiscard]] auto get_int8_ty() const noexcept -> llvm::IntegerType*;
     [[nodiscard]] auto get_int16_ty() const noexcept -> llvm::IntegerType*;

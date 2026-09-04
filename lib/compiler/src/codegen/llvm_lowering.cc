@@ -107,9 +107,33 @@ auto llvm_lowering::lower(const gir::module& gir_mod) -> stdx::box<llvm::Module>
     }
     {
         PROFILE_SCOPE("llvm_lowering: lower functions");
+        lower_dyn_vtables(gir_mod);
         for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
     }
     return std::move(llvm_module_);
+}
+
+auto llvm_lowering::lower_dyn_vtables(const gir::module& gir_mod) -> void {
+    PROFILE_FUNCTION();
+    auto* ptr_ty{types_.get_ptr_ty()};
+    for (const auto& vt : gir_mod.get_ast_module().dyn_vtables) {
+        if (llvm_module_->getNamedGlobal(vt.symbol)) { continue; }
+        std::vector<llvm::Constant*> slots;
+        slots.reserve(vt.slots.size());
+        for (const auto& name : vt.slots) {
+            auto* fn{llvm_module_->getFunction(name)};
+            slots.emplace_back(fn ? llvm::cast<llvm::Constant>(fn)
+                                  : llvm::ConstantPointerNull::get(ptr_ty));
+        }
+
+        auto* arr_ty{llvm::ArrayType::get(ptr_ty, slots.size())};
+        new llvm::GlobalVariable(*llvm_module_,
+                                 arr_ty,
+                                 true,
+                                 llvm::GlobalValue::InternalLinkage,
+                                 llvm::ConstantArray::get(arr_ty, slots),
+                                 vt.symbol);
+    }
 }
 
 auto llvm_lowering::lower_executable(const gir::module& gir_mod, std::string_view user_main_name)
@@ -128,6 +152,7 @@ auto llvm_lowering::lower_executable(const gir::module& gir_mod, std::string_vie
     }
     {
         PROFILE_SCOPE("llvm_lowering: lower functions");
+        lower_dyn_vtables(gir_mod);
         for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
     }
     emit_main_entry_wrapper(user_main_name_);
@@ -512,6 +537,7 @@ auto llvm_lowering::lower_test_executable(const gir::module&             gir_mod
     for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
     define_test_take_skipped();
     for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
+    lower_dyn_vtables(gir_mod);
     for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
     emit_test_entry_wrapper(gir_mod, recover_args);
     return std::move(llvm_module_);
@@ -1327,7 +1353,10 @@ auto llvm_lowering::emit_get_element_ptr(const gir::instruction& inst) -> llvm::
             }
             break;
         case sema::type_kind::SLICE:
-            source_elem_ty = types_.translate_slice_type();
+        case sema::type_kind::DYN:
+            source_elem_ty = base_type.get_kind() == sema::type_kind::DYN
+                                 ? static_cast<llvm::Type*>(types_.translate_dyn_fat_ptr())
+                                 : types_.translate_slice_type();
             indices.emplace_back(builder_.getInt32(0));
             for (const auto& operand : inst.operands | std::views::drop(1)) {
                 auto* idx{lower_value(operand)};

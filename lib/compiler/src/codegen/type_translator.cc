@@ -34,7 +34,16 @@ auto type_translator::translate(const sema::type& type) -> llvm::Type* {
     case sema::type_kind::VOID_:
     case sema::type_kind::NORETURN:  return get_void_ty();
     case sema::type_kind::POINTER:
-    case sema::type_kind::REFERENCE:
+    case sema::type_kind::REFERENCE: {
+        // `&dyn I` / `^dyn I` is a fat pointer: `{ data: ptr, vtable: ptr }`.
+        const auto p{type.get_data().as_opt<sema::types::pointer>()};
+        const auto r{type.get_data().as_opt<sema::types::reference>()};
+        const sema::type* referent{p ? &p->underlying : r ? &r->underlying : nullptr};
+        if (referent && referent->get_kind() == sema::type_kind::DYN) {
+            return translate_dyn_fat_ptr();
+        }
+        return get_ptr_ty();
+    }
     case sema::type_kind::FUNCTION:
     case sema::type_kind::NULLPTR:   return get_ptr_ty();
     case sema::type_kind::SLICE:     return translate_slice(type.get_data().as<sema::types::slice>());
@@ -46,9 +55,9 @@ auto type_translator::translate(const sema::type& type) -> llvm::Type* {
     case sema::type_kind::ENUM: return translate_enum(type.get_data().as<sema::types::enum_t>());
     case sema::type_kind::CLOSURE:
         return translate_closure(type.get_data().as<sema::types::closure_t>(), type);
+    case sema::type_kind::DYN:       return translate_dyn_fat_ptr();
     case sema::type_kind::OPAQUE:
     case sema::type_kind::INTERFACE:
-    case sema::type_kind::DYN:
     case sema::type_kind::TYPE:
     case sema::type_kind::MODULE:
     case sema::type_kind::LABEL:
@@ -124,6 +133,11 @@ auto type_translator::get_ptr_ty() const noexcept -> llvm::PointerType* {
 auto type_translator::translate_slice(const sema::types::slice&) -> llvm::Type* {
     PROFILE_FUNCTION();
     return translate_slice_type();
+}
+
+auto type_translator::translate_dyn_fat_ptr() -> llvm::StructType* {
+    PROFILE_FUNCTION();
+    return llvm::StructType::get(context_, {get_ptr_ty(), get_ptr_ty()});
 }
 
 auto type_translator::translate_array(const sema::types::array& a) -> llvm::Type* {

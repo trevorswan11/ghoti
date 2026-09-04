@@ -317,4 +317,46 @@ TEST_CASE("an `impl (A + B + C)` intersection parameter accepts three interfaces
     )") == 42);
 }
 
+TEST_CASE("a method call through a `&dyn I` dispatches to the concrete impl") {
+    CHECK(helpers::compile_and_run(R"(
+        const W := interface { pub const val := fn(&self): i32; };
+        const File := struct { fd: i32 };
+        impl W for File { pub const val := fn(&self): i32 { return self.fd; }; }
+        const use := fn(w: &dyn W): i32 { return w.val(); };
+        pub const main := fn(): i32 {
+            var f := File{ .fd = 42 };
+            return use(&f);
+        };
+    )") == 42);
+}
+
+TEST_CASE("a `^dyn I` fat pointer carries a default method through its vtable") {
+    CHECK(helpers::compile_and_run(R"(
+        const Shape := interface {
+            pub const area := fn(&self): i32;
+            pub const scaled := fn(&self, k: i32): i32 { return self.area() * k; };
+        };
+        const Box := struct { w: i32, h: i32 };
+        impl Shape for Box { pub const area := fn(&self): i32 { return self.w * self.h; }; }
+        const total := fn(s: ^dyn Shape): i32 { return s.area() + s.scaled(2); };
+        pub const main := fn(): i32 {
+            var b := Box{ .w = 3, .h = 4 };
+            return total(^b);
+        };
+    )") == 36);
+}
+
+TEST_CASE("a `&dyn I` argument coerces from a plain `&mut T`") {
+    CHECK(helpers::compile_and_run(R"(
+        const N := interface { pub const bump := fn(&mut self): i32; };
+        const Ctr := struct { n: i32 };
+        impl N for Ctr { pub const bump := fn(&mut self): i32 { self.n = self.n + 1; return self.n; }; }
+        const run := fn(x: &mut dyn N): i32 { return x.bump() + x.bump(); };
+        pub const main := fn(): i32 {
+            var c := Ctr{ .n = 19 };
+            return run(&mut c);
+        };
+    )") == 41);
+}
+
 } // namespace ghoti::tests

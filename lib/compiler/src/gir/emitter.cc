@@ -391,8 +391,73 @@ auto emitter::emit_slice_from_array(value arr_lval, const sema::type& arr_type) 
     return value{loaded_slice, slice_type};
 }
 
+auto emitter::emit_dyn_coercion(ast::expr_handle src, const sema::type& fat_type) -> value {
+    PROFILE_FUNCTION();
+    const auto  p{fat_type.get_data().as_opt<sema::types::pointer>()};
+    const auto  r{fat_type.get_data().as_opt<sema::types::reference>()};
+    auto&       dyn_type{p ? p->underlying : r->underlying};
+    const auto& dyn{dyn_type.get_data().as<sema::types::dyn_t>()};
+    const auto& iface{dyn.interface.get_data().as<sema::types::interface_t>()};
+
+    // The concrete `T` behind the source `&T` / `^T`.
+    auto* target{const_cast<sema::type*>(active_mod().get_sema_type_opt(*src).get())};
+    if (const auto tp{target->get_data().as_opt<sema::types::pointer>()}) {
+        target = &tp->underlying;
+    }
+    if (const auto tr{target->get_data().as_opt<sema::types::reference>()}) {
+        target = &tr->underlying;
+    }
+    const auto rec{ctx_.impls.lookup(*target, dyn.interface)};
+
+    auto& ptr_ty{ctx_.get_pointer(sema::types::mut::CONSTANT,
+                                  ctx_.get_builtin_resolved_type(sema::type_kind::OPAQUE))};
+    auto& usize_ty{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+
+    // Register one private vtable global per `(I, T)`; slots hold the impl methods in order.
+    const auto vtable_sym{fmt::format("__vtable.{}", rec ? rec->body_scope_idx : 0UZ)};
+    if (rec && std::ranges::none_of(active_mod().dyn_vtables,
+                                    [&](const auto& v) { return v.symbol == vtable_sym; })) {
+        mod::module::dyn_vtable v{.symbol = vtable_sym, .slots = {}};
+        for (const auto name : iface.method_names) {
+            v.slots.emplace_back(symbol_scoping_.name_for(rec->body_scope_idx, name));
+        }
+        active_mod().dyn_vtables.emplace_back(std::move(v));
+    }
+
+    // The `data` half is the address of the source object
+    const auto src_ty{active_mod().get_sema_type_opt(*src)};
+    const auto data_ptr{src_ty && (src_ty->get_kind() == sema::type_kind::POINTER ||
+                                   src_ty->get_kind() == sema::type_kind::REFERENCE)
+                            ? value{emit_expression_id_raw(*src).data, ptr_ty}
+                            : value{builder_.emit_address_of(emit_lvalue(src), ptr_ty), ptr_ty}};
+    const auto vtable_addr{builder_.emit_global_addr(vtable_sym, ptr_ty, true)};
+
+    // Build `{ data, vtable }` in an alloca typed by the bare `dyn` then load it out.
+    auto&      dyn_mut{p ? const_cast<sema::type&>(p->underlying)
+                         : const_cast<sema::type&>(r->underlying)};
+    const auto slot{builder_.emit_alloca(dyn_mut)};
+    const auto f0{
+        builder_.emit_get_element_ptr(value{slot, dyn_mut}, {value{u64{0}, usize_ty}}, ptr_ty)};
+    builder_.emit_store(value{f0, ptr_ty}, value{data_ptr.data, ptr_ty}).is_initializer = true;
+    const auto f1{
+        builder_.emit_get_element_ptr(value{slot, dyn_mut}, {value{u64{1}, usize_ty}}, ptr_ty)};
+    builder_.emit_store(value{f1, ptr_ty}, value{vtable_addr, ptr_ty}).is_initializer = true;
+
+    auto& fat_mut{const_cast<sema::type&>(fat_type)};
+    return value{builder_.emit_load(value{slot, dyn_mut}, fat_mut), fat_mut};
+}
+
 auto emitter::emit_coerced_expr(ast::expr_handle expr_id, const sema::type& dest_type) -> value {
     PROFILE_FUNCTION();
+    // `&T` / `^T` -> `&dyn I` / `^dyn I`: build the fat pointer.
+    if (const auto p{dest_type.get_data().as_opt<sema::types::pointer>()};
+        p && p->underlying.get_kind() == sema::type_kind::DYN) {
+        return emit_dyn_coercion(expr_id, dest_type);
+    } else if (const auto r{dest_type.get_data().as_opt<sema::types::reference>()};
+               r && r->underlying.get_kind() == sema::type_kind::DYN) {
+        return emit_dyn_coercion(expr_id, dest_type);
+    }
+
     if (dest_type.get_kind() == sema::type_kind::SLICE) {
         if (const auto rhs_type{active_mod().get_sema_type_opt(expr_id)}) {
             if (rhs_type->get_kind() == sema::type_kind::ARRAY) {
@@ -2128,6 +2193,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
 
     stdx::option<std::string> callee_name;
     stdx::option<value>       indirect_callee;
+    stdx::option<value>       dyn_self_data; // `w.data` for a `&dyn I` method call
     bool                      is_closure_ident_call{false};
     bool                      is_fn_ctx_self_call{false};
     const auto                dot_call{active_ast().get_as_opt<ast::dot_expr>(call.function)};
@@ -2189,7 +2255,55 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                 fn_d = fn_ty->get_data().as_opt<sema::types::function>();
             }
         }
-        if (fn_d && !fn_d->has_self) {
+
+        // `w.method(...)` on a `&dyn I`: load the method from `w`'s vtable and call it indirectly
+        const auto                      recv_ty{active_mod().get_sema_type_opt(dot_call->object)};
+        stdx::option<const sema::type&> recv_dyn;
+        if (recv_ty) {
+            if (const auto p{recv_ty->get_data().as_opt<sema::types::pointer>()}) {
+                recv_dyn.emplace(p->underlying);
+            } else if (const auto r{recv_ty->get_data().as_opt<sema::types::reference>()}) {
+                recv_dyn.emplace(r->underlying);
+            }
+        }
+
+        if (recv_dyn && recv_dyn->get_kind() == sema::type_kind::DYN) {
+            const auto& dyn{recv_dyn->get_data().as<sema::types::dyn_t>()};
+            const auto& iface{dyn.interface.get_data().as<sema::types::interface_t>()};
+            u64         slot_idx{0};
+            for (usize i{0}; i < iface.method_names.size(); ++i) {
+                if (iface.method_names[i] == member_ident.name) {
+                    slot_idx = i;
+                    break;
+                }
+            }
+            auto& opaque_ty{ctx_.get_builtin_resolved_type(sema::type_kind::OPAQUE)};
+            auto& ptr_ty{ctx_.get_pointer(sema::types::mut::CONSTANT, opaque_ty)};
+            auto& ptr_to_ptr_ty{ctx_.get_pointer(sema::types::mut::CONSTANT, ptr_ty)};
+            auto& usize_ty{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+            auto& dyn_mut{const_cast<sema::type&>(*recv_dyn)};
+
+            // Spill `w` to get its address, then read the `{ data, vtable }` fields.
+            const auto fat{value{emit_expression_id_raw(*dot_call->object).data, dyn_mut}};
+            const auto fat_slot{builder_.emit_alloca(dyn_mut)};
+            builder_.emit_store(value{fat_slot, dyn_mut}, fat);
+            const auto d_ptr{builder_.emit_get_element_ptr(
+                value{fat_slot, dyn_mut}, {value{u64{0}, usize_ty}}, ptr_ty)};
+            const auto v_ptr{builder_.emit_get_element_ptr(
+                value{fat_slot, dyn_mut}, {value{u64{1}, usize_ty}}, ptr_ty)};
+
+            auto& self_ty{fn_d && !fn_d->params.empty() ? const_cast<sema::type&>(*fn_d->params[0])
+                                                        : ptr_ty};
+            dyn_self_data.emplace(
+                value{builder_.emit_load(value{d_ptr, ptr_ty}, self_ty), self_ty});
+
+            const auto vtable{builder_.emit_load(value{v_ptr, ptr_ty}, ptr_ty)};
+            const auto slot_ptr{builder_.emit_get_element_ptr(
+                value{vtable, ptr_to_ptr_ty}, {value{slot_idx, usize_ty}}, ptr_ty)};
+            auto&      callee_ty{fn_ty ? const_cast<sema::type&>(*fn_ty) : ptr_ty};
+            indirect_callee.emplace(
+                value{builder_.emit_load(value{slot_ptr, ptr_ty}, callee_ty), callee_ty});
+        } else if (fn_d && !fn_d->has_self) {
             const auto callee_val{emit_expression(call.function)};
             indirect_callee.emplace(callee_val);
         } else if (emitting_impl_default_scope_) {
@@ -2327,10 +2441,13 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
 
     std::vector<value> args;
     const bool         has_implicit_self{is_closure_ident_call || is_fn_ctx_self_call ||
+                                 dyn_self_data.has_value() ||
                                  (fn_data && fn_data->has_self && is_obj_instance)};
     args.reserve(call.arguments.size() + (has_implicit_self ? 1 : 0));
 
-    if (is_closure_ident_call) {
+    if (dyn_self_data) {
+        args.emplace_back(*dyn_self_data);
+    } else if (is_closure_ident_call) {
         // The callee's binding is the environment; spill it to an alloca to get its address.
         ASSERT(!fn_data->params.empty(), "Closure implementation signature must have self");
         const auto self_ptr{emit_lvalue(call.function)};
