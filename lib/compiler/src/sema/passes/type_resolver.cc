@@ -1531,9 +1531,22 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 return last_type_.emplace(*cached->return_type);
             }
 
-            auto inst_res{
+            const auto diags_before_inst{ctx_.diags.size()};
+            auto       inst_res{
                 instantiate_generic(callee_type, *fn_info_opt, concrete_arg_types, constexpr_args)};
-            if (!inst_res) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
+            if (!inst_res) {
+                // `instantiate_generic` may have already reported so only report if not
+                if (ctx_.diags.size() == diags_before_inst) {
+                    return last_type_.emplace(ctx_.poison_node(
+                        resolving_,
+                        id,
+                        fmt::format("Failed to instantiate '{}'",
+                                    fn_info_opt->name.value_or("<generic function>")),
+                        error::CONSTEXPR_EVALUATION_FAILED,
+                        resolving_.ast.location_of(call.function)));
+                }
+                return last_type_.emplace(ctx_.poison_node(resolving_, id));
+            }
 
             auto& return_type{*inst_res->return_type};
             auto  mangled_name{inst_res->mangled_name};
@@ -4535,7 +4548,8 @@ auto type_resolver::resolve_module_access(ID id, const ast::module_access_expr& 
         case symbol_status::RESOLVED: break;
         }
 
-        if (sym->get_kind() == symbol_kind::POISONED || !inner_mod.has_sema_type(*symbol_node)) {
+        if (sym->get_kind_opt() == symbol_kind::POISONED ||
+            !inner_mod.has_sema_type(*symbol_node)) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
 
