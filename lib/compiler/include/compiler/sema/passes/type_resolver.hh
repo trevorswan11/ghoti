@@ -379,6 +379,7 @@ class type_resolver {
     auto visit(ast::explicit_type_id, const ast::explicit_function_type&) -> void;
     auto visit(ast::explicit_type_id, ast::explicit_type_id) -> void;
     auto visit(ast::explicit_type_id, const ast::explicit_array_type&) -> void;
+    auto visit(ast::explicit_type_id, const ast::explicit_dyn_type&) -> void;
 
     // Looks up the symbol by name in the current index ONLY. Changes no state on failure
     auto resolve_symbol_info(ast::identifier_handle handle, stdx::option<symbol_kind> kind)

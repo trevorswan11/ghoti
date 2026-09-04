@@ -167,6 +167,7 @@ class formatter {
     auto visit(explicit_type_id, const union_expr&) -> syntax::doc_id;
     auto visit(explicit_type_id, const interface_expr&) -> syntax::doc_id;
     auto visit(explicit_type_id, const explicit_array_type&) -> syntax::doc_id;
+    auto visit(explicit_type_id, const explicit_dyn_type&) -> syntax::doc_id;
 
     auto init_trivia() -> void;
     auto consume_leading_comments(usize before_line, bool allow_leading_blank = false)

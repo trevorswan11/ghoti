@@ -1007,4 +1007,33 @@ ImplStatement
                                 ├─ Member: ImplicitAccessExpression
                                 │   └─ Member: IdentifierExpression: h
                                 └─ Value: IdentifierExpression: raw
+DeclStatement
+├─ Name: IdentifierExpression: useDyn
+├─ Modifiers: CONSTANT
+├─ Type: (inferred)
+└─ Value: FunctionExpression
+    ├─ Parameters:
+    │   ├─ Param:
+    │   │   ├─ Name: IdentifierExpression: w
+    │   │   └─ Type: ExplicitType (modifier: MUT_REF)
+    │   │       └─ DynType
+    │   │           └─ ExplicitType (modifier: VALUE)
+    │   │               └─ ModuleAccessExpression
+    │   │                   ├─ Outer: IdentifierExpression: io
+    │   │                   └─ Inner: IdentifierExpression: Writer
+    │   └─ Param:
+    │       ├─ Name: IdentifierExpression: x
+    │       └─ Type: ExplicitType (modifier: PTR)
+    │           └─ DynType
+    │               └─ ExplicitType (modifier: VALUE)
+    │                   └─ IdentifierExpression: IW
+    ├─ Variadic: false
+    ├─ Move: false
+    ├─ Naked: false
+    ├─ CallConv: c
+    ├─ Returns: ExplicitType (modifier: VALUE)
+    │   └─ IdentifierExpression: void (primitive)
+    └─ Body: BlockStatement
+        └─ ExpressionStatement
+            └─ Expr: IdentifierExpression: c
 )"

@@ -164,7 +164,12 @@ auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {
     case type_kind::UNION:
     case type_kind::ENUM:
     case type_kind::CLOSURE:   return a.get_symbol_table_idx_opt() == b.get_symbol_table_idx_opt();
-    case type_kind::POINTER:   {
+    case type_kind::DYN:       {
+        const auto d_a{a.get_data().as_opt<types::dyn_t>()};
+        const auto d_b{b.get_data().as_opt<types::dyn_t>()};
+        return d_a && d_b && &d_a->interface == &d_b->interface;
+    }
+    case type_kind::POINTER: {
         const auto p_a{a.get_data().as_opt<types::pointer>()};
         const auto p_b{b.get_data().as_opt<types::pointer>()};
         if (!p_a || !p_b) { return false; }

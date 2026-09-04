@@ -90,6 +90,9 @@ TEST_CASE("formatter round-trips types") {
     CHECK(format_source("var f: ^fn(x: &a, y: ^mut B, ...): ^E = undefined;") ==
           "var f: ^fn(x: &a, y: ^mut B, ...): ^E = undefined;\n");
     CHECK(format_source("var a: [N:0]u8 = undefined;") == "var a: [N:0]u8 = undefined;\n");
+    CHECK(format_source("var w: &dyn Writer = undefined;") == "var w: &dyn Writer = undefined;\n");
+    CHECK(format_source("var w: ^mut dyn io::Writer = undefined;") ==
+          "var w: ^mut dyn io::Writer = undefined;\n");
 }
 
 TEST_CASE("formatter lays out a function body with K&R braces") {

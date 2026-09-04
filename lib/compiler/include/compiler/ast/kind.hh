@@ -156,6 +156,7 @@ enum class explicit_type_kind : u8 {
     UNION,
     INTERFACE,
     ARRAY,
+    DYN,
 };
 
 #define FOREACH_AST_TYPE(X)   \
@@ -169,11 +170,13 @@ enum class explicit_type_kind : u8 {
     X(enum_expr)              \
     X(union_expr)             \
     X(interface_expr)         \
-    X(explicit_array_type)
+    X(explicit_array_type)    \
+    X(explicit_dyn_type)
 
 class explicit_type_id;
 struct explicit_array_type;
 struct explicit_function_type;
+struct explicit_dyn_type;
 
 template <typename T> struct node_kind_of;
 
@@ -277,6 +280,7 @@ KIND_OF_TRAIT(enum_expr, ENUM)
 KIND_OF_TRAIT(union_expr, UNION)
 KIND_OF_TRAIT(interface_expr, INTERFACE)
 KIND_OF_TRAIT(explicit_array_type, ARRAY)
+KIND_OF_TRAIT(explicit_dyn_type, DYN)
 
 #undef KIND_OF_TRAIT
 

@@ -52,6 +52,7 @@ enum class type_kind : u8 {
     STRUCT,
     UNION,
     INTERFACE,
+    DYN,
     FUNCTION,
     CLOSURE,
     LABEL,
@@ -141,6 +142,7 @@ enum class type_kind : u8 {
     case type_kind::NORETURN:
     case type_kind::OPAQUE:
     case type_kind::INTERFACE:
+    case type_kind::DYN:
     case type_kind::BLOCK:
     case type_kind::MODULE:
     case type_kind::LABEL:
@@ -281,6 +283,11 @@ struct interface_t {
     }
 };
 
+// `dyn I` — the unsized referent of a `&dyn I` / `^dyn I` fat pointer
+struct dyn_t {
+    type& interface; // the `types::interface_t` this object is erased to
+};
+
 // How a closure stores one of its captured free variables in its environment
 enum class capture_mode : u8 {
     VALUE,   // `T`: Copyable  and never mutated by the closure body
@@ -418,6 +425,7 @@ class type {
                                  types::union_t,
                                  types::struct_t,
                                  types::interface_t,
+                                 types::dyn_t,
                                  types::module,
                                  types::function,
                                  types::closure_t,

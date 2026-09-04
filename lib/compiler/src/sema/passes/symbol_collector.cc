@@ -760,4 +760,10 @@ auto symbol_collector::visit(ast::explicit_type_id, const ast::explicit_array_ty
     collect(array.inner_explicit_type);
 }
 
+auto symbol_collector::visit(ast::explicit_type_id, const ast::explicit_dyn_type& dyn) -> void {
+    PROFILE_FUNCTION();
+    collect(dyn.interface_type);
+    for (const auto& binding : dyn.assoc_bindings) { collect(binding.type); }
+}
+
 } // namespace ghoti::sema

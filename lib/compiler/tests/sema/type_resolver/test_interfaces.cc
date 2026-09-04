@@ -408,4 +408,42 @@ TEST_CASE("a parameterized impl anchored on a local interface may target a forei
     CHECK(codes.empty());
 }
 
+TEST_CASE("`&dyn I` is a legal parameter type") {
+    helpers::resolve_and_check(R"(
+        const W := interface { pub const wr := fn(&self): i32; };
+        const use := fn(x: &dyn W): void { _ = x; };
+)");
+}
+
+TEST_CASE("`^mut dyn I` is a legal field type") {
+    helpers::resolve_and_check(R"(
+        const W := interface { pub const wr := fn(&self): i32; };
+        const Holder := struct { w: ^mut dyn W };
+)");
+}
+
+TEST_CASE("a bare `dyn I` is rejected as unsized") {
+    CHECK(helpers::raised(R"(
+        const W := interface { pub const wr := fn(&self): i32; };
+        const use := fn(x: dyn W): void { _ = x; };
+)",
+                          sema::error::ILLEGAL_UNSIZED_TYPE));
+}
+
+TEST_CASE("a `[]dyn I` slice element is rejected as unsized") {
+    CHECK(helpers::raised(R"(
+        const W := interface { pub const wr := fn(&self): i32; };
+        const use := fn(xs: []dyn W): void { _ = xs; };
+)",
+                          sema::error::ILLEGAL_UNSIZED_TYPE));
+}
+
+TEST_CASE("`dyn` on a non-interface is a type error") {
+    CHECK(helpers::raised(R"(
+        const S := struct { x: i32 };
+        const use := fn(x: &dyn S): void { _ = x; };
+)",
+                          sema::error::TYPE_MISMATCH));
+}
+
 } // namespace ghoti::tests

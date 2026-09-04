@@ -111,6 +111,7 @@ class symbol_collector {
     auto visit(ast::explicit_type_id, const ast::explicit_function_type&) -> void;
     auto visit(ast::explicit_type_id, ast::explicit_type_id id) -> void { collect(id); }
     auto visit(ast::explicit_type_id, const ast::explicit_array_type&) -> void;
+    auto visit(ast::explicit_type_id, const ast::explicit_dyn_type&) -> void;
 
     template <typename... IterPairs>
     [[nodiscard]] auto visit_scopes(type_kind kind, IterPairs&&... pairs) -> usize {

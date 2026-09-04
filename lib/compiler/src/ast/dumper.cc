@@ -1265,4 +1265,14 @@ auto dumper::visit(explicit_type_id, const explicit_array_type& array) -> void {
     }
 }
 
+auto dumper::visit(explicit_type_id, const explicit_dyn_type& dyn) -> void {
+    PROFILE_FUNCTION();
+    fmt::println(out_, "{}DynType", indent_.current_branch());
+    {
+        const indent::guard g{indent_, true};
+        fmt::print(out_, "{}", indent_.current_branch());
+        dump(dyn.interface_type);
+    }
+}
+
 } // namespace ghoti::ast

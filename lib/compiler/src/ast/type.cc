@@ -86,6 +86,14 @@ auto explicit_function_type::parse(syntax::parser& parser, bool allow_trailing_b
                                   .explicit_return_type = return_type};
 }
 
+auto explicit_dyn_type::parse(syntax::parser& parser, bool allow_trailing_brace)
+    -> stdx::result<explicit_dyn_type, syntax::diagnostic> {
+    PROFILE_FUNCTION();
+    // TODO: assoc-binding lists
+    const auto interface_type{TRY(explicit_type::parse(parser, allow_trailing_brace))};
+    return explicit_dyn_type{.interface_type = interface_type, .assoc_bindings = {}};
+}
+
 auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
     -> stdx::result<explicit_type_id, syntax::diagnostic> {
     // Always check for a modifier and advance past it if present
@@ -126,6 +134,13 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
         const syntax::token_t auto_token{
             syntax::token_type_t::AUTO_TYPE, "auto", modifier_token.line, modifier_token.column};
         return parser.add_type<identifier_expr>(auto_token, modifier, identifier_expr{"auto"});
+    }
+
+    // `dyn I` is an unsized interface object; the modifier (`&` / `^`) wraps it as a fat pointer.
+    if (parser.peek_token_is(syntax::token_type_t::DYN)) {
+        parser.advance(); // current == dyn
+        auto dyn{TRY(explicit_dyn_type::parse(parser, allow_trailing_brace))};
+        return parser.add_type<explicit_dyn_type>(modifier_token, modifier, std::move(dyn));
     }
 
     // The array dimension of a type are only present conditionally

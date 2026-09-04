@@ -1407,4 +1407,9 @@ auto formatter::visit(explicit_type_id id, const explicit_array_type& node) -> s
                          }));
 }
 
+auto formatter::visit(explicit_type_id id, const explicit_dyn_type& node) -> syntax::doc_id {
+    return with_modifier(
+        id, doc_manager_.concat({doc_manager_.text("dyn "), format(node.interface_type)}));
+}
+
 } // namespace ghoti::ast

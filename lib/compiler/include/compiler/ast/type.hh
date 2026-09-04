@@ -35,6 +35,19 @@ struct explicit_function_type {
         -> stdx::result<explicit_function_type, syntax::diagnostic>;
 };
 
+struct explicit_dyn_type {
+    struct assoc_binding {
+        identifier_handle name;
+        explicit_type_id  type;
+    };
+
+    explicit_type_id           interface_type;
+    std::vector<assoc_binding> assoc_bindings;
+
+    [[nodiscard]] static auto parse(syntax::parser& parser, bool allow_trailing_brace = false)
+        -> stdx::result<explicit_dyn_type, syntax::diagnostic>;
+};
+
 struct explicit_type {
     [[nodiscard]] static auto parse(syntax::parser& parser, bool allow_trailing_brace = false)
         -> stdx::result<explicit_type_id, syntax::diagnostic>;

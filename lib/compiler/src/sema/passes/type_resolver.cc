@@ -6094,6 +6094,36 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_array_ty
     last_type_.emplace(final_type);
 }
 
+auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type& dyn) -> void {
+    PROFILE_FUNCTION();
+    TRY_RESOLVE(dyn.interface_type);
+    auto& iface_type{denoted_type(*last_type_.take())};
+    if (iface_type.get_kind() != type_kind::INTERFACE) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             fmt::format("`dyn` requires an interface; found `{}`",
+                                         ctx_.type_display_name(iface_type)),
+                             error::TYPE_MISMATCH,
+                             resolving_.ast.location_of(dyn.interface_type)));
+    }
+
+    auto& dyn_type{*ctx_.pool[{type_kind::DYN, types::mut::CONSTANT, &iface_type}]};
+    dyn_type.resolve_if<types::dyn_t>(iface_type);
+
+    // `dyn I` is unsized: legal only as the referent of `&` / `^`.
+    auto& final_type{apply_explicit_modifiers(id, dyn_type)};
+    if (final_type.get_kind() == type_kind::DYN) {
+        return last_type_.emplace(ctx_.poison_node(resolving_,
+                                                   id,
+                                                   "`dyn I` is unsized; use `&dyn I` or `^dyn I`",
+                                                   error::ILLEGAL_UNSIZED_TYPE,
+                                                   resolving_.ast.location_of(id)));
+    }
+    resolving_.set_sema_type(id, final_type);
+    last_type_.emplace(final_type);
+}
+
 auto type_resolver::instantiate_generic(type&                             callee_type,
                                         const generic_function_info&      fn_info,
                                         gsl::span<type*>                  concrete_args,
