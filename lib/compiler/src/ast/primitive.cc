@@ -84,7 +84,7 @@ struct int_suffix {
     }
 
     const char head{suffix.front()};
-    const auto rest{suffix.substr(1)};
+    const auto rest{stdx::string::substr(suffix, 1)};
     if ((head == 'u' || head == 'i') && all_digits(rest) && rest.front() != '0') {
         const auto width{parse_width(rest)};
         if (width == 0) {
@@ -116,9 +116,11 @@ struct int_suffix {
     };
 
     if (ends_with("uz")) {
-        return {lexeme.substr(0, lexeme.size() - 2), lexeme.substr(lexeme.size() - 2)};
+        return {stdx::string::substr(lexeme, 0, lexeme.size() - 2),
+                stdx::string::substr(lexeme, lexeme.size() - 2)};
     } else if (ends_with("z")) {
-        return {lexeme.substr(0, lexeme.size() - 1), lexeme.substr(lexeme.size() - 1)};
+        return {stdx::string::substr(lexeme, 0, lexeme.size() - 1),
+                stdx::string::substr(lexeme, lexeme.size() - 1)};
     }
 
     // `u<W>` / `i<W>`: a trailing decimal run preceded by `u`/`i`.
@@ -126,7 +128,9 @@ struct int_suffix {
     while (k > prefix && lexeme[k - 1] >= '0' && lexeme[k - 1] <= '9') { --k; }
     if (k < lexeme.size() && k > prefix) {
         const char c{static_cast<char>(std::tolower(lexeme[k - 1]))};
-        if (c == 'u' || c == 'i') { return {lexeme.substr(0, k - 1), lexeme.substr(k - 1)}; }
+        if (c == 'u' || c == 'i') {
+            return {stdx::string::substr(lexeme, 0, k - 1), stdx::string::substr(lexeme, k - 1)};
+        }
         return {lexeme, {}}; // trailing digits belong to the number
     }
 
@@ -135,7 +139,9 @@ struct int_suffix {
            !syntax::digit_in_base(lexeme[j - 1], base)) {
         --j;
     }
-    if (j < lexeme.size() && j >= prefix) { return {lexeme.substr(0, j), lexeme.substr(j)}; }
+    if (j < lexeme.size() && j >= prefix) {
+        return {stdx::string::substr(lexeme, 0, j), stdx::string::substr(lexeme, j)};
+    }
     return {lexeme, {}};
 }
 
@@ -212,7 +218,7 @@ auto float_literal_expr::parse(syntax::parser& parser)
     std::string_view mantissa{slice};
     u8               width{0};
     if (const auto pos{slice.find_last_of("fF")}; pos != std::string_view::npos) {
-        const auto ws{slice.substr(pos + 1)};
+        const auto ws{stdx::string::substr(slice, pos + 1)};
         if (ws.empty() || !all_digits(ws)) {
             return make_syntax_err(
                 "float literal suffix needs a width, e.g. 1.0f32; valid widths are 16/32/64/80/128",
@@ -226,7 +232,7 @@ auto float_literal_expr::parse(syntax::parser& parser)
                                    start_token);
         }
         width    = static_cast<u8>(parse_width(ws));
-        mantissa = slice.substr(0, pos);
+        mantissa = stdx::string::substr(slice, 0, pos);
     }
 
     using namespace stdx::size_literals;

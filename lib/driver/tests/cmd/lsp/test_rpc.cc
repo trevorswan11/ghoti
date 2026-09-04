@@ -12,7 +12,7 @@ namespace ghoti::tests {
 
 TEST_CASE("read_message parses a well-formed Content-Length frame") {
     const std::string  body{R"({"jsonrpc":"2.0","id":1,"method":"initialize"})"};
-    std::istringstream in{"Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body};
+    std::istringstream in{fmt::format("Content-Length: {}\r\n\r\n{}", body.size(), body)};
     std::ostringstream errors;
 
     const auto message = UNWRAP(lsp::read_message(in, errors));
@@ -22,7 +22,7 @@ TEST_CASE("read_message parses a well-formed Content-Length frame") {
 
 TEST_CASE("read_message header matching ignores case") {
     const std::string  body{R"({"jsonrpc":"2.0","method":"initialized"})"};
-    std::istringstream in{"content-length: " + std::to_string(body.size()) + "\r\n\r\n" + body};
+    std::istringstream in{fmt::format("content-length: {}\r\n\r\n{}", body.size(), body)};
     std::ostringstream errors;
 
     const auto message = UNWRAP(lsp::read_message(in, errors));

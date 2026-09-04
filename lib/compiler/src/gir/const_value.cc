@@ -117,10 +117,10 @@ auto const_value::hash() const noexcept -> u64 {
 
 auto const_value::mangle() const -> std::string {
     return data_.visit(
-        [](i64 v) { return std::to_string(v); },
-        [](u64 v) { return std::to_string(v); },
-        [](i128 v) { return to_string(v); },
-        [](u128 v) { return to_string(v); },
+        [](i64 v) { return fmt::to_string(v); },
+        [](u64 v) { return fmt::to_string(v); },
+        [](i128 v) { return fmt::to_string(v); },
+        [](u128 v) { return fmt::to_string(v); },
         [](f64 v) { return fmt::format("{}", v); },
         [](bool v) -> std::string { return v ? "true" : "false"; },
         [](const std::string& v) {

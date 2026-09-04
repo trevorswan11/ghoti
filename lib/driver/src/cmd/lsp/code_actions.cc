@@ -6,6 +6,7 @@
 #include <utility>
 
 #include <nlohmann/json.hpp>
+#include <stdx/string.hh>
 
 namespace ghoti::lsp {
 
@@ -63,7 +64,7 @@ auto code_actions(const std::string& uri, const nlohmann::json& diagnostics) -> 
             // Message shape: "Expected token <NAME>, found <NAME>"
             const std::string_view after_prefix{message.data() + expected_token_prefix.size(),
                                                 message.size() - expected_token_prefix.size()};
-            const auto             expected_name{after_prefix.substr(0, after_prefix.find(','))};
+            const auto expected_name{stdx::string::substr(after_prefix, 0, after_prefix.find(','))};
             for (const auto& [name, spelling] : INSERTABLE_TOKENS) {
                 if (expected_name != name) { continue; }
                 out.push_back(quick_fix(

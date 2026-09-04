@@ -112,7 +112,7 @@ class const_value {
 
     [[nodiscard]] constexpr auto is_poison() const noexcept -> bool { return is<poison_val>(); }
 
-    // Signed view of any integer-like arm, widened to the 128-bit comptime domain (D4).
+    // Signed view of any integer-like arm, widened to the 128-bit comptime domain
     [[nodiscard]] constexpr auto as_int_opt() const noexcept -> stdx::option<i128> {
         if (is<i64>()) { return as<i64>(); }
         if (is<u64>()) { return static_cast<i128>(as<u64>()); }

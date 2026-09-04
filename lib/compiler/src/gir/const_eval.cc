@@ -5,7 +5,6 @@
 #include <cmath>
 #include <limits>
 #include <ranges>
-#include <stdx/type_traits.hh>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -17,6 +16,8 @@
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
+#include <stdx/string.hh>
+#include <stdx/type_traits.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
@@ -50,7 +51,7 @@ template <typename T>
 [[nodiscard]] auto make_scalar_const(T v, stdx::option<sema::type&> t) -> const_value {
     if constexpr (std::is_floating_point_v<T>) {
         return const_value{v, t};
-    } else if constexpr (std::is_signed_v<T>) {
+    } else if constexpr (Signed<T>) {
         const auto w{static_cast<i128>(v)};
         if (w >= static_cast<i128>(std::numeric_limits<i64>::min()) &&
             w <= static_cast<i128>(std::numeric_limits<u64>::max())) {
@@ -81,7 +82,7 @@ template <typename T>
         if (r == 0) { return on_div_zero("Division by zero in compile-time constant expression"); }
         return make_scalar_const(l / r, res_type);
     case syntax::token_type_t::PERCENT:
-        if constexpr (std::is_integral_v<T>) {
+        if constexpr (Integral<T>) {
             if (r == 0) {
                 return on_div_zero("Modulo by zero in compile-time constant expression");
             }
@@ -90,19 +91,19 @@ template <typename T>
             return stdx::none;
         }
     case syntax::token_type_t::BW_AND:
-        if constexpr (std::is_integral_v<T>) { return make_scalar_const(l & r, res_type); }
+        if constexpr (Integral<T>) { return make_scalar_const(l & r, res_type); }
         return stdx::none;
     case syntax::token_type_t::BW_OR:
-        if constexpr (std::is_integral_v<T>) { return make_scalar_const(l | r, res_type); }
+        if constexpr (Integral<T>) { return make_scalar_const(l | r, res_type); }
         return stdx::none;
     case syntax::token_type_t::CARET:
-        if constexpr (std::is_integral_v<T>) { return make_scalar_const(l ^ r, res_type); }
+        if constexpr (Integral<T>) { return make_scalar_const(l ^ r, res_type); }
         return stdx::none;
     case syntax::token_type_t::SHL:
-        if constexpr (std::is_integral_v<T>) { return make_scalar_const(l << r, res_type); }
+        if constexpr (Integral<T>) { return make_scalar_const(l << r, res_type); }
         return stdx::none;
     case syntax::token_type_t::SHR:
-        if constexpr (std::is_integral_v<T>) { return make_scalar_const(l >> r, res_type); }
+        if constexpr (Integral<T>) { return make_scalar_const(l >> r, res_type); }
         return stdx::none;
     case syntax::token_type_t::EQ:    return const_value{l == r, bool_type};
     case syntax::token_type_t::NEQ:   return const_value{l != r, bool_type};
@@ -1375,7 +1376,7 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
     // `iN` / `uN` name a primitive integer type; yield it as a compile-time type value.
     if (syntax::token_type::is_int_type_lexeme(ident.name)) {
         u64 width{0};
-        for (const char c : ident.name.substr(1)) {
+        for (const char c : stdx::string::substr(ident.name, 1)) {
             width = width * 10 + static_cast<u64>(c - '0');
             if (width > 65'535) { break; }
         }
@@ -1800,14 +1801,14 @@ auto const_eval::eval_builtin(ast::node_id          id,
             case syntax::token_type_t::BUILTIN_REM:       return const_value{av % bv, a->get_type()};
             case syntax::token_type_t::BUILTIN_DIV_FLOOR: {
                 auto q{av / bv};
-                if constexpr (std::is_signed_v<T>) {
+                if constexpr (Signed<T>) {
                     if ((av % bv != 0) && ((av < 0) != (bv < 0))) { --q; }
                 }
                 return const_value{q, a->get_type()};
             }
             case syntax::token_type_t::BUILTIN_MOD: {
                 auto r{av % bv};
-                if constexpr (std::is_signed_v<T>) {
+                if constexpr (Signed<T>) {
                     if ((r != 0) && ((r < 0) != (bv < 0))) { r += bv; }
                 }
                 return const_value{r, a->get_type()};

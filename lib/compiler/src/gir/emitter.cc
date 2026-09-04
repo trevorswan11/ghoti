@@ -3837,7 +3837,11 @@ auto emitter::emit_enum_cast_guard(ast::node_id     site,
     // A compile-time-known value that already lands on a variant needs no runtime check.
     if (const auto cv{const_eval_.try_eval(*src_expr)}) {
         if (const auto known{cv->as_int_opt()}) {
-            if (std::ranges::contains(discriminants, *known)) { return; }
+            if (std::ranges::contains(discriminants |
+                                          std::views::transform([](i64 i) -> i128 { return i; }),
+                                      *known)) {
+                return;
+            }
         }
     }
 

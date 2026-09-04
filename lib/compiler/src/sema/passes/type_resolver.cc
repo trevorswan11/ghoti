@@ -19,6 +19,7 @@
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 #include <stdx/variant.hh>
@@ -2329,7 +2330,7 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
     // `iN` / `uN` are primitive integer types, not looked-up symbols.
     if (syntax::token_type::is_int_type_lexeme(name)) {
         u64 width{0};
-        for (const char c : name.substr(1)) {
+        for (const char c : stdx::string::substr(name, 1)) {
             width = width * 10 + static_cast<u64>(c - '0');
             if (width > 65'535) { break; }
         }
