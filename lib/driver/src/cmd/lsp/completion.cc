@@ -64,9 +64,10 @@ auto local_scope_completions(const mod::module& module, source_location target) 
         const auto start{module.ast.location_of(id)};
         if (!contains(*enclosing, start) || !at_or_before(start, target)) { continue; }
 
-        const auto& ident{module.ast.get_as<ast::identifier_expr>(id)};
+        const auto ident{module.ast.get_as_opt<ast::identifier_expr>(id)};
+        if (!ident) { continue; }
         out.push_back({
-            {"label", std::string{ident.name}},
+            {"label", std::string{ident->name}},
             {"kind", completion_kind::VARIABLE},
         });
     }
@@ -96,9 +97,10 @@ auto completion_items(const mod::module& module, source_location target) -> nloh
     for (const auto root_id : module.ast) {
         const auto decl{module.ast.get_as_opt<ast::decl_stmt>(root_id)};
         if (!decl) { continue; }
-        const auto& name_ident{module.ast.get_as<ast::identifier_expr>(decl->name)};
+        const auto name_ident{module.ast.get_as_opt<ast::identifier_expr>(decl->name)};
+        if (!name_ident) { continue; }
         out.push_back({
-            {"label", std::string{name_ident.name}},
+            {"label", std::string{name_ident->name}},
             {"kind", std::to_underlying(completion_kind_of(module, *decl))},
         });
     }

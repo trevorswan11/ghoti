@@ -1420,7 +1420,7 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
         if (ctx_.prelude_index) {
             const auto& prelude{ctx_.registry.get(*ctx_.prelude_index)};
             if (const auto p_sym{prelude.get_opt(ident.name)}) {
-                if (p_sym->get_kind() == sema::symbol_kind::TYPE) {
+                if (p_sym->has_kind() && p_sym->get_kind() == sema::symbol_kind::TYPE) {
                     if (const auto builtin{p_sym->get_data().as_opt<sema::symbols::builtin>()}) {
                         return const_value{builtin->get_type()};
                     }
@@ -1431,7 +1431,7 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
     }
     const auto& sym{*sym_opt};
 
-    if (sym.get_kind() == sema::symbol_kind::TYPE) {
+    if (sym.has_kind() && sym.get_kind() == sema::symbol_kind::TYPE) {
         if (const auto builtin_sym{sym.get_data().as_opt<sema::symbols::builtin>()}) {
             return const_value{builtin_sym->get_type()};
         }

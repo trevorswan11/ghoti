@@ -5218,6 +5218,11 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             resolving_.set_sema_type_if(id, *last_type_.take());
         }
 
+        if (!resolving_.has_sema_type(id)) {
+            last_type_.emplace(ctx_.get_poison());
+            return poison_out();
+        }
+
         // A `var` (or explicit `: auto`) binding whose inferred type is `constexpr_*` has no
         // stable place to stay constexpr: materialize it to its runtime peer now
         const bool wants_concrete{decl.has_modifier(ast::decl_modifiers::VARIABLE) ||

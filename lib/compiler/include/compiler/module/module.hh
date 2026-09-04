@@ -177,6 +177,7 @@ struct module {
 
     template <ast::IndexableID ID>
     [[nodiscard]] constexpr auto get_sema_type(this auto&& self, ID id) noexcept -> auto& {
+        ASSERT(self.has_sema_type(id), "Attempted to access sema type for node without sema type");
         return *self.get_sema_type_opt(id);
     }
 
