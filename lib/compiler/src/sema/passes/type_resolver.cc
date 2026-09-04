@@ -5257,19 +5257,39 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
     if (resolved_type.is_poison()) {
         sym.set_kind(symbol_kind::POISONED);
     } else {
-        if (decl.has_modifier(ast::decl_modifiers::DISCARDABLE)) {
-            const auto fn_d{type_data.as_opt<types::function>()};
-            if (!fn_d && !type_data.is<types::builtin_function>()) {
-                ctx_.diags.emplace_back("'@discardable' may only be applied to a function",
-                                        error::ILLEGAL_DISCARDABLE,
-                                        resolving_.ast.location_of(id));
-            } else if (fn_d && fn_d->return_type.get_kind() == type_kind::VOID_) {
-                ctx_.diags.emplace_back(
-                    "'@discardable' has no effect on a function that returns 'void'",
-                    error::ILLEGAL_DISCARDABLE,
-                    resolving_.ast.location_of(id));
+        [&] {
+            if (!decl.has_modifier(ast::decl_modifiers::DISCARDABLE)) { return; }
+            if (type_data.is<types::builtin_function>()) { return; }
+            if (const auto fn_d{type_data.as_opt<types::function>()}) {
+                if (fn_d->return_type.get_kind() == type_kind::VOID_) {
+                    ctx_.diags.emplace_back(
+                        "'@discardable' has no effect on a function that returns 'void'",
+                        error::ILLEGAL_DISCARDABLE,
+                        resolving_.ast.location_of(id));
+                }
+                return;
             }
-        }
+
+            if (const auto closure_d{type_data.as_opt<types::closure_t>()}) {
+                const auto sig_data{
+                    closure_d->signature.get_data().as_opt<sema::types::function>()};
+                if (!sig_data) {
+                    ctx_.diags.emplace_back("closure signature was somehow not a function",
+                                            error::TYPE_MISMATCH,
+                                            resolving_.ast.location_of(id));
+                } else if (sig_data->return_type.get_kind() == type_kind::VOID_) {
+                    ctx_.diags.emplace_back(
+                        "'@discardable' has no effect on a closure that returns 'void'",
+                        error::ILLEGAL_DISCARDABLE,
+                        resolving_.ast.location_of(id));
+                }
+                return;
+            }
+
+            ctx_.diags.emplace_back("'@discardable' may only be applied to functions",
+                                    error::ILLEGAL_DISCARDABLE,
+                                    resolving_.ast.location_of(id));
+        }();
 
         const bool literal_type_anno{decl.explicit_type && decl.explicit_type->get_token_type() ==
                                                                syntax::token_type_t::TYPE_TYPE};

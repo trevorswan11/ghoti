@@ -68,6 +68,10 @@ pub const Stat := extern struct {
     pub st_qspare: [2]i64, // RESERVED: DO NOT USE!
 };
 
+extern("System", "fstat") const fstat: fn(file_desc: Handle, stat: ^mut Stat): i32;
+extern("System", "mkdir") const mkdir: fn(path: ^u8, mode: mode_t): i32;
+extern("System", "stat") const stat: fn(path: ^u8, stat: ^mut Stat): i32;
+
 pub const stdin: Handle = 0;
 pub const stdout: Handle = 1;
 pub const stderr: Handle = 2;
