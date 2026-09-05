@@ -207,3 +207,4 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Add `ghoti run` command
     - Eliminates the prior ceremony needed to compile and run a ghoti binary
     - Takes a subset of options from the other build command since this does not need to be as extensible
+- Add automatic path detection for sdk on windows to prevent needing to always set an env var or pass through a CLI arg
