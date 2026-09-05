@@ -1,14 +1,9 @@
-import "../result.gh" as result;
+import "../../result.gh" as result;
+pub import "errno.gh" as errno;
 
 pub using Handle = i32;
-pub using Errno = i32;
-
-extern("System", "__error") const sys_errno_loc: fn(): ^mut Errno;
-extern("System", "read") const sys_read: fn(fd: Handle, buf: ^mut u8, count: usize): isize;
-extern("System", "write") const sys_write: fn(fd: Handle, buf: ^u8, count: usize): isize;
-extern("System", "close") const sys_close: fn(fd: Handle): i32;
-extern("System", "open") const sys_open: fn(path: ^u8, flags: i32, ...): i32;
-extern("System", "lseek") const sys_lseek: fn(fd: i32, offset: i64, whence: i32): i64;
+pub using Errno = errno::Errno;
+pub constexpr EWOULDBLOCK := errno::EWOULDBLOCK;
 
 // <sys/fcntl.h> and its transitive includes
 pub const O_RDONLY: i32 = 0x0000; // open for reading only
@@ -68,9 +63,16 @@ pub const Stat := extern struct {
     pub st_qspare: [2]i64, // RESERVED: DO NOT USE!
 };
 
-extern("System", "fstat") const fstat: fn(file_desc: Handle, stat: ^mut Stat): i32;
-extern("System", "mkdir") const mkdir: fn(path: ^u8, mode: mode_t): i32;
-extern("System", "stat") const stat: fn(path: ^u8, stat: ^mut Stat): i32;
+extern("System", "__error") const sys_errno_loc: fn(): ^mut i32;
+extern("System", "read") const sys_read: fn(fd: Handle, buf: ^mut u8, count: usize): isize;
+extern("System", "write") const sys_write: fn(fd: Handle, buf: ^u8, count: usize): isize;
+extern("System", "close") const sys_close: fn(fd: Handle): i32;
+extern("System", "open") const sys_open: fn(path: ^u8, flags: i32, ...): i32;
+extern("System", "lseek") const sys_lseek: fn(fd: i32, offset: i64, whence: i32): i64;
+
+extern("System", "fstat") const sys_fstat: fn(file_desc: Handle, stat: ^mut Stat): i32;
+extern("System", "mkdir") const sys_mkdir: fn(path: ^u8, mode: mode_t): i32;
+extern("System", "stat") const sys_stat: fn(path: ^u8, stat: ^mut Stat): i32;
 
 pub const stdin: Handle = 0;
 pub const stdout: Handle = 1;
@@ -82,25 +84,42 @@ constexpr R := fn(T: type): type {
 
 pub const write := fn(h: Handle, buf: []u8): R(usize) {
     const r := sys_write(h, buf.ptr, buf.len);
-    return if (r < 0) .{ .err = *sys_errno_loc() } else .{ .ok = @as(usize, r) };
+    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = @as(usize, r) };
 };
 
 pub const read := fn(h: Handle, buf: []mut u8): R(usize) {
     const r := sys_read(h, buf.ptr, buf.len);
-    return if (r < 0) .{ .err = *sys_errno_loc() } else .{ .ok = @as(usize, r) };
+    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = @as(usize, r) };
 };
 
 pub const open := fn(path: [:0]u8, flags: i32, mode: mode_t): R(Handle) {
     const fd := sys_open(path.ptr, flags, @as(i32, mode));
-    return if (fd < 0) .{ .err = *sys_errno_loc() } else .{ .ok = fd };
+    return if (fd < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = fd };
 };
 
 pub const close := fn(h: Handle): R(void) {
     const r := sys_close(h);
-    return if (r < 0) .{ .err = *sys_errno_loc() } else .{ .ok = {} };
+    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = {} };
 };
 
 pub const lseek := fn(h: Handle, off: i64, whence: i32): R(i64) {
     const r := sys_lseek(h, off, whence);
-    return if (r < 0) .{ .err = *sys_errno_loc() } else .{ .ok = r };
+    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = r };
+};
+
+pub const fstat := fn(file: Handle): R(Stat) {
+    var stat: Stat = undefined;
+    const r := sys_fstat(file, ^mut stat);
+    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = stat };
+};
+
+pub const mkdir := fn(path: [:0]u8, mode: mode_t): R(void) {
+    const r := sys_mkdir(path.ptr, mode);
+    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = {} };
+};
+
+pub const stat := fn(path: [:0]u8): R(Stat) {
+    var stat: Stat = undefined;
+    const r := sys_stat(path.ptr, ^mut stat);
+    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = stat };
 };

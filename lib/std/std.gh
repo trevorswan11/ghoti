@@ -4,4 +4,4 @@ import "result.gh" as result;
 
 pub constexpr Result := result::Result;
 
-pub import "os/darwin.gh" as darwin;
+pub import "os/darwin/darwin.gh" as darwin;
