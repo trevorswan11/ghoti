@@ -184,6 +184,7 @@ auto llvm_lowering::lower(const gir::module& gir_mod) -> stdx::box<llvm::Module>
         lower_dyn_vtables(gir_mod);
         for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
     }
+    maybe_emit_windows_stack_probe();
     return std::move(llvm_module_);
 }
 
@@ -230,6 +231,7 @@ auto llvm_lowering::lower_executable(const gir::module& gir_mod, std::string_vie
         for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
     }
     emit_main_entry_wrapper(user_main_name_);
+    maybe_emit_windows_stack_probe();
     return std::move(llvm_module_);
 }
 
@@ -380,6 +382,61 @@ auto llvm_lowering::emit_freestanding_start(llvm::Function* main_fn) -> void {
     builder_.CreateCall(start_asm, {});
     builder_.CreateUnreachable();
     llvm::appendToUsed(*llvm_module_, {start_fn, main_fn});
+}
+
+auto llvm_lowering::windows_stack_probe_symbol() const -> stdx::option<std::string_view> {
+    const llvm::Triple triple{llvm_module_->getTargetTriple()};
+    if (!triple.isOSWindows() || triple.getArch() != llvm::Triple::x86_64) { return stdx::none; }
+    return triple.isOSCygMing() ? "___chkstk_ms" : "__chkstk";
+}
+
+// Emit a weak, self-contained probe so `no-stack-arg-probe` can stay off on Windows and
+// large frames grow the stack one 4 KiB page at a time. Weak + its own section: a build
+// with no big frame drops it at link time (`--gc-sections` / `/opt:ref`).
+auto llvm_lowering::maybe_emit_windows_stack_probe() -> void {
+    const auto sym{windows_stack_probe_symbol()};
+    if (!sym || llvm_module_->getFunction(*sym)) { return; }
+
+    auto* void_ty{llvm::Type::getVoidTy(context_)};
+    auto* fn_ty{llvm::FunctionType::get(void_ty, false)};
+    auto* probe_fn{
+        llvm::Function::Create(fn_ty, llvm::GlobalValue::WeakAnyLinkage, *sym, llvm_module_.get())};
+    probe_fn->setComdat(llvm_module_->getOrInsertComdat(*sym));
+    probe_fn->addFnAttr(llvm::Attribute::Naked);
+    probe_fn->addFnAttr(llvm::Attribute::NoInline);
+    probe_fn->addFnAttr(llvm::Attribute::NoUnwind);
+    probe_fn->addFnAttr(llvm::Attribute::NoBuiltin);
+    probe_fn->addFnAttr("no-stack-arg-probe", "true");
+
+    // Allocation size is passed in %rax; %rsp is left untouched. Every register except the saved
+    // scratch is preserved. This is libgcc's `___chkstk_ms`, which also satisfies the MSVC
+    // `__chkstk` contract on x64.
+    static constexpr std::string_view probe_asm{R"(push %rcx
+	push %rax
+	cmp $$0x1000, %rax
+	lea 0x18(%rsp), %rcx
+	jb 2f
+	1:
+	sub $$0x1000, %rcx
+	orq $$0x0, (%rcx)
+	sub $$0x1000, %rax
+	cmp $$0x1000, %rax
+	ja 1b
+	2:
+	sub %rax, %rcx
+	orq $$0x0, (%rcx)
+	pop %rax
+	pop %rcx
+	ret
+	)"};
+
+    auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", probe_fn)};
+    builder_.SetInsertPoint(entry_bb);
+    auto* asm_ty{llvm::FunctionType::get(void_ty, false)};
+    auto* probe_asm_val{
+        llvm::InlineAsm::get(asm_ty, probe_asm, "~{memory}", true, false, llvm::InlineAsm::AD_ATT)};
+    builder_.CreateCall(probe_asm_val, {});
+    builder_.CreateUnreachable();
 }
 
 auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_args) -> llvm::Value* {
@@ -614,6 +671,7 @@ auto llvm_lowering::lower_test_executable(const gir::module&             gir_mod
     lower_dyn_vtables(gir_mod);
     for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
     emit_test_entry_wrapper(gir_mod, recover_args);
+    maybe_emit_windows_stack_probe();
     return std::move(llvm_module_);
 }
 
@@ -1111,7 +1169,8 @@ auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function*
 
     auto* llvm_fn{llvm::Function::Create(fn_ty, g_linkage, fn_name, llvm_module_.get())};
     llvm_fn->addFnAttr(llvm::Attribute::NoBuiltin);
-    llvm_fn->addFnAttr("no-stack-arg-probe", "true");
+    // Non x86-64 Windows links no runtime that could provide a probe symbol
+    if (!windows_stack_probe_symbol()) { llvm_fn->addFnAttr("no-stack-arg-probe", "true"); }
     if (fn.get_calling_conv() != ast::calling_convention::C) {
         llvm_fn->setCallingConv(to_llvm_callconv(fn.get_calling_conv()));
     }

@@ -114,6 +114,12 @@ class llvm_lowering {
     // Emits a freestanding ELF `_start` (Linux, no crt/libc)
     auto emit_freestanding_start(llvm::Function* main_fn) -> void;
 
+    // The `__chkstk` / `___chkstk_ms` symbol name the x86 backend probes with on this
+    // target, or `none` when no synthesized stack probe is needed
+    [[nodiscard]] auto windows_stack_probe_symbol() const -> stdx::option<std::string_view>;
+    // Synthesizes a weak, runtime-free stack-probe routine when targeting x86-64 Windows
+    auto maybe_emit_windows_stack_probe() -> void;
+
     auto get_or_create_test_failed_flag() -> llvm::GlobalVariable*;
     auto get_or_create_test_skipped_flag() -> llvm::GlobalVariable*;
     auto define_test_take_skipped() -> void;
