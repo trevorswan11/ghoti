@@ -467,11 +467,15 @@ auto const_eval::force_deferred_array_elements(gsl::span<sema::type*> elements) 
 
 auto const_eval::force_deferred_aggregate_fields(sema::type& maybe_aggregate) -> void {
     PROFILE_FUNCTION();
+    // A type re-exported from another module can surface in this module's
+    // side tables, but its field AST nodes index into the declaring module's pools
     if (const auto st{maybe_aggregate.get_data().as_opt<sema::types::struct_t>()}) {
+        if (&st->enclosing != module_) { return; }
         force_deferred_array_elements(st->fields);
         return;
     }
     if (const auto ut{maybe_aggregate.get_data().as_opt<sema::types::union_t>()}) {
+        if (&ut->enclosing != module_) { return; }
         force_deferred_array_elements(ut->fields);
     }
 }
@@ -507,6 +511,12 @@ auto const_eval::resolve_deferred_array(const ast::explicit_array_type& array,
                                         sema::type& item_type) -> stdx::option<sema::type&> {
     PROFILE_FUNCTION();
     ASSERT(array.dimension, "Deferred array type must have a dimension");
+    // `array` can belong to a different module's AST when a type is re-exported across modules;
+    // its dimension node only indexes that module's tables. Leave the type deferred here rather
+    // than indexing ours out of bounds - the declaring module's own pass resolves it.
+    if (array.dimension->get_index() >= module_->sema_side_tables.node_types.values.size()) {
+        return stdx::none;
+    }
     const auto cv{try_eval(*array.dimension)};
     if (!cv || cv->is_poison()) { return stdx::none; }
     const auto len{cv->as_uint_opt().value_or(0)};
