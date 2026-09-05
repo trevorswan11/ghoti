@@ -47,6 +47,7 @@ template <node_kind... AllowedKinds> class handle {
         return handle{detail::INVALID_ID};
     }
 
+    [[nodiscard]] constexpr auto get_kind() const noexcept -> node_kind { return id_.get_kind(); }
     [[nodiscard]] constexpr auto get_index() const noexcept -> usize { return id_.get_index(); }
     [[nodiscard]] constexpr      operator node_id() const noexcept { return id_; } // NOLINT
 

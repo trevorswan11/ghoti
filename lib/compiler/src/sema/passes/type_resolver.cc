@@ -5557,6 +5557,14 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
     ASSERT(symbol_opt, "Somehow the declaration was lost in the symbol table");
     auto& sym{*symbol_opt};
 
+    // Ensure malformed symbols don't crash the compiler
+    if (const auto owner{sym.get_data().as_opt<symbols::node_t>()};
+        !owner || owner->get_kind() != id.get_kind() ||
+        owner->get_index() != id.get_index()) {
+        resolving_.set_sema_type(decl.name, ctx_.get_poison());
+        return last_type_.emplace(ctx_.poison_node(resolving_, id));
+    }
+
     // Breaking out early is possible due to out of order semantics
     if (sym.get_status() == symbol_status::RESOLVED) {
         auto& void_type{ctx_.get_builtin_resolved_type(type_kind::VOID_)};

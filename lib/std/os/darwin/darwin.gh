@@ -108,9 +108,9 @@ pub const lseek := fn(h: Handle, off: i64, whence: i32): R(i64) {
 };
 
 pub const fstat := fn(file: Handle): R(Stat) {
-    var stat: Stat = undefined;
-    const r := sys_fstat(file, ^mut stat);
-    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = stat };
+    var s: Stat = undefined;
+    const r := sys_fstat(file, ^mut s);
+    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = s };
 };
 
 pub const mkdir := fn(path: [:0]u8, mode: mode_t): R(void) {
@@ -119,7 +119,7 @@ pub const mkdir := fn(path: [:0]u8, mode: mode_t): R(void) {
 };
 
 pub const stat := fn(path: [:0]u8): R(Stat) {
-    var stat: Stat = undefined;
-    const r := sys_stat(path.ptr, ^mut stat);
-    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = stat };
+    var s: Stat = undefined;
+    const r := sys_stat(path.ptr, ^mut s);
+    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = s };
 };
