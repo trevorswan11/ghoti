@@ -139,9 +139,9 @@ constexpr std::array<std::string_view, 2>  ENDIAN_MEMBERS{"little", "big"};
 auto cfg_pass::run(mod::module& module, context& ctx) -> bool {
     PROFILE_FUNCTION();
     cfg_pass pass{module, ctx};
-    pass.gather_cfg_values(module.ast.roots_mut());
+    pass.gather_cfg_values(module.ast.get_roots());
     for (const auto& [name, node] : pass.cfg_value_decls_) { pass.resolve_cfg_value(node); }
-    pass.rewrite_roots(module.ast.roots_mut());
+    pass.rewrite_roots(module.ast.get_roots());
     return pass.ok_;
 }
 

@@ -427,4 +427,26 @@ TEST_CASE("Lexing illegal builtin") {
     CHECK(input == illegal.slice);
 }
 
+TEST_CASE("Lexer tags `///` and `//!` distinctly from plain comments") {
+    syntax::lexer l{R"(// plain
+/// doc line
+//! module line
+//// still plain
+)"};
+
+    auto first{l.advance()};
+    CHECK(first.type == token_type_t::COMMENT);
+
+    auto doc{l.advance()};
+    CHECK(doc.type == token_type_t::DOC_COMMENT);
+    CHECK(doc.slice == "doc line");
+
+    auto mod{l.advance()};
+    CHECK(mod.type == token_type_t::MODULE_DOC_COMMENT);
+    CHECK(mod.slice == "module line");
+
+    auto still_plain{l.advance()};
+    CHECK(still_plain.type == token_type_t::COMMENT);
+}
+
 } // namespace ghoti::tests

@@ -1,9 +1,14 @@
 #pragma once
 
+#include <ranges>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include <fmt/format.h>
+#include <fmt/ranges.h>
+#include <gsl/span>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
@@ -32,13 +37,16 @@ class parser {
     class checkpoint {
       public:
         explicit checkpoint(const parser& parser) noexcept
-            : snapshot_{parser.lexer_}, current_{parser.current_token_}, peek_{parser.peek_token_} {
-        }
+            : snapshot_{parser.lexer_}, current_{parser.current_token_}, peek_{parser.peek_token_},
+              pending_docs_len_{parser.pending_docs_.size()},
+              pending_module_docs_len_{parser.pending_module_docs_.size()} {}
 
       private:
         lexer::snapshot snapshot_;
         token_t         current_;
         token_t         peek_;
+        usize           pending_docs_len_;
+        usize           pending_module_docs_len_;
 
         friend class parser;
     };
@@ -198,12 +206,29 @@ class parser {
     using depth_counter = counter<u32>;
     using depth_guard   = depth_counter::guard;
 
+    // A `///` doc line awaiting attachment to the next declaration.
+    struct pending_doc {
+        std::string_view text;
+        usize            line;
+    };
+
   private:
     // Reverts the parser to the state from the checkpoint.
     auto rollback(const checkpoint& checkpoint) noexcept -> void {
         lexer_.restore(checkpoint.snapshot_);
         current_token_ = checkpoint.current_;
         peek_token_    = checkpoint.peek_;
+        pending_docs_.resize(checkpoint.pending_docs_len_);
+        pending_module_docs_.resize(checkpoint.pending_module_docs_len_);
+    }
+
+    // Like `lexer_.advance()` but siphons off `///` / `//!` comments into the pending-doc
+    // buffers and skips plain comments, so callers only see significant tokens.
+    [[nodiscard]] auto next_significant_token() noexcept -> token_t;
+
+    // Joins pending doc lines into one `\n`-separated block.
+    [[nodiscard]] static auto join_docs(gsl::span<const pending_doc> lines) -> std::string {
+        return fmt::to_string(fmt::join(lines | std::views::transform(&pending_doc::text), "\n"));
     }
 
   private:
@@ -215,6 +240,10 @@ class parser {
     depth_counter           expr_depth_;
 
     stdx::option<std::vector<ast::explicit_type_id>> pending_impl_bound_;
+
+    std::vector<pending_doc> pending_docs_;
+    std::vector<pending_doc> pending_module_docs_;
+    bool                     module_doc_locked_{false};
 };
 
 } // namespace ghoti::syntax

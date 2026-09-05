@@ -25,6 +25,7 @@
 #include "driver/cmd/build/library.hh"
 #include "driver/cmd/build/object.hh"
 #include "driver/cmd/build/options.hh"
+#include "driver/cmd/build/run.hh"
 #include "driver/cmd/build/test.hh"
 #include "driver/cmd/command.hh"
 #include "driver/cmd/format/formatter.hh"
@@ -57,6 +58,7 @@ auto parser::parse() -> stdx::result<stdx::box<cmd::command>, error> {
     const auto build_lib_cmd{setup_build_lib_subcmd()};
     const auto fmt_cmd{setup_fmt_subcmd()};
     const auto test_cmd{setup_test_subcmd()};
+    const auto run_cmd{setup_run_subcmd()};
 
     // No arguments should be handled by printing help and exiting
     if (argc_ == 1) {
@@ -106,6 +108,12 @@ auto parser::parse() -> stdx::result<stdx::box<cmd::command>, error> {
         return stdx::make_box<cmd::test_cmd>(std::move(opts), error_stream_);
     }
 
+    if (run_cmd->parsed()) {
+        auto opts{TRY(cmd::build::options::process_raw(
+            run_opts_, codegen::output_type::EXECUTABLE, error_stream_))};
+        return stdx::make_box<cmd::run_cmd>(std::move(opts), error_stream_);
+    }
+
     return fatal_error(error_stream_, "expected command argument", error::MISSING_SUBCOMMAND);
 }
 
@@ -151,6 +159,26 @@ auto parser::setup_build_lib_subcmd() -> gsl::not_null<CLI::App*> {
         ->default_val(build_lib_opts_.dynamic);
     cmd::build::setup_flags(
         sub, build_lib_opts_, "Output library path (.a / .lib / .so / .dylib / .dll)");
+    return sub;
+}
+
+auto parser::setup_run_subcmd() -> gsl::not_null<CLI::App*> {
+    auto* sub{app_.add_subcommand("run", "Build and run an executable from source")};
+    sub->add_option("input_file", run_opts_.input, "Input source file (.gh)")->required();
+    sub->add_option("program_args", run_opts_.forwarded_args, "Arguments forwarded to the program");
+    sub->add_option("-m,--module",
+                    run_opts_.module_raw_args,
+                    "Register a library module (format: <name>,<path>)");
+    sub->add_option("--object", run_opts_.extra_objects, "Link precompiled object file or library");
+    sub->add_option(
+        "-L,--library-path", run_opts_.library_paths, "Add directory to library search paths");
+    sub->add_option("-l,--library", run_opts_.libraries, "Link against library name");
+    sub->add_option(
+        "-O,--opt-level", run_opts_.opt_level_str, "Optimization level (0, 1, 2, 3, s, z)");
+    sub->add_flag("--release", run_opts_.release, "Build in release mode (defaults to -O2)")
+        ->default_val(run_opts_.release);
+    sub->add_flag("--unsafe", run_opts_.unsafe, "Disable all runtime safety checks")
+        ->default_val(run_opts_.unsafe);
     return sub;
 }
 

@@ -18,6 +18,27 @@
 
 namespace ghoti::syntax {
 
+namespace {
+
+// Re-tags a bare `//` comment token as `///` doc / `//!` module doc, trimming the extra
+// marker char and one optional leading space from the slice.
+auto classify_comment(token_t token) noexcept -> token_t {
+    auto rest{token.slice};
+    if (rest.starts_with('!')) {
+        token.type = token_type_t::MODULE_DOC_COMMENT;
+    } else if (rest.starts_with('/') && !rest.starts_with("//")) {
+        token.type = token_type_t::DOC_COMMENT;
+    } else {
+        return token;
+    }
+    rest.remove_prefix(1);
+    if (rest.starts_with(' ')) { rest.remove_prefix(1); }
+    token.slice = rest;
+    return token;
+}
+
+} // namespace
+
 auto lexer::reset(std::string_view input) noexcept -> void { *this = lexer{input}; }
 
 auto lexer::advance() noexcept -> token_t {
@@ -31,7 +52,9 @@ auto lexer::advance() noexcept -> token_t {
         if (maybe_operator->type == token_type_t::END) { return *maybe_operator; }
         for (usize i{0}; i < maybe_operator->slice.size(); ++i) { read_character(); }
 
-        if (maybe_operator->type == token_type_t::COMMENT) { return read_comment(); }
+        if (maybe_operator->type == token_type_t::COMMENT) {
+            return classify_comment(read_comment());
+        }
         if (maybe_operator->type == token_type_t::MULTILINE_STRING) {
             return read_multiline_string();
         }

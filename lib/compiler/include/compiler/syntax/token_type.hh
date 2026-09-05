@@ -81,6 +81,8 @@ enum class token_type_t : u8 {
     FAT_ARROW,
 
     COMMENT,
+    DOC_COMMENT,
+    MODULE_DOC_COMMENT,
     MULTILINE_STRING,
     NULL_TERMINATED,
 

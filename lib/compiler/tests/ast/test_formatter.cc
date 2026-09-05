@@ -520,6 +520,24 @@ TEST_CASE("formatter preserves standalone comments") {
     CHECK(format_source("// comment 1\n// comment 2\n") == "// comment 1\n// comment 2\n");
 }
 
+TEST_CASE("formatter preserves `///` doc comments and `//!` module docs") {
+    constexpr std::string_view source{R"(//! Module-level documentation.
+//! Second line.
+
+/// Documents the constant.
+const a := 1;
+
+const S := struct {
+    /// Documents the field.
+    x: i32,
+};
+
+const b := 2; /// trailing doc
+)"};
+
+    CHECK(format_source(source) == source);
+}
+
 TEST_CASE("formatter does not insert extra newlines after trailing comments") {
     constexpr std::string_view source{R"(const a := 1; // comment a
 const b := 2; // comment b

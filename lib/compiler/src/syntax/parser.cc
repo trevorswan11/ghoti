@@ -1,8 +1,10 @@
 #include "compiler/syntax/parser.hh"
 
 #include <cctype>
+#include <fmt/ranges.h>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <fmt/format.h>
 #include <magic_enum/magic_enum.hpp>
@@ -32,24 +34,33 @@ auto parser::reset(std::string_view input) noexcept -> void {
     ast_.reset();
     input_ = input;
     lexer_.reset(input);
+    pending_docs_.clear();
+    pending_module_docs_.clear();
+    module_doc_locked_ = false;
     advance(2);
 }
 
-namespace {
-
-// Skip comments here so no downstream code has to special-case `token_type_t::COMMENT`.
-[[nodiscard]] auto next_significant_token(lexer& lex) noexcept -> token_t {
-    auto token{lex.advance()};
-    while (token.type == token_type_t::COMMENT) { token = lex.advance(); }
-    return token;
+auto parser::next_significant_token() noexcept -> token_t {
+    while (true) {
+        auto token{lexer_.advance()};
+        switch (token.type) {
+        case token_type_t::COMMENT: continue;
+        case token_type_t::DOC_COMMENT:
+            pending_docs_.emplace_back(token.slice, token.line);
+            continue;
+        case token_type_t::MODULE_DOC_COMMENT:
+            // A `//!` past the first real token is not module-level; treat it as a plain comment.
+            if (!module_doc_locked_) { pending_module_docs_.emplace_back(token.slice, token.line); }
+            continue;
+        default: return token;
+        }
+    }
 }
-
-} // namespace
 
 auto parser::advance(u8 times) noexcept -> const token_t& {
     for (u8 i = 0; i < times; ++i) {
         current_token_ = peek_token_;
-        peek_token_    = next_significant_token(lexer_);
+        peek_token_    = next_significant_token();
     }
     return current_token_;
 }
@@ -60,6 +71,45 @@ auto parser::consume(ast::AST& ast) -> diagnostics {
     ast.clear();
     ast_.emplace(ast);
 
+    // A `//!` block at the very top of the file documents the module itself.
+    if (!pending_module_docs_.empty()) { ast.set_module_doc(join_docs(pending_module_docs_)); }
+    pending_module_docs_.clear();
+    module_doc_locked_ = true;
+
+    // Splits `pending_docs_` around a just-parsed statement: lines above it lead, a line on its
+    // last line trails, lines strictly inside it are nested and dropped, the rest carry forward.
+    const auto attach_docs = [&](ast::node_id node, usize start_line) -> void {
+        const auto                end_line{ast.end_location_of(node).line};
+        std::vector<pending_doc>  leading;
+        stdx::option<pending_doc> trailing;
+        std::erase_if(pending_docs_, [&](const pending_doc& doc) -> bool {
+            if (doc.line < start_line) {
+                leading.emplace_back(doc);
+                return true;
+            }
+            if (doc.line == end_line) {
+                trailing.emplace(doc);
+                return true;
+            }
+            return doc.line < end_line;
+        });
+        if (trailing) { leading.emplace_back(*trailing); }
+        if (leading.empty()) { return; }
+
+        stdx::option<ast::identifier_handle> name;
+        if (const auto decl{ast.get_as_opt<ast::decl_stmt>(node)}) {
+            name.emplace(decl->name);
+        } else if (const auto alias{ast.get_as_opt<ast::using_stmt>(node)}) {
+            name.emplace(alias->alias);
+        } else if (const auto import{ast.get_as_opt<ast::import_stmt>(node)}) {
+            if (import->alias) { name.emplace(*import->alias); }
+        }
+        if (name) {
+            ast.attach_doc({ast.location_of(*name), ast.end_location_of(*name)},
+                           join_docs(leading));
+        }
+    };
+
     diagnostics diagnostics;
 
     while (!current_token_is(token_type_t::END)) {
@@ -68,9 +118,11 @@ auto parser::consume(ast::AST& ast) -> diagnostics {
         if (skip(current_token_.type)) { while (skip(advance().type)); } // NOLINT
         if (current_token_is(token_type_t::END)) { break; }
 
-        auto stmt{parse_statement()};
+        const auto stmt_start_line{current_token_.line};
+        auto       stmt{parse_statement()};
         if (stmt) {
             ast.add_root(**stmt);
+            attach_docs(**stmt, stmt_start_line);
         } else {
             diagnostics.emplace_back(std::move(stmt.error()));
 
@@ -88,6 +140,7 @@ auto parser::consume(ast::AST& ast) -> diagnostics {
         advance();
     }
 
+    pending_docs_.clear();
     return diagnostics;
 }
 

@@ -36,6 +36,7 @@
 #    include <processthreadsapi.h>
 #    include <synchapi.h>
 #    include <windows.h>
+#    include <winerror.h>
 #    include <winnt.h>
 #elif GHOTI_APPLE
 #    include <mach-o/dyld.h>
@@ -102,6 +103,8 @@ auto self_exe_path() -> std::filesystem::path {
 }
 
 auto spawn_child(const mock_argv& args, std::chrono::milliseconds timeout) -> stdx::option<u32> {
+    // `milliseconds::max()` means "wait forever" — used for interactive child programs.
+    const bool no_timeout{timeout == std::chrono::milliseconds::max()};
 #if GHOTI_WINDOWS
     auto cmd_line{quote_arg_windows(args[0])};
     for (const auto& arg : args | std::views::drop(1)) {
@@ -122,8 +125,8 @@ auto spawn_child(const mock_argv& args, std::chrono::milliseconds timeout) -> st
         return stdx::none;
     }
 
-    const auto wait_result{
-        ::WaitForSingleObject(pi.hProcess, static_cast<::DWORD>(timeout.count()))};
+    const auto wait_result{::WaitForSingleObject(
+        pi.hProcess, no_timeout ? INFINITE : static_cast<::DWORD>(timeout.count()))};
     if (wait_result == WAIT_TIMEOUT) {
         ::TerminateProcess(pi.hProcess, spawn_child_timeout_exit_code);
         ::WaitForSingleObject(pi.hProcess, INFINITE);
@@ -148,7 +151,8 @@ auto spawn_child(const mock_argv& args, std::chrono::milliseconds timeout) -> st
     }
 
     // Poll for exit rather than blocking on waitpid indefinitely to prevent stall on trap
-    const auto deadline{std::chrono::steady_clock::now() + timeout};
+    const auto now{std::chrono::steady_clock::now()};
+    const auto deadline{no_timeout ? std::chrono::steady_clock::time_point::max() : now + timeout};
 
     i32 status{0};
     while (true) {
@@ -157,7 +161,7 @@ auto spawn_child(const mock_argv& args, std::chrono::milliseconds timeout) -> st
         if (reaped == pid) { break; }
         if (reaped < 0) { return stdx::none; }
 
-        if (std::chrono::steady_clock::now() >= deadline) {
+        if (!no_timeout && std::chrono::steady_clock::now() >= deadline) {
             ::kill(pid, SIGKILL);
             ::waitpid(pid, &status, 0); // reap to avoid leaving a zombie
             return spawn_child_timeout_exit_code;

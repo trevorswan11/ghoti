@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include <stdx/assert.hh>
@@ -193,18 +195,44 @@ class AST {
         return nodes_.pool[id.get_index()].template as<Data>();
     }
 
-    [[nodiscard]] constexpr auto roots_mut() noexcept -> std::vector<node_id>& {
-        return nodes_.roots;
+    [[nodiscard]] constexpr auto get_roots(this auto&& self) noexcept -> auto& {
+        return self.nodes_.roots;
     }
+
+    // Attaches a `///` doc comment, keyed by the span of the declared name it documents.
+    auto attach_doc(source_span name_span, std::string text) -> void {
+        doc_comments_.emplace_back(name_span, std::move(text));
+    }
+
+    [[nodiscard]] auto doc_for(source_span name_span) const noexcept
+        -> stdx::option<std::string_view> {
+        for (const auto& doc : doc_comments_) {
+            if (doc.name_span == name_span) { return std::string_view{doc.text}; }
+        }
+        return stdx::none;
+    }
+
+    auto               set_module_doc(std::string text) -> void { module_doc_ = std::move(text); }
+    [[nodiscard]] auto module_doc() const noexcept -> std::string_view { return module_doc_; }
 
     constexpr auto clear() noexcept -> void {
         nodes_.clear();
         explicit_types_.clear();
+        doc_comments_.clear();
+        module_doc_.clear();
     }
+
+  private:
+    struct doc_comment {
+        source_span name_span;
+        std::string text;
+    };
 
   private:
     data_pool<node_id, node_variant>          nodes_;
     data_pool<explicit_type_id, type_variant> explicit_types_;
+    std::vector<doc_comment>                  doc_comments_;
+    std::string                               module_doc_;
 };
 
 } // namespace ghoti::ast

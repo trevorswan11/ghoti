@@ -11,9 +11,13 @@
 #include <fmt/format.h>
 #include <fmt/ostream.h>
 #include <nlohmann/json.hpp>
+#include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/id.hh"
+#include "compiler/module/module.hh"
+#include "compiler/sema/type.hh"
 #include "driver/clap/error.hh"
 #include "driver/cmd/lsp/code_actions.hh"
 #include "driver/cmd/lsp/completion.hh"
@@ -74,6 +78,37 @@ auto position_from(const nlohmann::json& position) -> source_location {
 
 auto write_null_id(const nlohmann::json& message) -> void {
     lsp::write_message(std::cout, make_response(message.at("id"), nullptr));
+}
+
+// The `///` doc for whatever `id` resolves to (following go-to-definition across modules),
+// falling back to an imported module's `//!` doc when `id` is an import alias.
+auto doc_comment_for(const mod::module_manager& manager,
+                     const mod::module&         entry,
+                     ast::node_id               id,
+                     stdx::option<sema::type&>  type) -> stdx::option<std::string> {
+    const auto lookup{[&](const mod::module& mod, source_span span) -> stdx::option<std::string> {
+        if (const auto doc{mod.ast.doc_for(span)}) { return std::string{*doc}; }
+        return stdx::none;
+    }};
+
+    if (const auto def{entry.get_identifier_definition(id)}) {
+        for (const auto& [path, mod] : manager) {
+            if (path == def->path) { return lookup(*mod, def->span); }
+        }
+        return lookup(entry, def->span);
+    }
+
+    if (auto own{lookup(entry, {entry.ast.location_of(id), entry.ast.end_location_of(id)})}) {
+        return own;
+    }
+    if (type) {
+        if (const auto mod_type{type->get_data().as_opt<sema::types::module>()}) {
+            if (const auto md{mod_type->imported.ast.module_doc()}; !md.empty()) {
+                return std::string{md};
+            }
+        }
+    }
+    return stdx::none;
 }
 
 } // namespace
@@ -245,17 +280,15 @@ auto lsp_server::handle_hover(const nlohmann::json& message, lsp::document_store
     const auto type{entry_module.get_sema_type_opt(*id)};
     if (!type) { return write_null_id(message); }
 
-    lsp::write_message(std::cout,
-                       make_response(message.at("id"),
-                                     {
-                                         {
-                                             "contents",
-                                             {
-                                                 {"kind", "plaintext"},
-                                                 {"value", type->to_string()},
-                                             },
-                                         },
-                                     }));
+    const auto doc{doc_comment_for(store.manager(), entry_module, *id, type)};
+
+    nlohmann::json hover;
+    hover["contents"]["kind"] = doc ? "markdown" : "plaintext";
+    hover["contents"]["value"] =
+        doc ? fmt::format("```ghoti\n{}\n```\n\n---\n\n{}", type->to_string(), *doc)
+            : type->to_string();
+
+    lsp::write_message(std::cout, make_response(message.at("id"), std::move(hover)));
 }
 
 auto lsp_server::handle_definition(const nlohmann::json& message, lsp::document_store& store)

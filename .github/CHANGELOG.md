@@ -197,3 +197,13 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - This also fixes the equivalent static-dispatch case
 
 ## alpha.4
+
+- Address some compiler errors
+    - Shadowing no longer throws an assertion at type resolution
+    - Re-exported symbols reference their correct module and no longer cause misaligned memory access
+- Add doc comments
+    - `///` can lead or lag an ast node and shows on hover through the LSP
+    - `//!` at the top of a module shows the comment under the LSP's module hover
+- Add `ghoti run` command
+    - Eliminates the prior ceremony needed to compile and run a ghoti binary
+    - Takes a subset of options from the other build command since this does not need to be as extensible

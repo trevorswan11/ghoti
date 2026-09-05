@@ -1042,8 +1042,19 @@ TEST_CASE("ghoti lsp formats an unformatted document over a real child process")
                            {
                                "params",
                                {
-                                   {"textDocument", {{"uri", canonical_uri}}},
-                                   {"options", {{"tabSize", 4}, {"insertSpaces", true}}},
+                                   {
+                                       "textDocument",
+                                       {
+                                           {"uri", canonical_uri},
+                                       },
+                                   },
+                                   {
+                                       "options",
+                                       {
+                                           {"tabSize", 4},
+                                           {"insertSpaces", true},
+                                       },
+                                   },
                                },
                            },
                        });
@@ -1098,8 +1109,19 @@ TEST_CASE("ghoti lsp formats an unformatted document over a real child process")
                            {
                                "params",
                                {
-                                   {"textDocument", {{"uri", canonical_broken_uri}}},
-                                   {"options", {{"tabSize", 4}, {"insertSpaces", true}}},
+                                   {
+                                       "textDocument",
+                                       {
+                                           {"uri", canonical_broken_uri},
+                                       },
+                                   },
+                                   {
+                                       "options",
+                                       {
+                                           {"tabSize", 4},
+                                           {"insertSpaces", true},
+                                       },
+                                   },
                                },
                            },
                        });
@@ -1108,6 +1130,84 @@ TEST_CASE("ghoti lsp formats an unformatted document over a real child process")
 
     lsp::write_message(proc.stdin_stream(),
                        {{"jsonrpc", "2.0"}, {"id", 4}, {"method", "shutdown"}});
+    const auto shutdown_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(shutdown_resp.at("result").is_null());
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+    CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
+}
+
+TEST_CASE("ghoti lsp includes `///` doc comments in hover contents") {
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
+    REQUIRE(proc.is_running());
+
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"id", 1},
+                           {"method", "initialize"},
+                           {
+                               "params",
+                               {
+                                   {"processId", nullptr},
+                                   {"rootUri", nullptr},
+                                   {
+                                       "capabilities",
+                                       nlohmann::json::object(),
+                                   },
+                               },
+                           },
+                       });
+    const auto init_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(init_resp.at("result").at("capabilities").at("hoverProvider").get<bool>());
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"}, {"method", "initialized"}, {"params", nlohmann::json::object()}});
+
+    constexpr std::string_view uri{"file:///test_e2e_doc.gh"};
+    constexpr std::string_view text{"/// The magic number.\npub const answer := 42;\n"
+                                    "pub const echo := answer;\n"};
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"},
+         {"method", "textDocument/didOpen"},
+         {"params",
+          {{"textDocument",
+            {{"uri", uri}, {"languageId", "ghoti"}, {"version", 1}, {"text", text}}}}}});
+    const auto diag_note = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(diag_note.at("method") == "textDocument/publishDiagnostics");
+
+    // Hover the use of `answer` on the third line.
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"id", 2},
+                           {"method", "textDocument/hover"},
+                           {
+                               "params",
+                               {
+                                   {
+                                       "textDocument",
+                                       {
+                                           {"uri", uri},
+                                       },
+                                   },
+                                   {
+                                       "position",
+                                       {
+                                           {"line", 2},
+                                           {"character", 18},
+                                       },
+                                   },
+                               },
+                           },
+                       });
+    const auto hover_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    const auto value      = hover_resp.at("result").at("contents").at("value").get<std::string>();
+    CHECK(hover_resp.at("result").at("contents").at("kind") == "markdown");
+    CHECK(value.find("The magic number.") != std::string::npos);
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "shutdown"}});
     const auto shutdown_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
     CHECK(shutdown_resp.at("result").is_null());
     lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});

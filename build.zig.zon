@@ -1,6 +1,6 @@
 .{
     .name = .ghoti,
-    .version = "0.3.0-alpha.3",
+    .version = "0.3.0-alpha.4",
     .minimum_zig_version = "0.16.0",
     .fingerprint = 0x2f146abfbb7f6400,
     .dependencies = .{

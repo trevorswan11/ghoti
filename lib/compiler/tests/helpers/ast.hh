@@ -23,4 +23,6 @@ auto test_parser_fail(std::string_view failing, Ds&&... expected_diagnostics) ->
                                                       std::forward<Ds>(expected_diagnostics)...);
 }
 
+auto parse(std::string_view source) -> ast::AST;
+
 } // namespace ghoti::tests::helpers
