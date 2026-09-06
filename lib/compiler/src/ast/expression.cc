@@ -593,8 +593,10 @@ auto enum_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synta
         enumerations.emplace_back(ident, value);
 
         // No comma means that its the end or that there is a decl list starting
-        if (!parser.peek_token_is(syntax::token_type_t::COMMA)) { break; }
-        parser.advance();
+        const bool had_comma{parser.peek_token_is(syntax::token_type_t::COMMA)};
+        if (had_comma) { parser.advance(); }
+        parser.attach_member_doc(ident, doc_floor); // a trailing `///` is siphoned only now
+        if (!had_comma) { break; }
     }
 
     std::vector<member_cfg_group> member_cfg_groups;
@@ -1475,8 +1477,10 @@ auto struct_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
         fields.emplace_back(ident, type, value, explicit_alignment);
 
         // No comma means that its the end or that there is a decl list starting
-        if (!parser.peek_token_is(syntax::token_type_t::COMMA)) { break; }
-        parser.advance();
+        const bool had_comma{parser.peek_token_is(syntax::token_type_t::COMMA)};
+        if (had_comma) { parser.advance(); }
+        parser.attach_member_doc(ident, doc_floor); // a trailing `///` is siphoned only now
+        if (!had_comma) { break; }
     }
 
     std::vector<member_cfg_group> member_cfg_groups;
@@ -1524,8 +1528,10 @@ auto union_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
         fields.emplace_back(ident, type, explicit_alignment);
 
         // No comma means that its the end or that there is a decl list starting
-        if (!parser.peek_token_is(syntax::token_type_t::COMMA)) { break; }
-        parser.advance();
+        const bool had_comma{parser.peek_token_is(syntax::token_type_t::COMMA)};
+        if (had_comma) { parser.advance(); }
+        parser.attach_member_doc(ident, doc_floor); // a trailing `///` is siphoned only now
+        if (!had_comma) { break; }
     }
 
     std::vector<member_cfg_group> member_cfg_groups;

@@ -150,17 +150,19 @@ auto parser::attach_member_doc(ast::identifier_handle name, usize floor_line) ->
     if (!ast_ || pending_docs_.empty()) { return; }
     const auto name_line{ast_->location_of(name).line};
 
-    std::vector<pending_doc> leading;
+    // Leading `///` lines sit between the aggregate's opening keyword (`floor_line`) and the
+    // member; a trailing `///` sits on the member's own line (`X = 1, /// note`).
+    std::vector<pending_doc> owned;
     std::erase_if(pending_docs_, [&](const pending_doc& doc) -> bool {
-        if (doc.line > floor_line && doc.line < name_line) {
-            leading.emplace_back(doc);
+        if ((doc.line > floor_line && doc.line < name_line) || doc.line == name_line) {
+            owned.emplace_back(doc);
             return true;
         }
         return false;
     });
-    if (leading.empty()) { return; }
+    if (owned.empty()) { return; }
 
-    ast_->attach_doc({ast_->location_of(name), ast_->end_location_of(name)}, join_docs(leading));
+    ast_->attach_doc({ast_->location_of(name), ast_->end_location_of(name)}, join_docs(owned));
 }
 
 auto parser::expect_peek(token_type_t expected) -> stdx::result<void, diagnostic> {

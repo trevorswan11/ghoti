@@ -172,6 +172,52 @@ TEST_CASE("a leading `///` on a `const` member attaches to that member's name") 
           "Ratio of a circle's circumference to its diameter.");
 }
 
+TEST_CASE("a trailing same-line `///` attaches to a struct field / enum variant / union field") {
+    SECTION("struct field, comma then doc") {
+        ghoti::arena arena;
+        auto         ast{helpers::parse(R"(const Stat := struct {
+    st_dev: i32, /// [XSI] ID of device containing file
+    st_mode: u16,
+};
+)",
+                                arena)};
+        const auto&  se{first_decl_value<ast::struct_expr>(ast)};
+        REQUIRE(se.fields.size() == 2);
+        REQUIRE(doc_for_name(ast, se.fields[0].name));
+        CHECK(*doc_for_name(ast, se.fields[0].name) == "[XSI] ID of device containing file");
+        CHECK(!doc_for_name(ast, se.fields[1].name));
+    }
+
+    SECTION("enum variant, comma then doc") {
+        ghoti::arena arena;
+        auto         ast{helpers::parse(R"(const Errno := enum : i32 {
+    EPERM = 1, /// Operation not permitted
+    ECHILD = 10,
+    _,
+};
+)",
+                                arena)};
+        const auto&  ee{first_decl_value<ast::enum_expr>(ast)};
+        REQUIRE(ee.enumerations.size() == 2);
+        REQUIRE(doc_for_name(ast, ee.enumerations[0].name));
+        CHECK(*doc_for_name(ast, ee.enumerations[0].name) == "Operation not permitted");
+    }
+
+    SECTION("last field, no trailing comma") {
+        ghoti::arena arena;
+        auto         ast{helpers::parse(R"(const U := union {
+    a: u8,
+    b: u16 /// the wide one
+};
+)",
+                                arena)};
+        const auto&  ue{first_decl_value<ast::union_expr>(ast)};
+        REQUIRE(ue.fields.size() == 2);
+        REQUIRE(doc_for_name(ast, ue.fields[1].name));
+        CHECK(*doc_for_name(ast, ue.fields[1].name) == "the wide one");
+    }
+}
+
 TEST_CASE("a `///` leading a struct decl does not leak onto its first field") {
     ghoti::arena arena;
     auto         ast{helpers::parse(R"(/// A 2D point.

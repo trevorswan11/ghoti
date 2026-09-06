@@ -15,6 +15,7 @@
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/type.hh"
@@ -282,11 +283,16 @@ auto lsp_server::handle_hover(const nlohmann::json& message, lsp::document_store
 
     const auto doc{doc_comment_for(store.manager(), entry_module, *id, type)};
 
+    std::string signature{type->to_string()};
+    if (const auto ident{entry_module.ast.get_as_opt<ast::identifier_expr>(*id)};
+        ident && !ident->name.empty()) {
+        signature = fmt::format("{}: {}", ident->name, signature);
+    }
+
     nlohmann::json hover;
     hover["contents"]["kind"] = doc ? "markdown" : "plaintext";
     hover["contents"]["value"] =
-        doc ? fmt::format("```ghoti\n{}\n```\n\n---\n\n{}", type->to_string(), *doc)
-            : type->to_string();
+        doc ? fmt::format("```ghoti\n{}\n```\n\n---\n\n{}", signature, *doc) : type->to_string();
 
     lsp::write_message(std::cout, make_response(message.at("id"), std::move(hover)));
 }

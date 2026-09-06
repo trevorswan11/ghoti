@@ -23,6 +23,15 @@ TEST_CASE("E2E: module-scope constexpr ptr sentinel compares equal to the same r
     )") == 7);
 }
 
+TEST_CASE("E2E: module-scope @ptrFromInt with a negative literal folds to an all-ones pointer") {
+    CHECK(helpers::compile_and_run(R"(
+        const IHV: ^mut opaque = @ptrFromInt(^mut opaque, -1);
+        pub const main := fn(): i32 {
+            return if (@intFromPtr(IHV) == @as(usize, -1)) 7 else 1;
+        };
+    )") == 7);
+}
+
 TEST_CASE("E2E: module-scope usize maximum via @as(usize, -1) folds to all-ones") {
     CHECK(helpers::compile_and_run(R"(
         const MAX: usize = @as(usize, -1);
