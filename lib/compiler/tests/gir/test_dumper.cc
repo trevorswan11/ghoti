@@ -21,8 +21,8 @@ namespace ghoti::tests {
 TEST_CASE("GIR dumper formatting") {
     using namespace gir;
 
-    ghoti::arena arena;
-    sema::type_pool   pool{arena};
+    ghoti::arena    arena;
+    sema::type_pool pool{arena};
     auto& i32_type{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
     auto& bool_type{*pool[{sema::type_kind::BOOL, sema::types::mut::CONSTANT}]};
     auto& fn_type{*pool[{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT}]};
