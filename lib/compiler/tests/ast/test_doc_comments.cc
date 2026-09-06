@@ -22,7 +22,8 @@ auto first_doc(const ast::AST& ast) -> stdx::option<std::string_view> {
     return ast.doc_for({ast.location_of(decl.name), ast.end_location_of(decl.name)});
 }
 
-auto doc_for_name(const ast::AST& ast, ast::identifier_handle name) -> stdx::option<std::string_view> {
+auto doc_for_name(const ast::AST& ast, ast::identifier_handle name)
+    -> stdx::option<std::string_view> {
     return ast.doc_for({ast.location_of(name), ast.end_location_of(name)});
 }
 
@@ -116,7 +117,7 @@ TEST_CASE("a leading `///` on a struct field attaches to that field's name") {
 };
 )",
                             arena)};
-    const auto& se{first_decl_value<ast::struct_expr>(ast)};
+    const auto&  se{first_decl_value<ast::struct_expr>(ast)};
     REQUIRE(se.fields.size() == 2);
     REQUIRE(doc_for_name(ast, se.fields[0].name));
     CHECK(*doc_for_name(ast, se.fields[0].name) == "The horizontal coordinate.");
@@ -132,7 +133,7 @@ TEST_CASE("a leading `///` on an enum variant attaches to that variant's name") 
 };
 )",
                             arena)};
-    const auto& ee{first_decl_value<ast::enum_expr>(ast)};
+    const auto&  ee{first_decl_value<ast::enum_expr>(ast)};
     REQUIRE(ee.enumerations.size() == 2);
     REQUIRE(doc_for_name(ast, ee.enumerations[0].name));
     CHECK(*doc_for_name(ast, ee.enumerations[0].name) == "The warm one.");
@@ -148,7 +149,7 @@ TEST_CASE("a leading `///` on a union field attaches to that field's name") {
 };
 )",
                             arena)};
-    const auto& ue{first_decl_value<ast::union_expr>(ast)};
+    const auto&  ue{first_decl_value<ast::union_expr>(ast)};
     REQUIRE(ue.fields.size() == 2);
     REQUIRE(doc_for_name(ast, ue.fields[0].name));
     CHECK(*doc_for_name(ast, ue.fields[0].name) == "Present when the value is an integer.");
@@ -163,7 +164,7 @@ TEST_CASE("a leading `///` on a `const` member attaches to that member's name") 
 };
 )",
                             arena)};
-    const auto& se{first_decl_value<ast::struct_expr>(ast)};
+    const auto&  se{first_decl_value<ast::struct_expr>(ast)};
     REQUIRE(se.members.size() == 1);
     const auto& member_decl{ast.get_as<ast::decl_stmt>(*se.members[0])};
     REQUIRE(doc_for_name(ast, member_decl.name));

@@ -13,7 +13,7 @@ TEST_CASE("E2E: module-scope pointer const from @ptrFromInt round-trips through 
     )") == 7);
 }
 
-TEST_CASE("E2E: module-scope constexpr pointer sentinel compares equal to the same runtime pointer") {
+TEST_CASE("E2E: module-scope constexpr ptr sentinel compares equal to the same runtime pointer") {
     CHECK(helpers::compile_and_run(R"(
         constexpr IHV: ^mut opaque = @ptrFromInt(^mut opaque, 0xFFFFFFFFFFFFFFFFuz);
         pub const main := fn(): i32 {
