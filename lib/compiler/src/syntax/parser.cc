@@ -15,6 +15,7 @@
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
+#include "compiler/arena.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
@@ -65,10 +66,11 @@ auto parser::advance(u8 times) noexcept -> const token_t& {
     return current_token_;
 }
 
-auto parser::consume(ast::AST& ast) -> diagnostics {
+auto parser::consume(ast::AST& ast, ghoti::arena& arena) -> diagnostics {
     PROFILE_FUNCTION();
     reset(input_);
     ast.clear();
+    ast.set_arena(arena);
     ast_.emplace(ast);
 
     // A `//!` block at the very top of the file documents the module itself.
@@ -237,6 +239,13 @@ auto parser::parse_expression(bind_precedence precedence)
                 return make_syntax_err("Invalid or unterminated character literal",
                                        error::INVALID_CHARACTER_LITERAL,
                                        current_token_);
+            case '@':
+                if (current_token_.slice.starts_with("@\"")) {
+                    return make_syntax_err("Unterminated raw identifier",
+                                           error::UNTERMINATED_RAW_IDENTIFIER,
+                                           current_token_);
+                }
+                break;
             default:
                 if (std::isdigit(static_cast<u8>(current_token_.slice.front()))) {
                     return make_syntax_err(

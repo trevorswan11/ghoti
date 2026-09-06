@@ -12,6 +12,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/arena.hh"
 #include "compiler/codegen/error.hh"
 #include "compiler/codegen/linker.hh"
 #include "compiler/gir/module.hh"
@@ -51,17 +52,18 @@ class analyzer {
                       codegen::target_options target_opts            = {},
                       bool                    tolerate_syntax_errors = false,
                       bool                    runtime_safety         = true) noexcept
-        : modules_{modules}, pool_{arena_}, error_stream_{error_stream}, in_terminal_{in_terminal},
-          tolerate_syntax_errors_{tolerate_syntax_errors}, ctx_{modules_,
-                                                                registry_,
-                                                                pool_,
-                                                                generic_functions_,
-                                                                instantiation_cache_,
-                                                                impl_registry_,
-                                                                arena_,
-                                                                diagnostics{in_terminal_},
-                                                                error_stream_,
-                                                                std::move(target_opts)} {
+        : modules_{modules}, arena_{modules.arena()}, pool_{arena_}, error_stream_{error_stream},
+          in_terminal_{in_terminal}, tolerate_syntax_errors_{tolerate_syntax_errors},
+          ctx_{modules_,
+               registry_,
+               pool_,
+               generic_functions_,
+               instantiation_cache_,
+               impl_registry_,
+               arena_,
+               diagnostics{in_terminal_},
+               error_stream_,
+               std::move(target_opts)} {
         ctx_.runtime_safety = runtime_safety;
     }
     ~analyzer() = default;
@@ -194,7 +196,7 @@ class analyzer {
 
   private:
     mod::module_manager&        modules_;
-    arena_alloc                 arena_;
+    ghoti::arena&               arena_;
     symbol_table_registry       registry_;
     type_pool                   pool_;
     generic_function_registry   generic_functions_;

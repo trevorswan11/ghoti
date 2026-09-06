@@ -11,6 +11,7 @@
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
 
+#include "compiler/arena.hh"
 #include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
@@ -27,8 +28,9 @@ namespace ghoti::ast {
 
 auto dumper::compare_source_asts(std::string_view s1, std::string_view s2) -> bool {
     syntax::parser p1{s1}, p2{s2};
+    ghoti::arena   arena;
     ast::AST       s1_ast, s2_ast;
-    const auto     diag1{p1.consume(s1_ast)}, diag2{p2.consume(s2_ast)};
+    const auto     diag1{p1.consume(s1_ast, arena)}, diag2{p2.consume(s2_ast, arena)};
     if (!diag1.empty() || !diag2.empty()) { return false; }
 
     std::ostringstream s1_oss, s2_oss;

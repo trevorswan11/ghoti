@@ -885,7 +885,18 @@ auto identifier_expr::parse(syntax::parser& parser)
         return make_syntax_err(syntax::error::ILLEGAL_IDENTIFIER, start_token);
     }
 
-    return parser.add_expr<identifier_expr>(start_token, start_token.slice);
+    if (start_token.is_raw_identifier()) {
+        auto decoded{start_token.materialize_raw_identifier()};
+        if (decoded.empty()) {
+            return make_syntax_err("A raw identifier cannot be empty",
+                                   syntax::error::EMPTY_RAW_IDENTIFIER,
+                                   start_token);
+        }
+        return parser.add_expr<identifier_expr>(start_token, parser.get_ast().intern(decoded));
+    }
+
+    return parser.add_expr<identifier_expr>(start_token,
+                                            parser.get_ast().intern(start_token.slice));
 }
 
 auto if_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
@@ -1372,7 +1383,7 @@ auto string_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syn
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
     return parser.add_expr<string_expr>(
-        start_token, start_token.materialize_string(), start_token.slice);
+        start_token, parser.get_ast().intern(start_token.materialize_string()), start_token.slice);
 }
 
 auto module_access_expr::parse(syntax::parser& parser, expr_handle outer)

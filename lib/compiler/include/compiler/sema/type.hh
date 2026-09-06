@@ -20,6 +20,7 @@
 #include <stdx/utility.hh>
 #include <stdx/variant.hh>
 
+#include "compiler/arena.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/type.hh"
 #include "compiler/module/module.hh"
@@ -440,8 +441,6 @@ template <> struct ankerl::unordered_dense::hash<ghoti::sema::types::key_t> {
 
 namespace ghoti::sema {
 
-using arena_alloc = stdx::arena<stdx::sizes::kib(64UZ)>;
-
 // A semantic type that is entirely owned by an arena of types
 class type {
   public:
@@ -543,7 +542,7 @@ class type {
     data_t         data_;
 
     // Initialization is restricted to the pool's arena exclusively
-    friend arena_alloc;
+    friend ghoti::arena;
 };
 
 static_assert(stdx::TriviallyDestructible<type>);
@@ -582,7 +581,7 @@ static_assert(stdx::TriviallyDestructible<type>);
 // All associated type lifetimes are tied to the pool
 class type_pool {
   public:
-    explicit type_pool(arena_alloc& arena) noexcept : arena_{arena} {}
+    explicit type_pool(ghoti::arena& arena) noexcept : arena_{arena} {}
     ~type_pool() = default;
 
     MAKE_MOVE_CONSTRUCTABLE_ONLY(type_pool)
@@ -625,7 +624,7 @@ class type_pool {
     auto get_or_emplace(const types::key_t& key) -> gsl::not_null<type*>;
 
   private:
-    arena_alloc&                                      arena_;
+    ghoti::arena&                                     arena_;
     ankerl::unordered_dense::map<types::key_t, type*> cache_;
 };
 

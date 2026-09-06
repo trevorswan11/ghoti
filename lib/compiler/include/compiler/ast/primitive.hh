@@ -1,6 +1,5 @@
 #pragma once
 
-#include <string>
 #include <string_view>
 #include <type_traits>
 
@@ -19,8 +18,7 @@ namespace syntax { class parser; } // namespace syntax
 namespace ast {
 
 struct string_expr {
-    using value_type = std::string;
-    value_type                value;
+    std::string_view          value;
     std::string_view          spelling;
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;

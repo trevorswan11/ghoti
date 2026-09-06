@@ -21,6 +21,7 @@
 #include <stdx/utility.hh>
 #include <stdx/variant.hh>
 
+#include "compiler/arena.hh"
 #include "compiler/ast/ast.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
@@ -319,6 +320,7 @@ class module_manager {
 
     // Prints every poisoned/errored module's diagnostics
     auto print_all_diagnostics(std::ostream& os) const -> void;
+
     // True if any module ever loaded through this manager is poisoned or errored
     [[nodiscard]] auto any_errored() const noexcept -> bool;
     [[nodiscard]] auto get_or_create_builtin_module(std::string_view source) -> module&;
@@ -332,14 +334,18 @@ class module_manager {
         return static_cast<bool>(builtin_module_);
     }
 
+    // The returned reference is guaranteed to be stable even across moves of the manager
+    [[nodiscard]] auto arena() noexcept -> ghoti::arena& { return *arena_; }
+
   private:
     [[nodiscard]] auto try_get(const std::filesystem::path& path)
         -> stdx::result<gsl::not_null<module*>, diagnostic>;
 
   private:
-    source_loader&    loader_;
-    module_table      modules_;
-    stdx::box<module> builtin_module_;
+    source_loader&          loader_;
+    module_table            modules_;
+    stdx::box<module>       builtin_module_;
+    stdx::box<ghoti::arena> arena_{stdx::make_box<ghoti::arena>()};
 
     // Maps physical ghoti modules to their path on disk
     module_name_map module_lut_;

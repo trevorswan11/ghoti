@@ -356,16 +356,26 @@ auto get_decl_linkage(const ast::decl_stmt& decl) noexcept -> gir::linkage {
     return gir::linkage::INTERNAL;
 }
 
+// A `const X := @compileError("msg")` declaration is a deferred error
+auto decl_is_deferred_compile_error(const ast::AST& ast, const ast::decl_stmt& decl) -> bool {
+    if (!decl.value) { return false; }
+    const ast::node_id value_id{*decl.value};
+    if (value_id.get_kind() != ast::node_kind::CALL_EXPRESSION) { return false; }
+    const auto& call{ast.get_as<ast::call_expr>(value_id)};
+    return ast::node_id{call.function}.get_token_type() ==
+           syntax::token_type_t::BUILTIN_COMPILE_ERROR;
+}
+
 // Resolves an extern decl's optional `("target")` argument, defaulting to `"c"`.
 auto get_extern_target(const ast::AST& ast, const ast::decl_stmt& decl) -> std::string {
     if (!decl.extern_target) { return "c"; }
-    return ast.get_as<ast::string_expr>(**decl.extern_target).value;
+    return std::string{ast.get_as<ast::string_expr>(**decl.extern_target).value};
 }
 
 // The explicit symbol name from `extern("lib", "sym")` / `export("sym")`, else empty.
 auto get_link_name(const ast::AST& ast, const ast::decl_stmt& decl) -> std::string {
     if (!decl.link_name) { return {}; }
-    return ast.get_as<ast::string_expr>(**decl.link_name).value;
+    return std::string{ast.get_as<ast::string_expr>(**decl.link_name).value};
 }
 
 } // namespace
@@ -574,6 +584,8 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
     if (sema_type->get_kind() == sema::type_kind::TYPE) { return; }
     // An `interface` decl is a pure compile-time contract with no runtime storage or body.
     if (sema_type->get_kind() == sema::type_kind::INTERFACE) { return; }
+    // A deferred `@compileError` declaration only reports at its reference sites
+    if (decl_is_deferred_compile_error(active_ast(), decl)) { return; }
 
     const auto linkage{get_decl_linkage(decl)};
 
@@ -808,7 +820,7 @@ auto emitter::emit_top_level_test(ast::node_id id, const ast::test_stmt& test) -
 
     const auto test_desc{test.description
                              .transform([&](ast::string_handle h) {
-                                 return active_ast().get_as<ast::string_expr>(h).value;
+                                 return std::string{active_ast().get_as<ast::string_expr>(h).value};
                              })
                              .or_else([this] -> stdx::option<std::string> {
                                  return fmt::format("anonymous_test{}", anon_test_desc_counter_++);
@@ -1372,6 +1384,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
     const auto  sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Local declaration must have a resolved sema type");
     if (sema_type->get_kind() == sema::type_kind::TYPE) { return; }
+    if (decl_is_deferred_compile_error(active_ast(), decl)) { return; }
 
     if (decl.value &&
         decl.value->any<ast::struct_expr, ast::union_expr, ast::enum_expr, ast::interface_expr>()) {

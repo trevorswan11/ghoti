@@ -10,10 +10,12 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/arena.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/ast/kind.hh"
 #include "compiler/ast/traits.hh"
 #include "compiler/ast/visitor.hh"
+#include "compiler/syntax/interner.hh"
 #include "compiler/syntax/token.hh"
 #include "support/diagnostic.hh"
 
@@ -215,11 +217,21 @@ class AST {
     auto               set_module_doc(std::string text) -> void { module_doc_ = std::move(text); }
     [[nodiscard]] auto module_doc() const noexcept -> std::string_view { return module_doc_; }
 
-    constexpr auto clear() noexcept -> void {
+    // `parser::consume` calls this before it parses; it must outlive the AST.
+    auto set_arena(ghoti::arena& arena) -> void { interner_.emplace(arena); }
+
+    // The returned view stays valid for as long as the bound arena.
+    [[nodiscard]] auto intern(std::string_view text) -> std::string_view {
+        ASSERT(interner_, "AST has no arena");
+        return interner_->intern(text);
+    }
+
+    auto clear() noexcept -> void {
         nodes_.clear();
         explicit_types_.clear();
         doc_comments_.clear();
         module_doc_.clear();
+        if (interner_) { interner_->clear(); }
     }
 
   private:
@@ -233,6 +245,7 @@ class AST {
     data_pool<explicit_type_id, type_variant> explicit_types_;
     std::vector<doc_comment>                  doc_comments_;
     std::string                               module_doc_;
+    stdx::option<syntax::string_interner>     interner_;
 };
 
 } // namespace ghoti::ast

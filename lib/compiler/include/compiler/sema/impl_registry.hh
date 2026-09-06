@@ -14,6 +14,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/arena.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/sema/type.hh"
 
@@ -86,7 +87,7 @@ class impl_registry {
                                      ankerl::unordered_dense::set<const parameterized_impl*>>;
 
   public:
-    explicit impl_registry(arena_alloc& arena) noexcept : arena_{arena} {}
+    explicit impl_registry(ghoti::arena& arena) noexcept : arena_{arena} {}
     ~impl_registry() = default;
     MAKE_MOVE_CONSTRUCTABLE_ONLY(impl_registry)
 
@@ -142,7 +143,7 @@ class impl_registry {
     [[nodiscard]] auto records(this auto&& self) noexcept -> auto& { return self.records_; }
 
   private:
-    arena_alloc&                     arena_;
+    ghoti::arena&                    arena_;
     std::vector<impl_record*>        records_;
     std::vector<parameterized_impl*> param_records_;
     template_param_map               templates_;

@@ -67,6 +67,7 @@ auto lexer::advance() noexcept -> token_t {
         token.slice = stdx::string::substr(input_, pos_, 1);
         token.type  = *maybe_misc_token_type;
     } else if (current_byte_ == '@') {
+        if (peek_pos_ < input_.size() && input_[peek_pos_] == '"') { return read_raw_identifier(); }
         token.slice = read_ident(true);
         token.type  = lu_builtin(token.slice);
         return token;
@@ -419,6 +420,34 @@ auto lexer::read_string() noexcept -> token_t {
     read_character();
 
     return {token_type_t::STRING,
+            stdx::string::substr(input_, start, pos_ - start),
+            start_line,
+            start_col};
+}
+
+auto lexer::read_raw_identifier() noexcept -> token_t {
+    const auto start{pos_}; // Leading '@'
+    const auto start_line{line_no_};
+    const auto start_col{col_no_};
+    read_character(2); // consume '@' and the opening '"'
+
+    while (current_byte_ != '"' && current_byte_ != '\0' && current_byte_ != '\n' &&
+           current_byte_ != '\r') {
+        if (current_byte_ == '\\') { read_escape(); }
+        read_character();
+    }
+
+    // An unterminated raw identifier surfaces as ILLEGAL
+    if (current_byte_ != '"') {
+        return {token_type_t::ILLEGAL,
+                stdx::string::substr(input_, start, pos_ - start),
+                start_line,
+                start_col};
+    }
+    read_character(); // consume the closing '"'
+
+    // The slice keeps the whole `@"..."` lexeme for the parser to intern and interpret
+    return {token_type_t::IDENT,
             stdx::string::substr(input_, start, pos_ - start),
             start_line,
             start_col};

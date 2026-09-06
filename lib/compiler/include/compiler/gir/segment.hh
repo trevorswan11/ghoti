@@ -9,14 +9,14 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/arena.hh"
 #include "compiler/gir/instruction.hh"
-#include "compiler/sema/type.hh"
 
 namespace ghoti::gir {
 
 class segment {
   public:
-    constexpr explicit segment(sema::arena_alloc& arena, segment_id id) noexcept
+    constexpr explicit segment(ghoti::arena& arena, segment_id id) noexcept
         : arena_{arena}, id_{id} {}
     ~segment() = default;
     MAKE_PINNED(segment);
@@ -43,7 +43,7 @@ class segment {
     [[nodiscard]] auto size() const noexcept -> usize { return instructions_.size(); }
 
   private:
-    sema::arena_alloc&        arena_;
+    ghoti::arena&             arena_;
     segment_id                id_{0};
     std::vector<instruction*> instructions_;
 };

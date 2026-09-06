@@ -27,6 +27,16 @@ struct token_t {
 
     // Materializes the token, asserting that it was a string token
     [[nodiscard]] auto materialize_string() const -> std::string;
+
+    // True when this is an `IDENT` produced from the raw-identifier form `@"..."`.
+    [[nodiscard]] auto is_raw_identifier() const noexcept -> bool {
+        return type == token_type_t::IDENT && slice.starts_with("@\"");
+    }
+
+    // Decodes a raw identifier's `@"..."` lexeme into its bare name, resolving escape sequences.
+    // Asserts `is_raw_identifier()`.
+    [[nodiscard]] auto materialize_raw_identifier() const -> std::string;
+
     [[nodiscard]] auto is_decl_token() const noexcept -> bool;
 
     // Checks if the token can be used to kick off member parsing
