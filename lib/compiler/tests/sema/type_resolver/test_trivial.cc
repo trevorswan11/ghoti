@@ -63,6 +63,32 @@ TEST_CASE("Type alias resolution") {
     CHECK(c_type == ctx->get_type(sema::type_kind::REFERENCE, bool_ref));
 }
 
+TEST_CASE("`using` rejects a value RHS with a pointer to `const`/`constexpr`") {
+    SECTION("same-module value constant") {
+        helpers::test_resolver_fail(
+            "const BASE := 42; using K = BASE;",
+            sema::diagnostic{"'using' aliases a type, but 'BASE' is a value; use 'const' or "
+                             "'constexpr' to alias a value",
+                             sema::error::TYPE_MISMATCH,
+                             std::pair{0UZ, 28UZ}});
+    }
+
+    SECTION("cross-module value constant") {
+        helpers::test_resolver_fail(
+            R"(import "leaf.gh" as leaf; pub using K = leaf::K;)",
+            {helpers::mock_file{"leaf.gh", "pub const K: i32 = 42;", "leaf"}},
+            sema::diagnostic{"'using' aliases a type, but 'K' is a value; use 'const' or "
+                             "'constexpr' to alias a value",
+                             sema::error::TYPE_MISMATCH,
+                             std::pair{0UZ, 40UZ}});
+    }
+
+    SECTION("a type RHS is still accepted") {
+        helpers::resolve_and_check("const S := struct { x: i32 }; using T = S;");
+        helpers::resolve_and_check("using Byte = u8;");
+    }
+}
+
 TEST_CASE("Unary expression resolution") {
     helpers::resolve_and_check("var a: ^i32 = undefined; _ = *a;");
     helpers::resolve_and_check("_ = !1;");
