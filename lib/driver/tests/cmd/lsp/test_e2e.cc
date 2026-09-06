@@ -132,7 +132,11 @@ TEST_CASE("ghoti lsp hover surfaces a `///` doc comment on an enum variant and i
     constexpr std::string_view text{R"(pub const Color := enum : u32 {
     /// The warm one.
     red = 1u32,
-    blue = 2u32,
+    blue = 2u32, /// the cool one
+};
+pub const Stat := struct {
+    dev: i32, /// device id
+    mode: u16,
 };
 pub const main := fn(): i32 {
     return if (Color.red == Color.red) 0 else 1;
@@ -176,10 +180,15 @@ pub const main := fn(): i32 {
             .get<std::string>();
     };
 
-    // On the variant's own declaration ...
-    CHECK(hover_at(2, 2, 5).contains("The warm one."));
-    // ... and on a `Color.red` use site.
-    CHECK(hover_at(3, 6, 21).contains("The warm one."));
+    // A leading `///` on the variant's own declaration, hover leads with `<name>: <type>` ...
+    const auto red_decl{hover_at(2, 2, 5)};
+    CHECK(red_decl.contains("The warm one."));
+    CHECK(red_decl.contains("red:"));
+    // ... the same doc reaches a `Color.red` use site ...
+    CHECK(hover_at(3, 10, 21).contains("The warm one."));
+    // ... a trailing same-line `///` on a variant and on a struct field is surfaced too.
+    CHECK(hover_at(4, 3, 5).contains("the cool one"));
+    CHECK(hover_at(5, 6, 5).contains("device id"));
 
     lsp::write_message(proc.stdin_stream(),
                        {{"jsonrpc", "2.0"}, {"id", 9}, {"method", "shutdown"}});

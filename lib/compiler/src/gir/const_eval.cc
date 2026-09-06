@@ -2106,11 +2106,11 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!op_h) { return stdx::none; }
         const auto operand{try_eval(*op_h)};
         if (!operand) { return stdx::none; }
-        const auto bits{operand->as_uint_opt()};
+        const auto bits{operand->as_int_opt()};
         if (!bits) { return stdx::none; }
         auto target{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
         if (!target) { target = module_->get_sema_type_opt(call.function); }
-        return const_value{static_cast<u64>(*bits), target};
+        return const_value{static_cast<u64>(static_cast<u128>(*bits)), target};
     }
     case syntax::token_type_t::BUILTIN_INT_FROM_PTR: {
         // `@intFromPtr(p)` folds only when `p` is itself a folded pointer constant.
@@ -2147,9 +2147,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
                                ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
         }
         if (target->get_kind() == sema::type_kind::POINTER) {
-            if (const auto bits{operand->as_uint_opt()}) {
-                return const_value{static_cast<u64>(*bits), target};
-            }
+            return const_value{static_cast<u64>(static_cast<u128>(*src_int)), target};
         }
         return stdx::none;
     }
