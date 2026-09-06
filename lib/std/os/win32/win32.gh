@@ -1,0 +1,235 @@
+//! Raw Windows (Win32) I/O primitives, backed by `kernel32`
+import "../../result.gh" as result;
+pub import "errno.gh" as errno;
+
+pub using Handle = ^mut opaque;
+
+using Errno = errno::Win32Error;
+
+using DWORD = u32;
+using BOOL = i32;
+
+const INVALID_HANDLE: usize = 0xFFFFFFFFFFFFFFFFuz;
+
+pub const is_invalid_handle := fn(h: Handle): bool {
+    return @intFromPtr(h) == INVALID_HANDLE;
+};
+
+// CreateFileW dwDesiredAccess (winnt.h)
+pub const GENERIC_READ: u32 = 0x80000000u32;
+pub const GENERIC_WRITE: u32 = 0x40000000u32;
+pub const GENERIC_EXECUTE: u32 = 0x20000000u32;
+pub const GENERIC_ALL: u32 = 0x10000000u32;
+pub const FILE_APPEND_DATA: u32 = 0x00000004u32; /// write always at EOF
+
+// CreateFileW dwShareMode (winnt.h)
+pub const FILE_SHARE_READ: u32 = 0x00000001u32;
+pub const FILE_SHARE_WRITE: u32 = 0x00000002u32;
+pub const FILE_SHARE_DELETE: u32 = 0x00000004u32;
+
+// CreateFileW dwCreationDisposition (fileapi.h)
+pub const CREATE_NEW: u32 = 1u32; /// fail if the file exists
+pub const CREATE_ALWAYS: u32 = 2u32; /// create, or open+truncate if it exists
+pub const OPEN_EXISTING: u32 = 3u32; /// fail if the file does not exist
+pub const OPEN_ALWAYS: u32 = 4u32; /// open, or create if it does not exist
+pub const TRUNCATE_EXISTING: u32 = 5u32; /// open+truncate, fail if it does not exist
+
+// CreateFileW dwFlagsAndAttributes (fileapi.h / winnt.h)
+pub const FILE_ATTRIBUTE_NORMAL: u32 = 0x00000080u32;
+pub const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x02000000u32;
+
+// SetFilePointerEx dwMoveMethod (winbase.h)
+pub const SEEK_SET: i32 = 0; /// FILE_BEGIN: starting point is zero or the beginning of the file.
+pub const SEEK_CUR: i32 = 1; /// FILE_CURRENT: starting point is the current value of the file pointer.
+pub const SEEK_END: i32 = 2; /// FILE_END: starting point is the current end-of-file position.
+
+// GetStdHandle nStdHandle (winbase.h)
+pub const STD_INPUT_HANDLE: u32 = 0xFFFFFFF6u32; /// (DWORD)-10
+pub const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5u32; /// (DWORD)-11
+pub const STD_ERROR_HANDLE: u32 = 0xFFFFFFF4u32; /// (DWORD)-12
+
+// MultiByteToWideChar (stringapiset.h)
+pub const CP_UTF8: u32 = 65001u32;
+pub const MB_ERR_INVALID_CHARS: u32 = 0x00000008u32;
+
+const WIDE_MAX: usize = 32767uz; /// Largest UTF-16 path len on the stack, including the NUL
+const DWORD_MAX: usize = 0xFFFFFFFFuz;
+
+extern("kernel32", "CreateFileW") const CreateFileW: fn(
+    path: ^u16,
+    access: u32,
+    share: u32,
+    security: ^mut opaque,
+    disposition: u32,
+    flags: u32,
+    template: ^mut opaque
+): Handle;
+
+extern("kernel32", "ReadFile") const ReadFile: fn(
+    h: Handle,
+    buf: ^mut u8,
+    to_read: u32,
+    read: ^mut u32,
+    overlapped: ^mut opaque
+): BOOL;
+
+extern("kernel32", "WriteFile") const WriteFile: fn(
+    h: Handle,
+    buf: ^u8,
+    to_write: u32,
+    written: ^mut u32,
+    overlapped: ^mut opaque
+): BOOL;
+
+extern("kernel32", "CloseHandle") const CloseHandle: fn(h: Handle): BOOL;
+
+extern("kernel32", "SetFilePointerEx") const SetFilePointerEx: fn(
+    h: Handle,
+    distance: i64,
+    new_pointer: ^mut i64,
+    method: u32
+): i32;
+
+extern("kernel32", "GetStdHandle") const GetStdHandle: fn(which: u32): Handle;
+extern("kernel32", "GetLastError") const GetLastError: fn(): DWORD;
+
+/// Treats the input as NUL-terminated and NUL-terminates the output
+extern("kernel32", "MultiByteToWideChar") const MultiByteToWideChar: fn(
+    code_page: u32,
+    flags: u32,
+    mb_str: ^u8,
+    mb_len: i32,
+    wide_str: ^mut u16,
+    wide_cap: i32
+): i32;
+
+constexpr R := fn(T: type): type {
+    return result::Result(T, Errno);
+};
+
+/// Write the contents of `buf` to the file, returning the number of written bytes
+pub const write := fn(h: Handle, buf: []u8): R(usize) {
+    var put: u32 = 0u32;
+    const to_write := @as(u32, if (buf.len > DWORD_MAX) DWORD_MAX else buf.len);
+    const ok := WriteFile(h, buf.ptr, to_write, ^mut put, nullptr);
+    return if (ok == 0i32) .{ .err = @as(Errno, GetLastError()) } else .{ .ok = @as(usize, put) };
+};
+
+/// Read the contents of the file into `buf`, returning the number of read bytes
+pub const read := fn(h: Handle, buf: []mut u8): R(usize) {
+    var got: u32 = 0u32;
+    const to_read := @as(u32, if (buf.len > DWORD_MAX) DWORD_MAX else buf.len);
+    const ok := ReadFile(h, buf.ptr, to_read, ^mut got, nullptr);
+    if (ok == 0i32) {
+        const e := GetLastError();
+        if (e == @as(u32, Errno.ERROR_BROKEN_PIPE) or e == @as(u32, Errno.ERROR_HANDLE_EOF)) {
+            return .{ .ok = 0uz };
+        };
+        return .{ .err = @as(Errno, e) };
+    };
+    return .{ .ok = @as(usize, got) };
+};
+
+/// UTF-8 (NUL-terminated) -> UTF-16 (NUL-terminated), into a caller-provided stack buffer.
+/// Returns the WCHAR count including the terminator.
+const to_wide := fn(utf8: [:0]u8, out: ^mut [WIDE_MAX]u16): R(i32) {
+    const n := MultiByteToWideChar(
+        CP_UTF8,
+        MB_ERR_INVALID_CHARS,
+        utf8.ptr,
+        -1i32,
+        @ptrCast(^mut u16, out),
+        @as(i32, WIDE_MAX),
+    );
+    return if (n == 0i32) .{ .err = @as(Errno, GetLastError()) } else .{ .ok = n };
+};
+
+/// Open the file at the provided path with the provided, access, share, disposition, and flags.
+/// - https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew
+pub const open := fn(path: [:0]u8, access: u32, share: u32, disposition: u32, flags: u32): R(Handle) {
+    var wbuf: [WIDE_MAX]u16 = undefined;
+    _ = to_wide(path, ^mut wbuf)?;
+    const h := CreateFileW(
+        @ptrCast(^u16, ^mut wbuf),
+        access,
+        share,
+        nullptr,
+        disposition,
+        flags,
+        nullptr,
+    );
+
+    // CREATE_ALWAYS / OPEN_ALWAYS succeed on an existing file but leave
+    // GetLastError() == ERROR_ALREADY_EXISTS
+    return if (is_invalid_handle(h)) .{ .err = @as(Errno, GetLastError()) } else .{ .ok = h };
+};
+
+/// Close the file associated with the given handle
+pub const close := fn(h: Handle): R(void) {
+    return if (CloseHandle(h) == 0i32) .{ .err = @as(Errno, GetLastError()) } else .{ .ok = {} };
+};
+
+/// Moves the file pointer of the specified file.
+/// if `whence` is `SEEK_SET`: starting point is zero or the beginning of the file.
+/// if `whence` is `SEEK_CUR`: starting point is the current value of the file pointer.
+/// if `whence` is `SEEK_END`: starting point is the current end-of-file position.
+pub const lseek := fn(h: Handle, off: i64, whence: i32): R(i64) {
+    var new_pos: i64 = 0i64;
+    const ok := SetFilePointerEx(h, off, ^mut new_pos, @as(u32, whence));
+    return if (ok == 0i32) .{ .err = @as(Errno, GetLastError()) } else .{ .ok = new_pos };
+};
+
+const std_handle := fn(which: u32): R(Handle) {
+    const h := GetStdHandle(which);
+    if (is_invalid_handle(h)) {
+        return .{ .err = @as(Errno, GetLastError()) };
+    };
+
+    // NULL means "this process has no such stream" (e.g. a GUI subsystem).
+    return if (!h) .{ .err = .ERROR_INVALID_HANDLE } else .{ .ok = h };
+};
+
+pub const stdin := fn(): R(Handle) {
+    return std_handle(STD_INPUT_HANDLE);
+};
+
+pub const stdout := fn(): R(Handle) {
+    return std_handle(STD_OUTPUT_HANDLE);
+};
+
+pub const stderr := fn(): R(Handle) {
+    return std_handle(STD_ERROR_HANDLE);
+};
+
+test "win32: open / read / lseek / close a known file" {
+    const path: [:0]u8 = "C:/Windows/System32/kernel32.dll";
+    const r := open(path, GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL);
+    @require(r == .ok);
+    const h := match (r) { .ok => |x| x, .err => nullptr };
+
+    // Check the DOS/PE magic
+    var buf: [8]mut u8 = undefined;
+    @expect(match (read(h, buf[0..2])) { .ok => |k| k == 2uz, .err => false });
+    @expect(buf[0] == 0x4Du8); // 'M'
+    @expect(buf[1] == 0x5Au8); // 'Z'
+
+    @expect(match (lseek(h, 0i64, SEEK_END)) { .ok => |end| end > 0i64, .err => false });
+    @expect(match (close(h)) { .ok => true, .err => false });
+}
+
+test "win32: opening a missing file reports not-found" {
+    const r := open(
+        "C:/Windows/System32/ghoti-no-such-file.xyz",
+        GENERIC_READ,
+        FILE_SHARE_READ,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+    );
+
+    @expect(
+        match (r) {
+            .ok => false,
+            .err => |e| e == .ERROR_FILE_NOT_FOUND or e == .ERROR_PATH_NOT_FOUND,
+        },
+    );
+}
