@@ -18,8 +18,8 @@ TEST_CASE("Type translate primitive types") {
     llvm::Module             mod{"test", context};
     codegen::type_translator translator{context, mod};
 
-    ghoti::arena arena;
-    sema::type_pool   pool{arena};
+    ghoti::arena    arena;
+    sema::type_pool pool{arena};
 
     auto& i32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
     auto& i64_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{64}, true}]};
@@ -51,8 +51,8 @@ TEST_CASE("Type translate pointer and reference types") {
     llvm::Module             mod{"test", context};
     codegen::type_translator translator{context, mod};
 
-    ghoti::arena arena;
-    sema::type_pool   pool{arena};
+    ghoti::arena    arena;
+    sema::type_pool pool{arena};
 
     auto& i32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
     auto& ptr_t{*pool[{sema::type_kind::POINTER, sema::types::mut::CONSTANT, &i32_t}]};
@@ -75,8 +75,8 @@ TEST_CASE("Type translate array and slice types") {
     llvm::Module             mod{"test", context};
     codegen::type_translator translator{context, mod};
 
-    ghoti::arena arena;
-    sema::type_pool   pool{arena};
+    ghoti::arena    arena;
+    sema::type_pool pool{arena};
 
     auto& i32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
     auto& arr_t{*pool[{sema::type_kind::ARRAY, sema::types::mut::CONSTANT, &i32_t, 5UZ}]};
@@ -104,8 +104,8 @@ TEST_CASE("Type translate function types") {
     llvm::Module             mod{"test", context};
     codegen::type_translator translator{context, mod};
 
-    ghoti::arena arena;
-    sema::type_pool   pool{arena};
+    ghoti::arena    arena;
+    sema::type_pool pool{arena};
 
     auto& i32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
     auto& f64_t{*pool[{sema::type_kind::F64, sema::types::mut::CONSTANT}]};
@@ -235,8 +235,8 @@ TEST_CASE("usize/isize/slice-length follow the module's target data layout") {
     mod.setDataLayout("e-p:32:32"); // 32-bit pointers, unlike this host build
     codegen::type_translator translator{context, mod};
 
-    ghoti::arena arena;
-    sema::type_pool   pool{arena};
+    ghoti::arena    arena;
+    sema::type_pool pool{arena};
 
     auto& isize_t{*pool[{sema::type_kind::ISIZE, sema::types::mut::CONSTANT}]};
     auto& usize_t{*pool[{sema::type_kind::USIZE, sema::types::mut::CONSTANT}]};
