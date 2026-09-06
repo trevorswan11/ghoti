@@ -18,7 +18,7 @@ TEST_CASE("Type translate primitive types") {
     llvm::Module             mod{"test", context};
     codegen::type_translator translator{context, mod};
 
-    sema::arena_alloc arena;
+    ghoti::arena arena;
     sema::type_pool   pool{arena};
 
     auto& i32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
@@ -51,7 +51,7 @@ TEST_CASE("Type translate pointer and reference types") {
     llvm::Module             mod{"test", context};
     codegen::type_translator translator{context, mod};
 
-    sema::arena_alloc arena;
+    ghoti::arena arena;
     sema::type_pool   pool{arena};
 
     auto& i32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
@@ -75,7 +75,7 @@ TEST_CASE("Type translate array and slice types") {
     llvm::Module             mod{"test", context};
     codegen::type_translator translator{context, mod};
 
-    sema::arena_alloc arena;
+    ghoti::arena arena;
     sema::type_pool   pool{arena};
 
     auto& i32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
@@ -104,7 +104,7 @@ TEST_CASE("Type translate function types") {
     llvm::Module             mod{"test", context};
     codegen::type_translator translator{context, mod};
 
-    sema::arena_alloc arena;
+    ghoti::arena arena;
     sema::type_pool   pool{arena};
 
     auto& i32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
@@ -235,7 +235,7 @@ TEST_CASE("usize/isize/slice-length follow the module's target data layout") {
     mod.setDataLayout("e-p:32:32"); // 32-bit pointers, unlike this host build
     codegen::type_translator translator{context, mod};
 
-    sema::arena_alloc arena;
+    ghoti::arena arena;
     sema::type_pool   pool{arena};
 
     auto& isize_t{*pool[{sema::type_kind::ISIZE, sema::types::mut::CONSTANT}]};

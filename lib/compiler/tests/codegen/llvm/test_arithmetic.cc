@@ -12,6 +12,7 @@
 #include <stdx/arena.hh>
 #include <stdx/types.hh>
 
+#include "compiler/arena.hh"
 #include "compiler/codegen/llvm_lowering.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/sema/type.hh"
@@ -23,7 +24,7 @@ TEST_CASE("LLVM lowering integer and float constants") {
     llvm::LLVMContext      context;
     codegen::llvm_lowering lowering{context, "test_consts"};
 
-    sema::arena_alloc arena;
+    ghoti::arena arena;
     sema::type_pool   pool{arena};
     auto& i32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
     auto& f64_t{*pool[{sema::type_kind::F64, sema::types::mut::CONSTANT}]};
@@ -48,7 +49,7 @@ TEST_CASE("LLVM lowering binary arithmetic instructions") {
     llvm::LLVMContext      context;
     codegen::llvm_lowering lowering{context, "test_binary"};
 
-    sema::arena_alloc arena;
+    ghoti::arena arena;
     sema::type_pool   pool{arena};
     auto& i32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
     auto& u32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, false}]};
@@ -141,7 +142,7 @@ TEST_CASE("LLVM lowering unary and comparison instructions") {
     llvm::LLVMContext      context;
     codegen::llvm_lowering lowering{context, "test_unary_cmp"};
 
-    sema::arena_alloc arena;
+    ghoti::arena arena;
     sema::type_pool   pool{arena};
     auto& i32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
     auto& bool_t{*pool[{sema::type_kind::BOOL, sema::types::mut::CONSTANT}]};
@@ -201,7 +202,7 @@ TEST_CASE("LLVM lowering cast instructions") {
     llvm::LLVMContext      context;
     codegen::llvm_lowering lowering{context, "test_casts"};
 
-    sema::arena_alloc arena;
+    ghoti::arena arena;
     sema::type_pool   pool{arena};
     auto& i32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
     auto& i64_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{64}, true}]};

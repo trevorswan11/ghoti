@@ -62,4 +62,11 @@ TEST_CASE("Forward references and mutual recursion resolve") {
     )") == 7);
 }
 
+TEST_CASE("deferred @compileError allows unreferenced decls to still compile") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const BROKEN := @compileError("port this C macro by hand");
+        pub const main := fn(): i32 { return 42; };
+    )") == 42);
+}
+
 } // namespace ghoti::tests

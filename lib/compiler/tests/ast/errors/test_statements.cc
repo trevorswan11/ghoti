@@ -107,6 +107,18 @@ TEST_CASE("Malformed extern targets") {
                                                  std::pair{0UZ, 7UZ}});
 }
 
+TEST_CASE("Malformed raw identifiers") {
+    helpers::test_parser_fail(R"(const @"" := 0;)",
+                              syntax::diagnostic{"A raw identifier cannot be empty",
+                                                 syntax::error::EMPTY_RAW_IDENTIFIER,
+                                                 std::pair{0UZ, 6UZ}});
+
+    helpers::test_parser_fail(R"(const x := @"unterminated;)",
+                              syntax::diagnostic{"Unterminated raw identifier",
+                                                 syntax::error::UNTERMINATED_RAW_IDENTIFIER,
+                                                 std::pair{0UZ, 11UZ}});
+}
+
 TEST_CASE("Non-extern declarations must be value-initialized") {
     const auto expected_diag = [] -> syntax::diagnostic {
         return {"Non-extern declarations must be value-initialized; use '= undefined' to leave a "

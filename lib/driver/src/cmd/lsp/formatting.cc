@@ -9,6 +9,7 @@
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
+#include "compiler/arena.hh"
 #include "compiler/ast/ast.hh"
 #include "compiler/ast/dumper.hh"
 #include "compiler/ast/formatter.hh"
@@ -42,8 +43,9 @@ namespace {
 [[nodiscard]] auto format_document(std::string_view source_code, formatting_options opts)
     -> stdx::option<std::string> {
     syntax::parser parser{source_code};
+    ghoti::arena   arena;
     ast::AST       ast;
-    const auto     diagnostics{parser.consume(ast)};
+    const auto     diagnostics{parser.consume(ast, arena)};
     if (!diagnostics.empty()) { return stdx::none; }
 
     std::ostringstream formatted_os;

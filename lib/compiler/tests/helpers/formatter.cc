@@ -11,7 +11,7 @@
 #include "compiler/ast/formatter.hh"
 #include "compiler/syntax/doc.hh"
 #include "compiler/syntax/layout_engine.hh"
-#include "compiler/syntax/parser.hh"
+#include "helpers/ast.hh"
 
 namespace ghoti::tests::helpers {
 
@@ -23,10 +23,8 @@ auto render_docs(syntax::doc_manager& m, syntax::doc_id root, u16 max_width, u16
 }
 
 auto format_source(std::string_view src, u16 max_width, u16 indent_spaces) -> std::string {
-    syntax::parser p{src};
-    ast::AST       ast;
-    const auto     errors{p.consume(ast)};
-    CHECK(errors.empty());
+    ghoti::arena   arena;
+    auto ast{parse(src, arena)};
 
     std::ostringstream os;
     ast::formatter{ast, os, max_width, indent_spaces, src}.format();
