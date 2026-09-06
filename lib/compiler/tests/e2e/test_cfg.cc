@@ -204,6 +204,68 @@ TEST_CASE("E2E cfg: a @cfg-gated enum variant is real and usable") {
     )") == 42);
 }
 
+TEST_CASE("E2E cfg: a non-braced @cfg arm on a variant / field may be followed by a bare else") {
+    CHECK(helpers::compile_and_run(R"(
+        const Tag := enum : u32 {
+            A = 1u32,
+            @cfg(ptr_bits >= 16) TAKEN = 64u32,
+            else DEAD = 32u32,
+            _,
+        };
+        pub const main := fn(): i32 { return @as(i32, @as(u32, Tag.TAKEN)); };
+    )") == 64);
+
+    CHECK(helpers::compile_and_run(R"(
+        const S := struct {
+            a: i32,
+            @cfg(ptr_bits >= 16) w: i32,
+            else dead: i64,
+            b: i32,
+        };
+        pub const main := fn(): i32 {
+            const s: S = .{ .a = 1, .w = 5, .b = 1 };
+            return s.w + s.a + s.b;
+        };
+    )") == 7);
+}
+
+TEST_CASE("E2E cfg: a `@cfg`-gated member may follow a non-exhaustive enum's `_` marker") {
+    CHECK(helpers::compile_and_run(R"(
+        const E := enum : u32 {
+            A = 1u32,
+            _,
+            @cfg(ptr_bits >= 16) pub const label := fn(): i32 { return 7; };
+            else pub const label := fn(): i32 { return 3; };
+        };
+        pub const main := fn(): i32 { return E.label(); };
+    )") == 7);
+}
+
+TEST_CASE("E2E cfg: a re-exported @cfgValue constant is usable cross-module as a value") {
+    const auto exit_code{helpers::compile_and_run(
+        R"(
+            import "sys.gh" as sys;
+            pub const main := fn(): i32 {
+                var buf: [sys::word]mut i32 = undefined;
+                buf[sys::word - 1uz] = 3;
+                const via_if := if constexpr (sys::is_wide) 4 else 2;
+                const via_val := sys::is_wide;
+                return buf[sys::word - 1uz] + via_if + (if (via_val) 1 else 0);
+            };
+        )",
+        {helpers::mock_file{"sys.gh",
+                            R"(
+            pub constexpr is_wide := @cfgValue(ptr_bits >= 32);
+            pub constexpr word := @cfgValue(
+                ptr_bits == 64 => 8uz,
+                ptr_bits == 32 => 4uz,
+                _              => @compileError("unsupported"),
+            );
+        )",
+                            "sys"}})};
+    CHECK(exit_code == 8);
+}
+
 TEST_CASE("E2E cfg: endian is decided at compile time and exactly one arm runs") {
     CHECK(helpers::compile_and_run(R"(
         @cfg(endian == .little) { const MARK := 1; }

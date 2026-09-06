@@ -382,6 +382,7 @@ parse_aggregate_cfg_group(syntax::parser& parser,
             TRY(parser.expect_peek(tt::RBRACE));
         } else {
             items.emplace_back(TRY(parse_one(parser)));
+            if (parser.peek_token_is(tt::COMMA)) { parser.advance(); }
         }
         return items;
     };
@@ -569,7 +570,8 @@ auto enum_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synta
 
             // The non exhaustive marker must be the final 'enumeration'
             if (parser.get_peek_token().is_member_token() ||
-                parser.peek_token_is(syntax::token_type_t::RBRACE)) {
+                parser.peek_token_is(syntax::token_type_t::RBRACE) ||
+                parser.peek_token_is(syntax::token_type_t::BUILTIN_CFG)) {
                 non_exhaustive = true;
                 break;
             }
@@ -1272,9 +1274,14 @@ auto match_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
 
         // An arm may list several comma-separated patterns before its `=>`.
         const bool is_catch_all_arm{catch_all_idx == arm_idx};
+        bool       trailing_comma{false}; // Asks the formatter to break them one per line
         while (parser.peek_token_is(syntax::token_type_t::COMMA)) {
-            parser.advance();
-            parser.advance();
+            parser.advance(); // current == COMMA
+            if (parser.peek_token_is(syntax::token_type_t::FAT_ARROW)) {
+                trailing_comma = true;
+                break;
+            }
+            parser.advance(); // current == the extra pattern's first token
             if (is_catch_all_arm || parser.current_token_is(syntax::token_type_t::UNDERSCORE)) {
                 return make_syntax_err("A catch-all '_' arm cannot list additional patterns",
                                        syntax::error::ILLEGAL_MATCH_CATCH_ALL,
@@ -1326,7 +1333,7 @@ auto match_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
         parser.advance();
         const auto consequence{TRY(parser.parse_restricted_statement(
             syntax::error::ILLEGAL_MATCH_ARM, syntax::semicolon_behavior::DISALLOW))};
-        arms.emplace_back(std::move(patterns), capture, modifier, consequence);
+        arms.emplace_back(std::move(patterns), capture, modifier, consequence, trailing_comma);
         arm_idx += 1;
 
         // The lack of a comma must mean we're at the end of the arm list

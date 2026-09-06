@@ -262,6 +262,19 @@ TEST_CASE("A multi-value match arm is taken when any listed pattern matches") {
     CHECK(helpers::compile_and_run(program) == 109);
 }
 
+TEST_CASE("A multi-value match arm accepts a trailing comma after the last pattern") {
+    CHECK(helpers::compile_and_run(R"(
+        const kind := fn(n: i32): i32 {
+            return match (n) {
+                0, 2, 4, => 10,
+                1, 3, => 20,
+                _ => 0,
+            };
+        };
+        pub const main := fn(): i32 { return kind(2) + kind(3) + kind(9); };
+    )") == 30);
+}
+
 TEST_CASE("A range match arm accepts runtime endpoints") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {

@@ -327,6 +327,7 @@ struct match_expr {
         // Only meaningful when `capture` holds a real (non-discarded) identifier
         type_modifier modifier;
         stmt_handle   dispatch;
+        bool          force_break{false};
 
         // The canonical pattern used for side-table keying and diagnostic locations.
         [[nodiscard]] auto primary_pattern() const noexcept -> match_pattern_handle {
