@@ -103,6 +103,91 @@ TEST_CASE("ghoti lsp answers initialize/didOpen/hover/shutdown over a real child
     CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
 }
 
+TEST_CASE("ghoti lsp hover surfaces a `///` doc comment on an enum variant and its uses") {
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
+    REQUIRE(proc.is_running());
+
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"id", 1},
+                           {"method", "initialize"},
+                           {
+                               "params",
+                               {
+                                   {"processId", nullptr},
+                                   {"capabilities", nlohmann::json::object()},
+                               },
+                           },
+                       });
+    CHECK(lsp::read_message(proc.stdout_stream(), std::cerr));
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"method", "initialized"},
+                           {"params", nlohmann::json::object()},
+                       });
+
+    constexpr std::string_view uri{"file:///test_e2e_field_doc.gh"};
+    constexpr std::string_view text{R"(pub const Color := enum : u32 {
+    /// The warm one.
+    red = 1u32,
+    blue = 2u32,
+};
+pub const main := fn(): i32 {
+    return if (Color.red == Color.red) 0 else 1;
+};
+)"};
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"method", "textDocument/didOpen"},
+                           {
+                               "params",
+                               {
+                                   {
+                                       "textDocument",
+                                       {
+                                           {"uri", uri},
+                                           {"languageId", "ghoti"},
+                                           {"version", 1},
+                                           {"text", text},
+                                       },
+                                   },
+                               },
+                           },
+                       });
+    CHECK(lsp::read_message(proc.stdout_stream(), std::cerr));
+
+    const auto hover_at = [&](i32 id, i32 line, i32 character) -> std::string {
+        lsp::write_message(proc.stdin_stream(),
+                           {
+                               {"jsonrpc", "2.0"},
+                               {"id", id},
+                               {"method", "textDocument/hover"},
+                               {"params",
+                                {{"textDocument", {{"uri", uri}}},
+                                 {"position", {{"line", line}, {"character", character}}}}},
+                           });
+        return UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr))
+            .at("result")
+            .at("contents")
+            .at("value")
+            .get<std::string>();
+    };
+
+    // On the variant's own declaration ...
+    CHECK(hover_at(2, 2, 5).contains("The warm one."));
+    // ... and on a `Color.red` use site.
+    CHECK(hover_at(3, 6, 21).contains("The warm one."));
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 9}, {"method", "shutdown"}});
+    CHECK(lsp::read_message(proc.stdout_stream(), std::cerr));
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+    CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
+}
+
 TEST_CASE("ghoti lsp offers a missing-semicolon quick fix over a real child process") {
     piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
     REQUIRE(proc.is_running());

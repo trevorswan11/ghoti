@@ -30,6 +30,55 @@ constexpr std::string_view PLAT_WINDOWS{R"(
 
 } // namespace
 
+// Mirrors `lib/std/os/os.gh`: a `@cfg(os)` backend select that flat-re-exports
+constexpr std::string_view OS_BACKEND_DARWIN{R"(
+    pub const Errno := enum : i32 { OK = 0, NOPE = 1, _ };
+    pub using Handle = i32;
+    pub const answer := fn(): i32 { return 7; };
+    pub const WHENCE_END: i32 = 2;
+)"};
+
+constexpr std::string_view OS_BACKEND_WINDOWS{R"(
+    pub const Errno := enum : u32 { OK = 0u32, NOPE = 1u32, _ };
+    pub using Handle = ^mut opaque;
+    pub const answer := fn(): i32 { return 7; };
+    pub const WHENCE_END: i32 = 2;
+)"};
+
+constexpr std::string_view OS_SELECT{R"(
+    @cfg(os == .macos) import "os_darwin.gh" as backend;
+    else @cfg(os == .windows) import "os_windows.gh" as backend;
+    else @compileError("unsupported target OS");
+
+    pub using Handle = backend::Handle;
+    pub using Errno = backend::Errno;
+    pub using answer = backend::answer;
+    pub const WHENCE_END := backend::WHENCE_END;
+)"};
+
+constexpr std::string_view OS_STD{R"( pub import "os_select.gh" as os; )"};
+
+TEST_CASE("E2E: a @cfg-selected backend flat-re-exports its type / fn / const through `std`") {
+    const auto exit_code{helpers::compile_and_run(
+        R"(
+            import "std.gh" as std;
+            pub const main := fn(): i32 {
+                const e: std::os::Errno = std::os::Errno.NOPE;
+                const w := @as(i32, std::os::WHENCE_END);
+                const a := std::os::answer();
+                return if (e == std::os::Errno.NOPE and w == 2) a else 1;
+            };
+        )",
+        {
+            helpers::mock_file{"os_darwin.gh", OS_BACKEND_DARWIN, "os_darwin"},
+            helpers::mock_file{"os_windows.gh", OS_BACKEND_WINDOWS, "os_windows"},
+            helpers::mock_file{"os_select.gh", OS_SELECT, "os_select"},
+            helpers::mock_file{"std.gh", OS_STD, "std"},
+        })};
+
+    CHECK(exit_code == 7);
+}
+
 TEST_CASE("E2E: importing every platform module still links on the host") {
     const auto exit_code{helpers::compile_and_run(
         R"(
