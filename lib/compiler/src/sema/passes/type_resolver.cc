@@ -90,6 +90,24 @@ auto type_resolver::resolve_types(mod::module& module, context& ctx) -> mod::mod
 
 namespace {
 
+// When `value` is exactly `@compileError("literal")`, returns the message
+[[nodiscard]] auto sole_compile_error_message(const ast::AST& ast, ast::expr_handle value)
+    -> stdx::option<std::string_view> {
+    const ast::node_id id{value};
+    if (id.get_kind() != ast::node_kind::CALL_EXPRESSION) { return stdx::none; }
+    const auto& call{ast.get_as<ast::call_expr>(id)};
+    if (ast::node_id{call.function}.get_token_type() !=
+        syntax::token_type_t::BUILTIN_COMPILE_ERROR) {
+        return stdx::none;
+    }
+    if (call.arguments.size() != 1) { return stdx::none; }
+    const auto arg{call.arguments.front().as_opt<ast::expr_handle>()};
+    if (!arg) { return stdx::none; }
+    const auto str{ast.get_as_opt<ast::string_expr>(*arg)};
+    if (!str) { return stdx::none; }
+    return str->value;
+}
+
 [[nodiscard]] auto incomplete_array_item(const source_location& location) -> diagnostic {
     return diagnostic{
         "Array elements cannot have an incomplete type", error::CYCLIC_DEPENDENCY, location};
@@ -2504,6 +2522,16 @@ template <ast::IndexableID ID> auto type_resolver::resolve_symbol(ID id, symbol&
         break;
     }
     default: UNREACHABLE("Symbol status should only be 1 of 3 states");
+    }
+
+    // A reference to a deferred-error declaration (`const X := @compileError("msg")`) reports the
+    // message here, at the use site, rather than where `X` was declared.
+    if (const auto msg{sym.deferred_error()}) {
+        return last_type_.emplace(ctx_.poison_node(resolving_,
+                                                   id,
+                                                   std::string{*msg},
+                                                   error::COMPILE_ERROR_REACHED,
+                                                   resolving_.ast.location_of(id)));
     }
 
     if (sym.get_kind() == symbol_kind::POISONED) {
@@ -5575,6 +5603,20 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
         return last_type_.emplace(void_type);
     }
     sym.set_status(symbol_status::RESOLVING);
+
+    // `const X := @compileError("msg")` is inert until referenced. Record the message on the
+    // symbol and resolve it to `void`; `resolve_symbol` reports `msg` at each use site.
+    if (decl.value) {
+        if (const auto msg{sole_compile_error_message(resolving_.ast, *decl.value)}) {
+            sym.set_deferred_error(std::string{*msg});
+            sym.set_status(symbol_status::RESOLVED);
+            sym.set_kind(symbol_kind::VALUE);
+            auto& void_type{ctx_.get_builtin_resolved_type(type_kind::VOID_)};
+            resolving_.set_sema_type(decl.name, void_type);
+            resolving_.set_sema_type(id, void_type);
+            return last_type_.emplace(void_type);
+        }
+    }
 
     const auto poison_out = [&] -> void {
         resolving_.set_sema_type(decl.name, *last_type_);

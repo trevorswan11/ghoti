@@ -133,7 +133,7 @@ auto module_manager::try_get(const std::filesystem::path& path)
 
     auto mod{stdx::make_box<module>(path, path.parent_path(), source_file{std::move(source)})};
     syntax::parser p{mod->source};
-    auto           diagnostics{p.consume(mod->ast)};
+    auto           diagnostics{p.consume(mod->ast, *arena_)};
 
     mod->sema_side_tables.resize(mod->ast.get_pool_sizes());
     mod->parse_diagnostics.reserve(diagnostics.size());
@@ -154,7 +154,7 @@ auto module_manager::get_or_create_builtin_module(std::string_view source) -> mo
                                              std::filesystem::path{},
                                              source_file{std::string{source}});
     syntax::parser p{builtin_module_->source};
-    const auto     diagnostics{p.consume(builtin_module_->ast)};
+    const auto     diagnostics{p.consume(builtin_module_->ast, *arena_)};
     VERIFY(diagnostics.empty(), "the compiler-provided target-fact enum source must parse cleanly");
 
     builtin_module_->sema_side_tables.resize(builtin_module_->ast.get_pool_sizes());

@@ -13,6 +13,7 @@
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
+#include "compiler/arena.hh"
 #include "compiler/ast/traits.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/const_value.hh"
@@ -38,7 +39,7 @@ struct context {
     generic_function_registry&   generic_functions;
     generic_instantiation_cache& instantiation_cache;
     impl_registry&               impls;
-    arena_alloc&                 arena;
+    ghoti::arena&                arena;
 
     diagnostics             diags;
     std::ostream&           error_stream;
@@ -59,7 +60,7 @@ struct context {
             generic_function_registry&   generic_functions,
             generic_instantiation_cache& instantiation_cache,
             impl_registry&               impls,
-            arena_alloc&                 arena,
+            ghoti::arena&                arena,
             diagnostics                  diags,
             std::ostream&                error_stream,
             codegen::target_options      target_opts = {}) noexcept

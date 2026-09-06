@@ -13,6 +13,7 @@
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
+#include "compiler/arena.hh"
 #include "compiler/ast/ast.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
@@ -79,7 +80,7 @@ class parser {
     auto advance(u8 times = 1) noexcept -> const token_t&;
 
     // Fills the AST with the parser's output, clearing it before use
-    auto consume(ast::AST& ast) -> diagnostics;
+    auto consume(ast::AST& ast, ghoti::arena& arena) -> diagnostics;
 
     [[nodiscard]] auto get_current_token() const noexcept -> const token_t& {
         return current_token_;

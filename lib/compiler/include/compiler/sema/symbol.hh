@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ranges>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -135,6 +136,16 @@ class symbol {
     [[nodiscard]] auto get_status() const noexcept -> symbol_status { return status_; }
     auto               set_status(symbol_status status) noexcept -> void { status_ = status; }
 
+    // A declaration whose whole initializer is `@compileError("msg")` becomes a deferred error
+    auto set_deferred_error(std::string message) -> void {
+        deferred_error_.emplace(std::move(message));
+    }
+
+    [[nodiscard]] auto deferred_error() const noexcept -> stdx::option<std::string_view> {
+        if (!deferred_error_) { return stdx::none; }
+        return std::string_view{*deferred_error_};
+    }
+
     [[nodiscard]] auto has_kind() const noexcept -> bool { return kind_.has_value(); }
     [[nodiscard]] auto get_kind_opt() const noexcept -> stdx::option<symbol_kind> { return kind_; }
     [[nodiscard]] auto get_kind() const noexcept -> symbol_kind { return *get_kind_opt(); }
@@ -145,6 +156,7 @@ class symbol {
     data_t                    data_;
     symbol_status             status_{symbol_status::UNRESOLVED};
     stdx::option<symbol_kind> kind_;
+    stdx::option<std::string> deferred_error_;
 };
 
 class symbol_table {

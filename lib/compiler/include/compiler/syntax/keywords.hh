@@ -76,6 +76,9 @@ constexpr keyword_t UNREACHABLE{"unreachable", token_type_t::UNREACHABLE};
 [[nodiscard]] auto get_keyword_opt(std::string_view sv) noexcept -> stdx::option<token_type_t>;
 [[nodiscard]] auto get_keyword_opt(token_type_t tt) noexcept -> stdx::option<std::string_view>;
 
+// True when `name` cannot be written as a bare identifier and must use the raw form `@"name"
+[[nodiscard]] auto identifier_needs_raw(std::string_view name) noexcept -> bool;
+
 // Single source of truth for every reserved word
 constexpr std::array ALL_KEYWORDS{
     keywords::FN,          keywords::VAR,           keywords::CONSTANT,

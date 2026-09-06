@@ -1,8 +1,8 @@
 #include "compiler/ast/formatter.hh"
 
 #include <cctype>
-#include <cstddef>
 #include <stdx/assert.hh>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -21,6 +21,7 @@
 #include "compiler/ast/type.hh"
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/doc.hh"
+#include "compiler/syntax/keywords.hh"
 #include "compiler/syntax/layout_engine.hh"
 #include "compiler/syntax/lexer.hh"
 #include "compiler/syntax/operators.hh"
@@ -30,6 +31,24 @@
 namespace ghoti::ast {
 
 namespace {
+
+// Re-encodes `name` as a raw identifier `@"..."`, escaping chars when necessary
+auto raw_identifier(std::string_view name) -> std::string {
+    std::string out{"@\""};
+    for (const char c : name) {
+        switch (c) {
+        case '\\': out += "\\\\"; break;
+        case '"':  out += "\\\""; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        case '\0': out += "\\0"; break;
+        default:   out.push_back(c); break;
+        }
+    }
+    out.push_back('"');
+    return out;
+}
 
 auto operator_spelling(syntax::token_type_t tt) -> std::string_view {
     const auto spelling{syntax::get_operator_opt(tt)};
@@ -860,6 +879,10 @@ auto formatter::visit(node_id id, const identifier_expr& node) -> syntax::doc_id
     if (syntax::get_builtin_opt(id.get_token_type()) && !node.name.starts_with('@')) {
         return doc_manager_.owned(fmt::format("@{}", node.name));
     }
+    if (id.get_token_type() == syntax::token_type_t::IDENT &&
+        syntax::identifier_needs_raw(node.name)) {
+        return doc_manager_.owned(raw_identifier(node.name));
+    }
     return doc_manager_.text(node.name);
 }
 
@@ -1321,6 +1344,10 @@ auto formatter::visit(node_id id, const using_stmt& node) -> syntax::doc_id {
 auto formatter::visit(node_id, stdx::monostate) -> syntax::doc_id { return doc_manager_.text("_"); }
 
 auto formatter::visit(explicit_type_id id, const identifier_expr& node) -> syntax::doc_id {
+    if (id.get_token_type() == syntax::token_type_t::IDENT &&
+        syntax::identifier_needs_raw(node.name)) {
+        return with_modifier(id, doc_manager_.owned(raw_identifier(node.name)));
+    }
     return with_modifier(id, doc_manager_.text(node.name));
 }
 
