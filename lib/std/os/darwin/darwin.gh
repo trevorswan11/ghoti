@@ -79,16 +79,16 @@ constexpr R := fn(T: type): type {
     return result::Result(T, Errno);
 };
 
-pub constexpr stdin := fn(): Handle {
-    return 0;
+pub constexpr stdin := fn(): R(Handle) {
+    return .{ .ok = 0 };
 };
 
-pub constexpr stdout := fn(): Handle {
-    return 1;
+pub constexpr stdout := fn(): R(Handle) {
+    return .{ .ok = 1 };
 };
 
-pub constexpr stderr := fn(): Handle {
-    return 2;
+pub constexpr stderr := fn(): R(Handle) {
+    return .{ .ok = 2 };
 };
 
 /// Write the contents of `buf` to the file, returning the number of written bytes
