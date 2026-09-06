@@ -1,1 +1,25 @@
-pub import "darwin/darwin.gh" as darwin;
+//! Raw OS primitives for the target platform
+@cfg (os == .macos) {
+    import "darwin/darwin.gh" as backend;
+} else @cfg (os == .windows) {
+    import "win32/win32.gh" as backend;
+} else {
+    @compileError("std::os: unsupported target OS");
+}
+
+pub using Handle = backend::Handle;
+pub using Errno = backend::Errno;
+
+pub using open = backend::open;
+pub using read = backend::read;
+pub using write = backend::write;
+pub using close = backend::close;
+pub using lseek = backend::lseek;
+
+pub using stdin = backend::stdin;
+pub using stdout = backend::stdout;
+pub using stderr = backend::stderr;
+
+pub const SEEK_SET := backend::SEEK_SET;
+pub const SEEK_CUR := backend::SEEK_CUR;
+pub const SEEK_END := backend::SEEK_END;

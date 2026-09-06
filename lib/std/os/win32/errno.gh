@@ -1,6 +1,6 @@
 //! Win32 error codes as returned by `GetLastError()`.
 //! - https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes
-pub const Win32Error := enum : u32 {
+pub const Errno := enum : u32 {
     ERROR_SUCCESS = 0u32,
     ERROR_FILE_NOT_FOUND = 2u32,
     ERROR_PATH_NOT_FOUND = 3u32,
