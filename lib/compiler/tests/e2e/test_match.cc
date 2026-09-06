@@ -32,6 +32,49 @@ TEST_CASE("A plain match arm capture reads the current field value") {
     )") == 15);
 }
 
+TEST_CASE("A plain match arm capture binds a pointer-typed payload by value") {
+    SECTION("pointer payload, union built inline") {
+        CHECK(helpers::compile_and_run(R"(
+            const U := union { ok: ^mut u8, err: u32 };
+            pub const main := fn(): i32 {
+                var x: u8 = 9u8;
+                const p: ^mut u8 = ^mut x;
+                const r: U = .{ .ok = p };
+                const q := match (r) { .ok => |v| v, .err => |_| nullptr };
+                return if (q == p) 1 else 0;
+            };
+        )") == 1);
+    }
+
+    SECTION("pointer payload, returned from a function") {
+        CHECK(helpers::compile_and_run(R"(
+            const U := union { ok: ^mut u8, err: u32 };
+            const mk := fn(p: ^mut u8): U { return .{ .ok = p }; };
+            pub const main := fn(): i32 {
+                var x: u8 = 9u8;
+                const p: ^mut u8 = ^mut x;
+                const q := match (mk(p)) { .ok => |v| v, .err => |_| nullptr };
+                return if (q == p) 1 else 0;
+            };
+        )") == 1);
+    }
+
+    SECTION("opaque-pointer payload written through after capture") {
+        CHECK(helpers::compile_and_run(R"(
+            const U := union { ok: ^mut opaque, err: u32 };
+            const mk := fn(p: ^mut opaque): U { return .{ .ok = p }; };
+            pub const main := fn(): i32 {
+                var cell: i32 = 0;
+                const p: ^mut opaque = @ptrCast(^mut opaque, ^mut cell);
+                const q := match (mk(p)) { .ok => |h| h, .err => |_| nullptr };
+                const back: ^mut i32 = @ptrCast(^mut i32, q);
+                *back = 42;
+                return cell;
+            };
+        )") == 42);
+    }
+}
+
 TEST_CASE("Match arm capture mutates the matched union field in place") {
     SECTION("By mutable reference") {
         CHECK(helpers::compile_and_run(R"(
