@@ -972,11 +972,23 @@ auto formatter::visit(node_id id, const match_expr& node) -> syntax::doc_id {
         auto        leading{consume_leading_comments(start_loc.line, !arms.empty())};
 
         std::vector<syntax::doc_id> parts;
-        for (usize p{0}; p < arm.patterns.size(); ++p) {
-            if (p != 0) { parts.emplace_back(doc_manager_.text(", ")); }
-            parts.emplace_back(format(arm.patterns[p]));
+        if (arm.patterns.size() > 1) {
+            // `a, b, c => body` when it fits on one line
+            std::vector<syntax::doc_id> pattern_docs;
+            pattern_docs.reserve(arm.patterns.size());
+            for (const auto& pattern : arm.patterns) { pattern_docs.emplace_back(format(pattern)); }
+            const auto sep{doc_manager_.concat({doc_manager_.text(","), doc_manager_.line()})};
+            const auto trailer{doc_manager_.if_break(
+                doc_manager_.concat({doc_manager_.text(","), doc_manager_.line()}),
+                doc_manager_.text(" "))};
+            parts.emplace_back(doc_manager_.group(
+                doc_manager_.concat({doc_manager_.join(std::move(pattern_docs), sep), trailer}),
+                arm.force_break));
+            parts.emplace_back(doc_manager_.text("=> "));
+        } else {
+            parts.emplace_back(format(arm.patterns.front()));
+            parts.emplace_back(doc_manager_.text(" => "));
         }
-        parts.emplace_back(doc_manager_.text(" => "));
         if (arm.capture) {
             parts.emplace_back(doc_manager_.text("|"));
             parts.emplace_back(doc_manager_.text(modifier_prefix(arm.modifier)));

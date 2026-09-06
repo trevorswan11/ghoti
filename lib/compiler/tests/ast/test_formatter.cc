@@ -205,6 +205,15 @@ TEST_CASE("formatter lays out if / match") {
     CHECK(format_source("const r := match (n) { 1, 2, 3 => 1, _ => 0 };") ==
           "const r := match (n) { 1, 2, 3 => 1, _ => 0 };\n");
 
+    CHECK(format_source("const r := match (u) { .a, .b, => 1, _ => 0 };") ==
+          R"(const r := match (u) {
+    .a,
+    .b,
+    => 1,
+    _ => 0,
+};
+)");
+
     CHECK(format_source("const r := match constexpr (T) { i32 => 1, _ => 0 };") ==
           "const r := match constexpr (T) { i32 => 1, _ => 0 };\n");
 

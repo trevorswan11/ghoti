@@ -100,6 +100,14 @@ TEST_CASE("cfg: an unknown atom names the valid set") {
     CHECK(out.any_message_contains("os, arch, abi, family, endian, ptr_bits"));
 }
 
+TEST_CASE("cfg: an imported identifier in a predicate is rejected with a re-derive hint") {
+    constexpr std::string_view src{
+        R"( @cfg(sys::is_windows) { const x := 1; } else { const y := 1; } )"};
+    const auto out{run_cfg(src)};
+    CHECK(out.has_code(sema::error::CFG_ILLEGAL_CFG_VALUE_REFERENCE));
+    CHECK(out.any_message_contains("@cfgValue"));
+}
+
 TEST_CASE("cfg: @cfgValue guard arms must agree in type") {
     constexpr std::string_view src{R"(
         const BAD := @cfgValue(

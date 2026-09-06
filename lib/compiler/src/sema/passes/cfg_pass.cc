@@ -303,6 +303,15 @@ auto cfg_pass::eval_term(ast::expr_handle h) -> stdx::option<cfg_value> {
         return cfg_value{
             cfgval::member{module_.ast.get_as<ast::identifier_expr>(access.member).name}};
     }
+    case ast::node_kind::MODULE_ACCESS_EXPRESSION: {
+        const auto& access{module_.ast.get_as<ast::module_access_expr>(id)};
+        fail(id,
+             error::CFG_ILLEGAL_CFG_VALUE_REFERENCE,
+             "a `@cfg` predicate cannot reference another module's '{}'; `@cfg` is evaluated "
+             "before imports resolve; Re-derive the value locally with `@cfgValue`",
+             module_.ast.get_as<ast::identifier_expr>(access.inner).name);
+        return stdx::none;
+    }
     case ast::node_kind::BOOL_EXPRESSION:
         return cfg_value{id.get_token_type() == token_type_t::BOOLEAN_TRUE};
     case ast::node_kind::STRING_EXPRESSION:
