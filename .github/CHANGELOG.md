@@ -208,3 +208,13 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Eliminates the prior ceremony needed to compile and run a ghoti binary
     - Takes a subset of options from the other build command since this does not need to be as extensible
 - Add automatic path detection for sdk on windows to prevent needing to always set an env var or pass through a CLI arg
+
+## alpha.5
+
+- Allow `@compileError` to be used in decl value positions
+    - These are fired lazily
+- Add zig-like raw identifiers
+    - These are declared like `@"asdfasdf"` and can be used to make your identifiers take the name of reserved keywords
+    - Formatting will strip unnecessary raw identifiers
+- Add string and identifier interning backed by a new compiler-wide arena to save some memory
+    - Previously interning was not applied to identifiers and was not applied at the parsing stage
