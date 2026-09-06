@@ -14,10 +14,6 @@
 
 ; Types
 (primitive_type) @type.builtin
-; Arbitrary-width integers (iN / uN, N = 1..65535), extended floats, and the
-; constexpr literal types the grammar may still lex as plain identifiers.
-((identifier) @type.builtin
-  (#match? @type.builtin "^([iu](size|[1-9][0-9]{0,4})|f(16|32|64|80|128)|constexpr_(int|float))$"))
 (identifier) @type
   (#match? @type "^[A-Z]")
 
@@ -27,6 +23,7 @@
 (decl_statement name: (identifier) @function
   value: (function_expression))
 (function_expression) @function
+(interface_method name: (identifier) @function)
 (self_parameter) @variable.builtin
 
 ; Struct/union/enum field & member names
@@ -37,9 +34,15 @@
 (implicit_access_expression member: (identifier) @property)
 (module_access_expression member: (identifier) @property)
 
+; Interface associated items and dyn associated-type bindings
+(associated_type name: (identifier) @property)
+(associated_const name: (identifier) @property)
+(dyn_assoc_binding name: (identifier) @property)
+
 ; Declarations
 (decl_statement name: (identifier) @variable)
 (parameter name: (identifier) @variable.parameter)
+(impl_parameter name: (identifier) @variable.parameter)
 (import_statement alias: (identifier) @type)
 (using_statement alias: (identifier) @type)
 
@@ -49,6 +52,12 @@
 (field_declaration type: (identifier) @type)
 (function_expression return_type: (identifier) @type)
 (function_type return_type: (identifier) @type)
+(interface_method return_type: (identifier) @type)
+(impl_statement type: (identifier) @type)
+(impl_statement target: (identifier) @type)
+(impl_parameter type: (identifier) @type)
+(dyn_type interface: (identifier) @type)
+(calling_convention) @constant.builtin
 
 ; Labels
 (labeled_statement label: (identifier) @label)
@@ -84,13 +93,32 @@
   "volatile"
   "mut"
   "move"
+  "naked"
   "packed"
   "using"
   "test"
+  "weak"
+  "threadlocal"
+  "interface"
+  "impl"
+  "dyn"
+  "callconv"
+  "asm"
 ] @keyword
 
 ; Boolean/logical operators spelled as words
 ["and" "or"] @keyword
+
+; `asm { ... }` clause keys and options
+[
+  "template"
+  "outputs"
+  "inputs"
+  "clobbers"
+  "options"
+] @keyword
+
+["noreturn" "intel" "att" "align_stack"] @keyword
 
 ; Operators
 [
@@ -98,16 +126,10 @@
   ":="
   "+"
   "+="
-  "+%"
-  "+%="
   "-"
   "-="
-  "-%"
-  "-%="
   "*"
   "*="
-  "*%"
-  "*%="
   "/"
   "/="
   "%"
@@ -119,8 +141,6 @@
   "|="
   "<<"
   "<<="
-  "<<%"
-  "<<%="
   ">>"
   ">>="
   "~"
