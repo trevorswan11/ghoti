@@ -135,8 +135,9 @@ template <typename T>
     // A no-op past 128 bits: the fold already happened in the 128-bit comptime domain
     if (bits == 0 || bits >= 128) { return folded; }
     const u128 mask{(u128{1} << bits) - 1};
-    if (!is_signed) { return make_scalar_const(folded.as_uint_opt().value_or(0) & mask, res_type); }
+    // Two's-complement bit pattern of the source, valid for negative operands too
     const auto raw{static_cast<u128>(folded.as_int_opt().value_or(0))};
+    if (!is_signed) { return make_scalar_const(raw & mask, res_type); }
     const auto masked{raw & mask};
     const u128 sign_bit{u128{1} << (bits - 1)};
     if (masked & sign_bit) {
@@ -144,6 +145,18 @@ template <typename T>
                                  res_type);
     }
     return make_scalar_const(static_cast<i128>(masked), res_type);
+}
+
+// `{bit width, is signed}` for a concrete integer target (`iN`/`uN`/`isize`/`usize`),
+// or none for any other kind. `isize`/`usize` resolve against the target pointer width.
+[[nodiscard]] auto integer_target_width(const sema::type& t, u32 ptr_bits)
+    -> stdx::option<std::pair<u16, bool>> {
+    switch (t.get_kind()) {
+    case sema::type_kind::INT:   return std::pair{sema::int_width(t), sema::is_signed_integer(t)};
+    case sema::type_kind::ISIZE: return std::pair{static_cast<u16>(ptr_bits), true};
+    case sema::type_kind::USIZE: return std::pair{static_cast<u16>(ptr_bits), false};
+    default:                     return stdx::none;
+    }
 }
 
 } // namespace
@@ -1063,6 +1076,15 @@ auto const_eval::eval_module_member(mod::module& target_mod, std::string_view me
     if (!sym) { return stdx::none; }
     const auto node{sym->get_data().as_opt<sema::symbols::node_t>()};
     if (!node) { return stdx::none; }
+
+    if (const auto using_stmt{target_mod.ast.get_as_opt<ast::using_stmt>(*node)}) {
+        // Yield the aliased type so `mod::Alias.MEMBER` can resolve through it
+        if (const auto aliased{target_mod.get_sema_type_opt(using_stmt->explicit_type)}) {
+            return const_value{*aliased};
+        }
+        return stdx::none;
+    }
+
     const auto decl{target_mod.ast.get_as_opt<ast::decl_stmt>(*node)};
     if (!decl || !decl->value) { return stdx::none; }
 
@@ -2076,6 +2098,60 @@ auto const_eval::eval_builtin(ast::node_id          id,
             }
         }
         return const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+    }
+    case syntax::token_type_t::BUILTIN_PTR_FROM_INT: {
+        // `@ptrFromInt(T, n)` -> the pointer whose address bits are the constant `n`.
+        if (call.arguments.size() < 2) { return stdx::none; }
+        const auto op_h{call.arguments[1].as_opt<ast::expr_handle>()};
+        if (!op_h) { return stdx::none; }
+        const auto operand{try_eval(*op_h)};
+        if (!operand) { return stdx::none; }
+        const auto bits{operand->as_uint_opt()};
+        if (!bits) { return stdx::none; }
+        auto target{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
+        if (!target) { target = module_->get_sema_type_opt(call.function); }
+        return const_value{static_cast<u64>(*bits), target};
+    }
+    case syntax::token_type_t::BUILTIN_INT_FROM_PTR: {
+        // `@intFromPtr(p)` folds only when `p` is itself a folded pointer constant.
+        if (call.arguments.empty()) { return stdx::none; }
+        const auto op_h{call.arguments[0].as_opt<ast::expr_handle>()};
+        if (!op_h) { return stdx::none; }
+        const auto operand{try_eval(*op_h)};
+        if (!operand) { return stdx::none; }
+        if (operand->is<nullptr_val>()) { return const_value{u64{0}, usize_type}; }
+        const auto bits{operand->as_uint_opt()};
+        if (!bits) { return stdx::none; }
+        return const_value{static_cast<u64>(*bits), usize_type};
+    }
+    case syntax::token_type_t::BUILTIN_AS:
+    case syntax::token_type_t::BUILTIN_BIT_CAST: {
+        // Fold the numeric/pointer subset; leave floats, enums and aggregates to the emitter.
+        if (call.arguments.size() < 2) { return stdx::none; }
+        const auto op_h{call.arguments[1].as_opt<ast::expr_handle>()};
+        if (!op_h) { return stdx::none; }
+        const auto operand{try_eval(*op_h)};
+        if (!operand) { return stdx::none; }
+        const auto src_int{operand->as_int_opt()};
+        if (!src_int) { return stdx::none; }
+        auto target{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
+        if (!target) { target = module_->get_sema_type_opt(call.function); }
+        if (!target) { return stdx::none; }
+        const auto ptr_bits{static_cast<u32>(
+            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? 64 : 32)};
+        if (const auto w{integer_target_width(*target, ptr_bits)}) {
+            return wrap_to_width(*operand, w->first, w->second, target);
+        }
+        if (target->get_kind() == sema::type_kind::BOOL) {
+            return const_value{*src_int != 0,
+                               ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+        }
+        if (target->get_kind() == sema::type_kind::POINTER) {
+            if (const auto bits{operand->as_uint_opt()}) {
+                return const_value{static_cast<u64>(*bits), target};
+            }
+        }
+        return stdx::none;
     }
     case syntax::token_type_t::BUILTIN_SET_MAIN_SYMBOL: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
