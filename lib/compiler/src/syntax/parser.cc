@@ -146,6 +146,23 @@ auto parser::consume(ast::AST& ast, ghoti::arena& arena) -> diagnostics {
     return diagnostics;
 }
 
+auto parser::attach_member_doc(ast::identifier_handle name, usize floor_line) -> void {
+    if (!ast_ || pending_docs_.empty()) { return; }
+    const auto name_line{ast_->location_of(name).line};
+
+    std::vector<pending_doc> leading;
+    std::erase_if(pending_docs_, [&](const pending_doc& doc) -> bool {
+        if (doc.line > floor_line && doc.line < name_line) {
+            leading.emplace_back(doc);
+            return true;
+        }
+        return false;
+    });
+    if (leading.empty()) { return; }
+
+    ast_->attach_doc({ast_->location_of(name), ast_->end_location_of(name)}, join_docs(leading));
+}
+
 auto parser::expect_peek(token_type_t expected) -> stdx::result<void, diagnostic> {
     if (peek_token_is(expected)) {
         advance();

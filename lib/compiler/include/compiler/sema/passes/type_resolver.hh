@@ -344,6 +344,11 @@ class type_resolver {
     auto resolve_module_access(ID, const ast::module_access_expr&) -> void;
     auto visit(ast::node_id, const ast::module_access_expr&) -> void;
 
+    // If a `using` RHS is a bare-name form (`X`, `mod::X`) that resolves to a value symbol
+    // rather than a type, returns that name so the caller can reject the alias.
+    [[nodiscard]] auto using_rhs_value_name(ast::explicit_type_id rhs) const
+        -> stdx::option<std::string_view>;
+
     template <ast::IndexableID ID> auto visit(ID, const ast::struct_expr&) -> void;
     template <ast::IndexableID ID> auto visit(ID, const ast::union_expr&) -> void;
     template <ast::IndexableID ID> auto visit(ID, const ast::interface_expr&) -> void;

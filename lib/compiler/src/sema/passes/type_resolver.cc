@@ -4970,6 +4970,50 @@ auto type_resolver::visit(ast::node_id id, const ast::module_access_expr& scope)
     resolve_module_access(id, scope);
 }
 
+auto type_resolver::using_rhs_value_name(ast::explicit_type_id rhs) const
+    -> stdx::option<std::string_view> {
+    const auto is_value_sym{[](const sema::symbol& sym) -> bool {
+        return sym.has_kind() && sym.get_kind() == symbol_kind::VALUE;
+    }};
+
+    return resolving_.ast[rhs].visit(
+        [&](const ast::identifier_expr& e) -> stdx::option<std::string_view> {
+            if (syntax::token_type::is_int_type_lexeme(e.name)) { return stdx::none; }
+            if (const auto sym{ctx_.registry.lookup(table_stack_, e.name)};
+                sym && is_value_sym(*sym)) {
+                return e.name;
+            }
+            return stdx::none;
+        },
+        [&](const ast::module_access_expr& e) -> stdx::option<std::string_view> {
+            const auto outer_type{resolving_.get_sema_type_opt(e.outer)};
+            const auto mod_data{outer_type ? outer_type->get_data().as_opt<types::module>()
+                                           : stdx::none};
+            if (!mod_data || !mod_data->imported.root_table_idx) { return stdx::none; }
+            const auto& inner{resolving_.ast.get_as<ast::identifier_expr>(e.inner)};
+            if (const auto sym{ctx_.registry.get_from_opt(*mod_data->imported.root_table_idx,
+                                                         inner.name)};
+                sym && is_value_sym(*sym)) {
+                return inner.name;
+            }
+            return stdx::none;
+        },
+        [&](const ast::dot_expr& e) -> stdx::option<std::string_view> {
+            const auto obj_type{resolving_.get_sema_type_opt(e.object)};
+            if (!obj_type) { return stdx::none; }
+            auto& denoted{denoted_type(const_cast<type&>(*obj_type))};
+            const auto tbl{denoted.get_symbol_table_idx_opt()};
+            if (!tbl) { return stdx::none; }
+            const auto& member{resolving_.ast.get_as<ast::identifier_expr>(e.member)};
+            if (const auto sym{ctx_.registry.get_from_opt(*tbl, member.name)};
+                sym && is_value_sym(*sym)) {
+                return member.name;
+            }
+            return stdx::none;
+        },
+        [](const auto&) -> stdx::option<std::string_view> { return stdx::none; });
+}
+
 namespace {
 
 [[nodiscard]] auto incomplete_field(std::string_view name, const source_location& location)
@@ -6798,6 +6842,19 @@ auto type_resolver::visit(ast::node_id id, const ast::using_stmt& using_stmt) ->
                                             "Type aliases cannot be 'auto'",
                                             error::ILLEGAL_AUTO_USAGE,
                                             resolving_.ast.location_of(using_stmt.explicit_type)));
+        return poison_out();
+    }
+
+    // `using` aliases a type, catch accidental use of a value on the RHS
+    if (const auto value_name{using_rhs_value_name(using_stmt.explicit_type)}) {
+        last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            fmt::format("'using' aliases a type, but '{}' is a value; use 'const' or "
+                        "'constexpr' to alias a value",
+                        *value_name),
+            error::TYPE_MISMATCH,
+            resolving_.ast.location_of(using_stmt.explicit_type)));
         return poison_out();
     }
     resolving_.set_sema_type(id, explicit_type);

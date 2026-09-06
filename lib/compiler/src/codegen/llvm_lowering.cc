@@ -87,6 +87,14 @@ namespace {
     return llvm::ConstantInt::get(ty->getContext(), value.zextOrTrunc(ty->getIntegerBitWidth()));
 }
 
+// An integer-valued constant whose GIR type is a pointer must materialize as an `inttoptr` constant
+[[nodiscard]] auto int_or_ptr_constant(u128 bits, llvm::Type* ty) -> llvm::Constant* {
+    if (!ty->isPointerTy()) { return wide_int_constant(bits, ty); }
+    if (bits == 0) { return llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ty)); }
+    auto* int_ty{llvm::Type::getInt64Ty(ty->getContext())};
+    return llvm::ConstantExpr::getIntToPtr(wide_int_constant(bits, int_ty), ty);
+}
+
 [[nodiscard]] auto to_llvm_callconv(ast::calling_convention conv) noexcept
     -> llvm::CallingConv::ID {
     switch (conv) {
@@ -988,12 +996,10 @@ auto llvm_lowering::emit_checked_arith(const gir::instruction& inst,
 auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) -> llvm::Constant* {
     PROFILE_FUNCTION();
     if (!ty) { return nullptr; }
-    if (const auto i{cv.as_opt<i64>()}) {
-        return llvm::ConstantInt::get(ty, static_cast<u64>(*i), true);
-    }
-    if (const auto u{cv.as_opt<u64>()}) { return llvm::ConstantInt::get(ty, *u, false); }
-    if (const auto w{cv.as_opt<i128>()}) { return wide_int_constant(static_cast<u128>(*w), ty); }
-    if (const auto w{cv.as_opt<u128>()}) { return wide_int_constant(*w, ty); }
+    if (const auto i{cv.as_opt<i64>()}) { return int_or_ptr_constant(static_cast<u128>(*i), ty); }
+    if (const auto u{cv.as_opt<u64>()}) { return int_or_ptr_constant(*u, ty); }
+    if (const auto w{cv.as_opt<i128>()}) { return int_or_ptr_constant(static_cast<u128>(*w), ty); }
+    if (const auto w{cv.as_opt<u128>()}) { return int_or_ptr_constant(*w, ty); }
     if (const auto f{cv.as_opt<f64>()}) { return llvm::ConstantFP::get(ty, *f); }
     if (const auto b{cv.as_opt<bool>()}) { return llvm::ConstantInt::getBool(context_, *b); }
     if (const auto e{cv.as_opt<gir::const_enum>()}) {
@@ -1283,25 +1289,25 @@ auto llvm_lowering::lower_value(const gir::value& val, const sema::type* expecte
             auto* ty{expected_type ? types_.translate(*expected_type)
                      : val.type    ? types_.translate(*val.type)
                                    : types_.get_int64_ty()};
-            return llvm::ConstantInt::get(ty, static_cast<u64>(i), true);
+            return int_or_ptr_constant(static_cast<u128>(i), ty);
         },
         [this, &val, expected_type](u64 u) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
                      : val.type    ? types_.translate(*val.type)
                                    : types_.get_int64_ty()};
-            return llvm::ConstantInt::get(ty, u, false);
+            return int_or_ptr_constant(u, ty);
         },
         [this, &val, expected_type](i128 w) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
                      : val.type    ? types_.translate(*val.type)
                                    : types_.get_int64_ty()};
-            return wide_int_constant(static_cast<u128>(w), ty);
+            return int_or_ptr_constant(static_cast<u128>(w), ty);
         },
         [this, &val, expected_type](u128 w) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
                      : val.type    ? types_.translate(*val.type)
                                    : types_.get_int64_ty()};
-            return wide_int_constant(w, ty);
+            return int_or_ptr_constant(w, ty);
         },
         [this, &val, expected_type](f64 f) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)

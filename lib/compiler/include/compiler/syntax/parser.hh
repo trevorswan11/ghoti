@@ -137,6 +137,9 @@ class parser {
 
     [[nodiscard]] auto get_ast() noexcept -> ast ::AST& { return *ast_; }
 
+    // Attaches any pending `///` lines sitting directly above `name` and below `floor_line`
+    auto attach_member_doc(ast::identifier_handle name, usize floor_line) -> void;
+
     template <ast::NodeData N> [[nodiscard]] constexpr auto get_node(ast::node_id id) -> const N& {
         return ast_->get_as<N>(id);
     }
