@@ -4605,16 +4605,24 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
                     active_mod().get_sema_type_opt(*arm.capture).value_or(ctx_.get_int(32, true))};
                 ASSERT(matcher_addr, "A capturing arm must have a computed matcher address");
 
-                // Unwrap a ref/ptr modifier to the type used to address the aliased storage.
+                // Only a `|&v|` / `|^v|` binding aliases the field's storage
+                const bool alias_capture{arm.modifier.is_ref() || arm.modifier.is_ptr()};
+
+                // For an aliasing capture, unwrap the ref/ptr to the type addressing the storage.
                 auto* underlying{&cap_type};
-                if (const auto ref_d{cap_type.get_data().as_opt<sema::types::reference>()}) {
-                    underlying = &const_cast<sema::type&>(ref_d->underlying);
-                } else if (const auto ptr_d{cap_type.get_data().as_opt<sema::types::pointer>()}) {
-                    underlying = &const_cast<sema::type&>(ptr_d->underlying);
+                if (alias_capture) {
+                    if (const auto ref_d{cap_type.get_data().as_opt<sema::types::reference>()}) {
+                        underlying = &const_cast<sema::type&>(ref_d->underlying);
+                    } else if (const auto ptr_d{
+                                   cap_type.get_data().as_opt<sema::types::pointer>()}) {
+                        underlying = &const_cast<sema::type&>(ptr_d->underlying);
+                    }
                 }
 
-                // Force const so a plain capture is read-only
-                auto&      qualified{*ctx_.pool.with_const(*underlying, true)};
+                // An aliasing capture addresses the storage through a forced-const view so
+                // it can't be written through
+                auto&      qualified{alias_capture ? *ctx_.pool.with_const(*underlying, true)
+                                                   : *underlying};
                 value      field_addr{matcher_addr->data, qualified};
                 const auto ut{matcher_addr->type->get_data().as_opt<sema::types::union_t>()};
                 const bool is_tagged_union_field{ut && !ut->is_untagged};
@@ -4625,8 +4633,7 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
                     field_addr = value{payload_ptr, qualified};
                 }
 
-                if (cap_type.get_kind() == sema::type_kind::REFERENCE ||
-                    cap_type.get_kind() == sema::type_kind::POINTER) {
+                if (alias_capture) {
                     // `|&v|`/`|&mut v|` and `|^v|`/`|^mut v|` alias the field's own address
                     const auto capture_slot{builder_.emit_alloca(cap_type)};
                     builder_.emit_store(capture_slot, value{field_addr.data, cap_type})
