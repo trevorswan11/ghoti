@@ -46,6 +46,7 @@ TEST_CASE("discover_workspace_files skips excluded directories") {
     dir.write(".zig-cache/stale.gh", "pub const fake := 1;\n");
     dir.write("zig-out/stale.gh", "pub const fake := 1;\n");
     dir.write("zig-pkg/stale.gh", "pub const fake := 1;\n");
+    dir.write("editors/zed/grammars/ghoti/test/golden.gh", "pub const fake := 1;\n");
 
     const auto files{lsp::discover_workspace_files({dir.path})};
     CHECK(contains(files, dir.path / "real.gh"));
