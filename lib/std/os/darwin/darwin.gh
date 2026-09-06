@@ -1,3 +1,4 @@
+//! Raw Darwin (MacOS) primitives, backed by `libSystem`
 import "../../result.gh" as result;
 pub import "errno.gh" as errno;
 
@@ -6,25 +7,25 @@ pub using Errno = errno::Errno;
 pub constexpr EWOULDBLOCK := errno::EWOULDBLOCK;
 
 // <sys/fcntl.h> and its transitive includes
-pub const O_RDONLY: i32 = 0x0000; // open for reading only
-pub const O_WRONLY: i32 = 0x0001; // open for writing only
-pub const O_RDWR: i32 = 0x0002; // open for reading and writing
-pub const O_ACCMODE: i32 = 0x0003; // mask for above modes
-pub const O_NONBLOCK: i32 = 0x0004; // no delay
-pub const O_APPEND: i32 = 0x0008; // set append mode
-pub const O_CREAT: i32 = 0x0200; // create if nonexistant
-pub const O_TRUNC: i32 = 0x0400; // truncate to zero length
-pub const O_EXCL: i32 = 0x0800; // error if already exists
-pub const O_CLOEXEC: i32 = 0x1000000; // implicitly set FD_CLOEXEC
+pub const O_RDONLY: i32 = 0x0000; /// open for reading only
+pub const O_WRONLY: i32 = 0x0001; /// open for writing only
+pub const O_RDWR: i32 = 0x0002; /// open for reading and writing
+pub const O_ACCMODE: i32 = 0x0003; /// mask for above modes
+pub const O_NONBLOCK: i32 = 0x0004; /// no delay
+pub const O_APPEND: i32 = 0x0008; /// set append mode
+pub const O_CREAT: i32 = 0x0200; /// create if nonexistant
+pub const O_TRUNC: i32 = 0x0400; /// truncate to zero length
+pub const O_EXCL: i32 = 0x0800; /// error if already exists
+pub const O_CLOEXEC: i32 = 0x1000000; /// implicitly set FD_CLOEXEC
 pub const O_DIRECTORY: i32 = 0x100000;
 
-pub const SEEK_SET: i32 = 0; // set file offset to offset
-pub const SEEK_CUR: i32 = 1; // set file offset to current plus offset
-pub const SEEK_END: i32 = 2; // set file offset to EOF plus offset
+pub const SEEK_SET: i32 = 0; // Set file offset to offset
+pub const SEEK_CUR: i32 = 1; // Set file offset to current plus offset
+pub const SEEK_END: i32 = 2; // Set file offset to EOF plus offset
 
 pub using mode_t = u16;
-pub using dev_t = i32; // Device number
-pub using nlink_t = u16; // Link count
+pub using dev_t = i32; /// Device number
+pub using nlink_t = u16; /// Link count
 pub using ino64_t = u64;
 pub using uid_t = u32;
 pub using gid_t = u32;
@@ -32,35 +33,35 @@ pub using time_t = i64;
 pub using blkcnt_t = i64;
 pub using blksize_t = i32;
 
-// Reference: sys/stat.h
-// This structure is used as the second parameter to the fstat64(),
-// lstat64(), and stat64() functions, and for struct stat when
-// __DARWIN_64_BIT_INO_T is set.
-//
-// This is simillar to stat except for 64bit inode number
-// number instead of 32bit ino_t and the addition of create(birth) time.
+/// Reference: sys/stat.h
+/// This structure is used as the second parameter to the fstat64(),
+/// lstat64(), and stat64() functions, and for struct stat when
+/// __DARWIN_64_BIT_INO_T is set.
+///
+/// This is simillar to stat except for 64bit inode number
+/// number instead of 32bit ino_t and the addition of create(birth) time.
 pub const Stat := extern struct {
-    pub st_dev: dev_t, // [XSI] ID of device containing file
-    pub st_mode: mode_t, // [XSI] Mode of file
-    pub st_nlink: nlink_t, // [XSI] Number of hard links
-    pub st_ino: ino64_t, // [XSI] File serial number
-    pub st_uid: uid_t, // [XSI] User ID of the file
-    pub st_gid: gid_t, // [XSI] Group ID of the file
-    pub st_rdev: dev_t, // [XSI] Device ID
-    pub st_atime: time_t, // [XSI] Time of last access
-    pub st_atimensec: i64, // nsec of last access
-    pub st_mtime: time_t, // [XSI] Last data modification time
-    pub st_mtimensec: i64, // last data modification nsec
-    pub st_ctime: time_t, // [XSI] Time of last status change
-    pub st_ctimensec: i64, // nsec of last status change
-    pub st_birthtime: time_t, // File creation time (birth)
-    pub st_birthtimensec: i64, // nsec of File creation time
-    pub st_blocks: blkcnt_t, // [XSI] blocks allocated for file
-    pub st_blksize: blksize_t, // [XSI] optimal blocksize for I/O
-    pub st_flags: u32, // user defined flags for file
-    pub st_gen: u32, // file generation number
-    pub st_lspare: i32, // RESERVED: DO NOT USE!
-    pub st_qspare: [2]i64, // RESERVED: DO NOT USE!
+    pub st_dev: dev_t, /// [XSI] ID of device containing file
+    pub st_mode: mode_t, /// [XSI] Mode of file
+    pub st_nlink: nlink_t, /// [XSI] Number of hard links
+    pub st_ino: ino64_t, /// [XSI] File serial number
+    pub st_uid: uid_t, /// [XSI] User ID of the file
+    pub st_gid: gid_t, /// [XSI] Group ID of the file
+    pub st_rdev: dev_t, /// [XSI] Device ID
+    pub st_atime: time_t, /// [XSI] Time of last access
+    pub st_atimensec: i64, /// nsec of last access
+    pub st_mtime: time_t, /// [XSI] Last data modification time
+    pub st_mtimensec: i64, /// last data modification nsec
+    pub st_ctime: time_t, /// [XSI] Time of last status change
+    pub st_ctimensec: i64, /// nsec of last status change
+    pub st_birthtime: time_t, /// File creation time (birth)
+    pub st_birthtimensec: i64, /// nsec of File creation time
+    pub st_blocks: blkcnt_t, /// [XSI] blocks allocated for file
+    pub st_blksize: blksize_t, /// [XSI] optimal blocksize for I/O
+    pub st_flags: u32, /// user defined flags for file
+    pub st_gen: u32, /// file generation number
+    pub st_lspare: i32, /// RESERVED: DO NOT USE!
+    pub st_qspare: [2]i64, /// RESERVED: DO NOT USE!
 };
 
 extern("System", "__error") const sys_errno_loc: fn(): ^mut i32;
@@ -74,52 +75,71 @@ extern("System", "fstat") const sys_fstat: fn(file_desc: Handle, stat: ^mut Stat
 extern("System", "mkdir") const sys_mkdir: fn(path: ^u8, mode: mode_t): i32;
 extern("System", "stat") const sys_stat: fn(path: ^u8, stat: ^mut Stat): i32;
 
-pub const stdin: Handle = 0;
-pub const stdout: Handle = 1;
-pub const stderr: Handle = 2;
-
 constexpr R := fn(T: type): type {
     return result::Result(T, Errno);
 };
 
+pub constexpr stdin := fn(): Handle {
+    return 0;
+};
+
+pub constexpr stdout := fn(): Handle {
+    return 1;
+};
+
+pub constexpr stderr := fn(): Handle {
+    return 2;
+};
+
+/// Write the contents of `buf` to the file, returning the number of written bytes
 pub const write := fn(h: Handle, buf: []u8): R(usize) {
     const r := sys_write(h, buf.ptr, buf.len);
     return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = @as(usize, r) };
 };
 
+/// Read the contents of the file into `buf`, returning the number of read bytes
 pub const read := fn(h: Handle, buf: []mut u8): R(usize) {
     const r := sys_read(h, buf.ptr, buf.len);
     return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = @as(usize, r) };
 };
 
+/// Open the file at the provided path with the desired flag and mode
 pub const open := fn(path: [:0]u8, flags: i32, mode: mode_t): R(Handle) {
     const fd := sys_open(path.ptr, flags, @as(i32, mode));
     return if (fd < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = fd };
 };
 
+/// Close the file associated with the given handle
 pub const close := fn(h: Handle): R(void) {
     const r := sys_close(h);
     return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = {} };
 };
 
+/// Reposition a read/write file to offset `off` where:
+/// - If `whence` is `SEEK_SET`, the offset is set to offset bytes.
+/// - If `whence` is `SEEK_CUR`, the offset is set to its current location plus offset bytes.
+/// - If `whence` is `SEEK_END`, the offset is set to the size of the file plus offset bytes.
 pub const lseek := fn(h: Handle, off: i64, whence: i32): R(i64) {
     const r := sys_lseek(h, off, whence);
     return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = r };
 };
 
+// Get the `Stat` for an already open file
 pub const fstat := fn(file: Handle): R(Stat) {
     var s: Stat = undefined;
     const r := sys_fstat(file, ^mut s);
     return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = s };
 };
 
-pub const mkdir := fn(path: [:0]u8, mode: mode_t): R(void) {
-    const r := sys_mkdir(path.ptr, mode);
-    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = {} };
-};
-
+// Get the `Stat` for a file at the provided `path`
 pub const stat := fn(path: [:0]u8): R(Stat) {
     var s: Stat = undefined;
     const r := sys_stat(path.ptr, ^mut s);
     return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = s };
+};
+
+/// Create a directory at the provided path
+pub const mkdir := fn(path: [:0]u8, mode: mode_t): R(void) {
+    const r := sys_mkdir(path.ptr, mode);
+    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = {} };
 };
