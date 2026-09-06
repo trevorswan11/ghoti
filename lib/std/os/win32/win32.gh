@@ -4,16 +4,13 @@ pub import "errno.gh" as errno;
 
 pub using Handle = ^mut opaque;
 
-using Errno = errno::Win32Error;
+pub using Errno = errno::Errno;
 
 using DWORD = u32;
 using BOOL = i32;
 
-const INVALID_HANDLE: usize = 0xFFFFFFFFFFFFFFFFuz;
-
-pub const is_invalid_handle := fn(h: Handle): bool {
-    return @intFromPtr(h) == INVALID_HANDLE;
-};
+/// CreateFileW / GetStdHandle failure sentinel
+pub const INVALID_HANDLE_VALUE: Handle = @ptrFromInt(Handle, @as(usize, -1)); // (HANDLE)(LONG_PTR)-1
 
 // CreateFileW dwDesiredAccess (winnt.h)
 pub const GENERIC_READ: u32 = 0x80000000u32;
@@ -161,7 +158,7 @@ pub const open := fn(path: [:0]u8, access: u32, share: u32, disposition: u32, fl
 
     // CREATE_ALWAYS / OPEN_ALWAYS succeed on an existing file but leave
     // GetLastError() == ERROR_ALREADY_EXISTS
-    return if (is_invalid_handle(h)) .{ .err = @as(Errno, GetLastError()) } else .{ .ok = h };
+    return if (h == INVALID_HANDLE_VALUE) .{ .err = @as(Errno, GetLastError()) } else .{ .ok = h };
 };
 
 /// Close the file associated with the given handle
@@ -181,7 +178,7 @@ pub const lseek := fn(h: Handle, off: i64, whence: i32): R(i64) {
 
 const std_handle := fn(which: u32): R(Handle) {
     const h := GetStdHandle(which);
-    if (is_invalid_handle(h)) {
+    if (h == INVALID_HANDLE_VALUE) {
         return .{ .err = @as(Errno, GetLastError()) };
     };
 
