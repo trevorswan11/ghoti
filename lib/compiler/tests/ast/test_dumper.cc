@@ -21,8 +21,9 @@ constexpr std::string_view expected{
 
 TEST_CASE("Comprehensive dump") {
     syntax::parser p{golden_input};
+    ghoti::arena   arena;
     ast::AST       ast;
-    auto           errors{p.consume(ast)};
+    auto           errors{p.consume(ast, arena)};
     helpers::check_errors<syntax::diagnostic>(errors);
 
     std::ostringstream oss;

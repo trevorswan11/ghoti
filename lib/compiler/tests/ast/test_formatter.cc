@@ -327,6 +327,19 @@ TEST_CASE("formatter round trip: functions and types") {
     round_trips("const cb := fn(x: i32) callconv(.stdcall): i32 { return x; };");
 }
 
+TEST_CASE("formatter round trip: raw identifiers") {
+    round_trips(R"(const @"type": i32 = 0;)");
+    round_trips(R"(pub const @"match" := 1;)");
+    round_trips(R"(const x := @"struct".field;)");
+    round_trips(R"(const f := fn(@"fn": i32, @"i32": i32): i32 { return @"fn" + @"i32"; };)");
+    round_trips(R"(using @"union" = i32;)");
+    round_trips(R"(const s := extern struct { @"struct": i32, @"enum": u8 };)");
+    // A name needing no escaping must format bare, even when written raw in the source.
+    CHECK(format_source(R"(const @"plain" := 0;)") == "const plain := 0;\n");
+    // A keyword collision round-trips through the raw form.
+    CHECK(format_source(R"(const @"type" := 0;)") == "const @\"type\" := 0;\n");
+}
+
 TEST_CASE("formatter round trip: aggregates") {
     round_trips("struct { var a: Foo = bar; const b := fn(^mut this, a: A, b: ^B): C { c; }; };");
     round_trips("union { a: i32, b: &mut T, };");

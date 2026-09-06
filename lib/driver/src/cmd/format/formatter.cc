@@ -61,8 +61,9 @@ auto formatter::process_target(std::string_view                           source
                                const stdx::option<std::string>&           display_name,
                                stdx::option<const std::filesystem::path&> file_path) -> bool {
     syntax::parser parser{source_code};
+    ghoti::arena   arena;
     ast::AST       ast;
-    const auto     diagnostics{parser.consume(ast)};
+    const auto     diagnostics{parser.consume(ast, arena)};
 
     if (!diagnostics.empty()) {
         for (const auto& diag : diagnostics) {

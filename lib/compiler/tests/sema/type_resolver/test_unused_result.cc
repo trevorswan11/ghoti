@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
@@ -13,13 +14,8 @@ namespace {
 
 // Whether resolving `source` produced at least one diagnostic with the given error code.
 [[nodiscard]] auto has_error(std::string_view source, sema::error code) -> bool {
-    auto [ctx, idx]{helpers::resolve(source)};
-    const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()};
-    if (!diags) { return false; }
-    for (const auto& d : gsl::span<const sema::diagnostic>{*diags}) {
-        if (d.get_error() == code) { return true; }
-    }
-    return false;
+    const auto [codes, _]{helpers::resolve_diags(source)};
+    return std::ranges::contains(codes, code);
 }
 
 } // namespace

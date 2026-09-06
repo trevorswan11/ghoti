@@ -97,7 +97,7 @@ TEST_CASE("GIR value types and operations") {
 
 TEST_CASE("GIR segment terminator invariants") {
     using namespace gir;
-    sema::arena_alloc arena;
+    ghoti::arena arena;
 
     segment seg{arena, segment_id{0}};
     CHECK(seg.get_id() == segment_id{0});
@@ -131,7 +131,7 @@ TEST_CASE("GIR segment terminator invariants") {
 TEST_CASE("GIR function management and local ID allocation") {
     using namespace gir;
 
-    sema::arena_alloc arena;
+    ghoti::arena arena;
     sema::type_pool   pool{arena};
     auto& i32_type{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
     auto& fn_type{*pool[{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT}]};
