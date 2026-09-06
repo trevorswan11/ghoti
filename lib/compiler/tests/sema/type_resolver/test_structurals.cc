@@ -451,4 +451,26 @@ TEST_CASE("A type error inside an imported generic body is attributed to the def
     }
 }
 
+TEST_CASE("A failed @cfg pass still lets type resolution run without a missing-sema-type crash") {
+    SECTION("unknown cfg atom, aggregate bound to a const") {
+        CHECK(helpers::raised("const S := struct { @cfg(debug) a: i32 else b: i32 };",
+                              sema::error::CFG_UNKNOWN_ATOM));
+    }
+
+    SECTION("unknown cfg atom, anonymous aggregate as a bare statement") {
+        CHECK(helpers::raised("struct { @cfg(debug) a: i32 else b: i32 };",
+                              sema::error::CFG_UNKNOWN_ATOM));
+    }
+
+    SECTION("ill-typed cfg comparison against a string, anonymous aggregate") {
+        CHECK(helpers::raised("union { @cfg(os == \"linux\") a: i32 else b: i32 };",
+                              sema::error::CFG_COMPARISON_TYPE_MISMATCH));
+    }
+
+    SECTION("failed cfg statement inside a test block") {
+        CHECK(helpers::raised("test { const S := struct { @cfg(debug) a: i32 else b: i32 }; }",
+                              sema::error::CFG_UNKNOWN_ATOM));
+    }
+}
+
 } // namespace ghoti::tests

@@ -66,15 +66,13 @@ auto symbol_collector::collect_symbols(mod::module& module, context& ctx) -> mod
     if (module.is_collectable()) {
         module.root_table_idx.emplace(ctx.registry.create());
 
-        if (!cfg_pass::run(module, ctx)) {
-            return module.error_out(std::move(ctx.diags),
-                                    mod::module_state::POISONED_SYMBOL_COLLECTION);
-        }
+        // A failed `@cfg` pass still leaves the AST in a consistent, groups-flattened state
+        const bool cfg_ok{cfg_pass::run(module, ctx)};
 
         symbol_collector collector{module, ctx};
         for (const auto& node : module.ast) { collector.collect(node); }
 
-        if (!ctx.diags.empty()) {
+        if (!cfg_ok || !ctx.diags.empty()) {
             return module.error_out(std::move(ctx.diags),
                                     mod::module_state::POISONED_SYMBOL_COLLECTION);
         }
