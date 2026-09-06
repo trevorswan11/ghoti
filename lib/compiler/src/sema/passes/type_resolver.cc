@@ -4991,8 +4991,8 @@ auto type_resolver::using_rhs_value_name(ast::explicit_type_id rhs) const
                                            : stdx::none};
             if (!mod_data || !mod_data->imported.root_table_idx) { return stdx::none; }
             const auto& inner{resolving_.ast.get_as<ast::identifier_expr>(e.inner)};
-            if (const auto sym{ctx_.registry.get_from_opt(*mod_data->imported.root_table_idx,
-                                                         inner.name)};
+            if (const auto sym{
+                    ctx_.registry.get_from_opt(*mod_data->imported.root_table_idx, inner.name)};
                 sym && is_value_sym(*sym)) {
                 return inner.name;
             }
@@ -5001,7 +5001,7 @@ auto type_resolver::using_rhs_value_name(ast::explicit_type_id rhs) const
         [&](const ast::dot_expr& e) -> stdx::option<std::string_view> {
             const auto obj_type{resolving_.get_sema_type_opt(e.object)};
             if (!obj_type) { return stdx::none; }
-            auto& denoted{denoted_type(const_cast<type&>(*obj_type))};
+            auto&      denoted{denoted_type(const_cast<type&>(*obj_type))};
             const auto tbl{denoted.get_symbol_table_idx_opt()};
             if (!tbl) { return stdx::none; }
             const auto& member{resolving_.ast.get_as<ast::identifier_expr>(e.member)};
