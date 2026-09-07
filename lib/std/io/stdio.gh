@@ -11,7 +11,7 @@ using File = file::File;
 /// The standard output stream, infallible on POSIX
 pub const stdout := fn(): Result(File, Error) {
     return match (os::stdout()) {
-        .ok  => |h| .{ .ok = .{ .handle = h } },
+        .ok => |h| .{ .ok = .{ .handle = h } },
         .err => |e| .{ .err = .fromOs(e) },
     };
 };
@@ -19,7 +19,7 @@ pub const stdout := fn(): Result(File, Error) {
 /// The standard input stream, infallible on POSIX
 pub const stdin := fn(): Result(File, Error) {
     return match (os::stdin()) {
-        .ok  => |h| .{ .ok = .{ .handle = h } },
+        .ok => |h| .{ .ok = .{ .handle = h } },
         .err => |e| .{ .err = .fromOs(e) },
     };
 };
@@ -27,7 +27,7 @@ pub const stdin := fn(): Result(File, Error) {
 /// The standard error stream, infallible on POSIX
 pub const stderr := fn(): Result(File, Error) {
     return match (os::stderr()) {
-        .ok  => |h| .{ .ok = .{ .handle = h } },
+        .ok => |h| .{ .ok = .{ .handle = h } },
         .err => |e| .{ .err = .fromOs(e) },
     };
 };
