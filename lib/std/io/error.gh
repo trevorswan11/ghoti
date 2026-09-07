@@ -1,0 +1,64 @@
+//! Safe conversion wrapper from target-specific Errno
+import "../os/os.gh" as os;
+
+pub const Error := enum : i32 {
+    not_found,
+    access_denied,
+    broken_pipe,
+    would_block,
+    interrupted,
+    is_directory,
+    not_a_directory,
+    already_exists,
+    no_space,
+    bad_fd,
+    invalid_input,
+    input_output,
+    unexpected,
+    _,
+
+    pub constexpr fromOs := fn(errno: os::Errno): @this() {
+        @cfg (os == .macos) {
+            return match (errno) {
+                .ENOENT => .not_found,
+                .EACCES, .EPERM, .EROFS => .access_denied,
+                .EEXIST => .already_exists,
+                .EPIPE => .broken_pipe,
+                .EAGAIN, .EINPROGRESS => .would_block,
+                .EINTR => .interrupted,
+                .EISDIR => .is_directory,
+                .ENOTDIR => .not_a_directory,
+                .EBADF => .bad_fd,
+                .ENOSPC, .EDQUOT, .EFBIG, .ENOMEM => .no_space,
+                .EINVAL, .ESPIPE, .ENAMETOOLONG, .EFAULT => .invalid_input,
+                .EIO => .input_output,
+                _ => .unexpected,
+            };
+        } else @cfg (os == .windows) {
+            return match (errno) {
+                .ERROR_FILE_NOT_FOUND,
+                .ERROR_PATH_NOT_FOUND,
+                .ERROR_INVALID_NAME,
+                .ERROR_FILENAME_EXCED_RANGE,
+                => .not_found,
+                .ERROR_ACCESS_DENIED, .ERROR_WRITE_PROTECT, .ERROR_INVALID_ACCESS => .access_denied,
+                .ERROR_FILE_EXISTS, .ERROR_ALREADY_EXISTS => .already_exists,
+                .ERROR_BROKEN_PIPE, .ERROR_NO_DATA => .broken_pipe,
+                .ERROR_INVALID_HANDLE => .bad_fd,
+                .ERROR_DISK_FULL,
+                .ERROR_HANDLE_DISK_FULL,
+                .ERROR_OUTOFMEMORY,
+                .ERROR_NOT_ENOUGH_MEMORY,
+                => .no_space,
+                .ERROR_INVALID_PARAMETER, .ERROR_NEGATIVE_SEEK, .ERROR_INVALID_DATA => .invalid_input,
+                .ERROR_DIRECTORY => .not_a_directory,
+                .ERROR_OPERATION_ABORTED => .interrupted,
+                _ => .unexpected,
+            };
+        } else @cfg (os == .linux) {
+            @compileError("std::os: Linux is currently a WIP");
+        } else {
+            @compileError("std::os: unsupported target OS");
+        }
+    };
+};

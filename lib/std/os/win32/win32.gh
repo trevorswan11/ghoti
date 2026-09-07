@@ -32,8 +32,10 @@ pub const OPEN_ALWAYS: u32 = 4u32; /// open, or create if it does not exist
 pub const TRUNCATE_EXISTING: u32 = 5u32; /// open+truncate, fail if it does not exist
 
 // CreateFileW dwFlagsAndAttributes (fileapi.h / winnt.h)
+pub const FILE_ATTRIBUTE_READONLY: u32 = 0x00000001u32;
+pub const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x00000010u32;
 pub const FILE_ATTRIBUTE_NORMAL: u32 = 0x00000080u32;
-pub const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x02000000u32;
+pub const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x02000000u32; /// needed to open a directory handle
 
 // SetFilePointerEx dwMoveMethod (winbase.h)
 pub const SEEK_SET: i32 = 0; /// FILE_BEGIN: starting point is zero or the beginning of the file.
@@ -52,7 +54,42 @@ pub const MB_ERR_INVALID_CHARS: u32 = 0x00000008u32;
 const WIDE_MAX: usize = 32767uz; /// Largest UTF-16 path len on the stack, including the NUL
 const DWORD_MAX: usize = 0xFFFFFFFFuz;
 
-extern("kernel32", "CreateFileW") const CreateFileW: fn(
+/// File System time stamps are represented with the following structure:
+pub const Filetime := extern struct {
+    low: DWORD, /// dwLowDateTime
+    high: DWORD, /// dwHighDateTime
+};
+
+/// File metadata, filled by `stat` / `fstat`.
+pub const Stat := extern struct {
+    pub attributes: DWORD, /// dwFileAttributes
+    pub created_time: Filetime, /// ftCreationTime
+    pub accessed_time: Filetime, /// ftLastAccessTime
+    pub modified_time: Filetime, /// ftLastWriteTime
+    pub volume_serial: DWORD, /// dwVolumeSerialNumber
+    pub size_high: DWORD, /// nFileSizeHigh
+    pub size_low: DWORD, /// nFileSizeLow
+    pub links: DWORD, /// nNumberOfLinks
+    pub index_high: DWORD, /// nFileIndexHigh
+    pub index_low: DWORD, /// nFileIndexLow
+
+    /// File size in bytes.
+    pub const size := fn(&self): u64 {
+        return (@as(u64, self.size_high) << 32u64) | @as(u64, self.size_low);
+    };
+
+    /// Whether the entry is a directory.
+    pub const is_dir := fn(&self): bool {
+        return (self.attributes & FILE_ATTRIBUTE_DIRECTORY) != 0u32;
+    };
+
+    /// Last-write time as 100-ns ticks since 1601-01-01 UTC (Windows FILETIME epoch).
+    pub const modified_time_ns := fn(&self): u64 {
+        return (@as(u64, self.modified_time.high) << 32u64) | @as(u64, self.modified_time.low);
+    };
+};
+
+extern("kernel32") const CreateFileW: fn(
     path: ^u16,
     access: u32,
     share: u32,
@@ -78,20 +115,24 @@ extern("kernel32", "WriteFile") const WriteFile: fn(
     overlapped: ^mut opaque
 ): BOOL;
 
-extern("kernel32", "CloseHandle") const CloseHandle: fn(h: Handle): BOOL;
+extern("kernel32") const CloseHandle: fn(h: Handle): BOOL;
 
-extern("kernel32", "SetFilePointerEx") const SetFilePointerEx: fn(
+extern("kernel32") const SetFilePointerEx: fn(
     h: Handle,
     distance: i64,
     new_pointer: ^mut i64,
     method: u32
 ): i32;
 
-extern("kernel32", "GetStdHandle") const GetStdHandle: fn(which: u32): Handle;
-extern("kernel32", "GetLastError") const GetLastError: fn(): DWORD;
+extern("kernel32") const GetStdHandle: fn(which: u32): Handle;
+extern("kernel32") const GetLastError: fn(): DWORD;
+
+extern("kernel32") const CreateDirectoryW: fn(path: ^u16, security: ^mut opaque): BOOL;
+
+extern("kernel32") const GetFileInformationByHandle: fn(h: Handle, info: ^mut Stat): BOOL;
 
 /// Treats the input as NUL-terminated and NUL-terminates the output
-extern("kernel32", "MultiByteToWideChar") const MultiByteToWideChar: fn(
+extern("kernel32") const MultiByteToWideChar: fn(
     code_page: u32,
     flags: u32,
     mb_str: ^u8,
@@ -176,6 +217,36 @@ pub const lseek := fn(h: Handle, off: i64, whence: i32): R(i64) {
     return if (ok == 0i32) .{ .err = @as(Errno, GetLastError()) } else .{ .ok = new_pos };
 };
 
+/// Metadata for an already-open file or directory handle
+pub const fstat := fn(h: Handle): R(Stat) {
+    var s: Stat = undefined;
+    const ok := GetFileInformationByHandle(h, ^mut s);
+    return if (ok == 0i32) .{ .err = @as(Errno, GetLastError()) } else .{ .ok = s };
+};
+
+/// Metadata for the file or directory at `path`
+pub const stat := fn(path: [:0]u8): R(Stat) {
+    const h := open(
+        path,
+        0u32,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS,
+    )?;
+    defer _ = close(h);
+    return fstat(h);
+};
+
+/// Create a directory at the provided path.
+/// - Fails with `ERROR_ALREADY_EXISTS` when the directory already exists
+/// - Fails with `ERROR_PATH_NOT_FOUND` when a parent is missing
+pub const mkdir := fn(path: [:0]u8): R(void) {
+    var wbuf: [WIDE_MAX]u16 = undefined;
+    _ = to_wide(path, ^mut wbuf)?;
+    const ok := CreateDirectoryW(@ptrCast(^u16, ^mut wbuf), nullptr);
+    return if (ok == 0i32) .{ .err = @as(Errno, GetLastError()) } else .{ .ok = {} };
+};
+
 const std_handle := fn(which: u32): R(Handle) {
     const h := GetStdHandle(which);
     if (h == INVALID_HANDLE_VALUE) {
@@ -227,6 +298,46 @@ test "win32: opening a missing file reports not-found" {
         match (r) {
             .ok => false,
             .err => |e| e == .ERROR_FILE_NOT_FOUND or e == .ERROR_PATH_NOT_FOUND,
+        },
+    );
+}
+
+test "win32: stat reports a real size for a file and the directory flag for a dir" {
+    @expect(
+        match (stat("C:/Windows/System32/kernel32.dll")) {
+            .ok => |s| s.size() > 0u64 and !s.is_dir(),
+            .err => false,
+        },
+    );
+    @expect(match (stat("C:/Windows/System32")) { .ok => |s| s.is_dir(), .err => false });
+    @expect(
+        match (stat("C:/Windows/System32/ghoti-no-such-file.xyz")) {
+            .ok => false,
+            .err => |e| e == .ERROR_FILE_NOT_FOUND or e == .ERROR_PATH_NOT_FOUND,
+        },
+    );
+}
+
+test "win32: fstat on an open handle sees the file size" {
+    const hr := open(
+        "C:/Windows/System32/kernel32.dll",
+        0u32,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+    );
+
+    @require(hr == .ok);
+    const h := match (hr) { .ok => |x| x, .err => nullptr };
+    @expect(match (fstat(h)) { .ok => |s| s.size() > 0u64, .err => false });
+    _ = close(h);
+}
+
+test "win32: mkdir of an existing directory reports it, not a spurious success" {
+    @expect(
+        match (mkdir("C:/Windows")) {
+            .ok => false,
+            .err => |e| e == .ERROR_ALREADY_EXISTS or e == .ERROR_ACCESS_DENIED,
         },
     );
 }

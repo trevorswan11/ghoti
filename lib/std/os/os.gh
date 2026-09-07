@@ -3,6 +3,8 @@
     import "darwin/darwin.gh" as backend;
 } else @cfg (os == .windows) {
     import "win32/win32.gh" as backend;
+} else @cfg (os == .linux) {
+    @compileError("std::os: Linux is currently a WIP");
 } else {
     @compileError("std::os: unsupported target OS");
 }
@@ -10,15 +12,19 @@
 pub using Handle = backend::Handle;
 pub using Errno = backend::Errno;
 
-pub using open = backend::open;
-pub using read = backend::read;
-pub using write = backend::write;
-pub using close = backend::close;
-pub using lseek = backend::lseek;
+pub const open := backend::open;
+pub const read := backend::read;
+pub const write := backend::write;
+pub const close := backend::close;
+pub const lseek := backend::lseek;
 
-pub using stdin = backend::stdin;
-pub using stdout = backend::stdout;
-pub using stderr = backend::stderr;
+pub const stdin := backend::stdin;
+pub const stdout := backend::stdout;
+pub const stderr := backend::stderr;
+
+pub const mkdir := backend::mkdir;
+pub const stat := backend::stat;
+pub const fstat := backend::fstat;
 
 pub const SEEK_SET := backend::SEEK_SET;
 pub const SEEK_CUR := backend::SEEK_CUR;
