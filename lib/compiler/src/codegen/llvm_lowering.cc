@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <gsl/pointers>
 #include <gsl/span>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/CallingConv.h>
@@ -193,6 +194,7 @@ auto llvm_lowering::lower(const gir::module& gir_mod) -> stdx::box<llvm::Module>
         for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
     }
     maybe_emit_windows_stack_probe();
+    maybe_emit_mem_intrinsic_fallbacks();
     return std::move(llvm_module_);
 }
 
@@ -240,6 +242,7 @@ auto llvm_lowering::lower_executable(const gir::module& gir_mod, std::string_vie
     }
     emit_main_entry_wrapper(user_main_name_);
     maybe_emit_windows_stack_probe();
+    maybe_emit_mem_intrinsic_fallbacks();
     return std::move(llvm_module_);
 }
 
@@ -445,6 +448,112 @@ auto llvm_lowering::maybe_emit_windows_stack_probe() -> void {
         llvm::InlineAsm::get(asm_ty, probe_asm, "~{memory}", true, false, llvm::InlineAsm::AD_ATT)};
     builder_.CreateCall(probe_asm_val, {});
     builder_.CreateUnreachable();
+}
+
+auto llvm_lowering::maybe_emit_mem_intrinsic_fallbacks() -> void {
+    if (!mem_fallbacks_used()) { return; }
+
+    // COFF/ELF dedupe weak defs via a COMDAT
+    const llvm::Triple triple{llvm_module_->getTargetTriple()};
+    // MachO has no COMDATs but folds weak symbols on its own
+    const bool want_comdat{!triple.isOSBinFormatMachO()};
+
+    auto* i8_ty{llvm::Type::getInt8Ty(context_)};
+    auto* i32_ty{llvm::Type::getInt32Ty(context_)};
+    auto* i64_ty{llvm::Type::getInt64Ty(context_)};
+    auto* ptr{types_.get_ptr_ty()};
+    auto* zero64{llvm::ConstantInt::get(i64_ty, 0)};
+    auto* one64{llvm::ConstantInt::get(i64_ty, 1)};
+
+    const auto new_fn{[&](std::string_view name, bool set) -> llvm::Function* {
+        if (llvm_module_->getFunction(name)) { return nullptr; }
+        auto* second{set ? static_cast<llvm::Type*>(i32_ty) : static_cast<llvm::Type*>(ptr)};
+        auto* fn_ty{llvm::FunctionType::get(ptr, {ptr, second, i64_ty}, false)};
+        auto* fn{llvm::Function::Create(
+            fn_ty, llvm::GlobalValue::WeakAnyLinkage, name, llvm_module_.get())};
+        if (want_comdat) { fn->setComdat(llvm_module_->getOrInsertComdat(std::string{name})); }
+        fn->addFnAttr(llvm::Attribute::NoInline);
+        fn->addFnAttr(llvm::Attribute::NoUnwind);
+        fn->addFnAttr(llvm::Attribute::NoBuiltin);
+        // `optnone` stops loop-idiom recognition from turning the byte loop back into a
+        // `llvm.mem*` intrinsic, which lowers to this same (recursive) libcall.
+        fn->addFnAttr(llvm::Attribute::OptimizeNone);
+        return fn;
+    }};
+
+    // Emits, from the current insert point, a `dst[k] = <byte>` loop (`k` runs 0..n, or n..0
+    // when `backward`) that branches to `after` when done.
+    const auto byte_loop{[&](gsl::not_null<llvm::Function*>   fn,
+                             gsl::not_null<llvm::Value*>      dst,
+                             gsl::not_null<llvm::Value*>      mid,
+                             gsl::not_null<llvm::Value*>      n,
+                             bool                             set,
+                             bool                             backward,
+                             gsl::not_null<llvm::BasicBlock*> after) {
+        auto* iv{builder_.CreateAlloca(i64_ty, nullptr, "i")};
+        builder_.CreateStore(backward ? n.get() : static_cast<llvm::Value*>(zero64), iv);
+        auto* head{llvm::BasicBlock::Create(context_, "head", fn)};
+        auto* body{llvm::BasicBlock::Create(context_, "body", fn)};
+        builder_.CreateBr(head);
+
+        builder_.SetInsertPoint(head);
+        auto* i{builder_.CreateLoad(i64_ty, iv, "i.cur")};
+        auto* cont{backward ? builder_.CreateICmpNE(i, zero64) : builder_.CreateICmpULT(i, n)};
+        builder_.CreateCondBr(cont, body, after);
+
+        builder_.SetInsertPoint(body);
+        auto* idx{backward ? builder_.CreateSub(i, one64) : i};
+        auto* dp{builder_.CreateGEP(i8_ty, dst, idx, "dp")};
+        if (set) {
+            builder_.CreateStore(builder_.CreateTrunc(mid, i8_ty), dp);
+        } else {
+            auto* sp{builder_.CreateGEP(i8_ty, mid, idx, "sp")};
+            builder_.CreateStore(builder_.CreateLoad(i8_ty, sp, "b"), dp);
+        }
+        builder_.CreateStore(backward ? idx : builder_.CreateAdd(i, one64), iv);
+        builder_.CreateBr(head);
+    }};
+
+    // A simple non-overlapping memory intrinsic
+    const auto simple{[&](std::string_view name, bool set, bool backward) {
+        auto* fn{new_fn(name, set)};
+        if (!fn) { return; }
+        auto  arg{fn->arg_begin()};
+        auto* dst{arg++};
+        auto* mid{arg++};
+        auto* n{arg};
+        auto* done{llvm::BasicBlock::Create(context_, "done", fn)};
+        builder_.SetInsertPoint(done);
+        builder_.CreateRet(dst);
+        builder_.SetInsertPoint(llvm::BasicBlock::Create(context_, "entry", fn, done));
+        byte_loop(fn, dst, mid, n, set, backward, done);
+    }};
+
+    if (memcpy_used_) { simple("memcpy", false, false); }
+    if (memset_used_) { simple("memset", true, false); }
+    if (memmove_used_) {
+        if (auto* fn{new_fn("memmove", false)}) {
+            auto  arg{fn->arg_begin()};
+            auto* dst{arg++};
+            auto* src{arg++};
+            auto* n{arg};
+            auto* done{llvm::BasicBlock::Create(context_, "done", fn)};
+            builder_.SetInsertPoint(done);
+            builder_.CreateRet(dst);
+
+            auto* fwd{llvm::BasicBlock::Create(context_, "fwd", fn, done)};
+            auto* bwd{llvm::BasicBlock::Create(context_, "bwd", fn, done)};
+            builder_.SetInsertPoint(llvm::BasicBlock::Create(context_, "entry", fn, fwd));
+            auto* di{builder_.CreatePtrToInt(dst, i64_ty)};
+            auto* si{builder_.CreatePtrToInt(src, i64_ty)};
+            builder_.CreateCondBr(builder_.CreateICmpULT(di, si), fwd, bwd);
+
+            builder_.SetInsertPoint(fwd);
+            byte_loop(fn, dst, src, n, false, false, done);
+            builder_.SetInsertPoint(bwd);
+            byte_loop(fn, dst, src, n, false, true, done);
+        }
+    }
 }
 
 auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_args) -> llvm::Value* {
@@ -680,6 +789,7 @@ auto llvm_lowering::lower_test_executable(const gir::module&             gir_mod
     for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
     emit_test_entry_wrapper(gir_mod, recover_args);
     maybe_emit_windows_stack_probe();
+    maybe_emit_mem_intrinsic_fallbacks();
     return std::move(llvm_module_);
 }
 
@@ -2032,6 +2142,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             auto* len{lower_value(inst.operands[2])};
             if (dest && src && len) {
                 builder_.CreateMemCpy(dest, llvm::MaybeAlign(), src, llvm::MaybeAlign(), len);
+                memcpy_used_ = true;
             }
             return nullptr;
         }
@@ -2040,7 +2151,10 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             auto* dest{lower_value(inst.operands[0])};
             auto* val{lower_value(inst.operands[1])};
             auto* len{lower_value(inst.operands[2])};
-            if (dest && val && len) { builder_.CreateMemSet(dest, val, len, llvm::MaybeAlign()); }
+            if (dest && val && len) {
+                builder_.CreateMemSet(dest, val, len, llvm::MaybeAlign());
+                memset_used_ = true;
+            }
             return nullptr;
         }
         case syntax::token_type_t::BUILTIN_MEMMOVE: {
@@ -2050,6 +2164,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             auto* len{lower_value(inst.operands[2])};
             if (dest && src && len) {
                 builder_.CreateMemMove(dest, llvm::MaybeAlign(), src, llvm::MaybeAlign(), len);
+                memmove_used_ = true;
             }
             return nullptr;
         }

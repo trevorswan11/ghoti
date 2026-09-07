@@ -655,6 +655,75 @@ template <ast::IndexableID ID>
     case token_type_t::BUILTIN_MEMSET:
     case token_type_t::BUILTIN_MEMMOVE: {
         ASSERT(builtin.return_type.get_kind() == type_kind::VOID_);
+        const bool is_set{builtin_id == token_type_t::BUILTIN_MEMSET};
+        const auto op_name{*syntax::get_builtin_opt(builtin_id)};
+
+        // Peel one `&`/`^` layer, then report {element type, is_writable} for a slice or array.
+        const auto contiguous_of{[](type& t) -> stdx::option<std::pair<type&, bool>> {
+            stdx::option<type&> u{t};
+            if (const auto r{u->get_data().as_opt<types::reference>()}) {
+                u.emplace(const_cast<type&>(r->underlying));
+            } else if (const auto p{u->get_data().as_opt<types::pointer>()}) {
+                u.emplace(const_cast<type&>(p->underlying));
+            }
+            if (const auto s{u->get_data().as_opt<types::slice>()}) {
+                return std::pair<type&, bool>{const_cast<type&>(s->underlying), !u->is_constant()};
+            }
+            if (const auto a{u->get_data().as_opt<types::array>()}) {
+                return std::pair<type&, bool>{const_cast<type&>(a->underlying), !u->is_constant()};
+            }
+            return stdx::none;
+        }};
+
+        auto&      dest_t{*get_resolved_call_arg_type(call.arguments[0])};
+        const auto dest{contiguous_of(dest_t)};
+        if (!dest) {
+            return make_sema_err(
+                fmt::format("'{}' expects a slice or array destination; found '{}'",
+                            op_name,
+                            type_kind_display_name(dest_t)),
+                error::TYPE_MISMATCH,
+                get_call_arg_location(call.arguments[0]));
+        }
+        if (!dest->second) {
+            return make_sema_err(
+                fmt::format("'{}' cannot write through an immutable destination; use a `mut` "
+                            "slice or array",
+                            op_name),
+                error::TYPE_MISMATCH,
+                get_call_arg_location(call.arguments[0]));
+        }
+
+        if (is_set) {
+            auto& val_t{*get_resolved_call_arg_type(call.arguments[1])};
+            if (!is_integer(val_t.get_kind()) && val_t.get_kind() != type_kind::CONSTEXPR_INT) {
+                return make_sema_err(
+                    fmt::format("'@memset' fill value must be a byte-valued integer; found '{}'",
+                                type_kind_display_name(val_t)),
+                    error::TYPE_MISMATCH,
+                    get_call_arg_location(call.arguments[1]));
+            }
+        } else {
+            auto&      src_t{*get_resolved_call_arg_type(call.arguments[1])};
+            const auto src{contiguous_of(src_t)};
+            if (!src) {
+                return make_sema_err(fmt::format("'{}' expects a slice or array source; found '{}'",
+                                                 op_name,
+                                                 type_kind_display_name(src_t)),
+                                     error::TYPE_MISMATCH,
+                                     get_call_arg_location(call.arguments[1]));
+            }
+            if (!is_same_unqualified(dest->first, src->first)) {
+                return make_sema_err(
+                    fmt::format("'{}' requires matching element types; the destination holds "
+                                "'{}' but the source holds '{}'",
+                                op_name,
+                                type_kind_display_name(dest->first),
+                                type_kind_display_name(src->first)),
+                    error::TYPE_MISMATCH,
+                    get_call_arg_location(call.arguments[1]));
+            }
+        }
         return_type = &builtin.return_type;
         break;
     }

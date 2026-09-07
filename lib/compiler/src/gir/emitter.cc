@@ -2716,6 +2716,12 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             default: UNREACHABLE("Unhandled atomic builtin");
             }
         }
+        case syntax::token_type_t::BUILTIN_MEMCPY:
+        case syntax::token_type_t::BUILTIN_MEMSET:
+        case syntax::token_type_t::BUILTIN_MEMMOVE: {
+            emit_mem_intrinsic(id, call, fn_token);
+            return value{void_val{}, ret_type};
+        }
         default: {
             if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
             break;
@@ -4314,17 +4320,28 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                                           : binding->type};
             if (binding->is_alloca) { return value{binding->id, qualified_type}; }
 
-            // A binding with no alloca of its own has no address: spill it into one
+            // A binding with no alloca of its own has no address: spill it into one, cache the
+            // slot on the binding, and reuse it from any later segment
             const auto is_const_binding{binding->const_val || binding->is_const};
             const auto unspilled_value{
                 binding->const_val.value_or(value{binding->id, qualified_type})};
-            const auto spilled{
-                spill_to_temporary(unspilled_value, qualified_type, is_const_binding)};
+            const bool hoist_to_entry{
+                binding->const_val ||
+                (!binding->const_val && binding->id.get_kind() == local_kind::PARAMETER)};
+
+            local_id slot{};
+            if (hoist_to_entry) {
+                slot = builder_.emit_alloca_in_entry(qualified_type, is_const_binding);
+                builder_.emit_store_in_entry(slot, unspilled_value);
+            } else {
+                slot = spill_to_temporary(unspilled_value, qualified_type, is_const_binding)
+                           .data.as<local_id>();
+            }
             auto& mut_binding{*lookup_binding<local_binding&>(ident.name)};
-            mut_binding.id        = spilled.data.as<local_id>();
+            mut_binding.id        = slot;
             mut_binding.is_alloca = true;
             mut_binding.const_val = stdx::none;
-            return spilled;
+            return value{slot, qualified_type};
         },
         [&](const ast::call_expr& call) -> value {
             const auto fn_token{call.function->get_token_type()};
@@ -4838,6 +4855,115 @@ auto emitter::emit_union_active_field_guard(value            union_addr,
     emit_panic_call(fmt::format("accessed inactive union field '{}'", field_name), site);
 
     builder_.set_segment(active_seg);
+}
+
+auto emitter::emit_mem_intrinsic(ast::node_id          id,
+                                 const ast::call_expr& call,
+                                 syntax::token_type_t  builtin) -> void {
+    PROFILE_FUNCTION();
+    auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    auto& u8_type{ctx_.get_int(8, false)};
+    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto& void_type{ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+    auto& byte_ptr_ty{ctx_.get_pointer(sema::types::mut::MUTABLE, u8_type)};
+
+    const bool is_set{builtin == syntax::token_type_t::BUILTIN_MEMSET};
+
+    // Peel ref/pointer wrappers off an argument's static type.
+    const auto peeled{[&](ast::expr_handle h) {
+        const auto                      t{active_mod().get_sema_type_opt(h)};
+        stdx::option<const sema::type&> s{t};
+        while (s) {
+            if (const auto r{s->get_data().as_opt<sema::types::reference>()}) {
+                s.emplace(r->underlying);
+            } else if (const auto p{s->get_data().as_opt<sema::types::pointer>()}) {
+                s.emplace(p->underlying);
+            } else {
+                break;
+            }
+        }
+        return s;
+    }};
+
+    // {data pointer, element count} for a slice or array argument.
+    const auto decompose{[&](ast::expr_handle h) -> std::pair<value, value> {
+        const auto s{peeled(h)};
+        if (s && s->get_data().is<sema::types::array>()) {
+            const auto& arr{s->get_data().as<sema::types::array>()};
+            const auto  lval{emit_lvalue(h)};
+            const auto  ptr{
+                builder_.emit_get_element_ptr(lval, {value{u64{0}, usize_type}}, byte_ptr_ty)};
+            return {value{ptr, byte_ptr_ty}, value{static_cast<u64>(arr.len), usize_type}};
+        }
+
+        // A slice: spill to its address, then load `.ptr` / `.len`.
+        const auto val{emit_expression(h)};
+        const auto addr{spill_to_temporary(val, s ? const_cast<sema::type&>(*s) : void_type)};
+        const auto pf{builder_.emit_get_element_ptr(
+            addr, {value{SLICE_PTR_FIELD_INDEX, usize_type}}, byte_ptr_ty)};
+        const auto lf{builder_.emit_get_element_ptr(
+            addr, {value{SLICE_LEN_FIELD_INDEX, usize_type}}, usize_type)};
+        return {value{builder_.emit_load(value{pf, byte_ptr_ty}, byte_ptr_ty), byte_ptr_ty},
+                value{builder_.emit_load(value{lf, usize_type}, usize_type), usize_type}};
+    }};
+
+    const auto elem_size{[&](ast::expr_handle h) -> u64 {
+        const auto                      s{peeled(h)};
+        stdx::option<const sema::type&> elem;
+        if (s) {
+            if (const auto sl{s->get_data().as_opt<sema::types::slice>()}) {
+                elem.emplace(sl->underlying);
+            } else if (const auto ar{s->get_data().as_opt<sema::types::array>()}) {
+                elem.emplace(ar->underlying);
+            }
+        }
+
+        return elem
+            .transform([this](const sema::type& e) {
+                return static_cast<u64>(const_eval::type_size_of(e, target_ptr_bits_ / 8));
+            })
+            .value_or(1UZ);
+    }};
+
+    const auto to_bytes{[&](value count, u64 esize) -> value {
+        if (esize == 1) { return count; }
+        return value{builder_.emit_binary(
+                         instruction_kind::MUL, count, value{esize, usize_type}, usize_type),
+                     usize_type};
+    }};
+
+    const auto dest_h{*call.arguments[0].as_opt<ast::expr_handle>()};
+    const auto rhs_h{*call.arguments[1].as_opt<ast::expr_handle>()};
+
+    auto [dest_ptr, dest_len]{decompose(dest_h)};
+    const auto dest_bytes{to_bytes(dest_len, elem_size(dest_h))};
+    const auto name{*syntax::get_builtin_opt(builtin)};
+
+    if (is_set) {
+        const auto fill{emit_coerced_expr(rhs_h, u8_type)};
+        builder_.emit_builtin_call(name, {dest_ptr, fill, dest_bytes}, void_type);
+        return;
+    }
+
+    auto [src_ptr, src_len]{decompose(rhs_h)};
+
+    // `@memcpy` / `@memmove` require equal lengths; guard it when safety checks are on.
+    if (runtime_safety_) {
+        const auto eq{builder_.emit_binary(instruction_kind::EQ, dest_len, src_len, bool_type)};
+        auto       fn_opt{builder_.get_function()};
+        ASSERT(fn_opt, "mem intrinsic must be within an active function");
+        auto& ok_seg{fn_opt->add_segment()};
+        auto& bad_seg{fn_opt->add_segment()};
+        builder_.emit_cond_goto(value{eq, bool_type}, ok_seg.get_id(), bad_seg.get_id());
+        builder_.set_segment(bad_seg);
+        emit_panic_call(builtin == syntax::token_type_t::BUILTIN_MEMCPY
+                            ? "@memcpy with mismatched slice lengths"
+                            : "@memmove with mismatched slice lengths",
+                        id);
+        builder_.set_segment(ok_seg);
+    }
+
+    builder_.emit_builtin_call(name, {dest_ptr, src_ptr, dest_bytes}, void_type);
 }
 
 auto emitter::emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> value {
