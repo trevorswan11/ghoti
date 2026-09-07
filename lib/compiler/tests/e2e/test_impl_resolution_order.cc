@@ -122,6 +122,37 @@ TEST_CASE("E2E: a cross-module trait-impl method calls a sibling method through 
     CHECK(exit_code == 30);
 }
 
+TEST_CASE("E2E: a cross-module trait-impl method calls a sibling through a non-`self` receiver") {
+    constexpr std::string_view iface_gh{R"(
+        pub const W := interface {
+            pub const put := fn(&mut self, n: i32): i32;
+            pub const putN := fn(&mut self, n: i32): i32 { return self.put(n); };
+        };
+    )"};
+    constexpr std::string_view dev_gh{R"(
+        import "iface.gh" as iface;
+        pub const Dev := struct { acc: i32 };
+        impl iface::W for Dev {
+            pub const put := fn(&mut this, n: i32): i32 { this.acc += n; return this.acc; };
+            pub const putN := fn(&mut this, n: i32): i32 { return this.put(n) + this.put(n); };
+        }
+    )"};
+
+    const auto exit_code{helpers::compile_and_run(
+        R"(
+            import "dev.gh" as d;
+            pub const main := fn(): i32 {
+                var x := d::Dev{ .acc = 0 };
+                return x.putN(10);
+            };
+        )",
+        {
+            mock_file{"iface.gh", iface_gh, "iface"},
+            mock_file{"dev.gh", dev_gh, "dev"},
+        })};
+    CHECK(exit_code == 30);
+}
+
 TEST_CASE("E2E: a static enum method reached cross-module via a `using` alias is a direct call") {
     constexpr std::string_view err_gh{R"(
         pub const Error := enum : i32 {
