@@ -403,7 +403,7 @@ auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
     const auto field_count{entries.size()};
     format_members(entries, node.members, node.member_cfg_groups);
 
-    head.emplace_back(aggregate_body(std::move(entries), field_count));
+    head.emplace_back(aggregate_body(std::move(entries), field_count, node.fields_force_break));
     return doc_manager_.concat(std::move(head));
 }
 
@@ -465,7 +465,7 @@ auto formatter::format_union(const union_expr& node) -> syntax::doc_id {
     const auto field_count{entries.size()};
     format_members(entries, node.members, node.member_cfg_groups);
 
-    head.emplace_back(aggregate_body(std::move(entries), field_count));
+    head.emplace_back(aggregate_body(std::move(entries), field_count, node.fields_force_break));
     return doc_manager_.concat(std::move(head));
 }
 
@@ -533,7 +533,8 @@ auto formatter::format_enum(const enum_expr& node) -> syntax::doc_id {
         head.emplace_back(format(*node.underlying));
         head.emplace_back(doc_manager_.text(" "));
     }
-    head.emplace_back(aggregate_body(std::move(entries), value_count));
+    head.emplace_back(
+        aggregate_body(std::move(entries), value_count, node.enumerations_force_break));
     return doc_manager_.concat(std::move(head));
 }
 
@@ -610,8 +611,9 @@ auto formatter::format_interface(const interface_expr& node) -> syntax::doc_id {
         {doc_manager_.text("interface "), aggregate_body(std::move(entries), 0)});
 }
 
-auto formatter::aggregate_body(std::vector<syntax::doc_id> entries, usize comma_count)
-    -> syntax::doc_id {
+auto formatter::aggregate_body(std::vector<syntax::doc_id> entries,
+                               usize                       comma_count,
+                               bool                        force_break) -> syntax::doc_id {
     if (entries.empty()) { return doc_manager_.text("{}"); }
 
     std::vector<syntax::doc_id> body;
@@ -624,12 +626,13 @@ auto formatter::aggregate_body(std::vector<syntax::doc_id> entries, usize comma_
     }
 
     return doc_manager_.group(doc_manager_.concat({
-        doc_manager_.text("{"),
-        doc_manager_.nest(
-            doc_manager_.concat({doc_manager_.line(), doc_manager_.concat(std::move(body))})),
-        doc_manager_.line(),
-        doc_manager_.text("}"),
-    }));
+                                  doc_manager_.text("{"),
+                                  doc_manager_.nest(doc_manager_.concat(
+                                      {doc_manager_.line(), doc_manager_.concat(std::move(body))})),
+                                  doc_manager_.line(),
+                                  doc_manager_.text("}"),
+                              }),
+                              force_break);
 }
 
 auto formatter::decl_prefix(const decl_stmt& node) -> syntax::doc_id {
@@ -732,7 +735,8 @@ auto formatter::visit(node_id, const array_expr& node) -> syntax::doc_id {
     std::vector<syntax::doc_id> items;
     items.reserve(node.items.size());
     for (const auto& item : node.items) { items.emplace_back(format(item)); }
-    head.emplace_back(doc_manager_.delimited("{", "}", std::move(items), true, true));
+    head.emplace_back(
+        doc_manager_.delimited("{", "}", std::move(items), true, true, node.items_force_break));
 
     return doc_manager_.concat(std::move(head));
 }
@@ -753,7 +757,8 @@ auto formatter::visit(node_id, const asm_expr& node) -> syntax::doc_id {
         return doc_manager_.concat({
             doc_manager_.text(label),
             doc_manager_.text(": "),
-            doc_manager_.delimited("(", ")", std::move(items), false, false),
+            doc_manager_.delimited(
+                "(", ")", std::move(items), false, false, node.operands_force_break),
         });
     };
 
@@ -770,7 +775,8 @@ auto formatter::visit(node_id, const asm_expr& node) -> syntax::doc_id {
         for (const auto& clobber : node.clobbers) { items.emplace_back(format(clobber)); }
         clauses.emplace_back(doc_manager_.concat({
             doc_manager_.text("clobbers: "),
-            doc_manager_.delimited("(", ")", std::move(items), false, false),
+            doc_manager_.delimited(
+                "(", ")", std::move(items), false, false, node.operands_force_break),
         }));
     }
     if (!node.options.empty()) {
@@ -781,7 +787,8 @@ auto formatter::visit(node_id, const asm_expr& node) -> syntax::doc_id {
         }
         clauses.emplace_back(doc_manager_.concat({
             doc_manager_.text("options: "),
-            doc_manager_.delimited("(", ")", std::move(items), false, false),
+            doc_manager_.delimited(
+                "(", ")", std::move(items), false, false, node.operands_force_break),
         }));
     }
 
@@ -804,7 +811,7 @@ auto formatter::visit(node_id, const call_expr& node) -> syntax::doc_id {
     }
     return doc_manager_.concat({
         format(node.function),
-        doc_manager_.delimited("(", ")", std::move(args), false, true),
+        doc_manager_.delimited("(", ")", std::move(args), false, true, node.args_force_break),
     });
 }
 
@@ -836,10 +843,12 @@ auto formatter::visit(node_id, const for_loop_expr& node) -> syntax::doc_id {
 
     return doc_manager_.concat({
         doc_manager_.text("for "),
-        doc_manager_.delimited("(", ")", std::move(iterables), false, false),
-        doc_manager_.text(" |"),
-        doc_manager_.join(std::move(captures), doc_manager_.text(", ")),
-        doc_manager_.text("| "),
+        doc_manager_.delimited(
+            "(", ")", std::move(iterables), false, false, node.iterables_force_break),
+        doc_manager_.text(" "),
+        doc_manager_.delimited(
+            "|", "|", std::move(captures), false, false, node.captures_force_break),
+        doc_manager_.text(" "),
         format(node.block),
         node.non_break
             ? doc_manager_.concat({doc_manager_.text(" else "), tail_clause(*node.non_break)})
@@ -1048,7 +1057,8 @@ auto formatter::visit(node_id, const initializer_expr& node) -> syntax::doc_id {
             inits.emplace_back(format(init.value));
         }
     }
-    parts.emplace_back(doc_manager_.delimited("{", "}", std::move(inits), true, true));
+    parts.emplace_back(doc_manager_.delimited(
+        "{", "}", std::move(inits), true, true, node.initializers_force_break));
 
     return doc_manager_.concat(std::move(parts));
 }
@@ -1106,7 +1116,7 @@ auto formatter::visit(node_id id, const match_expr& node) -> syntax::doc_id {
         doc_manager_.text(node.is_constexpr ? "match constexpr (" : "match ("),
         format(node.matcher),
         doc_manager_.text(") "),
-        doc_manager_.delimited("{", "}", std::move(arms), true, true),
+        doc_manager_.delimited("{", "}", std::move(arms), true, true, node.arms_force_break),
     });
 }
 
@@ -1214,7 +1224,7 @@ auto formatter::visit(node_id, const cfg_value_expr& node) -> syntax::doc_id {
 
     return doc_manager_.concat({
         doc_manager_.text("@cfgValue"),
-        doc_manager_.delimited("(", ")", std::move(arms), true, true),
+        doc_manager_.delimited("(", ")", std::move(arms), true, true, node.guards_force_break),
     });
 }
 
@@ -1436,7 +1446,8 @@ auto formatter::visit(node_id, const impl_stmt& node) -> syntax::doc_id {
                                      doc_manager_.text(": "),
                                      format(param.explicit_type)}));
         }
-        head.emplace_back(doc_manager_.delimited("(", ")", std::move(params), false, false));
+        head.emplace_back(doc_manager_.delimited(
+            "(", ")", std::move(params), false, false, node.impl_params_force_break));
     }
 
     head.emplace_back(doc_manager_.text(" "));
@@ -1496,7 +1507,8 @@ auto formatter::visit(explicit_type_id id, const call_expr& node) -> syntax::doc
     return with_modifier(
         id,
         doc_manager_.concat({format(node.function),
-                             doc_manager_.delimited("(", ")", std::move(args), false, false)}));
+                             doc_manager_.delimited(
+                                 "(", ")", std::move(args), false, false, node.args_force_break)}));
 }
 
 auto formatter::visit(explicit_type_id id, const explicit_function_type& node) -> syntax::doc_id {
@@ -1512,13 +1524,15 @@ auto formatter::visit(explicit_type_id id, const explicit_function_type& node) -
     }
     if (node.variadic) { params.emplace_back(doc_manager_.text("...")); }
 
-    return with_modifier(id,
-                         doc_manager_.concat({
-                             doc_manager_.text("fn"),
-                             doc_manager_.delimited("(", ")", std::move(params), false, false),
-                             doc_manager_.text(": "),
-                             format(node.explicit_return_type),
-                         }));
+    return with_modifier(
+        id,
+        doc_manager_.concat({
+            doc_manager_.text("fn"),
+            doc_manager_.delimited(
+                "(", ")", std::move(params), false, false, node.params_force_break),
+            doc_manager_.text(": "),
+            format(node.explicit_return_type),
+        }));
 }
 
 auto formatter::visit(explicit_type_id id, const explicit_type_id& node) -> syntax::doc_id {
@@ -1562,7 +1576,8 @@ auto formatter::visit(explicit_type_id id, const explicit_dyn_type& node) -> syn
             binds.emplace_back(
                 doc_manager_.concat({format(b.name), doc_manager_.text(" = "), format(b.type)}));
         }
-        parts.emplace_back(doc_manager_.delimited("(", ")", std::move(binds), false, false));
+        parts.emplace_back(doc_manager_.delimited(
+            "(", ")", std::move(binds), false, false, node.assoc_bindings_force_break));
     }
     return with_modifier(id, doc_manager_.concat(std::move(parts)));
 }

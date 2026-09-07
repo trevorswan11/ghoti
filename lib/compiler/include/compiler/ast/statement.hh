@@ -154,6 +154,7 @@ struct impl_stmt {
     stdx::option<explicit_type_id>        interface_type;
     explicit_type_id                      target_type;
     member_list                           members;
+    bool impl_params_force_break{false}; // trailing comma before `)`
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<stmt_handle, syntax::diagnostic>;

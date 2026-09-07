@@ -493,7 +493,7 @@ auto test_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
 namespace {
 
 // Parses an optional `(P: type, constexpr n: usize, ...)` parameter list after `impl`.
-[[nodiscard]] auto parse_impl_params(syntax::parser& parser)
+[[nodiscard]] auto parse_impl_params(syntax::parser& parser, bool& force_break)
     -> stdx::result<std::vector<function_expr::parameter>, syntax::diagnostic> {
     using tt = syntax::token_type_t;
     std::vector<function_expr::parameter> params;
@@ -519,7 +519,10 @@ namespace {
         }
 
         params.emplace_back(name, *param_type, is_constexpr);
-        if (!parser.peek_token_is(tt::RPAREN)) { TRY(parser.expect_peek(tt::COMMA)); }
+        if (!parser.peek_token_is(tt::RPAREN)) {
+            TRY(parser.expect_peek(tt::COMMA));
+            force_break = parser.peek_token_is(tt::RPAREN); // trailing comma before `)`
+        }
     }
     TRY(parser.expect_peek(tt::RPAREN));
     return params;
@@ -532,7 +535,8 @@ auto impl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
     using tt = syntax::token_type_t;
     const auto start_token{parser.get_current_token()};
 
-    auto impl_params{TRY(parse_impl_params(parser))};
+    bool impl_params_force_break{false};
+    auto impl_params{TRY(parse_impl_params(parser, impl_params_force_break))};
 
     const auto first_type{TRY(explicit_type::parse(parser))};
 
@@ -551,8 +555,12 @@ auto impl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
     }
     auto members{TRY(parse_member_block(parser))};
 
-    return parser.add_stmt<impl_stmt>(
-        start_token, std::move(impl_params), interface_type, target_type, std::move(members));
+    return parser.add_stmt<impl_stmt>(start_token,
+                                      std::move(impl_params),
+                                      interface_type,
+                                      target_type,
+                                      std::move(members),
+                                      impl_params_force_break);
 }
 
 auto using_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {

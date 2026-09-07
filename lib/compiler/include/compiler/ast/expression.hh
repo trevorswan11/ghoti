@@ -26,6 +26,7 @@ struct array_expr {
     bool                      null_terminated;
     bool                      mut_elements;
     bool                      is_type_expr; // `[]T` / `[N]T` with no `{ ... }` initializer
+    bool                      items_force_break{false}; // trailing comma before `}`
     explicit_type_id          item_explicit_type;
     std::vector<expr_handle>  items;
 
@@ -38,6 +39,7 @@ struct call_expr {
 
     expr_handle           function;
     std::vector<argument> arguments;
+    bool                  args_force_break{false}; // trailing comma before `)`
 
     [[nodiscard]] static auto parse(syntax::parser& parser, expr_handle function)
         -> stdx::result<expr_handle, syntax::diagnostic>;
@@ -70,6 +72,8 @@ struct asm_expr {
     std::vector<operand>           inputs;
     std::vector<string_handle>     clobbers;
     std::vector<option>            options;
+    // trailing comma before `)` in any of the `outputs`/`inputs`/`clobbers`/`options` lists
+    bool operands_force_break{false};
 
     [[nodiscard]] auto has_option(option opt) const noexcept -> bool {
         return std::ranges::contains(options, opt);
@@ -111,6 +115,7 @@ struct enum_expr {
     std::vector<enumeration>        enumerations;
     std::vector<cfg_group>          cfg_groups;
     bool                            non_exhaustive;
+    bool                            enumerations_force_break{false}; // trailing comma before `}`
     member_list                     members;
     std::vector<member_cfg_group>   member_cfg_groups;
 
@@ -128,6 +133,8 @@ struct for_loop_expr {
     std::vector<capture>      captures;
     block_handle              block;
     stdx::option<stmt_handle> non_break;
+    bool                      iterables_force_break{false}; // trailing comma before `)`
+    bool                      captures_force_break{false};  // trailing comma before `|`
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;
@@ -249,6 +256,7 @@ struct cfg_value_expr {
     stdx::option<expr_handle> predicate;
     std::vector<guard>        guards;
     stdx::option<expr_handle> fallback;
+    bool                      guards_force_break{false}; // trailing comma before `)`
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;
@@ -296,6 +304,7 @@ struct initializer_expr {
 
     stdx::option<expr_handle> object_type;
     std::vector<initializer>  initializers;
+    bool                      initializers_force_break{false}; // trailing comma before `}`
 
     // Parse assuming an object is present. Meant for the parser LUT
     [[nodiscard]] static auto parse(syntax::parser& parser, expr_handle object)
@@ -340,6 +349,7 @@ struct match_expr {
     std::vector<arm> arms;
     stdx::opt_size   catch_all_idx;
     bool             is_constexpr{false};
+    bool             arms_force_break{false}; // trailing comma after the last arm
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;
@@ -404,6 +414,7 @@ struct struct_expr {
     std::vector<member_cfg_group> member_cfg_groups;
     bool                          is_extern{false};
     bool                          is_packed{false};
+    bool                          fields_force_break{false}; // trailing comma in the field list
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic> {
@@ -429,6 +440,7 @@ struct union_expr {
     std::vector<member_cfg_group> member_cfg_groups;
     bool                          is_extern{false};
     bool                          is_packed{false};
+    bool                          fields_force_break{false}; // trailing comma in the field list
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic> {

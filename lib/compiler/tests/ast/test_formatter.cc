@@ -156,7 +156,7 @@ const g := fn(): void {};
 const x := 42;
 )");
 
-    CHECK(format_source("const S := struct { x: i32, };\nconst f := fn(): void {};") ==
+    CHECK(format_source("const S := struct { x: i32 };\nconst f := fn(): void {};") ==
           R"(const S := struct { x: i32 };
 
 const f := fn(): void {};
@@ -328,6 +328,67 @@ TEST_CASE("formatter force-breaks a parameter list that has a trailing comma") {
 
     CHECK(format_source("const g := fn(a: i32, b: i32): void {};") ==
           "const g := fn(a: i32, b: i32): void {};\n");
+}
+
+TEST_CASE("formatter treats a trailing comma in any delimited list as a break hint") {
+    CHECK(format_source("const S := struct { x: i32, y: i32, };") == R"(const S := struct {
+    x: i32,
+    y: i32,
+};
+)");
+    CHECK(format_source("const U := union { a: i32, b: u8, };") == R"(const U := union {
+    a: i32,
+    b: u8,
+};
+)");
+    CHECK(format_source("const E := enum : u8 { a, b, };") == R"(const E := enum : u8 {
+    a,
+    b,
+};
+)");
+    CHECK(format_source("const E := enum { a, b, _, };") == R"(const E := enum {
+    a,
+    b,
+    _,
+};
+)");
+    CHECK(format_source("const x := f(a, b,);") == R"(const x := f(
+    a,
+    b,
+);
+)");
+    CHECK(format_source("const p := P{ .a = 1, .b = 2, };") == R"(const p := P{
+    .a = 1,
+    .b = 2,
+};
+)");
+    CHECK(format_source("const a := [2uz]i32{ 1, 2, };") == R"(const a := [2uz]i32{
+    1,
+    2,
+};
+)");
+    CHECK(format_source("const y := match (n) { 1 => a, _ => b, };") == R"(const y := match (n) {
+    1 => a,
+    _ => b,
+};
+)");
+    CHECK(format_source("const v: T(i32, u8,) = undefined;") == R"(const v: T(
+    i32,
+    u8,
+) = undefined;
+)");
+
+    CHECK(format_source("const S := struct { x: i32, y: i32 };") ==
+          "const S := struct { x: i32, y: i32 };\n");
+    CHECK(format_source("const x := f(a, b);") == "const x := f(a, b);\n");
+
+    round_trips("const S := struct { x: i32, y: i32, };");
+    round_trips("const E := enum { a, b, };");
+    round_trips("const x := f(a, b,);");
+    round_trips("const p := P{ .a = 1, .b = 2, };");
+    round_trips("const y := match (n) { 1 => a, _ => b, };");
+    round_trips("impl(T: type,) Box(T) { const x := 1; }");
+    round_trips("pub const main := fn(): void { for (arr,) |x,| { _ = x; } };");
 }
 
 TEST_CASE("formatter preserves a single blank line between items") {
