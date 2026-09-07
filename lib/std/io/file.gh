@@ -1,18 +1,15 @@
 //! The core File abtraction over raw OS primitives
 import "../os/os.gh" as os;
-import "error.gh" as error;
 import "../result.gh" as result;
-
+import "error.gh" as error;
 import "reader.gh" as reader;
 import "writer.gh" as writer;
 import "seeker.gh" as seeker;
 
 using Result = result::Result;
 
-pub const OpenMode := enum : u8 { read, write, read_write };
-
 pub const OpenFlags := struct {
-    pub access: OpenMode = .read,
+    pub access: enum : u8 { read, write, read_write } = .read,
     pub create: bool = false,
     pub truncate: bool = false,
     pub append: bool = false,
@@ -103,8 +100,7 @@ impl writer::Writer for File {
 impl seeker::Seeker for File {
     using Error = error::Error;
     pub const seek := fn(&mut self, offset: i64, whence: seeker::Whence): Result(i64, Error) {
-        const w: i32 = match (whence) { .start => 0, .current => 1, .end => 2 };
-        return match (os::lseek(self.handle, offset, w)) {
+        return match (os::lseek(self.handle, offset, @as(i32, whence))) {
             .ok => |p| .{ .ok = p },
             .err => |e| .{ .err = .fromOs(e) },
         };

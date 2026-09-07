@@ -4,12 +4,14 @@ import "reader.gh" as reader;
 import "writer.gh" as writer;
 import "seeker.gh" as seeker;
 import "stdio.gh" as stdio;
+import "fixed_buffer.gh" as fixed_buffer;
 
 pub using Error = error::Error;
 pub using File = file::File;
 pub using Reader = reader::Reader;
 pub using Writer = writer::Writer;
 pub using Seeker = seeker::Seeker;
+pub using FixedBufferStream = fixed_buffer::FixedBufferStream;
 
 pub const stdout := stdio::stdout;
 pub const stdin := stdio::stdin;

@@ -1,0 +1,55 @@
+//! In-memory stream for system-agnostic testing
+import "../os/os.gh" as os;
+import "../result.gh" as result;
+import "error.gh" as error;
+import "reader.gh" as reader;
+import "writer.gh" as writer;
+import "seeker.gh" as seeker;
+
+pub const FixedBufferStream := struct {
+    pub buf: []mut u8,
+    pub pos: usize,
+};
+
+impl reader::Reader for FixedBufferStream {
+    using Error = error::Error;
+    pub const read := fn(&mut self, out: []mut u8): result::Result(usize, Error) {
+        const remaining := self.buf.len - self.pos;
+        const n := if (out.len < remaining) out.len else remaining;
+
+        @memcpy(self.buf[self.pos..self.pos + n], out[0..n]);
+        self.pos += n;
+        return .{ .ok = n };
+    };
+}
+
+impl writer::Writer for FixedBufferStream {
+    using Error = error::Error;
+    pub const write := fn(&mut self, bytes: []u8): result::Result(usize, Error) {
+        const room := self.buf.len - self.pos;
+        if (room == 0 and bytes.len > 0) { return .{ .err = .no_space }; }
+        const n := if (bytes.len < room) bytes.len else room;
+
+        @memcpy(bytes[0..n], self.buf[self.pos..self.pos + n]);
+        self.pos += n;
+        return .{ .ok = n };
+    };
+}
+
+impl seeker::Seeker for FixedBufferStream {
+    using Error = error::Error;
+    pub const seek := fn(&mut self, offset: i64, whence: seeker::Whence): result::Result(i64, Error) {
+        const base: i64 = match (whence) {
+            .start => 0,
+            .current => @as(i64, self.pos),
+            .end => @as(i64, self.buf.len),
+        };
+
+        const target := base + offset;
+        if (target < 0 or target > @as(i64, self.buf.len)) {
+            return .{ .err = .invalid_input };
+        }
+        self.pos = @as(usize, target);
+        return .{ .ok = target };
+    };
+}
