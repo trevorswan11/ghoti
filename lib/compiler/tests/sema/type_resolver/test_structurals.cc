@@ -146,6 +146,22 @@ TEST_CASE("Indirection in structural type resolution") {
         };)");
 }
 
+TEST_CASE("An anonymous aggregate type may be followed by a default value") {
+    SECTION("struct / union field") {
+        helpers::resolve_and_check(
+            "const OpenFlags := struct { access: enum { read, write, read_write } = .read, };");
+        helpers::resolve_and_check(
+            "const Wrap := struct { inner: struct { x: i32 } = .{ .x = 0 }, };");
+    }
+
+    SECTION("local declaration") {
+        helpers::resolve_and_check(
+            "const f := fn(): void { var a: enum { lo, hi } = .lo; _ = a; };");
+        helpers::resolve_and_check(
+            "const g := fn(): void { var a: struct { x: i32 } = .{ .x = 1 }; _ = a; };");
+    }
+}
+
 TEST_CASE("Legal circular module-based access resolution") {
     constexpr std::string_view a_gh{R"(import "b.gh" as b; const A := struct { field: i32, };)"};
     constexpr std::string_view b_gh{R"(import "a.gh" as a; const B := struct { field: i32, };)"};

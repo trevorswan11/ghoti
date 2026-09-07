@@ -530,6 +530,14 @@ auto symbol_collector::visit(ast::node_id id, const ast::decl_stmt& decl) -> voi
     const auto  name{ident.name};
     collecting_.add_identifier_position(decl.name);
 
+    // An inline `struct`/`union`/`enum`/`interface` written as the declaration's type
+    // (`var a: enum { lo, hi } = .lo`) needs its anonymous scope registered here
+    if (decl.explicit_type &&
+        decl.explicit_type
+            ->any<ast::struct_expr, ast::union_expr, ast::enum_expr, ast::interface_expr>()) {
+        collect(*decl.explicit_type);
+    }
+
     if (in_function_scope_ && !declaring_into_aggregate()) {
         if (const auto illegal{function_local_illegal_modifiers(decl)}; !illegal.empty()) {
             ctx_.diags.emplace_back(
