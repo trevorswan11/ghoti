@@ -453,7 +453,10 @@ class type_resolver {
     bool in_expr_branch_{false};
     // Skips `if`/`match constexpr` folding and the throwaway `Ctor(<dummy>)` cache insert
     bool building_param_template_{false};
-    // Set when re-typing an interface default-method body against a concrete impl target
+
+    // Set by a dedicated instantiation resolver: a body-local decl whose declaring scope index is
+    // at or above this floor  is re-typed even though an earlier pass already left its symbol
+    // RESOLVED. Explicitly-typed decls are exempt.
     stdx::opt_size            reresolve_floor_{};
     stdx::opt_size            pending_impl_method_owner_;
     stdx::option<std::string> pending_param_impl_target_;
