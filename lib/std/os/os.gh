@@ -29,3 +29,35 @@ pub const fstat := backend::fstat;
 pub const SEEK_SET := backend::SEEK_SET;
 pub const SEEK_CUR := backend::SEEK_CUR;
 pub const SEEK_END := backend::SEEK_END;
+
+@cfg (os == .macos) {
+    pub using mode_t = backend::mode_t;
+    pub const O_RDONLY := backend::O_RDONLY;
+    pub const O_WRONLY := backend::O_WRONLY;
+    pub const O_RDWR := backend::O_RDWR;
+    pub const O_ACCMODE := backend::O_ACCMODE;
+    pub const O_NONBLOCK := backend::O_NONBLOCK;
+    pub const O_APPEND := backend::O_APPEND;
+    pub const O_CREAT := backend::O_CREAT;
+    pub const O_TRUNC := backend::O_TRUNC;
+    pub const O_EXCL := backend::O_EXCL;
+    pub const O_CLOEXEC := backend::O_CLOEXEC;
+    pub const O_DIRECTORY := backend::O_DIRECTORY;
+} else @cfg (os == .windows) {
+    pub const GENERIC_READ := backend::GENERIC_READ;
+    pub const GENERIC_WRITE := backend::GENERIC_WRITE;
+    pub const FILE_APPEND_DATA := backend::FILE_APPEND_DATA;
+    pub const CREATE_NEW := backend::CREATE_NEW;
+    pub const CREATE_ALWAYS := backend::CREATE_ALWAYS;
+    pub const OPEN_EXISTING := backend::OPEN_EXISTING;
+    pub const OPEN_ALWAYS := backend::OPEN_ALWAYS;
+    pub const TRUNCATE_EXISTING := backend::TRUNCATE_EXISTING;
+    pub const FILE_SHARE_READ := backend::FILE_SHARE_READ;
+    pub const FILE_SHARE_WRITE := backend::FILE_SHARE_WRITE;
+    pub const FILE_SHARE_DELETE := backend::FILE_SHARE_DELETE;
+    pub const FILE_ATTRIBUTE_NORMAL := backend::FILE_ATTRIBUTE_NORMAL;
+} else @cfg (os == .linux) {
+    @compileError("std::os: Linux is currently a WIP");
+} else {
+    @compileError("std::os: unsupported target OS");
+}
