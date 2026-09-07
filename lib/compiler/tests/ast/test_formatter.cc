@@ -409,6 +409,25 @@ TEST_CASE("formatter preserves comments and groups members inside an interface")
     CHECK(format_source(source) == source);
 }
 
+TEST_CASE("formatter keeps a doc comment on an interface method that follows a default body") {
+    constexpr std::string_view source{R"(const Reader := interface {
+    /// reads one chunk
+    pub const read := fn(&mut self, buf: []mut u8): usize;
+
+    /// drains the whole source
+    pub const readAll := fn(&mut self, buf: []mut u8): usize {
+        var i: usize = 0;
+        if (i == buf.len) { // done
+            return i;
+        }
+        return i;
+    };
+};
+)"};
+
+    CHECK(format_source(source) == source);
+}
+
 TEST_CASE("formatter groups interface members even with no comments") {
     CHECK(format_source("const I := interface { A: type; const n: usize; "
                         "pub const f := fn(&self): void; };") ==
