@@ -1,6 +1,10 @@
 import "../result.gh" as result;
 
-pub const Whence := enum { start, current, end };
+pub const Whence := enum {
+    start = 0,
+    current = 1,
+    end = 2,
+};
 
 pub const Seeker := interface {
     Error: type;
