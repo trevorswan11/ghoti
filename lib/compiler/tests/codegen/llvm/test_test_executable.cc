@@ -35,6 +35,26 @@ TEST_CASE("Test with failing @require returns failure status without aborting pr
     )") != 0);
 }
 
+TEST_CASE("`defer` is allowed in a test block and runs at block exit") {
+    SECTION("a harmless defer does not disturb a passing test") {
+        CHECK(helpers::compile_and_run_tests(R"(
+            test "defer after asserts" {
+                var x: i32 = 0;
+                defer x = 1;
+                @expect(x == 0);
+            }
+        )") == 0);
+    }
+    SECTION("a deferred assertion actually executes") {
+        CHECK(helpers::compile_and_run_tests(R"(
+            test "deferred require fails the test" {
+                defer @require(1 + 1 == 3);
+                @expect(true);
+            }
+        )") != 0);
+    }
+}
+
 TEST_CASE("Test with @src compiles and executes properly") {
     CHECK(helpers::compile_and_run_tests(R"(
         test "src location check" {

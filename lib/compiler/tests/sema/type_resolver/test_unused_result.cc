@@ -88,4 +88,31 @@ TEST_CASE("@discardable is rejected where it cannot apply") {
     }
 }
 
+TEST_CASE("@discardable(<constexpr bool>) gates the discard behavior on the condition") {
+    const auto ok{[](std::string_view body) {
+        auto [ctx, idx]{helpers::resolve(body)};
+        helpers::check_errors<sema::diagnostics>(ctx->root_mod);
+    }};
+
+    SECTION("a true condition allows the drop") {
+        ok(R"(
+            constexpr ON := true;
+            @discardable(ON) const log := fn(n: i32): i32 { return n; };
+            pub const main := fn(): i32 { log(3); return 0; };
+        )");
+    }
+    SECTION("a false condition keeps the must-use error") {
+        CHECK(has_error(R"(
+            constexpr OFF := false;
+            @discardable(OFF) const log := fn(n: i32): i32 { return n; };
+            pub const main := fn(): i32 { log(3); return 0; };
+        )",
+                        sema::error::UNUSED_RESULT));
+    }
+    SECTION("a non-boolean condition is an error") {
+        CHECK(has_error("@discardable(1 + 1) const f := fn(): i32 { return 0; };",
+                        sema::error::ILLEGAL_DISCARDABLE));
+    }
+}
+
 } // namespace ghoti::tests

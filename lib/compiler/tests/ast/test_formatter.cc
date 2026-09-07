@@ -378,7 +378,9 @@ TEST_CASE("formatter keeps small interfaces inline and breaks ones with bodies")
               "pub const writeAll := fn(&mut self, b: []u8): R { return self.write(b); }; };") ==
           R"(const W := interface {
     Error: type;
+
     const cap: usize = 4096;
+
     pub const write := fn(&mut self, b: []u8): R;
     const dbg := fn(&self): []u8;
     pub const writeAll := fn(&mut self, b: []u8): R {
@@ -386,6 +388,43 @@ TEST_CASE("formatter keeps small interfaces inline and breaks ones with bodies")
     };
 };
 )");
+}
+
+TEST_CASE("formatter preserves comments and groups members inside an interface") {
+    constexpr std::string_view source{R"(const Reader := interface {
+    // the associated error type
+    Error: type;
+    Width: type = usize; // an optional width
+
+    // the buffer size to use
+    const buf_size: usize;
+    const max_retries: i32 = 3; // retry ceiling
+
+    // read fills `dst`
+    pub const read := fn(&self, dst: []mut u8): usize;
+    const close := fn(&self): void; // release resources
+};
+)"};
+
+    CHECK(format_source(source) == source);
+}
+
+TEST_CASE("formatter groups interface members even with no comments") {
+    CHECK(format_source("const I := interface { A: type; const n: usize; "
+                        "pub const f := fn(&self): void; };") ==
+          R"(const I := interface {
+    A: type;
+
+    const n: usize;
+
+    pub const f := fn(&self): void;
+};
+)");
+
+    CHECK(format_source("const M := interface { pub const a := fn(&self): void; "
+                        "pub const b := fn(&self): void; };") ==
+          "const M := interface { pub const a := fn(&self): void; "
+          "pub const b := fn(&self): void; };\n");
 }
 
 TEST_CASE("formatter round trips impl blocks with no trailing semicolon") {
@@ -416,6 +455,20 @@ TEST_CASE("formatter round trips impl blocks with no trailing semicolon") {
     };
 }
 )");
+}
+
+TEST_CASE("formatter preserves comments inside an impl block") {
+    constexpr std::string_view source{R"(impl Writer for File {
+    // write pushes the whole buffer
+    pub const write := fn(&mut self, b: []u8): R {
+        return os::write(self.fd, b); // the syscall
+    };
+    // close releases the handle
+    const close := fn(&self): void {};
+}
+)"};
+
+    CHECK(format_source(source) == source);
 }
 
 TEST_CASE("formatter puts a blank line between an impl block and adjacent items") {
