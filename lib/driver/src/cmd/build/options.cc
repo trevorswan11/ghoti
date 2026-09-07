@@ -101,6 +101,8 @@ auto options::process_raw(const raw_options&   raw,
     if (!raw.emit_gir_path.empty()) { emit_gir_path.emplace(raw.emit_gir_path); }
     stdx::option<std::filesystem::path> emit_llvm_ir_path;
     if (!raw.emit_llvm_ir_path.empty()) { emit_llvm_ir_path.emplace(raw.emit_llvm_ir_path); }
+    stdx::option<std::filesystem::path> emit_asm_path;
+    if (!raw.emit_asm_path.empty()) { emit_asm_path.emplace(raw.emit_asm_path); }
 
     return options{
         .input_path        = std::move(input_path),
@@ -117,6 +119,7 @@ auto options::process_raw(const raw_options&   raw,
         .output_explicit   = !raw.output.empty(),
         .emit_gir_path     = std::move(emit_gir_path),
         .emit_llvm_ir_path = std::move(emit_llvm_ir_path),
+        .emit_asm_path     = std::move(emit_asm_path),
     };
 }
 
@@ -223,6 +226,10 @@ auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_v
         ->add_option(
             "--emit-llvm-ir", opts.emit_llvm_ir_path, "Write the LLVM IR to the given file path")
         ->type_name("FILE");
+    subcmd
+        ->add_option(
+            "--emit-asm", opts.emit_asm_path, "Write the native assembly to the given file path")
+        ->type_name("FILE");
 }
 
 auto options::emit_debug_artifacts(sema::analyzer& analyzer,
@@ -259,6 +266,16 @@ auto options::emit_debug_artifacts(sema::analyzer& analyzer,
                                      clap::error::COMPILATION_FAILED);
         }
         TRY(write_file(*emit_llvm_ir_path, *ir, "LLVM IR"));
+    }
+
+    if (emit_asm_path) {
+        auto asm_text{analyzer.emit_asm_text(gir_mod, target_opts, opt_opts)};
+        if (!asm_text) {
+            return clap::fatal_error(error_stream,
+                                     asm_text.error().get_message().value_or(GHOTI_UNKNOWN_ERROR),
+                                     clap::error::COMPILATION_FAILED);
+        }
+        TRY(write_file(*emit_asm_path, *asm_text, "assembly"));
     }
 
     return {};

@@ -156,7 +156,7 @@ TEST_CASE("build-obj subcommand parser") {
         }
     }
 
-    SECTION("--emit-gir / --emit-llvm-ir capture a file path, absent by default") {
+    SECTION("--emit-gir / --emit-llvm-ir / --emit-asm capture a file path, absent by default") {
         {
             mock_argv    args{"ghoti", "build-obj", "main.gh"};
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
@@ -164,18 +164,25 @@ TEST_CASE("build-obj subcommand parser") {
             auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
             CHECK_FALSE(build_cmd.get_opts().emit_gir_path);
             CHECK_FALSE(build_cmd.get_opts().emit_llvm_ir_path);
+            CHECK_FALSE(build_cmd.get_opts().emit_asm_path);
         }
         {
-            mock_argv args{
-                "ghoti", "build-obj", "--emit-gir", "a.gir", "--emit-llvm-ir", "b.ll", "main.gh"};
+            mock_argv    args{"ghoti",
+                           "build-obj",
+                           "--emit-gir",
+                           "a.gir",
+                           "--emit-llvm-ir",
+                           "b.ll",
+                           "--emit-asm",
+                           "c.s",
+                           "main.gh"};
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
             auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
             const auto&  opts{build_cmd.get_opts()};
-            REQUIRE(opts.emit_gir_path);
-            CHECK(*opts.emit_gir_path == "a.gir");
-            REQUIRE(opts.emit_llvm_ir_path);
-            CHECK(*opts.emit_llvm_ir_path == "b.ll");
+            CHECK(UNWRAP(opts.emit_gir_path) == "a.gir");
+            CHECK(UNWRAP(opts.emit_llvm_ir_path) == "b.ll");
+            CHECK(UNWRAP(opts.emit_asm_path) == "c.s");
         }
     }
 
