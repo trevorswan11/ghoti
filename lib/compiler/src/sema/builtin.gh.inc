@@ -84,9 +84,9 @@ pub weak const test_runner := fn(args: [][:0]u8, tests: []Test): i32 {
     for (tests) |entry| {
         const passed := entry.func();
         if (__ghoti_test_take_skipped()) {
-            skipped = skipped + 1;
+            skipped += 1;
         } else if (!passed) {
-            failures = failures + 1;
+            failures += 1;
         }
     }
     _ = skipped;

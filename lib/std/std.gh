@@ -6,3 +6,26 @@ pub constexpr Result := result::Result;
 
 pub import "os/os.gh" as os;
 pub import "io/io.gh" as io;
+pub import "testing/testing.gh" as testing;
+
+pub const panic_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): noreturn {
+    _ = io::eprint(file);
+    _ = io::eprint(": ");
+    _ = io::eprintln(msg);
+
+    // TODO(tcs): add line:col formatting once std::fmt lands
+    _ = line;
+    _ = column;
+    @trap();
+};
+
+pub const assert_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): void {
+    _ = io::eprint(file);
+    _ = io::eprint(": ");
+    _ = io::eprintln(msg);
+
+    // TODO(tcs): add line:col formatting once std::fmt lands
+    _ = line;
+    _ = column;
+    @trap();
+};
