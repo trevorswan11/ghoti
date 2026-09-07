@@ -1944,7 +1944,11 @@ auto type_resolver::visit(ID id, const ast::enum_expr& enum_expr) -> void {
     PROFILE_FUNCTION();
     if (enum_expr.underlying) { resolve(*enum_expr.underlying); }
 
-    auto&                  enum_type{resolving_.get_sema_type(id)};
+    auto& enum_type{resolving_.get_sema_type(id)};
+    if (enum_type.is_poison() || !enum_type.has_symbol_table_idx()) {
+        return last_type_.emplace(enum_type.is_poison() ? enum_type
+                                                        : ctx_.poison_node(resolving_, id));
+    }
     const scope            s{table_stack_, enum_type.get_symbol_table_idx(), table_idx_};
     const structural_guard g{user_type_stack_, enum_type};
 
@@ -3135,11 +3139,14 @@ auto type_resolver::resolve_impl_method_access(const type&      target,
             for (usize i{iface->requirement_count}; i < iface->method_names.size(); ++i) {
                 if (iface->method_names[i] != name) { continue; }
                 if (rec->find_method(name).has_value()) { continue; } // overridden
-                const auto& fn{
-                    resolving_.ast.get_as<ast::function_expr>(*iface->method_decl(i).signature)};
+                // The signature handle indexes the interface's declaring module
+                if (&iface->enclosing != &resolving_) { continue; }
+                const auto fn{resolving_.ast.get_as_opt<ast::function_expr>(
+                    *iface->method_decl(i).signature)};
+                if (!fn) { continue; }
                 pending_impl_method_owner_.emplace(rec->body_scope_idx);
                 return stdx::result<gsl::not_null<type*>, diagnostic>{gsl::not_null<type*>{
-                    &resolve_required_method_type(fn, const_cast<type&>(target))}};
+                    &resolve_required_method_type(*fn, const_cast<type&>(target))}};
             }
         }
     }
@@ -5136,7 +5143,11 @@ struct cabi_offenders {
 template <ast::IndexableID ID>
 auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
     PROFILE_FUNCTION();
-    auto&                  struct_type{resolving_.get_sema_type(id)};
+    auto& struct_type{resolving_.get_sema_type(id)};
+    if (struct_type.is_poison() || !struct_type.has_symbol_table_idx()) {
+        return last_type_.emplace(struct_type.is_poison() ? struct_type
+                                                          : ctx_.poison_node(resolving_, id));
+    }
     const scope            s{table_stack_, struct_type.get_symbol_table_idx(), table_idx_};
     const structural_guard g{user_type_stack_, struct_type};
 
@@ -5287,7 +5298,11 @@ VISITOR_TEMPLATE_INIT(type_resolver, visit, const ast::struct_expr&)
 template <ast::IndexableID ID>
 auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
     PROFILE_FUNCTION();
-    auto&                  union_type{resolving_.get_sema_type(id)};
+    auto& union_type{resolving_.get_sema_type(id)};
+    if (union_type.is_poison() || !union_type.has_symbol_table_idx()) {
+        return last_type_.emplace(union_type.is_poison() ? union_type
+                                                         : ctx_.poison_node(resolving_, id));
+    }
     const scope            s{table_stack_, union_type.get_symbol_table_idx(), table_idx_};
     const structural_guard g{user_type_stack_, union_type};
 
@@ -7335,6 +7350,16 @@ auto type_resolver::instantiate_generic(type&                             callee
     // this instantiation's body/signature typing, to be replayed at emit time.
     body_type_diff typing;
     snap.diff_into(ctx_, fn_mod, typing);
+
+    // The per-inst typing lives in `typing` and must not leak into `fn_mod`'s shared side tables
+    const auto rollback_poisoned{[](auto& live, const auto& snapshot, const auto& changed) {
+        for (const auto& [idx, ty] : changed) {
+            if (ty && ty->is_poison() && idx < snapshot.size()) { live[idx] = snapshot[idx]; }
+        }
+    }};
+    rollback_poisoned(fn_mod.sema_side_tables.node_types.values, snap.nodes, typing.node_types);
+    rollback_poisoned(
+        fn_mod.sema_side_tables.explicit_types.values, snap.types, typing.explicit_types);
 
     auto tracker{std::move(inst_resolver.return_trackers_.back())};
     inst_resolver.return_trackers_.pop_back();
