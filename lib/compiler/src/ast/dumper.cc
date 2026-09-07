@@ -1018,6 +1018,12 @@ auto dumper::visit(node_id, const decl_stmt& decl) -> void {
         dump(*decl.link_name);
     }
 
+    if (decl.discardable_condition) {
+        const indent::guard g{indent_, false};
+        fmt::print(out_, "{}Discardable Condition: ", indent_.current_branch());
+        dump(*decl.discardable_condition);
+    }
+
     const auto has_value{decl.value.has_value()};
     {
         const indent::guard g{indent_, !has_value};

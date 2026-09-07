@@ -98,6 +98,9 @@ struct module {
     // `match` (on a compile-time `type`) node index -> the arm index the resolver selected
     ankerl::unordered_dense::map<usize, usize> match_arm_results;
 
+    // Cond discardable `decl_stmt` node index -> the folded truth of the condition
+    ankerl::unordered_dense::map<usize, bool> discardable_conditions;
+
     // Every identifier_expr references and uses encountered during symbol collection/resolution
     std::vector<ast::node_id> identifier_positions;
 

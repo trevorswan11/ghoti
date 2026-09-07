@@ -235,6 +235,7 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
 
     stdx::option<string_handle> extern_target;
     stdx::option<string_handle> link_name;
+    stdx::option<expr_handle>   discardable_condition;
 
     const auto parse_binding_for{[&](decl_modifiers m) -> stdx::result<void, syntax::diagnostic> {
         if (m == decl_modifiers::EXTERN) {
@@ -244,6 +245,11 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
         } else if (m == decl_modifiers::EXPORT) {
             auto args{TRY(try_parse_binding_args(parser, false))};
             if (args.first) { link_name = args.first; }
+        } else if (m == decl_modifiers::DISCARDABLE &&
+                   parser.peek_token_is(syntax::token_type_t::LPAREN)) {
+            parser.advance(2); // onto `(`, then first token of the condition
+            discardable_condition.emplace(TRY(parser.parse_expression()));
+            TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
         }
         return {};
     }};
@@ -291,8 +297,14 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
     }
 
     TRY(parser.expect_semicolon());
-    return parser.add_stmt<decl_stmt>(
-        start_token, decl_name, decl_type, decl_value, modifiers, extern_target, link_name);
+    return parser.add_stmt<decl_stmt>(start_token,
+                                      decl_name,
+                                      decl_type,
+                                      decl_value,
+                                      modifiers,
+                                      extern_target,
+                                      link_name,
+                                      discardable_condition);
 }
 
 auto defer_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {

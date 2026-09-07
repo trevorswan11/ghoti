@@ -5812,6 +5812,20 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                                     resolving_.ast.location_of(id));
         }();
 
+        // `@discardable(<cond>)`: fold `<cond>` and record whether the attribute is active
+        if (decl.discardable_condition) {
+            gir::const_eval evaluator{ctx_, resolving_};
+            const auto      cv{evaluator.try_eval(*decl.discardable_condition)};
+            if (const auto folded{cv ? cv->as_opt<bool>() : stdx::none}) {
+                resolving_.discardable_conditions.insert_or_assign(id.get_index(), *folded);
+            } else {
+                ctx_.diags.emplace_back(
+                    "'@discardable(...)' requires a compile-time boolean condition",
+                    error::ILLEGAL_DISCARDABLE,
+                    resolving_.ast.location_of(*decl.discardable_condition));
+            }
+        }
+
         const bool literal_type_anno{decl.explicit_type && decl.explicit_type->get_token_type() ==
                                                                syntax::token_type_t::TYPE_TYPE};
         if (decl.has_modifier(ast::decl_modifiers::VARIABLE) && literal_type_anno) {
@@ -5897,7 +5911,11 @@ auto type_resolver::callee_is_discardable(const ast::call_expr& call) const -> b
         if (!node) { return false; }
         const auto decl{home->ast.get_as_opt<ast::decl_stmt>(*node)};
         if (!decl) { return false; }
-        if (decl->has_modifier(ast::decl_modifiers::DISCARDABLE)) { return true; }
+        if (decl->has_modifier(ast::decl_modifiers::DISCARDABLE)) {
+            if (!decl->discardable_condition) { return true; }
+            const auto it{home->discardable_conditions.find(node->get_index())};
+            return it != home->discardable_conditions.end() && it->second;
+        }
 
         // Follow a direct `const g := f` / `const g := m::f` re-export to the real declaration.
         if (decl->value && (home->ast.get_as_opt<ast::identifier_expr>(*decl->value) ||

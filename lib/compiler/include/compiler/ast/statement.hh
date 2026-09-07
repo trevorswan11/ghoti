@@ -80,6 +80,7 @@ struct decl_stmt {
     decl_modifiers                 modifiers;
     stdx::option<string_handle>    extern_target;
     stdx::option<string_handle>    link_name;
+    stdx::option<expr_handle>      discardable_condition; // unset for a bare `@discardable`
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<stmt_handle, syntax::diagnostic>;

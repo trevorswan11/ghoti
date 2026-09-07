@@ -541,6 +541,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::decl_stmt& decl) -> voi
         }
     }
 
+    if (decl.discardable_condition) { collect(*decl.discardable_condition); }
     if (!try_declare<symbols::node_t>(name, id)) { return; };
     if (!decl.value) { return; }
 
@@ -581,7 +582,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::decl_stmt& decl) -> voi
 
 auto symbol_collector::visit(ast::node_id id, const ast::defer_stmt& defer) -> void {
     PROFILE_FUNCTION();
-    if (!in_function_scope_) {
+    if (!in_function_scope_ && !in_test_scope_) {
         ctx_.diags.emplace_back("Cannot have defer outside of a function's scope",
                                 error::ILLEGAL_TOP_LEVEL_STATEMENT,
                                 collecting_.ast.location_of(id));

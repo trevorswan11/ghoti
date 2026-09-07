@@ -540,7 +540,19 @@ auto formatter::format_enum(const enum_expr& node) -> syntax::doc_id {
 auto formatter::format_interface(const interface_expr& node) -> syntax::doc_id {
     std::vector<syntax::doc_id> entries;
 
-    for (const auto& at : node.assoc_types) {
+    const auto add_member{
+        [&](usize start_line, usize end_line, bool starts_group, syntax::doc_id body) {
+            auto leading{consume_leading_comments(start_line, !starts_group)};
+            auto trailing{consume_trailing_comment(end_line)};
+            if (trailing != doc_manager_.nil()) { body = doc_manager_.concat({body, trailing}); }
+            if (leading != doc_manager_.nil()) { body = doc_manager_.concat({leading, body}); }
+            if (starts_group && !entries.empty()) {
+                body = doc_manager_.concat({doc_manager_.hard_line(), body});
+            }
+            entries.emplace_back(body);
+        }};
+
+    for (usize i{0}; const auto& at : node.assoc_types) {
         std::vector<syntax::doc_id> parts{
             format(at.name), doc_manager_.text(": "), format(at.annotation)};
         if (at.default_type) {
@@ -548,23 +560,33 @@ auto formatter::format_interface(const interface_expr& node) -> syntax::doc_id {
             parts.emplace_back(format(*at.default_type));
         }
         parts.emplace_back(doc_manager_.text(";"));
-        entries.emplace_back(doc_manager_.concat(std::move(parts)));
+        add_member(ast_.location_of(at.name).line,
+                   ast_.end_location_of(at.default_type ? *at.default_type : at.annotation).line,
+                   i == 0,
+                   doc_manager_.concat(std::move(parts)));
+        ++i;
     }
 
-    for (const auto& ac : node.assoc_consts) {
+    for (usize i{0}; const auto& ac : node.assoc_consts) {
         std::vector<syntax::doc_id> parts{doc_manager_.text("const "),
                                           format(ac.name),
                                           doc_manager_.text(": "),
                                           format(ac.explicit_type)};
+        const auto end_line{ac.default_value ? ast_.end_location_of(*ac.default_value).line
+                                             : ast_.end_location_of(ac.explicit_type).line};
         if (ac.default_value) {
             parts.emplace_back(doc_manager_.text(" = "));
             parts.emplace_back(format(*ac.default_value));
         }
         parts.emplace_back(doc_manager_.text(";"));
-        entries.emplace_back(doc_manager_.concat(std::move(parts)));
+        add_member(ast_.location_of(ac.name).line,
+                   end_line,
+                   i == 0,
+                   doc_manager_.concat(std::move(parts)));
+        ++i;
     }
 
-    for (const auto& m : node.methods) {
+    for (usize i{0}; const auto& m : node.methods) {
         std::vector<syntax::doc_id> parts;
         if (m.is_public()) { parts.emplace_back(doc_manager_.text("pub ")); }
         parts.emplace_back(doc_manager_.text("const "));
@@ -572,7 +594,11 @@ auto formatter::format_interface(const interface_expr& node) -> syntax::doc_id {
         parts.emplace_back(doc_manager_.text(" := "));
         parts.emplace_back(format(*m.signature));
         parts.emplace_back(doc_manager_.text(";"));
-        entries.emplace_back(doc_manager_.concat(std::move(parts)));
+        add_member(ast_.location_of(m.name).line,
+                   ast_.end_location_of(*m.signature).line,
+                   i == 0,
+                   doc_manager_.concat(std::move(parts)));
+        ++i;
     }
 
     return doc_manager_.concat(
@@ -607,7 +633,13 @@ auto formatter::decl_prefix(const decl_stmt& node) -> syntax::doc_id {
         parts.emplace_back(doc_manager_.text("pub "));
     }
     if (node.has_modifier(decl_modifiers::DISCARDABLE)) {
-        parts.emplace_back(doc_manager_.text("@discardable "));
+        if (node.discardable_condition) {
+            parts.emplace_back(doc_manager_.concat({doc_manager_.text("@discardable("),
+                                                    format(*node.discardable_condition),
+                                                    doc_manager_.text(") ")}));
+        } else {
+            parts.emplace_back(doc_manager_.text("@discardable "));
+        }
     }
     if (node.has_modifier(decl_modifiers::EXPORT)) {
         if (node.link_name) {
