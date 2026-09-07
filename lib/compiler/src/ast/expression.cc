@@ -79,9 +79,9 @@ auto array_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
                                            size,
                                            null_terminated,
                                            mut_elements,
+                                           true,
                                            item_type,
-                                           std::vector<expr_handle>{},
-                                           true);
+                                           std::vector<expr_handle>{});
     }
 
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
@@ -99,7 +99,7 @@ auto array_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
 
     TRY(parser.expect_peek(syntax::token_type_t::RBRACE));
     return parser.add_expr<array_expr>(
-        start_token, size, null_terminated, mut_elements, item_type, std::move(items), false);
+        start_token, size, null_terminated, mut_elements, false, item_type, std::move(items));
 }
 
 namespace {
@@ -762,6 +762,7 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
     std::vector<parameter>                 parameters;
     std::vector<function_expr::impl_bound> impl_bounds;
     bool                                   variadic{false};
+    bool                                   params_force_break{false}; // trailing comma in `fn(...)`
     if (parser.peek_token_is(syntax::token_type_t::RPAREN)) {
         parser.advance();
     } else if (TRY(try_parse_variadic_fn(parser))) {
@@ -847,6 +848,8 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
             parameters.emplace_back(name, explicit_type, is_constexpr);
             if (!parser.peek_token_is(syntax::token_type_t::RPAREN)) {
                 TRY(parser.expect_peek(syntax::token_type_t::COMMA));
+                // A comma immediately before `)` is a trailing comma: keep one param per line.
+                params_force_break = parser.peek_token_is(syntax::token_type_t::RPAREN);
             }
             first = false;
         }
@@ -867,8 +870,9 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
                                               variadic,
                                               is_move,
                                               is_naked,
-                                              conv,
                                               true,
+                                              params_force_break,
+                                              conv,
                                               std::move(impl_bounds));
     }
 
@@ -882,8 +886,9 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
                                           variadic,
                                           is_move,
                                           is_naked,
-                                          conv,
                                           false,
+                                          params_force_break,
+                                          conv,
                                           std::move(impl_bounds));
 }
 

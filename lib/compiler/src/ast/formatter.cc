@@ -892,7 +892,8 @@ auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
     if (node.is_type_expr) {
         return doc_manager_.concat({
             doc_manager_.text("fn"),
-            doc_manager_.delimited("(", ")", std::move(params), false, true),
+            doc_manager_.delimited(
+                "(", ")", std::move(params), false, true, node.params_force_break),
             callconv_doc,
             doc_manager_.text(": "),
             format(node.explicit_return_type),
@@ -903,7 +904,7 @@ auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
         node.is_move ? doc_manager_.text("move ") : doc_manager_.nil(),
         node.is_naked ? doc_manager_.text("naked ") : doc_manager_.nil(),
         doc_manager_.text("fn"),
-        doc_manager_.delimited("(", ")", std::move(params), false, true),
+        doc_manager_.delimited("(", ")", std::move(params), false, true, node.params_force_break),
         callconv_doc,
         doc_manager_.text(": "),
         format(node.explicit_return_type),
@@ -923,18 +924,74 @@ auto formatter::visit(node_id id, const identifier_expr& node) -> syntax::doc_id
     return doc_manager_.text(node.name);
 }
 
-auto formatter::visit(node_id, const if_expr& node) -> syntax::doc_id {
-    return doc_manager_.concat({
-        doc_manager_.text("if "),
-        node.constexpr_condition ? doc_manager_.text("constexpr ") : doc_manager_.nil(),
-        doc_manager_.text("("),
-        format(node.condition),
-        doc_manager_.text(") "),
-        node.alternate ? format(node.consequence) : tail_clause(node.consequence),
-        node.alternate
-            ? doc_manager_.concat({doc_manager_.text(" else "), tail_clause(*node.alternate)})
-            : doc_manager_.nil(),
-    });
+auto formatter::visit(node_id id, const if_expr& node) -> syntax::doc_id {
+    const auto head_clause{[&](const if_expr& n) -> syntax::doc_id {
+        return doc_manager_.concat({
+            doc_manager_.text("if "),
+            n.constexpr_condition ? doc_manager_.text("constexpr ") : doc_manager_.nil(),
+            doc_manager_.text("("),
+            format(n.condition),
+            doc_manager_.text(") "),
+            n.alternate ? format(n.consequence) : tail_clause(n.consequence),
+        });
+    }};
+
+    // `if (c) { ... } else { ... }` keeps `} else {` on one line
+    const bool block_form{ast_.get_as_opt<block_stmt>(node.consequence).has_value()};
+    const auto chain_end_line{ast_.end_location_of(id).line};
+
+    // Head plus every flattened `else` / `else if` arm, so the whole chain shares one break
+    std::vector<syntax::doc_id> arms;
+    bool                        force_break{false};
+    const auto                  push_arm{[&](syntax::doc_id doc, node_id value_stmt) -> void {
+        if (!block_form && ast_.end_location_of(value_stmt).line != chain_end_line) {
+            auto t{consume_trailing_comment(ast_.end_location_of(value_stmt).line)};
+            if (t != doc_manager_.nil()) {
+                // A `// comment` cannot sit mid-line, so the whole chain must break.
+                doc         = doc_manager_.concat({doc, t});
+                force_break = true;
+            }
+        }
+        arms.emplace_back(doc);
+    }};
+
+    push_arm(head_clause(node), node.consequence);
+    for (const if_expr* cur{&node}; cur->alternate;) {
+        const auto  alt{*cur->alternate};
+        const auto  es{ast_.get_as_opt<expr_stmt>(alt)};
+        const auto* next{es && ast_.get_as_opt<if_expr>(es->expression)
+                             ? &ast_.get_as<if_expr>(es->expression)
+                             : nullptr};
+        if (next) {
+            push_arm(doc_manager_.concat({doc_manager_.text("else "), head_clause(*next)}),
+                     next->consequence);
+            cur = next;
+        } else {
+            push_arm(doc_manager_.concat({doc_manager_.text("else "), tail_clause(alt)}), alt);
+            break;
+        }
+    }
+
+    if (arms.size() == 1) { return arms.front(); }
+
+    if (block_form) {
+        std::vector<syntax::doc_id> parts{arms.front()};
+        for (usize i{1}; i < arms.size(); ++i) {
+            parts.emplace_back(doc_manager_.text(" "));
+            parts.emplace_back(arms[i]);
+        }
+        return doc_manager_.concat(std::move(parts));
+    }
+
+    std::vector<syntax::doc_id> tail;
+    for (usize i{1}; i < arms.size(); ++i) {
+        tail.emplace_back(doc_manager_.line());
+        tail.emplace_back(arms[i]);
+    }
+    return doc_manager_.group(
+        doc_manager_.concat(
+            {arms.front(), doc_manager_.nest(doc_manager_.concat(std::move(tail)))}),
+        force_break);
 }
 
 auto formatter::visit(node_id, const index_expr& node) -> syntax::doc_id {
@@ -1171,10 +1228,29 @@ auto formatter::visit(node_id, const cfg_stmt& node) -> syntax::doc_id {
             parts.emplace_back(doc_manager_.text(") "));
         }
 
+        // Lay the body out like a block: pull each item's own comments from the trivia queue and
+        // keep a single author blank line between items (was: items concatenated raw, so interior
+        // comments leaked out to be misattached later and manual spacing was lost).
         std::vector<syntax::doc_id> body;
+        auto                        previous{node_id::make_invalid()};
         for (const auto& item : it->items) {
-            if (!body.empty()) { body.emplace_back(doc_manager_.hard_line()); }
-            body.emplace_back(format(item));
+            auto leading{consume_leading_comments(ast_.location_of(*item).line, !body.empty())};
+            if (!body.empty()) {
+                body.emplace_back(doc_manager_.hard_line());
+                if (leading == doc_manager_.nil() && blank_line_between(previous, *item)) {
+                    body.emplace_back(doc_manager_.hard_line());
+                }
+            }
+            auto item_doc{format(item)};
+            auto trailing{consume_trailing_comment(ast_.end_location_of(*item).line)};
+            if (trailing != doc_manager_.nil()) {
+                item_doc = doc_manager_.concat({item_doc, trailing});
+            }
+            if (leading != doc_manager_.nil()) {
+                item_doc = doc_manager_.concat({leading, item_doc});
+            }
+            body.emplace_back(item_doc);
+            previous = *item;
         }
         parts.emplace_back(doc_manager_.concat({
             doc_manager_.text("{"),

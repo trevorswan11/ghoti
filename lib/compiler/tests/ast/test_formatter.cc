@@ -240,6 +240,49 @@ TEST_CASE("formatter does not double the terminator on a value-if or loop tail")
     CHECK(format_source("if (c) return x; else return y;") == "if (c) return x; else return y;\n");
 }
 
+TEST_CASE("formatter breaks a wide value if/else-if chain one arm per line") {
+    const auto out{format_source(
+        "const d: u32 = if (flags.exclusive) NEW else if (flags.create and flags.trunc) "
+        "ALWAYS else if (flags.create) OPEN else EXISTING;",
+        60)};
+    CHECK(out == R"(const d: u32 = if (flags.exclusive) NEW
+    else if (flags.create and flags.trunc) ALWAYS
+    else if (flags.create) OPEN
+    else EXISTING;
+)");
+
+    CHECK(format_source("const d := if (a) 1 else if (b) 2 else 3;") ==
+          "const d := if (a) 1 else if (b) 2 else 3;\n");
+}
+
+TEST_CASE("formatter keeps a trailing comment on an interior if-chain arm") {
+    constexpr std::string_view source{R"(const f := fn(): i32 {
+    const d := if (aaaaaaaaaaaaaaaaaaaa) 1
+        else if (bbbbbbbbbbbbbbbbbbbb) 2 // pick two
+        else 3;
+    return d;
+};
+)"};
+    CHECK(format_source(source) == source);
+}
+
+TEST_CASE("formatter preserves comments and blank lines inside a local @cfg block") {
+    constexpr std::string_view source{R"(const f := fn(): i32 {
+    @cfg (os == .windows) {
+        // leading comment on the first statement
+        const a := 1; // trailing on a
+
+        // a blank line and a comment separate these
+        const b := 2;
+        return a + b;
+    } else {
+        return 0;
+    }
+};
+)"};
+    CHECK(format_source(source) == source);
+}
+
 TEST_CASE("formatter writes an inferred array size as _") {
     CHECK(format_source("[_]i32{};") == "[_]i32{};\n");
     CHECK(format_source("[_:0]^N{ a, b };") == "[_:0]^N{ a, b };\n");
@@ -257,6 +300,34 @@ TEST_CASE("formatter breaks a wide argument list") {
     ffffffffff,
 );
 )");
+}
+
+TEST_CASE("formatter force-breaks a parameter list that has a trailing comma") {
+    CHECK(format_source("const f := fn(a: i32, b: i32,): void {};") == R"(const f := fn(
+    a: i32,
+    b: i32,
+): void {};
+)");
+
+    round_trips("const f := fn(a: i32, b: i32,): void {};");
+
+    CHECK(format_source("const S := struct { const m := fn(&self, x: i32,): void {}; };") ==
+          R"(const S := struct {
+    const m := fn(
+        &self,
+        x: i32,
+    ): void {};
+};
+)");
+
+    CHECK(format_source("const T := fn(a: i32, b: i32,): void;") == R"(const T := fn(
+    a: i32,
+    b: i32,
+): void;
+)");
+
+    CHECK(format_source("const g := fn(a: i32, b: i32): void {};") ==
+          "const g := fn(a: i32, b: i32): void {};\n");
 }
 
 TEST_CASE("formatter preserves a single blank line between items") {

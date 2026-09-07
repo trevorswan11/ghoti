@@ -25,9 +25,9 @@ struct array_expr {
     stdx::option<expr_handle> size;
     bool                      null_terminated;
     bool                      mut_elements;
+    bool                      is_type_expr; // `[]T` / `[N]T` with no `{ ... }` initializer
     explicit_type_id          item_explicit_type;
     std::vector<expr_handle>  items;
-    bool                      is_type_expr{false}; // `[]T` / `[N]T` with no `{ ... }` initializer
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;
@@ -179,8 +179,9 @@ struct function_expr {
     bool                         variadic;
     bool                         is_move{false};
     bool                         is_naked{false};
-    calling_convention           conv{calling_convention::C};
     bool                         is_type_expr{false};
+    bool                         params_force_break{false};
+    calling_convention           conv{calling_convention::C};
     std::vector<impl_bound>      impl_bounds{};
 
     // Parse the function as a value. Meant for the parser LUT
