@@ -1,0 +1,18 @@
+import "error.gh" as error;
+import "file.gh" as file;
+import "reader.gh" as reader;
+import "writer.gh" as writer;
+import "seeker.gh" as seeker;
+import "stdio.gh" as stdio;
+
+pub using Error = error::Error;
+pub using File = file::File;
+pub using Reader = reader::Reader;
+pub using Writer = writer::Writer;
+pub using Seeker = seeker::Seeker;
+
+pub const stdout := stdio::stdout;
+pub const stdin := stdio::stdin;
+pub const stderr := stdio::stderr;
+pub const print := stdio::print;
+pub const println := stdio::println;
