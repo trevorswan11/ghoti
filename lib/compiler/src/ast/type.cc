@@ -288,8 +288,10 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
         return make_syntax_err(syntax::error::MISSING_EXPLICIT_TYPE, type_start);
     }
 
+    // Parse at TYPE precedence so a following `= <init>` is not  absorbed into an assignment
     stdx::option<explicit_type_id> id;
-    switch (const auto user{TRY(parser.parse_expression())}; user->get_kind()) {
+    switch (const auto user{TRY(parser.parse_expression(syntax::bind_precedence::TYPE))};
+            user->get_kind()) {
     case node_kind::STRUCT_EXPRESSION:
         id.emplace(parser.add_type<struct_expr>(
             modifier_token, modifier, parser.get_node<struct_expr>(*user)));
