@@ -177,6 +177,24 @@ auto analyzer::emit_llvm_ir_text(gir::module& gir_module, const codegen::optimiz
     return codegen::llvm_lowering::to_ir_string(*llvm_mod);
 }
 
+auto analyzer::emit_asm_text(gir::module&                      gir_module,
+                             const codegen::target_options&    target_opts,
+                             const codegen::optimizer_options& opt_options)
+    -> stdx::result<std::string, codegen::diagnostic> {
+    PROFILE_FUNCTION();
+    llvm::LLVMContext context;
+    auto              target_machine{TRY(codegen::create_target_machine(target_opts))};
+
+    codegen::optimizer_options opts{opt_options};
+    opts.target_machine = target_machine.get();
+    if (opts.level == codegen::opt_level::O0 && target_opts.level != codegen::opt_level::O0) {
+        opts.level = target_opts.level;
+    }
+
+    auto llvm_mod{TRY(emit_llvm_ir(gir_module, context, opts))};
+    return codegen::emit_asm_string(*llvm_mod, *target_machine);
+}
+
 auto analyzer::validate_main_entry(const mod::module& root_module) const
     -> stdx::result<void, diagnostic> {
     if (!root_module.root_table_idx) {

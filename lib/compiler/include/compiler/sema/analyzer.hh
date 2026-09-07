@@ -112,6 +112,12 @@ class analyzer {
     [[nodiscard]] auto emit_llvm_ir_text(gir::module&                      gir_module,
                                          const codegen::optimizer_options& options)
         -> stdx::result<std::string, codegen::diagnostic>;
+
+    // Lowers `gir_module` for `target_opts` and returns the resulting native assembly as text.
+    [[nodiscard]] auto emit_asm_text(gir::module&                      gir_module,
+                                     const codegen::target_options&    target_opts,
+                                     const codegen::optimizer_options& opt_options)
+        -> stdx::result<std::string, codegen::diagnostic>;
     [[nodiscard]] auto emit_llvm_ir_executable(gir::module&                      gir_module,
                                                llvm::LLVMContext&                context,
                                                const codegen::optimizer_options& options,

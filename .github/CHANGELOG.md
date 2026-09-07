@@ -222,3 +222,5 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fix a compiler error that would falsely error on orphaned impl through re-exports
 - Add Writer, Reader, Seeker, and File abstractions to the standard library
 - Allow trailing commas in all delimited lists to have the formatter add line breaks
+- Add `--emit-asm <file>` on `build-exe` / `build-obj` / `build-lib` / `test`
+    - Write the target's native assembly to a file (requires a path; mirrors `--emit-gir` / `--emit-llvm-ir`)

@@ -48,6 +48,7 @@ struct raw_options {
 
     std::string emit_gir_path;
     std::string emit_llvm_ir_path;
+    std::string emit_asm_path;
 };
 
 struct options {
@@ -66,12 +67,14 @@ struct options {
 
     stdx::option<std::filesystem::path> emit_gir_path{};
     stdx::option<std::filesystem::path> emit_llvm_ir_path{};
+    stdx::option<std::filesystem::path> emit_asm_path{};
 
     static auto process_raw(const raw_options&   raw,
                             codegen::output_type type,
                             std::ostream& error_stream) -> stdx::result<options, clap::error>;
 
-    // Writes the GIR / LLVM IR dumps requested via --emit-gir / --emit-llvm-ir, if any.
+    // Writes the GIR / LLVM IR / assembly dumps requested via
+    // --emit-gir / --emit-llvm-ir / --emit-asm, if any.
     [[nodiscard]] auto emit_debug_artifacts(sema::analyzer& analyzer,
                                             gir::module&    gir_mod,
                                             std::ostream&   error_stream) const

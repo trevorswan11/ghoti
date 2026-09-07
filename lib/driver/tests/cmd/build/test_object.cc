@@ -276,12 +276,13 @@ TEST_CASE("build_obj command execution") {
         CHECK(std::filesystem::file_size(obj_file) > 0);
     }
 
-    SECTION("--emit-gir / --emit-llvm-ir write the requested dumps") {
+    SECTION("--emit-gir / --emit-llvm-ir / --emit-asm write the requested dumps") {
         codegen::llvm_scope scope;
         tempfile            src_file{"test_emit_src.gh"};
         tempfile            obj_file{"test_emit_out.o"};
         tempfile            gir_file{"test_emit_out.gir"};
         tempfile            ir_file{"test_emit_out.ll"};
+        tempfile            asm_file{"test_emit_out.s"};
 
         {
             std::ofstream out{src_file.path};
@@ -295,8 +296,9 @@ TEST_CASE("build_obj command execution") {
         cmd::build_obj cmd{{
             .input_path        = src_file,
             .output_path       = obj_file,
-            .emit_gir_path     = std::filesystem::path{gir_file.path},
-            .emit_llvm_ir_path = std::filesystem::path{ir_file.path},
+            .emit_gir_path     = gir_file,
+            .emit_llvm_ir_path = ir_file,
+            .emit_asm_path     = asm_file,
         }};
         REQUIRE(cmd.execute());
 
@@ -315,6 +317,11 @@ TEST_CASE("build_obj command execution") {
         const auto ir{slurp(ir_file.path)};
         CHECK(ir.contains("define"));
         CHECK(ir.contains("@add"));
+
+        REQUIRE(std::filesystem::exists(asm_file));
+        const auto asm_text{slurp(asm_file)};
+        CHECK_FALSE(asm_text.empty());
+        CHECK(asm_text.contains("add"));
     }
 }
 
