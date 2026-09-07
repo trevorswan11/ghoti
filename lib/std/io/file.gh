@@ -88,22 +88,6 @@ impl reader::Reader for File {
             .err => |e| .{ .err = .fromOs(e) },
         };
     };
-
-    /// Fill `buf`, stopping early only on EOF
-    pub const readAll := fn(&mut self, buf: []mut u8): Result(usize, Error) {
-        var i: usize = 0;
-        loop {
-            if (i == buf.len) {
-                break;
-            }
-            const n := self.read(buf[i..])?;
-            if (n == 0uz) {
-                break;
-            }
-            i += n;
-        }
-        return .{ .ok = i };
-    };
 }
 
 impl writer::Writer for File {
@@ -113,24 +97,6 @@ impl writer::Writer for File {
             .ok => |n| .{ .ok = n },
             .err => |e| .{ .err = .fromOs(e) },
         };
-    };
-
-    /// Write every byte of `bytes`
-    pub const writeAll := fn(&mut self, bytes: []u8): Result(void, Error) {
-        var off: usize = 0;
-        loop {
-            if (off == bytes.len) {
-                break;
-            }
-            off += self.write(bytes[off..])?;
-        }
-        return .{ .ok = {} };
-    };
-
-    /// Write a single byte.
-    pub const writeByte := fn(&mut self, b: u8): Result(void, Error) {
-        const one := [1uz]u8{ b };
-        return self.writeAll(one);
     };
 }
 
