@@ -713,7 +713,9 @@ auto emitter::emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -
         const auto  gir_name{symbol_scoping_.name_for(rec->body_scope_idx, mname)};
 
         if (const auto fx{active_ast().get_as_opt<ast::function_expr>(*md->value)}) {
+            emitting_impl_body_scope_.emplace(rec->body_scope_idx);
             emit_function(*member, *md, *fx, std::string_view{gir_name});
+            emitting_impl_body_scope_.reset();
         } else if (const auto block_ty{active_mod().get_sema_type_opt(id)}) {
             // A static member goes in the impl block's own table so refs agree
             const type_guard scope_guard{user_type_stack_, block_ty.get()};
@@ -2803,12 +2805,46 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             indirect_callee.emplace(
                 value{builder_.emit_load(value{slot_ptr, ptr_ty}, callee_ty), callee_ty});
         } else if (fn_d && !fn_d->has_self) {
-            const auto callee_val{emit_expression(call.function)};
-            indirect_callee.emplace(callee_val);
+            // Dispatch `Type.method(...)` directly to the method's scoped symbol
+            stdx::option<const sema::type&> rt{recv_ty};
+            const bool recv_is_type{rt && (rt->get_kind() == sema::type_kind::TYPE ||
+                                           rt->get_data().is<sema::types::meta_type>())};
+            if (rt) {
+                if (const auto m{rt->get_data().as_opt<sema::types::meta_type>()}) {
+                    rt.emplace(m->instance);
+                }
+            }
+            const bool static_on_type{recv_is_type && rt != nullptr && rt->has_symbol_table_idx() &&
+                                      (rt->get_kind() == sema::type_kind::ENUM ||
+                                       rt->get_kind() == sema::type_kind::STRUCT ||
+                                       rt->get_kind() == sema::type_kind::UNION)};
+            if (static_on_type) {
+                // The static method lives in the receiver type's own member scope.
+                callee_name.emplace(
+                    symbol_scoping_.name_for(rt->get_symbol_table_idx(), member_ident.name));
+            } else if (recv_is_type) {
+                if (const auto owner{active_mod().get_resolved_symbol_owner_opt(call.function)}) {
+                    callee_name.emplace(symbol_scoping_.name_for(*owner, member_ident.name));
+                } else {
+                    callee_name.emplace(std::string{member_ident.name});
+                }
+            } else {
+                const auto callee_val{emit_expression(call.function)};
+                indirect_callee.emplace(callee_val);
+            }
         } else if (emitting_impl_default_scope_) {
             // Inside an inherited default body: `self.method(...)` targets this impl's method.
             callee_name.emplace(
                 symbol_scoping_.name_for(*emitting_impl_default_scope_, member_ident.name));
+        } else if (emitting_impl_body_scope_ && fn_d && fn_d->has_self && [&] {
+                       const auto obj{
+                           active_ast().get_as_opt<ast::identifier_expr>(dot_call->object)};
+                       return obj && obj->name == "self";
+                   }()) {
+            // Inside a method written in an `impl` block: `self.sibling(...)` resolves to that
+            // impl's own scoped symbol so cross-module method names stay resolvable.
+            callee_name.emplace(
+                symbol_scoping_.name_for(*emitting_impl_body_scope_, member_ident.name));
         } else {
             callee_name.emplace(std::string{member_ident.name});
         }

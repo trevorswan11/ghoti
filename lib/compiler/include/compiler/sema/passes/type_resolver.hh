@@ -108,6 +108,7 @@ class type_resolver {
     using function_boundary_guard = scope_guard<std::vector<usize>>;
     using open_function_guard     = scope_guard<std::vector<ast::node_id>>;
     using self_recursion_guard    = scope_guard<std::vector<bool>>;
+    using aggregate_resolve_guard = scope_guard<std::vector<usize>>;
 
     // Sets the flag to the provided value and resets it on destruction
     class mutating_context_guard {
@@ -431,6 +432,9 @@ class type_resolver {
     std::vector<usize>        function_boundaries_;
     std::vector<ast::node_id> open_function_nodes_;
     std::vector<bool>         self_recursive_flags_;
+    // Node indices of `struct`/`union`/`enum` literals whose resolution is currently on the
+    // stack
+    std::vector<usize> resolving_aggregate_nodes_;
 
     bool in_mutating_context_{false};
     bool for_generic_instantiation_{false};

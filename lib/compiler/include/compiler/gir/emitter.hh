@@ -421,6 +421,8 @@ class emitter {
     // While emitting an inherited interface default-method body: bare `self.method(...)` calls
     // are rewritten to target this impl's own methods (its body symbol table).
     stdx::opt_size emitting_impl_default_scope_;
+    // For emitting a method body written directly in an `impl` block
+    stdx::opt_size emitting_impl_body_scope_;
 };
 
 } // namespace ghoti::gir
