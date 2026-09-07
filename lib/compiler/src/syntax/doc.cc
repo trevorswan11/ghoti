@@ -68,7 +68,8 @@ auto doc_manager::delimited(std::string_view    open,
         }
         body.emplace_back(items[i]);
     }
-    if (trailing_comma) { body.emplace_back(if_break(text(","), nil())); }
+    // A force-broken list always keeps its trailing comma so it round-trips as a break hint.
+    if (trailing_comma || force_break) { body.emplace_back(if_break(text(","), nil())); }
 
     return group(concat({
                      text(open),

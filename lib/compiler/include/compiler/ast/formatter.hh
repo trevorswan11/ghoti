@@ -70,8 +70,9 @@ class formatter {
 
     [[nodiscard]] auto format_member_cfg_group(const cfg_item_group<member_handle>& group)
         -> syntax::doc_id;
-    [[nodiscard]] auto aggregate_body(std::vector<syntax::doc_id> entries, usize comma_count)
-        -> syntax::doc_id;
+    [[nodiscard]] auto aggregate_body(std::vector<syntax::doc_id> entries,
+                                      usize                       comma_count,
+                                      bool force_break = false) -> syntax::doc_id;
 
     template <typename Group, typename ItemFmt>
     [[nodiscard]] auto format_aggregate_cfg_group(const Group& group, ItemFmt item_fmt)

@@ -29,6 +29,7 @@ auto explicit_function_type::parse(syntax::parser& parser, bool allow_trailing_b
     std::vector<explicit_type_id>  parameter_types;
     std::vector<identifier_handle> parameter_names;
     bool                           variadic{false};
+    bool                           params_force_break{false};
     if (parser.peek_token_is(syntax::token_type_t::RPAREN)) {
         parser.advance();
     } else {
@@ -66,6 +67,8 @@ auto explicit_function_type::parse(syntax::parser& parser, bool allow_trailing_b
             parameter_types.emplace_back(type);
             if (!parser.peek_token_is(syntax::token_type_t::RPAREN)) {
                 TRY(parser.expect_peek(syntax::token_type_t::COMMA));
+                // A comma right before `)` is a trailing comma: keep one parameter per line.
+                params_force_break = parser.peek_token_is(syntax::token_type_t::RPAREN);
             }
         }
         TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
@@ -83,6 +86,7 @@ auto explicit_function_type::parse(syntax::parser& parser, bool allow_trailing_b
     return explicit_function_type{.parameter_types      = std::move(parameter_types),
                                   .parameter_names      = std::move(parameter_names),
                                   .variadic             = variadic,
+                                  .params_force_break   = params_force_break,
                                   .explicit_return_type = return_type};
 }
 
@@ -106,6 +110,7 @@ auto explicit_dyn_type::parse(syntax::parser& parser, bool allow_trailing_brace)
                   name_start, value_mod, parser.get_node<identifier_expr>(*name))};
 
     std::vector<explicit_dyn_type::assoc_binding> assoc_bindings;
+    bool                                          assoc_bindings_force_break{false};
     if (parser.peek_token_is(syntax::token_type_t::LPAREN)) {
         parser.advance(); // current == (
         while (!parser.peek_token_is(syntax::token_type_t::RPAREN) &&
@@ -117,6 +122,8 @@ auto explicit_dyn_type::parse(syntax::parser& parser, bool allow_trailing_brace)
             assoc_bindings.emplace_back(binding_name, binding_type);
             if (parser.peek_token_is(syntax::token_type_t::COMMA)) {
                 parser.advance();
+                // A comma right before `)` is a trailing comma: keep one binding per line.
+                assoc_bindings_force_break = parser.peek_token_is(syntax::token_type_t::RPAREN);
             } else {
                 break;
             }
@@ -124,8 +131,9 @@ auto explicit_dyn_type::parse(syntax::parser& parser, bool allow_trailing_brace)
         TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
     }
     return explicit_dyn_type{
-        .interface_type = interface_type,
-        .assoc_bindings = std::move(assoc_bindings),
+        .interface_type             = interface_type,
+        .assoc_bindings             = std::move(assoc_bindings),
+        .assoc_bindings_force_break = assoc_bindings_force_break,
     };
 }
 
