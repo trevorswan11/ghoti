@@ -247,7 +247,7 @@ fn addArtifacts(b: *std.Build, config: struct {
         \\Something went worng interally that isn't reported through an error message.
         \\Submit a bug report by opening an issue at https://github.com/trevorswan11/ghoti/issues/new/choose
         ,
-        .GHOTI_GIT_INFO = stdx.utils.getGitInfo(b),
+        .GHOTI_GIT_INFO = if (config.packaging) stdx.utils.getGitInfo(b) else "dev",
         .GHOTI_WINDOWS = target.result.os.tag == .windows,
         .GHOTI_LINUX = target.result.os.tag == .linux,
         .GHOTI_APPLE = target.result.os.tag == .macos,
