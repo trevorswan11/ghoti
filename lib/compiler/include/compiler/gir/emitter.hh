@@ -223,7 +223,11 @@ class emitter {
                                        std::string_view field_name,
                                        ast::node_id     site) -> void;
     auto emit_initializer(ast::node_id id, const ast::initializer_expr& init) -> value;
-    auto emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value;
+    // Emits a struct field's `= default` expression, coerced to `field_type`
+    auto               emit_field_default(ast::expr_handle   default_expr,
+                                          const mod::module& owner,
+                                          const sema::type&  field_type) -> value;
+    auto               emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value;
     [[nodiscard]] auto dot_object_is_type_namespace(const ast::dot_expr& dot) -> bool;
     auto               emit_index(ast::node_id id, const ast::index_expr& index) -> value;
     auto               emit_address_of(ast::node_id id, const ast::address_of_expr& addr) -> value;
