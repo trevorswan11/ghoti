@@ -176,6 +176,142 @@ TEST_CASE("E2E: a re-exported function called as `mod::fn(...)` links to its rea
     CHECK(exit_code == 42);
 }
 
+TEST_CASE("E2E: a cross-module interface default method the impl does not override is inherited") {
+    constexpr std::string_view adder_gh{R"(
+        pub const Adder := interface {
+            pub const step := fn(&self): i32;
+            pub const stepThrice := fn(&self): i32 {
+                return self.step() + self.step() + self.step();
+            };
+        };
+    )"};
+    constexpr std::string_view one_gh{R"(
+        import "adder.gh" as adder;
+        pub const One := struct { by: i32 };
+        impl adder::Adder for One {
+            pub const step := fn(&self): i32 { return self.by; };
+        }
+    )"};
+
+    const auto exit_code{helpers::compile_and_run(
+        R"(
+            import "one.gh" as m;
+            pub const main := fn(): i32 {
+                var o := m::One{ .by = 14 };
+                return o.stepThrice();
+            };
+        )",
+        {
+            mock_file{"adder.gh", adder_gh, "adder"},
+            mock_file{"one.gh", one_gh, "one"},
+        })};
+    CHECK(exit_code == 42);
+}
+
+TEST_CASE(
+    "E2E: an inherited cross-module default method re-types `self.req()?` and an assoc type") {
+    constexpr std::string_view res_gh{
+        R"(pub const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };)"};
+    constexpr std::string_view writer_gh{R"(
+        import "res.gh" as res;
+        pub const Writer := interface {
+            Error: type;
+            pub const write := fn(&mut self, bytes: []u8): res::Result(usize, Error);
+            pub const writeAll := fn(&mut self, bytes: []u8): res::Result(void, Error) {
+                var off: usize = 0;
+                loop {
+                    if (off == bytes.len) { break; }
+                    const n := self.write(bytes[off..])?;
+                    off += n;
+                };
+                return .{ .ok = {} };
+            };
+        };
+    )"};
+    constexpr std::string_view sink_gh{R"(
+        import "writer.gh" as writer;
+        import "res.gh" as res;
+        pub const Sink := struct { pub total: usize };
+        impl writer::Writer for Sink {
+            using Error = u8;
+            pub const write := fn(&mut self, bytes: []u8): res::Result(usize, Error) {
+                self.total += bytes.len;
+                return .{ .ok = bytes.len };
+            };
+        }
+    )"};
+
+    const auto exit_code{helpers::compile_and_run(
+        R"(
+            import "sink.gh" as m;
+            pub const main := fn(): i32 {
+                var s := m::Sink{ .total = 0 };
+                const buf := [3uz]u8{ 1, 2, 3 };
+                _ = s.writeAll(buf);
+                return @as(i32, s.total);
+            };
+        )",
+        {
+            mock_file{"res.gh", res_gh, "res"},
+            mock_file{"writer.gh", writer_gh, "writer"},
+            mock_file{"sink.gh", sink_gh, "sink"},
+        })};
+    CHECK(exit_code == 3);
+}
+
+TEST_CASE("E2E: one inherited cross-module default method calls another through `self`") {
+    constexpr std::string_view res_gh{
+        R"(pub const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };)"};
+    constexpr std::string_view writer_gh{R"(
+        import "res.gh" as res;
+        pub const Writer := interface {
+            Error: type;
+            pub const write := fn(&mut self, bytes: []u8): res::Result(usize, Error);
+            pub const writeAll := fn(&mut self, bytes: []u8): res::Result(void, Error) {
+                var off: usize = 0;
+                loop {
+                    if (off == bytes.len) { break; }
+                    off += self.write(bytes[off..])?;
+                };
+                return .{ .ok = {} };
+            };
+            pub const writeByte := fn(&mut self, b: u8): res::Result(void, Error) {
+                const one := [1uz]u8{ b };
+                return self.writeAll(one);
+            };
+        };
+    )"};
+    constexpr std::string_view sink_gh{R"(
+        import "writer.gh" as writer;
+        import "res.gh" as res;
+        pub const Sink := struct { pub total: usize };
+        impl writer::Writer for Sink {
+            using Error = u8;
+            pub const write := fn(&mut self, bytes: []u8): res::Result(usize, Error) {
+                self.total += bytes.len;
+                return .{ .ok = bytes.len };
+            };
+        }
+    )"};
+
+    const auto exit_code{helpers::compile_and_run(
+        R"(
+            import "sink.gh" as m;
+            pub const main := fn(): i32 {
+                var s := m::Sink{ .total = 0 };
+                _ = s.writeByte('x');
+                _ = s.writeByte('y');
+                return @as(i32, s.total);
+            };
+        )",
+        {
+            mock_file{"res.gh", res_gh, "res"},
+            mock_file{"writer.gh", writer_gh, "writer"},
+            mock_file{"sink.gh", sink_gh, "sink"},
+        })};
+    CHECK(exit_code == 2);
+}
+
 TEST_CASE("E2E: two instantiations of a nested `fn(...): type` constructor stay distinct") {
     const auto exit_code{helpers::compile_and_run(R"(
         const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };

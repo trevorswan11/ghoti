@@ -25,10 +25,14 @@ namespace ghoti::sema {
 // One resolved `impl [I for] T { ... }` block. `interface_type` is null for an inherent impl.
 struct impl_record {
     struct method {
-        std::string_view          name;
-        ast::node_id              decl;    // the `decl_stmt` in the impl body
-        stdx::option<const type&> fn_type; // resolved once conformance runs
-        bool                      is_pub;
+        std::string_view                 name;
+        ast::node_id                     decl;    // the `decl_stmt` in the impl body
+        stdx::option<const type&>        fn_type; // resolved once conformance runs
+        bool                             is_pub;
+        bool                             inherited{false};
+        std::string                      typing_key{};
+        stdx::option<const mod::module&> defining_mod{};
+        ast::node_id                     signature{ast::node_id::make_invalid()};
     };
 
     stdx::option<const type&>        interface_type;

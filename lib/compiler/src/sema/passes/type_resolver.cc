@@ -15,6 +15,7 @@
 #include <fmt/ranges.h>
 #include <gsl/pointers>
 #include <gsl/span>
+#include <gsl/util>
 #include <stdx/assert.hh>
 #include <stdx/enum.hh>
 #include <stdx/option.hh>
@@ -3160,31 +3161,6 @@ auto type_resolver::resolve_impl_method_access(const type&      target,
             gsl::not_null<type*>{const_cast<type*>(visible.front()->fn_type.get())}};
     }
 
-    // An interface default method the target inherits (not overridden by its impl). The signature
-    // is rebuilt with `self` bound to the concrete target so the call and the emitted body agree.
-    if (visible.empty()) {
-        for (const auto* rec : ctx_.impls.records()) {
-            if (!rec->target_type || rec->target_type != &target || !rec->interface_type) {
-                continue;
-            }
-            const auto iface{rec->interface_type->get_data().as_opt<types::interface_t>()};
-            if (!iface) { continue; }
-            for (usize i{iface->requirement_count}; i < iface->method_names.size(); ++i) {
-                if (iface->method_names[i] != name) { continue; }
-                if (rec->find_method(name).has_value()) { continue; } // overridden
-                // TODO:  A cross-module inherited default body cannot be emitted for this target
-                // yet
-                if (&iface->enclosing != &resolving_) { continue; }
-                const auto fn{resolving_.ast.get_as_opt<ast::function_expr>(
-                    *iface->method_decl(i).signature)};
-                if (!fn) { continue; }
-                pending_impl_method_owner_.emplace(rec->body_scope_idx);
-                return stdx::result<gsl::not_null<type*>, diagnostic>{gsl::not_null<type*>{
-                    &resolve_required_method_type(*fn, const_cast<type&>(target))}};
-            }
-        }
-    }
-
     if (visible.size() > 1) {
         return stdx::result<gsl::not_null<type*>, diagnostic>{stdx::err{diagnostic{
             fmt::format("call to `{}` is ambiguous: it is provided by more than one `impl`", name),
@@ -5712,8 +5688,16 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
         return last_type_.emplace(ctx_.poison_node(resolving_, id));
     }
 
+    // A dedicated instantiation resolver re-types a body a previous monomorphization already
+    // resolved; its body-local decls must resolve again and overwrite their node types rather than
+    // keep the earlier instantiation's.
+    const bool reresolve_local{for_generic_instantiation_ && reresolve_floor_.has_value() && [&] {
+        const auto lt{ctx_.registry.lookup_with_table(table_stack_, ident.name)};
+        return lt && lt->table_idx >= *reresolve_floor_;
+    }()};
+
     // Breaking out early is possible due to out of order semantics
-    if (sym.get_status() == symbol_status::RESOLVED) {
+    if (sym.get_status() == symbol_status::RESOLVED && !reresolve_local) {
         auto& void_type{ctx_.get_builtin_resolved_type(type_kind::VOID_)};
         // `id` may not be the node that resolved this symbol
         if (!resolving_.has_sema_type(id)) {
@@ -5793,11 +5777,17 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             }
         }
 
-        // Only update the decl value type if it hasn't been set
+        // Only update the decl value type if it hasn't been set unless this is an instantiation
+        // re-typing a body-local decl
         if (decl.value) {
             resolve(*decl.value);
             if (last_type_->is_poison()) { return poison_out(); }
-            resolving_.set_sema_type_if(id, *last_type_.take());
+            auto& decl_value_type{*last_type_.take()};
+            if (reresolve_local) {
+                resolving_.set_sema_type(id, decl_value_type);
+            } else {
+                resolving_.set_sema_type_if(id, decl_value_type);
+            }
         }
 
         if (!resolving_.has_sema_type(id)) {
@@ -5925,7 +5915,11 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
         }
     }
 
-    resolving_.set_sema_type_if(decl.name, resolved_type);
+    if (reresolve_local) {
+        resolving_.set_sema_type(decl.name, resolved_type);
+    } else {
+        resolving_.set_sema_type_if(decl.name, resolved_type);
+    }
     sym.set_status(symbol_status::RESOLVED);
     last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
 }
@@ -6786,13 +6780,15 @@ auto type_resolver::visit(ast::node_id id, const ast::impl_stmt& impl) -> void {
     }
 
     if (rec) {
-        // Fill any method type still missing (e.g. its body poisoned mid-loop).
+        // Fill any method type still missing
         for (auto& m : rec->methods) {
+            if (m.inherited) { continue; }
             if (const auto t{resolving_.get_sema_type_opt(m.decl)}) { m.fn_type.emplace(*t); }
         }
-        if (rec->interface_type != nullptr && !target.is_poison()) {
+        if (rec->interface_type && !target.is_poison()) {
             if (const auto iface{rec->interface_type->get_data().as_opt<types::interface_t>()}) {
                 check_impl_conformance(*rec, *iface);
+                resolve_inherited_default_methods(*rec, *iface);
             }
         }
     }
@@ -6919,6 +6915,166 @@ auto type_resolver::check_impl_conformance(const impl_record& rec, const types::
                 error::UNKNOWN_IMPL_MEMBER,
                 site_loc);
         }
+    }
+}
+
+auto type_resolver::resolve_inherited_default_methods(impl_record&              rec,
+                                                      const types::interface_t& iface) -> void {
+    PROFILE_FUNCTION();
+    if (iface.method_names.size() <= iface.requirement_count) { return; }
+    if (!rec.interface_type || !rec.target_type) { return; }
+
+    auto&       imod{const_cast<mod::module&>(iface.enclosing)};
+    const auto  iface_scope{rec.interface_type->get_symbol_table_idx()};
+    auto&       target{const_cast<type&>(*rec.target_type)};
+    const auto& impl_mod{rec.enclosing ? *rec.enclosing : resolving_};
+
+    // Rebind the interface's associated types to what this impl supplies
+    struct saved_assoc {
+        gsl::not_null<symbol*> sym;
+        ast::identifier_handle name_node;
+        stdx::option<type&>    prev_type;
+        symbol_status          prev_status;
+    };
+
+    std::vector<saved_assoc> restore;
+    for (usize k{0}; k < iface.assoc_type_names.size() && k < iface.ast_assoc_types.size(); ++k) {
+        const auto name{iface.assoc_type_names[k]};
+        const auto bsym{ctx_.registry.get_from_opt(rec.body_scope_idx, name)};
+        if (!bsym) { continue; } // defaulted associated type; leave the interface default
+        const auto bnode{bsym->get_data().as_opt<symbols::node_t>()};
+        if (!bnode) { continue; }
+
+        stdx::option<type&> bound;
+        if (const auto bu{impl_mod.ast.get_as_opt<ast::using_stmt>(*bnode)}) {
+            bound = impl_mod.get_sema_type_opt(bu->explicit_type);
+        } else if (const auto bd{impl_mod.ast.get_as_opt<ast::decl_stmt>(*bnode)};
+                   bd && bd->value) {
+            bound = impl_mod.get_sema_type_opt(*bd->value);
+        }
+        if (!bound || !bound->is_resolved()) { continue; }
+
+        const auto isym{ctx_.registry.get_from_opt(iface_scope, name)};
+        if (!isym) { continue; }
+        const auto at_name{iface.ast_assoc_types[k].name};
+        restore.emplace_back<saved_assoc>({
+            .sym         = isym.get(),
+            .name_node   = at_name,
+            .prev_type   = imod.get_sema_type_opt(at_name),
+            .prev_status = isym->get_status(),
+        });
+        imod.set_sema_type(at_name, denoted_type(*bound));
+        isym->set_status(symbol_status::RESOLVED);
+    }
+
+    const auto restore_assoc{gsl::finally([&] {
+        for (const auto& s : restore) {
+            s.sym->set_status(s.prev_status);
+            if (s.prev_type) { imod.set_sema_type(s.name_node, *s.prev_type); }
+        }
+    })};
+
+    for (usize i{iface.requirement_count}; i < iface.method_names.size(); ++i) {
+        const auto name{iface.method_names[i]};
+        if (rec.find_method(name)) { continue; } // overridden by an explicit `impl` member
+
+        const auto& m{iface.method_decl(i)};
+        const auto  sig_node{ast::node_id{*m.signature}};
+        const auto& fn_expr{imod.ast.get_as<ast::function_expr>(*m.signature)};
+        if (fn_expr.is_type_expr) { continue; } // a bodyless requirement, not a default
+
+        const auto sig_ty{imod.get_sema_type_opt(*m.signature)};
+        if (!sig_ty || !sig_ty->has_symbol_table_idx()) { continue; }
+        const auto fn_table{sig_ty->get_symbol_table_idx()};
+
+        symbol_table_stack stk;
+        stk.push(*ctx_.prelude_index);
+        if (imod.root_table_idx) { stk.push(*imod.root_table_idx); }
+        stk.push(iface_scope);
+        stk.push(fn_table);
+        type_resolver inst{imod, ctx_, fn_table, std::move(stk)};
+        inst.for_generic_instantiation_ = true;
+        inst.reresolve_floor_.emplace(fn_table);
+
+        const structural_guard     this_guard{inst.user_type_stack_, target};
+        const body_typing_snapshot snap{imod};
+
+        const auto mark_resolved{[&](ast::identifier_handle nm) {
+            const auto& n{imod.ast.get_as<ast::identifier_expr>(nm).name};
+            if (const auto s{ctx_.registry.get_from_opt(fn_table, n)}) {
+                s->set_kind(symbol_kind::VALUE);
+                s->set_status(symbol_status::RESOLVED);
+            }
+        }};
+
+        auto  params{ctx_.pool.get_many_unsafe(fn_expr.parameters.size() + (fn_expr.self ? 1 : 0))};
+        usize pi{0};
+        if (fn_expr.self) {
+            type* self_t{&target};
+            if (const auto mut{mutability_from_type_modifier(fn_expr.self->modifier)}) {
+                self_t = fn_expr.self->modifier.is_ptr() ? &ctx_.get_pointer(*mut, target)
+                                                         : &ctx_.get_reference(*mut, target);
+            }
+            imod.set_sema_type(fn_expr.self->name, *self_t);
+            mark_resolved(fn_expr.self->name);
+            params[pi++] = self_t;
+        }
+
+        for (const auto& param : fn_expr.parameters) {
+            inst.resolve(param.explicit_type);
+            auto& pt{inst.last_type_ && !inst.last_type_->is_poison()
+                         ? denoted_type(*inst.last_type_.take())
+                         : ctx_.get_poison()};
+            imod.set_sema_type(param.name, pt);
+            mark_resolved(param.name);
+            params[pi++] = &pt;
+        }
+
+        inst.resolve(fn_expr.explicit_return_type);
+        auto& ret{inst.last_type_ && !inst.last_type_->is_poison()
+                      ? denoted_type(*inst.last_type_.take())
+                      : ctx_.get_builtin_resolved_type(type_kind::VOID_)};
+
+        types::key_t key{type_kind::FUNCTION, types::mut::CONSTANT};
+        for (const auto* p : params) { key.imprint(*p); }
+        key.imprint(ret);
+        auto& concrete_fn{*ctx_.pool[key]};
+        concrete_fn.resolve_if<types::function>(
+            params, ret, fn_expr.self.has_value(), fn_expr.variadic);
+        imod.set_sema_type(*m.signature, concrete_fn);
+
+        const bool auto_ret{ret.get_kind() == type_kind::AUTO};
+        inst.return_trackers_.emplace_back<return_tracker>({
+            .return_types   = {},
+            .is_auto_return = auto_ret,
+            .expected_type  = auto_ret ? stdx::none : stdx::option<type&>{ret},
+        });
+        // `sig_node` now carries the per-target concrete signature, so a `?` in the body reads the
+        // right return type off it.
+        const open_function_guard body_fn_guard{inst.open_function_nodes_, sig_node};
+        for (const auto& stmt : imod.ast.get_as<ast::block_stmt>(fn_expr.body)) {
+            inst.resolve(stmt);
+        }
+        inst.return_trackers_.pop_back();
+
+        body_type_diff diff;
+        snap.diff_into(ctx_, imod, diff);
+
+        auto typing_key{fmt::format("impldef{}#{}", rec.body_scope_idx, name)};
+        if (!diff.empty()) {
+            ctx_.instantiation_cache.set_body_type_diff(typing_key, std::move(diff));
+        }
+
+        rec.methods.emplace_back<impl_record::method>({
+            .name         = name,
+            .decl         = sig_node,
+            .fn_type      = concrete_fn,
+            .is_pub       = iface.method_is_pub[i],
+            .inherited    = true,
+            .typing_key   = std::move(typing_key),
+            .defining_mod = imod,
+            .signature    = sig_node,
+        });
     }
 }
 

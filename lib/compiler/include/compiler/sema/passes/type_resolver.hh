@@ -375,6 +375,10 @@ class type_resolver {
     // Checks required methods present & signature-compatible, required associated items bound, no
     // stray members.
     auto check_impl_conformance(const impl_record& rec, const types::interface_t& iface) -> void;
+    // For each interface default method the impl does not override, re-type its body against the
+    // concrete target so cross-module defaults work
+    auto resolve_inherited_default_methods(impl_record& rec, const types::interface_t& iface)
+        -> void;
     auto visit(ast::node_id, const ast::import_stmt&) -> void;
     auto visit(ast::node_id, const ast::return_stmt&) -> void;
     auto visit(ast::node_id, const ast::test_stmt&) -> void;
@@ -402,6 +406,12 @@ class type_resolver {
                              gsl::span<type*>                  concrete_args,
                              gsl::span<const gir::const_value> constexpr_args = {})
         -> stdx::option<generic_instantiation_entry>;
+
+    // Distinct opaque `type` sentinel used to stand in for one parameterized-impl type param
+    // during its template resolution, keyed on the param's name-node index
+    auto param_impl_sentinel(usize disc) -> type&;
+    // Opaque `type` placeholder for one interface associated type in its method signatures.
+    auto assoc_type_placeholder(usize disc) -> type&;
 
     type_resolver(mod::module& resolving, context& ctx)
         : resolving_{resolving}, table_idx_{*resolving.root_table_idx}, ctx_{ctx} {
@@ -442,17 +452,11 @@ class type_resolver {
     bool in_for_iterable_{false};
     bool in_expr_branch_{false};
     // Skips `if`/`match constexpr` folding and the throwaway `Ctor(<dummy>)` cache insert
-    bool                      building_param_template_{false};
+    bool building_param_template_{false};
+    // Set when re-typing an interface default-method body against a concrete impl target
+    stdx::opt_size            reresolve_floor_{};
     stdx::opt_size            pending_impl_method_owner_;
     stdx::option<std::string> pending_param_impl_target_;
-
-    // Distinct opaque `type` sentinel used to stand in for one parameterized-impl type param
-    // during its template resolution, keyed on the param's name-node index. The template itself
-    // and the per-target expansion set live on the shared `impl_registry` so a monomorphization
-    // triggered from any consuming module can find them.
-    auto param_impl_sentinel(usize disc) -> type&;
-    // Opaque `type` placeholder for one interface associated type in its method signatures.
-    auto assoc_type_placeholder(usize disc) -> type&;
 
     impl_param_bound_map_t impl_param_bounds_;
     named_test_map_t       named_tests_;

@@ -12,6 +12,7 @@
 #include <fmt/format.h>
 #include <gsl/pointers>
 #include <gsl/span>
+#include <gsl/util>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
@@ -723,35 +724,65 @@ auto emitter::emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -
         }
     }
 
-    // Interface default methods the impl inherits: emit the default body once for this target.
-    if (rec->interface_type) {
-        if (const auto iface{rec->interface_type->get_data().as_opt<sema::types::interface_t>()}) {
-            for (usize i{iface->requirement_count}; i < iface->method_names.size(); ++i) {
-                const auto name{iface->method_names[i]};
-                if (rec->find_method(name).has_value()) { continue; } // overridden
-                const auto& method{iface->method_decl(i)};
-                const auto  fx{active_ast().get_as_opt<ast::function_expr>(*method.signature)};
-                if (!fx || fx->is_type_expr) { continue; }
-                emit_impl_default_method(symbol_scoping_.name_for(rec->body_scope_idx, name),
-                                         rec->body_scope_idx,
-                                         *method.signature,
-                                         *fx);
-            }
-        }
+    // Interface default methods the impl inherits
+    for (const auto& m : rec->methods) {
+        if (!m.inherited || !m.defining_mod || !m.signature.is_valid()) { continue; }
+        const auto fx{m.defining_mod->ast.get_as_opt<ast::function_expr>(m.signature)};
+        if (!fx || fx->is_type_expr) { continue; }
+
+        // Emit each body once against the interface's  module with that typing replayed.
+        emit_impl_default_method(
+            symbol_scoping_.name_for(rec->body_scope_idx, m.name),
+            rec->body_scope_idx,
+            const_cast<mod::module&>(*m.defining_mod),
+            m.signature,
+            *fx,
+            m.fn_type ? stdx::option<sema::type&>{&const_cast<sema::type&>(*m.fn_type)}
+                      : stdx::none,
+            m.typing_key);
     }
 }
 
 auto emitter::emit_impl_default_method(std::string_view          gir_name,
                                        usize                     impl_scope_idx,
+                                       mod::module&              iface_mod,
                                        ast::node_id              sig_id,
-                                       const ast::function_expr& fn_expr) -> void {
+                                       const ast::function_expr& fn_expr,
+                                       stdx::option<sema::type&> concrete_sig,
+                                       std::string_view          typing_key) -> void {
     PROFILE_FUNCTION();
     if (gir_module_.has_function(std::string{gir_name})) { return; }
-    const auto sema_type{active_mod().get_sema_type_opt(sig_id)};
-    if (!sema_type) { return; }
+    if (user_type_stack_.empty()) { return; }
+    auto* target{user_type_stack_.back()};
 
-    auto* target{user_type_stack_.empty() ? nullptr : user_type_stack_.back()};
-    if (target == nullptr) { return; }
+    // The default body's AST + resolved types live in the interface's module. Switch to it and
+    // replay this impl's per-target typing
+    auto       prev_module{std::exchange(active_module_, iface_mod)};
+    const auto restore_module{gsl::finally([&] {
+        active_module_ = prev_module;
+        if (prev_module) { const_eval_.set_module(*prev_module); }
+    })};
+    const_eval_.set_module(iface_mod);
+    const_eval_.clear_memo();
+    if (!typing_key.empty()) {
+        if (const auto diff{ctx_.instantiation_cache.get_body_type_diff(typing_key)}) {
+            for (const auto& [idx, ty] : diff->node_types) {
+                iface_mod.sema_side_tables.node_types.values[idx] = ty;
+            }
+            for (const auto& [idx, ty] : diff->explicit_types) {
+                iface_mod.sema_side_tables.explicit_types.values[idx] = ty;
+            }
+            for (const auto& [idx, br] : diff->if_branches) {
+                iface_mod.if_constexpr_results.insert_or_assign(idx, br);
+            }
+            for (const auto& [idx, arm] : diff->match_arms) {
+                iface_mod.match_arm_results.insert_or_assign(idx, arm);
+            }
+        }
+    }
+
+    auto sema_type{concrete_sig ? concrete_sig : active_mod().get_sema_type_opt(sig_id)};
+    if (!sema_type) { return; }
 
     auto& fn{gir_module_.add_function(
         std::string{gir_name}, *sema_type, false, false, fn_expr.variadic, gir::linkage::INTERNAL)};

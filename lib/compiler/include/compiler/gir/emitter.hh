@@ -93,13 +93,17 @@ class emitter {
     // Emits the member functions of an `impl [I for] T { ... }` block under names scoped to the
     // impl's own symbol table, plus any interface default methods the impl inherits.
     auto emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -> void;
-    // Emits one inherited interface default-method body for a concrete impl target. `self` is
-    // retyped to the target and bare `self.method(...)` calls in the body are redirected to the
-    // impl's own methods.
+    // Emits one inherited interface default-method body for a concrete impl target. The body's
+    // AST lives in `iface_mod`; `self` is retyped to the target, bare `self.method(...)` calls
+    // are redirected to the impl's own methods, and `body_type_diff[typing_key]` is replayed so
+    // associated types resolve to the impl's bindings.
     auto emit_impl_default_method(std::string_view          gir_name,
                                   usize                     impl_scope_idx,
+                                  mod::module&              iface_mod,
                                   ast::node_id              sig_id,
-                                  const ast::function_expr& fn_expr) -> void;
+                                  const ast::function_expr& fn_expr,
+                                  stdx::option<sema::type&> concrete_sig,
+                                  std::string_view          typing_key) -> void;
 
     auto emit_function(ast::node_id                   id,
                        const ast::decl_stmt&          decl,
