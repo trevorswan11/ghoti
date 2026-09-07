@@ -1949,8 +1949,13 @@ auto type_resolver::visit(ID id, const ast::enum_expr& enum_expr) -> void {
         return last_type_.emplace(enum_type.is_poison() ? enum_type
                                                         : ctx_.poison_node(resolving_, id));
     }
-    const scope            s{table_stack_, enum_type.get_symbol_table_idx(), table_idx_};
-    const structural_guard g{user_type_stack_, enum_type};
+    // See the note in `visit(struct_expr)`: a recursive re-entry is a no-op.
+    if (std::ranges::contains(resolving_aggregate_nodes_, id.get_index())) {
+        return last_type_.emplace(enum_type);
+    }
+    const aggregate_resolve_guard agg_guard{resolving_aggregate_nodes_, id.get_index()};
+    const scope                   s{table_stack_, enum_type.get_symbol_table_idx(), table_idx_};
+    const structural_guard        g{user_type_stack_, enum_type};
 
     // The underlying type defaults to an i32 as it would in C or C++
     auto& underlying_type{enum_expr.underlying ? resolving_.get_sema_type(*enum_expr.underlying)
@@ -2173,7 +2178,15 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     }
 
     // The entire function lives inside of its preallocated scope
-    auto&       fn_type{resolving_.get_sema_type(id)};
+    auto& fn_type{resolving_.get_sema_type(id)};
+
+    // `pre_register_impls` force-drives an impl target aggregate's decl; The
+    // signature is already committed, so a re-entry is a no-op rather than an assertion failure.
+    if (fn_type.is_resolved()) {
+        resolving_.set_sema_type(id, fn_type);
+        return last_type_.emplace(fn_type);
+    }
+
     const scope s{table_stack_, fn_type.get_symbol_table_idx(), table_idx_};
 
     const function_boundary_guard fn_boundary{function_boundaries_, table_stack_.size() - 1};
@@ -2561,10 +2574,30 @@ auto type_resolver::record_symbol_owner(ast::node_id       ref_id,
     const auto decl{target_mod.ast.get_as_opt<ast::decl_stmt>(*node)};
     if (!decl || !decl->value) { return; }
 
-    // Only a direct reference to a named function decays to a bare GIR symbol name at a call
-    // or value site
-    if (!target_mod.ast.get_as_opt<ast::function_expr>(*decl->value).has_value()) { return; }
-    resolving_.set_resolved_symbol_owner(ref_id, owner_table_idx);
+    // A direct reference to a named function decays to a bare/scoped GIR symbol name at a call
+    // or value site.
+    if (target_mod.ast.get_as_opt<ast::function_expr>(*decl->value).has_value()) {
+        resolving_.set_resolved_symbol_owner(ref_id, owner_table_idx);
+        return;
+    }
+
+    // `const f := other::g`: follow the chain so the call site scopes to `g`'s real owning module,
+    // not this alias.
+    if (const auto ma{target_mod.ast.get_as_opt<ast::module_access_expr>(*decl->value)}) {
+        if (const auto outer_ty{target_mod.get_sema_type_opt(ma->outer)}) {
+            if (const auto md{outer_ty->get_data().as_opt<types::module>()}) {
+                const auto& inner_mod{md->imported};
+                if (inner_mod.root_table_idx) {
+                    const auto& inner_ident{target_mod.ast.get_as<ast::identifier_expr>(ma->inner)};
+                    if (const auto inner_sym{ctx_.registry.get_from_opt(*inner_mod.root_table_idx,
+                                                                        inner_ident.name)}) {
+                        record_symbol_owner(
+                            ref_id, *inner_mod.root_table_idx, inner_mod, *inner_sym);
+                    }
+                }
+            }
+        }
+    }
 }
 
 auto type_resolver::record_member_owner(ast::node_id           ref_id,
@@ -3139,7 +3172,8 @@ auto type_resolver::resolve_impl_method_access(const type&      target,
             for (usize i{iface->requirement_count}; i < iface->method_names.size(); ++i) {
                 if (iface->method_names[i] != name) { continue; }
                 if (rec->find_method(name).has_value()) { continue; } // overridden
-                // The signature handle indexes the interface's declaring module
+                // TODO:  A cross-module inherited default body cannot be emitted for this target
+                // yet
                 if (&iface->enclosing != &resolving_) { continue; }
                 const auto fn{resolving_.ast.get_as_opt<ast::function_expr>(
                     *iface->method_decl(i).signature)};
@@ -5148,8 +5182,14 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
         return last_type_.emplace(struct_type.is_poison() ? struct_type
                                                           : ctx_.poison_node(resolving_, id));
     }
-    const scope            s{table_stack_, struct_type.get_symbol_table_idx(), table_idx_};
-    const structural_guard g{user_type_stack_, struct_type};
+    // Recursive re-entry: a member type names this struct while it is already being resolved
+    // further up the stack; don't kick off a nested resolution
+    if (std::ranges::contains(resolving_aggregate_nodes_, id.get_index())) {
+        return last_type_.emplace(struct_type);
+    }
+    const aggregate_resolve_guard agg_guard{resolving_aggregate_nodes_, id.get_index()};
+    const scope                   s{table_stack_, struct_type.get_symbol_table_idx(), table_idx_};
+    const structural_guard        g{user_type_stack_, struct_type};
 
     auto field_types{ctx_.pool.get_many_unsafe(struct_expr.fields.size())};
     for (usize i{0}; const auto& field : struct_expr.fields) {
@@ -5303,8 +5343,13 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
         return last_type_.emplace(union_type.is_poison() ? union_type
                                                          : ctx_.poison_node(resolving_, id));
     }
-    const scope            s{table_stack_, union_type.get_symbol_table_idx(), table_idx_};
-    const structural_guard g{user_type_stack_, union_type};
+    // A recursive re-entry is a no-op.
+    if (std::ranges::contains(resolving_aggregate_nodes_, id.get_index())) {
+        return last_type_.emplace(union_type);
+    }
+    const aggregate_resolve_guard agg_guard{resolving_aggregate_nodes_, id.get_index()};
+    const scope                   s{table_stack_, union_type.get_symbol_table_idx(), table_idx_};
+    const structural_guard        g{user_type_stack_, union_type};
 
     auto field_types{ctx_.pool.get_many_unsafe(union_expr.fields.size())};
     for (usize i{0}; const auto& field : union_expr.fields) {
@@ -6114,8 +6159,18 @@ auto type_resolver::resolve_impl_type_ref(ast::explicit_type_id ref) -> type& {
             if (const auto node{lookup->get_data().as_opt<symbols::node_t>()}) {
                 if (const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
                     decl && decl->value) {
-                    resolve(*decl->value);
-                    last_type_.reset();
+                    // `resolve(ref)` above resolves the ident, which can hand back a distinct
+                    // unresolved forward twin even after the underlying decl is fully typed
+                    const auto typed{resolving_.get_sema_type_opt(*decl->value)};
+                    if (typed && (typed->is_resolved() || typed->is_poison())) { return *typed; }
+                    if (lookup->get_status() != symbol_status::RESOLVING) {
+                        resolve(*decl->value);
+                        last_type_.reset();
+                        if (const auto now{resolving_.get_sema_type_opt(*decl->value)};
+                            now && (now->is_resolved() || now->is_poison())) {
+                            return *now;
+                        }
+                    }
                 }
             }
         }
@@ -6715,11 +6770,23 @@ auto type_resolver::visit(ast::node_id id, const ast::impl_stmt& impl) -> void {
     {
         stdx::option<structural_guard> guard;
         if (!target.is_poison()) { guard.emplace(user_type_stack_, target); }
-        for (const auto& member : impl.members) { TRY_RESOLVE(*member); }
+        for (const auto& member : impl.members) {
+            TRY_RESOLVE(*member);
+            // Publish each method's resolved type as soon as it is available so a later
+            // sibling's body can call it through `self.<name>(...)`
+            if (rec) {
+                for (auto& m : rec->methods) {
+                    if (m.fn_type) { continue; }
+                    if (const auto t{resolving_.get_sema_type_opt(m.decl)}) {
+                        m.fn_type.emplace(*t);
+                    }
+                }
+            }
+        }
     }
 
     if (rec) {
-        // Fill each impl method's resolved function type from its member decl.
+        // Fill any method type still missing (e.g. its body poisoned mid-loop).
         for (auto& m : rec->methods) {
             if (const auto t{resolving_.get_sema_type_opt(m.decl)}) { m.fn_type.emplace(*t); }
         }
@@ -6858,7 +6925,8 @@ auto type_resolver::check_impl_conformance(const impl_record& rec, const types::
 auto type_resolver::visit(ast::node_id id, const ast::using_stmt& using_stmt) -> void {
     PROFILE_FUNCTION();
     const auto& ident{resolving_.ast.get_as<ast::identifier_expr>(using_stmt.alias)};
-    auto        sym{ctx_.registry.get_from_opt(table_idx_, ident.name)};
+    // Search the whole stack, not just `table_idx_`, this can be reached out of decl order
+    auto sym{ctx_.registry.lookup(table_stack_, ident.name)};
     if (!sym) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
     if (sym->get_status() == symbol_status::RESOLVED) {
         auto& void_type{ctx_.get_builtin_resolved_type(type_kind::VOID_)};
@@ -6980,7 +7048,15 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::identifier_expr& 
     auto& sym{*symbol_opt};
 
     const auto forwarded_type{forward_type(resolving_, id.get_modifier(), sym)};
-    forwarded_type ? last_type_.emplace(*forwarded_type) : resolve_ident(id, ident);
+    const auto mods{id.get_modifier()};
+    // A by-value reference to an aggregate whose own resolution has not started yet
+    if (forwarded_type && !forwarded_type->is_resolved() &&
+        sym.get_status() == symbol_status::UNRESOLVED &&
+        (mods.is_value() || (!mods.is_ptr() && !mods.is_ref()))) {
+        resolve_ident(id, ident);
+    } else {
+        forwarded_type ? last_type_.emplace(*forwarded_type) : resolve_ident(id, ident);
+    }
 
     auto& resolved{apply_explicit_modifiers(id, *last_type_.take())};
     resolving_.set_sema_type(id, resolved);

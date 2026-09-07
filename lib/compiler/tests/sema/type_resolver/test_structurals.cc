@@ -239,18 +239,24 @@ TEST_CASE("Incomplete type used during resolution") {
                 std::pair{0UZ, col}};
     };
 
+    const auto expected_b = [](usize col) -> sema::diagnostic {
+        return {"Field 'b' has an incomplete type; creates an infinite size cycle",
+                sema::error::CYCLIC_DEPENDENCY,
+                std::pair{0UZ, col}};
+    };
+
     SECTION("Structs") {
         helpers::test_resolver_fail("const A := struct { a: A, };", expected_diag(23));
         helpers::test_resolver_fail("const A := struct { a: @this(), };", expected_diag(23));
         helpers::test_resolver_fail("const A := struct { a: B, }; const B := struct { b: A, };",
-                                    expected_diag(23));
+                                    expected_b(52));
     }
 
     SECTION("Unions") {
         helpers::test_resolver_fail("const A := union { a: A, };", expected_diag(22));
         helpers::test_resolver_fail("const A := union { a: @this(), };", expected_diag(22));
         helpers::test_resolver_fail("const A := union { a: B, }; const B := union { b: A, };",
-                                    expected_diag(22));
+                                    expected_b(50));
     }
 }
 
