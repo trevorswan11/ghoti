@@ -1,0 +1,46 @@
+//! Basic wrappers over standard IO streams
+import "../os/os.gh" as os;
+import "error.gh" as error;
+import "../result.gh" as result;
+import "file.gh" as file;
+
+using Error = result::Error;
+using Result = result::Result;
+using File = file::File;
+
+/// The standard output stream, infallible on POSIX
+pub const stdout := fn(): Result(File, Error) {
+    return match (os::stdout()) {
+        .ok  => |h| .{ .ok = .{ .handle = h } },
+        .err => |e| .{ .err = .fromOs(e) },
+    };
+};
+
+/// The standard input stream, infallible on POSIX
+pub const stdin := fn(): Result(File, Error) {
+    return match (os::stdin()) {
+        .ok  => |h| .{ .ok = .{ .handle = h } },
+        .err => |e| .{ .err = .fromOs(e) },
+    };
+};
+
+/// The standard error stream, infallible on POSIX
+pub const stderr := fn(): Result(File, Error) {
+    return match (os::stderr()) {
+        .ok  => |h| .{ .ok = .{ .handle = h } },
+        .err => |e| .{ .err = .fromOs(e) },
+    };
+};
+
+/// Print the contents of `bytes` to stdout
+pub const print := fn(bytes: []u8): Result(void, Error) {
+    var f := stdout()?;
+    return f.writeAll(bytes);
+};
+
+/// Print the contents of `bytes` to stdout, followed by a newline
+pub const println := fn(bytes: []u8): Result(void, Error) {
+    var f := stdout()?;
+    f.writeAll(bytes)?;
+    return f.writeByte('\n');
+};

@@ -5,3 +5,4 @@ import "result.gh" as result;
 pub constexpr Result := result::Result;
 
 pub import "os/os.gh" as os;
+pub import "io/io.gh" as io;
