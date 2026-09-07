@@ -4,7 +4,7 @@ import "error.gh" as error;
 import "../result.gh" as result;
 import "file.gh" as file;
 
-using Error = result::Error;
+using Error = error::Error;
 using Result = result::Result;
 using File = file::File;
 
