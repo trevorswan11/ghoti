@@ -1,0 +1,24 @@
+import "../result.gh" as result;
+
+pub const Reader := interface {
+    Error: type;
+
+    /// Read `buf.len` into the provided byte buffer
+    pub const read := fn(&mut self, buf: []mut u8): result::Result(usize, Error);
+
+    /// Try to read into the provided byte buffer
+    pub const readAll := fn(&mut self, buf: []mut u8): result::Result(usize, Error) {
+        var i: usize = 0;
+        loop {
+            if (i == buf.len) {
+                break;
+            }
+            const n := self.read(buf[i..])?;
+            if (n == 0) { // EOF
+                break;
+            }
+            i += n;
+        }
+        return .{ .ok = i };
+    };
+};

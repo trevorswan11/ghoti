@@ -326,11 +326,11 @@ test "win32: fstat on an open handle sees the file size" {
         OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL,
     );
+    defer _ = close(h);
 
     @require(hr == .ok);
     const h := match (hr) { .ok => |x| x, .err => nullptr };
     @expect(match (fstat(h)) { .ok => |s| s.size() > 0u64, .err => false });
-    _ = close(h);
 }
 
 test "win32: mkdir of an existing directory reports it, not a spurious success" {
