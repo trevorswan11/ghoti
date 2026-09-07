@@ -2868,12 +2868,21 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             callee_name.emplace(
                 symbol_scoping_.name_for(*emitting_impl_default_scope_, member_ident.name));
         } else if (emitting_impl_body_scope_ && fn_d && fn_d->has_self && [&] {
-                       const auto obj{
-                           active_ast().get_as_opt<ast::identifier_expr>(dot_call->object)};
-                       return obj && obj->name == "self";
+                       // Inside a method written in an `impl` block, a call on the method's own
+                       // receiver resolves to that impl's own scoped symbol so cross-module method
+                       // names stay resolvable
+                       if (user_type_stack_.empty() || !recv_ty ||
+                           !active_ast().get_as_opt<ast::identifier_expr>(dot_call->object)) {
+                           return false;
+                       }
+                       stdx::option<const sema::type&> r{recv_ty};
+                       if (const auto p{r->get_data().as_opt<sema::types::pointer>()}) {
+                           r.emplace(p->underlying);
+                       } else if (const auto rf{r->get_data().as_opt<sema::types::reference>()}) {
+                           r.emplace(rf->underlying);
+                       }
+                       return r == user_type_stack_.back();
                    }()) {
-            // Inside a method written in an `impl` block: `self.sibling(...)` resolves to that
-            // impl's own scoped symbol so cross-module method names stay resolvable.
             callee_name.emplace(
                 symbol_scoping_.name_for(*emitting_impl_body_scope_, member_ident.name));
         } else {
