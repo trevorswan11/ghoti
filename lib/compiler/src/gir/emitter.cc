@@ -5199,12 +5199,14 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
         return value{loaded, sema_type};
     }
 
+    ankerl::unordered_dense::set<u64> provided;
     for (const auto& [accessor, val_expr] : init.initializers) {
         const auto& imp{active_ast().get_as<ast::implicit_access_expr>(*accessor)};
         const auto& name{active_ast().get_as<ast::identifier_expr>(imp.member).name};
         const auto  proxy{table.get_proxy_opt(name)};
         ASSERT(proxy, "Member must exist in struct symbol table");
         const auto [sym, field_idx]{*proxy};
+        provided.emplace(field_idx);
         auto&      field_type{st->type_at(field_idx)};
         const auto field_ptr{
             builder_.emit_get_element_ptr(value{struct_slot, *sema_type},
@@ -5214,8 +5216,33 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
         builder_.emit_store(value{field_ptr, field_type}, val).is_initializer = true;
     }
 
+    // Every field the literal left out is guaranteed to have a default
+    for (u64 idx{0}; idx < st->ast_fields.size(); ++idx) {
+        if (provided.contains(idx) || !st->ast_fields[idx].default_value) { continue; }
+        auto&      field_type{st->type_at(idx)};
+        const auto field_ptr{builder_.emit_get_element_ptr(
+            value{struct_slot, *sema_type}, {value{idx, usize_type}}, field_type)};
+        const auto val{
+            emit_field_default(*st->ast_fields[idx].default_value, st->enclosing, field_type)};
+        builder_.emit_store(value{field_ptr, field_type}, val).is_initializer = true;
+    }
+
     const auto loaded{builder_.emit_load(value{struct_slot, *sema_type}, *sema_type)};
     return value{loaded, sema_type};
+}
+
+auto emitter::emit_field_default(ast::expr_handle   default_expr,
+                                 const mod::module& owner,
+                                 const sema::type&  field_type) -> value {
+    if (&owner == &active_mod()) { return emit_coerced_expr(default_expr, field_type); }
+
+    auto prev_module{std::exchange(active_module_, &const_cast<mod::module&>(owner))};
+    const_eval_.set_module(const_cast<mod::module&>(owner));
+    const_eval_.clear_memo();
+    const auto val{emit_coerced_expr(default_expr, field_type)};
+    active_module_ = prev_module;
+    if (prev_module) { const_eval_.set_module(*prev_module); }
+    return val;
 }
 
 // True when `dot.object` denotes a type used purely as a namespace
