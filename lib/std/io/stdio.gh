@@ -44,3 +44,16 @@ pub const println := fn(bytes: []u8): Result(void, Error) {
     f.writeAll(bytes)?;
     return f.writeByte('\n');
 };
+
+/// Print the contents of `bytes` to stderr
+pub const eprint := fn(bytes: []u8): Result(void, Error) {
+    var f := stderr()?;
+    return f.writeAll(bytes);
+};
+
+/// Print the contents of `bytes` to stderr, followed by a newline
+pub const eprintln := fn(bytes: []u8): Result(void, Error) {
+    var f := stderr()?;
+    f.writeAll(bytes)?;
+    return f.writeByte('\n');
+};

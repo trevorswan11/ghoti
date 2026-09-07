@@ -16,3 +16,5 @@ pub const stdin := stdio::stdin;
 pub const stderr := stdio::stderr;
 pub const print := stdio::print;
 pub const println := stdio::println;
+pub const eprint := stdio::eprint;
+pub const eprintln := stdio::eprintln;

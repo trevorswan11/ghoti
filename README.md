@@ -63,7 +63,7 @@ import std;
 
 pub const main := fn(args: [][:0]u8): void {
     const message := "Hello, world!";
-    std::io::println(message);
+    _ = std::io::println(message);
 };
 ```
 
