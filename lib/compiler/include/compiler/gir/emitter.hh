@@ -131,14 +131,15 @@ class emitter {
     // the definition-site scope, for use when constructing an environment field
     auto get_capture_source(const sema::types::closure_capture& capture) -> value;
 
-    auto emit_stmt(const ast::stmt_handle& stmt) -> void;
-    auto emit_block(const ast::block_stmt& block) -> void;
-    auto emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> void;
-    auto emit_return_stmt(ast::node_id id, const ast::return_stmt& ret) -> void;
-    auto emit_defer_stmt(ast::node_id id, const ast::defer_stmt& def) -> void;
-    auto emit_break(ast::node_id id, const ast::break_stmt& brk) -> void;
-    auto emit_continue(ast::node_id id, const ast::continue_stmt& cnt) -> void;
-    auto emit_stmt_as_value(const ast::stmt_handle& stmt) -> value;
+    auto               emit_stmt(const ast::stmt_handle& stmt) -> void;
+    auto               emit_block(const ast::block_stmt& block) -> void;
+    auto               emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> void;
+    auto               emit_return_stmt(ast::node_id id, const ast::return_stmt& ret) -> void;
+    auto               emit_defer_stmt(ast::node_id id, const ast::defer_stmt& def) -> void;
+    auto               emit_break(ast::node_id id, const ast::break_stmt& brk) -> void;
+    auto               emit_continue(ast::node_id id, const ast::continue_stmt& cnt) -> void;
+    [[nodiscard]] auto emit_stmt_as_value(const ast::stmt_handle& stmt) -> value;
+    [[nodiscard]] auto retype_if_undefined(value v, sema::type& result_type) -> value;
 
     auto emit_defers_for_scope(usize scope_idx) -> void;
     auto emit_defers_up_to(usize target_depth) -> void;

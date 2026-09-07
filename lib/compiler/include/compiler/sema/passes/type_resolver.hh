@@ -436,7 +436,8 @@ class type_resolver {
     bool for_generic_instantiation_{false};
     bool in_subscript_index_{false};
     bool in_for_iterable_{false};
-    // Sskips `if`/`match constexpr` folding and the throwaway `Ctor(<dummy>)` cache insert
+    bool in_expr_branch_{false};
+    // Skips `if`/`match constexpr` folding and the throwaway `Ctor(<dummy>)` cache insert
     bool                      building_param_template_{false};
     stdx::opt_size            pending_impl_method_owner_;
     stdx::option<std::string> pending_param_impl_target_;

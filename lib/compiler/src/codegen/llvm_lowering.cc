@@ -1335,11 +1335,17 @@ auto llvm_lowering::lower_value(const gir::value& val, const sema::type* expecte
             return builder_.CreateGlobalString(str, "str");
         },
         [this, &val, expected_type](gir::undefined_val) -> llvm::Value* {
-            auto* ty{val.type        ? types_.translate(*val.type)
-                     : expected_type ? types_.translate(*expected_type)
-                                     : types_.get_int64_ty()};
-            if (ty->isVoidTy()) { return nullptr; }
-            return llvm::UndefValue::get(ty);
+            // A bare `undefined` may still carry the placeholder UNDEFINED/POISON type; fall back
+            // to the expected type.
+            const auto        usable{[](const sema::type* t) {
+                return t && !t->is_poison() && t->get_kind() != sema::type_kind::UNDEFINED;
+            }};
+            const sema::type* ty{usable(val.type ? &*val.type : nullptr) ? &*val.type
+                                 : usable(expected_type)                 ? expected_type
+                                                                         : nullptr};
+            auto*             llty{ty ? types_.translate(*ty) : types_.get_int64_ty()};
+            if (llty->isVoidTy()) { return nullptr; }
+            return llvm::UndefValue::get(llty);
         },
         [](gir::void_val) -> llvm::Value* { return nullptr; },
         [this](gir::nullptr_val) -> llvm::Value* {

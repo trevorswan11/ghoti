@@ -1286,6 +1286,11 @@ auto emitter::emit_stmt(const ast::stmt_handle& stmt) -> void {
         [&](const ast::import_stmt&) {});
 }
 
+auto emitter::retype_if_undefined(value v, sema::type& result_type) -> value {
+    if (v.is<undefined_val>()) { return value{undefined_val{}, result_type}; }
+    return v;
+}
+
 auto emitter::emit_stmt_as_value(const ast::stmt_handle& stmt) -> value {
     PROFILE_FUNCTION();
     return active_ast()[stmt].visit(
@@ -3159,7 +3164,8 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
     // Consequence branch
     builder_.set_segment(consequence_seg);
     if (yields_value) {
-        builder_.emit_store(*res_slot, emit_stmt_as_value(if_expr.consequence));
+        builder_.emit_store(
+            *res_slot, retype_if_undefined(emit_stmt_as_value(if_expr.consequence), *sema_type));
     } else {
         emit_stmt(if_expr.consequence);
     }
@@ -3171,7 +3177,8 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
     if (alternate_seg_ptr) {
         builder_.set_segment(*alternate_seg_ptr);
         if (yields_value) {
-            builder_.emit_store(*res_slot, emit_stmt_as_value(*if_expr.alternate));
+            builder_.emit_store(
+                *res_slot, retype_if_undefined(emit_stmt_as_value(*if_expr.alternate), *sema_type));
         } else {
             emit_stmt(*if_expr.alternate);
         }
@@ -4670,7 +4677,8 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
             }
 
             if (yields_value && res_slot) {
-                const auto arm_val{emit_stmt_as_value(arm.dispatch)};
+                const auto arm_val{
+                    retype_if_undefined(emit_stmt_as_value(arm.dispatch), *sema_type)};
                 // A block body that diverges (`|e| { return e; }`, `_ => { return N; }`) already
                 // terminated the segment; storing its `void` result would outlive the terminator.
                 if (const auto seg{builder_.get_segment()}; seg && !seg->has_terminator()) {
