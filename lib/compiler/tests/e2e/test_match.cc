@@ -444,4 +444,27 @@ TEST_CASE("a lone call in an `if`/`match` value arm is not a discarded result") 
     }
 }
 
+TEST_CASE("a by-reference param read across sibling match arms and later blocks") {
+    CHECK(helpers::compile_and_run(R"(
+        const Whence := enum { start = 0, current = 1, end = 2 };
+        const S := struct { pub buf: []mut u8, pub pos: usize };
+        const seek := fn(s: &mut S, offset: i64, whence: Whence): i64 {
+            const base: i64 = match (whence) {
+                .start => 0,
+                .current => @as(i64, s.pos),
+                .end => @as(i64, s.buf.len),
+            };
+            const target := base + offset;
+            if (target < 0 or target > @as(i64, s.buf.len)) { return -1; }
+            s.pos = @as(usize, target);
+            return target;
+        };
+        pub const main := fn(): i32 {
+            var backing := [8uz]mut u8{ 0, 0, 0, 0, 0, 0, 0, 0 };
+            var s := S{ .buf = backing[0..8], .pos = 2uz };
+            return @as(i32, seek(&mut s, 3i64, Whence.current));
+        };
+    )") == 5);
+}
+
 } // namespace ghoti::tests

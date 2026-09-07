@@ -38,6 +38,35 @@ auto builder::emit_alloca(sema::type& type, std::string_view, bool is_const) -> 
     return slot;
 }
 
+auto builder::emit_alloca_in_entry(sema::type& type, bool is_const) -> local_id {
+    PROFILE_FUNCTION();
+    ASSERT(function_, "Cannot emit alloca without an active function");
+    auto*      entry{function_->get_segment(segment_id{0})};
+    const auto slot{function_->next_local_id(local_kind::ALLOCA)};
+    entry->insert_before_terminator({
+        .kind     = instruction_kind::ALLOCA,
+        .type     = type,
+        .result   = slot,
+        .operands = {},
+        .is_const = is_const,
+    });
+    return slot;
+}
+
+auto builder::emit_store_in_entry(local_id dest, value val) -> void {
+    PROFILE_FUNCTION();
+    ASSERT(function_, "Cannot emit store without an active function");
+    const auto val_type{val.type};
+    function_->get_segment(segment_id{0})
+        ->insert_before_terminator({
+            .kind           = instruction_kind::STORE,
+            .type           = val_type,
+            .result         = dest,
+            .operands       = {std::move(val)},
+            .is_initializer = true,
+        });
+}
+
 auto builder::emit_load(local_id src, sema::type& type) -> local_id {
     PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit load without an active function");

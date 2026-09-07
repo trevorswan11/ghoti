@@ -180,14 +180,37 @@ TEST_CASE("Builtin pointer conversions") {
 }
 
 TEST_CASE("Builtins memory operation") {
-    const auto bi{GENERATE(bis::MEMCPY, bis::MEMSET, bis::MEMMOVE)};
     test_builtin_resolve(
-        bi,
-        "a, b",
+        GENERATE(bis::MEMCPY, bis::MEMMOVE),
+        "d, s",
         [](helpers::sema_test_context& ctx) -> sema::type& {
             return ctx.get_type(sema::type_kind::VOID_);
         },
-        "var a: i32 = undefined; var b: i32 = undefined;");
+        "var d: []mut u8 = undefined; var s: []u8 = undefined;");
+
+    test_builtin_resolve(
+        bis::MEMSET,
+        "d, 0u8",
+        [](helpers::sema_test_context& ctx) -> sema::type& {
+            return ctx.get_type(sema::type_kind::VOID_);
+        },
+        "var d: []mut u8 = undefined;");
+}
+
+TEST_CASE("@memcpy rejects a non-contiguous or immutable destination") {
+    helpers::test_resolver_fail(
+        R"(const f := fn(d: []u8, s: []u8): void { @memcpy(d, s); };)",
+        sema::diagnostic{"'@memcpy' cannot write through an immutable destination; use a `mut` "
+                         "slice or array",
+                         sema::error::TYPE_MISMATCH,
+                         std::pair{0UZ, 48UZ}});
+
+    helpers::test_resolver_fail(
+        R"(const f := fn(d: []mut u8, s: []u16): void { @memcpy(d, s); };)",
+        sema::diagnostic{"'@memcpy' requires matching element types; the destination holds 'u8' "
+                         "but the source holds 'u16'",
+                         sema::error::TYPE_MISMATCH,
+                         std::pair{0UZ, 56UZ}});
 }
 
 TEST_CASE("Builtin arithmetic") {

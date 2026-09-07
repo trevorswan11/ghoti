@@ -207,6 +207,11 @@ class emitter {
     auto emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value;
     auto emit_match(ast::node_id id, const ast::match_expr& match) -> value;
 
+    // @mem* decompose the slice args into a data pointer + byte length
+    auto emit_mem_intrinsic(ast::node_id          id,
+                            const ast::call_expr& call,
+                            syntax::token_type_t  builtin) -> void;
+
     auto emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> value;
     auto emit_unwrap_propagation(value             operand_addr,
                                  const sema::type& operand_union,

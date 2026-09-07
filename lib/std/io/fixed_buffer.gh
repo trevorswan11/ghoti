@@ -8,7 +8,7 @@ import "seeker.gh" as seeker;
 
 pub const FixedBufferStream := struct {
     pub buf: []mut u8,
-    pub pos: usize,
+    pub pos: usize = 0,
 };
 
 impl reader::Reader for FixedBufferStream {
@@ -17,7 +17,7 @@ impl reader::Reader for FixedBufferStream {
         const remaining := self.buf.len - self.pos;
         const n := if (out.len < remaining) out.len else remaining;
 
-        @memcpy(self.buf[self.pos..self.pos + n], out[0..n]);
+        @memcpy(out[0..n], self.buf[self.pos..self.pos + n]);
         self.pos += n;
         return .{ .ok = n };
     };
@@ -27,10 +27,12 @@ impl writer::Writer for FixedBufferStream {
     using Error = error::Error;
     pub const write := fn(&mut self, bytes: []u8): result::Result(usize, Error) {
         const room := self.buf.len - self.pos;
-        if (room == 0 and bytes.len > 0) { return .{ .err = .no_space }; }
+        if (room == 0 and bytes.len > 0) {
+            return .{ .err = .no_space };
+        }
         const n := if (bytes.len < room) bytes.len else room;
 
-        @memcpy(bytes[0..n], self.buf[self.pos..self.pos + n]);
+        @memcpy(self.buf[self.pos..self.pos + n], bytes[0..n]);
         self.pos += n;
         return .{ .ok = n };
     };

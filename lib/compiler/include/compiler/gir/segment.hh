@@ -1,5 +1,6 @@
 #pragma once
 
+#include <iterator>
 #include <vector>
 
 #include <stdx/arena.hh>
@@ -26,6 +27,13 @@ class segment {
 
     auto append(instruction&& inst) -> instruction& {
         return *instructions_.emplace_back(arena_.make<instruction>(std::move(inst)));
+    }
+
+    // Splices `inst` in just before this segment's terminator (or at the end if it has none).
+    auto insert_before_terminator(instruction&& inst) -> instruction& {
+        instruction* node{arena_.make<instruction>(std::move(inst)).get()};
+        const auto   pos{has_terminator() ? std::prev(instructions_.end()) : instructions_.end()};
+        return **instructions_.insert(pos, node);
     }
 
     [[nodiscard]] auto has_terminator() const noexcept -> bool {
