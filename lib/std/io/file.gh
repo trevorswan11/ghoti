@@ -1,0 +1,74 @@
+//! The core File abtraction over raw OS primitives
+import "../os/os.gh" as os;
+import "error.gh" as error;
+import "../result.gh" as result;
+
+using Error = error::Error;
+using Result = result::Result;
+
+pub const OpenMode := enum : u8 { read, write, read_write };
+
+pub const OpenFlags := struct {
+    pub access: OpenMode = .read,
+    pub create: bool = false,
+    pub truncate: bool = false,
+    pub append: bool = false,
+    pub exclusive: bool = false,
+};
+
+pub const File := struct {
+    handle: os::Handle,
+
+    /// Opens a file at the provided `path` with the options in `flags`
+    pub const open := fn(path: [:0]u8, flags: OpenFlags): Result(File, Error) {
+        // These cases cause some UB on both windows and POSIX
+        if (flags.exclusive and !flags.create) {
+            return .{ .err = .invalid_input };
+        } else if (flags.truncate and flags.access == .read) {
+            return .{ .err = .invalid_input };
+        } else if (flags.truncate and flags.append) {
+            return .{ .err = .invalid_input };
+        }
+
+        @cfg (os == .windows) {
+            const access: u32 = match (flags.access) {
+                .read => os::GENERIC_READ,
+                .write => if (flags.append) os::FILE_APPEND_DATA else os::GENERIC_WRITE,
+                .read_write => os::GENERIC_READ |
+                    (if (flags.append) os::FILE_APPEND_DATA else os::GENERIC_WRITE),
+            };
+            const disp: u32 = if (flags.exclusive) os::CREATE_NEW else if (flags.create and
+                flags.truncate) os::CREATE_ALWAYS else if (flags.create) os::OPEN_ALWAYS else if (flags.truncate) os::TRUNCATE_EXISTING else os::OPEN_EXISTING;
+            const share: u32 = os::FILE_SHARE_READ | os::FILE_SHARE_WRITE | os::FILE_SHARE_DELETE;
+            return match (os::open(path, access, share, disp, os::FILE_ATTRIBUTE_NORMAL)) {
+                // Permissive share mode to mirror posix
+                .ok => |h| .{ .ok = .{ .handle = h } },
+                .err => |e| .{ .err = .fromOs(e) },
+            };
+        } else {
+            var oflags: i32 = match (flags.access) {
+                .read => os::O_RDONLY,
+                .write => os::O_WRONLY,
+                .read_write => os::O_RDWR,
+            };
+            if (flags.create) oflags |= os::O_CREAT;
+            if (flags.truncate) oflags |= os::O_TRUNC;
+            if (flags.append) oflags |= os::O_APPEND;
+            if (flags.exclusive) oflags |= os::O_EXCL;
+            const mode: os::mode_t = if (flags.create) 0o666u16 else 0u16;
+            return match (os::open(path, oflags, mode)) {
+                // umask applies
+                .ok => |h| .{ .ok = .{ .handle = h } },
+                .err => |e| .{ .err = .fromOs(e) },
+            };
+        }
+    };
+
+    /// Closes the file, propagating an ignorable error on failure
+    pub @discardable const close := fn(&self): Result(void, Error) {
+        return match (os::close(self.handle)) {
+            .ok => .{ .ok = {} },
+            .err => |e| .{ .err = .fromOs(e) },
+        };
+    };
+};
