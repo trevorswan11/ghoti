@@ -2,7 +2,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "compiler/sema/error.hh"
 #include "helpers/codegen.hh"
+#include "helpers/common.hh"
 #include "helpers/sema.hh"
 
 namespace ghoti::tests {
@@ -389,6 +391,56 @@ TEST_CASE("A direct `union == .field` comparison checks the active field") {
                 return 0;
             };
         )") == 42);
+    }
+}
+
+TEST_CASE("an `undefined` value arm/branch takes the surrounding result type, not a poison type") {
+    SECTION("match arm") {
+        CHECK(helpers::compile_and_run(R"(
+            const U := union { ok: i32, err: i32 };
+            pub const main := fn(): i32 {
+                const u := U{ .ok = 40 };
+                const v := match (u) { .ok => |x| x, .err => undefined };
+                return v + 2;
+            };
+        )") == 42);
+    }
+    SECTION("if branch") {
+        CHECK(helpers::compile_and_run(R"(
+            const pick := fn(n: i32): i32 { return n; };
+            pub const main := fn(): i32 {
+                const v := if (true) pick(42) else undefined;
+                return v;
+            };
+        )") == 42);
+    }
+}
+
+TEST_CASE("a lone call in an `if`/`match` value arm is not a discarded result") {
+    const auto ok{[](std::string_view body) {
+        auto [ctx, idx]{helpers::resolve(body)};
+        helpers::check_errors<sema::diagnostics>(ctx->root_mod);
+    }};
+
+    SECTION("match arm, with capture") {
+        ok(R"(
+            const U := union { ok: i32, err: i32 };
+            const positive := fn(n: i32): bool { return n > 0; };
+            pub const main := fn(): i32 {
+                const u := U{ .ok = 5 };
+                const b := match (u) { .ok => |n| positive(n), .err => |_| false };
+                return if (b) 1 else 0;
+            };
+        )");
+    }
+    SECTION("if branch") {
+        ok(R"(
+            const positive := fn(n: i32): bool { return n > 0; };
+            pub const main := fn(): i32 {
+                const b := if (true) positive(5) else false;
+                return if (b) 1 else 0;
+            };
+        )");
     }
 }
 

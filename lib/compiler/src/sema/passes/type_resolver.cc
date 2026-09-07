@@ -1703,6 +1703,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                             }
                         }
                         resolve(arg_id);
+                        if (!last_type_) { return stdx::none; }
                         auto* arg_type{last_type_.take()};
                         if (arg_type->is_poison()) { return stdx::none; }
                         // `@typeOf(x)` in a `type` argument position denotes the type it wraps.
@@ -1713,8 +1714,13 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                         // generic `T` / `auto` parameter, keeping instantiations concrete.
                         return &constexpr_numeric_view(*arg_type);
                     });
-                if (!result_arg_type) { any_arg_poison = true; }
-                concrete_arg_types[i++] = result_arg_type.take();
+                // A poisoned argument yields `none`; record it and move on
+                if (result_arg_type) {
+                    concrete_arg_types[i++] = result_arg_type.take();
+                } else {
+                    concrete_arg_types[i++] = nullptr;
+                    any_arg_poison          = true;
+                }
             }
             if (any_arg_poison) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
 
@@ -2763,7 +2769,8 @@ auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void 
                     return *last_type_;
                 }};
 
-                stdx::option<type&> live_type;
+                stdx::option<type&>          live_type;
+                const mutating_context_guard branch_g{in_expr_branch_, true};
                 if (*folded) {
                     TRY_RESOLVE(if_expr.consequence);
                     live_type.emplace(arm_value_type(if_expr.consequence));
@@ -2785,6 +2792,7 @@ auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void 
         }
     }
 
+    const mutating_context_guard branch_g{in_expr_branch_, true};
     TRY_RESOLVE(if_expr.consequence);
 
     auto* branch_type{last_type_.take()};
@@ -3977,6 +3985,7 @@ auto type_resolver::resolve_type_match(ast::node_id           id,
     {
         auto&       live_table_type{resolving_.get_sema_type(live)};
         const scope live_scope{table_stack_, live_table_type.get_symbol_table_idx(), table_idx_};
+        const mutating_context_guard branch_g{in_expr_branch_, true};
         TRY_RESOLVE(live.dispatch);
     }
 
@@ -4067,6 +4076,7 @@ auto type_resolver::resolve_constexpr_match(ast::node_id           id,
             resolve_symbol_info(*live.capture, symbol_kind::VALUE);
         }
 
+        const mutating_context_guard branch_g{in_expr_branch_, true};
         TRY_RESOLVE(live.dispatch);
     }
 
@@ -4420,7 +4430,10 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                 }
             }
         }
-        TRY_RESOLVE(arm.dispatch);
+        {
+            const mutating_context_guard branch_g{in_expr_branch_, true};
+            TRY_RESOLVE(arm.dispatch);
+        }
 
         // Only an expr_stmt arm can yield a value (blocks never do, per emit_stmt_as_value); a
         // block's own resolved type is just its scope handle, not a value type, so it's ignored.
@@ -5559,6 +5572,9 @@ auto type_resolver::visit(ast::node_id id, const ast::block_stmt& block) -> void
     auto&       block_type{resolving_.get_sema_type(id)};
     const scope s{table_stack_, block_type.get_symbol_table_idx(), table_idx_};
 
+    // A block that is an `if`/`match` branch never yields a value
+    in_expr_branch_ = false;
+
     // Just an abridged loop handler
     for (const auto& stmt : block) { TRY_RESOLVE(stmt); }
     resolving_.set_sema_type(
@@ -5926,9 +5942,12 @@ auto type_resolver::check_unused_result(ast::node_id stmt_id, const ast::expr_st
 
 auto type_resolver::visit(ast::node_id id, const ast::expr_stmt& expr) -> void {
     PROFILE_FUNCTION();
+    // An `if`/`match` branch statement yields the branch's value; its call result is not
+    // discarded, so skip the unused-result check while resolving one.
+    const bool is_branch_value{in_expr_branch_};
     TRY_RESOLVE(expr.expression);
     resolving_.set_sema_type(expr.expression, *last_type_.take());
-    check_unused_result(id, expr);
+    if (!is_branch_value) { check_unused_result(id, expr); }
     last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
 }
 
