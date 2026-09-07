@@ -40,11 +40,15 @@ pub const File := struct {
                 .read_write => os::GENERIC_READ |
                     (if (flags.append) os::FILE_APPEND_DATA else os::GENERIC_WRITE),
             };
-            const disp: u32 = if (flags.exclusive) os::CREATE_NEW else if (flags.create and
-                flags.truncate) os::CREATE_ALWAYS else if (flags.create) os::OPEN_ALWAYS else if (flags.truncate) os::TRUNCATE_EXISTING else os::OPEN_EXISTING;
+            const disp: u32 = if (flags.exclusive) os::CREATE_NEW
+                else if (flags.create and flags.truncate) os::CREATE_ALWAYS
+                else if (flags.create) os::OPEN_ALWAYS
+                else if (flags.truncate) os::TRUNCATE_EXISTING
+                else os::OPEN_EXISTING;
+
+            // Permissive share mode to mirror posix
             const share: u32 = os::FILE_SHARE_READ | os::FILE_SHARE_WRITE | os::FILE_SHARE_DELETE;
             return match (os::open(path, access, share, disp, os::FILE_ATTRIBUTE_NORMAL)) {
-                // Permissive share mode to mirror posix
                 .ok => |h| .{ .ok = .{ .handle = h } },
                 .err => |e| .{ .err = .fromOs(e) },
             };
