@@ -58,4 +58,33 @@ TEST_CASE("a static member fn returning its own struct type (with an array field
     )") == 7);
 }
 
+TEST_CASE("a generic fn's body-local `const` decls are re-typed for each instantiation") {
+    CHECK(helpers::compile_and_run(R"(
+        const dup := fn(T: type, x: T): T {
+            const y := x;
+            const z := y;
+            return z;
+        };
+        pub const main := fn(): i32 {
+            const a := dup(i32, 10);
+            const b := dup(u8, 5u8);
+            return a + @as(i32, b);
+        };
+    )") == 15);
+}
+
+TEST_CASE("the `?` operator works inside a generic function body") {
+    CHECK(helpers::compile_and_run(R"(
+        const R := union { ok: i32, err: u8 };
+        const first := fn(T: type, r: R): R {
+            const v := r?;
+            return .{ .ok = v + 1 };
+        };
+        pub const main := fn(): i32 {
+            const x := first(i32, .{ .ok = 7 });
+            return match (x) { .ok => |v| v, .err => 0 };
+        };
+    )") == 8);
+}
+
 } // namespace ghoti::tests

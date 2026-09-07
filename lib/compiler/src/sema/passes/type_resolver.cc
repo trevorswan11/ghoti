@@ -4703,7 +4703,21 @@ auto type_resolver::visit(ast::node_id id, const ast::unwrap_expr& unwrap) -> vo
         return last_type_.emplace(payload_type);
     }
 
-    if (open_function_nodes_.empty()) {
+    // A body re-typed by a dedicated instantiation resolver has no `open_function_nodes_` entry
+    stdx::option<const type&> ret_type;
+    if (!open_function_nodes_.empty()) {
+        auto& fn_type{resolving_.get_sema_type(open_function_nodes_.back())};
+        if (const auto fd{fn_type.get_data().as_opt<types::function>()}) {
+            ret_type.emplace(fd->return_type);
+        } else if (const auto cd{fn_type.get_data().as_opt<types::closure_t>()}) {
+            if (const auto sd{cd->signature.get_data().as_opt<types::function>()}) {
+                ret_type.emplace(sd->return_type);
+            }
+        }
+    } else if (!return_trackers_.empty() && return_trackers_.back().expected_type) {
+        // The `return_tracker` carrying the concrete return type can be used as a fallback
+        ret_type.emplace(*return_trackers_.back().expected_type);
+    } else if (return_trackers_.empty()) {
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
                              id,
@@ -4712,15 +4726,6 @@ auto type_resolver::visit(ast::node_id id, const ast::unwrap_expr& unwrap) -> vo
                              loc));
     }
 
-    auto&                     fn_type{resolving_.get_sema_type(open_function_nodes_.back())};
-    stdx::option<const type&> ret_type;
-    if (const auto fd{fn_type.get_data().as_opt<types::function>()}) {
-        ret_type.emplace(fd->return_type);
-    } else if (const auto cd{fn_type.get_data().as_opt<types::closure_t>()}) {
-        if (const auto sd{cd->signature.get_data().as_opt<types::function>()}) {
-            ret_type.emplace(sd->return_type);
-        }
-    }
     if (!ret_type) {
         return last_type_.emplace(ctx_.poison_node(
             resolving_,
@@ -5691,10 +5696,13 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
     // A dedicated instantiation resolver re-types a body a previous monomorphization already
     // resolved; its body-local decls must resolve again and overwrite their node types rather than
     // keep the earlier instantiation's.
-    const bool reresolve_local{for_generic_instantiation_ && reresolve_floor_.has_value() && [&] {
-        const auto lt{ctx_.registry.lookup_with_table(table_stack_, ident.name)};
-        return lt && lt->table_idx >= *reresolve_floor_;
-    }()};
+    const bool reresolve_local{
+        for_generic_instantiation_ && reresolve_floor_ &&
+        !decl.explicit_type // Explicit type is authoritative
+        && [&] {
+               const auto lt{ctx_.registry.lookup_with_table(table_stack_, ident.name)};
+               return lt && lt->table_idx >= *reresolve_floor_;
+           }()};
 
     // Breaking out early is possible due to out of order semantics
     if (sym.get_status() == symbol_status::RESOLVED && !reresolve_local) {
@@ -7477,6 +7485,11 @@ auto type_resolver::instantiate_generic(type&                             callee
 
     type_resolver inst_resolver{fn_mod, ctx_, fn_table_idx, std::move(inst_stack)};
     inst_resolver.for_generic_instantiation_ = true;
+
+    // Re-type body-local decls this instantiation reaches even if a prior monomorphization of the
+    // same generic already resolved them
+    inst_resolver.reresolve_floor_.emplace(fn_table_idx);
+
     // This freestanding resolver has no enclosing-type context, so @this() needs it restored.
     stdx::option<structural_guard> this_type_guard;
     if (fn_info.enclosing_type) {
