@@ -114,12 +114,13 @@ class doc_manager {
     [[nodiscard]] auto join(std::vector<syntax::doc_id> items, syntax::doc_id sep)
         -> syntax::doc_id;
 
-    // `open pad items pad close` as a group: one line if it fits
+    // `open pad items pad close` as a group: one line if it fits, unless `force_break`.
     [[nodiscard]] auto delimited(std::string_view            open,
                                  std::string_view            close,
                                  std::vector<syntax::doc_id> items,
                                  bool                        pad,
-                                 bool                        trailing_comma) -> syntax::doc_id;
+                                 bool                        trailing_comma,
+                                 bool                        force_break = false) -> syntax::doc_id;
 
   private:
     roots_t            roots_;

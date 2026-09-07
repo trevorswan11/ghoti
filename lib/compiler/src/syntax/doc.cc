@@ -54,7 +54,8 @@ auto doc_manager::delimited(std::string_view    open,
                             std::string_view    close,
                             std::vector<doc_id> items,
                             bool                pad,
-                            bool                trailing_comma) -> doc_id {
+                            bool                trailing_comma,
+                            bool                force_break) -> doc_id {
     if (items.empty()) { return owned(fmt::format("{}{}", open, close)); }
     const auto edge{pad ? line() : soft_line()};
 
@@ -70,11 +71,12 @@ auto doc_manager::delimited(std::string_view    open,
     if (trailing_comma) { body.emplace_back(if_break(text(","), nil())); }
 
     return group(concat({
-        text(open),
-        nest(concat({edge, concat(std::move(body))})),
-        edge,
-        text(close),
-    }));
+                     text(open),
+                     nest(concat({edge, concat(std::move(body))})),
+                     edge,
+                     text(close),
+                 }),
+                 force_break);
 }
 
 } // namespace ghoti::syntax
