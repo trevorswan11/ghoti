@@ -218,3 +218,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Formatting will strip unnecessary raw identifiers
 - Add string and identifier interning backed by a new compiler-wide arena to save some memory
     - Previously interning was not applied to identifiers and was not applied at the parsing stage
+- Fix a compiler error that prevented default functions in interfaces from being used in separate modules
+- Fix a compiler error that would falsely error on orphaned impl through re-exports
+- Add Writer, Reader, Seeker, and File abstractions to the standard library
+- Allow trailing commas in all delimited lists to have the formatter add line breaks
