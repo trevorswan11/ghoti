@@ -81,7 +81,7 @@ _ = blk: {
         CHECK(*yield_types[0] == ctx->get_type(sema::type_kind::CONSTEXPR_INT));
         CHECK(*yield_types[1] == ctx->get_type(sema::type_kind::BOOL));
         CHECK(*yield_types[2] ==
-              ctx->get_type(sema::type_kind::ARRAY, true, 4, ctx->get_int_type(8, false)));
+              ctx->get_type(sema::type_kind::ARRAY, true, 3, ctx->get_int_type(8, false)));
         CHECK(*yield_types[3] == ctx->get_type(sema::type_kind::VOID_));
     }
 

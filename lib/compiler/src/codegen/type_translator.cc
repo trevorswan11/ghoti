@@ -140,7 +140,8 @@ auto type_translator::translate_dyn_fat_ptr() -> llvm::StructType* {
 
 auto type_translator::translate_array(const sema::types::array& a) -> llvm::Type* {
     PROFILE_FUNCTION();
-    return llvm::ArrayType::get(translate(a.underlying), a.len);
+    // A sentinel-terminated array stores one extra element for the terminator
+    return llvm::ArrayType::get(translate(a.underlying), a.len + (a.null_terminated ? 1 : 0));
 }
 
 auto type_translator::translate_struct(const sema::types::struct_t& s, const sema::type& original)

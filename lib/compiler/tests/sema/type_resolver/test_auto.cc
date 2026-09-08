@@ -31,7 +31,7 @@ TEST_CASE("Declaration auto type inference") {
     const auto& i64_type{ctx->get_int_type(64, true)};
     const auto& bool_type{ctx->get_type(sema::type_kind::BOOL)};
     const auto& u8_type{ctx->get_int_type(8, false)};
-    const auto& str_type{ctx->get_type(sema::type_kind::ARRAY, true, 6UZ, u8_type)};
+    const auto& str_type{ctx->get_type(sema::type_kind::ARRAY, true, 5UZ, u8_type)};
 
     SECTION("Explicit auto variable declaration adopts value type") {
         const auto [sym, data, node, type]{

@@ -4857,9 +4857,10 @@ auto type_resolver::visit(ast::node_id id, const ast::implicit_access_expr& impl
 auto type_resolver::visit(ast::node_id id, const ast::string_expr& string) -> void {
     PROFILE_FUNCTION();
 
-    // String literals are null terminated since they can be trivially shortened to non null
-    auto& type{ctx_.get_array(
-        types::mut::CONSTANT, true, string.value.size() + 1, ctx_.get_int(8, false))};
+    // A string literal is a sentinel-terminated array: its `.len` is the character count, and
+    // codegen sizes the storage one element larger to hold the implicit `\0`
+    auto& type{
+        ctx_.get_array(types::mut::CONSTANT, true, string.value.size(), ctx_.get_int(8, false))};
 
     // String literals with the same size will always have the same type
     resolving_.set_sema_type(id, type);
