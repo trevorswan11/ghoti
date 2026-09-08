@@ -230,3 +230,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fix an issue where the panic handler would not receive `file` and `msg` args properly
 - Resolve bug that prevented an interface from being implemented multiple times
 - Resolve formatter bug that would clobber match arms if block had trailing comma
+- Properly implement @mem* builtins
+    - `@memset`, `@memcpy`, and `@memmove` now all work without libc
+- Implement `std::io`
+    - Add File abstraction and `Writer`, `Reader`, and `Seeker` interfaces
+    - Supported on macos, windows, and x86-64 & aarch64 linux
+    - Backs new concrete handlers and test runner in the standard library

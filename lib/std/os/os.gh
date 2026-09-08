@@ -4,7 +4,7 @@
 } else @cfg (os == .windows) {
     pub import "win32/win32.gh" as backend;
 } else @cfg (os == .linux) {
-    @compileError("std::os: Linux is currently a WIP");
+    pub import "linux/linux.gh" as backend;
 } else {
     @compileError("std::os: unsupported target OS");
 }
@@ -30,7 +30,7 @@ pub const SEEK_SET := backend::SEEK_SET;
 pub const SEEK_CUR := backend::SEEK_CUR;
 pub const SEEK_END := backend::SEEK_END;
 
-@cfg (os == .macos) {
+@cfg (os == .macos or os == .linux) {
     pub using mode_t = backend::mode_t;
     pub const O_RDONLY := backend::O_RDONLY;
     pub const O_WRONLY := backend::O_WRONLY;
@@ -56,8 +56,6 @@ pub const SEEK_END := backend::SEEK_END;
     pub const FILE_SHARE_WRITE := backend::FILE_SHARE_WRITE;
     pub const FILE_SHARE_DELETE := backend::FILE_SHARE_DELETE;
     pub const FILE_ATTRIBUTE_NORMAL := backend::FILE_ATTRIBUTE_NORMAL;
-} else @cfg (os == .linux) {
-    @compileError("std::os: Linux is currently a WIP");
 } else {
     @compileError("std::os: unsupported target OS");
 }
