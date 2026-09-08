@@ -904,70 +904,92 @@ auto const_eval::eval_dot(ast::node_id, const ast::dot_expr& dot) -> stdx::optio
 
     if (const auto type_opt{target_val->as_opt<stdx::option<sema::type&>>()};
         type_opt && *type_opt) {
-        auto* denoted{&**type_opt};
-        if (denoted->get_kind() == sema::type_kind::TYPE) {
-            if (const auto meta{denoted->get_data().as_opt<sema::types::meta_type>()}) {
-                denoted = &meta->instance;
-            }
-        }
-        auto&      type{*denoted};
-        const auto kind{type.get_kind()};
-
-        // An enum variant reached through anything other than a bare identifier object (e.g.
-        // `builtin::MemoryOrder.seq_cst`, where `dot.object` is a `module_access_expr`) misses
-        // the bare-identifier fast path above; look it up the same way `eval_implicit_access`
-        // does for a `.seq_cst`-style implicit access against a known enum type.
-        if (const auto en{type.get_data().as_opt<sema::types::enum_t>()}) {
-            for (usize idx{0}; idx < en->ast_enumerations.size(); ++idx) {
-                const auto& e{en->ast_enumerations[idx]};
-                const auto& vname{en->enclosing.ast.get_as<ast::identifier_expr>(e.name).name};
-                if (vname == member_name) {
-                    auto val{static_cast<i64>(idx)};
-                    if (e.value) {
-                        // The initializer expression is a node in the enum's defining module's
-                        // AST arena, which is not necessarily the module currently being
-                        // const-evaluated; evaluate it against the defining module.
-                        auto&      enclosing_mod{const_cast<mod::module&>(en->enclosing)};
-                        const_eval enclosing_eval{ctx_, enclosing_mod};
-                        enclosing_eval.set_symbol_scoping(symbol_scoping_);
-                        if (const auto ev{enclosing_eval.try_eval(*e.value)}) {
-                            val = static_cast<i64>(ev->as_int_opt().value_or(val));
-                        }
-                    }
-                    return const_value{const_enum{std::string{member_name}, val}, type};
-                }
-            }
-        }
-
-        const bool is_structural{kind == sema::type_kind::STRUCT ||
-                                 kind == sema::type_kind::UNION || kind == sema::type_kind::ENUM};
-        if (is_structural) {
-            if (const auto tbl_idx{type.get_symbol_table_idx_opt()}) {
-                const auto& mtable{ctx_.registry.get(*tbl_idx)};
-                if (const auto msym{mtable.get_opt(member_name)}) {
-                    if (const auto node{msym->get_data().as_opt<sema::symbols::node_t>()}) {
-                        if (const auto mdecl{module_->ast.get_as_opt<ast::decl_stmt>(*node)};
-                            mdecl && mdecl->value &&
-                            (mdecl->has_modifier(ast::decl_modifiers::CONSTANT) ||
-                             mdecl->has_modifier(ast::decl_modifiers::CONSTEXPR))) {
-                            // A static member function decays to a value naming its GIR symbol
-                            if (module_->ast.get_as_opt<ast::function_expr>(*mdecl->value)) {
-                                if (const auto fn_type{module_->get_sema_type_opt(*mdecl->value)};
-                                    fn_type && fn_type->get_kind() == sema::type_kind::FUNCTION) {
-                                    return const_value{scoped_symbol_name(*tbl_idx, member_name),
-                                                       *fn_type};
-                                }
-                                return stdx::none;
-                            }
-                            return try_eval(*mdecl->value);
-                        }
-                    }
-                }
-            }
-        }
+        return eval_type_member(**type_opt, member_name);
     }
 
     return stdx::none;
+}
+
+auto const_eval::eval_type_member(sema::type& denoted_in, std::string_view member)
+    -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
+
+    sema::type* denoted{&denoted_in};
+    if (denoted->get_kind() == sema::type_kind::TYPE) {
+        if (const auto meta{denoted->get_data().as_opt<sema::types::meta_type>()}) {
+            denoted = &meta->instance;
+        }
+    }
+    auto&      type{*denoted};
+    const auto kind{type.get_kind()};
+
+    // An enum variant reached through anything other than a bare identifier object (e.g.
+    // `builtin::MemoryOrder.seq_cst`, or `alias::E.C` where the object is a module-access):
+    // look it up the same way `eval_implicit_access` does against a known enum type.
+    if (const auto en{type.get_data().as_opt<sema::types::enum_t>()}) {
+        for (usize idx{0}; idx < en->ast_enumerations.size(); ++idx) {
+            const auto& e{en->ast_enumerations[idx]};
+            const auto& vname{en->enclosing.ast.get_as<ast::identifier_expr>(e.name).name};
+            if (vname != member) { continue; }
+            auto val{static_cast<i64>(idx)};
+            if (e.value) {
+                // The initializer node lives in the enum's defining module's AST arena, not
+                // necessarily the module currently being const-evaluated.
+                auto&      enclosing_mod{const_cast<mod::module&>(en->enclosing)};
+                const_eval enclosing_eval{ctx_, enclosing_mod};
+                enclosing_eval.set_symbol_scoping(symbol_scoping_);
+                if (const auto ev{enclosing_eval.try_eval(*e.value)}) {
+                    val = static_cast<i64>(ev->as_int_opt().value_or(val));
+                }
+            }
+            return const_value{const_enum{std::string{member}, val}, type};
+        }
+    }
+
+    // A `const` / `constexpr` static member (a value or a function) of a struct / union / enum.
+    const bool is_structural{kind == sema::type_kind::STRUCT || kind == sema::type_kind::UNION ||
+                             kind == sema::type_kind::ENUM};
+    if (!is_structural) { return stdx::none; }
+
+    const auto tbl_idx{type.get_symbol_table_idx_opt()};
+    if (!tbl_idx) { return stdx::none; }
+    const auto msym{ctx_.registry.get(*tbl_idx).get_opt(member)};
+    if (!msym) { return stdx::none; }
+    const auto node{msym->get_data().as_opt<sema::symbols::node_t>()};
+    if (!node) { return stdx::none; }
+
+    // The member decl belongs to the type's own defining module
+    stdx::option<const mod::module&> owner;
+    if (const auto s{type.get_data().as_opt<sema::types::struct_t>()}) {
+        owner.emplace(s->enclosing);
+    } else if (const auto u{type.get_data().as_opt<sema::types::union_t>()}) {
+        owner.emplace(u->enclosing);
+    } else if (const auto e{type.get_data().as_opt<sema::types::enum_t>()}) {
+        owner.emplace(e->enclosing);
+    }
+    if (!owner) { return stdx::none; }
+    auto& owner_mod{const_cast<mod::module&>(*owner)};
+
+    const auto mdecl{owner_mod.ast.get_as_opt<ast::decl_stmt>(*node)};
+    if (!mdecl || !mdecl->value ||
+        !(mdecl->has_modifier(ast::decl_modifiers::CONSTANT) ||
+          mdecl->has_modifier(ast::decl_modifiers::CONSTEXPR))) {
+        return stdx::none;
+    }
+
+    // A static member function decays to a value naming its GIR symbol.
+    if (owner_mod.ast.get_as_opt<ast::function_expr>(*mdecl->value)) {
+        const auto fn_type{owner_mod.get_sema_type_opt(*mdecl->value)};
+        if (fn_type && fn_type->get_kind() == sema::type_kind::FUNCTION) {
+            return const_value{scoped_symbol_name(*tbl_idx, member), *fn_type};
+        }
+        return stdx::none;
+    }
+
+    if (&owner_mod == module_.get()) { return try_eval(*mdecl->value); }
+    const_eval owner_eval{ctx_, owner_mod};
+    owner_eval.set_symbol_scoping(symbol_scoping_);
+    return owner_eval.try_eval(*mdecl->value);
 }
 
 auto const_eval::target_enum_value(std::string_view enum_name, std::string_view member)
@@ -1148,6 +1170,16 @@ auto const_eval::eval_module_access(ast::node_id, const ast::module_access_expr&
 
     const auto node{sym->get_data().as_opt<sema::symbols::node_t>()};
     if (!node) { return stdx::none; }
+
+    // The outer name may be a local `using X = <path>` alias
+    if (const auto using_stmt{module_->ast.get_as_opt<ast::using_stmt>(*node)}) {
+        const auto aliased{module_->get_sema_type_opt(using_stmt->explicit_type)};
+        if (!aliased) { return stdx::none; }
+        if (const auto m_data{aliased->get_data().as_opt<sema::types::module>()}) {
+            return eval_module_member(m_data->imported, inner_name);
+        }
+        return eval_type_member(*aliased, inner_name);
+    }
 
     if (const auto decl{module_->ast.get_as_opt<ast::decl_stmt>(*node)}) {
         if (!decl->value) { return stdx::none; }

@@ -21,6 +21,17 @@ constexpr std::string_view MID_MOD{R"(
     pub using Errno = en::E;
 )"};
 
+constexpr std::string_view PKG_MOD{R"(
+    pub import "enums.gh" as en;
+)"};
+
+constexpr std::string_view AGG_MOD{R"(
+    pub const Cfg := struct {
+        pub constexpr LIMIT: i32 = 42;
+        pub constexpr twice := fn(x: i32): i32 { return x * 2; };
+    };
+)"};
+
 } // namespace
 
 TEST_CASE("E2E: cross-module `pub using` alias resolves an enum variant via `alias::Type.MEMBER`") {
@@ -50,6 +61,58 @@ TEST_CASE("E2E: a `pub using` alias re-exported through a middle module still re
             mock_file{"mid.gh", MID_MOD, "mid"},
         })};
     CHECK(exit_code == 7);
+}
+
+TEST_CASE("E2E: a local `using` alias of a module resolves `alias::Type.MEMBER`") {
+    const auto exit_code{helpers::compile_and_run(
+        R"(
+            import "pkg.gh" as pkg;
+            using x = pkg::en;
+            pub const main := fn(): i32 {
+                const e: x::E = x::E.C;
+                return if (e == x::E.C) @as(i32, @as(u32, x::E.B)) + 5 else 1;
+            };
+        )",
+        {
+            mock_file{"enums.gh", ENUM_MOD, "enums"},
+            mock_file{"pkg.gh", PKG_MOD, "pkg"},
+        })};
+    CHECK(exit_code == 7);
+}
+
+TEST_CASE("E2E: `alias::Enum.MEMBER` folds through a generic-union `match` capture and compare") {
+    const auto exit_code{helpers::compile_and_run(
+        R"(
+            import "pkg.gh" as pkg;
+            using x = pkg::en;
+            constexpr Result := fn(T: type, F: type): type { return union { ok: T, err: F }; };
+            const g := fn(): Result(i32, x::E) { return .{ .err = x::E.B }; };
+            pub const main := fn(): i32 {
+                const miss := match (g()) {
+                    .ok  => x::E.A,
+                    .err => |e| e,
+                };
+                return if (miss == x::E.B) 7 else 1;
+            };
+        )",
+        {
+            mock_file{"enums.gh", ENUM_MOD, "enums"},
+            mock_file{"pkg.gh", PKG_MOD, "pkg"},
+        })};
+    CHECK(exit_code == 7);
+}
+
+TEST_CASE("E2E: a `using` alias of a cross-module struct resolves its `constexpr` static members") {
+    const auto exit_code{helpers::compile_and_run(
+        R"(
+            import "agg.gh" as agg;
+            using C = agg::Cfg;
+            pub const main := fn(): i32 {
+                return C.twice(20) + @as(i32, C.LIMIT) - 60;
+            };
+        )",
+        {mock_file{"agg.gh", AGG_MOD, "agg"}})};
+    CHECK(exit_code == 22);
 }
 
 TEST_CASE(
