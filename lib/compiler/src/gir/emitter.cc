@@ -526,6 +526,11 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, const sema::type& dest
                 return emit_slice_from_array(emit_lvalue(expr_id), *rhs_type);
             }
         }
+
+        // A foldable string constant arrives here carrying a slice type, no array lvalue to decay
+        if (const auto cv{const_eval_.try_eval(*expr_id)}; cv && cv->is<std::string>()) {
+            return emit_string_as_slice(cv->as<std::string>(), dest_type);
+        }
     }
     // A reference destination is one of the few positions that must see the raw reference value
     if (dest_type.get_kind() == sema::type_kind::REFERENCE) {
@@ -1744,7 +1749,16 @@ auto emitter::emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> 
     }
 
     // Not a local binding; may be a top-level const/constexpr global, resolvable at compile time
-    if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
+    if (const auto cv{const_eval_.try_eval(id)}) {
+        // Decay to `{ptr, len}` so it matches how every consumer expects to see `S`
+        if (cv->is<std::string>()) {
+            if (const auto decl_ty{active_mod().get_sema_type_opt(id)};
+                decl_ty && decl_ty->get_kind() == sema::type_kind::SLICE) {
+                return emit_string_as_slice(cv->as<std::string>(), *decl_ty);
+            }
+        }
+        return materialize_const(*cv);
+    }
 
     // A module-level / static-member `var` (or otherwise non-foldable) value: load from its global.
     if (const auto gref{try_global_ref(ident.name)}) {
@@ -4013,7 +4027,34 @@ auto emitter::materialize_const(const const_value& cv) -> value {
         return value{loaded, type};
     }
 
+    // Decay folded string constant it exactly like a string literal in expression position
+    if (const auto s{cv.as_opt<std::string>()}) {
+        if (const auto type_opt{cv.get_type()};
+            type_opt && type_opt->get_kind() == sema::type_kind::SLICE) {
+            return emit_string_as_slice(*s, *type_opt);
+        }
+    }
+
     return cv.to_gir_value();
+}
+
+auto emitter::emit_string_as_slice(const std::string& bytes, const sema::type& slice_type)
+    -> value {
+    PROFILE_FUNCTION();
+    const auto sl{slice_type.get_data().as_opt<sema::types::slice>()};
+    ASSERT(sl, "emit_string_as_slice requires a slice sema type");
+    const auto mutability{slice_type.is_constant() ? sema::types::mut::CONSTANT
+                                                   : sema::types::mut::MUTABLE};
+    // Back the slice with a NUL-terminated array regardless of the slice's own sentinel flag
+    auto&      arr_type{ctx_.get_array(mutability, true, bytes.size(), sl->underlying)};
+    const auto slot{builder_.emit_alloca(arr_type)};
+    builder_.emit_store(value{slot, arr_type}, value{std::string{bytes}, arr_type}).is_initializer =
+        true;
+
+    // Report the slice type the caller asked for
+    auto decayed{emit_slice_from_array(value{slot, arr_type}, arr_type)};
+    decayed.type.emplace(const_cast<sema::type&>(slice_type));
+    return decayed;
 }
 
 auto emitter::lvalue_of_expr(ast::node_id id, sema::type& sema_type) -> value {
