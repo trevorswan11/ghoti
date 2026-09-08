@@ -56,7 +56,21 @@ pub const Error := enum : i32 {
                 _ => .unexpected,
             };
         } else @cfg (os == .linux) {
-            @compileError("std::os: Linux is currently a WIP");
+            return match (errno) {
+                .ENOENT => .not_found,
+                .EACCES, .EPERM, .EROFS => .access_denied,
+                .EEXIST => .already_exists,
+                .EPIPE => .broken_pipe,
+                .EAGAIN, .EINPROGRESS => .would_block,
+                .EINTR => .interrupted,
+                .EISDIR => .is_directory,
+                .ENOTDIR => .not_a_directory,
+                .EBADF => .bad_fd,
+                .ENOSPC, .EDQUOT, .EFBIG, .ENOMEM => .no_space,
+                .EINVAL, .ESPIPE, .ENAMETOOLONG, .EFAULT => .invalid_input,
+                .EIO => .input_output,
+                _ => .unexpected,
+            };
         } else {
             @compileError("std::os: unsupported target OS");
         }
