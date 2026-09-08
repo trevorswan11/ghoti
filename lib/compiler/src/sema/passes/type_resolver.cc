@@ -6833,7 +6833,7 @@ auto type_resolver::visit(ast::node_id id, const ast::impl_stmt& impl) -> void {
         return last_type_.emplace(void_type);
     }
 
-    const auto rec{ctx_.impls.find_by_site(id)};
+    const auto rec{ctx_.impls.find_by_site(id, resolving_)};
 
     if (impl.interface_type) { TRY_RESOLVE(*impl.interface_type); }
     TRY_RESOLVE(impl.target_type);

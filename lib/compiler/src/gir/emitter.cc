@@ -764,22 +764,66 @@ auto emitter::emit_impl_default_method(std::string_view          gir_name,
     })};
     const_eval_.set_module(iface_mod);
     const_eval_.clear_memo();
+
+    // The diff is this impl's per-target typing. It is replayed onto the shared interface module
+    std::vector<std::pair<usize, stdx::option<sema::type&>>>    restore_nodes;
+    std::vector<std::pair<usize, stdx::option<sema::type&>>>    restore_types;
+    std::vector<std::pair<usize, stdx::option<mod::if_branch>>> restore_ifs;
+    std::vector<std::pair<usize, stdx::option<usize>>>          restore_arms;
     if (!typing_key.empty()) {
         if (const auto diff{ctx_.instantiation_cache.get_body_type_diff(typing_key)}) {
+            auto& nodes{iface_mod.sema_side_tables.node_types.values};
+            auto& types{iface_mod.sema_side_tables.explicit_types.values};
             for (const auto& [idx, ty] : diff->node_types) {
-                iface_mod.sema_side_tables.node_types.values[idx] = ty;
+                if (idx >= nodes.size()) { continue; }
+                restore_nodes.emplace_back(idx, nodes[idx]);
+                nodes[idx] = ty;
             }
             for (const auto& [idx, ty] : diff->explicit_types) {
-                iface_mod.sema_side_tables.explicit_types.values[idx] = ty;
+                if (idx >= types.size()) { continue; }
+                restore_types.emplace_back(idx, types[idx]);
+                types[idx] = ty;
             }
             for (const auto& [idx, br] : diff->if_branches) {
+                const auto it{iface_mod.if_constexpr_results.find(idx)};
+                restore_ifs.emplace_back(idx,
+                                         it == iface_mod.if_constexpr_results.end()
+                                             ? stdx::option<mod::if_branch>{stdx::none}
+                                             : stdx::option<mod::if_branch>{it->second});
                 iface_mod.if_constexpr_results.insert_or_assign(idx, br);
             }
             for (const auto& [idx, arm] : diff->match_arms) {
+                const auto it{iface_mod.match_arm_results.find(idx)};
+                restore_arms.emplace_back(idx,
+                                          it == iface_mod.match_arm_results.end()
+                                              ? stdx::option<usize>{stdx::none}
+                                              : stdx::option<usize>{it->second});
                 iface_mod.match_arm_results.insert_or_assign(idx, arm);
             }
         }
     }
+
+    // Restore to ensure the abstract one rather than the one here
+    const auto restore_side_tables{gsl::finally([&] {
+        auto& nodes{iface_mod.sema_side_tables.node_types.values};
+        auto& types{iface_mod.sema_side_tables.explicit_types.values};
+        for (const auto& [idx, ty] : restore_nodes) { nodes[idx] = ty; }
+        for (const auto& [idx, ty] : restore_types) { types[idx] = ty; }
+        for (const auto& [idx, br] : restore_ifs) {
+            if (br) {
+                iface_mod.if_constexpr_results.insert_or_assign(idx, *br);
+            } else {
+                iface_mod.if_constexpr_results.erase(idx);
+            }
+        }
+        for (const auto& [idx, arm] : restore_arms) {
+            if (arm) {
+                iface_mod.match_arm_results.insert_or_assign(idx, *arm);
+            } else {
+                iface_mod.match_arm_results.erase(idx);
+            }
+        }
+    })};
 
     auto sema_type{concrete_sig ? concrete_sig : active_mod().get_sema_type_opt(sig_id)};
     if (!sema_type) { return; }
