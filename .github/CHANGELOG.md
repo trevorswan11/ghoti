@@ -224,3 +224,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Allow trailing commas in all delimited lists to have the formatter add line breaks
 - Add `--emit-asm <file>` on `build-exe` / `build-obj` / `build-lib` / `test`
     - Write the target's native assembly to a file (requires a path; mirrors `--emit-gir` / `--emit-llvm-ir`)
+- `[N:0]T` sentinel arrays now report `.len == N`
+    - Storage is `N+1`, sentinel lives at index `[N]`
+- Fix a bug where struct literal field defaults were never emitted
+- Fix an issue where the panic handler would not receive `file` and `msg` args properly

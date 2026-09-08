@@ -97,7 +97,7 @@ auto sema_test_context::get_string_literal_size(ast::expr_handle           handl
                                                 stdx::option<mod::module&> enclosing_mod) -> usize {
     const auto& module{enclosing_mod.value_or(root_mod)};
     const auto& str_expr{UNWRAP(module.ast.get_as_opt<ast::string_expr>(handle))};
-    return str_expr.value.size() + 1;
+    return str_expr.value.size();
 }
 
 auto collect(std::string_view input, const std::vector<mock_file>& imports) -> ctx_idx_pair {

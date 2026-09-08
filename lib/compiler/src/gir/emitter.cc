@@ -3987,10 +3987,12 @@ auto emitter::emit_panic_call(std::string_view message, ast::node_id site) -> vo
     const auto loc{active_ast().location_of(site)};
     auto&      u32_type{ctx_.get_int(32, false)};
     auto&      noreturn_type{ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN)};
+    auto&      cstr_type{ctx_.get_slice(sema::types::mut::CONSTANT, true, ctx_.get_int(8, false))};
 
+    // `panic_handler(msg, file, line, col)` takes `[]u8` slices: materialize proper `{ ptr, len }`
     std::vector<value> args;
-    args.emplace_back(const_value::make_string(ctx_, std::string{message}).to_gir_value());
-    args.emplace_back(const_value::make_string(ctx_, active_mod().path.string()).to_gir_value());
+    args.emplace_back(materialize_string_slice(message, cstr_type));
+    args.emplace_back(materialize_string_slice(active_mod().path.string(), cstr_type));
     args.emplace_back(value{static_cast<u64>(loc.line), u32_type});
     args.emplace_back(value{static_cast<u64>(loc.column), u32_type});
 
@@ -4490,9 +4492,14 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                         idx_cmp = value{cast_idx, index_type};
                     }
 
+                    // A sentinel-terminated array has one extra addressable slot: `arr[arr.len]`
+                    // reads the terminator.
                     const auto bound_val{value{static_cast<u64>(arr_data->len), index_type}};
-                    const auto is_in_bounds{
-                        builder_.emit_binary(instruction_kind::LT, idx_cmp, bound_val, bool_type)};
+                    const auto is_in_bounds{builder_.emit_binary(
+                        arr_data->null_terminated ? instruction_kind::LE : instruction_kind::LT,
+                        idx_cmp,
+                        bound_val,
+                        bool_type)};
 
                     auto fn_opt{builder_.get_function()};
                     ASSERT(fn_opt, "Bounds check must be within an active function");
@@ -5102,12 +5109,21 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
     // `RowAlias{ a, b, c }`: an array literal of positional values.
     if (const auto arr{sema_type->get_data().as_opt<sema::types::array>()}) {
         auto& elem_type{arr->underlying};
-        for (u64 i{0}; const auto& [accessor, val_expr] : init.initializers) {
+        u64   count{0};
+        for (const auto& [accessor, val_expr] : init.initializers) {
             const auto elem_ptr{builder_.emit_get_element_ptr(
-                value{struct_slot, *sema_type}, {value{i, usize_type}}, elem_type)};
+                value{struct_slot, *sema_type}, {value{count, usize_type}}, elem_type)};
             const auto val{emit_coerced_expr(val_expr, elem_type)};
             builder_.emit_store(value{elem_ptr, elem_type}, val).is_initializer = true;
-            ++i;
+            ++count;
+        }
+
+        // Write the terminator element of a `[N:0]T` literal.
+        if (arr->null_terminated) {
+            const auto sentinel_ptr{builder_.emit_get_element_ptr(
+                value{struct_slot, *sema_type}, {value{arr->len, usize_type}}, elem_type)};
+            builder_.emit_store(value{sentinel_ptr, elem_type}, value{u64{0}, elem_type})
+                .is_initializer = true;
         }
         const auto loaded{builder_.emit_load(value{struct_slot, *sema_type}, *sema_type)};
         return value{loaded, sema_type};

@@ -393,7 +393,9 @@ auto const_eval::type_size_of(const sema::type& type, usize ptr_size) -> usize {
             const auto elem_stride{elem_align > 0
                                        ? (elem_size + elem_align - 1) / elem_align * elem_align
                                        : elem_size};
-            return arr->len * (elem_stride == 0 ? elem_size : elem_stride);
+            // A sentinel-terminated array stores one extra element for the terminator.
+            const auto count{arr->len + (arr->null_terminated ? 1 : 0)};
+            return count * (elem_stride == 0 ? elem_size : elem_stride);
         }
         UNREACHABLE("type_kind::ARRAY associated with improper type");
     case sema::type_kind::STRUCT:

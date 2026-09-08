@@ -63,6 +63,16 @@ auto emit_static_lib(helpers::sema_test_context&       test_ctx,
 [[nodiscard]] auto compile_and_run(std::string_view              source,
                                    const std::vector<mock_file>& imports = {}) -> u32;
 
+struct run_output {
+    u32         exit_code{};
+    std::string out;
+    std::string err;
+};
+
+[[nodiscard]] auto compile_and_run_captured(std::string_view              source,
+                                            const std::vector<mock_file>& imports = {})
+    -> run_output;
+
 [[nodiscard]] auto compile_and_run_tests(std::string_view                source,
                                          const std::vector<mock_file>&   imports    = {},
                                          const std::vector<std::string>& extra_args = {}) -> u32;
