@@ -5164,8 +5164,10 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
 
         // Write the terminator element of a `[N:0]T` literal.
         if (arr->null_terminated) {
-            const auto sentinel_ptr{builder_.emit_get_element_ptr(
-                value{struct_slot, *sema_type}, {value{arr->len, usize_type}}, elem_type)};
+            const auto sentinel_ptr{
+                builder_.emit_get_element_ptr(value{struct_slot, *sema_type},
+                                              {value{static_cast<u64>(arr->len), usize_type}},
+                                              elem_type)};
             builder_.emit_store(value{sentinel_ptr, elem_type}, value{u64{0}, elem_type})
                 .is_initializer = true;
         }
