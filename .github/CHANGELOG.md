@@ -229,4 +229,4 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fix a bug where struct literal field defaults were never emitted
 - Fix an issue where the panic handler would not receive `file` and `msg` args properly
 - Resolve bug that prevented an interface from being implemented multiple times
--
+- Resolve formatter bug that would clobber match arms if block had trailing comma

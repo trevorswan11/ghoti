@@ -1071,7 +1071,8 @@ auto formatter::visit(node_id id, const match_expr& node) -> syntax::doc_id {
     const auto& match_end{ast_.end_location_of(id)};
 
     std::vector<syntax::doc_id> arms;
-    for (const auto& arm : node.arms) {
+    for (usize arm_idx{0}; arm_idx < node.arms.size(); ++arm_idx) {
+        const auto& arm{node.arms[arm_idx]};
         const auto& start_loc{ast_.location_of(arm.primary_pattern())};
         auto        leading{consume_leading_comments(start_loc.line, !arms.empty())};
 
@@ -1103,13 +1104,20 @@ auto formatter::visit(node_id id, const match_expr& node) -> syntax::doc_id {
 
         const auto end_line{ast_.end_location_of(arm.dispatch).line};
         auto       arm_doc{doc_manager_.concat(std::move(parts))};
-        auto       trailing{consume_trailing_comment(end_line)};
+        const auto next_line{arm_idx + 1 < node.arms.size()
+                                 ? ast_.location_of(node.arms[arm_idx + 1].primary_pattern()).line
+                                 : match_end.line};
+        auto       trailing{next_line > end_line ? consume_trailing_comment(end_line)
+                                                 : doc_manager_.nil()};
         if (trailing != doc_manager_.nil()) { arm_doc = doc_manager_.concat({arm_doc, trailing}); }
         if (leading != doc_manager_.nil()) { arm_doc = doc_manager_.concat({leading, arm_doc}); }
         arms.emplace_back(arm_doc);
     }
 
-    auto dangling{consume_dangling_comments(match_end.line)};
+    const bool brace_on_own_line{
+        node.arms.empty() || match_end.line > ast_.end_location_of(node.arms.back().dispatch).line};
+    auto dangling{brace_on_own_line ? consume_dangling_comments(match_end.line)
+                                    : doc_manager_.nil()};
     if (dangling != doc_manager_.nil()) { arms.emplace_back(dangling); }
 
     return doc_manager_.concat({

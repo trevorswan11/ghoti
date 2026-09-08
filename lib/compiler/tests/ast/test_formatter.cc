@@ -226,6 +226,22 @@ TEST_CASE("formatter lays out if / match") {
 )");
 }
 
+TEST_CASE("formatter keeps a trailing comment after an inline match statement") {
+    CHECK(format_source("_ = match (f()) { .a => 1, .b => 2 }; // note\n") ==
+          "_ = match (f()) { .a => 1, .b => 2 }; // note\n");
+    CHECK(format_source(R"(const f := fn(): i32 {
+    @expect(match (g()) { .ok => |n| n == 4, .err => false }); // only 4 available
+    @expect(match (g()) { .ok => |n| n == 0, .err => false }); // EOF
+    return 0;
+};
+)") == R"(const f := fn(): i32 {
+    @expect(match (g()) { .ok => |n| n == 4, .err => false }); // only 4 available
+    @expect(match (g()) { .ok => |n| n == 0, .err => false }); // EOF
+    return 0;
+};
+)");
+}
+
 TEST_CASE("formatter does not double the terminator on a value-if or loop tail") {
     CHECK(
         format_source("const min := fn(a: auto, b: auto): auto { return if (a < b) a else b; };") ==
