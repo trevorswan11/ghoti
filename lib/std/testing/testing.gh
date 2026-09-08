@@ -17,8 +17,12 @@ pub const test_runner := fn(args: [][:0]u8, tests: []Test): i32 {
     }
 
     // TODO(tcs): print the number of failures and skips once std::fmt lands
-    if (failures > 0) io::eprintln("Some tests failed!")!;
-    if (skipped > 0) io::eprintln("Some tests were skipped!")!;
+    if (failures > 0 or skipped > 0) {
+        if (failures > 0) io::eprintln("Some tests failed!")!;
+        if (skipped > 0) io::eprintln("Some tests were skipped!")!;
+    } else {
+        io::println("All tests passed!")!;
+    }
 
     return if (failures > 0) 1 else 0;
 };
