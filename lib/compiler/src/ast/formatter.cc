@@ -1071,6 +1071,7 @@ auto formatter::visit(node_id id, const match_expr& node) -> syntax::doc_id {
     const auto& match_end{ast_.end_location_of(id)};
 
     std::vector<syntax::doc_id> arms;
+    std::vector<syntax::doc_id> arm_trailers;
     for (usize arm_idx{0}; arm_idx < node.arms.size(); ++arm_idx) {
         const auto& arm{node.arms[arm_idx]};
         const auto& start_loc{ast_.location_of(arm.primary_pattern())};
@@ -1107,24 +1108,29 @@ auto formatter::visit(node_id id, const match_expr& node) -> syntax::doc_id {
         const auto next_line{arm_idx + 1 < node.arms.size()
                                  ? ast_.location_of(node.arms[arm_idx + 1].primary_pattern()).line
                                  : match_end.line};
-        auto       trailing{next_line > end_line ? consume_trailing_comment(end_line)
-                                                 : doc_manager_.nil()};
-        if (trailing != doc_manager_.nil()) { arm_doc = doc_manager_.concat({arm_doc, trailing}); }
+        // A per-arm trailing comment must land after the arm's separator comma
+        auto trailing{next_line > end_line ? consume_trailing_comment(end_line)
+                                           : doc_manager_.nil()};
         if (leading != doc_manager_.nil()) { arm_doc = doc_manager_.concat({leading, arm_doc}); }
         arms.emplace_back(arm_doc);
+        arm_trailers.emplace_back(trailing);
     }
 
     const bool brace_on_own_line{
         node.arms.empty() || match_end.line > ast_.end_location_of(node.arms.back().dispatch).line};
     auto dangling{brace_on_own_line ? consume_dangling_comments(match_end.line)
                                     : doc_manager_.nil()};
-    if (dangling != doc_manager_.nil()) { arms.emplace_back(dangling); }
+    if (dangling != doc_manager_.nil()) {
+        arms.emplace_back(dangling);
+        arm_trailers.emplace_back(doc_manager_.nil());
+    }
 
     return doc_manager_.concat({
         doc_manager_.text(node.is_constexpr ? "match constexpr (" : "match ("),
         format(node.matcher),
         doc_manager_.text(") "),
-        doc_manager_.delimited("{", "}", std::move(arms), true, true, node.arms_force_break),
+        doc_manager_.delimited(
+            "{", "}", std::move(arms), std::move(arm_trailers), true, true, node.arms_force_break),
     });
 }
 

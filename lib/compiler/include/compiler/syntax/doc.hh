@@ -122,6 +122,16 @@ class doc_manager {
                                  bool                        trailing_comma,
                                  bool                        force_break = false) -> syntax::doc_id;
 
+    // As above, but `item_trailers[i]` (a trailing line comment, or `nil()`) is placed right after
+    // item `i`'s separator comma. Any non-nil trailer forces the list to break.
+    [[nodiscard]] auto delimited(std::string_view            open,
+                                 std::string_view            close,
+                                 std::vector<syntax::doc_id> items,
+                                 std::vector<syntax::doc_id> item_trailers,
+                                 bool                        pad,
+                                 bool                        trailing_comma,
+                                 bool                        force_break = false) -> syntax::doc_id;
+
   private:
     roots_t            roots_;
     std::vector<doc_t> docs_;
