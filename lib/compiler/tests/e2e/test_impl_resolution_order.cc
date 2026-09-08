@@ -343,6 +343,78 @@ TEST_CASE("E2E: one inherited cross-module default method calls another through 
     CHECK(exit_code == 2);
 }
 
+TEST_CASE("E2E: a second impl of the same interface still inherits its default methods") {
+    constexpr std::string_view res_gh{
+        R"(pub const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };)"};
+    constexpr std::string_view reader_gh{R"(
+        import "res.gh" as res;
+        pub const Reader := interface {
+            Error: type;
+            pub const read := fn(&mut self, buf: []mut u8): res::Result(usize, Error);
+            pub const readAll := fn(&mut self, buf: []mut u8): res::Result(usize, Error) {
+                var i: usize = 0;
+                loop {
+                    if (i == buf.len) { break; }
+                    const n := self.read(buf[i..])?;
+                    if (n == 0) { break; }
+                    i += n;
+                };
+                return .{ .ok = i };
+            };
+        };
+    )"};
+
+    constexpr std::string_view early_gh{R"(
+        import "reader.gh" as reader;
+        import "res.gh" as res;
+        pub const Early := struct { pub data: []mut u8, pub pos: usize = 0 };
+        impl reader::Reader for Early {
+            using Error = u8;
+            pub const read := fn(&mut self, buf: []mut u8): res::Result(usize, Error) {
+                const rem := self.data.len - self.pos;
+                const n := if (buf.len < rem) buf.len else rem;
+                self.pos += n;
+                return .{ .ok = n };
+            };
+        }
+    )"};
+
+    const auto exit_code{helpers::compile_and_run(
+        R"(
+            import "early.gh" as early;
+            import "reader.gh" as reader;
+            import "res.gh" as res;
+
+            const Late := struct { pub data: []mut u8, pub pos: usize = 0 };
+            impl reader::Reader for Late {
+                using Error = u8;
+                pub const read := fn(&mut self, buf: []mut u8): res::Result(usize, Error) {
+                    const rem := self.data.len - self.pos;
+                    const n := if (buf.len < rem) buf.len else rem;
+                    self.pos += n;
+                    return .{ .ok = n };
+                };
+            }
+
+            pub const main := fn(): i32 {
+                var eb: [6]mut u8 = undefined;
+                var e := early::Early{ .data = eb };
+                var lb: [6]mut u8 = undefined;
+                var l := Late{ .data = lb };
+                var out: [4]mut u8 = undefined;
+                const en := match (e.readAll(out[..])) { .ok => |n| n, .err => 0uz };
+                const ln := match (l.readAll(out[..])) { .ok => |n| n, .err => 0uz };
+                return @as(i32, en + ln);
+            };
+        )",
+        {
+            mock_file{"res.gh", res_gh, "res"},
+            mock_file{"reader.gh", reader_gh, "reader"},
+            mock_file{"early.gh", early_gh, "early"},
+        })};
+    CHECK(exit_code == 8);
+}
+
 TEST_CASE("E2E: two instantiations of a nested `fn(...): type` constructor stay distinct") {
     const auto exit_code{helpers::compile_and_run(R"(
         const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };

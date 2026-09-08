@@ -7065,6 +7065,13 @@ auto type_resolver::resolve_inherited_default_methods(impl_record&              
         if (!sig_ty || !sig_ty->has_symbol_table_idx()) { continue; }
         const auto fn_table{sig_ty->get_symbol_table_idx()};
 
+        // The interface's signature node is shared by every `impl` of this interface.
+        // Temp overwrite it with this target's concrete `fn` type so the default body
+        // re-resolves against concrete parameter/return types
+        auto&      abstract_sig{*sig_ty};
+        const auto restore_sig{
+            gsl::finally([&] { imod.set_sema_type(*m.signature, abstract_sig); })};
+
         symbol_table_stack stk;
         stk.push(*ctx_.prelude_index);
         if (imod.root_table_idx) { stk.push(*imod.root_table_idx); }
