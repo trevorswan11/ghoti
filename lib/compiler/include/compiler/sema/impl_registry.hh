@@ -109,7 +109,8 @@ class impl_registry {
     }
 
     // The record whose `impl_stmt` node is `site` (inherent or trait).
-    [[nodiscard]] auto find_by_site(ast::node_id site) noexcept -> stdx::option<impl_record&>;
+    [[nodiscard]] auto find_by_site(ast::node_id site, const mod::module& enclosing) noexcept
+        -> stdx::option<impl_record&>;
     [[nodiscard]] auto implements(const type& target, const type& iface) const noexcept -> bool;
 
     // Parameterized `impl(P) ...` blocks, held un-expanded until a concrete target materializes.
