@@ -161,6 +161,11 @@ class const_eval {
     // Evaluates `member`, looked up in `target_mod`'s root scope, as a cross-module constant.
     auto eval_module_member(mod::module& target_mod, std::string_view member)
         -> stdx::option<const_value>;
+
+    // Resolves `member` against an already-denoted aggregate type.
+    // Shared by `Type.member` and `alias::Type::member`.
+    auto eval_type_member(sema::type& denoted, std::string_view member)
+        -> stdx::option<const_value>;
     auto eval_match(ast::node_id id, const ast::match_expr& match) -> stdx::option<const_value>;
     auto eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> stdx::option<const_value>;
     auto match_pattern(const ast::match_pattern_handle& pattern_h, const const_value& target)
