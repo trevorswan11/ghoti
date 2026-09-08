@@ -228,3 +228,5 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Storage is `N+1`, sentinel lives at index `[N]`
 - Fix a bug where struct literal field defaults were never emitted
 - Fix an issue where the panic handler would not receive `file` and `msg` args properly
+- Resolve bug that prevented an interface from being implemented multiple times
+-
