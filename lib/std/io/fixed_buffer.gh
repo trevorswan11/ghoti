@@ -55,3 +55,85 @@ impl seeker::Seeker for FixedBufferStream {
         return .{ .ok = target };
     };
 }
+
+test "fixed_buffer: write, seek-to-start, read roundtrips the bytes" {
+    var backing: [32]mut u8 = undefined;
+    var s: FixedBufferStream = .{ .buf = backing };
+
+    @expect(match (s.write("hello")) { .ok => |n| n == 5, .err => false });
+    @expect(s.pos == 5);
+
+    @expect(match (s.seek(0i64, .start)) { .ok => |p| p == 0, .err => false });
+
+    var out: [5]mut u8 = undefined;
+    @expect(match (s.read(out[..])) { .ok => |n| n == 5, .err => false });
+    @expect(out[0] == 'h');
+    @expect(out[1] == 'e');
+    @expect(out[4] == 'o');
+}
+
+test "fixed_buffer: reading past the end returns a short count, then zero" {
+    var backing := [4]mut u8{ 1, 2, 3, 4 };
+    var s: FixedBufferStream = .{ .buf = backing };
+
+    var out: [8]mut u8 = undefined;
+    @expect(match (s.read(out[..])) { .ok => |n| n == 4, .err => false }); // only 4 available
+    @expect(match (s.read(out[..])) { .ok => |n| n == 0, .err => false }); // EOF
+}
+
+test "fixed_buffer: readAll fills the buffer and then stops at EOF" {
+    var backing := [6]mut u8{ 'a', 'b', 'c', 'd', 'e', 'f' };
+    var s: FixedBufferStream = .{ .buf = backing };
+
+    var out: [4]mut u8 = undefined;
+    @expect(match (s.readAll(out[..])) { .ok => |n| n == 4, .err => false });
+    @expect(out[0] == 'a');
+    @expect(out[3] == 'd');
+    var rest: [8]mut u8 = undefined; // asks for 8, only 'e','f' remain
+    @expect(match (s.readAll(rest[..])) { .ok => |n| n == 2, .err => false });
+}
+
+test "fixed_buffer: writeAll writes every byte; writeByte appends one" {
+    var backing: [16]mut u8 = undefined;
+    var s: FixedBufferStream = .{ .buf = backing };
+    @expect(s.writeAll("abcdefgh") == .ok);
+    @expect(s.writeByte('!') == .ok);
+    @expect(s.pos == 9);
+    @expect(backing[0] == 'a');
+    @expect(backing[7] == 'h');
+    @expect(backing[8] == '!');
+}
+
+test "fixed_buffer: write is short when nearly full, then reports no_space" {
+    var backing: [4]mut u8 = undefined;
+    var s: FixedBufferStream = .{ .buf = backing[..], .pos = 0uz };
+
+    @expect(match (s.write("ab")) { .ok => |n| n == 2, .err => false });
+    @expect(match (s.write("cdefg")) { .ok => |n| n == 2, .err => false }); // 2 bytes room
+    @expect(s.pos == 4uz);
+    @expect(backing[2] == 'c');
+    @expect(backing[3] == 'd');
+    @expect(match (s.write("!")) { .ok => false, .err => |e| e == .no_space });
+    @expect(match (s.writeAll("!")) { .ok => false, .err => |e| e == .no_space });
+}
+
+test "fixed_buffer: seek from start, current, end; then read at the new pos" {
+    var backing := [10]mut u8{ '0', '1', '2', '3', '4', '5', '6', '7', '8', '9' };
+    var s := FixedBufferStream{ .buf = backing[..] };
+    @expect(match (s.seek(3i64, .start)) { .ok => |p| p == 3, .err => false });
+    @expect(match (s.seek(2i64, .current)) { .ok => |p| p == 5, .err => false });
+    @expect(match (s.seek(-1i64, .end)) { .ok => |p| p == 9, .err => false });
+
+    var one: [1]mut u8 = undefined;
+    @expect(match (s.read(one[..])) { .ok => |n| n == 1, .err => false });
+    @expect(one[0] == '9');
+}
+
+test "fixed_buffer: out-of-range seek is invalid_input; one-past-end is allowed" {
+    var backing: [4]mut u8 = undefined;
+    var s: FixedBufferStream = .{ .buf = backing };
+    @expect(match (s.seek(-1i64, .start)) { .ok => false, .err => |e| e == .invalid_input });
+    @expect(match (s.seek(5i64, .start)) { .ok => false, .err => |e| e == .invalid_input });
+    @expect(match (s.seek(1i64, .end)) { .ok => false, .err => |e| e == .invalid_input });
+    @expect(match (s.seek(0i64, .end)) { .ok => |p| p == 4i64, .err => false }); // one-past OK
+}
