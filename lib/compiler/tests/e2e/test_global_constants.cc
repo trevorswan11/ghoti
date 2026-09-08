@@ -69,4 +69,36 @@ TEST_CASE("Top-level struct const with a nested array field") {
     )") == 6);
 }
 
+TEST_CASE("Top-level string const with an explicit slice type is usable, not a raw i8*") {
+    CHECK(helpers::compile_and_run(R"(
+        const S: []u8 = "abcd";
+        pub const main := fn(): i32 {
+            return @as(i32, @as(u32, S.len));
+        };
+    )") == 4);
+}
+
+TEST_CASE("Top-level sentinel-string const passed to a function as a slice") {
+    CHECK(helpers::compile_and_run(R"(
+        const NAME: [:0]u8 = "hijkl";
+        const first := fn(s: []u8): u8 {
+            return s[0];
+        };
+        pub const main := fn(): i32 {
+            return @as(i32, first(NAME));
+        };
+    )") == 'h');
+}
+
+TEST_CASE("Top-level sentinel-string const iterated at runtime") {
+    CHECK(helpers::compile_and_run(R"(
+        const P: [:0]u8 = "ABC";
+        pub const main := fn(): i32 {
+            var n: i32 = 0;
+            for (P) |c| { n += @as(i32, c); }
+            return n - 100;
+        };
+    )") == ('A' + 'B' + 'C' - 100));
+}
+
 } // namespace ghoti::tests

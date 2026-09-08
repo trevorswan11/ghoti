@@ -1118,7 +1118,9 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
     if (const auto s{cv.as_opt<std::string>()}) {
         if (ty->isPointerTy()) {
             if (auto* fn{resolve_named_function(*s)}) { return fn; }
-            return builder_.CreateGlobalString(*s, "gstr");
+            // Pass the module explicitly: `const_to_llvm` also runs while lowering module
+            // globals, where the IRBuilder has no insertion block to source it from.
+            return builder_.CreateGlobalString(*s, "gstr", 0, llvm_module_.get());
         }
         if (auto* at{llvm::dyn_cast<llvm::ArrayType>(ty)}) {
             std::string bytes{*s};
@@ -1181,6 +1183,22 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
     llvm::Constant* init{nullptr};
     if (g.const_init) {
         init = const_to_llvm(*g.const_init, g_type);
+    } else if (g.init_value && g.init_value->is<std::string>() &&
+               g.type.get_kind() == sema::type_kind::SLICE) {
+        // The folded value of a constexpr str slice is a bare str, but the global's type is a slice
+        const auto& bytes{g.init_value->as<std::string>()};
+        const auto  slice_data{g.type.get_data().as_opt<sema::types::slice>()};
+        const bool  add_nul{slice_data && slice_data->null_terminated};
+        auto*       data{llvm::ConstantDataArray::getString(context_, bytes, add_nul)};
+        auto*       data_gv{new llvm::GlobalVariable{*llvm_module_,
+                                               data->getType(),
+                                               true,
+                                               llvm::GlobalValue::PrivateLinkage,
+                                               data,
+                                               ".str.data"}};
+        data_gv->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+        auto* len{llvm::ConstantInt::get(types_.get_usize_ty(), bytes.size())};
+        init = llvm::ConstantStruct::get(llvm::cast<llvm::StructType>(g_type), {data_gv, len});
     } else if (g.init_value) {
         auto* init_v{lower_value(*g.init_value, &g.type)};
         if (init_v && llvm::isa<llvm::Constant>(init_v)) {
@@ -1188,15 +1206,12 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
         }
     }
 
-    if (init == nullptr && g.linkage != gir::linkage::EXTERN) {
-        init = llvm::Constant::getNullValue(g_type);
-    }
+    if (!init && g.linkage != gir::linkage::EXTERN) { init = llvm::Constant::getNullValue(g_type); }
 
     std::string sym_name{g.link_name.empty() ? g.name : g.link_name};
     // A plain (INTERNAL/PUBLIC) ghoti global whose name collides with a C-ABI symbol
     if (g.link_name.empty() && !g.is_weak &&
-        (llvm_module_->getNamedValue(sym_name) != nullptr ||
-         reserved_symbols_.contains(sym_name))) {
+        (llvm_module_->getNamedValue(sym_name) || reserved_symbols_.contains(sym_name))) {
         sym_name  = private_symbol_name(sym_name);
         g_linkage = llvm::GlobalValue::InternalLinkage;
     }
@@ -1442,7 +1457,8 @@ auto llvm_lowering::lower_value(const gir::value& val, const sema::type* expecte
             if (ty && ty->get_kind() == sema::type_kind::ARRAY) {
                 return llvm::ConstantDataArray::getString(context_, str, true);
             }
-            return builder_.CreateGlobalString(str, "str");
+            // Give `CreateGlobalString` the module directly
+            return builder_.CreateGlobalString(str, "str", 0, llvm_module_.get());
         },
         [this, &val, expected_type](gir::undefined_val) -> llvm::Value* {
             // A bare `undefined` may still carry the placeholder UNDEFINED/POISON type; fall back

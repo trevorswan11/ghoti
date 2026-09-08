@@ -194,6 +194,9 @@ class emitter {
     }
     auto emit_array(ast::node_id id, const ast::array_expr& array) -> value;
     auto emit_slice_from_array(value arr_lval, const sema::type& arr_type) -> value;
+    // Materializes a folded string constant that is typed as a slice (`const S: []u8 = "..."`)
+    // into a `{ptr, len}` value by spilling the bytes to a fresh array temporary and decaying it.
+    auto emit_string_as_slice(const std::string& bytes, const sema::type& slice_type) -> value;
     // Builds a `&dyn I` / `^dyn I` fat pointer `{ data, vtable }` from `src` (a `&T` / `^T`)
     auto emit_dyn_coercion(ast::expr_handle src, const sema::type& fat_type) -> value;
     // Lowers `expr[lo..{=}hi]` on an array or slice to a bounds-checked `{ptr, len}` subslice.
