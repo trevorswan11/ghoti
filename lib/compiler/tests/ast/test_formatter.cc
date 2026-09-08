@@ -242,6 +242,15 @@ TEST_CASE("formatter keeps a trailing comment after an inline match statement") 
 )");
 }
 
+TEST_CASE("formatter keeps a per-arm trailing comment on a multi-line match") {
+    constexpr std::string_view source{R"(const r := match (u) {
+    .a => 1, // first
+    .b => 2, // second
+};
+)"};
+    CHECK(format_source(source) == source);
+}
+
 TEST_CASE("formatter does not double the terminator on a value-if or loop tail") {
     CHECK(
         format_source("const min := fn(a: auto, b: auto): auto { return if (a < b) a else b; };") ==

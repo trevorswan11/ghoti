@@ -1,5 +1,6 @@
 #include "compiler/syntax/doc.hh"
 
+#include <algorithm>
 #include <cstring>
 #include <fmt/format.h>
 #include <string>
@@ -56,20 +57,39 @@ auto doc_manager::delimited(std::string_view    open,
                             bool                pad,
                             bool                trailing_comma,
                             bool                force_break) -> doc_id {
+    return delimited(open, close, std::move(items), {}, pad, trailing_comma, force_break);
+}
+
+auto doc_manager::delimited(std::string_view    open,
+                            std::string_view    close,
+                            std::vector<doc_id> items,
+                            std::vector<doc_id> item_trailers,
+                            bool                pad,
+                            bool                trailing_comma,
+                            bool                force_break) -> doc_id {
     if (items.empty()) { return owned(fmt::format("{}{}", open, close)); }
     const auto edge{pad ? line() : soft_line()};
 
+    const auto trailer_of{
+        [&](usize i) -> doc_id { return i < item_trailers.size() ? item_trailers[i] : nil(); }};
+    const bool has_trailers{
+        std::ranges::any_of(item_trailers, [&](doc_id d) { return d != nil(); })};
+
     std::vector<doc_id> body;
-    body.reserve(items.size() * 3 - 1);
+    body.reserve(items.size() * 4);
     for (usize i{0}; i < items.size(); ++i) {
         if (i != 0) {
             body.emplace_back(text(","));
+            if (trailer_of(i - 1) != nil()) { body.emplace_back(trailer_of(i - 1)); }
             body.emplace_back(line());
         }
         body.emplace_back(items[i]);
     }
     // A force-broken list always keeps its trailing comma so it round-trips as a break hint.
-    if (trailing_comma || force_break) { body.emplace_back(if_break(text(","), nil())); }
+    if (trailing_comma || force_break || has_trailers) {
+        body.emplace_back(if_break(text(","), nil()));
+    }
+    if (trailer_of(items.size() - 1) != nil()) { body.emplace_back(trailer_of(items.size() - 1)); }
 
     return group(concat({
                      text(open),
@@ -77,7 +97,7 @@ auto doc_manager::delimited(std::string_view    open,
                      edge,
                      text(close),
                  }),
-                 force_break);
+                 force_break || has_trailers);
 }
 
 } // namespace ghoti::syntax
