@@ -237,7 +237,6 @@ class emitter {
     auto emit_dereference(ast::node_id id, const ast::dereference_expr& deref) -> value;
     auto emit_reference(ast::node_id id, const ast::reference_expr& ref) -> value;
     auto emit_implicit_access(ast::node_id id, const ast::implicit_access_expr& imp) -> value;
-    auto emit_module_access(ast::node_id id, const ast::module_access_expr& mod_access) -> value;
     auto emit_while(ast::node_id                   id,
                     const ast::while_loop_expr&    while_loop,
                     stdx::option<std::string_view> label       = stdx::none,

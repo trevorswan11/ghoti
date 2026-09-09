@@ -341,11 +341,7 @@ class type_resolver {
     auto visit(ast::node_id, const ast::nullptr_expr&) -> void;
     auto visit(ast::node_id, const ast::unreachable_expr&) -> void;
 
-    template <ast::IndexableID ID>
-    auto resolve_module_access(ID, const ast::module_access_expr&) -> void;
-    auto visit(ast::node_id, const ast::module_access_expr&) -> void;
-
-    // If a `using` RHS is a bare-name form (`X`, `mod::X`) that resolves to a value symbol
+    // If a `using` RHS is a bare-name form (`X`, `mod.X`) that resolves to a value symbol
     // rather than a type, returns that name so the caller can reject the alias.
     [[nodiscard]] auto using_rhs_value_name(ast::explicit_type_id rhs) const
         -> stdx::option<std::string_view>;
@@ -389,7 +385,6 @@ class type_resolver {
     auto apply_explicit_modifiers(ast::explicit_type_id id, type& inner_type) -> type&;
 
     auto visit(ast::explicit_type_id, const ast::identifier_expr&) -> void;
-    auto visit(ast::explicit_type_id, const ast::module_access_expr&) -> void;
     auto visit(ast::explicit_type_id, const ast::dot_expr&) -> void;
     auto visit(ast::explicit_type_id, const ast::call_expr&) -> void;
     auto visit(ast::explicit_type_id, const ast::explicit_function_type&) -> void;

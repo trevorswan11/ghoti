@@ -1477,21 +1477,6 @@ auto string_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syn
         start_token, parser.get_ast().intern(start_token.materialize_string()), start_token.slice);
 }
 
-auto module_access_expr::parse(syntax::parser& parser, expr_handle outer)
-    -> stdx::result<expr_handle, syntax::diagnostic> {
-    PROFILE_FUNCTION();
-    if (!outer.any<identifier_expr, module_access_expr, dot_expr>()) {
-        return make_syntax_err("Module access expressions must have outer accessors or identifiers",
-                               syntax::error::ILLEGAL_OUTER_ACCESSOR_TYPE,
-                               parser.get_location_of(*outer));
-    }
-
-    const auto start_token{parser.get_current_token()};
-    TRY(parser.expect_peek(syntax::token_type_t::IDENT));
-    const identifier_handle inner{TRY(identifier_expr::parse(parser))};
-    return parser.add_expr<module_access_expr>(start_token, outer, inner);
-}
-
 auto struct_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();

@@ -171,10 +171,8 @@ class const_eval {
     auto eval_dot(ast::node_id id, const ast::dot_expr& dot) -> stdx::option<const_value>;
     auto eval_implicit_access(ast::node_id id, const ast::implicit_access_expr& implicit)
         -> stdx::option<const_value>;
-    auto eval_module_access(ast::node_id id, const ast::module_access_expr& mod_access)
-        -> stdx::option<const_value>;
 
-    // Resolves a (possibly chained) module-access operand to the imported module it names
+    // Resolves a (possibly chained) module operand to the imported module it names
     auto resolve_module_chain(ast::node_id node) -> stdx::option<mod::module&>;
 
     // Evaluates `member`, looked up in `target_mod`'s root scope, as a cross-module constant.

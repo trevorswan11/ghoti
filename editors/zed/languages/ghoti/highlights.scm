@@ -32,7 +32,6 @@
 (enumerator name: (identifier) @property)
 (dot_expression member: (identifier) @property)
 (implicit_access_expression member: (identifier) @property)
-(module_access_expression member: (identifier) @property)
 
 ; Interface associated items and dyn associated-type bindings
 (associated_type name: (identifier) @property)

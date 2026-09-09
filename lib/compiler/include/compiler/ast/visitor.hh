@@ -21,7 +21,6 @@ using node_variant = stdx::variant<FOREACH_AST_NODE(X) discarded>;
     auto Class::visit(ghoti::ast::node_id, const ghoti::ast::NodeType&) -> void {}
 
 using type_variant = stdx::variant<identifier_expr,
-                                   module_access_expr,
                                    dot_expr,
                                    call_expr,
                                    explicit_function_type,
