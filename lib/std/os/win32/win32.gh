@@ -127,6 +127,20 @@ extern("kernel32") const SetFilePointerEx: fn(
 extern("kernel32") const GetStdHandle: fn(which: u32): Handle;
 extern("kernel32") const GetLastError: fn(): DWORD;
 
+// VirtualAlloc / VirtualFree (memoryapi.h)
+pub const MEM_COMMIT: u32 = 0x00001000u32;
+pub const MEM_RESERVE: u32 = 0x00002000u32;
+pub const MEM_RELEASE: u32 = 0x00008000u32;
+pub const PAGE_READWRITE: u32 = 0x04u32;
+
+extern("kernel32") const VirtualAlloc: fn(
+    addr: ^mut opaque,
+    size: usize,
+    alloc_type: u32,
+    protect: u32
+): ^mut opaque;
+extern("kernel32") const VirtualFree: fn(addr: ^mut opaque, size: usize, free_type: u32): BOOL;
+
 extern("kernel32") const CreateDirectoryW: fn(path: ^u16, security: ^mut opaque): BOOL;
 
 extern("kernel32") const GetFileInformationByHandle: fn(h: Handle, info: ^mut Stat): BOOL;
@@ -247,6 +261,21 @@ pub const mkdir := fn(path: [:0]u8): R(void) {
     return if (ok == 0i32) .{ .err = @as(Errno, GetLastError()) } else .{ .ok = {} };
 };
 
+/// Reserve and commit `len` bytes of zero-filled, read-write memory.
+/// The result is page-aligned; `len` is rounded up to a page by the OS.
+pub const alloc := fn(len: usize): R(^mut u8) {
+    const p := VirtualAlloc(nullptr, len, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    return if (!p) .{ .err = @as(Errno, GetLastError()) } else .{ .ok = @ptrCast(^mut u8, p) };
+};
+
+/// Release a region previously returned by `alloc`, `len` is ignored
+pub const free := fn(ptr: ^mut u8, len: usize): R(void) {
+    _ = len;
+    // `MEM_RELEASE` frees the whole original reservation and requires the size argument to be zero
+    const ok := VirtualFree(@ptrCast(^mut opaque, ptr), 0uz, MEM_RELEASE);
+    return if (ok == 0i32) .{ .err = @as(Errno, GetLastError()) } else .{ .ok = {} };
+};
+
 const std_handle := fn(which: u32): R(Handle) {
     const h := GetStdHandle(which);
     if (h == INVALID_HANDLE_VALUE) {
@@ -340,4 +369,16 @@ test "win32: mkdir of an existing directory reports it, not a spurious success" 
             .err => |e| e == .ERROR_ALREADY_EXISTS or e == .ERROR_ACCESS_DENIED,
         },
     );
+}
+
+test "win32: alloc gives zero-filled, writable memory that free releases" {
+    const n: usize = 8192uz;
+    const p := match (alloc(n)) { .ok => |q| q, .err => nullptr };
+    @require(p);
+
+    @expect(p[0] == 0u8 and p[n - 1uz] == 0u8); // VirtualAlloc zeroes committed pages
+    p[0] = 0x41u8;
+    p[n - 1uz] = 0x5Au8;
+    @expect(p[0] == 0x41u8 and p[n - 1uz] == 0x5Au8);
+    @expect(match (free(p, n)) { .ok => true, .err => false });
 }

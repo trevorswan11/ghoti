@@ -30,8 +30,12 @@ pub using ino64_t = u64;
 pub using uid_t = u32;
 pub using gid_t = u32;
 pub using time_t = i64;
+pub using off_t = i64; /// File offset / size
 pub using blkcnt_t = i64;
 pub using blksize_t = i32;
+
+const S_IFMT: mode_t = 0o170000u16; /// file-type mask within `st_mode`
+const S_IFDIR: mode_t = 0o040000u16; /// directory
 
 /// Reference: sys/stat.h
 /// This structure is used as the second parameter to the fstat64(),
@@ -56,12 +60,28 @@ pub const Stat := extern struct {
     pub st_ctimensec: i64, /// nsec of last status change
     pub st_birthtime: time_t, /// File creation time (birth)
     pub st_birthtimensec: i64, /// nsec of File creation time
+    pub st_size: off_t, /// [XSI] file size, in bytes
     pub st_blocks: blkcnt_t, /// [XSI] blocks allocated for file
     pub st_blksize: blksize_t, /// [XSI] optimal blocksize for I/O
     pub st_flags: u32, /// user defined flags for file
     pub st_gen: u32, /// file generation number
     pub st_lspare: i32, /// RESERVED: DO NOT USE!
     pub st_qspare: [2]i64, /// RESERVED: DO NOT USE!
+
+    /// File size in bytes.
+    pub const size := fn(&self): u64 {
+        return @as(u64, self.st_size);
+    };
+
+    /// Whether the entry is a directory.
+    pub const is_dir := fn(&self): bool {
+        return (self.st_mode & S_IFMT) == S_IFDIR;
+    };
+
+    /// Last-modification time in nanoseconds since the Unix epoch.
+    pub const modified_time_ns := fn(&self): u64 {
+        return @as(u64, self.st_mtime) * 1000000000u64 + @as(u64, self.st_mtimensec);
+    };
 };
 
 extern("System", "__error") const sys_errno_loc: fn(): ^mut i32;
@@ -74,6 +94,23 @@ extern("System", "lseek") const sys_lseek: fn(fd: i32, offset: i64, whence: i32)
 extern("System", "fstat") const sys_fstat: fn(file_desc: Handle, stat: ^mut Stat): i32;
 extern("System", "mkdir") const sys_mkdir: fn(path: ^u8, mode: mode_t): i32;
 extern("System", "stat") const sys_stat: fn(path: ^u8, stat: ^mut Stat): i32;
+
+// <sys/mman.h>: raw anonymous memory, the page-granular allocation primitive.
+pub const PROT_READ: i32 = 0x1; /// pages can be read
+pub const PROT_WRITE: i32 = 0x2; /// pages can be written
+pub const MAP_PRIVATE: i32 = 0x0002; /// changes are private (copy-on-write)
+pub const MAP_ANON: i32 = 0x1000; /// allocate from anonymous virtual memory
+const MAP_FAILED: ^mut opaque = @ptrFromInt(^mut opaque, @as(usize, -1)); // ((void *)-1)
+
+extern("System", "mmap") const sys_mmap: fn(
+    addr: ^mut opaque,
+    len: usize,
+    prot: i32,
+    flags: i32,
+    fd: i32,
+    offset: i64
+): ^mut opaque;
+extern("System", "munmap") const sys_munmap: fn(addr: ^mut opaque, len: usize): i32;
 
 constexpr R := fn(T: type): type {
     return result::Result(T, Errno);
@@ -141,5 +178,19 @@ pub const stat := fn(path: [:0]u8): R(Stat) {
 /// Create a directory at the provided path
 pub const mkdir := fn(path: [:0]u8, mode: mode_t): R(void) {
     const r := sys_mkdir(path.ptr, mode);
+    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = {} };
+};
+
+/// Reserve and commit `len` bytes of zero-filled, read-write anonymous memory.
+/// The result is page-aligned; `len` is rounded up to a page by the kernel.
+pub const alloc := fn(len: usize): R(^mut u8) {
+    const p := sys_mmap(nullptr, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1i32, 0i64);
+    return if (p == MAP_FAILED) .{ .err = @as(Errno, *sys_errno_loc()) }
+        else .{ .ok = @ptrCast(^mut u8, p) };
+};
+
+/// Release a region previously returned by `alloc`. `len` must match the `alloc` call.
+pub const free := fn(ptr: ^mut u8, len: usize): R(void) {
+    const r := sys_munmap(@ptrCast(^mut opaque, ptr), len);
     return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = {} };
 };

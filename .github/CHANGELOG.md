@@ -238,3 +238,4 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Backs new concrete handlers and test runner in the standard library
 - Resolve an issue where aliased types/modules could not be used in dot expressions (bad constant folding)
 - Resolve an issue that prevented module-aliased lookups through aggregates
+- Add raw memory alloc/free to all backends

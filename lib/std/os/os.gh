@@ -26,6 +26,9 @@ pub const mkdir := backend::mkdir;
 pub const stat := backend::stat;
 pub const fstat := backend::fstat;
 
+pub const alloc := backend::alloc;
+pub const free := backend::free;
+
 pub const SEEK_SET := backend::SEEK_SET;
 pub const SEEK_CUR := backend::SEEK_CUR;
 pub const SEEK_END := backend::SEEK_END;
