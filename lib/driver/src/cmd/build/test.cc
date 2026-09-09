@@ -65,7 +65,7 @@ auto test_cmd::execute() -> stdx::result<void, clap::error> {
         opts_.runtime_safety,
     };
 
-    auto module{TRY(opts_.analyze(analyzer, manager, error_stream_))};
+    auto [module, gir_mod]{TRY(opts_.analyze(analyzer, manager, error_stream_, true))};
 
     // A hand-written `test_runner` override must match the forced entry signature.
     if (auto val_res{analyzer.validate_test_entry(*module)}; !val_res) {
@@ -73,8 +73,6 @@ auto test_cmd::execute() -> stdx::result<void, clap::error> {
         return stdx::err{clap::error::COMPILATION_FAILED};
     }
 
-    auto gir_mod{analyzer.emit_gir(*module, true)};
-    if (module->is_poisoned()) { return stdx::err{clap::error::COMPILATION_FAILED}; }
     TRY(opts_.emit_debug_artifacts(analyzer, gir_mod, error_stream_));
 
     auto emit_res{analyzer.emit_test_executable(gir_mod,

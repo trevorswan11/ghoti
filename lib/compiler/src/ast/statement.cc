@@ -39,7 +39,8 @@ auto block_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synt
     return parser.add_stmt<block_stmt>(start_token, std::move(statements));
 }
 
-auto break_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
+auto break_stmt::parse(syntax::parser& parser, syntax::semicolon_behavior behavior)
+    -> stdx::result<stmt_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
 
@@ -54,7 +55,10 @@ auto break_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synt
     // Values can be present but must be associated with a label
     stdx::option<expr_handle> value;
     if (!parser.peek_token_is(syntax::token_type_t::END) &&
-        !parser.peek_token_is(syntax::token_type_t::SEMICOLON)) {
+        !parser.peek_token_is(syntax::token_type_t::SEMICOLON) &&
+        !(behavior == syntax::semicolon_behavior::DISALLOW &&
+          (parser.peek_token_is(syntax::token_type_t::COMMA) ||
+           parser.peek_token_is(syntax::token_type_t::RBRACE)))) {
         parser.advance();
         value.emplace(TRY(parser.parse_expression()));
     }
@@ -64,7 +68,7 @@ auto break_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synt
                                syntax::error::VALUED_BREAK_MISSING_LABEL,
                                start_token);
     }
-    TRY(parser.expect_semicolon());
+    if (behavior != syntax::semicolon_behavior::DISALLOW) { TRY(parser.expect_semicolon()); }
     return parser.add_stmt<break_stmt>(start_token, label, value);
 }
 
@@ -121,7 +125,8 @@ auto cfg_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax
     return parser.add_stmt<cfg_stmt>(start_token, std::move(arms));
 }
 
-auto continue_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
+auto continue_stmt::parse(syntax::parser& parser, syntax::semicolon_behavior behavior)
+    -> stdx::result<stmt_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
 
@@ -135,13 +140,18 @@ auto continue_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, s
 
     // Values can never be present in a continue
     if (!parser.peek_token_is(syntax::token_type_t::END) &&
-        !parser.peek_token_is(syntax::token_type_t::SEMICOLON)) {
+        !parser.peek_token_is(syntax::token_type_t::SEMICOLON) &&
+        !(behavior == syntax::semicolon_behavior::DISALLOW &&
+          (parser.peek_token_is(syntax::token_type_t::COMMA) ||
+           parser.peek_token_is(syntax::token_type_t::RBRACE)))) {
         return make_syntax_err("Continue statements may only contain labels",
                                syntax::error::VALUED_CONTINUE,
                                start_token);
     }
 
-    TRY(parser.expect_peek(syntax::token_type_t::SEMICOLON));
+    if (behavior != syntax::semicolon_behavior::DISALLOW) {
+        TRY(parser.expect_peek(syntax::token_type_t::SEMICOLON));
+    }
     return parser.add_stmt<continue_stmt>(start_token, label);
 }
 
@@ -453,18 +463,22 @@ auto import_stmt::get_name(const AST& tree) const noexcept
     return {payload, ident.name};
 }
 
-auto return_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
+auto return_stmt::parse(syntax::parser& parser, syntax::semicolon_behavior behavior)
+    -> stdx::result<stmt_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
 
     stdx::option<expr_handle> value;
     if (!parser.peek_token_is(syntax::token_type_t::END) &&
-        !parser.peek_token_is(syntax::token_type_t::SEMICOLON)) {
+        !parser.peek_token_is(syntax::token_type_t::SEMICOLON) &&
+        !(behavior == syntax::semicolon_behavior::DISALLOW &&
+          (parser.peek_token_is(syntax::token_type_t::COMMA) ||
+           parser.peek_token_is(syntax::token_type_t::RBRACE)))) {
         parser.advance();
         value.emplace(TRY(parser.parse_expression()));
     }
 
-    TRY(parser.expect_semicolon());
+    if (behavior != syntax::semicolon_behavior::DISALLOW) { TRY(parser.expect_semicolon()); }
     return parser.add_stmt<return_stmt>(start_token, value);
 }
 

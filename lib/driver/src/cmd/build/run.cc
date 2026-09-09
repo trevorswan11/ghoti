@@ -55,15 +55,12 @@ auto run_cmd::execute() -> stdx::result<void, clap::error> {
 
     sema::analyzer analyzer{
         manager, error_stream_, true, opts_.target_opts, false, opts_.runtime_safety};
-    auto module{TRY(opts_.analyze(analyzer, manager, error_stream_))};
+    auto [module, gir_mod]{TRY(opts_.analyze(analyzer, manager, error_stream_))};
 
     if (auto val_res{analyzer.validate_main_entry(*module)}; !val_res) {
         fmt::println(error_stream_, "{}", val_res.error());
         return stdx::err{clap::error::COMPILATION_FAILED};
     }
-
-    auto gir_mod{analyzer.emit_gir(*module)};
-    if (module->is_poisoned()) { return stdx::err{clap::error::COMPILATION_FAILED}; }
 
     auto emit_res{analyzer.emit_executable(gir_mod,
                                            opts_.target_opts,
