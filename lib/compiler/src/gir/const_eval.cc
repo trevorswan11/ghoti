@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <filesystem>
 #include <limits>
 #include <ranges>
 #include <string>
@@ -2066,6 +2067,22 @@ auto const_eval::eval_builtin(ast::node_id          id,
         src_struct.fields["line"]   = const_value{static_cast<u64>(loc.line), t_u32};
         src_struct.fields["column"] = const_value{static_cast<u64>(loc.column), t_u32};
         return const_value{std::move(src_struct), ctx_.get_builtin_type("SourceLocation")};
+    }
+    case syntax::token_type_t::BUILTIN_EMBED: {
+        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
+        const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
+        if (!expr_h) { return stdx::none; }
+        const auto path_val{try_eval(*expr_h)};
+        if (!path_val || !path_val->is<std::string>()) { return stdx::none; }
+
+        const auto embed_path{module_->make_path_absolute(path_val->as<std::string>())};
+        const auto content_opt{ctx_.read_embed_file(embed_path)};
+        if (!content_opt) { return stdx::none; }
+
+        auto& u8_type{ctx_.get_int(8, false)};
+        auto& array_type{
+            ctx_.get_array(sema::types::mut::CONSTANT, true, content_opt->size(), u8_type)};
+        return const_value{*content_opt, array_type};
     }
     case syntax::token_type_t::BUILTIN_SET_EVAL_RECURSION_LIMIT: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");

@@ -1,18 +1,22 @@
+#include <fstream>
 #include <string_view>
 #include <utility>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <fmt/format.h>
+#include <fmt/ostream.h>
 
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/statement.hh"
+#include "compiler/gir/const_eval.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
 #include "helpers/common.hh"
 #include "helpers/sema.hh"
+#include "support/tempfile.hh"
 
 namespace ghoti::tests {
 
@@ -376,6 +380,32 @@ TEST_CASE("@setMainSymbol invalid identifier error") {
         sema::diagnostic{"@setMainSymbol argument must be a valid identifier; found '123bad'",
                          sema::error::TYPE_MISMATCH,
                          std::pair{0UZ, 15UZ}});
+}
+
+TEST_CASE("@embed builtin constant eval in sema") {
+    tempfile embedded{"ghoti_test_embed_sema"};
+    {
+        std::ofstream out{embedded.path};
+        fmt::print(out, "GhotiEmbedData");
+    }
+
+    const auto source{fmt::format(R"(const data := @embed("{}");)", embedded.path.string())};
+    auto [ctx, idx]{helpers::resolve_and_check(source)};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym, _, decl, type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("data", idx)};
+    const auto val{UNWRAP(evaluator.try_eval(*decl.value))};
+    CHECK(UNWRAP(val.as_opt<std::string>()) == "GhotiEmbedData");
+}
+
+TEST_CASE("@embed non-existent file produces sema error") {
+    helpers::test_resolver_fail(
+        R"(const data := @embed("/nonexistent/file/path/that/does/not/exist.txt");)",
+        sema::diagnostic{
+            "failed to read embedded file '/nonexistent/file/path/that/does/not/exist.txt'",
+            sema::error::CONSTEXPR_EVALUATION_FAILED,
+            std::pair{0UZ, 21UZ}});
 }
 
 } // namespace ghoti::tests

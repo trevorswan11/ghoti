@@ -1,6 +1,9 @@
 #include "compiler/sema/context.hh"
 
 #include <concepts>
+#include <filesystem>
+#include <fstream>
+#include <ios>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -21,6 +24,7 @@
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/keywords.hh"
 #include "compiler/syntax/token_type.hh"
+#include "support/string_utils.hh"
 
 namespace ghoti::sema {
 
@@ -209,6 +213,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::PANIC, params(t_c_str), t_noreturn);
     inject_function(bis::TRAP, params(), t_noreturn);
     inject_function(bis::COMPILE_ERROR, params(t_c_str), t_noreturn);
+    inject_function(bis::EMBED, params(t_c_str), t_auto);
 
     // `@implements(T | value, I)` -> bool (constexpr)
     inject_function(bis::IMPLEMENTS, params(t_auto, t_auto), t_bool);
@@ -309,6 +314,22 @@ auto context::type_display_name(const type& t) const -> std::string {
         return std::string{it->second};
     }
     return denoted->to_string();
+}
+
+auto context::read_embed_file(const std::filesystem::path& path)
+    -> stdx::option<const std::string&> {
+    const auto key{path.string()};
+    if (const auto it{embed_cache.find(key)}; it != embed_cache.end()) {
+        if (it->second) { return *it->second; }
+        return stdx::none;
+    }
+
+    std::ifstream file{path, std::ios::binary};
+    if (!file.is_open()) {
+        embed_cache[key] = stdx::none;
+        return stdx::none;
+    }
+    return embed_cache[key].emplace(string_utils::read_stream(file));
 }
 
 } // namespace ghoti::sema

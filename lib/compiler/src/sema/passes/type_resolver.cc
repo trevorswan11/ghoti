@@ -4,6 +4,7 @@
 #include <array>
 #include <cctype>
 #include <concepts>
+#include <filesystem>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -1124,6 +1125,44 @@ template <ast::IndexableID ID>
     }
     case token_type_t::BUILTIN_SRC: {
         return_type = &ctx_.get_builtin_type("SourceLocation");
+        break;
+    }
+    case token_type_t::BUILTIN_EMBED: {
+        if (call.arguments.empty()) {
+            return make_sema_err("@embed expects 1 argument",
+                                 error::TYPE_MISMATCH,
+                                 resolving_.ast.location_of(call.function));
+        }
+
+        stdx::option<std::string> path_str;
+        if (const auto expr_h{call.arguments[0].as_opt<ast::expr_handle>()}) {
+            if (const auto str_expr{resolving_.ast.get_as_opt<ast::string_expr>(*expr_h)}) {
+                path_str.emplace(str_expr->value);
+            } else {
+                gir::const_eval evaluator{ctx_, resolving_};
+                if (const auto val{evaluator.try_eval(*expr_h)}) {
+                    if (const auto str{val->as_opt<std::string>()}) { path_str.emplace(*str); }
+                }
+            }
+        }
+
+        if (!path_str) {
+            return make_sema_err("@embed argument must be a compile-time string",
+                                 error::CONSTEXPR_EVALUATION_FAILED,
+                                 get_call_arg_location(call.arguments[0]));
+        }
+
+        const auto embed_path{resolving_.make_path_absolute(*path_str)};
+        const auto content_opt{ctx_.read_embed_file(embed_path)};
+        if (!content_opt) {
+            return make_sema_err(
+                fmt::format("failed to read embedded file '{}'", embed_path.string()),
+                error::CONSTEXPR_EVALUATION_FAILED,
+                get_call_arg_location(call.arguments[0]));
+        }
+
+        return_type = &ctx_.get_array(
+            types::mut::CONSTANT, true, content_opt->size(), ctx_.get_int(8, false));
         break;
     }
     case token_type_t::BUILTIN_EXPECT:

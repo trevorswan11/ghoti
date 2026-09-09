@@ -245,3 +245,5 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - The `::` operator for namespacing has been completely removed 
     - Everything now must route through the `.` operator
 - Resolve an issue that prevent discardable method calls from being ignored
+- Fix a bug that would discard const correctness checks through address of operations at the IR level
+- Add `@embed` builtin for embedding a file on disk at compile time
