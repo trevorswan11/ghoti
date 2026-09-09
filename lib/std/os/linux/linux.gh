@@ -39,12 +39,20 @@ pub const STATX_BASIC_STATS: usize = 0x7ffuz; /// the traditional stat(2) field 
 const S_IFMT: u16 = 0o170000u16; /// file-type mask within `stx_mode`
 const S_IFDIR: u16 = 0o040000u16; /// directory
 
+// <asm-generic/mman-common.h> — raw anonymous memory, the page-granular allocation primitive.
+pub const PROT_READ: usize = 0x1uz; /// pages can be read
+pub const PROT_WRITE: usize = 0x2uz; /// pages can be written
+pub const MAP_PRIVATE: usize = 0x02uz; /// changes are private (copy-on-write)
+pub const MAP_ANONYMOUS: usize = 0x20uz; /// the mapping is not backed by any file
+
 @cfg (arch == .x86_64) {
     // <asm/unistd_64.h>
     const NR_read: usize = 0uz;
     const NR_write: usize = 1uz;
     const NR_close: usize = 3uz;
     const NR_lseek: usize = 8uz;
+    const NR_mmap: usize = 9uz;
+    const NR_munmap: usize = 11uz;
     const NR_openat: usize = 257uz;
     const NR_mkdirat: usize = 258uz;
     const NR_statx: usize = 332uz;
@@ -165,6 +173,8 @@ const S_IFDIR: u16 = 0o040000u16; /// directory
     const NR_write: usize = 64uz;
     const NR_close: usize = 57uz;
     const NR_lseek: usize = 62uz;
+    const NR_mmap: usize = 222uz;
+    const NR_munmap: usize = 215uz;
     const NR_openat: usize = 56uz;
     const NR_mkdirat: usize = 34uz;
     const NR_statx: usize = 291uz;
@@ -423,5 +433,26 @@ pub const fstat := fn(h: Handle): R(Stat) {
 /// - Fails with `ENOENT` when a parent is missing
 pub const mkdir := fn(path: [:0]u8, mode: mode_t): R(void) {
     const ret := syscall3(NR_mkdirat, AT_FDCWD, @intFromPtr(path.ptr), @as(usize, mode));
+    return if (failed(ret)) .{ .err = to_errno(ret) } else .{ .ok = {} };
+};
+
+/// Reserve and commit `len` bytes of zero-filled, read-write anonymous memory.
+/// The result is page-aligned; `len` is rounded up to a page by the kernel.
+pub const alloc := fn(len: usize): R(^mut u8) {
+    const ret := syscall6(
+        NR_mmap,
+        0uz,
+        len,
+        PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS,
+        @as(usize, -1),
+        0uz,
+    );
+    return if (failed(ret)) .{ .err = to_errno(ret) } else .{ .ok = @ptrFromInt(^mut u8, ret) };
+};
+
+/// Release a region previously returned by `alloc`. `len` must match the `alloc` call.
+pub const free := fn(ptr: ^mut u8, len: usize): R(void) {
+    const ret := syscall2(NR_munmap, @intFromPtr(ptr), len);
     return if (failed(ret)) .{ .err = to_errno(ret) } else .{ .ok = {} };
 };
