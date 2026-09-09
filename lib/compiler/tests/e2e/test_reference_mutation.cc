@@ -235,4 +235,55 @@ TEST_CASE("Passing an existing reference directly aliases the same referent") {
     )") == 6);
 }
 
+TEST_CASE("Taking &mut of a const binding is rejected") {
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            const c: i32 = 5;
+            const p: &mut i32 = &mut c;
+            return c;
+        };
+    )");
+}
+
+TEST_CASE("Taking ^mut of a const binding is rejected") {
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            const c: i32 = 5;
+            const p: ^mut i32 = ^mut c;
+            return c;
+        };
+    )");
+}
+
+TEST_CASE("Calling a `&mut self` method on a const receiver is rejected") {
+    helpers::expect_compile_error(R"(
+        const Counter := struct {
+            n: i32,
+            pub const bump := fn(&mut self): void {
+                self.n = self.n + 1;
+            };
+        };
+        pub const main := fn(): i32 {
+            const c := Counter{ .n = 0 };
+            c.bump();
+            return c.n;
+        };
+    )");
+}
+
+TEST_CASE("Calling a `&self` method on a const receiver is allowed") {
+    CHECK(helpers::compile_and_run(R"(
+        const Counter := struct {
+            n: i32,
+            pub const get := fn(&self): i32 {
+                return self.n;
+            };
+        };
+        pub const main := fn(): i32 {
+            const c := Counter{ .n = 7 };
+            return c.get();
+        };
+    )") == 7);
+}
+
 } // namespace ghoti::tests

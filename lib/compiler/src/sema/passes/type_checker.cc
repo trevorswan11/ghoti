@@ -686,7 +686,38 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                                      });
         }
         break;
-    case gir::instruction_kind::ADDRESS_OF:
+    case gir::instruction_kind::ADDRESS_OF: {
+        // Enforce `&mut`/`^mut` const correctness
+        const auto result_mutable{inst.type && !inst.type->is_poison() &&
+                                  (inst.type->get_kind() == type_kind::POINTER ||
+                                   inst.type->get_kind() == type_kind::REFERENCE) &&
+                                  !inst.type->is_constant()};
+        if (result_mutable && !inst.operands.empty()) {
+            if (const auto lid{inst.operands[0].as_opt<gir::local_id>()}) {
+                if (const auto it{locals_.find(*lid)};
+                    it != locals_.end() && it->second.is_const && it->second.is_alloca &&
+                    it->second.type &&
+                    it->second.type->get_kind() !=
+                        type_kind::CLOSURE // closure's `const` binding only pins the binding, not
+                                           // its captured env
+                ) {
+                    emit_diagnostic(
+                        "Cannot take a mutable reference or pointer to a constant binding",
+                        error::ASSIGNMENT_TO_CONST,
+                        inst.location);
+                }
+            }
+        }
+        if (inst.result && inst.type) {
+            locals_.insert_or_assign(*inst.result,
+                                     local_info{
+                                         .type      = inst.type.get(),
+                                         .is_alloca = false,
+                                         .is_const  = false,
+                                     });
+        }
+        break;
+    }
     case gir::instruction_kind::DEREF:
     case gir::instruction_kind::INT_FROM_PTR:
     case gir::instruction_kind::PTR_FROM_INT:
