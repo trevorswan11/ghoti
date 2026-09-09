@@ -106,7 +106,7 @@ TEST_CASE("test command execution") {
                 import "{}" as helper;
 
                 test "main module test" {{
-                    @expect(helper::helper_val == 42);
+                    @expect(helper.helper_val == 42);
                 }}
             )",
                        helper_file.path.filename().string());
@@ -141,7 +141,7 @@ TEST_CASE("test command execution") {
                 import "{}" as helper;
 
                 test "main module test" {{
-                    @expect(helper::helper_val == 42);
+                    @expect(helper.helper_val == 42);
                 }}
             )",
                        helper_file.path.filename().string());
@@ -164,7 +164,7 @@ TEST_CASE("test command execution") {
                     @require(false);
                 }}
 
-                pub const test_runner := fn(args: [][:0]u8, tests: []builtin::Test): i32 {{
+                pub const test_runner := fn(args: [][:0]u8, tests: []builtin.Test): i32 {{
                     _ = args;
                     _ = tests;
                     return 0;
@@ -189,7 +189,7 @@ TEST_CASE("test command execution") {
                     @expect(true);
                 }}
 
-                pub const test_runner := fn(args: [][:0]u8, tests: []builtin::Test): i32 {{
+                pub const test_runner := fn(args: [][:0]u8, tests: []builtin.Test): i32 {{
                     _ = args;
                     _ = tests;
                     return 12;
@@ -212,7 +212,7 @@ TEST_CASE("test command execution") {
             fmt::print(out, R"(
                 test "noop" {{ @expect(true); }}
 
-                pub const test_runner := fn(tests: []builtin::Test): i32 {{
+                pub const test_runner := fn(tests: []builtin.Test): i32 {{
                     _ = tests;
                     return 0;
                 }};
@@ -232,7 +232,7 @@ TEST_CASE("test command execution") {
             fmt::print(out, R"(
                 test "noop" {{ @expect(true); }}
 
-                pub const test_runner := fn(args: [][:0]u8, tests: []builtin::Test): void {{
+                pub const test_runner := fn(args: [][:0]u8, tests: []builtin.Test): void {{
                     _ = args;
                     _ = tests;
                 }};
@@ -252,7 +252,7 @@ TEST_CASE("test command execution") {
             fmt::print(out, R"(
                 test "noop" {{ @expect(true); }}
 
-                pub const test_runner := fn(args: [][:0]u8, tests: []builtin::Test): i32 {{
+                pub const test_runner := fn(args: [][:0]u8, tests: []builtin.Test): i32 {{
                     _ = tests;
                     if (args.len == 3) {{ return 0; }} // args passed through from runtime
                     if (args.len == 0) {{ return 0; }} // empty fallback on windows due to sysroot

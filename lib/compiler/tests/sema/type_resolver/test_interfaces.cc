@@ -176,7 +176,7 @@ TEST_CASE("a stray member in a trait impl is reported") {
 
 TEST_CASE("the orphan rule rejects an inherent impl on a foreign type") {
     CHECK(raised_with_import(R"(import "other.gh" as other;
-impl other::Foreign { pub const f := fn(&self): void {}; }
+impl other.Foreign { pub const f := fn(&self): void {}; }
 )",
                              "pub const Foreign := struct { x: i32 };",
                              sema::error::ORPHAN_IMPL));
@@ -353,7 +353,7 @@ TEST_CASE("a parameterized trait impl over a local ctor conforms and its method 
 TEST_CASE("a parameterized impl anchored on neither its ctor nor its interface is an orphan") {
     CHECK(raised_with_import(R"(
         import "other.gh" as other;
-        impl(T: type) other::Bag(T) { pub const peek := fn(&self): T { return self.v; }; }
+        impl(T: type) other.Bag(T) { pub const peek := fn(&self): T { return self.v; }; }
 )",
                              R"(pub const Bag := fn(T: type): type { return struct { v: T }; };)",
                              sema::error::ORPHAN_IMPL));
@@ -400,11 +400,11 @@ TEST_CASE("a parameterized impl anchored on a local interface may target a forei
         R"(
         import "other.gh" as other;
         const Named := interface { pub const label := fn(&self): i32; };
-        impl(T: type) Named for other::Bag(T) {
+        impl(T: type) Named for other.Bag(T) {
             pub const label := fn(&self): i32 { return self.v; };
         }
         const use := fn(): i32 {
-            var b: other::Bag(i32) = .{ .v = 7 };
+            var b: other.Bag(i32) = .{ .v = 7 };
             return b.label();
         };
 )",
@@ -544,7 +544,7 @@ TEST_CASE("a sealed method is not callable through `&dyn I` from another module"
     CHECK(raised_with_import(
         R"(
         import "other.gh" as m;
-        const use := fn(x: &dyn m::Sealed): i32 { return x.hidden(); };
+        const use := fn(x: &dyn m.Sealed): i32 { return x.hidden(); };
 )",
         R"(pub const Sealed := interface {
                pub const shown := fn(&self): i32;

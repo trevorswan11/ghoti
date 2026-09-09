@@ -216,7 +216,7 @@ TEST_CASE("a parameterized impl in a library module is used from the consumer") 
               R"(
         import "shapes.gh" as shapes;
         pub const main := fn(): i32 {
-            var s: shapes::Scaled(i32) = .{ .base = 42 };
+            var s: shapes.Scaled(i32) = .{ .base = 42 };
             return s.size();
         };
     )",
@@ -352,9 +352,9 @@ TEST_CASE("`&dyn I` dispatches across a module boundary") {
     CHECK(helpers::compile_and_run(
               R"(
             import "sh.gh" as sh;
-            const measure := fn(x: &dyn sh::Shape): i32 { return x.area(); };
+            const measure := fn(x: &dyn sh.Shape): i32 { return x.area(); };
             pub const main := fn(): i32 {
-                var q: sh::Sq = .{ .s = 7 };
+                var q: sh.Sq = .{ .s = 7 };
                 return measure(&q) - 7;
             };
         )",
@@ -593,7 +593,7 @@ TEST_CASE("Two impls in separate modules sharing an interface") {
     constexpr std::string_view MOD_A{R"(
         import "iface.gh" as i;
         pub const AType := struct { v: i32 };
-        impl i::Adder for AType {
+        impl i.Adder for AType {
             pub const base := fn(&self): i32 { return self.v; };
         }
         pub const make_a := fn(): i32 {
@@ -606,12 +606,12 @@ TEST_CASE("Two impls in separate modules sharing an interface") {
             import "iface.gh" as i;
             import "mod_a.gh" as ma;
             const BType := struct { v: i32 };
-            impl i::Adder for BType {
+            impl i.Adder for BType {
                 pub const base := fn(&self): i32 { return self.v; };
             }
             pub const main := fn(): i32 {
                 var b := BType{ .v = 0 };
-                return ma::make_a();
+                return ma.make_a();
             };
         )",
         {
@@ -634,11 +634,11 @@ TEST_CASE("Multiple impls of shared interface retain inherited defaults") {
         R"(
             import "greeter.gh" as g;
             const Alpha := struct { c: i32 };
-            impl g::Greeter for Alpha {
+            impl g.Greeter for Alpha {
                 pub const code := fn(&self): i32 { return self.c; };
             }
             const Beta := struct { c: i32 };
-            impl g::Greeter for Beta {
+            impl g.Greeter for Beta {
                 pub const code := fn(&self): i32 { return self.c; };
             }
             pub const main := fn(): i32 {
@@ -664,7 +664,7 @@ TEST_CASE("Cross-module inherited default method compiles and runs") {
         R"(
             import "iface.gh" as iface;
             const Item := struct { val: i32 };
-            impl iface::Describable for Item {
+            impl iface.Describable for Item {
                 pub const id := fn(&self): i32 { return self.val; };
             }
             pub const main := fn(): i32 {

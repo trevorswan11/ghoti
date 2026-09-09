@@ -36,7 +36,7 @@ constexpr std::string_view LEAF{R"(
 // Middle module: re-exports the leaf and also aliases one of its symbols.
 constexpr std::string_view MID{R"(
     pub import "leaf.gh" as leaf;
-    pub using Coord = leaf::Point;
+    pub using Coord = leaf.Point;
 )"};
 
 // Top module: re-exports the middle module.
@@ -57,9 +57,9 @@ TEST_CASE("E2E: a re-exported `pub var` has one storage location across the whol
         R"(
             import "top.gh" as top;
             pub const main := fn(): i32 {
-                top::top_mid::leaf::bump();
-                top::top_mid::leaf::bump();
-                return top::top_mid::leaf::get();
+                top.top_mid.leaf.bump();
+                top.top_mid.leaf.bump();
+                return top.top_mid.leaf.get();
             };
         )",
         chain_files())};
@@ -71,7 +71,7 @@ TEST_CASE("E2E: a re-exported `pub const` folds as a compile-time array dimensio
         R"(
             import "top.gh" as top;
             pub const main := fn(): i32 {
-                var buf: [top::top_mid::leaf::PAGE]mut i32 = undefined;
+                var buf: [top.top_mid.leaf.PAGE]mut i32 = undefined;
                 buf[3] = 42;   // valid only if PAGE >= 4
                 return buf[3];
             };
@@ -85,7 +85,7 @@ TEST_CASE("E2E: a re-exported `pub const` folds as a value operand through the c
         R"(
             import "top.gh" as top;
             pub const main := fn(): i32 {
-                return @as(i32, top::top_mid::leaf::PAGE) * 10 + 2;
+                return @as(i32, top.top_mid.leaf.PAGE) * 10 + 2;
             };
         )",
         chain_files())};
@@ -97,7 +97,7 @@ TEST_CASE("E2E: a re-exported `struct` type is constructible with a callable mem
         R"(
             import "top.gh" as top;
             pub const main := fn(): i32 {
-                const p: top::top_mid::leaf::Point = .{ .x = 30, .y = 12 };
+                const p: top.top_mid.leaf.Point = .{ .x = 30, .y = 12 };
                 return p.sum() + p.x - p.x;   // method + direct pub field access
             };
         )",
@@ -110,7 +110,7 @@ TEST_CASE("E2E: a `pub using` alias of a re-exported symbol is itself re-exporte
         R"(
             import "top.gh" as top;
             pub const main := fn(): i32 {
-                const c: top::top_mid::Coord = .{ .x = 40, .y = 2 };
+                const c: top.top_mid.Coord = .{ .x = 40, .y = 2 };
                 return c.sum();
             };
         )",
@@ -123,7 +123,7 @@ TEST_CASE("E2E: a re-exported `enum` matches by variant through the chain") {
         R"(
             import "top.gh" as top;
             pub const main := fn(): i32 {
-                const t: top::top_mid::leaf::Tag = .green;
+                const t: top.top_mid.leaf.Tag = .green;
                 return match (t) {
                     .red => 1,
                     .green => 42,
@@ -141,7 +141,7 @@ TEST_CASE(
         R"(
             import "top.gh" as top;
             pub const main := fn(): i32 {
-                const lvl: top::top_mid::leaf::Level = top::top_mid::leaf::to_level(20);
+                const lvl: top.top_mid.leaf.Level = top.top_mid.leaf.to_level(20);
                 return match (lvl) {
                     .low => 1,
                     .mid => 42,
@@ -159,7 +159,7 @@ TEST_CASE("E2E: a re-exported generic type constructor instantiates through the 
         R"(
             import "top.gh" as top;
             pub const main := fn(): i32 {
-                const b: top::top_mid::leaf::Box(i32) = .{ .val = 42 };
+                const b: top.top_mid.leaf.Box(i32) = .{ .val = 42 };
                 return b.val;
             };
         )",
@@ -179,7 +179,7 @@ TEST_CASE("E2E: same-named symbols from two leaves re-exported into one parent s
         R"(
             import "combined.gh" as combined;
             pub const main := fn(): i32 {
-                return combined::a::kind() + combined::b::kind();
+                return combined.a.kind() + combined.b.kind();
             };
         )",
         {

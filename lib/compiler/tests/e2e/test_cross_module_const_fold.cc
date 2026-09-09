@@ -28,7 +28,7 @@ TEST_CASE("E2E: a `pub const` folds to its own module's value across imports") {
             import "b.gh" as b;
 
             pub const main := fn(): i32 {
-                return a::read_a() + b::read_b();
+                return a.read_a() + b.read_b();
             };
         )",
         {

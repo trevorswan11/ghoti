@@ -436,7 +436,6 @@ constexpr auto INFIX_FNS = [] -> auto {
     fns[token_type_t::SHR_ASSIGN]           = ast::assignment_expr::parse;
     fns[token_type_t::NOT_ASSIGN]           = ast::assignment_expr::parse;
     fns[token_type_t::XOR_ASSIGN]           = ast::assignment_expr::parse;
-    fns[token_type_t::COLON_COLON]          = ast::module_access_expr::parse;
     fns[token_type_t::COLON]                = ast::label_expr::parse;
 
     return fns;

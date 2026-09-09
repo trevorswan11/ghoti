@@ -275,7 +275,7 @@ TEST_CASE("E2E: a cross-module non-generic `fn(): type` with member functions") 
     const auto                 exit_code{helpers::compile_and_run(
         R"(
             import "lib.gh" as lib;
-            using M = lib::Make();
+            using M = lib.Make();
             pub const main := fn(): i32 {
                 const a := M.of(21);
                 return a.doubled();
@@ -298,8 +298,8 @@ TEST_CASE("E2E: a cross-module generic type constructor, two instantiations, met
     const auto                 exit_code{helpers::compile_and_run(
         R"(
             import "vec.gh" as v;
-            using VI = v::Vec(i32);
-            using VL = v::Vec(i64);
+            using VI = v.Vec(i32);
+            using VL = v.Vec(i64);
             pub const main := fn(): i32 {
                 const a := VI.make(3);
                 const b := VL.make(7);

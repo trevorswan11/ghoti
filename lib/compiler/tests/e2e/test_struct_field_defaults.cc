@@ -63,7 +63,7 @@ TEST_CASE("A field default that references another module resolves") {
               R"(
             import "opts.gh" as opts;
             pub const main := fn(): i32 {
-                var o := opts::Options{ .name = "x" };
+                var o := opts.Options{ .name = "x" };
                 return o.cap - 200;
             };
         )",

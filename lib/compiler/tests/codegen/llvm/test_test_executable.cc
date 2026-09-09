@@ -70,7 +70,7 @@ TEST_CASE("A non-weak `test_runner` overrides the builtin weak default") {
             @require(false);
         }
 
-        pub const test_runner := fn(args: [][:0]u8, tests: []builtin::Test): i32 {
+        pub const test_runner := fn(args: [][:0]u8, tests: []builtin.Test): i32 {
             _ = args;
             _ = tests;
             return 77;
@@ -88,7 +88,7 @@ TEST_CASE("The overriding `test_runner` receives the test metadata slice") {
             @expect(true);
         }
 
-        pub const test_runner := fn(args: [][:0]u8, tests: []builtin::Test): i32 {
+        pub const test_runner := fn(args: [][:0]u8, tests: []builtin.Test): i32 {
             _ = args;
             if (tests.len == 2) {
                 return 42;
@@ -104,7 +104,7 @@ TEST_CASE("The overriding `test_runner` invokes a test function pointer directly
             @expect(1 + 1 == 2);
         }
 
-        pub const test_runner := fn(args: [][:0]u8, tests: []builtin::Test): i32 {
+        pub const test_runner := fn(args: [][:0]u8, tests: []builtin.Test): i32 {
             _ = args;
             if (tests.len == 1) {
                 const ok := tests[0].func();
@@ -123,7 +123,7 @@ TEST_CASE("The overriding `test_runner` can walk the argv slice") {
             @expect(true);
         }
 
-        pub const test_runner := fn(args: [][:0]u8, tests: []builtin::Test): i32 {
+        pub const test_runner := fn(args: [][:0]u8, tests: []builtin.Test): i32 {
             _ = tests;
             var total: usize = 0;
             for (args) |arg| {

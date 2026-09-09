@@ -66,9 +66,9 @@ TEST_CASE("a shared session that analyzes two impls of one interface keeps inher
     constexpr std::string_view impl_body{R"(
         import "reader.gh" as reader;
         pub const {0} := struct {{ pub data: []mut u8, pub pos: usize = 0 }};
-        impl reader::Reader for {0} {{
+        impl reader.Reader for {0} {{
             using Error = u8;
-            pub const read := fn(&mut self, buf: []mut u8): reader::Result(usize, Error) {{
+            pub const read := fn(&mut self, buf: []mut u8): reader.Result(usize, Error) {{
                 const rem := self.data.len - self.pos;
                 const n := if (buf.len < rem) buf.len else rem;
                 self.pos += n;

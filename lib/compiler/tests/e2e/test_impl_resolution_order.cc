@@ -62,11 +62,11 @@ TEST_CASE("E2E: a cross-module `using` alias in an `impl` target's method signat
     constexpr std::string_view file_gh{R"(
         import "result.gh" as result;
         import "err.gh" as error;
-        using Result = result::Result;
+        using Result = result.Result;
 
         pub const File := struct {
             pub handle: i32,
-            pub const open := fn(h: i32): Result(File, error::Error) {
+            pub const open := fn(h: i32): Result(File, error.Error) {
                 return .{ .ok = .{ .handle = h } };
             };
         };
@@ -77,7 +77,7 @@ TEST_CASE("E2E: a cross-module `using` alias in an `impl` target's method signat
         R"(
             import "file.gh" as f;
             pub const main := fn(): i32 {
-                return match (f::File.open(9)) { .ok => |x| x.handle, .err => 0 };
+                return match (f.File.open(9)) { .ok => |x| x.handle, .err => 0 };
             };
         )",
         {
@@ -98,7 +98,7 @@ TEST_CASE("E2E: a cross-module trait-impl method calls a sibling method through 
     constexpr std::string_view dev_gh{R"(
         import "iface.gh" as iface;
         pub const Dev := struct { acc: i32 };
-        impl iface::W for Dev {
+        impl iface.W for Dev {
             pub const put := fn(&mut self, n: i32): i32 { self.acc += n; return self.acc; };
             pub const putN := fn(&mut self, n: i32, k: i32): i32 {
                 _ = k;
@@ -111,7 +111,7 @@ TEST_CASE("E2E: a cross-module trait-impl method calls a sibling method through 
         R"(
             import "dev.gh" as d;
             pub const main := fn(): i32 {
-                var x := d::Dev{ .acc = 0 };
+                var x := d.Dev{ .acc = 0 };
                 return x.putN(10, 3);
             };
         )",
@@ -132,7 +132,7 @@ TEST_CASE("E2E: a cross-module trait-impl method calls a sibling through a non-`
     constexpr std::string_view dev_gh{R"(
         import "iface.gh" as iface;
         pub const Dev := struct { acc: i32 };
-        impl iface::W for Dev {
+        impl iface.W for Dev {
             pub const put := fn(&mut this, n: i32): i32 { this.acc += n; return this.acc; };
             pub const putN := fn(&mut this, n: i32): i32 { return this.put(n) + this.put(n); };
         }
@@ -142,7 +142,7 @@ TEST_CASE("E2E: a cross-module trait-impl method calls a sibling through a non-`
         R"(
             import "dev.gh" as d;
             pub const main := fn(): i32 {
-                var x := d::Dev{ .acc = 0 };
+                var x := d.Dev{ .acc = 0 };
                 return x.putN(10);
             };
         )",
@@ -164,7 +164,7 @@ TEST_CASE("E2E: a static enum method reached cross-module via a `using` alias is
     )"};
     constexpr std::string_view wrap_gh{R"(
         import "err.gh" as error;
-        using Error = error::Error;
+        using Error = error.Error;
         pub const classify := fn(c: i32): Error { return Error.fromCode(c); };
     )"};
 
@@ -172,7 +172,7 @@ TEST_CASE("E2E: a static enum method reached cross-module via a `using` alias is
         R"(
             import "wrap.gh" as wrap;
             pub const main := fn(): i32 {
-                return match (wrap::classify(0i32)) { .not_found => 5, _ => 1 };
+                return match (wrap.classify(0i32)) { .not_found => 5, _ => 1 };
             };
         )",
         {
@@ -182,11 +182,11 @@ TEST_CASE("E2E: a static enum method reached cross-module via a `using` alias is
     CHECK(exit_code == 5);
 }
 
-TEST_CASE("E2E: a re-exported function called as `mod::fn(...)` links to its real owner") {
+TEST_CASE("E2E: a re-exported function called as `mod.fn(...)` links to its real owner") {
     constexpr std::string_view backend_gh{R"(pub const dup := fn(n: i32): i32 { return n + n; };)"};
     constexpr std::string_view os_gh{R"(
         import "backend.gh" as backend;
-        pub const dup := backend::dup;
+        pub const dup := backend.dup;
     )"};
     constexpr std::string_view other_gh{R"(pub const dup := fn(): i32 { return 999; };)"};
 
@@ -195,8 +195,8 @@ TEST_CASE("E2E: a re-exported function called as `mod::fn(...)` links to its rea
             import "os.gh" as os;
             import "other.gh" as other;
             pub const main := fn(): i32 {
-                _ = other::dup;
-                return os::dup(21);
+                _ = other.dup;
+                return os.dup(21);
             };
         )",
         {
@@ -219,7 +219,7 @@ TEST_CASE("E2E: a cross-module interface default method the impl does not overri
     constexpr std::string_view one_gh{R"(
         import "adder.gh" as adder;
         pub const One := struct { by: i32 };
-        impl adder::Adder for One {
+        impl adder.Adder for One {
             pub const step := fn(&self): i32 { return self.by; };
         }
     )"};
@@ -228,7 +228,7 @@ TEST_CASE("E2E: a cross-module interface default method the impl does not overri
         R"(
             import "one.gh" as m;
             pub const main := fn(): i32 {
-                var o := m::One{ .by = 14 };
+                var o := m.One{ .by = 14 };
                 return o.stepThrice();
             };
         )",
@@ -247,8 +247,8 @@ TEST_CASE(
         import "res.gh" as res;
         pub const Writer := interface {
             Error: type;
-            pub const write := fn(&mut self, bytes: []u8): res::Result(usize, Error);
-            pub const writeAll := fn(&mut self, bytes: []u8): res::Result(void, Error) {
+            pub const write := fn(&mut self, bytes: []u8): res.Result(usize, Error);
+            pub const writeAll := fn(&mut self, bytes: []u8): res.Result(void, Error) {
                 var off: usize = 0;
                 loop {
                     if (off == bytes.len) { break; }
@@ -263,9 +263,9 @@ TEST_CASE(
         import "writer.gh" as writer;
         import "res.gh" as res;
         pub const Sink := struct { pub total: usize };
-        impl writer::Writer for Sink {
+        impl writer.Writer for Sink {
             using Error = u8;
-            pub const write := fn(&mut self, bytes: []u8): res::Result(usize, Error) {
+            pub const write := fn(&mut self, bytes: []u8): res.Result(usize, Error) {
                 self.total += bytes.len;
                 return .{ .ok = bytes.len };
             };
@@ -276,7 +276,7 @@ TEST_CASE(
         R"(
             import "sink.gh" as m;
             pub const main := fn(): i32 {
-                var s := m::Sink{ .total = 0 };
+                var s := m.Sink{ .total = 0 };
                 const buf := [3uz]u8{ 1, 2, 3 };
                 _ = s.writeAll(buf);
                 return @as(i32, s.total);
@@ -297,8 +297,8 @@ TEST_CASE("E2E: one inherited cross-module default method calls another through 
         import "res.gh" as res;
         pub const Writer := interface {
             Error: type;
-            pub const write := fn(&mut self, bytes: []u8): res::Result(usize, Error);
-            pub const writeAll := fn(&mut self, bytes: []u8): res::Result(void, Error) {
+            pub const write := fn(&mut self, bytes: []u8): res.Result(usize, Error);
+            pub const writeAll := fn(&mut self, bytes: []u8): res.Result(void, Error) {
                 var off: usize = 0;
                 loop {
                     if (off == bytes.len) { break; }
@@ -306,7 +306,7 @@ TEST_CASE("E2E: one inherited cross-module default method calls another through 
                 };
                 return .{ .ok = {} };
             };
-            pub const writeByte := fn(&mut self, b: u8): res::Result(void, Error) {
+            pub const writeByte := fn(&mut self, b: u8): res.Result(void, Error) {
                 const one := [1uz]u8{ b };
                 return self.writeAll(one);
             };
@@ -316,9 +316,9 @@ TEST_CASE("E2E: one inherited cross-module default method calls another through 
         import "writer.gh" as writer;
         import "res.gh" as res;
         pub const Sink := struct { pub total: usize };
-        impl writer::Writer for Sink {
+        impl writer.Writer for Sink {
             using Error = u8;
-            pub const write := fn(&mut self, bytes: []u8): res::Result(usize, Error) {
+            pub const write := fn(&mut self, bytes: []u8): res.Result(usize, Error) {
                 self.total += bytes.len;
                 return .{ .ok = bytes.len };
             };
@@ -329,7 +329,7 @@ TEST_CASE("E2E: one inherited cross-module default method calls another through 
         R"(
             import "sink.gh" as m;
             pub const main := fn(): i32 {
-                var s := m::Sink{ .total = 0 };
+                var s := m.Sink{ .total = 0 };
                 _ = s.writeByte('x');
                 _ = s.writeByte('y');
                 return @as(i32, s.total);
@@ -350,8 +350,8 @@ TEST_CASE("E2E: a second impl of the same interface still inherits its default m
         import "res.gh" as res;
         pub const Reader := interface {
             Error: type;
-            pub const read := fn(&mut self, buf: []mut u8): res::Result(usize, Error);
-            pub const readAll := fn(&mut self, buf: []mut u8): res::Result(usize, Error) {
+            pub const read := fn(&mut self, buf: []mut u8): res.Result(usize, Error);
+            pub const readAll := fn(&mut self, buf: []mut u8): res.Result(usize, Error) {
                 var i: usize = 0;
                 loop {
                     if (i == buf.len) { break; }
@@ -368,9 +368,9 @@ TEST_CASE("E2E: a second impl of the same interface still inherits its default m
         import "reader.gh" as reader;
         import "res.gh" as res;
         pub const Early := struct { pub data: []mut u8, pub pos: usize = 0 };
-        impl reader::Reader for Early {
+        impl reader.Reader for Early {
             using Error = u8;
-            pub const read := fn(&mut self, buf: []mut u8): res::Result(usize, Error) {
+            pub const read := fn(&mut self, buf: []mut u8): res.Result(usize, Error) {
                 const rem := self.data.len - self.pos;
                 const n := if (buf.len < rem) buf.len else rem;
                 self.pos += n;
@@ -386,9 +386,9 @@ TEST_CASE("E2E: a second impl of the same interface still inherits its default m
             import "res.gh" as res;
 
             const Late := struct { pub data: []mut u8, pub pos: usize = 0 };
-            impl reader::Reader for Late {
+            impl reader.Reader for Late {
                 using Error = u8;
-                pub const read := fn(&mut self, buf: []mut u8): res::Result(usize, Error) {
+                pub const read := fn(&mut self, buf: []mut u8): res.Result(usize, Error) {
                     const rem := self.data.len - self.pos;
                     const n := if (buf.len < rem) buf.len else rem;
                     self.pos += n;
@@ -398,7 +398,7 @@ TEST_CASE("E2E: a second impl of the same interface still inherits its default m
 
             pub const main := fn(): i32 {
                 var eb: [6]mut u8 = undefined;
-                var e := early::Early{ .data = eb };
+                var e := early.Early{ .data = eb };
                 var lb: [6]mut u8 = undefined;
                 var l := Late{ .data = lb };
                 var out: [4]mut u8 = undefined;

@@ -2885,6 +2885,12 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                 } else {
                     callee_name.emplace(std::string{member_ident.name});
                 }
+            } else if (rt && rt->get_kind() == sema::type_kind::MODULE) {
+                if (const auto owner{active_mod().get_resolved_symbol_owner_opt(call.function)}) {
+                    callee_name.emplace(symbol_scoping_.name_for(*owner, member_ident.name));
+                } else {
+                    callee_name.emplace(std::string{member_ident.name});
+                }
             } else {
                 const auto callee_val{emit_expression(call.function)};
                 indirect_callee.emplace(callee_val);
@@ -3020,6 +3026,22 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                     }
                 }
             }
+        } else if (const auto inner_dot{active_ast().get_as_opt<ast::dot_expr>(target_obj)}) {
+            if (const auto mod_type{active_mod().get_sema_type_opt(inner_dot->object)}) {
+                if (const auto m_data{mod_type->get_data().as_opt<sema::types::module>()}) {
+                    const auto& inner_mod{m_data->imported};
+                    if (inner_mod.root_table_idx) {
+                        const auto& inner_ident{
+                            active_ast().get_as<ast::identifier_expr>(inner_dot->member)};
+                        if (const auto sym{ctx_.registry.get_from_opt(*inner_mod.root_table_idx,
+                                                                      inner_ident.name)}) {
+                            if (sym->has_kind() && sym->get_kind() == sema::symbol_kind::TYPE) {
+                                is_type = true;
+                            }
+                        }
+                    }
+                }
+            }
         } else if (const auto mac{active_ast().get_as_opt<ast::module_access_expr>(target_obj)}) {
             if (const auto mod_type{active_mod().get_sema_type_opt(mac->outer)}) {
                 if (const auto m_data{mod_type->get_data().as_opt<sema::types::module>()}) {
@@ -3035,6 +3057,11 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                         }
                     }
                 }
+            }
+        } else if (const auto ot{active_mod().get_sema_type_opt(target_obj)}) {
+            if (ot->get_kind() == sema::type_kind::TYPE ||
+                ot->get_kind() == sema::type_kind::MODULE) {
+                is_type = true;
             }
         }
         if (!is_type) { is_obj_instance = true; }
@@ -4428,9 +4455,22 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                 return lvalue_of_expr(id, *st);
             }
 
-            auto       base_lval{emit_lvalue(dot.object)};
             const auto obj_type_opt{active_mod().get_sema_type_opt(dot.object)};
             ASSERT(obj_type_opt, "Dot expression object must have a resolved type");
+            if (obj_type_opt->get_kind() == sema::type_kind::MODULE) {
+                const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
+                const auto  m_data{obj_type_opt->get_data().as_opt<sema::types::module>()};
+                if (m_data && m_data->imported.root_table_idx) {
+                    if (const auto gref{global_ref_in(*m_data->imported.root_table_idx, member_ident.name)}) {
+                        return *gref;
+                    }
+                }
+                const auto st{active_mod().get_sema_type_opt(id)};
+                ASSERT(st, "LValue expression must have a resolved sema type");
+                return lvalue_of_expr(id, *st);
+            }
+
+            auto       base_lval{emit_lvalue(dot.object)};
             auto* obj_type{obj_type_opt.get()};
 
             // A reference/pointer-typed field or nested access needs one more indirection unwound
@@ -5340,6 +5380,18 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
     const auto raw_obj_type{active_mod().get_sema_type_opt(dot.object)};
     ASSERT(raw_obj_type, "Dot expression object must have a resolved type");
     auto* obj_type{raw_obj_type.get()};
+
+    if (obj_type->get_kind() == sema::type_kind::MODULE) {
+        if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+        const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
+        const auto  m_data{obj_type->get_data().as_opt<sema::types::module>()};
+        if (m_data && m_data->imported.root_table_idx) {
+            if (const auto gref{global_ref_in(*m_data->imported.root_table_idx, member_ident.name)}) {
+                return value{builder_.emit_load(*gref, *gref->type), *gref->type};
+            }
+        }
+        return value{ref_symbol_name(id, member_ident.name), sema_type};
+    }
 
     if (dot_object_is_type_namespace(dot)) {
         const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};

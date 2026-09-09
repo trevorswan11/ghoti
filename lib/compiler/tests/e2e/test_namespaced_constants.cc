@@ -69,7 +69,7 @@ TEST_CASE("reference to a global constant aggregate, then field access") {
     )") == 42);
 }
 
-TEST_CASE("`using T = other::Enum` then `alias::T.M` evaluates cleanly") {
+TEST_CASE("`using T = other.Enum` then `alias.T.M` evaluates cleanly") {
     constexpr std::string_view ENUM_MOD{R"(
         pub const E := enum : u32 { A = 1u32, B = 2u32, C = 7u32, _ };
         pub using Alias = E;
@@ -78,15 +78,15 @@ TEST_CASE("`using T = other::Enum` then `alias::T.M` evaluates cleanly") {
         R"(
             import "enums.gh" as x;
             pub const main := fn(): i32 {
-                const e: x::Alias = x::Alias.C;
-                return if (e == x::Alias.C) 7 else 1;
+                const e: x.Alias = x.Alias.C;
+                return if (e == x.Alias.C) 7 else 1;
             };
         )",
         {helpers::mock_file{"enums.gh", ENUM_MOD, "enums"}})};
     CHECK(exit_code == 7);
 }
 
-TEST_CASE("Local module alias `alias::E.C` resolves cleanly without ICmp crash") {
+TEST_CASE("Local module alias `alias.E.C` resolves cleanly without ICmp crash") {
     constexpr std::string_view PKG_MOD{R"(
         pub const E := enum : u32 { A = 1u32, B = 2u32, C = 7u32, _ };
     )"};
@@ -95,8 +95,8 @@ TEST_CASE("Local module alias `alias::E.C` resolves cleanly without ICmp crash")
             import "pkg.gh" as pkg;
             using my_pkg = pkg;
             pub const main := fn(): i32 {
-                const e: my_pkg::E = my_pkg::E.C;
-                return if (e == my_pkg::E.C) 7 else 1;
+                const e: my_pkg.E = my_pkg.E.C;
+                return if (e == my_pkg.E.C) 7 else 1;
             };
         )",
         {helpers::mock_file{"pkg.gh", PKG_MOD, "pkg"}})};

@@ -88,7 +88,7 @@ TEST_CASE("E2E cfg: a non-selected @cfg import is never parsed") {
             @cfg(ptr_bits == 64) import "good.gh"   as backend;
             else                 import "broken.gh" as backend;
 
-            pub const main := fn(): i32 { return backend::value(); };
+            pub const main := fn(): i32 { return backend.value(); };
         )",
         {
             helpers::mock_file{"good.gh", GOOD_BACKEND, "good"},
@@ -246,11 +246,11 @@ TEST_CASE("E2E cfg: a re-exported @cfgValue constant is usable cross-module as a
         R"(
             import "sys.gh" as sys;
             pub const main := fn(): i32 {
-                var buf: [sys::word]mut i32 = undefined;
-                buf[sys::word - 1uz] = 3;
-                const via_if := if constexpr (sys::is_wide) 4 else 2;
-                const via_val := sys::is_wide;
-                return buf[sys::word - 1uz] + via_if + (if (via_val) 1 else 0);
+                var buf: [sys.word]mut i32 = undefined;
+                buf[sys.word - 1uz] = 3;
+                const via_if := if constexpr (sys.is_wide) 4 else 2;
+                const via_val := sys.is_wide;
+                return buf[sys.word - 1uz] + via_if + (if (via_val) 1 else 0);
             };
         )",
         {helpers::mock_file{"sys.gh",

@@ -32,7 +32,7 @@ TEST_CASE("E2E: same-named `pub const fn` in two modules stay distinct") {
             import "k2.gh" as k2;
 
             pub const main := fn(): i32 {
-                return k1::tag() * 10 + k2::tag();   // 37
+                return k1.tag() * 10 + k2.tag();   // 37
             };
         )",
         {
@@ -50,10 +50,10 @@ TEST_CASE("E2E: same-named `pub var` in two modules have independent storage") {
             import "k2.gh" as k2;
 
             pub const main := fn(): i32 {
-                k1::bump();
-                k2::bump();
-                k2::bump();
-                return k1::get() + k2::get();   // (10+1) + (50+20) = 81
+                k1.bump();
+                k2.bump();
+                k2.bump();
+                return k1.get() + k2.get();   // (10+1) + (50+20) = 81
             };
         )",
         {
@@ -69,8 +69,8 @@ TEST_CASE("E2E: a module-scope alias of a colliding cross-module function") {
             import "k1.gh" as k1;
             import "k2.gh" as k2;
 
-            const first  := k1::tag;
-            const second := k2::tag;
+            const first  := k1.tag;
+            const second := k2.tag;
 
             pub const main := fn(): i32 {
                 return first() * 10 + second();   // 37
@@ -150,10 +150,10 @@ TEST_CASE("E2E: same-named method on same-named struct in two modules") {
             import "sb.gh" as sb;
 
             pub const main := fn(): i32 {
-                const a := sa::Shape.make(4);   // area -> 5
-                const b := sb::Shape.make(4);   // area -> 20
+                const a := sa.Shape.make(4);   // area -> 5
+                const b := sb.Shape.make(4);   // area -> 20
                 const viaObj := a.area();
-                const viaType := sb::Shape.area(^b);
+                const viaType := sb.Shape.area(^b);
                 return viaObj + viaType;        // 5 + 20 = 25
             };
         )",
@@ -198,7 +198,7 @@ TEST_CASE("E2E: an `export`ed name still resolves alongside a colliding internal
             const answer := fn(): i32 { return 7; };
 
             pub const main := fn(): i32 {
-                return answer() * 10 + exp::relay();   // 7*10 + 42 = 112
+                return answer() * 10 + exp.relay();   // 7*10 + 42 = 112
             };
         )",
         {helpers::mock_file{"exp.gh", EXPORTER, "exp"}})};

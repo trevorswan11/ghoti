@@ -132,7 +132,7 @@ TEST_CASE("build_obj command execution") {
                 pub import "ghoti_test_helper.gh" as helper;
 
                 pub const calc := fn(x: i64): i64 {{
-                    return helper::multiply(x, 2);
+                    return helper.multiply(x, 2);
                 }};
             )");
         }
@@ -154,7 +154,7 @@ TEST_CASE("build_obj command execution") {
                 pub import std;
 
                 pub const ver := fn(): auto {{
-                    return std::version;
+                    return std.version;
                 }};
             )");
         }
@@ -184,7 +184,7 @@ TEST_CASE("build_obj command execution") {
                 pub import mylib;
 
                 pub const run_custom := fn(v: i64): i64 {{
-                    return mylib::custom_fn(v);
+                    return mylib.custom_fn(v);
                 }};
             )");
         }
@@ -220,7 +220,7 @@ TEST_CASE("build_obj command execution") {
                 pub import mylib;
 
                 pub const run_custom := fn(v: i64): i64 {{
-                    return mylib::custom_fn(v);
+                    return mylib.custom_fn(v);
                 }};
             )");
         }
@@ -260,7 +260,7 @@ TEST_CASE("build_obj command execution") {
                 pub import math;
 
                 pub const clamp_int := fn(v: i64): i64 {{
-                    return math::clamp(v, 0, 100);
+                    return math.clamp(v, 0, 100);
                 }};
             )");
         }

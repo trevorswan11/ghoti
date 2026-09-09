@@ -17,7 +17,7 @@ pub const Error := enum : i32 {
     unexpected,
     _,
 
-    pub constexpr fromOs := fn(errno: os::Errno): @this() {
+    pub constexpr fromOs := fn(errno: os.Errno): @this() {
         @cfg (os == .macos) {
             return match (errno) {
                 .ENOENT => .not_found,
@@ -72,7 +72,7 @@ pub const Error := enum : i32 {
                 _ => .unexpected,
             };
         } else {
-            @compileError("std::os: unsupported target OS");
+            @compileError("std.os: unsupported target OS");
         }
     };
 };

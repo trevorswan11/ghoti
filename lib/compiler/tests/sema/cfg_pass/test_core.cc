@@ -102,7 +102,7 @@ TEST_CASE("cfg: an unknown atom names the valid set") {
 
 TEST_CASE("cfg: an imported identifier in a predicate is rejected with a re-derive hint") {
     constexpr std::string_view src{
-        R"( @cfg(sys::is_windows) { const x := 1; } else { const y := 1; } )"};
+        R"( @cfg(sys.is_windows) { const x := 1; } else { const y := 1; } )"};
     const auto out{run_cfg(src)};
     CHECK(out.has_code(sema::error::CFG_ILLEGAL_CFG_VALUE_REFERENCE));
     CHECK(out.any_message_contains("@cfgValue"));

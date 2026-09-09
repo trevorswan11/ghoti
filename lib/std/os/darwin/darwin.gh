@@ -3,8 +3,8 @@ import "../../result.gh" as result;
 pub import "errno.gh" as errno;
 
 pub using Handle = i32;
-pub using Errno = errno::Errno;
-pub constexpr EWOULDBLOCK := errno::EWOULDBLOCK;
+pub using Errno = errno.Errno;
+pub constexpr EWOULDBLOCK := errno.EWOULDBLOCK;
 
 // <sys/fcntl.h> and its transitive includes
 pub const O_RDONLY: i32 = 0x0000; /// open for reading only
@@ -113,7 +113,7 @@ extern("System", "mmap") const sys_mmap: fn(
 extern("System", "munmap") const sys_munmap: fn(addr: ^mut opaque, len: usize): i32;
 
 constexpr R := fn(T: type): type {
-    return result::Result(T, Errno);
+    return result.Result(T, Errno);
 };
 
 pub constexpr stdin := fn(): R(Handle) {

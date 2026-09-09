@@ -97,16 +97,16 @@ auto explicit_dyn_type::parse(syntax::parser& parser, bool allow_trailing_brace)
     parser.advance(); // current == first name token
     const auto  name_start{parser.get_current_token()};
     expr_handle name{TRY(identifier_expr::parse(parser))};
-    while (parser.peek_token_is(syntax::token_type_t::COLON_COLON)) {
-        parser.advance(); // current == ::
-        name = TRY(module_access_expr::parse(parser, name));
+    while (parser.peek_token_is(syntax::token_type_t::DOT)) {
+        parser.advance(); // current == .
+        name = TRY(dot_expr::parse(parser, name));
     }
     const type_modifier value_mod{};
     const auto          interface_type{
-        name.is<module_access_expr>()
-                     ? parser.add_type<module_access_expr>(
-                  name_start, value_mod, parser.get_node<module_access_expr>(*name))
-                     : parser.add_type<identifier_expr>(
+        name.is<dot_expr>()
+            ? parser.add_type<dot_expr>(
+                  name_start, value_mod, parser.get_node<dot_expr>(*name))
+            : parser.add_type<identifier_expr>(
                   name_start, value_mod, parser.get_node<identifier_expr>(*name))};
 
     std::vector<explicit_dyn_type::assoc_binding> assoc_bindings;
@@ -249,14 +249,9 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
 
         parser.advance();
         // Manually dispatch to prevent weird consumption
-        if (parser.peek_token_is(syntax::token_type_t::COLON_COLON) ||
+        if (parser.peek_token_is(syntax::token_type_t::DOT) ||
             parser.peek_token_is(syntax::token_type_t::LPAREN)) {
             const auto parsed{TRY(parser.parse_expression(syntax::bind_precedence::TYPE))};
-            if (parsed.is<module_access_expr>()) {
-                return parser.add_type<module_access_expr>(
-                    modifier_token, modifier, parser.get_node<module_access_expr>(*parsed));
-            }
-
             if (parsed.is<dot_expr>()) {
                 return parser.add_type<dot_expr>(
                     modifier_token, modifier, parser.get_node<dot_expr>(*parsed));

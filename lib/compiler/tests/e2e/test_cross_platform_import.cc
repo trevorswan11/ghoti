@@ -50,10 +50,10 @@ constexpr std::string_view OS_SELECT{R"(
     else @cfg(os == .windows) import "os_windows.gh" as backend;
     else @compileError("unsupported target OS");
 
-    pub using Handle = backend::Handle;
-    pub using Errno = backend::Errno;
-    pub using answer = backend::answer;
-    pub const WHENCE_END := backend::WHENCE_END;
+    pub using Handle = backend.Handle;
+    pub using Errno = backend.Errno;
+    pub using answer = backend.answer;
+    pub const WHENCE_END := backend.WHENCE_END;
 )"};
 
 constexpr std::string_view OS_STD{R"( pub import "os_select.gh" as os; )"};
@@ -63,10 +63,10 @@ TEST_CASE("E2E: a @cfg-selected backend flat-re-exports its type / fn / const th
         R"(
             import "std.gh" as std;
             pub const main := fn(): i32 {
-                const e: std::os::Errno = std::os::Errno.NOPE;
-                const w := @as(i32, std::os::WHENCE_END);
-                const a := std::os::answer();
-                return if (e == std::os::Errno.NOPE and w == 2) a else 1;
+                const e: std.os.Errno = std.os.Errno.NOPE;
+                const w := @as(i32, std.os.WHENCE_END);
+                const a := std.os.answer();
+                return if (e == std.os.Errno.NOPE and w == 2) a else 1;
             };
         )",
         {
@@ -88,11 +88,11 @@ TEST_CASE("E2E: importing every platform module still links on the host") {
 
             const plat_tag := fn(): i32 {
                 if constexpr (@targetOs() == .linux) {
-                    return plat_linux::linux_tag();
+                    return plat_linux.linux_tag();
                 } else if constexpr (@targetOs() == .macos) {
-                    return plat_darwin::darwin_tag();
+                    return plat_darwin.darwin_tag();
                 } else {
-                    return plat_windows::windows_tag();
+                    return plat_windows.windows_tag();
                 };
             };
 
