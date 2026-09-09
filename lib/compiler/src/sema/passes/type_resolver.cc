@@ -1128,6 +1128,19 @@ template <ast::IndexableID ID>
     }
     case token_type_t::BUILTIN_EXPECT:
     case token_type_t::BUILTIN_REQUIRE: {
+        if (const auto cond_expr{call.arguments[0].as_opt<ast::expr_handle>()}) {
+            if (const auto ct{resolving_.get_sema_type_opt(*cond_expr)};
+                ct && !ct->is_poison() && ct->get_kind() != type_kind::BOOL &&
+                ct->get_kind() != type_kind::POINTER) {
+                return make_sema_err(
+                    fmt::format("{} condition must be `bool` or a pointer, found `{}` (wrap it in "
+                                "`@as(bool, ...)` if that is intended)",
+                                *syntax::get_builtin_opt(builtin_id),
+                                ctx_.type_display_name(*ct)),
+                    error::TYPE_MISMATCH,
+                    get_call_arg_location(call.arguments[0]));
+            }
+        }
         return_type = &builtin.return_type;
         break;
     }

@@ -41,6 +41,27 @@ TEST_CASE("@assert / @verify reject a non-bool condition") {
                           sema::error::TYPE_MISMATCH));
 }
 
+TEST_CASE("@expect / @require accept a bool or a pointer condition (pointer means `!= null`)") {
+    helpers::resolve_and_check(R"(
+test "conditions" {
+    var x: i32 = 0;
+    const p: ^i32 = ^x;
+    @expect(x == 0);
+    @require(x == 0, "x should be zero");
+    @require(p != nullptr);
+    @expect(p);              // contextually converted like `if (p)`
+    @require(p, "must be non-null");
+}
+)");
+}
+
+TEST_CASE("@expect / @require still reject a non-bool, non-pointer condition") {
+    CHECK(helpers::raised(R"(test "t" { var n: i32 = 1; @require(n, "nonzero"); })",
+                          sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised(R"(test "t" { var n: i32 = 1; @expect(n); })",
+                          sema::error::TYPE_MISMATCH));
+}
+
 TEST_CASE("@assert / @verify reject the wrong argument count") {
     CHECK(helpers::raised("const use := fn(): void { @assert(); };", sema::error::ARITY_MISMATCH));
     CHECK(helpers::raised("const use := fn(x: i32): void { @verify(x > 0, \"a\", \"b\"); };",
