@@ -142,7 +142,8 @@ TEST_CASE("Full sema pipeline") {
             // The outer part of resolution should be two modules
             const auto& access_outer{
                 UNWRAP(root_module.ast.get_as_opt<ast::dot_expr>(access_expr.object))};
-            const auto& access_std_expr = UNWRAP(root_module.get_sema_type_opt(access_outer.object));
+            const auto& access_std_expr =
+                UNWRAP(root_module.get_sema_type_opt(access_outer.object));
             CHECK(access_std_expr == std_module_type);
 
             const auto& access_io_expr = UNWRAP(root_module.get_sema_type_opt(access_outer.member));

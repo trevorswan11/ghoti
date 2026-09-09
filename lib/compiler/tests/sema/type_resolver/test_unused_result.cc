@@ -76,6 +76,18 @@ TEST_CASE("A @discardable callee may be dropped with no diagnostic") {
             pub const main := fn(): i32 { note(3); return 0; };
         )");
     }
+    SECTION("method call on struct") {
+        ok(R"(
+            const S := struct {
+                pub @discardable const close := fn(&self): i32 { return 0; };
+            };
+            pub const main := fn(): i32 {
+                const s: S = .{};
+                s.close();
+                return 0;
+            };
+        )");
+    }
 }
 
 TEST_CASE("@discardable is rejected where it cannot apply") {

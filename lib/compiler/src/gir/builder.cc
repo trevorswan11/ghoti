@@ -48,6 +48,7 @@ auto builder::emit_alloca_in_entry(sema::type& type, bool is_const) -> local_id 
         .type     = type,
         .result   = slot,
         .operands = {},
+        .location = location_,
         .is_const = is_const,
     });
     return slot;
@@ -63,6 +64,7 @@ auto builder::emit_store_in_entry(local_id dest, value val) -> void {
             .type           = val_type,
             .result         = dest,
             .operands       = {std::move(val)},
+            .location       = location_,
             .is_initializer = true,
         });
 }

@@ -1661,8 +1661,7 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
             if (target_mod->root_table_idx) {
                 callee_mod.emplace(*target_mod);
                 const auto& inner{module_->ast.get_as<ast::identifier_expr>(dot->member)};
-                callee_sym =
-                    ctx_.registry.get_from_opt(*callee_mod->root_table_idx, inner.name);
+                callee_sym = ctx_.registry.get_from_opt(*callee_mod->root_table_idx, inner.name);
             }
         }
     }
