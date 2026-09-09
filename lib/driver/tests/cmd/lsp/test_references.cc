@@ -59,20 +59,20 @@ TEST_CASE("find_references returns every reference to a definition, not the decl
     CHECK(refs[1].span.start.column == 19);
 }
 
-TEST_CASE("definition_location_at resolves a cross-module `::` access into the imported file") {
+TEST_CASE("definition_location_at resolves a cross-module `.` access into the imported file") {
     mod::overlay_loader         loader;
     const std::filesystem::path helper_path{"test_xmod_helper.gh"};
     const std::filesystem::path main_path{"test_xmod_main.gh"};
     CHECK(loader.add(helper_path, "pub const value := 42;\n"));
     CHECK(loader.add(main_path,
                      "import \"test_xmod_helper.gh\" as helper;\n"
-                     "pub const x := helper::value;\n"));
+                     "pub const x := helper.value;\n"));
 
     auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
     const auto module{UNWRAP(session->analyze(main_path))};
 
-    // Line 1, column 23 lands on `value` in `helper::value`
-    const auto def{UNWRAP(lsp::definition_location_at(*module, {1, 23}))};
+    // Line 1, column 22 lands on `value` in `helper.value`
+    const auto def{UNWRAP(lsp::definition_location_at(*module, {1, 22}))};
     CHECK(def.path == std::filesystem::weakly_canonical(helper_path));
     CHECK(def.span.start.line == 0);
     CHECK(def.span.start.column == 10);
@@ -83,7 +83,7 @@ TEST_CASE("definition_location_at resolves a cross-module `::` access into the i
     REQUIRE(refs.size() == 1);
     CHECK(refs[0].path == std::filesystem::weakly_canonical(main_path));
     CHECK(refs[0].span.start.line == 1);
-    CHECK(refs[0].span.start.column == 23);
+    CHECK(refs[0].span.start.column == 22);
 }
 
 TEST_CASE("definition_location_at resolves a struct field access in the same module") {
@@ -110,7 +110,7 @@ TEST_CASE("definition_location_at resolves a struct field access across an impor
     CHECK(loader.add(helper_path, "pub const point := struct { pub x: i32, pub y: i32 };\n"));
     CHECK(loader.add(main_path,
                      "import \"test_field_xmod_helper.gh\" as helper;\n"
-                     "pub const p := helper::point{ .x = 1, .y = 2 };\n"
+                     "pub const p := helper.point{ .x = 1, .y = 2 };\n"
                      "pub const px := p.x;\n"));
 
     auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
@@ -130,7 +130,7 @@ TEST_CASE("analyze can be called twice on the same session for different entry p
     CHECK(loader.add(helper_path, "pub const value := 42;\n"));
     CHECK(loader.add(main_path,
                      "import \"test_reanalyze_helper.gh\" as helper;\n"
-                     "pub const x := helper::value;\n"));
+                     "pub const x := helper.value;\n"));
 
     auto session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
     CHECK(session->analyze(main_path));                              // pulls helper in as an import

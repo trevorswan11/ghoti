@@ -48,7 +48,7 @@ TEST_CASE("E2E: a `pub` function imported across modules still collides safely")
             import "sys.gh" as sys;
 
             pub const main := fn(): i32 {
-                return sys::read(21);
+                return sys.read(21);
             };
         )",
         {helpers::mock_file{"sys.gh", SYS_MODULE, "sys"}})};

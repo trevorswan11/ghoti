@@ -4,10 +4,10 @@ pub const Writer := interface {
     Error: type;
 
     /// Write the contents of `bytes`, returning the total number of bytes written
-    pub const write := fn(&mut self, bytes: []u8): result::Result(usize, Error);
+    pub const write := fn(&mut self, bytes: []u8): result.Result(usize, Error);
 
     /// Write all the contents of `bytes` until it's 'empty'
-    pub const writeAll := fn(&mut self, bytes: []u8): result::Result(void, Error) {
+    pub const writeAll := fn(&mut self, bytes: []u8): result.Result(void, Error) {
         var off: usize = 0;
         loop {
             if (off == bytes.len) {
@@ -20,7 +20,7 @@ pub const Writer := interface {
     };
 
     /// Write a single byte
-    pub const writeByte := fn(&mut self, b: u8): result::Result(void, Error) {
+    pub const writeByte := fn(&mut self, b: u8): result.Result(void, Error) {
         const one := [1uz]u8{ b };
         return self.writeAll(one);
     };

@@ -34,7 +34,7 @@ TEST_CASE("E2E: a `const` folds through a chained re-export used as an operand")
             import "std.gh" as std;
 
             pub const main := fn(): i32 {
-                return std::darwin::stdout + std::darwin::stderr;
+                return std.darwin.stdout + std.darwin.stderr;
             };
         )",
         {
@@ -51,7 +51,7 @@ TEST_CASE("E2E: a `const` folds through a chained re-export passed as a call arg
             import "std.gh" as std;
 
             pub const main := fn(): i32 {
-                return std::darwin::combine(std::darwin::stdout, 30);
+                return std.darwin.combine(std.darwin.stdout, 30);
             };
         )",
         {
@@ -68,7 +68,7 @@ TEST_CASE("E2E: a `const` folds through a three-hop re-export chain") {
             import "sys.gh" as sys;
 
             pub const main := fn(): i32 {
-                return sys::std::darwin::combine(sys::std::darwin::stdout, 30);
+                return sys.std.darwin.combine(sys.std.darwin.stdout, 30);
             };
         )",
         {

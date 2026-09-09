@@ -613,7 +613,7 @@ TEST_CASE("ghoti lsp resolves go-to-definition and references across an import")
     constexpr std::string_view main_uri{"file:///C:/ghoti_e2e_xmod/main.gh"};
     constexpr std::string_view helper_text{"pub const value := 42;\n"};
     constexpr std::string_view main_text{"import \"helper.gh\" as helper;\n"
-                                         "pub const x := helper::value;\n"};
+                                         "pub const x := helper.value;\n"};
 
     lsp::write_message(proc.stdin_stream(),
                        {
@@ -667,7 +667,7 @@ TEST_CASE("ghoti lsp resolves go-to-definition and references across an import")
     }
     REQUIRE_FALSE(canonical_main_uri.empty());
 
-    // Line 1, column 23 lands on `value` in `helper::value`
+    // Line 1, column 22 lands on `value` in `helper.value`
     lsp::write_message(proc.stdin_stream(),
                        {
                            {"jsonrpc", "2.0"},
@@ -681,7 +681,7 @@ TEST_CASE("ghoti lsp resolves go-to-definition and references across an import")
                                        "position",
                                        {
                                            {"line", 1},
-                                           {"character", 23},
+                                           {"character", 22},
                                        },
                                    },
                                },
@@ -700,7 +700,7 @@ TEST_CASE("ghoti lsp resolves go-to-definition and references across an import")
                                "params",
                                {
                                    {"textDocument", {{"uri", main_uri}}},
-                                   {"position", {{"line", 1}, {"character", 23}}},
+                                   {"position", {{"line", 1}, {"character", 22}}},
                                    {
                                        "context",
                                        {
@@ -714,7 +714,7 @@ TEST_CASE("ghoti lsp resolves go-to-definition and references across an import")
     const auto& locations{refs_resp.at("result")};
     REQUIRE(locations.size() == 1);
     CHECK(locations[0].at("uri") == canonical_main_uri);
-    CHECK(locations[0].at("range").at("start").at("character") == 23);
+    CHECK(locations[0].at("range").at("start").at("character") == 22);
 
     lsp::write_message(proc.stdin_stream(),
                        {
@@ -739,7 +739,7 @@ TEST_CASE("ghoti lsp resolves go-to-definition and references across an import")
     const auto& upstream_locations{upstream_refs_resp.at("result")};
     REQUIRE(upstream_locations.size() == 1);
     CHECK(upstream_locations[0].at("uri") == canonical_main_uri);
-    CHECK(upstream_locations[0].at("range").at("start").at("character") == 23);
+    CHECK(upstream_locations[0].at("range").at("start").at("character") == 22);
 
     lsp::write_message(proc.stdin_stream(),
                        {
@@ -755,8 +755,8 @@ TEST_CASE("ghoti lsp resolves go-to-definition and references across an import")
                                            {
                                                {"text",
                                                 "import \"helper.gh\" as helper;\n"
-                                                "pub const x := helper::value;\n"
-                                                "pub const y := helper::value;\n"},
+                                                "pub const x := helper.value;\n"
+                                                "pub const y := helper.value;\n"},
                                            },
                                        },
                                    },
@@ -826,7 +826,7 @@ TEST_CASE("ghoti lsp renames a symbol from its upstream importer's usage") {
     constexpr std::string_view main_uri{"file:///C:/ghoti_e2e_rename_xmod/main.gh"};
     constexpr std::string_view helper_text{"pub const value := 42;\n"};
     constexpr std::string_view main_text{"import \"helper.gh\" as helper;\n"
-                                         "pub const x := helper::value;\n"};
+                                         "pub const x := helper.value;\n"};
 
     lsp::write_message(proc.stdin_stream(),
                        {
@@ -886,7 +886,7 @@ TEST_CASE("ghoti lsp renames a symbol from its upstream importer's usage") {
     const auto& main_edits{changes.at(canonical_main_uri)};
     REQUIRE(main_edits.size() == 1);
     CHECK(main_edits[0].at("newText") == "renamed");
-    CHECK(main_edits[0].at("range").at("start").at("character") == 23);
+    CHECK(main_edits[0].at("range").at("start").at("character") == 22);
 
     lsp::write_message(proc.stdin_stream(),
                        {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "shutdown"}});
@@ -1002,7 +1002,7 @@ TEST_CASE("ghoti lsp discovers workspace files and resolves references without o
     dir.write("helper.gh", "pub const value := 42;\n");
     dir.write("main.gh",
               "import \"helper.gh\" as helper;\n"
-              "pub const x := helper::value;\n");
+              "pub const x := helper.value;\n");
 
     piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
     REQUIRE(proc.is_running());
@@ -1071,7 +1071,7 @@ TEST_CASE("ghoti lsp discovers workspace files and resolves references without o
     const auto& locations{refs_resp.at("result")};
     REQUIRE(locations.size() == 1);
     CHECK(locations[0].at("uri") == main_uri);
-    CHECK(locations[0].at("range").at("start").at("character") == 23);
+    CHECK(locations[0].at("range").at("start").at("character") == 22);
     lsp::write_message(proc.stdin_stream(),
                        {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "shutdown"}});
     const auto shutdown_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));

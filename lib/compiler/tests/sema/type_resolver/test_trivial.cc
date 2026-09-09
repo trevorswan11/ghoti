@@ -75,7 +75,7 @@ TEST_CASE("`using` rejects a value RHS with a pointer to `const`/`constexpr`") {
 
     SECTION("cross-module value constant") {
         helpers::test_resolver_fail(
-            R"(import "leaf.gh" as leaf; pub using K = leaf::K;)",
+            R"(import "leaf.gh" as leaf; pub using K = leaf.K;)",
             {helpers::mock_file{"leaf.gh", "pub const K: i32 = 42;", "leaf"}},
             sema::diagnostic{"'using' aliases a type, but 'K' is a value; use 'const' or "
                              "'constexpr' to alias a value",

@@ -63,7 +63,7 @@ import std;
 
 pub const main := fn(args: [][:0]u8): void {
     const message := "Hello, world!";
-    _ = std::io::println(message);
+    _ = std.io.println(message);
 };
 ```
 
@@ -108,7 +108,7 @@ The language's website is written with [Go](https://go.dev/), [HTMX](https://htm
     - [x] LSP
     - [x] Formatter
 - [ ] Standard library
-    - [ ] Cross-platform support w/o forcing libc
+    - [x] Cross-platform support w/o forcing libc
     - [ ] Generic data structures
     - [ ] Generic algorithms
 

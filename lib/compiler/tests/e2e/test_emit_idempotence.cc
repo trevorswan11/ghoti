@@ -84,7 +84,7 @@ TEST_CASE("Multiple modules sharing an interface impl produce identical GIR") {
     constexpr std::string_view MOD_A{R"(
         import "iface.gh" as iface;
         pub const Human := struct { id: i32 };
-        impl iface::Greeter for Human {
+        impl iface.Greeter for Human {
             pub const greet := fn(&self): i32 {
                 return self.id * 10;
             };
@@ -94,7 +94,7 @@ TEST_CASE("Multiple modules sharing an interface impl produce identical GIR") {
     constexpr std::string_view MOD_B{R"(
         import "iface.gh" as iface;
         pub const Robot := struct { code: i32 };
-        impl iface::Greeter for Robot {
+        impl iface.Greeter for Robot {
             pub const greet := fn(&self): i32 {
                 return self.code * 100;
             };
@@ -107,8 +107,8 @@ TEST_CASE("Multiple modules sharing an interface impl produce identical GIR") {
         import "mod_b.gh" as b;
 
         pub const main := fn(): i32 {
-            const h: a::Human = .{ .id = 3 };
-            const r: b::Robot = .{ .code = 4 };
+            const h: a.Human = .{ .id = 3 };
+            const r: b.Robot = .{ .code = 4 };
             const g1: i32 = h.greet();
             const g2: i32 = r.greet();
             return if (g1 == 30 and g2 == 400) 0 else 1;

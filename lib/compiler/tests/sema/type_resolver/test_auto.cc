@@ -358,9 +358,9 @@ TEST_CASE("Cross-module generic function instantiation") {
     auto [ctx, idx]{helpers::resolve_and_check(
         R"(
             import "math.gh" as math;
-            const a := math::identity(42);
-            const b := math::identity(true);
-            const c := math::double_val(100i64);
+            const a := math.identity(42);
+            const b := math.identity(true);
+            const c := math.double_val(100i64);
         )",
         helpers::make_vector<helpers::mock_file>(
             helpers::mock_file{.path = "math.gh", .source = math_gh}))};
