@@ -48,7 +48,7 @@ TEST_CASE("A defaulted slice field is initialized, not garbage") {
         pub const main := fn(): i32 {
             var backing: [16]mut u8 = undefined;
             var b := Buf{ .data = backing };
-            return @as(i32, b.pos) * 100 + @as(i32, room(&b));
+            return @intCast(i32, b.pos) * 100 + @intCast(i32, room(&b));
         };
     )") == 16);
 }

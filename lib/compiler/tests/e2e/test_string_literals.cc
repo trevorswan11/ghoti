@@ -20,7 +20,7 @@ TEST_CASE("String literal escape sequences are decoded to their actual bytes") {
         CHECK(helpers::compile_and_run(R"(
             pub const main := fn(): i32 {
                 const s := "a\nb";
-                return @as(i32, s.len);
+                return @intCast(i32, s.len);
             };
         )") == 3);
     }
@@ -38,7 +38,7 @@ TEST_CASE("String literal escape sequences are decoded to their actual bytes") {
         CHECK(helpers::compile_and_run(R"(
             pub const main := fn(): i32 {
                 const s := "a\\b";
-                return @as(i32, s.len);
+                return @intCast(i32, s.len);
             };
         )") == 3);
     }
@@ -59,7 +59,7 @@ TEST_CASE("Local string literal .len is the character count, excluding the senti
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             const s := "hello";
-            return @as(i32, s.len);
+            return @intCast(i32, s.len);
         };
     )") == 5);
 }
@@ -68,7 +68,7 @@ TEST_CASE("A string literal's storage keeps room for the sentinel") {
     SECTION("@sizeOf a [N:0]u8 is N + 1") {
         CHECK(helpers::compile_and_run(R"(
             pub const main := fn(): i32 {
-                return @as(i32, @sizeOf([5:0]u8));
+                return @intCast(i32, @sizeOf([5:0]u8));
             };
         )") == 6);
     }
@@ -117,7 +117,7 @@ TEST_CASE("String literal passed directly to a slice parameter") {
 TEST_CASE("String literal passed directly to a slice parameter has the character-count length") {
     CHECK(helpers::compile_and_run(R"(
         const len_of := fn(msg: []u8): i32 {
-            return @as(i32, msg.len);
+            return @intCast(i32, msg.len);
         };
         pub const main := fn(): i32 {
             return len_of("hello");
@@ -130,7 +130,7 @@ TEST_CASE("A `[:0]T` null-terminated slice type is usable in value position") {
         CHECK(helpers::compile_and_run(R"(
             pub const main := fn(): i32 {
                 const s: [:0]u8 = "hello";
-                return @as(i32, s.len);
+                return @intCast(i32, s.len);
             };
         )") == 5);
     }
@@ -138,7 +138,7 @@ TEST_CASE("A `[:0]T` null-terminated slice type is usable in value position") {
     SECTION("as a function parameter type") {
         CHECK(helpers::compile_and_run(R"(
             const len_of := fn(msg: [:0]u8): i32 {
-                return @as(i32, msg.len);
+                return @intCast(i32, msg.len);
             };
             pub const main := fn(): i32 {
                 return len_of("hello");

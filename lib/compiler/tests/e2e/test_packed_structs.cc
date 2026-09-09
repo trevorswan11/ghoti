@@ -64,8 +64,8 @@ TEST_CASE("packed struct wider than a machine word") {
         pub const main := fn(): i32 {
             if (@sizeOf(Wide) != 16) { return 1; }
             var w: Wide = .{ .lo = 1000000, .hi = 2000000 };
-            if (@as(i32, @as(u64, w.lo)) != 1000000) { return 2; }
-            if (@as(i32, @as(u64, w.hi)) != 2000000) { return 3; }
+            if (@intCast(i32, w.lo) != 1000000) { return 2; }
+            if (@intCast(i32, w.hi) != 2000000) { return 3; }
             return 0;
         };
     )") == 0);
@@ -219,7 +219,7 @@ TEST_CASE("packed union with float and int views of the same bits") {
             var u: U = .{ .bits = 0 };
             u.f = 1.0;
             // IEEE-754 single 1.0 == 0x3F800000
-            return @as(i32, @as(i64, u.bits) - 1065353216);
+            return @intCast(i32, @as(i64, u.bits) - 1065353216);
         };
     )") == 0);
 }

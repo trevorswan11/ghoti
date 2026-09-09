@@ -125,6 +125,8 @@ class type;
 }
 
 [[nodiscard]] auto is_implicit_widenable(const type& from, const type& to) noexcept -> bool;
+[[nodiscard]] auto cast_rejection_reason(const type& from, const type& to, u32 ptr_bits)
+    -> stdx::option<std::string>;
 
 [[nodiscard]] constexpr auto is_value_type(type_kind kind) noexcept -> bool {
     switch (kind) {

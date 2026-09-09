@@ -10,7 +10,7 @@ using DWORD = u32;
 using BOOL = i32;
 
 /// CreateFileW / GetStdHandle failure sentinel
-pub const INVALID_HANDLE_VALUE: Handle = @ptrFromInt(Handle, @as(usize, -1)); // (HANDLE)(LONG_PTR)-1
+pub const INVALID_HANDLE_VALUE: Handle = @ptrFromInt(Handle, @bitCast(usize, -1z)); // (HANDLE)(LONG_PTR)-1
 
 // CreateFileW dwDesiredAccess (winnt.h)
 pub const GENERIC_READ: u32 = 0x80000000u32;
@@ -162,7 +162,7 @@ constexpr R := fn(T: type): type {
 /// Write the contents of `buf` to the file, returning the number of written bytes
 pub const write := fn(h: Handle, buf: []u8): R(usize) {
     var put: u32 = 0u32;
-    const to_write := @as(u32, if (buf.len > DWORD_MAX) DWORD_MAX else buf.len);
+    const to_write := @intCast(u32, if (buf.len > DWORD_MAX) DWORD_MAX else buf.len);
     const ok := WriteFile(h, buf.ptr, to_write, ^mut put, nullptr);
     return if (ok == 0i32) .{ .err = @as(Errno, GetLastError()) } else .{ .ok = @as(usize, put) };
 };
@@ -170,7 +170,7 @@ pub const write := fn(h: Handle, buf: []u8): R(usize) {
 /// Read the contents of the file into `buf`, returning the number of read bytes
 pub const read := fn(h: Handle, buf: []mut u8): R(usize) {
     var got: u32 = 0u32;
-    const to_read := @as(u32, if (buf.len > DWORD_MAX) DWORD_MAX else buf.len);
+    const to_read := @intCast(u32, if (buf.len > DWORD_MAX) DWORD_MAX else buf.len);
     const ok := ReadFile(h, buf.ptr, to_read, ^mut got, nullptr);
     if (ok == 0i32) {
         const e := GetLastError();
@@ -191,7 +191,7 @@ const to_wide := fn(utf8: [:0]u8, out: ^mut [WIDE_MAX]u16): R(i32) {
         utf8.ptr,
         -1i32,
         @ptrCast(^mut u16, out),
-        @as(i32, WIDE_MAX),
+        @intCast(i32, WIDE_MAX),
     );
     return if (n == 0i32) .{ .err = @as(Errno, GetLastError()) } else .{ .ok = n };
 };
@@ -227,7 +227,7 @@ pub const close := fn(h: Handle): R(void) {
 /// if `whence` is `SEEK_END`: starting point is the current end-of-file position.
 pub const lseek := fn(h: Handle, off: i64, whence: i32): R(i64) {
     var new_pos: i64 = 0i64;
-    const ok := SetFilePointerEx(h, off, ^mut new_pos, @as(u32, whence));
+    const ok := SetFilePointerEx(h, off, ^mut new_pos, @intCast(u32, whence));
     return if (ok == 0i32) .{ .err = @as(Errno, GetLastError()) } else .{ .ok = new_pos };
 };
 

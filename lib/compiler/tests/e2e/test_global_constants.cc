@@ -73,7 +73,7 @@ TEST_CASE("Top-level string const with an explicit slice type is usable, not a r
     CHECK(helpers::compile_and_run(R"(
         const S: []u8 = "abcd";
         pub const main := fn(): i32 {
-            return @as(i32, @as(u32, S.len));
+            return @intCast(i32, S.len);
         };
     )") == 4);
 }

@@ -85,7 +85,7 @@ TEST_CASE("E2E: a re-exported `pub const` folds as a value operand through the c
         R"(
             import "top.gh" as top;
             pub const main := fn(): i32 {
-                return @as(i32, top.top_mid.leaf.PAGE) * 10 + 2;
+                return @intCast(i32, top.top_mid.leaf.PAGE) * 10 + 2;
             };
         )",
         chain_files())};

@@ -56,7 +56,8 @@ TEST_CASE("Function call type checking") {
             };
         )",
             sema::diagnostic{"Argument 2 of type 'bool' is not assignable to parameter type 'i32' "
-                             "in call to 'add'",
+                             "in call to 'add' (conversion from 'bool' to 'i32' maps false/true to "
+                             "0/1; use @intFromBool for an explicit conversion)",
                              sema::error::TYPE_MISMATCH,
                              std::pair{5UZ, 31UZ}});
     }

@@ -55,7 +55,7 @@ auto test_builtin_resolve(const syntax::builtin_t& builtin,
 namespace bis = syntax::builtins;
 
 TEST_CASE("Builtin 'safe' casts") {
-    const auto bi{GENERATE(bis::ALIGN_CAST, bis::PTR_CAST, bis::BIT_CAST, bis::AS)};
+    const auto bi{GENERATE(bis::ALIGN_CAST, bis::PTR_CAST, bis::BIT_CAST, bis::AS, bis::INT_CAST)};
     test_builtin_resolve(bi, "i32, 23UZ", [](helpers::sema_test_context& ctx) -> sema::type& {
         return ctx.get_int_type(32, true);
     });
@@ -77,7 +77,7 @@ TEST_CASE("Builtin 'unsafe' casts") {
 
 TEST_CASE("Builtin bit/byte operations") {
     const auto bi{GENERATE(
-        bis::ALIGN_OF, bis::SIZE_OF, bis::CLZ, bis::CTZ, bis::POP_COUNT, bis::INT_FROM_PTR)};
+        bis::ALIGN_OF, bis::SIZE_OF, bis::CLZ, bis::CTZ, bis::POPCOUNT, bis::INT_FROM_PTR)};
     test_builtin_resolve(bi, "123", [](helpers::sema_test_context& ctx) -> sema::type& {
         return ctx.get_type(sema::type_kind::USIZE);
     });

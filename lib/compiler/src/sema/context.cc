@@ -158,6 +158,10 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::CONST_CAST, params(t_auto), t_auto);
     inject_function(bis::VOLATILE_CAST, params(t_auto), t_auto);
     inject_function(bis::AS, params(t_type, t_auto), t_auto);
+    inject_function(bis::INT_CAST, params(t_type, t_auto), t_auto);
+    inject_function(bis::TRUNCATE, params(t_type, t_auto), t_auto);
+    inject_function(bis::BOOL_FROM_INT, params(t_auto), t_bool);
+    inject_function(bis::INT_FROM_BOOL, params(t_type, t_bool), t_auto);
 
     inject_function(bis::INT_FROM_PTR, params(t_auto), t_usize);
     inject_function(bis::PTR_FROM_INT, params(t_type, t_usize), t_auto);
@@ -180,7 +184,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::MUL_ADD, params(t_type, t_auto, t_auto, t_auto), t_auto);
     inject_function(bis::CLZ, params(t_auto), t_usize);
     inject_function(bis::CTZ, params(t_auto), t_usize);
-    inject_function(bis::POP_COUNT, params(t_auto), t_usize);
+    inject_function(bis::POPCOUNT, params(t_auto), t_usize);
     inject_function(bis::ABS, params(t_auto), t_auto);
 
     inject_function(bis::MIN, params(t_auto, t_auto), t_auto);

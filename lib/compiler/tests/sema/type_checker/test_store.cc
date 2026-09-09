@@ -25,9 +25,11 @@ TEST_CASE("Type checker store and assignment validation") {
                 x = true;
             };
         )",
-            sema::diagnostic{"Type mismatch in store: cannot assign 'bool' to 'i32'",
-                             sema::error::TYPE_MISMATCH,
-                             std::pair{3UZ, 20UZ}});
+            sema::diagnostic{
+                "Type mismatch in store: cannot assign 'bool' to 'i32' (conversion from 'bool' to "
+                "'i32' maps false/true to 0/1; use @intFromBool for an explicit conversion)",
+                sema::error::TYPE_MISMATCH,
+                std::pair{3UZ, 20UZ}});
     }
 
     SECTION("Store through mutable pointer succeeds") {
@@ -57,9 +59,11 @@ TEST_CASE("Type checker store and assignment validation") {
                 *p = true;
             };
         )",
-            sema::diagnostic{"Type mismatch in store: cannot assign 'bool' to 'i32'",
-                             sema::error::TYPE_MISMATCH,
-                             std::pair{2UZ, 21UZ}});
+            sema::diagnostic{
+                "Type mismatch in store: cannot assign 'bool' to 'i32' (conversion from 'bool' to "
+                "'i32' maps false/true to 0/1; use @intFromBool for an explicit conversion)",
+                sema::error::TYPE_MISMATCH,
+                std::pair{2UZ, 21UZ}});
     }
 
     SECTION("Allocating opaque variable fails with ILLEGAL_OPAQUE_TYPE") {
