@@ -678,22 +678,6 @@ auto dumper::visit(node_id, const unreachable_expr&) -> void {
 }
 
 // Safe to call with invalid ID in type dispatch
-auto dumper::visit(node_id, const module_access_expr& module_access) -> void {
-    PROFILE_FUNCTION();
-    fmt::println(out_, "ModuleAccessExpression");
-    {
-        const indent::guard g{indent_, false};
-        fmt::print(out_, "{}Outer: ", indent_.current_branch());
-        dump(module_access.outer);
-    }
-    {
-        const indent::guard g{indent_, true};
-        fmt::print(out_, "{}Inner: ", indent_.current_branch());
-        dump(module_access.inner);
-    }
-}
-
-// Safe to call with invalid ID in type dispatch
 auto dumper::visit(node_id, const struct_expr& node) -> void {
     PROFILE_FUNCTION();
     fmt::println(out_, "StructExpression");
@@ -1201,7 +1185,6 @@ auto dumper::visit(explicit_type_id id, const identifier_expr& ident) -> void {
     fmt::println(out_, "");
 }
 
-MAKE_EXPLICIT_TYPE_DUMP(module_access_expr)
 MAKE_EXPLICIT_TYPE_DUMP(dot_expr)
 MAKE_EXPLICIT_TYPE_DUMP(call_expr)
 

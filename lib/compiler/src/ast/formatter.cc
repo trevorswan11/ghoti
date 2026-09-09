@@ -1183,10 +1183,6 @@ MAKE_VERBATIM_FORMAT(undefined_expr, "undefined")
 MAKE_VERBATIM_FORMAT(nullptr_expr, "nullptr")
 MAKE_VERBATIM_FORMAT(unreachable_expr, "unreachable")
 
-auto formatter::visit(node_id, const module_access_expr& node) -> syntax::doc_id {
-    return doc_manager_.concat({format(node.outer), doc_manager_.text("::"), format(node.inner)});
-}
-
 auto formatter::visit(node_id, const struct_expr& node) -> syntax::doc_id {
     return format_struct(node);
 }
@@ -1499,11 +1495,6 @@ auto formatter::visit(explicit_type_id id, const identifier_expr& node) -> synta
         return with_modifier(id, doc_manager_.owned(raw_identifier(node.name)));
     }
     return with_modifier(id, doc_manager_.text(node.name));
-}
-
-auto formatter::visit(explicit_type_id id, const module_access_expr& node) -> syntax::doc_id {
-    return with_modifier(
-        id, doc_manager_.concat({format(node.outer), doc_manager_.text("::"), format(node.inner)}));
 }
 
 auto formatter::visit(explicit_type_id id, const dot_expr& node) -> syntax::doc_id {

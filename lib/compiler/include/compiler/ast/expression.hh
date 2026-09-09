@@ -384,14 +384,6 @@ struct implicit_access_expr {
 
 #undef DECLARE_PREFIX_EXPRESSION
 
-struct module_access_expr {
-    outer_access_handle outer;
-    identifier_handle   inner;
-
-    [[nodiscard]] static auto parse(syntax::parser& parser, expr_handle outer)
-        -> stdx::result<expr_handle, syntax::diagnostic>;
-};
-
 struct struct_expr {
     // Field publicity is baked into the identifier's token type
     struct field {
