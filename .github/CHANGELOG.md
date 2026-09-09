@@ -244,3 +244,4 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Checksums are now implemented in debug mode against semantic side tables
 - The `::` operator for namespacing has been completely removed 
     - Everything now must route through the `.` operator
+- Resolve an issue that prevent discardable method calls from being ignored

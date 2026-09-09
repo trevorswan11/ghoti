@@ -24,8 +24,8 @@ TEST_CASE("@atomicLoad resolves to T") {
 }
 
 TEST_CASE("@atomicStore resolves to void") {
-    auto [ctx, idx]{helpers::resolve_and_check(fmt::format(
-        "{}const r := @atomicStore(p, 1, builtin.MemoryOrder.seq_cst);", PTR_PRELUDE))};
+    auto [ctx, idx]{helpers::resolve_and_check(
+        fmt::format("{}const r := @atomicStore(p, 1, builtin.MemoryOrder.seq_cst);", PTR_PRELUDE))};
     const auto [sym, data, type]{ctx->get_type_sym_info<sema::symbols::node_t>("r", idx)};
     CHECK(type == ctx->get_type(sema::type_kind::VOID_));
 }

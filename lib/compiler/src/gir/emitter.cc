@@ -4440,7 +4440,8 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                 const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
                 const auto  m_data{obj_type_opt->get_data().as_opt<sema::types::module>()};
                 if (m_data && m_data->imported.root_table_idx) {
-                    if (const auto gref{global_ref_in(*m_data->imported.root_table_idx, member_ident.name)}) {
+                    if (const auto gref{
+                            global_ref_in(*m_data->imported.root_table_idx, member_ident.name)}) {
                         return *gref;
                     }
                 }
@@ -4449,7 +4450,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                 return lvalue_of_expr(id, *st);
             }
 
-            auto       base_lval{emit_lvalue(dot.object)};
+            auto  base_lval{emit_lvalue(dot.object)};
             auto* obj_type{obj_type_opt.get()};
 
             // A reference/pointer-typed field or nested access needs one more indirection unwound
@@ -5365,7 +5366,8 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
         const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
         const auto  m_data{obj_type->get_data().as_opt<sema::types::module>()};
         if (m_data && m_data->imported.root_table_idx) {
-            if (const auto gref{global_ref_in(*m_data->imported.root_table_idx, member_ident.name)}) {
+            if (const auto gref{
+                    global_ref_in(*m_data->imported.root_table_idx, member_ident.name)}) {
                 return value{builder_.emit_load(*gref, *gref->type), *gref->type};
             }
         }
