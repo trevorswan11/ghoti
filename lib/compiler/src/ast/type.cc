@@ -104,9 +104,8 @@ auto explicit_dyn_type::parse(syntax::parser& parser, bool allow_trailing_brace)
     const type_modifier value_mod{};
     const auto          interface_type{
         name.is<dot_expr>()
-            ? parser.add_type<dot_expr>(
-                  name_start, value_mod, parser.get_node<dot_expr>(*name))
-            : parser.add_type<identifier_expr>(
+                     ? parser.add_type<dot_expr>(name_start, value_mod, parser.get_node<dot_expr>(*name))
+                     : parser.add_type<identifier_expr>(
                   name_start, value_mod, parser.get_node<identifier_expr>(*name))};
 
     std::vector<explicit_dyn_type::assoc_binding> assoc_bindings;
