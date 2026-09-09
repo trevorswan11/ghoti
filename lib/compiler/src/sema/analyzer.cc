@@ -84,7 +84,8 @@ constexpr std::array supported_archs{
 
 } // namespace
 
-auto analyzer::analyze(const std::filesystem::path& entry_path) -> stdx::result<void, diagnostic> {
+auto analyzer::analyze(const std::filesystem::path& entry_path, bool for_test_executable)
+    -> stdx::result<gir::module, diagnostic> {
     PROFILE_FUNCTION();
     auto module_result{modules_.try_get_file_module(entry_path)};
     if (!module_result) {
@@ -101,29 +102,29 @@ auto analyzer::analyze(const std::filesystem::path& entry_path) -> stdx::result<
     }
 
     // An errored module's AST is incomplete/inconsistent; it can't proceed past this point.
-    if (module->is_errored()) { return {}; }
+    if (module->is_errored()) { return gir::module{*module, ctx_.arena}; }
 
     collect_symbols(*module);
     resolve_types(*module);
 
     if (module->is_poisoned()) {
         modules_.print_all_diagnostics(error_stream_);
-        return {};
+        return gir::module{*module, ctx_.arena};
     }
 
-    auto gir_mod{emit_gir(*module)};
+    auto gir_mod{emit_gir(*module, for_test_executable)};
     if (module->is_poisoned()) {
         modules_.print_all_diagnostics(error_stream_);
-        return {};
+        return gir::module{*module, ctx_.arena};
     }
 
     check_types(gir_mod, *module);
     if (module->is_poisoned()) {
         modules_.print_all_diagnostics(error_stream_);
-        return {};
+        return gir::module{*module, ctx_.arena};
     }
 
-    return {};
+    return gir_mod;
 }
 
 auto analyzer::collect_symbols(mod::module& module) -> mod::module_state {

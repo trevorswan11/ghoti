@@ -33,10 +33,7 @@ auto build_obj::execute() -> stdx::result<void, clap::error> {
 
     sema::analyzer analyzer{
         manager, error_stream_, true, opts_.target_opts, false, opts_.runtime_safety};
-    auto module{TRY(opts_.analyze(analyzer, manager, error_stream_))};
-
-    auto gir_mod{analyzer.emit_gir(*module)};
-    if (module->is_poisoned()) { return stdx::err{clap::error::COMPILATION_FAILED}; }
+    auto [module, gir_mod]{TRY(opts_.analyze(analyzer, manager, error_stream_))};
     TRY(opts_.emit_debug_artifacts(analyzer, gir_mod, error_stream_));
 
     auto emit_res{

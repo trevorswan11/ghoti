@@ -13,12 +13,12 @@
 
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
+#include "compiler/gir/module.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/analyzer.hh"
 #include "driver/clap/error.hh"
 
-namespace CLI { class App; }           // namespace CLI
-namespace ghoti::gir { class module; } // namespace ghoti::gir
+namespace CLI { class App; } // namespace CLI
 
 namespace ghoti::cmd::build {
 
@@ -87,8 +87,11 @@ struct options {
                                             std::ostream&        error_stream)
         -> stdx::result<void, clap::error>;
 
-    auto analyze(sema::analyzer& analyzer, mod::module_manager& manager, std::ostream& error_stream)
-        -> stdx::result<gsl::not_null<ghoti::mod::module*>, clap::error>;
+    auto analyze(sema::analyzer&      analyzer,
+                 mod::module_manager& manager,
+                 std::ostream&        error_stream,
+                 bool                 for_test_executable = false)
+        -> stdx::result<std::pair<gsl::not_null<ghoti::mod::module*>, gir::module>, clap::error>;
 };
 
 // Helper to register standard build options into CLI subcommands

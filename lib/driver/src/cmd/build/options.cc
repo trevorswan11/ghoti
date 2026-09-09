@@ -170,9 +170,11 @@ auto options::setup_module_manager(mod::module_manager& manager, std::ostream& e
 
 auto options::analyze(sema::analyzer&      analyzer,
                       mod::module_manager& manager,
-                      std::ostream&        error_stream)
-    -> stdx::result<gsl::not_null<ghoti::mod::module*>, clap::error> {
-    if (!analyzer.analyze(input_path)) { return stdx::err{clap::error::COMPILATION_FAILED}; }
+                      std::ostream&        error_stream,
+                      bool                 for_test_executable)
+    -> stdx::result<std::pair<gsl::not_null<ghoti::mod::module*>, gir::module>, clap::error> {
+    auto gir_mod_res{analyzer.analyze(input_path, for_test_executable)};
+    if (!gir_mod_res) { return stdx::err{clap::error::COMPILATION_FAILED}; }
 
     auto module_result{manager.try_get_file_module(input_path)};
     if (!module_result) {
@@ -191,7 +193,7 @@ auto options::analyze(sema::analyzer&      analyzer,
         manager.print_all_diagnostics(error_stream);
         return stdx::err{clap::error::COMPILATION_FAILED};
     }
-    return module;
+    return std::make_pair(module, std::move(*gir_mod_res));
 }
 
 auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_view> output_desc)
