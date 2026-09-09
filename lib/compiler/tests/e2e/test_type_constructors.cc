@@ -165,7 +165,7 @@ TEST_CASE("E2E: a `fn(bool): type` that selects between existing named types") {
 
         pub const main := fn(): i32 {
             const v: Chosen = .{ .a = 3, .b = 4 };
-            return @as(i32, v.a + v.b);
+            return @intCast(i32, v.a + v.b);
         };
     )") == 7);
 }
@@ -180,8 +180,8 @@ TEST_CASE("E2E: @sizeOf / @alignOf resolve a `fn(bool): type` alias selecting a 
         using U = choose(false);
 
         pub const main := fn(): i32 {
-            return @as(i32, @sizeOf(T)) + @as(i32, @alignOf(T))
-                 + @as(i32, @sizeOf(U)) + @as(i32, @alignOf(U));
+            return @intCast(i32, @sizeOf(T)) + @intCast(i32, @alignOf(T))
+                 + @intCast(i32, @sizeOf(U)) + @intCast(i32, @alignOf(U));
         };
     )") == 8 + 8 + 4 + 4);
 }
@@ -218,7 +218,7 @@ TEST_CASE("E2E: two instantiations of a generic type constructor do not alias th
         pub const main := fn(): i32 {
             const a := VI.make(3);
             const b := VL.make(7);
-            return @as(i32, a.doubled()) + @as(i32, b.doubled());   // 6 + 14
+            return @intCast(i32, a.doubled()) + @intCast(i32, b.doubled());   // 6 + 14
         };
     )") == 20);
 }
@@ -303,7 +303,7 @@ TEST_CASE("E2E: a cross-module generic type constructor, two instantiations, met
             pub const main := fn(): i32 {
                 const a := VI.make(3);
                 const b := VL.make(7);
-                return @as(i32, a.doubled()) + @as(i32, b.doubled());   // 6 + 14
+                return @intCast(i32, a.doubled()) + @intCast(i32, b.doubled());   // 6 + 14
             };
         )",
         {helpers::mock_file{"vec.gh", VEC, "v"}})};
@@ -313,7 +313,7 @@ TEST_CASE("E2E: a cross-module generic type constructor, two instantiations, met
 TEST_CASE("E2E: two instantiations of the same constructor passed to another generic") {
     CHECK(helpers::compile_and_run(R"(
         const Box := fn(T: type): type { return struct { v: T }; };
-        const boxSize := fn(B: type): i32 { return @as(i32, @sizeOf(B)); };
+        const boxSize := fn(B: type): i32 { return @intCast(i32, @sizeOf(B)); };
 
         pub const main := fn(): i32 {
             return boxSize(Box(i32)) * 10 + boxSize(Box(i64));   // 4*10 + 8
@@ -401,7 +401,7 @@ TEST_CASE("E2E: a type constructor member sizes a local `[n]T` from a `constexpr
                     const probe := fn(&self): i32 {
                         var buf: [n]i32 = undefined;
                         const b0: i32 = buf[0];
-                        return b0 - b0 + self.head + @as(i32, n);
+                        return b0 - b0 + self.head + @intCast(i32, n);
                     };
                 };
             };
@@ -421,7 +421,7 @@ TEST_CASE("E2E: a type constructor member sizes a local `[n]T` from a `constexpr
                     const sum := fn(&self): i32 {
                         var buf: [n]mut i32 = undefined;
                         var i: usize = 0;
-                        while (i < n) { buf[i] = @as(i32, i) * 2; i = i + 1; }
+                        while (i < n) { buf[i] = @intCast(i32, i) * 2; i = i + 1; }
                         var acc: i32 = 0;
                         var j: usize = 0;
                         while (j < n) { acc = acc + buf[j]; j = j + 1; }
@@ -445,7 +445,7 @@ TEST_CASE("E2E: a type constructor member sizes a local `[n]T` from a `constexpr
                     const fill := fn(&self): i32 {
                         var buf: [n]mut i32 = undefined;
                         var i: usize = 0;
-                        while (i < n) : (i += 1) { buf[i] = @as(i32, i); }
+                        while (i < n) : (i += 1) { buf[i] = @intCast(i32, i); }
                         var acc: i32 = 0;
                         var j: usize = 0;
                         while (j < n) : (j += 1) { acc = acc + buf[j]; }
@@ -468,11 +468,11 @@ TEST_CASE("E2E: a plain generic fn sizes a local `[n]mut T` from a `constexpr` p
         const probe := fn(constexpr n: usize, head: i32): i32 {
             var buf: [n]mut i32 = undefined;
             var i: usize = 0;
-            while (i < n) { buf[i] = @as(i32, i) * 2; i = i + 1; }
+            while (i < n) { buf[i] = @intCast(i32, i) * 2; i = i + 1; }
             var acc: i32 = 0;
             var j: usize = 0;
             while (j < n) { acc = acc + buf[j]; j = j + 1; }
-            return acc + head + @as(i32, n);
+            return acc + head + @intCast(i32, n);
         };
 
         pub const main := fn(): i32 { return probe(5, 3); };   // (0+2+4+6+8) + 3 + 5

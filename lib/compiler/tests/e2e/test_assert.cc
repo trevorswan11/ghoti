@@ -40,7 +40,7 @@ TEST_CASE("@verify routes its message to the panic handler, which can observe it
         pub const main := fn(): i32 {
             var x: i32 = 0;
             @verify(x > 0, "nope");
-            return @as(i32, last_msg_len);
+            return @intCast(i32, last_msg_len);
         };
     )") != 0);
 }

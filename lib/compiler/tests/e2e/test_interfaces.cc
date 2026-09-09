@@ -161,7 +161,7 @@ TEST_CASE("a parameterized impl with two type parameters remaps each independent
         }
         pub const main := fn(): i32 {
             var p: Pair(i32, i64) = .{ .a = 30, .b = 12 };
-            return p.first() + @as(i32, p.second());
+            return p.first() + @intCast(i32, p.second());
         };
     )") == 42);
 }
@@ -175,7 +175,7 @@ TEST_CASE("a parameterized impl folds a `constexpr` parameter into its method bo
         }
         pub const main := fn(): i32 {
             var r: Ring(28) = .{ .head = 0 };
-            return @as(i32, r.capacity()) + @as(i32, r.half());
+            return @intCast(i32, r.capacity()) + @intCast(i32, r.half());
         };
     )") == 42);
 }

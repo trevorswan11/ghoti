@@ -88,7 +88,7 @@ TEST_CASE("E2E: a re-exported extern struct's fixed-array field is usable throug
                     .blocks = 0, .blksize = 0, .flags = 0,
                     .spare = [2]i64{ 20, 22 },
                 };
-                return s.mode + @as(i32, s.spare[0]) + @as(i32, s.spare[1]) - 7;
+                return s.mode + @intCast(i32, s.spare[0]) + @intCast(i32, s.spare[1]) - 7;
             };
         )",
         chain_files())};

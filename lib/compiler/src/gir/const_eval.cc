@@ -1896,7 +1896,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto v{arg->is<u64>() ? arg->as<u64>() : static_cast<u64>(arg->as<i64>())};
         return const_value{static_cast<u64>(std::countr_zero(v)), usize_type};
     }
-    case syntax::token_type_t::BUILTIN_POP_COUNT: {
+    case syntax::token_type_t::BUILTIN_POPCOUNT: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
         if (!expr_h) { return stdx::none; }
@@ -2124,11 +2124,38 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!bits) { return stdx::none; }
         return const_value{static_cast<u64>(*bits), usize_type};
     }
-    case syntax::token_type_t::BUILTIN_AS:
-    case syntax::token_type_t::BUILTIN_BIT_CAST: {
-        // Fold the numeric/pointer subset; leave floats, enums and aggregates to the emitter.
-        if (call.arguments.size() < 2) { return stdx::none; }
-        const auto op_h{call.arguments[1].as_opt<ast::expr_handle>()};
+    case syntax::token_type_t::BUILTIN_INT_CAST: {
+        const auto op_arg_idx{call.arguments.size() == 1 ? 0UZ : 1UZ};
+        if (call.arguments.size() < (op_arg_idx + 1)) { return stdx::none; }
+        const auto op_h{call.arguments[op_arg_idx].as_opt<ast::expr_handle>()};
+        if (!op_h) { return stdx::none; }
+        const auto operand{try_eval(*op_h)};
+        if (!operand) { return stdx::none; }
+        const auto src_int{operand->as_int_opt()};
+        if (!src_int) { return stdx::none; }
+        auto target{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
+        if (!target) { target = module_->get_sema_type_opt(call.function); }
+        if (!target) { return stdx::none; }
+        const auto ptr_bits{static_cast<u32>(
+            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? 64 : 32)};
+        if (!sema::constexpr_int_fits(*src_int, *target, ptr_bits)) {
+            ctx_.diags.emplace_back(
+                fmt::format("Integer value {} is out of range for target type '{}' in @intCast",
+                            *src_int,
+                            sema::type_kind_display_name(*target)),
+                sema::error::CONSTEXPR_EVALUATION_FAILED,
+                module_->ast.location_of(*op_h));
+            return const_value::make_poison();
+        }
+        if (const auto w{integer_target_width(*target, ptr_bits)}) {
+            return wrap_to_width(*operand, w->first, w->second, target);
+        }
+        return stdx::none;
+    }
+    case syntax::token_type_t::BUILTIN_TRUNCATE: {
+        const auto op_arg_idx{call.arguments.size() == 1 ? 0UZ : 1UZ};
+        if (call.arguments.size() < (op_arg_idx + 1)) { return stdx::none; }
+        const auto op_h{call.arguments[op_arg_idx].as_opt<ast::expr_handle>()};
         if (!op_h) { return stdx::none; }
         const auto operand{try_eval(*op_h)};
         if (!operand) { return stdx::none; }
@@ -2142,9 +2169,56 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (const auto w{integer_target_width(*target, ptr_bits)}) {
             return wrap_to_width(*operand, w->first, w->second, target);
         }
-        if (target->get_kind() == sema::type_kind::BOOL) {
-            return const_value{*src_int != 0,
-                               ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+        return stdx::none;
+    }
+    case syntax::token_type_t::BUILTIN_BOOL_FROM_INT: {
+        if (call.arguments.empty()) { return stdx::none; }
+        const auto op_h{call.arguments[0].as_opt<ast::expr_handle>()};
+        if (!op_h) { return stdx::none; }
+        const auto operand{try_eval(*op_h)};
+        if (!operand) { return stdx::none; }
+        auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+        if (const auto src_int{operand->as_int_opt()}) {
+            return const_value{*src_int != 0, bool_type};
+        }
+        if (const auto ptr_val{operand->as_opt<u64>()}) {
+            return const_value{*ptr_val != 0, bool_type};
+        }
+        return stdx::none;
+    }
+    case syntax::token_type_t::BUILTIN_INT_FROM_BOOL: {
+        const auto op_arg_idx{call.arguments.size() == 1 ? 0UZ : 1UZ};
+        if (call.arguments.size() < (op_arg_idx + 1)) { return stdx::none; }
+        const auto op_h{call.arguments[op_arg_idx].as_opt<ast::expr_handle>()};
+        if (!op_h) { return stdx::none; }
+        const auto operand{try_eval(*op_h)};
+        if (!operand) { return stdx::none; }
+        const auto src_bool{operand->as_opt<bool>()};
+        if (!src_bool) { return stdx::none; }
+        auto target{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
+        if (!target) { target = module_->get_sema_type_opt(call.function); }
+        if (!target) { return stdx::none; }
+        const u64 int_val{*src_bool ? 1ULL : 0ULL};
+        return const_value{int_val, target};
+    }
+    case syntax::token_type_t::BUILTIN_AS:
+    case syntax::token_type_t::BUILTIN_BIT_CAST: {
+        // Fold the numeric/pointer subset; leave floats, enums and aggregates to the emitter.
+        const auto op_arg_idx{call.arguments.size() == 1 ? 0UZ : 1UZ};
+        if (call.arguments.size() < (op_arg_idx + 1)) { return stdx::none; }
+        const auto op_h{call.arguments[op_arg_idx].as_opt<ast::expr_handle>()};
+        if (!op_h) { return stdx::none; }
+        const auto operand{try_eval(*op_h)};
+        if (!operand) { return stdx::none; }
+        const auto src_int{operand->as_int_opt()};
+        if (!src_int) { return stdx::none; }
+        auto target{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
+        if (!target) { target = module_->get_sema_type_opt(call.function); }
+        if (!target) { return stdx::none; }
+        const auto ptr_bits{static_cast<u32>(
+            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? 64 : 32)};
+        if (const auto w{integer_target_width(*target, ptr_bits)}) {
+            return wrap_to_width(*operand, w->first, w->second, target);
         }
         if (target->get_kind() == sema::type_kind::POINTER) {
             return const_value{static_cast<u64>(static_cast<u128>(*src_int)), target};

@@ -212,7 +212,7 @@ TEST_CASE("E2E cfg: a non-braced @cfg arm on a variant / field may be followed b
             else DEAD = 32u32,
             _,
         };
-        pub const main := fn(): i32 { return @as(i32, @as(u32, Tag.TAKEN)); };
+        pub const main := fn(): i32 { return @intCast(i32, @as(u32, Tag.TAKEN)); };
     )") == 64);
 
     CHECK(helpers::compile_and_run(R"(

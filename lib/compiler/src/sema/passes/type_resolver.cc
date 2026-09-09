@@ -381,6 +381,15 @@ namespace {
     return std::ranges::contains(names, name);
 }
 
+[[nodiscard]] auto integer_effective_bits(const type& t, u32 ptr_bits) noexcept -> u32 {
+    switch (t.get_kind()) {
+    case type_kind::INT:   return u32{int_width(t)};
+    case type_kind::ISIZE:
+    case type_kind::USIZE: return ptr_bits;
+    default:               return 0;
+    }
+}
+
 } // namespace
 
 template <ast::IndexableID ID>
@@ -399,8 +408,13 @@ template <ast::IndexableID ID>
     const auto  is_assert_or_verify{builtin_id == token_type_t::BUILTIN_ASSERT ||
                                    builtin_id == token_type_t::BUILTIN_VERIFY};
     const auto  is_skip{builtin_id == token_type_t::BUILTIN_SKIP};
+    const auto  is_inferrable_cast{builtin_id == token_type_t::BUILTIN_AS ||
+                                  builtin_id == token_type_t::BUILTIN_INT_CAST ||
+                                  builtin_id == token_type_t::BUILTIN_BIT_CAST ||
+                                  builtin_id == token_type_t::BUILTIN_TRUNCATE ||
+                                  builtin_id == token_type_t::BUILTIN_INT_FROM_BOOL};
     const auto& params{builtin.params};
-    if (is_expect_or_require || is_assert_or_verify) {
+    if (is_expect_or_require || is_assert_or_verify || is_inferrable_cast) {
         if (call.arguments.empty() || call.arguments.size() > 2) {
             return make_sema_err(
                 fmt::format("Builtin expects 1 or 2 arguments, found {}", call.arguments.size()),
@@ -425,14 +439,185 @@ template <ast::IndexableID ID>
     using syntax::token_type_t;
     gsl::not_null<type*> return_type = &ctx_.get_poison();
 
+    struct cast_args {
+        stdx::option<type&>                           target;
+        stdx::option<const ast::call_expr::argument&> operand;
+        source_location                               target_loc;
+    };
+
+    const auto extract_cast_args =
+        [&](std::string_view name) -> stdx::result<cast_args, diagnostic> {
+        cast_args args;
+
+        if (call.arguments.size() == 1) {
+            const auto implicit_type{implicit_type_stack_.peek()};
+            if (!implicit_type || !implicit_type->is_resolved() ||
+                implicit_type->get_kind() == type_kind::AUTO ||
+                implicit_type->get_kind() == type_kind::CONSTEXPR_INT ||
+                implicit_type->get_kind() == type_kind::CONSTEXPR_FLOAT) {
+                return make_sema_err(
+                    fmt::format(
+                        "cannot infer the target type of '{}' here; write '{}(T, x)'", name, name),
+                    error::TYPE_MISMATCH,
+                    resolving_.ast.location_of(call.function));
+            }
+            if (implicit_type->is_poison()) { return args; }
+            args.target.emplace(*implicit_type);
+            args.target_loc = resolving_.ast.location_of(call.function);
+            args.operand.emplace(call.arguments[0]);
+        } else {
+            args.target.emplace(get_resolved_call_arg_type(call.arguments[0]));
+            args.target_loc = get_call_arg_location(call.arguments[0]);
+            args.operand.emplace(call.arguments[1]);
+        }
+        return args;
+    };
+
     // Indexing can be done freely as arity is already validated
     switch (builtin_id) {
     case token_type_t::BUILTIN_ALIGN_CAST:
-    case token_type_t::BUILTIN_PTR_CAST:
-    case token_type_t::BUILTIN_BIT_CAST:
-    case token_type_t::BUILTIN_AS:         {
-        // These builtins take in a resulting type to cast to
+    case token_type_t::BUILTIN_PTR_CAST:   {
         return_type = get_resolved_call_arg_type(call.arguments[0]);
+        break;
+    }
+    case token_type_t::BUILTIN_BIT_CAST: {
+        const auto args_res{extract_cast_args("@bitCast")};
+        if (!args_res) { return make_sema_err(args_res.error()); }
+        if (args_res->target && !args_res->target->is_poison()) {
+            return_type = args_res->target.get();
+        }
+        break;
+    }
+    case token_type_t::BUILTIN_AS: {
+        const auto args_res{extract_cast_args("@as")};
+        if (!args_res) { return make_sema_err(args_res.error()); }
+        if (!args_res->target || args_res->target->is_poison()) { break; }
+        auto& target{*args_res->target};
+        auto& src{*get_resolved_call_arg_type(*args_res->operand)};
+        if (src.is_poison()) { break; }
+
+        if (target.get_kind() == type_kind::BOOL &&
+            (is_integer(src.get_kind()) || src.get_kind() == type_kind::CONSTEXPR_INT ||
+             src.get_kind() == type_kind::POINTER)) {
+            return make_sema_err("`@as` cannot convert to `bool`; use `@boolFromInt` instead",
+                                 error::TYPE_MISMATCH,
+                                 resolving_.ast.location_of(call.function));
+        }
+        if (src.get_kind() == type_kind::BOOL && is_integer(target.get_kind())) {
+            return make_sema_err("`@as` cannot convert from `bool`; use `@intFromBool` instead",
+                                 error::TYPE_MISMATCH,
+                                 resolving_.ast.location_of(call.function));
+        }
+
+        return_type = &target;
+        break;
+    }
+    case token_type_t::BUILTIN_INT_CAST: {
+        const auto args_res{extract_cast_args("@intCast")};
+        if (!args_res) { return make_sema_err(args_res.error()); }
+        if (!args_res->target || args_res->target->is_poison()) { break; }
+        auto& target{*args_res->target};
+        if (!is_integer(target.get_kind())) {
+            return make_sema_err(
+                fmt::format("`@intCast` target must be an integer type; found '{}'",
+                            type_kind_display_name(target)),
+                error::TYPE_MISMATCH,
+                args_res->target_loc);
+        }
+        auto& src{*get_resolved_call_arg_type(*args_res->operand)};
+        if (src.is_poison()) { break; }
+        if (!is_integer(src.get_kind()) && src.get_kind() != type_kind::CONSTEXPR_INT) {
+            return make_sema_err(
+                fmt::format("`@intCast` operand must be an integer type; found '{}'",
+                            type_kind_display_name(src)),
+                error::TYPE_MISMATCH,
+                get_call_arg_location(*args_res->operand));
+        }
+        return_type = &target;
+        break;
+    }
+    case token_type_t::BUILTIN_TRUNCATE: {
+        const auto args_res{extract_cast_args("@truncate")};
+        if (!args_res) { return make_sema_err(args_res.error()); }
+        if (!args_res->target || args_res->target->is_poison()) { break; }
+        auto& target{*args_res->target};
+        if (!is_integer(target.get_kind())) {
+            return make_sema_err(
+                fmt::format("`@truncate` target must be an integer type; found '{}'",
+                            type_kind_display_name(target)),
+                error::TYPE_MISMATCH,
+                args_res->target_loc);
+        }
+        auto& src{*get_resolved_call_arg_type(*args_res->operand)};
+        if (src.is_poison()) { break; }
+        if (!is_integer(src.get_kind())) {
+            return make_sema_err(
+                fmt::format("`@truncate` operand must be an integer type; found '{}'",
+                            type_kind_display_name(src)),
+                error::TYPE_MISMATCH,
+                get_call_arg_location(*args_res->operand));
+        }
+
+        const auto ptr_bits{target_ptr_bits()};
+        const auto to_bits{integer_effective_bits(target, ptr_bits)};
+        const auto from_bits{integer_effective_bits(src, ptr_bits)};
+        if (to_bits == from_bits) {
+            return make_sema_err(fmt::format("`@truncate` target type '{}' has the same width as "
+                                             "'{}'; use `@bitCast` or `@intCast` instead",
+                                             type_kind_display_name(target),
+                                             type_kind_display_name(src)),
+                                 error::TYPE_MISMATCH,
+                                 resolving_.ast.location_of(call.function));
+        }
+        if (to_bits > from_bits) {
+            return make_sema_err(
+                fmt::format("`@truncate` target type '{}' is wider than '{}'; use `@as` instead",
+                            type_kind_display_name(target),
+                            type_kind_display_name(src)),
+                error::TYPE_MISMATCH,
+                resolving_.ast.location_of(call.function));
+        }
+
+        return_type = &target;
+        break;
+    }
+    case token_type_t::BUILTIN_BOOL_FROM_INT: {
+        const auto& arg{call.arguments[0]};
+        auto&       src{*get_resolved_call_arg_type(arg)};
+        if (src.is_poison()) { break; }
+        if (!is_integer(src.get_kind()) && src.get_kind() != type_kind::CONSTEXPR_INT &&
+            src.get_kind() != type_kind::POINTER) {
+            return make_sema_err(
+                fmt::format("`@boolFromInt` operand must be an integer or pointer; found '{}'",
+                            type_kind_display_name(src)),
+                error::TYPE_MISMATCH,
+                get_call_arg_location(arg));
+        }
+        return_type = &ctx_.get_builtin_resolved_type(sema::type_kind::BOOL);
+        break;
+    }
+    case token_type_t::BUILTIN_INT_FROM_BOOL: {
+        const auto args_res{extract_cast_args("@intFromBool")};
+        if (!args_res) { return make_sema_err(args_res.error()); }
+        if (!args_res->target || args_res->target->is_poison()) { break; }
+        auto& target{*args_res->target};
+        if (!is_integer(target.get_kind())) {
+            return make_sema_err(
+                fmt::format("`@intFromBool` target must be an integer type; found '{}'",
+                            type_kind_display_name(target)),
+                error::TYPE_MISMATCH,
+                args_res->target_loc);
+        }
+        auto& src{*get_resolved_call_arg_type(*args_res->operand)};
+        if (src.is_poison()) { break; }
+        if (src.get_kind() != type_kind::BOOL) {
+            return make_sema_err(
+                fmt::format("`@intFromBool` operand must be of type 'bool'; found '{}'",
+                            type_kind_display_name(src)),
+                error::TYPE_MISMATCH,
+                get_call_arg_location(*args_res->operand));
+        }
+        return_type = &target;
         break;
     }
     case token_type_t::BUILTIN_DYN_CAST: {
@@ -491,7 +676,7 @@ template <ast::IndexableID ID>
     case token_type_t::BUILTIN_BIT_SIZE_OF:
     case token_type_t::BUILTIN_CLZ:
     case token_type_t::BUILTIN_CTZ:
-    case token_type_t::BUILTIN_POP_COUNT:    {
+    case token_type_t::BUILTIN_POPCOUNT:     {
         ASSERT(builtin.return_type.get_kind() == type_kind::USIZE);
         return_type = &builtin.return_type;
         break;
@@ -1173,7 +1358,7 @@ template <ast::IndexableID ID>
                 ct->get_kind() != type_kind::POINTER) {
                 return make_sema_err(
                     fmt::format("{} condition must be `bool` or a pointer, found `{}` (wrap it in "
-                                "`@as(bool, ...)` if that is intended)",
+                                "`@boolFromInt(...)` if that is intended)",
                                 *syntax::get_builtin_opt(builtin_id),
                                 ctx_.type_display_name(*ct)),
                     error::TYPE_MISMATCH,
@@ -1218,7 +1403,7 @@ template <ast::IndexableID ID>
                 ct && !ct->is_poison() && ct->get_kind() != type_kind::BOOL &&
                 ct->get_kind() != type_kind::POINTER) {
                 return make_sema_err(fmt::format("{} condition must be `bool` or a pointer, found "
-                                                 "`{}` (wrap it in `@as(bool, "
+                                                 "`{}` (wrap it in `@boolFromInt("
                                                  "...)` if that is intended)",
                                                  name,
                                                  ctx_.type_display_name(*ct)),

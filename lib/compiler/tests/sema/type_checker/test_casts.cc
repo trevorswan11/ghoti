@@ -81,19 +81,50 @@ TEST_CASE("Implicit numeric widening conversions") {
 TEST_CASE("Explicit numeric casting via @as") {
     helpers::type_check_and_verify(R"(
         pub const test_fn := fn(): void {
-            const big_u64: u64 = 1000;
-            const narrow_u8 := @as(u8, big_u64);
-            const narrow_u32 := @as(u32, big_u64);
+            const small_u8: u8 = 100;
+            const widen_u32 := @as(u32, small_u8);
+            const widen_u64 := @as(u64, widen_u32);
 
             const s_i32: i32 = -5;
-            const u_u32 := @as(u32, s_i32);
-            const back_i32 := @as(i32, u_u32);
+            const widen_i64 := @as(i64, s_i32);
 
             const float_val: f64 = 9.99;
             const int_from_float := @as(i32, float_val);
             const float_from_int := @as(f64, int_from_float);
         };
     )");
+}
+
+TEST_CASE("Explicit narrowing via @as is rejected") {
+    helpers::test_checker_fail(
+        R"(
+        pub const test_fn := fn(): void {
+            const big_u64: u64 = 1000;
+            const narrow_u8 := @as(u8, big_u64);
+        };
+    )",
+        sema::diagnostic{
+            "Cannot cast type 'u64' to 'u8' (narrowing conversion from 'u64' to 'u8' may truncate "
+            "high bits; use @intCast for a checked conversion or @truncate to discard high bits)",
+            sema::error::TYPE_MISMATCH,
+            std::pair{3UZ, 39UZ}});
+}
+
+TEST_CASE("Explicit sign change via @as is rejected") {
+    helpers::test_checker_fail(
+        R"(
+        pub const test_fn := fn(): void {
+            const s_i32: i32 = -5;
+            const u_u32 := @as(u32, s_i32);
+        };
+    )",
+        sema::diagnostic{
+            "Cannot cast type 'i32' to 'u32' (conversion from 'i32' to 'u32' changes signedness "
+            "and "
+            "may change the represented value; use @intCast for a checked conversion or @bitCast "
+            "to reinterpret the bits)",
+            sema::error::TYPE_MISMATCH,
+            std::pair{3UZ, 36UZ}});
 }
 
 TEST_CASE("Non-widenable implicit integer narrowing fails without @as") {
@@ -104,9 +135,12 @@ TEST_CASE("Non-widenable implicit integer narrowing fails without @as") {
             var small: u8 = big;
         };
     )",
-        sema::diagnostic{"Type mismatch in store: cannot assign 'u64' to 'u8'",
-                         sema::error::TYPE_MISMATCH,
-                         std::pair{3UZ, 28UZ}});
+        sema::diagnostic{
+            "Type mismatch in store: cannot assign 'u64' to 'u8' (narrowing conversion from 'u64' "
+            "to 'u8' may truncate high bits; use @intCast for a checked conversion or @truncate to "
+            "discard high bits)",
+            sema::error::TYPE_MISMATCH,
+            std::pair{3UZ, 28UZ}});
 }
 
 TEST_CASE("Explicit reference construction from value types") {

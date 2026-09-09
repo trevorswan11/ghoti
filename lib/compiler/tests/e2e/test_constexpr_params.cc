@@ -169,7 +169,7 @@ TEST_CASE("constexpr parameter: forward-referenced constexpr argument") {
 TEST_CASE("constexpr parameter: sizes a type in the body, per value") {
     CHECK(helpers::compile_and_run(R"(
         const bytes := fn(constexpr n: usize): i32 {
-            return @as(i32, @sizeOf([n]i32));
+            return @intCast(i32, @sizeOf([n]i32));
         };
 
         pub const main := fn(): i32 {

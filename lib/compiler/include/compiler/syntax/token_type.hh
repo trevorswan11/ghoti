@@ -173,6 +173,10 @@ enum class token_type_t : u8 {
     BUILTIN_CONST_CAST,
     BUILTIN_VOLATILE_CAST,
     BUILTIN_AS,
+    BUILTIN_INT_CAST,
+    BUILTIN_TRUNCATE,
+    BUILTIN_BOOL_FROM_INT,
+    BUILTIN_INT_FROM_BOOL,
     BUILTIN_INT_FROM_PTR,
     BUILTIN_PTR_FROM_INT,
     BUILTIN_PTR_FROM_ARRAY,
@@ -191,7 +195,7 @@ enum class token_type_t : u8 {
     BUILTIN_MUL_ADD,
     BUILTIN_CLZ, // Count leading zeroes
     BUILTIN_CTZ, // Count trailing zeroes
-    BUILTIN_POP_COUNT,
+    BUILTIN_POPCOUNT,
     BUILTIN_ABS,
     BUILTIN_MIN,
     BUILTIN_MAX,

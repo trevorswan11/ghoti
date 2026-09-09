@@ -15,8 +15,8 @@ TEST_CASE("a constexpr_int literal coerces to many concrete widths") {
             const d: u100 = n;
             if (@as(i32, a) != 200) { return 1; }
             if (@as(i32, b) != 200) { return 2; }
-            if (@as(i32, @as(i64, c)) != 200) { return 3; }
-            if (@as(i32, @as(u64, d)) != 200) { return 4; }
+            if (@intCast(i32, c) != 200) { return 3; }
+            if (@intCast(i32, d) != 200) { return 4; }
             return 0;
         };
     )") == 0);
@@ -89,7 +89,7 @@ TEST_CASE("@typeOf of an unsuffixed literal is constexpr_int / constexpr_float")
             const F := @typeOf(0.0);
             const a: I = 123;               // constexpr_int alias still coerces
             const b: F = 1.5;
-            if (@as(i32, @as(i64, a)) != 123) { return 1; }
+            if (@intCast(i32, @as(i64, a)) != 123) { return 1; }
             if (b != 1.5f64) { return 2; }
             return 0;
         };

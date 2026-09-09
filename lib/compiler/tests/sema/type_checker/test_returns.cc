@@ -60,7 +60,9 @@ TEST_CASE("Return statement type checking") {
             };
         )",
             sema::diagnostic{
-                "Return value of type 'bool' is not assignable to function return type 'i32'",
+                "Return value of type 'bool' is not assignable to function return type 'i32' "
+                "(conversion from 'bool' to 'i32' maps false/true to 0/1; use @intFromBool for an "
+                "explicit conversion)",
                 sema::error::RETURN_TYPE_MISMATCH,
                 std::pair{2UZ, 16UZ}});
     }
@@ -77,7 +79,9 @@ TEST_CASE("Return statement type checking") {
             };
         )",
             sema::diagnostic{
-                "Return value of type 'bool' is not assignable to function return type 'i32'",
+                "Return value of type 'bool' is not assignable to function return type 'i32' "
+                "(conversion from 'bool' to 'i32' maps false/true to 0/1; use @intFromBool for an "
+                "explicit conversion)",
                 sema::error::RETURN_TYPE_MISMATCH,
                 std::pair{5UZ, 20UZ}});
     }
