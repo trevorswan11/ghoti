@@ -467,4 +467,19 @@ TEST_CASE("a by-reference param read across sibling match arms and later blocks"
     )") == 5);
 }
 
+TEST_CASE("`match` capture of pointer union payload binds slot correctly") {
+    const auto exit_code{helpers::compile_and_run(R"(
+        const PtrUnion := union { ptr: ^i32, val: i32 };
+        pub const main := fn(): i32 {
+            var x: i32 = 7;
+            const u: PtrUnion = .{ .ptr = ^x };
+            return match (u) {
+                .ptr => |p| *p,
+                .val => |v| v,
+            };
+        };
+    )")};
+    CHECK(exit_code == 7);
+}
+
 } // namespace ghoti::tests

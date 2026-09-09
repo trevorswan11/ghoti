@@ -8,6 +8,8 @@
 
 namespace ghoti::tests {
 
+using helpers::mock_file;
+
 TEST_CASE("an inherent impl method runs on an instance") {
     CHECK(helpers::compile_and_run(R"(
         const Point := struct { x: i32, y: i32 };
@@ -577,6 +579,101 @@ TEST_CASE("`@dynCast` to `&mut T` allows mutating through the recovered referenc
             return cell.n;
         };
     )") == 42);
+}
+
+TEST_CASE("Two impls in separate modules sharing an interface") {
+    constexpr std::string_view IFACE_MOD{R"(
+        pub const Adder := interface {
+            pub const base := fn(&self): i32;
+            pub const add_three := fn(&self): i32 {
+                return self.base() + 3;
+            };
+        };
+    )"};
+    constexpr std::string_view MOD_A{R"(
+        import "iface.gh" as i;
+        pub const AType := struct { v: i32 };
+        impl i::Adder for AType {
+            pub const base := fn(&self): i32 { return self.v; };
+        }
+        pub const make_a := fn(): i32 {
+            var a := AType{ .v = 4 };
+            return a.add_three();
+        };
+    )"};
+    const auto                 exit_code{helpers::compile_and_run(
+        R"(
+            import "iface.gh" as i;
+            import "mod_a.gh" as ma;
+            const BType := struct { v: i32 };
+            impl i::Adder for BType {
+                pub const base := fn(&self): i32 { return self.v; };
+            }
+            pub const main := fn(): i32 {
+                var b := BType{ .v = 0 };
+                return ma::make_a();
+            };
+        )",
+        {
+            mock_file{"iface.gh", IFACE_MOD, "iface"},
+            mock_file{"mod_a.gh", MOD_A, "mod_a"},
+        })};
+    CHECK(exit_code == 7);
+}
+
+TEST_CASE("Multiple impls of shared interface retain inherited defaults") {
+    constexpr std::string_view IFACE_MOD{R"(
+        pub const Greeter := interface {
+            pub const code := fn(&self): i32;
+            pub const score := fn(&self): i32 {
+                return self.code() * 2;
+            };
+        };
+    )"};
+    const auto                 exit_code{helpers::compile_and_run(
+        R"(
+            import "greeter.gh" as g;
+            const Alpha := struct { c: i32 };
+            impl g::Greeter for Alpha {
+                pub const code := fn(&self): i32 { return self.c; };
+            }
+            const Beta := struct { c: i32 };
+            impl g::Greeter for Beta {
+                pub const code := fn(&self): i32 { return self.c; };
+            }
+            pub const main := fn(): i32 {
+                var a := Alpha{ .c = 2 };
+                var b := Beta{ .c = 3 };
+                return (a.score() - 4) + (b.score() + 1);
+            };
+        )",
+        {mock_file{"greeter.gh", IFACE_MOD, "greeter"}})};
+    CHECK(exit_code == 7);
+}
+
+TEST_CASE("Cross-module inherited default method compiles and runs") {
+    constexpr std::string_view IFACE_MOD{R"(
+        pub const Describable := interface {
+            pub const id := fn(&self): i32;
+            pub const boosted_id := fn(&self): i32 {
+                return self.id() + 5;
+            };
+        };
+    )"};
+    const auto                 exit_code{helpers::compile_and_run(
+        R"(
+            import "iface.gh" as iface;
+            const Item := struct { val: i32 };
+            impl iface::Describable for Item {
+                pub const id := fn(&self): i32 { return self.val; };
+            }
+            pub const main := fn(): i32 {
+                var it := Item{ .val = 2 };
+                return it.boosted_id();
+            };
+        )",
+        {mock_file{"iface.gh", IFACE_MOD, "iface"}})};
+    CHECK(exit_code == 7);
 }
 
 } // namespace ghoti::tests

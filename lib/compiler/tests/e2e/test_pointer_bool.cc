@@ -184,4 +184,50 @@ TEST_CASE("if (ptr) guards a defer-bearing scope") {
     )") == 42);
 }
 
+TEST_CASE("@assert and @verify coerce non-null pointers to truthy") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            var x: i32 = 42;
+            const p: ^i32 = ^x;
+            @assert(p);
+            @verify(p);
+            @assert(p, "pointer must not be null");
+            @verify(p, "verification with pointer");
+            return *p;
+        };
+    )") == 42);
+}
+
+TEST_CASE("@assert and @verify with non-bool non-pointer integers are rejected") {
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            @assert(5);
+            return 0;
+        };
+    )");
+
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            @verify(5);
+            return 0;
+        };
+    )");
+}
+
+TEST_CASE("@assert and @verify with comptime nullptr are rejected at compile time") {
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            @assert(nullptr);
+            return 0;
+        };
+    )");
+
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            @verify(nullptr);
+            return 0;
+        };
+    )");
+}
+
 } // namespace ghoti::tests
