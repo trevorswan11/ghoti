@@ -1,5 +1,6 @@
 #pragma once
 
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -49,6 +50,38 @@ struct body_type_diff {
     [[nodiscard]] auto empty() const noexcept -> bool {
         return node_types.empty() && explicit_types.empty() && if_branches.empty() &&
                match_arms.empty();
+    }
+
+    // An outer `none` means the idx doesn't exist, inner means node has no sema type
+    [[nodiscard]] auto find_node_type(usize idx) const noexcept
+        -> stdx::option<stdx::option<type&>> {
+        for (auto [node_idx, ty] : node_types | std::views::reverse) {
+            if (node_idx == idx) { return ty; }
+        }
+        return stdx::none;
+    }
+
+    // An outer `none` means the idx doesn't exist, inner means type has no sema type
+    [[nodiscard]] auto find_explicit_type(usize idx) const noexcept
+        -> stdx::option<stdx::option<type&>> {
+        for (auto [type_idx, ty] : explicit_types | std::views::reverse) {
+            if (type_idx == idx) { return ty; }
+        }
+        return stdx::none;
+    }
+
+    [[nodiscard]] auto find_if_branch(usize idx) const noexcept -> stdx::option<mod::if_branch> {
+        for (auto [if_idx, branch] : if_branches | std::views::reverse) {
+            if (if_idx == idx) { return branch; }
+        }
+        return stdx::none;
+    }
+
+    [[nodiscard]] auto find_match_arm(usize idx) const noexcept -> stdx::opt_size {
+        for (auto [match_idx, arm_idx] : match_arms | std::views::reverse) {
+            if (match_idx == idx) { return arm_idx; }
+        }
+        return stdx::none;
     }
 };
 using body_type_diff_map = ankerl::unordered_dense::

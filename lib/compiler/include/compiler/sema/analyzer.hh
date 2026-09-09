@@ -70,7 +70,8 @@ class analyzer {
     MAKE_MOVE_CONSTRUCTABLE_ONLY(analyzer);
 
     // Runs the entire sema pipeline
-    auto analyze(const std::filesystem::path& entry_path) -> stdx::result<void, diagnostic>;
+    auto analyze(const std::filesystem::path& entry_path, bool for_test_executable = false)
+        -> stdx::result<gir::module, diagnostic>;
 
     [[nodiscard]] auto get_table(this auto&& self, usize idx) -> auto& {
         return self.registry_.get(idx);

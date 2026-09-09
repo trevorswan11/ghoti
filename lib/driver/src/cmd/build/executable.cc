@@ -34,7 +34,7 @@ auto build_exe::execute() -> stdx::result<void, clap::error> {
 
     sema::analyzer analyzer{
         manager, error_stream_, true, opts_.target_opts, false, opts_.runtime_safety};
-    auto module{TRY(opts_.analyze(analyzer, manager, error_stream_))};
+    auto [module, gir_mod]{TRY(opts_.analyze(analyzer, manager, error_stream_))};
 
     // Validate that root module contains valid 'pub const main := fn(args: [][:0]u8): void'
     if (auto val_res{analyzer.validate_main_entry(*module)}; !val_res) {
@@ -42,8 +42,6 @@ auto build_exe::execute() -> stdx::result<void, clap::error> {
         return stdx::err{clap::error::COMPILATION_FAILED};
     }
 
-    auto gir_mod{analyzer.emit_gir(*module)};
-    if (module->is_poisoned()) { return stdx::err{clap::error::COMPILATION_FAILED}; }
     TRY(opts_.emit_debug_artifacts(analyzer, gir_mod, error_stream_));
 
     auto emit_res{analyzer.emit_executable(gir_mod,

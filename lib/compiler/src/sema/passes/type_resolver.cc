@@ -1176,19 +1176,26 @@ template <ast::IndexableID ID>
 
         if (cond_expr) {
             if (const auto ct{resolving_.get_sema_type_opt(*cond_expr)};
-                ct && !ct->is_poison() && ct->get_kind() != type_kind::BOOL) {
-                return make_sema_err(
-                    fmt::format("{} condition must be `bool`, found `{}` (wrap it in `@as(bool, "
-                                "...)` if that is intended)",
-                                name,
-                                ctx_.type_display_name(*ct)),
-                    error::TYPE_MISMATCH,
-                    get_call_arg_location(call.arguments[0]));
+                ct && !ct->is_poison() && ct->get_kind() != type_kind::BOOL &&
+                ct->get_kind() != type_kind::POINTER) {
+                return make_sema_err(fmt::format("{} condition must be `bool` or a pointer, found "
+                                                 "`{}` (wrap it in `@as(bool, "
+                                                 "...)` if that is intended)",
+                                                 name,
+                                                 ctx_.type_display_name(*ct)),
+                                     error::TYPE_MISMATCH,
+                                     get_call_arg_location(call.arguments[0]));
             }
 
             // A comptime-known-false condition is a compile error at the call site.
             if (const auto cv{evaluator.try_eval(*cond_expr)}) {
-                if (const auto b{cv->as_opt<bool>()}; b && !*b) {
+                bool is_false{false};
+                if (const auto b{cv->as_opt<bool>()}) {
+                    is_false = !*b;
+                } else if (cv->is<gir::nullptr_val>()) {
+                    is_false = true;
+                }
+                if (is_false) {
                     ctx_.diags.emplace_back(
                         fmt::format("{} failed at compile time{}",
                                     name,
@@ -2850,6 +2857,7 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
 
     if constexpr (std::same_as<ID, ast::node_id>) {
         if (const auto located{ctx_.registry.lookup_with_table(table_stack_, name)}) {
+            resolving_.set_symbol_table(id, located->table_idx);
             record_symbol_owner(id, located->table_idx, resolving_, located->symbol);
         }
     }
@@ -6617,6 +6625,7 @@ auto type_resolver::instantiate_impls_for(
         if (!cx_bindings.empty()) {
             ctx_.instantiation_cache.set_type_ctor_bindings(typing_key, std::move(cx_bindings));
         }
+        ctx_.advance_epoch();
 
         impl_record rec{
             .interface_type     = pimpl->interface_type,
@@ -6804,6 +6813,7 @@ auto type_resolver::build_param_impl_template(const ast::impl_stmt& impl, ast::n
         }
     }
     const constexpr_frame_guard cx_guard{ctx_.constexpr_binding_frames, std::move(cx_dummy)};
+    ctx_.advance_epoch();
 
     // The sentinel/dummy resolution only has to yield the abstract target + a signature per
     // method; its diags are noise and its `if constexpr` folds are redone per instantiation.
@@ -6826,6 +6836,7 @@ auto type_resolver::build_param_impl_template(const ast::impl_stmt& impl, ast::n
     if (ctx_.diags.size() > diags_before) { DISCARD(ctx_.diags.split_off(diags_before)); }
     resolving_.if_constexpr_results = snap_ifs;
     resolving_.match_arm_results    = snap_matches;
+    ctx_.advance_epoch();
 
     if (!pimpl) { return; } // unanchored: members resolved, nothing to store
     ctx_.impls.set_template(
@@ -7542,6 +7553,7 @@ auto type_resolver::instantiate_generic(type&                             callee
 
     // Snapshot the shared side tables so this instantiation's typing is captured as a replayable
     // diff
+    ctx_.advance_epoch();
     const body_typing_snapshot snap{fn_mod};
 
     // Bind each `constexpr` parameter to its folded value while this instantiation's body is
@@ -7695,6 +7707,7 @@ auto type_resolver::instantiate_generic(type&                             callee
     rollback_poisoned(fn_mod.sema_side_tables.node_types.values, snap.nodes, typing.node_types);
     rollback_poisoned(
         fn_mod.sema_side_tables.explicit_types.values, snap.types, typing.explicit_types);
+    ctx_.advance_epoch();
 
     auto tracker{std::move(inst_resolver.return_trackers_.back())};
     inst_resolver.return_trackers_.pop_back();

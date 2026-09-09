@@ -54,6 +54,12 @@ struct context {
     // Declared names for user struct/enum/union types, for `@typeName`
     ankerl::unordered_dense::map<const type*, std::string_view> user_type_names;
 
+    // Global epoch counter tracking type environment mutations
+    // Observed by all const_eval memo caches.
+    u64 env_epoch{0};
+
+    auto advance_epoch() noexcept -> u64 { return ++env_epoch; }
+
     context(mod::module_manager&         modules,
             symbol_table_registry&       registry,
             type_pool&                   pool,
@@ -79,7 +85,7 @@ struct context {
           prelude_index{other.prelude_index}, target_opts{other.target_opts},
           user_main_name{other.user_main_name}, runtime_safety{other.runtime_safety},
           constexpr_binding_frames{other.constexpr_binding_frames},
-          user_type_names{other.user_type_names} {}
+          user_type_names{other.user_type_names}, env_epoch{other.env_epoch} {}
 
     auto operator=(const context& other) -> context& = delete;
     context(context&&) noexcept                      = default;

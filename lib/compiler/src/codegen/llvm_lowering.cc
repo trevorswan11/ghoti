@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -1116,6 +1117,25 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
         return llvm::ConstantInt::get(ty, static_cast<u64>(e->value), true);
     }
     if (const auto s{cv.as_opt<std::string>()}) {
+        if (auto* st{llvm::dyn_cast<llvm::StructType>(ty)}) {
+            if (st->getNumElements() == 2 && st->getElementType(0)->isPointerTy() &&
+                st->getElementType(1)->isIntegerTy()) {
+                const auto slice_data{cv.get_type()
+                                          ? cv.get_type()->get_data().as_opt<sema::types::slice>()
+                                          : stdx::none};
+                const bool add_nul{slice_data && slice_data->null_terminated};
+                auto*      data{llvm::ConstantDataArray::getString(context_, *s, add_nul)};
+                auto*      data_gv{new llvm::GlobalVariable{*llvm_module_,
+                                                       data->getType(),
+                                                       true,
+                                                       llvm::GlobalValue::PrivateLinkage,
+                                                       data,
+                                                       ".str.data"}};
+                data_gv->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+                auto* len{llvm::ConstantInt::get(st->getElementType(1), s->size())};
+                return llvm::ConstantStruct::get(st, {data_gv, len});
+            }
+        }
         if (ty->isPointerTy()) {
             if (auto* fn{resolve_named_function(*s)}) { return fn; }
             // Pass the module explicitly: `const_to_llvm` also runs while lowering module
@@ -1128,6 +1148,77 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
             return llvm::ConstantDataArray::getString(context_, bytes, false);
         }
         return llvm::Constant::getNullValue(ty);
+    }
+    if (cv.is<gir::nullptr_val>()) { return llvm::Constant::getNullValue(ty); }
+    if (const auto un{cv.as_opt<gir::const_union>()}) {
+        const auto sema_ty{cv.get_type()};
+        const auto ud{sema_ty ? sema_ty->get_data().as_opt<sema::types::union_t>() : stdx::none};
+        if (!ud) { return llvm::Constant::getNullValue(ty); }
+
+        u32 active_idx{0};
+        for (usize i{0}; i < ud->fields.size(); ++i) {
+            const auto& fname{
+                ud->enclosing.ast.get_as<ast::identifier_expr>(ud->ast_fields[i].name).name};
+            if (fname == un->active_field) {
+                active_idx = static_cast<u32>(i);
+                break;
+            }
+        }
+
+        if (ud->is_bit_packed()) {
+            if (!un->payload.empty()) {
+                if (const auto int_val{un->payload.front().as_int_opt()}) {
+                    return llvm::ConstantInt::get(ty, static_cast<u64>(*int_val));
+                }
+            }
+            return llvm::Constant::getNullValue(ty);
+        }
+
+        if (ud->is_untagged) {
+            auto* at{llvm::dyn_cast<llvm::ArrayType>(ty)};
+            if (!at) { return llvm::Constant::getNullValue(ty); }
+            const u64   max_size{at->getNumElements()};
+            std::string bytes(max_size, '\0');
+            if (!un->payload.empty()) {
+                if (const auto iv{un->payload.front().as_int_opt()}) {
+                    u64         v{static_cast<u64>(*iv)};
+                    const usize copy_len{std::min<usize>(sizeof(v), max_size)};
+                    std::memcpy(bytes.data(), &v, copy_len);
+                }
+            }
+            return llvm::ConstantDataArray::getString(context_, bytes, false);
+        }
+
+        auto* st{llvm::dyn_cast<llvm::StructType>(ty)};
+        if (!st) { return llvm::Constant::getNullValue(ty); }
+
+        auto* tag_c{llvm::ConstantInt::get(st->getElementType(0), active_idx)};
+        if (st->getNumElements() == 1) { return llvm::ConstantStruct::get(st, {tag_c}); }
+
+        auto* payload_arr_ty{llvm::dyn_cast<llvm::ArrayType>(st->getElementType(1))};
+        if (!payload_arr_ty) {
+            return llvm::ConstantStruct::get(
+                st, {tag_c, llvm::Constant::getNullValue(st->getElementType(1))});
+        }
+
+        const u64   max_size{payload_arr_ty->getNumElements()};
+        std::string bytes(max_size, '\0');
+        if (!un->payload.empty()) {
+            const auto& p{un->payload.front()};
+            if (const auto iv{p.as_int_opt()}) {
+                u64         v{static_cast<u64>(*iv)};
+                const usize copy_len{std::min<usize>(sizeof(v), max_size)};
+                std::memcpy(bytes.data(), &v, copy_len);
+            } else if (const auto fv{p.as_opt<f64>()}) {
+                f64         v{*fv};
+                const usize copy_len{std::min<usize>(sizeof(v), max_size)};
+                std::memcpy(bytes.data(), &v, copy_len);
+            } else if (const auto bv{p.as_opt<bool>()}) {
+                bytes[0] = *bv ? 1 : 0;
+            }
+        }
+        auto* payload_c{llvm::ConstantDataArray::getString(context_, bytes, false)};
+        return llvm::ConstantStruct::get(st, {tag_c, payload_c});
     }
     if (const auto st{cv.as_opt<gir::const_struct>()}) {
         auto*      llvm_st{llvm::dyn_cast<llvm::StructType>(ty)};
@@ -2023,8 +2114,14 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (inst.operands.empty()) { return builder_.getInt1(true); }
             auto* cond_val{lower_value(inst.operands[0])};
             if (!cond_val) { return builder_.getInt1(true); }
-            if (cond_val->getType()->isIntegerTy() &&
-                cond_val->getType()->getIntegerBitWidth() != 1) {
+            if (cond_val->getType()->isPointerTy()) {
+                cond_val =
+                    builder_.CreateICmpNE(cond_val,
+                                          llvm::ConstantPointerNull::get(
+                                              llvm::cast<llvm::PointerType>(cond_val->getType())),
+                                          "tobool");
+            } else if (cond_val->getType()->isIntegerTy() &&
+                       cond_val->getType()->getIntegerBitWidth() != 1) {
                 cond_val = builder_.CreateICmpNE(
                     cond_val, llvm::Constant::getNullValue(cond_val->getType()), "tobool");
             }
@@ -2049,8 +2146,14 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (inst.operands.empty()) { return nullptr; }
             auto* cond_val{lower_value(inst.operands[0])};
             if (!cond_val) { return nullptr; }
-            if (cond_val->getType()->isIntegerTy() &&
-                cond_val->getType()->getIntegerBitWidth() != 1) {
+            if (cond_val->getType()->isPointerTy()) {
+                cond_val =
+                    builder_.CreateICmpNE(cond_val,
+                                          llvm::ConstantPointerNull::get(
+                                              llvm::cast<llvm::PointerType>(cond_val->getType())),
+                                          "tobool");
+            } else if (cond_val->getType()->isIntegerTy() &&
+                       cond_val->getType()->getIntegerBitWidth() != 1) {
                 cond_val = builder_.CreateICmpNE(
                     cond_val, llvm::Constant::getNullValue(cond_val->getType()), "tobool");
             }
@@ -2076,8 +2179,14 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (inst.operands.empty()) { return nullptr; }
             auto* cond_val{lower_value(inst.operands[0])};
             if (!cond_val) { return nullptr; }
-            if (cond_val->getType()->isIntegerTy() &&
-                cond_val->getType()->getIntegerBitWidth() != 1) {
+            if (cond_val->getType()->isPointerTy()) {
+                cond_val =
+                    builder_.CreateICmpNE(cond_val,
+                                          llvm::ConstantPointerNull::get(
+                                              llvm::cast<llvm::PointerType>(cond_val->getType())),
+                                          "tobool");
+            } else if (cond_val->getType()->isIntegerTy() &&
+                       cond_val->getType()->getIntegerBitWidth() != 1) {
                 cond_val = builder_.CreateICmpNE(
                     cond_val, llvm::Constant::getNullValue(cond_val->getType()), "tobool");
             }

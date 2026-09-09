@@ -15,11 +15,13 @@
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
+#include <stdx/types.hh>
 #include <stdx/utility.hh>
 #include <stdx/variant.hh>
 
 #include "compiler/ast/expression.hh"
 #include "compiler/module/error.hh"
+#include "compiler/sema/instantiation_cache.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/syntax/parser.hh"
 #include "support/diagnostic.hh"
@@ -160,6 +162,38 @@ auto module_manager::get_or_create_builtin_module(std::string_view source) -> mo
     builtin_module_->sema_side_tables.resize(builtin_module_->ast.get_pool_sizes());
     builtin_module_->state = module_state::PARSED;
     return *builtin_module_;
+}
+
+auto module::get_overlay_node_type(usize idx) const noexcept
+    -> stdx::option<stdx::option<sema::type&>> {
+    if (!active_body_diff) { return stdx::none; }
+    return active_body_diff->find_node_type(idx);
+}
+
+auto module::get_overlay_explicit_type(usize idx) const noexcept
+    -> stdx::option<stdx::option<sema::type&>> {
+    if (!active_body_diff) { return stdx::none; }
+    return active_body_diff->find_explicit_type(idx);
+}
+
+auto module::get_if_branch_opt(usize node_idx) const noexcept -> stdx::option<if_branch> {
+    if (active_body_diff) {
+        if (const auto br{active_body_diff->find_if_branch(node_idx)}) { return br; }
+    }
+    if (const auto it{if_constexpr_results.find(node_idx)}; it != if_constexpr_results.end()) {
+        return it->second;
+    }
+    return stdx::none;
+}
+
+auto module::get_match_arm_opt(usize node_idx) const noexcept -> stdx::opt_size {
+    if (active_body_diff) {
+        if (const auto arm{active_body_diff->find_match_arm(node_idx)}) { return arm; }
+    }
+    if (const auto it{match_arm_results.find(node_idx)}; it != match_arm_results.end()) {
+        return stdx::opt_size{it->second};
+    }
+    return stdx::none;
 }
 
 } // namespace ghoti::mod

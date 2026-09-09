@@ -35,6 +35,8 @@
 #include "support/diagnostic.hh"
 #include "support/source_file.hh"
 
+namespace ghoti::sema { struct body_type_diff; } // namespace ghoti::sema
+
 namespace ghoti::mod {
 
 enum class module_state : u8 {
@@ -66,6 +68,11 @@ enum class if_branch : u8 {
     ALTERNATE,
 };
 
+struct dyn_vtable {
+    std::string              symbol;
+    std::vector<std::string> slots;
+};
+
 struct module {
     std::filesystem::path                            path;
     std::filesystem::path                            parent_path;
@@ -83,10 +90,6 @@ struct module {
     std::vector<sema::type_ctor_member_emit> impl_ctor_member_emits;
 
     // One per `(I, T)` whose `&dyn I` fat pointer is built in this module
-    struct dyn_vtable {
-        std::string              symbol;
-        std::vector<std::string> slots;
-    };
     std::vector<dyn_vtable> dyn_vtables;
 
     // `@cfgValue` node index -> the cfg pass's evaluated verdict
@@ -97,6 +100,9 @@ struct module {
 
     // `match` (on a compile-time `type`) node index -> the arm index the resolver selected
     ankerl::unordered_dense::map<usize, usize> match_arm_results;
+
+    // Active emit-local overlay for generic instantiations / type ctor members / inherited defaults
+    stdx::option<const sema::body_type_diff&> active_body_diff;
 
     // Cond discardable `decl_stmt` node index -> the folded truth of the condition
     ankerl::unordered_dense::map<usize, bool> discardable_conditions;
@@ -157,8 +163,26 @@ struct module {
                                   state == mod::module_state::POISONED_SYMBOL_COLLECTION);
     }
 
+    [[nodiscard]] auto get_overlay_node_type(usize idx) const noexcept
+        -> stdx::option<stdx::option<sema::type&>>;
+    [[nodiscard]] auto get_overlay_explicit_type(usize idx) const noexcept
+        -> stdx::option<stdx::option<sema::type&>>;
+    [[nodiscard]] auto get_if_branch_opt(usize node_idx) const noexcept -> stdx::option<if_branch>;
+    [[nodiscard]] auto get_match_arm_opt(usize node_idx) const noexcept -> stdx::opt_size;
+
     template <ast::IndexableID ID>
     [[nodiscard]] constexpr auto has_sema_type(ID id) const noexcept -> bool {
+        if (active_body_diff) {
+            if constexpr (ast::IndexableNodeID<ID>) {
+                if (const auto ty{get_overlay_node_type(id.get_index())}) {
+                    return ty->has_value();
+                }
+            } else {
+                if (const auto ty{get_overlay_explicit_type(id.get_index())}) {
+                    return ty->has_value();
+                }
+            }
+        }
         if constexpr (ast::IndexableNodeID<ID>) {
             return sema_side_tables.node_types[id].has_value();
         } else {
@@ -172,6 +196,13 @@ struct module {
 
     template <ast::IndexableID ID>
     [[nodiscard]] constexpr auto get_sema_type_opt(this auto&& self, ID id) noexcept {
+        if (self.active_body_diff) {
+            if constexpr (ast::IndexableNodeID<ID>) {
+                if (const auto ty{self.get_overlay_node_type(id.get_index())}) { return *ty; }
+            } else {
+                if (const auto ty{self.get_overlay_explicit_type(id.get_index())}) { return *ty; }
+            }
+        }
         if constexpr (ast::IndexableNodeID<ID>) {
             return self.sema_side_tables.node_types[id];
         } else {
@@ -213,6 +244,20 @@ struct module {
     template <ast::IndexableID ID> auto set_resolved_symbol_owner(ID id, usize owner_idx) -> void {
         if constexpr (ast::IndexableNodeID<ID>) {
             sema_side_tables.resolved_symbol_owners[id].emplace(owner_idx);
+        }
+    }
+
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto get_symbol_table_opt(ID id) const noexcept -> stdx::opt_size {
+        if constexpr (ast::IndexableNodeID<ID>) {
+            return sema_side_tables.identifier_symbol_tables[id];
+        }
+        return {};
+    }
+
+    template <ast::IndexableID ID> auto set_symbol_table(ID id, usize table_idx) -> void {
+        if constexpr (ast::IndexableNodeID<ID>) {
+            sema_side_tables.identifier_symbol_tables[id].emplace(table_idx);
         }
     }
 
@@ -289,6 +334,17 @@ struct module {
             return sema_side_tables.explicit_type_definitions[id];
         }
     }
+};
+
+struct body_diff_guard {
+    module&                                   mod;
+    stdx::option<const sema::body_type_diff&> prev{};
+
+    explicit body_diff_guard(module& m, stdx::option<const sema::body_type_diff&> diff) noexcept
+        : mod{m}, prev{std::exchange(m.active_body_diff, diff)} {}
+
+    ~body_diff_guard() noexcept { mod.active_body_diff = prev; }
+    MAKE_PINNED(body_diff_guard);
 };
 
 class module_manager {

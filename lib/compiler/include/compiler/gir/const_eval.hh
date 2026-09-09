@@ -7,6 +7,7 @@
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
 #include <gsl/span>
+#include <stdx/hash.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
@@ -41,6 +42,7 @@ class const_eval {
 
     // The struct/union/enum whose member body is currently being evaluated
     auto set_enclosing_type(stdx::option<sema::type&> type) noexcept -> void {
+        if (enclosing_type_ != type) { clear_memo(); }
         enclosing_type_ = type;
     }
 
@@ -56,7 +58,10 @@ class const_eval {
     }
 
     // Node-indexed memoization is unsound across generic instantiations that share AST nodes.
-    auto clear_memo() noexcept -> void { memo_cache_.clear(); }
+    auto clear_memo() noexcept -> void {
+        memo_cache_.clear();
+        ctx_.advance_epoch();
+    }
 
     // Attempt to evaluate node as a compile-time constant. Returns none if non-constant.
     [[nodiscard]] auto try_eval(ast::node_id id) -> stdx::option<const_value>;
@@ -88,6 +93,26 @@ class const_eval {
   private:
     struct call_frame {
         ankerl::unordered_dense::map<std::string_view, const_value> bindings;
+    };
+
+    // A `constexpr` callable (closure or plain function) bound to `name` in scope
+    struct bound_callable {
+        gsl::not_null<mod::module*>              module;
+        gsl::not_null<const ast::function_expr*> fn_expr;
+        stdx::option<const const_struct&>        captures{};
+    };
+
+    struct memo_key {
+        usize node_index{};
+        u64   epoch{};
+
+        [[nodiscard]] auto operator==(const memo_key& other) const noexcept -> bool = default;
+    };
+
+    struct memo_key_hash {
+        [[nodiscard]] static constexpr auto operator()(const memo_key& k) noexcept -> u64 {
+            return stdx::hasher{k.node_index}.combine(k.epoch).finalize();
+        }
     };
 
   private:
@@ -127,12 +152,6 @@ class const_eval {
                            stdx::option<const const_struct&> captures = stdx::none)
         -> stdx::option<const_value>;
 
-    // A `constexpr` callable (closure or plain function) bound to `name` in scope
-    struct bound_callable {
-        gsl::not_null<mod::module*>              module;
-        gsl::not_null<const ast::function_expr*> fn_expr;
-        stdx::option<const const_struct&>        captures{};
-    };
     auto lookup_bound_callable(std::string_view name) -> stdx::option<bound_callable>;
 
     auto eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_value>;
@@ -175,15 +194,16 @@ class const_eval {
     auto set_local_binding(std::string_view name, const_value val) -> bool;
 
   private:
-    usize                                            max_recursion_depth_{256};
-    std::vector<usize>                               recursion_limit_stack_;
-    sema::context&                                   ctx_;
-    gsl::not_null<mod::module*>                      module_;
-    stdx::option<sema::type&>                        enclosing_type_;
-    stdx::option<const symbol_scoping&>              symbol_scoping_;
-    std::vector<call_frame>                          call_stack_;
-    default_counter                                  recursion_depth_;
-    ankerl::unordered_dense::map<usize, const_value> memo_cache_;
+    usize                               max_recursion_depth_{256};
+    std::vector<usize>                  recursion_limit_stack_;
+    sema::context&                      ctx_;
+    gsl::not_null<mod::module*>         module_;
+    stdx::option<sema::type&>           enclosing_type_;
+    stdx::option<const symbol_scoping&> symbol_scoping_;
+    std::vector<call_frame>             call_stack_;
+    default_counter                     recursion_depth_;
+
+    ankerl::unordered_dense::map<memo_key, const_value, memo_key_hash> memo_cache_;
 };
 
 } // namespace ghoti::gir

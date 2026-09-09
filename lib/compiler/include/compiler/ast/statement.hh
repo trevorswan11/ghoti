@@ -36,7 +36,9 @@ struct break_stmt {
     stdx::option<identifier_handle> label;
     stdx::option<expr_handle>       expression;
 
-    [[nodiscard]] static auto parse(syntax::parser& parser)
+    [[nodiscard]] static auto
+    parse(syntax::parser&            parser,
+          syntax::semicolon_behavior behavior = syntax::semicolon_behavior::REQUIRE)
         -> stdx::result<stmt_handle, syntax::diagnostic>;
 };
 
@@ -55,7 +57,9 @@ struct cfg_stmt {
 struct continue_stmt {
     stdx::option<identifier_handle> label;
 
-    [[nodiscard]] static auto parse(syntax::parser& parser)
+    [[nodiscard]] static auto
+    parse(syntax::parser&            parser,
+          syntax::semicolon_behavior behavior = syntax::semicolon_behavior::REQUIRE)
         -> stdx::result<stmt_handle, syntax::diagnostic>;
 };
 
@@ -137,7 +141,9 @@ struct import_stmt {
 struct return_stmt {
     stdx::option<expr_handle> expression;
 
-    [[nodiscard]] static auto parse(syntax::parser& parser)
+    [[nodiscard]] static auto
+    parse(syntax::parser&            parser,
+          syntax::semicolon_behavior behavior = syntax::semicolon_behavior::REQUIRE)
         -> stdx::result<stmt_handle, syntax::diagnostic>;
 };
 

@@ -166,8 +166,8 @@ auto const_eval::try_eval(ast::node_id id) -> stdx::option<const_value> {
     if (const auto sema_ty{module_->get_sema_type_opt(id)}) {
         if (sema_ty->is_volatile()) { return stdx::none; }
     }
-    const auto key{id.get_index()};
-    const bool is_outermost{call_stack_.empty()};
+    const memo_key key{id.get_index(), ctx_.env_epoch};
+    const bool     is_outermost{call_stack_.empty()};
     if (is_outermost) {
         if (auto cached{memo_cache_.find(key)}; cached != memo_cache_.end()) {
             return cached->second;
@@ -1017,34 +1017,9 @@ auto const_eval::eval_implicit_access(ast::node_id id, const ast::implicit_acces
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     const auto& member_name{module_->ast.get_as<ast::identifier_expr>(implicit.member).name};
-    const auto  sema_type{module_->get_sema_type_opt(id)};
-
-    if (sema_type) {
-        if (const auto en{sema_type->get_data().as_opt<sema::types::enum_t>()}) {
-            for (usize idx{0}; idx < en->ast_enumerations.size(); ++idx) {
-                const auto& e{en->ast_enumerations[idx]};
-                // Variant identifiers live in the enum's defining module, which is not
-                // necessarily the module being const-evaluated.
-                const auto& vname{en->enclosing.ast.get_as<ast::identifier_expr>(e.name).name};
-                if (vname == member_name) {
-                    auto val{static_cast<i64>(idx)};
-                    if (e.value) {
-                        // As in eval_dot: the initializer lives in the enum's defining module's
-                        // AST arena, which may differ from the module currently being evaluated.
-                        auto&      enclosing_mod{const_cast<mod::module&>(en->enclosing)};
-                        const_eval enclosing_eval{ctx_, enclosing_mod};
-                        enclosing_eval.set_symbol_scoping(symbol_scoping_);
-                        if (const auto ev{enclosing_eval.try_eval(*e.value)}) {
-                            val = static_cast<i64>(ev->as_int_opt().value_or(val));
-                        }
-                    }
-                    return const_value{const_enum{std::string{member_name}, val}, sema_type};
-                }
-            }
-        }
+    if (const auto sema_type{module_->get_sema_type_opt(id)}) {
+        return eval_type_member(*sema_type, member_name);
     }
-
-    // Not an enum member so let the caller fall back
     return stdx::none;
 }
 
@@ -1608,8 +1583,10 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
         }
     }
 
-    if (!module_->root_table_idx) { return stdx::none; }
-    const auto& table{ctx_.registry.get(*module_->root_table_idx)};
+    const auto table_idx{id.is_valid() ? module_->get_symbol_table_opt(id) : stdx::none};
+    const auto effective_tbl{table_idx ? table_idx : module_->root_table_idx};
+    if (!effective_tbl) { return stdx::none; }
+    const auto& table{ctx_.registry.get(*effective_tbl)};
     const auto  sym_opt{table.get_opt(ident.name)};
     if (!sym_opt) {
         if (ctx_.prelude_index) {
@@ -1626,6 +1603,10 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
     }
     const auto& sym{*sym_opt};
 
+    if (effective_tbl != module_->root_table_idx) {
+        if (!sym.has_kind() || sym.get_kind() != sema::symbol_kind::TYPE) { return stdx::none; }
+    }
+
     if (sym.has_kind() && sym.get_kind() == sema::symbol_kind::TYPE) {
         if (const auto builtin_sym{sym.get_data().as_opt<sema::symbols::builtin>()}) {
             return const_value{builtin_sym->get_type()};
@@ -1633,6 +1614,9 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
         if (const auto node{sym.get_data().as_opt<sema::symbols::node_t>()}) {
             if (const auto using_stmt{module_->ast.get_as_opt<ast::using_stmt>(*node)}) {
                 if (const auto sema_type{module_->get_sema_type_opt(using_stmt->explicit_type)}) {
+                    return const_value{*sema_type};
+                }
+                if (const auto sema_type{module_->get_sema_type_opt(*node)}) {
                     return const_value{*sema_type};
                 }
             }
