@@ -2570,7 +2570,8 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             for (const auto& arg : call.arguments) {
                 if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
                     if (first) {
-                        cond_val = emit_expression(*expr_h);
+                        // A pointer condition becomes `!= null`, matching `if (ptr)`.
+                        cond_val = coerce_condition(emit_expression(*expr_h));
                         first    = false;
                     } else {
                         msg_val.emplace(emit_expression(*expr_h));
