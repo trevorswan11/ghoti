@@ -247,3 +247,11 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Resolve an issue that prevent discardable method calls from being ignored
 - Fix a bug that would discard const correctness checks through address of operations at the IR level
 - Add `@embed` builtin for embedding a file on disk at compile time
+- Overhaul integer casting semantics with principle of least privilege in casting
+    - Added `@intCast(T, x)` and context-inferred `@intCast(x)` for checked integer narrowing and sign conversion with static range verification for compile-time values and hardware-trapping runtime checks
+    - Added `@truncate(T, x)` and `@truncate(x)` for explicitly discarding high bits without checking
+    - Added `@boolFromInt(x)` and `@intFromBool(T, x)` / `@intFromBool(x)` for explicit bool/int conversions
+    - Enabled 1-argument context-inferred forms for `@intCast`, `@truncate`, `@as`, and `@bitCast` across variable/const bindings, assignments, returns, call arguments, and struct field initializers
+    - Tightened `@as` to reject narrowing, sign changes, and bool/int conversions with actionable diagnostic suggestions
+    - Added rich diagnostics for rejected casts explaining why a conversion was rejected and suggesting the appropriate builtin
+    - `constexpr`-fits implicit coercion: compile-time integers that provably fit the destination type coerce implicitly, with compile errors on out-of-range values
