@@ -563,7 +563,10 @@ fn addTooling(b: *std.Build, config: struct {
     }, &counted_files);
     try stdx.utils.collectFilesInto(b, "ghoti", .{ .allowed_extensions = &counted_extensions }, &counted_files);
     try stdx.utils.collectFilesInto(b, "site", .{ .allowed_extensions = &counted_extensions }, &counted_files);
-    _ = LOCCounter.init(b, counted_files.wrapped.items);
+    _ = LOCCounter.init(b, .{
+        .counted_files = counted_files.wrapped.items,
+        .file_buf_size = 1000 * 1024,
+    });
 }
 
 // Compilation takes a while and I don't have a data center to run this on
