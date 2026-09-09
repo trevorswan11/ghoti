@@ -69,4 +69,15 @@ TEST_CASE("deferred @compileError allows unreferenced decls to still compile") {
     )") == 42);
 }
 
+TEST_CASE("Module-scope `const P = @ptrFromInt(...)` materializes cleanly") {
+    const auto exit_code{helpers::compile_and_run(R"(
+        const P: ^mut opaque = @ptrFromInt(^mut opaque, 0x1000uz);
+        pub const main := fn(): i32 {
+            const addr := @intFromPtr(P);
+            return if (addr == 0x1000uz) 7 else 0;
+        };
+    )")};
+    CHECK(exit_code == 7);
+}
+
 } // namespace ghoti::tests

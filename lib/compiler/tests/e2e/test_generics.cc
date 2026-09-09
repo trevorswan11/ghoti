@@ -87,4 +87,37 @@ TEST_CASE("the `?` operator works inside a generic function body") {
     )") == 8);
 }
 
+TEST_CASE("Multi-method struct with generic Result error checks compiles") {
+    const auto exit_code{helpers::compile_and_run(R"(
+        const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
+        const Error := enum : i32 { none, fail, _ };
+
+        const File := struct {
+            fd: i32,
+            pub const open := fn(path: i32): Result(File, Error) {
+                return if (path > 0) .{ .ok = File{ .fd = path } } else .{ .err = .fail };
+            };
+            pub const read := fn(&self): Result(i32, Error) {
+                return .{ .ok = self.fd };
+            };
+            pub const write := fn(&mut self, v: i32): Result(bool, Error) {
+                self.fd = v;
+                return .{ .ok = true };
+            };
+        };
+
+        pub const main := fn(): i32 {
+            var f1 := File.open(7);
+            return match (f1) {
+                .ok => |f| {
+                    const r := f.read();
+                    return match (r) { .ok => |v| v, .err => 0 };
+                },
+                .err => 0,
+            };
+        };
+    )")};
+    CHECK(exit_code == 7);
+}
+
 } // namespace ghoti::tests
