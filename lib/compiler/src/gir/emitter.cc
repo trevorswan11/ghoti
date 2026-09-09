@@ -1655,7 +1655,6 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
         [&](const ast::implicit_access_expr& data) -> value {
             return emit_implicit_access(id, data);
         },
-        [&](const ast::module_access_expr& data) -> value { return emit_module_access(id, data); },
         [&](const ast::while_loop_expr& data) -> value { return emit_while(id, data); },
         [&](const ast::do_while_loop_expr& data) -> value { return emit_do_while(id, data); },
         [&](const ast::infinite_loop_expr& data) -> value { return emit_infinite_loop(id, data); },
@@ -2927,10 +2926,6 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         callee_name.emplace(std::string{member_ident.name});
     } else if (const auto fn_expr{active_ast().get_as_opt<ast::function_expr>(call.function)}) {
         callee_name.emplace(emit_anonymous_function(*call.function, *fn_expr));
-    } else if (const auto mod_call{
-                   active_ast().get_as_opt<ast::module_access_expr>(call.function)}) {
-        const auto& inner_ident{active_ast().get_as<ast::identifier_expr>(mod_call->inner)};
-        callee_name.emplace(std::string{inner_ident.name});
     } else {
         const auto callee_val{emit_expression(call.function)};
         if (callee_val.type && (callee_val.type->get_kind() == sema::type_kind::FUNCTION ||
@@ -3033,22 +3028,6 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                     if (inner_mod.root_table_idx) {
                         const auto& inner_ident{
                             active_ast().get_as<ast::identifier_expr>(inner_dot->member)};
-                        if (const auto sym{ctx_.registry.get_from_opt(*inner_mod.root_table_idx,
-                                                                      inner_ident.name)}) {
-                            if (sym->has_kind() && sym->get_kind() == sema::symbol_kind::TYPE) {
-                                is_type = true;
-                            }
-                        }
-                    }
-                }
-            }
-        } else if (const auto mac{active_ast().get_as_opt<ast::module_access_expr>(target_obj)}) {
-            if (const auto mod_type{active_mod().get_sema_type_opt(mac->outer)}) {
-                if (const auto m_data{mod_type->get_data().as_opt<sema::types::module>()}) {
-                    const auto& inner_mod{m_data->imported};
-                    if (inner_mod.root_table_idx) {
-                        const auto& inner_ident{
-                            active_ast().get_as<ast::identifier_expr>(mac->inner)};
                         if (const auto sym{ctx_.registry.get_from_opt(*inner_mod.root_table_idx,
                                                                       inner_ident.name)}) {
                             if (sym->has_kind() && sym->get_kind() == sema::symbol_kind::TYPE) {
@@ -5713,15 +5692,6 @@ auto emitter::emit_implicit_access(ast::node_id id, const ast::implicit_access_e
     if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
     const auto& ident{active_ast().get_as<ast::identifier_expr>(imp.member)};
     return value{ref_symbol_name(id, ident.name), sema_type};
-}
-
-auto emitter::emit_module_access(ast::node_id id, const ast::module_access_expr& mod_access)
-    -> value {
-    PROFILE_FUNCTION();
-    const auto sema_type{active_mod().get_sema_type_opt(id)};
-    if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
-    const auto& inner_ident{active_ast().get_as<ast::identifier_expr>(mod_access.inner)};
-    return value{ref_symbol_name(id, inner_ident.name), sema_type};
 }
 
 } // namespace ghoti::gir

@@ -93,8 +93,7 @@ auto symbol_collector::collect_symbols(mod::module& module, context& ctx) -> mod
     X(void_expr)                \
     X(undefined_expr)           \
     X(nullptr_expr)             \
-    X(unreachable_expr)         \
-    X(module_access_expr)
+    X(unreachable_expr)
 
 #define COLLECTOR_NOOP_X(NodeType) AST_NODE_VISITOR_NOOP(symbol_collector, NodeType)
 MAKE_COLLECTOR_NOOPS(COLLECTOR_NOOP_X)
@@ -747,7 +746,6 @@ auto symbol_collector::visit(ast::node_id id, const ast::using_stmt& using_stmt)
 }
 
 AST_TYPE_VISITOR_NOOP(symbol_collector, identifier_expr)
-AST_TYPE_VISITOR_NOOP(symbol_collector, module_access_expr)
 AST_TYPE_VISITOR_NOOP(symbol_collector, dot_expr)
 
 auto symbol_collector::visit(ast::explicit_type_id, const ast::call_expr& call) -> void {

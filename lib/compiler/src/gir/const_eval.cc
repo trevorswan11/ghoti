@@ -662,7 +662,6 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
         [&](const ast::initializer_expr& data) { return eval_initializer(id, data); },
         [&](const ast::dot_expr& data) { return eval_dot(id, data); },
         [&](const ast::implicit_access_expr& data) { return eval_implicit_access(id, data); },
-        [&](const ast::module_access_expr& data) { return eval_module_access(id, data); },
         [&](const ast::match_expr& data) { return eval_match(id, data); },
         [&](const ast::unwrap_expr& data) { return eval_unwrap(id, data); },
         [&](const ast::assignment_expr& data) {
@@ -1110,43 +1109,6 @@ auto const_eval::resolve_module_chain(ast::node_id node) -> stdx::option<mod::mo
         return stdx::none;
     }
 
-    if (const auto nested{module_->ast.get_as_opt<ast::module_access_expr>(node)}) {
-        const auto outer_mod{resolve_module_chain(nested->outer)};
-        if (!outer_mod || !outer_mod->root_table_idx) { return stdx::none; }
-        const auto& seg_name{module_->ast.get_as<ast::identifier_expr>(nested->inner).name};
-        const auto& table{ctx_.registry.get(*outer_mod->root_table_idx)};
-        auto        sym{table.get_opt(seg_name)};
-        if (!sym && ctx_.prelude_index) {
-            sym = ctx_.registry.get(*ctx_.prelude_index).get_opt(seg_name);
-        }
-        if (!sym) { return stdx::none; }
-        const auto kind{sym->get_kind_opt()};
-        if (kind && *kind == sema::symbol_kind::MODULE) {
-            stdx::option<sema::type&> sema_type;
-            if (const auto bi{sym->get_data().as_opt<sema::symbols::builtin>()}) {
-                sema_type.emplace(bi->get_type());
-            } else if (const auto snode{sym->get_data().as_opt<sema::symbols::node_t>()}) {
-                sema_type = outer_mod->get_sema_type_opt(*snode);
-            }
-            if (!sema_type) { return stdx::none; }
-            const auto m_data{sema_type->get_data().as_opt<sema::types::module>()};
-            if (!m_data) { return stdx::none; }
-            return m_data->imported;
-        }
-        if (const auto snode{sym->get_data().as_opt<sema::symbols::node_t>()}) {
-            if (const auto using_stmt{outer_mod->ast.get_as_opt<ast::using_stmt>(*snode)}) {
-                auto aliased{outer_mod->get_sema_type_opt(using_stmt->explicit_type)};
-                if (!aliased) { aliased = outer_mod->get_sema_type_opt(*snode); }
-                if (aliased) {
-                    if (const auto m_data{aliased->get_data().as_opt<sema::types::module>()}) {
-                        return m_data->imported;
-                    }
-                }
-            }
-        }
-        return stdx::none;
-    }
-
     return stdx::none;
 }
 
@@ -1184,85 +1146,6 @@ auto const_eval::eval_module_member(mod::module& target_mod, std::string_view me
     const_eval inner_eval{ctx_, target_mod};
     inner_eval.set_symbol_scoping(symbol_scoping_);
     return inner_eval.try_eval(*decl->value);
-}
-
-auto const_eval::eval_module_access(ast::node_id, const ast::module_access_expr& mod_access)
-    -> stdx::option<const_value> {
-    PROFILE_FUNCTION();
-    const auto& inner_name{module_->ast.get_as<ast::identifier_expr>(mod_access.inner).name};
-
-    // Resolve the outer prefix to a module, then read inner from it
-    if (module_->ast.get_as_opt<ast::module_access_expr>(mod_access.outer)) {
-        const auto target_mod{resolve_module_chain(mod_access.outer)};
-        if (!target_mod) { return stdx::none; }
-        return eval_module_member(*target_mod, inner_name);
-    }
-
-    const auto outer_ident{module_->ast.get_as_opt<ast::identifier_expr>(mod_access.outer)};
-    if (!outer_ident || !module_->root_table_idx) { return stdx::none; }
-    const auto& table{ctx_.registry.get(*module_->root_table_idx)};
-
-    // `builtin::X` (and any other prelude-injected module) lives in the prelude table, not the
-    // resolving module's own root table -- fall back to it the same way the resolver's
-    // scope-chain lookup (`ctx_.registry.lookup(table_stack_, ...)`) would.
-    auto sym{table.get_opt(outer_ident->name)};
-    if (!sym && ctx_.prelude_index) {
-        sym = ctx_.registry.get(*ctx_.prelude_index).get_opt(outer_ident->name);
-    }
-    if (!sym) { return stdx::none; }
-
-    // A prelude module (like `builtin`) is a `symbols::builtin` entry carrying its type
-    // directly, not an AST-backed `symbols::node_t`; check MODULE-kind first so both shapes
-    // reach the module lookup below.
-    if (const auto node_sym{sym->get_kind_opt()};
-        node_sym && *node_sym == sema::symbol_kind::MODULE) {
-        stdx::option<sema::type&> sema_type;
-        if (const auto bi{sym->get_data().as_opt<sema::symbols::builtin>()}) {
-            sema_type.emplace(bi->get_type());
-        } else if (const auto node{sym->get_data().as_opt<sema::symbols::node_t>()}) {
-            sema_type = module_->get_sema_type_opt(*node);
-        }
-        if (!sema_type) { return stdx::none; }
-        const auto m_data{sema_type->get_data().as_opt<sema::types::module>()};
-        if (!m_data) { return stdx::none; }
-        return eval_module_member(m_data->imported, inner_name);
-    }
-
-    const auto node{sym->get_data().as_opt<sema::symbols::node_t>()};
-    if (!node) { return stdx::none; }
-
-    // The outer name may be a local `using X = <path>` alias
-    if (const auto using_stmt{module_->ast.get_as_opt<ast::using_stmt>(*node)}) {
-        const auto aliased{module_->get_sema_type_opt(using_stmt->explicit_type)};
-        if (!aliased) { return stdx::none; }
-        if (const auto m_data{aliased->get_data().as_opt<sema::types::module>()}) {
-            return eval_module_member(m_data->imported, inner_name);
-        }
-        return eval_type_member(*aliased, inner_name);
-    }
-
-    if (const auto decl{module_->ast.get_as_opt<ast::decl_stmt>(*node)}) {
-        if (!decl->value) { return stdx::none; }
-        const auto en_expr{module_->ast.get_as_opt<ast::enum_expr>(*decl->value)};
-        if (!en_expr) { return stdx::none; }
-
-        for (usize idx{0}; idx < en_expr->enumerations.size(); ++idx) {
-            const auto& e{en_expr->enumerations[idx]};
-            const auto& vname{module_->ast.get_as<ast::identifier_expr>(e.name).name};
-            if (vname == inner_name) {
-                i64 val{static_cast<i64>(idx)};
-                if (e.value) {
-                    if (const auto ev{try_eval(*e.value)}) {
-                        val = static_cast<i64>(ev->as_int_opt().value_or(val));
-                    }
-                }
-                return const_value{const_enum{std::string{inner_name}, val},
-                                   module_->get_sema_type_opt(*decl->value)};
-            }
-        }
-    }
-
-    return stdx::none;
 }
 
 auto const_eval::eval_match(ast::node_id id, const ast::match_expr& match)
@@ -1780,17 +1663,6 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                 const auto& inner{module_->ast.get_as<ast::identifier_expr>(dot->member)};
                 callee_sym =
                     ctx_.registry.get_from_opt(*callee_mod->root_table_idx, inner.name);
-            }
-        }
-    } else if (const auto mac{module_->ast.get_as_opt<ast::module_access_expr>(call.function)}) {
-        if (const auto mod_ty{module_->get_sema_type_opt(mac->outer)}) {
-            if (const auto m_data{mod_ty->get_data().as_opt<sema::types::module>()}) {
-                if (m_data->imported.root_table_idx) {
-                    callee_mod.emplace(m_data->imported);
-                    const auto& inner{module_->ast.get_as<ast::identifier_expr>(mac->inner)};
-                    callee_sym =
-                        ctx_.registry.get_from_opt(*callee_mod->root_table_idx, inner.name);
-                }
             }
         }
     }

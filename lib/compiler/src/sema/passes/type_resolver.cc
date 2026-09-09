@@ -1729,23 +1729,6 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                         }
                     }
                 }
-            } else if (const auto mac{
-                           resolving_.ast.get_as_opt<ast::module_access_expr>(target_obj)}) {
-                if (const auto mod_type{resolving_.get_sema_type_opt(mac->outer)}) {
-                    if (const auto m_data{mod_type->get_data().as_opt<types::module>()}) {
-                        const auto& inner_mod{m_data->imported};
-                        if (inner_mod.root_table_idx) {
-                            const auto& inner_ident{
-                                resolving_.ast.get_as<ast::identifier_expr>(mac->inner)};
-                            if (const auto sym{ctx_.registry.get_from_opt(*inner_mod.root_table_idx,
-                                                                          inner_ident.name)}) {
-                                if (sym->has_kind() && sym->get_kind() == symbol_kind::TYPE) {
-                                    is_type = true;
-                                }
-                            }
-                        }
-                    }
-                }
             } else if (const auto ot{resolving_.get_sema_type_opt(target_obj)}) {
                 if (ot->get_kind() == type_kind::TYPE) { is_type = true; }
             }
@@ -2706,20 +2689,6 @@ auto type_resolver::record_symbol_owner(ast::node_id       ref_id,
                 }
             }
         }
-    } else if (const auto ma{target_mod.ast.get_as_opt<ast::module_access_expr>(*decl->value)}) {
-        if (const auto outer_ty{target_mod.get_sema_type_opt(ma->outer)}) {
-            if (const auto md{outer_ty->get_data().as_opt<types::module>()}) {
-                const auto& inner_mod{md->imported};
-                if (inner_mod.root_table_idx) {
-                    const auto& inner_ident{target_mod.ast.get_as<ast::identifier_expr>(ma->inner)};
-                    if (const auto inner_sym{ctx_.registry.get_from_opt(*inner_mod.root_table_idx,
-                                                                        inner_ident.name)}) {
-                        record_symbol_owner(
-                            ref_id, *inner_mod.root_table_idx, inner_mod, *inner_sym);
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -2779,7 +2748,7 @@ auto type_resolver::register_non_generic_type_ctor_members(type&                
     if (k != type_kind::STRUCT && k != type_kind::UNION && k != type_kind::ENUM) { return; }
     if (ctx_.generic_functions.get_type_ctor_member_prefix(result)) { return; }
 
-    // Resolve the constructor's declaration and its owning module from `Ctor()` or `mod::Ctor()`.
+    // Resolve the constructor's declaration and its owning module from `Ctor()` or `mod.Ctor()`.
     mod::module*          owner_mod{nullptr};
     stdx::option<symbol&> ctor_sym;
     if (const auto fn_ident{resolving_.ast.get_as_opt<ast::identifier_expr>(ctor_call.function)}) {
@@ -2793,14 +2762,6 @@ auto type_resolver::register_non_generic_type_ctor_members(type&                
         if (!m_data || !m_data->imported.root_table_idx) { return; }
         owner_mod = &m_data->imported;
         const auto& inner{resolving_.ast.get_as<ast::identifier_expr>(dot->member)};
-        ctor_sym = ctx_.registry.get_from_opt(*owner_mod->root_table_idx, inner.name);
-    } else if (const auto mac{
-                   resolving_.ast.get_as_opt<ast::module_access_expr>(ctor_call.function)}) {
-        const auto mod_type{resolving_.get_sema_type_opt(mac->outer)};
-        const auto m_data{mod_type ? mod_type->get_data().as_opt<types::module>() : stdx::none};
-        if (!m_data || !m_data->imported.root_table_idx) { return; }
-        owner_mod = &m_data->imported;
-        const auto& inner{resolving_.ast.get_as<ast::identifier_expr>(mac->inner)};
         ctor_sym = ctx_.registry.get_from_opt(*owner_mod->root_table_idx, inner.name);
     }
     if (!owner_mod || !ctor_sym) { return; }
@@ -3460,11 +3421,6 @@ auto type_resolver::get_rightmost_name(ast::expr_handle handle) const noexcept
     while (true) {
         if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(current)}) {
             return ident->name;
-        }
-
-        if (const auto scope{resolving_.ast.get_as_opt<ast::module_access_expr>(current)}) {
-            current = scope->inner;
-            continue;
         }
 
         if (const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(current)}) {
@@ -5102,140 +5058,6 @@ MAKE_PRIMITIVE_RESOLVER(undefined_expr, UNDEFINED)
 MAKE_PRIMITIVE_RESOLVER(nullptr_expr, NULLPTR)
 MAKE_PRIMITIVE_RESOLVER(unreachable_expr, NORETURN)
 
-template <ast::IndexableID ID>
-auto type_resolver::resolve_module_access(ID id, const ast::module_access_expr& access) -> void {
-    // Resolving the right hand side recurses down to the identifier level
-    resolve(access.outer);
-    if (last_type_->is_poison()) { return resolving_.set_sema_type(id, *last_type_); }
-    auto& outer_type{*last_type_.take()};
-    auto& outer_resolved{outer_type.get_data()};
-
-    if (const auto module{outer_resolved.as_opt<types::module>()}) {
-        // The module may not have been resolved yet due to order independence
-        auto& inner_mod{module->imported};
-        if (inner_mod.is_resolvable()) {
-            context new_ctx{ctx_};
-            resolve_types(inner_mod, new_ctx);
-            if (inner_mod.is_poisoned()) {
-                return last_type_.emplace(ctx_.poison_node(
-                    resolving_,
-                    id,
-                    fmt::format("Module '{}' failed to resolve due to errors it contains",
-                                get_rightmost_name(access.outer).value_or("<module>")),
-                    error::IMPORTED_MODULE_CONTAINS_ERRORS,
-                    resolving_.ast.location_of(access.outer)));
-            }
-        }
-
-        // Step into the module's scope for lookup
-        const auto& inner_ident{resolving_.ast.get_as<ast::identifier_expr>(access.inner)};
-        auto        sym{ctx_.registry.get_from_opt(*inner_mod.root_table_idx, inner_ident.name)};
-        if (!sym) {
-            return last_type_.emplace(ctx_.poison_node(
-                resolving_,
-                id,
-                fmt::format("Module '{}' has no member named '{}'",
-                            get_rightmost_name(access.outer).value_or("<expression>"),
-                            inner_ident.name),
-                error::UNDECLARED_IDENTIFIER,
-                resolving_.ast.location_of(access.inner)));
-        }
-
-        const auto symbol_node{sym->get_data().as_opt<symbols::node_t>()};
-        if (!symbol_node) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
-
-        if (&inner_mod != &resolving_ && !sym->is_public(inner_mod)) {
-            return last_type_.emplace(ctx_.poison_node(
-                resolving_,
-                id,
-                fmt::format("Symbol '{}' is private to module '{}'",
-                            inner_ident.name,
-                            get_rightmost_name(access.outer).value_or("<expression>")),
-                error::ILLEGAL_PRIVATE_ACCESS,
-                resolving_.ast.location_of(access.inner)));
-        }
-
-        stdx::option<ast::type_modifier> mod;
-        if constexpr (ast::IndexableExplicitTypeID<ID>) { mod = id.get_modifier(); }
-        switch (sym->get_status()) {
-        case symbol_status::RESOLVING: {
-            const auto poison_out = [&] -> void {
-                ctx_.poison_symbol(*sym);
-                last_type_.emplace(ctx_.poison_node(
-                    resolving_,
-                    id,
-                    fmt::format(
-                        "Cross-module cyclic dependency detected while resolving symbol '{}'",
-                        inner_ident.name),
-                    error::CYCLIC_DEPENDENCY,
-                    resolving_.ast.location_of(access.inner)));
-            };
-
-            // Explicitly reject infinite size cycles across modules before forwarding
-            if (!mod || (!mod->is_ptr() && !mod->is_ref())) { return poison_out(); }
-            if (const auto forwarded_type{forward_type(inner_mod, mod, *sym)}) {
-                resolving_.set_sema_type(access.inner, *forwarded_type);
-                resolving_.set_sema_type(id, *forwarded_type);
-                return last_type_.emplace(*forwarded_type);
-            }
-
-            return poison_out();
-        }
-        case symbol_status::UNRESOLVED: {
-            type_resolver inner_resolver{inner_mod, ctx_};
-            inner_resolver.resolve(*symbol_node);
-            break;
-        }
-        case symbol_status::RESOLVED: break;
-        }
-
-        if (sym->get_kind_opt() == symbol_kind::POISONED ||
-            !inner_mod.has_sema_type(*symbol_node)) {
-            return last_type_.emplace(ctx_.poison_node(resolving_, id));
-        }
-
-        // Record where this cross-module reference resolves to, for LSP go-to-definition
-        resolving_.set_identifier_definition(access.inner,
-                                             {inner_mod.path, sym->get_symbol_span(inner_mod)});
-        resolving_.add_identifier_position(access.inner);
-
-        if constexpr (std::same_as<ID, ast::node_id>) {
-            record_symbol_owner(id, *inner_mod.root_table_idx, inner_mod, *sym);
-        }
-
-        auto& ident_type{inner_mod.get_sema_type(*symbol_node)};
-        resolving_.set_sema_type(access.inner, ident_type);
-        resolving_.set_sema_type(id, ident_type);
-        return last_type_.emplace(ident_type);
-    }
-
-    if (outer_resolved.is<types::struct_t>() || outer_resolved.is<types::enum_t>() ||
-        outer_resolved.is<types::union_t>()) {
-        return last_type_.emplace(ctx_.poison_node(
-            resolving_,
-            id,
-            fmt::format("Use the dot operator '.' to access {} fields; found module access '::'",
-                        type_kind_display_name(outer_type)),
-            error::TYPE_MISMATCH,
-            resolving_.ast.location_of(access.outer)));
-    }
-
-    return last_type_.emplace(ctx_.poison_node(
-        resolving_,
-        id,
-        fmt::format("Module access operator '::' can only be applied to modules; found '{}'",
-                    type_kind_display_name(outer_type)),
-        error::TYPE_MISMATCH,
-        resolving_.ast.location_of(access.outer)));
-}
-
-VISITOR_TEMPLATE_INIT(type_resolver, resolve_module_access, const ast::module_access_expr&)
-
-auto type_resolver::visit(ast::node_id id, const ast::module_access_expr& scope) -> void {
-    PROFILE_FUNCTION();
-    resolve_module_access(id, scope);
-}
-
 auto type_resolver::using_rhs_value_name(ast::explicit_type_id rhs) const
     -> stdx::option<std::string_view> {
     const auto is_value_sym{[](const sema::symbol& sym) -> bool {
@@ -5248,19 +5070,6 @@ auto type_resolver::using_rhs_value_name(ast::explicit_type_id rhs) const
             if (const auto sym{ctx_.registry.lookup(table_stack_, e.name)};
                 sym && is_value_sym(*sym)) {
                 return e.name;
-            }
-            return stdx::none;
-        },
-        [&](const ast::module_access_expr& e) -> stdx::option<std::string_view> {
-            const auto outer_type{resolving_.get_sema_type_opt(e.outer)};
-            const auto mod_data{outer_type ? outer_type->get_data().as_opt<types::module>()
-                                           : stdx::none};
-            if (!mod_data || !mod_data->imported.root_table_idx) { return stdx::none; }
-            const auto& inner{resolving_.ast.get_as<ast::identifier_expr>(e.inner)};
-            if (const auto sym{
-                    ctx_.registry.get_from_opt(*mod_data->imported.root_table_idx, inner.name)};
-                sym && is_value_sym(*sym)) {
-                return inner.name;
             }
             return stdx::none;
         },
@@ -6205,14 +6014,6 @@ auto type_resolver::callee_is_discardable(const ast::call_expr& call) const -> b
             const auto& inner_ident{home->ast.get_as<ast::identifier_expr>(dot->member)};
             sym  = ctx_.registry.get_from_opt(*m_data->imported.root_table_idx, inner_ident.name);
             home = &m_data->imported;
-        } else if (const auto mac{home->ast.get_as_opt<ast::module_access_expr>(fn_node)}) {
-            const auto outer_type{home->get_sema_type_opt(mac->outer)};
-            const auto m_data{outer_type ? outer_type->get_data().as_opt<types::module>()
-                                         : stdx::none};
-            if (!m_data || !m_data->imported.root_table_idx) { return false; }
-            const auto& inner_ident{home->ast.get_as<ast::identifier_expr>(mac->inner)};
-            sym  = ctx_.registry.get_from_opt(*m_data->imported.root_table_idx, inner_ident.name);
-            home = &m_data->imported;
         } else {
             return false;
         }
@@ -6230,8 +6031,7 @@ auto type_resolver::callee_is_discardable(const ast::call_expr& call) const -> b
 
         // Follow a direct `const g := f` / `const g := m.f` re-export to the real declaration.
         if (decl->value && (home->ast.get_as_opt<ast::identifier_expr>(*decl->value) ||
-                            home->ast.get_as_opt<ast::dot_expr>(*decl->value) ||
-                            home->ast.get_as_opt<ast::module_access_expr>(*decl->value))) {
+                            home->ast.get_as_opt<ast::dot_expr>(*decl->value))) {
             fn_node = *decl->value;
             continue;
         }
@@ -6601,25 +6401,6 @@ auto type_resolver::register_parameterized_impl(ast::node_id root, const ast::im
                 if (const auto md{mod_type->get_data().as_opt<types::module>()};
                     md && md->imported.root_table_idx) {
                     const auto& inner{resolving_.ast.get_as<ast::identifier_expr>(dot->member)};
-                    if (const auto sym{
-                            ctx_.registry.get_from_opt(*md->imported.root_table_idx, inner.name)}) {
-                        if (const auto n{sym->get_data().as_opt<symbols::node_t>()}) {
-                            if (const auto d{md->imported.ast.get_as_opt<ast::decl_stmt>(*n)};
-                                d && d->value) {
-                                base_mod.emplace(md->imported);
-                                base_ctor_fn.emplace(*d->value);
-                            }
-                        }
-                    }
-                }
-            }
-        } else if (const auto mac{
-                       resolving_.ast.get_as_opt<ast::module_access_expr>(*tgt_call->function)}) {
-            resolve(mac->outer); // the module alias is not otherwise typed this early
-            if (const auto mod_type{resolving_.get_sema_type_opt(mac->outer)}) {
-                if (const auto md{mod_type->get_data().as_opt<types::module>()};
-                    md && md->imported.root_table_idx) {
-                    const auto& inner{resolving_.ast.get_as<ast::identifier_expr>(mac->inner)};
                     if (const auto sym{
                             ctx_.registry.get_from_opt(*md->imported.root_table_idx, inner.name)}) {
                         if (const auto n{sym->get_data().as_opt<symbols::node_t>()}) {
@@ -7515,7 +7296,6 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::identifier_expr& 
         last_type_.emplace(resolved);                                                        \
     }
 
-MAKE_MODIFIED_RESOLVER(module_access_expr, resolve_module_access)
 MAKE_MODIFIED_RESOLVER(dot_expr, resolve_dot)
 MAKE_MODIFIED_RESOLVER(call_expr, resolve_call)
 
