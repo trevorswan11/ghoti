@@ -99,11 +99,11 @@ DeclStatement
 │                           └─ IdentifierExpression: E
 └─ Value: UndefinedExpression
 ExpressionStatement
-└─ Expr: ModuleAccessExpression
-    ├─ Outer: ModuleAccessExpression
-    │   ├─ Outer: IdentifierExpression: A
-    │   └─ Inner: IdentifierExpression: B
-    └─ Inner: IdentifierExpression: C
+└─ Expr: DotExpression (DOT)
+    ├─ Object: DotExpression (DOT)
+    │   ├─ Object: IdentifierExpression: A
+    │   └─ Member: IdentifierExpression: B
+    └─ Member: IdentifierExpression: C
 ExpressionStatement
 └─ Expr: StructExpression
     ├─ Extern: false
@@ -499,11 +499,11 @@ TestStatement
     │   └─ Library: IdentifierExpression: other
     └─ ExpressionStatement
         └─ Expr: CallExpression
-            ├─ Callee: ModuleAccessExpression
-            │   ├─ Outer: ModuleAccessExpression
-            │   │   ├─ Outer: IdentifierExpression: std
-            │   │   └─ Inner: IdentifierExpression: testing
-            │   └─ Inner: IdentifierExpression: expect
+            ├─ Callee: DotExpression (DOT)
+            │   ├─ Object: DotExpression (DOT)
+            │   │   ├─ Object: IdentifierExpression: std
+            │   │   └─ Member: IdentifierExpression: testing
+            │   └─ Member: IdentifierExpression: expect
             └─ Arguments:
                 └─ BinaryExpression (EQ)
                     ├─ LHS: IdentifierExpression: a
@@ -513,9 +513,9 @@ DeclStatement
 ├─ Modifiers: VARIABLE
 ├─ Type: ExplicitType (modifier: VALUE)
 │   └─ CallExpression
-│       ├─ Callee: ModuleAccessExpression
-│       │   ├─ Outer: IdentifierExpression: std
-│       │   └─ Inner: IdentifierExpression: ArrayList
+│       ├─ Callee: DotExpression (DOT)
+│       │   ├─ Object: IdentifierExpression: std
+│       │   └─ Member: IdentifierExpression: ArrayList
 │       └─ Arguments:
 │           └─ IdentifierExpression: u8 (primitive)
 └─ Value: UndefinedExpression
@@ -523,9 +523,9 @@ DeclStatement
 ├─ Name: IdentifierExpression: a
 ├─ Modifiers: VARIABLE
 ├─ Type: ExplicitType (modifier: VALUE)
-│   └─ ModuleAccessExpression
-│       ├─ Outer: IdentifierExpression: std
-│       └─ Inner: IdentifierExpression: Io
+│   └─ DotExpression (DOT)
+│       ├─ Object: IdentifierExpression: std
+│       └─ Member: IdentifierExpression: Io
 └─ Value: UndefinedExpression
 DeclStatement
 ├─ Name: IdentifierExpression: a
@@ -1022,9 +1022,9 @@ DeclStatement
     │   │   └─ Type: ExplicitType (modifier: MUT_REF)
     │   │       └─ DynType
     │   │           └─ Interface: ExplicitType (modifier: VALUE)
-    │   │               └─ ModuleAccessExpression
-    │   │                   ├─ Outer: IdentifierExpression: io
-    │   │                   └─ Inner: IdentifierExpression: Writer
+    │   │               └─ DotExpression (DOT)
+    │   │                   ├─ Object: IdentifierExpression: io
+    │   │                   └─ Member: IdentifierExpression: Writer
     │   └─ Param:
     │       ├─ Name: IdentifierExpression: x
     │       └─ Type: ExplicitType (modifier: PTR)

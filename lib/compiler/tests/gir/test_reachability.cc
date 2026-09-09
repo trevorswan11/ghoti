@@ -49,7 +49,7 @@ TEST_CASE("GIR reachability: transitively referenced imported extern is retained
         R"(
             import "win.gh" as win;
             pub const main := fn(args: [][:0]u8): void {
-                const e := win::last_error();
+                const e := win.last_error();
             };
         )",
         {helpers::mock_file{"win.gh", WIN_MODULE, "win"}})};

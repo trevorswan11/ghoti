@@ -7,9 +7,9 @@ import "../../result.gh" as result;
 pub import "errno.gh" as errno;
 
 pub using Handle = i32;
-pub using Errno = errno::Errno;
+pub using Errno = errno.Errno;
 pub using mode_t = u16; /// matches the darwin backend so `io/file.gh`'s mode literals coerce
-pub constexpr EWOULDBLOCK := errno::EWOULDBLOCK;
+pub constexpr EWOULDBLOCK := errno.EWOULDBLOCK;
 
 // <asm-generic/fcntl.h> — note these values differ from Darwin's.
 pub const O_RDONLY: i32 = 0o0; /// open for reading only
@@ -273,7 +273,7 @@ pub const MAP_ANONYMOUS: usize = 0x20uz; /// the mapping is not backed by any fi
         };
     };
 } else {
-    @compileError("std::os: unsupported Linux architecture (only x86_64 and aarch64)");
+    @compileError("std.os: unsupported Linux architecture (only x86_64 and aarch64)");
 }
 
 /// A raw return in `-4095..=-1` is `-errno`; every other value is success.
@@ -288,7 +288,7 @@ const to_errno := fn(ret: usize): Errno {
 };
 
 constexpr R := fn(T: type): type {
-    return result::Result(T, Errno);
+    return result.Result(T, Errno);
 };
 
 /// One timestamp field of `struct statx` (`struct statx_timestamp`).

@@ -10,7 +10,7 @@ R"([_:0]^N{a, b, c, d, e, 3, "54" };
     { a; b; 2; c; };
     while (true) : (i += 1) {a;} else return b;
     var f_ptr: ^fn(x: &a, y: ^mut B, ...): &[0x2uz][N]^E = undefined;
-    A::B::C;
+    A.B.C;
     struct { var a: Foo = bar; const b := fn(^mut this, a: A, b: ^B): C { c; }; };
     &a; &mut b; *a;
     match (a) { b => |c| d, e => |_| f, g => h, _ => d, };
@@ -43,9 +43,9 @@ R"([_:0]^N{a, b, c, d, e, 3, "54" };
     union { a: struct { b: Foo = bar, pub c: i32, var d: u32 = undefined; }, const b := fn(&self, a: A): C { c; }; };
     enum : i64 { A = 2i64, const b := fn(&self, a: A): C { c; }; };
     const a := {};
-    test "dump" { import other; std::testing::expect(a == true); }
-    var a: std::ArrayList(u8) = undefined;
-    var a: std::Io = undefined;
+    test "dump" { import other; std.testing.expect(a == true); }
+    var a: std.ArrayList(u8) = undefined;
+    var a: std.Io = undefined;
     var a: List(i32) = undefined;
     break :blk a;
     a: { continue :a; };
@@ -80,5 +80,5 @@ R"([_:0]^N{a, b, c, d, e, 3, "54" };
     impl File { pub const fromRaw := fn(fd: i32): @this() { return .{ .fd = fd }; }; }
     impl IW for File { pub const write := fn(&mut self, b: []u8): E { c; }; }
     impl(H: type) Buf(H) { pub const make := fn(raw: H): @this() { return .{ .h = raw }; }; }
-    const useDyn := fn(w: &mut dyn io::Writer, x: ^dyn IW(E = i32)): void { c; };
+    const useDyn := fn(w: &mut dyn io.Writer, x: ^dyn IW(E = i32)): void { c; };
 )"

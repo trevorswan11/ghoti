@@ -18,7 +18,7 @@ constexpr std::string_view ENUM_MOD{R"(
 
 constexpr std::string_view MID_MOD{R"(
     import "enums.gh" as en;
-    pub using Errno = en::E;
+    pub using Errno = en.E;
 )"};
 
 constexpr std::string_view PKG_MOD{R"(
@@ -34,13 +34,13 @@ constexpr std::string_view AGG_MOD{R"(
 
 } // namespace
 
-TEST_CASE("E2E: cross-module `pub using` alias resolves an enum variant via `alias::Type.MEMBER`") {
+TEST_CASE("E2E: cross-module `pub using` alias resolves an enum variant via `alias.Type.MEMBER`") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "enums.gh" as x;
             pub const main := fn(): i32 {
-                const e: x::Alias = x::Alias.C;
-                return if (e == x::Alias.C) @as(i32, @as(u32, x::Alias.B)) + 5 else 1;
+                const e: x.Alias = x.Alias.C;
+                return if (e == x.Alias.C) @as(i32, @as(u32, x.Alias.B)) + 5 else 1;
             };
         )",
         {mock_file{"enums.gh", ENUM_MOD, "enums"}})};
@@ -52,8 +52,8 @@ TEST_CASE("E2E: a `pub using` alias re-exported through a middle module still re
         R"(
             import "mid.gh" as m;
             pub const main := fn(): i32 {
-                const e: m::Errno = m::Errno.B;
-                return if (e == m::Errno.B) 7 else 1;
+                const e: m.Errno = m.Errno.B;
+                return if (e == m.Errno.B) 7 else 1;
             };
         )",
         {
@@ -63,14 +63,14 @@ TEST_CASE("E2E: a `pub using` alias re-exported through a middle module still re
     CHECK(exit_code == 7);
 }
 
-TEST_CASE("E2E: a local `using` alias of a module resolves `alias::Type.MEMBER`") {
+TEST_CASE("E2E: a local `using` alias of a module resolves `alias.Type.MEMBER`") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "pkg.gh" as pkg;
-            using x = pkg::en;
+            using x = pkg.en;
             pub const main := fn(): i32 {
-                const e: x::E = x::E.C;
-                return if (e == x::E.C) @as(i32, @as(u32, x::E.B)) + 5 else 1;
+                const e: x.E = x.E.C;
+                return if (e == x.E.C) @as(i32, @as(u32, x.E.B)) + 5 else 1;
             };
         )",
         {
@@ -80,19 +80,19 @@ TEST_CASE("E2E: a local `using` alias of a module resolves `alias::Type.MEMBER`"
     CHECK(exit_code == 7);
 }
 
-TEST_CASE("E2E: `alias::Enum.MEMBER` folds through a generic-union `match` capture and compare") {
+TEST_CASE("E2E: `alias.Enum.MEMBER` folds through a generic-union `match` capture and compare") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "pkg.gh" as pkg;
-            using x = pkg::en;
+            using x = pkg.en;
             constexpr Result := fn(T: type, F: type): type { return union { ok: T, err: F }; };
-            const g := fn(): Result(i32, x::E) { return .{ .err = x::E.B }; };
+            const g := fn(): Result(i32, x.E) { return .{ .err = x.E.B }; };
             pub const main := fn(): i32 {
                 const miss := match (g()) {
-                    .ok  => x::E.A,
+                    .ok  => x.E.A,
                     .err => |e| e,
                 };
-                return if (miss == x::E.B) 7 else 1;
+                return if (miss == x.E.B) 7 else 1;
             };
         )",
         {
@@ -106,7 +106,7 @@ TEST_CASE("E2E: a `using` alias of a cross-module struct resolves its `constexpr
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "agg.gh" as agg;
-            using C = agg::Cfg;
+            using C = agg.Cfg;
             pub const main := fn(): i32 {
                 return C.twice(20) + @as(i32, C.LIMIT) - 60;
             };
@@ -120,11 +120,11 @@ TEST_CASE(
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "enums.gh" as x;
-            const R := union { ok: x::Alias, err: i32 };
+            const R := union { ok: x.Alias, err: i32 };
             pub const main := fn(): i32 {
-                const r: R = .{ .ok = x::Alias.B };
+                const r: R = .{ .ok = x.Alias.B };
                 return match (r) {
-                    .ok  => |v| if (v == x::Alias.B) 7 else 3,
+                    .ok  => |v| if (v == x.Alias.B) 7 else 3,
                     .err => |e| e,
                 };
             };
@@ -138,7 +138,7 @@ TEST_CASE("E2E: implicit_access against a cross-module aliased enum in match scr
         R"(
             import "enums.gh" as x;
             pub const main := fn(): i32 {
-                const e: x::Alias = .C;
+                const e: x.Alias = .C;
                 return match (e) {
                     .A => 1,
                     .B => 2,
@@ -154,13 +154,13 @@ TEST_CASE("E2E: implicit_access against a cross-module aliased enum in match scr
 TEST_CASE("E2E: a re-exported `pub using` alias of a cross-module struct resolves static methods") {
     constexpr std::string_view MID_AGG{R"(
         import "agg.gh" as a;
-        pub using CfgAlias = a::Cfg;
+        pub using CfgAlias = a.Cfg;
     )"};
     const auto                 exit_code{helpers::compile_and_run(
         R"(
             import "mid_agg.gh" as m;
             pub const main := fn(): i32 {
-                return m::CfgAlias.twice(10) + @as(i32, m::CfgAlias.LIMIT) - 55;
+                return m.CfgAlias.twice(10) + @as(i32, m.CfgAlias.LIMIT) - 55;
             };
         )",
         {
@@ -195,7 +195,7 @@ TEST_CASE("E2E: a cross-module using alias of a union constructs and matches pay
     const auto                 exit_code{helpers::compile_and_run(
         R"(
             import "un.gh" as umod;
-            using MyU = umod::AliasU;
+            using MyU = umod.AliasU;
             pub const main := fn(): i32 {
                 const u: MyU = .{ .a = 7 };
                 return match (u) {

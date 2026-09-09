@@ -128,7 +128,7 @@ TEST_CASE("negation brings the minimum signed value into range") {
     )") == 0);
 }
 
-TEST_CASE("`using K = other::CONST` value RHS produces diagnostic, not ICE") {
+TEST_CASE("`using K = other.CONST` value RHS produces diagnostic, not ICE") {
     helpers::expect_compile_error(R"(
         const X := 42;
         using K = X;

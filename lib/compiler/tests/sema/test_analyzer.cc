@@ -26,7 +26,7 @@ import std;
 
 pub const main := fn(args: [][:0]u8): i32 {
     const message := "Hello, world!";
-    std::io::println(message);
+    std.io.println(message);
     return 0;
 };
 )"};
@@ -135,17 +135,17 @@ TEST_CASE("Full sema pipeline") {
             CHECK(arg_type == msg_type);
 
             const auto& access_expr{
-                UNWRAP(root_module.ast.get_as_opt<ast::module_access_expr>(call_expr.function))};
-            const auto& println_fn_type = UNWRAP(root_module.get_sema_type_opt(access_expr.inner));
+                UNWRAP(root_module.ast.get_as_opt<ast::dot_expr>(call_expr.function))};
+            const auto& println_fn_type = UNWRAP(root_module.get_sema_type_opt(access_expr.member));
             CHECK(println_fn_type == ctx->get_type(sema::type_kind::FUNCTION, 3));
 
             // The outer part of resolution should be two modules
             const auto& access_outer{
-                UNWRAP(root_module.ast.get_as_opt<ast::module_access_expr>(access_expr.outer))};
-            const auto& access_std_expr = UNWRAP(root_module.get_sema_type_opt(access_outer.outer));
+                UNWRAP(root_module.ast.get_as_opt<ast::dot_expr>(access_expr.object))};
+            const auto& access_std_expr = UNWRAP(root_module.get_sema_type_opt(access_outer.object));
             CHECK(access_std_expr == std_module_type);
 
-            const auto& access_io_expr = UNWRAP(root_module.get_sema_type_opt(access_outer.inner));
+            const auto& access_io_expr = UNWRAP(root_module.get_sema_type_opt(access_outer.member));
             CHECK(access_io_expr == io_module_type);
         }
     }

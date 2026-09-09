@@ -4,7 +4,7 @@ pub import "errno.gh" as errno;
 
 pub using Handle = ^mut opaque;
 
-pub using Errno = errno::Errno;
+pub using Errno = errno.Errno;
 
 using DWORD = u32;
 using BOOL = i32;
@@ -156,7 +156,7 @@ extern("kernel32") const MultiByteToWideChar: fn(
 ): i32;
 
 constexpr R := fn(T: type): type {
-    return result::Result(T, Errno);
+    return result.Result(T, Errno);
 };
 
 /// Write the contents of `buf` to the file, returning the number of written bytes

@@ -73,17 +73,17 @@ auto test_access_fail(std::string_view input, Ds&&... diagnostics) -> void {
 } // namespace
 
 TEST_CASE("Free function resolved access") {
-    auto [ctx, idx]{setup_access_test("const a := other::foo('a');")};
+    auto [ctx, idx]{setup_access_test("const a := other.foo('a');")};
     check_access_decl(*ctx, idx, "a", u8_slice_type(*ctx));
 }
 
 TEST_CASE("Enum resolved access") {
     auto [ctx, idx]{setup_access_test(R"(
-var e1: other::BarE = .A;
-const e2 := other::BarE.A;
+var e1: other.BarE = .A;
+const e2 := other.BarE.A;
 const e3 := e1.bar('a');
 
-const func := other::BarE.bar;
+const func := other.BarE.bar;
 )")};
 
     const auto& enum_type{ctx->get_type(sema::type_kind::ENUM, 3)};
@@ -95,11 +95,11 @@ const func := other::BarE.bar;
 
 TEST_CASE("Union resolved access") {
     auto [ctx, idx]{setup_access_test(R"(
-var ua: other::BarU = .{ .A = 1, };
-const ub := other::BarU{ .A = 1, };
+var ua: other.BarU = .{ .A = 1, };
+const ub := other.BarU{ .A = 1, };
 const uc := ua.bar('a');
 
-const func := other::BarU.bar;
+const func := other.BarU.bar;
 )")};
 
     const auto& union_type{ctx->get_type(sema::type_kind::UNION, 5)};
@@ -111,13 +111,13 @@ const func := other::BarU.bar;
 
 TEST_CASE("Struct resolved access") {
     auto [ctx, idx]{setup_access_test(R"(
-var s1: other::BarS = .{ .A = 42, };
-const s2 := other::BarS{ .A = 1, };
+var s1: other.BarS = .{ .A = 42, };
+const s2 := other.BarS{ .A = 1, };
 const s3 := s1.baz;
 const s4 := s1.bar('a');
 
-const member := other::BarS.baz;
-const func := other::BarS.bar;
+const member := other.BarS.baz;
+const func := other.BarS.bar;
 )")};
 
     const auto& struct_type{ctx->get_type(sema::type_kind::STRUCT, 7)};
@@ -185,51 +185,31 @@ TEST_CASE("Implicitly accessing unknown user-type fields/members") {
     const auto expected_diag = [] -> sema::diagnostic {
         return {"Type has no field named 'z'",
                 sema::error::UNDECLARED_IDENTIFIER,
-                std::pair{0UZ, 50UZ}};
+                std::pair{0UZ, 49UZ}};
     };
 
-    test_access_fail("var a: other::BarE = .z;", expected_diag());
-    test_access_fail("var a: other::BarU = .z;", expected_diag());
-    test_access_fail("var a: other::BarS = .z;", expected_diag());
+    test_access_fail("var a: other.BarE = .z;", expected_diag());
+    test_access_fail("var a: other.BarU = .z;", expected_diag());
+    test_access_fail("var a: other.BarS = .z;", expected_diag());
 }
 
 TEST_CASE("Dot-accessing unknown user-type fields/members") {
     const auto expected_diag = [](std::string_view type_name) -> sema::diagnostic {
         return {fmt::format("Type '{}' has no field named 'z'", type_name),
                 sema::error::UNDECLARED_IDENTIFIER,
-                std::pair{0UZ, 49UZ}};
+                std::pair{0UZ, 48UZ}};
     };
 
-    test_access_fail("var a := other::BarE.z;", expected_diag("BarE"));
-    test_access_fail("var a := other::BarU.z;", expected_diag("BarU"));
-    test_access_fail("var a := other::BarS.z;", expected_diag("BarS"));
-}
-
-TEST_CASE("Illegal module access targets") {
-    const auto expected_diag = [](std::string_view type_name) -> sema::diagnostic {
-        return {
-            fmt::format("Use the dot operator '.' to access {} fields; found module access '::'",
-                        type_name),
-            sema::error::TYPE_MISMATCH,
-            std::pair{0UZ, 42UZ}};
-    };
-
-    test_access_fail("var a := other::BarE::e;", expected_diag("enum"));
-    test_access_fail("var a := other::BarU::e;", expected_diag("union"));
-    test_access_fail("var a := other::BarS::e;", expected_diag("struct"));
-
-    helpers::test_resolver_fail(
-        "var a := i32::a;",
-        sema::diagnostic{"Module access operator '::' can only be applied to modules; found 'i32'",
-                         sema::error::TYPE_MISMATCH,
-                         std::pair{0UZ, 9UZ}});
+    test_access_fail("var a := other.BarE.z;", expected_diag("BarE"));
+    test_access_fail("var a := other.BarU.z;", expected_diag("BarU"));
+    test_access_fail("var a := other.BarS.z;", expected_diag("BarS"));
 }
 
 TEST_CASE("Unknown member lookup in module") {
-    test_access_fail("var a := other::BarF;",
+    test_access_fail("var a := other.BarF;",
                      sema::diagnostic{"Module 'other' has no member named 'BarF'",
                                       sema::error::UNDECLARED_IDENTIFIER,
-                                      std::pair{0UZ, 44UZ}});
+                                      std::pair{0UZ, 43UZ}});
 }
 
 TEST_CASE("Incomplete type used during resolution") {
@@ -273,12 +253,12 @@ TEST_CASE("Forward reference to a later struct field is reported as an ordering 
 
 TEST_CASE("Illegal circular module-based access resolution") {
     constexpr std::string_view a_gh{
-        R"(import "b.gh" as b; pub const A := struct { field: b::B, };)"};
+        R"(import "b.gh" as b; pub const A := struct { field: b.B, };)"};
     constexpr std::string_view b_gh{
-        R"(import "a.gh" as a; pub const B := struct { field: a::A, };)"};
+        R"(import "a.gh" as a; pub const B := struct { field: a.A, };)"};
 
     auto [ctx, idx]{helpers::resolve(
-        R"(import "a.gh" as a; using A = a::A;)",
+        R"(import "a.gh" as a; using A = a.A;)",
         helpers::make_vector<mock_file>(mock_file{.path = "a.gh", .source = a_gh},
                                         mock_file{.path = "b.gh", .source = b_gh}))};
     auto& test_module{*UNWRAP(ctx->manager.try_get_file_module("test.gh"))};
@@ -289,7 +269,7 @@ TEST_CASE("Illegal circular module-based access resolution") {
         b_module,
         sema::diagnostic{"Cross-module cyclic dependency detected while resolving symbol 'B'",
                          sema::error::CYCLIC_DEPENDENCY,
-                         std::pair{0UZ, 54UZ}});
+                         std::pair{0UZ, 53UZ}});
 
     // Each importer along the chain gets its own diagnostic, however far from the cycle.
     helpers::check_errors_against<sema::diagnostics>(
@@ -457,7 +437,7 @@ TEST_CASE("A type error inside an imported generic body is attributed to the def
         R"(pub const project := fn(x: auto): i32 { return x + undeclared_only_here; };)"};
 
     auto [ctx, idx]{helpers::resolve(
-        R"(import "dep.gh" as dep; const r := dep::project(5);)",
+        R"(import "dep.gh" as dep; const r := dep.project(5);)",
         helpers::make_vector<mock_file>(mock_file{.path = "dep.gh", .source = dep_gh}))};
 
     auto& dep_module{*UNWRAP(ctx->manager.try_get_file_module("dep.gh"))};

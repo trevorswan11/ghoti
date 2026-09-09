@@ -11,9 +11,9 @@ pub const FixedBufferStream := struct {
     pub pos: usize = 0,
 };
 
-impl reader::Reader for FixedBufferStream {
-    using Error = error::Error;
-    pub const read := fn(&mut self, out: []mut u8): result::Result(usize, Error) {
+impl reader.Reader for FixedBufferStream {
+    using Error = error.Error;
+    pub const read := fn(&mut self, out: []mut u8): result.Result(usize, Error) {
         const remaining := self.buf.len - self.pos;
         const n := if (out.len < remaining) out.len else remaining;
 
@@ -23,9 +23,9 @@ impl reader::Reader for FixedBufferStream {
     };
 }
 
-impl writer::Writer for FixedBufferStream {
-    using Error = error::Error;
-    pub const write := fn(&mut self, bytes: []u8): result::Result(usize, Error) {
+impl writer.Writer for FixedBufferStream {
+    using Error = error.Error;
+    pub const write := fn(&mut self, bytes: []u8): result.Result(usize, Error) {
         const room := self.buf.len - self.pos;
         if (room == 0 and bytes.len > 0) {
             return .{ .err = .no_space };
@@ -38,9 +38,9 @@ impl writer::Writer for FixedBufferStream {
     };
 }
 
-impl seeker::Seeker for FixedBufferStream {
-    using Error = error::Error;
-    pub const seek := fn(&mut self, offset: i64, whence: seeker::Whence): result::Result(i64, Error) {
+impl seeker.Seeker for FixedBufferStream {
+    using Error = error.Error;
+    pub const seek := fn(&mut self, offset: i64, whence: seeker.Whence): result.Result(i64, Error) {
         const base: i64 = match (whence) {
             .start => 0,
             .current => @as(i64, self.pos),

@@ -153,14 +153,6 @@ TEST_CASE("Illegal label statements") {
     helpers::test_parser_fail("a: return 3;", expected_diag());
 }
 
-TEST_CASE("Illegal implicit access operand") {
-    helpers::test_parser_fail(
-        ".a::b",
-        syntax::diagnostic{"Module access expressions must have outer accessors or identifiers",
-                           syntax::error::ILLEGAL_OUTER_ACCESSOR_TYPE,
-                           std::pair{0UZ, 0UZ}});
-}
-
 TEST_CASE("Prefix without operand") {
     helpers::test_parser_fail(".",
                               syntax::diagnostic{"Prefix expressions require an operand",
@@ -171,28 +163,6 @@ TEST_CASE("Prefix without operand") {
                               syntax::diagnostic{"No prefix parse function for SEMICOLON(;) found",
                                                  syntax::error::MISSING_PREFIX_PARSER,
                                                  std::pair{0UZ, 1UZ}});
-}
-
-TEST_CASE("Missing inner scope of resolution expression") {
-    helpers::test_parser_fail(
-        "A:: ;",
-        syntax::diagnostic{
-            "Expected token IDENT, found SEMICOLON", syntax::error::UNEXPECTED_TOKEN, 0, 4});
-}
-
-TEST_CASE("Illegal inner scope of resolution expression") {
-    helpers::test_parser_fail(
-        "A::2;",
-        syntax::diagnostic{
-            "Expected token IDENT, found INT_10", syntax::error::UNEXPECTED_TOKEN, 0, 3});
-}
-
-TEST_CASE("Illegal outer scope of resolution expression") {
-    helpers::test_parser_fail(
-        "2::A;",
-        syntax::diagnostic{"Module access expressions must have outer accessors or identifiers",
-                           syntax::error::ILLEGAL_OUTER_ACCESSOR_TYPE,
-                           std::pair{0UZ, 0UZ}});
 }
 
 TEST_CASE("Missing inner member of dot expression") {

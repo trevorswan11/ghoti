@@ -10,5 +10,5 @@ pub const Seeker := interface {
     Error: type;
 
     /// Seeks to `offset` by `whence`
-    pub const seek := fn(&mut self, offset: i64, whence: Whence): result::Result(i64, Error);
+    pub const seek := fn(&mut self, offset: i64, whence: Whence): result.Result(i64, Error);
 };

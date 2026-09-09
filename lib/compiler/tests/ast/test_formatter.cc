@@ -41,7 +41,7 @@ TEST_CASE("formatter preserves grouping parens the author wrote") {
 TEST_CASE("formatter round-trips operator expressions") {
     CHECK(format_source("a <= b or c == d and e;") == "a <= b or c == d and e;\n");
     CHECK(format_source("a or b[3uz] == !c;") == "a or b[3uz] == !c;\n");
-    CHECK(format_source("A::B::C;") == "A::B::C;\n");
+    CHECK(format_source("A.B.C;") == "A.B.C;\n");
     CHECK(format_source("a.b;") == "a.b;\n");
     CHECK(format_source("a..b;") == "a..b;\n");
     CHECK(format_source("a..=b;") == "a..=b;\n");
@@ -83,16 +83,16 @@ TEST_CASE("formatter round-trips leaf statements") {
 
 TEST_CASE("formatter round-trips types") {
     CHECK(format_source("var a: []i32 = undefined;") == "var a: []i32 = undefined;\n");
-    CHECK(format_source("var a: std::ArrayList(u8) = undefined;") ==
-          "var a: std::ArrayList(u8) = undefined;\n");
+    CHECK(format_source("var a: std.ArrayList(u8) = undefined;") ==
+          "var a: std.ArrayList(u8) = undefined;\n");
     CHECK(format_source("var a: List(i32) = undefined;") == "var a: List(i32) = undefined;\n");
     CHECK(format_source("var v: mut volatile i32 = 42;") == "var v: mut volatile i32 = 42;\n");
     CHECK(format_source("var f: ^fn(x: &a, y: ^mut B, ...): ^E = undefined;") ==
           "var f: ^fn(x: &a, y: ^mut B, ...): ^E = undefined;\n");
     CHECK(format_source("var a: [N:0]u8 = undefined;") == "var a: [N:0]u8 = undefined;\n");
     CHECK(format_source("var w: &dyn Writer = undefined;") == "var w: &dyn Writer = undefined;\n");
-    CHECK(format_source("var w: ^mut dyn io::Writer = undefined;") ==
-          "var w: ^mut dyn io::Writer = undefined;\n");
+    CHECK(format_source("var w: ^mut dyn io.Writer = undefined;") ==
+          "var w: ^mut dyn io.Writer = undefined;\n");
     CHECK(format_source("var it: &dyn Iterator(Item = u8) = undefined;") ==
           "var it: &dyn Iterator(Item = u8) = undefined;\n");
     CHECK(format_source("var m: &dyn Map(Key = []u8, Value = i32) = undefined;") ==
@@ -447,7 +447,7 @@ TEST_CASE("formatter round trip: operators and grouping") {
     round_trips("_ = (a + b) * c;");
     round_trips("_ = a + b * c - d / e;");
     round_trips("_ = ((a));");
-    round_trips("A::B::C; a.b; a..b; a..=b;");
+    round_trips("A.B.C; a.b; a..b; a..=b;");
     round_trips("&a; &mut b; *a; ^mut a; ^a;");
     round_trips("@as(i32, a); .a; .{ .a = 3 }; TT{ .adfasf = a }; .{};");
     round_trips("_ = a +% b - c *% d + e <<% f;");
@@ -476,7 +476,7 @@ TEST_CASE("formatter round trip: functions and types") {
     round_trips("fn(self): i32 {};");
     round_trips("pub const min := fn(a: auto, b: auto): auto { return if (a < b) a else b; };");
     round_trips("using T = i32; pub using a = ^^i32;");
-    round_trips("var a: std::ArrayList(u8) = undefined; var a: List(i32) = undefined; var a: []i32 "
+    round_trips("var a: std.ArrayList(u8) = undefined; var a: List(i32) = undefined; var a: []i32 "
                 "= undefined;");
     round_trips("extern const foo: fn(): i32;");
     round_trips(R"(extern("kernel32") const bar: fn(): void;)");
@@ -615,10 +615,10 @@ TEST_CASE("formatter round trips impl blocks with no trailing semicolon") {
 )");
 
     CHECK(format_source("impl Writer for File { pub const write := fn(&mut self, b: []u8): R "
-                        "{ return os::write(self.fd, b); }; }") ==
+                        "{ return os.write(self.fd, b); }; }") ==
           R"(impl Writer for File {
     pub const write := fn(&mut self, b: []u8): R {
-        return os::write(self.fd, b);
+        return os.write(self.fd, b);
     };
 }
 )");
@@ -637,7 +637,7 @@ TEST_CASE("formatter preserves comments inside an impl block") {
     constexpr std::string_view source{R"(impl Writer for File {
     // write pushes the whole buffer
     pub const write := fn(&mut self, b: []u8): R {
-        return os::write(self.fd, b); // the syscall
+        return os.write(self.fd, b); // the syscall
     };
     // close releases the handle
     const close := fn(&self): void {};

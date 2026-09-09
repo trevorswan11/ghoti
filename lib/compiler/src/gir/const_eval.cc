@@ -884,6 +884,10 @@ auto const_eval::eval_dot(ast::node_id, const ast::dot_expr& dot) -> stdx::optio
         }
     }
 
+    if (const auto target_mod{resolve_module_chain(dot.object)}) {
+        return eval_module_member(*target_mod, member_name);
+    }
+
     const auto target_val{try_eval(dot.object)};
     if (!target_val) { return stdx::none; }
 
@@ -904,6 +908,9 @@ auto const_eval::eval_dot(ast::node_id, const ast::dot_expr& dot) -> stdx::optio
 
     if (const auto type_opt{target_val->as_opt<stdx::option<sema::type&>>()};
         type_opt && *type_opt) {
+        if (const auto m_data{(**type_opt).get_data().as_opt<sema::types::module>()}) {
+            return eval_module_member(m_data->imported, member_name);
+        }
         return eval_type_member(**type_opt, member_name);
     }
 
@@ -923,8 +930,11 @@ auto const_eval::eval_type_member(sema::type& denoted_in, std::string_view membe
     auto&      type{*denoted};
     const auto kind{type.get_kind()};
 
-    // An enum variant reached through anything other than a bare identifier object (e.g.
-    // `builtin::MemoryOrder.seq_cst`, or `alias::E.C` where the object is a module-access):
+    if (const auto m_data{type.get_data().as_opt<sema::types::module>()}) {
+        return eval_module_member(m_data->imported, member);
+    }
+
+    // An enum variant reached through anything other than a bare identifier object:
     // look it up the same way `eval_implicit_access` does against a known enum type.
     if (const auto en{type.get_data().as_opt<sema::types::enum_t>()}) {
         for (usize idx{0}; idx < en->ast_enumerations.size(); ++idx) {
@@ -1029,37 +1039,112 @@ auto const_eval::resolve_module_chain(ast::node_id node) -> stdx::option<mod::mo
     if (const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(node)}) {
         if (!module_->root_table_idx) { return stdx::none; }
         const auto& table{ctx_.registry.get(*module_->root_table_idx)};
-        const auto  sym{table.get_opt(ident->name)};
+        auto        sym{table.get_opt(ident->name)};
+        if (!sym && ctx_.prelude_index) {
+            sym = ctx_.registry.get(*ctx_.prelude_index).get_opt(ident->name);
+        }
         if (!sym) { return stdx::none; }
         const auto kind{sym->get_kind_opt()};
-        if (!kind || *kind != sema::symbol_kind::MODULE) { return stdx::none; }
-        const auto snode{sym->get_data().as_opt<sema::symbols::node_t>()};
-        if (!snode) { return stdx::none; }
-        const auto sema_type{module_->get_sema_type_opt(*snode)};
-        if (!sema_type) { return stdx::none; }
-        const auto m_data{sema_type->get_data().as_opt<sema::types::module>()};
-        if (!m_data) { return stdx::none; }
-        return m_data->imported;
+        if (kind && *kind == sema::symbol_kind::MODULE) {
+            stdx::option<sema::type&> sema_type;
+            if (const auto bi{sym->get_data().as_opt<sema::symbols::builtin>()}) {
+                sema_type.emplace(bi->get_type());
+            } else if (const auto snode{sym->get_data().as_opt<sema::symbols::node_t>()}) {
+                sema_type = module_->get_sema_type_opt(*snode);
+            }
+            if (!sema_type) { return stdx::none; }
+            const auto m_data{sema_type->get_data().as_opt<sema::types::module>()};
+            if (!m_data) { return stdx::none; }
+            return m_data->imported;
+        }
+        if (const auto snode{sym->get_data().as_opt<sema::symbols::node_t>()}) {
+            if (const auto using_stmt{module_->ast.get_as_opt<ast::using_stmt>(*snode)}) {
+                auto aliased{module_->get_sema_type_opt(using_stmt->explicit_type)};
+                if (!aliased) { aliased = module_->get_sema_type_opt(*snode); }
+                if (aliased) {
+                    if (const auto m_data{aliased->get_data().as_opt<sema::types::module>()}) {
+                        return m_data->imported;
+                    }
+                }
+            }
+        }
+        return stdx::none;
     }
 
-    // Recursive case: `<outer>::<segment>` where `<outer>` itself names a module and
+    // Recursive case: `<outer>.<segment>` where `<outer>` itself names a module and
     // `<segment>` is a module re-exported from it.
+    if (const auto nested{module_->ast.get_as_opt<ast::dot_expr>(node)}) {
+        const auto outer_mod{resolve_module_chain(nested->object)};
+        if (!outer_mod || !outer_mod->root_table_idx) { return stdx::none; }
+        const auto& seg_name{module_->ast.get_as<ast::identifier_expr>(nested->member).name};
+        const auto& table{ctx_.registry.get(*outer_mod->root_table_idx)};
+        auto        sym{table.get_opt(seg_name)};
+        if (!sym && ctx_.prelude_index) {
+            sym = ctx_.registry.get(*ctx_.prelude_index).get_opt(seg_name);
+        }
+        if (!sym) { return stdx::none; }
+        const auto kind{sym->get_kind_opt()};
+        if (kind && *kind == sema::symbol_kind::MODULE) {
+            stdx::option<sema::type&> sema_type;
+            if (const auto bi{sym->get_data().as_opt<sema::symbols::builtin>()}) {
+                sema_type.emplace(bi->get_type());
+            } else if (const auto snode{sym->get_data().as_opt<sema::symbols::node_t>()}) {
+                sema_type = outer_mod->get_sema_type_opt(*snode);
+            }
+            if (!sema_type) { return stdx::none; }
+            const auto m_data{sema_type->get_data().as_opt<sema::types::module>()};
+            if (!m_data) { return stdx::none; }
+            return m_data->imported;
+        }
+        if (const auto snode{sym->get_data().as_opt<sema::symbols::node_t>()}) {
+            if (const auto using_stmt{outer_mod->ast.get_as_opt<ast::using_stmt>(*snode)}) {
+                auto aliased{outer_mod->get_sema_type_opt(using_stmt->explicit_type)};
+                if (!aliased) { aliased = outer_mod->get_sema_type_opt(*snode); }
+                if (aliased) {
+                    if (const auto m_data{aliased->get_data().as_opt<sema::types::module>()}) {
+                        return m_data->imported;
+                    }
+                }
+            }
+        }
+        return stdx::none;
+    }
+
     if (const auto nested{module_->ast.get_as_opt<ast::module_access_expr>(node)}) {
         const auto outer_mod{resolve_module_chain(nested->outer)};
         if (!outer_mod || !outer_mod->root_table_idx) { return stdx::none; }
         const auto& seg_name{module_->ast.get_as<ast::identifier_expr>(nested->inner).name};
         const auto& table{ctx_.registry.get(*outer_mod->root_table_idx)};
-        const auto  sym{table.get_opt(seg_name)};
+        auto        sym{table.get_opt(seg_name)};
+        if (!sym && ctx_.prelude_index) {
+            sym = ctx_.registry.get(*ctx_.prelude_index).get_opt(seg_name);
+        }
         if (!sym) { return stdx::none; }
         const auto kind{sym->get_kind_opt()};
-        if (!kind || *kind != sema::symbol_kind::MODULE) { return stdx::none; }
-        const auto snode{sym->get_data().as_opt<sema::symbols::node_t>()};
-        if (!snode) { return stdx::none; }
-        const auto sema_type{outer_mod->get_sema_type_opt(*snode)};
-        if (!sema_type) { return stdx::none; }
-        const auto m_data{sema_type->get_data().as_opt<sema::types::module>()};
-        if (!m_data) { return stdx::none; }
-        return m_data->imported;
+        if (kind && *kind == sema::symbol_kind::MODULE) {
+            stdx::option<sema::type&> sema_type;
+            if (const auto bi{sym->get_data().as_opt<sema::symbols::builtin>()}) {
+                sema_type.emplace(bi->get_type());
+            } else if (const auto snode{sym->get_data().as_opt<sema::symbols::node_t>()}) {
+                sema_type = outer_mod->get_sema_type_opt(*snode);
+            }
+            if (!sema_type) { return stdx::none; }
+            const auto m_data{sema_type->get_data().as_opt<sema::types::module>()};
+            if (!m_data) { return stdx::none; }
+            return m_data->imported;
+        }
+        if (const auto snode{sym->get_data().as_opt<sema::symbols::node_t>()}) {
+            if (const auto using_stmt{outer_mod->ast.get_as_opt<ast::using_stmt>(*snode)}) {
+                auto aliased{outer_mod->get_sema_type_opt(using_stmt->explicit_type)};
+                if (!aliased) { aliased = outer_mod->get_sema_type_opt(*snode); }
+                if (aliased) {
+                    if (const auto m_data{aliased->get_data().as_opt<sema::types::module>()}) {
+                        return m_data->imported;
+                    }
+                }
+            }
+        }
+        return stdx::none;
     }
 
     return stdx::none;
@@ -1687,6 +1772,15 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
         if (module_->root_table_idx) {
             callee_mod.emplace(*module_);
             callee_sym = ctx_.registry.get_from_opt(*module_->root_table_idx, ident->name);
+        }
+    } else if (const auto dot{module_->ast.get_as_opt<ast::dot_expr>(call.function)}) {
+        if (const auto target_mod{resolve_module_chain(dot->object)}) {
+            if (target_mod->root_table_idx) {
+                callee_mod.emplace(*target_mod);
+                const auto& inner{module_->ast.get_as<ast::identifier_expr>(dot->member)};
+                callee_sym =
+                    ctx_.registry.get_from_opt(*callee_mod->root_table_idx, inner.name);
+            }
         }
     } else if (const auto mac{module_->ast.get_as_opt<ast::module_access_expr>(call.function)}) {
         if (const auto mod_ty{module_->get_sema_type_opt(mac->outer)}) {

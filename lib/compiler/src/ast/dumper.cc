@@ -472,7 +472,8 @@ MAKE_INFIX_DUMP(binary_expr, BinaryExpression, LHS, RHS)
 
 auto dumper::visit(node_id id, const dot_expr& node) -> void {
     PROFILE_FUNCTION();
-    fmt::println(out_, "DotExpression ({})", magic_enum::enum_name(id.get_token_type()));
+    const auto token_type{id.is_valid() ? id.get_token_type() : syntax::token_type_t::DOT};
+    fmt::println(out_, "DotExpression ({})", magic_enum::enum_name(token_type));
     {
         const indent::guard g{indent_, false};
         fmt ::print(out_, "{}Object: ", indent_.current_branch());

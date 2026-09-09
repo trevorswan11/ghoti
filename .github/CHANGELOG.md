@@ -239,3 +239,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Resolve an issue where aliased types/modules could not be used in dot expressions (bad constant folding)
 - Resolve an issue that prevented module-aliased lookups through aggregates
 - Add raw memory alloc/free to all backends
+- GIR emission is now entirely idempotent
+    - This will hopefully reduce a large amount of bugs in the future
+    - Checksums are now implemented in debug mode against semantic side tables
+- The `::` operator for namespacing has been completely removed 
+    - Everything now must route through the `.` operator
