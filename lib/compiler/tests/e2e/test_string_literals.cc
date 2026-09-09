@@ -184,4 +184,14 @@ TEST_CASE("Top-level string const .ptr decays to a valid pointer to its bytes") 
     )") == 'h');
 }
 
+TEST_CASE("Top-level string const assigned to slice emits valid global init") {
+    const auto exit_code{helpers::compile_and_run(R"(
+        const S: []u8 = "Hello";
+        pub const main := fn(): i32 {
+            return if (S.len == 5) 7 else 0;
+        };
+    )")};
+    CHECK(exit_code == 7);
+}
+
 } // namespace ghoti::tests

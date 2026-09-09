@@ -133,4 +133,79 @@ TEST_CASE(
     CHECK(exit_code == 7);
 }
 
+TEST_CASE("E2E: implicit_access against a cross-module aliased enum in match scrutinee and arms") {
+    const auto exit_code{helpers::compile_and_run(
+        R"(
+            import "enums.gh" as x;
+            pub const main := fn(): i32 {
+                const e: x::Alias = .C;
+                return match (e) {
+                    .A => 1,
+                    .B => 2,
+                    .C => 7,
+                    _ => 0,
+                };
+            };
+        )",
+        {mock_file{"enums.gh", ENUM_MOD, "enums"}})};
+    CHECK(exit_code == 7);
+}
+
+TEST_CASE("E2E: a re-exported `pub using` alias of a cross-module struct resolves static methods") {
+    constexpr std::string_view MID_AGG{R"(
+        import "agg.gh" as a;
+        pub using CfgAlias = a::Cfg;
+    )"};
+    const auto                 exit_code{helpers::compile_and_run(
+        R"(
+            import "mid_agg.gh" as m;
+            pub const main := fn(): i32 {
+                return m::CfgAlias.twice(10) + @as(i32, m::CfgAlias.LIMIT) - 55;
+            };
+        )",
+        {
+            mock_file{"agg.gh", AGG_MOD, "agg"},
+            mock_file{"mid_agg.gh", MID_AGG, "mid_agg"},
+        })};
+    CHECK(exit_code == 7);
+}
+
+TEST_CASE("E2E: @this()-relative member accessed through a local using alias") {
+    const auto exit_code{helpers::compile_and_run(
+        R"(
+            const S := struct {
+                pub constexpr CONST: i32 = 7;
+                pub const get_val := fn(): i32 {
+                    using Self = @this();
+                    return Self.CONST;
+                };
+            };
+            pub const main := fn(): i32 {
+                return S.get_val();
+            };
+        )")};
+    CHECK(exit_code == 7);
+}
+
+TEST_CASE("E2E: a cross-module using alias of a union constructs and matches payload") {
+    constexpr std::string_view UNION_MOD{R"(
+        pub const U := union { a: i32, b: bool };
+        pub using AliasU = U;
+    )"};
+    const auto                 exit_code{helpers::compile_and_run(
+        R"(
+            import "un.gh" as umod;
+            using MyU = umod::AliasU;
+            pub const main := fn(): i32 {
+                const u: MyU = .{ .a = 7 };
+                return match (u) {
+                    .a => |val| val,
+                    .b => 0,
+                };
+            };
+        )",
+        {mock_file{"un.gh", UNION_MOD, "un"}})};
+    CHECK(exit_code == 7);
+}
+
 } // namespace ghoti::tests
