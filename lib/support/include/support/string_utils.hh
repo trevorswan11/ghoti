@@ -67,9 +67,9 @@ constexpr auto strip_trailing_cr(std::string& line) -> void {
     return std::ranges::ends_with(line, suffix, {}, stdx::string::to_lower, stdx::string::to_lower);
 }
 
-[[nodiscard]] auto read_stream(auto&& stream) -> std::string {
+template <typename Stream> [[nodiscard]] auto read_stream(Stream&& stream) -> std::string {
     return {
-        std::istreambuf_iterator<char>(stream),
+        std::istreambuf_iterator<char>(std::forward<Stream>(stream)),
         std::istreambuf_iterator<char>(),
     };
 }

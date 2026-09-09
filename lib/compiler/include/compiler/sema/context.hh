@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <ostream>
 #include <string>
 #include <string_view>
@@ -54,6 +55,9 @@ struct context {
     // Declared names for user struct/enum/union types, for `@typeName`
     ankerl::unordered_dense::map<const type*, std::string_view> user_type_names;
 
+    // Cache of read embedded files (path string -> optional file contents)
+    ankerl::unordered_dense::map<std::string, stdx::option<std::string>> embed_cache;
+
     // Global epoch counter tracking type environment mutations
     // Observed by all const_eval memo caches.
     u64 env_epoch{0};
@@ -85,7 +89,8 @@ struct context {
           prelude_index{other.prelude_index}, target_opts{other.target_opts},
           user_main_name{other.user_main_name}, runtime_safety{other.runtime_safety},
           constexpr_binding_frames{other.constexpr_binding_frames},
-          user_type_names{other.user_type_names}, env_epoch{other.env_epoch} {}
+          user_type_names{other.user_type_names}, embed_cache{other.embed_cache},
+          env_epoch{other.env_epoch} {}
 
     auto operator=(const context& other) -> context& = delete;
     context(context&&) noexcept                      = default;
@@ -161,6 +166,10 @@ struct context {
     // The bound value of a `constexpr` parameter named `name`, searching innermost frame first
     [[nodiscard]] auto lookup_constexpr_binding(std::string_view name) const
         -> stdx::option<const gir::const_value&>;
+
+    // Reads embedded file into embed_cache and returns reference to contents if successful
+    [[nodiscard]] auto read_embed_file(const std::filesystem::path& path)
+        -> stdx::option<const std::string&>;
 };
 
 } // namespace ghoti::sema

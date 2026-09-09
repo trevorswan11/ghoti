@@ -334,6 +334,12 @@ struct module {
             return sema_side_tables.explicit_type_definitions[id];
         }
     }
+
+    // Given a relative path, returns its absolute rep from the module's perspective
+    [[nodiscard]] auto make_path_absolute(const std::filesystem::path& p) -> std::filesystem::path {
+        if (p.is_relative()) { return parent_path / p; }
+        return p;
+    }
 };
 
 struct body_diff_guard {
