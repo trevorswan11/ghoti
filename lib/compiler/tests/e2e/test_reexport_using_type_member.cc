@@ -40,7 +40,7 @@ TEST_CASE("E2E: cross-module `pub using` alias resolves an enum variant via `ali
             import "enums.gh" as x;
             pub const main := fn(): i32 {
                 const e: x.Alias = x.Alias.C;
-                return if (e == x.Alias.C) @as(i32, @as(u32, x.Alias.B)) + 5 else 1;
+                return if (e == x.Alias.C) @intCast(i32, @as(u32, x.Alias.B)) + 5 else 1;
             };
         )",
         {mock_file{"enums.gh", ENUM_MOD, "enums"}})};
@@ -70,7 +70,7 @@ TEST_CASE("E2E: a local `using` alias of a module resolves `alias.Type.MEMBER`")
             using x = pkg.en;
             pub const main := fn(): i32 {
                 const e: x.E = x.E.C;
-                return if (e == x.E.C) @as(i32, @as(u32, x.E.B)) + 5 else 1;
+                return if (e == x.E.C) @intCast(i32, @as(u32, x.E.B)) + 5 else 1;
             };
         )",
         {

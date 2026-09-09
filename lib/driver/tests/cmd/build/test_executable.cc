@@ -66,7 +66,7 @@ TEST_CASE("build_exe command execution") {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
                 pub const main := fn(args: [][:0]u8): i32 {{
-                    return @as(i32, args.len);
+                    return @intCast(i32, args.len);
                 }};
             )");
         }

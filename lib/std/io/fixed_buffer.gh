@@ -43,15 +43,15 @@ impl seeker.Seeker for FixedBufferStream {
     pub const seek := fn(&mut self, offset: i64, whence: seeker.Whence): result.Result(i64, Error) {
         const base: i64 = match (whence) {
             .start => 0,
-            .current => @as(i64, self.pos),
-            .end => @as(i64, self.buf.len),
+            .current => @intCast(i64, self.pos),
+            .end => @intCast(i64, self.buf.len),
         };
 
         const target := base + offset;
-        if (target < 0 or target > @as(i64, self.buf.len)) {
+        if (target < 0 or target > @intCast(i64, self.buf.len)) {
             return .{ .err = .invalid_input };
         }
-        self.pos = @as(usize, target);
+        self.pos = @intCast(usize, target);
         return .{ .ok = target };
     };
 }

@@ -155,6 +155,7 @@ class emitter {
                               const value&     enum_val,
                               const value&     src_val,
                               ast::expr_handle src_expr) -> void;
+    auto emit_int_cast_guard(value operand, const sema::type& dest_type, ast::node_id site) -> void;
 
     [[nodiscard]] auto enum_discriminants(const sema::types::enum_t& en) -> std::vector<i64>;
     auto               emit_runtime_tag_name(ast::expr_handle operand_expr,

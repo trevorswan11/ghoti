@@ -451,18 +451,18 @@ TEST_CASE("a by-reference param read across sibling match arms and later blocks"
         const seek := fn(s: &mut S, offset: i64, whence: Whence): i64 {
             const base: i64 = match (whence) {
                 .start => 0,
-                .current => @as(i64, s.pos),
-                .end => @as(i64, s.buf.len),
+                .current => @intCast(i64, s.pos),
+                .end => @intCast(i64, s.buf.len),
             };
             const target := base + offset;
-            if (target < 0 or target > @as(i64, s.buf.len)) { return -1; }
-            s.pos = @as(usize, target);
+            if (target < 0 or target > @intCast(i64, s.buf.len)) { return -1; }
+            s.pos = @intCast(usize, target);
             return target;
         };
         pub const main := fn(): i32 {
             var backing := [8uz]mut u8{ 0, 0, 0, 0, 0, 0, 0, 0 };
             var s := S{ .buf = backing[0..8], .pos = 2uz };
-            return @as(i32, seek(&mut s, 3i64, Whence.current));
+            return @intCast(i32, seek(&mut s, 3i64, Whence.current));
         };
     )") == 5);
 }

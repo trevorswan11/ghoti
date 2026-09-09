@@ -487,12 +487,40 @@ auto emitter::folded_int(const value& v) noexcept -> stdx::option<i128> {
 }
 
 auto emitter::coerce_constexpr_int(value v, sema::type& target, ast::node_id at) -> value {
-    if (const auto folded{folded_int(v)};
-        folded && !sema::constexpr_int_fits(*folded, target, target_ptr_bits_)) {
-        ctx_.diags.emplace_back(fmt::format("integer literal is out of range for type '{}'",
-                                            sema::type_kind_display_name(target)),
+    const auto folded{folded_int(v)};
+    if (folded && !sema::constexpr_int_fits(*folded, target, target_ptr_bits_)) {
+        ctx_.diags.emplace_back(v.type && v.type->get_kind() == sema::type_kind::CONSTEXPR_INT
+                                    ? fmt::format("integer literal is out of range for type '{}'",
+                                                  sema::type_kind_display_name(target))
+                                    : fmt::format("integer value {} is out of range for type '{}'",
+                                                  *folded,
+                                                  sema::type_kind_display_name(target)),
                                 sema::error::LITERAL_OUT_OF_RANGE,
                                 active_ast().location_of(at));
+    }
+    if (folded) {
+        const auto effective_bits{[this](const sema::type& t) noexcept -> u32 {
+            switch (t.get_kind()) {
+            case sema::type_kind::INT:   return sema::int_width(t);
+            case sema::type_kind::ISIZE:
+            case sema::type_kind::USIZE: return target_ptr_bits_;
+            default:                     return 0;
+            }
+        }};
+        const auto bits{effective_bits(target)};
+        if (sema::is_unsigned_integer(target)) {
+            if (bits > 64) {
+                v.data = static_cast<u128>(*folded);
+            } else {
+                v.data = static_cast<u64>(static_cast<u128>(*folded));
+            }
+        } else if (sema::is_signed_integer(target)) {
+            if (bits > 64) {
+                v.data = *folded;
+            } else {
+                v.data = static_cast<i64>(*folded);
+            }
+        }
     }
     v.type.emplace(target);
     return v;
@@ -578,8 +606,27 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, const sema::type& dest
         return value{val.data, concrete};
     }
 
-    // A numeric value narrower than the destination widens implicitly (`iW`->`iV`, `f32`->`f64`,
-    // ...)
+    // A compile-time known integer that provably fits dest_type coerces implicitly
+    if (val.type && sema::is_integer(val.type->get_kind()) &&
+        sema::is_integer(dest_type.get_kind()) &&
+        !sema::is_same_unqualified(*val.type, dest_type)) {
+        auto  folded{folded_int(val)};
+        value v{val};
+        if (!folded) {
+            if (const auto cv{const_eval_.try_eval(*expr_id)}) {
+                if (const auto k{cv->as_int_opt()}) {
+                    folded = k;
+                    v      = cv->to_gir_value();
+                }
+            }
+        }
+        if (folded) {
+            auto& concrete{const_cast<sema::type&>(dest_type)};
+            return coerce_constexpr_int(v, concrete, *expr_id);
+        }
+    }
+
+    // A numeric value narrower than dest widens implicitly (`iW`->`iV`, `f32`->`f64`, ...)
     if (val.type && sema::is_numeric(dest_type.get_kind()) &&
         sema::is_numeric(val.type->get_kind()) &&
         !sema::is_same_unqualified(*val.type, dest_type) &&
@@ -680,10 +727,17 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
             if (cv->is<const_struct>() || cv->is<const_array>() || cv->is<const_union>()) {
                 const_init.emplace(std::move(*cv));
             } else {
-                init_val.emplace(cv->to_gir_value());
+                auto v{cv->to_gir_value()};
+                if (decl.explicit_type && v.type &&
+                    (sema::is_integer(v.type->get_kind()) ||
+                     v.type->get_kind() == sema::type_kind::CONSTEXPR_INT) &&
+                    sema::is_integer(sema_type->get_kind())) {
+                    v = coerce_constexpr_int(v, *sema_type, *decl.value);
+                }
+                init_val.emplace(v);
             }
         } else if (!is_const) {
-            init_val.emplace(emit_expression(*decl.value));
+            init_val.emplace(emit_coerced_expr(*decl.value, *sema_type));
         }
     }
     auto& g{gir_module_.add_global(global_gir_name,
@@ -1460,7 +1514,8 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
             auto bound{cv->to_gir_value()};
             // `const x: iN = <constexpr literal>` : range-check and pin the concrete type.
             if (decl.explicit_type && bound.type &&
-                bound.type->get_kind() == sema::type_kind::CONSTEXPR_INT &&
+                (sema::is_integer(bound.type->get_kind()) ||
+                 bound.type->get_kind() == sema::type_kind::CONSTEXPR_INT) &&
                 sema::is_integer(sema_type->get_kind())) {
                 bound = coerce_constexpr_int(bound, *sema_type, *decl.value);
             }
@@ -1480,10 +1535,15 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         // A non-foldable `const` binds directly to its initializer's value, bypassing the
         // store-typecheck a `var` alloca would get; re-check the annotated type here.
         if (decl.explicit_type && val.type && !sema::is_assignable(*val.type, *sema_type)) {
+            const auto reason{sema::cast_rejection_reason(*val.type, *sema_type, target_ptr_bits_)};
             ctx_.diags.emplace_back(
-                fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
-                            sema::type_kind_display_name(*val.type),
-                            sema::type_kind_display_name(*sema_type)),
+                reason ? fmt::format("Type mismatch in store: cannot assign '{}' to '{}' ({})",
+                                     sema::type_kind_display_name(*val.type),
+                                     sema::type_kind_display_name(*sema_type),
+                                     *reason)
+                       : fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
+                                     sema::type_kind_display_name(*val.type),
+                                     sema::type_kind_display_name(*sema_type)),
                 sema::error::TYPE_MISMATCH,
                 active_ast().location_of(*decl.value));
         }
@@ -1955,13 +2015,18 @@ auto emitter::emit_packed_bits_extract(
 
     const auto kind{field_type.get_kind()};
     if (kind == sema::type_kind::INT) {
-        return value{builder_.emit_cast(instruction_kind::WIDEN_CAST, shifted, field_type),
-                     field_type};
+        const auto src_bits{sema::int_width(backing_ty)};
+        const auto dst_bits{sema::int_width(field_type)};
+        const auto ckind{dst_bits < src_bits ? instruction_kind::TRUNC_CAST
+                                             : instruction_kind::WIDEN_CAST};
+        return value{builder_.emit_cast(ckind, shifted, field_type), field_type};
     }
 
     auto&       fbits_uint{ctx_.get_int(static_cast<u16>(fbits), false)};
-    const value narrowed{builder_.emit_cast(instruction_kind::WIDEN_CAST, shifted, fbits_uint),
-                         fbits_uint};
+    const auto  src_bits{sema::int_width(backing_ty)};
+    const auto  ckind{static_cast<u32>(fbits) < src_bits ? instruction_kind::TRUNC_CAST
+                                                         : instruction_kind::WIDEN_CAST};
+    const value narrowed{builder_.emit_cast(ckind, shifted, fbits_uint), fbits_uint};
     if (sema::is_float(kind) || kind == sema::type_kind::BOOL || kind == sema::type_kind::STRUCT ||
         kind == sema::type_kind::UNION) {
         // `bool` is `i1`, a nested `packed` aggregate is its own `iN`: reinterpret the bits.
@@ -1973,8 +2038,8 @@ auto emitter::emit_packed_bits_extract(
                      field_type};
     }
     // enum / usize / isize: the field-width integer is the value.
-    return value{builder_.emit_cast(instruction_kind::WIDEN_CAST, narrowed, field_type),
-                 field_type};
+    if (is_same_unqualified(fbits_uint, field_type)) { return narrowed; }
+    return value{builder_.emit_cast(instruction_kind::BIT_CAST, narrowed, field_type), field_type};
 }
 
 auto emitter::emit_packed_field_write(value                        backing_addr,
@@ -2020,9 +2085,23 @@ auto emitter::emit_packed_bits_merge(
             value{builder_.emit_cast(instruction_kind::INT_FROM_PTR, new_field_val, fbits_uint),
                   fbits_uint};
     } else {
-        as_fbits =
-            value{builder_.emit_cast(instruction_kind::WIDEN_CAST, new_field_val, fbits_uint),
-                  fbits_uint};
+        const auto val_bits{
+            new_field_val.type
+                ? sema::packed_field_bits(*new_field_val.type, target_ptr_bits_).value_or(fbits)
+                : fbits};
+        if (static_cast<u32>(fbits) < val_bits) {
+            as_fbits =
+                value{builder_.emit_cast(instruction_kind::TRUNC_CAST, new_field_val, fbits_uint),
+                      fbits_uint};
+        } else if (static_cast<u32>(fbits) > val_bits) {
+            as_fbits =
+                value{builder_.emit_cast(instruction_kind::WIDEN_CAST, new_field_val, fbits_uint),
+                      fbits_uint};
+        } else if (new_field_val.type && !is_same_unqualified(*new_field_val.type, fbits_uint)) {
+            as_fbits =
+                value{builder_.emit_cast(instruction_kind::BIT_CAST, new_field_val, fbits_uint),
+                      fbits_uint};
+        }
     }
 
     const value zexted{builder_.emit_cast(instruction_kind::WIDEN_CAST, as_fbits, backing_ty),
@@ -2294,33 +2373,27 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
     if (syntax::get_builtin_opt(fn_token)) {
         switch (fn_token) {
         case syntax::token_type_t::BUILTIN_AS:
+        case syntax::token_type_t::BUILTIN_INT_CAST:
+        case syntax::token_type_t::BUILTIN_TRUNCATE:
+        case syntax::token_type_t::BUILTIN_INT_FROM_BOOL:
         case syntax::token_type_t::BUILTIN_BIT_CAST:
         case syntax::token_type_t::BUILTIN_PTR_CAST:
-        case syntax::token_type_t::BUILTIN_ALIGN_CAST: {
-            if (call.arguments.size() >= 2) {
-                if (const auto op_expr{call.arguments[1].as_opt<ast::expr_handle>()}) {
+        case syntax::token_type_t::BUILTIN_ALIGN_CAST:    {
+            const bool is_one_arg{call.arguments.size() == 1};
+            if (is_one_arg || call.arguments.size() >= 2) {
+                const auto op_arg_idx{is_one_arg ? 0UZ : 1UZ};
+                if (const auto op_expr{call.arguments[op_arg_idx].as_opt<ast::expr_handle>()}) {
                     const auto operand{emit_expression(*op_expr)};
 
-                    // `@as(bool, x)` tests a pointer or integer against its zero value.
-                    if (fn_token == syntax::token_type_t::BUILTIN_AS &&
-                        ret_type.get_kind() == sema::type_kind::BOOL && operand.type) {
-                        const auto operand_kind{operand.type->get_kind()};
-                        if (operand_kind == sema::type_kind::POINTER) {
-                            return pointer_to_bool(operand, false);
-                        }
-                        if (sema::is_integer(operand_kind) ||
-                            sema::is_constexpr_int(operand_kind)) {
-                            auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
-                            return value{builder_.emit_binary(instruction_kind::NE,
-                                                              operand,
-                                                              value{u64{0}, *operand.type},
-                                                              bool_type),
-                                         bool_type};
-                        }
-                    }
-
                     auto cast_kind{instruction_kind::WIDEN_CAST};
-                    if (fn_token == syntax::token_type_t::BUILTIN_BIT_CAST) {
+                    if (fn_token == syntax::token_type_t::BUILTIN_INT_CAST) {
+                        cast_kind = instruction_kind::INT_CAST;
+                        emit_int_cast_guard(operand, ret_type, *op_expr);
+                    } else if (fn_token == syntax::token_type_t::BUILTIN_TRUNCATE) {
+                        cast_kind = instruction_kind::TRUNC_CAST;
+                    } else if (fn_token == syntax::token_type_t::BUILTIN_INT_FROM_BOOL) {
+                        cast_kind = instruction_kind::INT_CAST;
+                    } else if (fn_token == syntax::token_type_t::BUILTIN_BIT_CAST) {
                         cast_kind = instruction_kind::BIT_CAST;
                     } else if (fn_token == syntax::token_type_t::BUILTIN_PTR_CAST ||
                                fn_token == syntax::token_type_t::BUILTIN_ALIGN_CAST) {
@@ -2330,6 +2403,23 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                     value      result{dest, ret_type};
                     emit_enum_cast_guard(id, result, operand, *op_expr);
                     return result;
+                }
+            }
+            break;
+        }
+        case syntax::token_type_t::BUILTIN_BOOL_FROM_INT: {
+            if (!call.arguments.empty()) {
+                if (const auto op_expr{call.arguments[0].as_opt<ast::expr_handle>()}) {
+                    const auto operand{emit_expression(*op_expr)};
+                    if (operand.type && operand.type->get_kind() == sema::type_kind::POINTER) {
+                        return pointer_to_bool(operand, false);
+                    }
+                    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+                    auto& op_type{operand.type ? *operand.type : ctx_.get_int(64, false)};
+                    return value{
+                        builder_.emit_binary(
+                            instruction_kind::NE, operand, value{u64{0}, op_type}, bool_type),
+                        bool_type};
                 }
             }
             break;
@@ -2633,7 +2723,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         }
         case syntax::token_type_t::BUILTIN_CLZ:
         case syntax::token_type_t::BUILTIN_CTZ:
-        case syntax::token_type_t::BUILTIN_POP_COUNT:
+        case syntax::token_type_t::BUILTIN_POPCOUNT:
         case syntax::token_type_t::BUILTIN_ABS:
         case syntax::token_type_t::BUILTIN_MIN:
         case syntax::token_type_t::BUILTIN_MAX:
@@ -4152,6 +4242,128 @@ auto emitter::emit_enum_cast_guard(ast::node_id     site,
 
     builder_.set_segment(bad_seg);
     emit_panic_call("invalid enum value", site);
+    builder_.set_segment(ok_seg);
+}
+
+auto emitter::emit_int_cast_guard(value operand, const sema::type& dest_type, ast::node_id site)
+    -> void {
+    PROFILE_FUNCTION();
+    if (!operand.type) {
+        if (const auto st{active_mod().get_sema_type_opt(site)}) { operand.type.emplace(*st); }
+    }
+    if (!operand.type) { return; }
+
+    // If the expression const-evaluates, check at compile time
+    if (const auto cv{const_eval_.try_eval(site)}) {
+        if (const auto known{cv->as_int_opt()}) {
+            if (!sema::constexpr_int_fits(*known, dest_type, target_ptr_bits_)) {
+                ctx_.diags.emplace_back(
+                    fmt::format("Integer value {} is out of range for target type '{}' in @intCast",
+                                *known,
+                                sema::type_kind_display_name(dest_type)),
+                    sema::error::CONSTEXPR_EVALUATION_FAILED,
+                    active_ast().location_of(site));
+            }
+            return;
+        }
+    } else if (const auto folded{folded_int(operand)}) {
+        if (!sema::constexpr_int_fits(*folded, dest_type, target_ptr_bits_)) {
+            ctx_.diags.emplace_back(
+                fmt::format("Integer value {} is out of range for target type '{}' in @intCast",
+                            *folded,
+                            sema::type_kind_display_name(dest_type)),
+                sema::error::CONSTEXPR_EVALUATION_FAILED,
+                active_ast().location_of(site));
+        }
+        return;
+    }
+
+    if (!runtime_safety_) { return; }
+
+    auto fn_opt{builder_.get_function()};
+    if (!fn_opt) { return; }
+
+    const auto get_info{[this](const sema::type& t) -> stdx::option<std::pair<u16, bool>> {
+        switch (t.get_kind()) {
+        case sema::type_kind::INT:   return std::pair{sema::int_width(t), sema::is_signed_integer(t)};
+        case sema::type_kind::ISIZE: return std::pair{static_cast<u16>(target_ptr_bits_), true};
+        case sema::type_kind::USIZE: return std::pair{static_cast<u16>(target_ptr_bits_), false};
+        default:                     return stdx::none;
+        }
+    }};
+
+    const auto from_info{get_info(*operand.type)};
+    const auto to_info{get_info(dest_type)};
+    if (!from_info || !to_info) { return; }
+
+    const auto from_bits{from_info->first};
+    const auto from_signed{from_info->second};
+    const auto to_bits{to_info->first};
+    const auto to_signed{to_info->second};
+
+    auto&               bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    stdx::option<value> is_valid;
+
+    if (from_signed && to_signed) {
+        if (from_bits > to_bits) {
+            const i128  min_to{-(i128{1} << (to_bits - 1))};
+            const i128  max_to{(i128{1} << (to_bits - 1)) - 1};
+            const value min_val{from_bits > 64 ? value{min_to, *operand.type}
+                                               : value{static_cast<i64>(min_to), *operand.type}};
+            const value max_val{from_bits > 64 ? value{max_to, *operand.type}
+                                               : value{static_cast<i64>(max_to), *operand.type}};
+            const auto  ge{builder_.emit_binary(instruction_kind::GE, operand, min_val, bool_type)};
+            const auto  le{builder_.emit_binary(instruction_kind::LE, operand, max_val, bool_type)};
+            is_valid.emplace(
+                builder_.emit_binary(
+                    instruction_kind::AND, value{ge, bool_type}, value{le, bool_type}, bool_type),
+                bool_type);
+        }
+    } else if (!from_signed && !to_signed) {
+        if (from_bits > to_bits) {
+            const u128  max_to{(u128{1} << to_bits) - 1};
+            const value max_val{from_bits > 64 ? value{max_to, *operand.type}
+                                               : value{static_cast<u64>(max_to), *operand.type}};
+            const auto  le{builder_.emit_binary(instruction_kind::LE, operand, max_val, bool_type)};
+            is_valid.emplace(le, bool_type);
+        }
+    } else if (from_signed && !to_signed) {
+        const value zero_val{from_bits > 64 ? value{i128{0}, *operand.type}
+                                            : value{i64{0}, *operand.type}};
+        const auto  ge_zero{
+            builder_.emit_binary(instruction_kind::GE, operand, zero_val, bool_type)};
+        if (from_bits > to_bits) {
+            const u128  max_to{(u128{1} << to_bits) - 1};
+            const value max_val{from_bits > 64 ? value{static_cast<i128>(max_to), *operand.type}
+                                               : value{static_cast<i64>(max_to), *operand.type}};
+            const auto  le{builder_.emit_binary(instruction_kind::LE, operand, max_val, bool_type)};
+            is_valid.emplace(builder_.emit_binary(instruction_kind::AND,
+                                                  value{ge_zero, bool_type},
+                                                  value{le, bool_type},
+                                                  bool_type),
+                             bool_type);
+        } else {
+            is_valid.emplace(ge_zero, bool_type);
+        }
+    } else { // !from_signed && to_signed
+        if (from_bits >= to_bits) {
+            const u128  max_to{(u128{1} << (to_bits - 1)) - 1};
+            const value max_val{from_bits > 64 ? value{max_to, *operand.type}
+                                               : value{static_cast<u64>(max_to), *operand.type}};
+            const auto  le{builder_.emit_binary(instruction_kind::LE, operand, max_val, bool_type)};
+            is_valid.emplace(le, bool_type);
+        }
+    }
+
+    if (!is_valid) { return; }
+
+    auto& fn{*fn_opt};
+    auto& ok_seg{fn.add_segment()};
+    auto& bad_seg{fn.add_segment()};
+    builder_.emit_cond_goto(*is_valid, ok_seg.get_id(), bad_seg.get_id());
+
+    builder_.set_segment(bad_seg);
+    emit_panic_call("integer value out of range for target type", site);
     builder_.set_segment(ok_seg);
 }
 

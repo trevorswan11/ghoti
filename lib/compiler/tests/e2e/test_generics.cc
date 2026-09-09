@@ -48,7 +48,7 @@ TEST_CASE("a static member fn returning its own struct type (with an array field
                 l.len = 7uz;
                 return l;
             };
-            const size := fn(^self): i32 { return @as(i32, self.len); };
+            const size := fn(^self): i32 { return @intCast(i32, self.len); };
         };
 
         pub const main := fn(): i32 {
@@ -68,7 +68,7 @@ TEST_CASE("a generic fn's body-local `const` decls are re-typed for each instant
         pub const main := fn(): i32 {
             const a := dup(i32, 10);
             const b := dup(u8, 5u8);
-            return a + @as(i32, b);
+            return a + @intCast(i32, b);
         };
     )") == 15);
 }

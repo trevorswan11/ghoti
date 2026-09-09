@@ -37,7 +37,7 @@ TEST_CASE("previously compile-time-only integer bit builtins now lower at runtim
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             var x: u32 = 16u32;
-            return @as(i32, @clz(x)) + @as(i32, @ctz(x)) + @as(i32, @popCount(x)) + @abs(-9);
+            return @intCast(i32, @clz(x)) + @intCast(i32, @ctz(x)) + @intCast(i32, @popCount(x)) + @abs(-9);
         };
     )") == 27 + 4 + 1 + 9);
 }

@@ -73,7 +73,7 @@ TEST_CASE("E2E: `@tagName` of a cross-module enum with explicit values reports t
             pub const main := fn(): i32 {
                 const v: c.Color = .green;
                 const s := @tagName(v);
-                return @as(i32, s.len) * 10 + @as(i32, s[0]);
+                return @intCast(i32, s.len) * 10 + @as(i32, s[0]);
             };
         )",
         {helpers::mock_file{"c.gh", mod, "c"}})};

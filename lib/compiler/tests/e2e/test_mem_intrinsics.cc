@@ -22,7 +22,7 @@ TEST_CASE("@memcpy scales the byte length by the element size") {
             var dst := [3uz]mut u32{ 0, 0, 0 };
             const src := [3uz]u32{ 1, 2, 3 };
             @memcpy(dst[0..3], src[0..3]);
-            return @as(i32, dst[0]) + @as(i32, dst[1]) + @as(i32, dst[2]);
+            return @intCast(i32, dst[0]) + @intCast(i32, dst[1]) + @intCast(i32, dst[2]);
         };
     )") == 6);
 }

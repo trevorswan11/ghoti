@@ -1604,6 +1604,8 @@ auto llvm_lowering::lower_instruction(const gir::instruction& inst) -> void {
     case gir::instruction_kind::GT:
     case gir::instruction_kind::GE:              result_val = emit_comparison(inst); break;
     case gir::instruction_kind::WIDEN_CAST:
+    case gir::instruction_kind::INT_CAST:
+    case gir::instruction_kind::TRUNC_CAST:
     case gir::instruction_kind::BIT_CAST:
     case gir::instruction_kind::PTR_CAST:
     case gir::instruction_kind::INT_FROM_PTR:
@@ -1955,6 +1957,9 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
 
     auto* src_ty{val->getType()};
     switch (inst.kind) {
+    case gir::instruction_kind::INT_CAST:
+        return builder_.CreateIntCast(val, target_ty, is_signed_type(inst));
+    case gir::instruction_kind::TRUNC_CAST: return builder_.CreateTrunc(val, target_ty, "trunc");
     case gir::instruction_kind::WIDEN_CAST: {
         const bool src_is_flt{src_ty->isFloatingPointTy()};
         const bool dst_is_flt{target_ty->isFloatingPointTy()};
@@ -2342,7 +2347,14 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (auto* val{lower_value(inst.operands[0])}) {
                 auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
                     llvm_module_.get(), llvm::Intrinsic::ctlz, {val->getType()})};
-                return builder_.CreateCall(fn, {val, builder_.getInt1(false)});
+                auto* res{builder_.CreateCall(fn, {val, builder_.getInt1(false)})};
+                if (inst.type) {
+                    if (auto* target_ty{types_.translate(*inst.type)};
+                        target_ty && res->getType() != target_ty) {
+                        return builder_.CreateZExt(res, target_ty);
+                    }
+                }
+                return res;
             }
             return nullptr;
         }
@@ -2351,16 +2363,30 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (auto* val{lower_value(inst.operands[0])}) {
                 auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
                     llvm_module_.get(), llvm::Intrinsic::cttz, {val->getType()})};
-                return builder_.CreateCall(fn, {val, builder_.getInt1(false)});
+                auto* res{builder_.CreateCall(fn, {val, builder_.getInt1(false)})};
+                if (inst.type) {
+                    if (auto* target_ty{types_.translate(*inst.type)};
+                        target_ty && res->getType() != target_ty) {
+                        return builder_.CreateZExt(res, target_ty);
+                    }
+                }
+                return res;
             }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_POP_COUNT: {
+        case syntax::token_type_t::BUILTIN_POPCOUNT: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* val{lower_value(inst.operands[0])}) {
                 auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
                     llvm_module_.get(), llvm::Intrinsic::ctpop, {val->getType()})};
-                return builder_.CreateCall(fn, {val});
+                auto* res{builder_.CreateCall(fn, {val})};
+                if (inst.type) {
+                    if (auto* target_ty{types_.translate(*inst.type)};
+                        target_ty && res->getType() != target_ty) {
+                        return builder_.CreateZExt(res, target_ty);
+                    }
+                }
+                return res;
             }
             return nullptr;
         }

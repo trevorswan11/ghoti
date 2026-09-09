@@ -29,9 +29,11 @@ const f := fn(r: R1): R2 {
     return R2{ .ok = v };
 };
 )",
-            sema::diagnostic{"Type mismatch in store: cannot assign 'i32' to 'bool'",
-                             sema::error::TYPE_MISMATCH,
-                             std::pair{4UZ, 15UZ}});
+            sema::diagnostic{
+                "Type mismatch in store: cannot assign 'i32' to 'bool' (conversion from 'i32' to "
+                "'bool' tests non-zero; use @boolFromInt for an explicit conversion)",
+                sema::error::TYPE_MISMATCH,
+                std::pair{4UZ, 15UZ}});
     }
 }
 

@@ -29,7 +29,7 @@ pub const SEEK_CUR: i32 = 1; /// set the file offset to current + `offset`
 pub const SEEK_END: i32 = 2; /// set the file offset to EOF + `offset`
 
 /// `openat`/`mkdirat`/... resolve a relative path against the cwd when the dirfd is `AT_FDCWD`.
-pub const AT_FDCWD: usize = @as(usize, -100); // `(int)-100` reinterpreted as a register-wide unsigned
+pub const AT_FDCWD: usize = @bitCast(usize, -100z); // `(int)-100` reinterpreted as a register-wide unsigned
 
 // <linux/fcntl.h> / <linux/stat.h> — flags and masks for the *at() / statx calls.
 pub const AT_SYMLINK_NOFOLLOW: usize = 0x100uz; /// do not follow a trailing symlink
@@ -278,13 +278,13 @@ pub const MAP_ANONYMOUS: usize = 0x20uz; /// the mapping is not backed by any fi
 
 /// A raw return in `-4095..=-1` is `-errno`; every other value is success.
 const failed := fn(ret: usize): bool {
-    const s := @as(isize, ret);
+    const s := @bitCast(isize, ret);
     return s < 0 and s >= -4095;
 };
 
 /// Negate a failed raw return into its `Errno`.
 const to_errno := fn(ret: usize): Errno {
-    return @as(Errno, @as(i32, -@as(isize, ret)));
+    return @as(Errno, @intCast(i32, -@bitCast(isize, ret)));
 };
 
 constexpr R := fn(T: type): type {
@@ -373,15 +373,15 @@ pub const open := fn(path: [:0]u8, flags: i32, mode: mode_t): R(Handle) {
         NR_openat,
         AT_FDCWD,
         @intFromPtr(path.ptr),
-        @as(usize, flags),
+        @bitCast(usize, @as(isize, flags)),
         @as(usize, mode),
     );
-    return if (failed(ret)) .{ .err = to_errno(ret) } else .{ .ok = @as(Handle, @as(isize, ret)) };
+    return if (failed(ret)) .{ .err = to_errno(ret) } else .{ .ok = @intCast(Handle, ret) };
 };
 
 /// Close the file associated with the given handle
 pub const close := fn(h: Handle): R(void) {
-    const ret := syscall1(NR_close, @as(usize, h));
+    const ret := syscall1(NR_close, @intCast(usize, h));
     return if (failed(ret)) .{ .err = to_errno(ret) } else .{ .ok = {} };
 };
 
@@ -390,8 +390,13 @@ pub const close := fn(h: Handle): R(void) {
 /// - If `whence` is `SEEK_CUR`, the offset is set to its current location plus `off` bytes.
 /// - If `whence` is `SEEK_END`, the offset is set to the size of the file plus `off` bytes.
 pub const lseek := fn(h: Handle, off: i64, whence: i32): R(i64) {
-    const ret := syscall3(NR_lseek, @as(usize, h), @as(usize, off), @as(usize, whence));
-    return if (failed(ret)) .{ .err = to_errno(ret) } else .{ .ok = @as(i64, @as(isize, ret)) };
+    const ret := syscall3(
+        NR_lseek,
+        @intCast(usize, h),
+        @bitCast(usize, off),
+        @intCast(usize, whence),
+    );
+    return if (failed(ret)) .{ .err = to_errno(ret) } else .{ .ok = @bitCast(i64, ret) };
 };
 
 /// Fill `out` from a `statx` call. `dirfd`/`path`/`flags` select the target:
@@ -422,7 +427,7 @@ pub const stat := fn(path: [:0]u8): R(Stat) {
 pub const fstat := fn(h: Handle): R(Stat) {
     var s: Statx = undefined;
     const empty: [:0]u8 = "";
-    return match (statx_into(@as(usize, h), empty, AT_EMPTY_PATH, ^mut s)) {
+    return match (statx_into(@intCast(usize, h), empty, AT_EMPTY_PATH, ^mut s)) {
         .ok => .{ .ok = s },
         .err => |e| .{ .err = e },
     };
@@ -445,7 +450,7 @@ pub const alloc := fn(len: usize): R(^mut u8) {
         len,
         PROT_READ | PROT_WRITE,
         MAP_PRIVATE | MAP_ANONYMOUS,
-        @as(usize, -1),
+        @bitCast(usize, -1z),
         0uz,
     );
     return if (failed(ret)) .{ .err = to_errno(ret) } else .{ .ok = @ptrFromInt(^mut u8, ret) };

@@ -20,7 +20,7 @@ TEST_CASE("@embed builtin reads file contents at compile-time") {
     const auto source{fmt::format(R"(
         pub const main := fn(): i32 {{
             const data := @embed("{}");
-            return @as(i32, data.len);
+            return @intCast(i32, data.len);
         }};
     )",
                                   embedded.path.generic_string())};
@@ -39,7 +39,7 @@ TEST_CASE("multiple @embed calls use in-memory cache") {
         pub const main := fn(): i32 {{
             const a := @embed("{}");
             const b := @embed("{}");
-            return @as(i32, a.len) + @as(i32, b.len);
+            return @intCast(i32, a.len) + @intCast(i32, b.len);
         }};
     )",
                                   path_str,

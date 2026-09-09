@@ -40,7 +40,7 @@ TEST_CASE("narrow integers widen implicitly at call sites and returns") {
             const s: i8 = 7;
             const w: i16 = 9;
             const summed := bump(s) + bump(w);                  // i64: 8 + 10 = 18
-            return @as(i32, summed) + @as(i32, as_isize(s));    // 18 + 7 = 25
+            return @intCast(i32, summed) + @intCast(i32, as_isize(s));    // 18 + 7 = 25
         };
     )") == 25);
 }

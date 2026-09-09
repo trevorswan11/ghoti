@@ -100,7 +100,7 @@ pub const PROT_READ: i32 = 0x1; /// pages can be read
 pub const PROT_WRITE: i32 = 0x2; /// pages can be written
 pub const MAP_PRIVATE: i32 = 0x0002; /// changes are private (copy-on-write)
 pub const MAP_ANON: i32 = 0x1000; /// allocate from anonymous virtual memory
-const MAP_FAILED: ^mut opaque = @ptrFromInt(^mut opaque, @as(usize, -1)); // ((void *)-1)
+const MAP_FAILED: ^mut opaque = @ptrFromInt(^mut opaque, @bitCast(usize, -1z)); // ((void *)-1)
 
 extern("System", "mmap") const sys_mmap: fn(
     addr: ^mut opaque,
@@ -131,13 +131,13 @@ pub constexpr stderr := fn(): R(Handle) {
 /// Write the contents of `buf` to the file, returning the number of written bytes
 pub const write := fn(h: Handle, buf: []u8): R(usize) {
     const r := sys_write(h, buf.ptr, buf.len);
-    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = @as(usize, r) };
+    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = @intCast(usize, r) };
 };
 
 /// Read the contents of the file into `buf`, returning the number of read bytes
 pub const read := fn(h: Handle, buf: []mut u8): R(usize) {
     const r := sys_read(h, buf.ptr, buf.len);
-    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = @as(usize, r) };
+    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = @intCast(usize, r) };
 };
 
 /// Open the file at the provided path with the desired flag and mode

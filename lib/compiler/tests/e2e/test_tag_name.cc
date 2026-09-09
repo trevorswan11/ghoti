@@ -1,4 +1,4 @@
-﻿#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 #include "helpers/codegen.hh"
 
@@ -9,7 +9,7 @@ TEST_CASE("`@tagName` folds at compile time for a constexpr enum value") {
         const Color := enum { red, green, blue };
         pub const main := fn(): i32 {
             const s := @tagName(Color.green);
-            return @as(i32, s.len) + @as(i32, s[0]);
+            return @intCast(i32, s.len) + @as(i32, s[0]);
         };
     )") == (5 + 'g'));
 }
@@ -20,7 +20,7 @@ TEST_CASE("`@tagName` dispatches at runtime for a non-constant enum value") {
         const name_of := fn(c: Color): []u8 { return @tagName(c); };
         pub const main := fn(): i32 {
             const s := name_of(.blue);
-            return @as(i32, s.len) + @as(i32, s[0]);
+            return @intCast(i32, s.len) + @as(i32, s[0]);
         };
     )") == (4 + 'b'));
 }
@@ -32,7 +32,7 @@ TEST_CASE("`@tagName` runtime dispatch honors explicit, non-positional discrimin
         const name_of := fn(l: Level): []u8 { return @tagName(l); };
         pub const main := fn(): i32 {
             const s := name_of(to_level(30));
-            return @as(i32, s.len) + @as(i32, s[0]);
+            return @intCast(i32, s.len) + @as(i32, s[0]);
         };
     )") == (4 + 'h'));
 }
@@ -44,7 +44,7 @@ TEST_CASE(
         const make := fn(v: i32): Status { return @as(Status, v); };
         pub const main := fn(): i32 {
             const s := @tagName(make(99));   // 99 matches no listed variant
-            return @as(i32, s.len) + @as(i32, s[0]);
+            return @intCast(i32, s.len) + @as(i32, s[0]);
         };
     )") == (1 + '_'));
 }
@@ -55,7 +55,7 @@ TEST_CASE("`@tagName` of a non-exhaustive enum reports a variant's real name whe
         const make := fn(v: i32): Status { return @as(Status, v); };
         pub const main := fn(): i32 {
             const s := @tagName(make(2));
-            return @as(i32, s.len) + @as(i32, s[0]);
+            return @intCast(i32, s.len) + @as(i32, s[0]);
         };
     )") == (4 + 'f'));
 }
@@ -67,7 +67,7 @@ TEST_CASE("`@tagName` of a tagged union reports the currently-active field's nam
         pub const main := fn(): i32 {
             var u := U{ .count = 5 };
             const s := active_name(u);
-            return @as(i32, s.len) + @as(i32, s[0]);
+            return @intCast(i32, s.len) + @as(i32, s[0]);
         };
     )") == (5 + 'c'));
 }
@@ -79,7 +79,7 @@ TEST_CASE("`@tagName` of a tagged union tracks a field reassigned through a dire
             var u := U{ .a = 1 };
             u.b = 2;   // re-tags u as active field 'b'
             const s := @tagName(u);
-            return @as(i32, s.len) + @as(i32, s[0]);
+            return @intCast(i32, s.len) + @as(i32, s[0]);
         };
     )") == (1 + 'b'));
 }
@@ -89,7 +89,7 @@ TEST_CASE("`@tagName` folds for a raw-identifier enum variant") {
         const Kw := enum { @"struct", @"fn", plain };
         pub const main := fn(): i32 {
             const s := @tagName(Kw.@"fn");
-            return @as(i32, s.len) + @as(i32, s[0]);   // "fn"
+            return @intCast(i32, s.len) + @as(i32, s[0]);   // "fn"
         };
     )") == (2 + 'f'));
 }
@@ -100,7 +100,7 @@ TEST_CASE("`@tagName` dispatches at runtime for a raw-identifier enum variant") 
         const name_of := fn(k: Kw): []u8 { return @tagName(k); };
         pub const main := fn(): i32 {
             const s := name_of(.@"struct");
-            return @as(i32, s.len) + @as(i32, s[0]);   // "struct"
+            return @intCast(i32, s.len) + @as(i32, s[0]);   // "struct"
         };
     )") == (6 + 's'));
 }
@@ -112,7 +112,7 @@ TEST_CASE("`@tagName` of a tagged union reports a raw-identifier field name") {
         pub const main := fn(): i32 {
             var u := U{ .@"match" = 7 };
             const s := active(u);
-            return @as(i32, s.len) + @as(i32, s[0]);   // "match"
+            return @intCast(i32, s.len) + @as(i32, s[0]);   // "match"
         };
     )") == (5 + 'm'));
 }
@@ -123,7 +123,7 @@ TEST_CASE("`@tagName` folds for a raw-identifier tagged-union field") {
         pub const main := fn(): i32 {
             const u := U{ .@"union" = 3 };
             const s := @tagName(u);
-            return @as(i32, s.len) + @as(i32, s[0]);   // "union"
+            return @intCast(i32, s.len) + @as(i32, s[0]);   // "union"
         };
     )") == (5 + 'u'));
 }

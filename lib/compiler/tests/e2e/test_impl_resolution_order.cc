@@ -279,7 +279,7 @@ TEST_CASE(
                 var s := m.Sink{ .total = 0 };
                 const buf := [3uz]u8{ 1, 2, 3 };
                 _ = s.writeAll(buf);
-                return @as(i32, s.total);
+                return @intCast(i32, s.total);
             };
         )",
         {
@@ -332,7 +332,7 @@ TEST_CASE("E2E: one inherited cross-module default method calls another through 
                 var s := m.Sink{ .total = 0 };
                 _ = s.writeByte('x');
                 _ = s.writeByte('y');
-                return @as(i32, s.total);
+                return @intCast(i32, s.total);
             };
         )",
         {
@@ -404,7 +404,7 @@ TEST_CASE("E2E: a second impl of the same interface still inherits its default m
                 var out: [4]mut u8 = undefined;
                 const en := match (e.readAll(out[..])) { .ok => |n| n, .err => 0uz };
                 const ln := match (l.readAll(out[..])) { .ok => |n| n, .err => 0uz };
-                return @as(i32, en + ln);
+                return @intCast(i32, en + ln);
             };
         )",
         {
@@ -429,7 +429,7 @@ TEST_CASE("E2E: two instantiations of a nested `fn(...): type` constructor stay 
         pub const main := fn(): i32 {
             const a := match (get_num()) { .ok => |n| n, .err => 0uz };
             const b := match (get_stat()) { .ok => |s| s.size(), .err => 0u64 };
-            return @as(i32, a) + @as(i32, b);
+            return @intCast(i32, a) + @intCast(i32, b);
         };
     )")};
     CHECK(exit_code == 42);

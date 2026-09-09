@@ -61,6 +61,8 @@ enum class instruction_kind : u8 {
 
     // Casts and conversions
     WIDEN_CAST,
+    INT_CAST,
+    TRUNC_CAST,
     BIT_CAST,
     PTR_CAST,
     INT_FROM_PTR,
