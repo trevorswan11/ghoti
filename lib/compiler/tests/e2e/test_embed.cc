@@ -23,7 +23,7 @@ TEST_CASE("@embed builtin reads file contents at compile-time") {
             return @as(i32, data.len);
         }};
     )",
-                                  embedded.path.string())};
+                                  embedded.path.generic_string())};
     CHECK(helpers::compile_and_run(source) == 25);
 }
 
@@ -33,7 +33,7 @@ TEST_CASE("multiple @embed calls use in-memory cache") {
         std::ofstream out{embedded.path};
         out << "CacheTestBytes";
     }
-    const auto path_str{embedded.path.string()};
+    const auto path_str{embedded.path.generic_string()};
 
     const auto source{fmt::format(R"(
         pub const main := fn(): i32 {{

@@ -389,7 +389,8 @@ TEST_CASE("@embed builtin constant eval in sema") {
         fmt::print(out, "GhotiEmbedData");
     }
 
-    const auto source{fmt::format(R"(const data := @embed("{}");)", embedded.path.string())};
+    const auto source{
+        fmt::format(R"(const data := @embed("{}");)", embedded.path.generic_string())};
     auto [ctx, idx]{helpers::resolve_and_check(source)};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
