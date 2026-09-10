@@ -167,9 +167,9 @@ namespace ghoti::ast {
 
 struct function_expr {
     struct parameter {
-        identifier_handle name;
-        explicit_type_id  explicit_type;
-        bool              is_constexpr{false};
+        discardable_ident_handle name;
+        explicit_type_id         explicit_type;
+        bool                     is_constexpr{false};
     };
 
     // The parameter's `auto` type must infer to a type that implements every interface in

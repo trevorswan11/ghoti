@@ -845,6 +845,13 @@ const b: i32 = 3;
     CHECK(format_source("// file header\nconst a := 1;\n") == "// file header\nconst a := 1;\n");
 }
 
+TEST_CASE("formatter preserves discarded function parameters") {
+    CHECK(format_source("const f := fn(_: i32): void {};\n") ==
+          "const f := fn(_: i32): void {};\n");
+    CHECK(format_source("const f := fn(a: i32, _: bool, _: []u8): void {};\n") ==
+          "const f := fn(a: i32, _: bool, _: []u8): void {};\n");
+}
+
 constexpr std::string_view corpus{
 #include "ast/golden.gh.inc"
 };

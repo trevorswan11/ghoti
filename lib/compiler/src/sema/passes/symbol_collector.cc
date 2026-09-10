@@ -234,9 +234,11 @@ auto symbol_collector::visit(ast::node_id id, const ast::function_expr& fn) -> v
     // The parameter's type should be collected first to prevent self-referential types
     for (const auto& param : fn.parameters) {
         collect(param.explicit_type);
-        const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(param.name)};
-        collecting_.add_identifier_position(param.name);
-        try_declare<symbols::parameter>(ident.name, param);
+        if (param.name.is<ast::identifier_expr>()) {
+            const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(param.name)};
+            collecting_.add_identifier_position(param.name);
+            try_declare<symbols::parameter>(ident.name, param);
+        }
     }
     collect(fn.explicit_return_type);
 

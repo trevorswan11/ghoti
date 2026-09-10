@@ -867,7 +867,10 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
                 parser.advance();
             }
 
-            const identifier_handle name{TRY(identifier_expr::parse(parser))};
+            const auto name{parser.current_token_is(syntax::token_type_t::UNDERSCORE)
+                                ? parser.add_node<discardable_ident_handle, ast::discarded>(
+                                      parser.get_current_token())
+                                : discardable_ident_handle{TRY(identifier_expr::parse(parser))}};
             const auto [param_type, initialized]{TRY(explicit_type::parse_opt_init(parser))};
 
             // There are no default values for parameters, and they must be explicitly typed
@@ -910,6 +913,14 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
 
     // No body: `fn(params): ret` is a function*type value
     if (!parser.peek_token_is(syntax::token_type_t::LBRACE)) {
+        for (const auto& param : parameters) {
+            if (param.name.is<ast::discarded>()) {
+                return make_syntax_err("Function type parameter names cannot be discarded; a "
+                                       "parameter name is required",
+                                       syntax::error::FN_TYPE_PARAMETER_DISCARDED,
+                                       parser.get_location_of(*param.name));
+            }
+        }
         return parser.add_expr<function_expr>(start_token,
                                               self,
                                               std::move(parameters),

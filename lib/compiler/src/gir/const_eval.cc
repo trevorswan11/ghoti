@@ -2308,8 +2308,10 @@ auto const_eval::eval_constexpr_fn(ast::node_id                      call_id,
 
     call_frame frame;
     for (const auto& [param, arg] : std::views::zip(fn_expr.parameters, args)) {
-        const auto& ident{module_->ast.get_as<ast::identifier_expr>(param.name)};
-        frame.bindings.emplace(ident.name, arg);
+        if (param.name.is<ast::identifier_expr>()) {
+            const auto& ident{module_->ast.get_as<ast::identifier_expr>(param.name)};
+            frame.bindings.emplace(ident.name, arg);
+        }
     }
     if (captures) {
         for (const auto& [name, val] : captures->fields) { frame.bindings.emplace(name, val); }

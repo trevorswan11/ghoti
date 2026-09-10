@@ -255,3 +255,4 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Tightened `@as` to reject narrowing, sign changes, and bool/int conversions with actionable diagnostic suggestions
     - Added rich diagnostics for rejected casts explaining why a conversion was rejected and suggesting the appropriate builtin
     - `constexpr`-fits implicit coercion: compile-time integers that provably fit the destination type coerce implicitly, with compile errors on out-of-range values
+- Allow function expressions to discard their parameters at the declaration site rather than needing "_ = param;"

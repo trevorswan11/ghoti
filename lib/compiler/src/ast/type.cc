@@ -44,6 +44,12 @@ auto explicit_function_type::parse(syntax::parser& parser, bool allow_trailing_b
             // Every non-variadic parameter must be named, e.g. `fn(status: i32, done: ^bool):
             // void`, so the type reads clearly and the formatter can round-trip it.
             if (!parser.peek_token_is(syntax::token_type_t::IDENT)) {
+                if (parser.peek_token_is(syntax::token_type_t::UNDERSCORE)) {
+                    return make_syntax_err("Function type parameter names cannot be discarded; a "
+                                           "parameter name is required",
+                                           syntax::error::FN_TYPE_PARAMETER_DISCARDED,
+                                           parser.get_peek_token());
+                }
                 return make_syntax_err(
                     "Function type parameters must be named (e.g. `fn(x: i32): i32`)",
                     syntax::error::FN_TYPE_PARAMETER_UNNAMED,

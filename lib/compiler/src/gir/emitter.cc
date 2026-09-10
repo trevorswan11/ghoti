@@ -244,9 +244,11 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
         usize cx_i{0};
         for (const auto& param : fn_expr.parameters) {
             if (!param.is_constexpr || cx_i >= cx_args->size()) { continue; }
-            const auto& p_name{fn_mod.ast.get_as<ast::identifier_expr>(param.name).name};
-            cx_frame.insert_or_assign(p_name, (*cx_args)[cx_i]);
-            cx_by_name.emplace(p_name, &(*cx_args)[cx_i]);
+            if (param.name.is<ast::identifier_expr>()) {
+                const auto& p_name{fn_mod.ast.get_as<ast::identifier_expr>(param.name).name};
+                cx_frame.insert_or_assign(p_name, (*cx_args)[cx_i]);
+                cx_by_name.emplace(p_name, &(*cx_args)[cx_i]);
+            }
             ++cx_i;
         }
     }
@@ -260,10 +262,14 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
         const scope_guard g{scopes_};
         usize             rt_i{0};
         for (const auto& param : fn_expr.parameters) {
-            const auto& p_name{fn_mod.ast.get_as<ast::identifier_expr>(param.name).name};
+            std::string_view p_name{};
+            if (param.name.is<ast::identifier_expr>()) {
+                p_name = fn_mod.ast.get_as<ast::identifier_expr>(param.name).name;
+            }
 
             // `constexpr` parameters are erased from the signature
             if (param.is_constexpr) {
+                if (p_name.empty()) { continue; }
                 const auto cxit{cx_by_name.find(p_name)};
                 if (cxit == cx_by_name.end()) { continue; }
                 const auto& val{*cxit->second};
@@ -288,26 +294,28 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
 
             auto& arg_type{req.arg_types[rt_i++]};
             auto& p_slot{fn.add_param(std::string{p_name}, *arg_type)};
-            if (arg_type->get_kind() == sema::type_kind::CLOSURE) {
-                // A closure argument arrives by value
-                const auto spilled{spill_to_temporary(value{p_slot.id, *arg_type}, *arg_type)};
+            if (!p_name.empty()) {
+                if (arg_type->get_kind() == sema::type_kind::CLOSURE) {
+                    // A closure argument arrives by value
+                    const auto spilled{spill_to_temporary(value{p_slot.id, *arg_type}, *arg_type)};
+                    scopes_.back().bindings.emplace(p_name,
+                                                    local_binding{
+                                                        .id        = spilled.data.as<local_id>(),
+                                                        .type      = *arg_type,
+                                                        .is_alloca = true,
+                                                        .const_val = stdx::none,
+                                                    });
+                    continue;
+                }
+                const bool p_spilled{arg_type->get_kind() == sema::type_kind::SLICE};
                 scopes_.back().bindings.emplace(p_name,
                                                 local_binding{
-                                                    .id        = spilled.data.as<local_id>(),
+                                                    .id        = p_slot.id,
                                                     .type      = *arg_type,
-                                                    .is_alloca = true,
+                                                    .is_alloca = p_spilled,
                                                     .const_val = stdx::none,
                                                 });
-                continue;
             }
-            const bool p_spilled{arg_type->get_kind() == sema::type_kind::SLICE};
-            scopes_.back().bindings.emplace(p_name,
-                                            local_binding{
-                                                .id        = p_slot.id,
-                                                .type      = *arg_type,
-                                                .is_alloca = p_spilled,
-                                                .const_val = stdx::none,
-                                            });
         }
 
         emit_block(fn_mod.ast.get_as<ast::block_stmt>(fn_expr.body));
@@ -875,15 +883,21 @@ auto emitter::emit_impl_default_method(std::string_view          gir_name,
                                         });
     }
     for (const auto& param : fn_expr.parameters) {
-        const auto& p_ident{active_ast().get_as<ast::identifier_expr>(param.name)};
-        const auto  p_type{active_mod().get_sema_type_opt(param.name)};
+        std::string_view p_name{};
+        if (param.name.is<ast::identifier_expr>()) {
+            p_name = active_ast().get_as<ast::identifier_expr>(param.name).name;
+        }
+        const auto p_type{active_mod().get_sema_type_opt(param.name)};
         if (!p_type) { continue; }
-        auto&      p_slot{fn.add_param(std::string{p_ident.name}, *p_type)};
+        auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
         const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-        scopes_.back().bindings.emplace(
-            p_ident.name,
-            local_binding{
-                .id = p_slot.id, .type = *p_type, .is_alloca = p_spilled, .const_val = stdx::none});
+        if (!p_name.empty()) {
+            scopes_.back().bindings.emplace(p_name,
+                                            local_binding{.id        = p_slot.id,
+                                                          .type      = *p_type,
+                                                          .is_alloca = p_spilled,
+                                                          .const_val = stdx::none});
+        }
     }
 
     emitting_impl_default_scope_.emplace(impl_scope_idx);
@@ -987,20 +1001,24 @@ auto emitter::emit_function(ast::node_id                   id,
     }
 
     for (const auto& param : fn_expr.parameters) {
-        const auto& p_ident{active_ast().get_as<ast::identifier_expr>(param.name)};
-        const auto  p_name{p_ident.name};
-        const auto  p_type{active_mod().get_sema_type_opt(param.name)};
+        std::string_view p_name{};
+        if (param.name.is<ast::identifier_expr>()) {
+            p_name = active_ast().get_as<ast::identifier_expr>(param.name).name;
+        }
+        const auto p_type{active_mod().get_sema_type_opt(param.name)};
         ASSERT(p_type, "Function parameter must have a resolved sema type");
 
         auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
         const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-        scopes_.back().bindings.emplace(p_name,
-                                        local_binding{
-                                            .id        = p_slot.id,
-                                            .type      = *p_type,
-                                            .is_alloca = p_spilled,
-                                            .const_val = stdx::none,
-                                        });
+        if (!p_name.empty()) {
+            scopes_.back().bindings.emplace(p_name,
+                                            local_binding{
+                                                .id        = p_slot.id,
+                                                .type      = *p_type,
+                                                .is_alloca = p_spilled,
+                                                .const_val = stdx::none,
+                                            });
+        }
     }
 
     emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
@@ -1052,20 +1070,24 @@ auto emitter::emit_anonymous_function(ast::node_id id, const ast::function_expr&
     {
         const scope_guard g{scopes_};
         for (const auto& param : fn_expr.parameters) {
-            const auto& p_ident{active_ast().get_as<ast::identifier_expr>(param.name)};
-            const auto  p_name{p_ident.name};
-            const auto  p_type{active_mod().get_sema_type_opt(param.name)};
+            std::string_view p_name{};
+            if (param.name.is<ast::identifier_expr>()) {
+                p_name = active_ast().get_as<ast::identifier_expr>(param.name).name;
+            }
+            const auto p_type{active_mod().get_sema_type_opt(param.name)};
             ASSERT(p_type, "Anonymous function parameter must have a resolved sema type");
 
             auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
             const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-            scopes_.back().bindings.emplace(p_name,
-                                            local_binding{
-                                                .id        = p_slot.id,
-                                                .type      = *p_type,
-                                                .is_alloca = p_spilled,
-                                                .const_val = stdx::none,
-                                            });
+            if (!p_name.empty()) {
+                scopes_.back().bindings.emplace(p_name,
+                                                local_binding{
+                                                    .id        = p_slot.id,
+                                                    .type      = *p_type,
+                                                    .is_alloca = p_spilled,
+                                                    .const_val = stdx::none,
+                                                });
+            }
         }
 
         emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
@@ -1121,20 +1143,24 @@ auto emitter::emit_named_local_function(std::string_view          name,
                                         });
 
         for (const auto& param : fn_expr.parameters) {
-            const auto& p_ident{active_ast().get_as<ast::identifier_expr>(param.name)};
-            const auto  p_name{p_ident.name};
-            const auto  p_type{active_mod().get_sema_type_opt(param.name)};
+            std::string_view p_name{};
+            if (param.name.is<ast::identifier_expr>()) {
+                p_name = active_ast().get_as<ast::identifier_expr>(param.name).name;
+            }
+            const auto p_type{active_mod().get_sema_type_opt(param.name)};
             ASSERT(p_type, "Local function parameter must have a resolved sema type");
 
             auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
             const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-            scopes_.back().bindings.emplace(p_name,
-                                            local_binding{
-                                                .id        = p_slot.id,
-                                                .type      = *p_type,
-                                                .is_alloca = p_spilled,
-                                                .const_val = stdx::none,
-                                            });
+            if (!p_name.empty()) {
+                scopes_.back().bindings.emplace(p_name,
+                                                local_binding{
+                                                    .id        = p_slot.id,
+                                                    .type      = *p_type,
+                                                    .is_alloca = p_spilled,
+                                                    .const_val = stdx::none,
+                                                });
+            }
         }
 
         emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
@@ -1199,19 +1225,23 @@ auto emitter::emit_closure_function(const ast::function_expr&     fn_expr,
                                         });
 
         for (const auto& param : fn_expr.parameters) {
-            const auto& p_ident{active_ast().get_as<ast::identifier_expr>(param.name)};
-            const auto  p_name{p_ident.name};
-            const auto  p_type{active_mod().get_sema_type_opt(param.name)};
+            std::string_view p_name{};
+            if (param.name.is<ast::identifier_expr>()) {
+                p_name = active_ast().get_as<ast::identifier_expr>(param.name).name;
+            }
+            const auto p_type{active_mod().get_sema_type_opt(param.name)};
             ASSERT(p_type, "Closure parameter must have a resolved sema type");
             auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
             const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-            scopes_.back().bindings.emplace(p_name,
-                                            local_binding{
-                                                .id        = p_slot.id,
-                                                .type      = *p_type,
-                                                .is_alloca = p_spilled,
-                                                .const_val = stdx::none,
-                                            });
+            if (!p_name.empty()) {
+                scopes_.back().bindings.emplace(p_name,
+                                                local_binding{
+                                                    .id        = p_slot.id,
+                                                    .type      = *p_type,
+                                                    .is_alloca = p_spilled,
+                                                    .const_val = stdx::none,
+                                                });
+            }
         }
 
         // Load every capture once, up front, from `self`
@@ -1329,19 +1359,23 @@ auto emitter::emit_constexpr_closure(const const_closure& cl) -> std::string {
         const constexpr_frame_guard cxg{ctx_.constexpr_binding_frames, std::move(cx_frame)};
 
         for (const auto& param : fn_expr.parameters) {
-            const auto& p_ident{def_mod.ast.get_as<ast::identifier_expr>(param.name)};
-            const auto  p_name{p_ident.name};
-            const auto  p_type{def_mod.get_sema_type_opt(param.name)};
+            std::string_view p_name{};
+            if (param.name.is<ast::identifier_expr>()) {
+                p_name = def_mod.ast.get_as<ast::identifier_expr>(param.name).name;
+            }
+            const auto p_type{def_mod.get_sema_type_opt(param.name)};
             ASSERT(p_type, "closure parameter must have a resolved sema type");
             auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
             const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-            scopes_.back().bindings.emplace(p_name,
-                                            local_binding{
-                                                .id        = p_slot.id,
-                                                .type      = *p_type,
-                                                .is_alloca = p_spilled,
-                                                .const_val = stdx::none,
-                                            });
+            if (!p_name.empty()) {
+                scopes_.back().bindings.emplace(p_name,
+                                                local_binding{
+                                                    .id        = p_slot.id,
+                                                    .type      = *p_type,
+                                                    .is_alloca = p_spilled,
+                                                    .const_val = stdx::none,
+                                                });
+            }
         }
 
         emit_block(def_mod.ast.get_as<ast::block_stmt>(fn_expr.body));
