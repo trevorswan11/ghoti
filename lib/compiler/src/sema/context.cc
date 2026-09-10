@@ -253,15 +253,16 @@ constexpr std::string_view BUILTIN_NAMESPACE{"builtin"};
 auto inject_builtin_module(context& ctx, usize prelude_idx) -> void {
     PROFILE_FUNCTION();
 
-    auto& enum_mod{ctx.modules.get_or_create_builtin_module(BUILTIN_MODULE_SOURCE)};
-    symbol_collector::collect_symbols(enum_mod, ctx);
-    type_resolver::resolve_types(enum_mod, ctx);
-    VERIFY(!enum_mod.is_poisoned() && ctx.diags.empty(),
+    auto& builtin_mod{ctx.modules.get_or_create_builtin_module(BUILTIN_MODULE_SOURCE)};
+    symbol_collector::collect_symbols(builtin_mod, ctx);
+    type_resolver::resolve_types(builtin_mod, ctx);
+    VERIFY(!builtin_mod.is_poisoned() && ctx.diags.empty(),
            "the compiler-provided `builtin` module must resolve cleanly");
 
     // Expose the module under one prelude name, reusing the ordinary module-access machinery
-    auto& mod_type{*ctx.pool[{type_kind::MODULE, types::mut::CONSTANT, *enum_mod.root_table_idx}]};
-    mod_type.resolve_if<types::module>(enum_mod);
+    auto& mod_type{
+        *ctx.pool[{type_kind::MODULE, types::mut::CONSTANT, *builtin_mod.root_table_idx}]};
+    mod_type.resolve_if<types::module>(builtin_mod);
 
     auto& prelude{ctx.registry.get(prelude_idx)};
     prelude.insert_unchecked(

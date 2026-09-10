@@ -482,4 +482,93 @@ TEST_CASE("`match` capture of pointer union payload binds slot correctly") {
     CHECK(exit_code == 7);
 }
 
+TEST_CASE("Match directly on reference types without dereferencing") {
+    SECTION("Match on &union with value capture") {
+        CHECK(helpers::compile_and_run(R"(
+            const U := union { ok: i32, err: bool };
+            const check := fn(u: &U): i32 {
+                return match (u) {
+                    .ok => |v| v * 2,
+                    .err => |_| -1,
+                };
+            };
+            pub const main := fn(): i32 {
+                const u := U{ .ok = 21 };
+                return check(&u);
+            };
+        )") == 42);
+    }
+
+    SECTION("Match on &mut union with mutation") {
+        CHECK(helpers::compile_and_run(R"(
+            const U := union { ok: i32, err: bool };
+            const mutate := fn(u: &mut U): void {
+                match (u) {
+                    .ok => |&mut v| { v += 10; },
+                    .err => {},
+                };
+            };
+            pub const main := fn(): i32 {
+                var u := U{ .ok = 32 };
+                mutate(&mut u);
+                return match (u) {
+                    .ok => |v| v,
+                    .err => |_| 0,
+                };
+            };
+        )") == 42);
+    }
+
+    SECTION("Match on &self method in struct/union") {
+        CHECK(helpers::compile_and_run(R"(
+            const Opt := union { some: i32, none: void };
+            impl Opt {
+                pub const is_some := fn(&self): bool {
+                    return match (self) {
+                        .some => true,
+                        .none => false,
+                    };
+                };
+            }
+            pub const main := fn(): i32 {
+                const o := Opt{ .some = 100 };
+                return if (o.is_some()) 42 else 0;
+            };
+        )") == 42);
+    }
+
+    SECTION("Match on &enum") {
+        CHECK(helpers::compile_and_run(R"(
+            const Color := enum { red, green, blue };
+            const code := fn(c: &Color): i32 {
+                return match (c) {
+                    .red => 1,
+                    .green => 2,
+                    .blue => 3,
+                };
+            };
+            pub const main := fn(): i32 {
+                const c := Color.green;
+                return code(&c);
+            };
+        )") == 2);
+    }
+
+    SECTION("Match on &primitive integer") {
+        CHECK(helpers::compile_and_run(R"(
+            const classify := fn(n: &i32): i32 {
+                return match (n) {
+                    0 => 10,
+                    1 => 20,
+                    _ => 30,
+                };
+            };
+            pub const main := fn(): i32 {
+                const x: i32 = 1;
+                return classify(&x);
+            };
+        )") == 20);
+    }
+}
+
 } // namespace ghoti::tests

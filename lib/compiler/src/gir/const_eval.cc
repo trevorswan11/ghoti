@@ -37,6 +37,7 @@
 #include "compiler/sema/error.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/sema/unwrap_shape.hh"
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
@@ -1204,12 +1205,72 @@ auto const_eval::eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap)
     const auto operand{try_eval(unwrap.operand)};
     if (!operand) { return stdx::none; }
 
+    const auto operand_type{module_->get_sema_type_opt(unwrap.operand)};
+    if (!operand_type) { return stdx::none; }
+
+    const auto shape{sema::unwrap_shape_of(ctx_, *operand_type)};
+    if (!shape) { return stdx::none; }
+
     const auto un{operand->as_opt<const_union>()};
     if (!un) { return stdx::none; }
 
+    bool is_break{false};
+    if (un->active_field == "ok" || un->active_field == "some") {
+        is_break = false;
+    } else if (un->active_field == "err" || un->active_field == "none") {
+        is_break = true;
+    } else if (const auto is_break_method{shape->impl->find_method("isBreak")}) {
+        const auto& decl_mod{is_break_method->defining_mod ? *is_break_method->defining_mod
+                             : shape->impl->enclosing      ? *shape->impl->enclosing
+                                                           : *module_};
+        if (const auto decl{decl_mod.ast.get_as_opt<ast::decl_stmt>(is_break_method->decl)}) {
+            [&] {
+                if (!decl->value) { return; }
+                const auto fn_expr{decl_mod.ast.get_as_opt<ast::function_expr>(*decl->value)};
+                if (!fn_expr) { return; }
+                const auto block{decl_mod.ast.get_as_opt<ast::block_stmt>(fn_expr->body)};
+                if (!block) { return; }
+
+                for (const auto& stmt_h : block->statements) {
+                    const auto ret{decl_mod.ast.get_as_opt<ast::return_stmt>(*stmt_h)};
+                    const auto expr_h{ret && ret->expression ? ret->expression : stdx::none};
+                    if (!expr_h) { continue; }
+                    const auto match{decl_mod.ast.get_as_opt<ast::match_expr>(*expr_h)};
+                    if (!match) { continue; }
+
+                    for (const auto& arm : match->arms) {
+                        const auto expr_st{decl_mod.ast.get_as_opt<ast::expr_stmt>(*arm.dispatch)};
+                        const auto ret_st{decl_mod.ast.get_as_opt<ast::return_stmt>(*arm.dispatch)};
+                        const auto consequence{expr_st                        ? expr_st->expression
+                                               : ret_st && ret_st->expression ? *ret_st->expression
+                                                                              : *arm.dispatch};
+
+                        for (const auto& pat_h : arm.patterns) {
+                            const auto imp{
+                                decl_mod.ast.get_as_opt<ast::implicit_access_expr>(*pat_h)};
+                            if (!imp) { continue; }
+
+                            const auto variant_name{
+                                decl_mod.ast.get_as<ast::identifier_expr>(imp->member).name};
+                            if (variant_name == un->active_field) {
+                                if (consequence.get_token_type() ==
+                                    syntax::token_type_t::BOOLEAN_TRUE) {
+                                    is_break = true;
+                                } else if (consequence.get_token_type() ==
+                                           syntax::token_type_t::BOOLEAN_FALSE) {
+                                    is_break = false;
+                                }
+                            }
+                        }
+                    }
+                }
+            }();
+        }
+    }
+
     const auto payload{
         [&] -> const_value { return un->payload.empty() ? *operand : un->payload.front(); }};
-    if (un->active_field == "ok" || un->active_field == "some") { return payload(); }
+    if (!is_break) { return payload(); }
 
     if (id.get_token_type() == syntax::token_type_t::BANG) {
         ctx_.diags.emplace_back(
@@ -1219,7 +1280,12 @@ auto const_eval::eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap)
         return const_value::make_poison();
     }
 
-    return payload();
+    ctx_.diags.emplace_back(
+        fmt::format("compile-time '?' on an errored or empty value (variant '{}')",
+                    un->active_field),
+        sema::error::CONSTEXPR_EVALUATION_FAILED,
+        module_->ast.location_of(id));
+    return const_value::make_poison();
 }
 
 auto const_eval::match_pattern(const ast::match_pattern_handle& pattern_h,

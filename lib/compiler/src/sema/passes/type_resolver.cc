@@ -48,6 +48,7 @@
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/sema/unwrap_shape.hh"
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/operators.hh"
 #include "compiler/syntax/token_type.hh"
@@ -4604,37 +4605,48 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
     }
 
     // The expression must resolve to a single type on pass 3
+    stdx::option<type&> effective_matcher_type{matcher_type};
+    if (const auto ref{matcher_type.get_data().as_opt<types::reference>()}) {
+        effective_matcher_type.emplace(ref->underlying);
+    }
+
     stdx::option<type&> first_type;
     bool                matcher_is_const{false};
-    if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(match.matcher)}) {
-        if (const auto sym{ctx_.registry.lookup(table_stack_, ident->name)}) {
-            if (const auto node{sym->get_data().as_opt<symbols::node_t>()}) {
-                if (const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)}) {
-                    matcher_is_const = decl->has_modifier(ast::decl_modifiers::CONSTANT) ||
-                                       decl->has_modifier(ast::decl_modifiers::CONSTEXPR);
+    bool                matcher_is_addressable{false};
+    if (matcher_type.get_data().is<types::reference>()) {
+        matcher_is_const       = matcher_type.is_constant();
+        matcher_is_addressable = true;
+    } else {
+        if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(match.matcher)}) {
+            if (const auto sym{ctx_.registry.lookup(table_stack_, ident->name)}) {
+                if (const auto node{sym->get_data().as_opt<symbols::node_t>()}) {
+                    if (const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)}) {
+                        matcher_is_const = decl->has_modifier(ast::decl_modifiers::CONSTANT) ||
+                                           decl->has_modifier(ast::decl_modifiers::CONSTEXPR);
+                    }
                 }
             }
         }
+        matcher_is_addressable = is_lvalue_shape(resolving_, match.matcher);
     }
-    const bool matcher_is_addressable{is_lvalue_shape(resolving_, match.matcher)};
 
     // Rip through the arms once to validate structural arm rules
-    const auto& matcher_data{matcher_type.get_data()};
+    const auto& matcher_data{effective_matcher_type->get_data()};
     if (matcher_data.is<types::enum_t>()) {
-        if (auto diag{validate_enum_arms(id, match, matcher_type)}; diag) {
+        if (auto diag{validate_enum_arms(id, match, *effective_matcher_type)}; diag) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(diag).value()));
         }
     } else if (matcher_data.is<types::union_t>()) {
-        if (auto diag{validate_union_arms(id, match, matcher_type)}; diag) {
+        if (auto diag{validate_union_arms(id, match, *effective_matcher_type)}; diag) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(diag).value()));
         }
     } else if (matcher_data.is<types::builtin_type>() || matcher_data.is<types::integer>()) {
         // It's assumed that any sufficiently large type cannot be fully enumerated
         stdx::option<u16> required_arm_count;
-        switch (matcher_type.get_kind()) {
+        switch (effective_matcher_type->get_kind()) {
         case type_kind::INT:
             // Only an 8-bit unsigned integer is small enough to enumerate exhaustively.
-            if (const auto info{as_integer(matcher_type)};
+            if (const auto info{as_integer(*effective_matcher_type)};
                 info && info->bits == 8 && !info->is_signed) {
                 required_arm_count.emplace(256);
             }
@@ -4669,7 +4681,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                 resolving_,
                 id,
                 fmt::format("Can only match on integers, bytes, and booleans; found '{}'",
-                            type_kind_display_name(matcher_type)),
+                            type_kind_display_name(*effective_matcher_type)),
                 sema::error::TYPE_MISMATCH,
                 resolving_.ast.location_of(match.matcher)));
         default: UNREACHABLE("Builtin types should never take this type kind");
@@ -4682,7 +4694,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
             });
         })};
         if (has_range_arm) {
-            if (matcher_type.get_kind() == type_kind::BOOL) {
+            if (effective_matcher_type->get_kind() == type_kind::BOOL) {
                 return last_type_.emplace(
                     ctx_.poison_node(resolving_,
                                      id,
@@ -4710,7 +4722,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                     id,
                     fmt::format("Matching on type '{}' requires a catch all arm with "
                                 "a pattern of '_' or exactly {} patterned arms",
-                                type_kind_display_name(matcher_type),
+                                type_kind_display_name(*effective_matcher_type),
                                 *required_arm_count),
                     sema::error::TYPE_MISMATCH,
                     resolving_.ast.location_of(match.matcher)));
@@ -4723,7 +4735,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                     id,
                     fmt::format(
                         "Matching on type '{}' requires a catch all arm with a pattern of '_'",
-                        type_kind_display_name(matcher_type)),
+                        type_kind_display_name(*effective_matcher_type)),
                     sema::error::TYPE_MISMATCH,
                     resolving_.ast.location_of(match.matcher)));
             }
@@ -4733,7 +4745,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
             resolving_,
             id,
             fmt::format("Can only match on enums, unions, and certain primitive types; found '{}'",
-                        type_kind_display_name(matcher_type)),
+                        type_kind_display_name(*effective_matcher_type)),
             sema::error::TYPE_MISMATCH,
             resolving_.ast.location_of(match.matcher)));
     }
@@ -4748,7 +4760,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
     gir::const_eval           interval_probe{ctx_, resolving_};
     const bool                scalar_match{
         (matcher_data.is<types::builtin_type>() || matcher_data.is<types::integer>()) &&
-        matcher_type.get_kind() != type_kind::BOOL};
+        effective_matcher_type->get_kind() != type_kind::BOOL};
 
     // Each arm was assigned a new scope index on the first pass
     for (const auto& arm : match.arms) {
@@ -4760,7 +4772,8 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
             // Unions implicitly unpack the value since the field is guaranteed to be valid
             stdx::option<type&> base_type;
             if (const auto union_data{matcher_data.as_opt<types::union_t>()}) {
-                const auto& table{ctx_.registry.get(matcher_type.get_symbol_table_idx())};
+                const auto& table{
+                    ctx_.registry.get(effective_matcher_type->get_symbol_table_idx())};
                 // Every listed variant must carry the same payload type to share one capture.
                 for (const auto& pat : arm.patterns) {
                     const auto ia{resolving_.ast.get_as_opt<ast::implicit_access_expr>(*pat)};
@@ -4780,7 +4793,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                     }
                 }
             } else {
-                base_type.emplace(matcher_type);
+                base_type.emplace(*effective_matcher_type);
             }
 
             auto cap_result{resolve_capture_modifier(ctx_,
@@ -4823,7 +4836,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
             }
 
             {
-                const structural_guard pattern_g{implicit_type_stack_, matcher_type};
+                const structural_guard pattern_g{implicit_type_stack_, *effective_matcher_type};
                 if (range) {
                     TRY_RESOLVE(*range->lhs);
                     TRY_RESOLVE(*range->rhs);
@@ -4867,18 +4880,14 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
 
         // Only an expr_stmt arm can yield a value (blocks never do, per emit_stmt_as_value); a
         // block's own resolved type is just its scope handle, not a value type, so it's ignored.
-        type* arm_dispatch_type{&ctx_.get_builtin_resolved_type(type_kind::VOID_)};
         if (const auto expr_stmt_node{resolving_.ast.get_as_opt<ast::expr_stmt>(arm.dispatch)}) {
             if (const auto inner_type{resolving_.get_sema_type_opt(expr_stmt_node->expression)}) {
-                if (!inner_type->is_poison() && inner_type->get_kind() != type_kind::VOID_) {
-                    arm_dispatch_type = inner_type.get();
+                if (!inner_type->is_poison()) {
+                    if (!first_type || first_type->get_kind() == type_kind::NORETURN) {
+                        first_type = *inner_type;
+                    }
                 }
             }
-        }
-
-        if ((!first_type || first_type->get_kind() == type_kind::VOID_) &&
-            arm_dispatch_type->get_kind() != type_kind::VOID_) {
-            first_type = *arm_dispatch_type;
         }
     }
 
@@ -5051,40 +5060,6 @@ auto type_resolver::visit(ast::node_id id, const ast::unary_expr& node) -> void 
     resolving_.set_sema_type(id, *last_type_);
 }
 
-namespace {
-
-enum class unwrap_family {
-    RESULT,
-    OPTIONAL,
-};
-
-struct unwrap_shape {
-    unwrap_family family;
-    usize         payload_idx;
-    usize         diverge_idx;
-};
-
-// Recognizes a tagged two-field union shaped like `union { ok: T, err: E }` (RESULT) or
-// `union { some: T, none: void }` (OPTIONAL).
-[[nodiscard]] auto classify_unwrap_union(const type& t) -> stdx::option<unwrap_shape> {
-    const auto ud{t.get_data().as_opt<types::union_t>()};
-    if (!ud || ud->is_untagged || ud->fields.size() != 2) { return stdx::none; }
-
-    const auto& enclosing{ud->enclosing};
-    const auto  name_of{[&](usize i) -> std::string_view {
-        return enclosing.ast.get_as<ast::identifier_expr>(ud->ast_fields[i].name).name;
-    }};
-    const auto  n0{name_of(0)}, n1{name_of(1)};
-
-    if (n0 == "ok" && n1 == "err") { return unwrap_shape{unwrap_family::RESULT, 0, 1}; }
-    if (n0 == "err" && n1 == "ok") { return unwrap_shape{unwrap_family::RESULT, 1, 0}; }
-    if (n0 == "some" && n1 == "none") { return unwrap_shape{unwrap_family::OPTIONAL, 0, 1}; }
-    if (n0 == "none" && n1 == "some") { return unwrap_shape{unwrap_family::OPTIONAL, 1, 0}; }
-    return stdx::none;
-}
-
-} // namespace
-
 auto type_resolver::visit(ast::node_id id, const ast::unwrap_expr& unwrap) -> void {
     PROFILE_FUNCTION();
     TRY_RESOLVE(unwrap.operand);
@@ -5093,27 +5068,35 @@ auto type_resolver::visit(ast::node_id id, const ast::unwrap_expr& unwrap) -> vo
     const bool is_question{id.get_token_type() == syntax::token_type_t::QUESTION};
     const auto loc{resolving_.ast.location_of(id)};
 
-    const auto shape{classify_unwrap_union(operand_type)};
-    if (!shape) {
+    const auto nominal_shape{unwrap_shape_of(ctx_, operand_type)};
+
+    if (!nominal_shape) {
+        std::string note;
+        if (const auto ud = operand_type.get_data().as_opt<types::union_t>()) {
+            if (!ud->is_untagged && ud->fields.size() == 2) {
+                note = fmt::format("; add 'impl builtin.Unwrappable for {}'",
+                                   ctx_.type_display_name(operand_type));
+            }
+        }
         return last_type_.emplace(ctx_.poison_node(
             resolving_,
             id,
-            fmt::format("the postfix '{}' operator expects a tagged union shaped like "
-                        "'union {{ ok: T, err: E }}' or 'union {{ some: T, none: void }}'; "
-                        "its operand has type '{}'",
-                        is_question ? "?" : "!",
-                        operand_type.to_string()),
+            fmt::format(
+                "the postfix '{}' operator expects a type implementing 'builtin.Unwrappable'; "
+                "'{}' does not implement it{}",
+                is_question ? "?" : "!",
+                ctx_.type_display_name(operand_type),
+                note),
             error::UNWRAP_ON_NON_RESULT,
             loc));
     }
 
-    const auto& operand_union{operand_type.get_data().as<types::union_t>()};
-    auto&       payload_type{operand_union.type_at(shape->payload_idx)};
+    const type* payload_type{nominal_shape->output_type};
 
     // `expr!` just projects the success payload with lowering handling the discriminant check
     if (!is_question) {
-        resolving_.set_sema_type(id, payload_type);
-        return last_type_.emplace(payload_type);
+        resolving_.set_sema_type(id, const_cast<type&>(*payload_type));
+        return last_type_.emplace(const_cast<type&>(*payload_type));
     }
 
     // A body re-typed by a dedicated instantiation resolver has no `open_function_nodes_` entry
@@ -5149,24 +5132,49 @@ auto type_resolver::visit(ast::node_id id, const ast::unwrap_expr& unwrap) -> vo
             loc));
     }
 
-    const auto ret_shape{classify_unwrap_union(*ret_type)};
-    if (!ret_shape || ret_shape->family != shape->family) {
+    const auto nominal_rewrap{rewrap_shape_of(ctx_, *ret_type)};
+    if (!nominal_rewrap) {
         return last_type_.emplace(ctx_.poison_node(
             resolving_,
             id,
-            fmt::format(
-                "the '?' operator propagates a '{}' but the enclosing function returns '{}', "
-                "which is not a matching {}",
-                operand_type.to_string(),
-                ret_type->to_string(),
-                shape->family == unwrap_family::RESULT ? "'union { ok: _, err: E }'"
-                                                       : "'union { some: _, none: void }'"),
+            fmt::format("the '?' operator propagates a '{}' residual ('{}') but '{}' "
+                        "does not implement 'builtin.Rewrappable'",
+                        ctx_.type_display_name(operand_type),
+                        ctx_.type_display_name(*nominal_shape->residual_type),
+                        ctx_.type_display_name(*ret_type)),
             error::UNWRAP_RETURN_TYPE_MISMATCH,
             loc));
     }
 
-    resolving_.set_sema_type(id, payload_type);
-    last_type_.emplace(payload_type);
+    const auto& res_ty{*nominal_shape->residual_type};
+    const auto& from_ty{*nominal_rewrap->from_type};
+    const bool  same{is_same_unqualified(res_ty, from_ty)};
+    const bool  assignable{is_assignable(res_ty, from_ty)};
+    const bool  widenable{is_implicit_widenable(res_ty, from_ty)};
+    if (!same && !assignable && !widenable) {
+        const auto  ptr_bits{codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
+        const auto  reason{cast_rejection_reason(res_ty, from_ty, ptr_bits)};
+        std::string reason_suffix;
+        if (reason) { reason_suffix = fmt::format(" ({})", *reason); }
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            fmt::format(
+                "the '?' operator propagates a '{}' residual ('{}') but '{}' is not "
+                "rebuildable from '{}'{}; implement 'builtin.Rewrappable for {}' with From = '{}'",
+                ctx_.type_display_name(operand_type),
+                ctx_.type_display_name(res_ty),
+                ctx_.type_display_name(*ret_type),
+                ctx_.type_display_name(res_ty),
+                reason_suffix,
+                ctx_.type_display_name(*ret_type),
+                ctx_.type_display_name(res_ty)),
+            error::UNWRAP_RETURN_TYPE_MISMATCH,
+            loc));
+    }
+
+    resolving_.set_sema_type(id, const_cast<type&>(*payload_type));
+    last_type_.emplace(const_cast<type&>(*payload_type));
 }
 
 auto type_resolver::visit(ast::node_id id, const ast::implicit_access_expr& implicit_access)
@@ -6209,9 +6217,174 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
     last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
 }
 
+auto type_resolver::check_deferred_body_jumps(ast::stmt_handle body) -> void {
+    ankerl::unordered_dense::set<std::string_view> local_labels;
+
+    auto collect_labels = [&](auto& self, ast::node_id n) -> void {
+        if (!n.is_valid()) { return; }
+        resolving_.ast[n].visit(
+            [&](const ast::label_expr& data) {
+                local_labels.emplace(resolving_.ast.get_as<ast::identifier_expr>(data.name).name);
+                self(self, *data.body);
+            },
+            [&](const ast::while_loop_expr& data) { self(self, *data.block); },
+            [&](const ast::for_loop_expr& data) { self(self, *data.block); },
+            [&](const ast::infinite_loop_expr& data) { self(self, *data.block); },
+            [&](const ast::do_while_loop_expr& data) { self(self, *data.block); },
+            [&](const ast::block_stmt& data) {
+                for (const auto s : data) { self(self, *s); }
+            },
+            [&](const ast::expr_stmt& data) { self(self, *data.expression); },
+            [&](const ast::if_expr& data) {
+                self(self, *data.consequence);
+                if (data.alternate) { self(self, *data.alternate); }
+            },
+            [&](const ast::match_expr& data) {
+                for (const auto& arm : data.arms) { self(self, *arm.dispatch); }
+            },
+            [&](const auto&) { return; });
+    };
+    collect_labels(collect_labels, *body);
+
+    auto check_jumps = [&](auto& self, ast::node_id n, usize loop_depth) -> void {
+        if (!n.is_valid()) { return; }
+        resolving_.ast[n].visit(
+            [&](const ast::return_stmt&) {
+                ctx_.diags.emplace_back("cannot 'return' from inside a 'defer' body",
+                                        error::DEFER_BODY_JUMP,
+                                        resolving_.ast.location_of(n));
+            },
+            [&](const ast::unwrap_expr& data) {
+                if (n.get_token_type() == syntax::token_type_t::QUESTION) {
+                    ctx_.diags.emplace_back("cannot use '?' operator inside a 'defer' body",
+                                            error::DEFER_BODY_JUMP,
+                                            resolving_.ast.location_of(n));
+                }
+                self(self, *data.operand, loop_depth);
+            },
+            [&](const ast::break_stmt& data) {
+                bool illegal{false};
+                if (data.label) {
+                    const auto& name{resolving_.ast.get_as<ast::identifier_expr>(*data.label).name};
+                    if (!local_labels.contains(name)) { illegal = true; }
+                } else if (loop_depth == 0) {
+                    illegal = true;
+                }
+                if (illegal) {
+                    ctx_.diags.emplace_back("cannot 'break' from inside a 'defer' body",
+                                            error::DEFER_BODY_JUMP,
+                                            resolving_.ast.location_of(n));
+                }
+                if (data.expression) { self(self, **data.expression, loop_depth); }
+            },
+            [&](const ast::continue_stmt& data) {
+                bool illegal{false};
+                if (data.label) {
+                    const auto& name{resolving_.ast.get_as<ast::identifier_expr>(*data.label).name};
+                    if (!local_labels.contains(name)) { illegal = true; }
+                } else if (loop_depth == 0) {
+                    illegal = true;
+                }
+                if (illegal) {
+                    ctx_.diags.emplace_back("cannot 'continue' from inside a 'defer' body",
+                                            error::DEFER_BODY_JUMP,
+                                            resolving_.ast.location_of(n));
+                }
+            },
+            [&](const ast::while_loop_expr& data) {
+                self(self, *data.condition, loop_depth);
+                if (data.continuation) { self(self, **data.continuation, loop_depth); }
+                self(self, *data.block, loop_depth + 1);
+                if (data.non_break) { self(self, **data.non_break, loop_depth); }
+            },
+            [&](const ast::for_loop_expr& data) {
+                for (const auto it : data.iterables) { self(self, *it, loop_depth); }
+                self(self, *data.block, loop_depth + 1);
+                if (data.non_break) { self(self, **data.non_break, loop_depth); }
+            },
+            [&](const ast::infinite_loop_expr& data) { self(self, *data.block, loop_depth + 1); },
+            [&](const ast::do_while_loop_expr& data) {
+                self(self, *data.condition, loop_depth);
+                self(self, *data.block, loop_depth + 1);
+            },
+            [&](const ast::block_stmt& data) {
+                for (const auto s : data) { self(self, *s, loop_depth); }
+            },
+            [&](const ast::expr_stmt& data) { self(self, *data.expression, loop_depth); },
+            [&](const ast::discard_stmt& data) { self(self, *data.discarded, loop_depth); },
+            [&](const ast::defer_stmt& data) { self(self, *data.deferred, loop_depth); },
+            [&](const ast::decl_stmt& data) {
+                if (data.value) { self(self, **data.value, loop_depth); }
+            },
+            [&](const ast::if_expr& data) {
+                self(self, *data.condition, loop_depth);
+                self(self, *data.consequence, loop_depth);
+                if (data.alternate) { self(self, *data.alternate, loop_depth); }
+            },
+            [&](const ast::match_expr& data) {
+                self(self, *data.matcher, loop_depth);
+                for (const auto& arm : data.arms) { self(self, *arm.dispatch, loop_depth); }
+            },
+            [&](const ast::binary_expr& data) {
+                self(self, *data.lhs, loop_depth);
+                self(self, *data.rhs, loop_depth);
+            },
+            [&](const ast::assignment_expr& data) {
+                self(self, *data.lhs, loop_depth);
+                self(self, *data.rhs, loop_depth);
+            },
+            [&](const ast::unary_expr& data) { self(self, *data.rhs, loop_depth); },
+            [&](const ast::reference_expr& data) { self(self, *data.rhs, loop_depth); },
+            [&](const ast::dereference_expr& data) { self(self, *data.rhs, loop_depth); },
+            [&](const ast::address_of_expr& data) { self(self, *data.rhs, loop_depth); },
+            [&](const ast::call_expr& data) {
+                self(self, *data.function, loop_depth);
+                for (const auto& arg : data.arguments) {
+                    if (const auto eh = arg.template as_opt<ast::expr_handle>()) {
+                        self(self, **eh, loop_depth);
+                    }
+                }
+            },
+            [&](const ast::dot_expr& data) { self(self, *data.object, loop_depth); },
+            [&](const ast::index_expr& data) {
+                self(self, *data.array, loop_depth);
+                self(self, *data.index, loop_depth);
+            },
+            [&](const ast::range_expr& data) {
+                if (data.lhs) { self(self, **data.lhs, loop_depth); }
+                if (data.rhs) { self(self, **data.rhs, loop_depth); }
+            },
+            [&](const ast::array_expr& data) {
+                for (const auto item : data.items) { self(self, *item, loop_depth); }
+            },
+
+            [&](const ast::label_expr& data) { self(self, *data.body, loop_depth); },
+            [&](const ast::initializer_expr& data) {
+                for (const auto& init : data.initializers) { self(self, *init.value, loop_depth); }
+            },
+            [&](const ast::cfg_stmt& data) {
+                for (const auto& arm : data.arms) {
+                    if (arm.predicate) { self(self, **arm.predicate, loop_depth); }
+                    for (const auto it : arm.items) { self(self, *it, loop_depth); }
+                }
+            },
+            [&](const ast::cfg_value_expr& data) {
+                if (data.predicate) { self(self, **data.predicate, loop_depth); }
+                for (const auto& guard : data.guards) {
+                    self(self, *guard.predicate, loop_depth);
+                    self(self, *guard.value, loop_depth);
+                }
+                if (data.fallback) { self(self, **data.fallback, loop_depth); }
+            },
+            [&](const auto&) {});
+    };
+    check_jumps(check_jumps, *body, 0);
+}
+
 auto type_resolver::visit(ast::node_id id, const ast::defer_stmt& defer) -> void {
     PROFILE_FUNCTION();
     TRY_RESOLVE(defer.deferred);
+    check_deferred_body_jumps(defer.deferred);
     last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
 }
 
@@ -6742,6 +6915,7 @@ auto type_resolver::instantiate_impls_for(
         std::vector<type*> type_bounds(pimpl->param_to_ctor_arg.size(), nullptr);
         std::vector<std::pair<std::string, gir::const_value>> cx_bindings;
         bool                                                  ok{true};
+        bool                                                  is_abstract{false};
         for (usize i{0}; i < pimpl->param_to_ctor_arg.size(); ++i) {
             const auto slot{pimpl->param_to_ctor_arg[i]};
             if (!slot || *slot >= ctor_args.size() || *slot >= base_fn.parameters.size()) {
@@ -6768,11 +6942,11 @@ auto type_resolver::instantiate_impls_for(
                     it->second);
             } else {
                 auto* arg{ctor_args[*slot]};
-                // A still-abstract `type` argument means this is not a real monomorphization.
-                if (!arg || arg->get_kind() == type_kind::TYPE || arg->is_poison()) {
+                if (!arg || arg->is_poison()) {
                     ok = false;
                     break;
                 }
+                if (arg->get_kind() == type_kind::TYPE) { is_abstract = true; }
                 if (i < type_bounds.size()) { type_bounds[i] = arg; }
             }
         }
@@ -6817,35 +6991,38 @@ auto type_resolver::instantiate_impls_for(
             return r;
         }};
 
-        body_type_diff typing;
-        resolve_param_impl_bodies(impl_mod,
-                                  *impl_stmt,
-                                  pimpl->body_scope_idx,
-                                  concrete,
-                                  type_bounds,
-                                  cx_bindings,
-                                  typing);
-
-        // Fold each method's remapped signature into the replay so emit sees the concrete
-        // `fn(...)` type; `emit_function` reads the decl-stmt node, so key that and the `fn` expr.
-        for (const auto& member : impl_stmt->members) {
-            const auto decl{impl_mod.ast.get_as_opt<ast::decl_stmt>(*member)};
-            if (!decl || !decl->value || !decl->value->is<ast::function_expr>()) { continue; }
-            if (const auto t{impl_mod.get_sema_type_opt(*decl->value)}) {
-                auto* remapped{remap_one(const_cast<type*>(t.get()))};
-                typing.node_types.emplace_back((*member).get_index(), remapped);
-                typing.node_types.emplace_back(decl->value->get_index(), remapped);
-            }
-        }
-
         const auto typing_key{fmt::format("pimpl{}#{}", pimpl->site.get_index(), ctor_mangled)};
-        if (!typing.empty()) {
-            ctx_.instantiation_cache.set_body_type_diff(typing_key, std::move(typing));
+        if (!is_abstract) {
+            body_type_diff typing;
+            resolve_param_impl_bodies(impl_mod,
+                                      *impl_stmt,
+                                      pimpl->body_scope_idx,
+                                      concrete,
+                                      type_bounds,
+                                      cx_bindings,
+                                      typing);
+
+            // Fold each method's remapped signature into the replay so emit sees the concrete
+            // `fn(...)` type; `emit_function` reads the decl-stmt node, so key that and the `fn`
+            // expr.
+            for (const auto& member : impl_stmt->members) {
+                const auto decl{impl_mod.ast.get_as_opt<ast::decl_stmt>(*member)};
+                if (!decl || !decl->value || !decl->value->is<ast::function_expr>()) { continue; }
+                if (const auto t{impl_mod.get_sema_type_opt(*decl->value)}) {
+                    auto* remapped{remap_one(const_cast<type*>(t.get()))};
+                    typing.node_types.emplace_back((*member).get_index(), remapped);
+                    typing.node_types.emplace_back(decl->value->get_index(), remapped);
+                }
+            }
+
+            if (!typing.empty()) {
+                ctx_.instantiation_cache.set_body_type_diff(typing_key, std::move(typing));
+            }
+            if (!cx_bindings.empty()) {
+                ctx_.instantiation_cache.set_type_ctor_bindings(typing_key, std::move(cx_bindings));
+            }
+            ctx_.advance_epoch();
         }
-        if (!cx_bindings.empty()) {
-            ctx_.instantiation_cache.set_type_ctor_bindings(typing_key, std::move(cx_bindings));
-        }
-        ctx_.advance_epoch();
 
         impl_record rec{
             .interface_type     = pimpl->interface_type,
@@ -6884,19 +7061,21 @@ auto type_resolver::instantiate_impls_for(
         }
 
         auto* stored{recorded->get()};
-        if (trait && stored->interface_type) {
+        if (trait && stored->interface_type && !is_abstract) {
             if (const auto iface{stored->interface_type->get_data().as_opt<types::interface_t>()}) {
                 check_impl_conformance(*stored, *iface);
             }
         }
 
-        for (const auto& m : stored->methods) {
-            impl_mod.impl_ctor_member_emits.emplace_back<type_ctor_member_emit>({
-                .owner_clone = &concrete,
-                .member_decl = m.decl,
-                .gir_name    = fmt::format("{}.{}", stored->gir_prefix, m.name),
-                .typing_key  = typing_key,
-            });
+        if (!is_abstract) {
+            for (const auto& m : stored->methods) {
+                impl_mod.impl_ctor_member_emits.emplace_back<type_ctor_member_emit>({
+                    .owner_clone = &concrete,
+                    .member_decl = m.decl,
+                    .gir_name    = fmt::format("{}.{}", stored->gir_prefix, m.name),
+                    .typing_key  = typing_key,
+                });
+            }
         }
     }
 }
@@ -6910,6 +7089,9 @@ auto type_resolver::resolve_param_impl_bodies(
     gsl::span<const std::pair<std::string, gir::const_value>> cx_bindings,
     body_type_diff&                                           out) -> void {
     PROFILE_FUNCTION();
+
+    const body_typing_snapshot snap{impl_mod};
+    const auto                 restore_guard{gsl::finally([&] { snap.restore_to(impl_mod); })};
 
     // Bind each impl param to its concrete meaning for this monomorphization: a type param to the
     // ctor argument type (as a resolvable symbol + a `const_eval` frame entry), a `constexpr`
@@ -6932,7 +7114,6 @@ auto type_resolver::resolve_param_impl_bodies(
     }
     const constexpr_frame_guard frame_guard{ctx_.constexpr_binding_frames, std::move(frame)};
 
-    const body_typing_snapshot snap{impl_mod};
     for (const auto& member : impl.members) {
         const auto decl{impl_mod.ast.get_as_opt<ast::decl_stmt>(*member)};
         if (!decl || !decl->value || !decl->value->is<ast::function_expr>()) { continue; }
@@ -6950,13 +7131,15 @@ auto type_resolver::resolve_param_impl_bodies(
         stk.push(fn_table);
         type_resolver inst{impl_mod, ctx_, fn_table, std::move(stk)};
         inst.for_generic_instantiation_ = true;
+        inst.reresolve_floor_.emplace(fn_table);
         const structural_guard this_guard{inst.user_type_stack_, concrete};
 
-        const auto mark_resolved{[&](ast::identifier_handle name) {
-            const auto& n{impl_mod.ast.get_as<ast::identifier_expr>(name).name};
-            if (const auto s{ctx_.registry.get_from_opt(fn_table, n)}) {
-                s->set_kind(symbol_kind::VALUE);
-                s->set_status(symbol_status::RESOLVED);
+        const auto mark_resolved{[&](ast::node_id name) {
+            if (const auto ident{impl_mod.ast.get_as_opt<ast::identifier_expr>(name)}) {
+                if (const auto s{ctx_.registry.get_from_opt(fn_table, ident->name)}) {
+                    s->set_kind(symbol_kind::VALUE);
+                    s->set_status(symbol_status::RESOLVED);
+                }
             }
         }};
 
@@ -7170,7 +7353,13 @@ auto type_resolver::check_impl_conformance(const impl_record& rec, const types::
 
         const usize first_param{expected->has_self ? 1UZ : 0UZ};
         for (usize p{first_param}; p < expected->params.size(); ++p) {
-            auto& want{*expected->params[p]};
+            auto& want_base{*expected->params[p]};
+            auto& want{rec.interface_type && rec.target_type
+                           ? remap_type(ctx_,
+                                        const_cast<type&>(want_base),
+                                        *rec.interface_type,
+                                        const_cast<type&>(*rec.target_type))
+                           : want_base};
             auto& have{*got->params[p]};
             if (want.get_kind() == type_kind::TYPE) { continue; } // associated / Self slot
             if (!is_same_unqualified(want, have) && !is_assignable(have, want)) {
@@ -7185,8 +7374,14 @@ auto type_resolver::check_impl_conformance(const impl_record& rec, const types::
             }
         }
 
-        if (expected->return_type.get_kind() != type_kind::TYPE &&
-            !is_same_unqualified(expected->return_type, got->return_type)) {
+        auto& expected_ret{rec.interface_type && rec.target_type
+                               ? remap_type(ctx_,
+                                            const_cast<type&>(expected->return_type),
+                                            *rec.interface_type,
+                                            const_cast<type&>(*rec.target_type))
+                               : const_cast<type&>(expected->return_type)};
+        if (expected_ret.get_kind() != type_kind::TYPE &&
+            !is_same_unqualified(expected_ret, got->return_type)) {
             ctx_.diags.emplace_back(
                 fmt::format("method `{}`: return type does not match the requirement in `{}`",
                             name,
@@ -7328,11 +7523,12 @@ auto type_resolver::resolve_inherited_default_methods(impl_record&              
         const structural_guard     this_guard{inst.user_type_stack_, target};
         const body_typing_snapshot snap{imod};
 
-        const auto mark_resolved{[&](ast::identifier_handle nm) {
-            const auto& n{imod.ast.get_as<ast::identifier_expr>(nm).name};
-            if (const auto s{ctx_.registry.get_from_opt(fn_table, n)}) {
-                s->set_kind(symbol_kind::VALUE);
-                s->set_status(symbol_status::RESOLVED);
+        const auto mark_resolved{[&](ast::node_id nm) {
+            if (const auto ident{imod.ast.get_as_opt<ast::identifier_expr>(nm)}) {
+                if (const auto s{ctx_.registry.get_from_opt(fn_table, ident->name)}) {
+                    s->set_kind(symbol_kind::VALUE);
+                    s->set_status(symbol_status::RESOLVED);
+                }
             }
         }};
 

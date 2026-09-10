@@ -124,6 +124,65 @@ TEST_CASE("Defer & discard statement resolution") {
     helpers::resolve_and_check("_ = 1 + 1;");
 }
 
+TEST_CASE("Defer body jump rejection") {
+    helpers::test_resolver_fail("fn(): void { defer { return; } }",
+                                sema::diagnostic{"cannot 'return' from inside a 'defer' body",
+                                                 sema::error::DEFER_BODY_JUMP,
+                                                 std::pair{0UZ, 21UZ}});
+
+    helpers::test_resolver_fail("fn(): void { defer { break; } }",
+                                sema::diagnostic{"cannot 'break' from inside a 'defer' body",
+                                                 sema::error::DEFER_BODY_JUMP,
+                                                 std::pair{0UZ, 21UZ}});
+
+    helpers::test_resolver_fail("fn(): void { defer { continue; } }",
+                                sema::diagnostic{"cannot 'continue' from inside a 'defer' body",
+                                                 sema::error::DEFER_BODY_JUMP,
+                                                 std::pair{0UZ, 21UZ}});
+
+    helpers::test_resolver_fail(
+        R"(
+const R := union { ok: i32, err: i32 };
+impl builtin.Unwrappable for R {
+    using Output = i32;
+    using Residual = i32;
+    pub const isBreak := fn(&self): bool { return match (self) { .ok => false, .err => true }; };
+    pub const intoOutput := fn(self): i32 { return match (self) { .ok => |v| v, .err => @trap() }; };
+    pub const intoResidual := fn(self): i32 { return match (self) { .err => |e| e, .ok => @trap() }; };
+}
+impl builtin.Rewrappable for R {
+    using From = i32;
+    pub const fromResidual := fn(r: i32): @this() { return .{ .err = r }; };
+}
+const f := fn(): R {
+    defer {
+        const r := R{ .ok = 1 };
+        _ = r?;
+    }
+    return R{ .ok = 0 };
+};
+)",
+        sema::diagnostic{"cannot use '?' operator inside a 'defer' body",
+                         sema::error::DEFER_BODY_JUMP,
+                         std::pair{16UZ, 12UZ}});
+
+    SECTION("Loops and local blocks inside defer are allowed to use break and continue") {
+        helpers::resolve_and_check(R"(
+fn(): void {
+    defer {
+        while (true) {
+            break;
+            continue;
+        }
+        blk: {
+            break :blk;
+        }
+    }
+}
+)");
+    }
+}
+
 TEST_CASE("Call resolution edge cases") {
     helpers::resolve_and_check(
         "@sizeOf(blk: { if (1 + 1 == 2) { break :blk i32; } else { break :blk f64; } });");

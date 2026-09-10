@@ -2,6 +2,7 @@
 
 #include <concepts>
 #include <filesystem>
+#include <iostream>
 #include <ostream>
 #include <string>
 #include <string_view>
@@ -384,7 +385,7 @@ class module_manager {
         -> stdx::result<void, diagnostic>;
 
     // Prints every poisoned/errored module's diagnostics
-    auto print_all_diagnostics(std::ostream& os) const -> void;
+    auto print_all_diagnostics(std::ostream& os = std::cerr) const -> void;
 
     // True if any module ever loaded through this manager is poisoned or errored
     [[nodiscard]] auto any_errored() const noexcept -> bool;

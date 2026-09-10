@@ -40,6 +40,7 @@
 #include "compiler/sema/generic.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/sema/unwrap_shape.hh"
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/int128.hh"
@@ -345,8 +346,6 @@ auto emitter::emit_type_ctor_member(mod::module& owner_mod, const sema::type_cto
     const_eval_.set_module(owner_mod);
     const_eval_.clear_memo();
 
-    // Overlay this constructor instantiation's body typing onto the shared AST nodes so
-    // `@this()` / `.{ ... }` / `^self` resolve to the right shape.
     const auto                 diff{ctx_.instantiation_cache.get_body_type_diff(tcm.typing_key)};
     const mod::body_diff_guard diff_guard{owner_mod, diff};
 
@@ -4937,27 +4936,44 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
     stdx::option<local_id> res_slot;
     if (yields_value) { res_slot.emplace(builder_.emit_alloca(*sema_type)); }
 
-    const auto matcher_val{emit_expression(match.matcher)};
-    auto&      bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
-    auto&      merge_seg{fn.add_segment()};
+    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto& merge_seg{fn.add_segment()};
 
     // A tagged union's tag and a capture both need the scrutinee's address
     auto& matcher_sema_type{active_mod().get_sema_type_opt(match.matcher).value_or(*sema_type)};
-    const auto          union_data{matcher_sema_type.get_data().as_opt<sema::types::union_t>()};
-    const bool          has_capture{std::ranges::any_of(
+    const auto ref_data{matcher_sema_type.get_data().as_opt<sema::types::reference>()};
+    auto&      effective_matcher_type{ref_data ? ref_data->underlying : matcher_sema_type};
+    const auto union_data{effective_matcher_type.get_data().as_opt<sema::types::union_t>()};
+    const bool has_capture{std::ranges::any_of(
         match.arms, [](const ast::match_expr::arm& arm) { return arm.capture.has_value(); })};
     stdx::option<value> matcher_addr;
-    if (has_capture || (union_data && !union_data->is_untagged)) {
-        // Anything else is an rvalue: its value is spilled instead of re-evaluating the matcher.
-        const bool is_lvalue_shape{active_ast().get_as_opt<ast::identifier_expr>(match.matcher) ||
-                                   active_ast().get_as_opt<ast::dot_expr>(match.matcher) ||
-                                   active_ast().get_as_opt<ast::index_expr>(match.matcher) ||
-                                   active_ast().get_as_opt<ast::dereference_expr>(match.matcher)};
-        if (is_lvalue_shape) {
-            matcher_addr.emplace(emit_lvalue(match.matcher));
-        } else {
-            matcher_addr.emplace(spill_to_temporary(
-                matcher_val, matcher_sema_type, matcher_sema_type.is_constant()));
+    value effective_matcher_val{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+
+    if (ref_data) {
+        const auto raw_ref{emit_expression_id_raw(*match.matcher)};
+        matcher_addr.emplace(value{raw_ref.data, effective_matcher_type});
+        if (!union_data || union_data->is_untagged) {
+            const auto loaded{builder_.emit_load(raw_ref, effective_matcher_type)};
+            effective_matcher_val = value{loaded, effective_matcher_type};
+        }
+    } else {
+        const auto matcher_val{emit_expression(match.matcher)};
+        effective_matcher_val = matcher_val;
+
+        if (has_capture || (union_data && !union_data->is_untagged)) {
+            // Anything else is an rvalue: its value is spilled instead of re-evaluating the
+            // matcher.
+            const bool is_lvalue_shape{
+                active_ast().get_as_opt<ast::identifier_expr>(match.matcher) ||
+                active_ast().get_as_opt<ast::dot_expr>(match.matcher) ||
+                active_ast().get_as_opt<ast::index_expr>(match.matcher) ||
+                active_ast().get_as_opt<ast::dereference_expr>(match.matcher)};
+            if (is_lvalue_shape) {
+                matcher_addr.emplace(emit_lvalue(match.matcher));
+            } else {
+                matcher_addr.emplace(spill_to_temporary(
+                    matcher_val, matcher_sema_type, matcher_sema_type.is_constant()));
+            }
         }
     }
 
@@ -4977,12 +4993,13 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
                 ASSERT(range->lhs && range->rhs, "A range pattern needs both endpoints");
                 const auto start_val{emit_expression(*range->lhs)};
                 const auto end_val{emit_expression(*range->rhs)};
-                const auto ge_cond{
-                    builder_.emit_binary(instruction_kind::GE, matcher_val, start_val, bool_type)};
+                const auto ge_cond{builder_.emit_binary(
+                    instruction_kind::GE, effective_matcher_val, start_val, bool_type)};
                 const auto le_kind{pat_id.get_token_type() == syntax::token_type_t::DOT_DOT_EQ
                                        ? instruction_kind::LE
                                        : instruction_kind::LT};
-                const auto le_cond{builder_.emit_binary(le_kind, matcher_val, end_val, bool_type)};
+                const auto le_cond{
+                    builder_.emit_binary(le_kind, effective_matcher_val, end_val, bool_type)};
                 return value{builder_.emit_binary(instruction_kind::AND,
                                                   value{ge_cond, bool_type},
                                                   value{le_cond, bool_type},
@@ -4992,7 +5009,7 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
             const auto is_eq{union_data && !union_data->is_untagged
                                  ? emit_union_tag_eq(*matcher_addr, pat_id)
                                  : builder_.emit_binary(instruction_kind::EQ,
-                                                        matcher_val,
+                                                        effective_matcher_val,
                                                         emit_expression_id(pat_id),
                                                         bool_type)};
             return value{is_eq, bool_type};
@@ -5119,28 +5136,6 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
     }
     return value{void_val{}, sema_type};
 }
-
-namespace {
-
-// A tagged union recognized as `union { ok/some: T, err/none: E }`, resolved to field ordinals.
-struct unwrap_field_layout {
-    u64  payload_idx;
-    u64  diverge_idx;
-    bool diverge_is_void;
-};
-
-[[nodiscard]] auto unwrap_layout_of(sema::context& ctx, const sema::type& union_type)
-    -> unwrap_field_layout {
-    const auto& table{ctx.registry.get(union_type.get_symbol_table_idx())};
-    const bool  is_optional{table.get_proxy_opt("some").has_value()};
-    return {
-        .payload_idx     = table.get_proxy(is_optional ? "some" : "ok").index,
-        .diverge_idx     = table.get_proxy(is_optional ? "none" : "err").index,
-        .diverge_is_void = is_optional,
-    };
-}
-
-} // namespace
 
 auto emitter::emit_union_active_field_guard(value            union_addr,
                                             u64              field_idx,
@@ -5286,25 +5281,18 @@ auto emitter::emit_mem_intrinsic(ast::node_id          id,
 
 auto emitter::emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> value {
     PROFILE_FUNCTION();
-    const auto payload_type_opt{active_mod().get_sema_type_opt(id)};
-    ASSERT(payload_type_opt, "unwrap expression must have a resolved payload type");
-    auto& payload_type{*payload_type_opt};
-
     const auto operand_type_opt{active_mod().get_sema_type_opt(unwrap.operand)};
     ASSERT(operand_type_opt, "unwrap operand must have a resolved type");
     auto& operand_type{*operand_type_opt};
-    ASSERT(operand_type.get_data().as_opt<sema::types::union_t>(),
-           "unwrap operand must be a tagged union");
 
-    const auto layout{unwrap_layout_of(ctx_, operand_type)};
+    const auto shape{unwrap_shape_of(ctx_, operand_type)};
+    ASSERT(shape, "unwrap operand must implement builtin.Unwrappable");
 
     auto fn_opt{builder_.get_function()};
     ASSERT(fn_opt, "unwrap must be within an active function");
-    [[maybe_unused]] auto& fn{*fn_opt};
+    auto& fn{*fn_opt};
 
-    [[maybe_unused]] auto& i32_type{ctx_.get_int(32, true)};
-    auto&                  usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
-    [[maybe_unused]] auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
 
     // Address of the scrutinee: reuse its storage when it is an lvalue, else spill the rvalue.
     const bool is_lvalue_shape{active_ast().get_as_opt<ast::identifier_expr>(unwrap.operand) ||
@@ -5318,46 +5306,45 @@ auto emitter::emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> va
 
     // `?` propagation is control flow, not a safety check, so it is always emitted
     const bool is_propagation{id.get_token_type() == syntax::token_type_t::QUESTION};
+
+    auto& base_operand{const_cast<sema::type&>(*shape->operand_type)};
     if (is_propagation || runtime_safety_) {
-        const auto tag_ptr{builder_.emit_get_element_ptr(
-            operand_addr, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
-        const auto tag_val{builder_.emit_load(value{tag_ptr, i32_type}, i32_type)};
-        const auto is_payload{
-            builder_.emit_binary(instruction_kind::EQ,
-                                 value{tag_val, i32_type},
-                                 value{static_cast<i64>(layout.payload_idx), i32_type},
-                                 bool_type)};
+        const auto is_break_name{shape->gir_method_name("isBreak", symbol_scoping_)};
+        auto&      ref_type{ctx_.get_reference(sema::types::mut::CONSTANT, base_operand)};
+        const auto self_ref{builder_.emit_address_of(operand_addr, ref_type)};
+        const auto is_break_dest{
+            builder_.emit_call(is_break_name, {value{self_ref, ref_type}}, bool_type)};
+        ASSERT(is_break_dest, "isBreak must return a bool");
+        const value is_break_val{*is_break_dest, bool_type};
 
         auto& payload_seg{fn.add_segment()};
         auto& diverge_seg{fn.add_segment()};
-        builder_.emit_cond_goto(
-            value{is_payload, bool_type}, payload_seg.get_id(), diverge_seg.get_id());
+        builder_.emit_cond_goto(is_break_val, diverge_seg.get_id(), payload_seg.get_id());
 
         builder_.set_segment(diverge_seg);
         if (is_propagation) {
-            emit_unwrap_propagation(
-                operand_addr, operand_type, layout.diverge_idx, layout.diverge_is_void, id);
+            emit_unwrap_propagation(operand_addr, *shape, id);
         } else {
-            emit_panic_call(layout.diverge_is_void ? "'!' unwrapped an empty optional"
-                                                   : "'!' unwrapped an errored result",
+            emit_panic_call(shape->residual_is_void ? "'!' unwrapped an empty optional"
+                                                    : "'!' unwrapped an errored result",
                             id);
         }
 
-        // `diverge_seg` always terminates; execution continues in `payload_seg`.
         builder_.set_segment(payload_seg);
     }
 
-    const auto payload_ptr{builder_.emit_get_element_ptr(
-        operand_addr, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, payload_type)};
-    const auto loaded{builder_.emit_load(value{payload_ptr, payload_type}, payload_type)};
-    return value{loaded, payload_type};
+    const auto into_output_name{shape->gir_method_name("intoOutput", symbol_scoping_)};
+    const auto loaded_self{builder_.emit_load(operand_addr, base_operand)};
+    auto&      out_type{const_cast<sema::type&>(*shape->output_type)};
+    const auto out_dest{
+        builder_.emit_call(into_output_name, {value{loaded_self, base_operand}}, out_type)};
+    if (out_dest) { return value{*out_dest, out_type}; }
+    return value{void_val{}, out_type};
 }
 
-auto emitter::emit_unwrap_propagation(value             operand_addr,
-                                      const sema::type& operand_union,
-                                      u64               operand_diverge_idx,
-                                      bool              diverge_is_void,
-                                      ast::node_id      site) -> void {
+auto emitter::emit_unwrap_propagation(value                    operand_addr,
+                                      const sema::unwrap_info& shape,
+                                      ast::node_id             site) -> void {
     PROFILE_FUNCTION();
     auto fn_opt{builder_.get_function()};
     ASSERT(fn_opt, "`?` propagation must be within an active function");
@@ -5365,42 +5352,36 @@ auto emitter::emit_unwrap_propagation(value             operand_addr,
     ASSERT(fn_data, "`?` propagation requires the enclosing function signature");
     auto& ret_type{fn_data->return_type};
 
-    const auto ret_layout{unwrap_layout_of(ctx_, ret_type)};
-
-    auto& i32_type{ctx_.get_int(32, true)};
-    auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
-
     builder_.set_location(active_ast().location_of(site));
-    const auto ret_slot{builder_.emit_alloca(ret_type)};
 
-    const auto tag_ptr{builder_.emit_get_element_ptr(
-        value{ret_slot, ret_type}, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
-    builder_
-        .emit_store(value{tag_ptr, i32_type},
-                    value{static_cast<i64>(ret_layout.diverge_idx), i32_type})
-        .is_initializer = true;
+    auto&      base_operand{const_cast<sema::type&>(*shape.operand_type)};
+    const auto into_residual_name{shape.gir_method_name("intoResidual", symbol_scoping_)};
+    const auto loaded_self{builder_.emit_load(operand_addr, base_operand)};
+    auto&      residual_type{const_cast<sema::type&>(*shape.residual_type)};
+    const auto res_dest{
+        builder_.emit_call(into_residual_name, {value{loaded_self, base_operand}}, residual_type)};
+    value res_val{res_dest ? value{*res_dest, residual_type} : value{void_val{}, residual_type}};
 
-    // A non-void divergent payload is copied across
-    if (!diverge_is_void) {
-        auto& src_type{operand_union.get_data().as<sema::types::union_t>().type_at(
-            static_cast<usize>(operand_diverge_idx))};
-        auto& dst_type{ret_type.get_data().as<sema::types::union_t>().type_at(
-            static_cast<usize>(ret_layout.diverge_idx))};
+    const auto rewrap{rewrap_shape_of(ctx_, ret_type)};
+    ASSERT(rewrap, "`?` propagation return type must implement Rewrappable");
 
-        const auto src_ptr{builder_.emit_get_element_ptr(
-            operand_addr, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, src_type)};
-        const auto err_val{builder_.emit_load(value{src_ptr, src_type}, src_type)};
-
-        const auto dst_ptr{builder_.emit_get_element_ptr(
-            value{ret_slot, ret_type}, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, dst_type)};
-        builder_.emit_store(value{dst_ptr, dst_type}, value{err_val, src_type}).is_initializer =
-            true;
+    auto& from_type{const_cast<sema::type&>(*rewrap->from_type)};
+    if (res_val.type && *res_val.type != from_type &&
+        (sema::is_implicit_widenable(*res_val.type, from_type) ||
+         sema::is_assignable(*res_val.type, from_type))) {
+        const auto casted{builder_.emit_cast(instruction_kind::WIDEN_CAST, res_val, from_type)};
+        res_val = value{casted, from_type};
     }
 
-    const auto ret_val{builder_.emit_load(value{ret_slot, ret_type}, ret_type)};
+    const auto from_residual_name{rewrap->gir_method_name("fromResidual", symbol_scoping_)};
+    auto&      final_ret_type{const_cast<sema::type&>(*rewrap->return_type)};
+    const auto rewrapped_dest{builder_.emit_call(from_residual_name, {res_val}, final_ret_type)};
+    value      ret_val{rewrapped_dest ? value{*rewrapped_dest, final_ret_type}
+                                      : value{void_val{}, final_ret_type}};
+
     emit_defers_up_to(0);
     builder_.set_location(active_ast().location_of(site));
-    builder_.emit_return(value{ret_val, ret_type});
+    builder_.emit_return(ret_val);
 }
 
 auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& init) -> value {

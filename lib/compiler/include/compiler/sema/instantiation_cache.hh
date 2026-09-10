@@ -196,6 +196,9 @@ struct body_typing_snapshot {
     // side-table entry the resolution changed into `out`.
     auto diff_into(context& ctx, mod::module& m, body_type_diff& out) const -> void;
 
+    // Restores `m`'s side tables and branch cache back to the captured state.
+    auto restore_to(mod::module& m) const -> void;
+
     std::vector<stdx::option<type&>>                    nodes;
     std::vector<stdx::option<type&>>                    types;
     ankerl::unordered_dense::map<usize, mod::if_branch> ifs;

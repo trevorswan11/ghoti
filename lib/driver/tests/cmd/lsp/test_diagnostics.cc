@@ -48,6 +48,17 @@ TEST_CASE("a shared session that analyzes two impls of one interface keeps inher
     mod::overlay_loader loader;
     CHECK(loader.add(std::filesystem::path{"reader.gh"}, R"(
         pub const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
+        impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
+            using Output = T;
+            using Residual = E;
+            pub const isBreak := fn(&self): bool { return match (self) { .ok => false, .err => true }; };
+            pub const intoOutput := fn(self): T { return match (self) { .ok => |v| v, .err => @trap() }; };
+            pub const intoResidual := fn(self): E { return match (self) { .err => |e| e, .ok => @trap() }; };
+        }
+        impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
+            using From = E;
+            pub const fromResidual := fn(r: E): @this() { return .{ .err = r }; };
+        }
         pub const Reader := interface {
             Error: type;
             pub const read := fn(&mut self, buf: []mut u8): Result(usize, Error);

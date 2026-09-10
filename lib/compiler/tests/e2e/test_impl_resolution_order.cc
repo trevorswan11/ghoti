@@ -241,8 +241,20 @@ TEST_CASE("E2E: a cross-module interface default method the impl does not overri
 
 TEST_CASE(
     "E2E: an inherited cross-module default method re-types `self.req()?` and an assoc type") {
-    constexpr std::string_view res_gh{
-        R"(pub const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };)"};
+    constexpr std::string_view res_gh{R"(
+        pub const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
+        impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
+            using Output = T;
+            using Residual = E;
+            pub const isBreak := fn(&self): bool { return match (self) { .ok => false, .err => true }; };
+            pub const intoOutput := fn(self): T { return match (self) { .ok => |v| v, .err => @trap() }; };
+            pub const intoResidual := fn(self): E { return match (self) { .err => |e| e, .ok => @trap() }; };
+        }
+        impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
+            using From = E;
+            pub const fromResidual := fn(r: E): @this() { return .{ .err = r }; };
+        }
+    )"};
     constexpr std::string_view writer_gh{R"(
         import "res.gh" as res;
         pub const Writer := interface {
@@ -291,8 +303,20 @@ TEST_CASE(
 }
 
 TEST_CASE("E2E: one inherited cross-module default method calls another through `self`") {
-    constexpr std::string_view res_gh{
-        R"(pub const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };)"};
+    constexpr std::string_view res_gh{R"(
+        pub const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
+        impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
+            using Output = T;
+            using Residual = E;
+            pub const isBreak := fn(&self): bool { return match (self) { .ok => false, .err => true }; };
+            pub const intoOutput := fn(self): T { return match (self) { .ok => |v| v, .err => @trap() }; };
+            pub const intoResidual := fn(self): E { return match (self) { .err => |e| e, .ok => @trap() }; };
+        }
+        impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
+            using From = E;
+            pub const fromResidual := fn(r: E): @this() { return .{ .err = r }; };
+        }
+    )"};
     constexpr std::string_view writer_gh{R"(
         import "res.gh" as res;
         pub const Writer := interface {
@@ -344,8 +368,20 @@ TEST_CASE("E2E: one inherited cross-module default method calls another through 
 }
 
 TEST_CASE("E2E: a second impl of the same interface still inherits its default methods") {
-    constexpr std::string_view res_gh{
-        R"(pub const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };)"};
+    constexpr std::string_view res_gh{R"(
+        pub const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
+        impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
+            using Output = T;
+            using Residual = E;
+            pub const isBreak := fn(&self): bool { return match (self) { .ok => false, .err => true }; };
+            pub const intoOutput := fn(self): T { return match (self) { .ok => |v| v, .err => @trap() }; };
+            pub const intoResidual := fn(self): E { return match (self) { .err => |e| e, .ok => @trap() }; };
+        }
+        impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
+            using From = E;
+            pub const fromResidual := fn(r: E): @this() { return .{ .err = r }; };
+        }
+    )"};
     constexpr std::string_view reader_gh{R"(
         import "res.gh" as res;
         pub const Reader := interface {
