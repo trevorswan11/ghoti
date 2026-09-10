@@ -369,6 +369,8 @@ auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
         }
     }};
 
+    bool force_break{node.fields_force_break || !node.members.empty() || !node.cfg_groups.empty()};
+
     flush_cfg_groups(0);
     for (usize i{0}; i < node.fields.size(); ++i) {
         const auto& field{node.fields[i]};
@@ -391,10 +393,12 @@ auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
                 {field_doc, doc_manager_.if_break(doc_manager_.text(","), doc_manager_.nil())});
         }
         if (trailing != doc_manager_.nil()) {
-            field_doc = doc_manager_.concat({field_doc, trailing});
+            field_doc   = doc_manager_.concat({field_doc, trailing});
+            force_break = true;
         }
         if (leading != doc_manager_.nil()) {
-            field_doc = doc_manager_.concat({leading, field_doc});
+            field_doc   = doc_manager_.concat({leading, field_doc});
+            force_break = true;
         }
         entries.emplace_back(field_doc);
         flush_cfg_groups(i + 1);
@@ -403,7 +407,7 @@ auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
     const auto field_count{entries.size()};
     format_members(entries, node.members, node.member_cfg_groups);
 
-    head.emplace_back(aggregate_body(std::move(entries), field_count, node.fields_force_break));
+    head.emplace_back(aggregate_body(std::move(entries), field_count, force_break));
     return doc_manager_.concat(std::move(head));
 }
 
@@ -435,14 +439,15 @@ auto formatter::format_union(const union_expr& node) -> syntax::doc_id {
         }
     }};
 
+    bool force_break{node.fields_force_break || !node.members.empty() || !node.cfg_groups.empty()};
+
     flush_cfg_groups(0);
     for (usize i{0}; i < node.fields.size(); ++i) {
         const auto& [name, explicit_type, explicit_alignment]{node.fields[i]};
         const auto& start_loc{ast_.location_of(name)};
         auto        leading{consume_leading_comments(start_loc.line, !entries.empty())};
 
-        const auto end_line{explicit_alignment ? ast_.end_location_of(*explicit_alignment).line
-                                               : ast_.end_location_of(explicit_type).line};
+        const auto end_line{ast_.end_location_of(explicit_type).line};
         const auto more_follows{i + 1 < node.fields.size() || !node.members.empty() ||
                                 !node.cfg_groups.empty()};
         auto       field_doc{field_item(node.fields[i])};
@@ -454,10 +459,12 @@ auto formatter::format_union(const union_expr& node) -> syntax::doc_id {
                 {field_doc, doc_manager_.if_break(doc_manager_.text(","), doc_manager_.nil())});
         }
         if (trailing != doc_manager_.nil()) {
-            field_doc = doc_manager_.concat({field_doc, trailing});
+            field_doc   = doc_manager_.concat({field_doc, trailing});
+            force_break = true;
         }
         if (leading != doc_manager_.nil()) {
-            field_doc = doc_manager_.concat({leading, field_doc});
+            field_doc   = doc_manager_.concat({leading, field_doc});
+            force_break = true;
         }
         entries.emplace_back(field_doc);
         flush_cfg_groups(i + 1);
@@ -465,7 +472,7 @@ auto formatter::format_union(const union_expr& node) -> syntax::doc_id {
     const auto field_count{entries.size()};
     format_members(entries, node.members, node.member_cfg_groups);
 
-    head.emplace_back(aggregate_body(std::move(entries), field_count, node.fields_force_break));
+    head.emplace_back(aggregate_body(std::move(entries), field_count, force_break));
     return doc_manager_.concat(std::move(head));
 }
 
@@ -489,6 +496,9 @@ auto formatter::format_enum(const enum_expr& node) -> syntax::doc_id {
         }
     }};
 
+    bool force_break{node.enumerations_force_break || !node.members.empty() ||
+                     !node.cfg_groups.empty()};
+
     const auto total_enums{node.enumerations.size() + (node.non_exhaustive ? 1 : 0)};
     flush_cfg_groups(0);
     for (usize i{0}; i < node.enumerations.size(); ++i) {
@@ -509,9 +519,13 @@ auto formatter::format_enum(const enum_expr& node) -> syntax::doc_id {
                 {enum_doc, doc_manager_.if_break(doc_manager_.text(","), doc_manager_.nil())});
         }
         if (trailing != doc_manager_.nil()) {
-            enum_doc = doc_manager_.concat({enum_doc, trailing});
+            enum_doc    = doc_manager_.concat({enum_doc, trailing});
+            force_break = true;
         }
-        if (leading != doc_manager_.nil()) { enum_doc = doc_manager_.concat({leading, enum_doc}); }
+        if (leading != doc_manager_.nil()) {
+            enum_doc    = doc_manager_.concat({leading, enum_doc});
+            force_break = true;
+        }
         entries.emplace_back(enum_doc);
         flush_cfg_groups(i + 1);
     }
@@ -533,8 +547,7 @@ auto formatter::format_enum(const enum_expr& node) -> syntax::doc_id {
         head.emplace_back(format(*node.underlying));
         head.emplace_back(doc_manager_.text(" "));
     }
-    head.emplace_back(
-        aggregate_body(std::move(entries), value_count, node.enumerations_force_break));
+    head.emplace_back(aggregate_body(std::move(entries), value_count, force_break));
     return doc_manager_.concat(std::move(head));
 }
 
