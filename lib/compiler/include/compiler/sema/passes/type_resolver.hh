@@ -407,7 +407,11 @@ class type_resolver {
     // during its template resolution, keyed on the param's name-node index
     auto param_impl_sentinel(usize disc) -> type&;
     // Opaque `type` placeholder for one interface associated type in its method signatures.
-    auto assoc_type_placeholder(usize disc) -> type&;
+    auto               assoc_type_placeholder(usize disc) -> type&;
+    [[nodiscard]] auto types_match_with_assoc(const impl_record&        rec,
+                                              const types::interface_t& iface,
+                                              const type&               want,
+                                              const type&               have) -> bool;
 
     type_resolver(mod::module& resolving, context& ctx)
         : resolving_{resolving}, table_idx_{*resolving.root_table_idx}, ctx_{ctx} {

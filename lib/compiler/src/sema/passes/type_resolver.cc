@@ -159,6 +159,45 @@ namespace {
     return !got_ptr && !got_ref;
 }
 
+// Identifiers, fields, elements, or deref off one have real storage; anything else is an rvalue.
+[[nodiscard]] auto is_lvalue_shape(const mod::module& module, ast::expr_handle expr) noexcept
+    -> bool {
+    return module.ast.get_as_opt<ast::identifier_expr>(expr) ||
+           module.ast.get_as_opt<ast::dot_expr>(expr) ||
+           module.ast.get_as_opt<ast::index_expr>(expr) ||
+           module.ast.get_as_opt<ast::dereference_expr>(expr);
+}
+
+[[nodiscard]] auto is_lvalue_expression(const mod::module& module, ast::expr_handle expr) noexcept
+    -> bool {
+    if (const auto ty{module.get_sema_type_opt(expr)}) {
+        if (ty->get_kind() == type_kind::REFERENCE) { return true; }
+    }
+    if (module.ast.get_as_opt<ast::identifier_expr>(expr)) { return true; }
+    if (const auto dot{module.ast.get_as_opt<ast::dot_expr>(expr)}) {
+        if (const auto obj_t{module.get_sema_type_opt(dot->object)}) {
+            if (obj_t->get_kind() == type_kind::POINTER ||
+                obj_t->get_kind() == type_kind::REFERENCE) {
+                return true;
+            }
+        }
+        return is_lvalue_expression(module, dot->object);
+    }
+
+    if (const auto idx{module.ast.get_as_opt<ast::index_expr>(expr)}) {
+        if (const auto arr_t{module.get_sema_type_opt(idx->array)}) {
+            if (arr_t->get_kind() == type_kind::POINTER ||
+                arr_t->get_kind() == type_kind::REFERENCE ||
+                arr_t->get_kind() == type_kind::SLICE) {
+                return true;
+            }
+        }
+        return is_lvalue_expression(module, idx->array);
+    }
+    if (module.ast.get_as_opt<ast::dereference_expr>(expr)) { return true; }
+    return false;
+}
+
 } // namespace
 
 auto type_resolver::visit(ast::node_id id, const ast::array_expr& array) -> void {
@@ -1644,67 +1683,6 @@ namespace {
     return false;
 }
 
-// Returns `t` with every occurrence of `from` replaced by `to`, looking through pointer,
-// reference, and function types. Returns `t` unchanged (same object) when nothing matched.
-[[nodiscard]] auto remap_type(context& ctx, type& t, const type& from, type& to) -> type& {
-    if (&t == &from) { return to; }
-    return t.get_data().visit(
-        [&](types::pointer p) -> type& {
-            auto& u{remap_type(ctx, p.underlying, from, to)};
-            if (&u == &p.underlying) { return t; }
-            return ctx.get_pointer(t.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE, u);
-        },
-        [&](types::reference r) -> type& {
-            auto& u{remap_type(ctx, r.underlying, from, to)};
-            if (&u == &r.underlying) { return t; }
-            return ctx.get_reference(t.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE,
-                                     u);
-        },
-        [&](types::slice sl) -> type& {
-            auto& u{remap_type(ctx, sl.underlying, from, to)};
-            if (&u == &sl.underlying) { return t; }
-            return ctx.get_slice(t.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE,
-                                 sl.null_terminated,
-                                 u);
-        },
-        [&](types::array ar) -> type& {
-            auto& u{remap_type(ctx, ar.underlying, from, to)};
-            if (&u == &ar.underlying) { return t; }
-            return ctx.get_array(t.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE,
-                                 ar.null_terminated,
-                                 ar.len,
-                                 u);
-        },
-        [&](types::deferred_array da) -> type& {
-            auto& u{remap_type(ctx, da.underlying, from, to)};
-            if (&u == &da.underlying) { return t; }
-            auto& nt{*ctx.pool[{type_kind::TYPE, t.get_key().get_mut(), &da.array, &u}]};
-            nt.resolve_if<types::deferred_array>(da.array, u);
-            return nt;
-        },
-        [&](types::function fn) -> type& {
-            bool changed{false};
-            auto new_params{ctx.pool.get_many_unsafe(fn.params.size())};
-            for (usize i{0}; i < fn.params.size(); ++i) {
-                auto& np{remap_type(ctx, *fn.params[i], from, to)};
-                new_params[i] = &np;
-                changed |= &np != fn.params[i];
-            }
-            auto& new_ret{remap_type(ctx, fn.return_type, from, to)};
-            if (!changed && &new_ret == &fn.return_type) { return t; }
-
-            types::key_t key{type_kind::FUNCTION, t.get_key().get_mut()};
-            for (auto* p : new_params) { key.imprint(*p); }
-            key.imprint(new_ret);
-            key.imprint(static_cast<u64>(fn.has_self));
-            key.imprint(static_cast<u64>(fn.is_variadic));
-            auto& nt{*ctx.pool[key]};
-            nt.resolve_if<types::function>(new_params, new_ret, fn.has_self, fn.is_variadic);
-            return nt;
-        },
-        [&t](const auto&) -> type& { return t; });
-}
-
 // The node id of the struct/union/enum literal a `fn(...): type` body returns, if any.
 [[nodiscard]] auto returned_aggregate_node(const ast::AST& ast, const ast::block_stmt& block)
     -> stdx::option<ast::node_id> {
@@ -1985,6 +1963,21 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                     "Expected {} arguments, found {}", expected_arity, call.arguments.size()),
                 error::ARITY_MISMATCH,
                 resolving_.ast.location_of(call.function)));
+        }
+
+        if (has_implicit_self && dot_call && is_obj_instance && !function_type->params.empty()) {
+            const auto& self_param{*function_type->params[0]};
+            const bool  self_requires_mut{!self_param.is_constant() &&
+                                         (self_param.get_kind() == type_kind::REFERENCE ||
+                                          self_param.get_kind() == type_kind::POINTER)};
+            if (self_requires_mut && !is_lvalue_expression(resolving_, dot_call->object)) {
+                return last_type_.emplace(ctx_.poison_node(
+                    resolving_,
+                    id,
+                    "Cannot call method requiring mutable 'self' on a temporary value",
+                    error::ILLEGAL_RVALUE_CAPTURE,
+                    resolving_.ast.location_of(dot_call->object)));
+            }
         }
 
         const auto fn_info_opt{ctx_.generic_functions.get_opt(callee_type)};
@@ -2307,15 +2300,6 @@ auto type_resolver::visit(ID id, const ast::enum_expr& enum_expr) -> void {
 VISITOR_TEMPLATE_INIT(type_resolver, visit, const ast::enum_expr&)
 
 namespace {
-
-// Identifiers, fields, elements, or deref off one have  real storage; anything else is an rvalue.
-[[nodiscard]] auto is_lvalue_shape(const mod::module& module, ast::expr_handle expr) noexcept
-    -> bool {
-    return module.ast.get_as_opt<ast::identifier_expr>(expr) ||
-           module.ast.get_as_opt<ast::dot_expr>(expr) ||
-           module.ast.get_as_opt<ast::index_expr>(expr) ||
-           module.ast.get_as_opt<ast::dereference_expr>(expr);
-}
 
 // Applies a `&`/`&mut`/`^`/`^mut`/none capture modifier, rejecting const or address-of-rvalue.
 [[nodiscard]] auto resolve_capture_modifier(context&           ctx,
@@ -4947,6 +4931,47 @@ namespace {
     return false;
 }
 
+[[nodiscard]] auto is_type_denoting_expr(const context&            ctx,
+                                         const mod::module&        mod,
+                                         ast::node_id              id,
+                                         const symbol_table_stack* tables = nullptr) -> bool {
+    if (const auto ty{mod.get_sema_type_opt(id)}) {
+        if (ty->get_kind() == type_kind::TYPE) { return true; }
+    }
+    if (const auto ident{mod.ast.get_as_opt<ast::identifier_expr>(id)}) {
+        if (syntax::token_type::is_int_type_lexeme(ident->name) ||
+            syntax::token_type::is_primitive(id.get_token_type()) ||
+            id.get_token_type() == syntax::token_type_t::TYPE_TYPE) {
+            return true;
+        }
+        if (tables) {
+            if (const auto sym{ctx.registry.lookup_with_depth(*tables, ident->name)}) {
+                if (sym->symbol.get_kind() == symbol_kind::TYPE) { return true; }
+            }
+        }
+        if (mod.root_table_idx) {
+            if (const auto sym{ctx.registry.get_from_opt(*mod.root_table_idx, ident->name)}) {
+                if (sym->get_kind() == symbol_kind::TYPE) { return true; }
+            }
+        }
+        if (ctx.prelude_index) {
+            if (const auto b{ctx.registry.get_from_opt(*ctx.prelude_index, ident->name)}) {
+                if (b->get_kind() == symbol_kind::TYPE) { return true; }
+            }
+        }
+    }
+    if (const auto arr{mod.ast.get_as_opt<ast::array_expr>(id)}) {
+        if (arr->is_type_expr) { return true; }
+    }
+    if (const auto adr{mod.ast.get_as_opt<ast::address_of_expr>(id)}) {
+        return is_type_denoting_expr(ctx, mod, adr->rhs, tables);
+    }
+    if (const auto ref{mod.ast.get_as_opt<ast::reference_expr>(id)}) {
+        return is_type_denoting_expr(ctx, mod, ref->rhs, tables);
+    }
+    return false;
+}
+
 } // namespace
 
 auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> void {
@@ -4957,6 +4982,17 @@ auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> vo
         TRY_RESOLVE(ref.rhs);
     }
     auto& rhs_type{*last_type_.take()};
+
+    const bool is_mut{ref_addr_of_is_mutable(id) == types::mut::MUTABLE};
+    if (is_mut && !is_type_denoting_expr(ctx_, resolving_, ref.rhs, &table_stack_) &&
+        !is_lvalue_expression(resolving_, ref.rhs)) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             "Cannot take a mutable reference to a temporary value",
+                             error::ILLEGAL_RVALUE_CAPTURE,
+                             resolving_.ast.location_of(id)));
+    }
 
     if (rhs_is_packed_field(resolving_, ref.rhs)) {
         return last_type_.emplace(ctx_.poison_node(
@@ -4993,6 +5029,17 @@ auto type_resolver::visit(ast::node_id id, const ast::address_of_expr& adr_of) -
         TRY_RESOLVE(adr_of.rhs);
     }
     auto& rhs_type{*last_type_.take()};
+
+    const bool is_mut{ref_addr_of_is_mutable(id) == types::mut::MUTABLE};
+    if (is_mut && !is_type_denoting_expr(ctx_, resolving_, adr_of.rhs, &table_stack_) &&
+        !is_lvalue_expression(resolving_, adr_of.rhs)) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             "Cannot take a mutable pointer to a temporary value",
+                             error::ILLEGAL_RVALUE_CAPTURE,
+                             resolving_.ast.location_of(id)));
+    }
 
     if (rhs_is_packed_field(resolving_, adr_of.rhs)) {
         return last_type_.emplace(ctx_.poison_node(
@@ -7008,6 +7055,7 @@ auto type_resolver::instantiate_impls_for(
             for (const auto& member : impl_stmt->members) {
                 const auto decl{impl_mod.ast.get_as_opt<ast::decl_stmt>(*member)};
                 if (!decl || !decl->value || !decl->value->is<ast::function_expr>()) { continue; }
+                if (typing.find_node_type(decl->value->get_index())) { continue; }
                 if (const auto t{impl_mod.get_sema_type_opt(*decl->value)}) {
                     auto* remapped{remap_one(const_cast<type*>(t.get()))};
                     typing.node_types.emplace_back((*member).get_index(), remapped);
@@ -7024,14 +7072,26 @@ auto type_resolver::instantiate_impls_for(
             ctx_.advance_epoch();
         }
 
+        std::vector<const type*> rec_sentinels;
+        std::vector<const type*> rec_type_args;
+        for (usize i{0}; i < tmpl.sentinels.size() && i < type_bounds.size(); ++i) {
+            if (tmpl.sentinels[i] && type_bounds[i]) {
+                rec_sentinels.emplace_back(tmpl.sentinels[i]);
+                rec_type_args.emplace_back(type_bounds[i]);
+            }
+        }
+
         impl_record rec{
             .interface_type     = pimpl->interface_type,
             .target_type        = concrete,
             .site               = pimpl->site,
             .enclosing          = pimpl->enclosing,
             .body_scope_idx     = pimpl->body_scope_idx,
+            .methods            = {},
             .from_parameterized = true,
             .gir_prefix         = typing_key,
+            .sentinels          = std::move(rec_sentinels),
+            .type_arguments     = std::move(rec_type_args),
         };
         for (const auto& member : impl_stmt->members) {
             const auto decl{impl_mod.ast.get_as_opt<ast::decl_stmt>(*member)};
@@ -7042,8 +7102,15 @@ auto type_resolver::instantiate_impls_for(
                 .fn_type = stdx::none,
                 .is_pub  = decl->has_modifier(ast::decl_modifiers::PUBLIC),
             };
-            if (const auto t{impl_mod.get_sema_type_opt(*decl->value)}) {
-                m.fn_type = remap_one(const_cast<type*>(t.get()));
+            if (const auto diff{ctx_.instantiation_cache.get_body_type_diff(typing_key)}) {
+                if (const auto nt{diff->find_node_type(decl->value->get_index())}; nt && *nt) {
+                    m.fn_type = *nt;
+                }
+            }
+            if (!m.fn_type) {
+                if (const auto t{impl_mod.get_sema_type_opt(*decl->value)}) {
+                    m.fn_type = remap_one(const_cast<type*>(t.get()));
+                }
             }
             rec.methods.emplace_back(std::move(m));
         }
@@ -7174,7 +7241,48 @@ auto type_resolver::resolve_param_impl_bodies(
         for (const auto& stmt : impl_mod.ast.get_as<ast::block_stmt>(fn_expr.body)) {
             inst.resolve(stmt);
         }
+        auto tracker{std::move(inst.return_trackers_.back())};
         inst.return_trackers_.pop_back();
+
+        stdx::option<type&> deduced_ret{auto_ret ? tracker.deduced_return_type(ctx_) : ret};
+        if (deduced_ret->get_data().is<types::deferred_call>()) {
+            gir::const_eval evaluator{ctx_, impl_mod};
+            deduced_ret.emplace(
+                const_cast<type&>(denoted_type(evaluator.force_deferred_call(*deduced_ret))));
+        }
+
+        const bool  has_self{fn_expr.self.has_value()};
+        const usize num_params{fn_expr.parameters.size() + (has_self ? 1UZ : 0UZ)};
+        auto        concrete_param_types{ctx_.pool.get_many_unsafe(num_params)};
+        usize       pi{0};
+        if (has_self) {
+            if (const auto st{impl_mod.get_sema_type_opt(fn_expr.self->name)}) {
+                concrete_param_types[pi++] = const_cast<type*>(st.get());
+            } else {
+                concrete_param_types[pi++] = &concrete;
+            }
+        }
+        for (const auto& param : fn_expr.parameters) {
+            if (const auto pt{impl_mod.get_sema_type_opt(param.name)}) {
+                concrete_param_types[pi++] = const_cast<type*>(pt.get());
+            } else {
+                concrete_param_types[pi++] = &ctx_.get_poison();
+            }
+        }
+
+        types::key_t key{type_kind::FUNCTION, types::mut::CONSTANT};
+        for (auto* p : concrete_param_types) { key.imprint(*p); }
+        key.imprint(*deduced_ret);
+        key.imprint(static_cast<u64>(fn_expr.self.has_value()));
+        key.imprint(static_cast<u64>(fn_expr.variadic));
+        auto& concrete_fn_type{*ctx_.pool[key]};
+        concrete_fn_type.resolve_if<types::function>(
+            concrete_param_types, *deduced_ret, fn_expr.self.has_value(), fn_expr.variadic);
+        if (fn_type && fn_type->has_symbol_table_idx()) {
+            concrete_fn_type.set_symbol_table_idx(fn_type->get_symbol_table_idx());
+        }
+        impl_mod.set_sema_type(*decl->value, concrete_fn_type);
+        impl_mod.set_sema_type(*member, concrete_fn_type);
     }
     snap.diff_into(ctx_, impl_mod, out);
 }
@@ -7301,6 +7409,152 @@ auto type_resolver::visit(ast::node_id id, const ast::impl_stmt& impl) -> void {
     last_type_.emplace(void_type);
 }
 
+auto type_resolver::types_match_with_assoc(const impl_record&        rec,
+                                           const types::interface_t& iface,
+                                           const type&               want,
+                                           const type&               have) -> bool {
+    if (&want == &have || is_same_unqualified(want, have) || is_assignable(have, want)) {
+        return true;
+    }
+
+    // Check if `want` is an associated type placeholder of `iface`:
+    for (usize k{0}; k < iface.ast_assoc_types.size(); ++k) {
+        const auto node_idx{(*iface.ast_assoc_types[k].name).get_index()};
+        if (&want == &assoc_type_placeholder(node_idx)) {
+            const auto assoc_name{iface.assoc_type_names[k]};
+            if (const auto bound{find_assoc_type_alias(ctx_, rec, assoc_name)}) {
+                if (bound->get_kind() == type_kind::TYPE) { return true; }
+                return is_same_unqualified(*bound, have) || is_assignable(have, *bound);
+            }
+            return true;
+        }
+    }
+
+    const auto get_arg_type{
+        [](const mod::module& m, const ast::call_expr::argument& arg) -> stdx::option<type&> {
+            if (const auto tid{arg.as_opt<ast::explicit_type_id>()}) {
+                return m.get_sema_type_opt(*tid);
+            }
+            if (const auto eh{arg.as_opt<ast::expr_handle>()}) { return m.get_sema_type_opt(*eh); }
+            return stdx::none;
+        }};
+
+    if (const auto dc_w{want.get_data().as_opt<types::deferred_call>()}) {
+        if (const auto dc_h{have.get_data().as_opt<types::deferred_call>()}) {
+            if (dc_w->call.arguments.size() == dc_h->call.arguments.size()) {
+                bool        args_match{true};
+                const auto& mod_w{iface.enclosing};
+                const auto& mod_h{rec.enclosing ? *rec.enclosing : resolving_};
+                for (usize i{0}; i < dc_w->call.arguments.size(); ++i) {
+                    const auto arg_w{get_arg_type(mod_w, dc_w->call.arguments[i])};
+                    const auto arg_h{get_arg_type(mod_h, dc_h->call.arguments[i])};
+                    if (arg_w && arg_h) {
+                        if (!types_match_with_assoc(rec, iface, *arg_w, *arg_h)) {
+                            args_match = false;
+                            break;
+                        }
+                    }
+                }
+                if (args_match) { return true; }
+            }
+        }
+    }
+
+    if (want.get_kind() == type_kind::TYPE) { return true; }
+
+    if (const auto pw{want.get_data().as_opt<types::pointer>()}) {
+        if (const auto ph{have.get_data().as_opt<types::pointer>()}) {
+            if (want.is_constant() != have.is_constant()) { return false; }
+            return types_match_with_assoc(rec, iface, pw->underlying, ph->underlying);
+        }
+        return false;
+    }
+
+    if (const auto rw{want.get_data().as_opt<types::reference>()}) {
+        if (const auto rh{have.get_data().as_opt<types::reference>()}) {
+            if (want.is_constant() != have.is_constant()) { return false; }
+            return types_match_with_assoc(rec, iface, rw->underlying, rh->underlying);
+        }
+        return false;
+    }
+
+    if (const auto sw{want.get_data().as_opt<types::slice>()}) {
+        if (const auto sh{have.get_data().as_opt<types::slice>()}) {
+            if (want.is_constant() != have.is_constant() ||
+                sw->null_terminated != sh->null_terminated) {
+                return false;
+            }
+            return types_match_with_assoc(rec, iface, sw->underlying, sh->underlying);
+        }
+        return false;
+    }
+
+    if (const auto aw{want.get_data().as_opt<types::array>()}) {
+        if (const auto ah{have.get_data().as_opt<types::array>()}) {
+            if (want.is_constant() != have.is_constant() || aw->len != ah->len ||
+                aw->null_terminated != ah->null_terminated) {
+                return false;
+            }
+            return types_match_with_assoc(rec, iface, aw->underlying, ah->underlying);
+        }
+        return false;
+    }
+
+    if (const auto uw{want.get_data().as_opt<types::union_t>()}) {
+        if (const auto uh{have.get_data().as_opt<types::union_t>()}) {
+            if (uw->fields.size() != uh->fields.size()) { return false; }
+            for (usize i{0}; i < uw->fields.size(); ++i) {
+                const auto nw{
+                    uw->enclosing.ast.get_as<ast::identifier_expr>(*uw->ast_fields[i].name).name};
+                const auto nh{
+                    uh->enclosing.ast.get_as<ast::identifier_expr>(*uh->ast_fields[i].name).name};
+                if (nw != nh) { return false; }
+                if (!types_match_with_assoc(rec, iface, *uw->fields[i], *uh->fields[i])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
+    if (const auto sw{want.get_data().as_opt<types::struct_t>()}) {
+        if (const auto sh{have.get_data().as_opt<types::struct_t>()}) {
+            if (sw->fields.size() != sh->fields.size()) { return false; }
+            for (usize i{0}; i < sw->fields.size(); ++i) {
+                const auto nw{
+                    sw->enclosing.ast.get_as<ast::identifier_expr>(*sw->ast_fields[i].name).name};
+                const auto nh{
+                    sh->enclosing.ast.get_as<ast::identifier_expr>(*sh->ast_fields[i].name).name};
+                if (nw != nh) { return false; }
+                if (!types_match_with_assoc(rec, iface, *sw->fields[i], *sh->fields[i])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
+    if (const auto fw{want.get_data().as_opt<types::function>()}) {
+        if (const auto fh{have.get_data().as_opt<types::function>()}) {
+            if (fw->has_self != fh->has_self || fw->is_variadic != fh->is_variadic ||
+                fw->params.size() != fh->params.size()) {
+                return false;
+            }
+            for (usize i{0}; i < fw->params.size(); ++i) {
+                if (!types_match_with_assoc(rec, iface, *fw->params[i], *fh->params[i])) {
+                    return false;
+                }
+            }
+            return types_match_with_assoc(rec, iface, fw->return_type, fh->return_type);
+        }
+        return false;
+    }
+
+    return false;
+}
+
 auto type_resolver::check_impl_conformance(const impl_record& rec, const types::interface_t& iface)
     -> void {
     PROFILE_FUNCTION();
@@ -7361,8 +7615,7 @@ auto type_resolver::check_impl_conformance(const impl_record& rec, const types::
                                         const_cast<type&>(*rec.target_type))
                            : want_base};
             auto& have{*got->params[p]};
-            if (want.get_kind() == type_kind::TYPE) { continue; } // associated / Self slot
-            if (!is_same_unqualified(want, have) && !is_assignable(have, want)) {
+            if (!types_match_with_assoc(rec, iface, want, have)) {
                 ctx_.diags.emplace_back(
                     fmt::format(
                         "method `{}`: parameter {} type does not match the requirement in `{}`",
@@ -7380,8 +7633,7 @@ auto type_resolver::check_impl_conformance(const impl_record& rec, const types::
                                             *rec.interface_type,
                                             const_cast<type&>(*rec.target_type))
                                : const_cast<type&>(expected->return_type)};
-        if (expected_ret.get_kind() != type_kind::TYPE &&
-            !is_same_unqualified(expected_ret, got->return_type)) {
+        if (!types_match_with_assoc(rec, iface, expected_ret, got->return_type)) {
             ctx_.diags.emplace_back(
                 fmt::format("method `{}`: return type does not match the requirement in `{}`",
                             name,

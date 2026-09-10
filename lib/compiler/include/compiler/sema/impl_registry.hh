@@ -43,8 +43,10 @@ struct impl_record {
     std::vector<method>              methods{};
 
     // Set for a record produced by expanding an `impl(P) ...` for one concrete target
-    bool        from_parameterized{false};
-    std::string gir_prefix{}; // The per-instantiation symbol prefix
+    bool                     from_parameterized{false};
+    std::string              gir_prefix{}; // The per-instantiation symbol prefix
+    std::vector<const type*> sentinels{};
+    std::vector<const type*> type_arguments{};
 
     template <typename Self>
     [[nodiscard]] auto find_method(this Self&& self, std::string_view name) noexcept
