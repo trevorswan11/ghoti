@@ -85,6 +85,7 @@ class dumper {
     auto visit(node_id, const continue_stmt&) -> void;
     auto visit(node_id, const decl_stmt&) -> void;
     auto visit(node_id, const defer_stmt&) -> void;
+    auto visit(node_id, const errdefer_stmt&) -> void;
     auto visit(node_id, const discard_stmt&) -> void;
     auto visit(node_id, const expr_stmt&) -> void;
     auto visit(node_id, const impl_stmt&) -> void;

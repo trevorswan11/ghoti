@@ -223,6 +223,7 @@ auto parser::parse_statement(semicolon_behavior behavior)
     case token_type_t::BREAK:       return ast::break_stmt::parse(*this, behavior);
     case token_type_t::CONTINUE:    return ast::continue_stmt::parse(*this, behavior);
     case token_type_t::DEFER:       return ast::defer_stmt::parse(*this);
+    case token_type_t::ERRDEFER:    return ast::errdefer_stmt::parse(*this);
     case token_type_t::UNDERSCORE:  return ast::discard_stmt::parse(*this);
     case token_type_t::IMPL:        return ast::impl_stmt::parse(*this);
     case token_type_t::IMPORT:      return ast::import_stmt::parse(*this);

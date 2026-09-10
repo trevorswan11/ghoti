@@ -1395,6 +1395,21 @@ auto formatter::visit(node_id, const defer_stmt& node) -> syntax::doc_id {
     return doc_manager_.concat({doc_manager_.text("defer "), format(node.deferred)});
 }
 
+auto formatter::visit(node_id, const errdefer_stmt& node) -> syntax::doc_id {
+    if (node.capture) {
+        std::vector<syntax::doc_id> parts;
+        parts.emplace_back(doc_manager_.text("errdefer |"));
+        if (!node.modifier.is_value()) {
+            parts.emplace_back(doc_manager_.text(modifier_prefix(node.modifier)));
+        }
+        parts.emplace_back(format(*node.capture));
+        parts.emplace_back(doc_manager_.text("| "));
+        parts.emplace_back(format(node.deferred));
+        return doc_manager_.concat(std::move(parts));
+    }
+    return doc_manager_.concat({doc_manager_.text("errdefer "), format(node.deferred)});
+}
+
 auto formatter::visit(node_id, const discard_stmt& node) -> syntax::doc_id {
     return doc_manager_.concat(
         {doc_manager_.text("_ = "), format(node.discarded), doc_manager_.text(";")});
