@@ -79,9 +79,12 @@ TEST_CASE("the `?` operator works inside a generic function body") {
         impl builtin.Unwrappable for R {
             using Output = i32;
             using Residual = u8;
-            pub const isBreak := fn(&self): bool { return match (self) { .ok => false, .err => true }; };
-            pub const intoOutput := fn(self): i32 { return match (self) { .ok => |v| v, .err => @trap() }; };
-            pub const intoResidual := fn(self): u8 { return match (self) { .err => |e| e, .ok => @trap() }; };
+            pub const branch := fn(self): builtin.Flow(i32, u8) {
+                return match (self) {
+                    .ok => |v| builtin.Flow(i32, u8){ .@"continue" = v },
+                    .err => |e| builtin.Flow(i32, u8){ .@"break" = e },
+                };
+            };
         }
         impl builtin.Rewrappable for R {
             using From = u8;

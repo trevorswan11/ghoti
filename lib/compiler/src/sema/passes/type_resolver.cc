@@ -1970,6 +1970,9 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
             const bool  self_requires_mut{!self_param.is_constant() &&
                                          (self_param.get_kind() == type_kind::REFERENCE ||
                                           self_param.get_kind() == type_kind::POINTER)};
+            // Semantic safeguard: disallow calling methods that require `&mut self` or `^mut self`
+            // on an rvalue/temporary (e.g. `(Counter{...}).inc()`), which would mutate an ephemeral
+            // value.
             if (self_requires_mut && !is_lvalue_expression(resolving_, dot_call->object)) {
                 return last_type_.emplace(ctx_.poison_node(
                     resolving_,
@@ -4931,13 +4934,19 @@ namespace {
     return false;
 }
 
+// Determines whether an expression denotes a type (e.g. `^mut ^i32`, `&mut i32`, `[]u8`)
+// rather than an rvalue value. This distinction is critical to prevent false-positive
+// `ILLEGAL_RVALUE_CAPTURE` errors when mutable pointer/reference syntax appears in type
+// expressions.
 [[nodiscard]] auto is_type_denoting_expr(const context&            ctx,
                                          const mod::module&        mod,
                                          ast::node_id              id,
                                          const symbol_table_stack* tables = nullptr) -> bool {
+    // 1. Explicit sema type denoting a compile-time type
     if (const auto ty{mod.get_sema_type_opt(id)}) {
         if (ty->get_kind() == type_kind::TYPE) { return true; }
     }
+    // 2. Identifier representing a primitive type, keyword type, or type symbol
     if (const auto ident{mod.ast.get_as_opt<ast::identifier_expr>(id)}) {
         if (syntax::token_type::is_int_type_lexeme(ident->name) ||
             syntax::token_type::is_primitive(id.get_token_type()) ||
@@ -4960,9 +4969,11 @@ namespace {
             }
         }
     }
+    // 3. Array type expression like `[]i32` or `[4]i32`
     if (const auto arr{mod.ast.get_as_opt<ast::array_expr>(id)}) {
         if (arr->is_type_expr) { return true; }
     }
+    // 4. Recursive traversal for composite pointer/reference type expressions (e.g. `^mut ^i32`)
     if (const auto adr{mod.ast.get_as_opt<ast::address_of_expr>(id)}) {
         return is_type_denoting_expr(ctx, mod, adr->rhs, tables);
     }
@@ -4983,6 +4994,8 @@ auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> vo
     }
     auto& rhs_type{*last_type_.take()};
 
+    // Semantic safeguard: disallow taking a mutable reference to an rvalue/temporary
+    // (e.g. `&mut 42`), which would immediately become a dangling reference to dropped storage.
     const bool is_mut{ref_addr_of_is_mutable(id) == types::mut::MUTABLE};
     if (is_mut && !is_type_denoting_expr(ctx_, resolving_, ref.rhs, &table_stack_) &&
         !is_lvalue_expression(resolving_, ref.rhs)) {
@@ -5030,6 +5043,8 @@ auto type_resolver::visit(ast::node_id id, const ast::address_of_expr& adr_of) -
     }
     auto& rhs_type{*last_type_.take()};
 
+    // Semantic safeguard: disallow taking a mutable pointer to an rvalue/temporary
+    // (e.g. `^mut 42`), which would immediately become a dangling pointer.
     const bool is_mut{ref_addr_of_is_mutable(id) == types::mut::MUTABLE};
     if (is_mut && !is_type_denoting_expr(ctx_, resolving_, adr_of.rhs, &table_stack_) &&
         !is_lvalue_expression(resolving_, adr_of.rhs)) {
@@ -7245,12 +7260,17 @@ auto type_resolver::resolve_param_impl_bodies(
         inst.return_trackers_.pop_back();
 
         stdx::option<type&> deduced_ret{auto_ret ? tracker.deduced_return_type(ctx_) : ret};
+        // If the return type is a type constructor call (e.g. `Flow(T, E)`), force its
+        // evaluation at compile time so the monomorphized signature has the concrete union type.
         if (deduced_ret->get_data().is<types::deferred_call>()) {
             gir::const_eval evaluator{ctx_, impl_mod};
             deduced_ret.emplace(
                 const_cast<type&>(denoted_type(evaluator.force_deferred_call(*deduced_ret))));
         }
 
+        // Build the concrete `types::function` signature for the monomorphized method.
+        // Include `self` as the first parameter when `has_self` is true so arity and interface
+        // conformance checks see the full signature with the receiver.
         const bool  has_self{fn_expr.self.has_value()};
         const usize num_params{fn_expr.parameters.size() + (has_self ? 1UZ : 0UZ)};
         auto        concrete_param_types{ctx_.pool.get_many_unsafe(num_params)};

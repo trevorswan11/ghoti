@@ -254,5 +254,19 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Enabled 1-argument context-inferred forms for `@intCast`, `@truncate`, `@as`, and `@bitCast` across variable/const bindings, assignments, returns, call arguments, and struct field initializers
     - Tightened `@as` to reject narrowing, sign changes, and bool/int conversions with actionable diagnostic suggestions
     - Added rich diagnostics for rejected casts explaining why a conversion was rejected and suggesting the appropriate builtin
-    - `constexpr`-fits implicit coercion: compile-time integers that provably fit the destination type coerce implicitly, with compile errors on out-of-range values
 - Allow function expressions to discard their parameters at the declaration site rather than needing "_ = param;"
+- Overhaul nominal unwrap operators (`?` and `!`) to use the single-match `Flow` protocol
+    - Added `builtin.Flow(C, R)` control flow union type with raw identifier variants `@"continue"` and `@"break"`
+    - Updated `Option(T)` and `Result(T, E)` in the standard library to implement the single-match `branch()` protocol
+    - Refactored GIR lowering to spill `branch()` results to a stack slot and branch directly on the `@"break"` discriminant tag for propagation and error exits
+- Add compile-time `impl` and object method evaluation to constant folding
+    - `const_eval` now evaluates method calls on objects (`obj.method(...)`) and extension methods registered through `impl` blocks at compile time
+    - Bound `self` receiver parameter across value, reference, and pointer receiver forms during compile-time function evaluation
+    - Enabled compile-time evaluation of `?` and `!` unwrapping by folding `branch(operand)` calls
+- Add semantic safeguards for rvalues and temporary values
+    - Prohibit taking mutable references (`&mut expr`) and mutable pointers (`^mut expr`) to temporary rvalues (`error::ILLEGAL_RVALUE_CAPTURE`)
+    - Prohibit calling methods requiring `&mut self` or `^mut self` on temporary rvalues
+    - Added recursive type-expression detection in semantic analysis to allow mutable pointer/reference syntax in type expressions (e.g. `@typeOf(^mut ^i32)`) without false-positive rvalue errors
+- Support trait implementations on primitive types with orphan rule enforcement
+    - Traits can now be implemented on primitive types (e.g. `impl Format for i32`) within the trait's declaring module
+    - Enforced orphan rules to reject inherent `impl` blocks on primitive types and foreign types (`error::ORPHAN_IMPL`)

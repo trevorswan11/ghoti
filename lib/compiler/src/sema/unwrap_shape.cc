@@ -34,6 +34,9 @@ namespace {
 
 } // namespace
 
+// Looks up an associated type alias (`using Output = ...` or `const Output := ...`)
+// in the impl's body scope. If the impl is parameterized (`from_parameterized`), any
+// sentinel types are remapped to concrete type arguments.
 auto find_assoc_type_alias(context& ctx, const impl_record& rec, std::string_view name)
     -> stdx::option<const type&> {
     if (const auto bsym{ctx.registry.get_from_opt(rec.body_scope_idx, name)}) {
@@ -50,6 +53,9 @@ auto find_assoc_type_alias(context& ctx, const impl_record& rec, std::string_vie
                 }
             }
             if (result) {
+                // For parameterized impls (e.g. `impl(T, E) Unwrappable for Result(T, E)`),
+                // replace sentinels with the actual concrete type arguments instantiated for this
+                // target.
                 if (rec.from_parameterized) {
                     stdx::option<type&> r{const_cast<type&>(*result)};
                     for (usize i{0}; i < rec.sentinels.size() && i < rec.type_arguments.size();
@@ -94,6 +100,9 @@ auto rewrap_info::gir_method_name(std::string_view           method_name,
     return scoping.name_for(impl->body_scope_idx, method_name);
 }
 
+// Deep structural substitution: replaces all occurrences of `from` with `to` across
+// pointer/reference/slice/array wrappers and function parameter/return types.
+// Preserves type pool identity when no sub-type changes.
 auto remap_type(context& ctx, type& t, const type& from, type& to) -> type& {
     if (&t == &from) { return to; }
     return t.get_data().visit(
@@ -153,6 +162,9 @@ auto remap_type(context& ctx, type& t, const type& from, type& to) -> type& {
         [&t](const auto&) -> type& { return t; });
 }
 
+// Queries whether `operand` implements `builtin.Unwrappable`. If so, extracts the
+// associated `Output` and `Residual` types and the `Flow(Output, Residual)` return
+// type of `branch(self)`.
 auto unwrap_shape_of(context& ctx, const type& operand) -> stdx::option<unwrap_info> {
     if (!ctx.prelude_index) { return stdx::none; }
 
@@ -168,6 +180,7 @@ auto unwrap_shape_of(context& ctx, const type& operand) -> stdx::option<unwrap_i
         find_assoc_type_alias(ctx, rec, builtin_impl::RESIDUAL)};
     stdx::option<const type&> flow_type;
 
+    // Retrieve concrete `Flow(...)` return type from `branch(self)`
     if (const auto m{rec.find_method(builtin_impl::BRANCH)}; m && m->fn_type) {
         if (const auto fd{m->fn_type->get_data().as_opt<types::function>()}) {
             flow_type.emplace(fd->return_type);
