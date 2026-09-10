@@ -1,5 +1,5 @@
 //! Raw Darwin (MacOS) primitives, backed by `libSystem`
-import "../../result.gh" as result;
+import std;
 pub import "errno.gh" as errno;
 
 pub using Handle = i32;
@@ -70,7 +70,7 @@ pub const Stat := extern struct {
 
     /// File size in bytes.
     pub const size := fn(&self): u64 {
-        return @as(u64, self.st_size);
+        return @intCast(u64, self.st_size);
     };
 
     /// Whether the entry is a directory.
@@ -80,7 +80,7 @@ pub const Stat := extern struct {
 
     /// Last-modification time in nanoseconds since the Unix epoch.
     pub const modified_time_ns := fn(&self): u64 {
-        return @as(u64, self.st_mtime) * 1000000000u64 + @as(u64, self.st_mtimensec);
+        return @intCast(u64, self.st_mtime) * 1000000000u64 + @intCast(u64, self.st_mtimensec);
     };
 };
 
@@ -113,7 +113,7 @@ extern("System", "mmap") const sys_mmap: fn(
 extern("System", "munmap") const sys_munmap: fn(addr: ^mut opaque, len: usize): i32;
 
 constexpr R := fn(T: type): type {
-    return result.Result(T, Errno);
+    return std.Result(T, Errno);
 };
 
 pub constexpr stdin := fn(): R(Handle) {

@@ -1,0 +1,3 @@
+pub constexpr Option := fn(T: type): type {
+    return union { some: T, none: void };
+};

@@ -1,5 +1,5 @@
 //! Safe conversion wrapper from target-specific Errno
-import "../os/os.gh" as os;
+import std;
 
 pub const Error := enum : i32 {
     not_found,
@@ -17,7 +17,7 @@ pub const Error := enum : i32 {
     unexpected,
     _,
 
-    pub constexpr fromOs := fn(errno: os.Errno): @this() {
+    pub constexpr fromOs := fn(errno: std.os.Errno): @this() {
         @cfg (os == .macos) {
             return match (errno) {
                 .ENOENT => .not_found,

@@ -1,4 +1,4 @@
-import "../io/io.gh" as io;
+import std;
 
 using Test = builtin.Test;
 
@@ -18,23 +18,23 @@ pub const test_runner := fn(args: [][:0]u8, tests: []Test): i32 {
 
     // TODO(tcs): print the number of failures and skips once std.fmt lands
     if (failures > 0 or skipped > 0) {
-        if (failures > 0) io.eprintln("Some tests failed!")!;
-        if (skipped > 0) io.eprintln("Some tests were skipped!")!;
+        if (failures > 0) std.io.eprintln("Some tests failed!")!;
+        if (skipped > 0) std.io.eprintln("Some tests were skipped!")!;
     } else {
-        io.println("All tests passed!")!;
+        std.io.println("All tests passed!")!;
     }
 
     return if (failures > 0) 1 else 0;
 };
 
 pub const expect_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): void {
-    io.eprint("Test failed: ")!;
-    io.eprint(file)!;
+    std.io.eprint("Test failed: ")!;
+    std.io.eprint(file)!;
     if (msg.len > 0) {
-        io.eprint(": (EXPECTED)")!;
-        io.eprintln(msg)!;
+        std.io.eprint(": (EXPECTED)")!;
+        std.io.eprintln(msg)!;
     } else {
-        io.eprintln(": (EXPECTED)")!;
+        std.io.eprintln(": (EXPECTED)")!;
     }
 
     // TODO(tcs): add line:col formatting once std.fmt lands
@@ -43,13 +43,13 @@ pub const expect_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): v
 };
 
 pub const require_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): void {
-    io.eprint("Test failed: ")!;
-    io.eprint(file)!;
+    std.io.eprint("Test failed: ")!;
+    std.io.eprint(file)!;
     if (msg.len > 0) {
-        io.eprint(": (REQUIRED) ")!;
-        io.eprintln(msg)!;
+        std.io.eprint(": (REQUIRED) ")!;
+        std.io.eprintln(msg)!;
     } else {
-        io.eprintln(": (REQUIRED)")!;
+        std.io.eprintln(": (REQUIRED)")!;
     }
 
     // TODO(tcs): add line:col formatting once std.fmt lands
@@ -58,13 +58,13 @@ pub const require_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): 
 };
 
 pub const skip_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): void {
-    io.eprint("Test failed: ")!;
-    io.eprint(file)!;
+    std.io.eprint("Test failed: ")!;
+    std.io.eprint(file)!;
     if (msg.len > 0) {
-        io.eprint(": (SKIPP ED)")!;
-        io.eprintln(msg)!;
+        std.io.eprint(": (SKIPP ED)")!;
+        std.io.eprintln(msg)!;
     } else {
-        io.eprintln(": (SKIPPED)")!;
+        std.io.eprintln(": (SKIPPED)")!;
     }
 
     // TODO(tcs): add line:col formatting once std.fmt lands
