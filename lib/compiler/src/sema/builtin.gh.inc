@@ -75,19 +75,24 @@ pub const Test := struct {
     pub func: fn(): bool,
 };
 
+/// Control flow tagged union for single-match nominal unwrapping (`?` and `!`).
 pub const Flow := fn(C: type, R: type): type {
     return union {
-        @"continue": C,
-        @"break": R,
+        @"continue": C, /// Holds the success payload
+        @"break": R, /// Holds the early-return residual
     };
 };
 
+/// Interface implemented by types supporting postfix `?` and `!` unwrapping.
+/// Maps the instance into a `Flow(Output, Residual)` union via `branch(self)`.
 pub const Unwrappable := interface {
     Output: type;
     Residual: type;
     pub const branch := fn(self): Flow(Output, Residual);
 };
 
+/// Interface implemented by enclosing function return types to construct an early-return
+/// value from an unwrap expression's residual payload during `?` propagation.
 pub const Rewrappable := interface {
     From: type;
     pub const fromResidual := fn(r: From): @this();

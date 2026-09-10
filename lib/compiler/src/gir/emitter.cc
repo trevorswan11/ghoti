@@ -5307,6 +5307,8 @@ auto emitter::emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> va
     auto&      base_operand{const_cast<sema::type&>(*shape->operand_type)};
     const auto loaded_self{builder_.emit_load(operand_addr, base_operand)};
 
+    // Call `branch(self)` which maps the unwrap operand into a `Flow(Output, Residual)` union:
+    // `@"continue": Output` or `@"break": Residual`.
     const auto branch_name{shape->gir_method_name(sema::builtin_impl::BRANCH, symbol_scoping_)};
     ASSERT(shape->flow_type, "Unwrappable must have a flow type for branch()");
     auto& flow_type{const_eval_.force_deferred_call(const_cast<sema::type&>(*shape->flow_type))};
@@ -5314,15 +5316,18 @@ auto emitter::emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> va
     const auto flow_dest{
         builder_.emit_call(branch_name, {value{loaded_self, base_operand}}, flow_type)};
     ASSERT(flow_dest, "branch() must return a Flow union value");
+    // Spill the Flow result to a stack slot so we can inspect its tag and extract payloads.
     const auto flow_slot{spill_to_temporary(value{*flow_dest, flow_type}, flow_type, false)};
 
     auto& i32_type{ctx_.get_int(32, true)};
     auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
 
+    // Read the discriminant tag from the Flow tagged-union slot.
     const auto tag_ptr{builder_.emit_get_element_ptr(
         flow_slot, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
     const auto tag_val{builder_.emit_load(value{tag_ptr, i32_type}, i32_type)};
 
+    // Find the tag index corresponding to the `@"break"` variant in Flow (default index 1).
     u64 break_idx{1};
     if (flow_type.has_symbol_table_idx()) {
         const auto& table{ctx_.registry.get(flow_type.get_symbol_table_idx())};
@@ -5338,10 +5343,12 @@ auto emitter::emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> va
                                                   bool_type)};
     const value is_break_val{is_break_dest, bool_type};
 
+    // Branch to diverge_seg on break, or continue to payload_seg.
     auto& payload_seg{fn.add_segment()};
     auto& diverge_seg{fn.add_segment()};
     builder_.emit_cond_goto(is_break_val, diverge_seg.get_id(), payload_seg.get_id());
 
+    // Break path: propagate residual for `?`, or invoke panic handler for `!`.
     builder_.set_segment(diverge_seg);
     if (is_propagation) {
         emit_unwrap_propagation(flow_slot, *shape, id);
@@ -5351,6 +5358,7 @@ auto emitter::emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> va
                         id);
     }
 
+    // Continue path: load the `@"continue"` output payload from the Flow union.
     builder_.set_segment(payload_seg);
     auto&      out_type{const_cast<sema::type&>(*shape->output_type)};
     const auto payload_ptr{builder_.emit_get_element_ptr(
@@ -5374,6 +5382,7 @@ auto emitter::emit_unwrap_propagation(value                    flow_slot,
     auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
     auto& residual_type{const_cast<sema::type&>(*shape.residual_type)};
 
+    // Extract the residual payload from the Flow union (if non-void).
     value res_val{void_val{}, residual_type};
     if (!shape.residual_is_void) {
         const auto payload_ptr{builder_.emit_get_element_ptr(
@@ -5382,6 +5391,7 @@ auto emitter::emit_unwrap_propagation(value                    flow_slot,
         res_val = value{loaded_res, residual_type};
     }
 
+    // Rewrap the residual into the enclosing function's return type using `Rewrappable.fromResidual`.
     const auto rewrap{rewrap_shape_of(ctx_, ret_type)};
     ASSERT(rewrap, "`?` propagation return type must implement Rewrappable");
 
@@ -5400,6 +5410,7 @@ auto emitter::emit_unwrap_propagation(value                    flow_slot,
     value      ret_val{rewrapped_dest ? value{*rewrapped_dest, final_ret_type}
                                       : value{void_val{}, final_ret_type}};
 
+    // Run deferred scopes before returning from the enclosing function.
     emit_defers_up_to(0);
     builder_.set_location(active_ast().location_of(site));
     builder_.emit_return(ret_val);

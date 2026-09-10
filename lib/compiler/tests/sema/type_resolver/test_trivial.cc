@@ -146,9 +146,12 @@ const R := union { ok: i32, err: i32 };
 impl builtin.Unwrappable for R {
     using Output = i32;
     using Residual = i32;
-    pub const isBreak := fn(&self): bool { return match (self) { .ok => false, .err => true }; };
-    pub const intoOutput := fn(self): i32 { return match (self) { .ok => |v| v, .err => @trap() }; };
-    pub const intoResidual := fn(self): i32 { return match (self) { .err => |e| e, .ok => @trap() }; };
+    pub const branch := fn(self): builtin.Flow(i32, i32) {
+        return match (self) {
+            .ok => |v| builtin.Flow(i32, i32){ .@"continue" = v },
+            .err => |e| builtin.Flow(i32, i32){ .@"break" = e },
+        };
+    };
 }
 impl builtin.Rewrappable for R {
     using From = i32;
@@ -164,7 +167,7 @@ const f := fn(): R {
 )",
         sema::diagnostic{"cannot use '?' operator inside a 'defer' body",
                          sema::error::DEFER_BODY_JUMP,
-                         std::pair{16UZ, 12UZ}});
+                         std::pair{19UZ, 12UZ}});
 
     SECTION("Loops and local blocks inside defer are allowed to use break and continue") {
         helpers::resolve_and_check(R"(
@@ -245,6 +248,36 @@ TEST_CASE("Dereferenced assignment using non-pointer fails") {
         sema::diagnostic{"Cannot dereference non-pointer expression; found 'i32'",
                          sema::error::TYPE_MISMATCH,
                          std::pair{2UZ, 25UZ}});
+}
+
+TEST_CASE("Mutable borrow of rvalue is rejected") {
+    helpers::test_resolver_fail(
+        "pub const test_fn := fn(): void { const p := &mut 42; };",
+        sema::diagnostic{"Cannot take a mutable reference to a temporary value",
+                         sema::error::ILLEGAL_RVALUE_CAPTURE,
+                         std::pair{0UZ, 45UZ}});
+
+    helpers::test_resolver_fail(
+        "pub const test_fn := fn(): void { const p := ^mut 42; };",
+        sema::diagnostic{"Cannot take a mutable pointer to a temporary value",
+                         sema::error::ILLEGAL_RVALUE_CAPTURE,
+                         std::pair{0UZ, 45UZ}});
+}
+
+TEST_CASE("Method requiring mutable self on rvalue is rejected") {
+    helpers::test_resolver_fail(
+        R"(
+        const Counter := struct {
+            val: i32,
+            pub const inc := fn(&mut self): void { self.val += 1; };
+        };
+        pub const test_fn := fn(): void {
+            (Counter{ .val = 0 }).inc();
+        };
+    )",
+        sema::diagnostic{"Cannot call method requiring mutable 'self' on a temporary value",
+                         sema::error::ILLEGAL_RVALUE_CAPTURE,
+                         std::pair{6UZ, 20UZ}});
 }
 
 } // namespace ghoti::tests

@@ -14,9 +14,12 @@ const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
 impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
     using Output = T;
     using Residual = E;
-    pub const isBreak := fn(&self): bool { return match (self) { .ok => false, .err => true }; };
-    pub const intoOutput := fn(self): T { return match (self) { .ok => |v| v, .err => @trap() }; };
-    pub const intoResidual := fn(self): E { return match (self) { .err => |e| e, .ok => @trap() }; };
+    pub const branch := fn(self): builtin.Flow(T, E) {
+        return match (self) {
+            .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
+            .err => |e| builtin.Flow(T, E){ .@"break" = e },
+        };
+    };
 }
 impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
     using From = E;
@@ -26,9 +29,12 @@ const Option := fn(T: type): type { return union { some: T, none: void }; };
 impl(T: type) builtin.Unwrappable for Option(T) {
     using Output = T;
     using Residual = void;
-    pub const isBreak := fn(&self): bool { return match (self) { .some => false, .none => true }; };
-    pub const intoOutput := fn(self): T { return match (self) { .some => |v| v, .none => @trap() }; };
-    pub const intoResidual := fn(self): void { return {}; };
+    pub const branch := fn(self): builtin.Flow(T, void) {
+        return match (self) {
+            .some => |v| builtin.Flow(T, void){ .@"continue" = v },
+            .none => builtin.Flow(T, void){ .@"break" = {} },
+        };
+    };
 }
 impl(T: type) builtin.Rewrappable for Option(T) {
     using From = void;
@@ -157,22 +163,10 @@ TEST_CASE("nominal `?` and `!` work on custom renamed-variant unions") {
         impl builtin.Unwrappable for Custom {
             using Output = i32;
             using Residual = u8;
-            pub const isBreak := fn(&self): bool {
+            pub const branch := fn(self): builtin.Flow(i32, u8) {
                 return match (self) {
-                    .item => false,
-                    .failure => true,
-                };
-            };
-            pub const intoOutput := fn(self): i32 {
-                return match (self) {
-                    .item => |v| v,
-                    .failure => @trap(),
-                };
-            };
-            pub const intoResidual := fn(self): u8 {
-                return match (self) {
-                    .failure => |e| e,
-                    .item => @trap(),
+                    .item => |v| builtin.Flow(i32, u8){ .@"continue" = v },
+                    .failure => |e| builtin.Flow(i32, u8){ .@"break" = e },
                 };
             };
         }

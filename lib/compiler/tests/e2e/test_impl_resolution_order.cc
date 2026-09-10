@@ -246,9 +246,12 @@ TEST_CASE(
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
             using Output = T;
             using Residual = E;
-            pub const isBreak := fn(&self): bool { return match (self) { .ok => false, .err => true }; };
-            pub const intoOutput := fn(self): T { return match (self) { .ok => |v| v, .err => @trap() }; };
-            pub const intoResidual := fn(self): E { return match (self) { .err => |e| e, .ok => @trap() }; };
+            pub const branch := fn(self): builtin.Flow(T, E) {
+                return match (self) {
+                    .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
+                    .err => |e| builtin.Flow(T, E){ .@"break" = e },
+                };
+            };
         }
         impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
             using From = E;
@@ -308,9 +311,12 @@ TEST_CASE("E2E: one inherited cross-module default method calls another through 
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
             using Output = T;
             using Residual = E;
-            pub const isBreak := fn(&self): bool { return match (self) { .ok => false, .err => true }; };
-            pub const intoOutput := fn(self): T { return match (self) { .ok => |v| v, .err => @trap() }; };
-            pub const intoResidual := fn(self): E { return match (self) { .err => |e| e, .ok => @trap() }; };
+            pub const branch := fn(self): builtin.Flow(T, E) {
+                return match (self) {
+                    .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
+                    .err => |e| builtin.Flow(T, E){ .@"break" = e },
+                };
+            };
         }
         impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
             using From = E;
@@ -373,9 +379,12 @@ TEST_CASE("E2E: a second impl of the same interface still inherits its default m
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
             using Output = T;
             using Residual = E;
-            pub const isBreak := fn(&self): bool { return match (self) { .ok => false, .err => true }; };
-            pub const intoOutput := fn(self): T { return match (self) { .ok => |v| v, .err => @trap() }; };
-            pub const intoResidual := fn(self): E { return match (self) { .err => |e| e, .ok => @trap() }; };
+            pub const branch := fn(self): builtin.Flow(T, E) {
+                return match (self) {
+                    .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
+                    .err => |e| builtin.Flow(T, E){ .@"break" = e },
+                };
+            };
         }
         impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
             using From = E;

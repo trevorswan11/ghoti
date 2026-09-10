@@ -16,9 +16,12 @@ const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
 impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
     using Output = T;
     using Residual = E;
-    pub const isBreak := fn(&self): bool { return match (self) { .ok => false, .err => true }; };
-    pub const intoOutput := fn(self): T { return match (self) { .ok => |v| v, .err => @trap() }; };
-    pub const intoResidual := fn(self): E { return match (self) { .err => |e| e, .ok => @trap() }; };
+    pub const branch := fn(self): builtin.Flow(T, E) {
+        return match (self) {
+            .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
+            .err => |e| builtin.Flow(T, E){ .@"break" = e },
+        };
+    };
 }
 impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
     using From = E;
@@ -28,9 +31,12 @@ const Option := fn(T: type): type { return union { some: T, none: void }; };
 impl(T: type) builtin.Unwrappable for Option(T) {
     using Output = T;
     using Residual = void;
-    pub const isBreak := fn(&self): bool { return match (self) { .some => false, .none => true }; };
-    pub const intoOutput := fn(self): T { return match (self) { .some => |v| v, .none => @trap() }; };
-    pub const intoResidual := fn(self): void { return {}; };
+    pub const branch := fn(self): builtin.Flow(T, void) {
+        return match (self) {
+            .some => |v| builtin.Flow(T, void){ .@"continue" = v },
+            .none => builtin.Flow(T, void){ .@"break" = {} },
+        };
+    };
 }
 impl(T: type) builtin.Rewrappable for Option(T) {
     using From = void;
@@ -117,7 +123,7 @@ const b := r?;
 )",
         sema::diagnostic{"the '?' operator can only be used inside a function",
                          sema::error::UNWRAP_OUTSIDE_FUNCTION,
-                         std::pair{28UZ, 11UZ}});
+                         std::pair{34UZ, 11UZ}});
 }
 
 TEST_CASE("`?` requires the enclosing function to return a matching Result / Optional") {
@@ -132,7 +138,7 @@ const f := fn(r: R): i32 {
             sema::diagnostic{"the '?' operator propagates a 'union' residual ('i32') but 'i32' "
                              "does not implement 'builtin.Rewrappable'",
                              sema::error::UNWRAP_RETURN_TYPE_MISMATCH,
-                             std::pair{28UZ, 11UZ}});
+                             std::pair{34UZ, 11UZ}});
     }
 
     SECTION("Optional `?` inside a Result-returning function: From mismatch") {
@@ -148,7 +154,7 @@ const f := fn(o: O): R {
                              "is not rebuildable from 'void'; implement 'builtin.Rewrappable for "
                              "union' with From = 'void'",
                              sema::error::UNWRAP_RETURN_TYPE_MISMATCH,
-                             std::pair{29UZ, 11UZ}});
+                             std::pair{35UZ, 11UZ}});
     }
 }
 
@@ -159,9 +165,12 @@ TEST_CASE("Nominal Unwrappable and Rewrappable resolution") {
         impl builtin.Unwrappable for MyRes {
             using Output = i32;
             using Residual = u8;
-            pub const isBreak := fn(&self): bool { return true; };
-            pub const intoOutput := fn(self): i32 { return 0; };
-            pub const intoResidual := fn(self): u8 { return 0; };
+            pub const branch := fn(self): builtin.Flow(i32, u8) {
+                return match (self) {
+                    .val => |v| builtin.Flow(i32, u8){ .@"continue" = v },
+                    .fail => |f| builtin.Flow(i32, u8){ .@"break" = f },
+                };
+            };
         }
         impl builtin.Rewrappable for MyRes {
             using From = u8;
@@ -183,9 +192,12 @@ TEST_CASE("Nominal Unwrappable and Rewrappable resolution") {
         impl builtin.Unwrappable for MyRes {
             using Output = i32;
             using Residual = u8;
-            pub const isBreak := fn(&self): bool { return true; };
-            pub const intoOutput := fn(self): i32 { return 0; };
-            pub const intoResidual := fn(self): u8 { return 0; };
+            pub const branch := fn(self): builtin.Flow(i32, u8) {
+                return match (self) {
+                    .val => |v| builtin.Flow(i32, u8){ .@"continue" = v },
+                    .fail => |f| builtin.Flow(i32, u8){ .@"break" = f },
+                };
+            };
         }
         const BigRes := union { val: i32, fail: u32 };
         impl builtin.Rewrappable for BigRes {
@@ -206,9 +218,12 @@ const BigRes := union { val: i32, fail: u32 };
 impl builtin.Unwrappable for BigRes {
     using Output = i32;
     using Residual = u32;
-    pub const isBreak := fn(&self): bool { return true; };
-    pub const intoOutput := fn(self): i32 { return 0; };
-    pub const intoResidual := fn(self): u32 { return 0; };
+    pub const branch := fn(self): builtin.Flow(i32, u32) {
+        return match (self) {
+            .val => |v| builtin.Flow(i32, u32){ .@"continue" = v },
+            .fail => |f| builtin.Flow(i32, u32){ .@"break" = f },
+        };
+    };
 }
 const SmallRes := union { val: i32, fail: u8 };
 impl builtin.Rewrappable for SmallRes {
@@ -226,7 +241,7 @@ const f := fn(m: BigRes): SmallRes {
                 "use @intCast for a checked conversion or @truncate to discard high bits); "
                 "implement 'builtin.Rewrappable for SmallRes' with From = 'u32'",
                 sema::error::UNWRAP_RETURN_TYPE_MISMATCH,
-                std::pair{15UZ, 11UZ}});
+                std::pair{18UZ, 11UZ}});
     }
 }
 
