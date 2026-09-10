@@ -2561,9 +2561,11 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
 
     // Every parameter contributes to the resolution but not the type key due to unique idx
     for (const auto& param : fn.parameters) {
-        const auto& ident{resolving_.ast.get_as<ast::identifier_expr>(param.name)};
-        if (auto sym{ctx_.registry.get_from_opt(table_idx_, ident.name)}) {
-            sym->set_status(symbol_status::RESOLVING);
+        if (param.name.is<ast::identifier_expr>()) {
+            const auto& ident{resolving_.ast.get_as<ast::identifier_expr>(param.name)};
+            if (auto sym{ctx_.registry.get_from_opt(table_idx_, ident.name)}) {
+                sym->set_status(symbol_status::RESOLVING);
+            }
         }
         TRY_RESOLVE(param.explicit_type);
 
@@ -2578,7 +2580,9 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         }
         param_types[param_idx++] = &param_type;
         resolving_.set_sema_type(param.name, param_type);
-        resolve_symbol_info(param.name, symbol_kind::VALUE);
+        if (param.name.is<ast::identifier_expr>()) {
+            resolve_symbol_info(param.name, symbol_kind::VALUE);
+        }
     }
 
     TRY_RESOLVE(fn.explicit_return_type);
@@ -6745,8 +6749,11 @@ auto type_resolver::instantiate_impls_for(
                 break;
             }
             if (i < impl_stmt->impl_params.size() && impl_stmt->impl_params[i].is_constexpr) {
-                const auto& cx_name{
-                    base_mod.ast.get_as<ast::identifier_expr>(base_fn.parameters[*slot].name).name};
+                std::string_view cx_name{};
+                if (const auto ident{base_mod.ast.get_as_opt<ast::identifier_expr>(
+                        base_fn.parameters[*slot].name)}) {
+                    cx_name = ident->name;
+                }
                 const auto it{std::ranges::find(
                     ctor_cx, cx_name, [](const auto& p) { return std::string_view{p.first}; })};
                 if (it == ctor_cx.end()) {
@@ -7774,9 +7781,11 @@ auto type_resolver::instantiate_generic(type&                             callee
     for (usize p_idx{0}, cx_i{0}; p_idx < fn_expr.parameters.size(); ++p_idx) {
         if (!fn_expr.parameters[p_idx].is_constexpr) { continue; }
         if (cx_i >= constexpr_args.size()) { break; }
-        const auto& name{
-            fn_mod.ast.get_as<ast::identifier_expr>(fn_expr.parameters[p_idx].name).name};
-        binding_frame.insert_or_assign(name, constexpr_args[cx_i]);
+        if (fn_expr.parameters[p_idx].name.is<ast::identifier_expr>()) {
+            const auto& name{
+                fn_mod.ast.get_as<ast::identifier_expr>(fn_expr.parameters[p_idx].name).name};
+            binding_frame.insert_or_assign(name, constexpr_args[cx_i]);
+        }
         ++cx_i;
     }
     const constexpr_frame_guard cfg{ctx_.constexpr_binding_frames, std::move(binding_frame)};
@@ -7790,10 +7799,12 @@ auto type_resolver::instantiate_generic(type&                             callee
            "Arity should be validated in resolve_call");
     for (const auto& [arg_type, param] : std::views::zip(concrete_args, fn_expr.parameters)) {
         fn_mod.set_sema_type(param.name, *arg_type);
-        const auto& ident{fn_mod.ast.get_as<ast::identifier_expr>(param.name)};
-        if (auto sym{ctx_.registry.get_from_opt(fn_table_idx, ident.name)}) {
-            sym->set_kind(symbol_kind::VALUE);
-            sym->set_status(symbol_status::RESOLVED);
+        if (param.name.is<ast::identifier_expr>()) {
+            const auto& ident{fn_mod.ast.get_as<ast::identifier_expr>(param.name)};
+            if (auto sym{ctx_.registry.get_from_opt(fn_table_idx, ident.name)}) {
+                sym->set_kind(symbol_kind::VALUE);
+                sym->set_status(symbol_status::RESOLVED);
+            }
         }
     }
 
@@ -7948,7 +7959,10 @@ auto type_resolver::instantiate_generic(type&                             callee
             if (param.is_constexpr) { continue; }
             const auto pty{fn_mod.get_sema_type_opt(param.explicit_type)};
             if (pty && pty->get_kind() != type_kind::TYPE) {
-                const auto& pn{fn_mod.ast.get_as<ast::identifier_expr>(param.name).name};
+                std::string_view pn{"_"};
+                if (param.name.is<ast::identifier_expr>()) {
+                    pn = fn_mod.ast.get_as<ast::identifier_expr>(param.name).name;
+                }
                 ctx_.diags.emplace_back(
                     fmt::format(
                         "a `fn(...): type` constructor cannot take a plain value parameter; "
@@ -7979,10 +7993,12 @@ auto type_resolver::instantiate_generic(type&                             callee
                 for (usize p_idx{0}, cx_i{0}; p_idx < fn_expr.parameters.size(); ++p_idx) {
                     if (!fn_expr.parameters[p_idx].is_constexpr) { continue; }
                     if (cx_i >= constexpr_args.size()) { break; }
-                    const auto& p_name{
-                        fn_mod.ast.get_as<ast::identifier_expr>(fn_expr.parameters[p_idx].name)
-                            .name};
-                    ctor_bindings.emplace_back(std::string{p_name}, constexpr_args[cx_i]);
+                    if (fn_expr.parameters[p_idx].name.is<ast::identifier_expr>()) {
+                        const auto& p_name{
+                            fn_mod.ast.get_as<ast::identifier_expr>(fn_expr.parameters[p_idx].name)
+                                .name};
+                        ctor_bindings.emplace_back(std::string{p_name}, constexpr_args[cx_i]);
+                    }
                     ++cx_i;
                 }
                 deduced_return_type = &clone;
