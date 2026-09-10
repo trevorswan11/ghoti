@@ -5292,8 +5292,6 @@ auto emitter::emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> va
     ASSERT(fn_opt, "unwrap must be within an active function");
     auto& fn{*fn_opt};
 
-    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
-
     // Address of the scrutinee: reuse its storage when it is an lvalue, else spill the rvalue.
     const bool is_lvalue_shape{active_ast().get_as_opt<ast::identifier_expr>(unwrap.operand) ||
                                active_ast().get_as_opt<ast::dot_expr>(unwrap.operand) ||
@@ -5304,45 +5302,64 @@ auto emitter::emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> va
                                                                  operand_type,
                                                                  operand_type.is_constant())};
 
-    // `?` propagation is control flow, not a safety check, so it is always emitted
     const bool is_propagation{id.get_token_type() == syntax::token_type_t::QUESTION};
 
-    auto& base_operand{const_cast<sema::type&>(*shape->operand_type)};
-    if (is_propagation || runtime_safety_) {
-        const auto is_break_name{shape->gir_method_name("isBreak", symbol_scoping_)};
-        auto&      ref_type{ctx_.get_reference(sema::types::mut::CONSTANT, base_operand)};
-        const auto self_ref{builder_.emit_address_of(operand_addr, ref_type)};
-        const auto is_break_dest{
-            builder_.emit_call(is_break_name, {value{self_ref, ref_type}}, bool_type)};
-        ASSERT(is_break_dest, "isBreak must return a bool");
-        const value is_break_val{*is_break_dest, bool_type};
+    auto&      base_operand{const_cast<sema::type&>(*shape->operand_type)};
+    const auto loaded_self{builder_.emit_load(operand_addr, base_operand)};
 
-        auto& payload_seg{fn.add_segment()};
-        auto& diverge_seg{fn.add_segment()};
-        builder_.emit_cond_goto(is_break_val, diverge_seg.get_id(), payload_seg.get_id());
+    const auto branch_name{shape->gir_method_name(sema::builtin_impl::BRANCH, symbol_scoping_)};
+    ASSERT(shape->flow_type, "Unwrappable must have a flow type for branch()");
+    auto& flow_type{const_eval_.force_deferred_call(const_cast<sema::type&>(*shape->flow_type))};
 
-        builder_.set_segment(diverge_seg);
-        if (is_propagation) {
-            emit_unwrap_propagation(operand_addr, *shape, id);
-        } else {
-            emit_panic_call(shape->residual_is_void ? "'!' unwrapped an empty optional"
-                                                    : "'!' unwrapped an errored result",
-                            id);
+    const auto flow_dest{
+        builder_.emit_call(branch_name, {value{loaded_self, base_operand}}, flow_type)};
+    ASSERT(flow_dest, "branch() must return a Flow union value");
+    const auto flow_slot{spill_to_temporary(value{*flow_dest, flow_type}, flow_type, false)};
+
+    auto& i32_type{ctx_.get_int(32, true)};
+    auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+
+    const auto tag_ptr{builder_.emit_get_element_ptr(
+        flow_slot, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
+    const auto tag_val{builder_.emit_load(value{tag_ptr, i32_type}, i32_type)};
+
+    u64 break_idx{1};
+    if (flow_type.has_symbol_table_idx()) {
+        const auto& table{ctx_.registry.get(flow_type.get_symbol_table_idx())};
+        if (const auto proxy{table.get_proxy_opt(sema::builtin_impl::FLOW_BREAK)}) {
+            break_idx = proxy->index;
         }
-
-        builder_.set_segment(payload_seg);
     }
 
-    const auto into_output_name{shape->gir_method_name("intoOutput", symbol_scoping_)};
-    const auto loaded_self{builder_.emit_load(operand_addr, base_operand)};
+    auto&       bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    const auto  is_break_dest{builder_.emit_binary(instruction_kind::EQ,
+                                                  value{tag_val, i32_type},
+                                                  value{static_cast<i64>(break_idx), i32_type},
+                                                  bool_type)};
+    const value is_break_val{is_break_dest, bool_type};
+
+    auto& payload_seg{fn.add_segment()};
+    auto& diverge_seg{fn.add_segment()};
+    builder_.emit_cond_goto(is_break_val, diverge_seg.get_id(), payload_seg.get_id());
+
+    builder_.set_segment(diverge_seg);
+    if (is_propagation) {
+        emit_unwrap_propagation(flow_slot, *shape, id);
+    } else {
+        emit_panic_call(shape->residual_is_void ? "'!' unwrapped an empty optional"
+                                                : "'!' unwrapped an errored result",
+                        id);
+    }
+
+    builder_.set_segment(payload_seg);
     auto&      out_type{const_cast<sema::type&>(*shape->output_type)};
-    const auto out_dest{
-        builder_.emit_call(into_output_name, {value{loaded_self, base_operand}}, out_type)};
-    if (out_dest) { return value{*out_dest, out_type}; }
-    return value{void_val{}, out_type};
+    const auto payload_ptr{builder_.emit_get_element_ptr(
+        flow_slot, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, out_type)};
+    const auto payload_val{builder_.emit_load(value{payload_ptr, out_type}, out_type)};
+    return value{payload_val, out_type};
 }
 
-auto emitter::emit_unwrap_propagation(value                    operand_addr,
+auto emitter::emit_unwrap_propagation(value                    flow_slot,
                                       const sema::unwrap_info& shape,
                                       ast::node_id             site) -> void {
     PROFILE_FUNCTION();
@@ -5354,13 +5371,16 @@ auto emitter::emit_unwrap_propagation(value                    operand_addr,
 
     builder_.set_location(active_ast().location_of(site));
 
-    auto&      base_operand{const_cast<sema::type&>(*shape.operand_type)};
-    const auto into_residual_name{shape.gir_method_name("intoResidual", symbol_scoping_)};
-    const auto loaded_self{builder_.emit_load(operand_addr, base_operand)};
-    auto&      residual_type{const_cast<sema::type&>(*shape.residual_type)};
-    const auto res_dest{
-        builder_.emit_call(into_residual_name, {value{loaded_self, base_operand}}, residual_type)};
-    value res_val{res_dest ? value{*res_dest, residual_type} : value{void_val{}, residual_type}};
+    auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    auto& residual_type{const_cast<sema::type&>(*shape.residual_type)};
+
+    value res_val{void_val{}, residual_type};
+    if (!shape.residual_is_void) {
+        const auto payload_ptr{builder_.emit_get_element_ptr(
+            flow_slot, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, residual_type)};
+        const auto loaded_res{builder_.emit_load(value{payload_ptr, residual_type}, residual_type)};
+        res_val = value{loaded_res, residual_type};
+    }
 
     const auto rewrap{rewrap_shape_of(ctx_, ret_type)};
     ASSERT(rewrap, "`?` propagation return type must implement Rewrappable");
@@ -5373,7 +5393,8 @@ auto emitter::emit_unwrap_propagation(value                    operand_addr,
         res_val = value{casted, from_type};
     }
 
-    const auto from_residual_name{rewrap->gir_method_name("fromResidual", symbol_scoping_)};
+    const auto from_residual_name{
+        rewrap->gir_method_name(sema::builtin_impl::FROM_RESIDUAL, symbol_scoping_)};
     auto&      final_ret_type{const_cast<sema::type&>(*rewrap->return_type)};
     const auto rewrapped_dest{builder_.emit_call(from_residual_name, {res_val}, final_ret_type)};
     value      ret_val{rewrapped_dest ? value{*rewrapped_dest, final_ret_type}
