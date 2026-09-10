@@ -15,6 +15,7 @@
 #include "compiler/ast/ast.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/ast/kind.hh"
 #include "compiler/ast/primitive.hh"
 #include "compiler/ast/type.hh"
@@ -336,6 +337,44 @@ auto defer_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synt
                                parser.get_location_of(*stmt));
     }
     return parser.add_stmt<defer_stmt>(start_token, stmt);
+}
+
+auto errdefer_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
+    PROFILE_FUNCTION();
+    const auto start_token{parser.get_current_token()};
+
+    stdx::option<discardable_ident_handle> capture;
+    type_modifier                          modifier;
+    if (parser.peek_token_is(syntax::token_type_t::BW_OR)) {
+        parser.advance();
+        if (parser.peek_token_is(syntax::token_type_t::UNDERSCORE)) {
+            parser.advance();
+            capture.emplace(parser.add_node<discardable_ident_handle, ast::discarded>(
+                parser.get_current_token()));
+        } else {
+            parser.advance();
+            modifier = type_modifier{parser.get_current_token()};
+            if (!modifier.is_value()) { parser.advance(); }
+            capture.emplace(TRY(identifier_expr::parse(parser)));
+        }
+        TRY(parser.expect_peek(syntax::token_type_t::BW_OR));
+    }
+
+    if (parser.peek_token_is(syntax::token_type_t::END) ||
+        parser.peek_token_is(syntax::token_type_t::SEMICOLON)) {
+        return make_syntax_err("Errdefer statements require a statement to defer",
+                               syntax::error::DEFER_MISSING_DEFERREE,
+                               start_token);
+    }
+    parser.advance();
+    const auto stmt{TRY(parser.parse_statement())};
+
+    if (!stmt.any<expr_stmt, discard_stmt, block_stmt>()) {
+        return make_syntax_err("Deferred statements must be expressions, discards, or blocks",
+                               syntax::error::ILLEGAL_DEFERRED_STATEMENT,
+                               parser.get_location_of(*stmt));
+    }
+    return parser.add_stmt<errdefer_stmt>(start_token, stmt, capture, modifier);
 }
 
 auto discard_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {

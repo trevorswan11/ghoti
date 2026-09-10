@@ -866,6 +866,20 @@ TEST_CASE("formatter preserves discarded function parameters") {
           "const f := fn(a: i32, _: bool, _: []u8): void {};\n");
 }
 
+TEST_CASE("formatter formats errdefer statements") {
+    CHECK(format_source("const f := fn(): void { errdefer a(); };\n") ==
+          "const f := fn(): void {\n    errdefer a();\n};\n");
+    CHECK(format_source("const f := fn(): void { errdefer |e| cleanup(e); };\n") ==
+          "const f := fn(): void {\n    errdefer |e| cleanup(e);\n};\n");
+    CHECK(format_source("const f := fn(): void { errdefer |_| cleanup(); };\n") ==
+          "const f := fn(): void {\n    errdefer |_| cleanup();\n};\n");
+    CHECK(format_source("const f := fn(): void { errdefer |&e| cleanup(e); };\n") ==
+          "const f := fn(): void {\n    errdefer |&e| cleanup(e);\n};\n");
+    CHECK(format_source("const f := fn(): void { errdefer |^e| cleanup(e); };\n") ==
+          "const f := fn(): void {\n    errdefer |^e| cleanup(e);\n};\n");
+    round_trips("const f := fn(): void {\n    errdefer |e| cleanup(e);\n};\n");
+}
+
 constexpr std::string_view corpus{
 #include "ast/golden.gh.inc"
 };
