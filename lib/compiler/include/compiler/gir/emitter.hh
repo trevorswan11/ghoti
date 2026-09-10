@@ -32,6 +32,8 @@
 #include "support/int128.hh"
 #include "support/scope_guard.hh"
 
+namespace ghoti::sema { struct unwrap_info; } // namespace ghoti::sema
+
 namespace ghoti::gir {
 
 class emitter {
@@ -217,11 +219,9 @@ class emitter {
                             syntax::token_type_t  builtin) -> void;
 
     auto emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> value;
-    auto emit_unwrap_propagation(value             operand_addr,
-                                 const sema::type& operand_union,
-                                 u64               operand_diverge_idx,
-                                 bool              diverge_is_void,
-                                 ast::node_id      site) -> void;
+    auto emit_unwrap_propagation(value                    operand_addr,
+                                 const sema::unwrap_info& shape,
+                                 ast::node_id             site) -> void;
     auto emit_union_active_field_guard(value            union_addr,
                                        u64              field_idx,
                                        std::string_view field_name,

@@ -8,10 +8,41 @@
 
 namespace ghoti::tests {
 
+namespace {
+
+constexpr std::string_view RESULT_PRELUDE = R"(
+const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
+impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
+    using Output = T;
+    using Residual = E;
+    pub const isBreak := fn(&self): bool { return match (self) { .ok => false, .err => true }; };
+    pub const intoOutput := fn(self): T { return match (self) { .ok => |v| v, .err => @trap() }; };
+    pub const intoResidual := fn(self): E { return match (self) { .err => |e| e, .ok => @trap() }; };
+}
+impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
+    using From = E;
+    pub const fromResidual := fn(r: E): @this() { return .{ .err = r }; };
+}
+const Option := fn(T: type): type { return union { some: T, none: void }; };
+impl(T: type) builtin.Unwrappable for Option(T) {
+    using Output = T;
+    using Residual = void;
+    pub const isBreak := fn(&self): bool { return match (self) { .some => false, .none => true }; };
+    pub const intoOutput := fn(self): T { return match (self) { .some => |v| v, .none => @trap() }; };
+    pub const intoResidual := fn(self): void { return {}; };
+}
+impl(T: type) builtin.Rewrappable for Option(T) {
+    using From = void;
+    pub const fromResidual := fn(_: void): @this() { return .{ .none = {} }; };
+}
+)";
+
+} // namespace
+
 TEST_CASE("GIR `?` branches on the discriminant and emits a divergent return") {
     // `inner(x)` depends on a parameter, so the `?` cannot be constant-folded away.
-    auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const R := union { ok: i32, err: i32 };
+    auto [ctx, idx]{helpers::resolve_and_check(std::string{RESULT_PRELUDE} + R"(
+        const R := Result(i32, i32);
         const inner := fn(x: i32): R {
             return if (x > 0) R{ .ok = x }; else R{ .err = 1 };
         };
@@ -27,8 +58,8 @@ TEST_CASE("GIR `?` branches on the discriminant and emits a divergent return") {
 }
 
 TEST_CASE("GIR `!` guards the discriminant with a panic_handler call") {
-    auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const O := union { some: i32, none: void };
+    auto [ctx, idx]{helpers::resolve_and_check(std::string{RESULT_PRELUDE} + R"(
+        const O := Option(i32);
         const grab := fn(o: O): i32 { return o!; };
     )")};
 

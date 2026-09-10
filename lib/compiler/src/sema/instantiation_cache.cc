@@ -56,4 +56,11 @@ auto body_typing_snapshot::diff_into(context& ctx, mod::module& m, body_type_dif
     }
 }
 
+auto body_typing_snapshot::restore_to(mod::module& m) const -> void {
+    m.sema_side_tables.node_types.values     = nodes;
+    m.sema_side_tables.explicit_types.values = types;
+    m.if_constexpr_results                   = ifs;
+    m.match_arm_results                      = matches;
+}
+
 } // namespace ghoti::sema
