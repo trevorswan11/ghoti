@@ -1211,6 +1211,46 @@ auto const_eval::eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap)
     const auto shape{sema::unwrap_shape_of(ctx_, *operand_type)};
     if (!shape) { return stdx::none; }
 
+    if (const auto branch_m{shape->impl->find_method(sema::builtin_impl::BRANCH)}) {
+        const auto& decl_mod{branch_m->defining_mod   ? *branch_m->defining_mod
+                             : shape->impl->enclosing ? *shape->impl->enclosing
+                                                      : *module_};
+        if (const auto decl{decl_mod.ast.get_as_opt<ast::decl_stmt>(branch_m->decl)}) {
+            if (decl->value) {
+                if (const auto fn_expr{decl_mod.ast.get_as_opt<ast::function_expr>(*decl->value)}) {
+                    auto* const prev{module_.get()};
+                    if (&decl_mod != prev) { set_module(const_cast<mod::module&>(decl_mod)); }
+                    const auto flow_val{eval_constexpr_fn(id, *fn_expr, {*operand})};
+                    if (&decl_mod != prev) { set_module(*prev); }
+                    if (flow_val) {
+                        if (const auto un{flow_val->as_opt<const_union>()}) {
+                            if (un->active_field == sema::builtin_impl::FLOW_CONTINUE) {
+                                return un->payload.empty() ? const_value{void_val{}}
+                                                           : un->payload.front();
+                            }
+                            if (un->active_field == sema::builtin_impl::FLOW_BREAK) {
+                                if (id.get_token_type() == syntax::token_type_t::BANG) {
+                                    ctx_.diags.emplace_back(
+                                        shape->residual_is_void
+                                            ? "compile-time '!' unwrapped an empty optional"
+                                            : "compile-time '!' unwrapped an errored result",
+                                        sema::error::CONSTEXPR_EVALUATION_FAILED,
+                                        module_->ast.location_of(id));
+                                    return const_value::make_poison();
+                                }
+                                ctx_.diags.emplace_back(
+                                    "compile-time '?' on an errored or empty value",
+                                    sema::error::CONSTEXPR_EVALUATION_FAILED,
+                                    module_->ast.location_of(id));
+                                return const_value::make_poison();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     const auto un{operand->as_opt<const_union>()};
     if (!un) { return stdx::none; }
 
@@ -1219,53 +1259,8 @@ auto const_eval::eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap)
         is_break = false;
     } else if (un->active_field == "err" || un->active_field == "none") {
         is_break = true;
-    } else if (const auto is_break_method{shape->impl->find_method("isBreak")}) {
-        const auto& decl_mod{is_break_method->defining_mod ? *is_break_method->defining_mod
-                             : shape->impl->enclosing      ? *shape->impl->enclosing
-                                                           : *module_};
-        if (const auto decl{decl_mod.ast.get_as_opt<ast::decl_stmt>(is_break_method->decl)}) {
-            [&] {
-                if (!decl->value) { return; }
-                const auto fn_expr{decl_mod.ast.get_as_opt<ast::function_expr>(*decl->value)};
-                if (!fn_expr) { return; }
-                const auto block{decl_mod.ast.get_as_opt<ast::block_stmt>(fn_expr->body)};
-                if (!block) { return; }
-
-                for (const auto& stmt_h : block->statements) {
-                    const auto ret{decl_mod.ast.get_as_opt<ast::return_stmt>(*stmt_h)};
-                    const auto expr_h{ret && ret->expression ? ret->expression : stdx::none};
-                    if (!expr_h) { continue; }
-                    const auto match{decl_mod.ast.get_as_opt<ast::match_expr>(*expr_h)};
-                    if (!match) { continue; }
-
-                    for (const auto& arm : match->arms) {
-                        const auto expr_st{decl_mod.ast.get_as_opt<ast::expr_stmt>(*arm.dispatch)};
-                        const auto ret_st{decl_mod.ast.get_as_opt<ast::return_stmt>(*arm.dispatch)};
-                        const auto consequence{expr_st                        ? expr_st->expression
-                                               : ret_st && ret_st->expression ? *ret_st->expression
-                                                                              : *arm.dispatch};
-
-                        for (const auto& pat_h : arm.patterns) {
-                            const auto imp{
-                                decl_mod.ast.get_as_opt<ast::implicit_access_expr>(*pat_h)};
-                            if (!imp) { continue; }
-
-                            const auto variant_name{
-                                decl_mod.ast.get_as<ast::identifier_expr>(imp->member).name};
-                            if (variant_name == un->active_field) {
-                                if (consequence.get_token_type() ==
-                                    syntax::token_type_t::BOOLEAN_TRUE) {
-                                    is_break = true;
-                                } else if (consequence.get_token_type() ==
-                                           syntax::token_type_t::BOOLEAN_FALSE) {
-                                    is_break = false;
-                                }
-                            }
-                        }
-                    }
-                }
-            }();
-        }
+    } else {
+        return stdx::none;
     }
 
     const auto payload{
@@ -1752,6 +1747,127 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                 if (callee_mod != prev) { set_module(*callee_mod); }
                 auto res{eval_constexpr_fn(id, *fn_expr, args)};
                 if (callee_mod != prev) { set_module(*prev); }
+                return res;
+            }
+        }
+    }
+
+    if (const auto dot{module_->ast.get_as_opt<ast::dot_expr>(call.function)}) {
+        if (!resolve_module_chain(dot->object)) {
+            const auto& member_ident{module_->ast.get_as<ast::identifier_expr>(dot->member)};
+            stdx::option<mod::module&>              method_mod;
+            stdx::option<const ast::function_expr&> method_fn;
+
+            if (const auto owner{module_->get_resolved_symbol_owner_opt(call.function)}) {
+                for (const auto* r : ctx_.impls.records()) {
+                    if (r->body_scope_idx == *owner) {
+                        if (const auto m{r->find_method(member_ident.name)}) {
+                            if (m->defining_mod) {
+                                method_mod.emplace(const_cast<mod::module&>(*m->defining_mod));
+                            } else if (r->enclosing) {
+                                method_mod.emplace(const_cast<mod::module&>(*r->enclosing));
+                            } else {
+                                method_mod.emplace(module_);
+                            }
+                            if (const auto m_decl{
+                                    method_mod->ast.get_as_opt<ast::decl_stmt>(m->decl)}) {
+                                if (m_decl->value) {
+                                    if (const auto fn_opt{
+                                            method_mod->ast.get_as_opt<ast::function_expr>(
+                                                *m_decl->value)}) {
+                                        method_fn = fn_opt;
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (!method_fn) {
+                if (const auto obj_ty{module_->get_sema_type_opt(dot->object)}) {
+                    stdx::option<const sema::type&> target_ty{obj_ty};
+                    if (const auto ptr{target_ty->get_data().as_opt<sema::types::pointer>()}) {
+                        target_ty.emplace(ptr->underlying);
+                    } else if (const auto ref{
+                                   target_ty->get_data().as_opt<sema::types::reference>()}) {
+                        target_ty.emplace(ref->underlying);
+                    }
+
+                    for (const auto& em : ctx_.impls.methods_of(*target_ty)) {
+                        if (em.method->name == member_ident.name) {
+                            if (em.method->defining_mod) {
+                                method_mod.emplace(
+                                    const_cast<mod::module&>(*em.method->defining_mod));
+                            } else if (em.record->enclosing) {
+                                method_mod.emplace(const_cast<mod::module&>(*em.record->enclosing));
+                            } else {
+                                method_mod.emplace(module_);
+                            }
+                            if (const auto m_decl{
+                                    method_mod->ast.get_as_opt<ast::decl_stmt>(em.method->decl)}) {
+                                if (m_decl->value) {
+                                    if (const auto fn_opt{
+                                            method_mod->ast.get_as_opt<ast::function_expr>(
+                                                *m_decl->value)}) {
+                                        method_fn = fn_opt;
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                    }
+                    if (!method_fn && target_ty->has_symbol_table_idx()) {
+                        const auto& table{ctx_.registry.get(target_ty->get_symbol_table_idx())};
+                        if (const auto sym{table.get_opt(member_ident.name)}) {
+                            if (const auto sym_node{
+                                    sym->get_data().as_opt<sema::symbols::node_t>()}) {
+                                const auto& d{target_ty->get_data()};
+                                if (const auto s{d.as_opt<sema::types::struct_t>()}) {
+                                    method_mod.emplace(const_cast<mod::module&>(s->enclosing));
+                                } else if (const auto u{d.as_opt<sema::types::union_t>()}) {
+                                    method_mod.emplace(const_cast<mod::module&>(u->enclosing));
+                                } else if (const auto e{d.as_opt<sema::types::enum_t>()}) {
+                                    method_mod.emplace(const_cast<mod::module&>(e->enclosing));
+                                }
+                                if (method_mod) {
+                                    if (const auto m_decl{
+                                            method_mod->ast.get_as_opt<ast::decl_stmt>(
+                                                *sym_node)}) {
+                                        if (m_decl->value) {
+                                            if (const auto fn_opt{
+                                                    method_mod->ast.get_as_opt<ast::function_expr>(
+                                                        *m_decl->value)}) {
+                                                method_fn = fn_opt;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (method_fn && method_mod) {
+                std::vector<const_value> args;
+                if (method_fn->self) {
+                    const auto self_val{try_eval(dot->object)};
+                    if (!self_val) { return stdx::none; }
+                    args.emplace_back(*self_val);
+                }
+                for (const auto& arg : call.arguments) {
+                    if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
+                        const auto arg_val{try_eval(*expr_h)};
+                        if (!arg_val) { return stdx::none; }
+                        args.emplace_back(*arg_val);
+                    }
+                }
+                auto* const prev{module_.get()};
+                if (method_mod != prev) { set_module(*method_mod); }
+                auto res{eval_constexpr_fn(id, *method_fn, args)};
+                if (method_mod != prev) { set_module(*prev); }
                 return res;
             }
         }
@@ -2360,7 +2476,9 @@ auto const_eval::eval_constexpr_fn(ast::node_id                      call_id,
                                    stdx::option<const const_struct&> captures)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
-    VERIFY(fn_expr.parameters.size() == args.size(),
+    const bool  has_self{fn_expr.self.has_value()};
+    const usize expected_args{fn_expr.parameters.size() + (has_self ? 1UZ : 0UZ)};
+    VERIFY(expected_args == args.size(),
            "Constexpr function args count must match parameters count");
 
     if (recursion_depth_ >= max_recursion_depth_) {
@@ -2373,10 +2491,17 @@ auto const_eval::eval_constexpr_fn(ast::node_id                      call_id,
     }
 
     call_frame frame;
-    for (const auto& [param, arg] : std::views::zip(fn_expr.parameters, args)) {
+    usize      arg_idx{0};
+    if (has_self) {
+        const auto& self_ident{module_->ast.get_as<ast::identifier_expr>(*fn_expr.self->name)};
+        frame.bindings.emplace(self_ident.name, args[arg_idx++]);
+    }
+    for (const auto& param : fn_expr.parameters) {
         if (param.name.is<ast::identifier_expr>()) {
             const auto& ident{module_->ast.get_as<ast::identifier_expr>(param.name)};
-            frame.bindings.emplace(ident.name, arg);
+            frame.bindings.emplace(ident.name, args[arg_idx++]);
+        } else {
+            ++arg_idx;
         }
     }
     if (captures) {

@@ -6,22 +6,11 @@ impl(T: type) builtin.Unwrappable for Option(T) {
     using Output = T;
     using Residual = void;
 
-    pub const isBreak := fn(&self): bool {
+    pub const branch := fn(self): builtin.Flow(T, void) {
         return match (self) {
-            .some => false,
-            .none => true,
+            .some => |v| builtin.Flow(T, void){ .@"continue" = v },
+            .none => builtin.Flow(T, void){ .@"break" = {} },
         };
-    };
-
-    pub const intoOutput := fn(self): T {
-        return match (self) {
-            .some => |v| v,
-            .none => @trap(),
-        };
-    };
-
-    pub const intoResidual := fn(_: @this()): void {
-        return {};
     };
 }
 

@@ -75,12 +75,17 @@ pub const Test := struct {
     pub func: fn(): bool,
 };
 
+pub const Flow := fn(C: type, R: type): type {
+    return union {
+        @"continue": C,
+        @"break": R,
+    };
+};
+
 pub const Unwrappable := interface {
     Output: type;
     Residual: type;
-    pub const isBreak := fn(&self): bool;
-    pub const intoOutput := fn(self): Output;
-    pub const intoResidual := fn(self): Residual;
+    pub const branch := fn(self): Flow(Output, Residual);
 };
 
 pub const Rewrappable := interface {
