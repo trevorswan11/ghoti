@@ -1211,6 +1211,7 @@ auto const_eval::eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap)
     const auto shape{sema::unwrap_shape_of(ctx_, *operand_type)};
     if (!shape) { return stdx::none; }
 
+    // Evaluate `branch(self)` on the operand at compile time to obtain the Flow tagged union.
     if (const auto branch_m{shape->impl->find_method(sema::builtin_impl::BRANCH)}) {
         const auto& decl_mod{branch_m->defining_mod   ? *branch_m->defining_mod
                              : shape->impl->enclosing ? *shape->impl->enclosing
@@ -1223,6 +1224,10 @@ auto const_eval::eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap)
                     const auto flow_val{eval_constexpr_fn(id, *fn_expr, {*operand})};
                     if (&decl_mod != prev) { set_module(*prev); }
                     if (flow_val) {
+                        // Inspect the active variant in the returned `Flow(Output, Residual)`
+                        // union:
+                        // - @"continue": extract and return the success payload
+                        // - @"break": produce a compile-time evaluation diagnostic
                         if (const auto un{flow_val->as_opt<const_union>()}) {
                             if (un->active_field == sema::builtin_impl::FLOW_CONTINUE) {
                                 return un->payload.empty() ? const_value{void_val{}}
@@ -1785,6 +1790,9 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                 }
             }
 
+            // If the callee is an `obj.method(...)` call, locate the method declaration:
+            // 1. Look up extension methods on `target_ty` across registered `impl` blocks.
+            // 2. Look up inherent methods directly declared in the aggregate's symbol table.
             if (!method_fn) {
                 if (const auto obj_ty{module_->get_sema_type_opt(dot->object)}) {
                     stdx::option<const sema::type&> target_ty{obj_ty};
@@ -1795,6 +1803,7 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                         target_ty.emplace(ref->underlying);
                     }
 
+                    // Extension method search via impl registry:
                     for (const auto& em : ctx_.impls.methods_of(*target_ty)) {
                         if (em.method->name == member_ident.name) {
                             if (em.method->defining_mod) {

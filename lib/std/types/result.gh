@@ -5,7 +5,6 @@ pub constexpr Result := fn(T: type, E: type): type {
 impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
     using Output = T;
     using Residual = E;
-
     pub const branch := fn(self): builtin.Flow(T, E) {
         return match (self) {
             .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
@@ -16,7 +15,6 @@ impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
 
 impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
     using From = E;
-
     pub const fromResidual := fn(r: E): @this() {
         return .{ .err = r };
     };

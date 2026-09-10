@@ -596,4 +596,27 @@ TEST_CASE("a raw pointer field in an extern struct is still fine") {
     helpers::resolve_and_check("const S := extern struct { p: ^i32, q: ^^u8 };");
 }
 
+TEST_CASE("a trait can be implemented for a primitive type in the trait's declaring module") {
+    helpers::resolve_and_check(R"(
+        const Formattable := interface {
+            pub const format := fn(&self): i32;
+        };
+        impl Formattable for i32 {
+            pub const format := fn(&self): i32 { return *self * 2; };
+        }
+        const test_fn := fn(val: i32): i32 {
+            return val.format();
+        };
+    )");
+}
+
+TEST_CASE("the orphan rule rejects an inherent impl on a primitive type") {
+    CHECK(helpers::raised(R"(
+        impl i32 {
+            pub const double := fn(&self): i32 { return *self * 2; };
+        }
+    )",
+                          sema::error::ORPHAN_IMPL));
+}
+
 } // namespace ghoti::tests
