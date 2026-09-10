@@ -6304,6 +6304,8 @@ auto type_resolver::check_deferred_body_jumps(ast::stmt_handle body) -> void {
             [&](const ast::match_expr& data) {
                 for (const auto& arm : data.arms) { self(self, *arm.dispatch); }
             },
+            [&](const ast::defer_stmt& data) { self(self, *data.deferred); },
+            [&](const ast::errdefer_stmt& data) { self(self, *data.deferred); },
             [&](const auto&) { return; });
     };
     collect_labels(collect_labels, *body);
@@ -6375,6 +6377,7 @@ auto type_resolver::check_deferred_body_jumps(ast::stmt_handle body) -> void {
             [&](const ast::expr_stmt& data) { self(self, *data.expression, loop_depth); },
             [&](const ast::discard_stmt& data) { self(self, *data.discarded, loop_depth); },
             [&](const ast::defer_stmt& data) { self(self, *data.deferred, loop_depth); },
+            [&](const ast::errdefer_stmt& data) { self(self, *data.deferred, loop_depth); },
             [&](const ast::decl_stmt& data) {
                 if (data.value) { self(self, **data.value, loop_depth); }
             },
@@ -6447,6 +6450,73 @@ auto type_resolver::visit(ast::node_id id, const ast::defer_stmt& defer) -> void
     PROFILE_FUNCTION();
     TRY_RESOLVE(defer.deferred);
     check_deferred_body_jumps(defer.deferred);
+    last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
+}
+
+auto type_resolver::visit(ast::node_id id, const ast::errdefer_stmt& errdef) -> void {
+    PROFILE_FUNCTION();
+
+    stdx::option<const type&> ret_type;
+    if (!open_function_nodes_.empty()) {
+        auto& fn_type{resolving_.get_sema_type(open_function_nodes_.back())};
+        if (const auto fd{fn_type.get_data().as_opt<types::function>()}) {
+            ret_type.emplace(fd->return_type);
+        } else if (const auto cd{fn_type.get_data().as_opt<types::closure_t>()}) {
+            if (const auto sd{cd->signature.get_data().as_opt<types::function>()}) {
+                ret_type.emplace(sd->return_type);
+            }
+        }
+    } else if (!return_trackers_.empty() && return_trackers_.back().expected_type) {
+        ret_type.emplace(*return_trackers_.back().expected_type);
+    }
+
+    if (!ret_type) {
+        ctx_.diags.emplace_back("errdefer can only be used inside a function",
+                                error::UNWRAP_OUTSIDE_FUNCTION,
+                                resolving_.ast.location_of(id));
+        last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
+        return;
+    }
+
+    const auto nominal_rewrap{rewrap_shape_of(ctx_, *ret_type)};
+    if (!nominal_rewrap) {
+        ctx_.diags.emplace_back(
+            fmt::format("errdefer can only be used in a function returning a fallible type, "
+                        "but '{}' does not implement 'builtin.Rewrappable'",
+                        ctx_.type_display_name(*ret_type)),
+            error::ERRDEFER_IN_INFALLIBLE_FN,
+            resolving_.ast.location_of(id));
+        last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
+        return;
+    }
+
+    if (errdef.modifier.is_mutable_ref() || errdef.modifier.is_mutable_ptr() ||
+        errdef.modifier.is_volatile()) {
+        ctx_.diags.emplace_back("errdefer capture cannot have a mutable modifier",
+                                error::ERRDEFER_MUTABLE_CAPTURE,
+                                resolving_.ast.location_of(id));
+    }
+
+    if (errdef.capture && errdef.capture->is<ast::identifier_expr>() &&
+        resolving_.has_sema_type(id)) {
+        type* cap_type{const_cast<type*>(nominal_rewrap->from_type.get())};
+        if (errdef.modifier.is_ref()) {
+            cap_type = &ctx_.get_reference(types::mut::CONSTANT, *cap_type);
+        } else if (errdef.modifier.is_ptr()) {
+            cap_type = &ctx_.get_pointer(types::mut::CONSTANT, *cap_type);
+        }
+        resolving_.set_sema_type(**errdef.capture, *cap_type);
+
+        const auto& table_type{resolving_.get_sema_type(id)};
+        const scope s{table_stack_, table_type.get_symbol_table_idx(), table_idx_};
+        resolve_symbol_info(ast::identifier_handle{**errdef.capture}, symbol_kind::VALUE);
+
+        TRY_RESOLVE(errdef.deferred);
+    } else {
+        TRY_RESOLVE(errdef.deferred);
+    }
+
+    check_deferred_body_jumps(errdef.deferred);
     last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
 }
 

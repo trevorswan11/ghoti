@@ -52,6 +52,7 @@ enum class node_kind : u8 {
     CONTINUE_STATEMENT,
     DECL_STATEMENT,
     DEFER_STATEMENT,
+    ERRDEFER_STATEMENT,
     DISCARD_STATEMENT,
     EXPRESSION_STATEMENT,
     IMPL_STATEMENT,
@@ -109,6 +110,7 @@ enum class node_kind : u8 {
     X(continue_stmt)        \
     X(decl_stmt)            \
     X(defer_stmt)           \
+    X(errdefer_stmt)        \
     X(discard_stmt)         \
     X(expr_stmt)            \
     X(impl_stmt)            \
@@ -218,6 +220,7 @@ NODE_KIND_OF_TRAIT(cfg_stmt, CFG_STATEMENT)
 NODE_KIND_OF_TRAIT(continue_stmt, CONTINUE_STATEMENT)
 NODE_KIND_OF_TRAIT(decl_stmt, DECL_STATEMENT)
 NODE_KIND_OF_TRAIT(defer_stmt, DEFER_STATEMENT)
+NODE_KIND_OF_TRAIT(errdefer_stmt, ERRDEFER_STATEMENT)
 NODE_KIND_OF_TRAIT(discard_stmt, DISCARD_STATEMENT)
 NODE_KIND_OF_TRAIT(expr_stmt, EXPRESSION_STATEMENT)
 NODE_KIND_OF_TRAIT(impl_stmt, IMPL_STATEMENT)

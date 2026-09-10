@@ -106,6 +106,15 @@ struct defer_stmt {
         -> stdx::result<stmt_handle, syntax::diagnostic>;
 };
 
+struct errdefer_stmt {
+    stmt_handle                            deferred;
+    stdx::option<discardable_ident_handle> capture;
+    type_modifier                          modifier;
+
+    [[nodiscard]] static auto parse(syntax::parser& parser)
+        -> stdx::result<stmt_handle, syntax::diagnostic>;
+};
+
 struct discard_stmt {
     expr_handle discarded;
 

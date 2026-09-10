@@ -84,6 +84,7 @@ class symbol_collector {
     auto visit(ast::node_id, const ast::continue_stmt&) -> void;
     auto visit(ast::node_id, const ast::decl_stmt&) -> void;
     auto visit(ast::node_id, const ast::defer_stmt&) -> void;
+    auto visit(ast::node_id, const ast::errdefer_stmt&) -> void;
     auto visit(ast::node_id, const ast::discard_stmt&) -> void;
     auto visit(ast::node_id, const ast::expr_stmt&) -> void;
     auto visit(ast::node_id, const ast::impl_stmt&) -> void;

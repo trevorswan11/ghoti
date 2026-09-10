@@ -132,6 +132,7 @@ enum class token_type_t : u8 {
     DO,
     AS,
     DEFER,
+    ERRDEFER,
     TEST,
     UNDEFINED,
     ASM,

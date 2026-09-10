@@ -140,6 +140,7 @@ class formatter {
     auto visit(node_id, const continue_stmt&) -> syntax::doc_id;
     auto visit(node_id, const decl_stmt&) -> syntax::doc_id;
     auto visit(node_id, const defer_stmt&) -> syntax::doc_id;
+    auto visit(node_id, const errdefer_stmt&) -> syntax::doc_id;
     auto visit(node_id, const discard_stmt&) -> syntax::doc_id;
     auto visit(node_id, const expr_stmt&) -> syntax::doc_id;
     auto visit(node_id, const impl_stmt&) -> syntax::doc_id;

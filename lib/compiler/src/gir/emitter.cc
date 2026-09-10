@@ -1403,6 +1403,7 @@ auto emitter::emit_stmt(const ast::stmt_handle& stmt) -> void {
         [&](const ast::decl_stmt& decl) { emit_decl_stmt(stmt_id, decl); },
         [&](const ast::return_stmt& ret) { emit_return_stmt(stmt_id, ret); },
         [&](const ast::defer_stmt& def) { emit_defer_stmt(stmt_id, def); },
+        [&](const ast::errdefer_stmt& errdef) { emit_errdefer_stmt(stmt_id, errdef); },
         [&](const ast::expr_stmt& expr_st) { emit_expression_id(expr_st.expression); },
         [&](const ast::break_stmt& brk) { emit_break(stmt_id, brk); },
         [&](const ast::continue_stmt& cnt) { emit_continue(stmt_id, cnt); },
@@ -1433,23 +1434,82 @@ auto emitter::emit_stmt_as_value(const ast::stmt_handle& stmt) -> value {
         });
 }
 
-auto emitter::emit_defers_for_scope(usize scope_idx) -> void {
+auto emitter::emit_defers_for_scope(usize scope_idx, bool error_edge) -> void {
     PROFILE_FUNCTION();
     if (scope_idx >= scopes_.size()) { return; }
     const auto defers{scopes_[scope_idx].defers};
-    for (const auto& def_stmt : defers | std::views::reverse) { emit_stmt(def_stmt); }
+    for (const auto& entry : defers | std::views::reverse) {
+        if (entry.on_error && !error_edge) { continue; }
+        if (entry.on_error && entry.capture && entry.capture->template is<ast::identifier_expr>()) {
+            const scope_guard g{scopes_};
+            const auto&       ident{active_ast().get_as<ast::identifier_expr>(**entry.capture)};
+            const auto        p_name{ident.name};
+            ASSERT(current_error_slot_, "Error slot must be present for errdefer with capture");
+            const auto cap_type_opt{active_mod().get_sema_type_opt(**entry.capture)};
+            auto&      cap_type{cap_type_opt ? *cap_type_opt : *current_error_slot_->type};
+            if (cap_type.get_kind() == sema::type_kind::VOID_) {
+                scopes_.back().bindings.emplace(p_name,
+                                                local_binding{
+                                                    .id        = local_id{0, local_kind::TEMPORARY},
+                                                    .type      = cap_type,
+                                                    .is_alloca = false,
+                                                    .const_val = value{void_val{}, cap_type},
+                                                    .is_const  = true,
+                                                });
+            } else if (entry.modifier.is_ref() || entry.modifier.is_ptr()) {
+                const auto capture_slot{builder_.emit_alloca(cap_type)};
+                builder_.emit_store(capture_slot, value{current_error_slot_->data, cap_type})
+                    .is_initializer = true;
+                scopes_.back().bindings.emplace(p_name,
+                                                local_binding{
+                                                    .id        = capture_slot,
+                                                    .type      = cap_type,
+                                                    .is_alloca = true,
+                                                    .const_val = stdx::none,
+                                                });
+            } else {
+                scopes_.back().bindings.emplace(p_name,
+                                                local_binding{
+                                                    .id = current_error_slot_->data.as<local_id>(),
+                                                    .type      = *current_error_slot_->type,
+                                                    .is_alloca = true,
+                                                    .const_val = stdx::none,
+                                                    .is_const  = true,
+                                                });
+            }
+            emit_stmt(entry.deferred);
+            continue;
+        }
+        emit_stmt(entry.deferred);
+    }
 }
 
-auto emitter::emit_defers_up_to(usize target_depth) -> void {
+auto emitter::emit_defers_up_to(usize target_depth, bool error_edge) -> void {
     PROFILE_FUNCTION();
     if (scopes_.empty()) { return; }
-    for (usize i{scopes_.size()}; i > target_depth; --i) { emit_defers_for_scope(i - 1); }
+    for (usize i{scopes_.size()}; i > target_depth; --i) {
+        emit_defers_for_scope(i - 1, error_edge);
+    }
 }
 
 auto emitter::emit_defer_stmt(ast::node_id, const ast::defer_stmt& def) -> void {
     PROFILE_FUNCTION();
     ASSERT(!scopes_.empty(), "Defer statement must be within an active scope");
-    scopes_.back().defers.emplace_back(def.deferred);
+    scopes_.back().defers.emplace_back(deferred_entry{
+        .deferred = def.deferred,
+        .on_error = false,
+    });
+}
+
+auto emitter::emit_errdefer_stmt(ast::node_id, const ast::errdefer_stmt& errdef) -> void {
+    PROFILE_FUNCTION();
+    ASSERT(!scopes_.empty(), "Errdefer statement must be within an active scope");
+    scopes_.back().defers.emplace_back(deferred_entry{
+        .deferred = errdef.deferred,
+        .on_error = true,
+        .capture  = errdef.capture,
+        .modifier = errdef.modifier,
+    });
 }
 
 auto emitter::emit_break(ast::node_id, const ast::break_stmt& brk) -> void {
@@ -5391,7 +5451,8 @@ auto emitter::emit_unwrap_propagation(value                    flow_slot,
         res_val = value{loaded_res, residual_type};
     }
 
-    // Rewrap the residual into the enclosing function's return type using `Rewrappable.fromResidual`.
+    // Rewrap the residual into the enclosing function's return type using
+    // `Rewrappable.fromResidual`.
     const auto rewrap{rewrap_shape_of(ctx_, ret_type)};
     ASSERT(rewrap, "`?` propagation return type must implement Rewrappable");
 
@@ -5403,6 +5464,14 @@ auto emitter::emit_unwrap_propagation(value                    flow_slot,
         res_val = value{casted, from_type};
     }
 
+    // Preserve the error payload for errdefer captures.
+    const auto prev_error_slot{current_error_slot_};
+    if (from_type.get_kind() != sema::type_kind::VOID_) {
+        current_error_slot_ = spill_to_temporary(res_val, from_type, false);
+    } else {
+        current_error_slot_ = value{void_val{}, from_type};
+    }
+
     const auto from_residual_name{
         rewrap->gir_method_name(sema::builtin_impl::FROM_RESIDUAL, symbol_scoping_)};
     auto&      final_ret_type{const_cast<sema::type&>(*rewrap->return_type)};
@@ -5411,7 +5480,8 @@ auto emitter::emit_unwrap_propagation(value                    flow_slot,
                                       : value{void_val{}, final_ret_type}};
 
     // Run deferred scopes before returning from the enclosing function.
-    emit_defers_up_to(0);
+    emit_defers_up_to(0, true);
+    current_error_slot_ = prev_error_slot;
     builder_.set_location(active_ast().location_of(site));
     builder_.emit_return(ret_val);
 }

@@ -1039,6 +1039,27 @@ auto dumper::visit(node_id, const decl_stmt& decl) -> void {
     }
 
 MAKE_BASIC_STMT_DUMP(defer_stmt, DeferStatement, Deferred, deferred)
+
+auto dumper::visit(node_id, const errdefer_stmt& node) -> void {
+    PROFILE_FUNCTION();
+    fmt::println(out_, "ErrdeferStatement");
+    if (node.capture) {
+        const indent::guard g{indent_, false};
+        fmt::print(out_, "{}Capture: ", indent_.current_branch());
+        if (node.capture->is<discarded>()) {
+            fmt::println(out_, "<discarded>");
+        } else {
+            const auto& ident{ast_.get_as<identifier_expr>(**node.capture)};
+            fmt::println(out_, "{} (modifier: {})", ident, node.modifier);
+        }
+    }
+    {
+        const indent::guard g{indent_, true};
+        fmt::print(out_, "{}Deferred: ", indent_.current_branch());
+        dump(node.deferred);
+    }
+}
+
 MAKE_BASIC_STMT_DUMP(discard_stmt, DiscardStatement, Discarded, discarded)
 MAKE_BASIC_STMT_DUMP(expr_stmt, ExpressionStatement, Expr, expression)
 

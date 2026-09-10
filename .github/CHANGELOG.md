@@ -270,3 +270,11 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Support trait implementations on primitive types with orphan rule enforcement
     - Traits can now be implemented on primitive types (e.g. `impl Format for i32`) within the trait's declaring module
     - Enforced orphan rules to reject inherent `impl` blocks on primitive types and foreign types (`error::ORPHAN_IMPL`)
+- Fix a bug that prevented unions with trailing comments from being formatted
+- Implement `errdefer` statement for error-path deferred cleanup
+    - Executes deferred cleanup strictly upon early error propagation via the `?` operator
+    - Supports capture syntax `errdefer |err| ...` to bind the error payload by value, alias captures (`|^err|` and `|&err|`), and discardable captures (`|_|`)
+    - Prohibits mutable capture modifiers (`&mut`, `^mut`, `volatile`) with `ERRDEFER_MUTABLE_CAPTURE`
+    - Validates that enclosing function returns a fallible type implementing `builtin.Rewrappable` (`ERRDEFER_IN_INFALLIBLE_FN`)
+    - Interleaves with standard `defer` statements in LIFO order on the error propagation edge
+    - Prohibits control flow jumps (`return`, `break`, `continue`, `?`) out of `errdefer` bodies

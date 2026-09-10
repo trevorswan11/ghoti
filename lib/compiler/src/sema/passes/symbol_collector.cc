@@ -599,6 +599,28 @@ auto symbol_collector::visit(ast::node_id id, const ast::defer_stmt& defer) -> v
     collect(defer.deferred);
 }
 
+auto symbol_collector::visit(ast::node_id id, const ast::errdefer_stmt& errdef) -> void {
+    PROFILE_FUNCTION();
+    if (!in_function_scope_ && !in_test_scope_) {
+        ctx_.diags.emplace_back("Cannot have errdefer outside of a function's scope",
+                                error::ILLEGAL_TOP_LEVEL_STATEMENT,
+                                collecting_.ast.location_of(id));
+    }
+    if (errdef.capture && errdef.capture->is<ast::identifier_expr>()) {
+        const auto  new_idx{ctx_.registry.create()};
+        const scope s{table_stack_, new_idx, table_idx_};
+        const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(**errdef.capture)};
+        collecting_.add_identifier_position(**errdef.capture);
+        try_declare<symbols::match_capture>(ident.name, **errdef.capture);
+        collect(errdef.deferred);
+        last_type_.emplace(ctx_.pool[{type_kind::BLOCK, types::mut::CONSTANT, new_idx}]);
+        last_type_->set_symbol_table_idx(new_idx);
+        collecting_.set_sema_type(id, *last_type_.take());
+        return;
+    }
+    collect(errdef.deferred);
+}
+
 auto symbol_collector::visit(ast::node_id, const ast::discard_stmt& discard) -> void {
     PROFILE_FUNCTION();
     collect(discard.discarded);
