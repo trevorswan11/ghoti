@@ -27,7 +27,7 @@ pub const test_runner := fn(args: [][:0]u8, tests: []Test): i32 {
     return if (failures > 0) 1 else 0;
 };
 
-pub const expect_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): void {
+pub const expect_handler := fn(msg: []u8, file: []u8, _: u32, _: u32): void {
     std.io.eprint("Test failed: ")!;
     std.io.eprint(file)!;
     if (msg.len > 0) {
@@ -36,13 +36,9 @@ pub const expect_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): v
     } else {
         std.io.eprintln(": (EXPECTED)")!;
     }
-
-    // TODO(tcs): add line:col formatting once std.fmt lands
-    _ = line;
-    _ = column;
 };
 
-pub const require_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): void {
+pub const require_handler := fn(msg: []u8, file: []u8, _: u32, _: u32): void {
     std.io.eprint("Test failed: ")!;
     std.io.eprint(file)!;
     if (msg.len > 0) {
@@ -51,13 +47,9 @@ pub const require_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): 
     } else {
         std.io.eprintln(": (REQUIRED)")!;
     }
-
-    // TODO(tcs): add line:col formatting once std.fmt lands
-    _ = line;
-    _ = column;
 };
 
-pub const skip_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): void {
+pub const skip_handler := fn(msg: []u8, file: []u8, _: u32, _: u32): void {
     std.io.eprint("Test failed: ")!;
     std.io.eprint(file)!;
     if (msg.len > 0) {
@@ -66,8 +58,4 @@ pub const skip_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): voi
     } else {
         std.io.eprintln(": (SKIPPED)")!;
     }
-
-    // TODO(tcs): add line:col formatting once std.fmt lands
-    _ = line;
-    _ = column;
 };

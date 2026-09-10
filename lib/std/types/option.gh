@@ -1,3 +1,34 @@
 pub constexpr Option := fn(T: type): type {
     return union { some: T, none: void };
 };
+
+impl(T: type) builtin.Unwrappable for Option(T) {
+    using Output = T;
+    using Residual = void;
+
+    pub const isBreak := fn(&self): bool {
+        return match (self) {
+            .some => false,
+            .none => true,
+        };
+    };
+
+    pub const intoOutput := fn(self): T {
+        return match (self) {
+            .some => |v| v,
+            .none => @trap(),
+        };
+    };
+
+    pub const intoResidual := fn(_: @this()): void {
+        return {};
+    };
+}
+
+impl(T: type) builtin.Rewrappable for Option(T) {
+    using From = void;
+
+    pub const fromResidual := fn(_: void): @this() {
+        return .{ .none = {} };
+    };
+}
