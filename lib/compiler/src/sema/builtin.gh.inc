@@ -75,10 +75,22 @@ pub const Test := struct {
     pub func: fn(): bool,
 };
 
+pub const Unwrappable := interface {
+    Output: type;
+    Residual: type;
+    pub const isBreak := fn(&self): bool;
+    pub const intoOutput := fn(self): Output;
+    pub const intoResidual := fn(self): Residual;
+};
+
+pub const Rewrappable := interface {
+    From: type;
+    pub const fromResidual := fn(r: From): @this();
+};
+
 extern const __ghoti_test_take_skipped: fn(): bool;
 
-pub weak const test_runner := fn(args: [][:0]u8, tests: []Test): i32 {
-    _ = args;
+pub weak const test_runner := fn(_: [][:0]u8, tests: []Test): i32 {
     var failures: i32 = 0;
     var skipped: i32 = 0;
     for (tests) |entry| {
@@ -93,40 +105,17 @@ pub weak const test_runner := fn(args: [][:0]u8, tests: []Test): i32 {
     return failures;
 };
 
-pub weak const panic_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): noreturn {
-    _ = msg;
-    _ = file;
-    _ = line;
-    _ = column;
+pub weak const panic_handler := fn(_: []u8, _: []u8, _: u32, _: u32): noreturn {
     @trap();
 };
 
-pub weak const assert_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): void {
-    _ = msg;
-    _ = file;
-    _ = line;
-    _ = column;
+pub weak const assert_handler := fn(_: []u8, _: []u8, _: u32, _: u32): void {
     @trap();
 };
 
-pub weak const expect_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): void {
-    _ = msg;
-    _ = file;
-    _ = line;
-    _ = column;
-};
+pub weak const expect_handler := fn(_: []u8, _: []u8, _: u32, _: u32): void {};
 
-pub weak const require_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): void {
-    _ = msg;
-    _ = file;
-    _ = line;
-    _ = column;
-};
+pub weak const require_handler := fn(_: []u8, _: []u8, _: u32, _: u32): void {};
 
-pub weak const skip_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): void {
-    _ = msg;
-    _ = file;
-    _ = line;
-    _ = column;
-};
+pub weak const skip_handler := fn(_: []u8, _: []u8, _: u32, _: u32): void {};
 )"
