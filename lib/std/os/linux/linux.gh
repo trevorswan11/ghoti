@@ -3,7 +3,7 @@
 //! - `x86_64`
 //! - `aarch64`
 //! Everything else is a `@compileError`
-import "../../result.gh" as result;
+import std;
 pub import "errno.gh" as errno;
 
 pub using Handle = i32;
@@ -288,7 +288,7 @@ const to_errno := fn(ret: usize): Errno {
 };
 
 constexpr R := fn(T: type): type {
-    return result.Result(T, Errno);
+    return std.Result(T, Errno);
 };
 
 /// One timestamp field of `struct statx` (`struct statx_timestamp`).
@@ -337,7 +337,8 @@ pub const Statx := extern struct {
 
     /// Last-modification time in nanoseconds since the Unix epoch.
     pub const modified_time_ns := fn(&self): u64 {
-        return @as(u64, self.stx_mtime.tv_sec) * 1000000000u64 + @as(u64, self.stx_mtime.tv_nsec);
+        return @intCast(u64, self.stx_mtime.tv_sec) * 1000000000u64 +
+            @intCast(u64, self.stx_mtime.tv_nsec);
     };
 };
 
@@ -357,13 +358,13 @@ pub constexpr stderr := fn(): R(Handle) {
 
 /// Write the contents of `buf` to the file, returning the number of written bytes
 pub const write := fn(h: Handle, buf: []u8): R(usize) {
-    const ret := syscall3(NR_write, @as(usize, h), @intFromPtr(buf.ptr), buf.len);
+    const ret := syscall3(NR_write, @intCast(usize, h), @intFromPtr(buf.ptr), buf.len);
     return if (failed(ret)) .{ .err = to_errno(ret) } else .{ .ok = @as(usize, ret) };
 };
 
 /// Read the contents of the file into `buf`, returning the number of read bytes
 pub const read := fn(h: Handle, buf: []mut u8): R(usize) {
-    const ret := syscall3(NR_read, @as(usize, h), @intFromPtr(buf.ptr), buf.len);
+    const ret := syscall3(NR_read, @intCast(usize, h), @intFromPtr(buf.ptr), buf.len);
     return if (failed(ret)) .{ .err = to_errno(ret) } else .{ .ok = @as(usize, ret) };
 };
 

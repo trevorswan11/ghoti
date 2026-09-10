@@ -1,16 +1,13 @@
 //! Basic wrappers over standard IO streams
-import "../os/os.gh" as os;
-import "error.gh" as error;
-import "../result.gh" as result;
-import "file.gh" as file;
+import std;
 
-using Error = error.Error;
-using Result = result.Result;
-using File = file.File;
+using Result = std.Result;
+using Error = std.io.Error;
+using File = std.io.File;
 
 /// The standard output stream, infallible on POSIX
 pub const stdout := fn(): Result(File, Error) {
-    return match (os.stdout()) {
+    return match (std.os.stdout()) {
         .ok => |h| .{ .ok = .{ .handle = h } },
         .err => |e| .{ .err = .fromOs(e) },
     };
@@ -18,7 +15,7 @@ pub const stdout := fn(): Result(File, Error) {
 
 /// The standard input stream, infallible on POSIX
 pub const stdin := fn(): Result(File, Error) {
-    return match (os.stdin()) {
+    return match (std.os.stdin()) {
         .ok => |h| .{ .ok = .{ .handle = h } },
         .err => |e| .{ .err = .fromOs(e) },
     };
@@ -26,7 +23,7 @@ pub const stdin := fn(): Result(File, Error) {
 
 /// The standard error stream, infallible on POSIX
 pub const stderr := fn(): Result(File, Error) {
-    return match (os.stderr()) {
+    return match (std.os.stderr()) {
         .ok => |h| .{ .ok = .{ .handle = h } },
         .err => |e| .{ .err = .fromOs(e) },
     };

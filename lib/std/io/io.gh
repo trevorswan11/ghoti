@@ -11,6 +11,7 @@ pub using File = file.File;
 pub using Reader = reader.Reader;
 pub using Writer = writer.Writer;
 pub using Seeker = seeker.Seeker;
+pub using Whence = seeker.Whence;
 pub using FixedBufferStream = fixed_buffer.FixedBufferStream;
 
 pub const stdout := stdio.stdout;

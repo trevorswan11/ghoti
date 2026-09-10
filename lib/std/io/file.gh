@@ -1,12 +1,9 @@
 //! The core File abtraction over raw OS primitives
-import "../os/os.gh" as os;
-import "../result.gh" as result;
-import "error.gh" as error;
-import "reader.gh" as reader;
-import "writer.gh" as writer;
-import "seeker.gh" as seeker;
+import std;
 
-using Result = result.Result;
+using Result = std.Result;
+using os = std.os;
+using io = std.io;
 
 pub const OpenFlags := struct {
     pub access: enum : u8 { read, write, read_write } = .read,
@@ -20,7 +17,7 @@ pub const File := struct {
     handle: os.Handle,
 
     /// Opens a file at the provided `path` with the options in `flags`
-    pub const open := fn(path: [:0]u8, flags: OpenFlags): Result(File, error.Error) {
+    pub const open := fn(path: [:0]u8, flags: OpenFlags): Result(File, io.Error) {
         // These cases cause some UB on both windows and POSIX
         if (flags.exclusive and !flags.create) {
             return .{ .err = .invalid_input };
@@ -69,7 +66,7 @@ pub const File := struct {
     };
 
     /// Closes the file, propagating an ignorable error on failure
-    pub @discardable const close := fn(&self): Result(void, error.Error) {
+    pub @discardable const close := fn(&self): Result(void, io.Error) {
         return match (os.close(self.handle)) {
             .ok => .{ .ok = {} },
             .err => |e| .{ .err = .fromOs(e) },
@@ -77,8 +74,8 @@ pub const File := struct {
     };
 };
 
-impl reader.Reader for File {
-    using Error = error.Error;
+impl io.Reader for File {
+    using Error = io.Error;
     pub const read := fn(&mut self, buf: []mut u8): Result(usize, Error) {
         return match (os.read(self.handle, buf)) {
             .ok => |n| .{ .ok = n },
@@ -87,8 +84,8 @@ impl reader.Reader for File {
     };
 }
 
-impl writer.Writer for File {
-    using Error = error.Error;
+impl io.Writer for File {
+    using Error = io.Error;
     pub const write := fn(&mut self, bytes: []u8): Result(usize, Error) {
         return match (os.write(self.handle, bytes)) {
             .ok => |n| .{ .ok = n },
@@ -97,9 +94,9 @@ impl writer.Writer for File {
     };
 }
 
-impl seeker.Seeker for File {
-    using Error = error.Error;
-    pub const seek := fn(&mut self, offset: i64, whence: seeker.Whence): Result(i64, Error) {
+impl io.Seeker for File {
+    using Error = io.Error;
+    pub const seek := fn(&mut self, offset: i64, whence: io.Whence): Result(i64, Error) {
         return match (os.lseek(self.handle, offset, @as(i32, whence))) {
             .ok => |p| .{ .ok = p },
             .err => |e| .{ .err = .fromOs(e) },
