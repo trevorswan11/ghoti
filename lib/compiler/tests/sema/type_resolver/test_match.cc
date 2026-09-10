@@ -423,9 +423,11 @@ TEST_CASE("Illegal resolved arbitrary matcher type") {
                                                  sema::error::ILLEGAL_MATCH_PATTERN,
                                                  std::pair{0UZ, 0UZ}});
     helpers::test_resolver_fail("match (^4) { 3 => 5 };", expected_diag("pointer", 7));
-    helpers::test_resolver_fail("match (&mut 4) { 3 => 5 };", expected_diag("reference", 7));
+    helpers::test_resolver_fail("var a: fn(): void = undefined; match (&a) { 3 => 5 };",
+                                expected_diag("function", 38));
     helpers::test_resolver_fail("var a: fn(): void = undefined; match (a) { 3 => 5 };",
                                 expected_diag("function", 38));
+    helpers::resolve_and_check("var x := 4; _ = match (&mut x) { 3 => 5, _ => 0 };");
     helpers::test_resolver_fail(
         "import std; match (std) { 3 => 5 };",
         helpers::make_vector<mock_file>(mock_file{"std.gh", "pub extern var a: i32;", "std"}),

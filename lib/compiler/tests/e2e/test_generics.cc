@@ -76,6 +76,17 @@ TEST_CASE("a generic fn's body-local `const` decls are re-typed for each instant
 TEST_CASE("the `?` operator works inside a generic function body") {
     CHECK(helpers::compile_and_run(R"(
         const R := union { ok: i32, err: u8 };
+        impl builtin.Unwrappable for R {
+            using Output = i32;
+            using Residual = u8;
+            pub const isBreak := fn(&self): bool { return match (self) { .ok => false, .err => true }; };
+            pub const intoOutput := fn(self): i32 { return match (self) { .ok => |v| v, .err => @trap() }; };
+            pub const intoResidual := fn(self): u8 { return match (self) { .err => |e| e, .ok => @trap() }; };
+        }
+        impl builtin.Rewrappable for R {
+            using From = u8;
+            pub const fromResidual := fn(r: u8): @this() { return .{ .err = r }; };
+        }
         const first := fn(T: type, r: R): R {
             const v := r?;
             return .{ .ok = v + 1 };

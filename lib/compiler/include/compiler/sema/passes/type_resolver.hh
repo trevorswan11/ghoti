@@ -100,6 +100,7 @@ class type_resolver {
                                gsl::span<const std::pair<std::string, gir::const_value>> ctor_cx,
                                const ast::function_expr&                                 base_fn,
                                std::string_view ctor_mangled) -> void;
+    auto check_deferred_body_jumps(ast::stmt_handle body) -> void;
 
   private:
     using scope = symbol_table_stack::scope;
