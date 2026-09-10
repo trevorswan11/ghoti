@@ -267,9 +267,8 @@ pub const alloc := fn(len: usize): R(^mut u8) {
     return if (!p) .{ .err = @as(Errno, GetLastError()) } else .{ .ok = @ptrCast(^mut u8, p) };
 };
 
-/// Release a region previously returned by `alloc`, `len` is ignored
-pub const free := fn(ptr: ^mut u8, len: usize): R(void) {
-    _ = len;
+/// Release a region previously returned by `alloc`
+pub const free := fn(ptr: ^mut u8, _: usize): R(void) {
     // `MEM_RELEASE` frees the whole original reservation and requires the size argument to be zero
     const ok := VirtualFree(@ptrCast(^mut opaque, ptr), 0uz, MEM_RELEASE);
     return if (ok == 0i32) .{ .err = @as(Errno, GetLastError()) } else .{ .ok = {} };
