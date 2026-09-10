@@ -764,6 +764,20 @@ TEST_CASE("formatter preserves comments inside aggregates") {
 )"};
 
     CHECK(format_source(source) == source);
+
+    constexpr std::string_view union_source{R"(const U := union {
+    a: i32, // comment
+    b: u8,
+};
+)"};
+    round_trips(union_source);
+
+    constexpr std::string_view union_no_trailing_comma{R"(const U := union {
+    a: i32, // comment
+    b: u8
+};
+)"};
+    CHECK(format_source(union_no_trailing_comma) == union_source);
 }
 
 TEST_CASE("formatter preserves standalone comments") {
