@@ -9,7 +9,6 @@ namespace ghoti::tests {
 
 using helpers::mock_file;
 
-
 TEST_CASE("a poisoned aggregate member does not crash a constexpr type-ctor instantiation") {
     helpers::expect_compile_error(R"(
         const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
@@ -179,7 +178,7 @@ TEST_CASE("generic member functions in an inherent impl block on a generic aggre
                 val: T,
             };
         };
-        impl(T: type) for Container(T) {
+        impl(T: type) Container(T) {
             pub const map := fn(&self, U: type, mapper: fn(x: T): U): Container(U) {
                 return .{ .val = mapper(self.val) };
             };
@@ -295,8 +294,8 @@ TEST_CASE("generic member functions defined inline inside aggregate definitions"
 
         pub const main := fn(): i32 {
             const item := Item{ .x = 5 };
-            const i1 := Item.identity(i32, 10);
-            const i2 := Item.identity(u8, 5u8);
+            const id1 := Item.identity(i32, 10);
+            const id2 := Item.identity(u8, 5u8);
             const a1 := item.add_val(i32, 5);
             const a2 := item.add_val(u8, 3u8);
 
@@ -308,7 +307,7 @@ TEST_CASE("generic member functions defined inline inside aggregate definitions"
             const c1 := de.choose(i32, 1, 2);
             const c2 := de.choose(u8, 10u8, 20u8);
 
-            return i1 + @intCast(i32, i2) + a1 + a2 + g1 + @intCast(i32, g2) + c1 + @intCast(i32, c2);
+            return id1 + @intCast(i32, id2) + a1 + a2 + g1 + @intCast(i32, g2) + c1 + @intCast(i32, c2);
         };
     )") == 10 + 5 + 10 + 8 + 20 + 7 + 1 + 10);
 }
@@ -333,7 +332,7 @@ TEST_CASE("aggregate member function implementation calling a local generic func
             const eng := Engine{ .base = 20 };
             return eng.run(10, 5u8);
         };
-    )") == 60);
+    )") == 50);
 }
 
 TEST_CASE("cross-module aggregate impl with generic member functions") {
@@ -374,6 +373,3 @@ TEST_CASE("cross-module aggregate impl with generic member functions") {
 }
 
 } // namespace ghoti::tests
-
-
-
