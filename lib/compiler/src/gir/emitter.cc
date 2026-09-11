@@ -317,11 +317,38 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
                                                 .const_val = stdx::none,
                                             });
         }
-        usize rt_i{0};
+        usize                    rt_i{0};
+        std::vector<std::string> pack_hidden_names; // stable storage for synthesized param names
+        pack_hidden_names.reserve(req.arg_types.size());
         for (const auto& param : fn_expr.parameters) {
             std::string_view p_name{};
             if (param.name.is<ast::identifier_expr>()) {
                 p_name = fn_mod.ast.get_as<ast::identifier_expr>(param.name).name;
+            }
+
+            // A pack's elements each get a real, individually-named hidden parameter; `rest`
+            // itself binds to nothing (`current_pack_` is how `rest.len`/`rest[k]` resolve).
+            if (param.is_pack) {
+                const auto elem_count{req.arg_types.size() - rt_i};
+                for (usize k{0}; k < elem_count; ++k) {
+                    auto& elem_type{*req.arg_types[rt_i++]};
+                    pack_hidden_names.emplace_back(fmt::format("{}#{}", p_name, k));
+                    const std::string_view hidden_name{pack_hidden_names.back()};
+                    auto&      p_slot{fn.add_param(std::string{hidden_name}, elem_type)};
+                    const bool p_spilled{elem_type.get_kind() == sema::type_kind::SLICE};
+                    scopes_.back().bindings.emplace(hidden_name,
+                                                    local_binding{
+                                                        .id        = p_slot.id,
+                                                        .type      = elem_type,
+                                                        .is_alloca = p_spilled,
+                                                        .const_val = stdx::none,
+                                                    });
+                }
+                if (!p_name.empty()) {
+                    current_pack_.emplace(
+                        pack_context{.name = p_name, .element_count = elem_count});
+                }
+                continue;
             }
 
             // `constexpr` parameters are erased from the signature
@@ -386,6 +413,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
     }
 
     const_eval_.set_enclosing_type(stdx::none);
+    current_pack_.reset();
     active_module_ = prev_module;
     if (prev_module) { const_eval_.set_module(*prev_module); }
 }
@@ -4849,6 +4877,40 @@ auto emitter::ensure_builtin_runtime(std::string_view name) -> void {
     }
 }
 
+auto emitter::lvalue_of_binding(std::string_view name) -> value {
+    auto& binding{*lookup_binding<local_binding&>(name)};
+    // Struct/union field mutability is binding-based. A slice's own `.len`/`.ptr` fields
+    // (#255) need the same treatment
+    const auto is_struct_or_union{binding.type.get_kind() == sema::type_kind::STRUCT ||
+                                  binding.type.get_kind() == sema::type_kind::UNION};
+    const auto is_slice{binding.type.get_kind() == sema::type_kind::SLICE};
+    auto&      qualified_type{(is_struct_or_union || is_slice)
+                                  ? *ctx_.pool.with_const(binding.type, binding.is_const)
+                                  : binding.type};
+    if (binding.is_alloca) { return value{binding.id, qualified_type}; }
+
+    // A binding with no alloca of its own has no address: spill it into one, cache the slot on
+    // the binding, and reuse it from any later segment
+    const auto is_const_binding{binding.const_val || binding.is_const};
+    const auto unspilled_value{binding.const_val.value_or(value{binding.id, qualified_type})};
+    const bool hoist_to_entry{
+        binding.const_val ||
+        (!binding.const_val && binding.id.get_kind() == local_kind::PARAMETER)};
+
+    local_id slot{};
+    if (hoist_to_entry) {
+        slot = builder_.emit_alloca_in_entry(qualified_type, is_const_binding);
+        builder_.emit_store_in_entry(slot, unspilled_value);
+    } else {
+        slot = spill_to_temporary(unspilled_value, qualified_type, is_const_binding)
+                   .data.as<local_id>();
+    }
+    binding.id        = slot;
+    binding.is_alloca = true;
+    binding.const_val = stdx::none;
+    return value{slot, qualified_type};
+}
+
 auto emitter::emit_lvalue(ast::node_id id) -> value {
     PROFILE_FUNCTION();
     ASSERT(id.is_valid(), "Valid node ID expected in emit_lvalue");
@@ -4880,38 +4942,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                 }
             }
             ASSERT(binding, "LValue identifier must be bound in scope");
-            // Struct/union field mutability is binding-based. A slice's own `.len`/`.ptr` fields
-            // (#255) need the same treatment
-            const auto is_struct_or_union{binding->type.get_kind() == sema::type_kind::STRUCT ||
-                                          binding->type.get_kind() == sema::type_kind::UNION};
-            const auto is_slice{binding->type.get_kind() == sema::type_kind::SLICE};
-            auto&      qualified_type{(is_struct_or_union || is_slice)
-                                          ? *ctx_.pool.with_const(binding->type, binding->is_const)
-                                          : binding->type};
-            if (binding->is_alloca) { return value{binding->id, qualified_type}; }
-
-            // A binding with no alloca of its own has no address: spill it into one, cache the
-            // slot on the binding, and reuse it from any later segment
-            const auto is_const_binding{binding->const_val || binding->is_const};
-            const auto unspilled_value{
-                binding->const_val.value_or(value{binding->id, qualified_type})};
-            const bool hoist_to_entry{
-                binding->const_val ||
-                (!binding->const_val && binding->id.get_kind() == local_kind::PARAMETER)};
-
-            local_id slot{};
-            if (hoist_to_entry) {
-                slot = builder_.emit_alloca_in_entry(qualified_type, is_const_binding);
-                builder_.emit_store_in_entry(slot, unspilled_value);
-            } else {
-                slot = spill_to_temporary(unspilled_value, qualified_type, is_const_binding)
-                           .data.as<local_id>();
-            }
-            auto& mut_binding{*lookup_binding<local_binding&>(ident.name)};
-            mut_binding.id        = slot;
-            mut_binding.is_alloca = true;
-            mut_binding.const_val = stdx::none;
-            return value{slot, qualified_type};
+            return lvalue_of_binding(ident.name);
         },
         [&](const ast::call_expr& call) -> value {
             const auto fn_token{call.function->get_token_type()};
@@ -5032,6 +5063,19 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             return value{field_ptr, field_type};
         },
         [&](const ast::index_expr& index) -> value {
+            // `rest[k]`: `k`'s own hidden parameter already has a real binding under its
+            // synthesized name; no array/GEP semantics apply.
+            if (current_pack_) {
+                if (const auto ident{active_ast().get_as_opt<ast::identifier_expr>(index.array)};
+                    ident && ident->name == current_pack_->name) {
+                    if (const auto k{const_eval_.try_eval(index.index)}) {
+                        if (const auto ik{k->as_int_opt()}) {
+                            return lvalue_of_binding(
+                                fmt::format("{}#{}", current_pack_->name, *ik));
+                        }
+                    }
+                }
+            }
             // `expr[lo..hi]` yields a fresh subslice value; spill it so callers get an address.
             if (active_ast().get_as_opt<ast::range_expr>(index.index)) {
                 auto& slice_type{*active_mod().get_sema_type_opt(id)};
@@ -5901,6 +5945,14 @@ auto emitter::dot_object_is_type_namespace(const ast::dot_expr& dot) -> bool {
 
 auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
     PROFILE_FUNCTION();
+    // `rest.len`: the element count is fixed for this instantiation; no object to read at all.
+    if (current_pack_) {
+        if (const auto ident{active_ast().get_as_opt<ast::identifier_expr>(dot.object)};
+            ident && ident->name == current_pack_->name) {
+            const auto sema_type{active_mod().get_sema_type_opt(id)};
+            return value{static_cast<u64>(current_pack_->element_count), sema_type};
+        }
+    }
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     const auto raw_obj_type{active_mod().get_sema_type_opt(dot.object)};
     ASSERT(raw_obj_type, "Dot expression object must have a resolved type");

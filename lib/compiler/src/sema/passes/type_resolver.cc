@@ -2072,30 +2072,43 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
             }
 
             // Enforce `impl I` / `impl (A + B)` parameter bounds now the arguments are concrete.
+            // A pack parameter's bound applies to every trailing argument it collects, not just
+            // the one at its own AST index.
             if (const auto it{impl_param_bounds_.find(&callee_type)};
                 it != impl_param_bounds_.end()) {
-                for (const auto& [pidx, ifaces] : it->second) {
-                    if (pidx >= concrete_arg_types.size()) { continue; }
-                    gsl::not_null bound_t{&denoted_type(*concrete_arg_types[pidx])};
+                const auto check_bound_at{[&](usize                        arg_idx,
+                                              gsl::span<const type* const> ifaces,
+                                              std::string_view pname) -> stdx::option<type&> {
+                    gsl::not_null bound_t{&denoted_type(*concrete_arg_types[arg_idx])};
                     if (const auto p{bound_t->get_data().as_opt<types::pointer>()}) {
                         bound_t = &p->underlying;
                     } else if (const auto r{bound_t->get_data().as_opt<types::reference>()}) {
                         bound_t = &r->underlying;
                     }
-
                     for (const auto* iface : ifaces) {
                         if (ctx_.impls.implements(*bound_t, *iface)) { continue; }
-                        const auto& pname{resolving_.ast.get_as<ast::identifier_expr>(
-                            *fn_info_opt->fn_expr->parameters[pidx].name)};
-                        return last_type_.emplace(ctx_.poison_node(
+                        return ctx_.poison_node(
                             resolving_,
                             id,
                             fmt::format("`{}` does not implement `{}` required by parameter `{}`",
                                         ctx_.type_display_name(*bound_t),
                                         ctx_.type_display_name(*iface),
-                                        pname.name),
+                                        pname),
                             error::UNSATISFIED_BOUND,
-                            get_call_arg_location(call.arguments[pidx])));
+                            get_call_arg_location(call.arguments[arg_idx]));
+                    }
+                    return stdx::none;
+                }};
+                for (const auto& [pidx, ifaces] : it->second) {
+                    if (pidx >= concrete_arg_types.size()) { continue; }
+                    const auto& param{fn_info_opt->fn_expr->parameters[pidx]};
+                    const auto& pname{
+                        resolving_.ast.get_as<ast::identifier_expr>(*param.name).name};
+                    const auto arg_end{param.is_pack ? concrete_arg_types.size() : pidx + 1};
+                    for (usize arg_idx{pidx}; arg_idx < arg_end; ++arg_idx) {
+                        if (auto poison{check_bound_at(arg_idx, ifaces, pname)}) {
+                            return last_type_.emplace(*poison);
+                        }
                     }
                 }
             }
@@ -2146,17 +2159,6 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 resolving_.set_generic_call_target(id, cached->mangled_name);
                 resolving_.set_sema_type(id, *cached->return_type);
                 return last_type_.emplace(*cached->return_type);
-            }
-
-            // `rest.len`/`rest[K]`/monomorphization land in a later phase; a pack function is
-            // declarable today (above), but calling one isn't wired up yet.
-            if (has_pack_param) {
-                return last_type_.emplace(
-                    ctx_.poison_node(resolving_,
-                                     id,
-                                     "calling a parameter pack function is not yet implemented",
-                                     error::PACK_PARAM_NOT_YET_SUPPORTED,
-                                     resolving_.ast.location_of(call.function)));
             }
 
             // Copy out of the registry before instantiating: resolving the generic's body may
@@ -3027,6 +3029,22 @@ template <ast::IndexableID ID>
 auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> void {
     const auto name{ident.name};
 
+    // A pack is usable only as `.len`, `[K]`, `for constexpr`'s iterable, or `expr...`; those
+    // forms intercept before ever reaching here, so a bare mention of the name is out of position.
+    if (current_pack_ && name == current_pack_->name) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             fmt::format("'{}' is a parameter pack; use '{}.len', '{}[k]', "
+                                         "'{}...', or a `for constexpr` iterable",
+                                         name,
+                                         name,
+                                         name,
+                                         name),
+                             error::PACK_USE_OUT_OF_POSITION,
+                             resolving_.ast.location_of(id)));
+    }
+
     // `iN` / `uN` are primitive integer types, not looked-up symbols.
     if (syntax::token_type::is_int_type_lexeme(name)) {
         u64 width{0};
@@ -3187,8 +3205,43 @@ auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void 
     last_type_.emplace(*branch_type);
 }
 
+// `rest[k]`: the k-th argument's own type, `k` a compile-time constant in range.
+auto type_resolver::resolve_pack_index(ast::node_id id, const ast::index_expr& index) -> void {
+    gir::const_eval evaluator{ctx_, resolving_};
+    const auto      folded{evaluator.try_eval(index.index)};
+    const auto      k{folded ? folded->as_int_opt() : stdx::none};
+    if (!k) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            fmt::format("'{}[k]' requires a compile-time constant index", current_pack_->name),
+            error::PACK_INDEX_NOT_CONST,
+            resolving_.ast.location_of(index.index)));
+    }
+    if (*k < 0 || static_cast<usize>(*k) >= current_pack_->element_types.size()) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             fmt::format("pack index {} out of range for '{}' (len {})",
+                                         *k,
+                                         current_pack_->name,
+                                         current_pack_->element_types.size()),
+                             error::PACK_INDEX_OUT_OF_RANGE,
+                             resolving_.ast.location_of(index.index)));
+    }
+    auto& elem_type{*current_pack_->element_types[static_cast<usize>(*k)]};
+    resolving_.set_sema_type(id, elem_type);
+    last_type_.emplace(elem_type);
+}
+
 auto type_resolver::visit(ast::node_id id, const ast::index_expr& index) -> void {
     PROFILE_FUNCTION();
+    if (current_pack_) {
+        if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(index.array)};
+            ident && ident->name == current_pack_->name) {
+            return resolve_pack_index(id, index);
+        }
+    }
     TRY_RESOLVE(index.array);
     auto& array_type{*last_type_.take()};
     auto* target_type{&array_type};
@@ -3766,8 +3819,31 @@ auto type_resolver::get_rightmost_name(ast::expr_handle handle) const noexcept
     }
 }
 
+// `rest.len`: a `usize` known at every call. `.len` is the only member a pack has.
+template <ast::IndexableID ID>
+auto type_resolver::resolve_pack_len(ID id, const ast::dot_expr& dot) -> void {
+    const auto& member{resolving_.ast.get_as<ast::identifier_expr>(dot.member)};
+    if (member.name != "len") {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            fmt::format("a parameter pack has only '.len'; found '.{}'", member.name),
+            error::PACK_USE_OUT_OF_POSITION,
+            resolving_.ast.location_of(dot.member)));
+    }
+    auto& usize_type{ctx_.get_builtin_resolved_type(type_kind::USIZE)};
+    resolving_.set_sema_type(id, usize_type);
+    last_type_.emplace(usize_type);
+}
+
 template <ast::IndexableID ID>
 auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
+    if (current_pack_) {
+        if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(dot.object)};
+            ident && ident->name == current_pack_->name) {
+            return resolve_pack_len(id, dot);
+        }
+    }
     resolve(dot.object);
     if (last_type_->is_poison()) { return resolving_.set_sema_type(id, *last_type_); }
     auto& object_type{*last_type_.take()};
@@ -8583,10 +8659,14 @@ auto type_resolver::instantiate_generic(type&                             callee
         }
     }
 
-    ASSERT(fn_expr.parameters.size() == concrete_args.size(),
+    const bool has_pack{!fn_expr.parameters.empty() && fn_expr.parameters.back().is_pack};
+    const auto fixed_param_count{fn_expr.parameters.size() - (has_pack ? 1UZ : 0UZ)};
+    ASSERT(has_pack ? fixed_param_count <= concrete_args.size()
+                    : fixed_param_count == concrete_args.size(),
            "Arity should be validated in resolve_call");
-    for (const auto& [arg_type, param] : std::views::zip(concrete_args, fn_expr.parameters)) {
-        fn_mod.set_sema_type(param.name, *arg_type);
+    for (usize p_idx{0}; p_idx < fixed_param_count; ++p_idx) {
+        const auto& param{fn_expr.parameters[p_idx]};
+        fn_mod.set_sema_type(param.name, *concrete_args[p_idx]);
         if (param.name.is<ast::identifier_expr>()) {
             const auto& ident{fn_mod.ast.get_as<ast::identifier_expr>(param.name)};
             if (auto sym{ctx_.registry.get_from_opt(fn_table_idx, ident.name)}) {
@@ -8608,13 +8688,18 @@ auto type_resolver::instantiate_generic(type&                             callee
     if (fn_info.enclosing_type) {
         this_type_guard.emplace(inst_resolver.user_type_stack_, *fn_info.enclosing_type);
     }
-    // `constexpr` parameters are erased from the monomorph's signature.
-    const auto      rt_param_count{static_cast<usize>(
-        std::ranges::count_if(fn_expr.parameters, [](const auto& p) { return !p.is_constexpr; }))};
-    auto            inst_param_types{ctx_.pool.get_many_unsafe(rt_param_count)};
+    // `constexpr` parameters are erased from the monomorph's signature; a pack contributes one
+    // slot per trailing argument rather than one for the whole `rest...` declaration.
+    const auto      pack_elem_count{has_pack ? concrete_args.size() - fixed_param_count : 0UZ};
+    const auto      fixed_rt_count{static_cast<usize>(
+        std::ranges::count_if(fn_expr.parameters | std::views::take(fixed_param_count),
+                              [](const auto& p) { return !p.is_constexpr; }))};
+    auto            inst_param_types{ctx_.pool.get_many_unsafe(fixed_rt_count + pack_elem_count)};
     constexpr_frame type_param_frame;
-    for (usize i{0};
-         const auto& [arg_type, param] : std::views::zip(concrete_args, fn_expr.parameters)) {
+    usize           i{0};
+    for (usize p_idx{0}; p_idx < fixed_param_count; ++p_idx) {
+        const auto& param{fn_expr.parameters[p_idx]};
+        auto*       arg_type{concrete_args[p_idx]};
         inst_resolver.resolve(param.explicit_type);
         type* decl_p_type{arg_type}; // erased type data corresponding to nominal signature type
         type* body_p_type{arg_type}; // contextual type meaning in the function body
@@ -8671,6 +8756,23 @@ auto type_resolver::instantiate_generic(type&                             callee
         }
         fn_mod.set_sema_type(param.name, *body_p_type);
         if (!param.is_constexpr) { inst_param_types[i++] = decl_p_type; }
+    }
+    // A pack element has no `param.explicit_type` of its own to resolve against; each trailing
+    // argument's already-concrete type is its type. `rest` itself binds to no ordinary sema type
+    // at all - `rest.len`/`rest[K]` resolve against `current_pack_` instead (see those visitors).
+    if (has_pack) {
+        const auto&        pack_param{fn_expr.parameters.back()};
+        std::vector<type*> elem_types;
+        elem_types.reserve(pack_elem_count);
+        for (usize p_idx{fixed_param_count}; p_idx < concrete_args.size(); ++p_idx) {
+            elem_types.emplace_back(concrete_args[p_idx]);
+            inst_param_types[i++] = concrete_args[p_idx];
+        }
+        if (pack_param.name.is<ast::identifier_expr>()) {
+            const auto& pack_ident{fn_mod.ast.get_as<ast::identifier_expr>(pack_param.name)};
+            inst_resolver.current_pack_.emplace(
+                pack_binding{.name = pack_ident.name, .element_types = std::move(elem_types)});
+        }
     }
     const constexpr_frame_guard type_param_guard{ctx_.constexpr_binding_frames,
                                                  std::move(type_param_frame)};

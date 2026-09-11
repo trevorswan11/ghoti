@@ -111,6 +111,9 @@ enum class error : u8 {
     CONSTEXPR_VAR_ADDRESS_OF,
     // Parses; semantics land in a later phase. Gates resolution to fail clean, not crash.
     PACK_PARAM_NOT_YET_SUPPORTED,
+    PACK_USE_OUT_OF_POSITION,
+    PACK_INDEX_OUT_OF_RANGE,
+    PACK_INDEX_NOT_CONST,
 };
 
 using diagnostic  = diagnostic<error>;

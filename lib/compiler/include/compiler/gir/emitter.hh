@@ -59,6 +59,15 @@ class emitter {
         bool is_constexpr_var{false};
     };
 
+    // Set by `emit_generic_instantiation` for one pack function's body: `rest.len`/`rest[k]`
+    // resolve against this instead of an ordinary binding lookup. Each element already has its
+    // own real binding, named `"<pack>#<k>"` (see `emit_generic_instantiation`).
+    struct pack_context {
+        std::string_view name;
+        usize            element_count{0};
+    };
+    stdx::option<pack_context> current_pack_;
+
     struct loop_context {
         stdx::option<std::string_view> label;
         segment_id                     break_target{0};
@@ -161,6 +170,9 @@ class emitter {
     auto emit_defers_for_scope(usize scope_idx, bool error_edge = false) -> void;
     auto emit_defers_up_to(usize target_depth, bool error_edge = false) -> void;
     auto emit_lvalue(ast::node_id id) -> value;
+    // The lvalue of an already-bound local, by name (a parameter, a pack element, ...):
+    // alloca'd bindings are their own address; anything else is spilled into one, once.
+    auto lvalue_of_binding(std::string_view name) -> value;
 
     // Emits a `panic_handler(msg, file, line, column)` call followed by `unreachable`
     auto emit_panic_call(std::string_view message, ast::node_id site) -> void;

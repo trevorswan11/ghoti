@@ -314,6 +314,10 @@ class type_resolver {
     [[nodiscard]] auto get_rightmost_name(ast::expr_handle) const noexcept
         -> stdx::option<std::string_view>;
     template <ast::IndexableID ID> auto resolve_dot(ID, const ast::dot_expr&) -> void;
+    // `rest.len`; only reached when `dot.object` is a bare identifier naming `current_pack_`.
+    template <ast::IndexableID ID> auto resolve_pack_len(ID id, const ast::dot_expr& dot) -> void;
+    // `rest[k]`; only reached when `index.array` is a bare identifier naming `current_pack_`.
+    auto resolve_pack_index(ast::node_id id, const ast::index_expr& index) -> void;
 
     auto visit(ast::node_id, const ast::dot_expr&) -> void;
     auto visit(ast::node_id, const ast::range_expr&) -> void;
@@ -472,6 +476,15 @@ class type_resolver {
     stdx::opt_size            reresolve_floor_{};
     stdx::opt_size            pending_impl_method_owner_;
     stdx::option<std::string> pending_param_impl_target_;
+
+    // Set by `instantiate_generic` for the duration of resolving one pack function's body: the
+    // pack parameter's name and each trailing argument's concrete type, in call order. `rest.len`
+    // / `rest[K]` (only) resolve against this instead of an ordinary symbol lookup.
+    struct pack_binding {
+        std::string_view   name;
+        std::vector<type*> element_types;
+    };
+    stdx::option<pack_binding> current_pack_;
 
     impl_param_bound_map_t impl_param_bounds_;
     named_test_map_t       named_tests_;
