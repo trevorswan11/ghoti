@@ -341,6 +341,14 @@ class type_resolver {
     // Resolves a `match constexpr`: folds the scrutinee, type-checks only the selected arm
     auto resolve_constexpr_match(ast::node_id, const ast::match_expr&, type& matcher_type) -> void;
 
+    // Resolves a `for constexpr`: unrolls into one resolve pass per compile-time-known iteration,
+    // diffing each into a per-iteration `body_type_diff` for the emitter to replay.
+    auto resolve_constexpr_for(ast::node_id, const ast::for_loop_expr&) -> void;
+
+    // Rejects a bare `break`/`continue` reaching a `for`/`while constexpr`'s own iteration
+    // boundary (nested ordinary loops declared inside the body are unaffected).
+    auto check_constexpr_loop_jumps(ast::stmt_handle body) -> void;
+
     auto visit(ast::node_id, const ast::match_expr&) -> void;
     auto visit(ast::node_id, const ast::reference_expr&) -> void;
     auto visit(ast::node_id, const ast::address_of_expr&) -> void;
@@ -476,6 +484,11 @@ class type_resolver {
     stdx::opt_size            reresolve_floor_{};
     stdx::opt_size            pending_impl_method_owner_;
     stdx::option<std::string> pending_param_impl_target_;
+
+    // Set by `instantiate_generic` to that instantiation's mangled name for the duration of body
+    // resolution, so a nested `for`/`while constexpr`'s per-iteration typing keys stay unique
+    // across distinct instantiations sharing the same loop AST node. Empty outside a generic body.
+    std::string typing_scope_prefix_{};
 
     // Set by `instantiate_generic` for the duration of resolving one pack function's body: the
     // pack parameter's name and each trailing argument's concrete type, in call order. `rest.len`

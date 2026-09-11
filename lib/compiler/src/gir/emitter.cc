@@ -402,7 +402,9 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
             }
         }
 
+        const auto saved_scope_prefix{std::exchange(typing_scope_prefix_, req.mangled_name)};
         emit_block(fn_mod.ast.get_as<ast::block_stmt>(fn_expr.body));
+        typing_scope_prefix_ = saved_scope_prefix;
         if (const auto cur_seg{builder_.get_segment()}; cur_seg && !cur_seg->has_terminator()) {
             if (req.return_type->get_kind() == sema::type_kind::VOID_) {
                 builder_.emit_return();
@@ -3871,12 +3873,87 @@ auto emitter::emit_infinite_loop(ast::node_id                   id,
     return value{void_val{}, sema_type};
 }
 
+auto emitter::emit_constexpr_for(ast::node_id id, const ast::for_loop_expr& for_loop) -> value {
+    PROFILE_FUNCTION();
+    auto& void_type{ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+
+    const auto  driver_id{*for_loop.iterables[0]};
+    const auto& driver_cap{for_loop.captures[0]};
+    const auto  driver_ident{active_ast().get_as_opt<ast::identifier_expr>(driver_id)};
+    const bool  driver_is_pack{driver_ident && current_pack_ &&
+                              driver_ident->name == current_pack_->name};
+
+    const bool has_companion{for_loop.iterables.size() == 2};
+    const auto driver_name{
+        driver_cap.payload.is<ast::identifier_expr>()
+            ? stdx::option<std::string_view>{active_ast()
+                                                 .get_as<ast::identifier_expr>(driver_cap.payload)
+                                                 .name}
+            : stdx::none};
+    const auto companion_name{
+        has_companion && for_loop.captures[1].payload.is<ast::identifier_expr>()
+            ? stdx::option<std::string_view>{active_ast()
+                                                 .get_as<ast::identifier_expr>(
+                                                     for_loop.captures[1].payload)
+                                                 .name}
+            : stdx::none};
+
+    const auto key_for{[&](usize k) {
+        return fmt::format("{}forloop#{}#{}",
+                           typing_scope_prefix_.empty() ? std::string{}
+                                                        : typing_scope_prefix_ + "#",
+                           id.get_index(),
+                           k);
+    }};
+
+    const usize count{driver_is_pack ? current_pack_->element_count : [&] {
+        usize n{0};
+        while (ctx_.instantiation_cache.get_body_type_diff(key_for(n))) { ++n; }
+        return n;
+    }()};
+
+    const auto& block{active_ast().get_as<ast::block_stmt>(for_loop.block)};
+    for (usize k{0}; k < count; ++k) {
+        // Each iteration re-binds `v`/the companion index to a distinct constexpr value under
+        // the same shared AST nodes; the fold memo must not carry iteration `k`'s answer into
+        // `k + 1`.
+        const_eval_.clear_memo();
+        const auto                 key{key_for(k)};
+        const auto                 diff{ctx_.instantiation_cache.get_body_type_diff(key)};
+        const mod::body_diff_guard diff_guard{active_mod(), diff};
+        const scope_guard          sg{scopes_};
+
+        sema::constexpr_frame cx_frame;
+        if (driver_is_pack) {
+            if (driver_name) {
+                if (const auto elem_binding{lookup_binding<local_binding&>(
+                        fmt::format("{}#{}", current_pack_->name, k))}) {
+                    scopes_.back().bindings.emplace(*driver_name, *elem_binding);
+                }
+            }
+        } else if (const auto cx_args{ctx_.instantiation_cache.get_constexpr_args(key)}) {
+            usize i{0};
+            if (driver_name && i < cx_args->size()) {
+                cx_frame.insert_or_assign(*driver_name, (*cx_args)[i++]);
+            }
+            if (companion_name && i < cx_args->size()) {
+                cx_frame.insert_or_assign(*companion_name, (*cx_args)[i++]);
+            }
+        }
+        const constexpr_frame_guard cfg{ctx_.constexpr_binding_frames, std::move(cx_frame)};
+        emit_block(block);
+    }
+
+    return value{void_val{}, void_type};
+}
+
 auto emitter::emit_for(ast::node_id                   id,
                        const ast::for_loop_expr&      for_loop,
                        stdx::option<std::string_view> label,
                        stdx::option<local_id>         res_slot,
                        stdx::option<sema::type&>      result_type) -> value {
     PROFILE_FUNCTION();
+    if (for_loop.is_constexpr) { return emit_constexpr_for(id, for_loop); }
     const auto sema_type{result_type ? result_type : active_mod().get_sema_type_opt(id)};
     const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
 

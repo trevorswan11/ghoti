@@ -68,6 +68,11 @@ class emitter {
     };
     stdx::option<pack_context> current_pack_;
 
+    // Set by `emit_generic_instantiation` to that instantiation's mangled name for the duration
+    // of body emission, mirroring `type_resolver::typing_scope_prefix_` so a nested `for`/`while
+    // constexpr`'s per-iteration diff keys match what the resolver stored them under.
+    std::string typing_scope_prefix_{};
+
     struct loop_context {
         stdx::option<std::string_view> label;
         segment_id                     break_target{0};
@@ -281,6 +286,9 @@ class emitter {
                   stdx::option<std::string_view> label       = stdx::none,
                   stdx::option<local_id>         res_slot    = stdx::none,
                   stdx::option<sema::type&>      result_type = stdx::none) -> value;
+    // Replays each iteration the resolver already unrolled: no runtime loop, `N` straight-line
+    // blocks under that iteration's `body_type_diff` overlay and `constexpr_frame` binding.
+    auto emit_constexpr_for(ast::node_id id, const ast::for_loop_expr& for_loop) -> value;
     auto emit_label(ast::node_id id, const ast::label_expr& label) -> value;
     auto emit_binary(ast::node_id id, const ast::binary_expr& binary) -> value;
     // Detects `union_val == .field` and emits a tag comparison instead of a union-vs-field-type EQ
