@@ -83,6 +83,7 @@ class llvm_lowering {
     // A private, collision-free `__ghoti.<name>` symbol for an internal definition
     [[nodiscard]] auto private_symbol_name(std::string_view name) const -> std::string;
     auto               resolve_named_function(std::string_view ghoti_name) -> llvm::Function*;
+    auto               resolve_named_constant(std::string_view name) -> llvm::Constant*;
 
     auto emit_alloca(const gir::instruction& inst) -> llvm::Value*;
     auto emit_load(const gir::instruction& inst) -> llvm::Value*;

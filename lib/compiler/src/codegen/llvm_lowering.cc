@@ -186,12 +186,15 @@ auto llvm_lowering::lower(const gir::module& gir_mod) -> stdx::box<llvm::Module>
         for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
     }
     {
+        PROFILE_SCOPE("llvm_lowering: lower vtables");
+        lower_dyn_vtables(gir_mod);
+    }
+    {
         PROFILE_SCOPE("llvm_lowering: lower globals");
         for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
     }
     {
         PROFILE_SCOPE("llvm_lowering: lower functions");
-        lower_dyn_vtables(gir_mod);
         for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
     }
     maybe_emit_windows_stack_probe();
@@ -233,12 +236,15 @@ auto llvm_lowering::lower_executable(const gir::module& gir_mod, std::string_vie
         for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
     }
     {
+        PROFILE_SCOPE("llvm_lowering: lower vtables");
+        lower_dyn_vtables(gir_mod);
+    }
+    {
         PROFILE_SCOPE("llvm_lowering: lower globals");
         for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
     }
     {
         PROFILE_SCOPE("llvm_lowering: lower functions");
-        lower_dyn_vtables(gir_mod);
         for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
     }
     emit_main_entry_wrapper(user_main_name_);
@@ -785,8 +791,8 @@ auto llvm_lowering::lower_test_executable(const gir::module&             gir_mod
     gir_module_.emplace(gir_mod);
     for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
     define_test_take_skipped();
-    for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
     lower_dyn_vtables(gir_mod);
+    for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
     for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
     emit_test_entry_wrapper(gir_mod, recover_args);
     maybe_emit_windows_stack_probe();
@@ -1137,7 +1143,7 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
             }
         }
         if (ty->isPointerTy()) {
-            if (auto* fn{resolve_named_function(*s)}) { return fn; }
+            if (auto* c{resolve_named_constant(*s)}) { return c; }
             // Pass the module explicitly: `const_to_llvm` also runs while lowering module
             // globals, where the IRBuilder has no insertion block to source it from.
             return builder_.CreateGlobalString(*s, "gstr", 0, llvm_module_.get());
@@ -1148,6 +1154,24 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
             return llvm::ConstantDataArray::getString(context_, bytes, false);
         }
         return llvm::Constant::getNullValue(ty);
+    }
+    if (const auto addr{cv.as_opt<gir::const_addr>()}) {
+        if (ty->isPointerTy()) {
+            if (auto* c{resolve_named_constant(addr->symbol)}) { return c; }
+        }
+        return llvm::Constant::getNullValue(ty);
+    }
+    if (const auto dyn{cv.as_opt<gir::const_dyn_fat_ptr>()}) {
+        auto* st{llvm::dyn_cast<llvm::StructType>(ty)};
+        if (!st || st->getNumElements() != 2) { return llvm::Constant::getNullValue(ty); }
+        auto* ptr_ty{types_.get_ptr_ty()};
+        auto* data_c{dyn->data_symbol.empty() ? llvm::ConstantPointerNull::get(ptr_ty)
+                                              : resolve_named_constant(dyn->data_symbol)};
+        auto* vt_c{dyn->vtable_symbol.empty() ? llvm::ConstantPointerNull::get(ptr_ty)
+                                              : resolve_named_constant(dyn->vtable_symbol)};
+        if (!data_c) { data_c = llvm::ConstantPointerNull::get(ptr_ty); }
+        if (!vt_c) { vt_c = llvm::ConstantPointerNull::get(ptr_ty); }
+        return llvm::ConstantStruct::get(st, {data_c, vt_c});
     }
     if (cv.is<gir::nullptr_val>()) { return llvm::Constant::getNullValue(ty); }
     if (const auto un{cv.as_opt<gir::const_union>()}) {
@@ -1271,6 +1295,21 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
                                                         : llvm::GlobalValue::WeakAnyLinkage;
     }
 
+    std::string sym_name{g.link_name.empty() ? g.name : g.link_name};
+    // A plain (INTERNAL/PUBLIC) ghoti global whose name collides with a C-ABI symbol
+    if (g.link_name.empty() && !g.is_weak &&
+        (llvm_module_->getNamedValue(sym_name) || reserved_symbols_.contains(sym_name))) {
+        sym_name  = private_symbol_name(sym_name);
+        g_linkage = llvm::GlobalValue::InternalLinkage;
+    }
+    auto* gvar{
+        new llvm::GlobalVariable{*llvm_module_, g_type, is_const, g_linkage, nullptr, sym_name}};
+    if (g.is_thread_local) {
+        gvar->setThreadLocalMode(is_executable_ ? llvm::GlobalValue::LocalExecTLSModel
+                                                : llvm::GlobalValue::GeneralDynamicTLSModel);
+    }
+    globals_[g.name] = gvar;
+
     llvm::Constant* init{nullptr};
     if (g.const_init) {
         init = const_to_llvm(*g.const_init, g_type);
@@ -1298,21 +1337,8 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
     }
 
     if (!init && g.linkage != gir::linkage::EXTERN) { init = llvm::Constant::getNullValue(g_type); }
+    if (init) { gvar->setInitializer(init); }
 
-    std::string sym_name{g.link_name.empty() ? g.name : g.link_name};
-    // A plain (INTERNAL/PUBLIC) ghoti global whose name collides with a C-ABI symbol
-    if (g.link_name.empty() && !g.is_weak &&
-        (llvm_module_->getNamedValue(sym_name) || reserved_symbols_.contains(sym_name))) {
-        sym_name  = private_symbol_name(sym_name);
-        g_linkage = llvm::GlobalValue::InternalLinkage;
-    }
-    auto* gvar{
-        new llvm::GlobalVariable{*llvm_module_, g_type, is_const, g_linkage, init, sym_name}};
-    if (g.is_thread_local) {
-        gvar->setThreadLocalMode(is_executable_ ? llvm::GlobalValue::LocalExecTLSModel
-                                                : llvm::GlobalValue::GeneralDynamicTLSModel);
-    }
-    globals_[g.name] = gvar;
     return gvar;
 }
 
@@ -2001,6 +2027,32 @@ auto llvm_lowering::resolve_named_function(std::string_view ghoti_name) -> llvm:
         if (auto* fn{llvm::dyn_cast<llvm::Function>(it->second)}) { return fn; }
     }
     return llvm_module_->getFunction(ghoti_name);
+}
+
+auto llvm_lowering::resolve_named_constant(std::string_view name) -> llvm::Constant* {
+    PROFILE_FUNCTION();
+    if (auto* fn{resolve_named_function(name)}) { return fn; }
+    if (const auto it{globals_.find(name)}; it != globals_.end()) {
+        if (auto* c{llvm::dyn_cast<llvm::Constant>(it->second)}) { return c; }
+    }
+    if (auto* gv{llvm_module_->getNamedGlobal(name)}) { return gv; }
+    if (auto* val{llvm_module_->getNamedValue(name)}) {
+        if (auto* c{llvm::dyn_cast<llvm::Constant>(val)}) { return c; }
+    }
+    if (gir_module_) {
+        for (const auto* g : gir_module_->get_globals()) {
+            if (g->name == name || (!g->link_name.empty() && g->link_name == name)) {
+                return lower_global(*g);
+            }
+        }
+        for (const auto* f : gir_module_->get_functions()) {
+            if (f->get_name() == name ||
+                (!f->get_link_name().empty() && f->get_link_name() == name)) {
+                return declare_function(*f);
+            }
+        }
+    }
+    return nullptr;
 }
 
 auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {

@@ -280,3 +280,4 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Prohibits control flow jumps (`return`, `break`, `continue`, `?`) out of `errdefer` bodies
 - Resolve a bug that prevented top-level and aggregate-level generic functions from being monomorphized correctly
 - Rename `@this` builtin to `@This` to match type constructor and type name conventions
+- Resolve an issue that prevented dyn globals from being constructed

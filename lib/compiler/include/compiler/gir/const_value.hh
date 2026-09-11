@@ -63,6 +63,17 @@ struct const_closure {
     [[nodiscard]] auto         operator==(const const_closure& other) const noexcept -> bool;
 };
 
+struct const_addr {
+    std::string        symbol;
+    [[nodiscard]] auto operator==(const const_addr&) const noexcept -> bool = default;
+};
+
+struct const_dyn_fat_ptr {
+    std::string        data_symbol;
+    std::string        vtable_symbol;
+    [[nodiscard]] auto operator==(const const_dyn_fat_ptr&) const noexcept -> bool = default;
+};
+
 class const_value {
   public:
     using data_t = stdx::variant<i64,
@@ -78,6 +89,8 @@ class const_value {
                                  const_enum,
                                  const_union,
                                  const_closure,
+                                 const_addr,
+                                 const_dyn_fat_ptr,
                                  void_val,
                                  undefined_val,
                                  nullptr_val,

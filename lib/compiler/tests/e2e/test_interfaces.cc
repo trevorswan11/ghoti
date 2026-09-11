@@ -676,4 +676,52 @@ TEST_CASE("Cross-module inherited default method compiles and runs") {
     CHECK(exit_code == 7);
 }
 
+TEST_CASE("a global variable initialized with a `^dyn I` fat pointer dispatches methods") {
+    CHECK(helpers::compile_and_run(R"(
+        const Counter := interface {
+            pub const get := fn(&self): i32;
+        };
+        const MyCounter := struct { val: i32 };
+        impl Counter for MyCounter {
+            pub const get := fn(&self): i32 { return self.val; };
+        }
+        const Holder := struct {
+            vtable: ^dyn Counter,
+        };
+        var counter_impl: MyCounter = .{ .val = 42 };
+        pub var global_holder: Holder = .{
+            .vtable = ^counter_impl,
+        };
+        pub const main := fn(): i32 {
+            return global_holder.vtable.get();
+        };
+    )") == 42);
+}
+
+TEST_CASE(
+    "a global variable initialized with a mutable `^mut dyn I` fat pointer dispatches methods") {
+    CHECK(helpers::compile_and_run(R"(
+        const Resetter := interface {
+            pub const reset := fn(&mut self, v: i32): void;
+            pub const get := fn(&self): i32;
+        };
+        const State := struct { val: i32 };
+        impl Resetter for State {
+            pub const reset := fn(&mut self, v: i32): void { self.val = v; };
+            pub const get := fn(&self): i32 { return self.val; };
+        }
+        const Wrapper := struct {
+            ptr: ^mut dyn Resetter,
+        };
+        var state_impl: State = .{ .val = 10 };
+        pub var wrapper: Wrapper = .{
+            .ptr = ^mut state_impl,
+        };
+        pub const main := fn(): i32 {
+            wrapper.ptr.reset(42);
+            return wrapper.ptr.get();
+        };
+    )") == 42);
+}
+
 } // namespace ghoti::tests

@@ -699,10 +699,163 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
             }
             return try_eval(data.rhs);
         },
-        // A reference / pointer value is an address, not a compile-time constant
-        [&](const ast::reference_expr&) -> stdx::option<const_value> { return stdx::none; },
-        [&](const ast::address_of_expr&) -> stdx::option<const_value> { return stdx::none; },
+        [&](const ast::reference_expr& data) -> stdx::option<const_value> {
+            return eval_address_of(id, *data.rhs);
+        },
+        [&](const ast::address_of_expr& data) -> stdx::option<const_value> {
+            return eval_address_of(id, *data.rhs);
+        },
         [&](ast::grouped_expr) { return try_eval(id); });
+}
+
+auto const_eval::eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
+    const auto sema_type{module_->get_sema_type_opt(id)};
+    if (!sema_type) { return stdx::none; }
+
+    const auto rhs_val{try_eval(rhs)};
+    if (rhs_val && rhs_val->is<stdx::option<sema::type&>>()) {
+        const auto& t_opt{rhs_val->as<stdx::option<sema::type&>>()};
+        if (t_opt) {
+            using syntax::token_type_t;
+            const bool is_mut{id.get_token_type() == token_type_t::CARET_MUT ||
+                              id.get_token_type() == token_type_t::AND_MUT};
+            const bool is_ptr{id.get_token_type() == token_type_t::CARET ||
+                              id.get_token_type() == token_type_t::CARET_MUT};
+            const auto mutability{is_mut ? sema::types::mut::MUTABLE : sema::types::mut::CONSTANT};
+            auto&      constructed{is_ptr ? ctx_.get_pointer(mutability, *t_opt)
+                                          : ctx_.get_reference(mutability, *t_opt)};
+            return const_value{constructed};
+        }
+    }
+
+    if (const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(rhs)}) {
+        const auto          table_idx{module_->get_symbol_table_opt(rhs)};
+        const auto          effective_tbl{table_idx ? table_idx : module_->root_table_idx};
+        stdx::option<usize> owner_table;
+        stdx::option<const sema::symbol&> sym_opt;
+        if (effective_tbl) {
+            const auto& table{ctx_.registry.get(*effective_tbl)};
+            if (const auto s{table.get_opt(ident->name)}) {
+                owner_table = effective_tbl;
+                sym_opt     = s;
+            }
+        }
+        if (!sym_opt && module_->root_table_idx) {
+            const auto& table{ctx_.registry.get(*module_->root_table_idx)};
+            if (const auto s{table.get_opt(ident->name)}) {
+                owner_table = module_->root_table_idx;
+                sym_opt     = s;
+            }
+        }
+        if (sym_opt && owner_table) {
+            if (sym_opt->has_kind() && sym_opt->get_kind() == sema::symbol_kind::TYPE) {
+                return stdx::none;
+            }
+            if (const auto node{sym_opt->get_data().as_opt<sema::symbols::node_t>()}) {
+                if (const auto decl{module_->ast.get_as_opt<ast::decl_stmt>(*node)}) {
+                    if (decl->value && module_->ast.get_as_opt<ast::function_expr>(*decl->value)) {
+                        const auto sym_name{scoped_symbol_name(*owner_table, ident->name)};
+                        return const_value{const_addr{sym_name}, sema_type};
+                    }
+                    if (decl->value) {
+                        const auto& val_data{module_->ast[*decl->value]};
+                        if (val_data.is<ast::struct_expr>() || val_data.is<ast::enum_expr>() ||
+                            val_data.is<ast::union_expr>()) {
+                            return stdx::none;
+                        }
+                    }
+                    if (module_->root_table_idx && owner_table == module_->root_table_idx) {
+                        const auto sym_name{scoped_symbol_name(*owner_table, ident->name)};
+                        return const_value{const_addr{sym_name}, sema_type};
+                    }
+                }
+            }
+        }
+    }
+
+    if (const auto dot{module_->ast.get_as_opt<ast::dot_expr>(rhs)}) {
+        const auto obj_val{try_eval(dot->object)};
+        if (!obj_val) { return stdx::none; }
+
+        const auto type_opt{obj_val->as_opt<stdx::option<sema::type&>>()};
+        if (!type_opt || !*type_opt) { return stdx::none; }
+        const auto m_data{(**type_opt).get_data().as_opt<sema::types::module>()};
+        if (!m_data) { return stdx::none; }
+        auto& target_mod{m_data->imported};
+        if (!target_mod.root_table_idx) { return stdx::none; }
+
+        const auto& member_name{module_->ast.get_as<ast::identifier_expr>(dot->member).name};
+        const auto& table{ctx_.registry.get(*target_mod.root_table_idx)};
+        if (const auto sym{table.get_opt(member_name)}) {
+            if (sym->has_kind() && sym->get_kind() == sema::symbol_kind::TYPE) {
+                return stdx::none;
+            }
+            if (const auto node{sym->get_data().as_opt<sema::symbols::node_t>()}) {
+                if (const auto decl{target_mod.ast.get_as_opt<ast::decl_stmt>(*node)}) {
+                    if (decl->value) {
+                        const auto& val_data{target_mod.ast[*decl->value]};
+                        if (val_data.is<ast::struct_expr>() || val_data.is<ast::enum_expr>() ||
+                            val_data.is<ast::union_expr>()) {
+                            return stdx::none;
+                        }
+                    }
+                    const auto sym_name{
+                        scoped_symbol_name(*target_mod.root_table_idx, member_name)};
+                    return const_value{const_addr{sym_name}, sema_type};
+                }
+            }
+        }
+    }
+
+    return stdx::none;
+}
+
+auto const_eval::coerce_dyn(const const_value& val, const sema::type& dest_type)
+    -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
+    const auto        p{dest_type.get_data().as_opt<sema::types::pointer>()};
+    const auto        r{dest_type.get_data().as_opt<sema::types::reference>()};
+    const sema::type* dyn_ptr{p ? &p->underlying : r ? &r->underlying : nullptr};
+    if (!dyn_ptr || dyn_ptr->get_kind() != sema::type_kind::DYN) { return stdx::none; }
+    const auto& dyn{dyn_ptr->get_data().as<sema::types::dyn_t>()};
+    const auto& iface{dyn.interface.get_data().as<sema::types::interface_t>()};
+
+    auto target{val.get_type()};
+    if (!target) { return stdx::none; }
+    if (const auto tp{target->get_data().as_opt<sema::types::pointer>()}) {
+        target.emplace(tp->underlying);
+    }
+    if (const auto tr{target->get_data().as_opt<sema::types::reference>()}) {
+        target.emplace(tr->underlying);
+    }
+    const auto rec{ctx_.impls.lookup(*target, dyn.interface)};
+    if (!rec) { return stdx::none; }
+
+    const auto vtable_sym{fmt::format("__vtable.{}", rec->body_scope_idx)};
+    if (std::ranges::none_of(module_->dyn_vtables,
+                             [&](const auto& v) { return v.symbol == vtable_sym; })) {
+        mod::dyn_vtable v{.symbol = vtable_sym, .slots = {}};
+        for (const auto name : iface.method_names) {
+            v.slots.emplace_back(scoped_symbol_name(rec->body_scope_idx, name));
+        }
+        module_->dyn_vtables.emplace_back(std::move(v));
+    }
+
+    std::string data_sym;
+    if (const auto addr{val.as_opt<const_addr>()}) {
+        data_sym = addr->symbol;
+    } else if (val.is<nullptr_val>()) {
+        data_sym = "";
+    } else {
+        return stdx::none;
+    }
+
+    return const_value{const_dyn_fat_ptr{
+                           .data_symbol   = std::move(data_sym),
+                           .vtable_symbol = vtable_sym,
+                       },
+                       const_cast<sema::type&>(dest_type)};
 }
 
 auto const_eval::eval_array(ast::node_id id, const ast::array_expr& array)
@@ -802,14 +955,19 @@ auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& 
                     module_->ast.get_as<ast::implicit_access_expr>(*item.member)};
                 const auto& member_name{
                     module_->ast.get_as<ast::identifier_expr>(member_ident.member).name};
-                // A reference field needs an address to bind to
+                auto field_val{try_eval(item.value)};
+                if (!field_val) { return stdx::none; }
                 if (const auto proxy{table.get_proxy_opt(member_name)}) {
-                    if (st->type_at(proxy->index).get_kind() == sema::type_kind::REFERENCE) {
-                        return stdx::none;
+                    const auto&       field_type{st->type_at(proxy->index)};
+                    const auto        p{field_type.get_data().as_opt<sema::types::pointer>()};
+                    const auto        r{field_type.get_data().as_opt<sema::types::reference>()};
+                    const sema::type* dyn_ptr{p ? &p->underlying : r ? &r->underlying : nullptr};
+                    if (dyn_ptr && dyn_ptr->get_kind() == sema::type_kind::DYN &&
+                        !field_val->is<const_dyn_fat_ptr>()) {
+                        field_val = coerce_dyn(*field_val, field_type);
+                        if (!field_val) { return stdx::none; }
                     }
                 }
-                const auto field_val{try_eval(item.value)};
-                if (!field_val) { return stdx::none; }
                 struct_val.fields.emplace(std::string{member_name}, *field_val);
             }
             return const_value{std::move(struct_val), sema_type};
@@ -821,13 +979,19 @@ auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& 
                     module_->ast.get_as<ast::implicit_access_expr>(*item.member)};
                 const auto& member_name{
                     module_->ast.get_as<ast::identifier_expr>(member_ident.member).name};
+                auto field_val{try_eval(item.value)};
+                if (!field_val) { return stdx::none; }
                 if (const auto proxy{table.get_proxy_opt(member_name)}) {
-                    if (ut->type_at(proxy->index).get_kind() == sema::type_kind::REFERENCE) {
-                        return stdx::none;
+                    const auto&       field_type{ut->type_at(proxy->index)};
+                    const auto        p{field_type.get_data().as_opt<sema::types::pointer>()};
+                    const auto        r{field_type.get_data().as_opt<sema::types::reference>()};
+                    const sema::type* dyn_ptr{p ? &p->underlying : r ? &r->underlying : nullptr};
+                    if (dyn_ptr && dyn_ptr->get_kind() == sema::type_kind::DYN &&
+                        !field_val->is<const_dyn_fat_ptr>()) {
+                        field_val = coerce_dyn(*field_val, field_type);
+                        if (!field_val) { return stdx::none; }
                     }
                 }
-                const auto field_val{try_eval(item.value)};
-                if (!field_val) { return stdx::none; }
                 std::vector<const_value> payload;
                 payload.emplace_back(*field_val);
                 return const_value{const_union{std::string{member_name}, std::move(payload)},
