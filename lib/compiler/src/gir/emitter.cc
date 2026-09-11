@@ -3486,14 +3486,50 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         }
     }
 
-    const usize param_offset{has_implicit_self ? 1UZ : 0UZ};
-    for (usize i{0}; const auto& arg : call.arguments) {
-        const usize param_idx{i + param_offset};
-        if (generic_target_fn && i < generic_target_fn->parameters.size() &&
-            generic_target_fn->parameters[i].is_constexpr) {
-            ++i;
+    // Splice every `expr...` pack expansion into place, mirroring the resolver's own
+    // `expand_pack_call_args`: one effective slot per argument, or per pack element for a
+    // `...`-marked one. The resolver already validated that only the enclosing pack may be
+    // expanded, so `current_pack_` is trusted here without re-checking the identifier.
+    std::vector<usize>         arg_source_index;
+    std::vector<stdx::opt_size> arg_pack_k;
+    for (usize i{0}; i < call.arguments.size(); ++i) {
+        const bool is_expansion{
+            current_pack_ && i < call.pack_expansions.size() && call.pack_expansions[i]};
+        if (!is_expansion) {
+            arg_source_index.emplace_back(i);
+            arg_pack_k.emplace_back(stdx::none);
             continue;
         }
+        for (usize k{0}; k < current_pack_->element_count; ++k) {
+            arg_source_index.emplace_back(i);
+            arg_pack_k.emplace_back(k);
+        }
+    }
+
+    const usize param_offset{has_implicit_self ? 1UZ : 0UZ};
+    for (usize i{0}; i < arg_source_index.size(); ++i) {
+        const usize param_idx{i + param_offset};
+        if (arg_pack_k[i]) {
+            // A pack-element slot aliases the hidden per-element parameter binding that
+            // `emit_generic_instantiation` already materialized for the enclosing pack.
+            const auto elem_name{fmt::format("{}#{}", current_pack_->name, *arg_pack_k[i])};
+            if (const auto binding{lookup_binding(elem_name)}) {
+                if (binding->const_val) {
+                    args.emplace_back(*binding->const_val);
+                } else if (binding->is_alloca) {
+                    args.emplace_back(
+                        value{builder_.emit_load(binding->id, binding->type), binding->type});
+                } else {
+                    args.emplace_back(value{binding->id, binding->type});
+                }
+            }
+            continue;
+        }
+        if (generic_target_fn && i < generic_target_fn->parameters.size() &&
+            generic_target_fn->parameters[i].is_constexpr) {
+            continue;
+        }
+        const auto& arg{call.arguments[arg_source_index[i]]};
         if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
             bool is_type_arg{false};
             // A parameter declared `: type` accepts only a type value
@@ -3536,7 +3572,6 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             auto& type_type{ctx_.get_builtin_resolved_type(sema::type_kind::TYPE)};
             args.emplace_back(value{undefined_val{}, type_type});
         }
-        i++;
     }
 
     if (indirect_callee) {

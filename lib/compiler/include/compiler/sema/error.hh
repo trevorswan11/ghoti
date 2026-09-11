@@ -120,6 +120,7 @@ enum class error : u8 {
     CONSTEXPR_WHILE_NONFOLDABLE_COND,
     CONSTEXPR_LOOP_LIMIT,
     FIELD_NOT_FOUND,
+    PACK_EXPANSION_MISPLACED,
 };
 
 using diagnostic  = diagnostic<error>;

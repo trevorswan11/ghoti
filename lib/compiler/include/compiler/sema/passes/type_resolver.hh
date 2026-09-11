@@ -230,6 +230,18 @@ class type_resolver {
     auto resolve_call_args(gsl::span<const ast::call_expr::argument> args) -> resolve_result;
     [[nodiscard]] auto get_resolved_call_arg_type(const ast::call_expr::argument& arg)
         -> gsl::not_null<type*>;
+
+    // A call's arguments after splicing in every `expr...` pack expansion in place: one entry
+    // per *effective* slot. `source_index` names which syntactic argument a slot came from
+    // (shared by every element of the same expansion); `pack_k` is the element index within that
+    // expansion, present only for a slot an expansion produced.
+    struct expanded_call_args {
+        std::vector<usize>       source_index;
+        std::vector<stdx::opt_size> pack_k;
+    };
+    // `none` on a `PACK_EXPANSION_MISPLACED` diagnostic (already recorded on `ctx_.diags`).
+    [[nodiscard]] auto expand_pack_call_args(const ast::call_expr& call)
+        -> stdx::option<expanded_call_args>;
     // Folds `name_arg` to a compile-time string and looks it up as a data field of `denoted`.
     // Shared by `@hasField`/`@fieldType`/`@field`.
     [[nodiscard]] auto resolve_field_by_name(const ast::call_expr::argument& name_arg,

@@ -89,4 +89,39 @@ TEST_CASE("a bare parameter pack is out of position") {
                           sema::error::PACK_USE_OUT_OF_POSITION));
 }
 
+// `expr...` splices the enclosing pack into place at a call site (§8.5 forwarding).
+TEST_CASE("`expr...` forwards a pack into another call's argument list") {
+    helpers::resolve_and_check(R"(
+        const g := fn(rest...): void {};
+        const f := fn(rest...): void { g(rest...); };
+        const use := fn(): void { f(1, 2, 3); };
+    )");
+    helpers::resolve_and_check(R"(
+        const g := fn(a: i32, b: i32): void {};
+        const f := fn(rest...): void { g(rest...); };
+        const use := fn(): void { f(1, 2); };
+    )");
+}
+
+TEST_CASE("`expr...` only expands the enclosing parameter pack") {
+    CHECK(helpers::raised(R"(
+        const g := fn(rest...): void {};
+        const f := fn(rest...): void {
+            var arr: [2]i32 = .{1, 2};
+            g(arr...);
+        };
+        const use := fn(): void { f(1, 2); };
+    )",
+                          sema::error::PACK_EXPANSION_MISPLACED));
+}
+
+TEST_CASE("a spliced pack expansion's effective arity is checked against the callee") {
+    CHECK(helpers::raised(R"(
+        const g := fn(a: i32, b: i32): void {};
+        const f := fn(rest...): void { g(rest...); };
+        const use := fn(): void { f(1, 2, 3); };
+    )",
+                          sema::error::ARITY_MISMATCH));
+}
+
 } // namespace ghoti::tests

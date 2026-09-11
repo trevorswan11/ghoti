@@ -1579,6 +1579,33 @@ auto type_resolver::get_call_arg_location(const ast::call_expr::argument& arg) -
     return arg.visit([this](auto id) -> source_location { return resolving_.ast.location_of(id); });
 }
 
+auto type_resolver::expand_pack_call_args(const ast::call_expr& call)
+    -> stdx::option<expanded_call_args> {
+    expanded_call_args out;
+    for (usize i{0}; i < call.arguments.size(); ++i) {
+        const bool is_expansion{i < call.pack_expansions.size() && call.pack_expansions[i]};
+        if (!is_expansion) {
+            out.source_index.emplace_back(i);
+            out.pack_k.emplace_back(stdx::none);
+            continue;
+        }
+        const auto expr_h{call.arguments[i].as_opt<ast::expr_handle>()};
+        const auto ident{
+            expr_h ? resolving_.ast.get_as_opt<ast::identifier_expr>(*expr_h) : stdx::none};
+        if (!current_pack_ || !ident || ident->name != current_pack_->name) {
+            ctx_.diags.emplace_back("'...' may only expand the enclosing parameter pack",
+                                    error::PACK_EXPANSION_MISPLACED,
+                                    get_call_arg_location(call.arguments[i]));
+            return stdx::none;
+        }
+        for (usize k{0}; k < current_pack_->element_types.size(); ++k) {
+            out.source_index.emplace_back(i);
+            out.pack_k.emplace_back(k);
+        }
+    }
+    return out;
+}
+
 auto type_resolver::resolve_field_by_name(const ast::call_expr::argument& name_arg, type& denoted)
     -> stdx::option<field_lookup_result> {
     const auto expr_h{name_arg.as_opt<ast::expr_handle>()};
@@ -2003,24 +2030,32 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
         // A pack parameter accepts any number of trailing arguments, like a C variadic.
         const bool has_pack_param{fn_info_opt && !fn_info_opt->fn_expr->parameters.empty() &&
                                   fn_info_opt->fn_expr->parameters.back().is_pack};
+
+        // Splice every `expr...` pack expansion into place before counting/typing arguments, so
+        // both this call's own arity and its callee's (if it too takes a pack) see the same flat,
+        // already-expanded list.
+        const auto expanded_opt{expand_pack_call_args(call)};
+        if (!expanded_opt) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
+        const auto& expanded{*expanded_opt};
+        const auto  effective_arity{expanded.source_index.size()};
+
         const auto expected_arity{params.size() - param_offset - (has_pack_param ? 1UZ : 0UZ)};
         if (function_type->is_variadic || has_pack_param) {
-            if (call.arguments.size() < expected_arity) {
+            if (effective_arity < expected_arity) {
                 return last_type_.emplace(
                     ctx_.poison_node(resolving_,
                                      id,
                                      fmt::format("Expected at least {} arguments, found {}",
                                                  expected_arity,
-                                                 call.arguments.size()),
+                                                 effective_arity),
                                      error::ARITY_MISMATCH,
                                      resolving_.ast.location_of(call.function)));
             }
-        } else if (call.arguments.size() != expected_arity) {
+        } else if (effective_arity != expected_arity) {
             return last_type_.emplace(ctx_.poison_node(
                 resolving_,
                 id,
-                fmt::format(
-                    "Expected {} arguments, found {}", expected_arity, call.arguments.size()),
+                fmt::format("Expected {} arguments, found {}", expected_arity, effective_arity),
                 error::ARITY_MISMATCH,
                 resolving_.ast.location_of(call.function)));
         }
@@ -2045,14 +2080,22 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
 
         if (fn_info_opt && (any_param_generic(params) ||
                             any_param_constexpr(*fn_info_opt->fn_expr) || has_pack_param)) {
-            auto       concrete_arg_types{ctx_.pool.get_many_unsafe(call.arguments.size())};
+            auto       concrete_arg_types{ctx_.pool.get_many_unsafe(effective_arity)};
             bool       any_arg_poison{false};
             const auto fixed_params{params.subspan(param_offset)};
-            for (usize i{0}; i < call.arguments.size(); ++i) {
+            for (usize i{0}; i < effective_arity; ++i) {
                 // Beyond the fixed parameters, every trailing argument is a pack element and
                 // types against the pack's own (generic) declared type.
                 auto* param_type{i < fixed_params.size() ? fixed_params[i] : fixed_params.back()};
-                const auto&                    arg{call.arguments[i]};
+
+                // A slot an `expr...` expansion produced is already concretely typed (that
+                // element's own static type, from the *enclosing* pack) - no AST node to resolve.
+                if (expanded.pack_k[i]) {
+                    concrete_arg_types[i] = current_pack_->element_types[*expanded.pack_k[i]];
+                    continue;
+                }
+
+                const auto&                    arg{call.arguments[expanded.source_index[i]]};
                 stdx::option<structural_guard> g;
                 if (!is_generic_type(*param_type)) { g.emplace(implicit_type_stack_, *param_type); }
 
@@ -2248,16 +2291,20 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
         }
 
         bool any_arg_poison{false};
-        for (usize i{0}; const auto& arg : call.arguments) {
+        for (usize i{0}; i < effective_arity; ++i) {
+            // A pack-element slot has no AST node of its own to resolve - it aliases an
+            // already-typed element of the enclosing pack.
+            if (expanded.pack_k[i]) { continue; }
+
             stdx::option<structural_guard> g;
             if (i < expected_arity) {
                 g.emplace(implicit_type_stack_, *function_type->params[i + param_offset]);
             }
+            const auto& arg{call.arguments[expanded.source_index[i]]};
             any_arg_poison |= arg.visit([this](auto arg_id) -> bool {
                 resolve(arg_id);
                 return last_type_.take()->is_poison();
             });
-            ++i;
         }
         if (any_arg_poison) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
 
@@ -2618,7 +2665,12 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
     }
 
     if (any_poison) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
-    resolving_.set_sema_type(id, ctx_.get_builtin_resolved_type(type_kind::VOID_));
+    // Store `loop_type` itself back (not a bare `VOID_`), mirroring the ordinary for-loop's own
+    // final assignment: overwriting `id`'s node-type entry with a symbol-table-idx-less builtin
+    // would strand a second, differently-shaped instantiation of this same shared AST node (e.g.
+    // a pack function called at two different arities) with no scope to resolve against, since
+    // `instantiate_generic` never restores `fn_mod`'s side tables between instantiations.
+    resolving_.set_sema_type(id, loop_type);
     last_type_.emplace(resolving_.get_sema_type(id));
 }
 

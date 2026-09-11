@@ -2906,6 +2906,12 @@ auto const_eval::eval_constexpr_fn(ast::node_id                      call_id,
                                    stdx::option<const const_struct&> captures)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
+    // A pack parameter collects a variable number of trailing arguments, and this evaluator has
+    // no notion of `rest.len`/`rest[k]`/`for constexpr (rest)` (that machinery lives in
+    // type_resolver/emitter's `current_pack_`) - bail out rather than assert on the arity
+    // mismatch a pack call always produces against this fixed-parameter count.
+    if (!fn_expr.parameters.empty() && fn_expr.parameters.back().is_pack) { return stdx::none; }
+
     const bool  has_self{fn_expr.self.has_value()};
     const usize expected_args{fn_expr.parameters.size() + (has_self ? 1UZ : 0UZ)};
     VERIFY(expected_args == args.size(),
