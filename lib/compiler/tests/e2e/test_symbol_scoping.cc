@@ -87,11 +87,11 @@ TEST_CASE("E2E: two structs in one module with a same-named static method") {
     CHECK(helpers::compile_and_run(R"(
         const A := struct {
             n: i32,
-            const make := fn(v: i32): @this() { return .{ .n = v }; };
+            const make := fn(v: i32): @This() { return .{ .n = v }; };
         };
         const B := struct {
             m: i32,
-            const make := fn(v: i32): @this() { return .{ .m = v * 3 }; };
+            const make := fn(v: i32): @This() { return .{ .m = v * 3 }; };
         };
 
         pub const main := fn(): i32 {
@@ -106,12 +106,12 @@ TEST_CASE("E2E: two structs in one module with a same-named `^self` method") {
     CHECK(helpers::compile_and_run(R"(
         const A := struct {
             n: i32,
-            const make := fn(v: i32): @this() { return .{ .n = v }; };
+            const make := fn(v: i32): @This() { return .{ .n = v }; };
             const value := fn(^self): i32 { return self.n + 1; };
         };
         const B := struct {
             n: i32,
-            const make := fn(v: i32): @this() { return .{ .n = v }; };
+            const make := fn(v: i32): @This() { return .{ .n = v }; };
             const value := fn(^self): i32 { return self.n * 2; };
         };
 
@@ -128,7 +128,7 @@ namespace {
 constexpr std::string_view SHAPE_A{R"(
     pub const Shape := struct {
         k: i32,
-        pub const make := fn(v: i32): @this() { return .{ .k = v }; };
+        pub const make := fn(v: i32): @This() { return .{ .k = v }; };
         pub const area := fn(^self): i32 { return self.k + 1; };
     };
 )"};
@@ -136,7 +136,7 @@ constexpr std::string_view SHAPE_A{R"(
 constexpr std::string_view SHAPE_B{R"(
     pub const Shape := struct {
         k: i32,
-        pub const make := fn(v: i32): @this() { return .{ .k = v }; };
+        pub const make := fn(v: i32): @This() { return .{ .k = v }; };
         pub const area := fn(^self): i32 { return self.k * 5; };
     };
 )"};
@@ -170,7 +170,7 @@ TEST_CASE("E2E: a module function and a struct method sharing a name do not cros
 
         const Widget := struct {
             n: i32,
-            const make := fn(v: i32): @this() { return .{ .n = v * 2 }; };
+            const make := fn(v: i32): @This() { return .{ .n = v * 2 }; };
         };
 
         pub const main := fn(): i32 {

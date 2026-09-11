@@ -23,7 +23,7 @@ impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
 }
 impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
     using From = E;
-    pub const fromResidual := fn(r: E): @this() { return .{ .err = r }; };
+    pub const fromResidual := fn(r: E): @This() { return .{ .err = r }; };
 }
 )";
 

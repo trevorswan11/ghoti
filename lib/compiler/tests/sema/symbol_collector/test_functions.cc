@@ -77,7 +77,7 @@ TEST_CASE("Aggregate static members keep their visibility modifier inside a type
         const Make := fn(): type {
             return struct {
                 item: i32,
-                pub const of := fn(v: i32): @this() { return .{ .item = v }; };
+                pub const of := fn(v: i32): @This() { return .{ .item = v }; };
             };
         };
 )");

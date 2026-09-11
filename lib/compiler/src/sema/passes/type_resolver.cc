@@ -735,14 +735,14 @@ template <ast::IndexableID ID>
         }
         break;
     }
-    // @this returns a type as per docs, but it's really a structural type with full determinism
+    // @This returns a type as per docs, but it's really a structural type with full determinism
     case token_type_t::BUILTIN_THIS:
         if (const auto user_type{user_type_stack_.peek()}) {
             return_type = user_type.get();
             break;
         }
 
-        return make_sema_err("@this() may only be used inside of structs, unions, and enums",
+        return make_sema_err("@This() may only be used inside of structs, unions, and enums",
                              error::TYPE_MISMATCH,
                              resolving_.ast.location_of(id));
     // @fnCtx() returns the enclosing function's own (pre-capture) signature as a callable value
@@ -1731,7 +1731,7 @@ auto register_type_ctor_members(context&         ctx,
     }
     if (!any_fn_member) { return; }
 
-    // The replay must place `@this()` / `.{ ... }` / `^self` nodes at `clone`, not the shared
+    // The replay must place `@This()` / `.{ ... }` / `^self` nodes at `clone`, not the shared
     // literal type that later instantiations overwrite.
     for (auto& [_, ty] : typing.node_types) {
         if (ty) { ty.emplace(remap_type(ctx, *ty, src_agg, clone)); }
@@ -8289,7 +8289,7 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type
         bindings[i] = &denoted_type(*last_type_.take());
     }
 
-    // `dyn`-safety: a method must take `self` by `&`/`^` and must not mention `@this()` directly
+    // `dyn`-safety: a method must take `self` by `&`/`^` and must not mention `@This()` directly
     const auto is_dyn_unsafe_slot{
         [&](const type& t) { return t.get_kind() == type_kind::INTERFACE; }};
     for (usize i{0}; i < iface.method_names.size(); ++i) {
@@ -8306,7 +8306,7 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type
             return last_type_.emplace(ctx_.poison_node(
                 resolving_,
                 id,
-                fmt::format("`{}` is not `dyn`-safe: method `{}` passes `self`, `@this()`, or an "
+                fmt::format("`{}` is not `dyn`-safe: method `{}` passes `self`, `@This()`, or an "
                             "unbound associated type by value",
                             ctx_.type_display_name(iface_type),
                             iface.method_names[i]),
@@ -8459,7 +8459,7 @@ auto type_resolver::instantiate_generic(type&                             callee
     // same generic already resolved them
     inst_resolver.reresolve_floor_.emplace(fn_table_idx);
 
-    // This freestanding resolver has no enclosing-type context, so @this() needs it restored.
+    // This freestanding resolver has no enclosing-type context, so @This() needs it restored.
     stdx::option<structural_guard> this_type_guard;
     if (fn_info.enclosing_type) {
         this_type_guard.emplace(inst_resolver.user_type_stack_, *fn_info.enclosing_type);

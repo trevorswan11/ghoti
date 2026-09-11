@@ -23,7 +23,7 @@ impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
 }
 impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
     using From = E;
-    pub const fromResidual := fn(r: E): @this() { return .{ .err = r }; };
+    pub const fromResidual := fn(r: E): @This() { return .{ .err = r }; };
 }
 const Option := fn(T: type): type { return union { some: T, none: void }; };
 impl(T: type) builtin.Unwrappable for Option(T) {
@@ -38,7 +38,7 @@ impl(T: type) builtin.Unwrappable for Option(T) {
 }
 impl(T: type) builtin.Rewrappable for Option(T) {
     using From = void;
-    pub const fromResidual := fn(_: void): @this() { return .{ .none = {} }; };
+    pub const fromResidual := fn(_: void): @This() { return .{ .none = {} }; };
 }
 )";
 
@@ -172,7 +172,7 @@ TEST_CASE("nominal `?` and `!` work on custom renamed-variant unions") {
         }
         impl builtin.Rewrappable for Custom {
             using From = u8;
-            pub const fromResidual := fn(r: u8): @this() {
+            pub const fromResidual := fn(r: u8): @This() {
                 return .{ .failure = r };
             };
         }

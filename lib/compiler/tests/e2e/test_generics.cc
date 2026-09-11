@@ -22,13 +22,13 @@ TEST_CASE("a poisoned aggregate member does not crash a constexpr type-ctor inst
     )");
 }
 
-TEST_CASE("@this() resolves correctly inside a generic function's body") {
+TEST_CASE("@This() resolves correctly inside a generic function's body") {
     CHECK(helpers::compile_and_run(R"(
         const S := struct {
             x: i32,
 
             const make := fn(v: auto): i32 {
-                const r: @this() = S{ .x = v };
+                const r: @This() = S{ .x = v };
                 return r.x;
             };
         };
@@ -45,8 +45,8 @@ TEST_CASE("a static member fn returning its own struct type (with an array field
             buf: [4uz]mut i32,
             len: usize,
 
-            const init := fn(): @this() {
-                var l: @this() = undefined;
+            const init := fn(): @This() {
+                var l: @This() = undefined;
                 l.len = 7uz;
                 return l;
             };
@@ -90,7 +90,7 @@ TEST_CASE("the `?` operator works inside a generic function body") {
         }
         impl builtin.Rewrappable for R {
             using From = u8;
-            pub const fromResidual := fn(r: u8): @this() { return .{ .err = r }; };
+            pub const fromResidual := fn(r: u8): @This() { return .{ .err = r }; };
         }
         const first := fn(T: type, r: R): R {
             const v := r?;

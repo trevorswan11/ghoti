@@ -27,7 +27,7 @@ TEST_CASE("an inherent impl static constructor runs via implicit access") {
     CHECK(helpers::compile_and_run(R"(
         const Box := struct { v: i32 };
         impl Box {
-            pub const of := fn(v: i32): @this() { return .{ .v = v }; };
+            pub const of := fn(v: i32): @This() { return .{ .v = v }; };
         }
         pub const main := fn(): i32 {
             const b := Box.of(7);

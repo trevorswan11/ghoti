@@ -549,12 +549,12 @@ TEST_CASE("Division by zero failure handling in constant eval") {
     CHECK_FALSE(ctx->analyzer.get_ctx().diags.empty());
 }
 
-TEST_CASE("Builtin const eval @this") {
+TEST_CASE("Builtin const eval @This") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const Node := struct {
             val: i32,
 
-            using Self = @this();
+            using Self = @This();
             pub const bar := fn(s: &Self): i32 { return 0; };
         };
         const sz := @sizeOf(Node);
