@@ -183,6 +183,16 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::FIELD_TYPE, params(t_auto, t_auto), t_type);
     inject_function(bis::FIELD, params(t_auto, t_auto), t_auto);
 
+    // Per-kind construction builtins (§10.1): descriptor is really `IntInfo`/etc, not resolved
+    // until `inject_builtin_module` runs; the resolver folds the descriptor argument and builds
+    // the concrete type directly, so `t_auto`/`t_type` here are just placeholders.
+    inject_function(bis::INT, params(t_auto), t_type);
+    inject_function(bis::FLOAT, params(t_auto), t_type);
+    inject_function(bis::POINTER, params(t_auto), t_type);
+    inject_function(bis::REFERENCE, params(t_auto), t_type);
+    inject_function(bis::SLICE, params(t_auto), t_type);
+    inject_function(bis::ARRAY, params(t_auto), t_type);
+
     inject_function(bis::MEMCPY, params(t_auto, t_auto), t_void);
     inject_function(bis::MEMSET, params(t_auto, t_auto), t_void);
     inject_function(bis::MEMMOVE, params(t_auto, t_auto), t_void);

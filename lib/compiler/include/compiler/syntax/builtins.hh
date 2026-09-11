@@ -44,6 +44,15 @@ constexpr builtin_t HAS_FIELD{"@hasField", token_type_t::BUILTIN_HAS_FIELD};
 constexpr builtin_t FIELD_TYPE{"@fieldType", token_type_t::BUILTIN_FIELD_TYPE};
 constexpr builtin_t FIELD{"@field", token_type_t::BUILTIN_FIELD};
 
+// Per-kind construction builtins (§10.1): the compositional inverse of `@typeInfo`'s
+// `IntInfo`/`FloatInfo`/`PointerInfo`/`SliceInfo`/`ArrayInfo` payload shapes.
+constexpr builtin_t INT{"@Int", token_type_t::BUILTIN_INT};
+constexpr builtin_t FLOAT{"@Float", token_type_t::BUILTIN_FLOAT};
+constexpr builtin_t POINTER{"@Pointer", token_type_t::BUILTIN_POINTER};
+constexpr builtin_t REFERENCE{"@Reference", token_type_t::BUILTIN_REFERENCE};
+constexpr builtin_t SLICE{"@Slice", token_type_t::BUILTIN_SLICE};
+constexpr builtin_t ARRAY{"@Array", token_type_t::BUILTIN_ARRAY};
+
 constexpr builtin_t MEMCPY{"@memcpy", token_type_t::BUILTIN_MEMCPY};
 constexpr builtin_t MEMSET{"@memset", token_type_t::BUILTIN_MEMSET};
 constexpr builtin_t MEMMOVE{"@memmove", token_type_t::BUILTIN_MEMMOVE};
@@ -151,6 +160,12 @@ constexpr std::array ALL_BUILTINS{
     builtins::HAS_FIELD,
     builtins::FIELD_TYPE,
     builtins::FIELD,
+    builtins::INT,
+    builtins::FLOAT,
+    builtins::POINTER,
+    builtins::REFERENCE,
+    builtins::SLICE,
+    builtins::ARRAY,
     builtins::MEMCPY,
     builtins::MEMSET,
     builtins::MEMMOVE,

@@ -246,6 +246,11 @@ class type_resolver {
     // Shared by `@hasField`/`@fieldType`/`@field`.
     [[nodiscard]] auto resolve_field_by_name(const ast::call_expr::argument& name_arg,
                                              type& denoted) -> stdx::option<field_lookup_result>;
+    // Folds `desc_arg` (an `IntInfo`/`FloatInfo`/`PointerInfo`/`SliceInfo`/`ArrayInfo` value) to a
+    // compile-time struct. Shared by the `@Int`/`@Float`/`@Pointer`/`@Reference`/`@Slice`/`@Array`
+    // construction builtins (§10.1); `none` when the argument isn't a foldable struct value.
+    [[nodiscard]] auto resolve_type_descriptor(const ast::call_expr::argument& desc_arg)
+        -> stdx::option<gir::const_struct>;
     // Evaluates `arg` as a compile-time enum constant
     [[nodiscard]] auto resolve_const_enum_arg(const ast::call_expr::argument& arg,
                                               std::string_view                builtin_name,

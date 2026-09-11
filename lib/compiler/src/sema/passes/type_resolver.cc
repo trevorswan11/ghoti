@@ -903,6 +903,130 @@ template <ast::IndexableID ID>
                              error::FIELD_NOT_FOUND,
                              resolving_.ast.location_of(call.function));
     }
+    case token_type_t::BUILTIN_INT:
+    case token_type_t::BUILTIN_FLOAT:
+    case token_type_t::BUILTIN_POINTER:
+    case token_type_t::BUILTIN_REFERENCE:
+    case token_type_t::BUILTIN_SLICE:
+    case token_type_t::BUILTIN_ARRAY: {
+        // Compositional inverse of `@typeInfo` (§10.1): fold the descriptor argument to the
+        // matching `*Info` struct and build the concrete type directly from its fields.
+        const auto builtin_name{*syntax::get_builtin_opt(builtin_id)};
+        const auto desc{resolve_type_descriptor(call.arguments[0])};
+        if (!desc) {
+            return make_sema_err(
+                fmt::format("'{}' expects a compile-time-known descriptor argument", builtin_name),
+                error::CONSTEXPR_EVALUATION_FAILED,
+                get_call_arg_location(call.arguments[0]));
+        }
+        const auto field_err{[&](std::string_view field_name) -> stdx::result<void, diagnostic> {
+            return make_sema_err(
+                fmt::format(
+                    "'{}': descriptor is missing a compile-time-known '{}' field", builtin_name,
+                    field_name),
+                error::CONSTEXPR_EVALUATION_FAILED,
+                get_call_arg_location(call.arguments[0]));
+        }};
+        // The call denotes the constructed type as a compile-time value, like `@fieldType`
+        // (`BUILTIN_FIELD_TYPE` above) - a `TYPE`-kind meta-type wrapping it, not the type itself.
+        const auto wrap_type{[&](type& built) -> type* {
+            auto meta{ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, built}]};
+            meta->resolve_if<types::meta_type>(built);
+            return meta;
+        }};
+
+        switch (builtin_id) {
+        case token_type_t::BUILTIN_INT: {
+            const auto bits{desc->get_field_opt("bits")};
+            const auto is_signed{desc->get_field_opt("signed")};
+            const auto bits_v{bits ? bits->as_u64_opt() : stdx::none};
+            const auto signed_v{is_signed ? is_signed->as_opt<bool>() : stdx::none};
+            if (!bits_v) { return field_err("bits"); }
+            if (!signed_v) { return field_err("signed"); }
+            return_type = wrap_type(ctx_.get_int(static_cast<u16>(*bits_v), *signed_v));
+            break;
+        }
+        case token_type_t::BUILTIN_FLOAT: {
+            const auto bits{desc->get_field_opt("bits")};
+            const auto bits_v{bits ? bits->as_u64_opt() : stdx::none};
+            if (!bits_v) { return field_err("bits"); }
+            type_kind kind{};
+            switch (*bits_v) {
+            case 16:  kind = type_kind::F16; break;
+            case 32:  kind = type_kind::F32; break;
+            case 64:  kind = type_kind::F64; break;
+            case 80:  kind = type_kind::F80; break;
+            case 128: kind = type_kind::F128; break;
+            default:
+                return make_sema_err(
+                    fmt::format("'@Float' has no {}-bit floating-point type", *bits_v),
+                    error::LITERAL_OUT_OF_RANGE,
+                    get_call_arg_location(call.arguments[0]));
+            }
+            return_type = wrap_type(ctx_.get_builtin_resolved_type(kind));
+            break;
+        }
+        case token_type_t::BUILTIN_POINTER:
+        case token_type_t::BUILTIN_REFERENCE: {
+            const auto child{desc->get_field_opt("child")};
+            const auto is_mut{desc->get_field_opt("is_mut")};
+            const auto is_volatile{desc->get_field_opt("is_volatile")};
+            const auto child_v{child ? child->as_opt<stdx::option<type&>>() : stdx::none};
+            const auto mut_v{is_mut ? is_mut->as_opt<bool>() : stdx::none};
+            const auto vol_v{is_volatile ? is_volatile->as_opt<bool>() : stdx::none};
+            if (!child_v || !*child_v) { return field_err("child"); }
+            if (!mut_v) { return field_err("is_mut"); }
+            if (!vol_v) { return field_err("is_volatile"); }
+            auto mods{*mut_v ? types::mut::MUTABLE : types::mut::CONSTANT};
+            if (*vol_v) { mods = mods | types::mut::VOLATILE; }
+            return_type = wrap_type(builtin_id == token_type_t::BUILTIN_POINTER
+                                        ? ctx_.get_pointer(mods, **child_v)
+                                        : ctx_.get_reference(mods, **child_v));
+            break;
+        }
+        case token_type_t::BUILTIN_SLICE: {
+            const auto child{desc->get_field_opt("child")};
+            const auto sentinel{desc->get_field_opt("sentinel")};
+            const auto is_mut{desc->get_field_opt("is_mut")};
+            const auto is_volatile{desc->get_field_opt("is_volatile")};
+            const auto child_v{child ? child->as_opt<stdx::option<type&>>() : stdx::none};
+            const auto sentinel_v{sentinel ? sentinel->as_opt<bool>() : stdx::none};
+            const auto mut_v{is_mut ? is_mut->as_opt<bool>() : stdx::none};
+            const auto vol_v{is_volatile ? is_volatile->as_opt<bool>() : stdx::none};
+            if (!child_v || !*child_v) { return field_err("child"); }
+            if (!sentinel_v) { return field_err("sentinel"); }
+            if (!mut_v) { return field_err("is_mut"); }
+            if (!vol_v) { return field_err("is_volatile"); }
+            auto mods{*mut_v ? types::mut::MUTABLE : types::mut::CONSTANT};
+            if (*vol_v) { mods = mods | types::mut::VOLATILE; }
+            return_type = wrap_type(ctx_.get_slice(mods, *sentinel_v, **child_v));
+            break;
+        }
+        case token_type_t::BUILTIN_ARRAY: {
+            const auto child{desc->get_field_opt("child")};
+            const auto len{desc->get_field_opt("len")};
+            const auto sentinel{desc->get_field_opt("sentinel")};
+            const auto is_mut{desc->get_field_opt("is_mut")};
+            const auto is_volatile{desc->get_field_opt("is_volatile")};
+            const auto child_v{child ? child->as_opt<stdx::option<type&>>() : stdx::none};
+            const auto len_v{len ? len->as_u64_opt() : stdx::none};
+            const auto sentinel_v{sentinel ? sentinel->as_opt<bool>() : stdx::none};
+            const auto mut_v{is_mut ? is_mut->as_opt<bool>() : stdx::none};
+            const auto vol_v{is_volatile ? is_volatile->as_opt<bool>() : stdx::none};
+            if (!child_v || !*child_v) { return field_err("child"); }
+            if (!len_v) { return field_err("len"); }
+            if (!sentinel_v) { return field_err("sentinel"); }
+            if (!mut_v) { return field_err("is_mut"); }
+            if (!vol_v) { return field_err("is_volatile"); }
+            auto mods{*mut_v ? types::mut::MUTABLE : types::mut::CONSTANT};
+            if (*vol_v) { mods = mods | types::mut::VOLATILE; }
+            return_type = wrap_type(ctx_.get_array(mods, *sentinel_v, *len_v, **child_v));
+            break;
+        }
+        default: ASSERT(false, "unreachable");
+        }
+        break;
+    }
     case token_type_t::BUILTIN_TARGET_OS:       return_type = &ctx_.get_builtin_type("Os"); break;
     case token_type_t::BUILTIN_TARGET_ARCH:     return_type = &ctx_.get_builtin_type("Arch"); break;
     case token_type_t::BUILTIN_TARGET_ABI:      return_type = &ctx_.get_builtin_type("Abi"); break;
@@ -1615,6 +1739,18 @@ auto type_resolver::resolve_field_by_name(const ast::call_expr::argument& name_a
     const auto      name{folded ? folded->as_opt<std::string>() : stdx::none};
     if (!name) { return stdx::none; }
     return find_aggregate_field(denoted, *name);
+}
+
+auto type_resolver::resolve_type_descriptor(const ast::call_expr::argument& desc_arg)
+    -> stdx::option<gir::const_struct> {
+    const auto expr_h{desc_arg.as_opt<ast::expr_handle>()};
+    if (!expr_h) { return stdx::none; }
+    gir::const_eval evaluator{ctx_, resolving_};
+    const auto      folded{evaluator.try_eval(*expr_h)};
+    if (!folded) { return stdx::none; }
+    const auto s{folded->as_opt<gir::const_struct>()};
+    if (!s) { return stdx::none; }
+    return *s;
 }
 
 auto type_resolver::resolve_const_enum_arg(const ast::call_expr::argument& arg,

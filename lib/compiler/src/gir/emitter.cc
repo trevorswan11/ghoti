@@ -6033,7 +6033,14 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
             builder_.emit_get_element_ptr(value{struct_slot, *sema_type},
                                           {value{static_cast<u64>(field_idx), usize_type}},
                                           field_type)};
-        const auto val{emit_coerced_expr(val_expr, field_type)};
+        // A `type`-kind field (e.g. `PointerInfo.child`, §10.1's descriptors) has no runtime
+        // representation - `emit_coerced_expr` would try to materialize `val_expr` as an ordinary
+        // value and fail the store's type check, since a bare type name's own sema type is the
+        // type it denotes (`i32`), not `TYPE` itself. Mirrors `emit_call`'s `is_type_arg` handling
+        // for the same situation in a call argument position.
+        const auto val{field_type.get_kind() == sema::type_kind::TYPE
+                           ? value{undefined_val{}, field_type}
+                           : emit_coerced_expr(val_expr, field_type)};
         builder_.emit_store(value{field_ptr, field_type}, val).is_initializer = true;
     }
 
