@@ -1943,8 +1943,12 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
         // Check the arity of the function against params before resetting last type
         const auto& params{function_type->params};
         const usize param_offset{has_implicit_self ? 1UZ : 0UZ};
-        const auto  expected_arity{params.size() - param_offset};
-        if (function_type->is_variadic) {
+        const auto  fn_info_opt{ctx_.generic_functions.get_opt(callee_type)};
+        // A pack parameter accepts any number of trailing arguments, like a C variadic.
+        const bool has_pack_param{fn_info_opt && !fn_info_opt->fn_expr->parameters.empty() &&
+                                  fn_info_opt->fn_expr->parameters.back().is_pack};
+        const auto expected_arity{params.size() - param_offset - (has_pack_param ? 1UZ : 0UZ)};
+        if (function_type->is_variadic || has_pack_param) {
             if (call.arguments.size() < expected_arity) {
                 return last_type_.emplace(
                     ctx_.poison_node(resolving_,
@@ -1983,13 +1987,16 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
             }
         }
 
-        const auto fn_info_opt{ctx_.generic_functions.get_opt(callee_type)};
-        if (fn_info_opt &&
-            (any_param_generic(params) || any_param_constexpr(*fn_info_opt->fn_expr))) {
-            auto concrete_arg_types{ctx_.pool.get_many_unsafe(call.arguments.size())};
-            bool any_arg_poison{false};
-            for (usize i{0}; auto [param_type, arg] :
-                             std::views::zip(params.subspan(param_offset), call.arguments)) {
+        if (fn_info_opt && (any_param_generic(params) ||
+                            any_param_constexpr(*fn_info_opt->fn_expr) || has_pack_param)) {
+            auto       concrete_arg_types{ctx_.pool.get_many_unsafe(call.arguments.size())};
+            bool       any_arg_poison{false};
+            const auto fixed_params{params.subspan(param_offset)};
+            for (usize i{0}; i < call.arguments.size(); ++i) {
+                // Beyond the fixed parameters, every trailing argument is a pack element and
+                // types against the pack's own (generic) declared type.
+                auto* param_type{i < fixed_params.size() ? fixed_params[i] : fixed_params.back()};
+                const auto&                    arg{call.arguments[i]};
                 stdx::option<structural_guard> g;
                 if (!is_generic_type(*param_type)) { g.emplace(implicit_type_stack_, *param_type); }
 
@@ -2028,10 +2035,10 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                     });
                 // A poisoned argument yields `none`; record it and move on
                 if (result_arg_type) {
-                    concrete_arg_types[i++] = result_arg_type.take();
+                    concrete_arg_types[i] = result_arg_type.take();
                 } else {
-                    concrete_arg_types[i++] = nullptr;
-                    any_arg_poison          = true;
+                    concrete_arg_types[i] = nullptr;
+                    any_arg_poison        = true;
                 }
             }
             if (any_arg_poison) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
@@ -2139,6 +2146,17 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 resolving_.set_generic_call_target(id, cached->mangled_name);
                 resolving_.set_sema_type(id, *cached->return_type);
                 return last_type_.emplace(*cached->return_type);
+            }
+
+            // `rest.len`/`rest[K]`/monomorphization land in a later phase; a pack function is
+            // declarable today (above), but calling one isn't wired up yet.
+            if (has_pack_param) {
+                return last_type_.emplace(
+                    ctx_.poison_node(resolving_,
+                                     id,
+                                     "calling a parameter pack function is not yet implemented",
+                                     error::PACK_PARAM_NOT_YET_SUPPORTED,
+                                     resolving_.ast.location_of(call.function)));
             }
 
             // Copy out of the registry before instantiating: resolving the generic's body may
@@ -2438,7 +2456,8 @@ auto type_resolver::visit(ast::node_id id, const ast::for_loop_expr& for_expr) -
 auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void {
     PROFILE_FUNCTION();
 
-    const bool has_pack{std::ranges::any_of(fn.parameters, [](const auto& p) { return p.is_pack; })};
+    const bool has_pack{
+        std::ranges::any_of(fn.parameters, [](const auto& p) { return p.is_pack; })};
 
     // A pack function is implicitly generic (below) and, per its not-first-class rule, can never
     // denote a `fn(...): T` value type; that combination is simply unsupported syntax for now.
