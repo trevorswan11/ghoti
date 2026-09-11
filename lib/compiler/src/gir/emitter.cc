@@ -2062,6 +2062,17 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
 
     const auto kind_opt{map_binary_op(op_type)};
     const auto sema_type{active_mod().get_sema_type_opt(id)};
+
+    // An operator with no live-instruction mapping (e.g. `++`) only ever exists at comptime; a
+    // fold is the only way to emit it. Operators that do have a mapping keep their existing path.
+    if (!kind_opt) {
+        if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
+        ctx_.diags.emplace_back("Operands of '++' must be known at compile time here; a local "
+                                "array/slice binding does not yet fold through this expression",
+                                sema::error::CONCAT_NOT_FOLDABLE,
+                                active_ast().location_of(id));
+        return value{undefined_val{}, sema_type};
+    }
     ASSERT(kind_opt, "Binary operator must be mapped to instruction kind");
     ASSERT(sema_type, "Binary expression must have a resolved sema type");
 

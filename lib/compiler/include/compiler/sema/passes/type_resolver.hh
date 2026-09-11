@@ -90,6 +90,13 @@ class type_resolver {
     // Resolves and records the interface bounds of a generic function's `impl I` parameters.
     auto register_impl_param_bounds(type& fn_type, const ast::function_expr& fn) -> void;
 
+    // `lhs ++ rhs`: compile-time array/slice concatenation; sets `last_type_`.
+    auto
+    resolve_concat(ast::node_id id, const ast::binary_expr& binary, type& lhs_type, type& rhs_type)
+        -> void;
+    auto fold_concat_operand_len(ast::expr_handle operand, type& operand_type)
+        -> stdx::option<usize>;
+
     // Expands every parameterized `impl(P) ...` whose base ctor is `base_ctor_fn` for the freshly
     // materialized concrete target `concrete`, remapping its template typing and recording one
     // `impl_record` + emit entries per method

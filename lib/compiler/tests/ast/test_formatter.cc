@@ -453,6 +453,7 @@ TEST_CASE("formatter round trip: operators and grouping") {
     round_trips("_ = a +% b - c *% d + e <<% f;");
     round_trips("_ = -%a;");
     round_trips("var x: u8 = 0; x +%= 1; x -%= 1; x *%= 2; x <<%= 1;");
+    round_trips(R"(_ = "a" ++ "b" ++ c;)");
 }
 
 TEST_CASE("formatter round trip: precedence and nesting are preserved") {

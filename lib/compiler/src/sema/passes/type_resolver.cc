@@ -3254,6 +3254,19 @@ namespace {
     return is_integer(t.get_kind()) || t.get_kind() == type_kind::CONSTEXPR_INT;
 }
 
+// The element type of an array/slice, or none if `t` is neither (for `++`, `PLUS_PLUS`)
+[[nodiscard]] auto concat_element_type(type& t) noexcept -> stdx::option<type&> {
+    if (const auto arr{t.get_data().as_opt<types::array>()}) { return arr->underlying; }
+    if (const auto sl{t.get_data().as_opt<types::slice>()}) { return sl->underlying; }
+    return stdx::none;
+}
+
+[[nodiscard]] auto concat_is_null_terminated(const type& t) noexcept -> bool {
+    if (const auto arr{t.get_data().as_opt<types::array>()}) { return arr->null_terminated; }
+    if (const auto sl{t.get_data().as_opt<types::slice>()}) { return sl->null_terminated; }
+    return false;
+}
+
 } // namespace
 
 auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -> void {
@@ -3334,6 +3347,7 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
     }
 
     switch (id.get_token_type()) {
+    case syntax::token_type_t::PLUS_PLUS: resolve_concat(id, binary, *lhs_type, rhs_type); break;
     case syntax::token_type_t::LT:
     case syntax::token_type_t::LT_EQ:
     case syntax::token_type_t::GT:
@@ -3367,6 +3381,67 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
     }
 
     resolving_.set_sema_type(id, *last_type_);
+}
+
+// `lhs ++ rhs`: compile-time array/slice concatenation. Result is `[N+M]T`, sentinel from `rhs`.
+auto type_resolver::resolve_concat(ast::node_id            id,
+                                   const ast::binary_expr& binary,
+                                   type&                   lhs_type_in,
+                                   type&                   rhs_type_in) -> void {
+    // An identifier naming an array value can still carry a `TYPE`-wrapped meta-type or a
+    // not-yet-concrete `deferred_array` (e.g. a literal array dimension); unwrap/force both.
+    gir::const_eval evaluator{ctx_, resolving_};
+    auto&           lhs_type{evaluator.force_deferred_array(denoted_type(lhs_type_in))};
+    auto&           rhs_type{evaluator.force_deferred_array(denoted_type(rhs_type_in))};
+    const auto      lhs_elem{concat_element_type(lhs_type)};
+    const auto      rhs_elem{concat_element_type(rhs_type)};
+    if (!lhs_elem || !rhs_elem) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            fmt::format("operator '++' requires two array or slice operands; found '{}' and '{}'",
+                        ctx_.type_display_name(lhs_type),
+                        ctx_.type_display_name(rhs_type)),
+            error::CONCAT_REQUIRES_ARRAY_OR_SLICE,
+            resolving_.ast.location_of(id)));
+    }
+    if (!is_same_unqualified(*lhs_elem, *rhs_elem)) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            fmt::format("operator '++' requires matching element types; found '{}' and '{}'",
+                        ctx_.type_display_name(*lhs_elem),
+                        ctx_.type_display_name(*rhs_elem)),
+            error::CONCAT_ELEM_TYPE_MISMATCH,
+            resolving_.ast.location_of(id)));
+    }
+
+    const auto lhs_len{fold_concat_operand_len(binary.lhs, lhs_type)};
+    const auto rhs_len{fold_concat_operand_len(binary.rhs, rhs_type)};
+    if (!lhs_len || !rhs_len) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             "operands of '++' must be known at compile time",
+                             error::CONCAT_NOT_FOLDABLE,
+                             resolving_.ast.location_of(!lhs_len ? binary.lhs : binary.rhs)));
+    }
+
+    last_type_.emplace(ctx_.get_array(
+        types::mut::CONSTANT, concat_is_null_terminated(rhs_type), *lhs_len + *rhs_len, *lhs_elem));
+}
+
+// The element count of a `++` operand: read off an array type directly, or fold a slice value.
+auto type_resolver::fold_concat_operand_len(ast::expr_handle operand, type& operand_type)
+    -> stdx::option<usize> {
+    if (const auto arr{operand_type.get_data().as_opt<types::array>()}) { return arr->len; }
+
+    gir::const_eval evaluator{ctx_, resolving_};
+    const auto      folded{evaluator.try_eval(operand)};
+    if (!folded) { return stdx::none; }
+    if (const auto arr{folded->as_opt<gir::const_array>()}) { return arr->elements.size(); }
+    if (const auto str{folded->as_opt<std::string>()}) { return str->size(); }
+    return stdx::none;
 }
 
 // Looks `name` up among the methods attached to `target` by `impl` blocks. Returns:

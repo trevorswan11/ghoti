@@ -392,6 +392,7 @@ constexpr auto INFIX_FNS = [] -> auto {
     stdx::fixed::enum_map<token_type_t, parser::infix_fn> fns;
 
     fns[token_type_t::PLUS]                 = ast::binary_expr::parse;
+    fns[token_type_t::PLUS_PLUS]            = ast::binary_expr::parse;
     fns[token_type_t::PLUS_PERCENT]         = ast::binary_expr::parse;
     fns[token_type_t::MINUS]                = ast::binary_expr::parse;
     fns[token_type_t::MINUS_PERCENT]        = ast::binary_expr::parse;

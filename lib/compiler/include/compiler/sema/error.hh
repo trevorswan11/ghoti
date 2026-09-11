@@ -103,6 +103,9 @@ enum class error : u8 {
     ILLEGAL_PACKED_FIELD,
     ILLEGAL_PACKED_FIELD_ADDRESS,
     LITERAL_OUT_OF_RANGE,
+    CONCAT_REQUIRES_ARRAY_OR_SLICE,
+    CONCAT_ELEM_TYPE_MISMATCH,
+    CONCAT_NOT_FOLDABLE,
 };
 
 using diagnostic  = diagnostic<error>;

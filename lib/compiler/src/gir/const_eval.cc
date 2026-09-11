@@ -1524,6 +1524,42 @@ auto const_eval::eval_assignment(ast::node_id                id,
     return stdx::none;
 }
 
+namespace {
+
+[[nodiscard]] auto string_to_byte_array(const std::string& s) -> const_array {
+    const_array arr;
+    arr.elements.reserve(s.size());
+    for (const char c : s) {
+        arr.elements.emplace_back(const_value{static_cast<u64>(static_cast<unsigned char>(c))});
+    }
+    return arr;
+}
+
+} // namespace
+
+// `lhs ++ rhs`: the resolver always types the result as an array (see `resolve_concat`), so a
+// string operand normalizes to its bytes here rather than taking the slice-typed `make_string`
+// fast path; the element vectors are then spliced.
+auto const_eval::fold_concat(const const_value& lhs, const const_value& rhs, ast::node_id id)
+    -> stdx::option<const_value> {
+    const auto lhs_arr{lhs.as_opt<const_array>()};
+    const auto rhs_arr{rhs.as_opt<const_array>()};
+    const auto lhs_str{lhs.as_opt<std::string>()};
+    const auto rhs_str{rhs.as_opt<std::string>()};
+    if ((!lhs_arr && !lhs_str) || (!rhs_arr && !rhs_str)) { return stdx::none; }
+
+    const const_array lhs_bytes{lhs_str ? string_to_byte_array(*lhs_str) : *lhs_arr};
+    const const_array rhs_bytes{rhs_str ? string_to_byte_array(*rhs_str) : *rhs_arr};
+
+    const_array result;
+    result.elements.reserve(lhs_bytes.elements.size() + rhs_bytes.elements.size());
+    result.elements.insert(
+        result.elements.end(), lhs_bytes.elements.begin(), lhs_bytes.elements.end());
+    result.elements.insert(
+        result.elements.end(), rhs_bytes.elements.begin(), rhs_bytes.elements.end());
+    return const_value{std::move(result), module_->get_sema_type_opt(id)};
+}
+
 auto const_eval::fold_binary_values(syntax::token_type_t op_type,
                                     const const_value&   lhs,
                                     const const_value&   rhs,
@@ -1554,6 +1590,8 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
         // `constexpr_int` (or anything else non-scalar-width): no wrap, plain-op result stands.
         return folded;
     }
+
+    if (op_type == syntax::token_type_t::PLUS_PLUS) { return fold_concat(lhs, rhs, id); }
 
     auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
 

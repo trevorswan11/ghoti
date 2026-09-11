@@ -139,6 +139,9 @@ class const_eval {
                             const const_value&   lhs,
                             const const_value&   rhs,
                             ast::node_id         id) -> stdx::option<const_value>;
+    // `lhs ++ rhs`: concatenates two array/slice/string constants; result type from `id`.
+    auto fold_concat(const const_value& lhs, const const_value& rhs, ast::node_id id)
+        -> stdx::option<const_value>;
     auto eval_unary(ast::node_id id, const ast::unary_expr& unary) -> stdx::option<const_value>;
     auto eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::option<const_value>;
     auto eval_ident(ast::node_id id, const ast::identifier_expr& ident)

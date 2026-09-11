@@ -32,6 +32,7 @@ enum class token_type_t : u8 {
     ASSIGN,
     WALRUS,
     PLUS,
+    PLUS_PLUS,
     MINUS,
     STAR,
     SLASH,
