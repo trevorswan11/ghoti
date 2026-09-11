@@ -144,6 +144,21 @@ extern("kernel32") const CreateDirectoryW: fn(path: ^u16, security: ^mut opaque)
 
 extern("kernel32") const GetFileInformationByHandle: fn(h: Handle, info: ^mut Stat): BOOL;
 
+pub const SystemInfo := extern struct {
+    pub oem_id: u32,
+    pub page_size: u32,
+    pub min_app_addr: ^mut opaque,
+    pub max_app_addr: ^mut opaque,
+    pub active_proc_mask: usize,
+    pub num_processors: u32,
+    pub processor_type: u32,
+    pub allocation_granularity: u32,
+    pub processor_level: u16,
+    pub processor_revision: u16,
+};
+
+extern("kernel32") const GetSystemInfo: fn(info: ^mut SystemInfo): void;
+
 /// Treats the input as NUL-terminated and NUL-terminates the output
 extern("kernel32") const MultiByteToWideChar: fn(
     code_page: u32,
@@ -379,4 +394,27 @@ test "win32: alloc gives zero-filled, writable memory that free releases" {
     p[n - 1uz] = 0x5Au8;
     @expect(p[0] == 0x41u8 and p[n - 1uz] == 0x5Au8);
     @expect(match (free(p, n)) { .ok => true, .err => false });
+}
+
+var cached_page_size: std.Option(usize) = .{ .none = {} };
+
+/// Query and return the OS page size in bytes.
+/// Queries `GetSystemInfo` once and caches the result.
+pub const page_size := fn(): usize {
+    if (cached_page_size == .none) {
+        var info: SystemInfo = undefined;
+        GetSystemInfo(^mut info);
+        if (info.page_size > 0u32) {
+            cached_page_size = .{ .some = @intCast(usize, info.page_size) };
+        } else {
+            cached_page_size = .{ .some = 4096uz };
+        };
+    };
+    return cached_page_size.some;
+};
+
+test "win32: page_size returns non-zero power of two page size" {
+    const ps := page_size();
+    @expect(ps > 0uz);
+    @expect((ps & (ps - 1uz)) == 0uz);
 }

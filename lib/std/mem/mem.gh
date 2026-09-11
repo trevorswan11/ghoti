@@ -25,3 +25,8 @@ pub const Alignment := enum : u8 {
         return fromByteUnits(@alignOf(T));
     };
 };
+
+pub const roundUpPage := fn(len: usize): usize {
+    const ps := std.os.page_size();
+    return (len + ps - 1uz) & ~(ps - 1uz);
+};

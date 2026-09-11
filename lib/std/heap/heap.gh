@@ -1,0 +1,10 @@
+import std;
+
+import "page_allocator.gh" as page_alloc;
+
+pub using PageAllocator = page_alloc.PageAllocator;
+
+var page_alloc_impl: PageAllocator = .{};
+pub var page_allocator: std.mem.Allocator = .{
+    .vtable = ^mut page_alloc_impl,
+};

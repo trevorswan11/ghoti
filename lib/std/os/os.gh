@@ -28,6 +28,7 @@ pub const fstat := backend.fstat;
 
 pub const alloc := backend.alloc;
 pub const free := backend.free;
+pub const page_size := backend.page_size;
 
 pub const SEEK_SET := backend.SEEK_SET;
 pub const SEEK_CUR := backend.SEEK_CUR;
