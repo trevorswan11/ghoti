@@ -90,16 +90,16 @@ TEST_CASE("`return .{...}` flows through a labeled loop `break`") {
     )") == 42);
 }
 
-TEST_CASE("`return .{...}` for a method returning `@this()`") {
+TEST_CASE("`return .{...}` for a method returning `@This()`") {
     CHECK(helpers::compile_and_run(R"(
         const Counter := struct {
             value: i32,
 
-            const zero := fn(): @this() {
+            const zero := fn(): @This() {
                 return .{ .value = 0 };
             };
 
-            const bumped := fn(^self, by: i32): @this() {
+            const bumped := fn(^self, by: i32): @This() {
                 return .{ .value = self.value + by };
             };
         };

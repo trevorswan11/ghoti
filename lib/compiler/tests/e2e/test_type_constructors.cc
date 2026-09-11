@@ -191,7 +191,7 @@ TEST_CASE("E2E: a single generic type constructor instantiation with a member fu
         const Vec := fn(T: type): type {
             return struct {
                 item: T,
-                const make := fn(v: T): @this() { return .{ .item = v }; };
+                const make := fn(v: T): @This() { return .{ .item = v }; };
             };
         };
 
@@ -207,7 +207,7 @@ TEST_CASE("E2E: two instantiations of a generic type constructor do not alias th
         const Vec := fn(T: type): type {
             return struct {
                 item: T,
-                const make    := fn(v: T): @this() { return .{ .item = v }; };
+                const make    := fn(v: T): @This() { return .{ .item = v }; };
                 const doubled := fn(^self): T { return self.item + self.item; };
             };
         };
@@ -228,7 +228,7 @@ TEST_CASE("E2E: a non-generic `fn(): type` result with member functions") {
         const Make := fn(): type {
             return struct {
                 item: i32,
-                const of      := fn(v: i32): @this() { return .{ .item = v }; };
+                const of      := fn(v: i32): @This() { return .{ .item = v }; };
                 const doubled := fn(^self): i32 { return self.item + self.item; };
             };
         };
@@ -246,7 +246,7 @@ TEST_CASE("E2E: type constructor members with `&mut self` and sibling-method cal
         const Box := fn(T: type): type {
             return struct {
                 v: T,
-                const make  := fn(x: T): @this() { return .{ .v = x }; };
+                const make  := fn(x: T): @This() { return .{ .v = x }; };
                 const get   := fn(^self): T { return self.v; };
                 const bump  := fn(&mut self, by: T): void { self.v = self.v + by; };
                 const twice := fn(^self): T { return self.get() + self.get(); };
@@ -267,7 +267,7 @@ TEST_CASE("E2E: a cross-module non-generic `fn(): type` with member functions") 
         pub const Make := fn(): type {
             return struct {
                 item: i32,
-                pub const of      := fn(v: i32): @this() { return .{ .item = v }; };
+                pub const of      := fn(v: i32): @This() { return .{ .item = v }; };
                 pub const doubled := fn(^self): i32 { return self.item + self.item; };
             };
         };
@@ -290,7 +290,7 @@ TEST_CASE("E2E: a cross-module generic type constructor, two instantiations, met
         pub const Vec := fn(T: type): type {
             return struct {
                 item: T,
-                pub const make    := fn(v: T): @this() { return .{ .item = v }; };
+                pub const make    := fn(v: T): @This() { return .{ .item = v }; };
                 pub const doubled := fn(^self): T { return self.item + self.item; };
             };
         };

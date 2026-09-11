@@ -91,7 +91,7 @@ TEST_CASE("an inherent impl block resolves in phase 1") {
         const S := struct { x: i32 };
 
         impl S {
-            pub const fromRaw := fn(v: i32): @this() { return .{ .x = v }; };
+            pub const fromRaw := fn(v: i32): @This() { return .{ .x = v }; };
         }
 )");
 }
@@ -560,9 +560,9 @@ TEST_CASE("`&dyn I` binding an associated type twice keeps the last binding vali
 )");
 }
 
-TEST_CASE("`@this()` behind a reference stays `dyn`-safe") {
+TEST_CASE("`@This()` behind a reference stays `dyn`-safe") {
     helpers::resolve_and_check(R"(
-        const Chain := interface { pub const next := fn(&self): &@this(); };
+        const Chain := interface { pub const next := fn(&self): &@This(); };
         const use := fn(c: &dyn Chain): void { _ = c; };
 )");
 }

@@ -94,7 +94,7 @@ TEST_CASE("Builtin type introspection") {
 }
 
 TEST_CASE("Builtin this introspection") {
-    auto [ctx, idx]{helpers::resolve_and_check("struct { using A = @this(); };")};
+    auto [ctx, idx]{helpers::resolve_and_check("struct { using A = @This(); };")};
     const auto [sym, data, type]{ctx->get_type_sym_info<syms::node_t>("A", idx + 1)};
     CHECK(type == ctx->get_type(sema::type_kind::STRUCT, idx + 1));
 }
@@ -283,10 +283,10 @@ TEST_CASE("Other builtin quick type mismatch") {
                          std::pair{0UZ, 27UZ}});
 }
 
-TEST_CASE("Illegal @this usage") {
+TEST_CASE("Illegal @This usage") {
     helpers::test_resolver_fail(
-        "@this();",
-        sema::diagnostic{"@this() may only be used inside of structs, unions, and enums",
+        "@This();",
+        sema::diagnostic{"@This() may only be used inside of structs, unions, and enums",
                          sema::error::TYPE_MISMATCH,
                          std::pair{0UZ, 5UZ}});
 }

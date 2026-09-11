@@ -7,11 +7,11 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("static member constant read via the type name and `@this()`") {
+TEST_CASE("static member constant read via the type name and `@This()`") {
     CHECK(helpers::compile_and_run(R"(
         const Cfg := struct {
             const LIMIT := 40;
-            const bump := fn(): i32 { return @this().LIMIT + 2; };
+            const bump := fn(): i32 { return @This().LIMIT + 2; };
         };
 
         pub const main := fn(): i32 {
@@ -24,7 +24,7 @@ TEST_CASE("address of a scalar static member constant") {
     CHECK(helpers::compile_and_run(R"(
         const Cfg := struct {
             const BASE := 21;
-            const via_this := fn(): i32 { const p := ^@this().BASE; return *p; };
+            const via_this := fn(): i32 { const p := ^@This().BASE; return *p; };
             const via_name := fn(): i32 { const p := ^Cfg.BASE; return *p; };
         };
 
@@ -46,7 +46,7 @@ TEST_CASE("address of an aggregate static member constant (vtable singleton)") {
                 return vt.step(41);
             };
             const run_this := fn(): i32 {
-                const vt := ^@this().table;
+                const vt := ^@This().table;
                 return vt.step(41);
             };
         };

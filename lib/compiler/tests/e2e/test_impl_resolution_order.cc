@@ -157,7 +157,7 @@ TEST_CASE("E2E: a static enum method reached cross-module via a `using` alias is
     constexpr std::string_view err_gh{R"(
         pub const Error := enum : i32 {
             not_found, other, _,
-            pub const fromCode := fn(c: i32): @this() {
+            pub const fromCode := fn(c: i32): @This() {
                 return if (c == 0i32) .not_found else .other;
             };
         };
@@ -255,7 +255,7 @@ TEST_CASE(
         }
         impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
             using From = E;
-            pub const fromResidual := fn(r: E): @this() { return .{ .err = r }; };
+            pub const fromResidual := fn(r: E): @This() { return .{ .err = r }; };
         }
     )"};
     constexpr std::string_view writer_gh{R"(
@@ -320,7 +320,7 @@ TEST_CASE("E2E: one inherited cross-module default method calls another through 
         }
         impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
             using From = E;
-            pub const fromResidual := fn(r: E): @this() { return .{ .err = r }; };
+            pub const fromResidual := fn(r: E): @This() { return .{ .err = r }; };
         }
     )"};
     constexpr std::string_view writer_gh{R"(
@@ -388,7 +388,7 @@ TEST_CASE("E2E: a second impl of the same interface still inherits its default m
         }
         impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
             using From = E;
-            pub const fromResidual := fn(r: E): @this() { return .{ .err = r }; };
+            pub const fromResidual := fn(r: E): @This() { return .{ .err = r }; };
         }
     )"};
     constexpr std::string_view reader_gh{R"(

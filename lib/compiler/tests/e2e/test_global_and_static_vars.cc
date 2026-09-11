@@ -18,12 +18,12 @@ TEST_CASE("module-scope `var` global: read and write through the bare name") {
     )") == 42);
 }
 
-TEST_CASE("`var` static member of a struct via `Type.X` and `@this().X`") {
+TEST_CASE("`var` static member of a struct via `Type.X` and `@This().X`") {
     CHECK(helpers::compile_and_run(R"(
         const Counter := struct {
             var count: i32 = 0;
             const inc := fn(): void { Counter.count += 1; };
-            const value := fn(): i32 { return @this().count; };
+            const value := fn(): i32 { return @This().count; };
         };
 
         pub const main := fn(): i32 {
@@ -46,7 +46,7 @@ TEST_CASE("`var` static members of an enum and a union") {
         const U := union {
             x: i32,
             var calls: i32 = 0;
-            const bump := fn(): void { @this().calls += 2; };
+            const bump := fn(): void { @This().calls += 2; };
         };
 
         pub const main := fn(): i32 {

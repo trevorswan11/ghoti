@@ -516,7 +516,7 @@ TEST_CASE("formatter round trip: aggregates") {
     round_trips(R"(const S := struct {
     x: i32,
     const make := fn(v: auto): i32 {
-        const r: @this() = S{ .x = v };
+        const r: @This() = S{ .x = v };
         return r.x;
     };
 };)");
@@ -606,9 +606,9 @@ TEST_CASE("formatter groups interface members even with no comments") {
 TEST_CASE("formatter round trips impl blocks with no trailing semicolon") {
     CHECK(
         format_source(
-            "impl File { pub const fromRaw := fn(fd: i32): @this() { return .{ .fd = fd }; }; }") ==
+            "impl File { pub const fromRaw := fn(fd: i32): @This() { return .{ .fd = fd }; }; }") ==
         R"(impl File {
-    pub const fromRaw := fn(fd: i32): @this() {
+    pub const fromRaw := fn(fd: i32): @This() {
         return .{ .fd = fd };
     };
 }
@@ -623,10 +623,10 @@ TEST_CASE("formatter round trips impl blocks with no trailing semicolon") {
 }
 )");
 
-    CHECK(format_source("impl(H: type) Writer(H) { pub const fromRaw := fn(raw: H): @this() "
+    CHECK(format_source("impl(H: type) Writer(H) { pub const fromRaw := fn(raw: H): @This() "
                         "{ return .{ .handle = raw }; }; }") ==
           R"(impl(H: type) Writer(H) {
-    pub const fromRaw := fn(raw: H): @this() {
+    pub const fromRaw := fn(raw: H): @This() {
         return .{ .handle = raw };
     };
 }
@@ -664,7 +664,7 @@ TEST_CASE("formatter round trip: interfaces and impls") {
                 "const seal := fn(&self): void; "
                 "pub const drain := fn(&mut self): void { self.seal(); }; };");
     round_trips("using X = interface { pub const f := fn(^self): i32; };");
-    round_trips("impl File { pub const make := fn(): @this() { return .{}; }; }");
+    round_trips("impl File { pub const make := fn(): @This() { return .{}; }; }");
     round_trips("impl Writer for File { pub const write := fn(&mut self, b: []u8): R { c; }; }");
     round_trips("impl(T: type) Debug for Box(T) { pub const fmt := fn(&self): void {}; }");
     round_trips("impl(H: type, constexpr n: usize) Buf(H) { const cap := n; }");

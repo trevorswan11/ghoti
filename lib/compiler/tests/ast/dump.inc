@@ -931,7 +931,7 @@ ImplStatement
             ├─ CallConv: c
             ├─ Returns: ExplicitType (modifier: VALUE)
             │   └─ CallExpression
-            │       └─ Callee: IdentifierExpression: @this (builtin)
+            │       └─ Callee: IdentifierExpression: @This (builtin)
             └─ Body: BlockStatement
                 └─ ReturnStatement
                     └─ Value: Initializer Expression:
@@ -1001,7 +1001,7 @@ ImplStatement
             ├─ CallConv: c
             ├─ Returns: ExplicitType (modifier: VALUE)
             │   └─ CallExpression
-            │       └─ Callee: IdentifierExpression: @this (builtin)
+            │       └─ Callee: IdentifierExpression: @This (builtin)
             └─ Body: BlockStatement
                 └─ ReturnStatement
                     └─ Value: Initializer Expression:

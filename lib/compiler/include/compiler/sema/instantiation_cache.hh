@@ -40,7 +40,7 @@ using type_ctor_binding_map =
                                  stdx::string_transparent_eq>;
 
 // Per-monomorphization body typing, replayed at emit time: `[n]T` with a `constexpr n`, and the
-// `@this()` shape of a `fn(T): type` constructor's member functions.
+// `@This()` shape of a `fn(T): type` constructor's member functions.
 struct body_type_diff {
     std::vector<std::pair<usize, stdx::option<type&>>> node_types;
     std::vector<std::pair<usize, stdx::option<type&>>> explicit_types;

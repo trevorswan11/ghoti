@@ -15,7 +15,7 @@ impl(T: type) builtin.Unwrappable for Option(T) {
 
 impl(T: type) builtin.Rewrappable for Option(T) {
     using From = void;
-    pub const fromResidual := fn(_: void): @this() {
+    pub const fromResidual := fn(_: void): @This() {
         return .{ .none = {} };
     };
 }
