@@ -141,6 +141,50 @@ TEST_CASE("`@typeInfo` on an enum tags correctly and reads `exhaustive`") {
     )") == 0);
 }
 
+// Phase 10: `struct`/`union` arms (`function` waits on Phase 13's `callconv`-into-type-identity
+// fix - `types::function` has nowhere to read a calling convention from yet).
+TEST_CASE("`@typeInfo` on a struct tags correctly and reads its own flags") {
+    CHECK(helpers::compile_and_run(R"(
+        const Point := struct { x: i32, y: i32 };
+        pub const main := fn(): i32 {
+            return match constexpr (@typeInfo(Point)) {
+                .@"struct" => |s| @intFromBool(s.is_packed),
+                _ => -1,
+            };
+        };
+    )") == 0);
+    CHECK(helpers::compile_and_run(R"(
+        const P := extern struct { a: i32 };
+        pub const main := fn(): i32 {
+            return match constexpr (@typeInfo(P)) {
+                .@"struct" => |s| @intFromBool(s.is_extern),
+                _ => -1,
+            };
+        };
+    )") == 1);
+    CHECK(helpers::compile_and_run(R"(
+        const P := packed struct { a: u4, b: u4 };
+        pub const main := fn(): i32 {
+            return match constexpr (@typeInfo(P)) {
+                .@"struct" => |s| @intCast(i32, s.backing_bits) + @intFromBool(s.is_packed) * 100,
+                _ => -1,
+            };
+        };
+    )") == 108);
+}
+
+TEST_CASE("`@typeInfo` on a union tags correctly and reads `tagged`") {
+    CHECK(helpers::compile_and_run(R"(
+        const U := union { a: i32, b: i32 };
+        pub const main := fn(): i32 {
+            return match constexpr (@typeInfo(U)) {
+                .@"union" => |u| @intFromBool(u.tagged),
+                _ => -1,
+            };
+        };
+    )") == 1);
+}
+
 // Known limitation, not attempted here: `match constexpr`'s captured payload (`|e|`) is not
 // `const_eval`-foldable at *resolve* time the way a plain `constexpr` binding is - only a
 // narrower *emit*-time fallback (an unhandled builtin call tries `const_eval::try_eval` before
