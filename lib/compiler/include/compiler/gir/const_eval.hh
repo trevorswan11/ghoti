@@ -90,6 +90,9 @@ class const_eval {
     [[nodiscard]] static auto type_align_of(const sema::type& type, usize ptr_size) -> usize;
     [[nodiscard]] static auto type_size_of(const sema::type& type, usize ptr_size) -> usize;
 
+    [[nodiscard]] auto coerce_dyn(const const_value& val, const sema::type& dest_type)
+        -> stdx::option<const_value>;
+
   private:
     struct call_frame {
         ankerl::unordered_dense::map<std::string_view, const_value> bindings;
@@ -137,6 +140,7 @@ class const_eval {
                             const const_value&   rhs,
                             ast::node_id         id) -> stdx::option<const_value>;
     auto eval_unary(ast::node_id id, const ast::unary_expr& unary) -> stdx::option<const_value>;
+    auto eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::option<const_value>;
     auto eval_ident(ast::node_id id, const ast::identifier_expr& ident)
         -> stdx::option<const_value>;
     auto eval_call(ast::node_id id, const ast::call_expr& call) -> stdx::option<const_value>;

@@ -786,9 +786,19 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                 cv->get_type()->get_kind() == sema::type_kind::FUNCTION) {
                 return;
             }
-            // A folded struct/array/union aggregate cannot round-trip through the scalar `value`
-            // variant
-            if (cv->is<const_struct>() || cv->is<const_array>() || cv->is<const_union>()) {
+            const auto        p{sema_type->get_data().as_opt<sema::types::pointer>()};
+            const auto        r{sema_type->get_data().as_opt<sema::types::reference>()};
+            const sema::type* dyn_ptr{p ? &p->underlying : r ? &r->underlying : nullptr};
+            if (dyn_ptr && dyn_ptr->get_kind() == sema::type_kind::DYN &&
+                !cv->is<const_dyn_fat_ptr>()) {
+                if (auto coerced{const_eval_.coerce_dyn(*cv, *sema_type)}) {
+                    cv.emplace(std::move(*coerced));
+                }
+            }
+            // A folded struct/array/union aggregate or dyn fat pointer cannot round-trip through
+            // the scalar `value` variant
+            if (cv->is<const_struct>() || cv->is<const_array>() || cv->is<const_union>() ||
+                cv->is<const_dyn_fat_ptr>()) {
                 const_init.emplace(std::move(*cv));
             } else {
                 auto v{cv->to_gir_value()};
@@ -800,8 +810,10 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                 }
                 init_val.emplace(v);
             }
-        } else if (!is_const) {
-            init_val.emplace(emit_coerced_expr(*decl.value, *sema_type));
+        } else {
+            ctx_.diags.emplace_back("global variable initializer must be a constant expression",
+                                    sema::error::CONSTEXPR_EVALUATION_FAILED,
+                                    active_ast().location_of(*decl.value));
         }
     }
     auto& g{gir_module_.add_global(global_gir_name,
@@ -1671,23 +1683,26 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         }
 
         if (const auto cv{const_eval_.try_eval(*decl.value)}) {
-            auto bound{cv->to_gir_value()};
-            // `const x: iN = <constexpr literal>` : range-check and pin the concrete type.
-            if (decl.explicit_type && bound.type &&
-                (sema::is_integer(bound.type->get_kind()) ||
-                 bound.type->get_kind() == sema::type_kind::CONSTEXPR_INT) &&
-                sema::is_integer(sema_type->get_kind())) {
-                bound = coerce_constexpr_int(bound, *sema_type, *decl.value);
+            if (!cv->is<const_struct>() && !cv->is<const_array>() && !cv->is<const_union>() &&
+                !cv->is<const_dyn_fat_ptr>() && !cv->is<const_addr>()) {
+                auto bound{cv->to_gir_value()};
+                // `const x: iN = <constexpr literal>` : range-check and pin the concrete type.
+                if (decl.explicit_type && bound.type &&
+                    (sema::is_integer(bound.type->get_kind()) ||
+                     bound.type->get_kind() == sema::type_kind::CONSTEXPR_INT) &&
+                    sema::is_integer(sema_type->get_kind())) {
+                    bound = coerce_constexpr_int(bound, *sema_type, *decl.value);
+                }
+                scopes_.back().bindings.emplace(name,
+                                                local_binding{
+                                                    .id        = {0, local_kind::TEMPORARY},
+                                                    .type      = *sema_type,
+                                                    .is_alloca = false,
+                                                    .const_val = bound,
+                                                    .is_const  = true,
+                                                });
+                return;
             }
-            scopes_.back().bindings.emplace(name,
-                                            local_binding{
-                                                .id        = {0, local_kind::TEMPORARY},
-                                                .type      = *sema_type,
-                                                .is_alloca = false,
-                                                .const_val = bound,
-                                                .is_const  = true,
-                                            });
-            return;
         }
 
         const value val{emit_coerced_expr(*decl.value, *sema_type)};
@@ -4243,6 +4258,41 @@ auto emitter::materialize_const(const const_value& cv) -> value {
         return value{loaded, type};
     }
 
+    if (const auto addr{cv.as_opt<const_addr>()}) {
+        const auto type_opt{cv.get_type()};
+        ASSERT(type_opt, "const_addr must carry a resolved sema type");
+        const auto val{builder_.emit_global_addr(addr->symbol, *type_opt, true)};
+        return value{val, *type_opt};
+    }
+
+    if (const auto dyn{cv.as_opt<const_dyn_fat_ptr>()}) {
+        const auto type_opt{cv.get_type()};
+        ASSERT(type_opt, "const_dyn_fat_ptr must carry a resolved sema type");
+        auto&      fat_type{*type_opt};
+        auto&      ptr_ty{ctx_.get_pointer(sema::types::mut::CONSTANT,
+                                      ctx_.get_builtin_resolved_type(sema::type_kind::OPAQUE))};
+        const auto data_val{
+            dyn->data_symbol.empty()
+                ? value{nullptr_val{}, ptr_ty}
+                : value{builder_.emit_global_addr(dyn->data_symbol, ptr_ty, true), ptr_ty}};
+        const auto vt_val{
+            dyn->vtable_symbol.empty()
+                ? value{nullptr_val{}, ptr_ty}
+                : value{builder_.emit_global_addr(dyn->vtable_symbol, ptr_ty, true), ptr_ty}};
+        const auto p{fat_type.get_data().as_opt<sema::types::pointer>()};
+        const auto r{fat_type.get_data().as_opt<sema::types::reference>()};
+        auto&      dyn_mut{p ? const_cast<sema::type&>(p->underlying)
+                             : const_cast<sema::type&>(r->underlying)};
+        const auto slot{builder_.emit_alloca(dyn_mut)};
+        const auto f0{builder_.emit_get_element_ptr(
+            value{slot, dyn_mut}, {value{u64{0}, usize_type}}, ptr_ty)};
+        builder_.emit_store(value{f0, ptr_ty}, data_val).is_initializer = true;
+        const auto f1{builder_.emit_get_element_ptr(
+            value{slot, dyn_mut}, {value{u64{1}, usize_type}}, ptr_ty)};
+        builder_.emit_store(value{f1, ptr_ty}, vt_val).is_initializer = true;
+        return value{builder_.emit_load(value{slot, dyn_mut}, fat_type), fat_type};
+    }
+
     // Decay folded string constant it exactly like a string literal in expression position
     if (const auto s{cv.as_opt<std::string>()}) {
         if (const auto type_opt{cv.get_type()};
@@ -5795,7 +5845,7 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
                 }
             }
             if (cv->is<const_struct>() || cv->is<const_array>() || cv->is<const_union>() ||
-                cv->is<std::string>()) {
+                cv->is<const_addr>() || cv->is<const_dyn_fat_ptr>() || cv->is<std::string>()) {
                 return materialize_const(*cv);
             }
         }
@@ -5921,7 +5971,7 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
         if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
         if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
         if (cv->is<const_struct>() || cv->is<const_array>() || cv->is<const_union>() ||
-            cv->is<std::string>()) {
+            cv->is<const_addr>() || cv->is<const_dyn_fat_ptr>() || cv->is<std::string>()) {
             return materialize_const(*cv);
         }
     }

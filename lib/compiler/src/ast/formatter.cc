@@ -322,7 +322,7 @@ auto formatter::format_members(std::vector<syntax::doc_id>&                     
     flush_cfg(0);
     for (usize i{0}; i < members.size(); ++i) {
         const auto& member{members[i]};
-        // i != 0 only: the field→first-member gap already gets a blank from aggregate_body.
+        // i != 0 only: the field->first-member gap already gets a blank from aggregate_body.
         auto leading{consume_leading_comments(ast_.location_of(member).line, i != 0)};
         auto member_doc{format(member)};
         auto trailing{consume_trailing_comment(ast_.end_location_of(member).line)};
@@ -554,7 +554,7 @@ auto formatter::format_enum(const enum_expr& node) -> syntax::doc_id {
 auto formatter::format_interface(const interface_expr& node) -> syntax::doc_id {
     std::vector<syntax::doc_id> entries;
 
-    // `make_body` must run *between* the leading- and trailing-comment consumption: formatting a
+    // `make_body` must run between the leading- and trailing-comment consumption: formatting a
     // default-method body advances the shared comment cursor past interior comments, so a body
     // built before `consume_leading_comments` would swallow this member's own leading comment.
     const auto add_member{

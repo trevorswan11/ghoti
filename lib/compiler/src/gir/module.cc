@@ -103,6 +103,11 @@ auto module::prune_unreachable(gsl::span<const std::string_view> roots) -> void 
     }};
     const auto scan_const_value{[&](this auto&& self, const const_value& cv) -> void {
         if (const auto s{cv.as_opt<std::string>()}) { note_symbol(*s); }
+        if (const auto addr{cv.as_opt<const_addr>()}) { note_symbol(addr->symbol); }
+        if (const auto dyn{cv.as_opt<const_dyn_fat_ptr>()}) {
+            if (!dyn->data_symbol.empty()) { note_symbol(dyn->data_symbol); }
+            if (!dyn->vtable_symbol.empty()) { note_symbol(dyn->vtable_symbol); }
+        }
         if (const auto st{cv.as_opt<const_struct>()}) {
             for (const auto& [_, fv] : st->fields) { self(fv); }
         } else if (const auto arr{cv.as_opt<const_array>()}) {
