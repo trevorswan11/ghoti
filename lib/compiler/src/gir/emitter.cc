@@ -3689,12 +3689,50 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
     return value{void_val{}, sema_type};
 }
 
+auto emitter::emit_constexpr_while(ast::node_id id, const ast::while_loop_expr& while_loop)
+    -> value {
+    PROFILE_FUNCTION();
+    auto&       void_type{ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+    const auto& block{active_ast().get_as<ast::block_stmt>(while_loop.block)};
+
+    usize iterations{0};
+    while (true) {
+        // Each pass re-binds the loop's `constexpr var`(s) to their just-updated value; a stale
+        // memoized fold of the condition (or anything the body reads) must not survive across it.
+        const_eval_.clear_memo();
+        const auto cond_val{const_eval_.try_eval(while_loop.condition)};
+        const auto cond{cond_val ? cond_val->as_opt<bool>() : stdx::none};
+        if (!cond) {
+            ctx_.diags.emplace_back(
+                "`while constexpr`'s condition must fold to a compile-time-known `bool`",
+                sema::error::CONSTEXPR_WHILE_NONFOLDABLE_COND,
+                active_ast().location_of(while_loop.condition));
+            break;
+        }
+        if (!*cond) { break; }
+        if (iterations >= ctx_.eval_unroll_limit) {
+            ctx_.diags.emplace_back(
+                fmt::format("`while constexpr` exceeded its unroll limit of {}; raise it with "
+                            "`@setEvalUnrollLimit`",
+                            ctx_.eval_unroll_limit),
+                sema::error::CONSTEXPR_LOOP_LIMIT,
+                active_ast().location_of(id));
+            break;
+        }
+        ++iterations;
+        emit_block(block);
+        if (while_loop.continuation) { emit_expression(*while_loop.continuation); }
+    }
+    return value{void_val{}, void_type};
+}
+
 auto emitter::emit_while(ast::node_id                   id,
                          const ast::while_loop_expr&    while_loop,
                          stdx::option<std::string_view> label,
                          stdx::option<local_id>         res_slot,
                          stdx::option<sema::type&>      result_type) -> value {
     PROFILE_FUNCTION();
+    if (while_loop.is_constexpr) { return emit_constexpr_while(id, while_loop); }
     const auto sema_type{result_type ? result_type : active_mod().get_sema_type_opt(id)};
     const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
 

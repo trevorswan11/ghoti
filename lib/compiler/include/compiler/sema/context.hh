@@ -64,6 +64,11 @@ struct context {
 
     auto advance_epoch() noexcept -> u64 { return ++env_epoch; }
 
+    // The `for`/`while constexpr` unroll ceiling, raised by `@setEvalUnrollLimit(n)`. Lives here
+    // (not on `const_eval`) because it must persist across the resolver's many short-lived
+    // `const_eval` instances as well as the emitter's one long-lived one.
+    usize eval_unroll_limit{256};
+
     context(mod::module_manager&         modules,
             symbol_table_registry&       registry,
             type_pool&                   pool,

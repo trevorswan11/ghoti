@@ -77,6 +77,8 @@ constexpr builtin_t TARGET_FAMILY{"@targetFamily", token_type_t::BUILTIN_TARGET_
 
 constexpr builtin_t SET_EVAL_RECURSION_LIMIT{"@setEvalRecursionLimit",
                                              token_type_t::BUILTIN_SET_EVAL_RECURSION_LIMIT};
+constexpr builtin_t SET_EVAL_UNROLL_LIMIT{"@setEvalUnrollLimit",
+                                          token_type_t::BUILTIN_SET_EVAL_UNROLL_LIMIT};
 constexpr builtin_t SET_MAIN_SYMBOL{"@setMainSymbol", token_type_t::BUILTIN_SET_MAIN_SYMBOL};
 
 constexpr builtin_t PANIC{"@panic", token_type_t::BUILTIN_PANIC};
@@ -172,6 +174,7 @@ constexpr std::array ALL_BUILTINS{
     builtins::TARGET_ENDIAN,
     builtins::TARGET_FAMILY,
     builtins::SET_EVAL_RECURSION_LIMIT,
+    builtins::SET_EVAL_UNROLL_LIMIT,
     builtins::SET_MAIN_SYMBOL,
     builtins::PANIC,
     builtins::TRAP,

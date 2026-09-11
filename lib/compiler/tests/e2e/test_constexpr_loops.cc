@@ -1,20 +1,47 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "helpers/codegen.hh"
+#include "helpers/sema.hh"
 
 namespace ghoti::tests {
 
-// `while constexpr` still runs as an ordinary loop until unrolling lands (Part I §6 of the
-// design; `for constexpr` unrolling landed in Phase 5). The `else`/labeled rejections are pure
-// parse errors; see tests/ast/errors/test_pack_params.cc.
-TEST_CASE("`while constexpr` parses and runs (not yet unrolled)") {
+// The `else`/labeled rejections are pure parse errors; see tests/ast/errors/test_pack_params.cc.
+TEST_CASE("`while constexpr` unrolls while its `constexpr var` condition holds") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            var n := 0;
+            constexpr var n := 0;
             while constexpr (n < 3) { n = n + 1; }
             return n;
         };
     )") == 3);
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            constexpr var n := 0;
+            constexpr var sum := 0;
+            while constexpr (n < 4) { sum = sum + n; n = n + 1; }
+            return sum;
+        };
+    )") == 6);
+}
+
+TEST_CASE("`while constexpr` rejects a condition that can't fold to a compile-time `bool`") {
+    helpers::expect_compile_error(R"(
+        pub const main := fn(a: i32): i32 {
+            while constexpr (a < 3) { a = a + 1; }
+            return a;
+        };
+    )");
+}
+
+TEST_CASE("`while constexpr` stops at `@setEvalUnrollLimit` rather than looping forever") {
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            @setEvalUnrollLimit(5);
+            constexpr var n := 0;
+            while constexpr (n < 100) { n = n + 1; }
+            return n;
+        };
+    )");
 }
 
 TEST_CASE("`for constexpr` unrolls over a compile-time range") {

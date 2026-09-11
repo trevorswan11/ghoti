@@ -2492,6 +2492,18 @@ auto const_eval::eval_builtin(ast::node_id          id,
         }
         return const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
     }
+    case syntax::token_type_t::BUILTIN_SET_EVAL_UNROLL_LIMIT: {
+        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
+        const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
+        if (expr_h) {
+            if (const auto val{try_eval(*expr_h)}) {
+                if (const auto limit{val->as_int_opt()}; limit && *limit > 0) {
+                    ctx_.eval_unroll_limit = static_cast<usize>(*limit);
+                }
+            }
+        }
+        return const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+    }
     case syntax::token_type_t::BUILTIN_PTR_FROM_INT: {
         // `@ptrFromInt(T, n)` -> the pointer whose address bits are the constant `n`.
         if (call.arguments.size() < 2) { return stdx::none; }

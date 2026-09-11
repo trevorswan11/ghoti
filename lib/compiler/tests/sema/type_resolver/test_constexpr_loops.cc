@@ -92,4 +92,21 @@ TEST_CASE("`for constexpr`'s break/continue restriction does not reach a nested 
     )");
 }
 
+TEST_CASE("`while constexpr` rejects a `break`/`continue` at its own iteration boundary") {
+    CHECK(helpers::raised(R"(
+        const use := fn(): void {
+            constexpr var n := 0;
+            while constexpr (n < 3) { break; n = n + 1; }
+        };
+    )",
+                          sema::error::CONSTEXPR_LOOP_BREAK));
+    CHECK(helpers::raised(R"(
+        const use := fn(): void {
+            constexpr var n := 0;
+            while constexpr (n < 3) { continue; n = n + 1; }
+        };
+    )",
+                          sema::error::CONSTEXPR_LOOP_CONTINUE));
+}
+
 } // namespace ghoti::tests

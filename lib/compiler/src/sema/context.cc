@@ -212,6 +212,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::TARGET_FAMILY, params(), t_c_str);
 
     inject_function(bis::SET_EVAL_RECURSION_LIMIT, params(t_usize), t_void);
+    inject_function(bis::SET_EVAL_UNROLL_LIMIT, params(t_usize), t_void);
     inject_function(bis::SET_MAIN_SYMBOL, params(t_c_str), t_void);
 
     inject_function(bis::PANIC, params(t_c_str), t_noreturn);

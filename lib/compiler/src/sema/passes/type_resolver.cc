@@ -962,6 +962,15 @@ template <ast::IndexableID ID>
         return_type = &ctx_.get_builtin_resolved_type(type_kind::VOID_);
         break;
     }
+    case token_type_t::BUILTIN_SET_EVAL_UNROLL_LIMIT: {
+        if (return_trackers_.empty()) {
+            return make_sema_err("@setEvalUnrollLimit can only be used within a function scope",
+                                 error::TYPE_MISMATCH,
+                                 resolving_.ast.location_of(call.function));
+        }
+        return_type = &ctx_.get_builtin_resolved_type(type_kind::VOID_);
+        break;
+    }
     case token_type_t::BUILTIN_SET_MAIN_SYMBOL: {
         if (const auto expr_h{call.arguments[0].as_opt<ast::expr_handle>()}) {
             stdx::option<std::string> main_name;
@@ -6345,6 +6354,11 @@ VISITOR_TEMPLATE_INIT(type_resolver, visit, const ast::interface_expr&)
 
 auto type_resolver::visit(ast::node_id id, const ast::while_loop_expr& while_loop) -> void {
     PROFILE_FUNCTION();
+    // Unrolling itself is an emit-time concern (§6.2: it replays the condition/body through
+    // `const_eval`/`emit_block` as many times as the folded condition holds) - the resolver only
+    // needs to type-check the condition/body once (their types don't vary per iteration the way a
+    // pack's can) and enforce the same break/continue restriction `for constexpr` has.
+    if (while_loop.is_constexpr) { check_constexpr_loop_jumps(while_loop.block); }
     TRY_RESOLVE(while_loop.condition);
     if (while_loop.continuation) { TRY_RESOLVE(*while_loop.continuation); }
     // The loop itself holds the block index which houses captures, not the block

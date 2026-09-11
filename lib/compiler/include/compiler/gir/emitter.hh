@@ -271,6 +271,10 @@ class emitter {
                     stdx::option<std::string_view> label       = stdx::none,
                     stdx::option<local_id>         res_slot    = stdx::none,
                     stdx::option<sema::type&>      result_type = stdx::none) -> value;
+    // Repeatedly folds the condition and replays the body via `emit_block` for as long as it
+    // holds `true`; no runtime loop, no `body_type_diff` (unlike `for constexpr`, every pass
+    // through the same body has identical typing, so a single ordinary resolve suffices).
+    auto emit_constexpr_while(ast::node_id id, const ast::while_loop_expr& while_loop) -> value;
     auto emit_do_while(ast::node_id                   id,
                        const ast::do_while_loop_expr& do_while,
                        stdx::option<std::string_view> label       = stdx::none,
