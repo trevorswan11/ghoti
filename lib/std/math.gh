@@ -1,0 +1,5 @@
+/// Asserts that `int` is strictly positive
+pub constexpr isPowerOfTwo := fn(int: auto): bool {
+    @assert(int > 0);
+    return (int & (int - 1)) == 0;
+};
