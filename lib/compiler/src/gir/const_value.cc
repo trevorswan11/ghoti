@@ -52,13 +52,16 @@ auto const_value::make_string(sema::context& ctx, std::string str) -> const_valu
 }
 
 auto const_value::to_gir_value() const noexcept -> value {
-    return data_.visit([this](const poison_val&) -> value { return value{undefined_val{}, type_}; },
-                       [this](const const_array&) -> value { return value{void_val{}, type_}; },
-                       [this](const const_struct&) -> value { return value{void_val{}, type_}; },
-                       [this](const const_enum& e) -> value { return value{e.value, type_}; },
-                       [this](const const_union&) -> value { return value{void_val{}, type_}; },
-                       [this](const const_closure&) -> value { return value{void_val{}, type_}; },
-                       [this](const auto& v) -> value { return value{v, type_}; });
+    return data_.visit(
+        [this](const poison_val&) -> value { return value{undefined_val{}, type_}; },
+        [this](const const_array&) -> value { return value{void_val{}, type_}; },
+        [this](const const_struct&) -> value { return value{void_val{}, type_}; },
+        [this](const const_enum& e) -> value { return value{e.value, type_}; },
+        [this](const const_union&) -> value { return value{void_val{}, type_}; },
+        [this](const const_closure&) -> value { return value{void_val{}, type_}; },
+        [this](const const_addr& a) -> value { return value{a.symbol, type_}; },
+        [this](const const_dyn_fat_ptr&) -> value { return value{void_val{}, type_}; },
+        [this](const auto& v) -> value { return value{v, type_}; });
 }
 
 auto const_value::operator==(const const_value& other) const noexcept -> bool {
@@ -111,6 +114,11 @@ auto const_value::hash() const noexcept -> u64 {
                         h.combine(fh.finalize());
                     }
                 },
+                [&](const const_addr& a) { h.combine<std::string_view>(a.symbol); },
+                [&](const const_dyn_fat_ptr& d) {
+                    h.combine<std::string_view>(d.data_symbol);
+                    h.combine<std::string_view>(d.vtable_symbol);
+                },
                 [&](const auto&) {});
     return h.finalize();
 }
@@ -161,6 +169,10 @@ auto const_value::mangle() const -> std::string {
             }
             std::ranges::sort(parts);
             return fmt::format("cl.{}.{}", c.fn_node.get_index(), fmt::join(parts, "."));
+        },
+        [](const const_addr& a) { return fmt::format("addr.{}", a.symbol); },
+        [](const const_dyn_fat_ptr& d) {
+            return fmt::format("dyn.{}.{}", d.data_symbol, d.vtable_symbol);
         },
         [](const auto&) -> std::string { return "v"; });
 }
