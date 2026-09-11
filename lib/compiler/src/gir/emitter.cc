@@ -1725,6 +1725,8 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         }
 
         if (const auto cv{const_eval_.try_eval(*decl.value)}) {
+            // A struct/array/union/dyn-fat-ptr/addr constant needs real materialized storage
+            // (`emit_coerced_expr`'s fallback below), not this fast `const_val`-only bind.
             if (!cv->is<const_struct>() && !cv->is<const_array>() && !cv->is<const_union>() &&
                 !cv->is<const_dyn_fat_ptr>() && !cv->is<const_addr>()) {
                 auto bound{cv->to_gir_value()};
@@ -1737,32 +1739,30 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                 }
                 scopes_.back().bindings.emplace(name,
                                                 local_binding{
-                                                    .id        = {0, local_kind::TEMPORARY},
-                                                    .type      = *sema_type,
-                                                    .is_alloca = false,
-                                                    .const_val = bound,
-                                                    .is_const  = true,
+                                                    .id               = {0, local_kind::TEMPORARY},
+                                                    .type             = *sema_type,
+                                                    .is_alloca        = false,
+                                                    .const_val        = bound,
+                                                    .is_const         = true,
+                                                    .is_constexpr_var = is_constexpr_var,
                                                 });
+                // Visible to `const_eval` by name for the rest of this block (reassignment, and
+                // any later expression that needs `n`'s value folded).
+                if (is_constexpr_var) {
+                    ctx_.constexpr_binding_frames.back().insert_or_assign(name, *cv);
+                }
                 return;
             }
-            scopes_.back().bindings.emplace(name,
-                                            local_binding{
-                                                .id               = {0, local_kind::TEMPORARY},
-                                                .type             = *sema_type,
-                                                .is_alloca        = false,
-                                                .const_val        = bound,
-                                                .is_const         = true,
-                                                .is_constexpr_var = is_constexpr_var,
-                                            });
-            // Visible to `const_eval` by name for the rest of this block (reassignment, and any
-            // later expression that needs `n`'s value folded).
+            // `is_constexpr_var` reaching here means the *declared* type wasn't structural (that
+            // case already diagnosed and fell through above) but the folded *value* still was -
+            // no fast-path storage for it either way, so treat it the same as "not foldable".
             if (is_constexpr_var) {
-                ctx_.constexpr_binding_frames.back().insert_or_assign(name, *cv);
+                ctx_.diags.emplace_back("`constexpr var` initializer must be known at compile time",
+                                        sema::error::CONSTEXPR_VAR_NOT_FOLDABLE,
+                                        active_ast().location_of(*decl.value));
+                return;
             }
-            return;
-        }
-
-        if (is_constexpr_var) {
+        } else if (is_constexpr_var) {
             ctx_.diags.emplace_back("`constexpr var` initializer must be known at compile time",
                                     sema::error::CONSTEXPR_VAR_NOT_FOLDABLE,
                                     active_ast().location_of(*decl.value));
