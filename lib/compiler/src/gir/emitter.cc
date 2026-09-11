@@ -225,13 +225,52 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
     VERIFY(fn_expr_opt, "Generic instantiation must reference a valid function expression");
     const auto& fn_expr{*fn_expr_opt};
 
-    sema::types::key_t fn_key{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT};
-    for (const auto& param_type : req.arg_types) { fn_key.imprint(*param_type); }
-    fn_key.imprint(*req.return_type);
-    auto& fn_type{*ctx_.pool[fn_key]};
-    fn_type.resolve_if<sema::types::function>(req.arg_types, *req.return_type, false, false);
+    const auto                 diff{ctx_.instantiation_cache.get_body_type_diff(req.mangled_name)};
+    const mod::body_diff_guard diff_guard{fn_mod, diff};
 
-    auto& fn{gir_module_.add_function(req.mangled_name, fn_type, false, false)};
+    stdx::option<sema::type&> self_type;
+    if (fn_expr.self) {
+        self_type = fn_mod.get_sema_type_opt(fn_expr.self->name);
+        if (!self_type) {
+            if (const auto gi{ctx_.generic_functions.get_opt(*req.generic_fn_type)};
+                gi && gi->enclosing_type) {
+                auto& enc{*gi->enclosing_type};
+                if (const auto m{sema::types::mut::from_type_modifier(fn_expr.self->modifier)}) {
+                    self_type.emplace(fn_expr.self->modifier.is_ptr()
+                                          ? ctx_.get_pointer(*m, enc)
+                                          : ctx_.get_reference(*m, enc));
+                } else {
+                    self_type.emplace(enc);
+                }
+            } else if (const auto fn_data{
+                           req.generic_fn_type->get_data().as_opt<sema::types::function>()};
+                       fn_data && !fn_data->params.empty()) {
+                self_type.emplace(*fn_data->params[0]);
+            }
+        }
+    }
+
+    const bool  has_self{fn_expr.self.has_value()};
+    const usize num_params{req.arg_types.size() + (has_self ? 1UZ : 0UZ)};
+    auto        full_param_types{ctx_.pool.get_many_unsafe(num_params)};
+    usize       pi{0};
+    if (has_self) {
+        ASSERT(self_type, "Self parameter must have a resolved sema type");
+        full_param_types[pi++] = const_cast<sema::type*>(&*self_type);
+    }
+    for (const auto& param_type : req.arg_types) { full_param_types[pi++] = param_type; }
+
+    sema::types::key_t fn_key{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT};
+    for (const auto& param_type : full_param_types) { fn_key.imprint(*param_type); }
+    fn_key.imprint(*req.return_type);
+    fn_key.imprint(static_cast<u64>(has_self));
+    fn_key.imprint(static_cast<u64>(fn_expr.variadic));
+    auto& fn_type{*ctx_.pool[fn_key]};
+    fn_type.resolve_if<sema::types::function>(
+        full_param_types, *req.return_type, has_self, fn_expr.variadic);
+
+    auto& fn{gir_module_.add_function(
+        req.mangled_name, fn_type, false, false, fn_expr.variadic, gir::linkage::INTERNAL)};
     auto& entry{fn.add_segment()};
     builder_.set_insert_point(fn, entry);
 
@@ -257,11 +296,28 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
 
     // Overlay this monomorphization's body typing onto the shared AST nodes during emission
     const_eval_.clear_memo();
-    const auto                 diff{ctx_.instantiation_cache.get_body_type_diff(req.mangled_name)};
-    const mod::body_diff_guard diff_guard{fn_mod, diff};
+    stdx::option<type_guard> enclosing_guard;
+    if (const auto gi{ctx_.generic_functions.get_opt(*req.generic_fn_type)};
+        gi && gi->enclosing_type) {
+        enclosing_guard.emplace(user_type_stack_, const_cast<sema::type*>(&*gi->enclosing_type));
+        const_eval_.set_enclosing_type(gi->enclosing_type);
+    }
     {
         const scope_guard g{scopes_};
-        usize             rt_i{0};
+        if (fn_expr.self) {
+            const auto& self_ident{fn_mod.ast.get_as<ast::identifier_expr>(fn_expr.self->name)};
+            const auto  self_name{self_ident.name};
+            auto&       self_slot{fn.add_param(std::string{self_name}, *self_type)};
+            const bool  self_spilled{self_type->get_kind() == sema::type_kind::SLICE};
+            scopes_.back().bindings.emplace(self_name,
+                                            local_binding{
+                                                .id        = self_slot.id,
+                                                .type      = *self_type,
+                                                .is_alloca = self_spilled,
+                                                .const_val = stdx::none,
+                                            });
+        }
+        usize rt_i{0};
         for (const auto& param : fn_expr.parameters) {
             std::string_view p_name{};
             if (param.name.is<ast::identifier_expr>()) {
@@ -329,6 +385,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
         }
     }
 
+    const_eval_.set_enclosing_type(stdx::none);
     active_module_ = prev_module;
     if (prev_module) { const_eval_.set_module(*prev_module); }
 }
@@ -791,6 +848,12 @@ auto emitter::emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -
         const auto  gir_name{symbol_scoping_.name_for(rec->body_scope_idx, mname)};
 
         if (const auto fx{active_ast().get_as_opt<ast::function_expr>(*md->value)}) {
+            if (const auto sema_type{active_mod().get_sema_type_opt(*member)}) {
+                if (ctx_.generic_functions.get_opt(*sema_type)) { continue; }
+                if (const auto fn_data{sema_type->get_data().as_opt<sema::types::function>()}) {
+                    if (fn_data->return_type.get_kind() == sema::type_kind::TYPE) { continue; }
+                }
+            }
             emitting_impl_body_scope_.emplace(rec->body_scope_idx);
             emit_function(*member, *md, *fx, std::string_view{gir_name});
             emitting_impl_body_scope_.reset();
@@ -1591,6 +1654,10 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         // A local plain function is emitted with a synthetic name; pre-bind `name` to it so a
         // self-referential call (by name or @fnCtx()) inside its own body resolves correctly
         if (const auto fn_expr{active_ast().get_as_opt<ast::function_expr>(*decl.value)}) {
+            // A generic local function has no single concrete signature to emit directly; each
+            // call site instead targets a per-instantiation mangled symbol via
+            // `set_generic_call_target`, emitted lazily by `emit_generic_instantiation`.
+            if (ctx_.generic_functions.get_opt(*sema_type)) { return; }
             const auto anon_name{emit_named_local_function(name, **decl.value, *fn_expr)};
             scopes_.back().bindings.emplace(name,
                                             local_binding{

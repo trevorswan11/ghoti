@@ -22,6 +22,7 @@
 
 #include "compiler/arena.hh"
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/ast/type.hh"
 #include "compiler/module/module.hh"
 #include "support/int128.hh"
@@ -428,6 +429,20 @@ constexpr auto MUTABLE{static_cast<types::mutability_modifiers>(0)};
 constexpr auto CONSTANT{mutability_modifiers::CONSTANT};
 constexpr auto VOLATILE{mutability_modifiers::VOLATILE};
 constexpr auto CONSTANT_VOLATILE{CONSTANT | VOLATILE};
+
+[[nodiscard]] constexpr auto from_type_modifier(ast::type_modifier modifier) noexcept
+    -> stdx::option<types::mutability_modifiers> {
+    using modifier_t = ast::type_modifier::modifier;
+    switch (modifier.get_raw()) {
+    case modifier_t::VALUE:        return stdx::none;
+    case modifier_t::REF:          return types::mut::CONSTANT;
+    case modifier_t::MUT_REF:      return types::mut::MUTABLE;
+    case modifier_t::PTR:          return types::mut::CONSTANT;
+    case modifier_t::MUT_PTR:      return types::mut::MUTABLE;
+    case modifier_t::VOLATILE:     return types::mut::CONSTANT_VOLATILE;
+    case modifier_t::MUT_VOLATILE: return types::mut::VOLATILE;
+    }
+}
 
 } // namespace mut
 

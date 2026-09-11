@@ -278,3 +278,4 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Validates that enclosing function returns a fallible type implementing `builtin.Rewrappable` (`ERRDEFER_IN_INFALLIBLE_FN`)
     - Interleaves with standard `defer` statements in LIFO order on the error propagation edge
     - Prohibits control flow jumps (`return`, `break`, `continue`, `?`) out of `errdefer` bodies
+- Resolve a bug that prevented top-level and aggregate-level generic functions from being monomorphized correctly
