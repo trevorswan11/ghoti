@@ -45,7 +45,7 @@ TEST_CASE("module-scope alias of a static member function") {
     CHECK(helpers::compile_and_run(R"(
         const Box := struct {
             n: i32,
-            const of := fn(v: i32): @this() { return .{ .n = v }; };
+            const of := fn(v: i32): @This() { return .{ .n = v }; };
         };
 
         const make := Box.of;
@@ -63,7 +63,7 @@ TEST_CASE("unbound method reference: `^self` and `&mut self` receivers") {
     CHECK(helpers::compile_and_run(R"(
         const Box := struct {
             n: i32,
-            const of := fn(v: i32): @this() { return .{ .n = v }; };
+            const of := fn(v: i32): @This() { return .{ .n = v }; };
             const scaled := fn(^self, k: i32): i32 { return self.n * k; };
             const set := fn(&mut self, v: i32): void { self.n = v; };
         };

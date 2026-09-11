@@ -4787,7 +4787,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             return lvalue_of_expr(id, *sema_type);
         },
         [&](const ast::dot_expr& dot) -> value {
-            // `<Type>.member` / `@this().member` has no runtime object
+            // `<Type>.member` / `@This().member` has no runtime object
             if (dot_object_is_type_namespace(dot)) {
                 const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
                 if (const auto ot{active_mod().get_sema_type_opt(dot.object)}) {
@@ -5732,7 +5732,7 @@ auto emitter::dot_object_is_type_namespace(const ast::dot_expr& dot) -> bool {
     }
     if (const auto call{active_ast().get_as_opt<ast::call_expr>(dot.object)}) {
         if (const auto fi{active_ast().get_as_opt<ast::identifier_expr>(call->function)}) {
-            return fi->name == "@this";
+            return fi->name == "@This";
         }
     }
     if (const auto oi{active_ast().get_as_opt<ast::identifier_expr>(dot.object)}) {

@@ -146,7 +146,7 @@ TEST_CASE("`fn(...): type` constructors with const members produce identical GIR
                 second: T,
 
                 pub const DEFAULT_TAG: i32 = 42;
-                pub const swap := fn(&self): @this() {
+                pub const swap := fn(&self): @This() {
                     return .{ .first = self.second, .second = self.first };
                 };
             };

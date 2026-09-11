@@ -25,7 +25,7 @@ impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
 }
 impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
     using From = E;
-    pub const fromResidual := fn(r: E): @this() { return .{ .err = r }; };
+    pub const fromResidual := fn(r: E): @This() { return .{ .err = r }; };
 }
 const Option := fn(T: type): type { return union { some: T, none: void }; };
 impl(T: type) builtin.Unwrappable for Option(T) {
@@ -40,7 +40,7 @@ impl(T: type) builtin.Unwrappable for Option(T) {
 }
 impl(T: type) builtin.Rewrappable for Option(T) {
     using From = void;
-    pub const fromResidual := fn(_: void): @this() { return .{ .none = {} }; };
+    pub const fromResidual := fn(_: void): @This() { return .{ .none = {} }; };
 }
 )";
 
@@ -174,7 +174,7 @@ TEST_CASE("Nominal Unwrappable and Rewrappable resolution") {
         }
         impl builtin.Rewrappable for MyRes {
             using From = u8;
-            pub const fromResidual := fn(r: u8): @this() { return MyRes{ .fail = r }; };
+            pub const fromResidual := fn(r: u8): @This() { return MyRes{ .fail = r }; };
         }
         const f := fn(m: MyRes): MyRes {
             const v := m?;
@@ -202,7 +202,7 @@ TEST_CASE("Nominal Unwrappable and Rewrappable resolution") {
         const BigRes := union { val: i32, fail: u32 };
         impl builtin.Rewrappable for BigRes {
             using From = u32;
-            pub const fromResidual := fn(r: u32): @this() { return BigRes{ .fail = r }; };
+            pub const fromResidual := fn(r: u32): @This() { return BigRes{ .fail = r }; };
         }
         const f := fn(m: MyRes): BigRes {
             const v := m?;
@@ -228,7 +228,7 @@ impl builtin.Unwrappable for BigRes {
 const SmallRes := union { val: i32, fail: u8 };
 impl builtin.Rewrappable for SmallRes {
     using From = u8;
-    pub const fromResidual := fn(r: u8): @this() { return SmallRes{ .fail = r }; };
+    pub const fromResidual := fn(r: u8): @This() { return SmallRes{ .fail = r }; };
 }
 const f := fn(m: BigRes): SmallRes {
     return m?;

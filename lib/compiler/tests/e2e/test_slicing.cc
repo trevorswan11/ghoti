@@ -113,8 +113,8 @@ TEST_CASE("a growable buffer over a backing array can append and hand out its it
             buf: [8uz]mut i32,
             len: usize,
 
-            const init := fn(): @this() {
-                var l: @this() = undefined;
+            const init := fn(): @This() {
+                var l: @This() = undefined;
                 l.len = 0uz;
                 return l;
             };

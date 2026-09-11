@@ -135,7 +135,7 @@ TEST_CASE("Indirection in structural type resolution") {
     helpers::resolve_and_check("const A := struct { a: ^B, }; const B := struct { b: ^A, };");
     helpers::resolve_and_check("const A := struct { a: ^A, };");
     helpers::resolve_and_check("const A := struct { a: ^A, const b := fn(c: A): i32 {}; };");
-    helpers::resolve_and_check("const A := struct { a: ^@this(), const b := fn(c: ^A): i32 {}; };");
+    helpers::resolve_and_check("const A := struct { a: ^@This(), const b := fn(c: ^A): i32 {}; };");
     helpers::resolve_and_check(
         R"(const A := struct {
             a: ^A,
@@ -227,14 +227,14 @@ TEST_CASE("Incomplete type used during resolution") {
 
     SECTION("Structs") {
         helpers::test_resolver_fail("const A := struct { a: A, };", expected_diag(23));
-        helpers::test_resolver_fail("const A := struct { a: @this(), };", expected_diag(23));
+        helpers::test_resolver_fail("const A := struct { a: @This(), };", expected_diag(23));
         helpers::test_resolver_fail("const A := struct { a: B, }; const B := struct { b: A, };",
                                     expected_b(52));
     }
 
     SECTION("Unions") {
         helpers::test_resolver_fail("const A := union { a: A, };", expected_diag(22));
-        helpers::test_resolver_fail("const A := union { a: @this(), };", expected_diag(22));
+        helpers::test_resolver_fail("const A := union { a: @This(), };", expected_diag(22));
         helpers::test_resolver_fail("const A := union { a: B, }; const B := union { b: A, };",
                                     expected_b(50));
     }
@@ -315,8 +315,8 @@ TEST_CASE("Initializer expression in various resolution contexts") {
                     std::pair{0UZ, col}};
         };
 
-        helpers::test_resolver_fail("struct { a: auto = @this(){}, };", expected_diag(26));
-        helpers::test_resolver_fail("struct { a: @this() = .{}, };", expected_diag(23));
+        helpers::test_resolver_fail("struct { a: auto = @This(){}, };", expected_diag(26));
+        helpers::test_resolver_fail("struct { a: @This() = .{}, };", expected_diag(23));
     }
 
     SECTION("Union & enum type restrictions") {

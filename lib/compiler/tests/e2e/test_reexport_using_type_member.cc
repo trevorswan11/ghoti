@@ -170,13 +170,13 @@ TEST_CASE("E2E: a re-exported `pub using` alias of a cross-module struct resolve
     CHECK(exit_code == 7);
 }
 
-TEST_CASE("E2E: @this()-relative member accessed through a local using alias") {
+TEST_CASE("E2E: @This()-relative member accessed through a local using alias") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             const S := struct {
                 pub constexpr CONST: i32 = 7;
                 pub const get_val := fn(): i32 {
-                    using Self = @this();
+                    using Self = @This();
                     return Self.CONST;
                 };
             };

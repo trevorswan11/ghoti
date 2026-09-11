@@ -17,7 +17,7 @@ pub const Error := enum : i32 {
     unexpected,
     _,
 
-    pub constexpr fromOs := fn(errno: std.os.Errno): @this() {
+    pub constexpr fromOs := fn(errno: std.os.Errno): @This() {
         @cfg (os == .macos) {
             return match (errno) {
                 .ENOENT => .not_found,
