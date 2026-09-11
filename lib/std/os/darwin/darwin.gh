@@ -94,6 +94,9 @@ extern("System", "lseek") const sys_lseek: fn(fd: i32, offset: i64, whence: i32)
 extern("System", "fstat") const sys_fstat: fn(file_desc: Handle, stat: ^mut Stat): i32;
 extern("System", "mkdir") const sys_mkdir: fn(path: ^u8, mode: mode_t): i32;
 extern("System", "stat") const sys_stat: fn(path: ^u8, stat: ^mut Stat): i32;
+extern("System", "sysconf") const sys_sysconf: fn(name: i32): isize;
+
+pub const _SC_PAGESIZE: i32 = 29;
 
 // <sys/mman.h>: raw anonymous memory, the page-granular allocation primitive.
 pub const PROT_READ: i32 = 0x1; /// pages can be read
@@ -194,3 +197,25 @@ pub const free := fn(ptr: ^mut u8, len: usize): R(void) {
     const r := sys_munmap(@ptrCast(^mut opaque, ptr), len);
     return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = {} };
 };
+
+var cached_page_size: std.Option(usize) = .{ .none = {} };
+
+/// Query and return the OS page size in bytes.
+/// Queries `sysconf(_SC_PAGESIZE)` once and caches the result.
+pub const page_size := fn(): usize {
+    if (cached_page_size == .none) {
+        const ps := sys_sysconf(_SC_PAGESIZE);
+        if (ps > 0z) {
+            cached_page_size = .{ .some = @intCast(usize, ps) };
+        } else {
+            cached_page_size = .{ .some = 4096uz };
+        };
+    };
+    return cached_page_size.some;
+};
+
+test "darwin: page_size returns non-zero power of two page size" {
+    const ps := page_size();
+    @expect(ps > 0uz);
+    @expect((ps & (ps - 1uz)) == 0uz);
+}

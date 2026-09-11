@@ -462,3 +462,53 @@ pub const free := fn(ptr: ^mut u8, len: usize): R(void) {
     const ret := syscall2(NR_munmap, @intFromPtr(ptr), len);
     return if (failed(ret)) .{ .err = to_errno(ret) } else .{ .ok = {} };
 };
+
+pub const AT_PAGESZ: u64 = 6u64;
+
+var cached_page_size: std.Option(usize) = .{ .none = {} };
+
+/// Query and return the OS page size in bytes without libc.
+/// Queries `/proc/self/auxv` for `AT_PAGESZ` once and caches the result.
+pub const page_size := fn(): usize {
+    if (cached_page_size == .none) {
+        var size: usize = 0uz;
+        const res := open("/proc/self/auxv", O_RDONLY, 0u16);
+        if (res == .ok) {
+            const h := match (res) { .ok => |fd| fd, .err => -1 };
+            defer _ = close(h);
+
+            var entry: [2]u64 = undefined;
+            const entry_bytes := @sliceFromPtr(@ptrCast(^mut u8, ^mut entry), 16uz);
+            loop {
+                const r := read(h, entry_bytes);
+                if (r != .ok) {
+                    break;
+                };
+                const bytes_read := match (r) { .ok => |n| n, .err => 0uz };
+                if (bytes_read < 16uz) {
+                    break;
+                };
+                if (entry[0] == 0u64) { // AT_NULL
+                    break;
+                };
+                if (entry[0] == AT_PAGESZ) {
+                    size = @intCast(usize, entry[1]);
+                    break;
+                };
+            };
+        };
+
+        if (size > 0uz) {
+            cached_page_size = .{ .some = size };
+        } else {
+            cached_page_size = .{ .some = 4096uz };
+        };
+    };
+    return cached_page_size.some;
+};
+
+test "linux: page_size returns non-zero power of two page size" {
+    const ps := page_size();
+    @expect(ps > 0uz);
+    @expect((ps & (ps - 1uz)) == 0uz);
+}
