@@ -102,9 +102,9 @@ TEST_CASE("defer and errdefer interleave in LIFO order") {
                 var x: i32 = -1;
                 var log: i32 = 0;
                 _ = run(x, ^mut log);
-                return log; // 3, then 2, then 1 -> 321
+                return log - 300; // 3, then 2, then 1 -> 321
             };
-        )") == 321);
+        )") == 21);
     }
 
     SECTION("on success path, only plain defers run in reverse order") {
