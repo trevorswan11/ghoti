@@ -40,6 +40,9 @@ constexpr builtin_t THIS{"@This", token_type_t::BUILTIN_THIS};
 constexpr builtin_t TAG_NAME{"@tagName", token_type_t::BUILTIN_TAG_NAME};
 constexpr builtin_t TYPE_NAME{"@typeName", token_type_t::BUILTIN_TYPE_NAME};
 constexpr builtin_t TYPE_INFO{"@typeInfo", token_type_t::BUILTIN_TYPE_INFO};
+constexpr builtin_t HAS_FIELD{"@hasField", token_type_t::BUILTIN_HAS_FIELD};
+constexpr builtin_t FIELD_TYPE{"@fieldType", token_type_t::BUILTIN_FIELD_TYPE};
+constexpr builtin_t FIELD{"@field", token_type_t::BUILTIN_FIELD};
 
 constexpr builtin_t MEMCPY{"@memcpy", token_type_t::BUILTIN_MEMCPY};
 constexpr builtin_t MEMSET{"@memset", token_type_t::BUILTIN_MEMSET};
@@ -145,6 +148,9 @@ constexpr std::array ALL_BUILTINS{
     builtins::TAG_NAME,
     builtins::TYPE_NAME,
     builtins::TYPE_INFO,
+    builtins::HAS_FIELD,
+    builtins::FIELD_TYPE,
+    builtins::FIELD,
     builtins::MEMCPY,
     builtins::MEMSET,
     builtins::MEMMOVE,

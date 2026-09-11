@@ -17,6 +17,7 @@
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/expression.hh"
 #include "compiler/module/module.hh"
 #include "support/int128.hh"
 #include "support/string_utils.hh"
@@ -194,6 +195,25 @@ auto packed_union_backing_bits(const types::union_t& u, u32 ptr_bits) noexcept
     }
     if (widest < 1 || widest > 65'535) { return stdx::none; }
     return static_cast<u32>(widest);
+}
+
+auto find_aggregate_field(type& denoted, std::string_view name) noexcept
+    -> stdx::option<field_lookup_result> {
+    if (const auto st{denoted.get_data().as_opt<types::struct_t>()}) {
+        for (usize i{0}; i < st->ast_fields.size(); ++i) {
+            const auto& fname{
+                st->enclosing.ast.get_as<ast::identifier_expr>(st->ast_fields[i].name).name};
+            if (fname == name) { return field_lookup_result{i, *st->fields[i]}; }
+        }
+    }
+    if (const auto ut{denoted.get_data().as_opt<types::union_t>()}) {
+        for (usize i{0}; i < ut->ast_fields.size(); ++i) {
+            const auto& fname{
+                ut->enclosing.ast.get_as<ast::identifier_expr>(ut->ast_fields[i].name).name};
+            if (fname == name) { return field_lookup_result{i, *ut->fields[i]}; }
+        }
+    }
+    return stdx::none;
 }
 
 auto is_signed_integer(const type& t) noexcept -> bool {

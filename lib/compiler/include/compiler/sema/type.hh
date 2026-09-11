@@ -595,6 +595,16 @@ static_assert(stdx::TriviallyDestructible<type>);
 [[nodiscard]] auto packed_union_backing_bits(const types::union_t& u, u32 ptr_bits) noexcept
     -> stdx::option<u32>;
 
+// A data field found by name on a `struct`/`union` (not a static/const/method - those live in
+// the aggregate's symbol table under a different kind and are reached via `eval_type_member`,
+// not this). Shared by `@hasField`/`@fieldType`/`@field`'s field-branch.
+struct field_lookup_result {
+    usize index;
+    type& field_type;
+};
+[[nodiscard]] auto find_aggregate_field(type& denoted, std::string_view name) noexcept
+    -> stdx::option<field_lookup_result>;
+
 // All associated type lifetimes are tied to the pool
 class type_pool {
   public:

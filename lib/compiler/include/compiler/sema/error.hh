@@ -119,6 +119,7 @@ enum class error : u8 {
     CONSTEXPR_LOOP_CONTINUE,
     CONSTEXPR_WHILE_NONFOLDABLE_COND,
     CONSTEXPR_LOOP_LIMIT,
+    FIELD_NOT_FOUND,
 };
 
 using diagnostic  = diagnostic<error>;

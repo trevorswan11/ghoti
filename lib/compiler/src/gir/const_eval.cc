@@ -2600,6 +2600,35 @@ auto const_eval::eval_builtin(ast::node_id          id,
         }
         return eval_type_info(*target_type);
     }
+    case syntax::token_type_t::BUILTIN_HAS_FIELD:
+    case syntax::token_type_t::BUILTIN_FIELD_TYPE: {
+        VERIFY(call.arguments.size() == 2, "Arity mismatch not verified during resolution");
+        stdx::option<sema::type&> target_type;
+        if (const auto type_id{call.arguments[0].as_opt<ast::explicit_type_id>()}) {
+            target_type = module_->get_sema_type_opt(*type_id);
+        } else if (const auto expr_h{call.arguments[0].as_opt<ast::expr_handle>()}) {
+            target_type = module_->get_sema_type_opt(*expr_h);
+        }
+        if (!target_type) { return stdx::none; }
+        if (target_type->get_kind() == sema::type_kind::TYPE) {
+            if (const auto m{target_type->get_data().as_opt<sema::types::meta_type>()}) {
+                target_type.emplace(m->instance);
+            }
+        }
+        const auto name_expr{call.arguments[1].as_opt<ast::expr_handle>()};
+        if (!name_expr) { return stdx::none; }
+        const auto name_val{try_eval(*name_expr)};
+        const auto name{name_val ? name_val->as_opt<std::string>() : stdx::none};
+        if (!name) { return stdx::none; }
+
+        const auto found{sema::find_aggregate_field(*target_type, *name)};
+        if (builtin_type == syntax::token_type_t::BUILTIN_HAS_FIELD) {
+            auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+            return const_value{found.has_value(), bool_type};
+        }
+        if (!found) { return stdx::none; }
+        return const_value{stdx::option<sema::type&>{found->field_type}};
+    }
     case syntax::token_type_t::BUILTIN_TARGET_OS: {
         const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
         return target_enum_value("Os", facts.os);

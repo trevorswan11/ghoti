@@ -872,6 +872,37 @@ template <ast::IndexableID ID>
         return_type = &ctx_.get_builtin_type("TypeInfo");
         break;
     }
+    case token_type_t::BUILTIN_HAS_FIELD: {
+        DISCARD(get_resolved_call_arg_type(call.arguments[0]));
+        DISCARD(get_resolved_call_arg_type(call.arguments[1]));
+        ASSERT(builtin.return_type.get_kind() == type_kind::BOOL);
+        return_type = &builtin.return_type;
+        break;
+    }
+    case token_type_t::BUILTIN_FIELD_TYPE: {
+        auto&      arg_type{*get_resolved_call_arg_type(call.arguments[0])};
+        auto&      denoted{denoted_type(arg_type)};
+        const auto field{resolve_field_by_name(call.arguments[1], denoted)};
+        if (!field) {
+            return make_sema_err(
+                "@fieldType: unknown field (the name must be a compile-time-known string)",
+                error::FIELD_NOT_FOUND,
+                get_call_arg_location(call.arguments[1]));
+        }
+        return_type = ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, field->field_type}];
+        return_type->resolve_if<types::meta_type>(field->field_type);
+        break;
+    }
+    case token_type_t::BUILTIN_FIELD: {
+        // Parses and type-checks its arguments so a later pass can add real semantics without a
+        // grammar change; gated here to fail clean rather than reach the emitter with nothing to
+        // emit. Full semantics (data field GEP, static/const, bound method) are a follow-up.
+        DISCARD(get_resolved_call_arg_type(call.arguments[0]));
+        DISCARD(get_resolved_call_arg_type(call.arguments[1]));
+        return make_sema_err("@field is not yet implemented",
+                             error::FIELD_NOT_FOUND,
+                             resolving_.ast.location_of(call.function));
+    }
     case token_type_t::BUILTIN_TARGET_OS:       return_type = &ctx_.get_builtin_type("Os"); break;
     case token_type_t::BUILTIN_TARGET_ARCH:     return_type = &ctx_.get_builtin_type("Arch"); break;
     case token_type_t::BUILTIN_TARGET_ABI:      return_type = &ctx_.get_builtin_type("Abi"); break;
@@ -1546,6 +1577,17 @@ auto type_resolver::get_resolved_call_arg_type(const ast::call_expr::argument& a
 
 auto type_resolver::get_call_arg_location(const ast::call_expr::argument& arg) -> source_location {
     return arg.visit([this](auto id) -> source_location { return resolving_.ast.location_of(id); });
+}
+
+auto type_resolver::resolve_field_by_name(const ast::call_expr::argument& name_arg, type& denoted)
+    -> stdx::option<field_lookup_result> {
+    const auto expr_h{name_arg.as_opt<ast::expr_handle>()};
+    if (!expr_h) { return stdx::none; }
+    gir::const_eval evaluator{ctx_, resolving_};
+    const auto      folded{evaluator.try_eval(*expr_h)};
+    const auto      name{folded ? folded->as_opt<std::string>() : stdx::none};
+    if (!name) { return stdx::none; }
+    return find_aggregate_field(denoted, *name);
 }
 
 auto type_resolver::resolve_const_enum_arg(const ast::call_expr::argument& arg,

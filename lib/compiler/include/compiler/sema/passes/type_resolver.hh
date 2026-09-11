@@ -230,6 +230,10 @@ class type_resolver {
     auto resolve_call_args(gsl::span<const ast::call_expr::argument> args) -> resolve_result;
     [[nodiscard]] auto get_resolved_call_arg_type(const ast::call_expr::argument& arg)
         -> gsl::not_null<type*>;
+    // Folds `name_arg` to a compile-time string and looks it up as a data field of `denoted`.
+    // Shared by `@hasField`/`@fieldType`/`@field`.
+    [[nodiscard]] auto resolve_field_by_name(const ast::call_expr::argument& name_arg,
+                                             type& denoted) -> stdx::option<field_lookup_result>;
     // Evaluates `arg` as a compile-time enum constant
     [[nodiscard]] auto resolve_const_enum_arg(const ast::call_expr::argument& arg,
                                               std::string_view                builtin_name,

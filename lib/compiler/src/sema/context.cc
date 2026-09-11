@@ -179,6 +179,9 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     // Return type is really `builtin::TypeInfo`, not resolved until `inject_builtin_module` runs
     // (see the ATOMIC_* comment above); the resolver overrides this with `get_builtin_type`.
     inject_function(bis::TYPE_INFO, params(t_auto), t_auto);
+    inject_function(bis::HAS_FIELD, params(t_auto, t_auto), t_bool);
+    inject_function(bis::FIELD_TYPE, params(t_auto, t_auto), t_type);
+    inject_function(bis::FIELD, params(t_auto, t_auto), t_auto);
 
     inject_function(bis::MEMCPY, params(t_auto, t_auto), t_void);
     inject_function(bis::MEMSET, params(t_auto, t_auto), t_void);
