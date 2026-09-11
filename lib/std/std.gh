@@ -9,6 +9,8 @@ pub using Option = option.Option;
 pub import "os/os.gh" as os;
 pub import "io/io.gh" as io;
 pub import "testing/testing.gh" as testing;
+pub import "mem/mem.gh" as mem;
+pub import "math.gh" as math;
 
 pub const panic_handler := fn(msg: []u8, file: []u8, _: u32, _: u32): noreturn {
     _ = io.eprint(file);

@@ -1,0 +1,27 @@
+import std;
+
+import "allocator.gh" as allocator;
+
+pub using AllocatorVTable = allocator.AllocatorVTable;
+pub using Allocator = allocator.Allocator;
+
+/// Stored as a power-of-two.
+pub const Alignment := enum : u8 {
+    // TODO(tcs): Use math.Log2Int for backing when #247 and #251 land
+    @"1" = 0,
+    @"2" = 1,
+    @"4" = 2,
+    @"8" = 3,
+    @"16" = 4,
+    @"32" = 5,
+    @"64" = 6,
+    _,
+
+    pub constexpr fromByteUnits := fn(n: usize): Alignment {
+        @assert(std.math.isPowerOfTwo(n));
+        return @as(Alignment, @ctz(n));
+    };
+    pub constexpr of := fn(T: type): Alignment {
+        return fromByteUnits(@alignOf(T));
+    };
+};
