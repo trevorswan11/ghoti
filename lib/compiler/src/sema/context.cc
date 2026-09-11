@@ -192,6 +192,8 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::REFERENCE, params(t_auto), t_type);
     inject_function(bis::SLICE, params(t_auto), t_type);
     inject_function(bis::ARRAY, params(t_auto), t_type);
+    inject_function(bis::FN, params(t_auto), t_type);
+    inject_function(bis::FIELD_DEFAULT, params(t_auto, t_auto), t_auto);
 
     inject_function(bis::MEMCPY, params(t_auto, t_auto), t_void);
     inject_function(bis::MEMSET, params(t_auto, t_auto), t_void);

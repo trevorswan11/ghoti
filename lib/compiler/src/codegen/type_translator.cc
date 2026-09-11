@@ -140,8 +140,13 @@ auto type_translator::translate_dyn_fat_ptr() -> llvm::StructType* {
 
 auto type_translator::translate_array(const sema::types::array& a) -> llvm::Type* {
     PROFILE_FUNCTION();
+    // See `translate_struct`'s matching `type`-kind special case - `[N]type` (e.g.
+    // `builtin::FnInfo.params`, §10.2) needs the same sized-but-empty placeholder for the same
+    // reason: `void` isn't a sized LLVM type, so `ArrayType::get` would build an unsized array.
+    auto* elem_ty{a.underlying.get_kind() == sema::type_kind::TYPE ? llvm::StructType::get(context_)
+                                                                    : translate(a.underlying)};
     // A sentinel-terminated array stores one extra element for the terminator
-    return llvm::ArrayType::get(translate(a.underlying), a.len + (a.null_terminated ? 1 : 0));
+    return llvm::ArrayType::get(elem_ty, a.len + (a.null_terminated ? 1 : 0));
 }
 
 auto type_translator::translate_struct(const sema::types::struct_t& s, const sema::type& original)

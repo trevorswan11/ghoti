@@ -1268,6 +1268,25 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
         s.fields.emplace("is_volatile", const_value{denoted.is_volatile(), bool_type});
         return wrap("array", std::move(s), ctx_.get_builtin_type("ArrayInfo"));
     }
+    case sema::type_kind::FUNCTION: {
+        const auto&  fn{denoted.get_data().as<sema::types::function>()};
+        auto&        type_type{ctx_.get_builtin_resolved_type(sema::type_kind::TYPE)};
+        const_array  params;
+        for (auto* p : fn.params) { params.elements.emplace_back(type_value(*p)); }
+        auto& params_slice_type{ctx_.get_slice(sema::types::mut::CONSTANT, false, type_type)};
+        const_struct s;
+        s.fields.emplace("params", const_value{std::move(params), params_slice_type});
+        s.fields.emplace("return_type", type_value(fn.return_type));
+        s.fields.emplace("variadic", const_value{fn.is_variadic, bool_type});
+        s.fields.emplace("has_self", const_value{fn.has_self, bool_type});
+        s.fields.emplace(
+            "callconv",
+            const_value{
+                const_enum{std::string{ast::calling_convention_name(fn.conv)},
+                          static_cast<i64>(fn.conv)},
+                ctx_.get_builtin_type("CallConv")});
+        return wrap("function", std::move(s), ctx_.get_builtin_type("FnInfo"));
+    }
     case sema::type_kind::ENUM: {
         const auto& en{denoted.get_data().as<sema::types::enum_t>()};
         auto&       field_type{ctx_.get_builtin_type("EnumField")};

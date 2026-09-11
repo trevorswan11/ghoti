@@ -121,6 +121,7 @@ enum class error : u8 {
     CONSTEXPR_LOOP_LIMIT,
     FIELD_NOT_FOUND,
     PACK_EXPANSION_MISPLACED,
+    FIELD_HAS_NO_DEFAULT,
 };
 
 using diagnostic  = diagnostic<error>;

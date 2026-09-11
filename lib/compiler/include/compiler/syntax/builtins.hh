@@ -52,6 +52,8 @@ constexpr builtin_t POINTER{"@Pointer", token_type_t::BUILTIN_POINTER};
 constexpr builtin_t REFERENCE{"@Reference", token_type_t::BUILTIN_REFERENCE};
 constexpr builtin_t SLICE{"@Slice", token_type_t::BUILTIN_SLICE};
 constexpr builtin_t ARRAY{"@Array", token_type_t::BUILTIN_ARRAY};
+constexpr builtin_t FN{"@Fn", token_type_t::BUILTIN_FN};
+constexpr builtin_t FIELD_DEFAULT{"@fieldDefault", token_type_t::BUILTIN_FIELD_DEFAULT};
 
 constexpr builtin_t MEMCPY{"@memcpy", token_type_t::BUILTIN_MEMCPY};
 constexpr builtin_t MEMSET{"@memset", token_type_t::BUILTIN_MEMSET};
@@ -166,6 +168,8 @@ constexpr std::array ALL_BUILTINS{
     builtins::REFERENCE,
     builtins::SLICE,
     builtins::ARRAY,
+    builtins::FN,
+    builtins::FIELD_DEFAULT,
     builtins::MEMCPY,
     builtins::MEMSET,
     builtins::MEMMOVE,

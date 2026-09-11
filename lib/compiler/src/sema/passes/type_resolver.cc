@@ -893,6 +893,27 @@ template <ast::IndexableID ID>
         return_type->resolve_if<types::meta_type>(field->field_type);
         break;
     }
+    case token_type_t::BUILTIN_FIELD_DEFAULT: {
+        // The field's real default *value*, statically typed to the field's own type (§9.2/§10.4)
+        // - the read-side counterpart to `defaults...` on `@Struct`/`@Union` (§10.4, Phase 14).
+        auto&      arg_type{*get_resolved_call_arg_type(call.arguments[0])};
+        auto&      denoted{denoted_type(arg_type)};
+        const auto field{resolve_field_by_name(call.arguments[1], denoted)};
+        if (!field) {
+            return make_sema_err(
+                "@fieldDefault: unknown field (the name must be a compile-time-known string)",
+                error::FIELD_NOT_FOUND,
+                get_call_arg_location(call.arguments[1]));
+        }
+        const auto st{denoted.get_data().as_opt<types::struct_t>()};
+        if (!st || !st->ast_fields[field->index].default_value) {
+            return make_sema_err("@fieldDefault: field has no default value",
+                                 error::FIELD_HAS_NO_DEFAULT,
+                                 get_call_arg_location(call.arguments[1]));
+        }
+        return_type = &field->field_type;
+        break;
+    }
     case token_type_t::BUILTIN_FIELD: {
         // Parses and type-checks its arguments so a later pass can add real semantics without a
         // grammar change; gated here to fail clean rather than reach the emitter with nothing to
@@ -908,7 +929,8 @@ template <ast::IndexableID ID>
     case token_type_t::BUILTIN_POINTER:
     case token_type_t::BUILTIN_REFERENCE:
     case token_type_t::BUILTIN_SLICE:
-    case token_type_t::BUILTIN_ARRAY: {
+    case token_type_t::BUILTIN_ARRAY:
+    case token_type_t::BUILTIN_FN: {
         // Compositional inverse of `@typeInfo` (§10.1): fold the descriptor argument to the
         // matching `*Info` struct and build the concrete type directly from its fields.
         const auto builtin_name{*syntax::get_builtin_opt(builtin_id)};
@@ -1021,6 +1043,52 @@ template <ast::IndexableID ID>
             auto mods{*mut_v ? types::mut::MUTABLE : types::mut::CONSTANT};
             if (*vol_v) { mods = mods | types::mut::VOLATILE; }
             return_type = wrap_type(ctx_.get_array(mods, *sentinel_v, *len_v, **child_v));
+            break;
+        }
+        case token_type_t::BUILTIN_FN: {
+            const auto params_f{desc->get_field_opt("params")};
+            const auto ret_f{desc->get_field_opt("return_type")};
+            const auto variadic_f{desc->get_field_opt("variadic")};
+            const auto has_self_f{desc->get_field_opt("has_self")};
+            const auto callconv_f{desc->get_field_opt("callconv")};
+            const auto params_arr{params_f ? params_f->as_opt<gir::const_array>() : stdx::none};
+            const auto ret_v{ret_f ? ret_f->as_opt<stdx::option<type&>>() : stdx::none};
+            const auto variadic_v{variadic_f ? variadic_f->as_opt<bool>() : stdx::none};
+            const auto has_self_v{has_self_f ? has_self_f->as_opt<bool>() : stdx::none};
+            const auto callconv_v{callconv_f ? callconv_f->as_opt<gir::const_enum>() : stdx::none};
+            if (!params_arr) { return field_err("params"); }
+            if (!ret_v || !*ret_v) { return field_err("return_type"); }
+            if (!variadic_v) { return field_err("variadic"); }
+            if (!has_self_v) { return field_err("has_self"); }
+            if (!callconv_v) { return field_err("callconv"); }
+
+            const auto conv{ast::calling_convention_from_name(callconv_v->name)};
+            if (!conv) {
+                return make_sema_err(
+                    fmt::format("'@Fn': unknown calling convention '{}'", callconv_v->name),
+                    error::TYPE_MISMATCH,
+                    get_call_arg_location(call.arguments[0]));
+            }
+
+            auto param_types{ctx_.pool.get_many_unsafe(params_arr->elements.size())};
+            for (usize i{0}; i < params_arr->elements.size(); ++i) {
+                const auto pt{params_arr->elements[i].as_opt<stdx::option<type&>>()};
+                if (!pt || !*pt) {
+                    return make_sema_err(
+                        "'@Fn': every element of 'params' must be a compile-time-known type",
+                        error::CONSTEXPR_EVALUATION_FAILED,
+                        get_call_arg_location(call.arguments[0]));
+                }
+                param_types[i] = &**pt;
+            }
+
+            types::key_t fn_key{type_kind::FUNCTION, types::mut::CONSTANT};
+            for (const auto* p : param_types) { fn_key.imprint(*p); }
+            fn_key.imprint(**ret_v);
+            fn_key.imprint(*conv);
+            auto& built{*ctx_.pool[fn_key]};
+            built.resolve_if<types::function>(param_types, **ret_v, *has_self_v, *variadic_v, *conv);
+            return_type = wrap_type(built);
             break;
         }
         default: ASSERT(false, "unreachable");

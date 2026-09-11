@@ -2841,6 +2841,42 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             }
             break;
         }
+        case syntax::token_type_t::BUILTIN_FIELD_DEFAULT: {
+            // The resolver already validated the field exists and has a default (§9.2); this just
+            // emits that default's own initializer expression, reusing the exact same helper a
+            // struct-literal's own omitted-field defaulting uses (`emit_initializer` below).
+            const auto t_h{call.arguments[0].as_opt<ast::expr_handle>()};
+            const auto name_h{call.arguments[1].as_opt<ast::expr_handle>()};
+            if (t_h && name_h) {
+                auto t_type{active_mod().get_sema_type_opt(*t_h)};
+                if (t_type) {
+                    if (const auto m{t_type->get_data().as_opt<sema::types::meta_type>()}) {
+                        t_type.emplace(m->instance);
+                    }
+                }
+                gir::const_eval evaluator{ctx_, active_mod()};
+                const auto      folded_name{evaluator.try_eval(*name_h)};
+                const auto      name{folded_name ? folded_name->as_opt<std::string>() : stdx::none};
+                const auto st{t_type ? t_type->get_data().as_opt<sema::types::struct_t>()
+                                     : stdx::none};
+                if (st && name) {
+                    // Mirrors `find_aggregate_field`'s own by-name field scan, not the symbol
+                    // table's proxy indexing, so this matches the same field the resolver found.
+                    for (usize i{0}; i < st->ast_fields.size(); ++i) {
+                        const auto& fname{
+                            st->enclosing.ast.get_as<ast::identifier_expr>(st->ast_fields[i].name)
+                                .name};
+                        if (fname != *name) { continue; }
+                        if (st->ast_fields[i].default_value) {
+                            return emit_field_default(
+                                *st->ast_fields[i].default_value, st->enclosing, ret_type);
+                        }
+                        break;
+                    }
+                }
+            }
+            break;
+        }
         case syntax::token_type_t::BUILTIN_PANIC: {
             // The resolver has already checked the message is a compile-time-constant string.
             std::string message{"panic"};
@@ -5912,12 +5948,18 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
     // `RowAlias{ a, b, c }`: an array literal of positional values.
     if (const auto arr{sema_type->get_data().as_opt<sema::types::array>()}) {
         auto& elem_type{arr->underlying};
-        u64   count{0};
+        // A `[N]type` (e.g. `builtin::FnInfo.params`, §10.2) carries no runtime values at all -
+        // every slot is the same zero-sized placeholder `translate_array` already gives the whole
+        // array, so there's nothing to store; mirrors `translate_struct`'s field-level skip.
+        const bool elem_is_type{elem_type.get_kind() == sema::type_kind::TYPE};
+        u64        count{0};
         for (const auto& [accessor, val_expr] : init.initializers) {
-            const auto elem_ptr{builder_.emit_get_element_ptr(
-                value{struct_slot, *sema_type}, {value{count, usize_type}}, elem_type)};
-            const auto val{emit_coerced_expr(val_expr, elem_type)};
-            builder_.emit_store(value{elem_ptr, elem_type}, val).is_initializer = true;
+            if (!elem_is_type) {
+                const auto elem_ptr{builder_.emit_get_element_ptr(
+                    value{struct_slot, *sema_type}, {value{count, usize_type}}, elem_type)};
+                const auto val{emit_coerced_expr(val_expr, elem_type)};
+                builder_.emit_store(value{elem_ptr, elem_type}, val).is_initializer = true;
+            }
             ++count;
         }
 
