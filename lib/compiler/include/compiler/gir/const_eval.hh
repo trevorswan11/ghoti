@@ -155,10 +155,14 @@ class const_eval {
 
     [[nodiscard]] auto target_enum_value(std::string_view enum_name, std::string_view member)
         -> const_value;
-    auto eval_constexpr_fn(ast::node_id                      call_id,
-                           const ast::function_expr&         fn_expr,
-                           const std::vector<const_value>&   args,
-                           stdx::option<const const_struct&> captures = stdx::none)
+
+    // `@typeInfo(T)`: builds the `builtin::TypeInfo` tagged union for `denoted` (already
+    // unwrapped past any `TYPE`/`deferred_call` wrapper) by switching on its `type_kind`.
+    [[nodiscard]] auto eval_type_info(sema::type& denoted) -> const_value;
+    auto               eval_constexpr_fn(ast::node_id                      call_id,
+                                         const ast::function_expr&         fn_expr,
+                                         const std::vector<const_value>&   args,
+                                         stdx::option<const const_struct&> captures = stdx::none)
         -> stdx::option<const_value>;
 
     auto lookup_bound_callable(std::string_view name) -> stdx::option<bound_callable>;

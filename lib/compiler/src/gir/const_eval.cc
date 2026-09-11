@@ -1188,6 +1188,118 @@ auto const_eval::target_enum_value(std::string_view enum_name, std::string_view 
     return const_value{const_enum{std::string{member}, ordinal}, enum_type};
 }
 
+auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
+    PROFILE_FUNCTION();
+    auto& info_type{ctx_.get_builtin_type("TypeInfo")};
+    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+
+    // `@typeOf`'s own folding (above) represents "this value denotes a type" the same way: the
+    // `stdx::option<sema::type&>` data-variant alternative, no `type_` attached.
+    const auto type_value{
+        [](sema::type& t) -> const_value { return const_value{stdx::option<sema::type&>{t}}; }};
+
+    const auto wrap{[&](std::string_view tag,
+                        const_struct     payload_struct,
+                        sema::type&      payload_ty) -> const_value {
+        std::vector<const_value> payload;
+        payload.emplace_back(const_value{std::move(payload_struct), payload_ty});
+        return const_value{const_union{std::string{tag}, std::move(payload)}, info_type};
+    }};
+    const auto tag_only{[&](std::string_view tag) -> const_value {
+        return wrap(tag, const_struct{}, ctx_.get_builtin_type("NoPayload"));
+    }};
+
+    switch (denoted.get_kind()) {
+    case sema::type_kind::INT: {
+        const_struct s;
+        s.fields.emplace("bits",
+                         const_value{u64{sema::int_width(denoted)}, ctx_.get_int(16, false)});
+        s.fields.emplace("signed", const_value{sema::is_signed_integer(denoted), bool_type});
+        return wrap("int", std::move(s), ctx_.get_builtin_type("IntInfo"));
+    }
+    case sema::type_kind::F16:
+    case sema::type_kind::F32:
+    case sema::type_kind::F64:
+    case sema::type_kind::F80:
+    case sema::type_kind::F128: {
+        const_struct s;
+        s.fields.emplace(
+            "bits",
+            const_value{u64{sema::float_bits(denoted.get_kind())}, ctx_.get_int(16, false)});
+        return wrap("float", std::move(s), ctx_.get_builtin_type("FloatInfo"));
+    }
+    case sema::type_kind::BOOL:      return tag_only("bool");
+    case sema::type_kind::VOID_:     return tag_only("void");
+    case sema::type_kind::NORETURN:  return tag_only("noreturn");
+    case sema::type_kind::OPAQUE:    return tag_only("opaque");
+    case sema::type_kind::TYPE:      return tag_only("type");
+    case sema::type_kind::POINTER:
+    case sema::type_kind::REFERENCE: {
+        const bool   is_ptr{denoted.get_kind() == sema::type_kind::POINTER};
+        auto&        underlying{is_ptr ? denoted.get_data().as<sema::types::pointer>().underlying
+                                       : denoted.get_data().as<sema::types::reference>().underlying};
+        const_struct s;
+        s.fields.emplace("child", type_value(underlying));
+        // Mutability/volatility are keyed on the pointer/reference/slice/array type itself
+        // (`context::get_pointer` et al. imprint the modifier into *that* type's own pool key,
+        // leaving `underlying` unchanged) - not on the pointee/element type.
+        s.fields.emplace("is_mut", const_value{!denoted.is_constant(), bool_type});
+        s.fields.emplace("is_volatile", const_value{denoted.is_volatile(), bool_type});
+        return wrap(
+            is_ptr ? "pointer" : "reference", std::move(s), ctx_.get_builtin_type("PointerInfo"));
+    }
+    case sema::type_kind::SLICE: {
+        const auto&  sl{denoted.get_data().as<sema::types::slice>()};
+        const_struct s;
+        s.fields.emplace("child", type_value(sl.underlying));
+        s.fields.emplace("sentinel", const_value{sl.null_terminated, bool_type});
+        s.fields.emplace("is_mut", const_value{!denoted.is_constant(), bool_type});
+        s.fields.emplace("is_volatile", const_value{denoted.is_volatile(), bool_type});
+        return wrap("slice", std::move(s), ctx_.get_builtin_type("SliceInfo"));
+    }
+    case sema::type_kind::ARRAY: {
+        const auto&  ar{denoted.get_data().as<sema::types::array>()};
+        const_struct s;
+        s.fields.emplace("child", type_value(ar.underlying));
+        s.fields.emplace("len", const_value{u64{ar.len}, usize_type});
+        s.fields.emplace("sentinel", const_value{ar.null_terminated, bool_type});
+        s.fields.emplace("is_mut", const_value{!denoted.is_constant(), bool_type});
+        s.fields.emplace("is_volatile", const_value{denoted.is_volatile(), bool_type});
+        return wrap("array", std::move(s), ctx_.get_builtin_type("ArrayInfo"));
+    }
+    case sema::type_kind::ENUM: {
+        const auto& en{denoted.get_data().as<sema::types::enum_t>()};
+        auto&       field_type{ctx_.get_builtin_type("EnumField")};
+        const_array fields;
+        for (usize idx{0}; idx < en.ast_enumerations.size(); ++idx) {
+            const auto& e{en.ast_enumerations[idx]};
+            const auto& vname{en.enclosing.ast.get_as<ast::identifier_expr>(e.name).name};
+            i64         val{static_cast<i64>(idx)};
+            if (e.value) {
+                auto&      enclosing_mod{const_cast<mod::module&>(en.enclosing)};
+                const_eval enclosing_eval{ctx_, enclosing_mod};
+                enclosing_eval.set_symbol_scoping(symbol_scoping_);
+                if (const auto ev{enclosing_eval.try_eval(*e.value)}) {
+                    val = static_cast<i64>(ev->as_int_opt().value_or(val));
+                }
+            }
+            const_struct fs;
+            fs.fields.emplace("name", const_value::make_string(ctx_, std::string{vname}));
+            fs.fields.emplace("value", const_value{val, ctx_.get_int(64, true)});
+            fields.elements.emplace_back(const_value{std::move(fs), field_type});
+        }
+        auto& field_slice_type{ctx_.get_slice(sema::types::mut::CONSTANT, false, field_type)};
+        const_struct s;
+        s.fields.emplace("tag_type", type_value(en.underlying));
+        s.fields.emplace("fields", const_value{std::move(fields), field_slice_type});
+        s.fields.emplace("exhaustive", const_value{!en.non_exhaustive, bool_type});
+        return wrap("enum", std::move(s), ctx_.get_builtin_type("EnumInfo"));
+    }
+    default: return tag_only("other");
+    }
+}
+
 auto const_eval::eval_implicit_access(ast::node_id id, const ast::implicit_access_expr& implicit)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
@@ -2421,6 +2533,26 @@ auto const_eval::eval_builtin(ast::node_id          id,
         auto& t_u8{ctx_.get_int(8, false)};
         auto& arr_type{ctx_.get_array(sema::types::mut::CONSTANT, true, name.size() + 1, t_u8)};
         return const_value{std::move(name), arr_type};
+    }
+    case syntax::token_type_t::BUILTIN_TYPE_INFO: {
+        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
+        const auto&               arg{call.arguments.front()};
+        stdx::option<sema::type&> target_type;
+        if (const auto type_id{arg.as_opt<ast::explicit_type_id>()}) {
+            target_type = module_->get_sema_type_opt(*type_id);
+        } else if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
+            target_type = module_->get_sema_type_opt(*expr_h);
+        }
+        if (!target_type) { return stdx::none; }
+        if (const auto dc{target_type->get_data().as_opt<sema::types::deferred_call>()}) {
+            if (const auto r{try_resolve_deferred_call(dc->call)}) { target_type.emplace(*r); }
+        }
+        if (target_type->get_kind() == sema::type_kind::TYPE) {
+            if (const auto m{target_type->get_data().as_opt<sema::types::meta_type>()}) {
+                target_type.emplace(m->instance);
+            }
+        }
+        return eval_type_info(*target_type);
     }
     case syntax::token_type_t::BUILTIN_TARGET_OS: {
         const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};

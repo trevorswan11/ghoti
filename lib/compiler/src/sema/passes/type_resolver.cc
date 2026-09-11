@@ -867,6 +867,11 @@ template <ast::IndexableID ID>
             &ctx_.get_array(types::mut::CONSTANT, true, name.size() + 1, ctx_.get_int(8, false));
         break;
     }
+    case token_type_t::BUILTIN_TYPE_INFO: {
+        DISCARD(get_resolved_call_arg_type(call.arguments[0]));
+        return_type = &ctx_.get_builtin_type("TypeInfo");
+        break;
+    }
     case token_type_t::BUILTIN_TARGET_OS:       return_type = &ctx_.get_builtin_type("Os"); break;
     case token_type_t::BUILTIN_TARGET_ARCH:     return_type = &ctx_.get_builtin_type("Arch"); break;
     case token_type_t::BUILTIN_TARGET_ABI:      return_type = &ctx_.get_builtin_type("Abi"); break;
