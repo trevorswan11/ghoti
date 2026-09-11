@@ -266,10 +266,11 @@ struct struct_t {
 };
 
 struct function {
-    gsl::span<type*> params;
-    type&            return_type;
-    bool             has_self;
-    bool             is_variadic{false};
+    gsl::span<type*>       params;
+    type&                  return_type;
+    bool                   has_self;
+    bool                   is_variadic{false};
+    ast::calling_convention conv{ast::calling_convention::C};
 };
 
 // Carries no storage and is never a value type; it only describes a contract

@@ -2931,9 +2931,10 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         types::key_t fn_key{type_kind::FUNCTION, types::mut::CONSTANT};
         for (const auto* p : fn_param_types) { fn_key.imprint(*p); }
         fn_key.imprint(return_type);
+        fn_key.imprint(fn.conv);
         auto& fn_type{*ctx_.pool[fn_key]};
         fn_type.resolve_if<types::function>(
-            fn_param_types, return_type, fn.self.has_value(), fn.variadic);
+            fn_param_types, return_type, fn.self.has_value(), fn.variadic, fn.conv);
 
         auto& meta{*ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, fn_type}]};
         meta.resolve_if<types::meta_type>(fn_type);
@@ -3046,7 +3047,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     // A `constexpr` parameter makes the function a template, monomorphized per value
     if (any_param_generic(param_types) || any_param_constexpr(fn)) {
         fn_type.resolve<types::function>(
-            param_types, return_type, fn.self.has_value(), fn.variadic);
+            param_types, return_type, fn.self.has_value(), fn.variadic, fn.conv);
         // Only a function directly at the impl/aggregate level is a genuine method whose
         // instantiation should see the enclosing type's scope/self-binding
         const auto enclosing_for_generic{function_boundaries_.size() <= 1 ? user_type_stack_.peek()
@@ -3062,7 +3063,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     // A known return type lets a recursive call inside the body resolve against this signature
     if (!is_auto_return) {
         fn_type.resolve<types::function>(
-            param_types, return_type, fn.self.has_value(), fn.variadic);
+            param_types, return_type, fn.self.has_value(), fn.variadic, fn.conv);
     }
 
     return_trackers_.emplace_back(return_tracker{
@@ -3080,7 +3081,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     auto& deduced_return_type{is_auto_return ? tracker.deduced_return_type(ctx_) : return_type};
     if (is_auto_return) {
         fn_type.resolve<types::function>(
-            param_types, deduced_return_type, fn.self.has_value(), fn.variadic);
+            param_types, deduced_return_type, fn.self.has_value(), fn.variadic, fn.conv);
         resolving_.set_sema_type(fn.explicit_return_type, deduced_return_type);
     }
 
@@ -3241,7 +3242,7 @@ auto type_resolver::attach_closure_type(ast::node_id fn_id, type& fn_type, bool 
 
     auto* impl_sig{ctx_.pool[{type_kind::FUNCTION, types::mut::CONSTANT, idx, true}].get()};
     impl_sig->resolve<types::function>(
-        impl_params, public_sig.return_type, true, public_sig.is_variadic);
+        impl_params, public_sig.return_type, true, public_sig.is_variadic, public_sig.conv);
 
     closure_type->resolve<types::closure_t>(capture_span, fn_type, *impl_sig);
     resolving_.set_sema_type(fn_id, *closure_type);
@@ -6468,8 +6469,10 @@ auto type_resolver::resolve_required_method_type(const ast::function_expr& fn,
     types::key_t key{type_kind::FUNCTION, types::mut::CONSTANT};
     for (const auto* p : params) { key.imprint(*p); }
     key.imprint(return_type);
+    key.imprint(fn.conv);
     auto& fn_type{*ctx_.pool[key]};
-    fn_type.resolve_if<types::function>(params, return_type, fn.self.has_value(), fn.variadic);
+    fn_type.resolve_if<types::function>(
+        params, return_type, fn.self.has_value(), fn.variadic, fn.conv);
     return fn_type;
 }
 
@@ -8145,9 +8148,10 @@ auto type_resolver::resolve_param_impl_bodies(
             key.imprint(ret);
             key.imprint(static_cast<u64>(has_self));
             key.imprint(static_cast<u64>(fn_expr.variadic));
+            key.imprint(fn_expr.conv);
             auto& concrete_fn_type{*ctx_.pool[key]};
             concrete_fn_type.resolve_if<types::function>(
-                concrete_param_types, ret, has_self, fn_expr.variadic);
+                concrete_param_types, ret, has_self, fn_expr.variadic, fn_expr.conv);
             if (fn_type && fn_type->has_symbol_table_idx()) {
                 concrete_fn_type.set_symbol_table_idx(fn_type->get_symbol_table_idx());
             }
@@ -8211,9 +8215,11 @@ auto type_resolver::resolve_param_impl_bodies(
         key.imprint(*deduced_ret);
         key.imprint(static_cast<u64>(fn_expr.self.has_value()));
         key.imprint(static_cast<u64>(fn_expr.variadic));
+        key.imprint(fn_expr.conv);
         auto& concrete_fn_type{*ctx_.pool[key]};
         concrete_fn_type.resolve_if<types::function>(
-            concrete_param_types, *deduced_ret, fn_expr.self.has_value(), fn_expr.variadic);
+            concrete_param_types, *deduced_ret, fn_expr.self.has_value(), fn_expr.variadic,
+            fn_expr.conv);
         if (fn_type && fn_type->has_symbol_table_idx()) {
             concrete_fn_type.set_symbol_table_idx(fn_type->get_symbol_table_idx());
         }
@@ -8751,9 +8757,10 @@ auto type_resolver::resolve_inherited_default_methods(impl_record&              
         types::key_t key{type_kind::FUNCTION, types::mut::CONSTANT};
         for (const auto* p : params) { key.imprint(*p); }
         key.imprint(ret);
+        key.imprint(fn_expr.conv);
         auto& concrete_fn{*ctx_.pool[key]};
         concrete_fn.resolve_if<types::function>(
-            params, ret, fn_expr.self.has_value(), fn_expr.variadic);
+            params, ret, fn_expr.self.has_value(), fn_expr.variadic, fn_expr.conv);
         imod.set_sema_type(*m.signature, concrete_fn);
 
         const bool auto_ret{ret.get_kind() == type_kind::AUTO};
@@ -8977,9 +8984,14 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_function
     }
     fn_key.imprint(return_type);
     if (fn.variadic) { fn_key.imprint(fn.variadic); }
+    // `fn(...): T` type-annotation syntax has no `callconv(...)` spelling of its own, so it always
+    // denotes the default (`C`) convention - matching a value whose own function type imprinted
+    // anything else is now, correctly, a type mismatch (the ABI hazard this fix closes, §2).
+    fn_key.imprint(ast::calling_convention::C);
 
     auto& resolved_fn{*ctx_.pool[fn_key]};
-    resolved_fn.resolve_if<types::function>(param_types, return_type, false, fn.variadic);
+    resolved_fn.resolve_if<types::function>(
+        param_types, return_type, false, fn.variadic, ast::calling_convention::C);
 
     auto& final_type{apply_explicit_modifiers(id, resolved_fn)};
     resolving_.set_sema_type(id, final_type);
