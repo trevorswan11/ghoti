@@ -2141,9 +2141,12 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 return last_type_.emplace(*cached->return_type);
             }
 
-            const auto diags_before_inst{ctx_.diags.size()};
-            auto       inst_res{
-                instantiate_generic(callee_type, *fn_info_opt, concrete_arg_types, constexpr_args)};
+            // Copy out of the registry before instantiating: resolving the generic's body may
+            // recursively register further generic functions
+            const generic_function_info fn_info_copy{*fn_info_opt};
+            const auto                  diags_before_inst{ctx_.diags.size()};
+            auto                        inst_res{
+                instantiate_generic(callee_type, fn_info_copy, concrete_arg_types, constexpr_args)};
             if (!inst_res) {
                 // `instantiate_generic` may have already reported so only report if not
                 if (ctx_.diags.size() == diags_before_inst) {
@@ -2151,7 +2154,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                         resolving_,
                         id,
                         fmt::format("Failed to instantiate '{}'",
-                                    fn_info_opt->name.value_or("<generic function>")),
+                                    fn_info_copy.name.value_or("<generic function>")),
                         error::CONSTEXPR_EVALUATION_FAILED,
                         resolving_.ast.location_of(call.function)));
                 }
@@ -2432,24 +2435,6 @@ auto type_resolver::visit(ast::node_id id, const ast::for_loop_expr& for_expr) -
     last_type_.emplace(resolving_.get_sema_type(id));
 }
 
-namespace {
-
-[[nodiscard]] auto mutability_from_type_modifier(ast::type_modifier modifier) noexcept
-    -> stdx::option<types::mutability_modifiers> {
-    using modifier_t = ast::type_modifier::modifier;
-    switch (modifier.get_raw()) {
-    case modifier_t::VALUE:        return stdx::none;
-    case modifier_t::REF:          return types::mut::CONSTANT;
-    case modifier_t::MUT_REF:      return types::mut::MUTABLE;
-    case modifier_t::PTR:          return types::mut::CONSTANT;
-    case modifier_t::MUT_PTR:      return types::mut::MUTABLE;
-    case modifier_t::VOLATILE:     return types::mut::CONSTANT_VOLATILE;
-    case modifier_t::MUT_VOLATILE: return types::mut::VOLATILE;
-    }
-}
-
-} // namespace
-
 auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void {
     PROFILE_FUNCTION();
 
@@ -2504,7 +2489,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         // If self is valid here, then follow a similar tune to the type resolvers
         if (const auto user_type{user_type_stack_.peek()}) {
             const auto modifier{fn.self->modifier};
-            const auto mutability{mutability_from_type_modifier(modifier)};
+            const auto mutability{types::mut::from_type_modifier(modifier)};
 
             if (user_type->is_poison()) {
                 return last_type_.emplace(ctx_.poison_node(resolving_, id));
@@ -2581,8 +2566,12 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     if (any_param_generic(param_types) || any_param_constexpr(fn)) {
         fn_type.resolve<types::function>(
             param_types, return_type, fn.self.has_value(), fn.variadic);
+        // Only a function directly at the impl/aggregate level is a genuine method whose
+        // instantiation should see the enclosing type's scope/self-binding
+        const auto enclosing_for_generic{function_boundaries_.size() <= 1 ? user_type_stack_.peek()
+                                                                          : stdx::none};
         ctx_.generic_functions.register_function(
-            fn_type, resolving_, id, fn, stdx::none, user_type_stack_.peek());
+            fn_type, resolving_, id, fn, stdx::none, enclosing_for_generic);
         register_impl_param_bounds(fn_type, fn);
         return last_type_.emplace(fn_type);
     }
@@ -5801,7 +5790,7 @@ auto type_resolver::resolve_required_method_type(const ast::function_expr& fn,
 
     if (fn.self) {
         type* self_ty{&self_placeholder};
-        if (const auto mut{mutability_from_type_modifier(fn.self->modifier)}) {
+        if (const auto mut{types::mut::from_type_modifier(fn.self->modifier)}) {
             self_ty = fn.self->modifier.is_ptr() ? &ctx_.get_pointer(*mut, self_placeholder)
                                                  : &ctx_.get_reference(*mut, self_placeholder);
         }
@@ -7221,6 +7210,7 @@ auto type_resolver::instantiate_impls_for(
 
         if (!is_abstract) {
             for (const auto& m : stored->methods) {
+                if (m.fn_type && ctx_.generic_functions.get_opt(*m.fn_type)) { continue; }
                 impl_mod.impl_ctor_member_emits.emplace_back<type_ctor_member_emit>({
                     .owner_clone = &concrete,
                     .member_decl = m.decl,
@@ -7298,7 +7288,7 @@ auto type_resolver::resolve_param_impl_bodies(
         // `self` binds to the monomorphized target, wrapped per its `&` / `^` / `mut` modifier.
         if (fn_expr.self) {
             type* self_t{&concrete};
-            if (const auto m{mutability_from_type_modifier(fn_expr.self->modifier)}) {
+            if (const auto m{types::mut::from_type_modifier(fn_expr.self->modifier)}) {
                 self_t = fn_expr.self->modifier.is_ptr() ? &ctx_.get_pointer(*m, concrete)
                                                          : &ctx_.get_reference(*m, concrete);
             }
@@ -7306,12 +7296,62 @@ auto type_resolver::resolve_param_impl_bodies(
             mark_resolved(fn_expr.self->name);
         }
 
+        bool is_generic_method{any_param_constexpr(fn_expr)};
         for (const auto& param : fn_expr.parameters) {
             inst.resolve(param.explicit_type);
             if (inst.last_type_ && !inst.last_type_->is_poison()) {
-                impl_mod.set_sema_type(param.name, denoted_type(*inst.last_type_.take()));
+                auto& pty{denoted_type(*inst.last_type_.take())};
+                if (pty.get_kind() == type_kind::TYPE || param.is_constexpr) {
+                    is_generic_method = true;
+                }
+                impl_mod.set_sema_type(param.name, pty);
             }
             mark_resolved(param.name);
+        }
+
+        if (is_generic_method) {
+            inst.resolve(fn_expr.explicit_return_type);
+            auto& ret{inst.last_type_ && !inst.last_type_->is_poison()
+                          ? denoted_type(*inst.last_type_.take())
+                          : ctx_.get_builtin_resolved_type(type_kind::VOID_)};
+
+            const bool  has_self{fn_expr.self.has_value()};
+            const usize num_params{fn_expr.parameters.size() + (has_self ? 1UZ : 0UZ)};
+            auto        concrete_param_types{ctx_.pool.get_many_unsafe(num_params)};
+            usize       pi{0};
+            if (has_self) {
+                if (const auto st{impl_mod.get_sema_type_opt(fn_expr.self->name)}) {
+                    concrete_param_types[pi++] = const_cast<type*>(st.get());
+                } else {
+                    concrete_param_types[pi++] = &concrete;
+                }
+            }
+            for (const auto& param : fn_expr.parameters) {
+                if (const auto pt{impl_mod.get_sema_type_opt(param.name)}) {
+                    concrete_param_types[pi++] = const_cast<type*>(pt.get());
+                } else {
+                    concrete_param_types[pi++] = &ctx_.get_poison();
+                }
+            }
+
+            types::key_t key{type_kind::FUNCTION, types::mut::CONSTANT};
+            for (auto* p : concrete_param_types) { key.imprint(*p); }
+            key.imprint(ret);
+            key.imprint(static_cast<u64>(has_self));
+            key.imprint(static_cast<u64>(fn_expr.variadic));
+            auto& concrete_fn_type{*ctx_.pool[key]};
+            concrete_fn_type.resolve_if<types::function>(
+                concrete_param_types, ret, has_self, fn_expr.variadic);
+            if (fn_type && fn_type->has_symbol_table_idx()) {
+                concrete_fn_type.set_symbol_table_idx(fn_type->get_symbol_table_idx());
+            }
+            impl_mod.set_sema_type(*decl->value, concrete_fn_type);
+            impl_mod.set_sema_type(*member, concrete_fn_type);
+
+            const auto& mname{impl_mod.ast.get_as<ast::identifier_expr>(*decl->name).name};
+            ctx_.generic_functions.register_function(
+                concrete_fn_type, impl_mod, *member, fn_expr, mname, concrete);
+            continue;
         }
         inst.resolve(fn_expr.explicit_return_type);
         auto&      ret{inst.last_type_ && !inst.last_type_->is_poison()
@@ -7878,7 +7918,7 @@ auto type_resolver::resolve_inherited_default_methods(impl_record&              
         usize pi{0};
         if (fn_expr.self) {
             type* self_t{&target};
-            if (const auto mut{mutability_from_type_modifier(fn_expr.self->modifier)}) {
+            if (const auto mut{types::mut::from_type_modifier(fn_expr.self->modifier)}) {
                 self_t = fn_expr.self->modifier.is_ptr() ? &ctx_.get_pointer(*mut, target)
                                                          : &ctx_.get_reference(*mut, target);
             }
@@ -8012,7 +8052,7 @@ auto type_resolver::visit(ast::node_id id, const ast::using_stmt& using_stmt) ->
 auto type_resolver::apply_explicit_modifiers(ast::explicit_type_id id, type& inner_type) -> type& {
     const auto modifier{id.get_modifier()};
     if (modifier.is_value() || inner_type.is_poison()) { return inner_type; }
-    const auto mutability{mutability_from_type_modifier(modifier)};
+    const auto mutability{types::mut::from_type_modifier(modifier)};
 
     // Conditionally update the mutability since the modifier might entail mutability or volatility
     auto new_key{inner_type.get_key()};
@@ -8326,12 +8366,78 @@ auto type_resolver::instantiate_generic(type&                             callee
         }
         ++cx_i;
     }
+
+    stdx::option<const impl_record&> enclosing_impl;
+    if (fn_info.enclosing_type) {
+        for (const auto* r : ctx_.impls.records()) {
+            if (r->target_type == fn_info.enclosing_type) {
+                enclosing_impl.emplace(r);
+                break;
+            }
+        }
+    }
+
+    if (enclosing_impl && enclosing_impl->from_parameterized) {
+        const auto& impl_stmt{fn_mod.ast.get_as<ast::impl_stmt>(enclosing_impl->site)};
+        for (usize i{0}; i < impl_stmt.impl_params.size(); ++i) {
+            const auto& pname{
+                fn_mod.ast.get_as<ast::identifier_expr>(impl_stmt.impl_params[i].name).name};
+            if (i < enclosing_impl->type_arguments.size() && enclosing_impl->type_arguments[i]) {
+                auto& concrete_t{
+                    denoted_type(const_cast<type&>(*enclosing_impl->type_arguments[i]))};
+                binding_frame.insert_or_assign(pname, gir::const_value{concrete_t});
+                fn_mod.set_sema_type(impl_stmt.impl_params[i].name, concrete_t);
+                if (const auto s{
+                        ctx_.registry.get_from_opt(enclosing_impl->body_scope_idx, pname)}) {
+                    s->set_kind(symbol_kind::VALUE);
+                    s->set_status(symbol_status::RESOLVED);
+                }
+            }
+        }
+        if (!enclosing_impl->gir_prefix.empty()) {
+            if (const auto cx_bindings{
+                    ctx_.instantiation_cache.get_type_ctor_bindings(enclosing_impl->gir_prefix)}) {
+                for (const auto& [pname, val] : *cx_bindings) {
+                    binding_frame.insert_or_assign(pname, val);
+                }
+            }
+        }
+    }
+
     const constexpr_frame_guard cfg{ctx_.constexpr_binding_frames, std::move(binding_frame)};
 
     symbol_table_stack inst_stack;
     inst_stack.push(*ctx_.prelude_index);
     if (fn_mod.root_table_idx) { inst_stack.push(*fn_mod.root_table_idx); }
+    if (enclosing_impl) {
+        inst_stack.push(enclosing_impl->body_scope_idx);
+    } else if (fn_info.enclosing_type && fn_info.enclosing_type->has_symbol_table_idx()) {
+        inst_stack.push(fn_info.enclosing_type->get_symbol_table_idx());
+    }
     inst_stack.push(fn_table_idx);
+
+    if (fn_expr.self) {
+        stdx::option<type&> self_t;
+        if (fn_info.enclosing_type) {
+            auto& enc{*fn_info.enclosing_type};
+            self_t.emplace(enc);
+            if (const auto m{types::mut::from_type_modifier(fn_expr.self->modifier)}) {
+                self_t = fn_expr.self->modifier.is_ptr() ? &ctx_.get_pointer(*m, enc)
+                                                         : &ctx_.get_reference(*m, enc);
+            }
+        } else if (const auto st{fn_mod.get_sema_type_opt(fn_expr.self->name)}) {
+            self_t.emplace(const_cast<type*>(st.get()));
+        }
+        if (self_t) {
+            fn_mod.set_sema_type(fn_expr.self->name, *self_t);
+            if (const auto ident{fn_mod.ast.get_as_opt<ast::identifier_expr>(fn_expr.self->name)}) {
+                if (auto sym{ctx_.registry.get_from_opt(fn_table_idx, ident->name)}) {
+                    sym->set_kind(symbol_kind::VALUE);
+                    sym->set_status(symbol_status::RESOLVED);
+                }
+            }
+        }
+    }
 
     ASSERT(fn_expr.parameters.size() == concrete_args.size(),
            "Arity should be validated in resolve_call");
@@ -8410,8 +8516,11 @@ auto type_resolver::instantiate_generic(type&                             callee
             fn_mod.set_sema_type(param.explicit_type, resolved_param_type);
             if (resolved_param_type.get_kind() == type_kind::TYPE) {
                 const auto& p_name{fn_mod.ast.get_as<ast::identifier_expr>(param.name).name};
-                type_param_frame.insert_or_assign(p_name,
-                                                  gir::const_value{denoted_type(*body_p_type)});
+                const auto  val{gir::const_value{denoted_type(*body_p_type)}};
+                type_param_frame.insert_or_assign(p_name, val);
+                if (!ctx_.constexpr_binding_frames.empty()) {
+                    ctx_.constexpr_binding_frames.back().insert_or_assign(p_name, val);
+                }
             }
         } else {
             fn_mod.set_sema_type(param.explicit_type, *decl_p_type);
