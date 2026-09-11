@@ -2438,10 +2438,15 @@ auto type_resolver::visit(ast::node_id id, const ast::for_loop_expr& for_expr) -
 auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void {
     PROFILE_FUNCTION();
 
-    if (std::ranges::any_of(fn.parameters, [](const auto& p) { return p.is_pack; })) {
+    const bool has_pack{std::ranges::any_of(fn.parameters, [](const auto& p) { return p.is_pack; })};
+
+    // A pack function is implicitly generic (below) and, per its not-first-class rule, can never
+    // denote a `fn(...): T` value type; that combination is simply unsupported syntax for now.
+    if (has_pack && fn.is_type_expr) {
         return last_type_.emplace(ctx_.poison_node(resolving_,
                                                    id,
-                                                   "parameter packs are not yet implemented",
+                                                   "a parameter pack cannot appear in a `fn(...): "
+                                                   "type` value expression",
                                                    error::PACK_PARAM_NOT_YET_SUPPORTED,
                                                    resolving_.ast.location_of(id)));
     }
@@ -2548,7 +2553,12 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
                 sym->set_status(symbol_status::RESOLVING);
             }
         }
-        TRY_RESOLVE(param.explicit_type);
+        // An untyped pack (`rest...`) has no type to resolve; it's implicitly generic, like `auto`.
+        if (param.is_pack && !param.explicit_type.is_valid()) {
+            last_type_.emplace(ctx_.pool[{type_kind::AUTO, types::mut::CONSTANT}]);
+        } else {
+            TRY_RESOLVE(param.explicit_type);
+        }
 
         auto& param_type{denoted_type(*last_type_.take())};
         // A `type`-typed value is always compile-time known, so `constexpr` adds nothing.
