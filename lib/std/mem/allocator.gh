@@ -88,7 +88,8 @@ pub const Allocator := struct {
 
     /// `ptr` should be the return value of `create`, or otherwise
     /// have the same address and alignment property.
-    pub const destroy := fn(self, T: type, ptr: ^mut T): void {
+    pub const destroy := fn(self, ptr: auto): void {
+        using T = @typeOf(ptr);
         const raw := @sliceFromPtr(@ptrCast(^mut u8, ptr), @sizeOf(T));
         return self.vtable.free(raw, .of(T));
     };
