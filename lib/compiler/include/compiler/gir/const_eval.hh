@@ -66,6 +66,12 @@ class const_eval {
     // Attempt to evaluate node as a compile-time constant. Returns none if non-constant.
     [[nodiscard]] auto try_eval(ast::node_id id) -> stdx::option<const_value>;
 
+    // Folds two already-evaluated constants under `op_type` (e.g. for a `+=` on a folded local).
+    [[nodiscard]] auto fold_binary_values(syntax::token_type_t op_type,
+                                          const const_value&   lhs,
+                                          const const_value&   rhs,
+                                          ast::node_id         id) -> stdx::option<const_value>;
+
     [[nodiscard]] auto arm_pattern_matches(const ast::match_pattern_handle& pattern,
                                            const const_value&               target) -> bool {
         return match_pattern(pattern, target);
@@ -135,10 +141,6 @@ class const_eval {
     auto eval_assignment(ast::node_id                id,
                          const ast::assignment_expr& assign,
                          syntax::token_type_t        op_type) -> stdx::option<const_value>;
-    auto fold_binary_values(syntax::token_type_t op_type,
-                            const const_value&   lhs,
-                            const const_value&   rhs,
-                            ast::node_id         id) -> stdx::option<const_value>;
     // `lhs ++ rhs`: concatenates two array/slice/string constants; result type from `id`.
     auto fold_concat(const const_value& lhs, const const_value& rhs, ast::node_id id)
         -> stdx::option<const_value>;

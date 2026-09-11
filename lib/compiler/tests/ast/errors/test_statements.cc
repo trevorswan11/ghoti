@@ -13,6 +13,7 @@
 #include "compiler/syntax/keywords.hh"
 #include "helpers/ast.hh"
 #include "helpers/common.hh"
+#include "helpers/sema.hh"
 
 namespace ghoti::tests {
 
@@ -45,11 +46,21 @@ TEST_CASE("Mutability restrictions") {
                 std::pair{0UZ, 0UZ}};
     };
 
+    // `constexpr var` is the one legal pair (a mutable comptime local, see
+    // docs/comptime-metaprogramming-plan.md §4); every other pair of mutability modifiers,
+    // and all three together, are still rejected.
     constexpr std::array contending_mut{keywords::CONSTEXPR, keywords::VAR, keywords::CONSTANT};
     for (const auto& mut : helpers::combinations(contending_mut)) {
+        if (mut.first.type == keywords::CONSTEXPR.type && mut.second.type == keywords::VAR.type) {
+            continue;
+        }
         test_decl_fail({mut.first, mut.second}, expected_diag());
     }
     test_decl_fail({keywords::CONSTEXPR, keywords::VAR, keywords::CONSTANT}, expected_diag(3));
+}
+
+TEST_CASE("`constexpr var` is a legal mutability combination") {
+    helpers::resolve_and_check("constexpr var a := 2;");
 }
 
 TEST_CASE("Constexpr restrictions") {

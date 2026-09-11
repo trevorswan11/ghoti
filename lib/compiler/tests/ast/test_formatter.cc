@@ -433,6 +433,7 @@ const b := 2;
 TEST_CASE("formatter round trip: declarations and literals") {
     round_trips(R"(pub const version := "0.0.1";)");
     round_trips("constexpr SIZE := 2uz;");
+    round_trips("constexpr var n := 2uz;");
     round_trips("var a: i32 = undefined;");
     round_trips("var v: mut volatile i32 = 42;");
     round_trips("const v: volatile i32 = 42;");

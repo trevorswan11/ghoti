@@ -54,6 +54,9 @@ class emitter {
         bool                is_alloca{false};
         stdx::option<value> const_val;
         bool                is_const{false};
+        // A `constexpr var`: mutable, but never materializes storage. Assignment rebinds
+        // `const_val` in place instead of emitting a store.
+        bool is_constexpr_var{false};
     };
 
     struct loop_context {
@@ -277,6 +280,11 @@ class emitter {
     // Keeps a tagged union's runtime discriminant in sync with a direct `union.field = ...` write
     auto sync_tagged_union_tag(ast::node_id assign_lhs) -> void;
     auto emit_assignment(ast::node_id id, const ast::assignment_expr& assign) -> value;
+    // If `assign` targets a `constexpr var`, folds it and rebinds in place. `none` otherwise
+    // (the caller falls through to ordinary lvalue-store emission).
+    auto try_emit_constexpr_var_assignment(ast::node_id id, const ast::assignment_expr& assign)
+        -> stdx::option<value>;
+    auto update_constexpr_var(std::string_view name, const_value val) -> void;
 
     // Bit-packed `packed struct`/`packed union` field access: shift/mask over the backing int.
     [[nodiscard]] auto emit_packed_field_read(value                        backing_addr,

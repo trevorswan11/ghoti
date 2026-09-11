@@ -3444,6 +3444,19 @@ auto type_resolver::fold_concat_operand_len(ast::expr_handle operand, type& oper
     return stdx::none;
 }
 
+auto type_resolver::names_constexpr_var(ast::expr_handle expr) -> bool {
+    const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(expr)};
+    if (!ident) { return false; }
+    const auto lookup{ctx_.registry.lookup_with_depth(table_stack_, ident->name)};
+    if (!lookup) { return false; }
+    const auto node{lookup->symbol.get_data().as_opt<symbols::node_t>()};
+    if (!node) { return false; }
+    const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
+    if (!decl) { return false; }
+    return decl->has_modifier(ast::decl_modifiers::CONSTEXPR) &&
+           decl->has_modifier(ast::decl_modifiers::VARIABLE);
+}
+
 // Looks `name` up among the methods attached to `target` by `impl` blocks. Returns:
 //   - `none`               : no such extension method is visible
 //   - `ok(fn type)`        : exactly one visible method
@@ -5059,6 +5072,15 @@ auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> vo
     }
     auto& rhs_type{*last_type_.take()};
 
+    if (names_constexpr_var(ref.rhs)) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             "Cannot take a reference to a `constexpr var`; it has no storage",
+                             error::CONSTEXPR_VAR_ADDRESS_OF,
+                             resolving_.ast.location_of(id)));
+    }
+
     // Semantic safeguard: disallow taking a mutable reference to an rvalue/temporary
     // (e.g. `&mut 42`), which would immediately become a dangling reference to dropped storage.
     const bool is_mut{ref_addr_of_is_mutable(id) == types::mut::MUTABLE};
@@ -5107,6 +5129,15 @@ auto type_resolver::visit(ast::node_id id, const ast::address_of_expr& adr_of) -
         TRY_RESOLVE(adr_of.rhs);
     }
     auto& rhs_type{*last_type_.take()};
+
+    if (names_constexpr_var(adr_of.rhs)) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             "Cannot take the address of a `constexpr var`; it has no storage",
+                             error::CONSTEXPR_VAR_ADDRESS_OF,
+                             resolving_.ast.location_of(id)));
+    }
 
     // Semantic safeguard: disallow taking a mutable pointer to an rvalue/temporary
     // (e.g. `^mut 42`), which would immediately become a dangling pointer.

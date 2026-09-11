@@ -695,7 +695,9 @@ auto formatter::decl_prefix(const decl_stmt& node) -> syntax::doc_id {
         parts.emplace_back(doc_manager_.text("constexpr "));
     } else if (node.has_modifier(decl_modifiers::CONSTANT)) {
         parts.emplace_back(doc_manager_.text("const "));
-    } else if (node.has_modifier(decl_modifiers::VARIABLE)) {
+    }
+    // `constexpr var` is the one combination where both mutability keywords render together.
+    if (node.has_modifier(decl_modifiers::VARIABLE)) {
         parts.emplace_back(doc_manager_.text("var "));
     }
     return doc_manager_.concat(std::move(parts));

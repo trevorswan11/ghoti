@@ -96,6 +96,8 @@ class type_resolver {
         -> void;
     auto fold_concat_operand_len(ast::expr_handle operand, type& operand_type)
         -> stdx::option<usize>;
+    // True when `expr` is a bare identifier declared `constexpr var` (no storage, no address).
+    auto names_constexpr_var(ast::expr_handle expr) -> bool;
 
     // Expands every parameterized `impl(P) ...` whose base ctor is `base_ctor_fn` for the freshly
     // materialized concrete target `concrete`, remapping its template typing and recording one
