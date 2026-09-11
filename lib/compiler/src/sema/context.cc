@@ -245,6 +245,11 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::FENCE, params(t_auto), t_void);
 }
 
+// NOTE: build.zig's include-dir file scan only watches `.hh` for rebuild-triggering purposes,
+// not `.inc` - editing builtin.gh.inc alone will not reliably trigger a recompile of this
+// translation unit. Touch this file's own content too (this comment is deliberately here for
+// that) whenever builtin.gh.inc changes, then verify with a behavioral test, not just "the build
+// succeeded" - a stale prelude silently keeps the old content and reports success.
 constexpr std::string_view BUILTIN_MODULE_SOURCE{
 #include "builtin.gh.inc"
 };
