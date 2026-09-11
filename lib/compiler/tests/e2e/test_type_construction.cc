@@ -43,15 +43,63 @@ TEST_CASE("`@Float` rejects a bit width with no matching floating-point type") {
     )");
 }
 
-// `@Pointer`/`@Reference`/`@Slice`/`@Array` are implemented at the sema level (fold their
-// `PointerInfo`/`SliceInfo`/`ArrayInfo` descriptor and construct the matching type - see
-// `docs/comptime-metaprogramming-plan.md` §10.1) but are NOT exercised by a test here: any of
-// those descriptors has a `child: type` field, and constructing one via ordinary struct-literal
-// syntax hits a pre-existing gap where LLVM *aborts the process* (`Ty->isSized()` assertion, not a
-// clean diagnostic) trying to lay out a `type`-kind struct field for real runtime storage - the
-// same class of issue noted in §11's "aliased void" finding. A crashing scenario cannot be a
-// `helpers::expect_compile_error` test (that would abort the whole suite); fixing it for real
-// means giving `type`-kind fields a real (degenerate) sized LLVM representation in
-// `type_translator`/`llvm_lowering`, a separate unit of work - see §10.1's status note.
+TEST_CASE("`@Pointer` constructs a pointer type from a `PointerInfo` descriptor") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            const T := @Pointer(builtin.PointerInfo{ .child = i32, .is_mut = false, .is_volatile = false });
+            var v: i32 = 7;
+            var p: T = ^v;
+            return *p;
+        };
+    )") == 7);
+}
+
+TEST_CASE("`@Reference` constructs a reference type from a `PointerInfo` descriptor") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            const T := @Reference(builtin.PointerInfo{ .child = i32, .is_mut = true, .is_volatile = false });
+            var w: i32 = 3;
+            var r: T = &mut w;
+            r = 11;
+            return w;
+        };
+    )") == 11);
+}
+
+TEST_CASE("`@Slice` constructs a slice type from a `SliceInfo` descriptor") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            const T := @Slice(builtin.SliceInfo{ .child = i32, .sentinel = false, .is_mut = false, .is_volatile = false });
+            var arr: [3]i32 = .{1, 2, 3};
+            var s: T = arr[0..3];
+            return @intCast(i32, s.len);
+        };
+    )") == 3);
+}
+
+TEST_CASE("`@Array` constructs an array type from an `ArrayInfo` descriptor") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            const T := @Array(builtin.ArrayInfo{ .child = i32, .len = 4, .sentinel = false, .is_mut = false, .is_volatile = false });
+            var ar: T = .{9, 9, 9, 9};
+            return ar[0];
+        };
+    )") == 9);
+}
+
+// Regression: constructing a `PointerInfo`/`SliceInfo`/`ArrayInfo` descriptor via struct-literal
+// syntax (every one of them carries a `child: type` field) used to crash LLVM outright
+// (`Ty->isSized()` assertion trying to lay out a `type`-kind struct field for real runtime
+// storage) - the same root cause as §11's "aliased void" finding. Fixed by never physically
+// storing into a `type`-kind field (it's a compile-time-only, zero-sized placeholder purely so
+// later fields' GEP indices stay correct) rather than trying to give it a real value.
+TEST_CASE("a struct literal with a `type`-kind field constructs without crashing") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            const desc := builtin.PointerInfo{ .child = i32, .is_mut = false, .is_volatile = false };
+            return if (desc.is_mut) 1 else 0;
+        };
+    )") == 0);
+}
 
 } // namespace ghoti::tests

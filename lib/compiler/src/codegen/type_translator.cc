@@ -166,7 +166,21 @@ auto type_translator::translate_struct(const sema::types::struct_t& s, const sem
 
     std::vector<llvm::Type*> element_types;
     element_types.reserve(s.fields.size());
-    for (const auto* field : s.fields) { element_types.emplace_back(translate(*field)); }
+    for (const auto* field : s.fields) {
+        // A `type`-kind field never holds a real runtime value (`builtin::PointerInfo.child`,
+        // per §10.1's construction builtins, is the motivating case) - `translate(TYPE)` maps to
+        // `void` everywhere else in this file specifically so a `T: type` generic parameter's slot
+        // vanishes from a translated function signature (`translate_function_type`'s own
+        // `isVoidTy()` filter below), so this can't reuse that mapping here without also erasing
+        // whole function parameters elsewhere. A struct FIELD can't be erased the same way without
+        // shifting every later field's GEP index, and `void` isn't a sized LLVM type, so `field`
+        // being physically present here always needs a real (if degenerate) sized placeholder.
+        if (field->get_kind() == sema::type_kind::TYPE) {
+            element_types.emplace_back(llvm::StructType::get(context_));
+        } else {
+            element_types.emplace_back(translate(*field));
+        }
+    }
     struct_ty->setBody(element_types, s.is_packed);
     return struct_ty;
 }
