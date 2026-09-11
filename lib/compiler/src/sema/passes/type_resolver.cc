@@ -2438,6 +2438,14 @@ auto type_resolver::visit(ast::node_id id, const ast::for_loop_expr& for_expr) -
 auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void {
     PROFILE_FUNCTION();
 
+    if (std::ranges::any_of(fn.parameters, [](const auto& p) { return p.is_pack; })) {
+        return last_type_.emplace(ctx_.poison_node(resolving_,
+                                                   id,
+                                                   "parameter packs are not yet implemented",
+                                                   error::PACK_PARAM_NOT_YET_SUPPORTED,
+                                                   resolving_.ast.location_of(id)));
+    }
+
     if (fn.is_type_expr) {
         const auto true_param_count{fn.parameters.size() + (fn.self ? 1UZ : 0UZ)};
         auto       fn_param_types{ctx_.pool.get_many_unsafe(true_param_count)};

@@ -40,6 +40,8 @@ struct call_expr {
     expr_handle           function;
     std::vector<argument> arguments;
     bool                  args_force_break{false}; // trailing comma before `)`
+    // Parallel to `arguments`: true where that argument was written `expr...` (pack expansion).
+    std::vector<bool> pack_expansions{};
 
     [[nodiscard]] static auto parse(syntax::parser& parser, expr_handle function)
         -> stdx::result<expr_handle, syntax::diagnostic>;
@@ -135,6 +137,7 @@ struct for_loop_expr {
     stdx::option<stmt_handle> non_break;
     bool                      iterables_force_break{false}; // trailing comma before `)`
     bool                      captures_force_break{false};  // trailing comma before `|`
+    bool                      is_constexpr{false};          // `for constexpr (...)`
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;
@@ -170,6 +173,7 @@ struct function_expr {
         discardable_ident_handle name;
         explicit_type_id         explicit_type;
         bool                     is_constexpr{false};
+        bool                     is_pack{false}; // `rest...` / `rest: impl I...`
     };
 
     // The parameter's `auto` type must infer to a type that implements every interface in
@@ -486,6 +490,7 @@ struct while_loop_expr {
     stdx::option<expr_handle> continuation;
     block_handle              block;
     stdx::option<stmt_handle> non_break;
+    bool                      is_constexpr{false}; // `while constexpr (...)`
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;

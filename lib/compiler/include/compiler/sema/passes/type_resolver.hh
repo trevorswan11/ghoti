@@ -62,6 +62,8 @@ class type_resolver {
     static auto resolve_types(mod::module& module, context& ctx) -> mod::module_state;
 
     template <ast::IndexableID ID> auto resolve(ID id) -> void {
+        // An untyped parameter pack (`rest...`) has no type node at all; nothing to resolve.
+        if (!id.is_valid()) { return last_type_.emplace(ctx_.get_poison()); }
         resolving_.ast[id].visit([&](const auto& data) -> void { visit(id, data); });
     }
 

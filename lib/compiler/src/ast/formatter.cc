@@ -822,9 +822,15 @@ auto formatter::visit(node_id, const asm_expr& node) -> syntax::doc_id {
 auto formatter::visit(node_id, const call_expr& node) -> syntax::doc_id {
     std::vector<syntax::doc_id> args;
     args.reserve(node.arguments.size());
-    for (const auto& arg : node.arguments) {
-        args.emplace_back(arg.visit([&](expr_handle h) { return format(h); },
-                                    [&](explicit_type_id t) { return format(t); }));
+    for (usize i{0}; i < node.arguments.size(); ++i) {
+        const auto& arg{node.arguments[i]};
+        auto        rendered{arg.visit([&](expr_handle h) { return format(h); },
+                                [&](explicit_type_id t) { return format(t); })};
+        // `f(rest...)`: this argument was written with a trailing pack-expansion `...`.
+        if (i < node.pack_expansions.size() && node.pack_expansions[i]) {
+            rendered = doc_manager_.concat({rendered, doc_manager_.text("...")});
+        }
+        args.emplace_back(rendered);
     }
     return doc_manager_.concat({
         format(node.function),
@@ -859,7 +865,7 @@ auto formatter::visit(node_id, const for_loop_expr& node) -> syntax::doc_id {
     }
 
     return doc_manager_.concat({
-        doc_manager_.text("for "),
+        doc_manager_.text(node.is_constexpr ? "for constexpr " : "for "),
         doc_manager_.delimited(
             "(", ")", std::move(iterables), false, false, node.iterables_force_break),
         doc_manager_.text(" "),
@@ -901,12 +907,19 @@ auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
     for (usize idx{0}; idx < node.parameters.size(); ++idx) {
         const auto& param{node.parameters[idx]};
         auto        bound{impl_bound_for(idx)};
+        // An untyped pack (`rest...`) has no type to render at all.
+        if (param.is_pack && !param.explicit_type.is_valid()) {
+            params.emplace_back(
+                doc_manager_.concat({format(param.name), doc_manager_.text("...")}));
+            continue;
+        }
         params.emplace_back(doc_manager_.concat(
             {doc_manager_.text(param.is_constexpr ? "constexpr " : ""),
              format(param.name),
              doc_manager_.text(": "),
              bound == doc_manager_.nil() ? format(param.explicit_type)
-                                         : with_modifier(param.explicit_type, bound)}));
+                                         : with_modifier(param.explicit_type, bound),
+             doc_manager_.text(param.is_pack ? "..." : "")}));
     }
     if (node.variadic) { params.emplace_back(doc_manager_.text("...")); }
 
@@ -1214,7 +1227,7 @@ auto formatter::visit(node_id, const interface_expr& node) -> syntax::doc_id {
 
 auto formatter::visit(node_id, const while_loop_expr& node) -> syntax::doc_id {
     return doc_manager_.concat({
-        doc_manager_.text("while ("),
+        doc_manager_.text(node.is_constexpr ? "while constexpr (" : "while ("),
         format(node.condition),
         doc_manager_.text(")"),
         node.continuation

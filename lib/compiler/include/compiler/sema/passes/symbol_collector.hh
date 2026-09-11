@@ -32,6 +32,8 @@ class symbol_collector {
     static auto collect_symbols(mod::module& module, context& ctx) -> mod::module_state;
 
     template <ast::IndexableID ID> auto collect(ID id) -> void {
+        // An untyped parameter pack (`rest...`) has no type node at all; nothing to collect.
+        if (!id.is_valid()) { return; }
         collecting_.ast[id].visit([&](const auto& data) -> void { visit(id, data); });
     }
 

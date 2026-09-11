@@ -297,6 +297,7 @@ auto call_expr::parse(syntax::parser& parser, expr_handle function)
     PROFILE_FUNCTION();
     const auto            start_token{parser.get_current_token()};
     std::vector<argument> arguments;
+    std::vector<bool>     pack_expansions;
     // Guaranteed to roll back if there is an error
     const auto parse_expr_unsuccessful = [&] -> bool {
         // Try an expression first to prevent ambiguity between reference operators
@@ -305,6 +306,7 @@ auto call_expr::parse(syntax::parser& parser, expr_handle function)
         if (auto expr{parser.parse_expression()}) {
             transaction.commit();
             arguments.emplace_back(*expr);
+            pack_expansions.emplace_back(false);
             return false;
         }
         return true;
@@ -322,6 +324,11 @@ auto call_expr::parse(syntax::parser& parser, expr_handle function)
         // Advance cannot be called here since explicit type relies on peek, not current
         if (parse_expr_unsuccessful()) {
             arguments.emplace_back(TRY(explicit_type::parse(parser)));
+            pack_expansions.emplace_back(false);
+        } else if (parser.peek_token_is(syntax::token_type_t::ELLIPSIS)) {
+            // `f(pre, rest..., post)`: the argument just parsed is a pack expansion.
+            parser.advance();
+            pack_expansions.back() = true;
         }
         if (!parser.peek_token_is(syntax::token_type_t::RPAREN)) {
             TRY(parser.expect_peek(syntax::token_type_t::COMMA));
@@ -331,7 +338,8 @@ auto call_expr::parse(syntax::parser& parser, expr_handle function)
     }
     TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
 
-    return parser.add_expr<call_expr>(start_token, function, std::move(arguments), force_break);
+    return parser.add_expr<call_expr>(
+        start_token, function, std::move(arguments), force_break, std::move(pack_expansions));
 }
 
 auto do_while_loop_expr::parse(syntax::parser& parser)
@@ -663,6 +671,12 @@ auto for_loop_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, s
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
 
+    bool is_constexpr{false};
+    if (parser.peek_token_is(syntax::token_type_t::CONSTEXPR)) {
+        parser.advance();
+        is_constexpr = true;
+    }
+
     // Iterables have to be surrounded by parentheses
     TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
     if (parser.peek_token_is(syntax::token_type_t::RPAREN)) {
@@ -723,9 +737,18 @@ auto for_loop_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, s
 
     // Loops must have a well formed block and may have an alternate in non-break cases
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
-    const block_handle block{TRY(block_stmt::parse(parser))};
-    const auto         non_break{
-        TRY(parser.try_parse_restricted_alternate(syntax::error::ILLEGAL_LOOP_NON_BREAK))};
+    const block_handle        block{TRY(block_stmt::parse(parser))};
+    stdx::option<stmt_handle> non_break;
+    if (is_constexpr) {
+        if (parser.peek_token_is(syntax::token_type_t::ELSE)) {
+            return make_syntax_err("`for constexpr` cannot have an `else`/non-break clause",
+                                   syntax::error::CONSTEXPR_LOOP_HAS_ELSE,
+                                   parser.get_peek_token());
+        }
+    } else {
+        non_break =
+            TRY(parser.try_parse_restricted_alternate(syntax::error::ILLEGAL_LOOP_NON_BREAK));
+    }
 
     // The number of captures must align with the number of iterables
     if (captures.size() != iterables.size()) {
@@ -740,7 +763,8 @@ auto for_loop_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, s
                                           block,
                                           non_break,
                                           iterables_force_break,
-                                          captures_force_break);
+                                          captures_force_break,
+                                          is_constexpr);
 }
 
 // Variadic must be handled first and should break the enclosing loop
@@ -853,7 +877,9 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
         bool first{true};
         while (!parser.peek_token_is(syntax::token_type_t::RPAREN) &&
                !parser.peek_token_is(syntax::token_type_t::END)) {
-            if (TRY(try_parse_variadic_fn(parser))) {
+            // Skip only for the first param with no self: current already sits on its name
+            // (not a delimiter), so this peek-for-bare-`...` check would misfire on `name...`.
+            if (!(first && !self) && TRY(try_parse_variadic_fn(parser))) {
                 variadic = true;
                 break;
             }
@@ -871,36 +897,57 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
                                 ? parser.add_node<discardable_ident_handle, ast::discarded>(
                                       parser.get_current_token())
                                 : discardable_ident_handle{TRY(identifier_expr::parse(parser))}};
-            const auto [param_type, initialized]{TRY(explicit_type::parse_opt_init(parser))};
 
-            // There are no default values for parameters, and they must be explicitly typed
-            if (initialized || !param_type) {
-                return make_syntax_err("Function parameters may not have default values",
-                                       syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE,
-                                       parser.get_location_of(*param_type));
-            }
+            // An untyped pack (`rest...`) has no `: Type` at all; check before requiring one.
+            bool is_pack{false};
+            auto param_explicit_type{explicit_type_id::make_invalid()};
+            if (parser.peek_token_is(syntax::token_type_t::ELLIPSIS)) {
+                parser.advance();
+                is_pack = true;
+            } else {
+                const auto [param_type, initialized]{TRY(explicit_type::parse_opt_init(parser))};
 
-            const auto explicit_type{*param_type};
-            if (explicit_type.is<identifier_expr>()) {
-                // noreturn is not allowed for parameters
-                if (explicit_type.get_token_type() == syntax::token_type_t::NORETURN) {
-                    return make_syntax_err("Function parameter types may not be marked `noreturn`",
-                                           syntax::error::FN_PARAMETER_IS_NORETURN,
-                                           parser.get_location_of(explicit_type));
+                // There are no default values for parameters, and they must be explicitly typed
+                if (initialized || !param_type) {
+                    return make_syntax_err("Function parameters may not have default values",
+                                           syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE,
+                                           parser.get_location_of(*param_type));
+                }
+
+                param_explicit_type = *param_type;
+                if (param_explicit_type.is<identifier_expr>()) {
+                    // noreturn is not allowed for parameters
+                    if (param_explicit_type.get_token_type() == syntax::token_type_t::NORETURN) {
+                        return make_syntax_err(
+                            "Function parameter types may not be marked `noreturn`",
+                            syntax::error::FN_PARAMETER_IS_NORETURN,
+                            parser.get_location_of(param_explicit_type));
+                    }
+                }
+
+                if (auto bound{parser.take_pending_impl_bound()}) {
+                    impl_bounds.emplace_back(function_expr::impl_bound{
+                        .param_index = static_cast<u32>(parameters.size()),
+                        .interfaces  = std::move(*bound),
+                    });
+                    // `rest: impl I...`: the pack marker follows the bound's type expression.
+                    if (parser.peek_token_is(syntax::token_type_t::ELLIPSIS)) {
+                        parser.advance();
+                        is_pack = true;
+                    }
                 }
             }
 
-            if (auto bound{parser.take_pending_impl_bound()}) {
-                impl_bounds.emplace_back(function_expr::impl_bound{
-                    .param_index = static_cast<u32>(parameters.size()),
-                    .interfaces  = std::move(*bound),
-                });
-            }
-            parameters.emplace_back(name, explicit_type, is_constexpr);
+            parameters.emplace_back(name, param_explicit_type, is_constexpr, is_pack);
             if (!parser.peek_token_is(syntax::token_type_t::RPAREN)) {
                 TRY(parser.expect_peek(syntax::token_type_t::COMMA));
                 // A comma immediately before `)` is a trailing comma: keep one param per line.
                 params_force_break = parser.peek_token_is(syntax::token_type_t::RPAREN);
+                if (is_pack && !params_force_break) {
+                    return make_syntax_err("A parameter pack must be the last parameter",
+                                           syntax::error::PACK_PARAM_NOT_LAST,
+                                           parser.get_current_token());
+                }
             }
             first = false;
         }
@@ -1260,12 +1307,26 @@ auto label_expr::deconstruct_body(syntax::parser& parser, stmt_handle raw_stmt)
     case node_kind::EXPRESSION_STATEMENT: {
         const auto& stmt{parser.get_node<expr_stmt>(*raw_stmt)};
         switch (stmt.expression->get_kind()) {
-        case node_kind::DO_WHILE_LOOP_EXPRESSION:
         case node_kind::FOR_LOOP_EXPRESSION:
+            if (parser.get_node<for_loop_expr>(*stmt.expression).is_constexpr) {
+                return make_syntax_err("`for constexpr` cannot be labeled; it has no `break`/"
+                                       "`continue` to target",
+                                       syntax::error::CONSTEXPR_LOOP_LABELED,
+                                       parser.get_location_of(*raw_stmt));
+            }
+            return stmt.expression;
+        case node_kind::WHILE_LOOP_EXPRESSION:
+            if (parser.get_node<while_loop_expr>(*stmt.expression).is_constexpr) {
+                return make_syntax_err("`while constexpr` cannot be labeled; it has no `break`/"
+                                       "`continue` to target",
+                                       syntax::error::CONSTEXPR_LOOP_LABELED,
+                                       parser.get_location_of(*raw_stmt));
+            }
+            return stmt.expression;
+        case node_kind::DO_WHILE_LOOP_EXPRESSION:
         case node_kind::IF_EXPRESSION:
         case node_kind::INFINITE_LOOP_EXPRESSION:
-        case node_kind::MATCH_EXPRESSION:
-        case node_kind::WHILE_LOOP_EXPRESSION:    return stmt.expression;
+        case node_kind::MATCH_EXPRESSION:         return stmt.expression;
         default:
             return make_syntax_err("Labeled expressions may only be conditionals or loops",
                                    syntax::error::ILLEGAL_LABEL_EXPRESSION,
@@ -1675,6 +1736,12 @@ auto while_loop_expr::parse(syntax::parser& parser)
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
 
+    bool is_constexpr{false};
+    if (parser.peek_token_is(syntax::token_type_t::CONSTEXPR)) {
+        parser.advance();
+        is_constexpr = true;
+    }
+
     // Conditions have to be surrounded by parentheses
     TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
     parser.advance();
@@ -1708,10 +1775,20 @@ auto while_loop_expr::parse(syntax::parser& parser)
 
     // Loops must have a well formed block and may have an alternate in non-break cases
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
-    const block_handle block{TRY(block_stmt::parse(parser))};
-    const auto         non_break{
-        TRY(parser.try_parse_restricted_alternate(syntax::error::ILLEGAL_LOOP_NON_BREAK))};
-    return parser.add_expr<while_loop_expr>(start_token, condition, continuation, block, non_break);
+    const block_handle        block{TRY(block_stmt::parse(parser))};
+    stdx::option<stmt_handle> non_break;
+    if (is_constexpr) {
+        if (parser.peek_token_is(syntax::token_type_t::ELSE)) {
+            return make_syntax_err("`while constexpr` cannot have an `else`/non-break clause",
+                                   syntax::error::CONSTEXPR_LOOP_HAS_ELSE,
+                                   parser.get_peek_token());
+        }
+    } else {
+        non_break =
+            TRY(parser.try_parse_restricted_alternate(syntax::error::ILLEGAL_LOOP_NON_BREAK));
+    }
+    return parser.add_expr<while_loop_expr>(
+        start_token, condition, continuation, block, non_break, is_constexpr);
 }
 
 auto parse_member_block(syntax::parser& parser) -> stdx::result<member_list, syntax::diagnostic> {
