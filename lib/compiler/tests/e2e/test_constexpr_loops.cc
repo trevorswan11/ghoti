@@ -78,11 +78,6 @@ TEST_CASE("`for constexpr` unrolls over a module-level `constexpr` array") {
     )") == 60);
 }
 
-// Known limitation (§5.2): a local (function-scope) `constexpr` array's value isn't nameable to
-// `for constexpr`'s own iterable-folding check, which runs during the resolve pass - only a
-// module-level array's value is reachable there today. See the sibling known-limitation test in
-// test_concat.cc for why a full fix (resolve-time AND emit-time registration, plus a
-// materialize_const mismatch this surfaced) is bigger than this phase scoped.
 TEST_CASE("`for constexpr` over a function-local `constexpr` array is a clean compile error") {
     helpers::expect_compile_error(R"(
         pub const main := fn(): i32 {
@@ -105,9 +100,6 @@ TEST_CASE("`for constexpr` unrolls over a range with a companion `0..` index") {
     )") == 63);
 }
 
-// Two (or more) driving iterables in parallel - v1 was limited to one driver plus an optional
-// companion `0..` index range; now any number of packs/ranges/`constexpr` array-or-slice values
-// may drive the loop together, zipped by index like Zig's `for (a, b) |x, y|`.
 TEST_CASE("`for constexpr` unrolls over two arrays in parallel") {
     CHECK(helpers::compile_and_run(R"(
         constexpr a: [3]i32 = .{1, 2, 3};
@@ -121,7 +113,7 @@ TEST_CASE("`for constexpr` unrolls over two arrays in parallel") {
 }
 
 TEST_CASE("`for constexpr` unrolls over three iterables (array, range, array) plus a companion "
-         "index") {
+          "index") {
     CHECK(helpers::compile_and_run(R"(
         constexpr a: [3]i32 = .{1, 2, 3};
         constexpr b: [3]i32 = .{4, 5, 6};
@@ -135,9 +127,6 @@ TEST_CASE("`for constexpr` unrolls over three iterables (array, range, array) pl
     )") == (1 + 0 + 4 + 0) + (2 + 1 + 5 + 1) + (3 + 2 + 6 + 2));
 }
 
-// `weights` must be module-scope here, not a local inside `f`: a local `constexpr` array's own
-// value isn't nameable to const-eval yet (a separate, pre-existing, documented limitation - see
-// test_concat.cc - unrelated to parallel iteration itself).
 TEST_CASE("`for constexpr` mixes a parameter pack with an array driver in parallel") {
     CHECK(helpers::compile_and_run(R"(
         constexpr weights: [3]i32 = .{2, 3, 5};

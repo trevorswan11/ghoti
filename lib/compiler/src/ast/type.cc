@@ -80,9 +80,6 @@ auto explicit_function_type::parse(syntax::parser& parser, bool allow_trailing_b
         TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
     }
 
-    // Optional `callconv(.x)`, same spelling and position an ordinary function declaration's own
-    // signature already accepts - a `fn(...): T` type with none defaults to `.c`, matching the
-    // convention a value of this type must actually be called through.
     const auto conv{TRY(try_parse_callconv(parser))};
 
     // There must be a return type but there cannot be a block

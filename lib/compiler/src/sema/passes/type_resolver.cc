@@ -98,13 +98,8 @@ auto type_resolver::resolve_types(mod::module& module, context& ctx) -> mod::mod
         if (last_type_->is_poison()) { return resolving_.set_sema_type(id, *last_type_); } \
     } while (false)
 
-// Fetches one required descriptor field into `out_var` (via `read_desc_field`, see above) and
-// bails with `field_err(field_name)` if it's missing or the wrong kind - the per-kind
-// construction builtins' shared "read a required field" step, uniform enough here (unlike the
-// aggregate synthesizers below, whose messages combine several fields into one diagnostic) to
-// collapse fetch-and-check into one line per field.
-#define TRY_DESC_FIELD(out_var, T, field_name)                     \
-    const auto out_var{read_desc_field<T>(*desc, field_name)};     \
+#define TRY_DESC_FIELD(out_var, T, field_name)                 \
+    const auto out_var{read_desc_field<T>(*desc, field_name)}; \
     if (!out_var) { return field_err(field_name); }
 
 namespace {
@@ -151,12 +146,7 @@ namespace {
     return t;
 }
 
-// Reads one field off a compile-time-known descriptor struct - the fetch-then-narrow pattern
-// every reflection construction builtin (`@Int`/`@Float`/.../`@Fn`, and the `@Struct`/`@Union`/
-// `@Enum` synthesizers) repeats once per field. A field name is now spelled once per read instead
-// of once for `get_field_opt` and again for `as_opt`; a `u64` field always goes through
-// `as_u64_opt` (any integer-representation arm, not just a literal `u64`) and a `sema::type&`
-// field unwraps the descriptor's own `stdx::option<type&>` layer so a caller never double-derefs.
+// Reads one field off a compile-time-known descriptor struct
 template <typename T>
 [[nodiscard]] auto read_desc_field(const gir::const_struct& desc, std::string_view name)
     -> stdx::option<T> {
@@ -169,12 +159,7 @@ template <typename T>
         if (!v || !*v) { return stdx::none; }
         return **v;
     } else {
-        // `field` is bound through a `const` descriptor, so `as_opt`'s deducing-this overload
-        // returns a const-dispatched option, not `stdx::option<T>` itself - copy the value out
-        // explicitly rather than relying on an implicit conversion between the two.
-        const auto v{field->as_opt<T>()};
-        if (!v) { return stdx::none; }
-        return T{*v};
+        return field->as_opt<T>().materialize();
     }
 }
 
@@ -967,21 +952,7 @@ template <ast::IndexableID ID>
         break;
     }
     case token_type_t::BUILTIN_FIELD: {
-        // Data-field form only for now (§9.2's flagship use case: `@field(v, f.name)` reading an
-        // instance's own field by a compile-time-known name, lvalue-capable exactly like
-        // `v.name`). The type-first-arg form (`@field(T, name)` reaching a static/const/unbound
-        // method) and the bound-method form on an instance are a real follow-up, not attempted
-        // here - both need the same member-resolution machinery an ordinary `.name` dot-expr
-        // already has (symbol-table proxy lookup, static-member globals, bound-method values),
-        // which is substantially more than the data-field case alone.
         auto& arg_type{*get_resolved_call_arg_type(call.arguments[0])};
-        // A bare type name used as an ordinary value expression resolves directly to that
-        // type_kind (e.g. `Point`'s own sema type here is STRUCT, not a `TYPE`-kind wrapper -
-        // `resolve_ident` treats a user-defined type name like any other symbol reference), so
-        // `arg_type.get_kind()` can't tell a type reference apart from a real instance of the
-        // same struct/union. Folding the argument and checking whether it denotes a type (the
-        // same test `dot_object_is_type_namespace` uses for `Type.member` at the emitter level)
-        // is the actual signal.
         if (const auto arg0_h{call.arguments[0].as_opt<ast::expr_handle>()}) {
             gir::const_eval type_check{ctx_, resolving_};
             if (const auto folded{type_check.try_eval(*arg0_h)};
@@ -1121,7 +1092,7 @@ template <ast::IndexableID ID>
                         error::CONSTEXPR_EVALUATION_FAILED,
                         get_call_arg_location(call.arguments[0]));
                 }
-                param_types[i] = &**pt;
+                param_types[i] = pt->get();
             }
 
             types::key_t fn_key{type_kind::FUNCTION, types::mut::CONSTANT};
@@ -1129,8 +1100,7 @@ template <ast::IndexableID ID>
             fn_key.imprint(*ret_v);
             fn_key.imprint(*conv);
             auto& built{*ctx_.pool[fn_key]};
-            built.resolve_if<types::function>(
-                param_types, *ret_v, *has_self_v, *variadic_v, *conv);
+            built.resolve_if<types::function>(param_types, *ret_v, *has_self_v, *variadic_v, *conv);
             return_type = wrap_type(built);
             break;
         }
@@ -2080,7 +2050,7 @@ auto type_resolver::synthesize_struct(usize                             disc,
             return field_err(
                 "every element of 'fields' needs a compile-time 'name', 'type_', 'has_default'");
         }
-        field_types[i] = &*type_v;
+        field_types[i] = type_v.get();
 
         stdx::option<ast::expr_handle> default_value;
         if (*has_default_v) {
@@ -2184,10 +2154,7 @@ auto type_resolver::synthesize_union(usize                             disc,
     auto       field_types{ctx_.pool.get_many_unsafe(n)};
     const auto scope_idx{ctx_.registry.create()};
 
-    // A union field never has a default (`UnionFieldInfo` carries no `has_default` at all -
-    // unlike `FieldInfo`, since only one variant is ever active, a per-field default makes no
-    // sense), so unlike `@Struct`, `@Union` never consumes anything from `defaults...` - checked
-    // once up front instead of threading a would-always-be-zero counter through the loop below.
+    // A union field never has a default (`UnionFieldInfo` carries no `has_default` at all
     if (!defaults.empty()) {
         return make_sema_err(
             "'@Union': a union field never has a default; 'defaults...' must be empty",
@@ -2202,7 +2169,7 @@ auto type_resolver::synthesize_union(usize                             disc,
         if (!name_v || !type_v) {
             return field_err("every element of 'fields' needs a compile-time 'name' and 'type_'");
         }
-        field_types[i] = &*type_v;
+        field_types[i] = type_v.get();
 
         const auto name_ident{synthesize_ident(*name_v, true)};
         const auto ty_ident{synthesize_ident(ctx_.type_display_name(*type_v), false)};
@@ -3071,14 +3038,8 @@ namespace {
 
 } // namespace
 
-// Unrolls a `for constexpr`: resolves the block once per compile-time-known iteration, each under
-// its own `constexpr_frame` slot and diffed into a per-iteration `body_type_diff` the emitter
-// replays
 namespace {
 
-// One driving iterable's resolved domain: a parameter pack (no values of its own - aliases the
-// pack's own hidden per-element bindings instead, purely at emit time) or a range/array/slice
-// value folded down to a concrete element type and, for a non-pack driver, its per-index values.
 struct constexpr_for_driver {
     bool                           is_pack{false};
     type*                          elem_type{nullptr};
@@ -3090,9 +3051,7 @@ struct constexpr_for_driver {
 
 // Unrolls a `for constexpr`: resolves the block once per compile-time-known iteration, each under
 // its own `constexpr_frame` slot and diffed into a per-iteration `body_type_diff` the emitter
-// replays. Supports N parallel driving iterables (packs, ranges, and `constexpr` array/slice
-// values, freely mixed) plus an optional trailing open-ended `0..` companion index range, which
-// never drives the count itself.
+// replays
 auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_expr& for_expr)
     -> void {
     PROFILE_FUNCTION();
@@ -3108,14 +3067,14 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
     }
     check_constexpr_loop_jumps(for_expr.block);
 
-    auto&       loop_type{resolving_.get_sema_type(id)};
-    const scope s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
+    auto&           loop_type{resolving_.get_sema_type(id)};
+    const scope     s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
     gir::const_eval evaluator{ctx_, resolving_};
     auto&           usize_type{ctx_.get_builtin_resolved_type(type_kind::USIZE)};
 
     // A trailing open-ended `0..` range is the companion index, not a driver - same rule as v1,
     // just checked positionally last instead of assuming exactly two iterables total.
-    const bool has_companion{[&] {
+    const bool  has_companion{[&] {
         if (for_expr.iterables.size() < 2) { return false; }
         const auto rng{resolving_.ast.get_as_opt<ast::range_expr>(*for_expr.iterables.back())};
         return rng && !rng->rhs;
@@ -3137,14 +3096,15 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
         const auto  driver_id{*for_expr.iterables[d]};
         const auto& cap{for_expr.captures[d]};
         auto&       drv{drivers[d]};
-        drv.name = cap.payload.is<ast::identifier_expr>()
-                       ? stdx::option<std::string_view>{
-                             resolving_.ast.get_as<ast::identifier_expr>(cap.payload).name}
-                       : stdx::none;
+        drv.name =
+            cap.payload.is<ast::identifier_expr>()
+                ? stdx::option<std::string_view>{resolving_.ast
+                                                     .get_as<ast::identifier_expr>(cap.payload)
+                                                     .name}
+                : stdx::none;
 
         const auto driver_ident{resolving_.ast.get_as_opt<ast::identifier_expr>(driver_id)};
-        drv.is_pack =
-            driver_ident && current_pack_ && driver_ident->name == current_pack_->name;
+        drv.is_pack = driver_ident && current_pack_ && driver_ident->name == current_pack_->name;
 
         usize this_count{0};
         if (drv.is_pack) {
@@ -3173,8 +3133,8 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
                 }
                 drv.elem_type = &slice_data->underlying;
                 const auto lo{range->lhs ? evaluator.try_eval(*range->lhs)
-                                        : stdx::option<gir::const_value>{
-                                              gir::const_value{u64{0}, *drv.elem_type}}};
+                                         : stdx::option<gir::const_value>{
+                                               gir::const_value{u64{0}, *drv.elem_type}}};
                 const auto hi{evaluator.try_eval(*range->rhs)};
                 const auto lo_i{lo ? lo->as_int_opt() : stdx::none};
                 const auto hi_i{hi ? hi->as_int_opt() : stdx::none};
@@ -3187,7 +3147,7 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
                         resolving_.ast.location_of(driver_id)));
                 }
                 const bool inclusive{driver_id.get_token_type() ==
-                                    syntax::token_type_t::DOT_DOT_EQ};
+                                     syntax::token_type_t::DOT_DOT_EQ};
                 const i128 raw_count{*hi_i - *lo_i + (inclusive ? 1 : 0)};
                 this_count = raw_count > 0 ? static_cast<usize>(raw_count) : 0UZ;
                 drv.elem_values.reserve(this_count);
@@ -3253,9 +3213,10 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
     }
     const auto companion_name{
         has_companion && for_expr.captures.back().payload.is<ast::identifier_expr>()
-            ? stdx::option<std::string_view>{
-                  resolving_.ast.get_as<ast::identifier_expr>(for_expr.captures.back().payload)
-                      .name}
+            ? stdx::option<std::string_view>{resolving_.ast
+                                                 .get_as<ast::identifier_expr>(
+                                                     for_expr.captures.back().payload)
+                                                 .name}
             : stdx::none};
 
     const auto saved_for_gi{for_generic_instantiation_};
@@ -9435,21 +9396,6 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::identifier_expr& 
     }
 
     auto symbol_opt{ctx_.registry.lookup(table_stack_, ident.name)};
-    // A type-position identifier must never resolve to a same-named VALUE-kind symbol in an
-    // inner scope shadowing an outer TYPE-kind one (e.g. resolving `void` from inside a union
-    // body one of whose own arms happens to be named `void` too - type and value names occupy
-    // separate namespaces conceptually, but `lookup` above doesn't know that). Reliably fixed for
-    // a sibling already, concretely resolved to a value by the time it's looked up - walks
-    // outward for an actual TYPE-kind match instead of settling for the first same-named symbol
-    // regardless of kind. Deliberately does NOT touch a match that's currently, actively
-    // resolving itself (`RESOLVING` - the genuine self-reference case, `@"x": x`, where the
-    // existing "used during its own resolution" cycle diagnostic must still fire) or one not yet
-    // reached at all (`UNRESOLVED`, no kind assigned): an outer TYPE isn't independently
-    // findable as its own registry entry in that case (it's recognized structurally via
-    // `resolve_ident`'s own keyword handling once nothing shadows it), so a not-yet-processed
-    // same-named sibling here still reports a clean "referenced before its declaration" rather
-    // than resolving correctly - real progress over the original silent wrong-poison, but not
-    // the full fix. See the matching test in test_type_info_builtin.cc for the exact boundary.
     if (symbol_opt && symbol_opt->get_status() != sema::symbol_status::RESOLVING &&
         (!symbol_opt->has_kind() || symbol_opt->get_kind() != sema::symbol_kind::TYPE)) {
         for (const auto idx : table_stack_ | std::views::reverse) {

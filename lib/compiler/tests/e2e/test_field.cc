@@ -37,11 +37,8 @@ TEST_CASE("`@field` reads through a pointer and a reference") {
     )") == 7);
 }
 
-// A generic, name-driven field reader is the flagship use case (`std::meta`'s field-walking
-// helpers): the name comes from a runtime-facing but compile-time-foldable expression, not a
-// hardcoded literal, exercising the same `const_eval`-fold path `@fieldType`/`@fieldDefault`
-// already use for their own name argument.
-TEST_CASE("`@field`'s name argument may be any compile-time-foldable expression, not just a literal") {
+TEST_CASE(
+    "`@field`'s name argument may be any compile-time-foldable expression, not just a literal") {
     CHECK(helpers::compile_and_run(R"(
         const Point := struct { x: i32, y: i32 };
         const field_name := fn(): []u8 { return "y"; };

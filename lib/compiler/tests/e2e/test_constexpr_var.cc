@@ -69,9 +69,6 @@ TEST_CASE("a `constexpr var` assignment's RHS must fold") {
     )");
 }
 
-// An aggregate `constexpr var` has no address (same rule as a scalar one - see
-// CONSTEXPR_VAR_ADDRESS_OF), so it lives only in the constexpr_frame; reads/writes through a
-// field or element rebuild the whole value functionally rather than storing through any address.
 TEST_CASE("`constexpr var` reads back an array element") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {

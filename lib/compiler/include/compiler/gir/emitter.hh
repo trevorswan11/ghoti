@@ -111,10 +111,7 @@ class emitter {
     // Emits the member functions of an `impl [I for] T { ... }` block under names scoped to the
     // impl's own symbol table, plus any interface default methods the impl inherits.
     auto emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -> void;
-    // Emits one inherited interface default-method body for a concrete impl target. The body's
-    // AST lives in `iface_mod`; `self` is retyped to the target, bare `self.method(...)` calls
-    // are redirected to the impl's own methods, and `body_type_diff[typing_key]` is replayed so
-    // associated types resolve to the impl's bindings.
+    // Emits one inherited interface default-method body for a concrete impl target
     auto emit_impl_default_method(std::string_view          gir_name,
                                   usize                     impl_scope_idx,
                                   mod::module&              iface_mod,
@@ -206,9 +203,7 @@ class emitter {
     auto ensure_builtin_runtime(std::string_view name) -> void;
     auto spill_to_temporary(value val, sema::type& type, bool is_const = false) -> value;
     auto lvalue_of_expr(ast::node_id id, sema::type& sema_type) -> value;
-    // `@field(v, name)`'s own field address (data-field form only) - shared by `emit_call`'s
-    // read path (which loads it) and `emit_lvalue`'s call_expr case (an assignment target).
-    // `none` when the resolver's own validation somehow doesn't hold at emit time.
+    // `@field(v, name)`'s own field address (data-field form only)
     auto try_emit_field_builtin_addr(const ast::call_expr& call) -> stdx::option<value>;
 
     // An escape hatch for materializing constant evaluated aggregates since they cannot
@@ -301,28 +296,22 @@ class emitter {
     // If `assign` targets a `constexpr var`, folds it and rebinds in place. `none` otherwise
     auto try_emit_constexpr_var_assignment(ast::node_id id, const ast::assignment_expr& assign)
         -> stdx::option<value>;
-    // One level of `p.field = ...` / `p.field += ...` into an aggregate `constexpr var` - folds
-    // the whole aggregate anew with just that field replaced (there is no address to store
-    // through) and writes the result back via `update_constexpr_var`.
+    // One level of `p.field = ...` / `p.field += ...` into an aggregate `constexpr var`
     auto try_emit_constexpr_var_field_assignment(ast::node_id                id,
-                                                  const ast::assignment_expr& assign,
-                                                  std::string_view            root_name,
-                                                  local_binding&              binding,
-                                                  const ast::dot_expr&        dot)
-        -> stdx::option<value>;
+                                                 const ast::assignment_expr& assign,
+                                                 std::string_view            root_name,
+                                                 local_binding&              binding,
+                                                 const ast::dot_expr& dot) -> stdx::option<value>;
     // Same shape as the field form, for `arr[k] = ...` into an array-typed `constexpr var`.
     auto try_emit_constexpr_var_element_assignment(ast::node_id                id,
-                                                    const ast::assignment_expr& assign,
-                                                    std::string_view            root_name,
-                                                    local_binding&              binding,
-                                                    const ast::index_expr&      idx)
+                                                   const ast::assignment_expr& assign,
+                                                   std::string_view            root_name,
+                                                   local_binding&              binding,
+                                                   const ast::index_expr&      idx)
         -> stdx::option<value>;
     // Walks a chain of `dot_expr`/`index_expr` wrappers down to its root identifier and returns
-    // that identifier's binding if it names a `constexpr var` - used to catch (and diagnose,
-    // rather than silently no-op) an assignment nested deeper than the one level actually
-    // supported above (`p.a.b = ...`), which would otherwise fall through to an ordinary lvalue
-    // store into a disposable materialized copy.
-    auto constexpr_var_root_binding(ast::expr_handle expr) -> local_binding*;
+    // that identifier's binding if it names a `constexpr var`
+    auto constexpr_var_root_binding(ast::expr_handle expr) -> stdx::option<local_binding&>;
     auto update_constexpr_var(std::string_view name, const_value val) -> void;
 
     // Bit-packed `packed struct`/`packed union` field access: shift/mask over the backing int.

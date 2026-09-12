@@ -168,9 +168,7 @@ namespace ghoti::ast {
 [[nodiscard]] auto try_parse_variadic_fn(syntax::parser& parser)
     -> stdx::result<bool, syntax::diagnostic>;
 
-// Optional `callconv(.ident)` between the parameter list and the return-type colon; defaults to
-// `.c` when absent. Shared with `explicit_function_type::parse` so `fn(...) callconv(.x): T`
-// type annotations accept the identical spelling a function declaration's own signature does.
+// Optional `callconv(.ident)` between the parameter list and the return-type colon
 [[nodiscard]] auto try_parse_callconv(syntax::parser& parser)
     -> stdx::result<calling_convention, syntax::diagnostic>;
 
