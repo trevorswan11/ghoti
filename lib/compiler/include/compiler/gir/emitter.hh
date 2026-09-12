@@ -206,6 +206,10 @@ class emitter {
     auto ensure_builtin_runtime(std::string_view name) -> void;
     auto spill_to_temporary(value val, sema::type& type, bool is_const = false) -> value;
     auto lvalue_of_expr(ast::node_id id, sema::type& sema_type) -> value;
+    // `@field(v, name)`'s own field address (data-field form only) - shared by `emit_call`'s
+    // read path (which loads it) and `emit_lvalue`'s call_expr case (an assignment target).
+    // `none` when the resolver's own validation somehow doesn't hold at emit time.
+    auto try_emit_field_builtin_addr(const ast::call_expr& call) -> stdx::option<value>;
 
     // An escape hatch for materializing constant evaluated aggregates since they cannot
     // otherwise be represented as GIR instructions

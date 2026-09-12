@@ -967,11 +967,47 @@ template <ast::IndexableID ID>
         break;
     }
     case token_type_t::BUILTIN_FIELD: {
-        DISCARD(get_resolved_call_arg_type(call.arguments[0]));
-        DISCARD(get_resolved_call_arg_type(call.arguments[1]));
-        return make_sema_err("@field is not yet implemented",
-                             error::FIELD_NOT_FOUND,
-                             resolving_.ast.location_of(call.function));
+        // Data-field form only for now (§9.2's flagship use case: `@field(v, f.name)` reading an
+        // instance's own field by a compile-time-known name, lvalue-capable exactly like
+        // `v.name`). The type-first-arg form (`@field(T, name)` reaching a static/const/unbound
+        // method) and the bound-method form on an instance are a real follow-up, not attempted
+        // here - both need the same member-resolution machinery an ordinary `.name` dot-expr
+        // already has (symbol-table proxy lookup, static-member globals, bound-method values),
+        // which is substantially more than the data-field case alone.
+        auto& arg_type{*get_resolved_call_arg_type(call.arguments[0])};
+        // A bare type name used as an ordinary value expression resolves directly to that
+        // type_kind (e.g. `Point`'s own sema type here is STRUCT, not a `TYPE`-kind wrapper -
+        // `resolve_ident` treats a user-defined type name like any other symbol reference), so
+        // `arg_type.get_kind()` can't tell a type reference apart from a real instance of the
+        // same struct/union. Folding the argument and checking whether it denotes a type (the
+        // same test `dot_object_is_type_namespace` uses for `Type.member` at the emitter level)
+        // is the actual signal.
+        if (const auto arg0_h{call.arguments[0].as_opt<ast::expr_handle>()}) {
+            gir::const_eval type_check{ctx_, resolving_};
+            if (const auto folded{type_check.try_eval(*arg0_h)};
+                folded && folded->is<stdx::option<type&>>()) {
+                return make_sema_err(
+                    "@field: static/const/method access (a `type` first argument) is not yet "
+                    "implemented - only an instance's own data field is supported",
+                    error::FIELD_NOT_FOUND,
+                    get_call_arg_location(call.arguments[0]));
+            }
+        }
+        auto* denoted{&arg_type};
+        if (const auto p{denoted->get_data().as_opt<types::pointer>()}) {
+            denoted = &const_cast<type&>(p->underlying);
+        } else if (const auto r{denoted->get_data().as_opt<types::reference>()}) {
+            denoted = &const_cast<type&>(r->underlying);
+        }
+        const auto field{resolve_field_by_name(call.arguments[1], *denoted)};
+        if (!field) {
+            return make_sema_err(
+                "@field: unknown field (the name must be a compile-time-known string)",
+                error::FIELD_NOT_FOUND,
+                get_call_arg_location(call.arguments[1]));
+        }
+        return_type = &field->field_type;
+        break;
     }
     case token_type_t::BUILTIN_INT:
     case token_type_t::BUILTIN_FLOAT:

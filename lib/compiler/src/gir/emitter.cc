@@ -2821,6 +2821,70 @@ auto emitter::emit_asm(ast::node_id id, const ast::asm_expr& node) -> value {
     return value{void_val{}, void_type};
 }
 
+auto emitter::try_emit_field_builtin_addr(const ast::call_expr& call) -> stdx::option<value> {
+    // The resolver already validated the field exists on the (non-type) object's own type;
+    // data-field form only (see the resolver's own comment) - mirrors emit_dot's ordinary
+    // struct/union field-read path, keyed by a compile-time-folded name instead of a literal
+    // identifier token. Bit-packed structs aren't handled here, matching the resolver's own
+    // reduced scope.
+    const auto obj_h{call.arguments[0].as_opt<ast::expr_handle>()};
+    const auto name_h{call.arguments[1].as_opt<ast::expr_handle>()};
+    if (!obj_h || !name_h) { return stdx::none; }
+
+    auto  obj_type{active_mod().get_sema_type_opt(*obj_h)};
+    auto* denoted{obj_type.get()};
+    if (denoted) {
+        if (const auto p{denoted->get_data().as_opt<sema::types::pointer>()}) {
+            denoted = &const_cast<sema::type&>(p->underlying);
+        } else if (const auto r{denoted->get_data().as_opt<sema::types::reference>()}) {
+            denoted = &const_cast<sema::type&>(r->underlying);
+        }
+    }
+    gir::const_eval evaluator{ctx_, active_mod()};
+    const auto      folded_name{evaluator.try_eval(*name_h)};
+    const auto      name{folded_name ? folded_name->as_opt<std::string>() : stdx::none};
+    if (!denoted || !name) { return stdx::none; }
+
+    const auto& table{ctx_.registry.get(denoted->get_symbol_table_idx())};
+    const auto  proxy{table.get_proxy_opt(*name)};
+    if (!proxy) { return stdx::none; }
+
+    const auto  st{denoted->get_data().as_opt<sema::types::struct_t>()};
+    const auto  ut{denoted->get_data().as_opt<sema::types::union_t>()};
+    if (!st && !ut) { return stdx::none; }
+    auto& raw_field_type{const_cast<sema::type&>(st ? st->type_at(proxy->index)
+                                                    : ut->type_at(proxy->index))};
+
+    auto base_lval{emit_lvalue(*obj_h)};
+    // Same address-of-what-the-pointer/reference-points-to unwrap `emit_dot` does: `base_lval`
+    // starts as the ADDRESS OF THE POINTER/REFERENCE VARIABLE ITSELF, so its own value (an
+    // address) has to be loaded out first - a reference needs this exactly as much as a pointer
+    // does, unlike a plain by-value object which is already addressable as-is.
+    if (obj_type->get_kind() == sema::type_kind::POINTER ||
+        obj_type->get_kind() == sema::type_kind::REFERENCE) {
+        const value loaded{builder_.emit_load(base_lval, *obj_type), *obj_type};
+        base_lval.data = loaded.data;
+        base_lval.type.emplace(*denoted);
+    }
+
+    // Struct/union field mutability is binding-based (#255's own finding, mirrored here from
+    // `emit_lvalue`'s dot_expr case): the object's own qualified type - not the field's bare
+    // declared type - decides whether a write through it is allowed.
+    auto& field_type{*ctx_.pool.with_const(raw_field_type, base_lval.type->is_constant())};
+
+    auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    if (st) {
+        const auto field_ptr{builder_.emit_get_element_ptr(
+            base_lval, {value{static_cast<u64>(proxy->index), usize_type}}, field_type)};
+        return value{field_ptr, field_type};
+    }
+    if (ut->is_bit_packed()) { return stdx::none; }
+    if (ut->is_untagged) { return value{base_lval.data, field_type}; }
+    const auto payload_ptr{builder_.emit_get_element_ptr(
+        base_lval, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, field_type)};
+    return value{payload_ptr, field_type};
+}
+
 auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
     PROFILE_FUNCTION();
     auto& ret_type{active_mod().get_sema_type_opt(id).value_or(
@@ -2999,6 +3063,12 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                         builder_.emit_builtin_call("@fieldParentPtr", std::move(args), ret_type)}) {
                     return value{*res, ret_type};
                 }
+            }
+            break;
+        }
+        case syntax::token_type_t::BUILTIN_FIELD: {
+            if (const auto addr{try_emit_field_builtin_addr(call)}) {
+                return value{builder_.emit_load(*addr, ret_type), ret_type};
             }
             break;
         }
@@ -5337,6 +5407,11 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                     ASSERT(sema_type, "Cast expression must have a resolved sema type");
                     return value{emit_lvalue(*op_expr).data, *sema_type};
                 }
+            }
+            // `@field(v, name) = ...`: the field's own address, not a disposable copy of its
+            // current value - same address `emit_call`'s read path loads from.
+            if (fn_token == syntax::token_type_t::BUILTIN_FIELD) {
+                if (const auto addr{try_emit_field_builtin_addr(call)}) { return *addr; }
             }
 
             const auto sema_type{active_mod().get_sema_type_opt(id)};
