@@ -5,12 +5,6 @@ import "page_allocator.gh" as page_alloc;
 pub using PageAllocator = page_alloc.PageAllocator;
 
 var page_alloc_impl: PageAllocator = .{};
-
-// A function, not a `var` singleton: `PageAllocator` is stateless, and folding the `^dyn I`
-// vtable coercion into a `var` global's own *constant initializer* isn't supported yet (the
-// coercion needs a real vtable global + slot layout that only gets built at normal statement
-// emission, not const-eval time). Computing it fresh each call sidesteps that entirely - the
-// coercion happens through the same, already-working runtime path any other `^dyn I` use does.
-pub const page_allocator := fn(): std.mem.Allocator {
-    return .{ .vtable = ^mut page_alloc_impl };
+pub var page_allocator: std.mem.Allocator = .{
+    .vtable = ^mut page_alloc_impl,
 };

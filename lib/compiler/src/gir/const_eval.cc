@@ -833,13 +833,14 @@ auto const_eval::coerce_dyn(const const_value& val, const sema::type& dest_type)
     if (!rec) { return stdx::none; }
 
     const auto vtable_sym{fmt::format("__vtable.{}", rec->body_scope_idx)};
-    if (std::ranges::none_of(module_->dyn_vtables,
+    auto&      vtable_owner{vtable_root_ ? *vtable_root_ : *module_};
+    if (std::ranges::none_of(vtable_owner.dyn_vtables,
                              [&](const auto& v) { return v.symbol == vtable_sym; })) {
         mod::dyn_vtable v{.symbol = vtable_sym, .slots = {}};
         for (const auto name : iface.method_names) {
             v.slots.emplace_back(scoped_symbol_name(rec->body_scope_idx, name));
         }
-        module_->dyn_vtables.emplace_back(std::move(v));
+        vtable_owner.dyn_vtables.emplace_back(std::move(v));
     }
 
     std::string data_sym;

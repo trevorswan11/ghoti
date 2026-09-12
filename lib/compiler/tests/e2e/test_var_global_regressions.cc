@@ -89,4 +89,37 @@ TEST_CASE("A `^dyn I` coercion built inside an imported module's function has a 
               }) == 9);
 }
 
+// FIXED: `gir::const_eval::coerce_dyn` registered its synthesised `__vtable.<N>` global on
+// `module_` (whichever module is currently being folded) - wrong for the same reason as
+// `emit_dyn_coercion` above, and hit here via a *different* path: computing a `var`/aggregate-
+// `const` global's own constant initializer (`emitter::emit_top_level_decl`) runs with `module_`
+// set to whichever module declares it, not the root. A `var` global whose struct-literal
+// initializer coerces a field to `^dyn I` (`std.heap.page_allocator`'s own real shape) used to
+// silently get an uninitialized vtable half the same way. Fixed via an optional
+// `const_eval::set_vtable_root_module`, which `emitter` now sets once to its own fixed root
+// reference at construction (`coerce_dyn` prefers it over `module_` when set).
+TEST_CASE("A `var` global's struct field can coerce to `^dyn I` in its own initializer, "
+         "cross-module") {
+    constexpr std::string_view HELPER{R"(
+        pub const Shape := interface {
+            pub const area := fn(&self): i32;
+        };
+        const Box := struct { side: i32 };
+        impl Shape for Box {
+            pub const area := fn(&self): i32 { return self.side * self.side; };
+        }
+        const Holder := struct { pub s: ^dyn Shape };
+        var box_impl: Box = .{ .side = 3 };
+        pub var holder: Holder = .{ .s = ^mut box_impl };
+    )"};
+    CHECK(helpers::compile_and_run(
+              R"(
+        import "helper.gh" as helper;
+        pub const main := fn(): i32 {
+            return helper.holder.s.area();
+        };
+    )",
+              {mock_file{"helper.gh", HELPER, "helper"}}) == 9);
+}
+
 } // namespace ghoti::tests

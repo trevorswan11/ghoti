@@ -51,6 +51,16 @@ class const_eval {
         symbol_scoping_ = scoping;
     }
 
+    // The module `coerce_dyn` registers a synthesized `__vtable.<N>` global onto - defaults to
+    // `module_` when never set. `llvm_lowering::lower_dyn_vtables` only ever lowers the *root*
+    // module's own `dyn_vtables` list into a real LLVM global (see `emitter::emit_dyn_coercion`'s
+    // matching comment), so folding a `^dyn I` coercion while `module_` is a non-root (imported)
+    // module - e.g. computing a `var`/aggregate-`const` global's own constant initializer, which
+    // runs with `module_` set to whichever module declares it - would otherwise strand the
+    // registration on a list nothing ever reads. The emitter sets this once, to its own fixed
+    // root reference, at construction.
+    auto set_vtable_root_module(mod::module& root) noexcept -> void { vtable_root_ = root; }
+
     [[nodiscard]] auto scoped_symbol_name(usize owner_table_idx, std::string_view bare) const
         -> std::string {
         if (symbol_scoping_) { return symbol_scoping_->name_for(owner_table_idx, bare); }
@@ -209,6 +219,7 @@ class const_eval {
     std::vector<usize>                  recursion_limit_stack_;
     sema::context&                      ctx_;
     gsl::not_null<mod::module*>         module_;
+    stdx::option<mod::module&>          vtable_root_;
     stdx::option<sema::type&>           enclosing_type_;
     stdx::option<const symbol_scoping&> symbol_scoping_;
     std::vector<call_frame>             call_stack_;

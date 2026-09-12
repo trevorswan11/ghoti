@@ -49,14 +49,14 @@ impl std.mem.AllocatorVTable for PageAllocator {
 }
 
 test "PageAllocator: alloc/write/free round-trips through the global singleton" {
-    match (std.heap.page_allocator().alloc(u8, 64uz)) {
+    match (std.heap.page_allocator.alloc(u8, 64uz)) {
         .ok => |buf| {
             @expect(buf.len == 64uz);
             buf[0] = 42u8;
             buf[63] = 7u8;
             @expect(buf[0] == 42u8);
             @expect(buf[63] == 7u8);
-            std.heap.page_allocator().free(u8, buf);
+            std.heap.page_allocator.free(u8, buf);
         },
         .err => { @panic("PageAllocator.alloc failed"); },
     }
