@@ -8,6 +8,7 @@
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -97,6 +98,15 @@ auto type_resolver::resolve_types(mod::module& module, context& ctx) -> mod::mod
         if (last_type_->is_poison()) { return resolving_.set_sema_type(id, *last_type_); } \
     } while (false)
 
+// Fetches one required descriptor field into `out_var` (via `read_desc_field`, see above) and
+// bails with `field_err(field_name)` if it's missing or the wrong kind - the per-kind
+// construction builtins' shared "read a required field" step, uniform enough here (unlike the
+// aggregate synthesizers below, whose messages combine several fields into one diagnostic) to
+// collapse fetch-and-check into one line per field.
+#define TRY_DESC_FIELD(out_var, T, field_name)                     \
+    const auto out_var{read_desc_field<T>(*desc, field_name)};     \
+    if (!out_var) { return field_err(field_name); }
+
 namespace {
 
 // When `value` is exactly `@compileError("literal")`, returns the message
@@ -139,6 +149,33 @@ namespace {
         if (const auto meta{t.get_data().as_opt<types::meta_type>()}) { return meta->instance; }
     }
     return t;
+}
+
+// Reads one field off a compile-time-known descriptor struct - the fetch-then-narrow pattern
+// every reflection construction builtin (`@Int`/`@Float`/.../`@Fn`, and the `@Struct`/`@Union`/
+// `@Enum` synthesizers) repeats once per field. A field name is now spelled once per read instead
+// of once for `get_field_opt` and again for `as_opt`; a `u64` field always goes through
+// `as_u64_opt` (any integer-representation arm, not just a literal `u64`) and a `sema::type&`
+// field unwraps the descriptor's own `stdx::option<type&>` layer so a caller never double-derefs.
+template <typename T>
+[[nodiscard]] auto read_desc_field(const gir::const_struct& desc, std::string_view name)
+    -> stdx::option<T> {
+    const auto field{desc.get_field_opt(name)};
+    if (!field) { return stdx::none; }
+    if constexpr (std::is_same_v<T, u64>) {
+        return field->as_u64_opt();
+    } else if constexpr (std::is_same_v<T, sema::type&>) {
+        const auto v{field->as_opt<stdx::option<sema::type&>>()};
+        if (!v || !*v) { return stdx::none; }
+        return **v;
+    } else {
+        // `field` is bound through a `const` descriptor, so `as_opt`'s deducing-this overload
+        // returns a const-dispatched option, not `stdx::option<T>` itself - copy the value out
+        // explicitly rather than relying on an implicit conversion between the two.
+        const auto v{field->as_opt<T>()};
+        if (!v) { return stdx::none; }
+        return T{*v};
+    }
 }
 
 // The module a user-defined type was declared in, or null for a builtin / structural type.
@@ -968,19 +1005,13 @@ template <ast::IndexableID ID>
 
         switch (builtin_id) {
         case token_type_t::BUILTIN_INT: {
-            const auto bits{desc->get_field_opt("bits")};
-            const auto is_signed{desc->get_field_opt("signed")};
-            const auto bits_v{bits ? bits->as_u64_opt() : stdx::none};
-            const auto signed_v{is_signed ? is_signed->as_opt<bool>() : stdx::none};
-            if (!bits_v) { return field_err("bits"); }
-            if (!signed_v) { return field_err("signed"); }
+            TRY_DESC_FIELD(bits_v, u64, "bits");
+            TRY_DESC_FIELD(signed_v, bool, "signed");
             return_type = wrap_type(ctx_.get_int(static_cast<u16>(*bits_v), *signed_v));
             break;
         }
         case token_type_t::BUILTIN_FLOAT: {
-            const auto bits{desc->get_field_opt("bits")};
-            const auto bits_v{bits ? bits->as_u64_opt() : stdx::none};
-            if (!bits_v) { return field_err("bits"); }
+            TRY_DESC_FIELD(bits_v, u64, "bits");
             type_kind kind{};
             switch (*bits_v) {
             case 16:  kind = type_kind::F16; break;
@@ -999,77 +1030,43 @@ template <ast::IndexableID ID>
         }
         case token_type_t::BUILTIN_POINTER:
         case token_type_t::BUILTIN_REFERENCE: {
-            const auto child{desc->get_field_opt("child")};
-            const auto is_mut{desc->get_field_opt("is_mut")};
-            const auto is_volatile{desc->get_field_opt("is_volatile")};
-            const auto child_v{child ? child->as_opt<stdx::option<type&>>() : stdx::none};
-            const auto mut_v{is_mut ? is_mut->as_opt<bool>() : stdx::none};
-            const auto vol_v{is_volatile ? is_volatile->as_opt<bool>() : stdx::none};
-            if (!child_v || !*child_v) { return field_err("child"); }
-            if (!mut_v) { return field_err("is_mut"); }
-            if (!vol_v) { return field_err("is_volatile"); }
+            TRY_DESC_FIELD(child_v, sema::type&, "child");
+            TRY_DESC_FIELD(mut_v, bool, "is_mut");
+            TRY_DESC_FIELD(vol_v, bool, "is_volatile");
             auto mods{*mut_v ? types::mut::MUTABLE : types::mut::CONSTANT};
             if (*vol_v) { mods = mods | types::mut::VOLATILE; }
             return_type = wrap_type(builtin_id == token_type_t::BUILTIN_POINTER
-                                        ? ctx_.get_pointer(mods, **child_v)
-                                        : ctx_.get_reference(mods, **child_v));
+                                        ? ctx_.get_pointer(mods, *child_v)
+                                        : ctx_.get_reference(mods, *child_v));
             break;
         }
         case token_type_t::BUILTIN_SLICE: {
-            const auto child{desc->get_field_opt("child")};
-            const auto sentinel{desc->get_field_opt("sentinel")};
-            const auto is_mut{desc->get_field_opt("is_mut")};
-            const auto is_volatile{desc->get_field_opt("is_volatile")};
-            const auto child_v{child ? child->as_opt<stdx::option<type&>>() : stdx::none};
-            const auto sentinel_v{sentinel ? sentinel->as_opt<bool>() : stdx::none};
-            const auto mut_v{is_mut ? is_mut->as_opt<bool>() : stdx::none};
-            const auto vol_v{is_volatile ? is_volatile->as_opt<bool>() : stdx::none};
-            if (!child_v || !*child_v) { return field_err("child"); }
-            if (!sentinel_v) { return field_err("sentinel"); }
-            if (!mut_v) { return field_err("is_mut"); }
-            if (!vol_v) { return field_err("is_volatile"); }
+            TRY_DESC_FIELD(child_v, sema::type&, "child");
+            TRY_DESC_FIELD(sentinel_v, bool, "sentinel");
+            TRY_DESC_FIELD(mut_v, bool, "is_mut");
+            TRY_DESC_FIELD(vol_v, bool, "is_volatile");
             auto mods{*mut_v ? types::mut::MUTABLE : types::mut::CONSTANT};
             if (*vol_v) { mods = mods | types::mut::VOLATILE; }
-            return_type = wrap_type(ctx_.get_slice(mods, *sentinel_v, **child_v));
+            return_type = wrap_type(ctx_.get_slice(mods, *sentinel_v, *child_v));
             break;
         }
         case token_type_t::BUILTIN_ARRAY: {
-            const auto child{desc->get_field_opt("child")};
-            const auto len{desc->get_field_opt("len")};
-            const auto sentinel{desc->get_field_opt("sentinel")};
-            const auto is_mut{desc->get_field_opt("is_mut")};
-            const auto is_volatile{desc->get_field_opt("is_volatile")};
-            const auto child_v{child ? child->as_opt<stdx::option<type&>>() : stdx::none};
-            const auto len_v{len ? len->as_u64_opt() : stdx::none};
-            const auto sentinel_v{sentinel ? sentinel->as_opt<bool>() : stdx::none};
-            const auto mut_v{is_mut ? is_mut->as_opt<bool>() : stdx::none};
-            const auto vol_v{is_volatile ? is_volatile->as_opt<bool>() : stdx::none};
-            if (!child_v || !*child_v) { return field_err("child"); }
-            if (!len_v) { return field_err("len"); }
-            if (!sentinel_v) { return field_err("sentinel"); }
-            if (!mut_v) { return field_err("is_mut"); }
-            if (!vol_v) { return field_err("is_volatile"); }
+            TRY_DESC_FIELD(child_v, sema::type&, "child");
+            TRY_DESC_FIELD(len_v, u64, "len");
+            TRY_DESC_FIELD(sentinel_v, bool, "sentinel");
+            TRY_DESC_FIELD(mut_v, bool, "is_mut");
+            TRY_DESC_FIELD(vol_v, bool, "is_volatile");
             auto mods{*mut_v ? types::mut::MUTABLE : types::mut::CONSTANT};
             if (*vol_v) { mods = mods | types::mut::VOLATILE; }
-            return_type = wrap_type(ctx_.get_array(mods, *sentinel_v, *len_v, **child_v));
+            return_type = wrap_type(ctx_.get_array(mods, *sentinel_v, *len_v, *child_v));
             break;
         }
         case token_type_t::BUILTIN_FN: {
-            const auto params_f{desc->get_field_opt("params")};
-            const auto ret_f{desc->get_field_opt("return_type")};
-            const auto variadic_f{desc->get_field_opt("variadic")};
-            const auto has_self_f{desc->get_field_opt("has_self")};
-            const auto callconv_f{desc->get_field_opt("callconv")};
-            const auto params_arr{params_f ? params_f->as_opt<gir::const_array>() : stdx::none};
-            const auto ret_v{ret_f ? ret_f->as_opt<stdx::option<type&>>() : stdx::none};
-            const auto variadic_v{variadic_f ? variadic_f->as_opt<bool>() : stdx::none};
-            const auto has_self_v{has_self_f ? has_self_f->as_opt<bool>() : stdx::none};
-            const auto callconv_v{callconv_f ? callconv_f->as_opt<gir::const_enum>() : stdx::none};
-            if (!params_arr) { return field_err("params"); }
-            if (!ret_v || !*ret_v) { return field_err("return_type"); }
-            if (!variadic_v) { return field_err("variadic"); }
-            if (!has_self_v) { return field_err("has_self"); }
-            if (!callconv_v) { return field_err("callconv"); }
+            TRY_DESC_FIELD(params_arr, gir::const_array, "params");
+            TRY_DESC_FIELD(ret_v, sema::type&, "return_type");
+            TRY_DESC_FIELD(variadic_v, bool, "variadic");
+            TRY_DESC_FIELD(has_self_v, bool, "has_self");
+            TRY_DESC_FIELD(callconv_v, gir::const_enum, "callconv");
 
             const auto conv{ast::calling_convention_from_name(callconv_v->name)};
             if (!conv) {
@@ -1093,11 +1090,11 @@ template <ast::IndexableID ID>
 
             types::key_t fn_key{type_kind::FUNCTION, types::mut::CONSTANT};
             for (const auto* p : param_types) { fn_key.imprint(*p); }
-            fn_key.imprint(**ret_v);
+            fn_key.imprint(*ret_v);
             fn_key.imprint(*conv);
             auto& built{*ctx_.pool[fn_key]};
             built.resolve_if<types::function>(
-                param_types, **ret_v, *has_self_v, *variadic_v, *conv);
+                param_types, *ret_v, *has_self_v, *variadic_v, *conv);
             return_type = wrap_type(built);
             break;
         }
@@ -1959,13 +1956,10 @@ auto type_resolver::synthesize_enum(usize disc, source_location loc, const gir::
                 fmt::format("'@Enum': {}", what), error::CONSTEXPR_EVALUATION_FAILED, loc);
         }};
 
-    const auto tag_f{desc.get_field_opt("tag_type")};
-    const auto fields_f{desc.get_field_opt("fields")};
-    const auto exhaustive_f{desc.get_field_opt("exhaustive")};
-    const auto tag_v{tag_f ? tag_f->as_opt<stdx::option<type&>>() : stdx::none};
-    const auto fields_arr{fields_f ? fields_f->as_opt<gir::const_array>() : stdx::none};
-    const auto exhaustive_v{exhaustive_f ? exhaustive_f->as_opt<bool>() : stdx::none};
-    if (!tag_v || !*tag_v) { return field_err("descriptor is missing 'tag_type'"); }
+    const auto tag_v{read_desc_field<sema::type&>(desc, "tag_type")};
+    const auto fields_arr{read_desc_field<gir::const_array>(desc, "fields")};
+    const auto exhaustive_v{read_desc_field<bool>(desc, "exhaustive")};
+    if (!tag_v) { return field_err("descriptor is missing 'tag_type'"); }
     if (!fields_arr) { return field_err("descriptor is missing 'fields'"); }
     if (!exhaustive_v) { return field_err("descriptor is missing 'exhaustive'"); }
 
@@ -1974,11 +1968,10 @@ auto type_resolver::synthesize_enum(usize disc, source_location loc, const gir::
     const auto scope_idx{ctx_.registry.create()};
     for (usize i{0}; i < fields_arr->elements.size(); ++i) {
         const auto fs{fields_arr->elements[i].as_opt<gir::const_struct>()};
-        const auto name_f{fs ? fs->get_field_opt("name") : stdx::none};
-        const auto value_f{fs ? fs->get_field_opt("value") : stdx::none};
-        const auto name_v{name_f ? name_f->as_opt<std::string>() : stdx::none};
-        const auto value_v{value_f ? value_f->as_int_opt() : stdx::none};
-        if (!name_v || !value_v) {
+        const auto name_v{fs ? read_desc_field<std::string>(*fs, "name") : stdx::none};
+        const auto value_v{fs ? fs->get_field_opt("value") : stdx::none};
+        const auto value_i{value_v ? value_v->as_int_opt() : stdx::none};
+        if (!name_v || !value_i) {
             return field_err("every element of 'fields' needs a compile-time 'name' and 'value'");
         }
 
@@ -1988,7 +1981,7 @@ auto type_resolver::synthesize_enum(usize disc, source_location loc, const gir::
             val_tok,
             val_tok,
             ast::int_literal_expr{
-                           .value = static_cast<u128>(*value_v), .is_signed = true, .spelling = "0"})};
+                           .value = static_cast<u128>(*value_i), .is_signed = true, .spelling = "0"})};
         resolving_.sync_side_tables_for_new_node();
         new (&enumerations[i])
             ast::enum_expr::enumeration{.name = name_ident, .value = ast::expr_handle{val_node}};
@@ -2005,14 +1998,14 @@ auto type_resolver::synthesize_enum(usize disc, source_location loc, const gir::
         auto& variant_sym{ctx_.registry.get(scope_idx).get(stable_name)};
         variant_sym.set_kind(symbol_kind::VALUE);
         variant_sym.set_status(symbol_status::RESOLVED);
-        resolving_.set_sema_type(name_ident, **tag_v);
+        resolving_.set_sema_type(name_ident, *tag_v);
     }
 
     types::key_t key{type_kind::ENUM, types::mut::CONSTANT};
     key.imprint(disc);
     auto& enum_type{*ctx_.pool[key]};
     enum_type.resolve_if<types::enum_t>(
-        enumerations, !*exhaustive_v, **tag_v, gsl::span<type*>{}, resolving_);
+        enumerations, !*exhaustive_v, *tag_v, gsl::span<type*>{}, resolving_);
     enum_type.set_symbol_table_idx(scope_idx);
     return gsl::not_null{&enum_type};
 }
@@ -2030,12 +2023,9 @@ auto type_resolver::synthesize_struct(usize                             disc,
                 fmt::format("'@Struct': {}", what), error::CONSTEXPR_EVALUATION_FAILED, loc);
         }};
 
-    const auto fields_f{desc.get_field_opt("fields")};
-    const auto is_extern_f{desc.get_field_opt("is_extern")};
-    const auto is_packed_f{desc.get_field_opt("is_packed")};
-    const auto fields_arr{fields_f ? fields_f->as_opt<gir::const_array>() : stdx::none};
-    const auto is_extern_v{is_extern_f ? is_extern_f->as_opt<bool>() : stdx::none};
-    const auto is_packed_v{is_packed_f ? is_packed_f->as_opt<bool>() : stdx::none};
+    const auto fields_arr{read_desc_field<gir::const_array>(desc, "fields")};
+    const auto is_extern_v{read_desc_field<bool>(desc, "is_extern")};
+    const auto is_packed_v{read_desc_field<bool>(desc, "is_packed")};
     if (!fields_arr) { return field_err("descriptor is missing 'fields'"); }
     if (!is_extern_v) { return field_err("descriptor is missing 'is_extern'"); }
     if (!is_packed_v) { return field_err("descriptor is missing 'is_packed'"); }
@@ -2047,17 +2037,14 @@ auto type_resolver::synthesize_struct(usize                             disc,
     usize      default_i{0};
     for (usize i{0}; i < n; ++i) {
         const auto fs{fields_arr->elements[i].as_opt<gir::const_struct>()};
-        const auto name_f{fs ? fs->get_field_opt("name") : stdx::none};
-        const auto type_f{fs ? fs->get_field_opt("type_") : stdx::none};
-        const auto has_default_f{fs ? fs->get_field_opt("has_default") : stdx::none};
-        const auto name_v{name_f ? name_f->as_opt<std::string>() : stdx::none};
-        const auto type_v{type_f ? type_f->as_opt<stdx::option<type&>>() : stdx::none};
-        const auto has_default_v{has_default_f ? has_default_f->as_opt<bool>() : stdx::none};
-        if (!name_v || !type_v || !*type_v || !has_default_v) {
+        const auto name_v{fs ? read_desc_field<std::string>(*fs, "name") : stdx::none};
+        const auto type_v{fs ? read_desc_field<sema::type&>(*fs, "type_") : stdx::none};
+        const auto has_default_v{fs ? read_desc_field<bool>(*fs, "has_default") : stdx::none};
+        if (!name_v || !type_v || !has_default_v) {
             return field_err(
                 "every element of 'fields' needs a compile-time 'name', 'type_', 'has_default'");
         }
-        field_types[i] = &**type_v;
+        field_types[i] = &*type_v;
 
         stdx::option<ast::expr_handle> default_value;
         if (*has_default_v) {
@@ -2068,12 +2055,12 @@ auto type_resolver::synthesize_struct(usize                             disc,
                                      loc);
             }
             const auto& dv{defaults[default_i++]};
-            if (const auto dt{dv.get_type()}; dt && !is_assignable(*dt, **type_v)) {
+            if (const auto dt{dv.get_type()}; dt && !is_assignable(*dt, *type_v)) {
                 return make_sema_err(
                     fmt::format("'@Struct': default #{} has type '{}', expected '{}'",
                                 default_i,
                                 ctx_.type_display_name(*dt),
-                                ctx_.type_display_name(**type_v)),
+                                ctx_.type_display_name(*type_v)),
                     error::TYPE_MISMATCH,
                     loc);
             }
@@ -2091,7 +2078,7 @@ auto type_resolver::synthesize_struct(usize                             disc,
         }
 
         const auto name_ident{synthesize_ident(*name_v, true)};
-        const auto ty_ident{synthesize_ident(ctx_.type_display_name(**type_v), false)};
+        const auto ty_ident{synthesize_ident(ctx_.type_display_name(*type_v), false)};
         new (&ast_fields[i]) ast::struct_expr::field{
             .name               = name_ident,
             .explicit_type      = ast::explicit_type_id{ast::explicit_type_kind::IDENT,
@@ -2147,14 +2134,10 @@ auto type_resolver::synthesize_union(usize                             disc,
                 fmt::format("'@Union': {}", what), error::CONSTEXPR_EVALUATION_FAILED, loc);
         }};
 
-    const auto fields_f{desc.get_field_opt("fields")};
-    const auto is_extern_f{desc.get_field_opt("is_extern")};
-    const auto is_packed_f{desc.get_field_opt("is_packed")};
-    const auto tagged_f{desc.get_field_opt("tagged")};
-    const auto fields_arr{fields_f ? fields_f->as_opt<gir::const_array>() : stdx::none};
-    const auto is_extern_v{is_extern_f ? is_extern_f->as_opt<bool>() : stdx::none};
-    const auto is_packed_v{is_packed_f ? is_packed_f->as_opt<bool>() : stdx::none};
-    const auto tagged_v{tagged_f ? tagged_f->as_opt<bool>() : stdx::none};
+    const auto fields_arr{read_desc_field<gir::const_array>(desc, "fields")};
+    const auto is_extern_v{read_desc_field<bool>(desc, "is_extern")};
+    const auto is_packed_v{read_desc_field<bool>(desc, "is_packed")};
+    const auto tagged_v{read_desc_field<bool>(desc, "tagged")};
     if (!fields_arr) { return field_err("descriptor is missing 'fields'"); }
     if (!is_extern_v) { return field_err("descriptor is missing 'is_extern'"); }
     if (!is_packed_v) { return field_err("descriptor is missing 'is_packed'"); }
@@ -2168,17 +2151,14 @@ auto type_resolver::synthesize_union(usize                             disc,
     usize default_i{0};
     for (usize i{0}; i < n; ++i) {
         const auto fs{fields_arr->elements[i].as_opt<gir::const_struct>()};
-        const auto name_f{fs ? fs->get_field_opt("name") : stdx::none};
-        const auto type_f{fs ? fs->get_field_opt("type_") : stdx::none};
-        const auto has_default_f{fs ? fs->get_field_opt("has_default") : stdx::none};
-        const auto name_v{name_f ? name_f->as_opt<std::string>() : stdx::none};
-        const auto type_v{type_f ? type_f->as_opt<stdx::option<type&>>() : stdx::none};
-        const auto has_default_v{has_default_f ? has_default_f->as_opt<bool>() : stdx::none};
-        if (!name_v || !type_v || !*type_v || !has_default_v) {
+        const auto name_v{fs ? read_desc_field<std::string>(*fs, "name") : stdx::none};
+        const auto type_v{fs ? read_desc_field<sema::type&>(*fs, "type_") : stdx::none};
+        const auto has_default_v{fs ? read_desc_field<bool>(*fs, "has_default") : stdx::none};
+        if (!name_v || !type_v || !has_default_v) {
             return field_err(
                 "every element of 'fields' needs a compile-time 'name', 'type_', 'has_default'");
         }
-        field_types[i] = &**type_v;
+        field_types[i] = &*type_v;
 
         if (*has_default_v) {
             if (default_i >= defaults.size()) {
@@ -2188,19 +2168,19 @@ auto type_resolver::synthesize_union(usize                             disc,
                                      loc);
             }
             const auto& dv{defaults[default_i++]};
-            if (const auto dt{dv.get_type()}; dt && !is_assignable(*dt, **type_v)) {
+            if (const auto dt{dv.get_type()}; dt && !is_assignable(*dt, *type_v)) {
                 return make_sema_err(
                     fmt::format("'@Union': default #{} has type '{}', expected '{}'",
                                 default_i,
                                 ctx_.type_display_name(*dt),
-                                ctx_.type_display_name(**type_v)),
+                                ctx_.type_display_name(*type_v)),
                     error::TYPE_MISMATCH,
                     loc);
             }
         }
 
         const auto name_ident{synthesize_ident(*name_v, true)};
-        const auto ty_ident{synthesize_ident(ctx_.type_display_name(**type_v), false)};
+        const auto ty_ident{synthesize_ident(ctx_.type_display_name(*type_v), false)};
         new (&ast_fields[i]) ast::union_expr::field{
             .name               = name_ident,
             .explicit_type      = ast::explicit_type_id{ast::explicit_type_kind::IDENT,
