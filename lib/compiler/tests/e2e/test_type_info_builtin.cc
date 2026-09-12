@@ -206,8 +206,12 @@ TEST_CASE("a match-captured payload's field is readable inside a nested `for con
     )") == 12); // "red" + "green" + "blue" = 3 + 5 + 4
 }
 
-TEST_CASE("known limitation: a plain runtime `if` on a match-captured payload field still "
-          "misreads it") {
+// A `match constexpr` arm's captured payload now gets the same `constexpr_frame` binding a
+// `for`/`while constexpr` capture already gets, so a plain runtime `if` on a captured field
+// reads it correctly instead of trying (and failing) to materialize the whole payload as
+// ordinary storage - `EnumInfo`/`TypeInfo` carry a `type`-kind field in every arm, which has no
+// LLVM size at all.
+TEST_CASE("a plain runtime `if` on a match-captured payload field reads it correctly") {
     CHECK(helpers::compile_and_run(R"(
         const Color := enum { red, green, blue };
         const use := fn(): i32 {
@@ -219,7 +223,7 @@ TEST_CASE("known limitation: a plain runtime `if` on a match-captured payload fi
         pub const main := fn(): i32 {
             return use();
         };
-    )") == 0); // should be 1 (`Color` IS exhaustive) once this limitation is fixed
+    )") == 1);
 }
 
 } // namespace ghoti::tests

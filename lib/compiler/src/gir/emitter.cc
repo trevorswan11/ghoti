@@ -1697,17 +1697,12 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
     const auto is_constexpr_var{decl.has_modifier(ast::decl_modifiers::CONSTEXPR) &&
                                 decl.has_modifier(ast::decl_modifiers::VARIABLE)};
 
-    // Aggregates need one stable address across every use; only non-aggregates can skip storage.
+    // An ordinary aggregate const/constexpr needs one stable address across every use, so only a
+    // non-aggregate can skip storage below - except a `constexpr var`, which never has storage
+    // at all (aggregate or not): its whole point is to live only in the constexpr_frame, so an
+    // aggregate one takes the same fast, storage-free path as a scalar one.
     const auto is_structural{sema::is_structural(sema_type->get_kind())};
-    if (is_constexpr_var && is_structural) {
-        // Not yet supported (§4 scopes `constexpr var` to scalars); diagnose, then fall through
-        // to the ordinary `var`-with-storage path below so later uses still get a real binding.
-        ctx_.diags.emplace_back("`constexpr var` does not yet support aggregate types; use a "
-                                "scalar",
-                                sema::error::CONSTEXPR_VAR_NOT_FOLDABLE,
-                                active_ast().location_of(id));
-    }
-    if (is_const && decl.value && !is_structural) {
+    if (is_const && decl.value && (!is_structural || is_constexpr_var)) {
         // A local plain function is emitted with a synthetic name; pre-bind `name` to it so a
         // self-referential call (by name or @fnCtx()) inside its own body resolves correctly
         if (const auto fn_expr{active_ast().get_as_opt<ast::function_expr>(*decl.value)}) {
@@ -1728,16 +1723,28 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         }
 
         if (const auto cv{const_eval_.try_eval(*decl.value)}) {
-            // A struct/array/union/dyn-fat-ptr/addr constant needs real materialized storage
-            if (!cv->is<const_struct>() && !cv->is<const_array>() && !cv->is<const_union>() &&
-                !cv->is<const_dyn_fat_ptr>() && !cv->is<const_addr>()) {
-                auto bound{cv->to_gir_value()};
-                // `const x: iN = <constexpr literal>` : range-check and pin the concrete type.
-                if (decl.explicit_type && bound.type &&
-                    (sema::is_integer(bound.type->get_kind()) ||
-                     bound.type->get_kind() == sema::type_kind::CONSTEXPR_INT) &&
-                    sema::is_integer(sema_type->get_kind())) {
-                    bound = coerce_constexpr_int(bound, *sema_type, *decl.value);
+            // An ordinary (non-`constexpr var`) struct/array/union/dyn-fat-ptr/addr constant
+            // needs real materialized storage (`emit_coerced_expr`'s fallback below) - but a
+            // `constexpr var` never gets storage regardless of shape, so an aggregate one takes
+            // this same fast path too.
+            const auto is_aggregate_cv{cv->is<const_struct>() || cv->is<const_array>() ||
+                                       cv->is<const_union>() || cv->is<const_dyn_fat_ptr>() ||
+                                       cv->is<const_addr>()};
+            if (!is_aggregate_cv || is_constexpr_var) {
+                // No real `gir::value` exists for a folded aggregate (`to_gir_value()` is a
+                // `void_val` placeholder for one) - its bits live only in the constexpr_frame
+                // entry below, read back on demand by `lvalue_of_binding`.
+                stdx::option<value> bound;
+                if (!is_aggregate_cv) {
+                    auto scalar{cv->to_gir_value()};
+                    // `const x: iN = <constexpr literal>` : range-check, pin the concrete type.
+                    if (decl.explicit_type && scalar.type &&
+                        (sema::is_integer(scalar.type->get_kind()) ||
+                         scalar.type->get_kind() == sema::type_kind::CONSTEXPR_INT) &&
+                        sema::is_integer(sema_type->get_kind())) {
+                        scalar = coerce_constexpr_int(scalar, *sema_type, *decl.value);
+                    }
+                    bound = scalar;
                 }
                 scopes_.back().bindings.emplace(name,
                                                 local_binding{
@@ -1748,17 +1755,17 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                                                     .is_const         = true,
                                                     .is_constexpr_var = is_constexpr_var,
                                                 });
-                // Visible to `const_eval` by name for the rest of this block
+                // Visible to `const_eval` by name for the rest of this block (reassignment, and
+                // any later expression that needs this var's value folded). Deliberately scoped
+                // to `constexpr var` only: registering an ORDINARY local const/constexpr's value
+                // here too was tried and reverted - it let a later const-eval'd expression skip
+                // `emit_coerced_expr`'s own validation entirely (e.g. an `@as` narrowing cast
+                // that must be rejected), since a fast-bound value never reaches a real STORE for
+                // `type_checker.cc` to check. Fixing that needs const-eval's own cast folding to
+                // enforce the same rules first - a bigger unit of work than this phase scoped.
                 if (is_constexpr_var) {
                     ctx_.constexpr_binding_frames.back().insert_or_assign(name, *cv);
                 }
-                return;
-            }
-            // `is_constexpr_var` reaching here means the declare* type wasn't structural
-            if (is_constexpr_var) {
-                ctx_.diags.emplace_back("`constexpr var` initializer must be known at compile time",
-                                        sema::error::CONSTEXPR_VAR_NOT_FOLDABLE,
-                                        active_ast().location_of(*decl.value));
                 return;
             }
         } else if (is_constexpr_var) {
@@ -1994,6 +2001,14 @@ auto emitter::emit_array(ast::node_id id, const ast::array_expr& arr) -> value {
 auto emitter::emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> value {
     PROFILE_FUNCTION();
     if (const auto binding{lookup_binding(ident.name)}) {
+        if (binding->is_constexpr_var && !binding->const_val) {
+            // An aggregate `constexpr var` has no real `gir::value` of its own to cache (see
+            // `lvalue_of_binding`'s identical reasoning) - its current value lives only in the
+            // constexpr_frame, re-materialized fresh on every read.
+            const auto current{ctx_.lookup_constexpr_binding(ident.name)};
+            ASSERT(current, "constexpr var binding must have a live constexpr_frame entry");
+            return materialize_const(*current);
+        }
         if (binding->const_val) { return *binding->const_val; }
         if (binding->is_alloca) {
             const auto loaded{builder_.emit_load(binding->id, binding->type)};
@@ -2494,37 +2509,184 @@ auto emitter::update_constexpr_var(std::string_view name, const_value val) -> vo
     }
 }
 
+auto emitter::constexpr_var_root_binding(ast::expr_handle expr) -> local_binding* {
+    ast::node_id cur{expr};
+    for (;;) {
+        if (const auto ident{active_ast().get_as_opt<ast::identifier_expr>(cur)}) {
+            const auto binding{lookup_binding<local_binding&>(ident->name)};
+            return (binding && binding->is_constexpr_var) ? &*binding : nullptr;
+        }
+        if (const auto dot{active_ast().get_as_opt<ast::dot_expr>(cur)}) {
+            cur = dot->object;
+            continue;
+        }
+        if (const auto idx{active_ast().get_as_opt<ast::index_expr>(cur)}) {
+            cur = idx->array;
+            continue;
+        }
+        return nullptr;
+    }
+}
+
 auto emitter::try_emit_constexpr_var_assignment(ast::node_id id, const ast::assignment_expr& assign)
     -> stdx::option<value> {
-    const auto ident{active_ast().get_as_opt<ast::identifier_expr>(assign.lhs)};
-    if (!ident) { return stdx::none; }
-    const auto binding{lookup_binding<local_binding&>(ident->name)};
-    if (!binding || !binding->is_constexpr_var) { return stdx::none; }
+    if (const auto ident{active_ast().get_as_opt<ast::identifier_expr>(assign.lhs)}) {
+        const auto binding{lookup_binding<local_binding&>(ident->name)};
+        if (!binding || !binding->is_constexpr_var) { return stdx::none; }
 
-    auto base_op{id.get_token_type()};
-    if (const auto b{syntax::token_type::get_compound_base_op(base_op)}) { base_op = *b; }
+        auto base_op{id.get_token_type()};
+        if (const auto b{syntax::token_type::get_compound_base_op(base_op)}) { base_op = *b; }
 
-    const auto                rhs_val{const_eval_.try_eval(assign.rhs)};
-    stdx::option<const_value> new_val;
-    if (id.get_token_type() == syntax::token_type_t::ASSIGN) {
-        new_val = rhs_val;
-    } else if (rhs_val) {
-        if (const auto current{ctx_.lookup_constexpr_binding(ident->name)}) {
-            new_val = const_eval_.fold_binary_values(base_op, *current, *rhs_val, id);
+        const auto                rhs_val{const_eval_.try_eval(assign.rhs)};
+        stdx::option<const_value> new_val;
+        if (id.get_token_type() == syntax::token_type_t::ASSIGN) {
+            new_val = rhs_val;
+        } else if (rhs_val) {
+            if (const auto current{ctx_.lookup_constexpr_binding(ident->name)}) {
+                new_val = const_eval_.fold_binary_values(base_op, *current, *rhs_val, id);
+            }
+        }
+
+        if (!new_val) {
+            ctx_.diags.emplace_back("`constexpr var` assignment must be known at compile time",
+                                    sema::error::CONSTEXPR_VAR_ASSIGN_NOT_FOLDABLE,
+                                    active_ast().location_of(id));
+            return value{undefined_val{}, binding->type};
+        }
+
+        update_constexpr_var(ident->name, *new_val);
+        const auto gv{new_val->to_gir_value()};
+        binding->const_val = gv;
+        return gv;
+    }
+
+    if (const auto dot{active_ast().get_as_opt<ast::dot_expr>(assign.lhs)}) {
+        if (const auto ident{active_ast().get_as_opt<ast::identifier_expr>(dot->object)}) {
+            const auto binding{lookup_binding<local_binding&>(ident->name)};
+            if (binding && binding->is_constexpr_var) {
+                return try_emit_constexpr_var_field_assignment(id, assign, ident->name, *binding, *dot);
+            }
+        }
+    }
+    if (const auto idx{active_ast().get_as_opt<ast::index_expr>(assign.lhs)}) {
+        if (const auto ident{active_ast().get_as_opt<ast::identifier_expr>(idx->array)}) {
+            const auto binding{lookup_binding<local_binding&>(ident->name)};
+            if (binding && binding->is_constexpr_var) {
+                return try_emit_constexpr_var_element_assignment(
+                    id, assign, ident->name, *binding, *idx);
+            }
         }
     }
 
-    if (!new_val) {
+    // A deeper chain rooted at a constexpr-var aggregate (`p.a.b = v`, `arr[i].field = v`) isn't
+    // supported yet - diagnose rather than silently falling through to an ordinary lvalue store
+    // into a disposable materialized copy that would never reach the frame.
+    if (const auto root{constexpr_var_root_binding(assign.lhs)}) {
+        ctx_.diags.emplace_back(
+            "assigning more than one level into a `constexpr var` aggregate is not yet supported",
+            sema::error::CONSTEXPR_VAR_ASSIGN_NOT_FOLDABLE,
+            active_ast().location_of(id));
+        return value{undefined_val{}, root->type};
+    }
+    return stdx::none;
+}
+
+auto emitter::try_emit_constexpr_var_field_assignment(ast::node_id                id,
+                                                       const ast::assignment_expr& assign,
+                                                       std::string_view            root_name,
+                                                       local_binding&              binding,
+                                                       const ast::dot_expr&        dot)
+    -> stdx::option<value> {
+    const auto& field_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
+    const auto  not_foldable{[&] {
         ctx_.diags.emplace_back("`constexpr var` assignment must be known at compile time",
                                 sema::error::CONSTEXPR_VAR_ASSIGN_NOT_FOLDABLE,
                                 active_ast().location_of(id));
-        return value{undefined_val{}, binding->type};
+        return value{undefined_val{}, binding.type};
+    }};
+
+    const auto current{ctx_.lookup_constexpr_binding(root_name)};
+    if (!current || (!current->is<const_struct>() && !current->is<const_union>())) {
+        return not_foldable();
     }
 
-    update_constexpr_var(ident->name, *new_val);
-    const auto gv{new_val->to_gir_value()};
-    binding->const_val = gv;
-    return gv;
+    auto base_op{id.get_token_type()};
+    if (const auto b{syntax::token_type::get_compound_base_op(base_op)}) { base_op = *b; }
+    const auto rhs_val{const_eval_.try_eval(assign.rhs)};
+
+    stdx::option<const_value> new_field;
+    if (id.get_token_type() == syntax::token_type_t::ASSIGN) {
+        new_field = rhs_val;
+    } else if (rhs_val) {
+        stdx::option<const_value> current_field;
+        if (const auto st{current->as_opt<const_struct>()}) {
+            if (const auto f{st->get_field_opt(field_ident.name)}) { current_field = *f; }
+        } else if (const auto un{current->as_opt<const_union>()};
+                   un && un->active_field == field_ident.name && !un->payload.empty()) {
+            current_field = un->payload.front();
+        }
+        if (current_field) {
+            new_field = const_eval_.fold_binary_values(base_op, *current_field, *rhs_val, id);
+        }
+    }
+    if (!new_field) { return not_foldable(); }
+
+    auto rebuilt{*current};
+    if (auto st{rebuilt.as_opt<const_struct>()}) {
+        st->fields.insert_or_assign(std::string{field_ident.name}, *new_field);
+    } else {
+        auto& un{rebuilt.as<const_union>()};
+        un.active_field = std::string{field_ident.name};
+        if (un.payload.empty()) {
+            un.payload.emplace_back(*new_field);
+        } else {
+            un.payload.front() = *new_field;
+        }
+    }
+    update_constexpr_var(root_name, std::move(rebuilt));
+    binding.const_val = stdx::none;
+    return new_field->to_gir_value();
+}
+
+auto emitter::try_emit_constexpr_var_element_assignment(ast::node_id                id,
+                                                         const ast::assignment_expr& assign,
+                                                         std::string_view            root_name,
+                                                         local_binding&              binding,
+                                                         const ast::index_expr&      idx)
+    -> stdx::option<value> {
+    const auto not_foldable{[&] {
+        ctx_.diags.emplace_back("`constexpr var` assignment must be known at compile time",
+                                sema::error::CONSTEXPR_VAR_ASSIGN_NOT_FOLDABLE,
+                                active_ast().location_of(id));
+        return value{undefined_val{}, binding.type};
+    }};
+
+    const auto current{ctx_.lookup_constexpr_binding(root_name)};
+    if (!current || !current->is<const_array>()) { return not_foldable(); }
+
+    const auto idx_val{const_eval_.try_eval(idx.index)};
+    const auto idx_v{idx_val ? idx_val->as_uint_opt() : stdx::none};
+    if (!idx_v || *idx_v >= current->as<const_array>().elements.size()) { return not_foldable(); }
+    const auto k{static_cast<usize>(*idx_v)};
+
+    auto base_op{id.get_token_type()};
+    if (const auto b{syntax::token_type::get_compound_base_op(base_op)}) { base_op = *b; }
+    const auto rhs_val{const_eval_.try_eval(assign.rhs)};
+
+    stdx::option<const_value> new_elem;
+    if (id.get_token_type() == syntax::token_type_t::ASSIGN) {
+        new_elem = rhs_val;
+    } else if (rhs_val) {
+        new_elem = const_eval_.fold_binary_values(
+            base_op, current->as<const_array>().elements[k], *rhs_val, id);
+    }
+    if (!new_elem) { return not_foldable(); }
+
+    auto rebuilt{*current};
+    rebuilt.as<const_array>().elements[k] = *new_elem;
+    update_constexpr_var(root_name, std::move(rebuilt));
+    binding.const_val = stdx::none;
+    return new_elem->to_gir_value();
 }
 
 auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assign) -> value {
@@ -4487,7 +4649,30 @@ auto emitter::materialize_const(const const_value& cv) -> value {
     if (const auto arr{cv.as_opt<const_array>()}) {
         const auto type_opt{cv.get_type()};
         ASSERT(type_opt, "const_array must carry a resolved sema type");
-        auto&      type{*type_opt};
+        auto& type{*type_opt};
+        // `gir::const_array` backs both a fixed-size `[N]T` AND a `[]T` slice value (e.g. a
+        // reflection struct's `fields: []FieldInfo`) - a slice-tagged one has no `[N]T` layout
+        // of its own to allocate directly, so materialize its elements into a fresh backing
+        // array first, then decay that to the slice the same way an ordinary array-to-slice
+        // coercion already does.
+        if (const auto slice_data{type.get_data().as_opt<sema::types::slice>()}) {
+            auto&      elem_type{slice_data->underlying};
+            auto&      backing_type{ctx_.get_array(elem_type.is_constant() ? sema::types::mut::CONSTANT
+                                                                          : sema::types::mut::MUTABLE,
+                                              false,
+                                              arr->elements.size(),
+                                              elem_type)};
+            const auto slot{builder_.emit_alloca(backing_type)};
+            for (u64 i{0}; const auto& elem : arr->elements) {
+                const auto elem_ptr{builder_.emit_get_element_ptr(
+                    value{slot, backing_type}, {value{i++, usize_type}}, elem_type)};
+                builder_.emit_store(value{elem_ptr, elem_type}, materialize_const(elem))
+                    .is_initializer = true;
+            }
+            auto decayed{emit_slice_from_array(value{slot, backing_type}, backing_type)};
+            decayed.type.emplace(type);
+            return decayed;
+        }
         const auto arr_data{type.get_data().as_opt<sema::types::array>()};
         ASSERT(arr_data, "const_array must materialize into an array sema type");
         auto&      elem_type{arr_data->underlying};
@@ -5070,6 +5255,20 @@ auto emitter::lvalue_of_binding(std::string_view name) -> value {
     auto&      qualified_type{(is_struct_or_union || is_slice)
                                   ? *ctx_.pool.with_const(binding.type, binding.is_const)
                                   : binding.type};
+
+    if (binding.is_constexpr_var) {
+        // A `constexpr var`'s value can change on every reassignment (`update_constexpr_var`
+        // writes straight into the frame, not into any storage this binding owns), so - unlike
+        // an ordinary immutable const below - caching a spilled slot after the first read would
+        // go stale the moment the var is reassigned. Re-fetch the CURRENT frame value and spill
+        // a fresh copy on every call instead of ever caching `is_alloca = true` for it. This is
+        // also what makes an aggregate `constexpr var`'s fields readable at all (`p.x`): its own
+        // `binding.const_val` can't hold a real aggregate (only a `void_val` placeholder), so
+        // the ordinary path below would spill garbage.
+        const auto current{ctx_.lookup_constexpr_binding(name)};
+        ASSERT(current, "constexpr var binding must have a live constexpr_frame entry");
+        return spill_to_temporary(materialize_const(*current), qualified_type, true);
+    }
     if (binding.is_alloca) { return value{binding.id, qualified_type}; }
 
     // A binding with no alloca of its own has no address: spill it into one, cache the slot on
@@ -5422,12 +5621,37 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
     stdx::opt_size forced_arm;
     if (const auto arm{active_mod().get_match_arm_opt(id.get_index())}) {
         forced_arm = arm;
+        const auto& chosen{match.arms[*arm]};
         // With no capture there is nothing to bind: emit only the chosen dispatch.
-        if (!match.arms[*arm].capture) {
-            const auto& chosen{match.arms[*arm]};
+        if (!chosen.capture) {
             if (yields_value) { return emit_stmt_as_value(chosen.dispatch); }
             emit_stmt(chosen.dispatch);
             return value{void_val{}, sema_type};
+        }
+        // `match constexpr`'s capture: bind it into the constexpr_frame - the same treatment a
+        // `for`/`while constexpr` capture already gets - instead of falling through to the
+        // general runtime machinery below, which spills/addresses the WHOLE captured value. A
+        // payload whose shape carries a `type`-kind field (e.g. `@typeInfo`'s own `EnumInfo.
+        // tag_type`) can never be materialized as ordinary storage at all (a union's layout
+        // sizes every arm up front, and `type` has no size), so a runtime `if`/assignment on a
+        // captured reflection payload used to hit that wall directly; reading it via const-eval
+        // instead sidesteps materializing it as a value at all.
+        if (match.is_constexpr) {
+            if (const auto scrutinee{const_eval_.try_eval(match.matcher)}) {
+                const auto& cap_ident{active_ast().get_as<ast::identifier_expr>(*chosen.capture)};
+                sema::constexpr_frame cx_frame;
+                if (const auto un{scrutinee->as_opt<const_union>()}) {
+                    cx_frame.insert_or_assign(
+                        cap_ident.name, !un->payload.empty() ? un->payload.front() : *scrutinee);
+                } else {
+                    cx_frame.insert_or_assign(cap_ident.name, *scrutinee);
+                }
+                const constexpr_frame_guard cfg{ctx_.constexpr_binding_frames,
+                                                std::move(cx_frame)};
+                if (yields_value) { return emit_stmt_as_value(chosen.dispatch); }
+                emit_stmt(chosen.dispatch);
+                return value{void_val{}, sema_type};
+            }
         }
     }
 

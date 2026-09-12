@@ -1331,9 +1331,13 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
         s.fields.emplace("fields", const_value{std::move(fields), field_slice_type});
         s.fields.emplace("is_extern", const_value{st.is_c_abi, bool_type});
         s.fields.emplace("is_packed", const_value{st.is_packed, bool_type});
-        s.fields.emplace(
-            "backing_bits",
-            const_value{u64{sema::packed_backing_bits(st, ptr_bits).value_or(0)}, usize_type});
+        // `StructInfo.backing_bits` is declared `u32` (builtin.gh.inc), not `usize` - tag it to
+        // match, or a downstream store sized for the declared field width (materializing the
+        // whole struct as an ordinary runtime value, not just reading this field in isolation)
+        // writes a 64-bit value into a 32-bit slot.
+        s.fields.emplace("backing_bits",
+                         const_value{u64{sema::packed_backing_bits(st, ptr_bits).value_or(0)},
+                                     ctx_.get_int(32, false)});
         return wrap("struct", std::move(s), ctx_.get_builtin_type("StructInfo"));
     }
     case sema::type_kind::UNION: {

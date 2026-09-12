@@ -297,6 +297,28 @@ class emitter {
     // If `assign` targets a `constexpr var`, folds it and rebinds in place. `none` otherwise
     auto try_emit_constexpr_var_assignment(ast::node_id id, const ast::assignment_expr& assign)
         -> stdx::option<value>;
+    // One level of `p.field = ...` / `p.field += ...` into an aggregate `constexpr var` - folds
+    // the whole aggregate anew with just that field replaced (there is no address to store
+    // through) and writes the result back via `update_constexpr_var`.
+    auto try_emit_constexpr_var_field_assignment(ast::node_id                id,
+                                                  const ast::assignment_expr& assign,
+                                                  std::string_view            root_name,
+                                                  local_binding&              binding,
+                                                  const ast::dot_expr&        dot)
+        -> stdx::option<value>;
+    // Same shape as the field form, for `arr[k] = ...` into an array-typed `constexpr var`.
+    auto try_emit_constexpr_var_element_assignment(ast::node_id                id,
+                                                    const ast::assignment_expr& assign,
+                                                    std::string_view            root_name,
+                                                    local_binding&              binding,
+                                                    const ast::index_expr&      idx)
+        -> stdx::option<value>;
+    // Walks a chain of `dot_expr`/`index_expr` wrappers down to its root identifier and returns
+    // that identifier's binding if it names a `constexpr var` - used to catch (and diagnose,
+    // rather than silently no-op) an assignment nested deeper than the one level actually
+    // supported above (`p.a.b = ...`), which would otherwise fall through to an ordinary lvalue
+    // store into a disposable materialized copy.
+    auto constexpr_var_root_binding(ast::expr_handle expr) -> local_binding*;
     auto update_constexpr_var(std::string_view name, const_value val) -> void;
 
     // Bit-packed `packed struct`/`packed union` field access: shift/mask over the backing int.

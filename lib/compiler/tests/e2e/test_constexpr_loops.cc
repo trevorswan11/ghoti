@@ -78,6 +78,22 @@ TEST_CASE("`for constexpr` unrolls over a module-level `constexpr` array") {
     )") == 60);
 }
 
+// Known limitation (§5.2): a local (function-scope) `constexpr` array's value isn't nameable to
+// `for constexpr`'s own iterable-folding check, which runs during the resolve pass - only a
+// module-level array's value is reachable there today. See the sibling known-limitation test in
+// test_concat.cc for why a full fix (resolve-time AND emit-time registration, plus a
+// materialize_const mismatch this surfaced) is bigger than this phase scoped.
+TEST_CASE("`for constexpr` over a function-local `constexpr` array is a clean compile error") {
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            constexpr arr: [3]i32 = .{10, 20, 30};
+            var sum := 0;
+            for constexpr (arr) |v| { sum = sum + v; }
+            return sum;
+        };
+    )");
+}
+
 TEST_CASE("`for constexpr` unrolls over a range with a companion `0..` index") {
     CHECK(helpers::compile_and_run(R"(
         constexpr arr: [3]i32 = .{10, 20, 30};

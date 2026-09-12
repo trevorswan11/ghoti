@@ -55,6 +55,18 @@ TEST_CASE("`++` takes its sentinel from the right operand only") {
     )") == 0);
 }
 
+// A local (function-scope) array/slice `const`/`constexpr`'s own VALUE still isn't nameable to a
+// later const-eval'd expression in the same scope - only a module-scope constant's value is
+// reachable this way today. An emit-time-only fix (opportunistically folding and registering
+// every structural local into the constexpr_frame) was tried and reverted: it fixed this case but
+// crashed an unrelated existing test (`materialize_const`'s array branch asserted on a
+// const_array read back with a mismatched sema type), and separately did not fix the sibling
+// `for constexpr`-over-a-local-array gap at all, since that check runs during the EARLIER resolve
+// pass, which has no visibility into anything the emitter registers later. Fixing this properly
+// needs the same registration done during resolution too (mirroring how a for/while-constexpr
+// capture already gets a resolve-time constexpr_frame entry), plus root-causing the
+// materialize_const mismatch - a bigger unit of work than this phase scoped, left for a
+// follow-up.
 TEST_CASE("`++` on a local array identifier is a clean compile error, not a crash") {
     helpers::expect_compile_error(R"(
         pub const main := fn(): i32 {

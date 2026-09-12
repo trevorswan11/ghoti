@@ -69,11 +69,89 @@ TEST_CASE("a `constexpr var` assignment's RHS must fold") {
     )");
 }
 
-TEST_CASE("`constexpr var` does not yet support aggregate types") {
-    helpers::expect_compile_error(R"(
+// An aggregate `constexpr var` has no address (same rule as a scalar one - see
+// CONSTEXPR_VAR_ADDRESS_OF), so it lives only in the constexpr_frame; reads/writes through a
+// field or element rebuild the whole value functionally rather than storing through any address.
+TEST_CASE("`constexpr var` reads back an array element") {
+    CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             constexpr var arr: [2]i32 = .{1, 2};
-            return arr[0];
+            return arr[0] + arr[1];
+        };
+    )") == 3);
+}
+
+TEST_CASE("`constexpr var` array element is directly assignable") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            constexpr var arr: [3]i32 = .{1, 2, 3};
+            arr[1] = 20;
+            return arr[0] + arr[1] + arr[2];
+        };
+    )") == 24);
+}
+
+TEST_CASE("`constexpr var` array element supports a compound assignment") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            constexpr var arr: [3]i32 = .{1, 2, 3};
+            arr[1] += 100;
+            return arr[0] + arr[1] + arr[2];
+        };
+    )") == 106);
+}
+
+TEST_CASE("`constexpr var` reads back a struct field") {
+    CHECK(helpers::compile_and_run(R"(
+        const Point := struct { x: i32, y: i32 };
+        pub const main := fn(): i32 {
+            constexpr var p := Point{ .x = 1, .y = 2 };
+            return p.x + p.y;
+        };
+    )") == 3);
+}
+
+TEST_CASE("`constexpr var` struct field is directly assignable") {
+    CHECK(helpers::compile_and_run(R"(
+        const Point := struct { x: i32, y: i32 };
+        pub const main := fn(): i32 {
+            constexpr var p := Point{ .x = 1, .y = 2 };
+            p.x = 10;
+            return p.x + p.y;
+        };
+    )") == 12);
+}
+
+TEST_CASE("`constexpr var` struct field supports a compound assignment") {
+    CHECK(helpers::compile_and_run(R"(
+        const Point := struct { x: i32, y: i32 };
+        pub const main := fn(): i32 {
+            constexpr var p := Point{ .x = 1, .y = 2 };
+            p.x += 9;
+            return p.x + p.y;
+        };
+    )") == 12);
+}
+
+TEST_CASE("`constexpr var` accumulates across `for constexpr` iterations") {
+    CHECK(helpers::compile_and_run(R"(
+        const Point := struct { x: i32, y: i32 };
+        pub const main := fn(): i32 {
+            constexpr var p := Point{ .x = 0, .y = 0 };
+            for constexpr (0..3) |i| { p.x += i; }
+            return p.x;
+        };
+    )") == 3);
+}
+
+TEST_CASE("assigning more than one level into a `constexpr var` aggregate is a clean error") {
+    helpers::expect_compile_error(R"(
+        const Inner := struct { v: i32 };
+        const Outer := struct { inner: Inner };
+        pub const main := fn(): i32 {
+            constexpr var o := Outer{ .inner = Inner{ .v = 1 } };
+            o.inner.v = 2;
+            return o.inner.v;
         };
     )");
 }
