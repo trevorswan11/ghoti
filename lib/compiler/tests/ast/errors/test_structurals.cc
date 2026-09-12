@@ -20,9 +20,9 @@ TEST_CASE("Empty enum") {
 
 TEST_CASE("Illegal underlying type") {
     helpers::test_parser_fail("enum : 4 {A};",
-                              syntax::diagnostic{syntax::error::ILLEGAL_IDENTIFIER, 0, 7});
+                              syntax::diagnostic{syntax::error::ILLEGAL_EXPLICIT_TYPE, 0, 5});
     helpers::test_parser_fail(R"(enum : "e" {A};)",
-                              syntax::diagnostic{syntax::error::ILLEGAL_IDENTIFIER, 0, 7});
+                              syntax::diagnostic{syntax::error::ILLEGAL_EXPLICIT_TYPE, 0, 5});
 }
 
 TEST_CASE("Empty enum with decl") {
