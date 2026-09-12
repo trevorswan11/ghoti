@@ -289,7 +289,8 @@ ExpressionStatement
         └─ Value: IdentifierExpression: b
 ExpressionStatement
 └─ Expr: EnumExpression
-    ├─ Underlying: IdentifierExpression: u64 (primitive)
+    ├─ Underlying: ExplicitType (modifier: VALUE)
+    │   └─ IdentifierExpression: u64 (primitive)
     ├─ Enumerations:
     │   ├─ Name: IdentifierExpression: A
     │   │   └─ Default: IntLiteralExpression: 1u64
@@ -460,7 +461,8 @@ ExpressionStatement
                         └─ Expr: IdentifierExpression: c
 ExpressionStatement
 └─ Expr: EnumExpression
-    ├─ Underlying: IdentifierExpression: i64 (primitive)
+    ├─ Underlying: ExplicitType (modifier: VALUE)
+    │   └─ IdentifierExpression: i64 (primitive)
     ├─ Enumerations:
     │   └─ Name: IdentifierExpression: A
     │       └─ Default: IntLiteralExpression: 2i64

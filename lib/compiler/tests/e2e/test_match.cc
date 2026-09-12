@@ -571,4 +571,31 @@ TEST_CASE("Match directly on reference types without dereferencing") {
     }
 }
 
+TEST_CASE("A match with a void block arm and a bare `@panic` arm resolves to void") {
+    CHECK(helpers::compile_and_run(R"(
+        const R := union { ok: void, err: i32 };
+        pub const main := fn(): i32 {
+            const r: R = .{ .ok = {} };
+            match (r) {
+                .ok => {},
+                .err => |_| @panic("boom"),
+            };
+            return 0;
+        };
+    )") == 0);
+}
+
+TEST_CASE("A match with a value arm and a bare `@panic` arm resolves to the value's type") {
+    CHECK(helpers::compile_and_run(R"(
+        const R := union { ok: i32, err: i32 };
+        pub const main := fn(): i32 {
+            const r: R = .{ .ok = 7 };
+            return match (r) {
+                .ok => |v| v,
+                .err => |_| @panic("boom"),
+            };
+        };
+    )") == 7);
+}
+
 } // namespace ghoti::tests

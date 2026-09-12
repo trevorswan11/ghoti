@@ -572,10 +572,10 @@ auto enum_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synta
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
 
-    stdx::option<identifier_handle> underlying;
+    stdx::option<explicit_type_id> underlying;
     if (parser.peek_token_is(syntax::token_type_t::COLON)) {
-        parser.advance(2);
-        underlying.emplace(TRY(identifier_expr::parse(parser)));
+        parser.advance();
+        underlying.emplace(TRY(explicit_type::parse(parser)));
     }
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
 
