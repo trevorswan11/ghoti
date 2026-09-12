@@ -5597,6 +5597,7 @@ auto type_resolver::resolve_constexpr_match(ast::node_id           id,
         auto&       live_table_type{resolving_.get_sema_type(live)};
         const scope live_scope{table_stack_, live_table_type.get_symbol_table_idx(), table_idx_};
 
+        constexpr_frame frame;
         if (live.capture && live.capture->is<ast::identifier_expr>()) {
             if (scrutinee->is<stdx::option<sema::type&>>()) {
                 return last_type_.emplace(
@@ -5626,9 +5627,25 @@ auto type_resolver::resolve_constexpr_match(ast::node_id           id,
             }
             resolving_.set_sema_type(*live.capture, *cap_type);
             resolve_symbol_info(*live.capture, symbol_kind::VALUE);
+
+            // Give the capture the same `constexpr_frame` binding a `for`/`while constexpr`
+            // capture already gets (§5.3/§6.2) - previously missing, this is what blocked
+            // `std::meta`'s flagship field-walker (§9.1): any later `try_eval` on an expression
+            // referencing the capture by name (not just one that's itself a builtin-call
+            // argument, the only path `emit_call`'s fold-first fallback covers) can now resolve
+            // it. Mirrors `const_eval::eval_match`'s own capture extraction for a union
+            // scrutinee: the bound value is the active variant's payload, not the whole union.
+            const auto& cap_ident{resolving_.ast.get_as<ast::identifier_expr>(*live.capture)};
+            if (const auto un{scrutinee->as_opt<gir::const_union>()}) {
+                frame.insert_or_assign(cap_ident.name,
+                                       !un->payload.empty() ? un->payload.front() : *scrutinee);
+            } else {
+                frame.insert_or_assign(cap_ident.name, *scrutinee);
+            }
         }
 
         const mutating_context_guard branch_g{in_expr_branch_, true};
+        const constexpr_frame_guard  cfg{ctx_.constexpr_binding_frames, std::move(frame)};
         TRY_RESOLVE(live.dispatch);
     }
 
