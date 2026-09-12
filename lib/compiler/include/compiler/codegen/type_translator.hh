@@ -41,6 +41,21 @@ class type_translator {
 
   private:
     using type_cache_t = ankerl::unordered_dense::map<const sema::type*, llvm::Type*>;
+    // A `const`/`mut` sibling pair of the same aggregate (`type_pool::with_const`) are two
+    // distinct `sema::type` objects that share the same underlying `struct_t`/`union_t`/
+    // `closure_t` data (a shallow copy of the same field/member spans) - so caching by `&type`
+    // alone would translate each sibling to its own, separately-`llvm::StructType::create`d named
+    // LLVM type. Two structurally identical but distinct named types then trip LLVM's own
+    // "calling a function with bad signature" check the moment one sibling's value crosses into a
+    // context expecting the other (e.g. a `var` global's value passed where a by-value `self`
+    // param - conventionally resolved as the const sibling - is expected). A sibling pair's own
+    // `key_t` differs *only* in its mutability bit (same `kind_`/`markers_`, including a generic
+    // instantiation's own per-instantiation discriminator) - so a `key_t` with that bit normalized
+    // is a mutability-invariant identity to fall back to on a cache miss, still distinguishing
+    // separate instantiations of the same generic aggregate from one another (unlike
+    // `symbol_table_idx`, which a generic template's every instantiation shares).
+    using aggregate_identity_cache_t =
+        ankerl::unordered_dense::map<sema::types::key_t, llvm::Type*>;
 
   private:
     auto translate_slice(const sema::types::slice& s) -> llvm::Type*;
@@ -53,11 +68,13 @@ class type_translator {
         -> llvm::Type*;
 
   private:
-    llvm::LLVMContext& context_;
-    llvm::Module&      module_;
-    type_cache_t       struct_cache_;
-    type_cache_t       union_cache_;
-    type_cache_t       closure_cache_;
+    llvm::LLVMContext&         context_;
+    llvm::Module&              module_;
+    type_cache_t               struct_cache_;
+    type_cache_t               union_cache_;
+    type_cache_t               closure_cache_;
+    aggregate_identity_cache_t struct_identity_cache_;
+    aggregate_identity_cache_t union_identity_cache_;
 };
 
 } // namespace ghoti::codegen

@@ -539,14 +539,22 @@ auto emitter::emit_dyn_coercion(ast::expr_handle src, const sema::type& fat_type
     auto& usize_ty{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
 
     // Register one private vtable global per `(I, T)`; slots hold the impl methods in order.
+    // This goes on `ast_module_` (the root module fixed at construction), never `active_mod()`
+    // (swapped for cross-module emission, e.g. a lazily-emitted imported function's own body,
+    // matching how this very coercion can run while emitting an *imported* module's function): a
+    // `gir::module` (and thus `llvm_lowering::lower_dyn_vtables`) only ever reads the ROOT
+    // module's own `dyn_vtables` list to materialize the vtable as a real LLVM global - anything
+    // registered on a non-root module's list is silently never lowered, leaving the coercion's own
+    // vtable-half `GLOBAL_ADDR` reference dangling (lowers to null, so the store that would set it
+    // is itself silently dropped - the resulting fat pointer's vtable half is left uninitialized).
     const auto vtable_sym{fmt::format("__vtable.{}", rec ? rec->body_scope_idx : 0UZ)};
-    if (rec && std::ranges::none_of(active_mod().dyn_vtables,
+    if (rec && std::ranges::none_of(ast_module_.dyn_vtables,
                                     [&](const auto& v) { return v.symbol == vtable_sym; })) {
         mod::dyn_vtable v{.symbol = vtable_sym, .slots = {}};
         for (const auto name : iface.method_names) {
             v.slots.emplace_back(symbol_scoping_.name_for(rec->body_scope_idx, name));
         }
-        active_mod().dyn_vtables.emplace_back(std::move(v));
+        ast_module_.dyn_vtables.emplace_back(std::move(v));
     }
 
     // The `data` half is the address of the source object
@@ -2857,8 +2865,8 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                 gir::const_eval evaluator{ctx_, active_mod()};
                 const auto      folded_name{evaluator.try_eval(*name_h)};
                 const auto      name{folded_name ? folded_name->as_opt<std::string>() : stdx::none};
-                const auto st{t_type ? t_type->get_data().as_opt<sema::types::struct_t>()
-                                     : stdx::none};
+                const auto      st{t_type ? t_type->get_data().as_opt<sema::types::struct_t>()
+                                          : stdx::none};
                 if (st && name) {
                     // Mirrors `find_aggregate_field`'s own by-name field scan, not the symbol
                     // table's proxy indexing, so this matches the same field the resolver found.
@@ -3510,7 +3518,11 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                 args.emplace_back(value{addr, self_param_type});
             }
         } else {
-            args.emplace_back(emit_expression(obj_expr_h));
+            // Retype to the declared self-param's own const/mut qualifier: a `var` receiver's
+            // loaded value otherwise keeps the mutable-global's own type, which - for a struct -
+            // is a distinct (if structurally identical) LLVM named type from the const-qualified
+            // one a by-value `self` param resolves to, tripping LLVM's "bad signature" call check.
+            args.emplace_back(value{emit_expression(obj_expr_h).data, self_param_type});
         }
     }
 
@@ -3526,11 +3538,11 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
     // `expand_pack_call_args`: one effective slot per argument, or per pack element for a
     // `...`-marked one. The resolver already validated that only the enclosing pack may be
     // expanded, so `current_pack_` is trusted here without re-checking the identifier.
-    std::vector<usize>         arg_source_index;
+    std::vector<usize>          arg_source_index;
     std::vector<stdx::opt_size> arg_pack_k;
     for (usize i{0}; i < call.arguments.size(); ++i) {
-        const bool is_expansion{
-            current_pack_ && i < call.pack_expansions.size() && call.pack_expansions[i]};
+        const bool is_expansion{current_pack_ && i < call.pack_expansions.size() &&
+                                call.pack_expansions[i]};
         if (!is_expansion) {
             arg_source_index.emplace_back(i);
             arg_pack_k.emplace_back(stdx::none);
@@ -5174,6 +5186,12 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                 const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
                 const auto  m_data{obj_type_opt->get_data().as_opt<sema::types::module>()};
                 if (m_data && m_data->imported.root_table_idx) {
+                    // See the matching comment in `emit_dot`'s own MODULE branch: the member's
+                    // `decl_stmt` lives in `m_data->imported`'s AST, not the module currently being
+                    // emitted, so `global_ref_in` needs that module swapped in for the lookup.
+                    auto&      target_mod{const_cast<mod::module&>(m_data->imported)};
+                    auto       prev_module{std::exchange(active_module_, &target_mod)};
+                    const auto restore_module{gsl::finally([&] { active_module_ = prev_module; })};
                     if (const auto gref{
                             global_ref_in(*m_data->imported.root_table_idx, member_ident.name)}) {
                         return *gref;
@@ -6160,15 +6178,30 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
     auto* obj_type{raw_obj_type.get()};
 
     if (obj_type->get_kind() == sema::type_kind::MODULE) {
-        if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
         const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
         const auto  m_data{obj_type->get_data().as_opt<sema::types::module>()};
+        // A `var` or aggregate `const` module member has real storage: load it from its global.
+        // This must come before the `try_eval` fallback below - a `var`'s value can change at
+        // runtime, so folding its *initializer* here (as `try_eval` would) reads stale/wrong data,
+        // and even for the untouched-since-init case the fold can produce a shape `to_gir_value()`
+        // has no scalar representation for (e.g. a struct holding a `^mut` address-of-another-
+        // global field), silently degrading to a bogus `void` value - matches the sibling
+        // type-namespace branch below, which already checks storage before folding.
         if (m_data && m_data->imported.root_table_idx) {
+            // `global_ref_in` reads the target node/type through `active_ast()`/`active_mod()`,
+            // which normally means "the module currently being emitted" - wrong here, since the
+            // member's own `decl_stmt` lives in `m_data->imported`'s AST, a different module. Swap
+            // it in for the lookup, matching the pattern already used for other cross-module reads
+            // (e.g. `emit_impl_default_body`, `emit_type_ctor_member`).
+            auto&      target_mod{const_cast<mod::module&>(m_data->imported)};
+            auto       prev_module{std::exchange(active_module_, &target_mod)};
+            const auto restore_module{gsl::finally([&] { active_module_ = prev_module; })};
             if (const auto gref{
                     global_ref_in(*m_data->imported.root_table_idx, member_ident.name)}) {
                 return value{builder_.emit_load(*gref, *gref->type), *gref->type};
             }
         }
+        if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
         return value{ref_symbol_name(id, member_ident.name), sema_type};
     }
 

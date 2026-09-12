@@ -144,7 +144,7 @@ auto type_translator::translate_array(const sema::types::array& a) -> llvm::Type
     // `builtin::FnInfo.params`, §10.2) needs the same sized-but-empty placeholder for the same
     // reason: `void` isn't a sized LLVM type, so `ArrayType::get` would build an unsized array.
     auto* elem_ty{a.underlying.get_kind() == sema::type_kind::TYPE ? llvm::StructType::get(context_)
-                                                                    : translate(a.underlying)};
+                                                                   : translate(a.underlying)};
     // A sentinel-terminated array stores one extra element for the terminator
     return llvm::ArrayType::get(elem_ty, a.len + (a.null_terminated ? 1 : 0));
 }
@@ -155,6 +155,13 @@ auto type_translator::translate_struct(const sema::types::struct_t& s, const sem
     if (const auto it{struct_cache_.find(&original)}; it != struct_cache_.end()) {
         return it->second;
     }
+    auto mut_invariant_key{original.get_key()};
+    mut_invariant_key.set_mut(sema::types::mut::CONSTANT);
+    if (const auto it{struct_identity_cache_.find(mut_invariant_key)};
+        it != struct_identity_cache_.end()) {
+        struct_cache_[&original] = it->second;
+        return it->second;
+    }
 
     // A bit-packed `packed struct` is a bare backing integer, not an aggregate.
     if (s.is_bit_packed()) {
@@ -162,12 +169,14 @@ auto type_translator::translate_struct(const sema::types::struct_t& s, const sem
             sema::packed_backing_bits(s, module_.getDataLayout().getPointerSizeInBits())};
         ASSERT(bits, "a bit-packed struct must have an eligible, in-range layout");
         auto* int_ty{llvm::IntegerType::get(context_, *bits)};
-        struct_cache_[&original] = int_ty;
+        struct_cache_[&original]                  = int_ty;
+        struct_identity_cache_[mut_invariant_key] = int_ty;
         return int_ty;
     }
 
     auto* struct_ty{llvm::StructType::create(context_)};
-    struct_cache_[&original] = struct_ty;
+    struct_cache_[&original]                  = struct_ty;
+    struct_identity_cache_[mut_invariant_key] = struct_ty;
 
     std::vector<llvm::Type*> element_types;
     element_types.reserve(s.fields.size());
@@ -196,6 +205,18 @@ auto type_translator::translate_union(const sema::types::union_t& u, const sema:
     if (const auto it{union_cache_.find(&original)}; it != union_cache_.end()) {
         return it->second;
     }
+    // See the matching comment in `translate_struct`: a const/mut sibling pair of a *tagged*
+    // union both create their own named `llvm::StructType` unless this identity is shared.
+    auto mut_invariant_key{original.get_key()};
+    mut_invariant_key.set_mut(sema::types::mut::CONSTANT);
+    const bool is_tagged{!u.is_bit_packed() && !u.is_untagged};
+    if (is_tagged) {
+        if (const auto it{union_identity_cache_.find(mut_invariant_key)};
+            it != union_identity_cache_.end()) {
+            union_cache_[&original] = it->second;
+            return it->second;
+        }
+    }
 
     const auto& dl{module_.getDataLayout()};
 
@@ -223,7 +244,8 @@ auto type_translator::translate_union(const sema::types::union_t& u, const sema:
     }
 
     auto* union_ty{llvm::StructType::create(context_)};
-    union_cache_[&original] = union_ty;
+    union_cache_[&original]                  = union_ty;
+    union_identity_cache_[mut_invariant_key] = union_ty;
     u64 max_size{0};
 
     for (const auto* field : u.fields) {
