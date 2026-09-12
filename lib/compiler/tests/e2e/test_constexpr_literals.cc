@@ -1,12 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "helpers/codegen.hh"
+#include "helpers/sema.hh"
 
 namespace ghoti::tests {
-
-// An unsuffixed integer / real literal is `constexpr_int` / `constexpr_float`: it is
-// compile-time known, coerces to any concrete numeric type it fits, and folds at 128-bit
-// (int) / f64 (float) precision before it ever reaches runtime.
 
 TEST_CASE("a constexpr_int literal coerces to many concrete widths") {
     CHECK(helpers::compile_and_run(R"(
@@ -18,8 +15,8 @@ TEST_CASE("a constexpr_int literal coerces to many concrete widths") {
             const d: u100 = n;
             if (@as(i32, a) != 200) { return 1; }
             if (@as(i32, b) != 200) { return 2; }
-            if (@as(i32, @as(i64, c)) != 200) { return 3; }
-            if (@as(i32, @as(u64, d)) != 200) { return 4; }
+            if (@intCast(i32, c) != 200) { return 3; }
+            if (@intCast(i32, d) != 200) { return 4; }
             return 0;
         };
     )") == 0);
@@ -92,7 +89,7 @@ TEST_CASE("@typeOf of an unsuffixed literal is constexpr_int / constexpr_float")
             const F := @typeOf(0.0);
             const a: I = 123;               // constexpr_int alias still coerces
             const b: F = 1.5;
-            if (@as(i32, @as(i64, a)) != 123) { return 1; }
+            if (@intCast(i32, @as(i64, a)) != 123) { return 1; }
             if (b != 1.5f64) { return 2; }
             return 0;
         };
@@ -129,6 +126,14 @@ TEST_CASE("negation brings the minimum signed value into range") {
             return @as(i32, hi) + @as(i32, lo) + 1;   // 127 + (-128) + 1 == 0
         };
     )") == 0);
+}
+
+TEST_CASE("`using K = other.CONST` value RHS produces diagnostic, not ICE") {
+    helpers::expect_compile_error(R"(
+        const X := 42;
+        using K = X;
+        pub const main := fn(): i32 { return K; };
+    )");
 }
 
 } // namespace ghoti::tests

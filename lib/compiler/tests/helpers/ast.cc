@@ -9,10 +9,10 @@
 
 namespace ghoti::tests::helpers {
 
-auto parse(std::string_view source) -> ast::AST {
+auto parse(std::string_view source, ghoti::arena& arena) -> ast::AST {
     syntax::parser p{source};
     ast::AST       parsed;
-    const auto     errors{p.consume(parsed)};
+    const auto     errors{p.consume(parsed, arena)};
     REQUIRE(errors.empty());
     return parsed;
 }

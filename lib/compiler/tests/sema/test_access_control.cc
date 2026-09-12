@@ -19,18 +19,18 @@ TEST_CASE("Cross-module public vs private declaration access") {
 
     SECTION("Public function access succeeds") {
         auto [ctx, idx]{
-            helpers::resolve_and_check(R"(import "math.gh" as math; const res := math::add(1, 2);)",
+            helpers::resolve_and_check(R"(import "math.gh" as math; const res := math.add(1, 2);)",
                                        {mock_file{.path = "math.gh", .source = math_gh}})};
         ctx->verify_registry_resolved();
     }
 
     SECTION("Private declaration access fails") {
-        helpers::test_resolver_fail(R"(import "math.gh" as math; const res := math::secret;)",
+        helpers::test_resolver_fail(R"(import "math.gh" as math; const res := math.secret;)",
                                     {mock_file{.path = "math.gh", .source = math_gh}},
                                     sema::diagnostic{
                                         "Symbol 'secret' is private to module 'math'",
                                         sema::error::ILLEGAL_PRIVATE_ACCESS,
-                                        std::pair{0UZ, 45UZ},
+                                        std::pair{0UZ, 44UZ},
                                     });
     }
 }
@@ -51,9 +51,9 @@ TEST_CASE("Cross-module public vs private struct field and member access") {
     SECTION("Public field and member access succeeds") {
         auto [ctx, idx]{helpers::resolve_and_check(
             R"(import "point.gh" as point;
-               const p := point::make_point();
+               const p := point.make_point();
                const px := p.x;
-               const zero_fn := point::Point.get_origin;)",
+               const zero_fn := point.Point.get_origin;)",
             {mock_file{.path = "point.gh", .source = point_gh}})};
         ctx->verify_registry_resolved();
     }
@@ -61,7 +61,7 @@ TEST_CASE("Cross-module public vs private struct field and member access") {
     SECTION("Private struct field access across modules fails") {
         helpers::test_resolver_fail(
             R"(import "point.gh" as point;
-               const p := point::make_point();
+               const p := point.make_point();
                const py := p.y;)",
             {mock_file{.path = "point.gh", .source = point_gh}},
             sema::diagnostic{
@@ -73,12 +73,12 @@ TEST_CASE("Cross-module public vs private struct field and member access") {
 
     SECTION("Private struct member access across modules fails") {
         helpers::test_resolver_fail(
-            R"(import "point.gh" as point; const p := point::Point.secret_helper;)",
+            R"(import "point.gh" as point; const p := point.Point.secret_helper;)",
             {mock_file{.path = "point.gh", .source = point_gh}},
             sema::diagnostic{
                 "Member 'secret_helper' of struct 'Point' is private",
                 sema::error::ILLEGAL_PRIVATE_ACCESS,
-                std::pair{0UZ, 52UZ},
+                std::pair{0UZ, 51UZ},
             });
     }
 }
@@ -97,20 +97,20 @@ TEST_CASE("Cross-module public vs private enum member access") {
     SECTION("Public enum member access succeeds") {
         auto [ctx, idx]{helpers::resolve_and_check(
             R"(import "color.gh" as color;
-               const c := color::Color.get_default;
-               const r := color::Color.RED;)",
+               const c := color.Color.get_default;
+               const r := color.Color.RED;)",
             {mock_file{.path = "color.gh", .source = color_gh}})};
         ctx->verify_registry_resolved();
     }
 
     SECTION("Private enum member access across modules fails") {
         helpers::test_resolver_fail(
-            R"(import "color.gh" as color; const code := color::Color.secret_code;)",
+            R"(import "color.gh" as color; const code := color.Color.secret_code;)",
             {mock_file{.path = "color.gh", .source = color_gh}},
             sema::diagnostic{
                 "Member 'secret_code' of enum 'Color' is private",
                 sema::error::ILLEGAL_PRIVATE_ACCESS,
-                std::pair{0UZ, 55UZ},
+                std::pair{0UZ, 54UZ},
             });
     }
 }
@@ -126,19 +126,19 @@ TEST_CASE("Cross-module public vs private union member access") {
 
     SECTION("Public union member access succeeds") {
         auto [ctx, idx]{helpers::resolve_and_check(
-            R"(import "data.gh" as data; const z := data::Value.get_zero;)",
+            R"(import "data.gh" as data; const z := data.Value.get_zero;)",
             {mock_file{.path = "data.gh", .source = data_gh}})};
         ctx->verify_registry_resolved();
     }
 
     SECTION("Private union member access across modules fails") {
         helpers::test_resolver_fail(
-            R"(import "data.gh" as data; const t := data::Value.secret_tag;)",
+            R"(import "data.gh" as data; const t := data.Value.secret_tag;)",
             {mock_file{.path = "data.gh", .source = data_gh}},
             sema::diagnostic{
                 "Member 'secret_tag' of union 'Value' is private",
                 sema::error::ILLEGAL_PRIVATE_ACCESS,
-                std::pair{0UZ, 49UZ},
+                std::pair{0UZ, 48UZ},
             });
     }
 }
@@ -158,20 +158,20 @@ TEST_CASE("Cross-module re-exported symbol access") {
 
     SECTION("Re-exported public import succeeds") {
         auto [ctx, idx]{
-            helpers::resolve_and_check(R"(import "std.gh" as std; const f := std::io::println;)",
+            helpers::resolve_and_check(R"(import "std.gh" as std; const f := std.io.println;)",
                                        {mock_file{.path = "std.gh", .source = std_pub_gh},
                                         mock_file{.path = "io.gh", .source = io_gh}})};
         ctx->verify_registry_resolved();
     }
 
     SECTION("Private import access from outer module fails") {
-        helpers::test_resolver_fail(R"(import "std.gh" as std; const f := std::io::println;)",
+        helpers::test_resolver_fail(R"(import "std.gh" as std; const f := std.io.println;)",
                                     {mock_file{.path = "std.gh", .source = std_priv_gh},
                                      mock_file{.path = "io.gh", .source = io_gh}},
                                     sema::diagnostic{
                                         "Symbol 'io' is private to module 'std'",
                                         sema::error::ILLEGAL_PRIVATE_ACCESS,
-                                        std::pair{0UZ, 40UZ},
+                                        std::pair{0UZ, 39UZ},
                                     });
     }
 }

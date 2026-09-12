@@ -1,5 +1,6 @@
 #pragma once
 
+#include <iterator>
 #include <vector>
 
 #include <stdx/arena.hh>
@@ -9,14 +10,14 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/arena.hh"
 #include "compiler/gir/instruction.hh"
-#include "compiler/sema/type.hh"
 
 namespace ghoti::gir {
 
 class segment {
   public:
-    constexpr explicit segment(sema::arena_alloc& arena, segment_id id) noexcept
+    constexpr explicit segment(ghoti::arena& arena, segment_id id) noexcept
         : arena_{arena}, id_{id} {}
     ~segment() = default;
     MAKE_PINNED(segment);
@@ -26,6 +27,13 @@ class segment {
 
     auto append(instruction&& inst) -> instruction& {
         return *instructions_.emplace_back(arena_.make<instruction>(std::move(inst)));
+    }
+
+    // Splices `inst` in just before this segment's terminator (or at the end if it has none).
+    auto insert_before_terminator(instruction&& inst) -> instruction& {
+        instruction* node{arena_.make<instruction>(std::move(inst)).get()};
+        const auto   pos{has_terminator() ? std::prev(instructions_.end()) : instructions_.end()};
+        return **instructions_.insert(pos, node);
     }
 
     [[nodiscard]] auto has_terminator() const noexcept -> bool {
@@ -43,7 +51,7 @@ class segment {
     [[nodiscard]] auto size() const noexcept -> usize { return instructions_.size(); }
 
   private:
-    sema::arena_alloc&        arena_;
+    ghoti::arena&             arena_;
     segment_id                id_{0};
     std::vector<instruction*> instructions_;
 };

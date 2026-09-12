@@ -13,12 +13,12 @@
 
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
+#include "compiler/gir/module.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/analyzer.hh"
 #include "driver/clap/error.hh"
 
-namespace CLI { class App; }           // namespace CLI
-namespace ghoti::gir { class module; } // namespace ghoti::gir
+namespace CLI { class App; } // namespace CLI
 
 namespace ghoti::cmd::build {
 
@@ -48,6 +48,7 @@ struct raw_options {
 
     std::string emit_gir_path;
     std::string emit_llvm_ir_path;
+    std::string emit_asm_path;
 };
 
 struct options {
@@ -66,12 +67,14 @@ struct options {
 
     stdx::option<std::filesystem::path> emit_gir_path{};
     stdx::option<std::filesystem::path> emit_llvm_ir_path{};
+    stdx::option<std::filesystem::path> emit_asm_path{};
 
     static auto process_raw(const raw_options&   raw,
                             codegen::output_type type,
                             std::ostream& error_stream) -> stdx::result<options, clap::error>;
 
-    // Writes the GIR / LLVM IR dumps requested via --emit-gir / --emit-llvm-ir, if any.
+    // Writes the GIR / LLVM IR / assembly dumps requested via
+    // --emit-gir / --emit-llvm-ir / --emit-asm, if any.
     [[nodiscard]] auto emit_debug_artifacts(sema::analyzer& analyzer,
                                             gir::module&    gir_mod,
                                             std::ostream&   error_stream) const
@@ -84,8 +87,11 @@ struct options {
                                             std::ostream&        error_stream)
         -> stdx::result<void, clap::error>;
 
-    auto analyze(sema::analyzer& analyzer, mod::module_manager& manager, std::ostream& error_stream)
-        -> stdx::result<gsl::not_null<ghoti::mod::module*>, clap::error>;
+    auto analyze(sema::analyzer&      analyzer,
+                 mod::module_manager& manager,
+                 std::ostream&        error_stream,
+                 bool                 for_test_executable = false)
+        -> stdx::result<std::pair<gsl::not_null<ghoti::mod::module*>, gir::module>, clap::error>;
 };
 
 // Helper to register standard build options into CLI subcommands

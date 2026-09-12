@@ -97,7 +97,7 @@ TEST_CASE("document_store finds references in a file that imports the queried de
     CHECK(!store
                .update(main_path,
                        "import \"test_ds_xmod_helper.gh\" as helper;\n"
-                       "pub const x := helper::value;\n")
+                       "pub const x := helper.value;\n")
                .empty());
 
     const auto helper_module{UNWRAP(store.analyze(helper_path))};
@@ -107,7 +107,7 @@ TEST_CASE("document_store finds references in a file that imports the queried de
     REQUIRE(refs.size() == 1);
     CHECK(refs[0].path == std::filesystem::weakly_canonical(main_path));
     CHECK(refs[0].span.start.line == 1);
-    CHECK(refs[0].span.start.column == 23);
+    CHECK(refs[0].span.start.column == 22);
 }
 
 TEST_CASE("document_store finds the upstream reference regardless of which file was opened first") {
@@ -119,7 +119,7 @@ TEST_CASE("document_store finds the upstream reference regardless of which file 
     CHECK(!store
                .update(main_path,
                        "import \"test_ds_xmod_order_helper.gh\" as helper;\n"
-                       "pub const x := helper::value;\n")
+                       "pub const x := helper.value;\n")
                .empty());
     CHECK(!store.update(helper_path, "pub const value := 42;\n").empty());
 
@@ -141,7 +141,7 @@ TEST_CASE(
     CHECK(!store
                .update(main_path,
                        "import \"test_ds_xmod_edit_helper.gh\" as helper;\n"
-                       "pub const x := helper::value;\n")
+                       "pub const x := helper.value;\n")
                .empty());
 
     const auto definition_of = [&] {
@@ -150,12 +150,12 @@ TEST_CASE(
     };
     REQUIRE(lsp::find_references(store.manager(), definition_of()).size() == 1);
 
-    // A second didChange adding a second usage of helper::value
+    // A second didChange adding a second usage of helper.value
     CHECK(!store
                .update(main_path,
                        "import \"test_ds_xmod_edit_helper.gh\" as helper;\n"
-                       "pub const x := helper::value;\n"
-                       "pub const y := helper::value;\n")
+                       "pub const x := helper.value;\n"
+                       "pub const y := helper.value;\n")
                .empty());
 
     CHECK(lsp::find_references(store.manager(), definition_of()).size() == 2);
@@ -212,7 +212,7 @@ TEST_CASE("seed_known_roots discovers cross-file references without ever opening
     {
         std::ofstream main_out{main_file.path};
         fmt::println(main_out,
-                     "import \"{}\" as helper;\npub const x := helper::value;",
+                     "import \"{}\" as helper;\npub const x := helper.value;",
                      helper_file.path.filename().string());
     }
 

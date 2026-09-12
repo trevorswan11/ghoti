@@ -1,0 +1,49 @@
+import std;
+
+/// A horribly inefficient allocator that allocates full OS pages at a time
+pub const PageAllocator := struct {};
+
+impl std.mem.AllocatorVTable for PageAllocator {
+    pub const alloc := fn(
+        &mut self,
+        len: usize,
+        alignment: std.mem.Alignment,
+    ): std.Option(^mut u8) {
+        @assert(
+            @as(usize, alignment) <= std.os.page_size(),
+            "PageAllocator: alignment above the page size is not supported",
+        );
+        return match (std.os.alloc(len)) {
+            .ok => |p| .{ .some = p },
+            .err => .{ .none = {} },
+        };
+    };
+    pub const resize := fn(
+        &mut self,
+        memory: []mut u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+    ): bool {
+        return std.mem.roundUpPage(new_len) <= std.mem.roundUpPage(memory.len);
+    };
+    pub const remap := fn(
+        &mut self,
+        memory: []mut u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+    ): std.Option(^mut u8) {
+        if (self.resize(memory, alignment, new_len)) {
+            return .{ .some = memory.ptr };
+        }
+        return .{ .none = {} };
+    };
+    pub const free := fn(
+        &mut self,
+        memory: []mut u8,
+        _: std.mem.Alignment,
+    ): void {
+        if (std.os.free(memory.ptr, memory.len) == .err) {
+            @panic("PageAllocator.free: munmap/VirtualFree failed");
+        }
+    };
+}

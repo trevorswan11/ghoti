@@ -247,7 +247,7 @@ fn addArtifacts(b: *std.Build, config: struct {
         \\Something went worng interally that isn't reported through an error message.
         \\Submit a bug report by opening an issue at https://github.com/trevorswan11/ghoti/issues/new/choose
         ,
-        .GHOTI_GIT_INFO = stdx.utils.getGitInfo(b),
+        .GHOTI_GIT_INFO = if (config.packaging) stdx.utils.getGitInfo(b) else "dev",
         .GHOTI_WINDOWS = target.result.os.tag == .windows,
         .GHOTI_LINUX = target.result.os.tag == .linux,
         .GHOTI_APPLE = target.result.os.tag == .macos,
@@ -563,7 +563,10 @@ fn addTooling(b: *std.Build, config: struct {
     }, &counted_files);
     try stdx.utils.collectFilesInto(b, "ghoti", .{ .allowed_extensions = &counted_extensions }, &counted_files);
     try stdx.utils.collectFilesInto(b, "site", .{ .allowed_extensions = &counted_extensions }, &counted_files);
-    _ = LOCCounter.init(b, counted_files.wrapped.items);
+    _ = LOCCounter.init(b, .{
+        .counted_files = counted_files.wrapped.items,
+        .file_buf_size = 1000 * 1024,
+    });
 }
 
 // Compilation takes a while and I don't have a data center to run this on

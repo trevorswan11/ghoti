@@ -330,4 +330,13 @@ struct cfg_outcome {
 [[nodiscard]] auto resolver_error_codes(std::string_view src) -> std::vector<sema::error>;
 [[nodiscard]] auto raised(std::string_view src, sema::error code) -> bool;
 
+struct resolve_result {
+    std::vector<sema::error> codes;
+    std::vector<std::string> messages;
+
+    [[nodiscard]] auto message_contains(std::string_view needle) const -> bool;
+};
+
+[[nodiscard]] auto resolve_diags(std::string_view src) -> resolve_result;
+
 } // namespace ghoti::tests::helpers

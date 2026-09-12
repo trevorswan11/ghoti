@@ -97,7 +97,7 @@ auto sema_test_context::get_string_literal_size(ast::expr_handle           handl
                                                 stdx::option<mod::module&> enclosing_mod) -> usize {
     const auto& module{enclosing_mod.value_or(root_mod)};
     const auto& str_expr{UNWRAP(module.ast.get_as_opt<ast::string_expr>(handle))};
-    return str_expr.value.size() + 1;
+    return str_expr.value.size();
 }
 
 auto collect(std::string_view input, const std::vector<mock_file>& imports) -> ctx_idx_pair {
@@ -270,6 +270,25 @@ auto resolver_error_codes(std::string_view src) -> std::vector<sema::error> {
 auto raised(std::string_view src, sema::error code) -> bool {
     const auto codes{resolver_error_codes(src)};
     return std::ranges::contains(codes, code);
+}
+
+auto resolve_result::message_contains(std::string_view needle) const -> bool {
+    for (const auto& m : messages) {
+        if (m.contains(needle)) { return true; }
+    }
+    return false;
+}
+
+[[nodiscard]] auto resolve_diags(std::string_view src) -> resolve_result {
+    auto [ctx, idx]{helpers::resolve(src)};
+    resolve_result out;
+    if (const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()}) {
+        for (const auto& d : *diags) {
+            out.codes.emplace_back(d.get_error());
+            if (const auto& msg{d.get_message()}) { out.messages.emplace_back(*msg); }
+        }
+    }
+    return out;
 }
 
 } // namespace ghoti::tests::helpers

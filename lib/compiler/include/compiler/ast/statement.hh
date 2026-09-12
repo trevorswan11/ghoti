@@ -36,7 +36,9 @@ struct break_stmt {
     stdx::option<identifier_handle> label;
     stdx::option<expr_handle>       expression;
 
-    [[nodiscard]] static auto parse(syntax::parser& parser)
+    [[nodiscard]] static auto
+    parse(syntax::parser&            parser,
+          syntax::semicolon_behavior behavior = syntax::semicolon_behavior::REQUIRE)
         -> stdx::result<stmt_handle, syntax::diagnostic>;
 };
 
@@ -55,7 +57,9 @@ struct cfg_stmt {
 struct continue_stmt {
     stdx::option<identifier_handle> label;
 
-    [[nodiscard]] static auto parse(syntax::parser& parser)
+    [[nodiscard]] static auto
+    parse(syntax::parser&            parser,
+          syntax::semicolon_behavior behavior = syntax::semicolon_behavior::REQUIRE)
         -> stdx::result<stmt_handle, syntax::diagnostic>;
 };
 
@@ -80,6 +84,7 @@ struct decl_stmt {
     decl_modifiers                 modifiers;
     stdx::option<string_handle>    extern_target;
     stdx::option<string_handle>    link_name;
+    stdx::option<expr_handle>      discardable_condition; // unset for a bare `@discardable`
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<stmt_handle, syntax::diagnostic>;
@@ -96,6 +101,15 @@ struct decl_stmt {
 
 struct defer_stmt {
     stmt_handle deferred;
+
+    [[nodiscard]] static auto parse(syntax::parser& parser)
+        -> stdx::result<stmt_handle, syntax::diagnostic>;
+};
+
+struct errdefer_stmt {
+    stmt_handle                            deferred;
+    stdx::option<discardable_ident_handle> capture;
+    type_modifier                          modifier;
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<stmt_handle, syntax::diagnostic>;
@@ -136,7 +150,9 @@ struct import_stmt {
 struct return_stmt {
     stdx::option<expr_handle> expression;
 
-    [[nodiscard]] static auto parse(syntax::parser& parser)
+    [[nodiscard]] static auto
+    parse(syntax::parser&            parser,
+          syntax::semicolon_behavior behavior = syntax::semicolon_behavior::REQUIRE)
         -> stdx::result<stmt_handle, syntax::diagnostic>;
 };
 
@@ -153,6 +169,7 @@ struct impl_stmt {
     stdx::option<explicit_type_id>        interface_type;
     explicit_type_id                      target_type;
     member_list                           members;
+    bool impl_params_force_break{false}; // trailing comma before `)`
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<stmt_handle, syntax::diagnostic>;

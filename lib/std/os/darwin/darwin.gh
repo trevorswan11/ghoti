@@ -1,66 +1,87 @@
-import "../../result.gh" as result;
+//! Raw Darwin (MacOS) primitives, backed by `libSystem`
+import std;
 pub import "errno.gh" as errno;
 
 pub using Handle = i32;
-pub using Errno = errno::Errno;
-pub constexpr EWOULDBLOCK := errno::EWOULDBLOCK;
+pub using Errno = errno.Errno;
+pub constexpr EWOULDBLOCK := errno.EWOULDBLOCK;
 
 // <sys/fcntl.h> and its transitive includes
-pub const O_RDONLY: i32 = 0x0000; // open for reading only
-pub const O_WRONLY: i32 = 0x0001; // open for writing only
-pub const O_RDWR: i32 = 0x0002; // open for reading and writing
-pub const O_ACCMODE: i32 = 0x0003; // mask for above modes
-pub const O_NONBLOCK: i32 = 0x0004; // no delay
-pub const O_APPEND: i32 = 0x0008; // set append mode
-pub const O_CREAT: i32 = 0x0200; // create if nonexistant
-pub const O_TRUNC: i32 = 0x0400; // truncate to zero length
-pub const O_EXCL: i32 = 0x0800; // error if already exists
-pub const O_CLOEXEC: i32 = 0x1000000; // implicitly set FD_CLOEXEC
+pub const O_RDONLY: i32 = 0x0000; /// open for reading only
+pub const O_WRONLY: i32 = 0x0001; /// open for writing only
+pub const O_RDWR: i32 = 0x0002; /// open for reading and writing
+pub const O_ACCMODE: i32 = 0x0003; /// mask for above modes
+pub const O_NONBLOCK: i32 = 0x0004; /// no delay
+pub const O_APPEND: i32 = 0x0008; /// set append mode
+pub const O_CREAT: i32 = 0x0200; /// create if nonexistant
+pub const O_TRUNC: i32 = 0x0400; /// truncate to zero length
+pub const O_EXCL: i32 = 0x0800; /// error if already exists
+pub const O_CLOEXEC: i32 = 0x1000000; /// implicitly set FD_CLOEXEC
 pub const O_DIRECTORY: i32 = 0x100000;
 
-pub const SEEK_SET: i32 = 0; // set file offset to offset
-pub const SEEK_CUR: i32 = 1; // set file offset to current plus offset
-pub const SEEK_END: i32 = 2; // set file offset to EOF plus offset
+pub const SEEK_SET: i32 = 0; // Set file offset to offset
+pub const SEEK_CUR: i32 = 1; // Set file offset to current plus offset
+pub const SEEK_END: i32 = 2; // Set file offset to EOF plus offset
 
 pub using mode_t = u16;
-pub using dev_t = i32; // Device number
-pub using nlink_t = u16; // Link count
+pub using dev_t = i32; /// Device number
+pub using nlink_t = u16; /// Link count
 pub using ino64_t = u64;
 pub using uid_t = u32;
 pub using gid_t = u32;
 pub using time_t = i64;
+pub using off_t = i64; /// File offset / size
 pub using blkcnt_t = i64;
 pub using blksize_t = i32;
 
-// Reference: sys/stat.h
-// This structure is used as the second parameter to the fstat64(),
-// lstat64(), and stat64() functions, and for struct stat when
-// __DARWIN_64_BIT_INO_T is set.
-//
-// This is simillar to stat except for 64bit inode number
-// number instead of 32bit ino_t and the addition of create(birth) time.
+const S_IFMT: mode_t = 0o170000u16; /// file-type mask within `st_mode`
+const S_IFDIR: mode_t = 0o040000u16; /// directory
+
+/// Reference: sys/stat.h
+/// This structure is used as the second parameter to the fstat64(),
+/// lstat64(), and stat64() functions, and for struct stat when
+/// __DARWIN_64_BIT_INO_T is set.
+///
+/// This is simillar to stat except for 64bit inode number
+/// number instead of 32bit ino_t and the addition of create(birth) time.
 pub const Stat := extern struct {
-    pub st_dev: dev_t, // [XSI] ID of device containing file
-    pub st_mode: mode_t, // [XSI] Mode of file
-    pub st_nlink: nlink_t, // [XSI] Number of hard links
-    pub st_ino: ino64_t, // [XSI] File serial number
-    pub st_uid: uid_t, // [XSI] User ID of the file
-    pub st_gid: gid_t, // [XSI] Group ID of the file
-    pub st_rdev: dev_t, // [XSI] Device ID
-    pub st_atime: time_t, // [XSI] Time of last access
-    pub st_atimensec: i64, // nsec of last access
-    pub st_mtime: time_t, // [XSI] Last data modification time
-    pub st_mtimensec: i64, // last data modification nsec
-    pub st_ctime: time_t, // [XSI] Time of last status change
-    pub st_ctimensec: i64, // nsec of last status change
-    pub st_birthtime: time_t, // File creation time (birth)
-    pub st_birthtimensec: i64, // nsec of File creation time
-    pub st_blocks: blkcnt_t, // [XSI] blocks allocated for file
-    pub st_blksize: blksize_t, // [XSI] optimal blocksize for I/O
-    pub st_flags: u32, // user defined flags for file
-    pub st_gen: u32, // file generation number
-    pub st_lspare: i32, // RESERVED: DO NOT USE!
-    pub st_qspare: [2]i64, // RESERVED: DO NOT USE!
+    pub st_dev: dev_t, /// [XSI] ID of device containing file
+    pub st_mode: mode_t, /// [XSI] Mode of file
+    pub st_nlink: nlink_t, /// [XSI] Number of hard links
+    pub st_ino: ino64_t, /// [XSI] File serial number
+    pub st_uid: uid_t, /// [XSI] User ID of the file
+    pub st_gid: gid_t, /// [XSI] Group ID of the file
+    pub st_rdev: dev_t, /// [XSI] Device ID
+    pub st_atime: time_t, /// [XSI] Time of last access
+    pub st_atimensec: i64, /// nsec of last access
+    pub st_mtime: time_t, /// [XSI] Last data modification time
+    pub st_mtimensec: i64, /// last data modification nsec
+    pub st_ctime: time_t, /// [XSI] Time of last status change
+    pub st_ctimensec: i64, /// nsec of last status change
+    pub st_birthtime: time_t, /// File creation time (birth)
+    pub st_birthtimensec: i64, /// nsec of File creation time
+    pub st_size: off_t, /// [XSI] file size, in bytes
+    pub st_blocks: blkcnt_t, /// [XSI] blocks allocated for file
+    pub st_blksize: blksize_t, /// [XSI] optimal blocksize for I/O
+    pub st_flags: u32, /// user defined flags for file
+    pub st_gen: u32, /// file generation number
+    pub st_lspare: i32, /// RESERVED: DO NOT USE!
+    pub st_qspare: [2]i64, /// RESERVED: DO NOT USE!
+
+    /// File size in bytes.
+    pub const size := fn(&self): u64 {
+        return @intCast(u64, self.st_size);
+    };
+
+    /// Whether the entry is a directory.
+    pub const is_dir := fn(&self): bool {
+        return (self.st_mode & S_IFMT) == S_IFDIR;
+    };
+
+    /// Last-modification time in nanoseconds since the Unix epoch.
+    pub const modified_time_ns := fn(&self): u64 {
+        return @intCast(u64, self.st_mtime) * 1000000000u64 + @intCast(u64, self.st_mtimensec);
+    };
 };
 
 extern("System", "__error") const sys_errno_loc: fn(): ^mut i32;
@@ -73,53 +94,128 @@ extern("System", "lseek") const sys_lseek: fn(fd: i32, offset: i64, whence: i32)
 extern("System", "fstat") const sys_fstat: fn(file_desc: Handle, stat: ^mut Stat): i32;
 extern("System", "mkdir") const sys_mkdir: fn(path: ^u8, mode: mode_t): i32;
 extern("System", "stat") const sys_stat: fn(path: ^u8, stat: ^mut Stat): i32;
+extern("System", "sysconf") const sys_sysconf: fn(name: i32): isize;
 
-pub const stdin: Handle = 0;
-pub const stdout: Handle = 1;
-pub const stderr: Handle = 2;
+pub const _SC_PAGESIZE: i32 = 29;
+
+// <sys/mman.h>: raw anonymous memory, the page-granular allocation primitive.
+pub const PROT_READ: i32 = 0x1; /// pages can be read
+pub const PROT_WRITE: i32 = 0x2; /// pages can be written
+pub const MAP_PRIVATE: i32 = 0x0002; /// changes are private (copy-on-write)
+pub const MAP_ANON: i32 = 0x1000; /// allocate from anonymous virtual memory
+const MAP_FAILED: ^mut opaque = @ptrFromInt(^mut opaque, @bitCast(usize, -1z)); // ((void *)-1)
+
+extern("System", "mmap") const sys_mmap: fn(
+    addr: ^mut opaque,
+    len: usize,
+    prot: i32,
+    flags: i32,
+    fd: i32,
+    offset: i64
+): ^mut opaque;
+extern("System", "munmap") const sys_munmap: fn(addr: ^mut opaque, len: usize): i32;
 
 constexpr R := fn(T: type): type {
-    return result::Result(T, Errno);
+    return std.Result(T, Errno);
 };
 
+pub constexpr stdin := fn(): R(Handle) {
+    return .{ .ok = 0 };
+};
+
+pub constexpr stdout := fn(): R(Handle) {
+    return .{ .ok = 1 };
+};
+
+pub constexpr stderr := fn(): R(Handle) {
+    return .{ .ok = 2 };
+};
+
+/// Write the contents of `buf` to the file, returning the number of written bytes
 pub const write := fn(h: Handle, buf: []u8): R(usize) {
     const r := sys_write(h, buf.ptr, buf.len);
-    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = @as(usize, r) };
+    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = @intCast(usize, r) };
 };
 
+/// Read the contents of the file into `buf`, returning the number of read bytes
 pub const read := fn(h: Handle, buf: []mut u8): R(usize) {
     const r := sys_read(h, buf.ptr, buf.len);
-    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = @as(usize, r) };
+    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = @intCast(usize, r) };
 };
 
+/// Open the file at the provided path with the desired flag and mode
 pub const open := fn(path: [:0]u8, flags: i32, mode: mode_t): R(Handle) {
     const fd := sys_open(path.ptr, flags, @as(i32, mode));
     return if (fd < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = fd };
 };
 
+/// Close the file associated with the given handle
 pub const close := fn(h: Handle): R(void) {
     const r := sys_close(h);
     return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = {} };
 };
 
+/// Reposition a read/write file to offset `off` where:
+/// - If `whence` is `SEEK_SET`, the offset is set to offset bytes.
+/// - If `whence` is `SEEK_CUR`, the offset is set to its current location plus offset bytes.
+/// - If `whence` is `SEEK_END`, the offset is set to the size of the file plus offset bytes.
 pub const lseek := fn(h: Handle, off: i64, whence: i32): R(i64) {
     const r := sys_lseek(h, off, whence);
     return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = r };
 };
 
+// Get the `Stat` for an already open file
 pub const fstat := fn(file: Handle): R(Stat) {
     var s: Stat = undefined;
     const r := sys_fstat(file, ^mut s);
     return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = s };
 };
 
-pub const mkdir := fn(path: [:0]u8, mode: mode_t): R(void) {
-    const r := sys_mkdir(path.ptr, mode);
-    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = {} };
-};
-
+// Get the `Stat` for a file at the provided `path`
 pub const stat := fn(path: [:0]u8): R(Stat) {
     var s: Stat = undefined;
     const r := sys_stat(path.ptr, ^mut s);
     return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = s };
 };
+
+/// Create a directory at the provided path
+pub const mkdir := fn(path: [:0]u8, mode: mode_t): R(void) {
+    const r := sys_mkdir(path.ptr, mode);
+    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = {} };
+};
+
+/// Reserve and commit `len` bytes of zero-filled, read-write anonymous memory.
+/// The result is page-aligned; `len` is rounded up to a page by the kernel.
+pub const alloc := fn(len: usize): R(^mut u8) {
+    const p := sys_mmap(nullptr, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1i32, 0i64);
+    return if (p == MAP_FAILED) .{ .err = @as(Errno, *sys_errno_loc()) }
+        else .{ .ok = @ptrCast(^mut u8, p) };
+};
+
+/// Release a region previously returned by `alloc`. `len` must match the `alloc` call.
+pub const free := fn(ptr: ^mut u8, len: usize): R(void) {
+    const r := sys_munmap(@ptrCast(^mut opaque, ptr), len);
+    return if (r < 0) .{ .err = @as(Errno, *sys_errno_loc()) } else .{ .ok = {} };
+};
+
+var cached_page_size: std.Option(usize) = .{ .none = {} };
+
+/// Query and return the OS page size in bytes.
+/// Queries `sysconf(_SC_PAGESIZE)` once and caches the result.
+pub const page_size := fn(): usize {
+    if (cached_page_size == .none) {
+        const ps := sys_sysconf(_SC_PAGESIZE);
+        if (ps > 0z) {
+            cached_page_size = .{ .some = @intCast(usize, ps) };
+        } else {
+            cached_page_size = .{ .some = 4096uz };
+        };
+    };
+    return cached_page_size.some;
+};
+
+test "darwin: page_size returns non-zero power of two page size" {
+    const ps := page_size();
+    @expect(ps > 0uz);
+    @expect((ps & (ps - 1uz)) == 0uz);
+}

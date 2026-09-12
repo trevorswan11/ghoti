@@ -12,7 +12,9 @@
 #include <fmt/format.h>
 #include <gsl/pointers>
 #include <gsl/span>
+#include <gsl/util>
 #include <stdx/assert.hh>
+#include <stdx/hash.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
@@ -38,6 +40,7 @@
 #include "compiler/sema/generic.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/sema/unwrap_shape.hh"
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/int128.hh"
@@ -129,6 +132,29 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
     symbol_scoping_ = symbol_scoping::build(ctx_, ast_module_, imported_mods);
     const_eval_.set_symbol_scoping(symbol_scoping_);
 
+#ifdef GHOTI_DEBUG
+    const auto compute_side_table_checksum = [](const mod::module& m) -> u64 {
+        stdx::hasher h{0};
+        for (const auto& ty : m.sema_side_tables.node_types.values) {
+            h.combine(ty ? reinterpret_cast<u64>(ty.get()) : 0);
+        }
+        for (const auto& ty : m.sema_side_tables.explicit_types.values) {
+            h.combine(ty ? reinterpret_cast<u64>(ty.get()) : 0);
+        }
+        for (const auto& [idx, br] : m.if_constexpr_results) {
+            h.combine(idx).combine(static_cast<u8>(br));
+        }
+        for (const auto& [idx, arm] : m.match_arm_results) { h.combine(idx).combine(arm); }
+        return h.finalize();
+    };
+
+    std::vector<std::pair<const mod::module*, u64>> pre_emit_checksums;
+    pre_emit_checksums.emplace_back(&ast_module_, compute_side_table_checksum(ast_module_));
+    for (const auto* m : imported_mods) {
+        if (m) { pre_emit_checksums.emplace_back(m, compute_side_table_checksum(*m)); }
+    }
+#endif
+
     {
         PROFILE_SCOPE("emitter: emit root module");
         for (const auto root_id : ast_module_.ast) { emit_top_level_stmt(ast_module_, root_id); }
@@ -167,6 +193,16 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
     }
 
     for (const auto name : pending_builtin_runtime_) { ensure_builtin_runtime(name); }
+
+#ifdef GHOTI_DEBUG
+    for (const auto& [m, expected_sum] : pre_emit_checksums) {
+        const auto actual_sum{compute_side_table_checksum(*m)};
+        ASSERT(actual_sum == expected_sum,
+               "Emitter violated zero-mutation invariant: side tables or folded results were "
+               "mutated during emit");
+    }
+#endif
+
     return std::move(gir_module_);
 }
 
@@ -189,13 +225,52 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
     VERIFY(fn_expr_opt, "Generic instantiation must reference a valid function expression");
     const auto& fn_expr{*fn_expr_opt};
 
-    sema::types::key_t fn_key{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT};
-    for (const auto& param_type : req.arg_types) { fn_key.imprint(*param_type); }
-    fn_key.imprint(*req.return_type);
-    auto& fn_type{*ctx_.pool[fn_key]};
-    fn_type.resolve_if<sema::types::function>(req.arg_types, *req.return_type, false, false);
+    const auto                 diff{ctx_.instantiation_cache.get_body_type_diff(req.mangled_name)};
+    const mod::body_diff_guard diff_guard{fn_mod, diff};
 
-    auto& fn{gir_module_.add_function(req.mangled_name, fn_type, false, false)};
+    stdx::option<sema::type&> self_type;
+    if (fn_expr.self) {
+        self_type = fn_mod.get_sema_type_opt(fn_expr.self->name);
+        if (!self_type) {
+            if (const auto gi{ctx_.generic_functions.get_opt(*req.generic_fn_type)};
+                gi && gi->enclosing_type) {
+                auto& enc{*gi->enclosing_type};
+                if (const auto m{sema::types::mut::from_type_modifier(fn_expr.self->modifier)}) {
+                    self_type.emplace(fn_expr.self->modifier.is_ptr()
+                                          ? ctx_.get_pointer(*m, enc)
+                                          : ctx_.get_reference(*m, enc));
+                } else {
+                    self_type.emplace(enc);
+                }
+            } else if (const auto fn_data{
+                           req.generic_fn_type->get_data().as_opt<sema::types::function>()};
+                       fn_data && !fn_data->params.empty()) {
+                self_type.emplace(*fn_data->params[0]);
+            }
+        }
+    }
+
+    const bool  has_self{fn_expr.self.has_value()};
+    const usize num_params{req.arg_types.size() + (has_self ? 1UZ : 0UZ)};
+    auto        full_param_types{ctx_.pool.get_many_unsafe(num_params)};
+    usize       pi{0};
+    if (has_self) {
+        ASSERT(self_type, "Self parameter must have a resolved sema type");
+        full_param_types[pi++] = const_cast<sema::type*>(&*self_type);
+    }
+    for (const auto& param_type : req.arg_types) { full_param_types[pi++] = param_type; }
+
+    sema::types::key_t fn_key{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT};
+    for (const auto& param_type : full_param_types) { fn_key.imprint(*param_type); }
+    fn_key.imprint(*req.return_type);
+    fn_key.imprint(static_cast<u64>(has_self));
+    fn_key.imprint(static_cast<u64>(fn_expr.variadic));
+    auto& fn_type{*ctx_.pool[fn_key]};
+    fn_type.resolve_if<sema::types::function>(
+        full_param_types, *req.return_type, has_self, fn_expr.variadic);
+
+    auto& fn{gir_module_.add_function(
+        req.mangled_name, fn_type, false, false, fn_expr.variadic, gir::linkage::INTERNAL)};
     auto& entry{fn.add_segment()};
     builder_.set_insert_point(fn, entry);
 
@@ -209,38 +284,49 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
         usize cx_i{0};
         for (const auto& param : fn_expr.parameters) {
             if (!param.is_constexpr || cx_i >= cx_args->size()) { continue; }
-            const auto& p_name{fn_mod.ast.get_as<ast::identifier_expr>(param.name).name};
-            cx_frame.insert_or_assign(p_name, (*cx_args)[cx_i]);
-            cx_by_name.emplace(p_name, &(*cx_args)[cx_i]);
+            if (param.name.is<ast::identifier_expr>()) {
+                const auto& p_name{fn_mod.ast.get_as<ast::identifier_expr>(param.name).name};
+                cx_frame.insert_or_assign(p_name, (*cx_args)[cx_i]);
+                cx_by_name.emplace(p_name, &(*cx_args)[cx_i]);
+            }
             ++cx_i;
         }
     }
     const constexpr_frame_guard cx_frame_guard{ctx_.constexpr_binding_frames, std::move(cx_frame)};
 
-    // Replay this monomorphization's body typing onto the shared AST nodes before emitting
+    // Overlay this monomorphization's body typing onto the shared AST nodes during emission
     const_eval_.clear_memo();
-    if (const auto diff{ctx_.instantiation_cache.get_body_type_diff(req.mangled_name)}) {
-        for (const auto& [idx, ty] : diff->node_types) {
-            fn_mod.sema_side_tables.node_types.values[idx] = ty;
-        }
-        for (const auto& [idx, ty] : diff->explicit_types) {
-            fn_mod.sema_side_tables.explicit_types.values[idx] = ty;
-        }
-        for (const auto& [idx, br] : diff->if_branches) {
-            fn_mod.if_constexpr_results.insert_or_assign(idx, br);
-        }
-        for (const auto& [idx, arm] : diff->match_arms) {
-            fn_mod.match_arm_results.insert_or_assign(idx, arm);
-        }
+    stdx::option<type_guard> enclosing_guard;
+    if (const auto gi{ctx_.generic_functions.get_opt(*req.generic_fn_type)};
+        gi && gi->enclosing_type) {
+        enclosing_guard.emplace(user_type_stack_, const_cast<sema::type*>(&*gi->enclosing_type));
+        const_eval_.set_enclosing_type(gi->enclosing_type);
     }
     {
         const scope_guard g{scopes_};
-        usize             rt_i{0};
+        if (fn_expr.self) {
+            const auto& self_ident{fn_mod.ast.get_as<ast::identifier_expr>(fn_expr.self->name)};
+            const auto  self_name{self_ident.name};
+            auto&       self_slot{fn.add_param(std::string{self_name}, *self_type)};
+            const bool  self_spilled{self_type->get_kind() == sema::type_kind::SLICE};
+            scopes_.back().bindings.emplace(self_name,
+                                            local_binding{
+                                                .id        = self_slot.id,
+                                                .type      = *self_type,
+                                                .is_alloca = self_spilled,
+                                                .const_val = stdx::none,
+                                            });
+        }
+        usize rt_i{0};
         for (const auto& param : fn_expr.parameters) {
-            const auto& p_name{fn_mod.ast.get_as<ast::identifier_expr>(param.name).name};
+            std::string_view p_name{};
+            if (param.name.is<ast::identifier_expr>()) {
+                p_name = fn_mod.ast.get_as<ast::identifier_expr>(param.name).name;
+            }
 
             // `constexpr` parameters are erased from the signature
             if (param.is_constexpr) {
+                if (p_name.empty()) { continue; }
                 const auto cxit{cx_by_name.find(p_name)};
                 if (cxit == cx_by_name.end()) { continue; }
                 const auto& val{*cxit->second};
@@ -265,26 +351,28 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
 
             auto& arg_type{req.arg_types[rt_i++]};
             auto& p_slot{fn.add_param(std::string{p_name}, *arg_type)};
-            if (arg_type->get_kind() == sema::type_kind::CLOSURE) {
-                // A closure argument arrives by value
-                const auto spilled{spill_to_temporary(value{p_slot.id, *arg_type}, *arg_type)};
+            if (!p_name.empty()) {
+                if (arg_type->get_kind() == sema::type_kind::CLOSURE) {
+                    // A closure argument arrives by value
+                    const auto spilled{spill_to_temporary(value{p_slot.id, *arg_type}, *arg_type)};
+                    scopes_.back().bindings.emplace(p_name,
+                                                    local_binding{
+                                                        .id        = spilled.data.as<local_id>(),
+                                                        .type      = *arg_type,
+                                                        .is_alloca = true,
+                                                        .const_val = stdx::none,
+                                                    });
+                    continue;
+                }
+                const bool p_spilled{arg_type->get_kind() == sema::type_kind::SLICE};
                 scopes_.back().bindings.emplace(p_name,
                                                 local_binding{
-                                                    .id        = spilled.data.as<local_id>(),
+                                                    .id        = p_slot.id,
                                                     .type      = *arg_type,
-                                                    .is_alloca = true,
+                                                    .is_alloca = p_spilled,
                                                     .const_val = stdx::none,
                                                 });
-                continue;
             }
-            const bool p_spilled{arg_type->get_kind() == sema::type_kind::SLICE};
-            scopes_.back().bindings.emplace(p_name,
-                                            local_binding{
-                                                .id        = p_slot.id,
-                                                .type      = *arg_type,
-                                                .is_alloca = p_spilled,
-                                                .const_val = stdx::none,
-                                            });
         }
 
         emit_block(fn_mod.ast.get_as<ast::block_stmt>(fn_expr.body));
@@ -297,6 +385,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
         }
     }
 
+    const_eval_.set_enclosing_type(stdx::none);
     active_module_ = prev_module;
     if (prev_module) { const_eval_.set_module(*prev_module); }
 }
@@ -314,22 +403,8 @@ auto emitter::emit_type_ctor_member(mod::module& owner_mod, const sema::type_cto
     const_eval_.set_module(owner_mod);
     const_eval_.clear_memo();
 
-    // Replay this constructor instantiation's body typing onto the shared AST nodes so
-    // `@this()` / `.{ ... }` / `^self` resolve to the right shape.
-    if (const auto diff{ctx_.instantiation_cache.get_body_type_diff(tcm.typing_key)}) {
-        for (const auto& [idx, ty] : diff->node_types) {
-            owner_mod.sema_side_tables.node_types.values[idx] = ty;
-        }
-        for (const auto& [idx, ty] : diff->explicit_types) {
-            owner_mod.sema_side_tables.explicit_types.values[idx] = ty;
-        }
-        for (const auto& [idx, br] : diff->if_branches) {
-            owner_mod.if_constexpr_results.insert_or_assign(idx, br);
-        }
-        for (const auto& [idx, arm] : diff->match_arms) {
-            owner_mod.match_arm_results.insert_or_assign(idx, arm);
-        }
-    }
+    const auto                 diff{ctx_.instantiation_cache.get_body_type_diff(tcm.typing_key)};
+    const mod::body_diff_guard diff_guard{owner_mod, diff};
 
     // Make this constructor instantiation's `constexpr` parameter values visible to the bodyA
     sema::constexpr_frame ctor_frame;
@@ -356,16 +431,26 @@ auto get_decl_linkage(const ast::decl_stmt& decl) noexcept -> gir::linkage {
     return gir::linkage::INTERNAL;
 }
 
+// A `const X := @compileError("msg")` declaration is a deferred error
+auto decl_is_deferred_compile_error(const ast::AST& ast, const ast::decl_stmt& decl) -> bool {
+    if (!decl.value) { return false; }
+    const ast::node_id value_id{*decl.value};
+    if (value_id.get_kind() != ast::node_kind::CALL_EXPRESSION) { return false; }
+    const auto& call{ast.get_as<ast::call_expr>(value_id)};
+    return ast::node_id{call.function}.get_token_type() ==
+           syntax::token_type_t::BUILTIN_COMPILE_ERROR;
+}
+
 // Resolves an extern decl's optional `("target")` argument, defaulting to `"c"`.
 auto get_extern_target(const ast::AST& ast, const ast::decl_stmt& decl) -> std::string {
     if (!decl.extern_target) { return "c"; }
-    return ast.get_as<ast::string_expr>(**decl.extern_target).value;
+    return std::string{ast.get_as<ast::string_expr>(**decl.extern_target).value};
 }
 
 // The explicit symbol name from `extern("lib", "sym")` / `export("sym")`, else empty.
 auto get_link_name(const ast::AST& ast, const ast::decl_stmt& decl) -> std::string {
     if (!decl.link_name) { return {}; }
-    return ast.get_as<ast::string_expr>(**decl.link_name).value;
+    return std::string{ast.get_as<ast::string_expr>(**decl.link_name).value};
 }
 
 } // namespace
@@ -427,7 +512,7 @@ auto emitter::emit_dyn_coercion(ast::expr_handle src, const sema::type& fat_type
     const auto vtable_sym{fmt::format("__vtable.{}", rec ? rec->body_scope_idx : 0UZ)};
     if (rec && std::ranges::none_of(active_mod().dyn_vtables,
                                     [&](const auto& v) { return v.symbol == vtable_sym; })) {
-        mod::module::dyn_vtable v{.symbol = vtable_sym, .slots = {}};
+        mod::dyn_vtable v{.symbol = vtable_sym, .slots = {}};
         for (const auto name : iface.method_names) {
             v.slots.emplace_back(symbol_scoping_.name_for(rec->body_scope_idx, name));
         }
@@ -466,12 +551,40 @@ auto emitter::folded_int(const value& v) noexcept -> stdx::option<i128> {
 }
 
 auto emitter::coerce_constexpr_int(value v, sema::type& target, ast::node_id at) -> value {
-    if (const auto folded{folded_int(v)};
-        folded && !sema::constexpr_int_fits(*folded, target, target_ptr_bits_)) {
-        ctx_.diags.emplace_back(fmt::format("integer literal is out of range for type '{}'",
-                                            sema::type_kind_display_name(target)),
+    const auto folded{folded_int(v)};
+    if (folded && !sema::constexpr_int_fits(*folded, target, target_ptr_bits_)) {
+        ctx_.diags.emplace_back(v.type && v.type->get_kind() == sema::type_kind::CONSTEXPR_INT
+                                    ? fmt::format("integer literal is out of range for type '{}'",
+                                                  sema::type_kind_display_name(target))
+                                    : fmt::format("integer value {} is out of range for type '{}'",
+                                                  *folded,
+                                                  sema::type_kind_display_name(target)),
                                 sema::error::LITERAL_OUT_OF_RANGE,
                                 active_ast().location_of(at));
+    }
+    if (folded) {
+        const auto effective_bits{[this](const sema::type& t) noexcept -> u32 {
+            switch (t.get_kind()) {
+            case sema::type_kind::INT:   return sema::int_width(t);
+            case sema::type_kind::ISIZE:
+            case sema::type_kind::USIZE: return target_ptr_bits_;
+            default:                     return 0;
+            }
+        }};
+        const auto bits{effective_bits(target)};
+        if (sema::is_unsigned_integer(target)) {
+            if (bits > 64) {
+                v.data = static_cast<u128>(*folded);
+            } else {
+                v.data = static_cast<u64>(static_cast<u128>(*folded));
+            }
+        } else if (sema::is_signed_integer(target)) {
+            if (bits > 64) {
+                v.data = *folded;
+            } else {
+                v.data = static_cast<i64>(*folded);
+            }
+        }
     }
     v.type.emplace(target);
     return v;
@@ -515,6 +628,11 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, const sema::type& dest
                 return emit_slice_from_array(emit_lvalue(expr_id), *rhs_type);
             }
         }
+
+        // A foldable string constant arrives here carrying a slice type, no array lvalue to decay
+        if (const auto cv{const_eval_.try_eval(*expr_id)}; cv && cv->is<std::string>()) {
+            return emit_string_as_slice(cv->as<std::string>(), dest_type);
+        }
     }
     // A reference destination is one of the few positions that must see the raw reference value
     if (dest_type.get_kind() == sema::type_kind::REFERENCE) {
@@ -552,8 +670,27 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, const sema::type& dest
         return value{val.data, concrete};
     }
 
-    // A numeric value narrower than the destination widens implicitly (`iW`->`iV`, `f32`->`f64`,
-    // ...)
+    // A compile-time known integer that provably fits dest_type coerces implicitly
+    if (val.type && sema::is_integer(val.type->get_kind()) &&
+        sema::is_integer(dest_type.get_kind()) &&
+        !sema::is_same_unqualified(*val.type, dest_type)) {
+        auto  folded{folded_int(val)};
+        value v{val};
+        if (!folded) {
+            if (const auto cv{const_eval_.try_eval(*expr_id)}) {
+                if (const auto k{cv->as_int_opt()}) {
+                    folded = k;
+                    v      = cv->to_gir_value();
+                }
+            }
+        }
+        if (folded) {
+            auto& concrete{const_cast<sema::type&>(dest_type)};
+            return coerce_constexpr_int(v, concrete, *expr_id);
+        }
+    }
+
+    // A numeric value narrower than dest widens implicitly (`iW`->`iV`, `f32`->`f64`, ...)
     if (val.type && sema::is_numeric(dest_type.get_kind()) &&
         sema::is_numeric(val.type->get_kind()) &&
         !sema::is_same_unqualified(*val.type, dest_type) &&
@@ -574,6 +711,8 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
     if (sema_type->get_kind() == sema::type_kind::TYPE) { return; }
     // An `interface` decl is a pure compile-time contract with no runtime storage or body.
     if (sema_type->get_kind() == sema::type_kind::INTERFACE) { return; }
+    // A deferred `@compileError` declaration only reports at its reference sites
+    if (decl_is_deferred_compile_error(active_ast(), decl)) { return; }
 
     const auto linkage{get_decl_linkage(decl)};
 
@@ -647,14 +786,34 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                 cv->get_type()->get_kind() == sema::type_kind::FUNCTION) {
                 return;
             }
-            // A folded struct/array aggregate cannot round-trip through the scalar `value` variant
-            if (cv->is<const_struct>() || cv->is<const_array>()) {
+            const auto        p{sema_type->get_data().as_opt<sema::types::pointer>()};
+            const auto        r{sema_type->get_data().as_opt<sema::types::reference>()};
+            const sema::type* dyn_ptr{p ? &p->underlying : r ? &r->underlying : nullptr};
+            if (dyn_ptr && dyn_ptr->get_kind() == sema::type_kind::DYN &&
+                !cv->is<const_dyn_fat_ptr>()) {
+                if (auto coerced{const_eval_.coerce_dyn(*cv, *sema_type)}) {
+                    cv.emplace(std::move(*coerced));
+                }
+            }
+            // A folded struct/array/union aggregate or dyn fat pointer cannot round-trip through
+            // the scalar `value` variant
+            if (cv->is<const_struct>() || cv->is<const_array>() || cv->is<const_union>() ||
+                cv->is<const_dyn_fat_ptr>()) {
                 const_init.emplace(std::move(*cv));
             } else {
-                init_val.emplace(cv->to_gir_value());
+                auto v{cv->to_gir_value()};
+                if (decl.explicit_type && v.type &&
+                    (sema::is_integer(v.type->get_kind()) ||
+                     v.type->get_kind() == sema::type_kind::CONSTEXPR_INT) &&
+                    sema::is_integer(sema_type->get_kind())) {
+                    v = coerce_constexpr_int(v, *sema_type, *decl.value);
+                }
+                init_val.emplace(v);
             }
-        } else if (!is_const) {
-            init_val.emplace(emit_expression(*decl.value));
+        } else {
+            ctx_.diags.emplace_back("global variable initializer must be a constant expression",
+                                    sema::error::CONSTEXPR_EVALUATION_FAILED,
+                                    active_ast().location_of(*decl.value));
         }
     }
     auto& g{gir_module_.add_global(global_gir_name,
@@ -701,7 +860,15 @@ auto emitter::emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -
         const auto  gir_name{symbol_scoping_.name_for(rec->body_scope_idx, mname)};
 
         if (const auto fx{active_ast().get_as_opt<ast::function_expr>(*md->value)}) {
+            if (const auto sema_type{active_mod().get_sema_type_opt(*member)}) {
+                if (ctx_.generic_functions.get_opt(*sema_type)) { continue; }
+                if (const auto fn_data{sema_type->get_data().as_opt<sema::types::function>()}) {
+                    if (fn_data->return_type.get_kind() == sema::type_kind::TYPE) { continue; }
+                }
+            }
+            emitting_impl_body_scope_.emplace(rec->body_scope_idx);
             emit_function(*member, *md, *fx, std::string_view{gir_name});
+            emitting_impl_body_scope_.reset();
         } else if (const auto block_ty{active_mod().get_sema_type_opt(id)}) {
             // A static member goes in the impl block's own table so refs agree
             const type_guard scope_guard{user_type_stack_, block_ty.get()};
@@ -709,35 +876,54 @@ auto emitter::emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -
         }
     }
 
-    // Interface default methods the impl inherits: emit the default body once for this target.
-    if (rec->interface_type) {
-        if (const auto iface{rec->interface_type->get_data().as_opt<sema::types::interface_t>()}) {
-            for (usize i{iface->requirement_count}; i < iface->method_names.size(); ++i) {
-                const auto name{iface->method_names[i]};
-                if (rec->find_method(name).has_value()) { continue; } // overridden
-                const auto& method{iface->method_decl(i)};
-                const auto  fx{active_ast().get_as_opt<ast::function_expr>(*method.signature)};
-                if (!fx || fx->is_type_expr) { continue; }
-                emit_impl_default_method(symbol_scoping_.name_for(rec->body_scope_idx, name),
-                                         rec->body_scope_idx,
-                                         *method.signature,
-                                         *fx);
-            }
-        }
+    // Interface default methods the impl inherits
+    for (const auto& m : rec->methods) {
+        if (!m.inherited || !m.defining_mod || !m.signature.is_valid()) { continue; }
+        const auto fx{m.defining_mod->ast.get_as_opt<ast::function_expr>(m.signature)};
+        if (!fx || fx->is_type_expr) { continue; }
+
+        // Emit each body once against the interface's  module with that typing replayed.
+        emit_impl_default_method(
+            symbol_scoping_.name_for(rec->body_scope_idx, m.name),
+            rec->body_scope_idx,
+            const_cast<mod::module&>(*m.defining_mod),
+            m.signature,
+            *fx,
+            m.fn_type ? stdx::option<sema::type&>{&const_cast<sema::type&>(*m.fn_type)}
+                      : stdx::none,
+            m.typing_key);
     }
 }
 
 auto emitter::emit_impl_default_method(std::string_view          gir_name,
                                        usize                     impl_scope_idx,
+                                       mod::module&              iface_mod,
                                        ast::node_id              sig_id,
-                                       const ast::function_expr& fn_expr) -> void {
+                                       const ast::function_expr& fn_expr,
+                                       stdx::option<sema::type&> concrete_sig,
+                                       std::string_view          typing_key) -> void {
     PROFILE_FUNCTION();
     if (gir_module_.has_function(std::string{gir_name})) { return; }
-    const auto sema_type{active_mod().get_sema_type_opt(sig_id)};
-    if (!sema_type) { return; }
+    if (user_type_stack_.empty()) { return; }
+    auto* target{user_type_stack_.back()};
 
-    auto* target{user_type_stack_.empty() ? nullptr : user_type_stack_.back()};
-    if (target == nullptr) { return; }
+    // The default body's AST + resolved types live in the interface's module. Switch to it and
+    // replay this impl's per-target typing
+    auto       prev_module{std::exchange(active_module_, iface_mod)};
+    const auto restore_module{gsl::finally([&] {
+        active_module_ = prev_module;
+        if (prev_module) { const_eval_.set_module(*prev_module); }
+    })};
+    const_eval_.set_module(iface_mod);
+    const_eval_.clear_memo();
+
+    // Overlay this impl's per-target typing onto the shared interface module during emission
+    const auto                 diff{typing_key.empty() ? stdx::none
+                                                       : ctx_.instantiation_cache.get_body_type_diff(typing_key)};
+    const mod::body_diff_guard diff_guard{iface_mod, diff};
+
+    auto sema_type{concrete_sig ? concrete_sig : active_mod().get_sema_type_opt(sig_id)};
+    if (!sema_type) { return; }
 
     auto& fn{gir_module_.add_function(
         std::string{gir_name}, *sema_type, false, false, fn_expr.variadic, gir::linkage::INTERNAL)};
@@ -771,15 +957,21 @@ auto emitter::emit_impl_default_method(std::string_view          gir_name,
                                         });
     }
     for (const auto& param : fn_expr.parameters) {
-        const auto& p_ident{active_ast().get_as<ast::identifier_expr>(param.name)};
-        const auto  p_type{active_mod().get_sema_type_opt(param.name)};
+        std::string_view p_name{};
+        if (param.name.is<ast::identifier_expr>()) {
+            p_name = active_ast().get_as<ast::identifier_expr>(param.name).name;
+        }
+        const auto p_type{active_mod().get_sema_type_opt(param.name)};
         if (!p_type) { continue; }
-        auto&      p_slot{fn.add_param(std::string{p_ident.name}, *p_type)};
+        auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
         const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-        scopes_.back().bindings.emplace(
-            p_ident.name,
-            local_binding{
-                .id = p_slot.id, .type = *p_type, .is_alloca = p_spilled, .const_val = stdx::none});
+        if (!p_name.empty()) {
+            scopes_.back().bindings.emplace(p_name,
+                                            local_binding{.id        = p_slot.id,
+                                                          .type      = *p_type,
+                                                          .is_alloca = p_spilled,
+                                                          .const_val = stdx::none});
+        }
     }
 
     emitting_impl_default_scope_.emplace(impl_scope_idx);
@@ -808,7 +1000,7 @@ auto emitter::emit_top_level_test(ast::node_id id, const ast::test_stmt& test) -
 
     const auto test_desc{test.description
                              .transform([&](ast::string_handle h) {
-                                 return active_ast().get_as<ast::string_expr>(h).value;
+                                 return std::string{active_ast().get_as<ast::string_expr>(h).value};
                              })
                              .or_else([this] -> stdx::option<std::string> {
                                  return fmt::format("anonymous_test{}", anon_test_desc_counter_++);
@@ -883,20 +1075,24 @@ auto emitter::emit_function(ast::node_id                   id,
     }
 
     for (const auto& param : fn_expr.parameters) {
-        const auto& p_ident{active_ast().get_as<ast::identifier_expr>(param.name)};
-        const auto  p_name{p_ident.name};
-        const auto  p_type{active_mod().get_sema_type_opt(param.name)};
+        std::string_view p_name{};
+        if (param.name.is<ast::identifier_expr>()) {
+            p_name = active_ast().get_as<ast::identifier_expr>(param.name).name;
+        }
+        const auto p_type{active_mod().get_sema_type_opt(param.name)};
         ASSERT(p_type, "Function parameter must have a resolved sema type");
 
         auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
         const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-        scopes_.back().bindings.emplace(p_name,
-                                        local_binding{
-                                            .id        = p_slot.id,
-                                            .type      = *p_type,
-                                            .is_alloca = p_spilled,
-                                            .const_val = stdx::none,
-                                        });
+        if (!p_name.empty()) {
+            scopes_.back().bindings.emplace(p_name,
+                                            local_binding{
+                                                .id        = p_slot.id,
+                                                .type      = *p_type,
+                                                .is_alloca = p_spilled,
+                                                .const_val = stdx::none,
+                                            });
+        }
     }
 
     emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
@@ -948,20 +1144,24 @@ auto emitter::emit_anonymous_function(ast::node_id id, const ast::function_expr&
     {
         const scope_guard g{scopes_};
         for (const auto& param : fn_expr.parameters) {
-            const auto& p_ident{active_ast().get_as<ast::identifier_expr>(param.name)};
-            const auto  p_name{p_ident.name};
-            const auto  p_type{active_mod().get_sema_type_opt(param.name)};
+            std::string_view p_name{};
+            if (param.name.is<ast::identifier_expr>()) {
+                p_name = active_ast().get_as<ast::identifier_expr>(param.name).name;
+            }
+            const auto p_type{active_mod().get_sema_type_opt(param.name)};
             ASSERT(p_type, "Anonymous function parameter must have a resolved sema type");
 
             auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
             const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-            scopes_.back().bindings.emplace(p_name,
-                                            local_binding{
-                                                .id        = p_slot.id,
-                                                .type      = *p_type,
-                                                .is_alloca = p_spilled,
-                                                .const_val = stdx::none,
-                                            });
+            if (!p_name.empty()) {
+                scopes_.back().bindings.emplace(p_name,
+                                                local_binding{
+                                                    .id        = p_slot.id,
+                                                    .type      = *p_type,
+                                                    .is_alloca = p_spilled,
+                                                    .const_val = stdx::none,
+                                                });
+            }
         }
 
         emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
@@ -1017,20 +1217,24 @@ auto emitter::emit_named_local_function(std::string_view          name,
                                         });
 
         for (const auto& param : fn_expr.parameters) {
-            const auto& p_ident{active_ast().get_as<ast::identifier_expr>(param.name)};
-            const auto  p_name{p_ident.name};
-            const auto  p_type{active_mod().get_sema_type_opt(param.name)};
+            std::string_view p_name{};
+            if (param.name.is<ast::identifier_expr>()) {
+                p_name = active_ast().get_as<ast::identifier_expr>(param.name).name;
+            }
+            const auto p_type{active_mod().get_sema_type_opt(param.name)};
             ASSERT(p_type, "Local function parameter must have a resolved sema type");
 
             auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
             const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-            scopes_.back().bindings.emplace(p_name,
-                                            local_binding{
-                                                .id        = p_slot.id,
-                                                .type      = *p_type,
-                                                .is_alloca = p_spilled,
-                                                .const_val = stdx::none,
-                                            });
+            if (!p_name.empty()) {
+                scopes_.back().bindings.emplace(p_name,
+                                                local_binding{
+                                                    .id        = p_slot.id,
+                                                    .type      = *p_type,
+                                                    .is_alloca = p_spilled,
+                                                    .const_val = stdx::none,
+                                                });
+            }
         }
 
         emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
@@ -1095,19 +1299,23 @@ auto emitter::emit_closure_function(const ast::function_expr&     fn_expr,
                                         });
 
         for (const auto& param : fn_expr.parameters) {
-            const auto& p_ident{active_ast().get_as<ast::identifier_expr>(param.name)};
-            const auto  p_name{p_ident.name};
-            const auto  p_type{active_mod().get_sema_type_opt(param.name)};
+            std::string_view p_name{};
+            if (param.name.is<ast::identifier_expr>()) {
+                p_name = active_ast().get_as<ast::identifier_expr>(param.name).name;
+            }
+            const auto p_type{active_mod().get_sema_type_opt(param.name)};
             ASSERT(p_type, "Closure parameter must have a resolved sema type");
             auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
             const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-            scopes_.back().bindings.emplace(p_name,
-                                            local_binding{
-                                                .id        = p_slot.id,
-                                                .type      = *p_type,
-                                                .is_alloca = p_spilled,
-                                                .const_val = stdx::none,
-                                            });
+            if (!p_name.empty()) {
+                scopes_.back().bindings.emplace(p_name,
+                                                local_binding{
+                                                    .id        = p_slot.id,
+                                                    .type      = *p_type,
+                                                    .is_alloca = p_spilled,
+                                                    .const_val = stdx::none,
+                                                });
+            }
         }
 
         // Load every capture once, up front, from `self`
@@ -1225,19 +1433,23 @@ auto emitter::emit_constexpr_closure(const const_closure& cl) -> std::string {
         const constexpr_frame_guard cxg{ctx_.constexpr_binding_frames, std::move(cx_frame)};
 
         for (const auto& param : fn_expr.parameters) {
-            const auto& p_ident{def_mod.ast.get_as<ast::identifier_expr>(param.name)};
-            const auto  p_name{p_ident.name};
-            const auto  p_type{def_mod.get_sema_type_opt(param.name)};
+            std::string_view p_name{};
+            if (param.name.is<ast::identifier_expr>()) {
+                p_name = def_mod.ast.get_as<ast::identifier_expr>(param.name).name;
+            }
+            const auto p_type{def_mod.get_sema_type_opt(param.name)};
             ASSERT(p_type, "closure parameter must have a resolved sema type");
             auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
             const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-            scopes_.back().bindings.emplace(p_name,
-                                            local_binding{
-                                                .id        = p_slot.id,
-                                                .type      = *p_type,
-                                                .is_alloca = p_spilled,
-                                                .const_val = stdx::none,
-                                            });
+            if (!p_name.empty()) {
+                scopes_.back().bindings.emplace(p_name,
+                                                local_binding{
+                                                    .id        = p_slot.id,
+                                                    .type      = *p_type,
+                                                    .is_alloca = p_spilled,
+                                                    .const_val = stdx::none,
+                                                });
+            }
         }
 
         emit_block(def_mod.ast.get_as<ast::block_stmt>(fn_expr.body));
@@ -1266,12 +1478,19 @@ auto emitter::emit_stmt(const ast::stmt_handle& stmt) -> void {
         [&](const ast::decl_stmt& decl) { emit_decl_stmt(stmt_id, decl); },
         [&](const ast::return_stmt& ret) { emit_return_stmt(stmt_id, ret); },
         [&](const ast::defer_stmt& def) { emit_defer_stmt(stmt_id, def); },
+        [&](const ast::errdefer_stmt& errdef) { emit_errdefer_stmt(stmt_id, errdef); },
         [&](const ast::expr_stmt& expr_st) { emit_expression_id(expr_st.expression); },
         [&](const ast::break_stmt& brk) { emit_break(stmt_id, brk); },
         [&](const ast::continue_stmt& cnt) { emit_continue(stmt_id, cnt); },
         [&](const ast::discard_stmt& discard) { emit_expression(discard.discarded); },
-        // A local `import` only brings a name into scope; the module is emitted separately.
-        [&](const ast::import_stmt&) {});
+        // A local `import` or `using` only brings a name into scope; no GIR instructions needed.
+        [&](const ast::import_stmt&) {},
+        [&](const ast::using_stmt&) {});
+}
+
+auto emitter::retype_if_undefined(value v, sema::type& result_type) -> value {
+    if (v.is<undefined_val>()) { return value{undefined_val{}, result_type}; }
+    return v;
 }
 
 auto emitter::emit_stmt_as_value(const ast::stmt_handle& stmt) -> value {
@@ -1290,23 +1509,82 @@ auto emitter::emit_stmt_as_value(const ast::stmt_handle& stmt) -> value {
         });
 }
 
-auto emitter::emit_defers_for_scope(usize scope_idx) -> void {
+auto emitter::emit_defers_for_scope(usize scope_idx, bool error_edge) -> void {
     PROFILE_FUNCTION();
     if (scope_idx >= scopes_.size()) { return; }
     const auto defers{scopes_[scope_idx].defers};
-    for (const auto& def_stmt : defers | std::views::reverse) { emit_stmt(def_stmt); }
+    for (const auto& entry : defers | std::views::reverse) {
+        if (entry.on_error && !error_edge) { continue; }
+        if (entry.on_error && entry.capture && entry.capture->template is<ast::identifier_expr>()) {
+            const scope_guard g{scopes_};
+            const auto&       ident{active_ast().get_as<ast::identifier_expr>(**entry.capture)};
+            const auto        p_name{ident.name};
+            ASSERT(current_error_slot_, "Error slot must be present for errdefer with capture");
+            const auto cap_type_opt{active_mod().get_sema_type_opt(**entry.capture)};
+            auto&      cap_type{cap_type_opt ? *cap_type_opt : *current_error_slot_->type};
+            if (cap_type.get_kind() == sema::type_kind::VOID_) {
+                scopes_.back().bindings.emplace(p_name,
+                                                local_binding{
+                                                    .id        = local_id{0, local_kind::TEMPORARY},
+                                                    .type      = cap_type,
+                                                    .is_alloca = false,
+                                                    .const_val = value{void_val{}, cap_type},
+                                                    .is_const  = true,
+                                                });
+            } else if (entry.modifier.is_ref() || entry.modifier.is_ptr()) {
+                const auto capture_slot{builder_.emit_alloca(cap_type)};
+                builder_.emit_store(capture_slot, value{current_error_slot_->data, cap_type})
+                    .is_initializer = true;
+                scopes_.back().bindings.emplace(p_name,
+                                                local_binding{
+                                                    .id        = capture_slot,
+                                                    .type      = cap_type,
+                                                    .is_alloca = true,
+                                                    .const_val = stdx::none,
+                                                });
+            } else {
+                scopes_.back().bindings.emplace(p_name,
+                                                local_binding{
+                                                    .id = current_error_slot_->data.as<local_id>(),
+                                                    .type      = *current_error_slot_->type,
+                                                    .is_alloca = true,
+                                                    .const_val = stdx::none,
+                                                    .is_const  = true,
+                                                });
+            }
+            emit_stmt(entry.deferred);
+            continue;
+        }
+        emit_stmt(entry.deferred);
+    }
 }
 
-auto emitter::emit_defers_up_to(usize target_depth) -> void {
+auto emitter::emit_defers_up_to(usize target_depth, bool error_edge) -> void {
     PROFILE_FUNCTION();
     if (scopes_.empty()) { return; }
-    for (usize i{scopes_.size()}; i > target_depth; --i) { emit_defers_for_scope(i - 1); }
+    for (usize i{scopes_.size()}; i > target_depth; --i) {
+        emit_defers_for_scope(i - 1, error_edge);
+    }
 }
 
 auto emitter::emit_defer_stmt(ast::node_id, const ast::defer_stmt& def) -> void {
     PROFILE_FUNCTION();
     ASSERT(!scopes_.empty(), "Defer statement must be within an active scope");
-    scopes_.back().defers.emplace_back(def.deferred);
+    scopes_.back().defers.emplace_back(deferred_entry{
+        .deferred = def.deferred,
+        .on_error = false,
+    });
+}
+
+auto emitter::emit_errdefer_stmt(ast::node_id, const ast::errdefer_stmt& errdef) -> void {
+    PROFILE_FUNCTION();
+    ASSERT(!scopes_.empty(), "Errdefer statement must be within an active scope");
+    scopes_.back().defers.emplace_back(deferred_entry{
+        .deferred = errdef.deferred,
+        .on_error = true,
+        .capture  = errdef.capture,
+        .modifier = errdef.modifier,
+    });
 }
 
 auto emitter::emit_break(ast::node_id, const ast::break_stmt& brk) -> void {
@@ -1372,6 +1650,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
     const auto  sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Local declaration must have a resolved sema type");
     if (sema_type->get_kind() == sema::type_kind::TYPE) { return; }
+    if (decl_is_deferred_compile_error(active_ast(), decl)) { return; }
 
     if (decl.value &&
         decl.value->any<ast::struct_expr, ast::union_expr, ast::enum_expr, ast::interface_expr>()) {
@@ -1387,6 +1666,10 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         // A local plain function is emitted with a synthetic name; pre-bind `name` to it so a
         // self-referential call (by name or @fnCtx()) inside its own body resolves correctly
         if (const auto fn_expr{active_ast().get_as_opt<ast::function_expr>(*decl.value)}) {
+            // A generic local function has no single concrete signature to emit directly; each
+            // call site instead targets a per-instantiation mangled symbol via
+            // `set_generic_call_target`, emitted lazily by `emit_generic_instantiation`.
+            if (ctx_.generic_functions.get_opt(*sema_type)) { return; }
             const auto anon_name{emit_named_local_function(name, **decl.value, *fn_expr)};
             scopes_.back().bindings.emplace(name,
                                             local_binding{
@@ -1400,22 +1683,26 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         }
 
         if (const auto cv{const_eval_.try_eval(*decl.value)}) {
-            auto bound{cv->to_gir_value()};
-            // `const x: iN = <constexpr literal>` : range-check and pin the concrete type.
-            if (decl.explicit_type && bound.type &&
-                bound.type->get_kind() == sema::type_kind::CONSTEXPR_INT &&
-                sema::is_integer(sema_type->get_kind())) {
-                bound = coerce_constexpr_int(bound, *sema_type, *decl.value);
+            if (!cv->is<const_struct>() && !cv->is<const_array>() && !cv->is<const_union>() &&
+                !cv->is<const_dyn_fat_ptr>() && !cv->is<const_addr>()) {
+                auto bound{cv->to_gir_value()};
+                // `const x: iN = <constexpr literal>` : range-check and pin the concrete type.
+                if (decl.explicit_type && bound.type &&
+                    (sema::is_integer(bound.type->get_kind()) ||
+                     bound.type->get_kind() == sema::type_kind::CONSTEXPR_INT) &&
+                    sema::is_integer(sema_type->get_kind())) {
+                    bound = coerce_constexpr_int(bound, *sema_type, *decl.value);
+                }
+                scopes_.back().bindings.emplace(name,
+                                                local_binding{
+                                                    .id        = {0, local_kind::TEMPORARY},
+                                                    .type      = *sema_type,
+                                                    .is_alloca = false,
+                                                    .const_val = bound,
+                                                    .is_const  = true,
+                                                });
+                return;
             }
-            scopes_.back().bindings.emplace(name,
-                                            local_binding{
-                                                .id        = {0, local_kind::TEMPORARY},
-                                                .type      = *sema_type,
-                                                .is_alloca = false,
-                                                .const_val = bound,
-                                                .is_const  = true,
-                                            });
-            return;
         }
 
         const value val{emit_coerced_expr(*decl.value, *sema_type)};
@@ -1423,10 +1710,15 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         // A non-foldable `const` binds directly to its initializer's value, bypassing the
         // store-typecheck a `var` alloca would get; re-check the annotated type here.
         if (decl.explicit_type && val.type && !sema::is_assignable(*val.type, *sema_type)) {
+            const auto reason{sema::cast_rejection_reason(*val.type, *sema_type, target_ptr_bits_)};
             ctx_.diags.emplace_back(
-                fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
-                            sema::type_kind_display_name(*val.type),
-                            sema::type_kind_display_name(*sema_type)),
+                reason ? fmt::format("Type mismatch in store: cannot assign '{}' to '{}' ({})",
+                                     sema::type_kind_display_name(*val.type),
+                                     sema::type_kind_display_name(*sema_type),
+                                     *reason)
+                       : fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
+                                     sema::type_kind_display_name(*val.type),
+                                     sema::type_kind_display_name(*sema_type)),
                 sema::error::TYPE_MISMATCH,
                 active_ast().location_of(*decl.value));
         }
@@ -1598,7 +1890,6 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
         [&](const ast::implicit_access_expr& data) -> value {
             return emit_implicit_access(id, data);
         },
-        [&](const ast::module_access_expr& data) -> value { return emit_module_access(id, data); },
         [&](const ast::while_loop_expr& data) -> value { return emit_while(id, data); },
         [&](const ast::do_while_loop_expr& data) -> value { return emit_do_while(id, data); },
         [&](const ast::infinite_loop_expr& data) -> value { return emit_infinite_loop(id, data); },
@@ -1648,20 +1939,29 @@ auto emitter::emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> 
         return value{binding->id, binding->type};
     }
 
-    // Not a local binding; may be a top-level const/constexpr global, resolvable at compile time
-    if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
-
-    // A module-level / static-member `var` (or otherwise non-foldable) value: load from its global.
+    // A module-level aggregate `const` or `var`: load from its global.
     if (const auto gref{try_global_ref(ident.name)}) {
         auto& gtype{const_cast<sema::type&>(*gref->type)};
         return value{builder_.emit_load(*gref, gtype), gtype};
     }
-    // A bare `var` sibling static member inside a member fn body.
+    // A bare aggregate `const` or `var` sibling static member inside a member fn body.
     if (!user_type_stack_.empty()) {
         if (const auto gref{try_static_member_ref(*user_type_stack_.back(), ident.name)}) {
             auto& gtype{const_cast<sema::type&>(*gref->type)};
             return value{builder_.emit_load(*gref, gtype), gtype};
         }
+    }
+
+    // Not a local binding; may be a scalar const/constexpr global, resolvable at compile time
+    if (const auto cv{const_eval_.try_eval(id)}) {
+        // Decay to `{ptr, len}` so it matches how every consumer expects to see `S`
+        if (cv->is<std::string>()) {
+            if (const auto decl_ty{active_mod().get_sema_type_opt(id)};
+                decl_ty && decl_ty->get_kind() == sema::type_kind::SLICE) {
+                return emit_string_as_slice(cv->as<std::string>(), *decl_ty);
+            }
+        }
+        return materialize_const(*cv);
     }
 
     const auto sema_type{active_mod().get_sema_type_opt(id)};
@@ -1680,19 +1980,22 @@ auto emitter::global_ref_in(usize table_idx, std::string_view name) -> stdx::opt
     const auto node{sym->get_data().as_opt<sema::symbols::node_t>()};
     if (!node) { return stdx::none; }
     const auto decl{active_ast().get_as_opt<ast::decl_stmt>(*node)};
-    // Only a `var` value binding has genuine per-program storage that must be shared
-    if (!decl || !decl->has_modifier(ast::decl_modifiers::VARIABLE) ||
-        decl->has_modifier(ast::decl_modifiers::EXTERN)) {
-        return stdx::none;
-    }
+    if (!decl || decl->has_modifier(ast::decl_modifiers::EXTERN)) { return stdx::none; }
     const auto raw_ty{active_mod().get_sema_type_opt(*node)};
     if (!raw_ty || raw_ty->get_kind() == sema::type_kind::TYPE ||
         raw_ty->get_kind() == sema::type_kind::FUNCTION) {
         return stdx::none;
     }
-    auto&      ty{*ctx_.pool.with_const(*raw_ty, false)};
+    const bool is_var{decl->has_modifier(ast::decl_modifiers::VARIABLE)};
+    const bool is_aggregate{raw_ty->get_kind() == sema::type_kind::STRUCT ||
+                            raw_ty->get_kind() == sema::type_kind::ARRAY ||
+                            raw_ty->get_kind() == sema::type_kind::UNION};
+    const bool is_const{decl->has_modifier(ast::decl_modifiers::CONSTANT) ||
+                        decl->has_modifier(ast::decl_modifiers::CONSTEXPR)};
+    if (!is_var && !(is_const && is_aggregate)) { return stdx::none; }
+    auto&      ty{*ctx_.pool.with_const(*raw_ty, is_const)};
     const auto addr{
-        builder_.emit_global_addr(symbol_scoping_.name_for(table_idx, name), ty, false)};
+        builder_.emit_global_addr(symbol_scoping_.name_for(table_idx, name), ty, is_const)};
     return value{addr, ty};
 }
 
@@ -1887,13 +2190,18 @@ auto emitter::emit_packed_bits_extract(
 
     const auto kind{field_type.get_kind()};
     if (kind == sema::type_kind::INT) {
-        return value{builder_.emit_cast(instruction_kind::WIDEN_CAST, shifted, field_type),
-                     field_type};
+        const auto src_bits{sema::int_width(backing_ty)};
+        const auto dst_bits{sema::int_width(field_type)};
+        const auto ckind{dst_bits < src_bits ? instruction_kind::TRUNC_CAST
+                                             : instruction_kind::WIDEN_CAST};
+        return value{builder_.emit_cast(ckind, shifted, field_type), field_type};
     }
 
     auto&       fbits_uint{ctx_.get_int(static_cast<u16>(fbits), false)};
-    const value narrowed{builder_.emit_cast(instruction_kind::WIDEN_CAST, shifted, fbits_uint),
-                         fbits_uint};
+    const auto  src_bits{sema::int_width(backing_ty)};
+    const auto  ckind{static_cast<u32>(fbits) < src_bits ? instruction_kind::TRUNC_CAST
+                                                         : instruction_kind::WIDEN_CAST};
+    const value narrowed{builder_.emit_cast(ckind, shifted, fbits_uint), fbits_uint};
     if (sema::is_float(kind) || kind == sema::type_kind::BOOL || kind == sema::type_kind::STRUCT ||
         kind == sema::type_kind::UNION) {
         // `bool` is `i1`, a nested `packed` aggregate is its own `iN`: reinterpret the bits.
@@ -1905,8 +2213,8 @@ auto emitter::emit_packed_bits_extract(
                      field_type};
     }
     // enum / usize / isize: the field-width integer is the value.
-    return value{builder_.emit_cast(instruction_kind::WIDEN_CAST, narrowed, field_type),
-                 field_type};
+    if (is_same_unqualified(fbits_uint, field_type)) { return narrowed; }
+    return value{builder_.emit_cast(instruction_kind::BIT_CAST, narrowed, field_type), field_type};
 }
 
 auto emitter::emit_packed_field_write(value                        backing_addr,
@@ -1952,9 +2260,23 @@ auto emitter::emit_packed_bits_merge(
             value{builder_.emit_cast(instruction_kind::INT_FROM_PTR, new_field_val, fbits_uint),
                   fbits_uint};
     } else {
-        as_fbits =
-            value{builder_.emit_cast(instruction_kind::WIDEN_CAST, new_field_val, fbits_uint),
-                  fbits_uint};
+        const auto val_bits{
+            new_field_val.type
+                ? sema::packed_field_bits(*new_field_val.type, target_ptr_bits_).value_or(fbits)
+                : fbits};
+        if (static_cast<u32>(fbits) < val_bits) {
+            as_fbits =
+                value{builder_.emit_cast(instruction_kind::TRUNC_CAST, new_field_val, fbits_uint),
+                      fbits_uint};
+        } else if (static_cast<u32>(fbits) > val_bits) {
+            as_fbits =
+                value{builder_.emit_cast(instruction_kind::WIDEN_CAST, new_field_val, fbits_uint),
+                      fbits_uint};
+        } else if (new_field_val.type && !is_same_unqualified(*new_field_val.type, fbits_uint)) {
+            as_fbits =
+                value{builder_.emit_cast(instruction_kind::BIT_CAST, new_field_val, fbits_uint),
+                      fbits_uint};
+        }
     }
 
     const value zexted{builder_.emit_cast(instruction_kind::WIDEN_CAST, as_fbits, backing_ty),
@@ -2226,33 +2548,27 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
     if (syntax::get_builtin_opt(fn_token)) {
         switch (fn_token) {
         case syntax::token_type_t::BUILTIN_AS:
+        case syntax::token_type_t::BUILTIN_INT_CAST:
+        case syntax::token_type_t::BUILTIN_TRUNCATE:
+        case syntax::token_type_t::BUILTIN_INT_FROM_BOOL:
         case syntax::token_type_t::BUILTIN_BIT_CAST:
         case syntax::token_type_t::BUILTIN_PTR_CAST:
-        case syntax::token_type_t::BUILTIN_ALIGN_CAST: {
-            if (call.arguments.size() >= 2) {
-                if (const auto op_expr{call.arguments[1].as_opt<ast::expr_handle>()}) {
+        case syntax::token_type_t::BUILTIN_ALIGN_CAST:    {
+            const bool is_one_arg{call.arguments.size() == 1};
+            if (is_one_arg || call.arguments.size() >= 2) {
+                const auto op_arg_idx{is_one_arg ? 0UZ : 1UZ};
+                if (const auto op_expr{call.arguments[op_arg_idx].as_opt<ast::expr_handle>()}) {
                     const auto operand{emit_expression(*op_expr)};
 
-                    // `@as(bool, x)` tests a pointer or integer against its zero value.
-                    if (fn_token == syntax::token_type_t::BUILTIN_AS &&
-                        ret_type.get_kind() == sema::type_kind::BOOL && operand.type) {
-                        const auto operand_kind{operand.type->get_kind()};
-                        if (operand_kind == sema::type_kind::POINTER) {
-                            return pointer_to_bool(operand, false);
-                        }
-                        if (sema::is_integer(operand_kind) ||
-                            sema::is_constexpr_int(operand_kind)) {
-                            auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
-                            return value{builder_.emit_binary(instruction_kind::NE,
-                                                              operand,
-                                                              value{u64{0}, *operand.type},
-                                                              bool_type),
-                                         bool_type};
-                        }
-                    }
-
                     auto cast_kind{instruction_kind::WIDEN_CAST};
-                    if (fn_token == syntax::token_type_t::BUILTIN_BIT_CAST) {
+                    if (fn_token == syntax::token_type_t::BUILTIN_INT_CAST) {
+                        cast_kind = instruction_kind::INT_CAST;
+                        emit_int_cast_guard(operand, ret_type, *op_expr);
+                    } else if (fn_token == syntax::token_type_t::BUILTIN_TRUNCATE) {
+                        cast_kind = instruction_kind::TRUNC_CAST;
+                    } else if (fn_token == syntax::token_type_t::BUILTIN_INT_FROM_BOOL) {
+                        cast_kind = instruction_kind::INT_CAST;
+                    } else if (fn_token == syntax::token_type_t::BUILTIN_BIT_CAST) {
                         cast_kind = instruction_kind::BIT_CAST;
                     } else if (fn_token == syntax::token_type_t::BUILTIN_PTR_CAST ||
                                fn_token == syntax::token_type_t::BUILTIN_ALIGN_CAST) {
@@ -2262,6 +2578,23 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                     value      result{dest, ret_type};
                     emit_enum_cast_guard(id, result, operand, *op_expr);
                     return result;
+                }
+            }
+            break;
+        }
+        case syntax::token_type_t::BUILTIN_BOOL_FROM_INT: {
+            if (!call.arguments.empty()) {
+                if (const auto op_expr{call.arguments[0].as_opt<ast::expr_handle>()}) {
+                    const auto operand{emit_expression(*op_expr)};
+                    if (operand.type && operand.type->get_kind() == sema::type_kind::POINTER) {
+                        return pointer_to_bool(operand, false);
+                    }
+                    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+                    auto& op_type{operand.type ? *operand.type : ctx_.get_int(64, false)};
+                    return value{
+                        builder_.emit_binary(
+                            instruction_kind::NE, operand, value{u64{0}, op_type}, bool_type),
+                        bool_type};
                 }
             }
             break;
@@ -2420,6 +2753,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             }
             return value{void_val{}, ret_type};
         }
+        case syntax::token_type_t::BUILTIN_EMBED:
         case syntax::token_type_t::BUILTIN_SIZE_OF:
         case syntax::token_type_t::BUILTIN_BIT_SIZE_OF:
         case syntax::token_type_t::BUILTIN_ALIGN_OF:
@@ -2461,7 +2795,8 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             for (const auto& arg : call.arguments) {
                 if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
                     if (first) {
-                        cond_val = emit_expression(*expr_h);
+                        // A pointer condition becomes `!= null`, matching `if (ptr)`.
+                        cond_val = coerce_condition(emit_expression(*expr_h));
                         first    = false;
                     } else {
                         msg_val.emplace(emit_expression(*expr_h));
@@ -2520,7 +2855,8 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             auto&      u32_type{ctx_.get_int(32, false)};
 
             std::vector<value> args;
-            args.emplace_back(emit_expression(*call.arguments[0].as_opt<ast::expr_handle>()));
+            args.emplace_back(
+                coerce_condition(emit_expression(*call.arguments[0].as_opt<ast::expr_handle>())));
             args.emplace_back(
                 const_value::make_string(ctx_, active_mod().path.string()).to_gir_value());
             args.emplace_back(value{static_cast<u64>(loc.line), u32_type});
@@ -2562,7 +2898,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         }
         case syntax::token_type_t::BUILTIN_CLZ:
         case syntax::token_type_t::BUILTIN_CTZ:
-        case syntax::token_type_t::BUILTIN_POP_COUNT:
+        case syntax::token_type_t::BUILTIN_POPCOUNT:
         case syntax::token_type_t::BUILTIN_ABS:
         case syntax::token_type_t::BUILTIN_MIN:
         case syntax::token_type_t::BUILTIN_MAX:
@@ -2664,6 +3000,12 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             }
             default: UNREACHABLE("Unhandled atomic builtin");
             }
+        }
+        case syntax::token_type_t::BUILTIN_MEMCPY:
+        case syntax::token_type_t::BUILTIN_MEMSET:
+        case syntax::token_type_t::BUILTIN_MEMMOVE: {
+            emit_mem_intrinsic(id, call, fn_token);
+            return value{void_val{}, ret_type};
         }
         default: {
             if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
@@ -2785,12 +3127,61 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             indirect_callee.emplace(
                 value{builder_.emit_load(value{slot_ptr, ptr_ty}, callee_ty), callee_ty});
         } else if (fn_d && !fn_d->has_self) {
-            const auto callee_val{emit_expression(call.function)};
-            indirect_callee.emplace(callee_val);
+            // Dispatch `Type.method(...)` directly to the method's scoped symbol
+            stdx::option<const sema::type&> rt{recv_ty};
+            const bool recv_is_type{rt && (rt->get_kind() == sema::type_kind::TYPE ||
+                                           rt->get_data().is<sema::types::meta_type>())};
+            if (rt) {
+                if (const auto m{rt->get_data().as_opt<sema::types::meta_type>()}) {
+                    rt.emplace(m->instance);
+                }
+            }
+            const bool static_on_type{recv_is_type && rt != nullptr && rt->has_symbol_table_idx() &&
+                                      (rt->get_kind() == sema::type_kind::ENUM ||
+                                       rt->get_kind() == sema::type_kind::STRUCT ||
+                                       rt->get_kind() == sema::type_kind::UNION)};
+            if (static_on_type) {
+                // The static method lives in the receiver type's own member scope.
+                callee_name.emplace(
+                    symbol_scoping_.name_for(rt->get_symbol_table_idx(), member_ident.name));
+            } else if (recv_is_type) {
+                if (const auto owner{active_mod().get_resolved_symbol_owner_opt(call.function)}) {
+                    callee_name.emplace(symbol_scoping_.name_for(*owner, member_ident.name));
+                } else {
+                    callee_name.emplace(std::string{member_ident.name});
+                }
+            } else if (rt && rt->get_kind() == sema::type_kind::MODULE) {
+                if (const auto owner{active_mod().get_resolved_symbol_owner_opt(call.function)}) {
+                    callee_name.emplace(symbol_scoping_.name_for(*owner, member_ident.name));
+                } else {
+                    callee_name.emplace(std::string{member_ident.name});
+                }
+            } else {
+                const auto callee_val{emit_expression(call.function)};
+                indirect_callee.emplace(callee_val);
+            }
         } else if (emitting_impl_default_scope_) {
             // Inside an inherited default body: `self.method(...)` targets this impl's method.
             callee_name.emplace(
                 symbol_scoping_.name_for(*emitting_impl_default_scope_, member_ident.name));
+        } else if (emitting_impl_body_scope_ && fn_d && fn_d->has_self && [&] {
+                       // Inside a method written in an `impl` block, a call on the method's own
+                       // receiver resolves to that impl's own scoped symbol so cross-module method
+                       // names stay resolvable
+                       if (user_type_stack_.empty() || !recv_ty ||
+                           !active_ast().get_as_opt<ast::identifier_expr>(dot_call->object)) {
+                           return false;
+                       }
+                       stdx::option<const sema::type&> r{recv_ty};
+                       if (const auto p{r->get_data().as_opt<sema::types::pointer>()}) {
+                           r.emplace(p->underlying);
+                       } else if (const auto rf{r->get_data().as_opt<sema::types::reference>()}) {
+                           r.emplace(rf->underlying);
+                       }
+                       return r == user_type_stack_.back();
+                   }()) {
+            callee_name.emplace(
+                symbol_scoping_.name_for(*emitting_impl_body_scope_, member_ident.name));
         } else {
             callee_name.emplace(std::string{member_ident.name});
         }
@@ -2801,10 +3192,6 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         callee_name.emplace(std::string{member_ident.name});
     } else if (const auto fn_expr{active_ast().get_as_opt<ast::function_expr>(call.function)}) {
         callee_name.emplace(emit_anonymous_function(*call.function, *fn_expr));
-    } else if (const auto mod_call{
-                   active_ast().get_as_opt<ast::module_access_expr>(call.function)}) {
-        const auto& inner_ident{active_ast().get_as<ast::identifier_expr>(mod_call->inner)};
-        callee_name.emplace(std::string{inner_ident.name});
     } else {
         const auto callee_val{emit_expression(call.function)};
         if (callee_val.type && (callee_val.type->get_kind() == sema::type_kind::FUNCTION ||
@@ -2900,13 +3287,13 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                     }
                 }
             }
-        } else if (const auto mac{active_ast().get_as_opt<ast::module_access_expr>(target_obj)}) {
-            if (const auto mod_type{active_mod().get_sema_type_opt(mac->outer)}) {
+        } else if (const auto inner_dot{active_ast().get_as_opt<ast::dot_expr>(target_obj)}) {
+            if (const auto mod_type{active_mod().get_sema_type_opt(inner_dot->object)}) {
                 if (const auto m_data{mod_type->get_data().as_opt<sema::types::module>()}) {
                     const auto& inner_mod{m_data->imported};
                     if (inner_mod.root_table_idx) {
                         const auto& inner_ident{
-                            active_ast().get_as<ast::identifier_expr>(mac->inner)};
+                            active_ast().get_as<ast::identifier_expr>(inner_dot->member)};
                         if (const auto sym{ctx_.registry.get_from_opt(*inner_mod.root_table_idx,
                                                                       inner_ident.name)}) {
                             if (sym->has_kind() && sym->get_kind() == sema::symbol_kind::TYPE) {
@@ -2915,6 +3302,11 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                         }
                     }
                 }
+            }
+        } else if (const auto ot{active_mod().get_sema_type_opt(target_obj)}) {
+            if (ot->get_kind() == sema::type_kind::TYPE ||
+                ot->get_kind() == sema::type_kind::MODULE) {
+                is_type = true;
             }
         }
         if (!is_type) { is_obj_instance = true; }
@@ -3089,11 +3481,8 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
     }};
 
     // The type resolver already folded this `if constexpr`
-    if (const auto it{active_mod().if_constexpr_results.find(id.get_index())};
-        it != active_mod().if_constexpr_results.end()) {
-        if (it->second == mod::if_branch::CONSEQUENCE) {
-            return emit_single_arm(if_expr.consequence);
-        }
+    if (const auto br{active_mod().get_if_branch_opt(id.get_index())}) {
+        if (*br == mod::if_branch::CONSEQUENCE) { return emit_single_arm(if_expr.consequence); }
         if (if_expr.alternate) { return emit_single_arm(*if_expr.alternate); }
         return value{void_val{}, sema_type};
     }
@@ -3146,7 +3535,8 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
     // Consequence branch
     builder_.set_segment(consequence_seg);
     if (yields_value) {
-        builder_.emit_store(*res_slot, emit_stmt_as_value(if_expr.consequence));
+        builder_.emit_store(
+            *res_slot, retype_if_undefined(emit_stmt_as_value(if_expr.consequence), *sema_type));
     } else {
         emit_stmt(if_expr.consequence);
     }
@@ -3158,7 +3548,8 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
     if (alternate_seg_ptr) {
         builder_.set_segment(*alternate_seg_ptr);
         if (yields_value) {
-            builder_.emit_store(*res_slot, emit_stmt_as_value(*if_expr.alternate));
+            builder_.emit_store(
+                *res_slot, retype_if_undefined(emit_stmt_as_value(*if_expr.alternate), *sema_type));
         } else {
             emit_stmt(*if_expr.alternate);
         }
@@ -3867,7 +4258,69 @@ auto emitter::materialize_const(const const_value& cv) -> value {
         return value{loaded, type};
     }
 
+    if (const auto addr{cv.as_opt<const_addr>()}) {
+        const auto type_opt{cv.get_type()};
+        ASSERT(type_opt, "const_addr must carry a resolved sema type");
+        const auto val{builder_.emit_global_addr(addr->symbol, *type_opt, true)};
+        return value{val, *type_opt};
+    }
+
+    if (const auto dyn{cv.as_opt<const_dyn_fat_ptr>()}) {
+        const auto type_opt{cv.get_type()};
+        ASSERT(type_opt, "const_dyn_fat_ptr must carry a resolved sema type");
+        auto&      fat_type{*type_opt};
+        auto&      ptr_ty{ctx_.get_pointer(sema::types::mut::CONSTANT,
+                                      ctx_.get_builtin_resolved_type(sema::type_kind::OPAQUE))};
+        const auto data_val{
+            dyn->data_symbol.empty()
+                ? value{nullptr_val{}, ptr_ty}
+                : value{builder_.emit_global_addr(dyn->data_symbol, ptr_ty, true), ptr_ty}};
+        const auto vt_val{
+            dyn->vtable_symbol.empty()
+                ? value{nullptr_val{}, ptr_ty}
+                : value{builder_.emit_global_addr(dyn->vtable_symbol, ptr_ty, true), ptr_ty}};
+        const auto p{fat_type.get_data().as_opt<sema::types::pointer>()};
+        const auto r{fat_type.get_data().as_opt<sema::types::reference>()};
+        auto&      dyn_mut{p ? const_cast<sema::type&>(p->underlying)
+                             : const_cast<sema::type&>(r->underlying)};
+        const auto slot{builder_.emit_alloca(dyn_mut)};
+        const auto f0{builder_.emit_get_element_ptr(
+            value{slot, dyn_mut}, {value{u64{0}, usize_type}}, ptr_ty)};
+        builder_.emit_store(value{f0, ptr_ty}, data_val).is_initializer = true;
+        const auto f1{builder_.emit_get_element_ptr(
+            value{slot, dyn_mut}, {value{u64{1}, usize_type}}, ptr_ty)};
+        builder_.emit_store(value{f1, ptr_ty}, vt_val).is_initializer = true;
+        return value{builder_.emit_load(value{slot, dyn_mut}, fat_type), fat_type};
+    }
+
+    // Decay folded string constant it exactly like a string literal in expression position
+    if (const auto s{cv.as_opt<std::string>()}) {
+        if (const auto type_opt{cv.get_type()};
+            type_opt && type_opt->get_kind() == sema::type_kind::SLICE) {
+            return emit_string_as_slice(*s, *type_opt);
+        }
+    }
+
     return cv.to_gir_value();
+}
+
+auto emitter::emit_string_as_slice(const std::string& bytes, const sema::type& slice_type)
+    -> value {
+    PROFILE_FUNCTION();
+    const auto sl{slice_type.get_data().as_opt<sema::types::slice>()};
+    ASSERT(sl, "emit_string_as_slice requires a slice sema type");
+    const auto mutability{slice_type.is_constant() ? sema::types::mut::CONSTANT
+                                                   : sema::types::mut::MUTABLE};
+    // Back the slice with a NUL-terminated array regardless of the slice's own sentinel flag
+    auto&      arr_type{ctx_.get_array(mutability, true, bytes.size(), sl->underlying)};
+    const auto slot{builder_.emit_alloca(arr_type)};
+    builder_.emit_store(value{slot, arr_type}, value{std::string{bytes}, arr_type}).is_initializer =
+        true;
+
+    // Report the slice type the caller asked for
+    auto decayed{emit_slice_from_array(value{slot, arr_type}, arr_type)};
+    decayed.type.emplace(const_cast<sema::type&>(slice_type));
+    return decayed;
 }
 
 auto emitter::lvalue_of_expr(ast::node_id id, sema::type& sema_type) -> value {
@@ -3885,10 +4338,12 @@ auto emitter::emit_panic_call(std::string_view message, ast::node_id site) -> vo
     const auto loc{active_ast().location_of(site)};
     auto&      u32_type{ctx_.get_int(32, false)};
     auto&      noreturn_type{ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN)};
+    auto&      cstr_type{ctx_.get_slice(sema::types::mut::CONSTANT, true, ctx_.get_int(8, false))};
 
+    // `panic_handler(msg, file, line, col)` takes `[]u8` slices: materialize proper `{ ptr, len }`
     std::vector<value> args;
-    args.emplace_back(const_value::make_string(ctx_, std::string{message}).to_gir_value());
-    args.emplace_back(const_value::make_string(ctx_, active_mod().path.string()).to_gir_value());
+    args.emplace_back(materialize_string_slice(message, cstr_type));
+    args.emplace_back(materialize_string_slice(active_mod().path.string(), cstr_type));
     args.emplace_back(value{static_cast<u64>(loc.line), u32_type});
     args.emplace_back(value{static_cast<u64>(loc.column), u32_type});
 
@@ -3997,6 +4452,128 @@ auto emitter::emit_enum_cast_guard(ast::node_id     site,
 
     builder_.set_segment(bad_seg);
     emit_panic_call("invalid enum value", site);
+    builder_.set_segment(ok_seg);
+}
+
+auto emitter::emit_int_cast_guard(value operand, const sema::type& dest_type, ast::node_id site)
+    -> void {
+    PROFILE_FUNCTION();
+    if (!operand.type) {
+        if (const auto st{active_mod().get_sema_type_opt(site)}) { operand.type.emplace(*st); }
+    }
+    if (!operand.type) { return; }
+
+    // If the expression const-evaluates, check at compile time
+    if (const auto cv{const_eval_.try_eval(site)}) {
+        if (const auto known{cv->as_int_opt()}) {
+            if (!sema::constexpr_int_fits(*known, dest_type, target_ptr_bits_)) {
+                ctx_.diags.emplace_back(
+                    fmt::format("Integer value {} is out of range for target type '{}' in @intCast",
+                                *known,
+                                sema::type_kind_display_name(dest_type)),
+                    sema::error::CONSTEXPR_EVALUATION_FAILED,
+                    active_ast().location_of(site));
+            }
+            return;
+        }
+    } else if (const auto folded{folded_int(operand)}) {
+        if (!sema::constexpr_int_fits(*folded, dest_type, target_ptr_bits_)) {
+            ctx_.diags.emplace_back(
+                fmt::format("Integer value {} is out of range for target type '{}' in @intCast",
+                            *folded,
+                            sema::type_kind_display_name(dest_type)),
+                sema::error::CONSTEXPR_EVALUATION_FAILED,
+                active_ast().location_of(site));
+        }
+        return;
+    }
+
+    if (!runtime_safety_) { return; }
+
+    auto fn_opt{builder_.get_function()};
+    if (!fn_opt) { return; }
+
+    const auto get_info{[this](const sema::type& t) -> stdx::option<std::pair<u16, bool>> {
+        switch (t.get_kind()) {
+        case sema::type_kind::INT:   return std::pair{sema::int_width(t), sema::is_signed_integer(t)};
+        case sema::type_kind::ISIZE: return std::pair{static_cast<u16>(target_ptr_bits_), true};
+        case sema::type_kind::USIZE: return std::pair{static_cast<u16>(target_ptr_bits_), false};
+        default:                     return stdx::none;
+        }
+    }};
+
+    const auto from_info{get_info(*operand.type)};
+    const auto to_info{get_info(dest_type)};
+    if (!from_info || !to_info) { return; }
+
+    const auto from_bits{from_info->first};
+    const auto from_signed{from_info->second};
+    const auto to_bits{to_info->first};
+    const auto to_signed{to_info->second};
+
+    auto&               bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    stdx::option<value> is_valid;
+
+    if (from_signed && to_signed) {
+        if (from_bits > to_bits) {
+            const i128  min_to{-(i128{1} << (to_bits - 1))};
+            const i128  max_to{(i128{1} << (to_bits - 1)) - 1};
+            const value min_val{from_bits > 64 ? value{min_to, *operand.type}
+                                               : value{static_cast<i64>(min_to), *operand.type}};
+            const value max_val{from_bits > 64 ? value{max_to, *operand.type}
+                                               : value{static_cast<i64>(max_to), *operand.type}};
+            const auto  ge{builder_.emit_binary(instruction_kind::GE, operand, min_val, bool_type)};
+            const auto  le{builder_.emit_binary(instruction_kind::LE, operand, max_val, bool_type)};
+            is_valid.emplace(
+                builder_.emit_binary(
+                    instruction_kind::AND, value{ge, bool_type}, value{le, bool_type}, bool_type),
+                bool_type);
+        }
+    } else if (!from_signed && !to_signed) {
+        if (from_bits > to_bits) {
+            const u128  max_to{(u128{1} << to_bits) - 1};
+            const value max_val{from_bits > 64 ? value{max_to, *operand.type}
+                                               : value{static_cast<u64>(max_to), *operand.type}};
+            const auto  le{builder_.emit_binary(instruction_kind::LE, operand, max_val, bool_type)};
+            is_valid.emplace(le, bool_type);
+        }
+    } else if (from_signed && !to_signed) {
+        const value zero_val{from_bits > 64 ? value{i128{0}, *operand.type}
+                                            : value{i64{0}, *operand.type}};
+        const auto  ge_zero{
+            builder_.emit_binary(instruction_kind::GE, operand, zero_val, bool_type)};
+        if (from_bits > to_bits) {
+            const u128  max_to{(u128{1} << to_bits) - 1};
+            const value max_val{from_bits > 64 ? value{static_cast<i128>(max_to), *operand.type}
+                                               : value{static_cast<i64>(max_to), *operand.type}};
+            const auto  le{builder_.emit_binary(instruction_kind::LE, operand, max_val, bool_type)};
+            is_valid.emplace(builder_.emit_binary(instruction_kind::AND,
+                                                  value{ge_zero, bool_type},
+                                                  value{le, bool_type},
+                                                  bool_type),
+                             bool_type);
+        } else {
+            is_valid.emplace(ge_zero, bool_type);
+        }
+    } else { // !from_signed && to_signed
+        if (from_bits >= to_bits) {
+            const u128  max_to{(u128{1} << (to_bits - 1)) - 1};
+            const value max_val{from_bits > 64 ? value{max_to, *operand.type}
+                                               : value{static_cast<u64>(max_to), *operand.type}};
+            const auto  le{builder_.emit_binary(instruction_kind::LE, operand, max_val, bool_type)};
+            is_valid.emplace(le, bool_type);
+        }
+    }
+
+    if (!is_valid) { return; }
+
+    auto& fn{*fn_opt};
+    auto& ok_seg{fn.add_segment()};
+    auto& bad_seg{fn.add_segment()};
+    builder_.emit_cond_goto(*is_valid, ok_seg.get_id(), bad_seg.get_id());
+
+    builder_.set_segment(bad_seg);
+    emit_panic_call("integer value out of range for target type", site);
     builder_.set_segment(ok_seg);
 }
 
@@ -4193,42 +4770,56 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
         [&](const ast::identifier_expr& ident) -> value {
             const auto binding{lookup_binding(ident.name)};
             if (!binding) {
-                // Not a local binding; may be a top-level const/constexpr global.
-                if (const_eval_.try_eval(id)) {
-                    const auto sema_type{active_mod().get_sema_type_opt(id)};
-                    ASSERT(sema_type, "LValue identifier must have a resolved sema type");
-                    return spill_to_temporary(emit_ident(id, ident), *sema_type, true);
-                }
-                // A module-level `var`: its lvalue is the global's address.
+                // A module-level global (var or aggregate const): its lvalue is the global's
+                // address.
                 if (const auto gref{try_global_ref(ident.name)}) { return *gref; }
-                // A bare `var` sibling static member inside a member fn body.
+                // A bare aggregate const or var sibling static member inside a member fn body.
                 if (!user_type_stack_.empty()) {
                     if (const auto gref{
                             try_static_member_ref(*user_type_stack_.back(), ident.name)}) {
                         return *gref;
                     }
                 }
+                // Not a local binding; may be a top-level scalar const/constexpr global.
+                if (const_eval_.try_eval(id)) {
+                    const auto sema_type{active_mod().get_sema_type_opt(id)};
+                    ASSERT(sema_type, "LValue identifier must have a resolved sema type");
+                    return spill_to_temporary(emit_ident(id, ident), *sema_type, true);
+                }
             }
             ASSERT(binding, "LValue identifier must be bound in scope");
-            // Struct/union field mutability is binding-based
+            // Struct/union field mutability is binding-based. A slice's own `.len`/`.ptr` fields
+            // (#255) need the same treatment
             const auto is_struct_or_union{binding->type.get_kind() == sema::type_kind::STRUCT ||
                                           binding->type.get_kind() == sema::type_kind::UNION};
-            auto&      qualified_type{is_struct_or_union
+            const auto is_slice{binding->type.get_kind() == sema::type_kind::SLICE};
+            auto&      qualified_type{(is_struct_or_union || is_slice)
                                           ? *ctx_.pool.with_const(binding->type, binding->is_const)
                                           : binding->type};
             if (binding->is_alloca) { return value{binding->id, qualified_type}; }
 
-            // A binding with no alloca of its own has no address: spill it into one
+            // A binding with no alloca of its own has no address: spill it into one, cache the
+            // slot on the binding, and reuse it from any later segment
             const auto is_const_binding{binding->const_val || binding->is_const};
             const auto unspilled_value{
                 binding->const_val.value_or(value{binding->id, qualified_type})};
-            const auto spilled{
-                spill_to_temporary(unspilled_value, qualified_type, is_const_binding)};
+            const bool hoist_to_entry{
+                binding->const_val ||
+                (!binding->const_val && binding->id.get_kind() == local_kind::PARAMETER)};
+
+            local_id slot{};
+            if (hoist_to_entry) {
+                slot = builder_.emit_alloca_in_entry(qualified_type, is_const_binding);
+                builder_.emit_store_in_entry(slot, unspilled_value);
+            } else {
+                slot = spill_to_temporary(unspilled_value, qualified_type, is_const_binding)
+                           .data.as<local_id>();
+            }
             auto& mut_binding{*lookup_binding<local_binding&>(ident.name)};
-            mut_binding.id        = spilled.data.as<local_id>();
+            mut_binding.id        = slot;
             mut_binding.is_alloca = true;
             mut_binding.const_val = stdx::none;
-            return spilled;
+            return value{slot, qualified_type};
         },
         [&](const ast::call_expr& call) -> value {
             const auto fn_token{call.function->get_token_type()};
@@ -4248,7 +4839,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             return lvalue_of_expr(id, *sema_type);
         },
         [&](const ast::dot_expr& dot) -> value {
-            // `<Type>.member` / `@this().member` has no runtime object
+            // `<Type>.member` / `@This().member` has no runtime object
             if (dot_object_is_type_namespace(dot)) {
                 const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
                 if (const auto ot{active_mod().get_sema_type_opt(dot.object)}) {
@@ -4268,9 +4859,23 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                 return lvalue_of_expr(id, *st);
             }
 
-            auto       base_lval{emit_lvalue(dot.object)};
             const auto obj_type_opt{active_mod().get_sema_type_opt(dot.object)};
             ASSERT(obj_type_opt, "Dot expression object must have a resolved type");
+            if (obj_type_opt->get_kind() == sema::type_kind::MODULE) {
+                const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
+                const auto  m_data{obj_type_opt->get_data().as_opt<sema::types::module>()};
+                if (m_data && m_data->imported.root_table_idx) {
+                    if (const auto gref{
+                            global_ref_in(*m_data->imported.root_table_idx, member_ident.name)}) {
+                        return *gref;
+                    }
+                }
+                const auto st{active_mod().get_sema_type_opt(id)};
+                ASSERT(st, "LValue expression must have a resolved sema type");
+                return lvalue_of_expr(id, *st);
+            }
+
+            auto  base_lval{emit_lvalue(dot.object)};
             auto* obj_type{obj_type_opt.get()};
 
             // A reference/pointer-typed field or nested access needs one more indirection unwound
@@ -4313,13 +4918,17 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
 
             auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
             auto& raw_field_type{active_mod().get_sema_type_opt(dot.member).value_or(*obj_type)};
+            // #255: `.len`/`.ptr` are ordinary assignable fields of the slice's own `{ptr, len}`
+            // struct
             const auto is_struct_or_union{obj_type->get_kind() == sema::type_kind::STRUCT ||
                                           obj_type->get_kind() == sema::type_kind::UNION};
+            const auto is_slice{obj_type->get_kind() == sema::type_kind::SLICE};
 
             // Binding based typing
-            auto& field_type{is_struct_or_union ? *ctx_.pool.with_const(
-                                                      raw_field_type, base_lval.type->is_constant())
-                                                : raw_field_type};
+            auto& field_type{
+                (is_struct_or_union || is_slice)
+                    ? *ctx_.pool.with_const(raw_field_type, base_lval.type->is_constant())
+                    : raw_field_type};
 
             if (const auto ut{obj_type->get_data().as_opt<sema::types::union_t>()}) {
                 if (ut->is_untagged) { return value{base_lval.data, field_type}; }
@@ -4377,9 +4986,14 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                         idx_cmp = value{cast_idx, index_type};
                     }
 
+                    // A sentinel-terminated array has one extra addressable slot: `arr[arr.len]`
+                    // reads the terminator.
                     const auto bound_val{value{static_cast<u64>(arr_data->len), index_type}};
-                    const auto is_in_bounds{
-                        builder_.emit_binary(instruction_kind::LT, idx_cmp, bound_val, bool_type)};
+                    const auto is_in_bounds{builder_.emit_binary(
+                        arr_data->null_terminated ? instruction_kind::LE : instruction_kind::LT,
+                        idx_cmp,
+                        bound_val,
+                        bool_type)};
 
                     auto fn_opt{builder_.get_function()};
                     ASSERT(fn_opt, "Bounds check must be within an active function");
@@ -4481,12 +5095,11 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
 
     // The resolver already selected an arm (`match` on a compile-time type, or `match constexpr`).
     stdx::opt_size forced_arm;
-    if (const auto it{active_mod().match_arm_results.find(id.get_index())};
-        it != active_mod().match_arm_results.end()) {
-        forced_arm.emplace(it->second);
+    if (const auto arm{active_mod().get_match_arm_opt(id.get_index())}) {
+        forced_arm = arm;
         // With no capture there is nothing to bind: emit only the chosen dispatch.
-        if (!match.arms[it->second].capture) {
-            const auto& chosen{match.arms[it->second]};
+        if (!match.arms[*arm].capture) {
+            const auto& chosen{match.arms[*arm]};
             if (yields_value) { return emit_stmt_as_value(chosen.dispatch); }
             emit_stmt(chosen.dispatch);
             return value{void_val{}, sema_type};
@@ -4506,27 +5119,44 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
     stdx::option<local_id> res_slot;
     if (yields_value) { res_slot.emplace(builder_.emit_alloca(*sema_type)); }
 
-    const auto matcher_val{emit_expression(match.matcher)};
-    auto&      bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
-    auto&      merge_seg{fn.add_segment()};
+    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto& merge_seg{fn.add_segment()};
 
     // A tagged union's tag and a capture both need the scrutinee's address
     auto& matcher_sema_type{active_mod().get_sema_type_opt(match.matcher).value_or(*sema_type)};
-    const auto          union_data{matcher_sema_type.get_data().as_opt<sema::types::union_t>()};
-    const bool          has_capture{std::ranges::any_of(
+    const auto ref_data{matcher_sema_type.get_data().as_opt<sema::types::reference>()};
+    auto&      effective_matcher_type{ref_data ? ref_data->underlying : matcher_sema_type};
+    const auto union_data{effective_matcher_type.get_data().as_opt<sema::types::union_t>()};
+    const bool has_capture{std::ranges::any_of(
         match.arms, [](const ast::match_expr::arm& arm) { return arm.capture.has_value(); })};
     stdx::option<value> matcher_addr;
-    if (has_capture || (union_data && !union_data->is_untagged)) {
-        // Anything else is an rvalue: its value is spilled instead of re-evaluating the matcher.
-        const bool is_lvalue_shape{active_ast().get_as_opt<ast::identifier_expr>(match.matcher) ||
-                                   active_ast().get_as_opt<ast::dot_expr>(match.matcher) ||
-                                   active_ast().get_as_opt<ast::index_expr>(match.matcher) ||
-                                   active_ast().get_as_opt<ast::dereference_expr>(match.matcher)};
-        if (is_lvalue_shape) {
-            matcher_addr.emplace(emit_lvalue(match.matcher));
-        } else {
-            matcher_addr.emplace(spill_to_temporary(
-                matcher_val, matcher_sema_type, matcher_sema_type.is_constant()));
+    value effective_matcher_val{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+
+    if (ref_data) {
+        const auto raw_ref{emit_expression_id_raw(*match.matcher)};
+        matcher_addr.emplace(value{raw_ref.data, effective_matcher_type});
+        if (!union_data || union_data->is_untagged) {
+            const auto loaded{builder_.emit_load(raw_ref, effective_matcher_type)};
+            effective_matcher_val = value{loaded, effective_matcher_type};
+        }
+    } else {
+        const auto matcher_val{emit_expression(match.matcher)};
+        effective_matcher_val = matcher_val;
+
+        if (has_capture || (union_data && !union_data->is_untagged)) {
+            // Anything else is an rvalue: its value is spilled instead of re-evaluating the
+            // matcher.
+            const bool is_lvalue_shape{
+                active_ast().get_as_opt<ast::identifier_expr>(match.matcher) ||
+                active_ast().get_as_opt<ast::dot_expr>(match.matcher) ||
+                active_ast().get_as_opt<ast::index_expr>(match.matcher) ||
+                active_ast().get_as_opt<ast::dereference_expr>(match.matcher)};
+            if (is_lvalue_shape) {
+                matcher_addr.emplace(emit_lvalue(match.matcher));
+            } else {
+                matcher_addr.emplace(spill_to_temporary(
+                    matcher_val, matcher_sema_type, matcher_sema_type.is_constant()));
+            }
         }
     }
 
@@ -4546,12 +5176,13 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
                 ASSERT(range->lhs && range->rhs, "A range pattern needs both endpoints");
                 const auto start_val{emit_expression(*range->lhs)};
                 const auto end_val{emit_expression(*range->rhs)};
-                const auto ge_cond{
-                    builder_.emit_binary(instruction_kind::GE, matcher_val, start_val, bool_type)};
+                const auto ge_cond{builder_.emit_binary(
+                    instruction_kind::GE, effective_matcher_val, start_val, bool_type)};
                 const auto le_kind{pat_id.get_token_type() == syntax::token_type_t::DOT_DOT_EQ
                                        ? instruction_kind::LE
                                        : instruction_kind::LT};
-                const auto le_cond{builder_.emit_binary(le_kind, matcher_val, end_val, bool_type)};
+                const auto le_cond{
+                    builder_.emit_binary(le_kind, effective_matcher_val, end_val, bool_type)};
                 return value{builder_.emit_binary(instruction_kind::AND,
                                                   value{ge_cond, bool_type},
                                                   value{le_cond, bool_type},
@@ -4561,7 +5192,7 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
             const auto is_eq{union_data && !union_data->is_untagged
                                  ? emit_union_tag_eq(*matcher_addr, pat_id)
                                  : builder_.emit_binary(instruction_kind::EQ,
-                                                        matcher_val,
+                                                        effective_matcher_val,
                                                         emit_expression_id(pat_id),
                                                         bool_type)};
             return value{is_eq, bool_type};
@@ -4592,16 +5223,24 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
                     active_mod().get_sema_type_opt(*arm.capture).value_or(ctx_.get_int(32, true))};
                 ASSERT(matcher_addr, "A capturing arm must have a computed matcher address");
 
-                // Unwrap a ref/ptr modifier to the type used to address the aliased storage.
+                // Only a `|&v|` / `|^v|` binding aliases the field's storage
+                const bool alias_capture{arm.modifier.is_ref() || arm.modifier.is_ptr()};
+
+                // For an aliasing capture, unwrap the ref/ptr to the type addressing the storage.
                 auto* underlying{&cap_type};
-                if (const auto ref_d{cap_type.get_data().as_opt<sema::types::reference>()}) {
-                    underlying = &const_cast<sema::type&>(ref_d->underlying);
-                } else if (const auto ptr_d{cap_type.get_data().as_opt<sema::types::pointer>()}) {
-                    underlying = &const_cast<sema::type&>(ptr_d->underlying);
+                if (alias_capture) {
+                    if (const auto ref_d{cap_type.get_data().as_opt<sema::types::reference>()}) {
+                        underlying = &const_cast<sema::type&>(ref_d->underlying);
+                    } else if (const auto ptr_d{
+                                   cap_type.get_data().as_opt<sema::types::pointer>()}) {
+                        underlying = &const_cast<sema::type&>(ptr_d->underlying);
+                    }
                 }
 
-                // Force const so a plain capture is read-only
-                auto&      qualified{*ctx_.pool.with_const(*underlying, true)};
+                // An aliasing capture addresses the storage through a forced-const view so
+                // it can't be written through
+                auto&      qualified{alias_capture ? *ctx_.pool.with_const(*underlying, true)
+                                                   : *underlying};
                 value      field_addr{matcher_addr->data, qualified};
                 const auto ut{matcher_addr->type->get_data().as_opt<sema::types::union_t>()};
                 const bool is_tagged_union_field{ut && !ut->is_untagged};
@@ -4612,8 +5251,7 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
                     field_addr = value{payload_ptr, qualified};
                 }
 
-                if (cap_type.get_kind() == sema::type_kind::REFERENCE ||
-                    cap_type.get_kind() == sema::type_kind::POINTER) {
+                if (alias_capture) {
                     // `|&v|`/`|&mut v|` and `|^v|`/`|^mut v|` alias the field's own address
                     const auto capture_slot{builder_.emit_alloca(cap_type)};
                     builder_.emit_store(capture_slot, value{field_addr.data, cap_type})
@@ -4650,7 +5288,8 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
             }
 
             if (yields_value && res_slot) {
-                const auto arm_val{emit_stmt_as_value(arm.dispatch)};
+                const auto arm_val{
+                    retype_if_undefined(emit_stmt_as_value(arm.dispatch), *sema_type)};
                 // A block body that diverges (`|e| { return e; }`, `_ => { return N; }`) already
                 // terminated the segment; storing its `void` result would outlive the terminator.
                 if (const auto seg{builder_.get_segment()}; seg && !seg->has_terminator()) {
@@ -4680,28 +5319,6 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
     }
     return value{void_val{}, sema_type};
 }
-
-namespace {
-
-// A tagged union recognized as `union { ok/some: T, err/none: E }`, resolved to field ordinals.
-struct unwrap_field_layout {
-    u64  payload_idx;
-    u64  diverge_idx;
-    bool diverge_is_void;
-};
-
-[[nodiscard]] auto unwrap_layout_of(sema::context& ctx, const sema::type& union_type)
-    -> unwrap_field_layout {
-    const auto& table{ctx.registry.get(union_type.get_symbol_table_idx())};
-    const bool  is_optional{table.get_proxy_opt("some").has_value()};
-    return {
-        .payload_idx     = table.get_proxy(is_optional ? "some" : "ok").index,
-        .diverge_idx     = table.get_proxy(is_optional ? "none" : "err").index,
-        .diverge_is_void = is_optional,
-    };
-}
-
-} // namespace
 
 auto emitter::emit_union_active_field_guard(value            union_addr,
                                             u64              field_idx,
@@ -4736,27 +5353,127 @@ auto emitter::emit_union_active_field_guard(value            union_addr,
     builder_.set_segment(active_seg);
 }
 
+auto emitter::emit_mem_intrinsic(ast::node_id          id,
+                                 const ast::call_expr& call,
+                                 syntax::token_type_t  builtin) -> void {
+    PROFILE_FUNCTION();
+    auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    auto& u8_type{ctx_.get_int(8, false)};
+    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto& void_type{ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+    auto& byte_ptr_ty{ctx_.get_pointer(sema::types::mut::MUTABLE, u8_type)};
+
+    const bool is_set{builtin == syntax::token_type_t::BUILTIN_MEMSET};
+
+    // Peel ref/pointer wrappers off an argument's static type.
+    const auto peeled{[&](ast::expr_handle h) {
+        const auto                      t{active_mod().get_sema_type_opt(h)};
+        stdx::option<const sema::type&> s{t};
+        while (s) {
+            if (const auto r{s->get_data().as_opt<sema::types::reference>()}) {
+                s.emplace(r->underlying);
+            } else if (const auto p{s->get_data().as_opt<sema::types::pointer>()}) {
+                s.emplace(p->underlying);
+            } else {
+                break;
+            }
+        }
+        return s;
+    }};
+
+    // {data pointer, element count} for a slice or array argument.
+    const auto decompose{[&](ast::expr_handle h) -> std::pair<value, value> {
+        const auto s{peeled(h)};
+        if (s && s->get_data().is<sema::types::array>()) {
+            const auto& arr{s->get_data().as<sema::types::array>()};
+            const auto  lval{emit_lvalue(h)};
+            const auto  ptr{
+                builder_.emit_get_element_ptr(lval, {value{u64{0}, usize_type}}, byte_ptr_ty)};
+            return {value{ptr, byte_ptr_ty}, value{static_cast<u64>(arr.len), usize_type}};
+        }
+
+        // A slice: spill to its address, then load `.ptr` / `.len`.
+        const auto val{emit_expression(h)};
+        const auto addr{spill_to_temporary(val, s ? const_cast<sema::type&>(*s) : void_type)};
+        const auto pf{builder_.emit_get_element_ptr(
+            addr, {value{SLICE_PTR_FIELD_INDEX, usize_type}}, byte_ptr_ty)};
+        const auto lf{builder_.emit_get_element_ptr(
+            addr, {value{SLICE_LEN_FIELD_INDEX, usize_type}}, usize_type)};
+        return {value{builder_.emit_load(value{pf, byte_ptr_ty}, byte_ptr_ty), byte_ptr_ty},
+                value{builder_.emit_load(value{lf, usize_type}, usize_type), usize_type}};
+    }};
+
+    const auto elem_size{[&](ast::expr_handle h) -> u64 {
+        const auto                      s{peeled(h)};
+        stdx::option<const sema::type&> elem;
+        if (s) {
+            if (const auto sl{s->get_data().as_opt<sema::types::slice>()}) {
+                elem.emplace(sl->underlying);
+            } else if (const auto ar{s->get_data().as_opt<sema::types::array>()}) {
+                elem.emplace(ar->underlying);
+            }
+        }
+
+        return elem
+            .transform([this](const sema::type& e) {
+                return static_cast<u64>(const_eval::type_size_of(e, target_ptr_bits_ / 8));
+            })
+            .value_or(1UZ);
+    }};
+
+    const auto to_bytes{[&](value count, u64 esize) -> value {
+        if (esize == 1) { return count; }
+        return value{builder_.emit_binary(
+                         instruction_kind::MUL, count, value{esize, usize_type}, usize_type),
+                     usize_type};
+    }};
+
+    const auto dest_h{*call.arguments[0].as_opt<ast::expr_handle>()};
+    const auto rhs_h{*call.arguments[1].as_opt<ast::expr_handle>()};
+
+    auto [dest_ptr, dest_len]{decompose(dest_h)};
+    const auto dest_bytes{to_bytes(dest_len, elem_size(dest_h))};
+    const auto name{*syntax::get_builtin_opt(builtin)};
+
+    if (is_set) {
+        const auto fill{emit_coerced_expr(rhs_h, u8_type)};
+        builder_.emit_builtin_call(name, {dest_ptr, fill, dest_bytes}, void_type);
+        return;
+    }
+
+    auto [src_ptr, src_len]{decompose(rhs_h)};
+
+    // `@memcpy` / `@memmove` require equal lengths; guard it when safety checks are on.
+    if (runtime_safety_) {
+        const auto eq{builder_.emit_binary(instruction_kind::EQ, dest_len, src_len, bool_type)};
+        auto       fn_opt{builder_.get_function()};
+        ASSERT(fn_opt, "mem intrinsic must be within an active function");
+        auto& ok_seg{fn_opt->add_segment()};
+        auto& bad_seg{fn_opt->add_segment()};
+        builder_.emit_cond_goto(value{eq, bool_type}, ok_seg.get_id(), bad_seg.get_id());
+        builder_.set_segment(bad_seg);
+        emit_panic_call(builtin == syntax::token_type_t::BUILTIN_MEMCPY
+                            ? "@memcpy with mismatched slice lengths"
+                            : "@memmove with mismatched slice lengths",
+                        id);
+        builder_.set_segment(ok_seg);
+    }
+
+    builder_.emit_builtin_call(name, {dest_ptr, src_ptr, dest_bytes}, void_type);
+}
+
 auto emitter::emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> value {
     PROFILE_FUNCTION();
-    const auto payload_type_opt{active_mod().get_sema_type_opt(id)};
-    ASSERT(payload_type_opt, "unwrap expression must have a resolved payload type");
-    auto& payload_type{*payload_type_opt};
-
     const auto operand_type_opt{active_mod().get_sema_type_opt(unwrap.operand)};
     ASSERT(operand_type_opt, "unwrap operand must have a resolved type");
     auto& operand_type{*operand_type_opt};
-    ASSERT(operand_type.get_data().as_opt<sema::types::union_t>(),
-           "unwrap operand must be a tagged union");
 
-    const auto layout{unwrap_layout_of(ctx_, operand_type)};
+    const auto shape{unwrap_shape_of(ctx_, operand_type)};
+    ASSERT(shape, "unwrap operand must implement builtin.Unwrappable");
 
     auto fn_opt{builder_.get_function()};
     ASSERT(fn_opt, "unwrap must be within an active function");
-    [[maybe_unused]] auto& fn{*fn_opt};
-
-    [[maybe_unused]] auto& i32_type{ctx_.get_int(32, true)};
-    auto&                  usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
-    [[maybe_unused]] auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto& fn{*fn_opt};
 
     // Address of the scrutinee: reuse its storage when it is an lvalue, else spill the rvalue.
     const bool is_lvalue_shape{active_ast().get_as_opt<ast::identifier_expr>(unwrap.operand) ||
@@ -4768,48 +5485,74 @@ auto emitter::emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> va
                                                                  operand_type,
                                                                  operand_type.is_constant())};
 
-    // `?` propagation is control flow, not a safety check, so it is always emitted
     const bool is_propagation{id.get_token_type() == syntax::token_type_t::QUESTION};
-    if (is_propagation || runtime_safety_) {
-        const auto tag_ptr{builder_.emit_get_element_ptr(
-            operand_addr, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
-        const auto tag_val{builder_.emit_load(value{tag_ptr, i32_type}, i32_type)};
-        const auto is_payload{
-            builder_.emit_binary(instruction_kind::EQ,
-                                 value{tag_val, i32_type},
-                                 value{static_cast<i64>(layout.payload_idx), i32_type},
-                                 bool_type)};
 
-        auto& payload_seg{fn.add_segment()};
-        auto& diverge_seg{fn.add_segment()};
-        builder_.emit_cond_goto(
-            value{is_payload, bool_type}, payload_seg.get_id(), diverge_seg.get_id());
+    auto&      base_operand{const_cast<sema::type&>(*shape->operand_type)};
+    const auto loaded_self{builder_.emit_load(operand_addr, base_operand)};
 
-        builder_.set_segment(diverge_seg);
-        if (is_propagation) {
-            emit_unwrap_propagation(
-                operand_addr, operand_type, layout.diverge_idx, layout.diverge_is_void, id);
-        } else {
-            emit_panic_call(layout.diverge_is_void ? "'!' unwrapped an empty optional"
-                                                   : "'!' unwrapped an errored result",
-                            id);
+    // Call `branch(self)` which maps the unwrap operand into a `Flow(Output, Residual)` union:
+    // `@"continue": Output` or `@"break": Residual`.
+    const auto branch_name{shape->gir_method_name(sema::builtin_impl::BRANCH, symbol_scoping_)};
+    ASSERT(shape->flow_type, "Unwrappable must have a flow type for branch()");
+    auto& flow_type{const_eval_.force_deferred_call(const_cast<sema::type&>(*shape->flow_type))};
+
+    const auto flow_dest{
+        builder_.emit_call(branch_name, {value{loaded_self, base_operand}}, flow_type)};
+    ASSERT(flow_dest, "branch() must return a Flow union value");
+    // Spill the Flow result to a stack slot so we can inspect its tag and extract payloads.
+    const auto flow_slot{spill_to_temporary(value{*flow_dest, flow_type}, flow_type, false)};
+
+    auto& i32_type{ctx_.get_int(32, true)};
+    auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+
+    // Read the discriminant tag from the Flow tagged-union slot.
+    const auto tag_ptr{builder_.emit_get_element_ptr(
+        flow_slot, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
+    const auto tag_val{builder_.emit_load(value{tag_ptr, i32_type}, i32_type)};
+
+    // Find the tag index corresponding to the `@"break"` variant in Flow (default index 1).
+    u64 break_idx{1};
+    if (flow_type.has_symbol_table_idx()) {
+        const auto& table{ctx_.registry.get(flow_type.get_symbol_table_idx())};
+        if (const auto proxy{table.get_proxy_opt(sema::builtin_impl::FLOW_BREAK)}) {
+            break_idx = proxy->index;
         }
-
-        // `diverge_seg` always terminates; execution continues in `payload_seg`.
-        builder_.set_segment(payload_seg);
     }
 
+    auto&       bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    const auto  is_break_dest{builder_.emit_binary(instruction_kind::EQ,
+                                                  value{tag_val, i32_type},
+                                                  value{static_cast<i64>(break_idx), i32_type},
+                                                  bool_type)};
+    const value is_break_val{is_break_dest, bool_type};
+
+    // Branch to diverge_seg on break, or continue to payload_seg.
+    auto& payload_seg{fn.add_segment()};
+    auto& diverge_seg{fn.add_segment()};
+    builder_.emit_cond_goto(is_break_val, diverge_seg.get_id(), payload_seg.get_id());
+
+    // Break path: propagate residual for `?`, or invoke panic handler for `!`.
+    builder_.set_segment(diverge_seg);
+    if (is_propagation) {
+        emit_unwrap_propagation(flow_slot, *shape, id);
+    } else {
+        emit_panic_call(shape->residual_is_void ? "'!' unwrapped an empty optional"
+                                                : "'!' unwrapped an errored result",
+                        id);
+    }
+
+    // Continue path: load the `@"continue"` output payload from the Flow union.
+    builder_.set_segment(payload_seg);
+    auto&      out_type{const_cast<sema::type&>(*shape->output_type)};
     const auto payload_ptr{builder_.emit_get_element_ptr(
-        operand_addr, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, payload_type)};
-    const auto loaded{builder_.emit_load(value{payload_ptr, payload_type}, payload_type)};
-    return value{loaded, payload_type};
+        flow_slot, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, out_type)};
+    const auto payload_val{builder_.emit_load(value{payload_ptr, out_type}, out_type)};
+    return value{payload_val, out_type};
 }
 
-auto emitter::emit_unwrap_propagation(value             operand_addr,
-                                      const sema::type& operand_union,
-                                      u64               operand_diverge_idx,
-                                      bool              diverge_is_void,
-                                      ast::node_id      site) -> void {
+auto emitter::emit_unwrap_propagation(value                    flow_slot,
+                                      const sema::unwrap_info& shape,
+                                      ast::node_id             site) -> void {
     PROFILE_FUNCTION();
     auto fn_opt{builder_.get_function()};
     ASSERT(fn_opt, "`?` propagation must be within an active function");
@@ -4817,42 +5560,53 @@ auto emitter::emit_unwrap_propagation(value             operand_addr,
     ASSERT(fn_data, "`?` propagation requires the enclosing function signature");
     auto& ret_type{fn_data->return_type};
 
-    const auto ret_layout{unwrap_layout_of(ctx_, ret_type)};
-
-    auto& i32_type{ctx_.get_int(32, true)};
-    auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
-
     builder_.set_location(active_ast().location_of(site));
-    const auto ret_slot{builder_.emit_alloca(ret_type)};
 
-    const auto tag_ptr{builder_.emit_get_element_ptr(
-        value{ret_slot, ret_type}, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
-    builder_
-        .emit_store(value{tag_ptr, i32_type},
-                    value{static_cast<i64>(ret_layout.diverge_idx), i32_type})
-        .is_initializer = true;
+    auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    auto& residual_type{const_cast<sema::type&>(*shape.residual_type)};
 
-    // A non-void divergent payload is copied across
-    if (!diverge_is_void) {
-        auto& src_type{operand_union.get_data().as<sema::types::union_t>().type_at(
-            static_cast<usize>(operand_diverge_idx))};
-        auto& dst_type{ret_type.get_data().as<sema::types::union_t>().type_at(
-            static_cast<usize>(ret_layout.diverge_idx))};
-
-        const auto src_ptr{builder_.emit_get_element_ptr(
-            operand_addr, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, src_type)};
-        const auto err_val{builder_.emit_load(value{src_ptr, src_type}, src_type)};
-
-        const auto dst_ptr{builder_.emit_get_element_ptr(
-            value{ret_slot, ret_type}, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, dst_type)};
-        builder_.emit_store(value{dst_ptr, dst_type}, value{err_val, src_type}).is_initializer =
-            true;
+    // Extract the residual payload from the Flow union (if non-void).
+    value res_val{void_val{}, residual_type};
+    if (!shape.residual_is_void) {
+        const auto payload_ptr{builder_.emit_get_element_ptr(
+            flow_slot, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, residual_type)};
+        const auto loaded_res{builder_.emit_load(value{payload_ptr, residual_type}, residual_type)};
+        res_val = value{loaded_res, residual_type};
     }
 
-    const auto ret_val{builder_.emit_load(value{ret_slot, ret_type}, ret_type)};
-    emit_defers_up_to(0);
+    // Rewrap the residual into the enclosing function's return type using
+    // `Rewrappable.fromResidual`.
+    const auto rewrap{rewrap_shape_of(ctx_, ret_type)};
+    ASSERT(rewrap, "`?` propagation return type must implement Rewrappable");
+
+    auto& from_type{const_cast<sema::type&>(*rewrap->from_type)};
+    if (res_val.type && *res_val.type != from_type &&
+        (sema::is_implicit_widenable(*res_val.type, from_type) ||
+         sema::is_assignable(*res_val.type, from_type))) {
+        const auto casted{builder_.emit_cast(instruction_kind::WIDEN_CAST, res_val, from_type)};
+        res_val = value{casted, from_type};
+    }
+
+    // Preserve the error payload for errdefer captures.
+    const auto prev_error_slot{current_error_slot_};
+    if (from_type.get_kind() != sema::type_kind::VOID_) {
+        current_error_slot_ = spill_to_temporary(res_val, from_type, false);
+    } else {
+        current_error_slot_ = value{void_val{}, from_type};
+    }
+
+    const auto from_residual_name{
+        rewrap->gir_method_name(sema::builtin_impl::FROM_RESIDUAL, symbol_scoping_)};
+    auto&      final_ret_type{const_cast<sema::type&>(*rewrap->return_type)};
+    const auto rewrapped_dest{builder_.emit_call(from_residual_name, {res_val}, final_ret_type)};
+    value      ret_val{rewrapped_dest ? value{*rewrapped_dest, final_ret_type}
+                                      : value{void_val{}, final_ret_type}};
+
+    // Run deferred scopes before returning from the enclosing function.
+    emit_defers_up_to(0, true);
+    current_error_slot_ = prev_error_slot;
     builder_.set_location(active_ast().location_of(site));
-    builder_.emit_return(value{ret_val, ret_type});
+    builder_.emit_return(ret_val);
 }
 
 auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& init) -> value {
@@ -4872,12 +5626,23 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
     // `RowAlias{ a, b, c }`: an array literal of positional values.
     if (const auto arr{sema_type->get_data().as_opt<sema::types::array>()}) {
         auto& elem_type{arr->underlying};
-        for (u64 i{0}; const auto& [accessor, val_expr] : init.initializers) {
+        u64   count{0};
+        for (const auto& [accessor, val_expr] : init.initializers) {
             const auto elem_ptr{builder_.emit_get_element_ptr(
-                value{struct_slot, *sema_type}, {value{i, usize_type}}, elem_type)};
+                value{struct_slot, *sema_type}, {value{count, usize_type}}, elem_type)};
             const auto val{emit_coerced_expr(val_expr, elem_type)};
             builder_.emit_store(value{elem_ptr, elem_type}, val).is_initializer = true;
-            ++i;
+            ++count;
+        }
+
+        // Write the terminator element of a `[N:0]T` literal.
+        if (arr->null_terminated) {
+            const auto sentinel_ptr{
+                builder_.emit_get_element_ptr(value{struct_slot, *sema_type},
+                                              {value{static_cast<u64>(arr->len), usize_type}},
+                                              elem_type)};
+            builder_.emit_store(value{sentinel_ptr, elem_type}, value{u64{0}, elem_type})
+                .is_initializer = true;
         }
         const auto loaded{builder_.emit_load(value{struct_slot, *sema_type}, *sema_type)};
         return value{loaded, sema_type};
@@ -4969,12 +5734,14 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
         return value{loaded, sema_type};
     }
 
+    ankerl::unordered_dense::set<u64> provided;
     for (const auto& [accessor, val_expr] : init.initializers) {
         const auto& imp{active_ast().get_as<ast::implicit_access_expr>(*accessor)};
         const auto& name{active_ast().get_as<ast::identifier_expr>(imp.member).name};
         const auto  proxy{table.get_proxy_opt(name)};
         ASSERT(proxy, "Member must exist in struct symbol table");
         const auto [sym, field_idx]{*proxy};
+        provided.emplace(field_idx);
         auto&      field_type{st->type_at(field_idx)};
         const auto field_ptr{
             builder_.emit_get_element_ptr(value{struct_slot, *sema_type},
@@ -4984,8 +5751,33 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
         builder_.emit_store(value{field_ptr, field_type}, val).is_initializer = true;
     }
 
+    // Every field the literal left out is guaranteed to have a default
+    for (u64 idx{0}; idx < st->ast_fields.size(); ++idx) {
+        if (provided.contains(idx) || !st->ast_fields[idx].default_value) { continue; }
+        auto&      field_type{st->type_at(idx)};
+        const auto field_ptr{builder_.emit_get_element_ptr(
+            value{struct_slot, *sema_type}, {value{idx, usize_type}}, field_type)};
+        const auto val{
+            emit_field_default(*st->ast_fields[idx].default_value, st->enclosing, field_type)};
+        builder_.emit_store(value{field_ptr, field_type}, val).is_initializer = true;
+    }
+
     const auto loaded{builder_.emit_load(value{struct_slot, *sema_type}, *sema_type)};
     return value{loaded, sema_type};
+}
+
+auto emitter::emit_field_default(ast::expr_handle   default_expr,
+                                 const mod::module& owner,
+                                 const sema::type&  field_type) -> value {
+    if (&owner == &active_mod()) { return emit_coerced_expr(default_expr, field_type); }
+
+    auto prev_module{std::exchange(active_module_, &const_cast<mod::module&>(owner))};
+    const_eval_.set_module(const_cast<mod::module&>(owner));
+    const_eval_.clear_memo();
+    const auto val{emit_coerced_expr(default_expr, field_type)};
+    active_module_ = prev_module;
+    if (prev_module) { const_eval_.set_module(*prev_module); }
+    return val;
 }
 
 // True when `dot.object` denotes a type used purely as a namespace
@@ -4996,16 +5788,21 @@ auto emitter::dot_object_is_type_namespace(const ast::dot_expr& dot) -> bool {
     }
     if (const auto call{active_ast().get_as_opt<ast::call_expr>(dot.object)}) {
         if (const auto fi{active_ast().get_as_opt<ast::identifier_expr>(call->function)}) {
-            return fi->name == "@this";
+            return fi->name == "@This";
         }
     }
     if (const auto oi{active_ast().get_as_opt<ast::identifier_expr>(dot.object)}) {
         if (lookup_binding(oi->name)) { return false; }
-        if (const auto rt{active_mod().root_table_idx}) {
-            if (const auto s{ctx_.registry.get_from_opt(*rt, oi->name)}) {
-                return s->has_kind() && s->get_kind() == sema::symbol_kind::TYPE;
+        const auto tbl{active_mod().get_symbol_table_opt(dot.object)};
+        const auto effective_tbl{tbl ? tbl : active_mod().root_table_idx};
+        if (effective_tbl) {
+            if (const auto s{ctx_.registry.get_from_opt(*effective_tbl, oi->name)}) {
+                if (s->has_kind() && s->get_kind() == sema::symbol_kind::TYPE) { return true; }
             }
         }
+    }
+    if (const auto cv{const_eval_.try_eval(dot.object)}) {
+        if (cv->is<stdx::option<sema::type&>>()) { return true; }
     }
     return false;
 }
@@ -5017,29 +5814,52 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
     ASSERT(raw_obj_type, "Dot expression object must have a resolved type");
     auto* obj_type{raw_obj_type.get()};
 
-    if (dot_object_is_type_namespace(dot)) {
-        if (const auto cv{const_eval_.try_eval(id)}) {
-            if (const auto i{cv->as_int_opt()}) { return value{static_cast<i64>(*i), sema_type}; }
-            if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
-            if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
-            if (cv->is<const_struct>() || cv->is<const_array>() || cv->is<const_union>() ||
-                cv->is<std::string>()) {
-                return materialize_const(*cv);
+    if (obj_type->get_kind() == sema::type_kind::MODULE) {
+        if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+        const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
+        const auto  m_data{obj_type->get_data().as_opt<sema::types::module>()};
+        if (m_data && m_data->imported.root_table_idx) {
+            if (const auto gref{
+                    global_ref_in(*m_data->imported.root_table_idx, member_ident.name)}) {
+                return value{builder_.emit_load(*gref, *gref->type), *gref->type};
             }
         }
+        return value{ref_symbol_name(id, member_ident.name), sema_type};
+    }
+
+    if (dot_object_is_type_namespace(dot)) {
         const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
-        // A `var` static member has real storage: load it from its global.
-        auto* owner{obj_type};
+        auto*       owner{obj_type};
         if (owner->get_kind() == sema::type_kind::TYPE) {
             if (const auto meta{owner->get_data().as_opt<sema::types::meta_type>()}) {
                 owner = &meta->instance;
             }
         }
+        // A `var` or aggregate `const` static member has real storage: load it from its global.
         if (const auto gref{try_static_member_ref(*owner, member_ident.name)}) {
             auto& gtype{const_cast<sema::type&>(*gref->type)};
             return value{builder_.emit_load(*gref, gtype), gtype};
         }
-        return value{ref_symbol_name(id, member_ident.name), sema_type};
+        if (const auto cv{const_eval_.try_eval(id)}) {
+            if (const auto i{cv->as_int_opt()}) { return value{static_cast<i64>(*i), sema_type}; }
+            if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
+            if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
+            if (const auto cv_type{cv->get_type()};
+                cv_type && cv_type->get_kind() == sema::type_kind::FUNCTION) {
+                if (const auto sym_name{cv->as_opt<std::string>()}) {
+                    return value{*sym_name, cv_type};
+                }
+            }
+            if (cv->is<const_struct>() || cv->is<const_array>() || cv->is<const_union>() ||
+                cv->is<const_addr>() || cv->is<const_dyn_fat_ptr>() || cv->is<std::string>()) {
+                return materialize_const(*cv);
+            }
+        }
+        if (sema_type && sema_type->get_kind() == sema::type_kind::FUNCTION) {
+            return value{ref_symbol_name(id, member_ident.name), sema_type};
+        }
+        UNREACHABLE("Type namespace member access did not resolve to a static member, function, or "
+                    "constant");
     }
 
     // A directly-held bit-packed struct value has no addressable fields
@@ -5157,7 +5977,7 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
         if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
         if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
         if (cv->is<const_struct>() || cv->is<const_array>() || cv->is<const_union>() ||
-            cv->is<std::string>()) {
+            cv->is<const_addr>() || cv->is<const_dyn_fat_ptr>() || cv->is<std::string>()) {
             return materialize_const(*cv);
         }
     }
@@ -5327,15 +6147,6 @@ auto emitter::emit_implicit_access(ast::node_id id, const ast::implicit_access_e
     if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
     const auto& ident{active_ast().get_as<ast::identifier_expr>(imp.member)};
     return value{ref_symbol_name(id, ident.name), sema_type};
-}
-
-auto emitter::emit_module_access(ast::node_id id, const ast::module_access_expr& mod_access)
-    -> value {
-    PROFILE_FUNCTION();
-    const auto sema_type{active_mod().get_sema_type_opt(id)};
-    if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
-    const auto& inner_ident{active_ast().get_as<ast::identifier_expr>(mod_access.inner)};
-    return value{ref_symbol_name(id, inner_ident.name), sema_type};
 }
 
 } // namespace ghoti::gir

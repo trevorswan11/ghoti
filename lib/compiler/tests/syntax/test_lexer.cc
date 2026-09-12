@@ -352,6 +352,31 @@ TEST_CASE("Lexing string literals") {
         });
 }
 
+TEST_CASE("Lexing raw identifiers") {
+    SECTION(R"(A raw identifier keeps its full `@"..."` lexeme)") {
+        test_lexer(R"(@"fn" @"i32" @"a b" @"has\"quote")",
+                   {
+                       {token_type_t::IDENT, R"(@"fn")"},
+                       {token_type_t::IDENT, R"(@"i32")"},
+                       {token_type_t::IDENT, R"(@"a b")"},
+                       {token_type_t::IDENT, R"(@"has\"quote")"},
+                   });
+    }
+
+    SECTION("`@name` without a quote is still the builtin path") {
+        test_lexer(R"(@sizeOf @"sizeOf")",
+                   {
+                       {token_type_t::BUILTIN_SIZE_OF, "@sizeOf"},
+                       {token_type_t::IDENT, R"(@"sizeOf")"},
+                   });
+    }
+
+    SECTION(R"(Unterminated forms surface as ILLEGAL with the `@"` prefix intact)") {
+        test_lexer(R"(@"open)", {{token_type_t::ILLEGAL, R"(@"open)"}});
+        test_lexer("@\"newline\n", {{token_type_t::ILLEGAL, "@\"newline"}});
+    }
+}
+
 TEST_CASE("Lexing multiline string literals") {
     test_lexer("const five := \\\\Multiline stringing\n"
                ";\n"

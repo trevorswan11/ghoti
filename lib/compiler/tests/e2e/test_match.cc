@@ -2,7 +2,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "compiler/sema/error.hh"
 #include "helpers/codegen.hh"
+#include "helpers/common.hh"
 #include "helpers/sema.hh"
 
 namespace ghoti::tests {
@@ -30,6 +32,49 @@ TEST_CASE("A plain match arm capture reads the current field value") {
             };
         };
     )") == 15);
+}
+
+TEST_CASE("A plain match arm capture binds a pointer-typed payload by value") {
+    SECTION("pointer payload, union built inline") {
+        CHECK(helpers::compile_and_run(R"(
+            const U := union { ok: ^mut u8, err: u32 };
+            pub const main := fn(): i32 {
+                var x: u8 = 9u8;
+                const p: ^mut u8 = ^mut x;
+                const r: U = .{ .ok = p };
+                const q := match (r) { .ok => |v| v, .err => |_| nullptr };
+                return if (q == p) 1 else 0;
+            };
+        )") == 1);
+    }
+
+    SECTION("pointer payload, returned from a function") {
+        CHECK(helpers::compile_and_run(R"(
+            const U := union { ok: ^mut u8, err: u32 };
+            const mk := fn(p: ^mut u8): U { return .{ .ok = p }; };
+            pub const main := fn(): i32 {
+                var x: u8 = 9u8;
+                const p: ^mut u8 = ^mut x;
+                const q := match (mk(p)) { .ok => |v| v, .err => |_| nullptr };
+                return if (q == p) 1 else 0;
+            };
+        )") == 1);
+    }
+
+    SECTION("opaque-pointer payload written through after capture") {
+        CHECK(helpers::compile_and_run(R"(
+            const U := union { ok: ^mut opaque, err: u32 };
+            const mk := fn(p: ^mut opaque): U { return .{ .ok = p }; };
+            pub const main := fn(): i32 {
+                var cell: i32 = 0;
+                const p: ^mut opaque = @ptrCast(^mut opaque, ^mut cell);
+                const q := match (mk(p)) { .ok => |h| h, .err => |_| nullptr };
+                const back: ^mut i32 = @ptrCast(^mut i32, q);
+                *back = 42;
+                return cell;
+            };
+        )") == 42);
+    }
 }
 
 TEST_CASE("Match arm capture mutates the matched union field in place") {
@@ -219,6 +264,19 @@ TEST_CASE("A multi-value match arm is taken when any listed pattern matches") {
     CHECK(helpers::compile_and_run(program) == 109);
 }
 
+TEST_CASE("A multi-value match arm accepts a trailing comma after the last pattern") {
+    CHECK(helpers::compile_and_run(R"(
+        const kind := fn(n: i32): i32 {
+            return match (n) {
+                0, 2, 4, => 10,
+                1, 3, => 20,
+                _ => 0,
+            };
+        };
+        pub const main := fn(): i32 { return kind(2) + kind(3) + kind(9); };
+    )") == 30);
+}
+
 TEST_CASE("A range match arm accepts runtime endpoints") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
@@ -334,6 +392,210 @@ TEST_CASE("A direct `union == .field` comparison checks the active field") {
             };
         )") == 42);
     }
+}
+
+TEST_CASE("an `undefined` value arm/branch takes the surrounding result type, not a poison type") {
+    SECTION("match arm") {
+        CHECK(helpers::compile_and_run(R"(
+            const U := union { ok: i32, err: i32 };
+            pub const main := fn(): i32 {
+                const u := U{ .ok = 40 };
+                const v := match (u) { .ok => |x| x, .err => undefined };
+                return v + 2;
+            };
+        )") == 42);
+    }
+    SECTION("if branch") {
+        CHECK(helpers::compile_and_run(R"(
+            const pick := fn(n: i32): i32 { return n; };
+            pub const main := fn(): i32 {
+                const v := if (true) pick(42) else undefined;
+                return v;
+            };
+        )") == 42);
+    }
+}
+
+TEST_CASE("a lone call in an `if`/`match` value arm is not a discarded result") {
+    const auto ok{[](std::string_view body) {
+        auto [ctx, idx]{helpers::resolve(body)};
+        helpers::check_errors<sema::diagnostics>(ctx->root_mod);
+    }};
+
+    SECTION("match arm, with capture") {
+        ok(R"(
+            const U := union { ok: i32, err: i32 };
+            const positive := fn(n: i32): bool { return n > 0; };
+            pub const main := fn(): i32 {
+                const u := U{ .ok = 5 };
+                const b := match (u) { .ok => |n| positive(n), .err => |_| false };
+                return if (b) 1 else 0;
+            };
+        )");
+    }
+    SECTION("if branch") {
+        ok(R"(
+            const positive := fn(n: i32): bool { return n > 0; };
+            pub const main := fn(): i32 {
+                const b := if (true) positive(5) else false;
+                return if (b) 1 else 0;
+            };
+        )");
+    }
+}
+
+TEST_CASE("a by-reference param read across sibling match arms and later blocks") {
+    CHECK(helpers::compile_and_run(R"(
+        const Whence := enum { start = 0, current = 1, end = 2 };
+        const S := struct { pub buf: []mut u8, pub pos: usize };
+        const seek := fn(s: &mut S, offset: i64, whence: Whence): i64 {
+            const base: i64 = match (whence) {
+                .start => 0,
+                .current => @intCast(i64, s.pos),
+                .end => @intCast(i64, s.buf.len),
+            };
+            const target := base + offset;
+            if (target < 0 or target > @intCast(i64, s.buf.len)) { return -1; }
+            s.pos = @intCast(usize, target);
+            return target;
+        };
+        pub const main := fn(): i32 {
+            var backing := [8uz]mut u8{ 0, 0, 0, 0, 0, 0, 0, 0 };
+            var s := S{ .buf = backing[0..8], .pos = 2uz };
+            return @intCast(i32, seek(&mut s, 3i64, Whence.current));
+        };
+    )") == 5);
+}
+
+TEST_CASE("`match` capture of pointer union payload binds slot correctly") {
+    const auto exit_code{helpers::compile_and_run(R"(
+        const PtrUnion := union { ptr: ^i32, val: i32 };
+        pub const main := fn(): i32 {
+            var x: i32 = 7;
+            const u: PtrUnion = .{ .ptr = ^x };
+            return match (u) {
+                .ptr => |p| *p,
+                .val => |v| v,
+            };
+        };
+    )")};
+    CHECK(exit_code == 7);
+}
+
+TEST_CASE("Match directly on reference types without dereferencing") {
+    SECTION("Match on &union with value capture") {
+        CHECK(helpers::compile_and_run(R"(
+            const U := union { ok: i32, err: bool };
+            const check := fn(u: &U): i32 {
+                return match (u) {
+                    .ok => |v| v * 2,
+                    .err => |_| -1,
+                };
+            };
+            pub const main := fn(): i32 {
+                const u := U{ .ok = 21 };
+                return check(&u);
+            };
+        )") == 42);
+    }
+
+    SECTION("Match on &mut union with mutation") {
+        CHECK(helpers::compile_and_run(R"(
+            const U := union { ok: i32, err: bool };
+            const mutate := fn(u: &mut U): void {
+                match (u) {
+                    .ok => |&mut v| { v += 10; },
+                    .err => {},
+                };
+            };
+            pub const main := fn(): i32 {
+                var u := U{ .ok = 32 };
+                mutate(&mut u);
+                return match (u) {
+                    .ok => |v| v,
+                    .err => |_| 0,
+                };
+            };
+        )") == 42);
+    }
+
+    SECTION("Match on &self method in struct/union") {
+        CHECK(helpers::compile_and_run(R"(
+            const Opt := union { some: i32, none: void };
+            impl Opt {
+                pub const is_some := fn(&self): bool {
+                    return match (self) {
+                        .some => true,
+                        .none => false,
+                    };
+                };
+            }
+            pub const main := fn(): i32 {
+                const o := Opt{ .some = 100 };
+                return if (o.is_some()) 42 else 0;
+            };
+        )") == 42);
+    }
+
+    SECTION("Match on &enum") {
+        CHECK(helpers::compile_and_run(R"(
+            const Color := enum { red, green, blue };
+            const code := fn(c: &Color): i32 {
+                return match (c) {
+                    .red => 1,
+                    .green => 2,
+                    .blue => 3,
+                };
+            };
+            pub const main := fn(): i32 {
+                const c := Color.green;
+                return code(&c);
+            };
+        )") == 2);
+    }
+
+    SECTION("Match on &primitive integer") {
+        CHECK(helpers::compile_and_run(R"(
+            const classify := fn(n: &i32): i32 {
+                return match (n) {
+                    0 => 10,
+                    1 => 20,
+                    _ => 30,
+                };
+            };
+            pub const main := fn(): i32 {
+                const x: i32 = 1;
+                return classify(&x);
+            };
+        )") == 20);
+    }
+}
+
+TEST_CASE("A match with a void block arm and a bare `@panic` arm resolves to void") {
+    CHECK(helpers::compile_and_run(R"(
+        const R := union { ok: void, err: i32 };
+        pub const main := fn(): i32 {
+            const r: R = .{ .ok = {} };
+            match (r) {
+                .ok => {},
+                .err => |_| @panic("boom"),
+            };
+            return 0;
+        };
+    )") == 0);
+}
+
+TEST_CASE("A match with a value arm and a bare `@panic` arm resolves to the value's type") {
+    CHECK(helpers::compile_and_run(R"(
+        const R := union { ok: i32, err: i32 };
+        pub const main := fn(): i32 {
+            const r: R = .{ .ok = 7 };
+            return match (r) {
+                .ok => |v| v,
+                .err => |_| @panic("boom"),
+            };
+        };
+    )") == 7);
 }
 
 } // namespace ghoti::tests

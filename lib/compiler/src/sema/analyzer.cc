@@ -84,7 +84,8 @@ constexpr std::array supported_archs{
 
 } // namespace
 
-auto analyzer::analyze(const std::filesystem::path& entry_path) -> stdx::result<void, diagnostic> {
+auto analyzer::analyze(const std::filesystem::path& entry_path, bool for_test_executable)
+    -> stdx::result<gir::module, diagnostic> {
     PROFILE_FUNCTION();
     auto module_result{modules_.try_get_file_module(entry_path)};
     if (!module_result) {
@@ -101,29 +102,29 @@ auto analyzer::analyze(const std::filesystem::path& entry_path) -> stdx::result<
     }
 
     // An errored module's AST is incomplete/inconsistent; it can't proceed past this point.
-    if (module->is_errored()) { return {}; }
+    if (module->is_errored()) { return gir::module{*module, ctx_.arena}; }
 
     collect_symbols(*module);
     resolve_types(*module);
 
     if (module->is_poisoned()) {
         modules_.print_all_diagnostics(error_stream_);
-        return {};
+        return gir::module{*module, ctx_.arena};
     }
 
-    auto gir_mod{emit_gir(*module)};
+    auto gir_mod{emit_gir(*module, for_test_executable)};
     if (module->is_poisoned()) {
         modules_.print_all_diagnostics(error_stream_);
-        return {};
+        return gir::module{*module, ctx_.arena};
     }
 
     check_types(gir_mod, *module);
     if (module->is_poisoned()) {
         modules_.print_all_diagnostics(error_stream_);
-        return {};
+        return gir::module{*module, ctx_.arena};
     }
 
-    return {};
+    return gir_mod;
 }
 
 auto analyzer::collect_symbols(mod::module& module) -> mod::module_state {
@@ -175,6 +176,24 @@ auto analyzer::emit_llvm_ir_text(gir::module& gir_module, const codegen::optimiz
     llvm::LLVMContext context;
     auto              llvm_mod{TRY(emit_llvm_ir(gir_module, context, options))};
     return codegen::llvm_lowering::to_ir_string(*llvm_mod);
+}
+
+auto analyzer::emit_asm_text(gir::module&                      gir_module,
+                             const codegen::target_options&    target_opts,
+                             const codegen::optimizer_options& opt_options)
+    -> stdx::result<std::string, codegen::diagnostic> {
+    PROFILE_FUNCTION();
+    llvm::LLVMContext context;
+    auto              target_machine{TRY(codegen::create_target_machine(target_opts))};
+
+    codegen::optimizer_options opts{opt_options};
+    opts.target_machine = target_machine.get();
+    if (opts.level == codegen::opt_level::O0 && target_opts.level != codegen::opt_level::O0) {
+        opts.level = target_opts.level;
+    }
+
+    auto llvm_mod{TRY(emit_llvm_ir(gir_module, context, opts))};
+    return codegen::emit_asm_string(*llvm_mod, *target_machine);
 }
 
 auto analyzer::validate_main_entry(const mod::module& root_module) const

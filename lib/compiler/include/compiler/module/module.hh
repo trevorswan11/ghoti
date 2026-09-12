@@ -2,6 +2,7 @@
 
 #include <concepts>
 #include <filesystem>
+#include <iostream>
 #include <ostream>
 #include <string>
 #include <string_view>
@@ -21,6 +22,7 @@
 #include <stdx/utility.hh>
 #include <stdx/variant.hh>
 
+#include "compiler/arena.hh"
 #include "compiler/ast/ast.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
@@ -33,6 +35,8 @@
 #include "compiler/syntax/error.hh"
 #include "support/diagnostic.hh"
 #include "support/source_file.hh"
+
+namespace ghoti::sema { struct body_type_diff; } // namespace ghoti::sema
 
 namespace ghoti::mod {
 
@@ -65,6 +69,11 @@ enum class if_branch : u8 {
     ALTERNATE,
 };
 
+struct dyn_vtable {
+    std::string              symbol;
+    std::vector<std::string> slots;
+};
+
 struct module {
     std::filesystem::path                            path;
     std::filesystem::path                            parent_path;
@@ -82,10 +91,6 @@ struct module {
     std::vector<sema::type_ctor_member_emit> impl_ctor_member_emits;
 
     // One per `(I, T)` whose `&dyn I` fat pointer is built in this module
-    struct dyn_vtable {
-        std::string              symbol;
-        std::vector<std::string> slots;
-    };
     std::vector<dyn_vtable> dyn_vtables;
 
     // `@cfgValue` node index -> the cfg pass's evaluated verdict
@@ -96,6 +101,12 @@ struct module {
 
     // `match` (on a compile-time `type`) node index -> the arm index the resolver selected
     ankerl::unordered_dense::map<usize, usize> match_arm_results;
+
+    // Active emit-local overlay for generic instantiations / type ctor members / inherited defaults
+    stdx::option<const sema::body_type_diff&> active_body_diff;
+
+    // Cond discardable `decl_stmt` node index -> the folded truth of the condition
+    ankerl::unordered_dense::map<usize, bool> discardable_conditions;
 
     // Every identifier_expr references and uses encountered during symbol collection/resolution
     std::vector<ast::node_id> identifier_positions;
@@ -153,8 +164,26 @@ struct module {
                                   state == mod::module_state::POISONED_SYMBOL_COLLECTION);
     }
 
+    [[nodiscard]] auto get_overlay_node_type(usize idx) const noexcept
+        -> stdx::option<stdx::option<sema::type&>>;
+    [[nodiscard]] auto get_overlay_explicit_type(usize idx) const noexcept
+        -> stdx::option<stdx::option<sema::type&>>;
+    [[nodiscard]] auto get_if_branch_opt(usize node_idx) const noexcept -> stdx::option<if_branch>;
+    [[nodiscard]] auto get_match_arm_opt(usize node_idx) const noexcept -> stdx::opt_size;
+
     template <ast::IndexableID ID>
     [[nodiscard]] constexpr auto has_sema_type(ID id) const noexcept -> bool {
+        if (active_body_diff) {
+            if constexpr (ast::IndexableNodeID<ID>) {
+                if (const auto ty{get_overlay_node_type(id.get_index())}) {
+                    return ty->has_value();
+                }
+            } else {
+                if (const auto ty{get_overlay_explicit_type(id.get_index())}) {
+                    return ty->has_value();
+                }
+            }
+        }
         if constexpr (ast::IndexableNodeID<ID>) {
             return sema_side_tables.node_types[id].has_value();
         } else {
@@ -168,6 +197,13 @@ struct module {
 
     template <ast::IndexableID ID>
     [[nodiscard]] constexpr auto get_sema_type_opt(this auto&& self, ID id) noexcept {
+        if (self.active_body_diff) {
+            if constexpr (ast::IndexableNodeID<ID>) {
+                if (const auto ty{self.get_overlay_node_type(id.get_index())}) { return *ty; }
+            } else {
+                if (const auto ty{self.get_overlay_explicit_type(id.get_index())}) { return *ty; }
+            }
+        }
         if constexpr (ast::IndexableNodeID<ID>) {
             return self.sema_side_tables.node_types[id];
         } else {
@@ -209,6 +245,20 @@ struct module {
     template <ast::IndexableID ID> auto set_resolved_symbol_owner(ID id, usize owner_idx) -> void {
         if constexpr (ast::IndexableNodeID<ID>) {
             sema_side_tables.resolved_symbol_owners[id].emplace(owner_idx);
+        }
+    }
+
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto get_symbol_table_opt(ID id) const noexcept -> stdx::opt_size {
+        if constexpr (ast::IndexableNodeID<ID>) {
+            return sema_side_tables.identifier_symbol_tables[id];
+        }
+        return {};
+    }
+
+    template <ast::IndexableID ID> auto set_symbol_table(ID id, usize table_idx) -> void {
+        if constexpr (ast::IndexableNodeID<ID>) {
+            sema_side_tables.identifier_symbol_tables[id].emplace(table_idx);
         }
     }
 
@@ -285,6 +335,23 @@ struct module {
             return sema_side_tables.explicit_type_definitions[id];
         }
     }
+
+    // Given a relative path, returns its absolute rep from the module's perspective
+    [[nodiscard]] auto make_path_absolute(const std::filesystem::path& p) -> std::filesystem::path {
+        if (p.is_relative()) { return parent_path / p; }
+        return p;
+    }
+};
+
+struct body_diff_guard {
+    module&                                   mod;
+    stdx::option<const sema::body_type_diff&> prev{};
+
+    explicit body_diff_guard(module& m, stdx::option<const sema::body_type_diff&> diff) noexcept
+        : mod{m}, prev{std::exchange(m.active_body_diff, diff)} {}
+
+    ~body_diff_guard() noexcept { mod.active_body_diff = prev; }
+    MAKE_PINNED(body_diff_guard);
 };
 
 class module_manager {
@@ -318,7 +385,8 @@ class module_manager {
         -> stdx::result<void, diagnostic>;
 
     // Prints every poisoned/errored module's diagnostics
-    auto print_all_diagnostics(std::ostream& os) const -> void;
+    auto print_all_diagnostics(std::ostream& os = std::cerr) const -> void;
+
     // True if any module ever loaded through this manager is poisoned or errored
     [[nodiscard]] auto any_errored() const noexcept -> bool;
     [[nodiscard]] auto get_or_create_builtin_module(std::string_view source) -> module&;
@@ -332,14 +400,18 @@ class module_manager {
         return static_cast<bool>(builtin_module_);
     }
 
+    // The returned reference is guaranteed to be stable even across moves of the manager
+    [[nodiscard]] auto arena() noexcept -> ghoti::arena& { return *arena_; }
+
   private:
     [[nodiscard]] auto try_get(const std::filesystem::path& path)
         -> stdx::result<gsl::not_null<module*>, diagnostic>;
 
   private:
-    source_loader&    loader_;
-    module_table      modules_;
-    stdx::box<module> builtin_module_;
+    source_loader&          loader_;
+    module_table            modules_;
+    stdx::box<module>       builtin_module_;
+    stdx::box<ghoti::arena> arena_{stdx::make_box<ghoti::arena>()};
 
     // Maps physical ghoti modules to their path on disk
     module_name_map module_lut_;

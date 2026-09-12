@@ -1,0 +1,56 @@
+//! Basic wrappers over standard IO streams
+import std;
+
+using Result = std.Result;
+using Error = std.io.Error;
+using File = std.io.File;
+
+/// The standard output stream, infallible on POSIX
+pub const stdout := fn(): Result(File, Error) {
+    return match (std.os.stdout()) {
+        .ok => |h| .{ .ok = .{ .handle = h } },
+        .err => |e| .{ .err = .fromOs(e) },
+    };
+};
+
+/// The standard input stream, infallible on POSIX
+pub const stdin := fn(): Result(File, Error) {
+    return match (std.os.stdin()) {
+        .ok => |h| .{ .ok = .{ .handle = h } },
+        .err => |e| .{ .err = .fromOs(e) },
+    };
+};
+
+/// The standard error stream, infallible on POSIX
+pub const stderr := fn(): Result(File, Error) {
+    return match (std.os.stderr()) {
+        .ok => |h| .{ .ok = .{ .handle = h } },
+        .err => |e| .{ .err = .fromOs(e) },
+    };
+};
+
+/// Print the contents of `bytes` to stdout
+pub const print := fn(bytes: []u8): Result(void, Error) {
+    var f := stdout()?;
+    return f.writeAll(bytes);
+};
+
+/// Print the contents of `bytes` to stdout, followed by a newline
+pub const println := fn(bytes: []u8): Result(void, Error) {
+    var f := stdout()?;
+    f.writeAll(bytes)?;
+    return f.writeByte('\n');
+};
+
+/// Print the contents of `bytes` to stderr
+pub const eprint := fn(bytes: []u8): Result(void, Error) {
+    var f := stderr()?;
+    return f.writeAll(bytes);
+};
+
+/// Print the contents of `bytes` to stderr, followed by a newline
+pub const eprintln := fn(bytes: []u8): Result(void, Error) {
+    var f := stderr()?;
+    f.writeAll(bytes)?;
+    return f.writeByte('\n');
+};

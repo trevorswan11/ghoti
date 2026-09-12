@@ -114,12 +114,23 @@ class doc_manager {
     [[nodiscard]] auto join(std::vector<syntax::doc_id> items, syntax::doc_id sep)
         -> syntax::doc_id;
 
-    // `open pad items pad close` as a group: one line if it fits
+    // `open pad items pad close` as a group: one line if it fits, unless `force_break`.
     [[nodiscard]] auto delimited(std::string_view            open,
                                  std::string_view            close,
                                  std::vector<syntax::doc_id> items,
                                  bool                        pad,
-                                 bool                        trailing_comma) -> syntax::doc_id;
+                                 bool                        trailing_comma,
+                                 bool                        force_break = false) -> syntax::doc_id;
+
+    // As above, but `item_trailers[i]` (a trailing line comment, or `nil()`) is placed right after
+    // item `i`'s separator comma. Any non-nil trailer forces the list to break.
+    [[nodiscard]] auto delimited(std::string_view            open,
+                                 std::string_view            close,
+                                 std::vector<syntax::doc_id> items,
+                                 std::vector<syntax::doc_id> item_trailers,
+                                 bool                        pad,
+                                 bool                        trailing_comma,
+                                 bool                        force_break = false) -> syntax::doc_id;
 
   private:
     roots_t            roots_;

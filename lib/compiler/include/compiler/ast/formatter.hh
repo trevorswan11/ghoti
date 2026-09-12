@@ -70,8 +70,9 @@ class formatter {
 
     [[nodiscard]] auto format_member_cfg_group(const cfg_item_group<member_handle>& group)
         -> syntax::doc_id;
-    [[nodiscard]] auto aggregate_body(std::vector<syntax::doc_id> entries, usize comma_count)
-        -> syntax::doc_id;
+    [[nodiscard]] auto aggregate_body(std::vector<syntax::doc_id> entries,
+                                      usize                       comma_count,
+                                      bool force_break = false) -> syntax::doc_id;
 
     template <typename Group, typename ItemFmt>
     [[nodiscard]] auto format_aggregate_cfg_group(const Group& group, ItemFmt item_fmt)
@@ -128,7 +129,6 @@ class formatter {
     auto visit(node_id, const undefined_expr&) -> syntax::doc_id;
     auto visit(node_id, const nullptr_expr&) -> syntax::doc_id;
     auto visit(node_id, const unreachable_expr&) -> syntax::doc_id;
-    auto visit(node_id, const module_access_expr&) -> syntax::doc_id;
     auto visit(node_id, const struct_expr&) -> syntax::doc_id;
     auto visit(node_id, const union_expr&) -> syntax::doc_id;
     auto visit(node_id, const interface_expr&) -> syntax::doc_id;
@@ -140,6 +140,7 @@ class formatter {
     auto visit(node_id, const continue_stmt&) -> syntax::doc_id;
     auto visit(node_id, const decl_stmt&) -> syntax::doc_id;
     auto visit(node_id, const defer_stmt&) -> syntax::doc_id;
+    auto visit(node_id, const errdefer_stmt&) -> syntax::doc_id;
     auto visit(node_id, const discard_stmt&) -> syntax::doc_id;
     auto visit(node_id, const expr_stmt&) -> syntax::doc_id;
     auto visit(node_id, const impl_stmt&) -> syntax::doc_id;
@@ -150,7 +151,6 @@ class formatter {
     auto visit(node_id, stdx::monostate) -> syntax::doc_id;
 
     auto visit(explicit_type_id, const identifier_expr&) -> syntax::doc_id;
-    auto visit(explicit_type_id, const module_access_expr&) -> syntax::doc_id;
     auto visit(explicit_type_id, const dot_expr&) -> syntax::doc_id;
     auto visit(explicit_type_id, const call_expr&) -> syntax::doc_id;
     auto visit(explicit_type_id, const explicit_function_type&) -> syntax::doc_id;

@@ -1,0 +1,21 @@
+pub constexpr Result := fn(T: type, E: type): type {
+    return union { ok: T, err: E };
+};
+
+impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
+    using Output = T;
+    using Residual = E;
+    pub const branch := fn(self): builtin.Flow(T, E) {
+        return match (self) {
+            .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
+            .err => |e| builtin.Flow(T, E){ .@"break" = e },
+        };
+    };
+}
+
+impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
+    using From = E;
+    pub const fromResidual := fn(r: E): @This() {
+        return .{ .err = r };
+    };
+}

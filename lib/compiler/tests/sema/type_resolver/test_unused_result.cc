@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
@@ -13,13 +14,8 @@ namespace {
 
 // Whether resolving `source` produced at least one diagnostic with the given error code.
 [[nodiscard]] auto has_error(std::string_view source, sema::error code) -> bool {
-    auto [ctx, idx]{helpers::resolve(source)};
-    const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()};
-    if (!diags) { return false; }
-    for (const auto& d : gsl::span<const sema::diagnostic>{*diags}) {
-        if (d.get_error() == code) { return true; }
-    }
-    return false;
+    const auto [codes, _]{helpers::resolve_diags(source)};
+    return std::ranges::contains(codes, code);
 }
 
 } // namespace
@@ -80,6 +76,18 @@ TEST_CASE("A @discardable callee may be dropped with no diagnostic") {
             pub const main := fn(): i32 { note(3); return 0; };
         )");
     }
+    SECTION("method call on struct") {
+        ok(R"(
+            const S := struct {
+                pub @discardable const close := fn(&self): i32 { return 0; };
+            };
+            pub const main := fn(): i32 {
+                const s: S = .{};
+                s.close();
+                return 0;
+            };
+        )");
+    }
 }
 
 TEST_CASE("@discardable is rejected where it cannot apply") {
@@ -89,6 +97,33 @@ TEST_CASE("@discardable is rejected where it cannot apply") {
     SECTION("on a function that returns void") {
         CHECK(
             has_error("@discardable const f := fn(): void {};", sema::error::ILLEGAL_DISCARDABLE));
+    }
+}
+
+TEST_CASE("@discardable(<constexpr bool>) gates the discard behavior on the condition") {
+    const auto ok{[](std::string_view body) {
+        auto [ctx, idx]{helpers::resolve(body)};
+        helpers::check_errors<sema::diagnostics>(ctx->root_mod);
+    }};
+
+    SECTION("a true condition allows the drop") {
+        ok(R"(
+            constexpr ON := true;
+            @discardable(ON) const log := fn(n: i32): i32 { return n; };
+            pub const main := fn(): i32 { log(3); return 0; };
+        )");
+    }
+    SECTION("a false condition keeps the must-use error") {
+        CHECK(has_error(R"(
+            constexpr OFF := false;
+            @discardable(OFF) const log := fn(n: i32): i32 { return n; };
+            pub const main := fn(): i32 { log(3); return 0; };
+        )",
+                        sema::error::UNUSED_RESULT));
+    }
+    SECTION("a non-boolean condition is an error") {
+        CHECK(has_error("@discardable(1 + 1) const f := fn(): i32 { return 0; };",
+                        sema::error::ILLEGAL_DISCARDABLE));
     }
 }
 

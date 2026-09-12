@@ -28,6 +28,7 @@ constexpr keyword_t DO{"do", token_type_t::DO};
 constexpr keyword_t MATCH{"match", token_type_t::MATCH};
 constexpr keyword_t RETURN{"return", token_type_t::RETURN};
 constexpr keyword_t DEFER{"defer", token_type_t::DEFER};
+constexpr keyword_t ERRDEFER{"errdefer", token_type_t::ERRDEFER};
 constexpr keyword_t LOOP{"loop", token_type_t::LOOP};
 constexpr keyword_t FOR{"for", token_type_t::FOR};
 constexpr keyword_t WHILE{"while", token_type_t::WHILE};
@@ -76,27 +77,69 @@ constexpr keyword_t UNREACHABLE{"unreachable", token_type_t::UNREACHABLE};
 [[nodiscard]] auto get_keyword_opt(std::string_view sv) noexcept -> stdx::option<token_type_t>;
 [[nodiscard]] auto get_keyword_opt(token_type_t tt) noexcept -> stdx::option<std::string_view>;
 
+// True when `name` cannot be written as a bare identifier and must use the raw form `@"name"
+[[nodiscard]] auto identifier_needs_raw(std::string_view name) noexcept -> bool;
+
 // Single source of truth for every reserved word
 constexpr std::array ALL_KEYWORDS{
-    keywords::FN,          keywords::VAR,           keywords::CONSTANT,
-    keywords::CONSTEXPR,   keywords::STRUCT,        keywords::ENUM,
-    keywords::UNION,       keywords::BOOLEAN_TRUE,  keywords::BOOLEAN_FALSE,
-    keywords::IF,          keywords::ELSE,          keywords::DO,
-    keywords::MATCH,       keywords::RETURN,        keywords::DEFER,
-    keywords::LOOP,        keywords::FOR,           keywords::WHILE,
-    keywords::CONTINUE,    keywords::BREAK,         keywords::IMPORT,
-    keywords::ISIZE,       keywords::USIZE,         keywords::F16,
-    keywords::F32,         keywords::F64,           keywords::F80,
-    keywords::F128,        keywords::CONSTEXPR_INT, keywords::CONSTEXPR_FLOAT,
-    keywords::BOOL,        keywords::VOID,          keywords::TYPE,
-    keywords::AUTO,        keywords::OPAQUE,        keywords::AS,
-    keywords::PUBLIC,      keywords::EXTERN,        keywords::EXPORT,
-    keywords::THREADLOCAL, keywords::WEAK,          keywords::NAKED,
-    keywords::CALLCONV,    keywords::VOLATILE,      keywords::MUT,
-    keywords::MOVE,        keywords::PACKED,        keywords::NORETURN,
-    keywords::NULLPTR,     keywords::USING,         keywords::TEST,
-    keywords::UNDEFINED,   keywords::UNREACHABLE,   keywords::ASM,
-    keywords::IMPL,        keywords::INTERFACE,     keywords::DYN,
+    keywords::FN,
+    keywords::VAR,
+    keywords::CONSTANT,
+    keywords::CONSTEXPR,
+    keywords::STRUCT,
+    keywords::ENUM,
+    keywords::UNION,
+    keywords::BOOLEAN_TRUE,
+    keywords::BOOLEAN_FALSE,
+    keywords::IF,
+    keywords::ELSE,
+    keywords::DO,
+    keywords::MATCH,
+    keywords::RETURN,
+    keywords::DEFER,
+    keywords::ERRDEFER,
+    keywords::LOOP,
+    keywords::FOR,
+    keywords::WHILE,
+    keywords::CONTINUE,
+    keywords::BREAK,
+    keywords::IMPORT,
+    keywords::ISIZE,
+    keywords::USIZE,
+    keywords::F16,
+    keywords::F32,
+    keywords::F64,
+    keywords::F80,
+    keywords::F128,
+    keywords::CONSTEXPR_INT,
+    keywords::CONSTEXPR_FLOAT,
+    keywords::BOOL,
+    keywords::VOID,
+    keywords::TYPE,
+    keywords::AUTO,
+    keywords::OPAQUE,
+    keywords::AS,
+    keywords::PUBLIC,
+    keywords::EXTERN,
+    keywords::EXPORT,
+    keywords::THREADLOCAL,
+    keywords::WEAK,
+    keywords::NAKED,
+    keywords::CALLCONV,
+    keywords::VOLATILE,
+    keywords::MUT,
+    keywords::MOVE,
+    keywords::PACKED,
+    keywords::NORETURN,
+    keywords::NULLPTR,
+    keywords::USING,
+    keywords::TEST,
+    keywords::UNDEFINED,
+    keywords::UNREACHABLE,
+    keywords::ASM,
+    keywords::IMPL,
+    keywords::INTERFACE,
+    keywords::DYN,
 };
 
 constexpr std::array ALL_PRIMITIVES{

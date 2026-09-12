@@ -57,7 +57,7 @@ TEST_CASE("`for (arr, 0..) |v, i|` enumerates: the sibling array bounds the open
         pub const main := fn(): i32 {
             var arr := [4uz]mut i32{10, 20, 30, 40};
             var acc: i32 = 0;
-            for (arr, 0..) |v, i| { acc = acc + v + @as(i32, i); }
+            for (arr, 0..) |v, i| { acc = acc + v + @intCast(i32, i); }
             return acc;
         };
     )") == (10 + 20 + 30 + 40) + (0 + 1 + 2 + 3));

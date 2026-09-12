@@ -301,4 +301,30 @@ auto emit_object_file(llvm::Module&                module,
     return {};
 }
 
+auto emit_asm_string(llvm::Module& module, llvm::TargetMachine& target_machine)
+    -> stdx::result<std::string, diagnostic> {
+    PROFILE_FUNCTION();
+
+    module.setDataLayout(target_machine.createDataLayout());
+    module.setTargetTriple(target_machine.getTargetTriple());
+
+    std::string buffer;
+    {
+        llvm::raw_string_ostream string_os{buffer};
+        llvm::buffer_ostream     dest{string_os};
+
+        llvm::legacy::PassManager pass_manager;
+        if (target_machine.addPassesToEmitFile(
+                pass_manager, dest, nullptr, llvm::CodeGenFileType::AssemblyFile)) {
+            return make_codegen_err(fmt::format("Target machine '{}' cannot emit assembly",
+                                                target_machine.getTargetTriple().str()),
+                                    error::ASM_EMISSION_FAILED);
+        }
+
+        PROFILE_SCOPE("LLVM Assembly Emission");
+        pass_manager.run(module);
+    }
+    return buffer;
+}
+
 } // namespace ghoti::codegen

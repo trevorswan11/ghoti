@@ -110,4 +110,27 @@ TEST_CASE("'move' must be followed directly by 'fn'") {
                                                  std::pair{0UZ, 0UZ}});
 }
 
+TEST_CASE("Discarded function type parameters") {
+    helpers::test_parser_fail(
+        "fn(_: i32): i32;",
+        syntax::diagnostic{
+            "Function type parameter names cannot be discarded; a parameter name is required",
+            syntax::error::FN_TYPE_PARAMETER_DISCARDED,
+            std::pair{0UZ, 3UZ}});
+
+    helpers::test_parser_fail(
+        "fn(a: i32, _: bool): void;",
+        syntax::diagnostic{
+            "Function type parameter names cannot be discarded; a parameter name is required",
+            syntax::error::FN_TYPE_PARAMETER_DISCARDED,
+            std::pair{0UZ, 11UZ}});
+
+    helpers::test_parser_fail(
+        "var f: fn(_: i32): i32;",
+        syntax::diagnostic{
+            "Function type parameter names cannot be discarded; a parameter name is required",
+            syntax::error::FN_TYPE_PARAMETER_DISCARDED,
+            std::pair{0UZ, 10UZ}});
+}
+
 } // namespace ghoti::tests

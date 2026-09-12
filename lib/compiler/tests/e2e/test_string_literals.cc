@@ -20,9 +20,9 @@ TEST_CASE("String literal escape sequences are decoded to their actual bytes") {
         CHECK(helpers::compile_and_run(R"(
             pub const main := fn(): i32 {
                 const s := "a\nb";
-                return @as(i32, s.len);
+                return @intCast(i32, s.len);
             };
-        )") == 4);
+        )") == 3);
     }
 
     SECTION("A decoded escape byte round-trips correctly by index") {
@@ -38,9 +38,9 @@ TEST_CASE("String literal escape sequences are decoded to their actual bytes") {
         CHECK(helpers::compile_and_run(R"(
             pub const main := fn(): i32 {
                 const s := "a\\b";
-                return @as(i32, s.len);
+                return @intCast(i32, s.len);
             };
-        )") == 4);
+        )") == 3);
     }
 }
 
@@ -55,13 +55,42 @@ TEST_CASE("Char literal escape sequences are decoded to their actual bytes") {
     }
 }
 
-TEST_CASE("Local string literal .len includes the implicit null terminator") {
+TEST_CASE("Local string literal .len is the character count, excluding the sentinel") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             const s := "hello";
-            return @as(i32, s.len);
+            return @intCast(i32, s.len);
         };
-    )") == 6);
+    )") == 5);
+}
+
+TEST_CASE("A string literal's storage keeps room for the sentinel") {
+    SECTION("@sizeOf a [N:0]u8 is N + 1") {
+        CHECK(helpers::compile_and_run(R"(
+            pub const main := fn(): i32 {
+                return @intCast(i32, @sizeOf([5:0]u8));
+            };
+        )") == 6);
+    }
+
+    SECTION("indexing at .len reads the terminator") {
+        CHECK(helpers::compile_and_run(R"(
+            pub const main := fn(): i32 {
+                const s := "hello";
+                return @as(i32, s[s.len]);
+            };
+        )") == 0);
+    }
+
+    SECTION("a `.ptr` walk still finds the terminating NUL") {
+        CHECK(helpers::compile_and_run(R"(
+            pub const main := fn(): i32 {
+                const s := "hi";
+                const end: ^u8 = @ptrFromInt(^u8, @intFromPtr(s.ptr) + 2uz);
+                return @as(i32, *end);
+            };
+        )") == 0);
+    }
 }
 
 TEST_CASE("Local string literal .ptr decays to a valid pointer to its bytes") {
@@ -85,15 +114,15 @@ TEST_CASE("String literal passed directly to a slice parameter") {
     )") == 'A');
 }
 
-TEST_CASE("String literal passed directly to a slice parameter preserves length") {
+TEST_CASE("String literal passed directly to a slice parameter has the character-count length") {
     CHECK(helpers::compile_and_run(R"(
         const len_of := fn(msg: []u8): i32 {
-            return @as(i32, msg.len);
+            return @intCast(i32, msg.len);
         };
         pub const main := fn(): i32 {
             return len_of("hello");
         };
-    )") == 6);
+    )") == 5);
 }
 
 TEST_CASE("A `[:0]T` null-terminated slice type is usable in value position") {
@@ -101,20 +130,20 @@ TEST_CASE("A `[:0]T` null-terminated slice type is usable in value position") {
         CHECK(helpers::compile_and_run(R"(
             pub const main := fn(): i32 {
                 const s: [:0]u8 = "hello";
-                return @as(i32, s.len);
+                return @intCast(i32, s.len);
             };
-        )") == 6);
+        )") == 5);
     }
 
     SECTION("as a function parameter type") {
         CHECK(helpers::compile_and_run(R"(
             const len_of := fn(msg: [:0]u8): i32 {
-                return @as(i32, msg.len);
+                return @intCast(i32, msg.len);
             };
             pub const main := fn(): i32 {
                 return len_of("hello");
             };
-        )") == 6);
+        )") == 5);
     }
 }
 
@@ -153,6 +182,16 @@ TEST_CASE("Top-level string const .ptr decays to a valid pointer to its bytes") 
             return @as(i32, *p);
         };
     )") == 'h');
+}
+
+TEST_CASE("Top-level string const assigned to slice emits valid global init") {
+    const auto exit_code{helpers::compile_and_run(R"(
+        const S: []u8 = "Hello";
+        pub const main := fn(): i32 {
+            return if (S.len == 5) 7 else 0;
+        };
+    )")};
+    CHECK(exit_code == 7);
 }
 
 } // namespace ghoti::tests

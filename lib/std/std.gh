@@ -1,7 +1,28 @@
 pub const version := "0.3.0-alpha.4";
 
-import "result.gh" as result;
+import "types/result.gh" as result;
+import "types/option.gh" as option;
 
-pub constexpr Result := result::Result;
+pub using Result = result.Result;
+pub using Option = option.Option;
 
-pub import "os/darwin/darwin.gh" as darwin;
+pub import "os/os.gh" as os;
+pub import "io/io.gh" as io;
+pub import "testing/testing.gh" as testing;
+pub import "mem/mem.gh" as mem;
+pub import "heap/heap.gh" as heap;
+pub import "math.gh" as math;
+
+pub const panic_handler := fn(msg: []u8, file: []u8, _: u32, _: u32): noreturn {
+    _ = io.eprint(file);
+    _ = io.eprint(": ");
+    _ = io.eprintln(msg);
+    @trap();
+};
+
+pub const assert_handler := fn(msg: []u8, file: []u8, _: u32, _: u32): void {
+    _ = io.eprint(file);
+    _ = io.eprint(": ");
+    _ = io.eprintln(msg);
+    @trap();
+};

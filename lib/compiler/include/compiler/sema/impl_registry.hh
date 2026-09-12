@@ -14,6 +14,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/arena.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/sema/type.hh"
 
@@ -24,10 +25,14 @@ namespace ghoti::sema {
 // One resolved `impl [I for] T { ... }` block. `interface_type` is null for an inherent impl.
 struct impl_record {
     struct method {
-        std::string_view          name;
-        ast::node_id              decl;    // the `decl_stmt` in the impl body
-        stdx::option<const type&> fn_type; // resolved once conformance runs
-        bool                      is_pub;
+        std::string_view                 name;
+        ast::node_id                     decl;    // the `decl_stmt` in the impl body
+        stdx::option<const type&>        fn_type; // resolved once conformance runs
+        bool                             is_pub;
+        bool                             inherited{false};
+        std::string                      typing_key{};
+        stdx::option<const mod::module&> defining_mod{};
+        ast::node_id                     signature{ast::node_id::make_invalid()};
     };
 
     stdx::option<const type&>        interface_type;
@@ -38,8 +43,10 @@ struct impl_record {
     std::vector<method>              methods{};
 
     // Set for a record produced by expanding an `impl(P) ...` for one concrete target
-    bool        from_parameterized{false};
-    std::string gir_prefix{}; // The per-instantiation symbol prefix
+    bool                     from_parameterized{false};
+    std::string              gir_prefix{}; // The per-instantiation symbol prefix
+    std::vector<const type*> sentinels{};
+    std::vector<const type*> type_arguments{};
 
     template <typename Self>
     [[nodiscard]] auto find_method(this Self&& self, std::string_view name) noexcept
@@ -86,7 +93,7 @@ class impl_registry {
                                      ankerl::unordered_dense::set<const parameterized_impl*>>;
 
   public:
-    explicit impl_registry(arena_alloc& arena) noexcept : arena_{arena} {}
+    explicit impl_registry(ghoti::arena& arena) noexcept : arena_{arena} {}
     ~impl_registry() = default;
     MAKE_MOVE_CONSTRUCTABLE_ONLY(impl_registry)
 
@@ -104,7 +111,8 @@ class impl_registry {
     }
 
     // The record whose `impl_stmt` node is `site` (inherent or trait).
-    [[nodiscard]] auto find_by_site(ast::node_id site) noexcept -> stdx::option<impl_record&>;
+    [[nodiscard]] auto find_by_site(ast::node_id site, const mod::module& enclosing) noexcept
+        -> stdx::option<impl_record&>;
     [[nodiscard]] auto implements(const type& target, const type& iface) const noexcept -> bool;
 
     // Parameterized `impl(P) ...` blocks, held un-expanded until a concrete target materializes.
@@ -142,7 +150,7 @@ class impl_registry {
     [[nodiscard]] auto records(this auto&& self) noexcept -> auto& { return self.records_; }
 
   private:
-    arena_alloc&                     arena_;
+    ghoti::arena&                    arena_;
     std::vector<impl_record*>        records_;
     std::vector<parameterized_impl*> param_records_;
     template_param_map               templates_;

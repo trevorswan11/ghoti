@@ -29,6 +29,7 @@ auto explicit_function_type::parse(syntax::parser& parser, bool allow_trailing_b
     std::vector<explicit_type_id>  parameter_types;
     std::vector<identifier_handle> parameter_names;
     bool                           variadic{false};
+    bool                           params_force_break{false};
     if (parser.peek_token_is(syntax::token_type_t::RPAREN)) {
         parser.advance();
     } else {
@@ -43,6 +44,12 @@ auto explicit_function_type::parse(syntax::parser& parser, bool allow_trailing_b
             // Every non-variadic parameter must be named, e.g. `fn(status: i32, done: ^bool):
             // void`, so the type reads clearly and the formatter can round-trip it.
             if (!parser.peek_token_is(syntax::token_type_t::IDENT)) {
+                if (parser.peek_token_is(syntax::token_type_t::UNDERSCORE)) {
+                    return make_syntax_err("Function type parameter names cannot be discarded; a "
+                                           "parameter name is required",
+                                           syntax::error::FN_TYPE_PARAMETER_DISCARDED,
+                                           parser.get_peek_token());
+                }
                 return make_syntax_err(
                     "Function type parameters must be named (e.g. `fn(x: i32): i32`)",
                     syntax::error::FN_TYPE_PARAMETER_UNNAMED,
@@ -66,6 +73,8 @@ auto explicit_function_type::parse(syntax::parser& parser, bool allow_trailing_b
             parameter_types.emplace_back(type);
             if (!parser.peek_token_is(syntax::token_type_t::RPAREN)) {
                 TRY(parser.expect_peek(syntax::token_type_t::COMMA));
+                // A comma right before `)` is a trailing comma: keep one parameter per line.
+                params_force_break = parser.peek_token_is(syntax::token_type_t::RPAREN);
             }
         }
         TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
@@ -83,6 +92,7 @@ auto explicit_function_type::parse(syntax::parser& parser, bool allow_trailing_b
     return explicit_function_type{.parameter_types      = std::move(parameter_types),
                                   .parameter_names      = std::move(parameter_names),
                                   .variadic             = variadic,
+                                  .params_force_break   = params_force_break,
                                   .explicit_return_type = return_type};
 }
 
@@ -93,19 +103,19 @@ auto explicit_dyn_type::parse(syntax::parser& parser, bool allow_trailing_brace)
     parser.advance(); // current == first name token
     const auto  name_start{parser.get_current_token()};
     expr_handle name{TRY(identifier_expr::parse(parser))};
-    while (parser.peek_token_is(syntax::token_type_t::COLON_COLON)) {
-        parser.advance(); // current == ::
-        name = TRY(module_access_expr::parse(parser, name));
+    while (parser.peek_token_is(syntax::token_type_t::DOT)) {
+        parser.advance(); // current == .
+        name = TRY(dot_expr::parse(parser, name));
     }
     const type_modifier value_mod{};
     const auto          interface_type{
-        name.is<module_access_expr>()
-                     ? parser.add_type<module_access_expr>(
-                  name_start, value_mod, parser.get_node<module_access_expr>(*name))
+        name.is<dot_expr>()
+                     ? parser.add_type<dot_expr>(name_start, value_mod, parser.get_node<dot_expr>(*name))
                      : parser.add_type<identifier_expr>(
                   name_start, value_mod, parser.get_node<identifier_expr>(*name))};
 
     std::vector<explicit_dyn_type::assoc_binding> assoc_bindings;
+    bool                                          assoc_bindings_force_break{false};
     if (parser.peek_token_is(syntax::token_type_t::LPAREN)) {
         parser.advance(); // current == (
         while (!parser.peek_token_is(syntax::token_type_t::RPAREN) &&
@@ -117,6 +127,8 @@ auto explicit_dyn_type::parse(syntax::parser& parser, bool allow_trailing_brace)
             assoc_bindings.emplace_back(binding_name, binding_type);
             if (parser.peek_token_is(syntax::token_type_t::COMMA)) {
                 parser.advance();
+                // A comma right before `)` is a trailing comma: keep one binding per line.
+                assoc_bindings_force_break = parser.peek_token_is(syntax::token_type_t::RPAREN);
             } else {
                 break;
             }
@@ -124,8 +136,9 @@ auto explicit_dyn_type::parse(syntax::parser& parser, bool allow_trailing_brace)
         TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
     }
     return explicit_dyn_type{
-        .interface_type = interface_type,
-        .assoc_bindings = std::move(assoc_bindings),
+        .interface_type             = interface_type,
+        .assoc_bindings             = std::move(assoc_bindings),
+        .assoc_bindings_force_break = assoc_bindings_force_break,
     };
 }
 
@@ -241,14 +254,9 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
 
         parser.advance();
         // Manually dispatch to prevent weird consumption
-        if (parser.peek_token_is(syntax::token_type_t::COLON_COLON) ||
+        if (parser.peek_token_is(syntax::token_type_t::DOT) ||
             parser.peek_token_is(syntax::token_type_t::LPAREN)) {
             const auto parsed{TRY(parser.parse_expression(syntax::bind_precedence::TYPE))};
-            if (parsed.is<module_access_expr>()) {
-                return parser.add_type<module_access_expr>(
-                    modifier_token, modifier, parser.get_node<module_access_expr>(*parsed));
-            }
-
             if (parsed.is<dot_expr>()) {
                 return parser.add_type<dot_expr>(
                     modifier_token, modifier, parser.get_node<dot_expr>(*parsed));
@@ -288,8 +296,10 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
         return make_syntax_err(syntax::error::MISSING_EXPLICIT_TYPE, type_start);
     }
 
+    // Parse at TYPE precedence so a following `= <init>` is not  absorbed into an assignment
     stdx::option<explicit_type_id> id;
-    switch (const auto user{TRY(parser.parse_expression())}; user->get_kind()) {
+    switch (const auto user{TRY(parser.parse_expression(syntax::bind_precedence::TYPE))};
+            user->get_kind()) {
     case node_kind::STRUCT_EXPRESSION:
         id.emplace(parser.add_type<struct_expr>(
             modifier_token, modifier, parser.get_node<struct_expr>(*user)));

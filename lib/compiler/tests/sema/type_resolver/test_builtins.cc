@@ -1,18 +1,22 @@
+#include <fstream>
 #include <string_view>
 #include <utility>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <fmt/format.h>
+#include <fmt/ostream.h>
 
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/statement.hh"
+#include "compiler/gir/const_eval.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
 #include "helpers/common.hh"
 #include "helpers/sema.hh"
+#include "support/tempfile.hh"
 
 namespace ghoti::tests {
 
@@ -51,7 +55,7 @@ auto test_builtin_resolve(const syntax::builtin_t& builtin,
 namespace bis = syntax::builtins;
 
 TEST_CASE("Builtin 'safe' casts") {
-    const auto bi{GENERATE(bis::ALIGN_CAST, bis::PTR_CAST, bis::BIT_CAST, bis::AS)};
+    const auto bi{GENERATE(bis::ALIGN_CAST, bis::PTR_CAST, bis::BIT_CAST, bis::AS, bis::INT_CAST)};
     test_builtin_resolve(bi, "i32, 23UZ", [](helpers::sema_test_context& ctx) -> sema::type& {
         return ctx.get_int_type(32, true);
     });
@@ -73,7 +77,7 @@ TEST_CASE("Builtin 'unsafe' casts") {
 
 TEST_CASE("Builtin bit/byte operations") {
     const auto bi{GENERATE(
-        bis::ALIGN_OF, bis::SIZE_OF, bis::CLZ, bis::CTZ, bis::POP_COUNT, bis::INT_FROM_PTR)};
+        bis::ALIGN_OF, bis::SIZE_OF, bis::CLZ, bis::CTZ, bis::POPCOUNT, bis::INT_FROM_PTR)};
     test_builtin_resolve(bi, "123", [](helpers::sema_test_context& ctx) -> sema::type& {
         return ctx.get_type(sema::type_kind::USIZE);
     });
@@ -90,7 +94,7 @@ TEST_CASE("Builtin type introspection") {
 }
 
 TEST_CASE("Builtin this introspection") {
-    auto [ctx, idx]{helpers::resolve_and_check("struct { using A = @this(); };")};
+    auto [ctx, idx]{helpers::resolve_and_check("struct { using A = @This(); };")};
     const auto [sym, data, type]{ctx->get_type_sym_info<syms::node_t>("A", idx + 1)};
     CHECK(type == ctx->get_type(sema::type_kind::STRUCT, idx + 1));
 }
@@ -180,14 +184,37 @@ TEST_CASE("Builtin pointer conversions") {
 }
 
 TEST_CASE("Builtins memory operation") {
-    const auto bi{GENERATE(bis::MEMCPY, bis::MEMSET, bis::MEMMOVE)};
     test_builtin_resolve(
-        bi,
-        "a, b",
+        GENERATE(bis::MEMCPY, bis::MEMMOVE),
+        "d, s",
         [](helpers::sema_test_context& ctx) -> sema::type& {
             return ctx.get_type(sema::type_kind::VOID_);
         },
-        "var a: i32 = undefined; var b: i32 = undefined;");
+        "var d: []mut u8 = undefined; var s: []u8 = undefined;");
+
+    test_builtin_resolve(
+        bis::MEMSET,
+        "d, 0u8",
+        [](helpers::sema_test_context& ctx) -> sema::type& {
+            return ctx.get_type(sema::type_kind::VOID_);
+        },
+        "var d: []mut u8 = undefined;");
+}
+
+TEST_CASE("@memcpy rejects a non-contiguous or immutable destination") {
+    helpers::test_resolver_fail(
+        R"(const f := fn(d: []u8, s: []u8): void { @memcpy(d, s); };)",
+        sema::diagnostic{"'@memcpy' cannot write through an immutable destination; use a `mut` "
+                         "slice or array",
+                         sema::error::TYPE_MISMATCH,
+                         std::pair{0UZ, 48UZ}});
+
+    helpers::test_resolver_fail(
+        R"(const f := fn(d: []mut u8, s: []u16): void { @memcpy(d, s); };)",
+        sema::diagnostic{"'@memcpy' requires matching element types; the destination holds 'u8' "
+                         "but the source holds 'u16'",
+                         sema::error::TYPE_MISMATCH,
+                         std::pair{0UZ, 56UZ}});
 }
 
 TEST_CASE("Builtin arithmetic") {
@@ -256,10 +283,10 @@ TEST_CASE("Other builtin quick type mismatch") {
                          std::pair{0UZ, 27UZ}});
 }
 
-TEST_CASE("Illegal @this usage") {
+TEST_CASE("Illegal @This usage") {
     helpers::test_resolver_fail(
-        "@this();",
-        sema::diagnostic{"@this() may only be used inside of structs, unions, and enums",
+        "@This();",
+        sema::diagnostic{"@This() may only be used inside of structs, unions, and enums",
                          sema::error::TYPE_MISMATCH,
                          std::pair{0UZ, 5UZ}});
 }
@@ -353,6 +380,33 @@ TEST_CASE("@setMainSymbol invalid identifier error") {
         sema::diagnostic{"@setMainSymbol argument must be a valid identifier; found '123bad'",
                          sema::error::TYPE_MISMATCH,
                          std::pair{0UZ, 15UZ}});
+}
+
+TEST_CASE("@embed builtin constant eval in sema") {
+    tempfile embedded{"ghoti_test_embed_sema"};
+    {
+        std::ofstream out{embedded.path};
+        fmt::print(out, "GhotiEmbedData");
+    }
+
+    const auto source{
+        fmt::format(R"(const data := @embed("{}");)", embedded.path.generic_string())};
+    auto [ctx, idx]{helpers::resolve_and_check(source)};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym, _, decl, type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("data", idx)};
+    const auto val{UNWRAP(evaluator.try_eval(*decl.value))};
+    CHECK(UNWRAP(val.as_opt<std::string>()) == "GhotiEmbedData");
+}
+
+TEST_CASE("@embed non-existent file produces sema error") {
+    helpers::test_resolver_fail(
+        R"(const data := @embed("/nonexistent/file/path/that/does/not/exist.txt");)",
+        sema::diagnostic{
+            "failed to read embedded file '/nonexistent/file/path/that/does/not/exist.txt'",
+            sema::error::CONSTEXPR_EVALUATION_FAILED,
+            std::pair{0UZ, 21UZ}});
 }
 
 } // namespace ghoti::tests

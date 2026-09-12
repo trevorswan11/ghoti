@@ -11,6 +11,7 @@
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
 
+#include "compiler/codegen/target.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/module.hh"
@@ -20,8 +21,13 @@
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
 #include "support/diagnostic.hh"
+#include "support/int128.hh"
 
 namespace ghoti::sema {
+
+type_checker::type_checker(gir::module& gir_mod, context& ctx) noexcept
+    : gir_mod_{gir_mod}, ctx_{ctx},
+      target_ptr_bits_{codegen::target_facts::resolve(ctx.target_opts.triple_str).ptr_bits} {}
 
 auto type_checker::check_types(gir::module& gir_mod, mod::module& ast_mod, context& ctx)
     -> mod::module_state {
@@ -33,6 +39,103 @@ auto type_checker::check_types(gir::module& gir_mod, mod::module& ast_mod, conte
         return ast_mod.error_out(std::move(ctx.diags), mod::module_state::POISONED_TYPE_RESOLVED);
     }
     return ast_mod.state;
+}
+
+auto type_checker::format_store_mismatch(const type& val_t, const type& dest_t) const
+    -> std::string {
+    if (const auto reason{cast_rejection_reason(val_t, dest_t, target_ptr_bits_)}) {
+        return fmt::format("Type mismatch in store: cannot assign '{}' to '{}' ({})",
+                           type_kind_display_name(val_t),
+                           type_kind_display_name(dest_t),
+                           *reason);
+    }
+    return fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
+                       type_kind_display_name(val_t),
+                       type_kind_display_name(dest_t));
+}
+
+auto type_checker::format_arg_mismatch(usize                          arg_idx,
+                                       const type&                    arg_t,
+                                       const type&                    param_t,
+                                       stdx::option<std::string_view> callee) const -> std::string {
+    const auto reason{cast_rejection_reason(arg_t, param_t, target_ptr_bits_)};
+    if (callee) {
+        if (reason) {
+            return fmt::format(
+                "Argument {} of type '{}' is not assignable to parameter type '{}' in call to '{}' "
+                "({})",
+                arg_idx,
+                type_kind_display_name(arg_t),
+                type_kind_display_name(param_t),
+                *callee,
+                *reason);
+        }
+        return fmt::format(
+            "Argument {} of type '{}' is not assignable to parameter type '{}' in call to '{}'",
+            arg_idx,
+            type_kind_display_name(arg_t),
+            type_kind_display_name(param_t),
+            *callee);
+    }
+    if (reason) {
+        return fmt::format(
+            "Argument {} of type '{}' is not assignable to parameter type '{}' in indirect call "
+            "({})",
+            arg_idx,
+            type_kind_display_name(arg_t),
+            type_kind_display_name(param_t),
+            *reason);
+    }
+    return fmt::format(
+        "Argument {} of type '{}' is not assignable to parameter type '{}' in indirect call",
+        arg_idx,
+        type_kind_display_name(arg_t),
+        type_kind_display_name(param_t));
+}
+
+auto type_checker::format_return_mismatch(const type& ret_t, const type& expected_t) const
+    -> std::string {
+    if (const auto reason{cast_rejection_reason(ret_t, expected_t, target_ptr_bits_)}) {
+        return fmt::format(
+            "Return value of type '{}' is not assignable to function return type '{}' ({})",
+            type_kind_display_name(ret_t),
+            type_kind_display_name(expected_t),
+            *reason);
+    }
+    return fmt::format("Return value of type '{}' is not assignable to function return type '{}'",
+                       type_kind_display_name(ret_t),
+                       type_kind_display_name(expected_t));
+}
+
+namespace {
+
+auto folded_int(const gir::value& v) noexcept -> stdx::option<i128> {
+    if (const auto x{v.as_opt<i64>()}) { return static_cast<i128>(*x); }
+    if (const auto x{v.as_opt<i128>()}) { return *x; }
+    if (const auto x{v.as_opt<u64>()}) { return static_cast<i128>(*x); }
+    if (const auto x{v.as_opt<u128>()}) { return static_cast<i128>(*x); }
+    return stdx::none;
+}
+
+} // namespace
+
+auto type_checker::is_value_assignable(const gir::value&             val,
+                                       const type&                   val_t,
+                                       const type&                   dest_t,
+                                       stdx::option<source_location> loc) -> bool {
+    if (is_assignable(val_t, dest_t)) { return true; }
+    if (is_integer(val_t.get_kind()) && is_integer(dest_t.get_kind())) {
+        if (const auto folded{folded_int(val)}) {
+            if (constexpr_int_fits(*folded, dest_t, target_ptr_bits_)) { return true; }
+            emit_diagnostic(fmt::format("integer value {} is out of range for type '{}'",
+                                        *folded,
+                                        type_kind_display_name(dest_t)),
+                            error::LITERAL_OUT_OF_RANGE,
+                            loc);
+            return true;
+        }
+    }
+    return false;
 }
 
 auto type_checker::emit_diagnostic(std::string_view              message,
@@ -435,14 +538,11 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                 }
             } else {
                 const auto ret_t{get_operand_type(inst.operands[0])};
-                if (ret_t && !ret_t->is_poison() && !is_assignable(*ret_t, expected_ret_t)) {
-                    emit_diagnostic(
-                        fmt::format("Return value of type '{}' is not assignable to function "
-                                    "return type '{}'",
-                                    type_kind_display_name(*ret_t),
-                                    type_kind_display_name(expected_ret_t)),
-                        error::RETURN_TYPE_MISMATCH,
-                        inst.location);
+                if (ret_t && !ret_t->is_poison() &&
+                    !is_value_assignable(inst.operands[0], *ret_t, expected_ret_t, inst.location)) {
+                    emit_diagnostic(format_return_mismatch(*ret_t, expected_ret_t),
+                                    error::RETURN_TYPE_MISMATCH,
+                                    inst.location);
                 }
             }
         }
@@ -469,14 +569,11 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                             if (arg_t && !arg_t->is_poison() &&
                                 arg_t->get_kind() != sema::type_kind::TYPE &&
                                 params[i]->type.get_kind() != sema::type_kind::TYPE &&
-                                !is_assignable(*arg_t, params[i]->type)) {
+                                !is_value_assignable(
+                                    inst.operands[i], *arg_t, params[i]->type, inst.location)) {
                                 emit_diagnostic(
-                                    fmt::format("Argument {} of type '{}' is not assignable to "
-                                                "parameter type '{}' in call to '{}'",
-                                                i + 1,
-                                                type_kind_display_name(*arg_t),
-                                                type_kind_display_name(params[i]->type),
-                                                *inst.callee_name),
+                                    format_arg_mismatch(
+                                        i + 1, *arg_t, params[i]->type, *inst.callee_name),
                                     error::TYPE_MISMATCH,
                                     inst.location);
                             }
@@ -496,16 +593,12 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                         if (arg_t && !arg_t->is_poison() &&
                             arg_t->get_kind() != sema::type_kind::TYPE &&
                             params[i]->type.get_kind() != sema::type_kind::TYPE &&
-                            !is_assignable(*arg_t, params[i]->type)) {
-                            emit_diagnostic(
-                                fmt::format("Argument {} of type '{}' is not assignable to "
-                                            "parameter type '{}' in call to '{}'",
-                                            i + 1,
-                                            type_kind_display_name(*arg_t),
-                                            type_kind_display_name(params[i]->type),
-                                            *inst.callee_name),
-                                error::TYPE_MISMATCH,
-                                inst.location);
+                            !is_value_assignable(
+                                inst.operands[i], *arg_t, params[i]->type, inst.location)) {
+                            emit_diagnostic(format_arg_mismatch(
+                                                i + 1, *arg_t, params[i]->type, *inst.callee_name),
+                                            error::TYPE_MISMATCH,
+                                            inst.location);
                         }
                     }
                 }
@@ -538,13 +631,13 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                                 const auto arg_t{get_operand_type(inst.operands[i + 1])};
                                 if (arg_t && !arg_t->is_poison() &&
                                     arg_t->get_kind() != sema::type_kind::TYPE &&
-                                    !is_assignable(*arg_t, *fn_data->params[i])) {
+                                    !is_value_assignable(inst.operands[i + 1],
+                                                         *arg_t,
+                                                         *fn_data->params[i],
+                                                         inst.location)) {
                                     emit_diagnostic(
-                                        fmt::format("Argument {} of type '{}' is not assignable to "
-                                                    "parameter type '{}' in indirect call",
-                                                    i + 1,
-                                                    type_kind_display_name(*arg_t),
-                                                    type_kind_display_name(*(fn_data->params[i]))),
+                                        format_arg_mismatch(
+                                            i + 1, *arg_t, *(fn_data->params[i]), stdx::none),
                                         error::TYPE_MISMATCH,
                                         inst.location);
                                 }
@@ -563,13 +656,13 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                             const auto arg_t{get_operand_type(inst.operands[i + 1])};
                             if (arg_t && !arg_t->is_poison() &&
                                 arg_t->get_kind() != sema::type_kind::TYPE &&
-                                !is_assignable(*arg_t, *fn_data->params[i])) {
+                                !is_value_assignable(inst.operands[i + 1],
+                                                     *arg_t,
+                                                     *fn_data->params[i],
+                                                     inst.location)) {
                                 emit_diagnostic(
-                                    fmt::format("Argument {} of type '{}' is not assignable to "
-                                                "parameter type '{}' in indirect call",
-                                                i + 1,
-                                                type_kind_display_name(*arg_t),
-                                                type_kind_display_name(*(fn_data->params[i]))),
+                                    format_arg_mismatch(
+                                        i + 1, *arg_t, *(fn_data->params[i]), stdx::none),
                                     error::TYPE_MISMATCH,
                                     inst.location);
                             }
@@ -620,6 +713,61 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
         }
         break;
     }
+    case gir::instruction_kind::INT_CAST: {
+        if (!inst.operands.empty() && inst.type) {
+            const auto src_t{get_operand_type(inst.operands[0])};
+            const auto dest_t{inst.type};
+            if (src_t && dest_t && !src_t->is_poison() && !dest_t->is_poison()) {
+                const auto src_k{src_t->get_kind()};
+                const auto dest_k{dest_t->get_kind()};
+                const bool src_is_int{is_integer(src_k) || src_k == type_kind::CONSTEXPR_INT ||
+                                      src_k == type_kind::BOOL};
+                const bool dest_is_int{is_integer(dest_k)};
+                if (!src_is_int || !dest_is_int) {
+                    emit_diagnostic(fmt::format("Cannot @intCast type '{}' to '{}'",
+                                                type_kind_display_name(*src_t),
+                                                type_kind_display_name(*dest_t)),
+                                    error::TYPE_MISMATCH,
+                                    inst.location);
+                }
+            }
+        }
+        if (inst.result && inst.type) {
+            locals_.insert_or_assign(*inst.result,
+                                     local_info{
+                                         .type      = inst.type.get(),
+                                         .is_alloca = false,
+                                         .is_const  = false,
+                                     });
+        }
+        break;
+    }
+    case gir::instruction_kind::TRUNC_CAST: {
+        if (!inst.operands.empty() && inst.type) {
+            const auto src_t{get_operand_type(inst.operands[0])};
+            const auto dest_t{inst.type};
+            if (src_t && dest_t && !src_t->is_poison() && !dest_t->is_poison()) {
+                const auto src_k{src_t->get_kind()};
+                const auto dest_k{dest_t->get_kind()};
+                if (!is_integer(src_k) || !is_integer(dest_k)) {
+                    emit_diagnostic(fmt::format("Cannot @truncate type '{}' to '{}'",
+                                                type_kind_display_name(*src_t),
+                                                type_kind_display_name(*dest_t)),
+                                    error::TYPE_MISMATCH,
+                                    inst.location);
+                }
+            }
+        }
+        if (inst.result && inst.type) {
+            locals_.insert_or_assign(*inst.result,
+                                     local_info{
+                                         .type      = inst.type.get(),
+                                         .is_alloca = false,
+                                         .is_const  = false,
+                                     });
+        }
+        break;
+    }
     case gir::instruction_kind::WIDEN_CAST: {
         if (!inst.operands.empty() && inst.type) {
             const auto src_t{get_operand_type(inst.operands[0])};
@@ -627,19 +775,47 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             if (src_t && dest_t && !src_t->is_poison() && !dest_t->is_poison()) {
                 const auto src_k{src_t->get_kind()};
                 const auto dest_k{dest_t->get_kind()};
-                const bool is_num_cast{sema::is_numeric(src_k) && sema::is_numeric(dest_k)};
-                // An enum and its numeric underlying representation convert freely
+                const bool both_int{is_integer(src_k) && is_integer(dest_k)};
+                const bool has_bool{src_k == type_kind::BOOL || dest_k == type_kind::BOOL};
                 const bool is_enum_repr_cast{
                     (dest_k == type_kind::ENUM && sema::is_numeric(src_k)) ||
                     (src_k == type_kind::ENUM && sema::is_numeric(dest_k)) ||
                     (src_k == type_kind::ENUM && dest_k == type_kind::ENUM)};
-                if (!is_implicit_widenable(*src_t, *dest_t) &&
-                    !is_same_unqualified(*src_t, *dest_t) && !is_num_cast && !is_enum_repr_cast) {
-                    emit_diagnostic(fmt::format("Cannot cast type '{}' to '{}'",
-                                                type_kind_display_name(*src_t),
-                                                type_kind_display_name(*dest_t)),
-                                    error::TYPE_MISMATCH,
-                                    inst.location);
+                const bool is_float_cast{(sema::is_float(src_k) && sema::is_float(dest_k)) ||
+                                         (sema::is_float(src_k) && is_integer(dest_k)) ||
+                                         (is_integer(src_k) && sema::is_float(dest_k))};
+
+                bool allowed{false};
+                if (is_same_unqualified(*src_t, *dest_t)) {
+                    allowed = true;
+                } else if (has_bool) {
+                    allowed = false;
+                } else if (both_int) {
+                    if (is_implicit_widenable(*src_t, *dest_t)) {
+                        allowed = true;
+                    } else if (const auto folded{folded_int(inst.operands[0])}) {
+                        allowed = constexpr_int_fits(*folded, *dest_t, target_ptr_bits_);
+                    }
+                } else if (is_enum_repr_cast || is_float_cast) {
+                    allowed = true;
+                }
+
+                if (!allowed) {
+                    if (const auto reason{
+                            cast_rejection_reason(*src_t, *dest_t, target_ptr_bits_)}) {
+                        emit_diagnostic(fmt::format("Cannot cast type '{}' to '{}' ({})",
+                                                    type_kind_display_name(*src_t),
+                                                    type_kind_display_name(*dest_t),
+                                                    *reason),
+                                        error::TYPE_MISMATCH,
+                                        inst.location);
+                    } else {
+                        emit_diagnostic(fmt::format("Cannot cast type '{}' to '{}'",
+                                                    type_kind_display_name(*src_t),
+                                                    type_kind_display_name(*dest_t)),
+                                        error::TYPE_MISMATCH,
+                                        inst.location);
+                    }
                 }
             }
         }
@@ -686,7 +862,38 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                                      });
         }
         break;
-    case gir::instruction_kind::ADDRESS_OF:
+    case gir::instruction_kind::ADDRESS_OF: {
+        // Enforce `&mut`/`^mut` const correctness
+        const auto result_mutable{inst.type && !inst.type->is_poison() &&
+                                  (inst.type->get_kind() == type_kind::POINTER ||
+                                   inst.type->get_kind() == type_kind::REFERENCE) &&
+                                  !inst.type->is_constant()};
+        if (result_mutable && !inst.operands.empty()) {
+            if (const auto lid{inst.operands[0].as_opt<gir::local_id>()}) {
+                if (const auto it{locals_.find(*lid)};
+                    it != locals_.end() && it->second.is_const && it->second.is_alloca &&
+                    it->second.type &&
+                    it->second.type->get_kind() !=
+                        type_kind::CLOSURE // closure's `const` binding only pins the binding, not
+                                           // its captured env
+                ) {
+                    emit_diagnostic(
+                        "Cannot take a mutable reference or pointer to a constant binding",
+                        error::ASSIGNMENT_TO_CONST,
+                        inst.location);
+                }
+            }
+        }
+        if (inst.result && inst.type) {
+            locals_.insert_or_assign(*inst.result,
+                                     local_info{
+                                         .type      = inst.type.get(),
+                                         .is_alloca = false,
+                                         .is_const  = false,
+                                     });
+        }
+        break;
+    }
     case gir::instruction_kind::DEREF:
     case gir::instruction_kind::INT_FROM_PTR:
     case gir::instruction_kind::PTR_FROM_INT:
@@ -742,14 +949,13 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
                     return;
                 }
 
-                if (val_t && !is_assignable(*val_t, *it->second.type) &&
+                if (val_t &&
+                    !is_value_assignable(
+                        inst.operands[0], *val_t, *it->second.type, inst.location) &&
                     !packed_backing_store(it->second.type, &*val_t)) {
-                    emit_diagnostic(
-                        fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
-                                    type_kind_display_name(*val_t),
-                                    type_kind_display_name(*it->second.type)),
-                        error::TYPE_MISMATCH,
-                        inst.location);
+                    emit_diagnostic(format_store_mismatch(*val_t, *it->second.type),
+                                    error::TYPE_MISMATCH,
+                                    inst.location);
                 }
                 return;
             }
@@ -766,7 +972,9 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
                     }
                     return;
                 }
-                if (ptr_data && val_t && is_assignable(*val_t, ptr_data->underlying)) {
+                if (ptr_data && val_t &&
+                    is_value_assignable(
+                        inst.operands[0], *val_t, ptr_data->underlying, inst.location)) {
                     // Storing through pointer: *p = val
                     if (it->second.type->is_constant()) {
                         emit_diagnostic("Cannot assign to constant memory through pointer",
@@ -781,13 +989,19 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
                                         error::ASSIGNMENT_TO_CONST,
                                         inst.location);
                     } else {
-                        emit_diagnostic(
-                            fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
-                                        val_t ? type_kind_display_name(*val_t) : "unknown",
-                                        ptr_data ? type_kind_display_name(ptr_data->underlying)
-                                                 : type_kind_display_name(*it->second.type)),
-                            error::TYPE_MISMATCH,
-                            inst.location);
+                        if (val_t && ptr_data) {
+                            emit_diagnostic(format_store_mismatch(*val_t, ptr_data->underlying),
+                                            error::TYPE_MISMATCH,
+                                            inst.location);
+                        } else {
+                            emit_diagnostic(
+                                fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
+                                            val_t ? type_kind_display_name(*val_t) : "unknown",
+                                            ptr_data ? type_kind_display_name(ptr_data->underlying)
+                                                     : type_kind_display_name(*it->second.type)),
+                                error::TYPE_MISMATCH,
+                                inst.location);
+                        }
                     }
                 }
                 return;
@@ -797,13 +1011,12 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
                 const auto ref_data{it->second.type->get_data().as_opt<types::reference>()};
                 if (ref_data) {
                     if (inst.is_initializer) {
-                        if (val_t && !is_assignable(*val_t, *it->second.type)) {
-                            emit_diagnostic(
-                                fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
-                                            type_kind_display_name(*val_t),
-                                            type_kind_display_name(*it->second.type)),
-                                error::TYPE_MISMATCH,
-                                inst.location);
+                        if (val_t &&
+                            !is_value_assignable(
+                                inst.operands[0], *val_t, *it->second.type, inst.location)) {
+                            emit_diagnostic(format_store_mismatch(*val_t, *it->second.type),
+                                            error::TYPE_MISMATCH,
+                                            inst.location);
                         }
                         return;
                     }
@@ -815,13 +1028,12 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
                                         inst.location);
                         return;
                     }
-                    if (val_t && !is_assignable(*val_t, ref_data->underlying)) {
-                        emit_diagnostic(
-                            fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
-                                        type_kind_display_name(*val_t),
-                                        type_kind_display_name(ref_data->underlying)),
-                            error::TYPE_MISMATCH,
-                            inst.location);
+                    if (val_t &&
+                        !is_value_assignable(
+                            inst.operands[0], *val_t, ref_data->underlying, inst.location)) {
+                        emit_diagnostic(format_store_mismatch(*val_t, ref_data->underlying),
+                                        error::TYPE_MISMATCH,
+                                        inst.location);
                     }
                 }
                 return;
@@ -834,11 +1046,10 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
                 return;
             }
 
-            if (val_t && !is_assignable(*val_t, *it->second.type) &&
+            if (val_t &&
+                !is_value_assignable(inst.operands[0], *val_t, *it->second.type, inst.location) &&
                 !packed_backing_store(it->second.type, &*val_t)) {
-                emit_diagnostic(fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
-                                            type_kind_display_name(*val_t),
-                                            type_kind_display_name(*it->second.type)),
+                emit_diagnostic(format_store_mismatch(*val_t, *it->second.type),
                                 error::TYPE_MISMATCH,
                                 inst.location);
             }
@@ -858,26 +1069,23 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
                         return;
                     }
 
-                    if (val_t && !is_assignable(*val_t, ptr_data->underlying)) {
-                        emit_diagnostic(
-                            fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
-                                        type_kind_display_name(*val_t),
-                                        type_kind_display_name(ptr_data->underlying)),
-                            error::TYPE_MISMATCH,
-                            inst.location);
+                    if (val_t &&
+                        !is_value_assignable(
+                            inst.operands[1], *val_t, ptr_data->underlying, inst.location)) {
+                        emit_diagnostic(format_store_mismatch(*val_t, ptr_data->underlying),
+                                        error::TYPE_MISMATCH,
+                                        inst.location);
                     }
                 }
             } else if (dest_t->get_kind() == type_kind::REFERENCE) {
                 const auto ref_data{dest_t->get_data().as_opt<types::reference>()};
                 if (ref_data) {
                     if (inst.is_initializer) {
-                        if (val_t && !is_assignable(*val_t, *dest_t)) {
-                            emit_diagnostic(
-                                fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
-                                            type_kind_display_name(*val_t),
-                                            type_kind_display_name(*dest_t)),
-                                error::TYPE_MISMATCH,
-                                inst.location);
+                        if (val_t && !is_value_assignable(
+                                         inst.operands[1], *val_t, *dest_t, inst.location)) {
+                            emit_diagnostic(format_store_mismatch(*val_t, *dest_t),
+                                            error::TYPE_MISMATCH,
+                                            inst.location);
                         }
                         return;
                     }
@@ -889,13 +1097,12 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
                         return;
                     }
 
-                    if (val_t && !is_assignable(*val_t, ref_data->underlying)) {
-                        emit_diagnostic(
-                            fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
-                                        type_kind_display_name(*val_t),
-                                        type_kind_display_name(ref_data->underlying)),
-                            error::TYPE_MISMATCH,
-                            inst.location);
+                    if (val_t &&
+                        !is_value_assignable(
+                            inst.operands[1], *val_t, ref_data->underlying, inst.location)) {
+                        emit_diagnostic(format_store_mismatch(*val_t, ref_data->underlying),
+                                        error::TYPE_MISMATCH,
+                                        inst.location);
                     }
                 }
             }

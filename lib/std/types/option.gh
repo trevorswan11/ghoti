@@ -1,0 +1,21 @@
+pub constexpr Option := fn(T: type): type {
+    return union { some: T, none: void };
+};
+
+impl(T: type) builtin.Unwrappable for Option(T) {
+    using Output = T;
+    using Residual = void;
+    pub const branch := fn(self): builtin.Flow(T, void) {
+        return match (self) {
+            .some => |v| builtin.Flow(T, void){ .@"continue" = v },
+            .none => builtin.Flow(T, void){ .@"break" = {} },
+        };
+    };
+}
+
+impl(T: type) builtin.Rewrappable for Option(T) {
+    using From = void;
+    pub const fromResidual := fn(_: void): @This() {
+        return .{ .none = {} };
+    };
+}

@@ -15,6 +15,7 @@
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
+#include "compiler/arena.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
@@ -65,10 +66,11 @@ auto parser::advance(u8 times) noexcept -> const token_t& {
     return current_token_;
 }
 
-auto parser::consume(ast::AST& ast) -> diagnostics {
+auto parser::consume(ast::AST& ast, ghoti::arena& arena) -> diagnostics {
     PROFILE_FUNCTION();
     reset(input_);
     ast.clear();
+    ast.set_arena(arena);
     ast_.emplace(ast);
 
     // A `//!` block at the very top of the file documents the module itself.
@@ -144,6 +146,25 @@ auto parser::consume(ast::AST& ast) -> diagnostics {
     return diagnostics;
 }
 
+auto parser::attach_member_doc(ast::identifier_handle name, usize floor_line) -> void {
+    if (!ast_ || pending_docs_.empty()) { return; }
+    const auto name_line{ast_->location_of(name).line};
+
+    // Leading `///` lines sit between the aggregate's opening keyword (`floor_line`) and the
+    // member; a trailing `///` sits on the member's own line (`X = 1, /// note`).
+    std::vector<pending_doc> owned;
+    std::erase_if(pending_docs_, [&](const pending_doc& doc) -> bool {
+        if ((doc.line > floor_line && doc.line < name_line) || doc.line == name_line) {
+            owned.emplace_back(doc);
+            return true;
+        }
+        return false;
+    });
+    if (owned.empty()) { return; }
+
+    ast_->attach_doc({ast_->location_of(name), ast_->end_location_of(name)}, join_docs(owned));
+}
+
 auto parser::expect_peek(token_type_t expected) -> stdx::result<void, diagnostic> {
     if (peek_token_is(expected)) {
         advance();
@@ -199,13 +220,14 @@ auto parser::parse_statement(semicolon_behavior behavior)
     switch (current_token_.type) {
     case token_type_t::BUILTIN_CFG: return ast::cfg_stmt::parse(*this);
     case token_type_t::LBRACE:      return ast::block_stmt::parse(*this);
-    case token_type_t::BREAK:       return ast::break_stmt::parse(*this);
-    case token_type_t::CONTINUE:    return ast::continue_stmt::parse(*this);
+    case token_type_t::BREAK:       return ast::break_stmt::parse(*this, behavior);
+    case token_type_t::CONTINUE:    return ast::continue_stmt::parse(*this, behavior);
     case token_type_t::DEFER:       return ast::defer_stmt::parse(*this);
+    case token_type_t::ERRDEFER:    return ast::errdefer_stmt::parse(*this);
     case token_type_t::UNDERSCORE:  return ast::discard_stmt::parse(*this);
     case token_type_t::IMPL:        return ast::impl_stmt::parse(*this);
     case token_type_t::IMPORT:      return ast::import_stmt::parse(*this);
-    case token_type_t::RETURN:      return ast::return_stmt::parse(*this);
+    case token_type_t::RETURN:      return ast::return_stmt::parse(*this, behavior);
     case token_type_t::TEST:        return ast::test_stmt::parse(*this);
     case token_type_t::USING:       return ast::using_stmt::parse(*this);
     default:                        return ast::expr_stmt::parse(*this, behavior);
@@ -237,6 +259,13 @@ auto parser::parse_expression(bind_precedence precedence)
                 return make_syntax_err("Invalid or unterminated character literal",
                                        error::INVALID_CHARACTER_LITERAL,
                                        current_token_);
+            case '@':
+                if (current_token_.slice.starts_with("@\"")) {
+                    return make_syntax_err("Unterminated raw identifier",
+                                           error::UNTERMINATED_RAW_IDENTIFIER,
+                                           current_token_);
+                }
+                break;
             default:
                 if (std::isdigit(static_cast<u8>(current_token_.slice.front()))) {
                     return make_syntax_err(
@@ -408,7 +437,6 @@ constexpr auto INFIX_FNS = [] -> auto {
     fns[token_type_t::SHR_ASSIGN]           = ast::assignment_expr::parse;
     fns[token_type_t::NOT_ASSIGN]           = ast::assignment_expr::parse;
     fns[token_type_t::XOR_ASSIGN]           = ast::assignment_expr::parse;
-    fns[token_type_t::COLON_COLON]          = ast::module_access_expr::parse;
     fns[token_type_t::COLON]                = ast::label_expr::parse;
 
     return fns;

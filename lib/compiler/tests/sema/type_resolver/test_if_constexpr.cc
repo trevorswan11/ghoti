@@ -1,6 +1,3 @@
-#include <string_view>
-#include <vector>
-
 #include <catch2/catch_test_macros.hpp>
 
 #include "compiler/ast/statement.hh"
@@ -12,20 +9,6 @@
 namespace ghoti::tests {
 
 namespace syms = sema::symbols;
-
-namespace {
-
-// Resolves `src` and returns every sema diagnostic code, in order.
-[[nodiscard]] auto resolve_error_codes(std::string_view src) -> std::vector<sema::error> {
-    auto [ctx, idx]{helpers::resolve(src)};
-    std::vector<sema::error> codes;
-    if (const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()}) {
-        for (const auto& d : *diags) { codes.emplace_back(d.get_error()); }
-    }
-    return codes;
-}
-
-} // namespace
 
 TEST_CASE("if constexpr: a folded non-generic condition resolves only the live arm") {
     SECTION("Dead alternate is never name-resolved") {
@@ -47,14 +30,14 @@ TEST_CASE("if constexpr: a folded non-generic condition resolves only the live a
     }
 
     SECTION("@compileError in the pruned arm stays silent") {
-        CHECK(resolve_error_codes(
+        CHECK(helpers::resolve_diags(
                   "const f := fn(): i32 { if constexpr (false) { @compileError(\"dead\"); } "
                   "else { return 0; } };")
-                  .empty());
+                  .codes.empty());
     }
 
     SECTION("@compileError in the live arm still fires") {
-        const auto codes{resolve_error_codes(
+        const auto [codes, _]{helpers::resolve_diags(
             "const f := fn(): i32 { if constexpr (true) { @compileError(\"live\"); } "
             "else { return 0; } };")};
         REQUIRE_FALSE(codes.empty());
@@ -63,15 +46,15 @@ TEST_CASE("if constexpr: a folded non-generic condition resolves only the live a
 }
 
 TEST_CASE("if constexpr: a non-foldable condition still resolves both arms") {
-    const auto codes{
-        resolve_error_codes("const f := fn(param: bool): i32 { if constexpr (param) { return 1; } "
-                            "else { return still_undeclared; } };")};
+    const auto [codes, _]{helpers::resolve_diags(
+        "const f := fn(param: bool): i32 { if constexpr (param) { return 1; } "
+        "else { return still_undeclared; } };")};
     REQUIRE_FALSE(codes.empty());
     CHECK(codes[0] == sema::error::UNDECLARED_IDENTIFIER);
 }
 
 TEST_CASE("if constexpr: a generic body prunes per instantiation") {
-    CHECK(resolve_error_codes(R"(
+    CHECK(helpers::resolve_diags(R"(
         const pick := fn(x: auto): i32 {
             if constexpr (@typeOf(x) == u8) {
                 return undeclared_only_in_dead_generic_arm(x);
@@ -81,7 +64,7 @@ TEST_CASE("if constexpr: a generic body prunes per instantiation") {
         };
         const r := pick(0i64);
     )")
-              .empty());
+              .codes.empty());
 }
 
 } // namespace ghoti::tests

@@ -282,4 +282,34 @@ TEST_CASE("Indexing a slice parameter of a nested function, passed an existing s
     )") == 7);
 }
 
+TEST_CASE("A `var` slice binding's `.len` field is directly assignable") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            var a: []mut u8 = [_]mut u8{1, 2, 3, 4, 5, 6};
+            a.len = 2;
+            return @intCast(i32, a.len);
+        };
+    )") == 2);
+}
+
+TEST_CASE("A `var` slice binding's `.len` field is assignable even with immutable elements") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            var a: []u8 = [_]u8{1, 2, 3, 4, 5, 6};
+            a.len = 3;
+            return @intCast(i32, a.len);
+        };
+    )") == 3);
+}
+
+TEST_CASE("A `const` slice binding's `.len` field is still rejected") {
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            const a: []mut u8 = [_]mut u8{1, 2, 3, 4, 5, 6};
+            a.len = 2;
+            return @intCast(i32, a.len);
+        };
+    )");
+}
+
 } // namespace ghoti::tests

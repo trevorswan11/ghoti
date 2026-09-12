@@ -79,27 +79,37 @@ auto array_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
                                            size,
                                            null_terminated,
                                            mut_elements,
+                                           true,
+                                           false,
                                            item_type,
-                                           std::vector<expr_handle>{},
-                                           true);
+                                           std::vector<expr_handle>{});
     }
 
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
 
     // Current token is either the LBRACE at the start or a comma before parsing
     std::vector<expr_handle> items;
+    bool                     force_break{false};
     while (!parser.peek_token_is(syntax::token_type_t::RBRACE) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
         parser.advance();
         items.emplace_back(TRY(parser.parse_expression()));
         if (!parser.peek_token_is(syntax::token_type_t::RBRACE)) {
             TRY(parser.expect_peek(syntax::token_type_t::COMMA));
+            // A comma right before `}` is a trailing comma: keep one item per line.
+            force_break = parser.peek_token_is(syntax::token_type_t::RBRACE);
         }
     }
 
     TRY(parser.expect_peek(syntax::token_type_t::RBRACE));
-    return parser.add_expr<array_expr>(
-        start_token, size, null_terminated, mut_elements, item_type, std::move(items), false);
+    return parser.add_expr<array_expr>(start_token,
+                                       size,
+                                       null_terminated,
+                                       mut_elements,
+                                       false,
+                                       force_break,
+                                       item_type,
+                                       std::move(items));
 }
 
 namespace {
@@ -137,7 +147,7 @@ namespace {
 }
 
 template <typename Fn>
-[[nodiscard]] auto parse_asm_paren_list(syntax::parser& parser, Fn&& element)
+[[nodiscard]] auto parse_asm_paren_list(syntax::parser& parser, Fn&& element, bool& force_break)
     -> stdx::result<void, syntax::diagnostic> {
     TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
     while (!parser.peek_token_is(syntax::token_type_t::RPAREN) &&
@@ -145,6 +155,8 @@ template <typename Fn>
         TRY(element());
         if (!parser.peek_token_is(syntax::token_type_t::RPAREN)) {
             TRY(parser.expect_peek(syntax::token_type_t::COMMA));
+            // A comma right before `)` is a trailing comma: keep one operand per line.
+            if (parser.peek_token_is(syntax::token_type_t::RPAREN)) { force_break = true; }
         }
     }
     return parser.expect_peek(syntax::token_type_t::RPAREN);
@@ -170,6 +182,7 @@ auto asm_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax
     std::vector<option>         options;
     bool                        seen_template{false}, seen_outputs{false}, seen_inputs{false};
     bool                        seen_clobbers{false}, seen_options{false};
+    bool                        force_break{false};
 
     const auto reject_duplicate =
         [&](bool& flag, const syntax::token_t& key) -> stdx::result<void, syntax::diagnostic> {
@@ -201,43 +214,56 @@ auto asm_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax
             tmpl.emplace(string_handle{TRY(string_expr::parse(parser))});
         } else if (key == "outputs") {
             TRY(reject_duplicate(seen_outputs, key_token));
-            TRY(parse_asm_paren_list(parser, [&] -> stdx::result<void, syntax::diagnostic> {
-                outputs.emplace_back(TRY(parse_asm_operand(parser)));
-                return {};
-            }));
+            TRY(parse_asm_paren_list(
+                parser,
+                [&] -> stdx::result<void, syntax::diagnostic> {
+                    outputs.emplace_back(TRY(parse_asm_operand(parser)));
+                    return {};
+                },
+                force_break));
         } else if (key == "inputs") {
             TRY(reject_duplicate(seen_inputs, key_token));
-            TRY(parse_asm_paren_list(parser, [&] -> stdx::result<void, syntax::diagnostic> {
-                inputs.emplace_back(TRY(parse_asm_operand(parser)));
-                return {};
-            }));
+            TRY(parse_asm_paren_list(
+                parser,
+                [&] -> stdx::result<void, syntax::diagnostic> {
+                    inputs.emplace_back(TRY(parse_asm_operand(parser)));
+                    return {};
+                },
+                force_break));
         } else if (key == "clobbers") {
             TRY(reject_duplicate(seen_clobbers, key_token));
-            TRY(parse_asm_paren_list(parser, [&] -> stdx::result<void, syntax::diagnostic> {
-                if (!parser.peek_token_is(syntax::token_type_t::STRING)) {
-                    return make_syntax_err("An asm clobber must be a string literal",
-                                           syntax::error::ASM_MALFORMED_OPERAND,
-                                           parser.get_peek_token());
-                }
-                parser.advance();
-                clobbers.emplace_back(string_handle{TRY(string_expr::parse(parser))});
-                return {};
-            }));
+            TRY(parse_asm_paren_list(
+                parser,
+                [&] -> stdx::result<void, syntax::diagnostic> {
+                    if (!parser.peek_token_is(syntax::token_type_t::STRING)) {
+                        return make_syntax_err("An asm clobber must be a string literal",
+                                               syntax::error::ASM_MALFORMED_OPERAND,
+                                               parser.get_peek_token());
+                    }
+                    parser.advance();
+                    clobbers.emplace_back(string_handle{TRY(string_expr::parse(parser))});
+                    return {};
+                },
+                force_break));
         } else if (key == "options") {
             TRY(reject_duplicate(seen_options, key_token));
-            TRY(parse_asm_paren_list(parser, [&] -> stdx::result<void, syntax::diagnostic> {
-                // Some (`volatile`, `noreturn`) are reserved keywords
-                parser.advance();
-                const auto opt_token{parser.get_current_token()};
-                const auto opt{map_asm_option(opt_token.slice)};
-                if (!opt) {
-                    return make_syntax_err(fmt::format("Unknown asm option '{}'", opt_token.slice),
-                                           syntax::error::ASM_UNKNOWN_OPTION,
-                                           opt_token);
-                }
-                options.emplace_back(*opt);
-                return {};
-            }));
+            TRY(parse_asm_paren_list(
+                parser,
+                [&] -> stdx::result<void, syntax::diagnostic> {
+                    // Some (`volatile`, `noreturn`) are reserved keywords
+                    parser.advance();
+                    const auto opt_token{parser.get_current_token()};
+                    const auto opt{map_asm_option(opt_token.slice)};
+                    if (!opt) {
+                        return make_syntax_err(
+                            fmt::format("Unknown asm option '{}'", opt_token.slice),
+                            syntax::error::ASM_UNKNOWN_OPTION,
+                            opt_token);
+                    }
+                    options.emplace_back(*opt);
+                    return {};
+                },
+                force_break));
         } else {
             return make_syntax_err(fmt::format("Unknown asm clause '{}'", key),
                                    syntax::error::ASM_UNKNOWN_CLAUSE,
@@ -262,7 +288,8 @@ auto asm_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax
                                      std::move(outputs),
                                      std::move(inputs),
                                      std::move(clobbers),
-                                     std::move(options));
+                                     std::move(options),
+                                     force_break);
 }
 
 auto call_expr::parse(syntax::parser& parser, expr_handle function)
@@ -283,6 +310,7 @@ auto call_expr::parse(syntax::parser& parser, expr_handle function)
         return true;
     };
 
+    bool force_break{false};
     while (!parser.peek_token_is(syntax::token_type_t::RPAREN) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
         if (parser.peek_token_is(syntax::token_type_t::COMMA)) {
@@ -297,11 +325,13 @@ auto call_expr::parse(syntax::parser& parser, expr_handle function)
         }
         if (!parser.peek_token_is(syntax::token_type_t::RPAREN)) {
             TRY(parser.expect_peek(syntax::token_type_t::COMMA));
+            // A comma right before `)` is a trailing comma: keep one argument per line.
+            force_break = parser.peek_token_is(syntax::token_type_t::RPAREN);
         }
     }
     TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
 
-    return parser.add_expr<call_expr>(start_token, function, std::move(arguments));
+    return parser.add_expr<call_expr>(start_token, function, std::move(arguments), force_break);
 }
 
 auto do_while_loop_expr::parse(syntax::parser& parser)
@@ -382,6 +412,7 @@ parse_aggregate_cfg_group(syntax::parser& parser,
             TRY(parser.expect_peek(tt::RBRACE));
         } else {
             items.emplace_back(TRY(parse_one(parser)));
+            if (parser.peek_token_is(tt::COMMA)) { parser.advance(); }
         }
         return items;
     };
@@ -408,12 +439,19 @@ parse_aggregate_cfg_group(syntax::parser& parser,
 // Parses one aggregate member (peek is its first token) and validates it.
 [[nodiscard]] auto parse_one_member(syntax::parser& parser)
     -> stdx::result<member_handle, syntax::diagnostic> {
+    const auto doc_floor{parser.get_current_token().line};
     parser.advance();
     auto       parsed{TRY(parser.parse_statement())};
     const auto member{TRY(deconstruct_member(parser, parsed))};
     if (const auto err_msg{validate_member_decl(parser, member)}) {
         return make_syntax_err(
             std::string{*err_msg}, syntax::error::INVALID_MEMBER, parser.get_location_of(*member));
+    }
+
+    // Carry a leading `///` block onto a `const` / `var` member the same way top-level decls get
+    // theirs, so it is available on hover.
+    if (const auto decl{parser.get_ast().get_as_opt<decl_stmt>(*member)}) {
+        parser.attach_member_doc(decl->name, doc_floor);
     }
     return member;
 }
@@ -474,8 +512,9 @@ using member_cfg_group = cfg_item_group<member_handle>;
 [[nodiscard]] auto parse_struct_field(syntax::parser& parser)
     -> stdx::result<struct_expr::field, syntax::diagnostic> {
     using tt = syntax::token_type_t;
-    auto align{TRY(try_parse_alignment(parser))};
-    bool is_public{false};
+    const auto doc_floor{parser.get_current_token().line};
+    auto       align{TRY(try_parse_alignment(parser))};
+    bool       is_public{false};
     if (parser.peek_token_is(tt::PUBLIC)) {
         parser.advance();
         is_public = true;
@@ -483,6 +522,7 @@ using member_cfg_group = cfg_item_group<member_handle>;
 
     TRY(parser.expect_peek(tt::IDENT));
     identifier_handle ident{TRY(identifier_expr::parse(parser))};
+    parser.attach_member_doc(ident, doc_floor);
     TRY(parser.expect_peek(tt::COLON));
     if (!align) { align = TRY(try_parse_alignment(parser)); }
     const auto type{TRY(explicit_type::parse(parser))};
@@ -499,9 +539,11 @@ using member_cfg_group = cfg_item_group<member_handle>;
 [[nodiscard]] auto parse_union_field(syntax::parser& parser)
     -> stdx::result<union_expr::field, syntax::diagnostic> {
     using tt = syntax::token_type_t;
-    auto align{TRY(try_parse_alignment(parser))};
+    const auto doc_floor{parser.get_current_token().line};
+    auto       align{TRY(try_parse_alignment(parser))};
     TRY(parser.expect_peek(tt::IDENT));
     const identifier_handle ident{TRY(identifier_expr::parse(parser))};
+    parser.attach_member_doc(ident, doc_floor);
     TRY(parser.expect_peek(tt::COLON));
     if (!align) { align = TRY(try_parse_alignment(parser)); }
     const auto type{TRY(explicit_type::parse(parser))};
@@ -512,8 +554,10 @@ using member_cfg_group = cfg_item_group<member_handle>;
 [[nodiscard]] auto parse_enumeration(syntax::parser& parser)
     -> stdx::result<enum_expr::enumeration, syntax::diagnostic> {
     using tt = syntax::token_type_t;
+    const auto doc_floor{parser.get_current_token().line};
     TRY(parser.expect_peek(tt::IDENT));
-    const identifier_handle   ident{TRY(identifier_expr::parse(parser))};
+    const identifier_handle ident{TRY(identifier_expr::parse(parser))};
+    parser.attach_member_doc(ident, doc_floor);
     stdx::option<expr_handle> value;
     if (parser.peek_token_is(tt::ASSIGN)) {
         parser.advance(2);
@@ -528,14 +572,15 @@ auto enum_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synta
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
 
-    stdx::option<identifier_handle> underlying;
+    stdx::option<explicit_type_id> underlying;
     if (parser.peek_token_is(syntax::token_type_t::COLON)) {
-        parser.advance(2);
-        underlying.emplace(TRY(identifier_expr::parse(parser)));
+        parser.advance();
+        underlying.emplace(TRY(explicit_type::parse(parser)));
     }
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
 
     bool                     non_exhaustive{false};
+    bool                     force_break{false};
     std::vector<enumeration> enumerations;
     std::vector<cfg_group>   cfg_groups;
     while (!parser.peek_token_is(syntax::token_type_t::RBRACE) &&
@@ -552,12 +597,18 @@ auto enum_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synta
 
         if (parser.peek_token_is(syntax::token_type_t::UNDERSCORE)) {
             parser.advance();
-            if (parser.peek_token_is(syntax::token_type_t::COMMA)) { parser.advance(); }
+            bool marker_comma{false};
+            if (parser.peek_token_is(syntax::token_type_t::COMMA)) {
+                parser.advance();
+                marker_comma = true;
+            }
 
             // The non exhaustive marker must be the final 'enumeration'
             if (parser.get_peek_token().is_member_token() ||
-                parser.peek_token_is(syntax::token_type_t::RBRACE)) {
+                parser.peek_token_is(syntax::token_type_t::RBRACE) ||
+                parser.peek_token_is(syntax::token_type_t::BUILTIN_CFG)) {
                 non_exhaustive = true;
+                force_break |= marker_comma && parser.peek_token_is(syntax::token_type_t::RBRACE);
                 break;
             }
 
@@ -567,8 +618,10 @@ auto enum_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synta
                 parser.get_current_token());
         }
 
+        const auto doc_floor{parser.get_current_token().line};
         TRY(parser.expect_peek(syntax::token_type_t::IDENT));
         const identifier_handle ident{TRY(identifier_expr::parse(parser))};
+        parser.attach_member_doc(ident, doc_floor);
 
         stdx::option<expr_handle> value;
         if (parser.peek_token_is(syntax::token_type_t::ASSIGN)) {
@@ -578,8 +631,12 @@ auto enum_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synta
         enumerations.emplace_back(ident, value);
 
         // No comma means that its the end or that there is a decl list starting
-        if (!parser.peek_token_is(syntax::token_type_t::COMMA)) { break; }
-        parser.advance();
+        const bool had_comma{parser.peek_token_is(syntax::token_type_t::COMMA)};
+        if (had_comma) { parser.advance(); }
+        parser.attach_member_doc(ident, doc_floor); // a trailing `///` is siphoned only now
+        if (!had_comma) { break; }
+        // A comma right before `}` is a trailing comma: keep one variant per line.
+        force_break |= parser.peek_token_is(syntax::token_type_t::RBRACE);
     }
 
     std::vector<member_cfg_group> member_cfg_groups;
@@ -597,6 +654,7 @@ auto enum_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synta
                                       std::move(enumerations),
                                       std::move(cfg_groups),
                                       non_exhaustive,
+                                      force_break,
                                       std::move(members),
                                       std::move(member_cfg_groups));
 }
@@ -614,6 +672,7 @@ auto for_loop_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, s
     }
 
     std::vector<expr_handle> iterables;
+    bool                     iterables_force_break{false};
     while (!parser.peek_token_is(syntax::token_type_t::RPAREN) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
         parser.advance();
@@ -623,6 +682,7 @@ auto for_loop_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, s
 
         if (!parser.peek_token_is(syntax::token_type_t::RPAREN)) {
             TRY(parser.expect_peek(syntax::token_type_t::COMMA));
+            iterables_force_break = parser.peek_token_is(syntax::token_type_t::RPAREN);
         }
     }
 
@@ -636,6 +696,7 @@ auto for_loop_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, s
 
     // Captures take on something similar to zig's capture syntax
     std::vector<capture> captures;
+    bool                 captures_force_break{false};
     TRY(parser.expect_peek(syntax::token_type_t::BW_OR));
     while (!parser.peek_token_is(syntax::token_type_t::BW_OR) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
@@ -655,6 +716,7 @@ auto for_loop_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, s
 
         if (!parser.peek_token_is(syntax::token_type_t::BW_OR)) {
             TRY(parser.expect_peek(syntax::token_type_t::COMMA));
+            captures_force_break = parser.peek_token_is(syntax::token_type_t::BW_OR);
         }
     }
     TRY(parser.expect_peek(syntax::token_type_t::BW_OR));
@@ -672,8 +734,13 @@ auto for_loop_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, s
                                start_token);
     }
 
-    return parser.add_expr<for_loop_expr>(
-        start_token, std::move(iterables), std::move(captures), block, non_break);
+    return parser.add_expr<for_loop_expr>(start_token,
+                                          std::move(iterables),
+                                          std::move(captures),
+                                          block,
+                                          non_break,
+                                          iterables_force_break,
+                                          captures_force_break);
 }
 
 // Variadic must be handled first and should break the enclosing loop
@@ -743,6 +810,7 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
     std::vector<parameter>                 parameters;
     std::vector<function_expr::impl_bound> impl_bounds;
     bool                                   variadic{false};
+    bool                                   params_force_break{false}; // trailing comma in `fn(...)`
     if (parser.peek_token_is(syntax::token_type_t::RPAREN)) {
         parser.advance();
     } else if (TRY(try_parse_variadic_fn(parser))) {
@@ -799,7 +867,10 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
                 parser.advance();
             }
 
-            const identifier_handle name{TRY(identifier_expr::parse(parser))};
+            const auto name{parser.current_token_is(syntax::token_type_t::UNDERSCORE)
+                                ? parser.add_node<discardable_ident_handle, ast::discarded>(
+                                      parser.get_current_token())
+                                : discardable_ident_handle{TRY(identifier_expr::parse(parser))}};
             const auto [param_type, initialized]{TRY(explicit_type::parse_opt_init(parser))};
 
             // There are no default values for parameters, and they must be explicitly typed
@@ -828,6 +899,8 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
             parameters.emplace_back(name, explicit_type, is_constexpr);
             if (!parser.peek_token_is(syntax::token_type_t::RPAREN)) {
                 TRY(parser.expect_peek(syntax::token_type_t::COMMA));
+                // A comma immediately before `)` is a trailing comma: keep one param per line.
+                params_force_break = parser.peek_token_is(syntax::token_type_t::RPAREN);
             }
             first = false;
         }
@@ -840,6 +913,14 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
 
     // No body: `fn(params): ret` is a function*type value
     if (!parser.peek_token_is(syntax::token_type_t::LBRACE)) {
+        for (const auto& param : parameters) {
+            if (param.name.is<ast::discarded>()) {
+                return make_syntax_err("Function type parameter names cannot be discarded; a "
+                                       "parameter name is required",
+                                       syntax::error::FN_TYPE_PARAMETER_DISCARDED,
+                                       parser.get_location_of(*param.name));
+            }
+        }
         return parser.add_expr<function_expr>(start_token,
                                               self,
                                               std::move(parameters),
@@ -848,8 +929,9 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
                                               variadic,
                                               is_move,
                                               is_naked,
-                                              conv,
                                               true,
+                                              params_force_break,
+                                              conv,
                                               std::move(impl_bounds));
     }
 
@@ -863,8 +945,9 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
                                           variadic,
                                           is_move,
                                           is_naked,
-                                          conv,
                                           false,
+                                          params_force_break,
+                                          conv,
                                           std::move(impl_bounds));
 }
 
@@ -885,7 +968,18 @@ auto identifier_expr::parse(syntax::parser& parser)
         return make_syntax_err(syntax::error::ILLEGAL_IDENTIFIER, start_token);
     }
 
-    return parser.add_expr<identifier_expr>(start_token, start_token.slice);
+    if (start_token.is_raw_identifier()) {
+        auto decoded{start_token.materialize_raw_identifier()};
+        if (decoded.empty()) {
+            return make_syntax_err("A raw identifier cannot be empty",
+                                   syntax::error::EMPTY_RAW_IDENTIFIER,
+                                   start_token);
+        }
+        return parser.add_expr<identifier_expr>(start_token, parser.get_ast().intern(decoded));
+    }
+
+    return parser.add_expr<identifier_expr>(start_token,
+                                            parser.get_ast().intern(start_token.slice));
 }
 
 auto if_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
@@ -963,6 +1057,7 @@ auto cfg_value_expr::parse(syntax::parser& parser)
 
     std::vector<guard>        guards;
     stdx::option<expr_handle> fallback;
+    bool                      force_break{false};
 
     // Parses one `<pred> => <val>` or `_ => <val>` arm
     const auto parse_guard_arm = [&] -> stdx::result<void, syntax::diagnostic> {
@@ -1001,9 +1096,12 @@ auto cfg_value_expr::parse(syntax::parser& parser)
     }
 
     while (parser.peek_token_is(token_type_t::COMMA)) {
-        parser.advance();                                          // ,
-        if (parser.peek_token_is(token_type_t::RPAREN)) { break; } // trailing comma
-        parser.advance();                                          // arm's first token
+        parser.advance(); // ,
+        if (parser.peek_token_is(token_type_t::RPAREN)) {
+            force_break = true; // trailing comma: keep one arm per line
+            break;
+        }
+        parser.advance(); // arm's first token
         TRY(parse_guard_arm());
     }
 
@@ -1013,8 +1111,11 @@ auto cfg_value_expr::parse(syntax::parser& parser)
                                syntax::error::CFG_VALUE_EMPTY_GUARD,
                                start_token);
     }
-    return parser.add_expr<cfg_value_expr>(
-        start_token, stdx::option<expr_handle>{}, std::move(guards), std::move(fallback));
+    return parser.add_expr<cfg_value_expr>(start_token,
+                                           stdx::option<expr_handle>{},
+                                           std::move(guards),
+                                           std::move(fallback),
+                                           force_break);
 }
 
 namespace {
@@ -1107,6 +1208,7 @@ auto initializer_expr::parse(syntax::parser& parser, stdx::option<expr_handle> o
     const auto start_token{parser.get_current_token()};
 
     std::vector<initializer> initializers;
+    bool                     force_break{false};
     while (!parser.peek_token_is(syntax::token_type_t::RBRACE) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
         stdx::option<implicit_access_handle> member;
@@ -1125,11 +1227,14 @@ auto initializer_expr::parse(syntax::parser& parser, stdx::option<expr_handle> o
 
         if (!parser.peek_token_is(syntax::token_type_t::RBRACE)) {
             TRY(parser.expect_peek(syntax::token_type_t::COMMA));
+            // A comma right before `}` is a trailing comma: keep one entry per line.
+            force_break = parser.peek_token_is(syntax::token_type_t::RBRACE);
         }
     }
     TRY(parser.expect_peek(syntax::token_type_t::RBRACE));
 
-    return parser.add_expr<initializer_expr>(start_token, object, std::move(initializers));
+    return parser.add_expr<initializer_expr>(
+        start_token, object, std::move(initializers), force_break);
 }
 
 auto label_expr::parse(syntax::parser& parser, expr_handle name)
@@ -1209,6 +1314,7 @@ auto match_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
     std::vector<arm> arms;
     stdx::opt_size   catch_all_idx;
     usize            arm_idx{0};
+    bool             arms_force_break{false};
 
     // Current token is either the LBRACE at the start or a comma before parsing
     while (!parser.peek_token_is(syntax::token_type_t::RBRACE) &&
@@ -1244,9 +1350,14 @@ auto match_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
 
         // An arm may list several comma-separated patterns before its `=>`.
         const bool is_catch_all_arm{catch_all_idx == arm_idx};
+        bool       trailing_comma{false}; // Asks the formatter to break them one per line
         while (parser.peek_token_is(syntax::token_type_t::COMMA)) {
-            parser.advance();
-            parser.advance();
+            parser.advance(); // current == COMMA
+            if (parser.peek_token_is(syntax::token_type_t::FAT_ARROW)) {
+                trailing_comma = true;
+                break;
+            }
+            parser.advance(); // current == the extra pattern's first token
             if (is_catch_all_arm || parser.current_token_is(syntax::token_type_t::UNDERSCORE)) {
                 return make_syntax_err("A catch-all '_' arm cannot list additional patterns",
                                        syntax::error::ILLEGAL_MATCH_CATCH_ALL,
@@ -1298,12 +1409,14 @@ auto match_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
         parser.advance();
         const auto consequence{TRY(parser.parse_restricted_statement(
             syntax::error::ILLEGAL_MATCH_ARM, syntax::semicolon_behavior::DISALLOW))};
-        arms.emplace_back(std::move(patterns), capture, modifier, consequence);
+        arms.emplace_back(std::move(patterns), capture, modifier, consequence, trailing_comma);
         arm_idx += 1;
 
         // The lack of a comma must mean we're at the end of the arm list
         if (parser.peek_token_is(syntax::token_type_t::COMMA)) {
             parser.advance();
+            // A comma right before `}` is a trailing comma: keep one arm per line.
+            arms_force_break = parser.peek_token_is(syntax::token_type_t::RBRACE);
         } else {
             break;
         }
@@ -1311,7 +1424,7 @@ auto match_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
 
     TRY(parser.expect_peek(syntax::token_type_t::RBRACE));
     return parser.add_expr<match_expr>(
-        start_token, matcher, std::move(arms), catch_all_idx, is_constexpr);
+        start_token, matcher, std::move(arms), catch_all_idx, is_constexpr, arms_force_break);
 }
 
 namespace {
@@ -1372,22 +1485,7 @@ auto string_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syn
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
     return parser.add_expr<string_expr>(
-        start_token, start_token.materialize_string(), start_token.slice);
-}
-
-auto module_access_expr::parse(syntax::parser& parser, expr_handle outer)
-    -> stdx::result<expr_handle, syntax::diagnostic> {
-    PROFILE_FUNCTION();
-    if (!outer.any<identifier_expr, module_access_expr, dot_expr>()) {
-        return make_syntax_err("Module access expressions must have outer accessors or identifiers",
-                               syntax::error::ILLEGAL_OUTER_ACCESSOR_TYPE,
-                               parser.get_location_of(*outer));
-    }
-
-    const auto start_token{parser.get_current_token()};
-    TRY(parser.expect_peek(syntax::token_type_t::IDENT));
-    const identifier_handle inner{TRY(identifier_expr::parse(parser))};
-    return parser.add_expr<module_access_expr>(start_token, outer, inner);
+        start_token, parser.get_ast().intern(start_token.materialize_string()), start_token.slice);
 }
 
 auto struct_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
@@ -1397,6 +1495,7 @@ auto struct_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
     std::vector<field>     fields;
     std::vector<cfg_group> cfg_groups;
+    bool                   fields_force_break{false};
     while (!parser.peek_token_is(syntax::token_type_t::RBRACE) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
         if (parser.peek_token_is(syntax::token_type_t::BUILTIN_CFG)) {
@@ -1408,8 +1507,9 @@ auto struct_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
             continue;
         }
 
-        bool is_public{false};
-        auto explicit_alignment{TRY(try_parse_alignment(parser))};
+        const auto doc_floor{parser.get_current_token().line};
+        bool       is_public{false};
+        auto       explicit_alignment{TRY(try_parse_alignment(parser))};
 
         if (parser.peek_token_is(syntax::token_type_t::PUBLIC)) {
             // Use a transaction to preserve the public modifier
@@ -1431,6 +1531,7 @@ auto struct_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
         }
 
         identifier_handle ident{TRY(identifier_expr::parse(parser))};
+        parser.attach_member_doc(ident, doc_floor);
         TRY(parser.expect_peek(syntax::token_type_t::COLON));
         if (!explicit_alignment) { explicit_alignment = TRY(try_parse_alignment(parser)); }
         const auto type{TRY(explicit_type::parse(parser))};
@@ -1447,8 +1548,12 @@ auto struct_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
         fields.emplace_back(ident, type, value, explicit_alignment);
 
         // No comma means that its the end or that there is a decl list starting
-        if (!parser.peek_token_is(syntax::token_type_t::COMMA)) { break; }
-        parser.advance();
+        const bool had_comma{parser.peek_token_is(syntax::token_type_t::COMMA)};
+        if (had_comma) { parser.advance(); }
+        parser.attach_member_doc(ident, doc_floor); // a trailing `///` is siphoned only now
+        if (!had_comma) { break; }
+        // A comma right before `}` is a trailing comma: keep one field per line.
+        fields_force_break |= parser.peek_token_is(syntax::token_type_t::RBRACE);
     }
 
     std::vector<member_cfg_group> member_cfg_groups;
@@ -1460,7 +1565,8 @@ auto struct_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
                                         std::move(members),
                                         std::move(member_cfg_groups),
                                         is_extern,
-                                        is_packed);
+                                        is_packed,
+                                        fields_force_break);
 }
 
 auto union_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
@@ -1470,6 +1576,7 @@ auto union_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
     std::vector<field>     fields;
     std::vector<cfg_group> cfg_groups;
+    bool                   fields_force_break{false};
     while (!parser.peek_token_is(syntax::token_type_t::RBRACE) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
         if (parser.peek_token_is(syntax::token_type_t::BUILTIN_CFG)) {
@@ -1482,9 +1589,11 @@ auto union_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
         }
         if (parser.get_peek_token().is_member_token()) { break; }
 
-        auto explicit_alignment{TRY(try_parse_alignment(parser))};
+        const auto doc_floor{parser.get_current_token().line};
+        auto       explicit_alignment{TRY(try_parse_alignment(parser))};
         TRY(parser.expect_peek(syntax::token_type_t::IDENT));
         const identifier_handle ident{TRY(identifier_expr::parse(parser))};
+        parser.attach_member_doc(ident, doc_floor);
 
         TRY(parser.expect_peek(syntax::token_type_t::COLON));
         if (!explicit_alignment) { explicit_alignment = TRY(try_parse_alignment(parser)); }
@@ -1494,8 +1603,12 @@ auto union_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
         fields.emplace_back(ident, type, explicit_alignment);
 
         // No comma means that its the end or that there is a decl list starting
-        if (!parser.peek_token_is(syntax::token_type_t::COMMA)) { break; }
-        parser.advance();
+        const bool had_comma{parser.peek_token_is(syntax::token_type_t::COMMA)};
+        if (had_comma) { parser.advance(); }
+        parser.attach_member_doc(ident, doc_floor); // a trailing `///` is siphoned only now
+        if (!had_comma) { break; }
+        // A comma right before `}` is a trailing comma: keep one field per line.
+        fields_force_break |= parser.peek_token_is(syntax::token_type_t::RBRACE);
     }
 
     std::vector<member_cfg_group> member_cfg_groups;
@@ -1514,7 +1627,8 @@ auto union_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
                                        std::move(members),
                                        std::move(member_cfg_groups),
                                        is_extern,
-                                       is_packed);
+                                       is_packed,
+                                       fields_force_break);
 }
 
 auto parse_modified_struct_or_union(syntax::parser& parser)

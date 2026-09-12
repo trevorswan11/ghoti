@@ -13,6 +13,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/arena.hh"
 #include "compiler/ast/attributes.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/segment.hh"
@@ -28,14 +29,14 @@ struct parameter {
 
 class function {
   public:
-    function(sema::arena_alloc& arena,
-             std::string        name,
-             sema::type&        type,
-             bool               is_test      = false,
-             bool               is_constexpr = false,
-             bool               is_variadic  = false,
-             gir::linkage       linkage      = linkage::INTERNAL,
-             std::string        abi_name     = "c") noexcept
+    function(ghoti::arena& arena,
+             std::string   name,
+             sema::type&   type,
+             bool          is_test      = false,
+             bool          is_constexpr = false,
+             bool          is_variadic  = false,
+             gir::linkage  linkage      = linkage::INTERNAL,
+             std::string   abi_name     = "c") noexcept
         : arena_{arena}, name_{std::move(name)}, type_{type}, is_test_{is_test},
           is_constexpr_{is_constexpr}, is_variadic_{is_variadic}, linkage_{linkage},
           abi_name_{std::move(abi_name)} {}
@@ -95,7 +96,7 @@ class function {
     [[nodiscard]] auto local_count() const noexcept -> usize { return next_local_index_; }
 
   private:
-    sema::arena_alloc&      arena_;
+    ghoti::arena&           arena_;
     std::string             name_;
     sema::type&             type_;
     std::vector<parameter*> params_;

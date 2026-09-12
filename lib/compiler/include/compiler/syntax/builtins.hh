@@ -20,6 +20,10 @@ constexpr builtin_t BIT_CAST{"@bitCast", token_type_t::BUILTIN_BIT_CAST};
 constexpr builtin_t CONST_CAST{"@constCast", token_type_t::BUILTIN_CONST_CAST};
 constexpr builtin_t VOLATILE_CAST{"@volatileCast", token_type_t::BUILTIN_VOLATILE_CAST};
 constexpr builtin_t AS{"@as", token_type_t::BUILTIN_AS};
+constexpr builtin_t INT_CAST{"@intCast", token_type_t::BUILTIN_INT_CAST};
+constexpr builtin_t TRUNCATE{"@truncate", token_type_t::BUILTIN_TRUNCATE};
+constexpr builtin_t BOOL_FROM_INT{"@boolFromInt", token_type_t::BUILTIN_BOOL_FROM_INT};
+constexpr builtin_t INT_FROM_BOOL{"@intFromBool", token_type_t::BUILTIN_INT_FROM_BOOL};
 constexpr builtin_t DYN_CAST{"@dynCast", token_type_t::BUILTIN_DYN_CAST};
 
 constexpr builtin_t INT_FROM_PTR{"@intFromPtr", token_type_t::BUILTIN_INT_FROM_PTR};
@@ -32,7 +36,7 @@ constexpr builtin_t ALIGN_OF{"@alignOf", token_type_t::BUILTIN_ALIGN_OF};
 constexpr builtin_t SIZE_OF{"@sizeOf", token_type_t::BUILTIN_SIZE_OF};
 constexpr builtin_t BIT_SIZE_OF{"@bitSizeOf", token_type_t::BUILTIN_BIT_SIZE_OF};
 constexpr builtin_t TYPE_OF{"@typeOf", token_type_t::BUILTIN_TYPE_OF};
-constexpr builtin_t THIS{"@this", token_type_t::BUILTIN_THIS};
+constexpr builtin_t THIS{"@This", token_type_t::BUILTIN_THIS};
 constexpr builtin_t TAG_NAME{"@tagName", token_type_t::BUILTIN_TAG_NAME};
 constexpr builtin_t TYPE_NAME{"@typeName", token_type_t::BUILTIN_TYPE_NAME};
 
@@ -43,7 +47,7 @@ constexpr builtin_t MEMMOVE{"@memmove", token_type_t::BUILTIN_MEMMOVE};
 constexpr builtin_t MUL_ADD{"@mulAdd", token_type_t::BUILTIN_MUL_ADD};
 constexpr builtin_t CLZ{"@clz", token_type_t::BUILTIN_CLZ};
 constexpr builtin_t CTZ{"@ctz", token_type_t::BUILTIN_CTZ};
-constexpr builtin_t POP_COUNT{"@popCount", token_type_t::BUILTIN_POP_COUNT};
+constexpr builtin_t POPCOUNT{"@popCount", token_type_t::BUILTIN_POPCOUNT};
 constexpr builtin_t ABS{"@abs", token_type_t::BUILTIN_ABS};
 
 constexpr builtin_t MIN{"@min", token_type_t::BUILTIN_MIN};
@@ -98,6 +102,7 @@ constexpr builtin_t CMPXCHG_STRONG{"@cmpxchgStrong", token_type_t::BUILTIN_CMPXC
 constexpr builtin_t FENCE{"@fence", token_type_t::BUILTIN_FENCE};
 
 constexpr builtin_t COMPILE_ERROR{"@compileError", token_type_t::BUILTIN_COMPILE_ERROR};
+constexpr builtin_t EMBED{"@embed", token_type_t::BUILTIN_EMBED};
 constexpr builtin_t CFG{"@cfg", token_type_t::BUILTIN_CFG};
 constexpr builtin_t CFG_VALUE{"@cfgValue", token_type_t::BUILTIN_CFG_VALUE};
 
@@ -105,7 +110,7 @@ constexpr builtin_t CFG_VALUE{"@cfgValue", token_type_t::BUILTIN_CFG_VALUE};
 constexpr builtin_t DISCARDABLE{"@discardable", token_type_t::BUILTIN_DISCARDABLE};
 
 constexpr auto ALL_TOKEN_TYPES{
-    stdx::enum_range<token_type_t::BUILTIN_ALIGN_CAST, token_type_t::BUILTIN_COMPILE_ERROR>()};
+    stdx::enum_range<token_type_t::BUILTIN_ALIGN_CAST, token_type_t::BUILTIN_EMBED>()};
 
 constexpr auto SPECIAL_FORM_TOKEN_TYPES{
     stdx::enum_range<token_type_t::BUILTIN_CFG, token_type_t::BUILTIN_CFG_VALUE>()};
@@ -120,6 +125,10 @@ constexpr std::array ALL_BUILTINS{
     builtins::CONST_CAST,
     builtins::VOLATILE_CAST,
     builtins::AS,
+    builtins::INT_CAST,
+    builtins::TRUNCATE,
+    builtins::BOOL_FROM_INT,
+    builtins::INT_FROM_BOOL,
     builtins::INT_FROM_PTR,
     builtins::PTR_FROM_INT,
     builtins::PTR_FROM_ARRAY,
@@ -138,7 +147,7 @@ constexpr std::array ALL_BUILTINS{
     builtins::MUL_ADD,
     builtins::CLZ,
     builtins::CTZ,
-    builtins::POP_COUNT,
+    builtins::POPCOUNT,
     builtins::ABS,
     builtins::MIN,
     builtins::MAX,
@@ -185,6 +194,7 @@ constexpr std::array ALL_BUILTINS{
     builtins::CFG_VALUE,
     builtins::DISCARDABLE,
     builtins::COMPILE_ERROR,
+    builtins::EMBED,
 };
 
 [[nodiscard]] auto get_builtin_opt(token_type_t tt) noexcept -> stdx::option<std::string_view>;

@@ -99,7 +99,6 @@ using expr_handle = handle<node_kind::ARRAY_EXPRESSION,
                            node_kind::NULLPTR_EXPRESSION,
                            node_kind::UNREACHABLE_EXPRESSION,
                            node_kind::RANGE_EXPRESSION,
-                           node_kind::MODULE_ACCESS_EXPRESSION,
                            node_kind::STRUCT_EXPRESSION,
                            node_kind::UNION_EXPRESSION,
                            node_kind::INTERFACE_EXPRESSION,
@@ -109,9 +108,6 @@ using identifier_handle        = handle<node_kind::IDENTIFIER_EXPRESSION>;
 using discardable_ident_handle = handle<node_kind::IDENTIFIER_EXPRESSION, node_kind::DISCARDED>;
 using implicit_access_handle   = handle<node_kind::IMPLICIT_ACCESS_EXPRESSION>;
 using string_handle            = handle<node_kind::STRING_EXPRESSION>;
-using outer_access_handle      = handle<node_kind::IDENTIFIER_EXPRESSION,
-                                        node_kind::MODULE_ACCESS_EXPRESSION,
-                                        node_kind::DOT_EXPRESSION>;
 using function_handle          = handle<node_kind::FUNCTION_EXPRESSION>;
 
 using match_pattern_handle = handle<node_kind::ARRAY_EXPRESSION,
@@ -130,13 +126,13 @@ using match_pattern_handle = handle<node_kind::ARRAY_EXPRESSION,
                                     node_kind::INT_LITERAL_EXPRESSION,
                                     node_kind::FLOAT_LITERAL_EXPRESSION,
                                     node_kind::BOOL_EXPRESSION,
-                                    node_kind::MODULE_ACCESS_EXPRESSION,
                                     node_kind::DISCARDED>;
 
 using stmt_handle = handle<node_kind::BLOCK_STATEMENT,
                            node_kind::CFG_STATEMENT,
                            node_kind::DECL_STATEMENT,
                            node_kind::DEFER_STATEMENT,
+                           node_kind::ERRDEFER_STATEMENT,
                            node_kind::DISCARD_STATEMENT,
                            node_kind::EXPRESSION_STATEMENT,
                            node_kind::IMPL_STATEMENT,

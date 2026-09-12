@@ -1,0 +1,61 @@
+import std;
+
+using Test = builtin.Test;
+
+extern const __ghoti_test_take_skipped: fn(): bool;
+
+pub const test_runner := fn(args: [][:0]u8, tests: []Test): i32 {
+    var failures: i32 = 0;
+    var skipped: i32 = 0;
+    for (tests) |entry| {
+        const passed := entry.func();
+        if (__ghoti_test_take_skipped()) {
+            skipped += 1;
+        } else if (!passed) {
+            failures += 1;
+        }
+    }
+
+    // TODO(tcs): print the number of failures and skips once std.fmt lands
+    if (failures > 0 or skipped > 0) {
+        if (failures > 0) std.io.eprintln("Some tests failed!")!;
+        if (skipped > 0) std.io.eprintln("Some tests were skipped!")!;
+    } else {
+        std.io.println("All tests passed!")!;
+    }
+
+    return if (failures > 0) 1 else 0;
+};
+
+pub const expect_handler := fn(msg: []u8, file: []u8, _: u32, _: u32): void {
+    std.io.eprint("Test failed: ")!;
+    std.io.eprint(file)!;
+    if (msg.len > 0) {
+        std.io.eprint(": (EXPECTED)")!;
+        std.io.eprintln(msg)!;
+    } else {
+        std.io.eprintln(": (EXPECTED)")!;
+    }
+};
+
+pub const require_handler := fn(msg: []u8, file: []u8, _: u32, _: u32): void {
+    std.io.eprint("Test failed: ")!;
+    std.io.eprint(file)!;
+    if (msg.len > 0) {
+        std.io.eprint(": (REQUIRED) ")!;
+        std.io.eprintln(msg)!;
+    } else {
+        std.io.eprintln(": (REQUIRED)")!;
+    }
+};
+
+pub const skip_handler := fn(msg: []u8, file: []u8, _: u32, _: u32): void {
+    std.io.eprint("Test failed: ")!;
+    std.io.eprint(file)!;
+    if (msg.len > 0) {
+        std.io.eprint(": (SKIPP ED)")!;
+        std.io.eprintln(msg)!;
+    } else {
+        std.io.eprintln(": (SKIPPED)")!;
+    }
+};

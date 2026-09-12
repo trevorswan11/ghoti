@@ -13,6 +13,7 @@ inline const std::vector<std::string> DEFAULT_WORKSPACE_EXCLUDES{
     "zig-pkg",
     ".zig-cache",
     "zig-out",
+    "editors",
 };
 
 inline constexpr usize DEFAULT_WORKSPACE_FILE_CAP{500};

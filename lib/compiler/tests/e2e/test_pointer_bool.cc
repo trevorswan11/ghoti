@@ -96,27 +96,37 @@ TEST_CASE("A pointer is truthy as an 'and' / 'or' operand") {
     )") == 11);
 }
 
-TEST_CASE("@as(bool, ptr) yields true for a non-null pointer and false for null") {
+TEST_CASE("@boolFromInt(ptr) yields true for a non-null pointer and false for null") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             var x: i32 = 5;
             var p: ^i32 = ^x;
-            const live := @as(bool, p);
+            const live := @boolFromInt(p);
             p = nullptr;
-            const dead := @as(bool, p);
+            const dead := @boolFromInt(p);
             return if (live and !dead) 1 else 0;
         };
     )") == 1);
 }
 
-TEST_CASE("@as(bool, int) tests the integer against zero") {
+TEST_CASE("@boolFromInt(int) tests the integer against zero") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            const a := @as(bool, 7);
-            const b := @as(bool, 0);
+            const a := @boolFromInt(7);
+            const b := @boolFromInt(0);
             return if (a and !b) 1 else 0;
         };
     )") == 1);
+}
+
+TEST_CASE("@as(bool, ...) is rejected in favor of @boolFromInt") {
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            var x: i32 = 5;
+            const b := @as(bool, x);
+            return if (b) 1 else 0;
+        };
+    )");
 }
 
 TEST_CASE("Implicitly assigning a pointer to a bool binding is rejected") {
@@ -182,6 +192,52 @@ TEST_CASE("if (ptr) guards a defer-bearing scope") {
             return x;
         };
     )") == 42);
+}
+
+TEST_CASE("@assert and @verify coerce non-null pointers to truthy") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            var x: i32 = 42;
+            const p: ^i32 = ^x;
+            @assert(p);
+            @verify(p);
+            @assert(p, "pointer must not be null");
+            @verify(p, "verification with pointer");
+            return *p;
+        };
+    )") == 42);
+}
+
+TEST_CASE("@assert and @verify with non-bool non-pointer integers are rejected") {
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            @assert(5);
+            return 0;
+        };
+    )");
+
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            @verify(5);
+            return 0;
+        };
+    )");
+}
+
+TEST_CASE("@assert and @verify with comptime nullptr are rejected at compile time") {
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            @assert(nullptr);
+            return 0;
+        };
+    )");
+
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            @verify(nullptr);
+            return 0;
+        };
+    )");
 }
 
 } // namespace ghoti::tests

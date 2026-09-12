@@ -94,4 +94,8 @@ auto emit_object_file(llvm::Module&                module,
                       llvm::TargetMachine&         target_machine,
                       const std::filesystem::path& output_path) -> stdx::result<void, diagnostic>;
 
+// Lowers `module` to native assembly for `target_machine` and returns it as text.
+auto emit_asm_string(llvm::Module& module, llvm::TargetMachine& target_machine)
+    -> stdx::result<std::string, diagnostic>;
+
 } // namespace ghoti::codegen

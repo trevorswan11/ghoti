@@ -28,6 +28,7 @@ struct explicit_function_type {
     std::vector<explicit_type_id>  parameter_types;
     std::vector<identifier_handle> parameter_names;
     bool                           variadic;
+    bool                           params_force_break{false}; // trailing comma before `)`
     explicit_type_id               explicit_return_type;
 
     // allow_trailing_brace lets an aggregate literal's own '{' follow without misreading it
@@ -43,6 +44,7 @@ struct explicit_dyn_type {
 
     explicit_type_id           interface_type;
     std::vector<assoc_binding> assoc_bindings;
+    bool                       assoc_bindings_force_break{false}; // trailing comma before `)`
 
     [[nodiscard]] static auto parse(syntax::parser& parser, bool allow_trailing_brace = false)
         -> stdx::result<explicit_dyn_type, syntax::diagnostic>;

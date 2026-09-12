@@ -41,7 +41,6 @@ enum class node_kind : u8 {
     UNDEFINED_EXPRESSION,
     NULLPTR_EXPRESSION,
     UNREACHABLE_EXPRESSION,
-    MODULE_ACCESS_EXPRESSION,
     STRUCT_EXPRESSION,
     UNION_EXPRESSION,
     INTERFACE_EXPRESSION,
@@ -53,6 +52,7 @@ enum class node_kind : u8 {
     CONTINUE_STATEMENT,
     DECL_STATEMENT,
     DEFER_STATEMENT,
+    ERRDEFER_STATEMENT,
     DISCARD_STATEMENT,
     EXPRESSION_STATEMENT,
     IMPL_STATEMENT,
@@ -98,7 +98,6 @@ enum class node_kind : u8 {
     X(undefined_expr)       \
     X(nullptr_expr)         \
     X(unreachable_expr)     \
-    X(module_access_expr)   \
     X(struct_expr)          \
     X(union_expr)           \
     X(interface_expr)       \
@@ -111,6 +110,7 @@ enum class node_kind : u8 {
     X(continue_stmt)        \
     X(decl_stmt)            \
     X(defer_stmt)           \
+    X(errdefer_stmt)        \
     X(discard_stmt)         \
     X(expr_stmt)            \
     X(impl_stmt)            \
@@ -132,7 +132,6 @@ FOREACH_AST_NODE(FWD_DECLARE_NODE_X)
 
 enum class explicit_type_kind : u8 {
     IDENT,
-    SCOPE,
     DOT,
     CALL,
     FUNCTION,
@@ -147,7 +146,6 @@ enum class explicit_type_kind : u8 {
 
 #define FOREACH_AST_TYPE(X)   \
     X(identifier_expr)        \
-    X(module_access_expr)     \
     X(dot_expr)               \
     X(call_expr)              \
     X(explicit_function_type) \
@@ -211,7 +209,6 @@ NODE_KIND_OF_TRAIT(void_expr, VOID_EXPRESSION)
 NODE_KIND_OF_TRAIT(undefined_expr, UNDEFINED_EXPRESSION)
 NODE_KIND_OF_TRAIT(nullptr_expr, NULLPTR_EXPRESSION)
 NODE_KIND_OF_TRAIT(unreachable_expr, UNREACHABLE_EXPRESSION)
-NODE_KIND_OF_TRAIT(module_access_expr, MODULE_ACCESS_EXPRESSION)
 NODE_KIND_OF_TRAIT(struct_expr, STRUCT_EXPRESSION)
 NODE_KIND_OF_TRAIT(union_expr, UNION_EXPRESSION)
 NODE_KIND_OF_TRAIT(interface_expr, INTERFACE_EXPRESSION)
@@ -223,6 +220,7 @@ NODE_KIND_OF_TRAIT(cfg_stmt, CFG_STATEMENT)
 NODE_KIND_OF_TRAIT(continue_stmt, CONTINUE_STATEMENT)
 NODE_KIND_OF_TRAIT(decl_stmt, DECL_STATEMENT)
 NODE_KIND_OF_TRAIT(defer_stmt, DEFER_STATEMENT)
+NODE_KIND_OF_TRAIT(errdefer_stmt, ERRDEFER_STATEMENT)
 NODE_KIND_OF_TRAIT(discard_stmt, DISCARD_STATEMENT)
 NODE_KIND_OF_TRAIT(expr_stmt, EXPRESSION_STATEMENT)
 NODE_KIND_OF_TRAIT(impl_stmt, IMPL_STATEMENT)
@@ -249,7 +247,6 @@ concept ExplicitTypeData = requires {
     };
 
 KIND_OF_TRAIT(identifier_expr, IDENT)
-KIND_OF_TRAIT(module_access_expr, SCOPE)
 KIND_OF_TRAIT(dot_expr, DOT)
 KIND_OF_TRAIT(call_expr, CALL)
 KIND_OF_TRAIT(explicit_function_type, FUNCTION)

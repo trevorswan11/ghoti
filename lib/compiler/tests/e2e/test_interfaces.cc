@@ -8,6 +8,8 @@
 
 namespace ghoti::tests {
 
+using helpers::mock_file;
+
 TEST_CASE("an inherent impl method runs on an instance") {
     CHECK(helpers::compile_and_run(R"(
         const Point := struct { x: i32, y: i32 };
@@ -25,7 +27,7 @@ TEST_CASE("an inherent impl static constructor runs via implicit access") {
     CHECK(helpers::compile_and_run(R"(
         const Box := struct { v: i32 };
         impl Box {
-            pub const of := fn(v: i32): @this() { return .{ .v = v }; };
+            pub const of := fn(v: i32): @This() { return .{ .v = v }; };
         }
         pub const main := fn(): i32 {
             const b := Box.of(7);
@@ -159,7 +161,7 @@ TEST_CASE("a parameterized impl with two type parameters remaps each independent
         }
         pub const main := fn(): i32 {
             var p: Pair(i32, i64) = .{ .a = 30, .b = 12 };
-            return p.first() + @as(i32, p.second());
+            return p.first() + @intCast(i32, p.second());
         };
     )") == 42);
 }
@@ -173,7 +175,7 @@ TEST_CASE("a parameterized impl folds a `constexpr` parameter into its method bo
         }
         pub const main := fn(): i32 {
             var r: Ring(28) = .{ .head = 0 };
-            return @as(i32, r.capacity()) + @as(i32, r.half());
+            return @intCast(i32, r.capacity()) + @intCast(i32, r.half());
         };
     )") == 42);
 }
@@ -214,7 +216,7 @@ TEST_CASE("a parameterized impl in a library module is used from the consumer") 
               R"(
         import "shapes.gh" as shapes;
         pub const main := fn(): i32 {
-            var s: shapes::Scaled(i32) = .{ .base = 42 };
+            var s: shapes.Scaled(i32) = .{ .base = 42 };
             return s.size();
         };
     )",
@@ -350,9 +352,9 @@ TEST_CASE("`&dyn I` dispatches across a module boundary") {
     CHECK(helpers::compile_and_run(
               R"(
             import "sh.gh" as sh;
-            const measure := fn(x: &dyn sh::Shape): i32 { return x.area(); };
+            const measure := fn(x: &dyn sh.Shape): i32 { return x.area(); };
             pub const main := fn(): i32 {
-                var q: sh::Sq = .{ .s = 7 };
+                var q: sh.Sq = .{ .s = 7 };
                 return measure(&q) - 7;
             };
         )",
@@ -575,6 +577,149 @@ TEST_CASE("`@dynCast` to `&mut T` allows mutating through the recovered referenc
             var cell := Cell{ .n = 41 };
             bump(&mut cell);
             return cell.n;
+        };
+    )") == 42);
+}
+
+TEST_CASE("Two impls in separate modules sharing an interface") {
+    constexpr std::string_view IFACE_MOD{R"(
+        pub const Adder := interface {
+            pub const base := fn(&self): i32;
+            pub const add_three := fn(&self): i32 {
+                return self.base() + 3;
+            };
+        };
+    )"};
+    constexpr std::string_view MOD_A{R"(
+        import "iface.gh" as i;
+        pub const AType := struct { v: i32 };
+        impl i.Adder for AType {
+            pub const base := fn(&self): i32 { return self.v; };
+        }
+        pub const make_a := fn(): i32 {
+            var a := AType{ .v = 4 };
+            return a.add_three();
+        };
+    )"};
+    const auto                 exit_code{helpers::compile_and_run(
+        R"(
+            import "iface.gh" as i;
+            import "mod_a.gh" as ma;
+            const BType := struct { v: i32 };
+            impl i.Adder for BType {
+                pub const base := fn(&self): i32 { return self.v; };
+            }
+            pub const main := fn(): i32 {
+                var b := BType{ .v = 0 };
+                return ma.make_a();
+            };
+        )",
+        {
+            mock_file{"iface.gh", IFACE_MOD, "iface"},
+            mock_file{"mod_a.gh", MOD_A, "mod_a"},
+        })};
+    CHECK(exit_code == 7);
+}
+
+TEST_CASE("Multiple impls of shared interface retain inherited defaults") {
+    constexpr std::string_view IFACE_MOD{R"(
+        pub const Greeter := interface {
+            pub const code := fn(&self): i32;
+            pub const score := fn(&self): i32 {
+                return self.code() * 2;
+            };
+        };
+    )"};
+    const auto                 exit_code{helpers::compile_and_run(
+        R"(
+            import "greeter.gh" as g;
+            const Alpha := struct { c: i32 };
+            impl g.Greeter for Alpha {
+                pub const code := fn(&self): i32 { return self.c; };
+            }
+            const Beta := struct { c: i32 };
+            impl g.Greeter for Beta {
+                pub const code := fn(&self): i32 { return self.c; };
+            }
+            pub const main := fn(): i32 {
+                var a := Alpha{ .c = 2 };
+                var b := Beta{ .c = 3 };
+                return (a.score() - 4) + (b.score() + 1);
+            };
+        )",
+        {mock_file{"greeter.gh", IFACE_MOD, "greeter"}})};
+    CHECK(exit_code == 7);
+}
+
+TEST_CASE("Cross-module inherited default method compiles and runs") {
+    constexpr std::string_view IFACE_MOD{R"(
+        pub const Describable := interface {
+            pub const id := fn(&self): i32;
+            pub const boosted_id := fn(&self): i32 {
+                return self.id() + 5;
+            };
+        };
+    )"};
+    const auto                 exit_code{helpers::compile_and_run(
+        R"(
+            import "iface.gh" as iface;
+            const Item := struct { val: i32 };
+            impl iface.Describable for Item {
+                pub const id := fn(&self): i32 { return self.val; };
+            }
+            pub const main := fn(): i32 {
+                var it := Item{ .val = 2 };
+                return it.boosted_id();
+            };
+        )",
+        {mock_file{"iface.gh", IFACE_MOD, "iface"}})};
+    CHECK(exit_code == 7);
+}
+
+TEST_CASE("a global variable initialized with a `^dyn I` fat pointer dispatches methods") {
+    CHECK(helpers::compile_and_run(R"(
+        const Counter := interface {
+            pub const get := fn(&self): i32;
+        };
+        const MyCounter := struct { val: i32 };
+        impl Counter for MyCounter {
+            pub const get := fn(&self): i32 { return self.val; };
+        }
+        const Holder := struct {
+            vtable: ^dyn Counter,
+        };
+        var counter_impl: MyCounter = .{ .val = 42 };
+        pub var global_holder: Holder = .{
+            .vtable = ^counter_impl,
+        };
+        pub const main := fn(): i32 {
+            return global_holder.vtable.get();
+        };
+    )") == 42);
+}
+
+TEST_CASE(
+    "a global variable initialized with a mutable `^mut dyn I` fat pointer dispatches methods") {
+    CHECK(helpers::compile_and_run(R"(
+        const Resetter := interface {
+            pub const reset := fn(&mut self, v: i32): void;
+            pub const get := fn(&self): i32;
+        };
+        const State := struct { val: i32 };
+        impl Resetter for State {
+            pub const reset := fn(&mut self, v: i32): void { self.val = v; };
+            pub const get := fn(&self): i32 { return self.val; };
+        }
+        const Wrapper := struct {
+            ptr: ^mut dyn Resetter,
+        };
+        var state_impl: State = .{ .val = 10 };
+        pub var wrapper: Wrapper = .{
+            .ptr = ^mut state_impl,
+        };
+        pub const main := fn(): i32 {
+            wrapper.ptr.reset(42);
+            return wrapper.ptr.get();
         };
     )") == 42);
 }

@@ -13,6 +13,7 @@
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
+#include "compiler/arena.hh"
 #include "compiler/ast/ast.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
@@ -79,7 +80,7 @@ class parser {
     auto advance(u8 times = 1) noexcept -> const token_t&;
 
     // Fills the AST with the parser's output, clearing it before use
-    auto consume(ast::AST& ast) -> diagnostics;
+    auto consume(ast::AST& ast, ghoti::arena& arena) -> diagnostics;
 
     [[nodiscard]] auto get_current_token() const noexcept -> const token_t& {
         return current_token_;
@@ -135,6 +136,9 @@ class parser {
     static auto get_poll_infix_fn_opt(token_type_t tt) noexcept -> stdx::option<infix_fn>;
 
     [[nodiscard]] auto get_ast() noexcept -> ast ::AST& { return *ast_; }
+
+    // Attaches any pending `///` lines sitting directly above `name` and below `floor_line`
+    auto attach_member_doc(ast::identifier_handle name, usize floor_line) -> void;
 
     template <ast::NodeData N> [[nodiscard]] constexpr auto get_node(ast::node_id id) -> const N& {
         return ast_->get_as<N>(id);

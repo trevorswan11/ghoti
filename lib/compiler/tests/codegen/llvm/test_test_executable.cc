@@ -35,6 +35,26 @@ TEST_CASE("Test with failing @require returns failure status without aborting pr
     )") != 0);
 }
 
+TEST_CASE("`defer` is allowed in a test block and runs at block exit") {
+    SECTION("a harmless defer does not disturb a passing test") {
+        CHECK(helpers::compile_and_run_tests(R"(
+            test "defer after asserts" {
+                var x: i32 = 0;
+                defer x = 1;
+                @expect(x == 0);
+            }
+        )") == 0);
+    }
+    SECTION("a deferred assertion actually executes") {
+        CHECK(helpers::compile_and_run_tests(R"(
+            test "deferred require fails the test" {
+                defer @require(1 + 1 == 3);
+                @expect(true);
+            }
+        )") != 0);
+    }
+}
+
 TEST_CASE("Test with @src compiles and executes properly") {
     CHECK(helpers::compile_and_run_tests(R"(
         test "src location check" {
@@ -50,7 +70,7 @@ TEST_CASE("A non-weak `test_runner` overrides the builtin weak default") {
             @require(false);
         }
 
-        pub const test_runner := fn(args: [][:0]u8, tests: []builtin::Test): i32 {
+        pub const test_runner := fn(args: [][:0]u8, tests: []builtin.Test): i32 {
             _ = args;
             _ = tests;
             return 77;
@@ -68,7 +88,7 @@ TEST_CASE("The overriding `test_runner` receives the test metadata slice") {
             @expect(true);
         }
 
-        pub const test_runner := fn(args: [][:0]u8, tests: []builtin::Test): i32 {
+        pub const test_runner := fn(args: [][:0]u8, tests: []builtin.Test): i32 {
             _ = args;
             if (tests.len == 2) {
                 return 42;
@@ -84,7 +104,7 @@ TEST_CASE("The overriding `test_runner` invokes a test function pointer directly
             @expect(1 + 1 == 2);
         }
 
-        pub const test_runner := fn(args: [][:0]u8, tests: []builtin::Test): i32 {
+        pub const test_runner := fn(args: [][:0]u8, tests: []builtin.Test): i32 {
             _ = args;
             if (tests.len == 1) {
                 const ok := tests[0].func();
@@ -103,7 +123,7 @@ TEST_CASE("The overriding `test_runner` can walk the argv slice") {
             @expect(true);
         }
 
-        pub const test_runner := fn(args: [][:0]u8, tests: []builtin::Test): i32 {
+        pub const test_runner := fn(args: [][:0]u8, tests: []builtin.Test): i32 {
             _ = tests;
             var total: usize = 0;
             for (args) |arg| {

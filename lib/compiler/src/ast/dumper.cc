@@ -11,6 +11,7 @@
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
 
+#include "compiler/arena.hh"
 #include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
@@ -27,8 +28,9 @@ namespace ghoti::ast {
 
 auto dumper::compare_source_asts(std::string_view s1, std::string_view s2) -> bool {
     syntax::parser p1{s1}, p2{s2};
+    ghoti::arena   arena;
     ast::AST       s1_ast, s2_ast;
-    const auto     diag1{p1.consume(s1_ast)}, diag2{p2.consume(s2_ast)};
+    const auto     diag1{p1.consume(s1_ast, arena)}, diag2{p2.consume(s2_ast, arena)};
     if (!diag1.empty() || !diag2.empty()) { return false; }
 
     std::ostringstream s1_oss, s2_oss;
@@ -470,7 +472,8 @@ MAKE_INFIX_DUMP(binary_expr, BinaryExpression, LHS, RHS)
 
 auto dumper::visit(node_id id, const dot_expr& node) -> void {
     PROFILE_FUNCTION();
-    fmt::println(out_, "DotExpression ({})", magic_enum::enum_name(id.get_token_type()));
+    const auto token_type{id.is_valid() ? id.get_token_type() : syntax::token_type_t::DOT};
+    fmt::println(out_, "DotExpression ({})", magic_enum::enum_name(token_type));
     {
         const indent::guard g{indent_, false};
         fmt ::print(out_, "{}Object: ", indent_.current_branch());
@@ -672,22 +675,6 @@ auto dumper::visit(node_id, const nullptr_expr&) -> void {
 auto dumper::visit(node_id, const unreachable_expr&) -> void {
     PROFILE_FUNCTION();
     fmt::println(out_, "UnreachableExpression");
-}
-
-// Safe to call with invalid ID in type dispatch
-auto dumper::visit(node_id, const module_access_expr& module_access) -> void {
-    PROFILE_FUNCTION();
-    fmt::println(out_, "ModuleAccessExpression");
-    {
-        const indent::guard g{indent_, false};
-        fmt::print(out_, "{}Outer: ", indent_.current_branch());
-        dump(module_access.outer);
-    }
-    {
-        const indent::guard g{indent_, true};
-        fmt::print(out_, "{}Inner: ", indent_.current_branch());
-        dump(module_access.inner);
-    }
 }
 
 // Safe to call with invalid ID in type dispatch
@@ -1016,6 +1003,12 @@ auto dumper::visit(node_id, const decl_stmt& decl) -> void {
         dump(*decl.link_name);
     }
 
+    if (decl.discardable_condition) {
+        const indent::guard g{indent_, false};
+        fmt::print(out_, "{}Discardable Condition: ", indent_.current_branch());
+        dump(*decl.discardable_condition);
+    }
+
     const auto has_value{decl.value.has_value()};
     {
         const indent::guard g{indent_, !has_value};
@@ -1046,6 +1039,27 @@ auto dumper::visit(node_id, const decl_stmt& decl) -> void {
     }
 
 MAKE_BASIC_STMT_DUMP(defer_stmt, DeferStatement, Deferred, deferred)
+
+auto dumper::visit(node_id, const errdefer_stmt& node) -> void {
+    PROFILE_FUNCTION();
+    fmt::println(out_, "ErrdeferStatement");
+    if (node.capture) {
+        const indent::guard g{indent_, false};
+        fmt::print(out_, "{}Capture: ", indent_.current_branch());
+        if (node.capture->is<discarded>()) {
+            fmt::println(out_, "<discarded>");
+        } else {
+            const auto& ident{ast_.get_as<identifier_expr>(**node.capture)};
+            fmt::println(out_, "{} (modifier: {})", ident, node.modifier);
+        }
+    }
+    {
+        const indent::guard g{indent_, true};
+        fmt::print(out_, "{}Deferred: ", indent_.current_branch());
+        dump(node.deferred);
+    }
+}
+
 MAKE_BASIC_STMT_DUMP(discard_stmt, DiscardStatement, Discarded, discarded)
 MAKE_BASIC_STMT_DUMP(expr_stmt, ExpressionStatement, Expr, expression)
 
@@ -1192,7 +1206,6 @@ auto dumper::visit(explicit_type_id id, const identifier_expr& ident) -> void {
     fmt::println(out_, "");
 }
 
-MAKE_EXPLICIT_TYPE_DUMP(module_access_expr)
 MAKE_EXPLICIT_TYPE_DUMP(dot_expr)
 MAKE_EXPLICIT_TYPE_DUMP(call_expr)
 

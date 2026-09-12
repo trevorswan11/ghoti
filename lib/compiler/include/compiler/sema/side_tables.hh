@@ -71,6 +71,9 @@ struct side_tables {
     // Same as `identifier_definitions`, but for identifiers used as explicit type annotations
     detail::side_table<ast::explicit_type_id, stdx::option<located_span>> explicit_type_definitions;
 
+    // Symbol table index that declares the symbol referenced by an identifier node
+    detail::side_table<ast::node_id, stdx::opt_size> identifier_symbol_tables;
+
     // Allocates `size` slots in all backing vectors
     constexpr auto resize(const ast::AST::data_pool_sizes& sizes) -> void {
         node_types.values.resize(sizes.nodes_size);
@@ -81,6 +84,7 @@ struct side_tables {
         function_captures.values.resize(sizes.nodes_size);
         identifier_definitions.values.resize(sizes.nodes_size);
         explicit_type_definitions.values.resize(sizes.types_size);
+        identifier_symbol_tables.values.resize(sizes.nodes_size);
     }
 };
 

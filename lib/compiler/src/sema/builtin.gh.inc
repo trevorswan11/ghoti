@@ -75,58 +75,57 @@ pub const Test := struct {
     pub func: fn(): bool,
 };
 
+/// Control flow tagged union for single-match nominal unwrapping (`?` and `!`).
+pub const Flow := fn(C: type, R: type): type {
+    return union {
+        @"continue": C, /// Holds the success payload
+        @"break": R, /// Holds the early-return residual
+    };
+};
+
+/// Interface implemented by types supporting postfix `?` and `!` unwrapping.
+/// Maps the instance into a `Flow(Output, Residual)` union via `branch(self)`.
+pub const Unwrappable := interface {
+    Output: type;
+    Residual: type;
+    pub const branch := fn(self): Flow(Output, Residual);
+};
+
+/// Interface implemented by enclosing function return types to construct an early-return
+/// value from an unwrap expression's residual payload during `?` propagation.
+pub const Rewrappable := interface {
+    From: type;
+    pub const fromResidual := fn(r: From): @This();
+};
+
 extern const __ghoti_test_take_skipped: fn(): bool;
 
-pub weak const test_runner := fn(args: [][:0]u8, tests: []Test): i32 {
-    _ = args;
+pub weak const test_runner := fn(_: [][:0]u8, tests: []Test): i32 {
     var failures: i32 = 0;
     var skipped: i32 = 0;
     for (tests) |entry| {
         const passed := entry.func();
         if (__ghoti_test_take_skipped()) {
-            skipped = skipped + 1;
+            skipped += 1;
         } else if (!passed) {
-            failures = failures + 1;
+            failures += 1;
         }
     }
     _ = skipped;
     return failures;
 };
 
-pub weak const panic_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): noreturn {
-    _ = msg;
-    _ = file;
-    _ = line;
-    _ = column;
+pub weak const panic_handler := fn(_: []u8, _: []u8, _: u32, _: u32): noreturn {
     @trap();
 };
 
-pub weak const assert_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): void {
-    _ = msg;
-    _ = file;
-    _ = line;
-    _ = column;
+pub weak const assert_handler := fn(_: []u8, _: []u8, _: u32, _: u32): void {
     @trap();
 };
 
-pub weak const expect_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): void {
-    _ = msg;
-    _ = file;
-    _ = line;
-    _ = column;
-};
+pub weak const expect_handler := fn(_: []u8, _: []u8, _: u32, _: u32): void {};
 
-pub weak const require_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): void {
-    _ = msg;
-    _ = file;
-    _ = line;
-    _ = column;
-};
+pub weak const require_handler := fn(_: []u8, _: []u8, _: u32, _: u32): void {};
 
-pub weak const skip_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): void {
-    _ = msg;
-    _ = file;
-    _ = line;
-    _ = column;
-};
+pub weak const skip_handler := fn(_: []u8, _: []u8, _: u32, _: u32): void {};
 )"

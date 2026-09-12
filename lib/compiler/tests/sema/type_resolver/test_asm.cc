@@ -14,12 +14,9 @@ namespace {
 // Resolves `body` inside a trivial function and returns the first sema diagnostic's code
 [[nodiscard]] auto resolve_asm_error(std::string_view body) -> stdx::option<sema::error> {
     const auto src{fmt::format("pub const f := fn(n: i64, fd: i64): void {{ {} }};", body)};
-    auto [ctx, idx]{helpers::resolve(src)};
-
-    // Resolver diagnostics are moved out of the shared context and into the module.
-    const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()};
-    if (!diags || diags->empty()) { return stdx::none; }
-    return (*diags)[0].get_error();
+    auto [codes, _]{helpers::resolve_diags(src)};
+    if (codes.empty()) { return stdx::none; }
+    return codes[0];
 }
 
 } // namespace

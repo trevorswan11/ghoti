@@ -137,7 +137,7 @@ TEST_CASE("hover-style type resolution names the module on an import alias and i
     CHECK(loader.add(helper_path, "pub const value := 42;\n"));
     CHECK(loader.add(main_path,
                      "import \"helper.gh\" as helper;\n"
-                     "pub const x := helper::value;\n"));
+                     "pub const x := helper.value;\n"));
 
     auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
     const auto module{UNWRAP(session->analyze(main_path))};

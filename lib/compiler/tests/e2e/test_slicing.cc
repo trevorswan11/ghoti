@@ -36,7 +36,7 @@ TEST_CASE("`slice[lo..=hi]` is inclusive and re-slices a slice") {
         pub const main := fn(): i32 {
             var arr := [4uz]mut i32{5, 10, 20, 12};
             var sl: []i32 = arr;
-            return sum(sl[1uz..=3uz]) + @as(i32, sl[0uz..2uz].len);
+            return sum(sl[1uz..=3uz]) + @intCast(i32, sl[0uz..2uz].len);
         };
     )") == 42 + 2);
 }
@@ -50,7 +50,7 @@ TEST_CASE("open-ended range subscripts fill the missing endpoint from the operan
                 var hi: usize = 4uz;
                 return sum(arr[lo..])            // 4 + 8 + 16 = 28
                      + sum(arr[..hi])            // 1 + 2 + 4 + 8 = 15
-                     + @as(i32, arr[..].len);    // 5
+                     + @intCast(i32, arr[..].len);    // 5
             };
         )") == 28 + 15 + 5);
     }
@@ -113,8 +113,8 @@ TEST_CASE("a growable buffer over a backing array can append and hand out its it
             buf: [8uz]mut i32,
             len: usize,
 
-            const init := fn(): @this() {
-                var l: @this() = undefined;
+            const init := fn(): @This() {
+                var l: @This() = undefined;
                 l.len = 0uz;
                 return l;
             };

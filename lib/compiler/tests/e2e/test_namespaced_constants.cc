@@ -1,14 +1,17 @@
+#include <string_view>
+
 #include <catch2/catch_test_macros.hpp>
 
 #include "helpers/codegen.hh"
+#include "helpers/sema.hh"
 
 namespace ghoti::tests {
 
-TEST_CASE("static member constant read via the type name and `@this()`") {
+TEST_CASE("static member constant read via the type name and `@This()`") {
     CHECK(helpers::compile_and_run(R"(
         const Cfg := struct {
             const LIMIT := 40;
-            const bump := fn(): i32 { return @this().LIMIT + 2; };
+            const bump := fn(): i32 { return @This().LIMIT + 2; };
         };
 
         pub const main := fn(): i32 {
@@ -21,7 +24,7 @@ TEST_CASE("address of a scalar static member constant") {
     CHECK(helpers::compile_and_run(R"(
         const Cfg := struct {
             const BASE := 21;
-            const via_this := fn(): i32 { const p := ^@this().BASE; return *p; };
+            const via_this := fn(): i32 { const p := ^@This().BASE; return *p; };
             const via_name := fn(): i32 { const p := ^Cfg.BASE; return *p; };
         };
 
@@ -43,7 +46,7 @@ TEST_CASE("address of an aggregate static member constant (vtable singleton)") {
                 return vt.step(41);
             };
             const run_this := fn(): i32 {
-                const vt := ^@this().table;
+                const vt := ^@This().table;
                 return vt.step(41);
             };
         };
@@ -64,6 +67,40 @@ TEST_CASE("reference to a global constant aggregate, then field access") {
             return r.x + r.y;
         };
     )") == 42);
+}
+
+TEST_CASE("`using T = other.Enum` then `alias.T.M` evaluates cleanly") {
+    constexpr std::string_view ENUM_MOD{R"(
+        pub const E := enum : u32 { A = 1u32, B = 2u32, C = 7u32, _ };
+        pub using Alias = E;
+    )"};
+    const auto                 exit_code{helpers::compile_and_run(
+        R"(
+            import "enums.gh" as x;
+            pub const main := fn(): i32 {
+                const e: x.Alias = x.Alias.C;
+                return if (e == x.Alias.C) 7 else 1;
+            };
+        )",
+        {helpers::mock_file{"enums.gh", ENUM_MOD, "enums"}})};
+    CHECK(exit_code == 7);
+}
+
+TEST_CASE("Local module alias `alias.E.C` resolves cleanly without ICmp crash") {
+    constexpr std::string_view PKG_MOD{R"(
+        pub const E := enum : u32 { A = 1u32, B = 2u32, C = 7u32, _ };
+    )"};
+    const auto                 exit_code{helpers::compile_and_run(
+        R"(
+            import "pkg.gh" as pkg;
+            using my_pkg = pkg;
+            pub const main := fn(): i32 {
+                const e: my_pkg.E = my_pkg.E.C;
+                return if (e == my_pkg.E.C) 7 else 1;
+            };
+        )",
+        {helpers::mock_file{"pkg.gh", PKG_MOD, "pkg"}})};
+    CHECK(exit_code == 7);
 }
 
 } // namespace ghoti::tests

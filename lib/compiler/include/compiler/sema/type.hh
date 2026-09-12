@@ -20,7 +20,9 @@
 #include <stdx/utility.hh>
 #include <stdx/variant.hh>
 
+#include "compiler/arena.hh"
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/ast/type.hh"
 #include "compiler/module/module.hh"
 #include "support/int128.hh"
@@ -124,6 +126,8 @@ class type;
 }
 
 [[nodiscard]] auto is_implicit_widenable(const type& from, const type& to) noexcept -> bool;
+[[nodiscard]] auto cast_rejection_reason(const type& from, const type& to, u32 ptr_bits)
+    -> stdx::option<std::string>;
 
 [[nodiscard]] constexpr auto is_value_type(type_kind kind) noexcept -> bool {
     switch (kind) {
@@ -426,6 +430,20 @@ constexpr auto CONSTANT{mutability_modifiers::CONSTANT};
 constexpr auto VOLATILE{mutability_modifiers::VOLATILE};
 constexpr auto CONSTANT_VOLATILE{CONSTANT | VOLATILE};
 
+[[nodiscard]] constexpr auto from_type_modifier(ast::type_modifier modifier) noexcept
+    -> stdx::option<types::mutability_modifiers> {
+    using modifier_t = ast::type_modifier::modifier;
+    switch (modifier.get_raw()) {
+    case modifier_t::VALUE:        return stdx::none;
+    case modifier_t::REF:          return types::mut::CONSTANT;
+    case modifier_t::MUT_REF:      return types::mut::MUTABLE;
+    case modifier_t::PTR:          return types::mut::CONSTANT;
+    case modifier_t::MUT_PTR:      return types::mut::MUTABLE;
+    case modifier_t::VOLATILE:     return types::mut::CONSTANT_VOLATILE;
+    case modifier_t::MUT_VOLATILE: return types::mut::VOLATILE;
+    }
+}
+
 } // namespace mut
 
 } // namespace types
@@ -439,8 +457,6 @@ template <> struct ankerl::unordered_dense::hash<ghoti::sema::types::key_t> {
 };
 
 namespace ghoti::sema {
-
-using arena_alloc = stdx::arena<stdx::sizes::kib(64UZ)>;
 
 // A semantic type that is entirely owned by an arena of types
 class type {
@@ -543,7 +559,7 @@ class type {
     data_t         data_;
 
     // Initialization is restricted to the pool's arena exclusively
-    friend arena_alloc;
+    friend ghoti::arena;
 };
 
 static_assert(stdx::TriviallyDestructible<type>);
@@ -582,7 +598,7 @@ static_assert(stdx::TriviallyDestructible<type>);
 // All associated type lifetimes are tied to the pool
 class type_pool {
   public:
-    explicit type_pool(arena_alloc& arena) noexcept : arena_{arena} {}
+    explicit type_pool(ghoti::arena& arena) noexcept : arena_{arena} {}
     ~type_pool() = default;
 
     MAKE_MOVE_CONSTRUCTABLE_ONLY(type_pool)
@@ -625,7 +641,7 @@ class type_pool {
     auto get_or_emplace(const types::key_t& key) -> gsl::not_null<type*>;
 
   private:
-    arena_alloc&                                      arena_;
+    ghoti::arena&                                     arena_;
     ankerl::unordered_dense::map<types::key_t, type*> cache_;
 };
 

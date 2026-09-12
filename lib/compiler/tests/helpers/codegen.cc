@@ -33,6 +33,7 @@
 #include "compiler/gir/module.hh"
 #include "compiler/sema/analyzer.hh"
 #include "helpers/sema.hh"
+#include "support/string_utils.hh"
 #include "support/subprocess.hh"
 #include "support/tempfile.hh"
 #include "support/test.hh"
@@ -140,6 +141,28 @@ auto compile_and_run(std::string_view source, const std::vector<mock_file>& impo
 
     const mock_argv args{exe_file.path.string()};
     return UNWRAP(spawn_child(args));
+}
+
+auto compile_and_run_captured(std::string_view source, const std::vector<mock_file>& imports)
+    -> run_output {
+    auto  ctx_idx{type_check_and_verify(source, imports)};
+    auto& test_ctx{*ctx_idx.first};
+
+    llvm::LLVMContext context;
+    const auto extension{codegen::get_default_output_extension(codegen::output_type::EXECUTABLE)};
+    const auto exe_stem{tempfile::make_temp_path("compile_and_run_captured")};
+    tempfile   exe_file{std::in_place, fmt::format("{}{}", exe_stem.string(), extension)};
+
+    const auto emitted{emit_executable(test_ctx, context, exe_file.path)};
+    if (!emitted) { fmt::println("{}", emitted.error()); }
+    REQUIRE(emitted);
+
+    piped_process proc{mock_argv{exe_file.path.string()}};
+    return run_output{
+        .exit_code = UNWRAP(proc.close_stdin_and_wait()),
+        .out       = string_utils::read_stream(proc.stdout_stream()),
+        .err       = string_utils::read_stream(proc.stderr_stream()),
+    };
 }
 
 auto compile_and_run_tests(std::string_view                source,

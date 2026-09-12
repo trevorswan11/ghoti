@@ -1,6 +1,9 @@
 #include "compiler/sema/context.hh"
 
 #include <concepts>
+#include <filesystem>
+#include <fstream>
+#include <ios>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -21,6 +24,7 @@
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/keywords.hh"
 #include "compiler/syntax/token_type.hh"
+#include "support/string_utils.hh"
 
 namespace ghoti::sema {
 
@@ -154,6 +158,10 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::CONST_CAST, params(t_auto), t_auto);
     inject_function(bis::VOLATILE_CAST, params(t_auto), t_auto);
     inject_function(bis::AS, params(t_type, t_auto), t_auto);
+    inject_function(bis::INT_CAST, params(t_type, t_auto), t_auto);
+    inject_function(bis::TRUNCATE, params(t_type, t_auto), t_auto);
+    inject_function(bis::BOOL_FROM_INT, params(t_auto), t_bool);
+    inject_function(bis::INT_FROM_BOOL, params(t_type, t_bool), t_auto);
 
     inject_function(bis::INT_FROM_PTR, params(t_auto), t_usize);
     inject_function(bis::PTR_FROM_INT, params(t_type, t_usize), t_auto);
@@ -176,7 +184,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::MUL_ADD, params(t_type, t_auto, t_auto, t_auto), t_auto);
     inject_function(bis::CLZ, params(t_auto), t_usize);
     inject_function(bis::CTZ, params(t_auto), t_usize);
-    inject_function(bis::POP_COUNT, params(t_auto), t_usize);
+    inject_function(bis::POPCOUNT, params(t_auto), t_usize);
     inject_function(bis::ABS, params(t_auto), t_auto);
 
     inject_function(bis::MIN, params(t_auto, t_auto), t_auto);
@@ -209,6 +217,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::PANIC, params(t_c_str), t_noreturn);
     inject_function(bis::TRAP, params(), t_noreturn);
     inject_function(bis::COMPILE_ERROR, params(t_c_str), t_noreturn);
+    inject_function(bis::EMBED, params(t_c_str), t_auto);
 
     // `@implements(T | value, I)` -> bool (constexpr)
     inject_function(bis::IMPLEMENTS, params(t_auto, t_auto), t_bool);
@@ -244,15 +253,16 @@ constexpr std::string_view BUILTIN_NAMESPACE{"builtin"};
 auto inject_builtin_module(context& ctx, usize prelude_idx) -> void {
     PROFILE_FUNCTION();
 
-    auto& enum_mod{ctx.modules.get_or_create_builtin_module(BUILTIN_MODULE_SOURCE)};
-    symbol_collector::collect_symbols(enum_mod, ctx);
-    type_resolver::resolve_types(enum_mod, ctx);
-    VERIFY(!enum_mod.is_poisoned() && ctx.diags.empty(),
+    auto& builtin_mod{ctx.modules.get_or_create_builtin_module(BUILTIN_MODULE_SOURCE)};
+    symbol_collector::collect_symbols(builtin_mod, ctx);
+    type_resolver::resolve_types(builtin_mod, ctx);
+    VERIFY(!builtin_mod.is_poisoned() && ctx.diags.empty(),
            "the compiler-provided `builtin` module must resolve cleanly");
 
     // Expose the module under one prelude name, reusing the ordinary module-access machinery
-    auto& mod_type{*ctx.pool[{type_kind::MODULE, types::mut::CONSTANT, *enum_mod.root_table_idx}]};
-    mod_type.resolve_if<types::module>(enum_mod);
+    auto& mod_type{
+        *ctx.pool[{type_kind::MODULE, types::mut::CONSTANT, *builtin_mod.root_table_idx}]};
+    mod_type.resolve_if<types::module>(builtin_mod);
 
     auto& prelude{ctx.registry.get(prelude_idx)};
     prelude.insert_unchecked(
@@ -309,6 +319,22 @@ auto context::type_display_name(const type& t) const -> std::string {
         return std::string{it->second};
     }
     return denoted->to_string();
+}
+
+auto context::read_embed_file(const std::filesystem::path& path)
+    -> stdx::option<const std::string&> {
+    const auto key{path.string()};
+    if (const auto it{embed_cache.find(key)}; it != embed_cache.end()) {
+        if (it->second) { return *it->second; }
+        return stdx::none;
+    }
+
+    std::ifstream file{path, std::ios::binary};
+    if (!file.is_open()) {
+        embed_cache[key] = stdx::none;
+        return stdx::none;
+    }
+    return embed_cache[key].emplace(string_utils::read_stream(file));
 }
 
 } // namespace ghoti::sema

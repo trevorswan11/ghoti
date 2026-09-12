@@ -1,0 +1,137 @@
+import std;
+
+pub const AllocError := enum : u8 {
+    out_of_memory,
+};
+
+using Alignment = std.mem.Alignment;
+
+pub const AllocatorVTable := interface {
+    /// Return a pointer to `len` bytes with specified `alignment`, or return
+    /// `none` indicating the allocation failed.
+    ///
+    /// `new_len` must be greater than zero.
+    pub const alloc := fn(
+        &mut self,
+        len: usize,
+        alignment: Alignment,
+    ): std.Option(^mut u8);
+
+    /// Attempt to expand or shrink memory in place.
+    ///
+    /// `memory.len` must equal the length requested from the most recent
+    /// successful call to `alloc`, `resize`, or `remap`. `alignment` must
+    /// equal the same value that was passed as the `alignment` parameter to
+    /// the original `alloc` call.
+    ///
+    /// A result of `true` indicates the resize was successful and the
+    /// allocation now has the same address but a size of `new_len`. `false`
+    /// indicates the resize could not be completed without moving the
+    /// allocation to a different address.
+    ///
+    /// `new_len` must be greater than zero.
+    pub const resize := fn(
+        &mut self,
+        memory: []mut u8,
+        alignment: Alignment,
+        new_len: usize,
+    ): bool;
+
+    /// Attempt to expand or shrink memory, allowing relocation.
+    ///
+    /// `memory.len` must equal the length requested from the most recent
+    /// successful call to `alloc`, `resize`, or `remap`. `alignment` must
+    /// equal the same value that was passed as the `alignment` parameter to
+    /// the original `alloc` call.
+    ///
+    /// A non-`none` return value indicates the resize was successful. The
+    /// allocation may have same address, or may have been relocated. In either
+    /// case, the allocation now has size of `new_len`. A `none` return value
+    /// indicates that the resize would be equivalent to allocating new memory,
+    /// copying the bytes from the old memory, and then freeing the old memory.
+    /// In such case, it is more efficient for the caller to perform the copy.
+    ///
+    /// `new_len` must be greater than zero.
+    pub const remap := fn(
+        &mut self,
+        memory: []mut u8,
+        alignment: Alignment,
+        new_len: usize,
+    ): std.Option(^mut u8);
+
+    /// Free and invalidate a region of memory.
+    ///
+    /// `memory.len` must equal the length requested from the most recent
+    /// successful call to `alloc`, `resize`, or `remap`. `alignment` must
+    /// equal the same value that was passed as the `alignment` parameter to
+    /// the original `alloc` call.
+    pub const free := fn(
+        &mut self,
+        memory: []mut u8,
+        alignment: Alignment,
+    ): void;
+};
+
+pub const Allocator := struct {
+    pub vtable: ^dyn AllocatorVTable,
+
+    /// Returns a pointer to undefined memory.
+    /// Call `destroy` with the result to free the memory.
+    pub const create := fn(self, T: type): std.Result(^mut T, AllocError) {
+        return match (self.vtable.alloc(@sizeOf(T), .of(T))) {
+            .some => |raw| .{
+                .ok = @ptrCast(^mut T, raw),
+            },
+            .none => .{ .err = .out_of_memory },
+        };
+    };
+
+    /// `ptr` should be the return value of `create`, or otherwise
+    /// have the same address and alignment property.
+    pub const destroy := fn(self, ptr: auto): void {
+        using T = @typeOf(ptr);
+        const raw := @sliceFromPtr(@ptrCast(^mut u8, ptr), @sizeOf(T));
+        return self.vtable.free(raw, .of(T));
+    };
+
+    /// Allocates an array of `n` items of type `T` and sets all the
+    /// items to `undefined`. Depending on the Allocator
+    /// implementation, it may be required to call `free` once the
+    /// memory is no longer needed, to avoid a resource leak. If the
+    /// `Allocator` implementation is unknown, then correct code will
+    /// call `free` when done.
+    ///
+    /// For allocating a single item, see `create`.
+    pub const alloc := fn(self, T: type, len: usize): std.Result([]mut T, AllocError) {
+        const size := @mulWithOverflow(@sizeOf(T), len); // guard the byte-count multiply
+        if (size.overflow) {
+            return .{ .err = .out_of_memory };
+        }
+        return match (self.vtable.alloc(size.value, .of(T))) {
+            .some => |raw| .{
+                .ok = @sliceFromPtr(@ptrCast(^mut T, raw), len),
+            },
+            .none => .{ .err = .out_of_memory },
+        };
+    };
+
+    /// Free an array allocated with `alloc`.
+    /// If memory has length 0, free is a no-op.
+    /// To free a single item, see `destroy`.
+    pub const free := fn(self, T: type, mem: []mut T): void {
+        const size := @mulWithOverflow(@sizeOf(T), mem.len);
+        @assert(size.overflow, "Attempt to free overflowed allocation");
+        const raw := @sliceFromPtr(@ptrCast(^mut u8, mem.ptr), size.value);
+        return self.vtable.free(raw, .of(T));
+    };
+
+    /// Copies `slice` to newly allocated memory. Caller owns the memory.
+    pub const dupe := fn(self, T: type, slice: []T): std.Result([]mut T, AllocError) {
+        // TODO(tcs): Also implement dupeZ for null temrination
+        const new_buf := self.alloc(T, slice.len)?;
+        @memcpy(new_buf, slice);
+        return new_buf;
+    };
+};
+
+// TODO(tcs): Implement realloc, remap, and resize thunks

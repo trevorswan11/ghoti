@@ -42,7 +42,7 @@ TEST_CASE("@sizeOf / @bitSizeOf of a function-local type folds") {
             if (@sizeOf(Pair) != 8) { return 1; }
             if (@sizeOf(Small) != 1 or @bitSizeOf(Small) != 8) { return 2; }
             var p: Pair = .{ .a = 3, .b = 4 };
-            return p.a + p.b + @as(i32, @sizeOf(Pair));
+            return p.a + p.b + @intCast(i32, @sizeOf(Pair));
         };
     )") == 15);
 }
@@ -60,6 +60,24 @@ TEST_CASE("Forward references and mutual recursion resolve") {
             return is_even(n - 1);
         };
     )") == 7);
+}
+
+TEST_CASE("deferred @compileError allows unreferenced decls to still compile") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const BROKEN := @compileError("port this C macro by hand");
+        pub const main := fn(): i32 { return 42; };
+    )") == 42);
+}
+
+TEST_CASE("Module-scope `const P = @ptrFromInt(...)` materializes cleanly") {
+    const auto exit_code{helpers::compile_and_run(R"(
+        const P: ^mut opaque = @ptrFromInt(^mut opaque, 0x1000uz);
+        pub const main := fn(): i32 {
+            const addr := @intFromPtr(P);
+            return if (addr == 0x1000uz) 7 else 0;
+        };
+    )")};
+    CHECK(exit_code == 7);
 }
 
 } // namespace ghoti::tests

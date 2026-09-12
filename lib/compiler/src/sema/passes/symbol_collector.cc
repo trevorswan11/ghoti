@@ -66,15 +66,13 @@ auto symbol_collector::collect_symbols(mod::module& module, context& ctx) -> mod
     if (module.is_collectable()) {
         module.root_table_idx.emplace(ctx.registry.create());
 
-        if (!cfg_pass::run(module, ctx)) {
-            return module.error_out(std::move(ctx.diags),
-                                    mod::module_state::POISONED_SYMBOL_COLLECTION);
-        }
+        // A failed `@cfg` pass still leaves the AST in a consistent, groups-flattened state
+        const bool cfg_ok{cfg_pass::run(module, ctx)};
 
         symbol_collector collector{module, ctx};
         for (const auto& node : module.ast) { collector.collect(node); }
 
-        if (!ctx.diags.empty()) {
+        if (!cfg_ok || !ctx.diags.empty()) {
             return module.error_out(std::move(ctx.diags),
                                     mod::module_state::POISONED_SYMBOL_COLLECTION);
         }
@@ -95,8 +93,7 @@ auto symbol_collector::collect_symbols(mod::module& module, context& ctx) -> mod
     X(void_expr)                \
     X(undefined_expr)           \
     X(nullptr_expr)             \
-    X(unreachable_expr)         \
-    X(module_access_expr)
+    X(unreachable_expr)
 
 #define COLLECTOR_NOOP_X(NodeType) AST_NODE_VISITOR_NOOP(symbol_collector, NodeType)
 MAKE_COLLECTOR_NOOPS(COLLECTOR_NOOP_X)
@@ -237,9 +234,11 @@ auto symbol_collector::visit(ast::node_id id, const ast::function_expr& fn) -> v
     // The parameter's type should be collected first to prevent self-referential types
     for (const auto& param : fn.parameters) {
         collect(param.explicit_type);
-        const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(param.name)};
-        collecting_.add_identifier_position(param.name);
-        try_declare<symbols::parameter>(ident.name, param);
+        if (param.name.is<ast::identifier_expr>()) {
+            const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(param.name)};
+            collecting_.add_identifier_position(param.name);
+            try_declare<symbols::parameter>(ident.name, param);
+        }
     }
     collect(fn.explicit_return_type);
 
@@ -532,6 +531,14 @@ auto symbol_collector::visit(ast::node_id id, const ast::decl_stmt& decl) -> voi
     const auto  name{ident.name};
     collecting_.add_identifier_position(decl.name);
 
+    // An inline `struct`/`union`/`enum`/`interface` written as the declaration's type
+    // (`var a: enum { lo, hi } = .lo`) needs its anonymous scope registered here
+    if (decl.explicit_type &&
+        decl.explicit_type
+            ->any<ast::struct_expr, ast::union_expr, ast::enum_expr, ast::interface_expr>()) {
+        collect(*decl.explicit_type);
+    }
+
     if (in_function_scope_ && !declaring_into_aggregate()) {
         if (const auto illegal{function_local_illegal_modifiers(decl)}; !illegal.empty()) {
             ctx_.diags.emplace_back(
@@ -543,6 +550,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::decl_stmt& decl) -> voi
         }
     }
 
+    if (decl.discardable_condition) { collect(*decl.discardable_condition); }
     if (!try_declare<symbols::node_t>(name, id)) { return; };
     if (!decl.value) { return; }
 
@@ -583,12 +591,34 @@ auto symbol_collector::visit(ast::node_id id, const ast::decl_stmt& decl) -> voi
 
 auto symbol_collector::visit(ast::node_id id, const ast::defer_stmt& defer) -> void {
     PROFILE_FUNCTION();
-    if (!in_function_scope_) {
+    if (!in_function_scope_ && !in_test_scope_) {
         ctx_.diags.emplace_back("Cannot have defer outside of a function's scope",
                                 error::ILLEGAL_TOP_LEVEL_STATEMENT,
                                 collecting_.ast.location_of(id));
     }
     collect(defer.deferred);
+}
+
+auto symbol_collector::visit(ast::node_id id, const ast::errdefer_stmt& errdef) -> void {
+    PROFILE_FUNCTION();
+    if (!in_function_scope_ && !in_test_scope_) {
+        ctx_.diags.emplace_back("Cannot have errdefer outside of a function's scope",
+                                error::ILLEGAL_TOP_LEVEL_STATEMENT,
+                                collecting_.ast.location_of(id));
+    }
+    if (errdef.capture && errdef.capture->is<ast::identifier_expr>()) {
+        const auto  new_idx{ctx_.registry.create()};
+        const scope s{table_stack_, new_idx, table_idx_};
+        const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(**errdef.capture)};
+        collecting_.add_identifier_position(**errdef.capture);
+        try_declare<symbols::match_capture>(ident.name, **errdef.capture);
+        collect(errdef.deferred);
+        last_type_.emplace(ctx_.pool[{type_kind::BLOCK, types::mut::CONSTANT, new_idx}]);
+        last_type_->set_symbol_table_idx(new_idx);
+        collecting_.set_sema_type(id, *last_type_.take());
+        return;
+    }
+    collect(errdef.deferred);
 }
 
 auto symbol_collector::visit(ast::node_id, const ast::discard_stmt& discard) -> void {
@@ -740,7 +770,6 @@ auto symbol_collector::visit(ast::node_id id, const ast::using_stmt& using_stmt)
 }
 
 AST_TYPE_VISITOR_NOOP(symbol_collector, identifier_expr)
-AST_TYPE_VISITOR_NOOP(symbol_collector, module_access_expr)
 AST_TYPE_VISITOR_NOOP(symbol_collector, dot_expr)
 
 auto symbol_collector::visit(ast::explicit_type_id, const ast::call_expr& call) -> void {

@@ -25,9 +25,10 @@ struct array_expr {
     stdx::option<expr_handle> size;
     bool                      null_terminated;
     bool                      mut_elements;
+    bool                      is_type_expr; // `[]T` / `[N]T` with no `{ ... }` initializer
+    bool                      items_force_break{false}; // trailing comma before `}`
     explicit_type_id          item_explicit_type;
     std::vector<expr_handle>  items;
-    bool                      is_type_expr{false}; // `[]T` / `[N]T` with no `{ ... }` initializer
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;
@@ -38,6 +39,7 @@ struct call_expr {
 
     expr_handle           function;
     std::vector<argument> arguments;
+    bool                  args_force_break{false}; // trailing comma before `)`
 
     [[nodiscard]] static auto parse(syntax::parser& parser, expr_handle function)
         -> stdx::result<expr_handle, syntax::diagnostic>;
@@ -70,6 +72,8 @@ struct asm_expr {
     std::vector<operand>           inputs;
     std::vector<string_handle>     clobbers;
     std::vector<option>            options;
+    // trailing comma before `)` in any of the `outputs`/`inputs`/`clobbers`/`options` lists
+    bool operands_force_break{false};
 
     [[nodiscard]] auto has_option(option opt) const noexcept -> bool {
         return std::ranges::contains(options, opt);
@@ -107,12 +111,13 @@ struct enum_expr {
     using cfg_group        = cfg_item_group<enumeration>;
     using member_cfg_group = cfg_item_group<member_handle>;
 
-    stdx::option<identifier_handle> underlying;
-    std::vector<enumeration>        enumerations;
-    std::vector<cfg_group>          cfg_groups;
-    bool                            non_exhaustive;
-    member_list                     members;
-    std::vector<member_cfg_group>   member_cfg_groups;
+    stdx::option<explicit_type_id> underlying;
+    std::vector<enumeration>       enumerations;
+    std::vector<cfg_group>         cfg_groups;
+    bool                           non_exhaustive;
+    bool                           enumerations_force_break{false}; // trailing comma before `}`
+    member_list                    members;
+    std::vector<member_cfg_group>  member_cfg_groups;
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;
@@ -128,6 +133,8 @@ struct for_loop_expr {
     std::vector<capture>      captures;
     block_handle              block;
     stdx::option<stmt_handle> non_break;
+    bool                      iterables_force_break{false}; // trailing comma before `)`
+    bool                      captures_force_break{false};  // trailing comma before `|`
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;
@@ -160,9 +167,9 @@ namespace ghoti::ast {
 
 struct function_expr {
     struct parameter {
-        identifier_handle name;
-        explicit_type_id  explicit_type;
-        bool              is_constexpr{false};
+        discardable_ident_handle name;
+        explicit_type_id         explicit_type;
+        bool                     is_constexpr{false};
     };
 
     // The parameter's `auto` type must infer to a type that implements every interface in
@@ -179,8 +186,9 @@ struct function_expr {
     bool                         variadic;
     bool                         is_move{false};
     bool                         is_naked{false};
-    calling_convention           conv{calling_convention::C};
     bool                         is_type_expr{false};
+    bool                         params_force_break{false};
+    calling_convention           conv{calling_convention::C};
     std::vector<impl_bound>      impl_bounds{};
 
     // Parse the function as a value. Meant for the parser LUT
@@ -248,6 +256,7 @@ struct cfg_value_expr {
     stdx::option<expr_handle> predicate;
     std::vector<guard>        guards;
     stdx::option<expr_handle> fallback;
+    bool                      guards_force_break{false}; // trailing comma before `)`
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;
@@ -295,6 +304,7 @@ struct initializer_expr {
 
     stdx::option<expr_handle> object_type;
     std::vector<initializer>  initializers;
+    bool                      initializers_force_break{false}; // trailing comma before `}`
 
     // Parse assuming an object is present. Meant for the parser LUT
     [[nodiscard]] static auto parse(syntax::parser& parser, expr_handle object)
@@ -327,6 +337,7 @@ struct match_expr {
         // Only meaningful when `capture` holds a real (non-discarded) identifier
         type_modifier modifier;
         stmt_handle   dispatch;
+        bool          force_break{false};
 
         // The canonical pattern used for side-table keying and diagnostic locations.
         [[nodiscard]] auto primary_pattern() const noexcept -> match_pattern_handle {
@@ -338,6 +349,7 @@ struct match_expr {
     std::vector<arm> arms;
     stdx::opt_size   catch_all_idx;
     bool             is_constexpr{false};
+    bool             arms_force_break{false}; // trailing comma after the last arm
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;
@@ -372,14 +384,6 @@ struct implicit_access_expr {
 
 #undef DECLARE_PREFIX_EXPRESSION
 
-struct module_access_expr {
-    outer_access_handle outer;
-    identifier_handle   inner;
-
-    [[nodiscard]] static auto parse(syntax::parser& parser, expr_handle outer)
-        -> stdx::result<expr_handle, syntax::diagnostic>;
-};
-
 struct struct_expr {
     // Field publicity is baked into the identifier's token type
     struct field {
@@ -402,6 +406,7 @@ struct struct_expr {
     std::vector<member_cfg_group> member_cfg_groups;
     bool                          is_extern{false};
     bool                          is_packed{false};
+    bool                          fields_force_break{false}; // trailing comma in the field list
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic> {
@@ -427,6 +432,7 @@ struct union_expr {
     std::vector<member_cfg_group> member_cfg_groups;
     bool                          is_extern{false};
     bool                          is_packed{false};
+    bool                          fields_force_break{false}; // trailing comma in the field list
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic> {

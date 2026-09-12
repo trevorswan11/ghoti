@@ -100,6 +100,7 @@ class type_resolver {
                                gsl::span<const std::pair<std::string, gir::const_value>> ctor_cx,
                                const ast::function_expr&                                 base_fn,
                                std::string_view ctor_mangled) -> void;
+    auto check_deferred_body_jumps(ast::stmt_handle body) -> void;
 
   private:
     using scope = symbol_table_stack::scope;
@@ -108,6 +109,7 @@ class type_resolver {
     using function_boundary_guard = scope_guard<std::vector<usize>>;
     using open_function_guard     = scope_guard<std::vector<ast::node_id>>;
     using self_recursion_guard    = scope_guard<std::vector<bool>>;
+    using aggregate_resolve_guard = scope_guard<std::vector<usize>>;
 
     // Sets the flag to the provided value and resets it on destruction
     class mutating_context_guard {
@@ -340,9 +342,10 @@ class type_resolver {
     auto visit(ast::node_id, const ast::nullptr_expr&) -> void;
     auto visit(ast::node_id, const ast::unreachable_expr&) -> void;
 
-    template <ast::IndexableID ID>
-    auto resolve_module_access(ID, const ast::module_access_expr&) -> void;
-    auto visit(ast::node_id, const ast::module_access_expr&) -> void;
+    // If a `using` RHS is a bare-name form (`X`, `mod.X`) that resolves to a value symbol
+    // rather than a type, returns that name so the caller can reject the alias.
+    [[nodiscard]] auto using_rhs_value_name(ast::explicit_type_id rhs) const
+        -> stdx::option<std::string_view>;
 
     template <ast::IndexableID ID> auto visit(ID, const ast::struct_expr&) -> void;
     template <ast::IndexableID ID> auto visit(ID, const ast::union_expr&) -> void;
@@ -363,12 +366,17 @@ class type_resolver {
     auto visit(ast::node_id, const ast::continue_stmt&) -> void;
     auto visit(ast::node_id, const ast::decl_stmt&) -> void;
     auto visit(ast::node_id, const ast::defer_stmt&) -> void;
+    auto visit(ast::node_id, const ast::errdefer_stmt&) -> void;
     auto visit(ast::node_id, const ast::discard_stmt&) -> void;
     auto visit(ast::node_id, const ast::expr_stmt&) -> void;
     auto visit(ast::node_id, const ast::impl_stmt&) -> void;
     // Checks required methods present & signature-compatible, required associated items bound, no
     // stray members.
     auto check_impl_conformance(const impl_record& rec, const types::interface_t& iface) -> void;
+    // For each interface default method the impl does not override, re-type its body against the
+    // concrete target so cross-module defaults work
+    auto resolve_inherited_default_methods(impl_record& rec, const types::interface_t& iface)
+        -> void;
     auto visit(ast::node_id, const ast::import_stmt&) -> void;
     auto visit(ast::node_id, const ast::return_stmt&) -> void;
     auto visit(ast::node_id, const ast::test_stmt&) -> void;
@@ -379,7 +387,6 @@ class type_resolver {
     auto apply_explicit_modifiers(ast::explicit_type_id id, type& inner_type) -> type&;
 
     auto visit(ast::explicit_type_id, const ast::identifier_expr&) -> void;
-    auto visit(ast::explicit_type_id, const ast::module_access_expr&) -> void;
     auto visit(ast::explicit_type_id, const ast::dot_expr&) -> void;
     auto visit(ast::explicit_type_id, const ast::call_expr&) -> void;
     auto visit(ast::explicit_type_id, const ast::explicit_function_type&) -> void;
@@ -396,6 +403,16 @@ class type_resolver {
                              gsl::span<type*>                  concrete_args,
                              gsl::span<const gir::const_value> constexpr_args = {})
         -> stdx::option<generic_instantiation_entry>;
+
+    // Distinct opaque `type` sentinel used to stand in for one parameterized-impl type param
+    // during its template resolution, keyed on the param's name-node index
+    auto param_impl_sentinel(usize disc) -> type&;
+    // Opaque `type` placeholder for one interface associated type in its method signatures.
+    auto               assoc_type_placeholder(usize disc) -> type&;
+    [[nodiscard]] auto types_match_with_assoc(const impl_record&        rec,
+                                              const types::interface_t& iface,
+                                              const type&               want,
+                                              const type&               have) -> bool;
 
     type_resolver(mod::module& resolving, context& ctx)
         : resolving_{resolving}, table_idx_{*resolving.root_table_idx}, ctx_{ctx} {
@@ -426,23 +443,24 @@ class type_resolver {
     std::vector<usize>        function_boundaries_;
     std::vector<ast::node_id> open_function_nodes_;
     std::vector<bool>         self_recursive_flags_;
+    // Node indices of `struct`/`union`/`enum` literals whose resolution is currently on the
+    // stack
+    std::vector<usize> resolving_aggregate_nodes_;
 
     bool in_mutating_context_{false};
     bool for_generic_instantiation_{false};
     bool in_subscript_index_{false};
     bool in_for_iterable_{false};
-    // Sskips `if`/`match constexpr` folding and the throwaway `Ctor(<dummy>)` cache insert
-    bool                      building_param_template_{false};
+    bool in_expr_branch_{false};
+    // Skips `if`/`match constexpr` folding and the throwaway `Ctor(<dummy>)` cache insert
+    bool building_param_template_{false};
+
+    // Set by a dedicated instantiation resolver: a body-local decl whose declaring scope index is
+    // at or above this floor  is re-typed even though an earlier pass already left its symbol
+    // RESOLVED. Explicitly-typed decls are exempt.
+    stdx::opt_size            reresolve_floor_{};
     stdx::opt_size            pending_impl_method_owner_;
     stdx::option<std::string> pending_param_impl_target_;
-
-    // Distinct opaque `type` sentinel used to stand in for one parameterized-impl type param
-    // during its template resolution, keyed on the param's name-node index. The template itself
-    // and the per-target expansion set live on the shared `impl_registry` so a monomorphization
-    // triggered from any consuming module can find them.
-    auto param_impl_sentinel(usize disc) -> type&;
-    // Opaque `type` placeholder for one interface associated type in its method signatures.
-    auto assoc_type_placeholder(usize disc) -> type&;
 
     impl_param_bound_map_t impl_param_bounds_;
     named_test_map_t       named_tests_;

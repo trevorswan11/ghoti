@@ -12,6 +12,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/arena.hh"
 #include "compiler/codegen/error.hh"
 #include "compiler/codegen/linker.hh"
 #include "compiler/gir/module.hh"
@@ -51,24 +52,26 @@ class analyzer {
                       codegen::target_options target_opts            = {},
                       bool                    tolerate_syntax_errors = false,
                       bool                    runtime_safety         = true) noexcept
-        : modules_{modules}, pool_{arena_}, error_stream_{error_stream}, in_terminal_{in_terminal},
-          tolerate_syntax_errors_{tolerate_syntax_errors}, ctx_{modules_,
-                                                                registry_,
-                                                                pool_,
-                                                                generic_functions_,
-                                                                instantiation_cache_,
-                                                                impl_registry_,
-                                                                arena_,
-                                                                diagnostics{in_terminal_},
-                                                                error_stream_,
-                                                                std::move(target_opts)} {
+        : modules_{modules}, arena_{modules.arena()}, pool_{arena_}, error_stream_{error_stream},
+          in_terminal_{in_terminal}, tolerate_syntax_errors_{tolerate_syntax_errors},
+          ctx_{modules_,
+               registry_,
+               pool_,
+               generic_functions_,
+               instantiation_cache_,
+               impl_registry_,
+               arena_,
+               diagnostics{in_terminal_},
+               error_stream_,
+               std::move(target_opts)} {
         ctx_.runtime_safety = runtime_safety;
     }
     ~analyzer() = default;
     MAKE_MOVE_CONSTRUCTABLE_ONLY(analyzer);
 
     // Runs the entire sema pipeline
-    auto analyze(const std::filesystem::path& entry_path) -> stdx::result<void, diagnostic>;
+    auto analyze(const std::filesystem::path& entry_path, bool for_test_executable = false)
+        -> stdx::result<gir::module, diagnostic>;
 
     [[nodiscard]] auto get_table(this auto&& self, usize idx) -> auto& {
         return self.registry_.get(idx);
@@ -109,6 +112,12 @@ class analyzer {
     // Lowers `gir_module` and returns the resulting module's textual LLVM IR.
     [[nodiscard]] auto emit_llvm_ir_text(gir::module&                      gir_module,
                                          const codegen::optimizer_options& options)
+        -> stdx::result<std::string, codegen::diagnostic>;
+
+    // Lowers `gir_module` for `target_opts` and returns the resulting native assembly as text.
+    [[nodiscard]] auto emit_asm_text(gir::module&                      gir_module,
+                                     const codegen::target_options&    target_opts,
+                                     const codegen::optimizer_options& opt_options)
         -> stdx::result<std::string, codegen::diagnostic>;
     [[nodiscard]] auto emit_llvm_ir_executable(gir::module&                      gir_module,
                                                llvm::LLVMContext&                context,
@@ -194,7 +203,7 @@ class analyzer {
 
   private:
     mod::module_manager&        modules_;
-    arena_alloc                 arena_;
+    ghoti::arena&               arena_;
     symbol_table_registry       registry_;
     type_pool                   pool_;
     generic_function_registry   generic_functions_;

@@ -21,7 +21,7 @@ TEST_CASE("E2E: match on a cross-module enum honors explicit discriminant values
         R"(
             import "a.gh" as a;
             pub const main := fn(): i32 {
-                const e: a::MyErr = a::make(2);
+                const e: a.MyErr = a.make(2);
                 return match (e) { .A => 1, .B => 2, _ => 99 };
             };
         )",
@@ -34,8 +34,8 @@ TEST_CASE("E2E: `==` against a cross-module enum's `Type.Variant` honors explici
         R"(
             import "a.gh" as a;
             pub const main := fn(): i32 {
-                const e: a::MyErr = a::make(1);
-                if (e == a::MyErr.A) { return 7; }
+                const e: a.MyErr = a.make(1);
+                if (e == a.MyErr.A) { return 7; }
                 return 0;
             };
         )",
@@ -52,7 +52,7 @@ TEST_CASE("E2E: an exhaustive cross-module enum match doesn't trap on a legitima
         R"(
             import "s.gh" as s;
             pub const main := fn(): i32 {
-                const st: s::Status = s::make(20);
+                const st: s.Status = s.make(20);
                 return match (st) {
                     .ok => 1,
                     .fail => 2,
@@ -71,9 +71,9 @@ TEST_CASE("E2E: `@tagName` of a cross-module enum with explicit values reports t
         R"(
             import "c.gh" as c;
             pub const main := fn(): i32 {
-                const v: c::Color = .green;
+                const v: c.Color = .green;
                 const s := @tagName(v);
-                return @as(i32, s.len) * 10 + @as(i32, s[0]);
+                return @intCast(i32, s.len) * 10 + @as(i32, s[0]);
             };
         )",
         {helpers::mock_file{"c.gh", mod, "c"}})};

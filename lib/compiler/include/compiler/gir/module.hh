@@ -12,6 +12,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/arena.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
@@ -40,7 +41,7 @@ struct type_decl {
 
 class module {
   public:
-    explicit module(const mod::module& ast_mod, sema::arena_alloc& arena) noexcept
+    explicit module(const mod::module& ast_mod, ghoti::arena& arena) noexcept
         : ast_module_{ast_mod}, arena_{arena} {}
     ~module() = default;
     MAKE_MOVE_CONSTRUCTABLE_ONLY(module);
@@ -101,7 +102,7 @@ class module {
 
   private:
     const mod::module&        ast_module_;
-    sema::arena_alloc&        arena_;
+    ghoti::arena&             arena_;
     std::vector<type_decl*>   types_;
     std::vector<global_decl*> globals_;
     std::vector<function*>    functions_;

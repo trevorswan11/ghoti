@@ -1,3 +1,0 @@
-pub constexpr Result := fn(T: type, E: type): type {
-    return union { ok: T, err: E };
-};

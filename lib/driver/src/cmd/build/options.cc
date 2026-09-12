@@ -101,6 +101,8 @@ auto options::process_raw(const raw_options&   raw,
     if (!raw.emit_gir_path.empty()) { emit_gir_path.emplace(raw.emit_gir_path); }
     stdx::option<std::filesystem::path> emit_llvm_ir_path;
     if (!raw.emit_llvm_ir_path.empty()) { emit_llvm_ir_path.emplace(raw.emit_llvm_ir_path); }
+    stdx::option<std::filesystem::path> emit_asm_path;
+    if (!raw.emit_asm_path.empty()) { emit_asm_path.emplace(raw.emit_asm_path); }
 
     return options{
         .input_path        = std::move(input_path),
@@ -117,6 +119,7 @@ auto options::process_raw(const raw_options&   raw,
         .output_explicit   = !raw.output.empty(),
         .emit_gir_path     = std::move(emit_gir_path),
         .emit_llvm_ir_path = std::move(emit_llvm_ir_path),
+        .emit_asm_path     = std::move(emit_asm_path),
     };
 }
 
@@ -167,9 +170,11 @@ auto options::setup_module_manager(mod::module_manager& manager, std::ostream& e
 
 auto options::analyze(sema::analyzer&      analyzer,
                       mod::module_manager& manager,
-                      std::ostream&        error_stream)
-    -> stdx::result<gsl::not_null<ghoti::mod::module*>, clap::error> {
-    if (!analyzer.analyze(input_path)) { return stdx::err{clap::error::COMPILATION_FAILED}; }
+                      std::ostream&        error_stream,
+                      bool                 for_test_executable)
+    -> stdx::result<std::pair<gsl::not_null<ghoti::mod::module*>, gir::module>, clap::error> {
+    auto gir_mod_res{analyzer.analyze(input_path, for_test_executable)};
+    if (!gir_mod_res) { return stdx::err{clap::error::COMPILATION_FAILED}; }
 
     auto module_result{manager.try_get_file_module(input_path)};
     if (!module_result) {
@@ -188,7 +193,7 @@ auto options::analyze(sema::analyzer&      analyzer,
         manager.print_all_diagnostics(error_stream);
         return stdx::err{clap::error::COMPILATION_FAILED};
     }
-    return module;
+    return std::make_pair(module, std::move(*gir_mod_res));
 }
 
 auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_view> output_desc)
@@ -222,6 +227,10 @@ auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_v
     subcmd
         ->add_option(
             "--emit-llvm-ir", opts.emit_llvm_ir_path, "Write the LLVM IR to the given file path")
+        ->type_name("FILE");
+    subcmd
+        ->add_option(
+            "--emit-asm", opts.emit_asm_path, "Write the native assembly to the given file path")
         ->type_name("FILE");
 }
 
@@ -259,6 +268,16 @@ auto options::emit_debug_artifacts(sema::analyzer& analyzer,
                                      clap::error::COMPILATION_FAILED);
         }
         TRY(write_file(*emit_llvm_ir_path, *ir, "LLVM IR"));
+    }
+
+    if (emit_asm_path) {
+        auto asm_text{analyzer.emit_asm_text(gir_mod, target_opts, opt_opts)};
+        if (!asm_text) {
+            return clap::fatal_error(error_stream,
+                                     asm_text.error().get_message().value_or(GHOTI_UNKNOWN_ERROR),
+                                     clap::error::COMPILATION_FAILED);
+        }
+        TRY(write_file(*emit_asm_path, *asm_text, "assembly"));
     }
 
     return {};

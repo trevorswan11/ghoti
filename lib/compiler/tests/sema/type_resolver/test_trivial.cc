@@ -63,6 +63,32 @@ TEST_CASE("Type alias resolution") {
     CHECK(c_type == ctx->get_type(sema::type_kind::REFERENCE, bool_ref));
 }
 
+TEST_CASE("`using` rejects a value RHS with a pointer to `const`/`constexpr`") {
+    SECTION("same-module value constant") {
+        helpers::test_resolver_fail(
+            "const BASE := 42; using K = BASE;",
+            sema::diagnostic{"'using' aliases a type, but 'BASE' is a value; use 'const' or "
+                             "'constexpr' to alias a value",
+                             sema::error::TYPE_MISMATCH,
+                             std::pair{0UZ, 28UZ}});
+    }
+
+    SECTION("cross-module value constant") {
+        helpers::test_resolver_fail(
+            R"(import "leaf.gh" as leaf; pub using K = leaf.K;)",
+            {helpers::mock_file{"leaf.gh", "pub const K: i32 = 42;", "leaf"}},
+            sema::diagnostic{"'using' aliases a type, but 'K' is a value; use 'const' or "
+                             "'constexpr' to alias a value",
+                             sema::error::TYPE_MISMATCH,
+                             std::pair{0UZ, 40UZ}});
+    }
+
+    SECTION("a type RHS is still accepted") {
+        helpers::resolve_and_check("const S := struct { x: i32 }; using T = S;");
+        helpers::resolve_and_check("using Byte = u8;");
+    }
+}
+
 TEST_CASE("Unary expression resolution") {
     helpers::resolve_and_check("var a: ^i32 = undefined; _ = *a;");
     helpers::resolve_and_check("_ = !1;");
@@ -96,6 +122,68 @@ TEST_CASE("Defer & discard statement resolution") {
     const auto [sym, _, type]{ctx->get_type_sym_info<syms::node_t>("a", 2)};
     CHECK(type == ctx->get_int_type(32, true));
     helpers::resolve_and_check("_ = 1 + 1;");
+}
+
+TEST_CASE("Defer body jump rejection") {
+    helpers::test_resolver_fail("fn(): void { defer { return; } }",
+                                sema::diagnostic{"cannot 'return' from inside a 'defer' body",
+                                                 sema::error::DEFER_BODY_JUMP,
+                                                 std::pair{0UZ, 21UZ}});
+
+    helpers::test_resolver_fail("fn(): void { defer { break; } }",
+                                sema::diagnostic{"cannot 'break' from inside a 'defer' body",
+                                                 sema::error::DEFER_BODY_JUMP,
+                                                 std::pair{0UZ, 21UZ}});
+
+    helpers::test_resolver_fail("fn(): void { defer { continue; } }",
+                                sema::diagnostic{"cannot 'continue' from inside a 'defer' body",
+                                                 sema::error::DEFER_BODY_JUMP,
+                                                 std::pair{0UZ, 21UZ}});
+
+    helpers::test_resolver_fail(
+        R"(
+const R := union { ok: i32, err: i32 };
+impl builtin.Unwrappable for R {
+    using Output = i32;
+    using Residual = i32;
+    pub const branch := fn(self): builtin.Flow(i32, i32) {
+        return match (self) {
+            .ok => |v| builtin.Flow(i32, i32){ .@"continue" = v },
+            .err => |e| builtin.Flow(i32, i32){ .@"break" = e },
+        };
+    };
+}
+impl builtin.Rewrappable for R {
+    using From = i32;
+    pub const fromResidual := fn(r: i32): @This() { return .{ .err = r }; };
+}
+const f := fn(): R {
+    defer {
+        const r := R{ .ok = 1 };
+        _ = r?;
+    }
+    return R{ .ok = 0 };
+};
+)",
+        sema::diagnostic{"cannot use '?' operator inside a 'defer' body",
+                         sema::error::DEFER_BODY_JUMP,
+                         std::pair{19UZ, 12UZ}});
+
+    SECTION("Loops and local blocks inside defer are allowed to use break and continue") {
+        helpers::resolve_and_check(R"(
+fn(): void {
+    defer {
+        while (true) {
+            break;
+            continue;
+        }
+        blk: {
+            break :blk;
+        }
+    }
+}
+)");
+    }
 }
 
 TEST_CASE("Call resolution edge cases") {
@@ -160,6 +248,36 @@ TEST_CASE("Dereferenced assignment using non-pointer fails") {
         sema::diagnostic{"Cannot dereference non-pointer expression; found 'i32'",
                          sema::error::TYPE_MISMATCH,
                          std::pair{2UZ, 25UZ}});
+}
+
+TEST_CASE("Mutable borrow of rvalue is rejected") {
+    helpers::test_resolver_fail(
+        "pub const test_fn := fn(): void { const p := &mut 42; };",
+        sema::diagnostic{"Cannot take a mutable reference to a temporary value",
+                         sema::error::ILLEGAL_RVALUE_CAPTURE,
+                         std::pair{0UZ, 45UZ}});
+
+    helpers::test_resolver_fail(
+        "pub const test_fn := fn(): void { const p := ^mut 42; };",
+        sema::diagnostic{"Cannot take a mutable pointer to a temporary value",
+                         sema::error::ILLEGAL_RVALUE_CAPTURE,
+                         std::pair{0UZ, 45UZ}});
+}
+
+TEST_CASE("Method requiring mutable self on rvalue is rejected") {
+    helpers::test_resolver_fail(
+        R"(
+        const Counter := struct {
+            val: i32,
+            pub const inc := fn(&mut self): void { self.val += 1; };
+        };
+        pub const test_fn := fn(): void {
+            (Counter{ .val = 0 }).inc();
+        };
+    )",
+        sema::diagnostic{"Cannot call method requiring mutable 'self' on a temporary value",
+                         sema::error::ILLEGAL_RVALUE_CAPTURE,
+                         std::pair{6UZ, 20UZ}});
 }
 
 } // namespace ghoti::tests

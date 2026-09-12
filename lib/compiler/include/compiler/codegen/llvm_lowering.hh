@@ -83,6 +83,7 @@ class llvm_lowering {
     // A private, collision-free `__ghoti.<name>` symbol for an internal definition
     [[nodiscard]] auto private_symbol_name(std::string_view name) const -> std::string;
     auto               resolve_named_function(std::string_view ghoti_name) -> llvm::Function*;
+    auto               resolve_named_constant(std::string_view name) -> llvm::Constant*;
 
     auto emit_alloca(const gir::instruction& inst) -> llvm::Value*;
     auto emit_load(const gir::instruction& inst) -> llvm::Value*;
@@ -120,6 +121,9 @@ class llvm_lowering {
     // Synthesizes a weak, runtime-free stack-probe routine when targeting x86-64 Windows
     auto maybe_emit_windows_stack_probe() -> void;
 
+    // Provide `@memcpy`/`@memset`/`@memmove` overrides to llvm intrinsics w/o libc
+    auto maybe_emit_mem_intrinsic_fallbacks() -> void;
+
     auto get_or_create_test_failed_flag() -> llvm::GlobalVariable*;
     auto get_or_create_test_skipped_flag() -> llvm::GlobalVariable*;
     auto define_test_take_skipped() -> void;
@@ -138,6 +142,10 @@ class llvm_lowering {
                             llvm::Value*            rhs,
                             bool                    is_signed) -> llvm::Value*;
 
+    [[nodiscard]] constexpr auto mem_fallbacks_used() const noexcept -> bool {
+        return memcpy_used_ || memmove_used_ || memset_used_;
+    }
+
   private:
     llvm::LLVMContext&                                                 context_;
     stdx::box<llvm::Module>                                            llvm_module_;
@@ -148,8 +156,11 @@ class llvm_lowering {
     ankerl::unordered_dense::map<std::string_view, llvm::GlobalValue*> globals_;
     ankerl::unordered_dense::set<std::string>                          reserved_symbols_;
     bool                             reserved_symbols_built_{false};
-    stdx::option<const gir::module&> gir_module_;
     bool                             is_executable_{false};
+    bool                             memcpy_used_{false};
+    bool                             memmove_used_{false};
+    bool                             memset_used_{false};
+    stdx::option<const gir::module&> gir_module_;
     std::string                      user_main_name_{"main"};
 };
 

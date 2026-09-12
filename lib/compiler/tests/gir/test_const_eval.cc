@@ -222,7 +222,7 @@ TEST_CASE("Target enum comparison folds against a bare member") {
         const here  := @targetOs();
         const eq    := @targetOs() == here;
         const ne    := @targetArch() != @targetArch();
-        const probe := fn(o: builtin::Os): void {};
+        const probe := fn(o: builtin.Os): void {};
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -549,12 +549,12 @@ TEST_CASE("Division by zero failure handling in constant eval") {
     CHECK_FALSE(ctx->analyzer.get_ctx().diags.empty());
 }
 
-TEST_CASE("Builtin const eval @this") {
+TEST_CASE("Builtin const eval @This") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const Node := struct {
             val: i32,
 
-            using Self = @this();
+            using Self = @This();
             pub const bar := fn(s: &Self): i32 { return 0; };
         };
         const sz := @sizeOf(Node);
@@ -650,6 +650,41 @@ TEST_CASE("Const eval @setMainSymbol sets main symbol name") {
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("setup", idx)};
     CHECK(evaluator.try_eval(*decl_s.value));
     CHECK(ctx->analyzer.get_ctx().user_main_name == "custom_entry");
+}
+
+TEST_CASE("Const eval folds method call on struct instance") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const Point := struct {
+            x: i32,
+            y: i32,
+            pub const sum := fn(self): i32 { return self.x + self.y; };
+        };
+        const pt := Point{ .x = 10, .y = 32 };
+        const res := pt.sum();
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym_res, _res, decl_res, type_res]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("res", idx)};
+    const auto val_res{UNWRAP(evaluator.try_eval(*decl_res.value))};
+    CHECK(val_res.as_int_opt() == 42);
+}
+
+TEST_CASE("Const eval folds impl method call") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const Rect := struct { w: i32, h: i32 };
+        impl Rect {
+            pub const area := fn(self): i32 { return self.w * self.h; };
+        }
+        const r := Rect{ .w = 6, .h = 7 };
+        const a := r.area();
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym_a, _a, decl_a, type_a]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("a", idx)};
+    const auto val_a{UNWRAP(evaluator.try_eval(*decl_a.value))};
+    CHECK(val_a.as_int_opt() == 42);
 }
 
 } // namespace ghoti::tests

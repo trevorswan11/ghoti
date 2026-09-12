@@ -32,6 +32,8 @@
 #include "support/int128.hh"
 #include "support/scope_guard.hh"
 
+namespace ghoti::sema { struct unwrap_info; } // namespace ghoti::sema
+
 namespace ghoti::gir {
 
 class emitter {
@@ -74,9 +76,16 @@ class emitter {
         bool alias_capture{false}; // the capture was written `|&x|`/`|^x|`
     };
 
+    struct deferred_entry {
+        ast::stmt_handle                            deferred;
+        bool                                        on_error{false};
+        stdx::option<ast::discardable_ident_handle> capture{};
+        ast::type_modifier                          modifier{};
+    };
+
     struct scope_frame {
         ankerl::unordered_dense::map<std::string_view, local_binding> bindings;
-        std::vector<ast::stmt_handle>                                 defers;
+        std::vector<deferred_entry>                                   defers;
     };
 
     using scope_guard           = ghoti::scope_guard<std::vector<scope_frame>>;
@@ -93,13 +102,17 @@ class emitter {
     // Emits the member functions of an `impl [I for] T { ... }` block under names scoped to the
     // impl's own symbol table, plus any interface default methods the impl inherits.
     auto emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -> void;
-    // Emits one inherited interface default-method body for a concrete impl target. `self` is
-    // retyped to the target and bare `self.method(...)` calls in the body are redirected to the
-    // impl's own methods.
+    // Emits one inherited interface default-method body for a concrete impl target. The body's
+    // AST lives in `iface_mod`; `self` is retyped to the target, bare `self.method(...)` calls
+    // are redirected to the impl's own methods, and `body_type_diff[typing_key]` is replayed so
+    // associated types resolve to the impl's bindings.
     auto emit_impl_default_method(std::string_view          gir_name,
                                   usize                     impl_scope_idx,
+                                  mod::module&              iface_mod,
                                   ast::node_id              sig_id,
-                                  const ast::function_expr& fn_expr) -> void;
+                                  const ast::function_expr& fn_expr,
+                                  stdx::option<sema::type&> concrete_sig,
+                                  std::string_view          typing_key) -> void;
 
     auto emit_function(ast::node_id                   id,
                        const ast::decl_stmt&          decl,
@@ -136,12 +149,14 @@ class emitter {
     auto emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> void;
     auto emit_return_stmt(ast::node_id id, const ast::return_stmt& ret) -> void;
     auto emit_defer_stmt(ast::node_id id, const ast::defer_stmt& def) -> void;
+    auto emit_errdefer_stmt(ast::node_id id, const ast::errdefer_stmt& errdef) -> void;
     auto emit_break(ast::node_id id, const ast::break_stmt& brk) -> void;
     auto emit_continue(ast::node_id id, const ast::continue_stmt& cnt) -> void;
-    auto emit_stmt_as_value(const ast::stmt_handle& stmt) -> value;
+    [[nodiscard]] auto emit_stmt_as_value(const ast::stmt_handle& stmt) -> value;
+    [[nodiscard]] auto retype_if_undefined(value v, sema::type& result_type) -> value;
 
-    auto emit_defers_for_scope(usize scope_idx) -> void;
-    auto emit_defers_up_to(usize target_depth) -> void;
+    auto emit_defers_for_scope(usize scope_idx, bool error_edge = false) -> void;
+    auto emit_defers_up_to(usize target_depth, bool error_edge = false) -> void;
     auto emit_lvalue(ast::node_id id) -> value;
 
     // Emits a `panic_handler(msg, file, line, column)` call followed by `unreachable`
@@ -150,6 +165,7 @@ class emitter {
                               const value&     enum_val,
                               const value&     src_val,
                               ast::expr_handle src_expr) -> void;
+    auto emit_int_cast_guard(value operand, const sema::type& dest_type, ast::node_id site) -> void;
 
     [[nodiscard]] auto enum_discriminants(const sema::types::enum_t& en) -> std::vector<i64>;
     auto               emit_runtime_tag_name(ast::expr_handle operand_expr,
@@ -189,6 +205,9 @@ class emitter {
     }
     auto emit_array(ast::node_id id, const ast::array_expr& array) -> value;
     auto emit_slice_from_array(value arr_lval, const sema::type& arr_type) -> value;
+    // Materializes a folded string constant that is typed as a slice (`const S: []u8 = "..."`)
+    // into a `{ptr, len}` value by spilling the bytes to a fresh array temporary and decaying it.
+    auto emit_string_as_slice(const std::string& bytes, const sema::type& slice_type) -> value;
     // Builds a `&dyn I` / `^dyn I` fat pointer `{ data, vtable }` from `src` (a `&T` / `^T`)
     auto emit_dyn_coercion(ast::expr_handle src, const sema::type& fat_type) -> value;
     // Lowers `expr[lo..{=}hi]` on an array or slice to a bounds-checked `{ptr, len}` subslice.
@@ -202,25 +221,31 @@ class emitter {
     auto emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value;
     auto emit_match(ast::node_id id, const ast::match_expr& match) -> value;
 
+    // @mem* decompose the slice args into a data pointer + byte length
+    auto emit_mem_intrinsic(ast::node_id          id,
+                            const ast::call_expr& call,
+                            syntax::token_type_t  builtin) -> void;
+
     auto emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> value;
-    auto emit_unwrap_propagation(value             operand_addr,
-                                 const sema::type& operand_union,
-                                 u64               operand_diverge_idx,
-                                 bool              diverge_is_void,
-                                 ast::node_id      site) -> void;
+    auto emit_unwrap_propagation(value                    operand_addr,
+                                 const sema::unwrap_info& shape,
+                                 ast::node_id             site) -> void;
     auto emit_union_active_field_guard(value            union_addr,
                                        u64              field_idx,
                                        std::string_view field_name,
                                        ast::node_id     site) -> void;
     auto emit_initializer(ast::node_id id, const ast::initializer_expr& init) -> value;
-    auto emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value;
+    // Emits a struct field's `= default` expression, coerced to `field_type`
+    auto               emit_field_default(ast::expr_handle   default_expr,
+                                          const mod::module& owner,
+                                          const sema::type&  field_type) -> value;
+    auto               emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value;
     [[nodiscard]] auto dot_object_is_type_namespace(const ast::dot_expr& dot) -> bool;
     auto               emit_index(ast::node_id id, const ast::index_expr& index) -> value;
     auto               emit_address_of(ast::node_id id, const ast::address_of_expr& addr) -> value;
     auto emit_dereference(ast::node_id id, const ast::dereference_expr& deref) -> value;
     auto emit_reference(ast::node_id id, const ast::reference_expr& ref) -> value;
     auto emit_implicit_access(ast::node_id id, const ast::implicit_access_expr& imp) -> value;
-    auto emit_module_access(ast::node_id id, const ast::module_access_expr& mod_access) -> value;
     auto emit_while(ast::node_id                   id,
                     const ast::while_loop_expr&    while_loop,
                     stdx::option<std::string_view> label       = stdx::none,
@@ -406,6 +431,7 @@ class emitter {
     module                        gir_module_;
     std::vector<scope_frame>      scopes_;
     std::vector<loop_context>     loop_stack_;
+    stdx::option<value>           current_error_slot_{};
     default_counter               anon_test_desc_counter_;
     default_counter               anon_test_fn_counter_;
     default_counter               anon_fn_counter_;
@@ -420,6 +446,8 @@ class emitter {
     // While emitting an inherited interface default-method body: bare `self.method(...)` calls
     // are rewritten to target this impl's own methods (its body symbol table).
     stdx::opt_size emitting_impl_default_scope_;
+    // For emitting a method body written directly in an `impl` block
+    stdx::opt_size emitting_impl_body_scope_;
 };
 
 } // namespace ghoti::gir

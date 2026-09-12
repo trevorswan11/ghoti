@@ -74,7 +74,6 @@ class dumper {
     auto visit(node_id, const undefined_expr&) -> void;
     auto visit(node_id, const nullptr_expr&) -> void;
     auto visit(node_id, const unreachable_expr&) -> void;
-    auto visit(node_id, const module_access_expr&) -> void;
     auto visit(node_id, const struct_expr&) -> void;
     auto visit(node_id, const union_expr&) -> void;
     auto visit(node_id, const interface_expr&) -> void;
@@ -86,6 +85,7 @@ class dumper {
     auto visit(node_id, const continue_stmt&) -> void;
     auto visit(node_id, const decl_stmt&) -> void;
     auto visit(node_id, const defer_stmt&) -> void;
+    auto visit(node_id, const errdefer_stmt&) -> void;
     auto visit(node_id, const discard_stmt&) -> void;
     auto visit(node_id, const expr_stmt&) -> void;
     auto visit(node_id, const impl_stmt&) -> void;
@@ -96,7 +96,6 @@ class dumper {
     auto visit(node_id, stdx::monostate) -> void { fmt::println(out_, "<discarded>"); }
 
     auto visit(explicit_type_id, const identifier_expr&) -> void;
-    auto visit(explicit_type_id, const module_access_expr&) -> void;
     auto visit(explicit_type_id, const dot_expr&) -> void;
     auto visit(explicit_type_id, const call_expr&) -> void;
     auto visit(explicit_type_id, const explicit_function_type&) -> void;

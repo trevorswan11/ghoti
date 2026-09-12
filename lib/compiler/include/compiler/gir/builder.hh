@@ -43,6 +43,14 @@ class builder {
     auto emit_instruction(instruction inst) -> instruction&;
     auto emit_alloca(sema::type& type, std::string_view name = {}, bool is_const = false)
         -> local_id;
+
+    // An alloca hoisted into the function's entry segment (before its terminator) so it dominates
+    // every use, no matter which segment is currently being built.
+    auto emit_alloca_in_entry(sema::type& type, bool is_const = false) -> local_id;
+
+    // A store spliced into the entry segment, paired with `emit_alloca_in_entry` to initialize a
+    // hoisted slot from an entry-live value (a parameter or a compile-time constant).
+    auto emit_store_in_entry(local_id dest, value val) -> void;
     auto emit_load(local_id src, sema::type& type) -> local_id;
     auto emit_load(value src, sema::type& type) -> local_id;
     auto emit_store(local_id dest, value val) -> instruction&;

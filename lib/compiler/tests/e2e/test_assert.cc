@@ -40,7 +40,7 @@ TEST_CASE("@verify routes its message to the panic handler, which can observe it
         pub const main := fn(): i32 {
             var x: i32 = 0;
             @verify(x > 0, "nope");
-            return @as(i32, last_msg_len);
+            return @intCast(i32, last_msg_len);
         };
     )") != 0);
 }
@@ -53,6 +53,19 @@ TEST_CASE("a comptime-true @assert / @verify emits no check") {
             return 42;
         };
     )") == 42);
+}
+
+TEST_CASE("Assertions with pointer conditions coerce to boolean cleanly") {
+    const auto exit_code{helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            var val: i32 = 7;
+            const p: ^i32 = ^val;
+            @assert(p);
+            @verify(p);
+            return *p;
+        };
+    )")};
+    CHECK(exit_code == 7);
 }
 
 } // namespace ghoti::tests

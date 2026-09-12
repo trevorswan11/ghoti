@@ -41,7 +41,7 @@ TEST_CASE("formatter preserves grouping parens the author wrote") {
 TEST_CASE("formatter round-trips operator expressions") {
     CHECK(format_source("a <= b or c == d and e;") == "a <= b or c == d and e;\n");
     CHECK(format_source("a or b[3uz] == !c;") == "a or b[3uz] == !c;\n");
-    CHECK(format_source("A::B::C;") == "A::B::C;\n");
+    CHECK(format_source("A.B.C;") == "A.B.C;\n");
     CHECK(format_source("a.b;") == "a.b;\n");
     CHECK(format_source("a..b;") == "a..b;\n");
     CHECK(format_source("a..=b;") == "a..=b;\n");
@@ -83,16 +83,16 @@ TEST_CASE("formatter round-trips leaf statements") {
 
 TEST_CASE("formatter round-trips types") {
     CHECK(format_source("var a: []i32 = undefined;") == "var a: []i32 = undefined;\n");
-    CHECK(format_source("var a: std::ArrayList(u8) = undefined;") ==
-          "var a: std::ArrayList(u8) = undefined;\n");
+    CHECK(format_source("var a: std.ArrayList(u8) = undefined;") ==
+          "var a: std.ArrayList(u8) = undefined;\n");
     CHECK(format_source("var a: List(i32) = undefined;") == "var a: List(i32) = undefined;\n");
     CHECK(format_source("var v: mut volatile i32 = 42;") == "var v: mut volatile i32 = 42;\n");
     CHECK(format_source("var f: ^fn(x: &a, y: ^mut B, ...): ^E = undefined;") ==
           "var f: ^fn(x: &a, y: ^mut B, ...): ^E = undefined;\n");
     CHECK(format_source("var a: [N:0]u8 = undefined;") == "var a: [N:0]u8 = undefined;\n");
     CHECK(format_source("var w: &dyn Writer = undefined;") == "var w: &dyn Writer = undefined;\n");
-    CHECK(format_source("var w: ^mut dyn io::Writer = undefined;") ==
-          "var w: ^mut dyn io::Writer = undefined;\n");
+    CHECK(format_source("var w: ^mut dyn io.Writer = undefined;") ==
+          "var w: ^mut dyn io.Writer = undefined;\n");
     CHECK(format_source("var it: &dyn Iterator(Item = u8) = undefined;") ==
           "var it: &dyn Iterator(Item = u8) = undefined;\n");
     CHECK(format_source("var m: &dyn Map(Key = []u8, Value = i32) = undefined;") ==
@@ -156,7 +156,7 @@ const g := fn(): void {};
 const x := 42;
 )");
 
-    CHECK(format_source("const S := struct { x: i32, };\nconst f := fn(): void {};") ==
+    CHECK(format_source("const S := struct { x: i32 };\nconst f := fn(): void {};") ==
           R"(const S := struct { x: i32 };
 
 const f := fn(): void {};
@@ -205,6 +205,15 @@ TEST_CASE("formatter lays out if / match") {
     CHECK(format_source("const r := match (n) { 1, 2, 3 => 1, _ => 0 };") ==
           "const r := match (n) { 1, 2, 3 => 1, _ => 0 };\n");
 
+    CHECK(format_source("const r := match (u) { .a, .b, => 1, _ => 0 };") ==
+          R"(const r := match (u) {
+    .a,
+    .b,
+    => 1,
+    _ => 0,
+};
+)");
+
     CHECK(format_source("const r := match constexpr (T) { i32 => 1, _ => 0 };") ==
           "const r := match constexpr (T) { i32 => 1, _ => 0 };\n");
 
@@ -215,6 +224,31 @@ TEST_CASE("formatter lays out if / match") {
     _ => {},
 };
 )");
+}
+
+TEST_CASE("formatter keeps a trailing comment after an inline match statement") {
+    CHECK(format_source("_ = match (f()) { .a => 1, .b => 2 }; // note\n") ==
+          "_ = match (f()) { .a => 1, .b => 2 }; // note\n");
+    CHECK(format_source(R"(const f := fn(): i32 {
+    @expect(match (g()) { .ok => |n| n == 4, .err => false }); // only 4 available
+    @expect(match (g()) { .ok => |n| n == 0, .err => false }); // EOF
+    return 0;
+};
+)") == R"(const f := fn(): i32 {
+    @expect(match (g()) { .ok => |n| n == 4, .err => false }); // only 4 available
+    @expect(match (g()) { .ok => |n| n == 0, .err => false }); // EOF
+    return 0;
+};
+)");
+}
+
+TEST_CASE("formatter keeps a per-arm trailing comment on a multi-line match") {
+    constexpr std::string_view source{R"(const r := match (u) {
+    .a => 1, // first
+    .b => 2, // second
+};
+)"};
+    CHECK(format_source(source) == source);
 }
 
 TEST_CASE("formatter does not double the terminator on a value-if or loop tail") {
@@ -229,6 +263,49 @@ TEST_CASE("formatter does not double the terminator on a value-if or loop tail")
 } else return b;
 )");
     CHECK(format_source("if (c) return x; else return y;") == "if (c) return x; else return y;\n");
+}
+
+TEST_CASE("formatter breaks a wide value if/else-if chain one arm per line") {
+    const auto out{format_source(
+        "const d: u32 = if (flags.exclusive) NEW else if (flags.create and flags.trunc) "
+        "ALWAYS else if (flags.create) OPEN else EXISTING;",
+        60)};
+    CHECK(out == R"(const d: u32 = if (flags.exclusive) NEW
+    else if (flags.create and flags.trunc) ALWAYS
+    else if (flags.create) OPEN
+    else EXISTING;
+)");
+
+    CHECK(format_source("const d := if (a) 1 else if (b) 2 else 3;") ==
+          "const d := if (a) 1 else if (b) 2 else 3;\n");
+}
+
+TEST_CASE("formatter keeps a trailing comment on an interior if-chain arm") {
+    constexpr std::string_view source{R"(const f := fn(): i32 {
+    const d := if (aaaaaaaaaaaaaaaaaaaa) 1
+        else if (bbbbbbbbbbbbbbbbbbbb) 2 // pick two
+        else 3;
+    return d;
+};
+)"};
+    CHECK(format_source(source) == source);
+}
+
+TEST_CASE("formatter preserves comments and blank lines inside a local @cfg block") {
+    constexpr std::string_view source{R"(const f := fn(): i32 {
+    @cfg (os == .windows) {
+        // leading comment on the first statement
+        const a := 1; // trailing on a
+
+        // a blank line and a comment separate these
+        const b := 2;
+        return a + b;
+    } else {
+        return 0;
+    }
+};
+)"};
+    CHECK(format_source(source) == source);
 }
 
 TEST_CASE("formatter writes an inferred array size as _") {
@@ -248,6 +325,95 @@ TEST_CASE("formatter breaks a wide argument list") {
     ffffffffff,
 );
 )");
+}
+
+TEST_CASE("formatter force-breaks a parameter list that has a trailing comma") {
+    CHECK(format_source("const f := fn(a: i32, b: i32,): void {};") == R"(const f := fn(
+    a: i32,
+    b: i32,
+): void {};
+)");
+
+    round_trips("const f := fn(a: i32, b: i32,): void {};");
+
+    CHECK(format_source("const S := struct { const m := fn(&self, x: i32,): void {}; };") ==
+          R"(const S := struct {
+    const m := fn(
+        &self,
+        x: i32,
+    ): void {};
+};
+)");
+
+    CHECK(format_source("const T := fn(a: i32, b: i32,): void;") == R"(const T := fn(
+    a: i32,
+    b: i32,
+): void;
+)");
+
+    CHECK(format_source("const g := fn(a: i32, b: i32): void {};") ==
+          "const g := fn(a: i32, b: i32): void {};\n");
+}
+
+TEST_CASE("formatter treats a trailing comma in any delimited list as a break hint") {
+    CHECK(format_source("const S := struct { x: i32, y: i32, };") == R"(const S := struct {
+    x: i32,
+    y: i32,
+};
+)");
+    CHECK(format_source("const U := union { a: i32, b: u8, };") == R"(const U := union {
+    a: i32,
+    b: u8,
+};
+)");
+    CHECK(format_source("const E := enum : u8 { a, b, };") == R"(const E := enum : u8 {
+    a,
+    b,
+};
+)");
+    CHECK(format_source("const E := enum { a, b, _, };") == R"(const E := enum {
+    a,
+    b,
+    _,
+};
+)");
+    CHECK(format_source("const x := f(a, b,);") == R"(const x := f(
+    a,
+    b,
+);
+)");
+    CHECK(format_source("const p := P{ .a = 1, .b = 2, };") == R"(const p := P{
+    .a = 1,
+    .b = 2,
+};
+)");
+    CHECK(format_source("const a := [2uz]i32{ 1, 2, };") == R"(const a := [2uz]i32{
+    1,
+    2,
+};
+)");
+    CHECK(format_source("const y := match (n) { 1 => a, _ => b, };") == R"(const y := match (n) {
+    1 => a,
+    _ => b,
+};
+)");
+    CHECK(format_source("const v: T(i32, u8,) = undefined;") == R"(const v: T(
+    i32,
+    u8,
+) = undefined;
+)");
+
+    CHECK(format_source("const S := struct { x: i32, y: i32 };") ==
+          "const S := struct { x: i32, y: i32 };\n");
+    CHECK(format_source("const x := f(a, b);") == "const x := f(a, b);\n");
+
+    round_trips("const S := struct { x: i32, y: i32, };");
+    round_trips("const E := enum { a, b, };");
+    round_trips("const x := f(a, b,);");
+    round_trips("const p := P{ .a = 1, .b = 2, };");
+    round_trips("const y := match (n) { 1 => a, _ => b, };");
+    round_trips("impl(T: type,) Box(T) { const x := 1; }");
+    round_trips("pub const main := fn(): void { for (arr,) |x,| { _ = x; } };");
 }
 
 TEST_CASE("formatter preserves a single blank line between items") {
@@ -281,7 +447,7 @@ TEST_CASE("formatter round trip: operators and grouping") {
     round_trips("_ = (a + b) * c;");
     round_trips("_ = a + b * c - d / e;");
     round_trips("_ = ((a));");
-    round_trips("A::B::C; a.b; a..b; a..=b;");
+    round_trips("A.B.C; a.b; a..b; a..=b;");
     round_trips("&a; &mut b; *a; ^mut a; ^a;");
     round_trips("@as(i32, a); .a; .{ .a = 3 }; TT{ .adfasf = a }; .{};");
     round_trips("_ = a +% b - c *% d + e <<% f;");
@@ -310,7 +476,7 @@ TEST_CASE("formatter round trip: functions and types") {
     round_trips("fn(self): i32 {};");
     round_trips("pub const min := fn(a: auto, b: auto): auto { return if (a < b) a else b; };");
     round_trips("using T = i32; pub using a = ^^i32;");
-    round_trips("var a: std::ArrayList(u8) = undefined; var a: List(i32) = undefined; var a: []i32 "
+    round_trips("var a: std.ArrayList(u8) = undefined; var a: List(i32) = undefined; var a: []i32 "
                 "= undefined;");
     round_trips("extern const foo: fn(): i32;");
     round_trips(R"(extern("kernel32") const bar: fn(): void;)");
@@ -327,6 +493,19 @@ TEST_CASE("formatter round trip: functions and types") {
     round_trips("const cb := fn(x: i32) callconv(.stdcall): i32 { return x; };");
 }
 
+TEST_CASE("formatter round trip: raw identifiers") {
+    round_trips(R"(const @"type": i32 = 0;)");
+    round_trips(R"(pub const @"match" := 1;)");
+    round_trips(R"(const x := @"struct".field;)");
+    round_trips(R"(const f := fn(@"fn": i32, @"i32": i32): i32 { return @"fn" + @"i32"; };)");
+    round_trips(R"(using @"union" = i32;)");
+    round_trips(R"(const s := extern struct { @"struct": i32, @"enum": u8 };)");
+    // A name needing no escaping must format bare, even when written raw in the source.
+    CHECK(format_source(R"(const @"plain" := 0;)") == "const plain := 0;\n");
+    // A keyword collision round-trips through the raw form.
+    CHECK(format_source(R"(const @"type" := 0;)") == "const @\"type\" := 0;\n");
+}
+
 TEST_CASE("formatter round trip: aggregates") {
     round_trips("struct { var a: Foo = bar; const b := fn(^mut this, a: A, b: ^B): C { c; }; };");
     round_trips("union { a: i32, b: &mut T, };");
@@ -337,7 +516,7 @@ TEST_CASE("formatter round trip: aggregates") {
     round_trips(R"(const S := struct {
     x: i32,
     const make := fn(v: auto): i32 {
-        const r: @this() = S{ .x = v };
+        const r: @This() = S{ .x = v };
         return r.x;
     };
 };)");
@@ -356,7 +535,9 @@ TEST_CASE("formatter keeps small interfaces inline and breaks ones with bodies")
               "pub const writeAll := fn(&mut self, b: []u8): R { return self.write(b); }; };") ==
           R"(const W := interface {
     Error: type;
+
     const cap: usize = 4096;
+
     pub const write := fn(&mut self, b: []u8): R;
     const dbg := fn(&self): []u8;
     pub const writeAll := fn(&mut self, b: []u8): R {
@@ -366,33 +547,133 @@ TEST_CASE("formatter keeps small interfaces inline and breaks ones with bodies")
 )");
 }
 
+TEST_CASE("formatter preserves comments and groups members inside an interface") {
+    constexpr std::string_view source{R"(const Reader := interface {
+    // the associated error type
+    Error: type;
+    Width: type = usize; // an optional width
+
+    // the buffer size to use
+    const buf_size: usize;
+    const max_retries: i32 = 3; // retry ceiling
+
+    // read fills `dst`
+    pub const read := fn(&self, dst: []mut u8): usize;
+    const close := fn(&self): void; // release resources
+};
+)"};
+
+    CHECK(format_source(source) == source);
+}
+
+TEST_CASE("formatter keeps a doc comment on an interface method that follows a default body") {
+    constexpr std::string_view source{R"(const Reader := interface {
+    /// reads one chunk
+    pub const read := fn(&mut self, buf: []mut u8): usize;
+
+    /// drains the whole source
+    pub const readAll := fn(&mut self, buf: []mut u8): usize {
+        var i: usize = 0;
+        if (i == buf.len) { // done
+            return i;
+        }
+        return i;
+    };
+};
+)"};
+
+    CHECK(format_source(source) == source);
+}
+
+TEST_CASE("formatter groups interface members even with no comments") {
+    CHECK(format_source("const I := interface { A: type; const n: usize; "
+                        "pub const f := fn(&self): void; };") ==
+          R"(const I := interface {
+    A: type;
+
+    const n: usize;
+
+    pub const f := fn(&self): void;
+};
+)");
+
+    CHECK(format_source("const M := interface { pub const a := fn(&self): void; "
+                        "pub const b := fn(&self): void; };") ==
+          "const M := interface { pub const a := fn(&self): void; "
+          "pub const b := fn(&self): void; };\n");
+}
+
 TEST_CASE("formatter round trips impl blocks with no trailing semicolon") {
     CHECK(
         format_source(
-            "impl File { pub const fromRaw := fn(fd: i32): @this() { return .{ .fd = fd }; }; }") ==
+            "impl File { pub const fromRaw := fn(fd: i32): @This() { return .{ .fd = fd }; }; }") ==
         R"(impl File {
-    pub const fromRaw := fn(fd: i32): @this() {
+    pub const fromRaw := fn(fd: i32): @This() {
         return .{ .fd = fd };
     };
 }
 )");
 
     CHECK(format_source("impl Writer for File { pub const write := fn(&mut self, b: []u8): R "
-                        "{ return os::write(self.fd, b); }; }") ==
+                        "{ return os.write(self.fd, b); }; }") ==
           R"(impl Writer for File {
     pub const write := fn(&mut self, b: []u8): R {
-        return os::write(self.fd, b);
+        return os.write(self.fd, b);
     };
 }
 )");
 
-    CHECK(format_source("impl(H: type) Writer(H) { pub const fromRaw := fn(raw: H): @this() "
+    CHECK(format_source("impl(H: type) Writer(H) { pub const fromRaw := fn(raw: H): @This() "
                         "{ return .{ .handle = raw }; }; }") ==
           R"(impl(H: type) Writer(H) {
-    pub const fromRaw := fn(raw: H): @this() {
+    pub const fromRaw := fn(raw: H): @This() {
         return .{ .handle = raw };
     };
 }
+)");
+}
+
+TEST_CASE("formatter preserves comments inside an impl block") {
+    constexpr std::string_view source{R"(impl Writer for File {
+    // write pushes the whole buffer
+    pub const write := fn(&mut self, b: []u8): R {
+        return os.write(self.fd, b); // the syscall
+    };
+    // close releases the handle
+    const close := fn(&self): void {};
+}
+)"};
+
+    CHECK(format_source(source) == source);
+}
+
+TEST_CASE("formatter puts a blank line between consecutive impl methods") {
+    CHECK(format_source("impl A for B { pub const f := fn(&self): void {}; "
+                        "pub const g := fn(&self): void {}; }") ==
+          R"(impl A for B {
+    pub const f := fn(&self): void {};
+
+    pub const g := fn(&self): void {};
+}
+)");
+}
+
+TEST_CASE("formatter puts a blank line between a struct field and its first method, and "
+         "between consecutive methods") {
+    CHECK(format_source("const S := struct { x: i32, pub const get := fn(&self): i32 "
+                        "{ return self.x; }; pub const inc := fn(&mut self): void "
+                        "{ self.x = self.x + 1; }; };") ==
+          R"(const S := struct {
+    x: i32,
+
+    pub const get := fn(&self): i32 {
+        return self.x;
+    };
+
+    pub const inc := fn(&mut self): void {
+        self.x = self.x + 1;
+    };
+};
 )");
 }
 
@@ -413,7 +694,7 @@ TEST_CASE("formatter round trip: interfaces and impls") {
                 "const seal := fn(&self): void; "
                 "pub const drain := fn(&mut self): void { self.seal(); }; };");
     round_trips("using X = interface { pub const f := fn(^self): i32; };");
-    round_trips("impl File { pub const make := fn(): @this() { return .{}; }; }");
+    round_trips("impl File { pub const make := fn(): @This() { return .{}; }; }");
     round_trips("impl Writer for File { pub const write := fn(&mut self, b: []u8): R { c; }; }");
     round_trips("impl(T: type) Debug for Box(T) { pub const fmt := fn(&self): void {}; }");
     round_trips("impl(H: type, constexpr n: usize) Buf(H) { const cap := n; }");
@@ -513,6 +794,20 @@ TEST_CASE("formatter preserves comments inside aggregates") {
 )"};
 
     CHECK(format_source(source) == source);
+
+    constexpr std::string_view union_source{R"(const U := union {
+    a: i32, // comment
+    b: u8,
+};
+)"};
+    round_trips(union_source);
+
+    constexpr std::string_view union_no_trailing_comma{R"(const U := union {
+    a: i32, // comment
+    b: u8
+};
+)"};
+    CHECK(format_source(union_no_trailing_comma) == union_source);
 }
 
 TEST_CASE("formatter preserves standalone comments") {
@@ -592,6 +887,27 @@ const b: i32 = 3;
     CHECK(format_source(no_blank) == no_blank);
 
     CHECK(format_source("// file header\nconst a := 1;\n") == "// file header\nconst a := 1;\n");
+}
+
+TEST_CASE("formatter preserves discarded function parameters") {
+    CHECK(format_source("const f := fn(_: i32): void {};\n") ==
+          "const f := fn(_: i32): void {};\n");
+    CHECK(format_source("const f := fn(a: i32, _: bool, _: []u8): void {};\n") ==
+          "const f := fn(a: i32, _: bool, _: []u8): void {};\n");
+}
+
+TEST_CASE("formatter formats errdefer statements") {
+    CHECK(format_source("const f := fn(): void { errdefer a(); };\n") ==
+          "const f := fn(): void {\n    errdefer a();\n};\n");
+    CHECK(format_source("const f := fn(): void { errdefer |e| cleanup(e); };\n") ==
+          "const f := fn(): void {\n    errdefer |e| cleanup(e);\n};\n");
+    CHECK(format_source("const f := fn(): void { errdefer |_| cleanup(); };\n") ==
+          "const f := fn(): void {\n    errdefer |_| cleanup();\n};\n");
+    CHECK(format_source("const f := fn(): void { errdefer |&e| cleanup(e); };\n") ==
+          "const f := fn(): void {\n    errdefer |&e| cleanup(e);\n};\n");
+    CHECK(format_source("const f := fn(): void { errdefer |^e| cleanup(e); };\n") ==
+          "const f := fn(): void {\n    errdefer |^e| cleanup(e);\n};\n");
+    round_trips("const f := fn(): void {\n    errdefer |e| cleanup(e);\n};\n");
 }
 
 constexpr std::string_view corpus{

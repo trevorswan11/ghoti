@@ -12,6 +12,7 @@
 #include "compiler/codegen/llvm_scope.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
+#include "ghoti/config.h"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
 #include "support/tempfile.hh"
@@ -119,8 +120,11 @@ TEST_CASE("windows entry point argv link failure includes sysroot hint") {
     const auto result{helpers::emit_executable(*ctx, context, out_file, target_opts)};
     if (!result) {
         const auto& diag{result.error()};
-        REQUIRE(diag.get_message());
-        CHECK(diag.get_message()->contains("hint: set GHOTI_WIN_SYSROOT_LIB"));
+#if GHOTI_WINDOWS
+        CHECK(UNWRAP(diag.get_message()).contains("hint: set GHOTI_WIN_SYSROOT_LIB"));
+#else
+        CHECK(UNWRAP(diag.get_message()).contains("error: unable to find library"));
+#endif
     }
 }
 

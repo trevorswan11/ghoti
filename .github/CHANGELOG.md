@@ -208,3 +208,76 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Eliminates the prior ceremony needed to compile and run a ghoti binary
     - Takes a subset of options from the other build command since this does not need to be as extensible
 - Add automatic path detection for sdk on windows to prevent needing to always set an env var or pass through a CLI arg
+
+## alpha.5
+
+- Allow `@compileError` to be used in decl value positions
+    - These are fired lazily
+- Add zig-like raw identifiers
+    - These are declared like `@"asdfasdf"` and can be used to make your identifiers take the name of reserved keywords
+    - Formatting will strip unnecessary raw identifiers
+- Add string and identifier interning backed by a new compiler-wide arena to save some memory
+    - Previously interning was not applied to identifiers and was not applied at the parsing stage
+- Fix a compiler error that prevented default functions in interfaces from being used in separate modules
+- Fix a compiler error that would falsely error on orphaned impl through re-exports
+- Add Writer, Reader, Seeker, and File abstractions to the standard library
+- Allow trailing commas in all delimited lists to have the formatter add line breaks
+- Add `--emit-asm <file>` on `build-exe` / `build-obj` / `build-lib` / `test`
+    - Write the target's native assembly to a file (requires a path; mirrors `--emit-gir` / `--emit-llvm-ir`)
+- `[N:0]T` sentinel arrays now report `.len == N`
+    - Storage is `N+1`, sentinel lives at index `[N]`
+- Fix a bug where struct literal field defaults were never emitted
+- Fix an issue where the panic handler would not receive `file` and `msg` args properly
+- Resolve bug that prevented an interface from being implemented multiple times
+- Resolve formatter bug that would clobber match arms if block had trailing comma
+- Properly implement @mem* builtins
+    - `@memset`, `@memcpy`, and `@memmove` now all work without libc
+- Implement `std::io`
+    - Add File abstraction and `Writer`, `Reader`, and `Seeker` interfaces
+    - Supported on macos, windows, and x86-64 & aarch64 linux
+    - Backs new concrete handlers and test runner in the standard library
+- Resolve an issue where aliased types/modules could not be used in dot expressions (bad constant folding)
+- Resolve an issue that prevented module-aliased lookups through aggregates
+- Add raw memory alloc/free to all backends
+- GIR emission is now entirely idempotent
+    - This will hopefully reduce a large amount of bugs in the future
+    - Checksums are now implemented in debug mode against semantic side tables
+- The `::` operator for namespacing has been completely removed 
+    - Everything now must route through the `.` operator
+- Resolve an issue that prevent discardable method calls from being ignored
+- Fix a bug that would discard const correctness checks through address of operations at the IR level
+- Add `@embed` builtin for embedding a file on disk at compile time
+- Overhaul integer casting semantics with principle of least privilege in casting
+    - Added `@intCast(T, x)` and context-inferred `@intCast(x)` for checked integer narrowing and sign conversion with static range verification for compile-time values and hardware-trapping runtime checks
+    - Added `@truncate(T, x)` and `@truncate(x)` for explicitly discarding high bits without checking
+    - Added `@boolFromInt(x)` and `@intFromBool(T, x)` / `@intFromBool(x)` for explicit bool/int conversions
+    - Enabled 1-argument context-inferred forms for `@intCast`, `@truncate`, `@as`, and `@bitCast` across variable/const bindings, assignments, returns, call arguments, and struct field initializers
+    - Tightened `@as` to reject narrowing, sign changes, and bool/int conversions with actionable diagnostic suggestions
+    - Added rich diagnostics for rejected casts explaining why a conversion was rejected and suggesting the appropriate builtin
+- Allow function expressions to discard their parameters at the declaration site rather than needing "_ = param;"
+- Overhaul nominal unwrap operators (`?` and `!`) to use the single-match `Flow` protocol
+    - Added `builtin.Flow(C, R)` control flow union type with raw identifier variants `@"continue"` and `@"break"`
+    - Updated `Option(T)` and `Result(T, E)` in the standard library to implement the single-match `branch()` protocol
+    - Refactored GIR lowering to spill `branch()` results to a stack slot and branch directly on the `@"break"` discriminant tag for propagation and error exits
+- Add compile-time `impl` and object method evaluation to constant folding
+    - `const_eval` now evaluates method calls on objects (`obj.method(...)`) and extension methods registered through `impl` blocks at compile time
+    - Bound `self` receiver parameter across value, reference, and pointer receiver forms during compile-time function evaluation
+    - Enabled compile-time evaluation of `?` and `!` unwrapping by folding `branch(operand)` calls
+- Add semantic safeguards for rvalues and temporary values
+    - Prohibit taking mutable references (`&mut expr`) and mutable pointers (`^mut expr`) to temporary rvalues (`error::ILLEGAL_RVALUE_CAPTURE`)
+    - Prohibit calling methods requiring `&mut self` or `^mut self` on temporary rvalues
+    - Added recursive type-expression detection in semantic analysis to allow mutable pointer/reference syntax in type expressions (e.g. `@typeOf(^mut ^i32)`) without false-positive rvalue errors
+- Support trait implementations on primitive types with orphan rule enforcement
+    - Traits can now be implemented on primitive types (e.g. `impl Format for i32`) within the trait's declaring module
+    - Enforced orphan rules to reject inherent `impl` blocks on primitive types and foreign types (`error::ORPHAN_IMPL`)
+- Fix a bug that prevented unions with trailing comments from being formatted
+- Implement `errdefer` statement for error-path deferred cleanup
+    - Executes deferred cleanup strictly upon early error propagation via the `?` operator
+    - Supports capture syntax `errdefer |err| ...` to bind the error payload by value, alias captures (`|^err|` and `|&err|`), and discardable captures (`|_|`)
+    - Prohibits mutable capture modifiers (`&mut`, `^mut`, `volatile`) with `ERRDEFER_MUTABLE_CAPTURE`
+    - Validates that enclosing function returns a fallible type implementing `builtin.Rewrappable` (`ERRDEFER_IN_INFALLIBLE_FN`)
+    - Interleaves with standard `defer` statements in LIFO order on the error propagation edge
+    - Prohibits control flow jumps (`return`, `break`, `continue`, `?`) out of `errdefer` bodies
+- Resolve a bug that prevented top-level and aggregate-level generic functions from being monomorphized correctly
+- Rename `@this` builtin to `@This` to match type constructor and type name conventions
+- Resolve an issue that prevented dyn globals from being constructed

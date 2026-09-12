@@ -91,7 +91,7 @@ TEST_CASE("an inherent impl block resolves in phase 1") {
         const S := struct { x: i32 };
 
         impl S {
-            pub const fromRaw := fn(v: i32): @this() { return .{ .x = v }; };
+            pub const fromRaw := fn(v: i32): @This() { return .{ .x = v }; };
         }
 )");
 }
@@ -176,7 +176,7 @@ TEST_CASE("a stray member in a trait impl is reported") {
 
 TEST_CASE("the orphan rule rejects an inherent impl on a foreign type") {
     CHECK(raised_with_import(R"(import "other.gh" as other;
-impl other::Foreign { pub const f := fn(&self): void {}; }
+impl other.Foreign { pub const f := fn(&self): void {}; }
 )",
                              "pub const Foreign := struct { x: i32 };",
                              sema::error::ORPHAN_IMPL));
@@ -353,7 +353,7 @@ TEST_CASE("a parameterized trait impl over a local ctor conforms and its method 
 TEST_CASE("a parameterized impl anchored on neither its ctor nor its interface is an orphan") {
     CHECK(raised_with_import(R"(
         import "other.gh" as other;
-        impl(T: type) other::Bag(T) { pub const peek := fn(&self): T { return self.v; }; }
+        impl(T: type) other.Bag(T) { pub const peek := fn(&self): T { return self.v; }; }
 )",
                              R"(pub const Bag := fn(T: type): type { return struct { v: T }; };)",
                              sema::error::ORPHAN_IMPL));
@@ -400,11 +400,11 @@ TEST_CASE("a parameterized impl anchored on a local interface may target a forei
         R"(
         import "other.gh" as other;
         const Named := interface { pub const label := fn(&self): i32; };
-        impl(T: type) Named for other::Bag(T) {
+        impl(T: type) Named for other.Bag(T) {
             pub const label := fn(&self): i32 { return self.v; };
         }
         const use := fn(): i32 {
-            var b: other::Bag(i32) = .{ .v = 7 };
+            var b: other.Bag(i32) = .{ .v = 7 };
             return b.label();
         };
 )",
@@ -544,7 +544,7 @@ TEST_CASE("a sealed method is not callable through `&dyn I` from another module"
     CHECK(raised_with_import(
         R"(
         import "other.gh" as m;
-        const use := fn(x: &dyn m::Sealed): i32 { return x.hidden(); };
+        const use := fn(x: &dyn m.Sealed): i32 { return x.hidden(); };
 )",
         R"(pub const Sealed := interface {
                pub const shown := fn(&self): i32;
@@ -560,9 +560,9 @@ TEST_CASE("`&dyn I` binding an associated type twice keeps the last binding vali
 )");
 }
 
-TEST_CASE("`@this()` behind a reference stays `dyn`-safe") {
+TEST_CASE("`@This()` behind a reference stays `dyn`-safe") {
     helpers::resolve_and_check(R"(
-        const Chain := interface { pub const next := fn(&self): &@this(); };
+        const Chain := interface { pub const next := fn(&self): &@This(); };
         const use := fn(c: &dyn Chain): void { _ = c; };
 )");
 }
@@ -594,6 +594,29 @@ TEST_CASE("a reference nested inside an extern struct field is rejected") {
 
 TEST_CASE("a raw pointer field in an extern struct is still fine") {
     helpers::resolve_and_check("const S := extern struct { p: ^i32, q: ^^u8 };");
+}
+
+TEST_CASE("a trait can be implemented for a primitive type in the trait's declaring module") {
+    helpers::resolve_and_check(R"(
+        const Formattable := interface {
+            pub const format := fn(&self): i32;
+        };
+        impl Formattable for i32 {
+            pub const format := fn(&self): i32 { return *self * 2; };
+        }
+        const test_fn := fn(val: i32): i32 {
+            return val.format();
+        };
+    )");
+}
+
+TEST_CASE("the orphan rule rejects an inherent impl on a primitive type") {
+    CHECK(helpers::raised(R"(
+        impl i32 {
+            pub const double := fn(&self): i32 { return *self * 2; };
+        }
+    )",
+                          sema::error::ORPHAN_IMPL));
 }
 
 } // namespace ghoti::tests

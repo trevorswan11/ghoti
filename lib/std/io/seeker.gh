@@ -1,0 +1,14 @@
+import std;
+
+pub const Whence := enum {
+    start = 0,
+    current = 1,
+    end = 2,
+};
+
+pub const Seeker := interface {
+    Error: type;
+
+    /// Seeks to `offset` by `whence`
+    pub const seek := fn(&mut self, offset: i64, whence: Whence): std.Result(i64, Error);
+};

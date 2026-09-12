@@ -35,4 +35,12 @@ auto get_keyword_opt(token_type_t tt) noexcept -> stdx::option<std::string_view>
     return ALL_KEYWORDS_TT[tt];
 }
 
+auto identifier_needs_raw(std::string_view name) noexcept -> bool {
+    // Implicitly covers builtin-style names
+    if (!token_type::is_valid_identifier_name(name)) { return true; }
+    if (name == "_") { return true; }
+    if (get_keyword_opt(name)) { return true; }
+    return token_type::is_int_type_lexeme(name);
+}
+
 } // namespace ghoti::syntax

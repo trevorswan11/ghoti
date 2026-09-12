@@ -47,9 +47,13 @@ auto impl_registry::param_record_by_site(ast::node_id site, const mod::module& e
     return stdx::none;
 }
 
-auto impl_registry::find_by_site(ast::node_id site) noexcept -> stdx::option<impl_record&> {
+auto impl_registry::find_by_site(ast::node_id site, const mod::module& enclosing) noexcept
+    -> stdx::option<impl_record&> {
+    // `site` is only an index into one module's AST node pool, so two modules can hold an `impl`
+    // block at the same index; match the owning module too
     for (auto* r : records_) {
-        if (r->site.get_index() == site.get_index() && r->site.get_kind() == site.get_kind()) {
+        if (r->site.get_index() == site.get_index() && r->site.get_kind() == site.get_kind() &&
+            r->enclosing == &enclosing) {
             return *r;
         }
     }

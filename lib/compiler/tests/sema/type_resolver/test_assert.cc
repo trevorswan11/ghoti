@@ -34,11 +34,43 @@ TEST_CASE("a comptime-known-true @assert / @verify raises nothing") {
               .empty());
 }
 
-TEST_CASE("@assert / @verify reject a non-bool condition") {
-    CHECK(helpers::raised("const use := fn(p: ^i32): void { @assert(p); };",
+TEST_CASE("@assert / @verify accept a bool or pointer condition") {
+    helpers::resolve_and_check(R"(
+const use := fn(p: ^i32): void {
+    @assert(p);
+    @assert(p, "must be non-null");
+    @verify(p);
+    @verify(p, "must be non-null");
+};
+)");
+}
+
+TEST_CASE("@assert / @verify reject a non-bool, non-pointer condition") {
+    CHECK(helpers::raised("const use := fn(x: f64): void { @assert(x); };",
                           sema::error::TYPE_MISMATCH));
     CHECK(helpers::raised("const use := fn(n: i32): void { @verify(n); };",
                           sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("@expect / @require accept a bool or a pointer condition (pointer means `!= null`)") {
+    helpers::resolve_and_check(R"(
+test "conditions" {
+    var x: i32 = 0;
+    const p: ^i32 = ^x;
+    @expect(x == 0);
+    @require(x == 0, "x should be zero");
+    @require(p != nullptr);
+    @expect(p);              // contextually converted like `if (p)`
+    @require(p, "must be non-null");
+}
+)");
+}
+
+TEST_CASE("@expect / @require still reject a non-bool, non-pointer condition") {
+    CHECK(helpers::raised(R"(test "t" { var n: i32 = 1; @require(n, "nonzero"); })",
+                          sema::error::TYPE_MISMATCH));
+    CHECK(
+        helpers::raised(R"(test "t" { var n: i32 = 1; @expect(n); })", sema::error::TYPE_MISMATCH));
 }
 
 TEST_CASE("@assert / @verify reject the wrong argument count") {
