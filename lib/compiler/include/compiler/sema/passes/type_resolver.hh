@@ -256,6 +256,37 @@ class type_resolver {
                                               std::string_view                builtin_name,
                                               std::string_view                what)
         -> stdx::result<gir::const_enum, diagnostic>;
+
+    // §10.3: aggregate synthesis (`@Struct`/`@Union`/`@Enum`). Each field/variant name comes from a
+    // runtime string, so it needs a fresh AST identifier - copied into `ctx_.arena` first, since
+    // an `identifier_expr`'s `name` is a non-owning `string_view` normally backed by the source
+    // file's own text. `is_public` sets the identifier's token to `PUBLIC`, matching how an
+    // ordinary struct field's `is_public()` reads its own name token's type.
+    [[nodiscard]] auto synthesize_ident(std::string_view name, bool is_public)
+        -> ast::identifier_handle;
+    // Materializes a folded scalar `const_value` (int/bool/float/string only) back into an AST
+    // literal node, so it can serve as a field's `default_value` expression (§10.4) - a later
+    // `emit_field_default`/`const_eval::try_eval` on that node reproduces the same value. `none`
+    // for any value shape this doesn't (yet) support.
+    [[nodiscard]] auto synthesize_const_literal(const gir::const_value& val)
+        -> stdx::option<ast::expr_handle>;
+    // Builds a `types::enum_t` directly from a folded `EnumInfo` descriptor - no AST `enum_expr`
+    // is ever resolved; `ast_enumerations` exists only so downstream name lookups keep working.
+    [[nodiscard]] auto synthesize_enum(usize disc, source_location loc, const gir::const_struct& desc)
+        -> stdx::result<gsl::not_null<type*>, diagnostic>;
+    // Builds a `types::struct_t` directly from a folded `StructInfo` descriptor plus the
+    // `defaults...` pack's folded values (one per `has_default` field, in field order, §10.4).
+    [[nodiscard]] auto synthesize_struct(usize                              disc,
+                                         source_location                    loc,
+                                         const gir::const_struct&           desc,
+                                         gsl::span<const gir::const_value> defaults)
+        -> stdx::result<gsl::not_null<type*>, diagnostic>;
+    // Same as `synthesize_struct` for `UnionInfo`.
+    [[nodiscard]] auto synthesize_union(usize                              disc,
+                                        source_location                    loc,
+                                        const gir::const_struct&           desc,
+                                        gsl::span<const gir::const_value> defaults)
+        -> stdx::result<gsl::not_null<type*>, diagnostic>;
     // Views a `constexpr_int` / `constexpr_float` as the concrete type it materializes to
     [[nodiscard]] auto constexpr_numeric_view(type& t) -> type&;
     [[nodiscard]] auto get_call_arg_location(const ast::call_expr::argument& arg)

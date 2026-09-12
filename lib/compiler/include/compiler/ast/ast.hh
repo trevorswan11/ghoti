@@ -1,5 +1,6 @@
 #pragma once
 
+#include <deque>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -21,10 +22,17 @@
 
 namespace ghoti::ast {
 
+// `pool`/`locations`/`end_locations` are `std::deque`, not `std::vector`: a node synthesized at
+// resolve-time (§10.3's `@Enum`/`@Struct`/`@Union`) calls `add_node` while a caller further up the
+// call stack (e.g. `type_resolver::visit(decl_stmt)`, mid-resolution of that very decl's RHS) is
+// still holding a live reference into an EARLIER element of this same pool. A `std::vector` would
+// invalidate that reference the moment growth reallocates; `std::deque` never invalidates
+// references (or pointers) to existing elements on `emplace_back`, only iterators - so growth
+// during synthesis can't corrupt an ancestor frame's reference into a node added before it.
 template <IndexableID ID, typename Data> struct data_pool_base {
-    std::vector<Data>            pool;
-    std::vector<source_location> locations;
-    std::vector<source_location> end_locations;
+    std::deque<Data>            pool;
+    std::deque<source_location> locations;
+    std::deque<source_location> end_locations;
 
     constexpr auto clear() noexcept -> void {
         pool.clear();

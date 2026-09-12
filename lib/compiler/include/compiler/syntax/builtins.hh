@@ -54,6 +54,9 @@ constexpr builtin_t SLICE{"@Slice", token_type_t::BUILTIN_SLICE};
 constexpr builtin_t ARRAY{"@Array", token_type_t::BUILTIN_ARRAY};
 constexpr builtin_t FN{"@Fn", token_type_t::BUILTIN_FN};
 constexpr builtin_t FIELD_DEFAULT{"@fieldDefault", token_type_t::BUILTIN_FIELD_DEFAULT};
+constexpr builtin_t STRUCT{"@Struct", token_type_t::BUILTIN_STRUCT};
+constexpr builtin_t UNION{"@Union", token_type_t::BUILTIN_UNION};
+constexpr builtin_t ENUM{"@Enum", token_type_t::BUILTIN_ENUM};
 
 constexpr builtin_t MEMCPY{"@memcpy", token_type_t::BUILTIN_MEMCPY};
 constexpr builtin_t MEMSET{"@memset", token_type_t::BUILTIN_MEMSET};
@@ -170,6 +173,9 @@ constexpr std::array ALL_BUILTINS{
     builtins::ARRAY,
     builtins::FN,
     builtins::FIELD_DEFAULT,
+    builtins::STRUCT,
+    builtins::UNION,
+    builtins::ENUM,
     builtins::MEMCPY,
     builtins::MEMSET,
     builtins::MEMMOVE,

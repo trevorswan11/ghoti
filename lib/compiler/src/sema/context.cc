@@ -194,6 +194,11 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::ARRAY, params(t_auto), t_type);
     inject_function(bis::FN, params(t_auto), t_type);
     inject_function(bis::FIELD_DEFAULT, params(t_auto, t_auto), t_auto);
+    // `@Struct`/`@Union` also take a trailing `defaults...` pack (§10.4/§10.5); `resolve_builtin_call`
+    // gives these two a variable-arity check instead of using `params.size()` directly.
+    inject_function(bis::STRUCT, params(t_auto), t_type);
+    inject_function(bis::UNION, params(t_auto), t_type);
+    inject_function(bis::ENUM, params(t_auto), t_type);
 
     inject_function(bis::MEMCPY, params(t_auto, t_auto), t_void);
     inject_function(bis::MEMSET, params(t_auto, t_auto), t_void);

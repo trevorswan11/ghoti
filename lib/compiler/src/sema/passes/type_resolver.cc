@@ -453,6 +453,12 @@ template <ast::IndexableID ID>
                                   builtin_id == token_type_t::BUILTIN_BIT_CAST ||
                                   builtin_id == token_type_t::BUILTIN_TRUNCATE ||
                                   builtin_id == token_type_t::BUILTIN_INT_FROM_BOOL};
+    // `@Struct(desc, defaults...)` / `@Union(desc, defaults...)` take a `defaults...` parameter
+    // pack (§10.4/§10.5) - a trailing arg count that varies with how many `has_default` fields
+    // the descriptor has, known only once it's folded, so only the *descriptor* arg is checked
+    // here.
+    const auto  is_aggregate_with_defaults{builtin_id == token_type_t::BUILTIN_STRUCT ||
+                                           builtin_id == token_type_t::BUILTIN_UNION};
     const auto& params{builtin.params};
     if (is_expect_or_require || is_assert_or_verify || is_inferrable_cast) {
         if (call.arguments.empty() || call.arguments.size() > 2) {
@@ -460,6 +466,12 @@ template <ast::IndexableID ID>
                 fmt::format("Builtin expects 1 or 2 arguments, found {}", call.arguments.size()),
                 error::ARITY_MISMATCH,
                 resolving_.ast.location_of(call.function));
+        }
+    } else if (is_aggregate_with_defaults) {
+        if (call.arguments.empty()) {
+            return make_sema_err("Builtin expects at least 1 argument, found 0",
+                                 error::ARITY_MISMATCH,
+                                 resolving_.ast.location_of(call.function));
         }
     } else if (is_skip) {
         if (call.arguments.size() > 1) {
@@ -1093,6 +1105,55 @@ template <ast::IndexableID ID>
         }
         default: ASSERT(false, "unreachable");
         }
+        break;
+    }
+    case token_type_t::BUILTIN_ENUM:
+    case token_type_t::BUILTIN_STRUCT:
+    case token_type_t::BUILTIN_UNION: {
+        // §10.3/§10.5: fold the descriptor (arg 0) the same way as §10.1's compositional
+        // builtins, then - for `@Struct`/`@Union` only - fold every trailing `defaults...` pack
+        // argument directly (no `expand_pack_call_args`: a builtin call folds immediately in
+        // `const_eval`, it never needs the generic-instantiation machinery Part II's own packs do).
+        const auto builtin_name{*syntax::get_builtin_opt(builtin_id)};
+        const auto desc{resolve_type_descriptor(call.arguments[0])};
+        if (!desc) {
+            return make_sema_err(
+                fmt::format("'{}' expects a compile-time-known descriptor argument", builtin_name),
+                error::CONSTEXPR_EVALUATION_FAILED,
+                get_call_arg_location(call.arguments[0]));
+        }
+
+        std::vector<gir::const_value> defaults;
+        if (builtin_id != token_type_t::BUILTIN_ENUM) {
+            gir::const_eval evaluator{ctx_, resolving_};
+            defaults.reserve(call.arguments.size() - 1);
+            for (usize i{1}; i < call.arguments.size(); ++i) {
+                const auto expr_h{call.arguments[i].as_opt<ast::expr_handle>()};
+                const auto val{expr_h ? evaluator.try_eval(*expr_h) : stdx::none};
+                if (!val) {
+                    return make_sema_err(
+                        fmt::format("'{}': every 'defaults...' argument must be a compile-time "
+                                    "constant",
+                                    builtin_name),
+                        error::CONSTEXPR_EVALUATION_FAILED,
+                        get_call_arg_location(call.arguments[i]));
+                }
+                defaults.emplace_back(std::move(*val));
+            }
+        }
+
+        const auto disc{id.get_index()};
+        const auto loc{resolving_.ast.location_of(id)};
+        auto synthesized = builtin_id == token_type_t::BUILTIN_ENUM
+                                ? synthesize_enum(disc, loc, *desc)
+                                : builtin_id == token_type_t::BUILTIN_STRUCT
+                                      ? synthesize_struct(disc, loc, *desc, defaults)
+                                      : synthesize_union(disc, loc, *desc, defaults);
+        if (!synthesized) { return stdx::err<diagnostic>{std::move(synthesized).error()}; }
+
+        auto meta{ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, **synthesized}]};
+        meta->template resolve_if<types::meta_type>(**synthesized);
+        return_type = meta;
         break;
     }
     case token_type_t::BUILTIN_TARGET_OS:       return_type = &ctx_.get_builtin_type("Os"); break;
@@ -1843,6 +1904,373 @@ auto type_resolver::resolve_const_enum_arg(const ast::call_expr::argument& arg,
             loc);
     }
     return *en;
+}
+
+namespace {
+
+// `arena::make_span<T>` default-constructs every element up front, which fails for a `T` holding
+// an `ast::identifier_handle`/`explicit_type_id` (neither is default-constructible - a `handle`'s
+// only constructor asserts a valid `node_id`). §10.3's synthesized `enum_expr::enumeration` /
+// `struct_expr::field` / `union_expr::field` spans all need this instead: raw, alignment-correct
+// storage the caller placement-constructs into directly, one real value per slot.
+template <typename T> auto arena_make_uninit_span(ghoti::arena& arena, usize n) -> gsl::span<T> {
+    if (n == 0) { return {}; }
+    // `arena::alloc` (the raw allocator `make_span<T>` itself calls) is private; a same-sized,
+    // same-aligned, trivially-default-constructible POD slot type gets contiguous, correctly
+    // aligned storage through the public `make_span` instead, then it's reinterpreted as `T*` for
+    // placement-new - the standard "aligned raw storage" idiom.
+    struct alignas(alignof(T)) raw_slot {
+        std::byte bytes[sizeof(T)];
+    };
+    auto slots{arena.make_span<raw_slot>(n)};
+    return gsl::span<T>{reinterpret_cast<T*>(slots.data()), n};
+}
+
+// `mod::module::sema_side_tables` is sized once, from the AST's node/type-pool counts as they
+// stood right after parsing (`side_tables::resize`); every side-table lookup (`set_sema_type`,
+// symbol/definition tables, ...) indexes it with **no bounds check** (`side_table::operator[]`
+// just does `values[id.get_index()]`). A node synthesized here at resolve-time gets an index at
+// or past that original pool size, so touching its sema type without this first is a silent
+// out-of-bounds vector write - undefined behavior, observed as heap corruption that only
+// surfaces much later at an unrelated `free()`. Cheap to call whenever growing (a no-op once
+// already large enough), so every synthesize helper below re-syncs right after `add_node`.
+auto sync_side_tables_for_new_node(mod::module& m) -> void {
+    m.sema_side_tables.resize(m.ast.get_pool_sizes());
+}
+
+} // namespace
+
+auto type_resolver::synthesize_ident(std::string_view name, bool is_public)
+    -> ast::identifier_handle {
+    auto        storage{ctx_.arena.make_span<char>(name.size())};
+    std::ranges::copy(name, storage.begin());
+    const std::string_view stable{storage.data(), storage.size()};
+    const syntax::token_t  tok{
+        is_public ? syntax::token_type_t::PUBLIC : syntax::token_type_t::IDENT, stable};
+    const auto id{resolving_.ast.add_node(tok, tok, ast::identifier_expr{stable})};
+    sync_side_tables_for_new_node(resolving_);
+    return ast::identifier_handle{id};
+}
+
+auto type_resolver::synthesize_const_literal(const gir::const_value& val)
+    -> stdx::option<ast::expr_handle> {
+    if (const auto b{val.as_opt<bool>()}) {
+        const syntax::token_t tok{
+            *b ? syntax::token_type_t::BOOLEAN_TRUE : syntax::token_type_t::BOOLEAN_FALSE, "0"};
+        const auto id{resolving_.ast.add_node(tok, tok, ast::bool_expr{})};
+        sync_side_tables_for_new_node(resolving_);
+        return ast::expr_handle{id};
+    }
+    if (const auto i{val.as_int_opt()}) {
+        const syntax::token_t tok{syntax::token_type_t::INT_10, "0"};
+        const auto            id{resolving_.ast.add_node(
+            tok, tok, ast::int_literal_expr{.value = static_cast<u128>(*i), .is_signed = true, .spelling = "0"})};
+        sync_side_tables_for_new_node(resolving_);
+        return ast::expr_handle{id};
+    }
+    if (const auto f{val.as_opt<f64>()}) {
+        const syntax::token_t tok{syntax::token_type_t::REAL, "0"};
+        const auto            id{
+            resolving_.ast.add_node(tok, tok, ast::float_literal_expr{.value = *f, .spelling = "0"})};
+        sync_side_tables_for_new_node(resolving_);
+        return ast::expr_handle{id};
+    }
+    if (const auto s{val.as_opt<std::string>()}) {
+        auto storage{ctx_.arena.make_span<char>(s->size())};
+        std::ranges::copy(*s, storage.begin());
+        const std::string_view stable{storage.data(), storage.size()};
+        const syntax::token_t  tok{syntax::token_type_t::STRING, stable};
+        const auto             id{
+            resolving_.ast.add_node(tok, tok, ast::string_expr{.value = stable, .spelling = stable})};
+        sync_side_tables_for_new_node(resolving_);
+        return ast::expr_handle{id};
+    }
+    return stdx::none;
+}
+
+auto type_resolver::synthesize_enum(usize disc, source_location loc, const gir::const_struct& desc)
+    -> stdx::result<gsl::not_null<type*>, diagnostic> {
+    const auto field_err{[&](std::string_view what) -> stdx::result<gsl::not_null<type*>, diagnostic> {
+        return make_sema_err(
+            fmt::format("'@Enum': {}", what), error::CONSTEXPR_EVALUATION_FAILED, loc);
+    }};
+
+    const auto tag_f{desc.get_field_opt("tag_type")};
+    const auto fields_f{desc.get_field_opt("fields")};
+    const auto exhaustive_f{desc.get_field_opt("exhaustive")};
+    const auto tag_v{tag_f ? tag_f->as_opt<stdx::option<type&>>() : stdx::none};
+    const auto fields_arr{fields_f ? fields_f->as_opt<gir::const_array>() : stdx::none};
+    const auto exhaustive_v{exhaustive_f ? exhaustive_f->as_opt<bool>() : stdx::none};
+    if (!tag_v || !*tag_v) { return field_err("descriptor is missing 'tag_type'"); }
+    if (!fields_arr) { return field_err("descriptor is missing 'fields'"); }
+    if (!exhaustive_v) { return field_err("descriptor is missing 'exhaustive'"); }
+
+    auto       enumerations{
+        arena_make_uninit_span<ast::enum_expr::enumeration>(ctx_.arena, fields_arr->elements.size())};
+    const auto scope_idx{ctx_.registry.create()};
+    for (usize i{0}; i < fields_arr->elements.size(); ++i) {
+        const auto fs{fields_arr->elements[i].as_opt<gir::const_struct>()};
+        const auto name_f{fs ? fs->get_field_opt("name") : stdx::none};
+        const auto value_f{fs ? fs->get_field_opt("value") : stdx::none};
+        const auto name_v{name_f ? name_f->as_opt<std::string>() : stdx::none};
+        const auto value_v{value_f ? value_f->as_int_opt() : stdx::none};
+        if (!name_v || !value_v) {
+            return field_err("every element of 'fields' needs a compile-time 'name' and 'value'");
+        }
+
+        const auto name_ident{synthesize_ident(*name_v, false)};
+        const syntax::token_t val_tok{syntax::token_type_t::INT_10, "0"};
+        const auto            val_node{resolving_.ast.add_node(
+            val_tok,
+            val_tok,
+            ast::int_literal_expr{.value = static_cast<u128>(*value_v), .is_signed = true, .spelling = "0"})};
+        sync_side_tables_for_new_node(resolving_);
+        new (&enumerations[i]) ast::enum_expr::enumeration{.name  = name_ident,
+                                                            .value = ast::expr_handle{val_node}};
+
+        // The map key must outlive this function - `*name_v` only points into the folded
+        // descriptor's own (transient) string storage, but the identifier node's own `name` was
+        // copied into `ctx_.arena` by `synthesize_ident`, so it's stable for the type's lifetime.
+        const auto stable_name{resolving_.ast.get_as<ast::identifier_expr>(name_ident).name};
+        if (auto res{
+                ctx_.registry.insert_into(
+                    scope_idx, resolving_, stable_name, symbols::enumeration{enumerations[i]})};
+            !res) {
+            return stdx::err<diagnostic>{std::move(res.error())};
+        }
+        // Ordinary `visit(enum_expr)` sets these once the variant is fully resolved; nothing
+        // else does this for a synthetic aggregate that never goes through that visitor.
+        auto& variant_sym{ctx_.registry.get(scope_idx).get(stable_name)};
+        variant_sym.set_kind(symbol_kind::VALUE);
+        variant_sym.set_status(symbol_status::RESOLVED);
+        resolving_.set_sema_type(name_ident, **tag_v);
+    }
+
+    types::key_t key{type_kind::ENUM, types::mut::CONSTANT};
+    key.imprint(disc);
+    auto& enum_type{*ctx_.pool[key]};
+    enum_type.resolve_if<types::enum_t>(
+        enumerations, !*exhaustive_v, **tag_v, gsl::span<type*>{}, resolving_);
+    enum_type.set_symbol_table_idx(scope_idx);
+    return gsl::not_null{&enum_type};
+}
+
+// Reads a `defaults...` pack argument in field order against `field_has_default`, checking each
+// value's static type against the matching field's own type (§10.4). Arity/type mismatches use
+// `usual_arity`/`usual_type` diagnostics since packs share `resolve_call`'s own error codes.
+auto type_resolver::synthesize_struct(usize                              disc,
+                                      source_location                    loc,
+                                      const gir::const_struct&          desc,
+                                      gsl::span<const gir::const_value> defaults)
+    -> stdx::result<gsl::not_null<type*>, diagnostic> {
+    const auto field_err{[&](std::string_view what) -> stdx::result<gsl::not_null<type*>, diagnostic> {
+        return make_sema_err(
+            fmt::format("'@Struct': {}", what), error::CONSTEXPR_EVALUATION_FAILED, loc);
+    }};
+
+    const auto fields_f{desc.get_field_opt("fields")};
+    const auto is_extern_f{desc.get_field_opt("is_extern")};
+    const auto is_packed_f{desc.get_field_opt("is_packed")};
+    const auto fields_arr{fields_f ? fields_f->as_opt<gir::const_array>() : stdx::none};
+    const auto is_extern_v{is_extern_f ? is_extern_f->as_opt<bool>() : stdx::none};
+    const auto is_packed_v{is_packed_f ? is_packed_f->as_opt<bool>() : stdx::none};
+    if (!fields_arr) { return field_err("descriptor is missing 'fields'"); }
+    if (!is_extern_v) { return field_err("descriptor is missing 'is_extern'"); }
+    if (!is_packed_v) { return field_err("descriptor is missing 'is_packed'"); }
+
+    const auto n{fields_arr->elements.size()};
+    auto       ast_fields{arena_make_uninit_span<ast::struct_expr::field>(ctx_.arena, n)};
+    auto       field_types{ctx_.pool.get_many_unsafe(n)};
+    const auto scope_idx{ctx_.registry.create()};
+    usize      default_i{0};
+    for (usize i{0}; i < n; ++i) {
+        const auto fs{fields_arr->elements[i].as_opt<gir::const_struct>()};
+        const auto name_f{fs ? fs->get_field_opt("name") : stdx::none};
+        const auto type_f{fs ? fs->get_field_opt("type_") : stdx::none};
+        const auto has_default_f{fs ? fs->get_field_opt("has_default") : stdx::none};
+        const auto name_v{name_f ? name_f->as_opt<std::string>() : stdx::none};
+        const auto type_v{type_f ? type_f->as_opt<stdx::option<type&>>() : stdx::none};
+        const auto has_default_v{has_default_f ? has_default_f->as_opt<bool>() : stdx::none};
+        if (!name_v || !type_v || !*type_v || !has_default_v) {
+            return field_err(
+                "every element of 'fields' needs a compile-time 'name', 'type_', 'has_default'");
+        }
+        field_types[i] = &**type_v;
+
+        stdx::option<ast::expr_handle> default_value;
+        if (*has_default_v) {
+            if (default_i >= defaults.size()) {
+                return make_sema_err("'@Struct': fewer 'defaults...' arguments than fields with "
+                                     "'has_default = true'",
+                                     error::ARITY_MISMATCH,
+                                     loc);
+            }
+            const auto& dv{defaults[default_i++]};
+            if (const auto dt{dv.get_type()}; dt && !is_assignable(*dt, **type_v)) {
+                return make_sema_err(
+                    fmt::format("'@Struct': default #{} has type '{}', expected '{}'",
+                                default_i,
+                                ctx_.type_display_name(*dt),
+                                ctx_.type_display_name(**type_v)),
+                    error::TYPE_MISMATCH,
+                    loc);
+            }
+            const auto lit{synthesize_const_literal(dv)};
+            if (!lit) {
+                return make_sema_err(
+                    fmt::format(
+                        "'@Struct': default #{} isn't a scalar (int/bool/float/string) - only "
+                        "those default kinds are supported",
+                        default_i),
+                    error::CONSTEXPR_EVALUATION_FAILED,
+                    loc);
+            }
+            default_value.emplace(*lit);
+        }
+
+        const auto name_ident{synthesize_ident(*name_v, true)};
+        const auto ty_ident{synthesize_ident(ctx_.type_display_name(**type_v), false)};
+        new (&ast_fields[i]) ast::struct_expr::field{
+            .name          = name_ident,
+            .explicit_type = ast::explicit_type_id{
+                ast::explicit_type_kind::IDENT, ast::type_modifier{}, syntax::token_type_t::IDENT,
+                static_cast<u64>((*ty_ident).get_index())},
+            .default_value      = default_value,
+            .explicit_alignment = stdx::none,
+        };
+
+        // See the matching comment in `synthesize_enum`: the key must be the stable,
+        // arena-backed name, not `*name_v` (a view into the transient folded descriptor).
+        const auto stable_name{resolving_.ast.get_as<ast::identifier_expr>(name_ident).name};
+        if (auto res{ctx_.registry.insert_into(
+                scope_idx, resolving_, stable_name, symbols::struct_field{ast_fields[i]})};
+            !res) {
+            return stdx::err<diagnostic>{std::move(res.error())};
+        }
+        // Ordinary `visit(struct_expr)` sets these once the field is fully resolved; nothing else
+        // does this for a synthetic aggregate that never goes through that visitor.
+        auto& field_sym{ctx_.registry.get(scope_idx).get(stable_name)};
+        field_sym.set_kind(symbol_kind::VALUE);
+        field_sym.set_status(symbol_status::RESOLVED);
+    }
+    if (default_i != defaults.size()) {
+        return make_sema_err(
+            "'@Struct': more 'defaults...' arguments than fields with 'has_default = true'",
+            error::ARITY_MISMATCH,
+            loc);
+    }
+
+    types::key_t key{type_kind::STRUCT, types::mut::CONSTANT};
+    key.imprint(disc);
+    auto& struct_type{*ctx_.pool[key]};
+    struct_type.resolve_if<types::struct_t>(
+        field_types, ast_fields, gsl::span<type*>{}, resolving_, *is_extern_v, *is_packed_v,
+        gsl::span<u64>{});
+    struct_type.set_symbol_table_idx(scope_idx);
+    return gsl::not_null{&struct_type};
+}
+
+auto type_resolver::synthesize_union(usize                              disc,
+                                     source_location                    loc,
+                                     const gir::const_struct&          desc,
+                                     gsl::span<const gir::const_value> defaults)
+    -> stdx::result<gsl::not_null<type*>, diagnostic> {
+    const auto field_err{[&](std::string_view what) -> stdx::result<gsl::not_null<type*>, diagnostic> {
+        return make_sema_err(
+            fmt::format("'@Union': {}", what), error::CONSTEXPR_EVALUATION_FAILED, loc);
+    }};
+
+    const auto fields_f{desc.get_field_opt("fields")};
+    const auto is_extern_f{desc.get_field_opt("is_extern")};
+    const auto is_packed_f{desc.get_field_opt("is_packed")};
+    const auto tagged_f{desc.get_field_opt("tagged")};
+    const auto fields_arr{fields_f ? fields_f->as_opt<gir::const_array>() : stdx::none};
+    const auto is_extern_v{is_extern_f ? is_extern_f->as_opt<bool>() : stdx::none};
+    const auto is_packed_v{is_packed_f ? is_packed_f->as_opt<bool>() : stdx::none};
+    const auto tagged_v{tagged_f ? tagged_f->as_opt<bool>() : stdx::none};
+    if (!fields_arr) { return field_err("descriptor is missing 'fields'"); }
+    if (!is_extern_v) { return field_err("descriptor is missing 'is_extern'"); }
+    if (!is_packed_v) { return field_err("descriptor is missing 'is_packed'"); }
+    if (!tagged_v) { return field_err("descriptor is missing 'tagged'"); }
+
+    const auto n{fields_arr->elements.size()};
+    auto       ast_fields{arena_make_uninit_span<ast::union_expr::field>(ctx_.arena, n)};
+    auto       field_types{ctx_.pool.get_many_unsafe(n)};
+    const auto scope_idx{ctx_.registry.create()};
+    // §10.4: `@Union` also collects `defaults...` (its `has_default`-flagged fields have real
+    // defaults too), but `types::union_t` has no per-field default storage - a union's own
+    // semantics never let a literal omit a field, so there's nowhere to attach one. Validate the
+    // pack anyway (arity + per-argument type) so a caller relying on the round-trip law doesn't
+    // silently lose defaults; the values themselves are simply not retained on the type.
+    usize default_i{0};
+    for (usize i{0}; i < n; ++i) {
+        const auto fs{fields_arr->elements[i].as_opt<gir::const_struct>()};
+        const auto name_f{fs ? fs->get_field_opt("name") : stdx::none};
+        const auto type_f{fs ? fs->get_field_opt("type_") : stdx::none};
+        const auto has_default_f{fs ? fs->get_field_opt("has_default") : stdx::none};
+        const auto name_v{name_f ? name_f->as_opt<std::string>() : stdx::none};
+        const auto type_v{type_f ? type_f->as_opt<stdx::option<type&>>() : stdx::none};
+        const auto has_default_v{has_default_f ? has_default_f->as_opt<bool>() : stdx::none};
+        if (!name_v || !type_v || !*type_v || !has_default_v) {
+            return field_err(
+                "every element of 'fields' needs a compile-time 'name', 'type_', 'has_default'");
+        }
+        field_types[i] = &**type_v;
+
+        if (*has_default_v) {
+            if (default_i >= defaults.size()) {
+                return make_sema_err("'@Union': fewer 'defaults...' arguments than fields with "
+                                     "'has_default = true'",
+                                     error::ARITY_MISMATCH,
+                                     loc);
+            }
+            const auto& dv{defaults[default_i++]};
+            if (const auto dt{dv.get_type()}; dt && !is_assignable(*dt, **type_v)) {
+                return make_sema_err(
+                    fmt::format("'@Union': default #{} has type '{}', expected '{}'",
+                                default_i,
+                                ctx_.type_display_name(*dt),
+                                ctx_.type_display_name(**type_v)),
+                    error::TYPE_MISMATCH,
+                    loc);
+            }
+        }
+
+        const auto name_ident{synthesize_ident(*name_v, true)};
+        const auto ty_ident{synthesize_ident(ctx_.type_display_name(**type_v), false)};
+        new (&ast_fields[i]) ast::union_expr::field{
+            .name          = name_ident,
+            .explicit_type = ast::explicit_type_id{
+                ast::explicit_type_kind::IDENT, ast::type_modifier{}, syntax::token_type_t::IDENT,
+                static_cast<u64>((*ty_ident).get_index())},
+            .explicit_alignment = stdx::none,
+        };
+
+        const auto stable_name{resolving_.ast.get_as<ast::identifier_expr>(name_ident).name};
+        if (auto res{ctx_.registry.insert_into(
+                scope_idx, resolving_, stable_name, symbols::union_field{ast_fields[i]})};
+            !res) {
+            return stdx::err<diagnostic>{std::move(res.error())};
+        }
+        auto& field_sym{ctx_.registry.get(scope_idx).get(stable_name)};
+        field_sym.set_kind(symbol_kind::VALUE);
+        field_sym.set_status(symbol_status::RESOLVED);
+    }
+    if (default_i != defaults.size()) {
+        return make_sema_err(
+            "'@Union': more 'defaults...' arguments than fields with 'has_default = true'",
+            error::ARITY_MISMATCH,
+            loc);
+    }
+
+    types::key_t key{type_kind::UNION, types::mut::CONSTANT};
+    key.imprint(disc);
+    auto& union_type{*ctx_.pool[key]};
+    union_type.resolve_if<types::union_t>(
+        field_types, ast_fields, gsl::span<type*>{}, resolving_, !*tagged_v, *is_extern_v,
+        *is_packed_v);
+    union_type.set_symbol_table_idx(scope_idx);
+    return gsl::not_null{&union_type};
 }
 
 auto type_resolver::local_const_fn_ref(ast::expr_handle expr) -> stdx::option<gir::const_value> {
@@ -4357,7 +4785,12 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
     }
     resolve(dot.object);
     if (last_type_->is_poison()) { return resolving_.set_sema_type(id, *last_type_); }
-    auto& object_type{*last_type_.take()};
+    // An ordinary `Color := enum {...}` names its `enum_t` directly, never wrapped; a
+    // dynamically-constructed one (`@Enum(desc)`, §10.3) resolves like `@fieldType` et al. - a
+    // `TYPE`-kind meta-type denoting it - since a builtin call's own declared return type is
+    // always `type`. Unwrap here so `T.variant`-style static-member lookup below sees the same
+    // `enum_t`/`struct_t`/`union_t` shape either way.
+    auto& object_type{denoted_type(*last_type_.take())};
 
     // Desugared to auto and needs to be deferred like the call handler
     if (is_generic_type(object_type)) {
