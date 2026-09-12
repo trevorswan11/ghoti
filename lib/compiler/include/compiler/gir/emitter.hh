@@ -56,24 +56,14 @@ class emitter {
         bool                is_alloca{false};
         stdx::option<value> const_val;
         bool                is_const{false};
-        // A `constexpr var`: mutable, but never materializes storage. Assignment rebinds
-        // `const_val` in place instead of emitting a store.
-        bool is_constexpr_var{false};
+        bool                is_constexpr_var{false}; // Mutable, but never materializes storage
     };
 
-    // Set by `emit_generic_instantiation` for one pack function's body: `rest.len`/`rest[k]`
-    // resolve against this instead of an ordinary binding lookup. Each element already has its
-    // own real binding, named `"<pack>#<k>"` (see `emit_generic_instantiation`).
+    // Set by `emit_generic_instantiation` for one pack function's body
     struct pack_context {
         std::string_view name;
         usize            element_count{0};
     };
-    stdx::option<pack_context> current_pack_;
-
-    // Set by `emit_generic_instantiation` to that instantiation's mangled name for the duration
-    // of body emission, mirroring `type_resolver::typing_scope_prefix_` so a nested `for`/`while
-    // constexpr`'s per-iteration diff keys match what the resolver stored them under.
-    std::string typing_scope_prefix_{};
 
     struct loop_context {
         stdx::option<std::string_view> label;
@@ -177,8 +167,7 @@ class emitter {
     auto emit_defers_for_scope(usize scope_idx, bool error_edge = false) -> void;
     auto emit_defers_up_to(usize target_depth, bool error_edge = false) -> void;
     auto emit_lvalue(ast::node_id id) -> value;
-    // The lvalue of an already-bound local, by name (a parameter, a pack element, ...):
-    // alloca'd bindings are their own address; anything else is spilled into one, once.
+    // The lvalue of an already-bound local, by name
     auto lvalue_of_binding(std::string_view name) -> value;
 
     // Emits a `panic_handler(msg, file, line, column)` call followed by `unreachable`
@@ -274,8 +263,7 @@ class emitter {
                     stdx::option<local_id>         res_slot    = stdx::none,
                     stdx::option<sema::type&>      result_type = stdx::none) -> value;
     // Repeatedly folds the condition and replays the body via `emit_block` for as long as it
-    // holds `true`; no runtime loop, no `body_type_diff` (unlike `for constexpr`, every pass
-    // through the same body has identical typing, so a single ordinary resolve suffices).
+    // holds `true`; no runtime loop, no `body_type_diff`
     auto emit_constexpr_while(ast::node_id id, const ast::while_loop_expr& while_loop) -> value;
     auto emit_do_while(ast::node_id                   id,
                        const ast::do_while_loop_expr& do_while,
@@ -307,7 +295,6 @@ class emitter {
     auto sync_tagged_union_tag(ast::node_id assign_lhs) -> void;
     auto emit_assignment(ast::node_id id, const ast::assignment_expr& assign) -> value;
     // If `assign` targets a `constexpr var`, folds it and rebinds in place. `none` otherwise
-    // (the caller falls through to ordinary lvalue-store emission).
     auto try_emit_constexpr_var_assignment(ast::node_id id, const ast::assignment_expr& assign)
         -> stdx::option<value>;
     auto update_constexpr_var(std::string_view name, const_value val) -> void;
@@ -482,6 +469,12 @@ class emitter {
     stdx::opt_size emitting_impl_default_scope_;
     // For emitting a method body written directly in an `impl` block
     stdx::opt_size emitting_impl_body_scope_;
+
+    stdx::option<pack_context> current_pack_;
+
+    // Set by `emit_generic_instantiation` to that instantiation's mangled name for the duration
+    // of body emission
+    std::string typing_scope_prefix_{};
 };
 
 } // namespace ghoti::gir

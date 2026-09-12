@@ -341,6 +341,10 @@ struct module {
         if (p.is_relative()) { return parent_path / p; }
         return p;
     }
+
+    // A node synthesized at resolve-time gets an index at or past that original pool size, so
+    // touching its sema type without this first would be a silent out-of-bounds vector write
+    auto sync_side_tables_for_new_node() -> void { sema_side_tables.resize(ast.get_pool_sizes()); }
 };
 
 struct body_diff_guard {

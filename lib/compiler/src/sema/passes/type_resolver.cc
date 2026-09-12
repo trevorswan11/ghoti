@@ -27,6 +27,8 @@
 #include <stdx/utility.hh>
 #include <stdx/variant.hh>
 
+#include "compiler/arena.hh"
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/format.hh"
 #include "compiler/ast/handle.hh"
@@ -37,8 +39,10 @@
 #include "compiler/ast/traits.hh"
 #include "compiler/ast/type.hh"
 #include "compiler/ast/visitor.hh"
+#include "compiler/codegen/target.hh"
 #include "compiler/gir/const_eval.hh"
 #include "compiler/gir/const_value.hh"
+#include "compiler/gir/instruction.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
@@ -51,8 +55,10 @@
 #include "compiler/sema/unwrap_shape.hh"
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/operators.hh"
+#include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/diagnostic.hh"
+#include "support/int128.hh"
 
 namespace ghoti::sema {
 
@@ -443,22 +449,20 @@ template <ast::IndexableID ID>
     ASSERT(syntax::get_builtin_opt(builtin_id), "Cannot resolve non-builtin function");
 
     using syntax::token_type_t;
-    const auto  is_expect_or_require{builtin_id == token_type_t::BUILTIN_EXPECT ||
+    const auto is_expect_or_require{builtin_id == token_type_t::BUILTIN_EXPECT ||
                                     builtin_id == token_type_t::BUILTIN_REQUIRE};
-    const auto  is_assert_or_verify{builtin_id == token_type_t::BUILTIN_ASSERT ||
+    const auto is_assert_or_verify{builtin_id == token_type_t::BUILTIN_ASSERT ||
                                    builtin_id == token_type_t::BUILTIN_VERIFY};
-    const auto  is_skip{builtin_id == token_type_t::BUILTIN_SKIP};
-    const auto  is_inferrable_cast{builtin_id == token_type_t::BUILTIN_AS ||
+    const auto is_skip{builtin_id == token_type_t::BUILTIN_SKIP};
+    const auto is_inferrable_cast{builtin_id == token_type_t::BUILTIN_AS ||
                                   builtin_id == token_type_t::BUILTIN_INT_CAST ||
                                   builtin_id == token_type_t::BUILTIN_BIT_CAST ||
                                   builtin_id == token_type_t::BUILTIN_TRUNCATE ||
                                   builtin_id == token_type_t::BUILTIN_INT_FROM_BOOL};
     // `@Struct(desc, defaults...)` / `@Union(desc, defaults...)` take a `defaults...` parameter
-    // pack (§10.4/§10.5) - a trailing arg count that varies with how many `has_default` fields
-    // the descriptor has, known only once it's folded, so only the *descriptor* arg is checked
-    // here.
+    // pack
     const auto  is_aggregate_with_defaults{builtin_id == token_type_t::BUILTIN_STRUCT ||
-                                           builtin_id == token_type_t::BUILTIN_UNION};
+                                          builtin_id == token_type_t::BUILTIN_UNION};
     const auto& params{builtin.params};
     if (is_expect_or_require || is_assert_or_verify || is_inferrable_cast) {
         if (call.arguments.empty() || call.arguments.size() > 2) {
@@ -906,8 +910,7 @@ template <ast::IndexableID ID>
         break;
     }
     case token_type_t::BUILTIN_FIELD_DEFAULT: {
-        // The field's real default *value*, statically typed to the field's own type (§9.2/§10.4)
-        // - the read-side counterpart to `defaults...` on `@Struct`/`@Union` (§10.4, Phase 14).
+        // The field's real default value, statically typed to the field's own type
         auto&      arg_type{*get_resolved_call_arg_type(call.arguments[0])};
         auto&      denoted{denoted_type(arg_type)};
         const auto field{resolve_field_by_name(call.arguments[1], denoted)};
@@ -927,9 +930,6 @@ template <ast::IndexableID ID>
         break;
     }
     case token_type_t::BUILTIN_FIELD: {
-        // Parses and type-checks its arguments so a later pass can add real semantics without a
-        // grammar change; gated here to fail clean rather than reach the emitter with nothing to
-        // emit. Full semantics (data field GEP, static/const, bound method) are a follow-up.
         DISCARD(get_resolved_call_arg_type(call.arguments[0]));
         DISCARD(get_resolved_call_arg_type(call.arguments[1]));
         return make_sema_err("@field is not yet implemented",
@@ -942,9 +942,7 @@ template <ast::IndexableID ID>
     case token_type_t::BUILTIN_REFERENCE:
     case token_type_t::BUILTIN_SLICE:
     case token_type_t::BUILTIN_ARRAY:
-    case token_type_t::BUILTIN_FN: {
-        // Compositional inverse of `@typeInfo` (§10.1): fold the descriptor argument to the
-        // matching `*Info` struct and build the concrete type directly from its fields.
+    case token_type_t::BUILTIN_FN:        {
         const auto builtin_name{*syntax::get_builtin_opt(builtin_id)};
         const auto desc{resolve_type_descriptor(call.arguments[0])};
         if (!desc) {
@@ -955,14 +953,13 @@ template <ast::IndexableID ID>
         }
         const auto field_err{[&](std::string_view field_name) -> stdx::result<void, diagnostic> {
             return make_sema_err(
-                fmt::format(
-                    "'{}': descriptor is missing a compile-time-known '{}' field", builtin_name,
-                    field_name),
+                fmt::format("'{}': descriptor is missing a compile-time-known '{}' field",
+                            builtin_name,
+                            field_name),
                 error::CONSTEXPR_EVALUATION_FAILED,
                 get_call_arg_location(call.arguments[0]));
         }};
-        // The call denotes the constructed type as a compile-time value, like `@fieldType`
-        // (`BUILTIN_FIELD_TYPE` above) - a `TYPE`-kind meta-type wrapping it, not the type itself.
+
         const auto wrap_type{[&](type& built) -> type* {
             auto meta{ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, built}]};
             meta->resolve_if<types::meta_type>(built);
@@ -1099,7 +1096,8 @@ template <ast::IndexableID ID>
             fn_key.imprint(**ret_v);
             fn_key.imprint(*conv);
             auto& built{*ctx_.pool[fn_key]};
-            built.resolve_if<types::function>(param_types, **ret_v, *has_self_v, *variadic_v, *conv);
+            built.resolve_if<types::function>(
+                param_types, **ret_v, *has_self_v, *variadic_v, *conv);
             return_type = wrap_type(built);
             break;
         }
@@ -1109,11 +1107,7 @@ template <ast::IndexableID ID>
     }
     case token_type_t::BUILTIN_ENUM:
     case token_type_t::BUILTIN_STRUCT:
-    case token_type_t::BUILTIN_UNION: {
-        // §10.3/§10.5: fold the descriptor (arg 0) the same way as §10.1's compositional
-        // builtins, then - for `@Struct`/`@Union` only - fold every trailing `defaults...` pack
-        // argument directly (no `expand_pack_call_args`: a builtin call folds immediately in
-        // `const_eval`, it never needs the generic-instantiation machinery Part II's own packs do).
+    case token_type_t::BUILTIN_UNION:  {
         const auto builtin_name{*syntax::get_builtin_opt(builtin_id)};
         const auto desc{resolve_type_descriptor(call.arguments[0])};
         if (!desc) {
@@ -1144,11 +1138,11 @@ template <ast::IndexableID ID>
 
         const auto disc{id.get_index()};
         const auto loc{resolving_.ast.location_of(id)};
-        auto synthesized = builtin_id == token_type_t::BUILTIN_ENUM
-                                ? synthesize_enum(disc, loc, *desc)
-                                : builtin_id == token_type_t::BUILTIN_STRUCT
-                                      ? synthesize_struct(disc, loc, *desc, defaults)
-                                      : synthesize_union(disc, loc, *desc, defaults);
+        auto       synthesized = builtin_id == token_type_t::BUILTIN_ENUM
+                                     ? synthesize_enum(disc, loc, *desc)
+                                 : builtin_id == token_type_t::BUILTIN_STRUCT
+                                     ? synthesize_struct(disc, loc, *desc, defaults)
+                                     : synthesize_union(disc, loc, *desc, defaults);
         if (!synthesized) { return stdx::err<diagnostic>{std::move(synthesized).error()}; }
 
         auto meta{ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, **synthesized}]};
@@ -1843,8 +1837,8 @@ auto type_resolver::expand_pack_call_args(const ast::call_expr& call)
             continue;
         }
         const auto expr_h{call.arguments[i].as_opt<ast::expr_handle>()};
-        const auto ident{
-            expr_h ? resolving_.ast.get_as_opt<ast::identifier_expr>(*expr_h) : stdx::none};
+        const auto ident{expr_h ? resolving_.ast.get_as_opt<ast::identifier_expr>(*expr_h)
+                                : stdx::none};
         if (!current_pack_ || !ident || ident->name != current_pack_->name) {
             ctx_.diags.emplace_back("'...' may only expand the enclosing parameter pack",
                                     error::PACK_EXPANSION_MISPLACED,
@@ -1906,49 +1900,15 @@ auto type_resolver::resolve_const_enum_arg(const ast::call_expr::argument& arg,
     return *en;
 }
 
-namespace {
-
-// `arena::make_span<T>` default-constructs every element up front, which fails for a `T` holding
-// an `ast::identifier_handle`/`explicit_type_id` (neither is default-constructible - a `handle`'s
-// only constructor asserts a valid `node_id`). §10.3's synthesized `enum_expr::enumeration` /
-// `struct_expr::field` / `union_expr::field` spans all need this instead: raw, alignment-correct
-// storage the caller placement-constructs into directly, one real value per slot.
-template <typename T> auto arena_make_uninit_span(ghoti::arena& arena, usize n) -> gsl::span<T> {
-    if (n == 0) { return {}; }
-    // `arena::alloc` (the raw allocator `make_span<T>` itself calls) is private; a same-sized,
-    // same-aligned, trivially-default-constructible POD slot type gets contiguous, correctly
-    // aligned storage through the public `make_span` instead, then it's reinterpreted as `T*` for
-    // placement-new - the standard "aligned raw storage" idiom.
-    struct alignas(alignof(T)) raw_slot {
-        std::byte bytes[sizeof(T)];
-    };
-    auto slots{arena.make_span<raw_slot>(n)};
-    return gsl::span<T>{reinterpret_cast<T*>(slots.data()), n};
-}
-
-// `mod::module::sema_side_tables` is sized once, from the AST's node/type-pool counts as they
-// stood right after parsing (`side_tables::resize`); every side-table lookup (`set_sema_type`,
-// symbol/definition tables, ...) indexes it with **no bounds check** (`side_table::operator[]`
-// just does `values[id.get_index()]`). A node synthesized here at resolve-time gets an index at
-// or past that original pool size, so touching its sema type without this first is a silent
-// out-of-bounds vector write - undefined behavior, observed as heap corruption that only
-// surfaces much later at an unrelated `free()`. Cheap to call whenever growing (a no-op once
-// already large enough), so every synthesize helper below re-syncs right after `add_node`.
-auto sync_side_tables_for_new_node(mod::module& m) -> void {
-    m.sema_side_tables.resize(m.ast.get_pool_sizes());
-}
-
-} // namespace
-
 auto type_resolver::synthesize_ident(std::string_view name, bool is_public)
     -> ast::identifier_handle {
-    auto        storage{ctx_.arena.make_span<char>(name.size())};
+    auto storage{ctx_.arena.make_span<char>(name.size())};
     std::ranges::copy(name, storage.begin());
     const std::string_view stable{storage.data(), storage.size()};
     const syntax::token_t  tok{
         is_public ? syntax::token_type_t::PUBLIC : syntax::token_type_t::IDENT, stable};
     const auto id{resolving_.ast.add_node(tok, tok, ast::identifier_expr{stable})};
-    sync_side_tables_for_new_node(resolving_);
+    resolving_.sync_side_tables_for_new_node();
     return ast::identifier_handle{id};
 }
 
@@ -1958,21 +1918,24 @@ auto type_resolver::synthesize_const_literal(const gir::const_value& val)
         const syntax::token_t tok{
             *b ? syntax::token_type_t::BOOLEAN_TRUE : syntax::token_type_t::BOOLEAN_FALSE, "0"};
         const auto id{resolving_.ast.add_node(tok, tok, ast::bool_expr{})};
-        sync_side_tables_for_new_node(resolving_);
+        resolving_.sync_side_tables_for_new_node();
         return ast::expr_handle{id};
     }
     if (const auto i{val.as_int_opt()}) {
         const syntax::token_t tok{syntax::token_type_t::INT_10, "0"};
-        const auto            id{resolving_.ast.add_node(
-            tok, tok, ast::int_literal_expr{.value = static_cast<u128>(*i), .is_signed = true, .spelling = "0"})};
-        sync_side_tables_for_new_node(resolving_);
+        const auto            id{resolving_.ast.add_node(tok,
+                                              tok,
+                                              ast::int_literal_expr{.value = static_cast<u128>(*i),
+                                                                               .is_signed = true,
+                                                                               .spelling  = "0"})};
+        resolving_.sync_side_tables_for_new_node();
         return ast::expr_handle{id};
     }
     if (const auto f{val.as_opt<f64>()}) {
         const syntax::token_t tok{syntax::token_type_t::REAL, "0"};
-        const auto            id{
-            resolving_.ast.add_node(tok, tok, ast::float_literal_expr{.value = *f, .spelling = "0"})};
-        sync_side_tables_for_new_node(resolving_);
+        const auto            id{resolving_.ast.add_node(
+            tok, tok, ast::float_literal_expr{.value = *f, .spelling = "0"})};
+        resolving_.sync_side_tables_for_new_node();
         return ast::expr_handle{id};
     }
     if (const auto s{val.as_opt<std::string>()}) {
@@ -1980,9 +1943,9 @@ auto type_resolver::synthesize_const_literal(const gir::const_value& val)
         std::ranges::copy(*s, storage.begin());
         const std::string_view stable{storage.data(), storage.size()};
         const syntax::token_t  tok{syntax::token_type_t::STRING, stable};
-        const auto             id{
-            resolving_.ast.add_node(tok, tok, ast::string_expr{.value = stable, .spelling = stable})};
-        sync_side_tables_for_new_node(resolving_);
+        const auto             id{resolving_.ast.add_node(
+            tok, tok, ast::string_expr{.value = stable, .spelling = stable})};
+        resolving_.sync_side_tables_for_new_node();
         return ast::expr_handle{id};
     }
     return stdx::none;
@@ -1990,10 +1953,11 @@ auto type_resolver::synthesize_const_literal(const gir::const_value& val)
 
 auto type_resolver::synthesize_enum(usize disc, source_location loc, const gir::const_struct& desc)
     -> stdx::result<gsl::not_null<type*>, diagnostic> {
-    const auto field_err{[&](std::string_view what) -> stdx::result<gsl::not_null<type*>, diagnostic> {
-        return make_sema_err(
-            fmt::format("'@Enum': {}", what), error::CONSTEXPR_EVALUATION_FAILED, loc);
-    }};
+    const auto field_err{
+        [&](std::string_view what) -> stdx::result<gsl::not_null<type*>, diagnostic> {
+            return make_sema_err(
+                fmt::format("'@Enum': {}", what), error::CONSTEXPR_EVALUATION_FAILED, loc);
+        }};
 
     const auto tag_f{desc.get_field_opt("tag_type")};
     const auto fields_f{desc.get_field_opt("fields")};
@@ -2005,8 +1969,8 @@ auto type_resolver::synthesize_enum(usize disc, source_location loc, const gir::
     if (!fields_arr) { return field_err("descriptor is missing 'fields'"); }
     if (!exhaustive_v) { return field_err("descriptor is missing 'exhaustive'"); }
 
-    auto       enumerations{
-        arena_make_uninit_span<ast::enum_expr::enumeration>(ctx_.arena, fields_arr->elements.size())};
+    auto enumerations{
+        make_uninit_span<ast::enum_expr::enumeration>(ctx_.arena, fields_arr->elements.size())};
     const auto scope_idx{ctx_.registry.create()};
     for (usize i{0}; i < fields_arr->elements.size(); ++i) {
         const auto fs{fields_arr->elements[i].as_opt<gir::const_struct>()};
@@ -2018,23 +1982,21 @@ auto type_resolver::synthesize_enum(usize disc, source_location loc, const gir::
             return field_err("every element of 'fields' needs a compile-time 'name' and 'value'");
         }
 
-        const auto name_ident{synthesize_ident(*name_v, false)};
+        const auto            name_ident{synthesize_ident(*name_v, false)};
         const syntax::token_t val_tok{syntax::token_type_t::INT_10, "0"};
         const auto            val_node{resolving_.ast.add_node(
             val_tok,
             val_tok,
-            ast::int_literal_expr{.value = static_cast<u128>(*value_v), .is_signed = true, .spelling = "0"})};
-        sync_side_tables_for_new_node(resolving_);
-        new (&enumerations[i]) ast::enum_expr::enumeration{.name  = name_ident,
-                                                            .value = ast::expr_handle{val_node}};
+            ast::int_literal_expr{
+                           .value = static_cast<u128>(*value_v), .is_signed = true, .spelling = "0"})};
+        resolving_.sync_side_tables_for_new_node();
+        new (&enumerations[i])
+            ast::enum_expr::enumeration{.name = name_ident, .value = ast::expr_handle{val_node}};
 
-        // The map key must outlive this function - `*name_v` only points into the folded
-        // descriptor's own (transient) string storage, but the identifier node's own `name` was
-        // copied into `ctx_.arena` by `synthesize_ident`, so it's stable for the type's lifetime.
+        // The map key must outlive this function
         const auto stable_name{resolving_.ast.get_as<ast::identifier_expr>(name_ident).name};
-        if (auto res{
-                ctx_.registry.insert_into(
-                    scope_idx, resolving_, stable_name, symbols::enumeration{enumerations[i]})};
+        if (auto res{ctx_.registry.insert_into(
+                scope_idx, resolving_, stable_name, symbols::enumeration{enumerations[i]})};
             !res) {
             return stdx::err<diagnostic>{std::move(res.error())};
         }
@@ -2056,17 +2018,17 @@ auto type_resolver::synthesize_enum(usize disc, source_location loc, const gir::
 }
 
 // Reads a `defaults...` pack argument in field order against `field_has_default`, checking each
-// value's static type against the matching field's own type (§10.4). Arity/type mismatches use
-// `usual_arity`/`usual_type` diagnostics since packs share `resolve_call`'s own error codes.
-auto type_resolver::synthesize_struct(usize                              disc,
-                                      source_location                    loc,
+// value's static type against the matching field's own type
+auto type_resolver::synthesize_struct(usize                             disc,
+                                      source_location                   loc,
                                       const gir::const_struct&          desc,
                                       gsl::span<const gir::const_value> defaults)
     -> stdx::result<gsl::not_null<type*>, diagnostic> {
-    const auto field_err{[&](std::string_view what) -> stdx::result<gsl::not_null<type*>, diagnostic> {
-        return make_sema_err(
-            fmt::format("'@Struct': {}", what), error::CONSTEXPR_EVALUATION_FAILED, loc);
-    }};
+    const auto field_err{
+        [&](std::string_view what) -> stdx::result<gsl::not_null<type*>, diagnostic> {
+            return make_sema_err(
+                fmt::format("'@Struct': {}", what), error::CONSTEXPR_EVALUATION_FAILED, loc);
+        }};
 
     const auto fields_f{desc.get_field_opt("fields")};
     const auto is_extern_f{desc.get_field_opt("is_extern")};
@@ -2079,7 +2041,7 @@ auto type_resolver::synthesize_struct(usize                              disc,
     if (!is_packed_v) { return field_err("descriptor is missing 'is_packed'"); }
 
     const auto n{fields_arr->elements.size()};
-    auto       ast_fields{arena_make_uninit_span<ast::struct_expr::field>(ctx_.arena, n)};
+    auto       ast_fields{make_uninit_span<ast::struct_expr::field>(ctx_.arena, n)};
     auto       field_types{ctx_.pool.get_many_unsafe(n)};
     const auto scope_idx{ctx_.registry.create()};
     usize      default_i{0};
@@ -2131,16 +2093,16 @@ auto type_resolver::synthesize_struct(usize                              disc,
         const auto name_ident{synthesize_ident(*name_v, true)};
         const auto ty_ident{synthesize_ident(ctx_.type_display_name(**type_v), false)};
         new (&ast_fields[i]) ast::struct_expr::field{
-            .name          = name_ident,
-            .explicit_type = ast::explicit_type_id{
-                ast::explicit_type_kind::IDENT, ast::type_modifier{}, syntax::token_type_t::IDENT,
-                static_cast<u64>((*ty_ident).get_index())},
+            .name               = name_ident,
+            .explicit_type      = ast::explicit_type_id{ast::explicit_type_kind::IDENT,
+                                                   ast::type_modifier{},
+                                                   syntax::token_type_t::IDENT,
+                                                   static_cast<u64>((*ty_ident).get_index())},
             .default_value      = default_value,
             .explicit_alignment = stdx::none,
         };
 
-        // See the matching comment in `synthesize_enum`: the key must be the stable,
-        // arena-backed name, not `*name_v` (a view into the transient folded descriptor).
+        // The key must be the stable,  arena-backed name, not `*name_v`
         const auto stable_name{resolving_.ast.get_as<ast::identifier_expr>(name_ident).name};
         if (auto res{ctx_.registry.insert_into(
                 scope_idx, resolving_, stable_name, symbols::struct_field{ast_fields[i]})};
@@ -2163,22 +2125,27 @@ auto type_resolver::synthesize_struct(usize                              disc,
     types::key_t key{type_kind::STRUCT, types::mut::CONSTANT};
     key.imprint(disc);
     auto& struct_type{*ctx_.pool[key]};
-    struct_type.resolve_if<types::struct_t>(
-        field_types, ast_fields, gsl::span<type*>{}, resolving_, *is_extern_v, *is_packed_v,
-        gsl::span<u64>{});
+    struct_type.resolve_if<types::struct_t>(field_types,
+                                            ast_fields,
+                                            gsl::span<type*>{},
+                                            resolving_,
+                                            *is_extern_v,
+                                            *is_packed_v,
+                                            gsl::span<u64>{});
     struct_type.set_symbol_table_idx(scope_idx);
     return gsl::not_null{&struct_type};
 }
 
-auto type_resolver::synthesize_union(usize                              disc,
-                                     source_location                    loc,
+auto type_resolver::synthesize_union(usize                             disc,
+                                     source_location                   loc,
                                      const gir::const_struct&          desc,
                                      gsl::span<const gir::const_value> defaults)
     -> stdx::result<gsl::not_null<type*>, diagnostic> {
-    const auto field_err{[&](std::string_view what) -> stdx::result<gsl::not_null<type*>, diagnostic> {
-        return make_sema_err(
-            fmt::format("'@Union': {}", what), error::CONSTEXPR_EVALUATION_FAILED, loc);
-    }};
+    const auto field_err{
+        [&](std::string_view what) -> stdx::result<gsl::not_null<type*>, diagnostic> {
+            return make_sema_err(
+                fmt::format("'@Union': {}", what), error::CONSTEXPR_EVALUATION_FAILED, loc);
+        }};
 
     const auto fields_f{desc.get_field_opt("fields")};
     const auto is_extern_f{desc.get_field_opt("is_extern")};
@@ -2194,14 +2161,10 @@ auto type_resolver::synthesize_union(usize                              disc,
     if (!tagged_v) { return field_err("descriptor is missing 'tagged'"); }
 
     const auto n{fields_arr->elements.size()};
-    auto       ast_fields{arena_make_uninit_span<ast::union_expr::field>(ctx_.arena, n)};
+    auto       ast_fields{make_uninit_span<ast::union_expr::field>(ctx_.arena, n)};
     auto       field_types{ctx_.pool.get_many_unsafe(n)};
     const auto scope_idx{ctx_.registry.create()};
-    // §10.4: `@Union` also collects `defaults...` (its `has_default`-flagged fields have real
-    // defaults too), but `types::union_t` has no per-field default storage - a union's own
-    // semantics never let a literal omit a field, so there's nowhere to attach one. Validate the
-    // pack anyway (arity + per-argument type) so a caller relying on the round-trip law doesn't
-    // silently lose defaults; the values themselves are simply not retained on the type.
+
     usize default_i{0};
     for (usize i{0}; i < n; ++i) {
         const auto fs{fields_arr->elements[i].as_opt<gir::const_struct>()};
@@ -2239,10 +2202,11 @@ auto type_resolver::synthesize_union(usize                              disc,
         const auto name_ident{synthesize_ident(*name_v, true)};
         const auto ty_ident{synthesize_ident(ctx_.type_display_name(**type_v), false)};
         new (&ast_fields[i]) ast::union_expr::field{
-            .name          = name_ident,
-            .explicit_type = ast::explicit_type_id{
-                ast::explicit_type_kind::IDENT, ast::type_modifier{}, syntax::token_type_t::IDENT,
-                static_cast<u64>((*ty_ident).get_index())},
+            .name               = name_ident,
+            .explicit_type      = ast::explicit_type_id{ast::explicit_type_kind::IDENT,
+                                                   ast::type_modifier{},
+                                                   syntax::token_type_t::IDENT,
+                                                   static_cast<u64>((*ty_ident).get_index())},
             .explicit_alignment = stdx::none,
         };
 
@@ -2266,9 +2230,13 @@ auto type_resolver::synthesize_union(usize                              disc,
     types::key_t key{type_kind::UNION, types::mut::CONSTANT};
     key.imprint(disc);
     auto& union_type{*ctx_.pool[key]};
-    union_type.resolve_if<types::union_t>(
-        field_types, ast_fields, gsl::span<type*>{}, resolving_, !*tagged_v, *is_extern_v,
-        *is_packed_v);
+    union_type.resolve_if<types::union_t>(field_types,
+                                          ast_fields,
+                                          gsl::span<type*>{},
+                                          resolving_,
+                                          !*tagged_v,
+                                          *is_extern_v,
+                                          *is_packed_v);
     union_type.set_symbol_table_idx(scope_idx);
     return gsl::not_null{&union_type};
 }
@@ -2924,7 +2892,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
 
         bool any_arg_poison{false};
         for (usize i{0}; i < effective_arity; ++i) {
-            // A pack-element slot has no AST node of its own to resolve - it aliases an
+            // A pack-element slot has no AST node of its own to resolve; it aliases an
             // already-typed element of the enclosing pack.
             if (expanded.pack_k[i]) { continue; }
 
@@ -3106,8 +3074,7 @@ namespace {
 
 // Unrolls a `for constexpr`: resolves the block once per compile-time-known iteration, each under
 // its own `constexpr_frame` slot and diffed into a per-iteration `body_type_diff` the emitter
-// replays (the same mechanism `instantiate_generic` uses to give one shared AST subtree distinct
-// per-instantiation typing).
+// replays
 auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_expr& for_expr)
     -> void {
     PROFILE_FUNCTION();
@@ -3137,7 +3104,7 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
 
     usize                         count{0};
     type*                         elem_type{nullptr};
-    std::vector<gir::const_value> elem_values; // unused (empty) for the pack domain
+    std::vector<gir::const_value> elem_values; // Empty for the pack domain
 
     if (driver_is_pack) {
         count = current_pack_->element_types.size();
@@ -3297,11 +3264,6 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
     }
 
     if (any_poison) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
-    // Store `loop_type` itself back (not a bare `VOID_`), mirroring the ordinary for-loop's own
-    // final assignment: overwriting `id`'s node-type entry with a symbol-table-idx-less builtin
-    // would strand a second, differently-shaped instantiation of this same shared AST node (e.g.
-    // a pack function called at two different arities) with no scope to resolve against, since
-    // `instantiate_generic` never restores `fn_mod`'s side tables between instantiations.
     resolving_.set_sema_type(id, loop_type);
     last_type_.emplace(resolving_.get_sema_type(id));
 }
@@ -3399,14 +3361,12 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     const bool has_pack{
         std::ranges::any_of(fn.parameters, [](const auto& p) { return p.is_pack; })};
 
-    // A pack function is implicitly generic (below) and, per its not-first-class rule, can never
-    // denote a `fn(...): T` value type; that combination is simply unsupported syntax for now.
     if (has_pack && fn.is_type_expr) {
         return last_type_.emplace(ctx_.poison_node(resolving_,
                                                    id,
                                                    "a parameter pack cannot appear in a `fn(...): "
                                                    "type` value expression",
-                                                   error::PACK_PARAM_NOT_YET_SUPPORTED,
+                                                   error::MALFORMED_PACK_USE,
                                                    resolving_.ast.location_of(id)));
     }
 
@@ -4785,11 +4745,7 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
     }
     resolve(dot.object);
     if (last_type_->is_poison()) { return resolving_.set_sema_type(id, *last_type_); }
-    // An ordinary `Color := enum {...}` names its `enum_t` directly, never wrapped; a
-    // dynamically-constructed one (`@Enum(desc)`, §10.3) resolves like `@fieldType` et al. - a
-    // `TYPE`-kind meta-type denoting it - since a builtin call's own declared return type is
-    // always `type`. Unwrap here so `T.variant`-style static-member lookup below sees the same
-    // `enum_t`/`struct_t`/`union_t` shape either way.
+    // An ordinary `Color := enum {...}` names its `enum_t` directly, never wrapped
     auto& object_type{denoted_type(*last_type_.take())};
 
     // Desugared to auto and needs to be deferred like the call handler
@@ -5629,12 +5585,7 @@ auto type_resolver::resolve_constexpr_match(ast::node_id           id,
             resolve_symbol_info(*live.capture, symbol_kind::VALUE);
 
             // Give the capture the same `constexpr_frame` binding a `for`/`while constexpr`
-            // capture already gets (§5.3/§6.2) - previously missing, this is what blocked
-            // `std::meta`'s flagship field-walker (§9.1): any later `try_eval` on an expression
-            // referencing the capture by name (not just one that's itself a builtin-call
-            // argument, the only path `emit_call`'s fold-first fallback covers) can now resolve
-            // it. Mirrors `const_eval::eval_match`'s own capture extraction for a union
-            // scrutinee: the bound value is the active variant's payload, not the whole union.
+            // capture already gets
             const auto& cap_ident{resolving_.ast.get_as<ast::identifier_expr>(*live.capture)};
             if (const auto un{scrutinee->as_opt<gir::const_union>()}) {
                 frame.insert_or_assign(cap_ident.name,
@@ -7110,10 +7061,8 @@ VISITOR_TEMPLATE_INIT(type_resolver, visit, const ast::interface_expr&)
 
 auto type_resolver::visit(ast::node_id id, const ast::while_loop_expr& while_loop) -> void {
     PROFILE_FUNCTION();
-    // Unrolling itself is an emit-time concern (§6.2: it replays the condition/body through
-    // `const_eval`/`emit_block` as many times as the folded condition holds) - the resolver only
-    // needs to type-check the condition/body once (their types don't vary per iteration the way a
-    // pack's can) and enforce the same break/continue restriction `for constexpr` has.
+    // Unrolling itself is an emit-time concern, the resolver only needs to type-check the
+    // condition/body once
     if (while_loop.is_constexpr) { check_constexpr_loop_jumps(while_loop.block); }
     TRY_RESOLVE(while_loop.condition);
     if (while_loop.continuation) { TRY_RESOLVE(*while_loop.continuation); }
@@ -7652,9 +7601,7 @@ auto type_resolver::check_constexpr_loop_jumps(ast::stmt_handle body) -> void {
     };
     collect_labels(collect_labels, *body);
 
-    // `loop_depth` counts nested *ordinary* loops declared inside this constexpr loop's own body;
-    // a nested constexpr loop is walked the same way (its own `break`/`continue` still targets it,
-    // not this one) and separately checks its own body when it resolves.
+    // `loop_depth` counts nested ordinary loops declared inside this constexpr loop's own body
     auto check_jumps = [&](auto& self, ast::node_id n, usize loop_depth) -> void {
         if (!n.is_valid()) { return; }
         resolving_.ast[n].visit(
@@ -8735,9 +8682,11 @@ auto type_resolver::resolve_param_impl_bodies(
         key.imprint(static_cast<u64>(fn_expr.variadic));
         key.imprint(fn_expr.conv);
         auto& concrete_fn_type{*ctx_.pool[key]};
-        concrete_fn_type.resolve_if<types::function>(
-            concrete_param_types, *deduced_ret, fn_expr.self.has_value(), fn_expr.variadic,
-            fn_expr.conv);
+        concrete_fn_type.resolve_if<types::function>(concrete_param_types,
+                                                     *deduced_ret,
+                                                     fn_expr.self.has_value(),
+                                                     fn_expr.variadic,
+                                                     fn_expr.conv);
         if (fn_type && fn_type->has_symbol_table_idx()) {
             concrete_fn_type.set_symbol_table_idx(fn_type->get_symbol_table_idx());
         }
@@ -9502,9 +9451,6 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_function
     }
     fn_key.imprint(return_type);
     if (fn.variadic) { fn_key.imprint(fn.variadic); }
-    // `fn(...): T` type-annotation syntax has no `callconv(...)` spelling of its own, so it always
-    // denotes the default (`C`) convention - matching a value whose own function type imprinted
-    // anything else is now, correctly, a type mismatch (the ABI hazard this fix closes, §2).
     fn_key.imprint(ast::calling_convention::C);
 
     auto& resolved_fn{*ctx_.pool[fn_key]};
@@ -9684,9 +9630,8 @@ auto type_resolver::instantiate_generic(type&                             callee
     const auto   fn_type{fn_info.fn_type};
     const auto   fn_table_idx{fn_type->get_symbol_table_idx()};
 
-    // Computed early (depends only on the call's own arguments) so a nested `for`/`while
-    // constexpr`'s per-iteration typing keys can be scoped to this instantiation before its body
-    // is resolved - see `type_resolver::typing_scope_prefix_`.
+    // Computed early so a nested `for`/`while constexpr`'s per-iteration typing keys can be scoped
+    // to this instantiation before its body is resolved
     auto mangled_name =
         fmt::format("{}__{}",
                     fn_info.name.value_or("fn"),
@@ -9887,9 +9832,7 @@ auto type_resolver::instantiate_generic(type&                             callee
         fn_mod.set_sema_type(param.name, *body_p_type);
         if (!param.is_constexpr) { inst_param_types[i++] = decl_p_type; }
     }
-    // A pack element has no `param.explicit_type` of its own to resolve against; each trailing
-    // argument's already-concrete type is its type. `rest` itself binds to no ordinary sema type
-    // at all - `rest.len`/`rest[K]` resolve against `current_pack_` instead (see those visitors).
+    // A pack element has no `param.explicit_type` of its own to resolve against
     if (has_pack) {
         const auto&        pack_param{fn_expr.parameters.back()};
         std::vector<type*> elem_types;

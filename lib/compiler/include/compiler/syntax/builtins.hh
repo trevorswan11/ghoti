@@ -44,8 +44,6 @@ constexpr builtin_t HAS_FIELD{"@hasField", token_type_t::BUILTIN_HAS_FIELD};
 constexpr builtin_t FIELD_TYPE{"@fieldType", token_type_t::BUILTIN_FIELD_TYPE};
 constexpr builtin_t FIELD{"@field", token_type_t::BUILTIN_FIELD};
 
-// Per-kind construction builtins (§10.1): the compositional inverse of `@typeInfo`'s
-// `IntInfo`/`FloatInfo`/`PointerInfo`/`SliceInfo`/`ArrayInfo` payload shapes.
 constexpr builtin_t INT{"@Int", token_type_t::BUILTIN_INT};
 constexpr builtin_t FLOAT{"@Float", token_type_t::BUILTIN_FLOAT};
 constexpr builtin_t POINTER{"@Pointer", token_type_t::BUILTIN_POINTER};

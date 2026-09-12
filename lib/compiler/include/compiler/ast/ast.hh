@@ -1,6 +1,5 @@
 #pragma once
 
-#include <deque>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -22,17 +21,11 @@
 
 namespace ghoti::ast {
 
-// `pool`/`locations`/`end_locations` are `std::deque`, not `std::vector`: a node synthesized at
-// resolve-time (§10.3's `@Enum`/`@Struct`/`@Union`) calls `add_node` while a caller further up the
-// call stack (e.g. `type_resolver::visit(decl_stmt)`, mid-resolution of that very decl's RHS) is
-// still holding a live reference into an EARLIER element of this same pool. A `std::vector` would
-// invalidate that reference the moment growth reallocates; `std::deque` never invalidates
-// references (or pointers) to existing elements on `emplace_back`, only iterators - so growth
-// during synthesis can't corrupt an ancestor frame's reference into a node added before it.
+// `pool`/`locations`/`end_locations` are arena allocated for stable references
 template <IndexableID ID, typename Data> struct data_pool_base {
-    std::deque<Data>            pool;
-    std::deque<source_location> locations;
-    std::deque<source_location> end_locations;
+    std::vector<Data*>            pool;
+    std::vector<source_location*> locations;
+    std::vector<source_location*> end_locations;
 
     constexpr auto clear() noexcept -> void {
         pool.clear();
@@ -41,21 +34,26 @@ template <IndexableID ID, typename Data> struct data_pool_base {
     }
 
     // `end_token` is the last token consumed while parsing this types
-    constexpr auto emplace_back(const syntax::token_t& start_token,
+    constexpr auto emplace_back(ghoti::arena&          arena,
+                                const syntax::token_t& start_token,
                                 const syntax::token_t& end_token,
                                 Data&&                 data) -> u64 {
-        return emplace_back(
-            source_info<syntax::token_t>::get(start_token), end_token, std::forward<Data>(data));
+        return emplace_back(arena,
+                            source_info<syntax::token_t>::get(start_token),
+                            end_token,
+                            std::forward<Data>(data));
     }
 
     // For types whose span starts earlier than the token that tags their id
-    constexpr auto emplace_back(const source_location& start_loc,
+    constexpr auto emplace_back(ghoti::arena&          arena,
+                                const source_location& start_loc,
                                 const syntax::token_t& end_token,
                                 Data&&                 data) -> u64 {
         const u64 index{pool.size()};
-        pool.emplace_back(std::forward<Data>(data));
-        locations.emplace_back(start_loc);
-        end_locations.emplace_back(end_token.line, end_token.column + end_token.slice.size());
+        pool.emplace_back(arena.make<Data>(std::forward<Data>(data)));
+        locations.emplace_back(arena.make<source_location>(start_loc));
+        end_locations.emplace_back(
+            arena.make<source_location>(end_token.line, end_token.column + end_token.slice.size()));
         return index;
     }
 };
@@ -66,20 +64,24 @@ template <typename Data> struct data_pool<node_id, Data> : public data_pool_base
     std::vector<u8>      paren_depths;
 
     // `end_token` is the last token consumed while parsing this node
-    constexpr auto emplace_back(const syntax::token_t& start_token,
+    constexpr auto emplace_back(ghoti::arena&          arena,
+                                const syntax::token_t& start_token,
                                 const syntax::token_t& end_token,
                                 Data&&                 data) -> u64 {
-        return emplace_back(
-            source_info<syntax::token_t>::get(start_token), end_token, std::forward<Data>(data));
+        return emplace_back(arena,
+                            source_info<syntax::token_t>::get(start_token),
+                            end_token,
+                            std::forward<Data>(data));
     }
 
     // For nodes whose span starts earlier than the token that tags their node_id
-    constexpr auto emplace_back(const source_location& start_loc,
+    constexpr auto emplace_back(ghoti::arena&          arena,
+                                const source_location& start_loc,
                                 const syntax::token_t& end_token,
                                 Data&&                 data) -> u64 {
         paren_depths.emplace_back(u8{0});
         return data_pool_base<node_id, Data>::emplace_back(
-            start_loc, end_token, std::forward<Data>(data));
+            arena, start_loc, end_token, std::forward<Data>(data));
     }
 
     constexpr auto clear() noexcept -> void {
@@ -115,7 +117,8 @@ class AST {
                                           const syntax::token_t& end_token,
                                           Data&&                 data) -> node_id {
         constexpr auto kind{node_kind_of<Data>::value()};
-        const auto     index{nodes_.emplace_back(start_token, end_token, std::forward<Data>(data))};
+        const auto     index{
+            nodes_.emplace_back(get_arena(), start_token, end_token, std::forward<Data>(data))};
         return node_id{kind, start_token.type, index};
     }
 
@@ -126,7 +129,8 @@ class AST {
                                           const syntax::token_t& end_token,
                                           Data&&                 data) -> node_id {
         constexpr auto kind{node_kind_of<Data>::value()};
-        const auto     index{nodes_.emplace_back(span_start, end_token, std::forward<Data>(data))};
+        const auto     index{
+            nodes_.emplace_back(get_arena(), span_start, end_token, std::forward<Data>(data))};
         return node_id{kind, tag_token.type, index};
     }
 
@@ -136,8 +140,8 @@ class AST {
                                           type_modifier          mod,
                                           Data&&                 data) -> explicit_type_id {
         constexpr auto kind{explicit_type_kind_of<Data>::value()};
-        const auto     index{
-            explicit_types_.emplace_back(start_token, end_token, std::forward<Data>(data))};
+        const auto     index{explicit_types_.emplace_back(
+            get_arena(), start_token, end_token, std::forward<Data>(data))};
         return explicit_type_id{kind, mod, start_token.type, index};
     }
 
@@ -145,9 +149,9 @@ class AST {
     [[nodiscard]] constexpr auto location_of(ID id) const noexcept -> const source_location& {
         ASSERT(id.is_valid(), "Attempt to access invalid id");
         if constexpr (IndexableNodeID<ID>) {
-            return nodes_.locations[id.get_index()];
+            return *nodes_.locations[id.get_index()];
         } else {
-            return explicit_types_.locations[id.get_index()];
+            return *explicit_types_.locations[id.get_index()];
         }
     }
 
@@ -156,9 +160,9 @@ class AST {
     [[nodiscard]] constexpr auto end_location_of(ID id) const noexcept -> const source_location& {
         ASSERT(id.is_valid(), "Attempt to access invalid id");
         if constexpr (IndexableNodeID<ID>) {
-            return nodes_.end_locations[id.get_index()];
+            return *nodes_.end_locations[id.get_index()];
         } else {
-            return explicit_types_.end_locations[id.get_index()];
+            return *explicit_types_.end_locations[id.get_index()];
         }
     }
 
@@ -179,9 +183,9 @@ class AST {
     [[nodiscard]] constexpr auto operator[](this auto&& self, ID id) noexcept -> auto& {
         ASSERT(id.is_valid(), "Attempt to access invalid id");
         if constexpr (IndexableNodeID<ID>) {
-            return self.nodes_.pool[id.get_index()];
+            return *self.nodes_.pool[id.get_index()];
         } else {
-            return self.explicit_types_.pool[id.get_index()];
+            return *self.explicit_types_.pool[id.get_index()];
         }
     }
 
@@ -202,7 +206,7 @@ class AST {
     template <typename Data, IndexableNodeID ID>
     [[nodiscard]] constexpr auto get_as_mut(ID id) noexcept -> Data& {
         ASSERT(id.template is<Data>(), "Illegal node data retrieval");
-        return nodes_.pool[id.get_index()].template as<Data>();
+        return nodes_.pool[id.get_index()]->template as<Data>();
     }
 
     [[nodiscard]] constexpr auto get_roots(this auto&& self) noexcept -> auto& {
@@ -227,6 +231,7 @@ class AST {
 
     // `parser::consume` calls this before it parses; it must outlive the AST.
     auto set_arena(ghoti::arena& arena) -> void { interner_.emplace(arena); }
+    auto get_arena() -> ghoti::arena& { return interner_->arena(); }
 
     // The returned view stays valid for as long as the bound arena.
     [[nodiscard]] auto intern(std::string_view text) -> std::string_view {

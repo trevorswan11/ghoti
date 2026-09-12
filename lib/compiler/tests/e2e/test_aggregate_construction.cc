@@ -1,12 +1,11 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "compiler/sema/error.hh"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
 
 namespace ghoti::tests {
 
-// §10.3: `@Enum` constructs an `enum` type from an `EnumInfo` descriptor - the compositional
-// inverse of `@typeInfo`'s `enum` arm.
 TEST_CASE("`@Enum` constructs an enum type from an `EnumInfo` descriptor") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
@@ -41,8 +40,6 @@ TEST_CASE("`@Enum` variants are usable with `@tagName`") {
     )") == 99);
 }
 
-// §10.4: `@Struct` constructs a `struct` type from a `StructInfo` descriptor, plus a
-// `defaults...` pack collecting one value per `has_default = true` field, in field order.
 TEST_CASE("`@Struct` constructs a struct type from a `StructInfo` descriptor") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
@@ -97,7 +94,6 @@ TEST_CASE("`@Struct` diagnoses a missing `defaults...` argument instead of crash
                           sema::error::ARITY_MISMATCH));
 }
 
-// §10.5: `@Union` constructs a `union` type from a `UnionInfo` descriptor.
 TEST_CASE("`@Union` constructs an untagged union type from a `UnionInfo` descriptor") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {

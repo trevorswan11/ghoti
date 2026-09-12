@@ -22,6 +22,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
@@ -1195,8 +1196,7 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
     auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
     auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
 
-    // `@typeOf`'s own folding (above) represents "this value denotes a type" the same way: the
-    // `stdx::option<sema::type&>` data-variant alternative, no `type_` attached.
+    // `@typeOf`'s own folding represents "this value denotes a type" the same way
     const auto type_value{
         [](sema::type& t) -> const_value { return const_value{stdx::option<sema::type&>{t}}; }};
 
@@ -1242,9 +1242,6 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
                                        : denoted.get_data().as<sema::types::reference>().underlying};
         const_struct s;
         s.fields.emplace("child", type_value(underlying));
-        // Mutability/volatility are keyed on the pointer/reference/slice/array type itself
-        // (`context::get_pointer` et al. imprint the modifier into *that* type's own pool key,
-        // leaving `underlying` unchanged) - not on the pointee/element type.
         s.fields.emplace("is_mut", const_value{!denoted.is_constant(), bool_type});
         s.fields.emplace("is_volatile", const_value{denoted.is_volatile(), bool_type});
         return wrap(
@@ -1270,9 +1267,9 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
         return wrap("array", std::move(s), ctx_.get_builtin_type("ArrayInfo"));
     }
     case sema::type_kind::FUNCTION: {
-        const auto&  fn{denoted.get_data().as<sema::types::function>()};
-        auto&        type_type{ctx_.get_builtin_resolved_type(sema::type_kind::TYPE)};
-        const_array  params;
+        const auto& fn{denoted.get_data().as<sema::types::function>()};
+        auto&       type_type{ctx_.get_builtin_resolved_type(sema::type_kind::TYPE)};
+        const_array params;
         for (auto* p : fn.params) { params.elements.emplace_back(type_value(*p)); }
         auto& params_slice_type{ctx_.get_slice(sema::types::mut::CONSTANT, false, type_type)};
         const_struct s;
@@ -1280,12 +1277,10 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
         s.fields.emplace("return_type", type_value(fn.return_type));
         s.fields.emplace("variadic", const_value{fn.is_variadic, bool_type});
         s.fields.emplace("has_self", const_value{fn.has_self, bool_type});
-        s.fields.emplace(
-            "callconv",
-            const_value{
-                const_enum{std::string{ast::calling_convention_name(fn.conv)},
-                          static_cast<i64>(fn.conv)},
-                ctx_.get_builtin_type("CallConv")});
+        s.fields.emplace("callconv",
+                         const_value{const_enum{std::string{ast::calling_convention_name(fn.conv)},
+                                                static_cast<i64>(fn.conv)},
+                                     ctx_.get_builtin_type("CallConv")});
         return wrap("function", std::move(s), ctx_.get_builtin_type("FnInfo"));
     }
     case sema::type_kind::ENUM: {
@@ -1715,9 +1710,6 @@ namespace {
 
 } // namespace
 
-// `lhs ++ rhs`: the resolver always types the result as an array (see `resolve_concat`), so a
-// string operand normalizes to its bytes here rather than taking the slice-typed `make_string`
-// fast path; the element vectors are then spliced.
 auto const_eval::fold_concat(const const_value& lhs, const const_value& rhs, ast::node_id id)
     -> stdx::option<const_value> {
     const auto lhs_arr{lhs.as_opt<const_array>()};
@@ -2926,10 +2918,7 @@ auto const_eval::eval_constexpr_fn(ast::node_id                      call_id,
                                    stdx::option<const const_struct&> captures)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
-    // A pack parameter collects a variable number of trailing arguments, and this evaluator has
-    // no notion of `rest.len`/`rest[k]`/`for constexpr (rest)` (that machinery lives in
-    // type_resolver/emitter's `current_pack_`) - bail out rather than assert on the arity
-    // mismatch a pack call always produces against this fixed-parameter count.
+    // We have no notion of `rest.len`/`rest[k]`/`for constexpr (rest)` (all emitter/resolver work)
     if (!fn_expr.parameters.empty() && fn_expr.parameters.back().is_pack) { return stdx::none; }
 
     const bool  has_self{fn_expr.self.has_value()};

@@ -2144,9 +2144,7 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
                        inst.type->get_kind() == sema::type_kind::NORETURN};
     auto*      call_inst{builder_.CreateCall(fn_ty, callee_val, args, is_void ? "" : "calltmp")};
     // An indirect call's target may have a non-default calling convention now that it's part of
-    // `types::function`'s own identity (§2/§10.2) - without this the call instruction always
-    // defaults to `C`, silently miscompiling a call through an `extern("sysv"/"win64"/...)`
-    // function value.
+    // `types::function`'s own identity
     call_inst->setCallingConv(to_llvm_callconv(ind_fn_data->conv));
     if (inst.result && !is_void) { set_local(*inst.result, call_inst); }
     return call_inst;

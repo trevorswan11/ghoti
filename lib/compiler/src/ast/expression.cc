@@ -878,7 +878,6 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
         while (!parser.peek_token_is(syntax::token_type_t::RPAREN) &&
                !parser.peek_token_is(syntax::token_type_t::END)) {
             // Skip only for the first param with no self: current already sits on its name
-            // (not a delimiter), so this peek-for-bare-`...` check would misfire on `name...`.
             if (!(first && !self) && TRY(try_parse_variadic_fn(parser))) {
                 variadic = true;
                 break;
@@ -930,6 +929,7 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
                         .param_index = static_cast<u32>(parameters.size()),
                         .interfaces  = std::move(*bound),
                     });
+
                     // `rest: impl I...`: the pack marker follows the bound's type expression.
                     if (parser.peek_token_is(syntax::token_type_t::ELLIPSIS)) {
                         parser.advance();

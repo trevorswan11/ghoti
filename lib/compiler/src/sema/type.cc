@@ -524,8 +524,6 @@ auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {
         const auto f_a{a.get_data().as_opt<types::function>()};
         const auto f_b{b.get_data().as_opt<types::function>()};
         if (!f_a || !f_b) { return a == b; }
-        // A distinct calling convention is a distinct ABI (§2/§10.2's fix): two `fn(...): T`
-        // values differing only in `callconv(...)` must never be considered interchangeable.
         if (f_a->conv != f_b->conv || f_a->is_variadic != f_b->is_variadic ||
             f_a->params.size() != f_b->params.size()) {
             return false;

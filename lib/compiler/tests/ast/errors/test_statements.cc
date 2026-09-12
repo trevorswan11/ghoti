@@ -46,9 +46,6 @@ TEST_CASE("Mutability restrictions") {
                 std::pair{0UZ, 0UZ}};
     };
 
-    // `constexpr var` is the one legal pair (a mutable comptime local, see
-    // docs/comptime-metaprogramming-plan.md §4); every other pair of mutability modifiers,
-    // and all three together, are still rejected.
     constexpr std::array contending_mut{keywords::CONSTEXPR, keywords::VAR, keywords::CONSTANT};
     for (const auto& mut : helpers::combinations(contending_mut)) {
         if (mut.first.type == keywords::CONSTEXPR.type && mut.second.type == keywords::VAR.type) {

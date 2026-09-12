@@ -661,7 +661,7 @@ TEST_CASE("formatter puts a blank line between consecutive impl methods") {
 }
 
 TEST_CASE("formatter puts a blank line between a struct field and its first method, and "
-         "between consecutive methods") {
+          "between consecutive methods") {
     CHECK(format_source("const S := struct { x: i32, pub const get := fn(&self): i32 "
                         "{ return self.x; }; pub const inc := fn(&mut self): void "
                         "{ self.x = self.x + 1; }; };") ==

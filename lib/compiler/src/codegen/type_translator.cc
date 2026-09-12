@@ -140,9 +140,7 @@ auto type_translator::translate_dyn_fat_ptr() -> llvm::StructType* {
 
 auto type_translator::translate_array(const sema::types::array& a) -> llvm::Type* {
     PROFILE_FUNCTION();
-    // See `translate_struct`'s matching `type`-kind special case - `[N]type` (e.g.
-    // `builtin::FnInfo.params`, §10.2) needs the same sized-but-empty placeholder for the same
-    // reason: `void` isn't a sized LLVM type, so `ArrayType::get` would build an unsized array.
+    // See `translate_struct`'s matching `type`-kind special case
     auto* elem_ty{a.underlying.get_kind() == sema::type_kind::TYPE ? llvm::StructType::get(context_)
                                                                    : translate(a.underlying)};
     // A sentinel-terminated array stores one extra element for the terminator
@@ -181,14 +179,8 @@ auto type_translator::translate_struct(const sema::types::struct_t& s, const sem
     std::vector<llvm::Type*> element_types;
     element_types.reserve(s.fields.size());
     for (const auto* field : s.fields) {
-        // A `type`-kind field never holds a real runtime value (`builtin::PointerInfo.child`,
-        // per §10.1's construction builtins, is the motivating case) - `translate(TYPE)` maps to
-        // `void` everywhere else in this file specifically so a `T: type` generic parameter's slot
-        // vanishes from a translated function signature (`translate_function_type`'s own
-        // `isVoidTy()` filter below), so this can't reuse that mapping here without also erasing
-        // whole function parameters elsewhere. A struct FIELD can't be erased the same way without
-        // shifting every later field's GEP index, and `void` isn't a sized LLVM type, so `field`
-        // being physically present here always needs a real (if degenerate) sized placeholder.
+        // `translate(TYPE)` maps to `void` which isn't a sized LLVM type, so `field` being
+        // physically present here always needs a real) sized placeholder.
         if (field->get_kind() == sema::type_kind::TYPE) {
             element_types.emplace_back(llvm::StructType::get(context_));
         } else {
@@ -205,8 +197,7 @@ auto type_translator::translate_union(const sema::types::union_t& u, const sema:
     if (const auto it{union_cache_.find(&original)}; it != union_cache_.end()) {
         return it->second;
     }
-    // See the matching comment in `translate_struct`: a const/mut sibling pair of a *tagged*
-    // union both create their own named `llvm::StructType` unless this identity is shared.
+    // See the matching comment in `translate_struct`
     auto mut_invariant_key{original.get_key()};
     mut_invariant_key.set_mut(sema::types::mut::CONSTANT);
     const bool is_tagged{!u.is_bit_packed() && !u.is_untagged};

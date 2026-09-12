@@ -217,6 +217,17 @@ class type_resolver {
         ankerl::unordered_dense::map<const type*,
                                      std::vector<std::pair<u32, std::vector<const type*>>>>;
 
+    // A call's arguments after splicing in every `expr...` pack expansion in place
+    struct expanded_call_args {
+        std::vector<usize>          source_index; // names which syntactic argument a slot came from
+        std::vector<stdx::opt_size> pack_k;       // element index within that expansion
+    };
+
+    struct pack_binding {
+        std::string_view   name;
+        std::vector<type*> element_types;
+    };
+
   private:
     auto visit(ast::node_id, const ast::array_expr&) -> void;
     auto visit(ast::node_id, const ast::asm_expr&) -> void;
@@ -231,14 +242,6 @@ class type_resolver {
     [[nodiscard]] auto get_resolved_call_arg_type(const ast::call_expr::argument& arg)
         -> gsl::not_null<type*>;
 
-    // A call's arguments after splicing in every `expr...` pack expansion in place: one entry
-    // per *effective* slot. `source_index` names which syntactic argument a slot came from
-    // (shared by every element of the same expansion); `pack_k` is the element index within that
-    // expansion, present only for a slot an expansion produced.
-    struct expanded_call_args {
-        std::vector<usize>       source_index;
-        std::vector<stdx::opt_size> pack_k;
-    };
     // `none` on a `PACK_EXPANSION_MISPLACED` diagnostic (already recorded on `ctx_.diags`).
     [[nodiscard]] auto expand_pack_call_args(const ast::call_expr& call)
         -> stdx::option<expanded_call_args>;
@@ -247,8 +250,7 @@ class type_resolver {
     [[nodiscard]] auto resolve_field_by_name(const ast::call_expr::argument& name_arg,
                                              type& denoted) -> stdx::option<field_lookup_result>;
     // Folds `desc_arg` (an `IntInfo`/`FloatInfo`/`PointerInfo`/`SliceInfo`/`ArrayInfo` value) to a
-    // compile-time struct. Shared by the `@Int`/`@Float`/`@Pointer`/`@Reference`/`@Slice`/`@Array`
-    // construction builtins (§10.1); `none` when the argument isn't a foldable struct value.
+    // compile-time struct. `none` when the argument isn't a foldable struct value.
     [[nodiscard]] auto resolve_type_descriptor(const ast::call_expr::argument& desc_arg)
         -> stdx::option<gir::const_struct>;
     // Evaluates `arg` as a compile-time enum constant
@@ -257,34 +259,29 @@ class type_resolver {
                                               std::string_view                what)
         -> stdx::result<gir::const_enum, diagnostic>;
 
-    // §10.3: aggregate synthesis (`@Struct`/`@Union`/`@Enum`). Each field/variant name comes from a
-    // runtime string, so it needs a fresh AST identifier - copied into `ctx_.arena` first, since
-    // an `identifier_expr`'s `name` is a non-owning `string_view` normally backed by the source
-    // file's own text. `is_public` sets the identifier's token to `PUBLIC`, matching how an
-    // ordinary struct field's `is_public()` reads its own name token's type.
+    // Aggregate synthesis for `@Struct`/`@Union`/`@Enum`
     [[nodiscard]] auto synthesize_ident(std::string_view name, bool is_public)
         -> ast::identifier_handle;
     // Materializes a folded scalar `const_value` (int/bool/float/string only) back into an AST
-    // literal node, so it can serve as a field's `default_value` expression (§10.4) - a later
-    // `emit_field_default`/`const_eval::try_eval` on that node reproduces the same value. `none`
-    // for any value shape this doesn't (yet) support.
+    // literal node, so it can serve as a field's `default_value` expression
     [[nodiscard]] auto synthesize_const_literal(const gir::const_value& val)
         -> stdx::option<ast::expr_handle>;
-    // Builds a `types::enum_t` directly from a folded `EnumInfo` descriptor - no AST `enum_expr`
-    // is ever resolved; `ast_enumerations` exists only so downstream name lookups keep working.
-    [[nodiscard]] auto synthesize_enum(usize disc, source_location loc, const gir::const_struct& desc)
+    // Builds a `types::enum_t` directly from a folded `EnumInfo` descriptor
+    [[nodiscard]] auto
+    synthesize_enum(usize disc, source_location loc, const gir::const_struct& desc)
         -> stdx::result<gsl::not_null<type*>, diagnostic>;
     // Builds a `types::struct_t` directly from a folded `StructInfo` descriptor plus the
-    // `defaults...` pack's folded values (one per `has_default` field, in field order, §10.4).
-    [[nodiscard]] auto synthesize_struct(usize                              disc,
-                                         source_location                    loc,
-                                         const gir::const_struct&           desc,
+    // `defaults...` pack's folded values
+    [[nodiscard]] auto synthesize_struct(usize                             disc,
+                                         source_location                   loc,
+                                         const gir::const_struct&          desc,
                                          gsl::span<const gir::const_value> defaults)
         -> stdx::result<gsl::not_null<type*>, diagnostic>;
-    // Same as `synthesize_struct` for `UnionInfo`.
-    [[nodiscard]] auto synthesize_union(usize                              disc,
-                                        source_location                    loc,
-                                        const gir::const_struct&           desc,
+    // Builds a `types::union_t` directly from a folded `UnionInfo` descriptor plus the
+    // `defaults...` pack's folded values
+    [[nodiscard]] auto synthesize_union(usize                             disc,
+                                        source_location                   loc,
+                                        const gir::const_struct&          desc,
                                         gsl::span<const gir::const_value> defaults)
         -> stdx::result<gsl::not_null<type*>, diagnostic>;
     // Views a `constexpr_int` / `constexpr_float` as the concrete type it materializes to
@@ -537,18 +534,10 @@ class type_resolver {
     stdx::opt_size            pending_impl_method_owner_;
     stdx::option<std::string> pending_param_impl_target_;
 
-    // Set by `instantiate_generic` to that instantiation's mangled name for the duration of body
-    // resolution, so a nested `for`/`while constexpr`'s per-iteration typing keys stay unique
-    // across distinct instantiations sharing the same loop AST node. Empty outside a generic body.
+    // Set by `instantiate_generic` to that inst's mangled name for the duration of body resolution
     std::string typing_scope_prefix_{};
 
-    // Set by `instantiate_generic` for the duration of resolving one pack function's body: the
-    // pack parameter's name and each trailing argument's concrete type, in call order. `rest.len`
-    // / `rest[K]` (only) resolve against this instead of an ordinary symbol lookup.
-    struct pack_binding {
-        std::string_view   name;
-        std::vector<type*> element_types;
-    };
+    // Set by `instantiate_generic` for the duration of resolving one pack function's body
     stdx::option<pack_binding> current_pack_;
 
     impl_param_bound_map_t impl_param_bounds_;

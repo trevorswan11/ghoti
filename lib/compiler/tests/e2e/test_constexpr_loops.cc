@@ -5,7 +5,6 @@
 
 namespace ghoti::tests {
 
-// The `else`/labeled rejections are pure parse errors; see tests/ast/errors/test_pack_params.cc.
 TEST_CASE("`while constexpr` unrolls while its `constexpr var` condition holds") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
@@ -114,8 +113,6 @@ TEST_CASE("`for constexpr`'s own `break`/`continue` restriction does not reach a
     )") == 0);
 }
 
-// `defer` fires at the end of its own iteration (same as inside an ordinary loop body), not
-// accumulated to the enclosing scope; see the design doc's corrected §5.5.
 TEST_CASE("`for constexpr`'s `defer` fires at the end of each iteration") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {

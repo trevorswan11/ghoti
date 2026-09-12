@@ -4,10 +4,6 @@
 
 namespace ghoti::tests {
 
-// Phase 11: `@hasField`/`@fieldType`. `@field` is scaffolded (token/builtin registered, arity/
-// type-checked) but gated to a clean `FIELD_NOT_FOUND` "not yet implemented" error - its full
-// semantics (data-field GEP + lvalue, static/const, bound method) are a follow-up; see the
-// design doc §9.2 (referenced from §14 Phase 11).
 TEST_CASE("`@hasField` reports whether a struct has a data field") {
     CHECK(helpers::compile_and_run(R"(
         const Point := struct { x: i32, y: i32 };

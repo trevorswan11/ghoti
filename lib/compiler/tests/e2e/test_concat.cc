@@ -19,8 +19,6 @@ TEST_CASE("`++` concatenates two byte-string literals") {
     )") == 0);
 }
 
-// Module-scope constants: today only these (and literals) fold as `++` operands. A local
-// array/slice identifier's *value* cannot yet be const-evaluated by name (see test below).
 TEST_CASE("`++` concatenates two constexpr integer arrays") {
     CHECK(helpers::compile_and_run(R"(
         const a: [2]i32 = .{1, 2};
@@ -57,8 +55,6 @@ TEST_CASE("`++` takes its sentinel from the right operand only") {
     )") == 0);
 }
 
-// A local array binding's own value cannot yet be looked up by name at const-eval time (only
-// module-scope constants and literals can); `++` reports this cleanly rather than emitting it.
 TEST_CASE("`++` on a local array identifier is a clean compile error, not a crash") {
     helpers::expect_compile_error(R"(
         pub const main := fn(): i32 {

@@ -51,11 +51,6 @@ TEST_CASE("`expr...` forwards a pack into a plain (non-pack) function's fixed pa
 
 TEST_CASE("the same pack function instantiated at two different arities does not corrupt shared "
           "`for constexpr` scope typing") {
-    // Regression: `resolve_constexpr_for` used to overwrite its own AST node's sema type with a
-    // bare `VOID_` (losing the scope's symbol table index) instead of reusing `loop_type` the way
-    // the ordinary `for` visitor does; a second, differently-shaped instantiation of the same
-    // shared for-loop node (e.g. this same pack function called with a different argument count)
-    // would then crash resolving that scope. See `docs/comptime-metaprogramming-plan.md` §8.5.
     CHECK(helpers::compile_and_run(R"(
         const sum := fn(rest...): i32 {
             var total: i32 = 0;

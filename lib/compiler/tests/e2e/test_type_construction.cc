@@ -5,7 +5,6 @@
 
 namespace ghoti::tests {
 
-// §10.1's compositional construction builtins: the inverse of `@typeInfo` for scalar kinds.
 TEST_CASE("`@Int` constructs an integer type from an `IntInfo` descriptor") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
@@ -87,12 +86,6 @@ TEST_CASE("`@Array` constructs an array type from an `ArrayInfo` descriptor") {
     )") == 9);
 }
 
-// Regression: constructing a `PointerInfo`/`SliceInfo`/`ArrayInfo` descriptor via struct-literal
-// syntax (every one of them carries a `child: type` field) used to crash LLVM outright
-// (`Ty->isSized()` assertion trying to lay out a `type`-kind struct field for real runtime
-// storage) - the same root cause as §11's "aliased void" finding. Fixed by never physically
-// storing into a `type`-kind field (it's a compile-time-only, zero-sized placeholder purely so
-// later fields' GEP indices stay correct) rather than trying to give it a real value.
 TEST_CASE("a struct literal with a `type`-kind field constructs without crashing") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {

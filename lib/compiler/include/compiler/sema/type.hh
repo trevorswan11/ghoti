@@ -21,6 +21,7 @@
 #include <stdx/variant.hh>
 
 #include "compiler/arena.hh"
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/ast/type.hh"
@@ -266,10 +267,10 @@ struct struct_t {
 };
 
 struct function {
-    gsl::span<type*>       params;
-    type&                  return_type;
-    bool                   has_self;
-    bool                   is_variadic{false};
+    gsl::span<type*>        params;
+    type&                   return_type;
+    bool                    has_self;
+    bool                    is_variadic{false};
     ast::calling_convention conv{ast::calling_convention::C};
 };
 
@@ -596,9 +597,7 @@ static_assert(stdx::TriviallyDestructible<type>);
 [[nodiscard]] auto packed_union_backing_bits(const types::union_t& u, u32 ptr_bits) noexcept
     -> stdx::option<u32>;
 
-// A data field found by name on a `struct`/`union` (not a static/const/method - those live in
-// the aggregate's symbol table under a different kind and are reached via `eval_type_member`,
-// not this). Shared by `@hasField`/`@fieldType`/`@field`'s field-branch.
+// A data field found by name on a `struct`/`union`
 struct field_lookup_result {
     usize index;
     type& field_type;

@@ -5,8 +5,6 @@
 
 namespace ghoti::tests {
 
-// §9.2/§10.4: `@fieldDefault` reads a field's real default value, the counterpart to `has_default`
-// on `@typeInfo`'s `FieldInfo`.
 TEST_CASE("`@fieldDefault` returns a defaulted field's compile-time value") {
     CHECK(helpers::compile_and_run(R"(
         const Point := struct {

@@ -176,16 +176,11 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::THIS, params(), t_type);
     inject_function(bis::TAG_NAME, params(t_auto), t_c_str);
     inject_function(bis::TYPE_NAME, params(t_auto), t_c_str);
-    // Return type is really `builtin::TypeInfo`, not resolved until `inject_builtin_module` runs
-    // (see the ATOMIC_* comment above); the resolver overrides this with `get_builtin_type`.
     inject_function(bis::TYPE_INFO, params(t_auto), t_auto);
     inject_function(bis::HAS_FIELD, params(t_auto, t_auto), t_bool);
     inject_function(bis::FIELD_TYPE, params(t_auto, t_auto), t_type);
     inject_function(bis::FIELD, params(t_auto, t_auto), t_auto);
 
-    // Per-kind construction builtins (§10.1): descriptor is really `IntInfo`/etc, not resolved
-    // until `inject_builtin_module` runs; the resolver folds the descriptor argument and builds
-    // the concrete type directly, so `t_auto`/`t_type` here are just placeholders.
     inject_function(bis::INT, params(t_auto), t_type);
     inject_function(bis::FLOAT, params(t_auto), t_type);
     inject_function(bis::POINTER, params(t_auto), t_type);
@@ -194,8 +189,6 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::ARRAY, params(t_auto), t_type);
     inject_function(bis::FN, params(t_auto), t_type);
     inject_function(bis::FIELD_DEFAULT, params(t_auto, t_auto), t_auto);
-    // `@Struct`/`@Union` also take a trailing `defaults...` pack (§10.4/§10.5); `resolve_builtin_call`
-    // gives these two a variable-arity check instead of using `params.size()` directly.
     inject_function(bis::STRUCT, params(t_auto), t_type);
     inject_function(bis::UNION, params(t_auto), t_type);
     inject_function(bis::ENUM, params(t_auto), t_type);
@@ -268,11 +261,6 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::FENCE, params(t_auto), t_void);
 }
 
-// NOTE: build.zig's include-dir file scan only watches `.hh` for rebuild-triggering purposes,
-// not `.inc` - editing builtin.gh.inc alone will not reliably trigger a recompile of this
-// translation unit. Touch this file's own content too (this comment is deliberately here for
-// that) whenever builtin.gh.inc changes, then verify with a behavioral test, not just "the build
-// succeeded" - a stale prelude silently keeps the old content and reports success.
 constexpr std::string_view BUILTIN_MODULE_SOURCE{
 #include "builtin.gh.inc"
 };

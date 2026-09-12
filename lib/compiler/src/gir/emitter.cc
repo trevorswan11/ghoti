@@ -345,8 +345,10 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
                                                     });
                 }
                 if (!p_name.empty()) {
-                    current_pack_.emplace(
-                        pack_context{.name = p_name, .element_count = elem_count});
+                    current_pack_.emplace<pack_context>({
+                        .name          = p_name,
+                        .element_count = elem_count,
+                    });
                 }
                 continue;
             }
@@ -539,17 +541,10 @@ auto emitter::emit_dyn_coercion(ast::expr_handle src, const sema::type& fat_type
     auto& usize_ty{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
 
     // Register one private vtable global per `(I, T)`; slots hold the impl methods in order.
-    // This goes on `ast_module_` (the root module fixed at construction), never `active_mod()`
-    // (swapped for cross-module emission, e.g. a lazily-emitted imported function's own body,
-    // matching how this very coercion can run while emitting an *imported* module's function): a
-    // `gir::module` (and thus `llvm_lowering::lower_dyn_vtables`) only ever reads the ROOT
-    // module's own `dyn_vtables` list to materialize the vtable as a real LLVM global - anything
-    // registered on a non-root module's list is silently never lowered, leaving the coercion's own
-    // vtable-half `GLOBAL_ADDR` reference dangling (lowers to null, so the store that would set it
-    // is itself silently dropped - the resulting fat pointer's vtable half is left uninitialized).
     const auto vtable_sym{fmt::format("__vtable.{}", rec ? rec->body_scope_idx : 0UZ)};
-    if (rec && std::ranges::none_of(ast_module_.dyn_vtables,
-                                    [&](const auto& v) { return v.symbol == vtable_sym; })) {
+    if (rec && std::ranges::none_of(
+                   ast_module_.dyn_vtables, // Use the root mod for lowering discoverability
+                   [&](const auto& v) { return v.symbol == vtable_sym; })) {
         mod::dyn_vtable v{.symbol = vtable_sym, .slots = {}};
         for (const auto name : iface.method_names) {
             v.slots.emplace_back(symbol_scoping_.name_for(rec->body_scope_idx, name));
@@ -1734,7 +1729,6 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
 
         if (const auto cv{const_eval_.try_eval(*decl.value)}) {
             // A struct/array/union/dyn-fat-ptr/addr constant needs real materialized storage
-            // (`emit_coerced_expr`'s fallback below), not this fast `const_val`-only bind.
             if (!cv->is<const_struct>() && !cv->is<const_array>() && !cv->is<const_union>() &&
                 !cv->is<const_dyn_fat_ptr>() && !cv->is<const_addr>()) {
                 auto bound{cv->to_gir_value()};
@@ -1754,16 +1748,13 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                                                     .is_const         = true,
                                                     .is_constexpr_var = is_constexpr_var,
                                                 });
-                // Visible to `const_eval` by name for the rest of this block (reassignment, and
-                // any later expression that needs `n`'s value folded).
+                // Visible to `const_eval` by name for the rest of this block
                 if (is_constexpr_var) {
                     ctx_.constexpr_binding_frames.back().insert_or_assign(name, *cv);
                 }
                 return;
             }
-            // `is_constexpr_var` reaching here means the *declared* type wasn't structural (that
-            // case already diagnosed and fell through above) but the folded *value* still was -
-            // no fast-path storage for it either way, so treat it the same as "not foldable".
+            // `is_constexpr_var` reaching here means the declare* type wasn't structural
             if (is_constexpr_var) {
                 ctx_.diags.emplace_back("`constexpr var` initializer must be known at compile time",
                                         sema::error::CONSTEXPR_VAR_NOT_FOLDABLE,
@@ -2850,9 +2841,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             break;
         }
         case syntax::token_type_t::BUILTIN_FIELD_DEFAULT: {
-            // The resolver already validated the field exists and has a default (§9.2); this just
-            // emits that default's own initializer expression, reusing the exact same helper a
-            // struct-literal's own omitted-field defaulting uses (`emit_initializer` below).
+            // The resolver already validated the field exists and has a default
             const auto t_h{call.arguments[0].as_opt<ast::expr_handle>()};
             const auto name_h{call.arguments[1].as_opt<ast::expr_handle>()};
             if (t_h && name_h) {
@@ -3518,10 +3507,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                 args.emplace_back(value{addr, self_param_type});
             }
         } else {
-            // Retype to the declared self-param's own const/mut qualifier: a `var` receiver's
-            // loaded value otherwise keeps the mutable-global's own type, which - for a struct -
-            // is a distinct (if structurally identical) LLVM named type from the const-qualified
-            // one a by-value `self` param resolves to, tripping LLVM's "bad signature" call check.
+            // Retype to the declared self-param's own const/mut qualifier
             args.emplace_back(value{emit_expression(obj_expr_h).data, self_param_type});
         }
     }
@@ -3536,8 +3522,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
 
     // Splice every `expr...` pack expansion into place, mirroring the resolver's own
     // `expand_pack_call_args`: one effective slot per argument, or per pack element for a
-    // `...`-marked one. The resolver already validated that only the enclosing pack may be
-    // expanded, so `current_pack_` is trusted here without re-checking the identifier.
+    // `...`-marked one
     std::vector<usize>          arg_source_index;
     std::vector<stdx::opt_size> arg_pack_k;
     for (usize i{0}; i < call.arguments.size(); ++i) {
@@ -5966,9 +5951,7 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
     // `RowAlias{ a, b, c }`: an array literal of positional values.
     if (const auto arr{sema_type->get_data().as_opt<sema::types::array>()}) {
         auto& elem_type{arr->underlying};
-        // A `[N]type` (e.g. `builtin::FnInfo.params`, §10.2) carries no runtime values at all -
-        // every slot is the same zero-sized placeholder `translate_array` already gives the whole
-        // array, so there's nothing to store; mirrors `translate_struct`'s field-level skip.
+        // A `[N]type` carries no runtime values at all
         const bool elem_is_type{elem_type.get_kind() == sema::type_kind::TYPE};
         u64        count{0};
         for (const auto& [accessor, val_expr] : init.initializers) {
@@ -6089,14 +6072,7 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
         const auto [sym, field_idx]{*proxy};
         provided.emplace(field_idx);
         auto& field_type{st->type_at(field_idx)};
-        // A `type`-kind field (e.g. `PointerInfo.child`, §10.1's descriptors) carries no runtime
-        // value at all - it's a zero-sized placeholder in the LLVM layout purely so later fields'
-        // GEP indices stay correct (`type_translator::translate_struct`'s own special case), and
-        // `type_translator::translate(TYPE)` maps to `void` everywhere else (so a `T: type`
-        // parameter's slot vanishes from a translated function signature) - a `void`-typed store
-        // is not a legal LLVM instruction, so skip the field entirely rather than materialize
-        // `val_expr` (which would also fail the store's type check: a bare type name's own sema
-        // type is the type it denotes, e.g. `i32`, not `TYPE` itself).
+        // A `type`-kind field carries no runtime value at all
         if (field_type.get_kind() == sema::type_kind::TYPE) { continue; }
         const auto field_ptr{
             builder_.emit_get_element_ptr(value{struct_slot, *sema_type},
@@ -6181,18 +6157,7 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
         const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
         const auto  m_data{obj_type->get_data().as_opt<sema::types::module>()};
         // A `var` or aggregate `const` module member has real storage: load it from its global.
-        // This must come before the `try_eval` fallback below - a `var`'s value can change at
-        // runtime, so folding its *initializer* here (as `try_eval` would) reads stale/wrong data,
-        // and even for the untouched-since-init case the fold can produce a shape `to_gir_value()`
-        // has no scalar representation for (e.g. a struct holding a `^mut` address-of-another-
-        // global field), silently degrading to a bogus `void` value - matches the sibling
-        // type-namespace branch below, which already checks storage before folding.
         if (m_data && m_data->imported.root_table_idx) {
-            // `global_ref_in` reads the target node/type through `active_ast()`/`active_mod()`,
-            // which normally means "the module currently being emitted" - wrong here, since the
-            // member's own `decl_stmt` lives in `m_data->imported`'s AST, a different module. Swap
-            // it in for the lookup, matching the pattern already used for other cross-module reads
-            // (e.g. `emit_impl_default_body`, `emit_type_ctor_member`).
             auto&      target_mod{const_cast<mod::module&>(m_data->imported)};
             auto       prev_module{std::exchange(active_module_, &target_mod)};
             const auto restore_module{gsl::finally([&] { active_module_ = prev_module; })};

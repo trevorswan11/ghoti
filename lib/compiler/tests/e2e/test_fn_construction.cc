@@ -1,12 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "helpers/codegen.hh"
-#include "helpers/sema.hh"
 
 namespace ghoti::tests {
 
-// §10.2: `@Fn` is the compositional inverse of `@typeInfo`'s `function` arm, plus the prerequisite
-// fix making calling convention part of a function type's own identity.
 TEST_CASE("`@Fn` constructs a function type from an `FnInfo` descriptor") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
