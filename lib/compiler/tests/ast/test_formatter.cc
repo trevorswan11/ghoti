@@ -647,6 +647,36 @@ TEST_CASE("formatter preserves comments inside an impl block") {
     CHECK(format_source(source) == source);
 }
 
+TEST_CASE("formatter puts a blank line between consecutive impl methods") {
+    CHECK(format_source("impl A for B { pub const f := fn(&self): void {}; "
+                        "pub const g := fn(&self): void {}; }") ==
+          R"(impl A for B {
+    pub const f := fn(&self): void {};
+
+    pub const g := fn(&self): void {};
+}
+)");
+}
+
+TEST_CASE("formatter puts a blank line between a struct field and its first method, and "
+         "between consecutive methods") {
+    CHECK(format_source("const S := struct { x: i32, pub const get := fn(&self): i32 "
+                        "{ return self.x; }; pub const inc := fn(&mut self): void "
+                        "{ self.x = self.x + 1; }; };") ==
+          R"(const S := struct {
+    x: i32,
+
+    pub const get := fn(&self): i32 {
+        return self.x;
+    };
+
+    pub const inc := fn(&mut self): void {
+        self.x = self.x + 1;
+    };
+};
+)");
+}
+
 TEST_CASE("formatter puts a blank line between an impl block and adjacent items") {
     CHECK(format_source("impl A for B { pub const f := fn(&self): void {}; }\nconst x := 1;") ==
           R"(impl A for B {

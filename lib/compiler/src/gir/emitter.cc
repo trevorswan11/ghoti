@@ -4788,10 +4788,12 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                 }
             }
             ASSERT(binding, "LValue identifier must be bound in scope");
-            // Struct/union field mutability is binding-based
+            // Struct/union field mutability is binding-based. A slice's own `.len`/`.ptr` fields
+            // (#255) need the same treatment
             const auto is_struct_or_union{binding->type.get_kind() == sema::type_kind::STRUCT ||
                                           binding->type.get_kind() == sema::type_kind::UNION};
-            auto&      qualified_type{is_struct_or_union
+            const auto is_slice{binding->type.get_kind() == sema::type_kind::SLICE};
+            auto&      qualified_type{(is_struct_or_union || is_slice)
                                           ? *ctx_.pool.with_const(binding->type, binding->is_const)
                                           : binding->type};
             if (binding->is_alloca) { return value{binding->id, qualified_type}; }
@@ -4916,13 +4918,17 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
 
             auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
             auto& raw_field_type{active_mod().get_sema_type_opt(dot.member).value_or(*obj_type)};
+            // #255: `.len`/`.ptr` are ordinary assignable fields of the slice's own `{ptr, len}`
+            // struct
             const auto is_struct_or_union{obj_type->get_kind() == sema::type_kind::STRUCT ||
                                           obj_type->get_kind() == sema::type_kind::UNION};
+            const auto is_slice{obj_type->get_kind() == sema::type_kind::SLICE};
 
             // Binding based typing
-            auto& field_type{is_struct_or_union ? *ctx_.pool.with_const(
-                                                      raw_field_type, base_lval.type->is_constant())
-                                                : raw_field_type};
+            auto& field_type{
+                (is_struct_or_union || is_slice)
+                    ? *ctx_.pool.with_const(raw_field_type, base_lval.type->is_constant())
+                    : raw_field_type};
 
             if (const auto ut{obj_type->get_data().as_opt<sema::types::union_t>()}) {
                 if (ut->is_untagged) { return value{base_lval.data, field_type}; }

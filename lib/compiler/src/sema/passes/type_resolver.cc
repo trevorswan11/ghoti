@@ -4859,7 +4859,8 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
         if (const auto expr_stmt_node{resolving_.ast.get_as_opt<ast::expr_stmt>(arm.dispatch)}) {
             if (const auto inner_type{resolving_.get_sema_type_opt(expr_stmt_node->expression)}) {
                 if (!inner_type->is_poison()) {
-                    if (!first_type || first_type->get_kind() == type_kind::NORETURN) {
+                    // Never let a noreturn arm win (#252)
+                    if (inner_type->get_kind() != type_kind::NORETURN && !first_type) {
                         first_type = *inner_type;
                     }
                 }

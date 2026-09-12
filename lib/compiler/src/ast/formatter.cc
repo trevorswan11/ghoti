@@ -331,6 +331,8 @@ auto formatter::format_members(std::vector<syntax::doc_id>&                     
         }
         if (leading != doc_manager_.nil()) {
             member_doc = doc_manager_.concat({leading, member_doc});
+        } else if (i != 0 && is_function_or_aggregate_node(members[i - 1])) {
+            member_doc = doc_manager_.concat({doc_manager_.hard_line(), member_doc});
         }
         entries.emplace_back(member_doc);
         flush_cfg(i + 1);

@@ -111,13 +111,13 @@ struct enum_expr {
     using cfg_group        = cfg_item_group<enumeration>;
     using member_cfg_group = cfg_item_group<member_handle>;
 
-    stdx::option<identifier_handle> underlying;
-    std::vector<enumeration>        enumerations;
-    std::vector<cfg_group>          cfg_groups;
-    bool                            non_exhaustive;
-    bool                            enumerations_force_break{false}; // trailing comma before `}`
-    member_list                     members;
-    std::vector<member_cfg_group>   member_cfg_groups;
+    stdx::option<explicit_type_id> underlying;
+    std::vector<enumeration>       enumerations;
+    std::vector<cfg_group>         cfg_groups;
+    bool                           non_exhaustive;
+    bool                           enumerations_force_break{false}; // trailing comma before `}`
+    member_list                    members;
+    std::vector<member_cfg_group>  member_cfg_groups;
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;
