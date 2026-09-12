@@ -9475,11 +9475,10 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_function
     }
     fn_key.imprint(return_type);
     if (fn.variadic) { fn_key.imprint(fn.variadic); }
-    fn_key.imprint(ast::calling_convention::C);
+    fn_key.imprint(fn.conv);
 
     auto& resolved_fn{*ctx_.pool[fn_key]};
-    resolved_fn.resolve_if<types::function>(
-        param_types, return_type, false, fn.variadic, ast::calling_convention::C);
+    resolved_fn.resolve_if<types::function>(param_types, return_type, false, fn.variadic, fn.conv);
 
     auto& final_type{apply_explicit_modifiers(id, resolved_fn)};
     resolving_.set_sema_type(id, final_type);

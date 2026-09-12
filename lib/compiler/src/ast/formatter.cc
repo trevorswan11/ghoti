@@ -1574,12 +1574,18 @@ auto formatter::visit(explicit_type_id id, const explicit_function_type& node) -
     }
     if (node.variadic) { params.emplace_back(doc_manager_.text("...")); }
 
+    const auto callconv_doc{node.conv == calling_convention::C
+                                ? doc_manager_.nil()
+                                : doc_manager_.owned(fmt::format(
+                                      " callconv(.{})", calling_convention_name(node.conv)))};
+
     return with_modifier(
         id,
         doc_manager_.concat({
             doc_manager_.text("fn"),
             doc_manager_.delimited(
                 "(", ")", std::move(params), false, false, node.params_force_break),
+            callconv_doc,
             doc_manager_.text(": "),
             format(node.explicit_return_type),
         }));
