@@ -133,7 +133,7 @@ pub weak const skip_handler := fn(_: []u8, _: []u8, _: u32, _: u32): void {};
 pub const TypeKind := enum {
     int, float, @"bool", @"void", @"noreturn", @"opaque", @"type",
     pointer, reference, slice, array,
-    @"struct", @"union", @"enum", function, other,
+    @"struct", @"union", @"enum", function, internal,
 };
 
 /// Exact set of calling conventions ghoti supports, matching `ast::calling_convention` 1:1.
@@ -182,8 +182,16 @@ pub const StructInfo := struct {
     pub backing_bits: u32,
 };
 
+// A union field never has a default value at all (`ast::union_expr::field` carries no
+// `default_value` syntax) - a leaner shape than `FieldInfo` instead of a `has_default` that can
+// only ever read `false`.
+pub const UnionFieldInfo := struct {
+    pub name: []u8,
+    pub type_: type,
+};
+
 pub const UnionInfo := struct {
-    pub fields: []FieldInfo,
+    pub fields: []UnionFieldInfo,
     pub is_extern: bool,
     pub is_packed: bool,
     pub tagged: bool,
@@ -229,7 +237,7 @@ pub const TypeInfo := union {
     @"noreturn": NoPayload,
     @"opaque": NoPayload,
     @"type": NoPayload,
-    other: NoPayload,
+    internal: NoPayload,
     pointer: PointerInfo,
     reference: PointerInfo,
     slice: SliceInfo,

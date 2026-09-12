@@ -2148,36 +2148,25 @@ auto type_resolver::synthesize_union(usize                             disc,
     auto       field_types{ctx_.pool.get_many_unsafe(n)};
     const auto scope_idx{ctx_.registry.create()};
 
-    usize default_i{0};
+    // A union field never has a default (`UnionFieldInfo` carries no `has_default` at all -
+    // unlike `FieldInfo`, since only one variant is ever active, a per-field default makes no
+    // sense), so unlike `@Struct`, `@Union` never consumes anything from `defaults...` - checked
+    // once up front instead of threading a would-always-be-zero counter through the loop below.
+    if (!defaults.empty()) {
+        return make_sema_err(
+            "'@Union': a union field never has a default; 'defaults...' must be empty",
+            error::ARITY_MISMATCH,
+            loc);
+    }
+
     for (usize i{0}; i < n; ++i) {
         const auto fs{fields_arr->elements[i].as_opt<gir::const_struct>()};
         const auto name_v{fs ? read_desc_field<std::string>(*fs, "name") : stdx::none};
         const auto type_v{fs ? read_desc_field<sema::type&>(*fs, "type_") : stdx::none};
-        const auto has_default_v{fs ? read_desc_field<bool>(*fs, "has_default") : stdx::none};
-        if (!name_v || !type_v || !has_default_v) {
-            return field_err(
-                "every element of 'fields' needs a compile-time 'name', 'type_', 'has_default'");
+        if (!name_v || !type_v) {
+            return field_err("every element of 'fields' needs a compile-time 'name' and 'type_'");
         }
         field_types[i] = &*type_v;
-
-        if (*has_default_v) {
-            if (default_i >= defaults.size()) {
-                return make_sema_err("'@Union': fewer 'defaults...' arguments than fields with "
-                                     "'has_default = true'",
-                                     error::ARITY_MISMATCH,
-                                     loc);
-            }
-            const auto& dv{defaults[default_i++]};
-            if (const auto dt{dv.get_type()}; dt && !is_assignable(*dt, *type_v)) {
-                return make_sema_err(
-                    fmt::format("'@Union': default #{} has type '{}', expected '{}'",
-                                default_i,
-                                ctx_.type_display_name(*dt),
-                                ctx_.type_display_name(*type_v)),
-                    error::TYPE_MISMATCH,
-                    loc);
-            }
-        }
 
         const auto name_ident{synthesize_ident(*name_v, true)};
         const auto ty_ident{synthesize_ident(ctx_.type_display_name(*type_v), false)};
@@ -2199,12 +2188,6 @@ auto type_resolver::synthesize_union(usize                             disc,
         auto& field_sym{ctx_.registry.get(scope_idx).get(stable_name)};
         field_sym.set_kind(symbol_kind::VALUE);
         field_sym.set_status(symbol_status::RESOLVED);
-    }
-    if (default_i != defaults.size()) {
-        return make_sema_err(
-            "'@Union': more 'defaults...' arguments than fields with 'has_default = true'",
-            error::ARITY_MISMATCH,
-            loc);
     }
 
     types::key_t key{type_kind::UNION, types::mut::CONSTANT};
@@ -9360,6 +9343,31 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::identifier_expr& 
     }
 
     auto symbol_opt{ctx_.registry.lookup(table_stack_, ident.name)};
+    // A type-position identifier must never resolve to a same-named VALUE-kind symbol in an
+    // inner scope shadowing an outer TYPE-kind one (e.g. resolving `void` from inside a union
+    // body one of whose own arms happens to be named `void` too - type and value names occupy
+    // separate namespaces conceptually, but `lookup` above doesn't know that). Reliably fixed for
+    // a sibling already, concretely resolved to a value by the time it's looked up - walks
+    // outward for an actual TYPE-kind match instead of settling for the first same-named symbol
+    // regardless of kind. Deliberately does NOT touch a match that's currently, actively
+    // resolving itself (`RESOLVING` - the genuine self-reference case, `@"x": x`, where the
+    // existing "used during its own resolution" cycle diagnostic must still fire) or one not yet
+    // reached at all (`UNRESOLVED`, no kind assigned): an outer TYPE isn't independently
+    // findable as its own registry entry in that case (it's recognized structurally via
+    // `resolve_ident`'s own keyword handling once nothing shadows it), so a not-yet-processed
+    // same-named sibling here still reports a clean "referenced before its declaration" rather
+    // than resolving correctly - real progress over the original silent wrong-poison, but not
+    // the full fix. See the matching test in test_type_info_builtin.cc for the exact boundary.
+    if (symbol_opt && symbol_opt->get_status() != sema::symbol_status::RESOLVING &&
+        (!symbol_opt->has_kind() || symbol_opt->get_kind() != sema::symbol_kind::TYPE)) {
+        for (const auto idx : table_stack_ | std::views::reverse) {
+            if (const auto sym{ctx_.registry.get(idx).get_opt(ident.name)};
+                sym && sym->has_kind() && sym->get_kind() == sema::symbol_kind::TYPE) {
+                symbol_opt = *sym;
+                break;
+            }
+        }
+    }
     if (!symbol_opt) {
         return last_type_.emplace(
             ctx_.poison_node(resolving_,

@@ -98,9 +98,9 @@ TEST_CASE("`@Union` constructs an untagged union type from a `UnionInfo` descrip
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             const T := @Union(builtin.UnionInfo{
-                .fields = [2]builtin.FieldInfo{
-                    .{ .name = "i", .type_ = i32, .has_default = false },
-                    .{ .name = "f", .type_ = f32, .has_default = false },
+                .fields = [2]builtin.UnionFieldInfo{
+                    .{ .name = "i", .type_ = i32 },
+                    .{ .name = "f", .type_ = f32 },
                 },
                 .is_extern = false,
                 .is_packed = false,
@@ -116,9 +116,9 @@ TEST_CASE("`@Union` constructs a tagged union type from a `UnionInfo` descriptor
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             const T := @Union(builtin.UnionInfo{
-                .fields = [2]builtin.FieldInfo{
-                    .{ .name = "i", .type_ = i32, .has_default = false },
-                    .{ .name = "f", .type_ = f32, .has_default = false },
+                .fields = [2]builtin.UnionFieldInfo{
+                    .{ .name = "i", .type_ = i32 },
+                    .{ .name = "f", .type_ = f32 },
                 },
                 .is_extern = false,
                 .is_packed = false,

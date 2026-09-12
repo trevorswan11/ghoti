@@ -1219,6 +1219,22 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
         s.fields.emplace("signed", const_value{sema::is_signed_integer(denoted), bool_type});
         return wrap("int", std::move(s), ctx_.get_builtin_type("IntInfo"));
     }
+    case sema::type_kind::ISIZE:
+    case sema::type_kind::USIZE: {
+        // `isize`/`usize` are integers in every other sense (`sema::is_integer` already treats
+        // them as such) - they used to fall to `.internal` purely because this `switch` only
+        // ever listed the bare `INT` kind, not a real semantic distinction. Unlike `INT`, though,
+        // neither kind carries a `types::integer` payload at all (their width is pointer-size-
+        // dependent, not fixed at the pool-key level) - `sema::int_width` hard-asserts on exactly
+        // that payload, so it can't be reused here; compute the width from the target directly,
+        // the same way the `STRUCT` arm below derives `ptr_bits` for `backing_bits`.
+        const auto ptr_bits{static_cast<u16>(
+            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? 64 : 32)};
+        const_struct s;
+        s.fields.emplace("bits", const_value{u64{ptr_bits}, ctx_.get_int(16, false)});
+        s.fields.emplace("signed", const_value{sema::is_signed_integer(denoted), bool_type});
+        return wrap("int", std::move(s), ctx_.get_builtin_type("IntInfo"));
+    }
     case sema::type_kind::F16:
     case sema::type_kind::F32:
     case sema::type_kind::F64:
@@ -1342,15 +1358,17 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
     }
     case sema::type_kind::UNION: {
         const auto& ut{denoted.get_data().as<sema::types::union_t>()};
-        auto&       field_type{ctx_.get_builtin_type("FieldInfo")};
+        auto&       field_type{ctx_.get_builtin_type("UnionFieldInfo")};
         const_array fields;
         for (usize idx{0}; idx < ut.ast_fields.size(); ++idx) {
-            const auto&  f{ut.ast_fields[idx]};
-            const auto&  fname{ut.enclosing.ast.get_as<ast::identifier_expr>(f.name).name};
             const_struct fs;
-            fs.fields.emplace("name", const_value::make_string(ctx_, std::string{fname}));
+            fs.fields.emplace(
+                "name",
+                const_value::make_string(
+                    ctx_,
+                    std::string{ut.enclosing.ast.get_as<ast::identifier_expr>(ut.ast_fields[idx].name)
+                                    .name}));
             fs.fields.emplace("type_", type_value(*ut.fields[idx]));
-            fs.fields.emplace("has_default", const_value{false, bool_type});
             fields.elements.emplace_back(const_value{std::move(fs), field_type});
         }
         auto& field_slice_type{ctx_.get_slice(sema::types::mut::CONSTANT, false, field_type)};
@@ -1361,7 +1379,7 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
         s.fields.emplace("tagged", const_value{!ut.is_untagged, bool_type});
         return wrap("union", std::move(s), ctx_.get_builtin_type("UnionInfo"));
     }
-    default: return tag_only("other");
+    default: return tag_only("internal");
     }
 }
 

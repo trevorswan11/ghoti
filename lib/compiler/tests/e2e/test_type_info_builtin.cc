@@ -4,6 +4,35 @@
 
 namespace ghoti::tests {
 
+// A same-named sibling member inside an aggregate's own body used to shadow an outer, keyword-
+// named TYPE even in a position where only a type can go (found while building `TypeInfo`
+// itself, which has arms literally named `bool`/`void`/etc. mirroring `TypeKind` - worked around
+// there with a `NoPayload` struct instead of a bare `void`, see builtin.gh.inc). A type-position
+// identifier lookup now skips a same-named sibling that's already, concretely resolved to a
+// value, walking outward for the actual type instead of stopping at the first same-named symbol
+// regardless of kind.
+//
+// Known residual gap: this only covers a sibling declared BEFORE the arm referencing the outer
+// type (already resolved to a value by the time it's looked up, as here). The reverse order -
+// referencing the type before its same-named, not-yet-processed sibling is declared - still
+// doesn't resolve correctly; it now reports a clean "referenced before its declaration" instead
+// of the original silent wrong-poison, which is real progress, but isn't the full fix. Chasing
+// that down further needs the resolver to distinguish "a forward-declared TYPE, legitimately not
+// processed yet" from "a not-yet-processed VALUE sibling occupying the same name slot" - the
+// same single-namespace root cause called out as out of scope when this bug was first found.
+TEST_CASE("a same-named sibling member doesn't shadow an outer type once it's itself resolved") {
+    CHECK(helpers::compile_and_run(R"(
+        const U := union {
+            @"void": bool,
+            @"first": void,
+        };
+        pub const main := fn(): i32 {
+            var u := U{ .@"void" = true };
+            return if (u.@"void") 1 else 0;
+        };
+    )") == 1);
+}
+
 TEST_CASE("`@typeInfo` on integer and float types") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
@@ -29,6 +58,27 @@ TEST_CASE("`@typeInfo` on integer and float types") {
             };
         };
     )") == 64);
+}
+
+// `isize`/`usize` used to fall to the `.internal` catch-all - `sema::is_integer` already treats
+// them as integers everywhere else, this was purely a gap in `eval_type_info`'s own switch.
+TEST_CASE("`@typeInfo` on `isize`/`usize` tags as `.int`, not `.internal`") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            return match constexpr (@typeInfo(usize)) {
+                .int => |i| (1 - @intFromBool(i.signed)) * @intCast(i32, i.bits),
+                _ => -1,
+            };
+        };
+    )") == 64);
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            return match constexpr (@typeInfo(isize)) {
+                .int => |i| @intFromBool(i.signed) * 1000 + @intCast(i32, i.bits),
+                _ => -1,
+            };
+        };
+    )") == 1064);
 }
 
 TEST_CASE("`@typeInfo` on payload-less kinds tags correctly") {
