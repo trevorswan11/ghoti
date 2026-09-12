@@ -74,11 +74,11 @@ TEST_CASE("`@typeInfo` on `isize`/`usize` tags as `.int`, not `.internal`") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             return match constexpr (@typeInfo(isize)) {
-                .int => |i| @intFromBool(i.signed) * 1000 + @intCast(i32, i.bits),
+                .int => |i| @intFromBool(i.signed) * 10 + @intCast(i32, i.bits),
                 _ => -1,
             };
         };
-    )") == 1064);
+    )") == 74);
 }
 
 TEST_CASE("`@typeInfo` on payload-less kinds tags correctly") {

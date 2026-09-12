@@ -4215,25 +4215,35 @@ auto emitter::emit_constexpr_for(ast::node_id id, const ast::for_loop_expr& for_
     PROFILE_FUNCTION();
     auto& void_type{ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
 
-    const auto  driver_id{*for_loop.iterables[0]};
-    const auto& driver_cap{for_loop.captures[0]};
-    const auto  driver_ident{active_ast().get_as_opt<ast::identifier_expr>(driver_id)};
-    const bool  driver_is_pack{driver_ident && current_pack_ &&
-                              driver_ident->name == current_pack_->name};
+    // Mirrors the resolver's own re-derivation exactly (no cross-pass metadata needed): a
+    // trailing open-ended `0..` iterable is the companion index, never a driver.
+    const bool has_companion{[&] {
+        if (for_loop.iterables.size() < 2) { return false; }
+        const auto rng{active_ast().get_as_opt<ast::range_expr>(*for_loop.iterables.back())};
+        return rng && !rng->rhs;
+    }()};
+    const usize num_drivers{for_loop.iterables.size() - (has_companion ? 1 : 0)};
 
-    const bool has_companion{for_loop.iterables.size() == 2};
-    const auto driver_name{
-        driver_cap.payload.is<ast::identifier_expr>()
-            ? stdx::option<std::string_view>{active_ast()
-                                                 .get_as<ast::identifier_expr>(driver_cap.payload)
-                                                 .name}
-            : stdx::none};
+    struct driver_view {
+        bool                            is_pack{false};
+        stdx::option<std::string_view>  name;
+    };
+    std::vector<driver_view> drivers(num_drivers);
+    bool                     any_driver_is_pack{false};
+    for (usize d{0}; d < num_drivers; ++d) {
+        const auto& cap{for_loop.captures[d]};
+        const auto  ident{active_ast().get_as_opt<ast::identifier_expr>(*for_loop.iterables[d])};
+        drivers[d].is_pack = ident && current_pack_ && ident->name == current_pack_->name;
+        drivers[d].name    = cap.payload.is<ast::identifier_expr>()
+                                ? stdx::option<std::string_view>{
+                                       active_ast().get_as<ast::identifier_expr>(cap.payload).name}
+                                : stdx::none;
+        any_driver_is_pack = any_driver_is_pack || drivers[d].is_pack;
+    }
     const auto companion_name{
-        has_companion && for_loop.captures[1].payload.is<ast::identifier_expr>()
-            ? stdx::option<std::string_view>{active_ast()
-                                                 .get_as<ast::identifier_expr>(
-                                                     for_loop.captures[1].payload)
-                                                 .name}
+        has_companion && for_loop.captures.back().payload.is<ast::identifier_expr>()
+            ? stdx::option<std::string_view>{
+                  active_ast().get_as<ast::identifier_expr>(for_loop.captures.back().payload).name}
             : stdx::none};
 
     const auto key_for{[&](usize k) {
@@ -4244,7 +4254,10 @@ auto emitter::emit_constexpr_for(ast::node_id id, const ast::for_loop_expr& for_
                            k);
     }};
 
-    const usize count{driver_is_pack ? current_pack_->element_count : [&] {
+    // A pack's own element count is known directly; otherwise count by how many per-iteration
+    // `body_type_diff`s the resolver actually cached (works identically whether zero, one, or
+    // several non-pack drivers are involved - they were all already validated equal-length).
+    const usize count{any_driver_is_pack ? current_pack_->element_count : [&] {
         usize n{0};
         while (ctx_.instantiation_cache.get_body_type_diff(key_for(n))) { ++n; }
         return n;
@@ -4252,9 +4265,8 @@ auto emitter::emit_constexpr_for(ast::node_id id, const ast::for_loop_expr& for_
 
     const auto& block{active_ast().get_as<ast::block_stmt>(for_loop.block)};
     for (usize k{0}; k < count; ++k) {
-        // Each iteration re-binds `v`/the companion index to a distinct constexpr value under
-        // the same shared AST nodes; the fold memo must not carry iteration `k`'s answer into
-        // `k + 1`.
+        // Each iteration re-binds every capture to a distinct constexpr value under the same
+        // shared AST nodes; the fold memo must not carry iteration `k`'s answer into `k + 1`.
         const_eval_.clear_memo();
         const auto                 key{key_for(k)};
         const auto                 diff{ctx_.instantiation_cache.get_body_type_diff(key)};
@@ -4262,21 +4274,22 @@ auto emitter::emit_constexpr_for(ast::node_id id, const ast::for_loop_expr& for_
         const scope_guard          sg{scopes_};
 
         sema::constexpr_frame cx_frame;
-        if (driver_is_pack) {
-            if (driver_name) {
-                if (const auto elem_binding{lookup_binding<local_binding&>(
-                        fmt::format("{}#{}", current_pack_->name, k))}) {
-                    scopes_.back().bindings.emplace(*driver_name, *elem_binding);
+        const auto             cx_args{ctx_.instantiation_cache.get_constexpr_args(key)};
+        usize                  i{0};
+        for (const auto& drv : drivers) {
+            if (drv.is_pack) {
+                if (drv.name) {
+                    if (const auto elem_binding{lookup_binding<local_binding&>(
+                            fmt::format("{}#{}", current_pack_->name, k))}) {
+                        scopes_.back().bindings.emplace(*drv.name, *elem_binding);
+                    }
                 }
+            } else if (drv.name && cx_args && i < cx_args->size()) {
+                cx_frame.insert_or_assign(*drv.name, (*cx_args)[i++]);
             }
-        } else if (const auto cx_args{ctx_.instantiation_cache.get_constexpr_args(key)}) {
-            usize i{0};
-            if (driver_name && i < cx_args->size()) {
-                cx_frame.insert_or_assign(*driver_name, (*cx_args)[i++]);
-            }
-            if (companion_name && i < cx_args->size()) {
-                cx_frame.insert_or_assign(*companion_name, (*cx_args)[i++]);
-            }
+        }
+        if (companion_name && cx_args && i < cx_args->size()) {
+            cx_frame.insert_or_assign(*companion_name, (*cx_args)[i++]);
         }
         const constexpr_frame_guard cfg{ctx_.constexpr_binding_frames, std::move(cx_frame)};
         emit_block(block);

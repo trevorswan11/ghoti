@@ -105,6 +105,63 @@ TEST_CASE("`for constexpr` unrolls over a range with a companion `0..` index") {
     )") == 63);
 }
 
+// Two (or more) driving iterables in parallel - v1 was limited to one driver plus an optional
+// companion `0..` index range; now any number of packs/ranges/`constexpr` array-or-slice values
+// may drive the loop together, zipped by index like Zig's `for (a, b) |x, y|`.
+TEST_CASE("`for constexpr` unrolls over two arrays in parallel") {
+    CHECK(helpers::compile_and_run(R"(
+        constexpr a: [3]i32 = .{1, 2, 3};
+        constexpr b: [3]i32 = .{4, 5, 6};
+        pub const main := fn(): i32 {
+            var sum := 0;
+            for constexpr (a, b) |x, y| { sum = sum + x * y; }
+            return sum;
+        };
+    )") == 1 * 4 + 2 * 5 + 3 * 6);
+}
+
+TEST_CASE("`for constexpr` unrolls over three iterables (array, range, array) plus a companion "
+         "index") {
+    CHECK(helpers::compile_and_run(R"(
+        constexpr a: [3]i32 = .{1, 2, 3};
+        constexpr b: [3]i32 = .{4, 5, 6};
+        pub const main := fn(): i32 {
+            var sum := 0;
+            for constexpr (a, 0..3, b, 0..) |x, r, y, i| {
+                sum = sum + x + r + y + @intCast(i32, i);
+            }
+            return sum;
+        };
+    )") == (1 + 0 + 4 + 0) + (2 + 1 + 5 + 1) + (3 + 2 + 6 + 2));
+}
+
+// `weights` must be module-scope here, not a local inside `f`: a local `constexpr` array's own
+// value isn't nameable to const-eval yet (a separate, pre-existing, documented limitation - see
+// test_concat.cc - unrelated to parallel iteration itself).
+TEST_CASE("`for constexpr` mixes a parameter pack with an array driver in parallel") {
+    CHECK(helpers::compile_and_run(R"(
+        constexpr weights: [3]i32 = .{2, 3, 5};
+        const f := fn(rest...): i32 {
+            var sum := 0;
+            for constexpr (rest, weights) |e, w| { sum = sum + e * w; }
+            return sum;
+        };
+        pub const main := fn(): i32 { return f(1, 2, 3); };
+    )") == 1 * 2 + 2 * 3 + 3 * 5);
+}
+
+TEST_CASE("`for constexpr`'s parallel iterables must all have the same length") {
+    helpers::expect_compile_error(R"(
+        constexpr a: [2]i32 = .{1, 2};
+        constexpr b: [3]i32 = .{1, 2, 3};
+        pub const main := fn(): i32 {
+            var sum := 0;
+            for constexpr (a, b) |x, y| { sum = sum + x + y; }
+            return sum;
+        };
+    )");
+}
+
 TEST_CASE("`for constexpr` unrolls over a parameter pack") {
     CHECK(helpers::compile_and_run(R"(
         const f := fn(rest...): i32 {

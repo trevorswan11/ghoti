@@ -3074,139 +3074,188 @@ namespace {
 // Unrolls a `for constexpr`: resolves the block once per compile-time-known iteration, each under
 // its own `constexpr_frame` slot and diffed into a per-iteration `body_type_diff` the emitter
 // replays
+namespace {
+
+// One driving iterable's resolved domain: a parameter pack (no values of its own - aliases the
+// pack's own hidden per-element bindings instead, purely at emit time) or a range/array/slice
+// value folded down to a concrete element type and, for a non-pack driver, its per-index values.
+struct constexpr_for_driver {
+    bool                           is_pack{false};
+    type*                          elem_type{nullptr};
+    std::vector<gir::const_value>  elem_values; // empty for a pack driver
+    stdx::option<std::string_view> name;        // unset for a `_`-discarded capture
+};
+
+} // namespace
+
+// Unrolls a `for constexpr`: resolves the block once per compile-time-known iteration, each under
+// its own `constexpr_frame` slot and diffed into a per-iteration `body_type_diff` the emitter
+// replays. Supports N parallel driving iterables (packs, ranges, and `constexpr` array/slice
+// values, freely mixed) plus an optional trailing open-ended `0..` companion index range, which
+// never drives the count itself.
 auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_expr& for_expr)
     -> void {
     PROFILE_FUNCTION();
     ASSERT(for_expr.iterables.size() == for_expr.captures.size());
 
-    if (for_expr.iterables.empty() || for_expr.iterables.size() > 2) {
-        return last_type_.emplace(ctx_.poison_node(
-            resolving_,
-            id,
-            "`for constexpr` takes one driving iterable and an optional companion `0..` index "
-            "range",
-            error::CONSTEXPR_LOOP_COUNT_NOT_STATIC,
-            resolving_.ast.location_of(id)));
+    if (for_expr.iterables.empty()) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             "`for constexpr` needs at least one driving iterable",
+                             error::CONSTEXPR_LOOP_COUNT_NOT_STATIC,
+                             resolving_.ast.location_of(id)));
     }
     check_constexpr_loop_jumps(for_expr.block);
 
     auto&       loop_type{resolving_.get_sema_type(id)};
     const scope s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
-
-    const auto      driver_id{*for_expr.iterables[0]};
-    const auto&     driver_cap{for_expr.captures[0]};
     gir::const_eval evaluator{ctx_, resolving_};
+    auto&           usize_type{ctx_.get_builtin_resolved_type(type_kind::USIZE)};
 
-    const auto driver_ident{resolving_.ast.get_as_opt<ast::identifier_expr>(driver_id)};
-    const bool driver_is_pack{driver_ident && current_pack_ &&
-                              driver_ident->name == current_pack_->name};
-
-    usize                         count{0};
-    type*                         elem_type{nullptr};
-    std::vector<gir::const_value> elem_values; // Empty for the pack domain
-
-    if (driver_is_pack) {
-        count = current_pack_->element_types.size();
-    } else {
-        {
-            const mutating_context_guard for_iter_g{in_for_iterable_, true};
-            TRY_RESOLVE(driver_id);
-        }
-        // A bare identifier naming a `constexpr` array/slice resolves through a `TYPE`-wrapped
-        // meta-type the same way a `constexpr T: type` parameter does; unwrap it, mirroring
-        // `resolve_concat`'s operand handling.
-        auto& iterable_type{evaluator.force_deferred_array(denoted_type(*last_type_.take()))};
-        resolving_.set_sema_type(driver_id, iterable_type);
-
-        if (const auto range{resolving_.ast.get_as_opt<ast::range_expr>(driver_id)}) {
-            const auto slice_data{iterable_type.get_data().as_opt<types::slice>()};
-            if (!range->rhs || !slice_data) {
-                return last_type_.emplace(ctx_.poison_node(
-                    resolving_,
-                    id,
-                    "`for constexpr`'s driving range must have a compile-time-known upper bound",
-                    error::CONSTEXPR_LOOP_COUNT_NOT_STATIC,
-                    resolving_.ast.location_of(driver_id)));
-            }
-            elem_type = &slice_data->underlying;
-            const auto lo{
-                range->lhs ? evaluator.try_eval(*range->lhs)
-                           : stdx::option<gir::const_value>{gir::const_value{u64{0}, *elem_type}}};
-            const auto hi{evaluator.try_eval(*range->rhs)};
-            const auto lo_i{lo ? lo->as_int_opt() : stdx::none};
-            const auto hi_i{hi ? hi->as_int_opt() : stdx::none};
-            if (!lo_i || !hi_i) {
-                return last_type_.emplace(
-                    ctx_.poison_node(resolving_,
-                                     id,
-                                     "`for constexpr`'s range bounds must be compile-time constant",
-                                     error::CONSTEXPR_LOOP_COUNT_NOT_STATIC,
-                                     resolving_.ast.location_of(driver_id)));
-            }
-            const bool inclusive{driver_id.get_token_type() == syntax::token_type_t::DOT_DOT_EQ};
-            const i128 raw_count{*hi_i - *lo_i + (inclusive ? 1 : 0)};
-            count = raw_count > 0 ? static_cast<usize>(raw_count) : 0UZ;
-            elem_values.reserve(count);
-            for (usize k{0}; k < count; ++k) {
-                const auto v{evaluator.fold_binary_values(
-                    syntax::token_type_t::PLUS, *lo, gir::const_value{u64{k}}, driver_id)};
-                elem_values.emplace_back(v.value_or(gir::const_value::make_poison()));
-            }
-        } else {
-            const auto folded{evaluator.try_eval(driver_id)};
-            const auto arr{folded ? folded->as_opt<gir::const_array>() : stdx::none};
-            if (!arr) {
-                return last_type_.emplace(ctx_.poison_node(
-                    resolving_,
-                    id,
-                    "`for constexpr`'s iterable must be a parameter pack, a compile-time-known "
-                    "range, or a `constexpr` array/slice value",
-                    error::CONSTEXPR_LOOP_COUNT_NOT_STATIC,
-                    resolving_.ast.location_of(driver_id)));
-            }
-            count       = arr->elements.size();
-            elem_values = arr->elements;
-            const auto arr_data{iterable_type.get_data().as_opt<types::array>()};
-            const auto sl_data{iterable_type.get_data().as_opt<types::slice>()};
-            elem_type =
-                arr_data ? &arr_data->underlying : (sl_data ? &sl_data->underlying : nullptr);
-            if (!elem_type) {
-                return last_type_.emplace(ctx_.poison_node(
-                    resolving_,
-                    id,
-                    "Could not determine the element type of this `for constexpr` iterable",
-                    error::CONSTEXPR_LOOP_COUNT_NOT_STATIC,
-                    resolving_.ast.location_of(driver_id)));
-            }
-        }
+    // A trailing open-ended `0..` range is the companion index, not a driver - same rule as v1,
+    // just checked positionally last instead of assuming exactly two iterables total.
+    const bool has_companion{[&] {
+        if (for_expr.iterables.size() < 2) { return false; }
+        const auto rng{resolving_.ast.get_as_opt<ast::range_expr>(*for_expr.iterables.back())};
+        return rng && !rng->rhs;
+    }()};
+    const usize num_drivers{for_expr.iterables.size() - (has_companion ? 1 : 0)};
+    if (num_drivers == 0) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            "`for constexpr` needs at least one driving iterable besides a companion `0..` index "
+            "range",
+            error::CONSTEXPR_LOOP_COUNT_NOT_STATIC,
+            resolving_.ast.location_of(id)));
     }
 
-    const bool has_companion{for_expr.iterables.size() == 2};
+    std::vector<constexpr_for_driver> drivers(num_drivers);
+    stdx::opt_size                    count;
+    for (usize d{0}; d < num_drivers; ++d) {
+        const auto  driver_id{*for_expr.iterables[d]};
+        const auto& cap{for_expr.captures[d]};
+        auto&       drv{drivers[d]};
+        drv.name = cap.payload.is<ast::identifier_expr>()
+                       ? stdx::option<std::string_view>{
+                             resolving_.ast.get_as<ast::identifier_expr>(cap.payload).name}
+                       : stdx::none;
+
+        const auto driver_ident{resolving_.ast.get_as_opt<ast::identifier_expr>(driver_id)};
+        drv.is_pack =
+            driver_ident && current_pack_ && driver_ident->name == current_pack_->name;
+
+        usize this_count{0};
+        if (drv.is_pack) {
+            this_count = current_pack_->element_types.size();
+        } else {
+            {
+                const mutating_context_guard for_iter_g{in_for_iterable_, true};
+                TRY_RESOLVE(driver_id);
+            }
+            // A bare identifier naming a `constexpr` array/slice resolves through a `TYPE`-
+            // wrapped meta-type the same way a `constexpr T: type` parameter does; unwrap it,
+            // mirroring `resolve_concat`'s operand handling.
+            auto& iterable_type{evaluator.force_deferred_array(denoted_type(*last_type_.take()))};
+            resolving_.set_sema_type(driver_id, iterable_type);
+
+            if (const auto range{resolving_.ast.get_as_opt<ast::range_expr>(driver_id)}) {
+                const auto slice_data{iterable_type.get_data().as_opt<types::slice>()};
+                if (!range->rhs || !slice_data) {
+                    return last_type_.emplace(ctx_.poison_node(
+                        resolving_,
+                        id,
+                        "`for constexpr`'s driving range must have a compile-time-known upper "
+                        "bound",
+                        error::CONSTEXPR_LOOP_COUNT_NOT_STATIC,
+                        resolving_.ast.location_of(driver_id)));
+                }
+                drv.elem_type = &slice_data->underlying;
+                const auto lo{range->lhs ? evaluator.try_eval(*range->lhs)
+                                        : stdx::option<gir::const_value>{
+                                              gir::const_value{u64{0}, *drv.elem_type}}};
+                const auto hi{evaluator.try_eval(*range->rhs)};
+                const auto lo_i{lo ? lo->as_int_opt() : stdx::none};
+                const auto hi_i{hi ? hi->as_int_opt() : stdx::none};
+                if (!lo_i || !hi_i) {
+                    return last_type_.emplace(ctx_.poison_node(
+                        resolving_,
+                        id,
+                        "`for constexpr`'s range bounds must be compile-time constant",
+                        error::CONSTEXPR_LOOP_COUNT_NOT_STATIC,
+                        resolving_.ast.location_of(driver_id)));
+                }
+                const bool inclusive{driver_id.get_token_type() ==
+                                    syntax::token_type_t::DOT_DOT_EQ};
+                const i128 raw_count{*hi_i - *lo_i + (inclusive ? 1 : 0)};
+                this_count = raw_count > 0 ? static_cast<usize>(raw_count) : 0UZ;
+                drv.elem_values.reserve(this_count);
+                for (usize k{0}; k < this_count; ++k) {
+                    const auto v{evaluator.fold_binary_values(
+                        syntax::token_type_t::PLUS, *lo, gir::const_value{u64{k}}, driver_id)};
+                    drv.elem_values.emplace_back(v.value_or(gir::const_value::make_poison()));
+                }
+            } else {
+                const auto folded{evaluator.try_eval(driver_id)};
+                const auto arr{folded ? folded->as_opt<gir::const_array>() : stdx::none};
+                if (!arr) {
+                    return last_type_.emplace(ctx_.poison_node(
+                        resolving_,
+                        id,
+                        "`for constexpr`'s iterable must be a parameter pack, a compile-time-"
+                        "known range, or a `constexpr` array/slice value",
+                        error::CONSTEXPR_LOOP_COUNT_NOT_STATIC,
+                        resolving_.ast.location_of(driver_id)));
+                }
+                this_count      = arr->elements.size();
+                drv.elem_values = arr->elements;
+                const auto arr_data{iterable_type.get_data().as_opt<types::array>()};
+                const auto sl_data{iterable_type.get_data().as_opt<types::slice>()};
+                drv.elem_type =
+                    arr_data ? &arr_data->underlying : (sl_data ? &sl_data->underlying : nullptr);
+                if (!drv.elem_type) {
+                    return last_type_.emplace(ctx_.poison_node(
+                        resolving_,
+                        id,
+                        "Could not determine the element type of this `for constexpr` iterable",
+                        error::CONSTEXPR_LOOP_COUNT_NOT_STATIC,
+                        resolving_.ast.location_of(driver_id)));
+                }
+            }
+        }
+
+        if (count && *count != this_count) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("`for constexpr`'s driving iterables must all have the same length "
+                            "({} vs {})",
+                            *count,
+                            this_count),
+                error::CONSTEXPR_LOOP_COUNT_NOT_STATIC,
+                resolving_.ast.location_of(driver_id)));
+        }
+        count.emplace(this_count);
+    }
+
     if (has_companion) {
-        const auto comp_range{resolving_.ast.get_as_opt<ast::range_expr>(*for_expr.iterables[1])};
+        const auto comp_range{
+            resolving_.ast.get_as_opt<ast::range_expr>(*for_expr.iterables.back())};
         if (!comp_range || comp_range->rhs) {
             return last_type_.emplace(ctx_.poison_node(
                 resolving_,
                 id,
                 "`for constexpr`'s companion iterable must be an open-ended index range like `0..`",
                 error::CONSTEXPR_LOOP_COUNT_NOT_STATIC,
-                resolving_.ast.location_of(*for_expr.iterables[1])));
+                resolving_.ast.location_of(*for_expr.iterables.back())));
         }
     }
-
-    auto&      usize_type{ctx_.get_builtin_resolved_type(type_kind::USIZE)};
-    const auto driver_name{
-        driver_cap.payload.is<ast::identifier_expr>()
-            ? stdx::option<std::string_view>{resolving_.ast
-                                                 .get_as<ast::identifier_expr>(driver_cap.payload)
-                                                 .name}
-            : stdx::none};
     const auto companion_name{
-        has_companion && for_expr.captures[1].payload.is<ast::identifier_expr>()
-            ? stdx::option<std::string_view>{resolving_.ast
-                                                 .get_as<ast::identifier_expr>(
-                                                     for_expr.captures[1].payload)
-                                                 .name}
+        has_companion && for_expr.captures.back().payload.is<ast::identifier_expr>()
+            ? stdx::option<std::string_view>{
+                  resolving_.ast.get_as<ast::identifier_expr>(for_expr.captures.back().payload)
+                      .name}
             : stdx::none};
 
     const auto saved_for_gi{for_generic_instantiation_};
@@ -3220,23 +3269,27 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
 
     const auto& block{resolving_.ast.get_as<ast::block_stmt>(for_expr.block)};
     bool        any_poison{false};
-    for (usize k{0}; k < count; ++k) {
+    for (usize k{0}; k < *count; ++k) {
         ctx_.advance_epoch();
         const body_typing_snapshot snap{resolving_};
 
         constexpr_frame frame;
-        if (driver_is_pack) {
-            resolving_.set_sema_type(driver_cap.payload, *current_pack_->element_types[k]);
-        } else {
-            resolving_.set_sema_type(driver_cap.payload, *elem_type);
-            if (driver_name) { frame.insert_or_assign(*driver_name, elem_values[k]); }
+        for (usize d{0}; d < num_drivers; ++d) {
+            const auto& drv{drivers[d]};
+            const auto& cap{for_expr.captures[d]};
+            if (drv.is_pack) {
+                resolving_.set_sema_type(cap.payload, *current_pack_->element_types[k]);
+            } else {
+                resolving_.set_sema_type(cap.payload, *drv.elem_type);
+                if (drv.name) { frame.insert_or_assign(*drv.name, drv.elem_values[k]); }
+            }
+            if (drv.name) { resolve_symbol_info(cap.payload, symbol_kind::VALUE); }
         }
-        if (driver_name) { resolve_symbol_info(driver_cap.payload, symbol_kind::VALUE); }
         if (has_companion) {
-            resolving_.set_sema_type(for_expr.captures[1].payload, usize_type);
+            resolving_.set_sema_type(for_expr.captures.back().payload, usize_type);
             if (companion_name) {
                 frame.insert_or_assign(*companion_name, gir::const_value{u64{k}, usize_type});
-                resolve_symbol_info(for_expr.captures[1].payload, symbol_kind::VALUE);
+                resolve_symbol_info(for_expr.captures.back().payload, symbol_kind::VALUE);
             }
         }
 
@@ -3254,10 +3307,13 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
                         id.get_index(),
                         k)};
         ctx_.instantiation_cache.set_body_type_diff(key, std::move(typing));
-        if (!driver_is_pack && (driver_name || companion_name)) {
-            std::vector<gir::const_value> cx_args;
-            if (driver_name) { cx_args.emplace_back(elem_values[k]); }
-            if (companion_name) { cx_args.emplace_back(gir::const_value{u64{k}, usize_type}); }
+
+        std::vector<gir::const_value> cx_args;
+        for (const auto& drv : drivers) {
+            if (!drv.is_pack && drv.name) { cx_args.emplace_back(drv.elem_values[k]); }
+        }
+        if (companion_name) { cx_args.emplace_back(gir::const_value{u64{k}, usize_type}); }
+        if (!cx_args.empty()) {
             ctx_.instantiation_cache.set_constexpr_args(key, std::move(cx_args));
         }
     }
