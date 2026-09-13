@@ -1074,7 +1074,7 @@ template <ast::IndexableID ID>
             TRY_DESC_FIELD(mut_v, bool, "is_mut");
             TRY_DESC_FIELD(vol_v, bool, "is_volatile");
             auto mods{*mut_v ? types::mut::MUTABLE : types::mut::CONSTANT};
-            if (*vol_v) { mods = mods | types::mut::VOLATILE; }
+            if (*vol_v) { mods |= types::mut::VOLATILE; }
             return_type = wrap_type(builtin_id == token_type_t::BUILTIN_POINTER
                                         ? ctx_.get_pointer(mods, *child_v)
                                         : ctx_.get_reference(mods, *child_v));
@@ -1086,7 +1086,7 @@ template <ast::IndexableID ID>
             TRY_DESC_FIELD(mut_v, bool, "is_mut");
             TRY_DESC_FIELD(vol_v, bool, "is_volatile");
             auto mods{*mut_v ? types::mut::MUTABLE : types::mut::CONSTANT};
-            if (*vol_v) { mods = mods | types::mut::VOLATILE; }
+            if (*vol_v) { mods |= types::mut::VOLATILE; }
             return_type = wrap_type(ctx_.get_slice(mods, *sentinel_v, *child_v));
             break;
         }
@@ -1097,8 +1097,9 @@ template <ast::IndexableID ID>
             TRY_DESC_FIELD(mut_v, bool, "is_mut");
             TRY_DESC_FIELD(vol_v, bool, "is_volatile");
             auto mods{*mut_v ? types::mut::MUTABLE : types::mut::CONSTANT};
-            if (*vol_v) { mods = mods | types::mut::VOLATILE; }
-            return_type = wrap_type(ctx_.get_array(mods, *sentinel_v, *len_v, *child_v));
+            if (*vol_v) { mods |= types::mut::VOLATILE; }
+            return_type =
+                wrap_type(ctx_.get_array(mods, *sentinel_v, static_cast<usize>(*len_v), *child_v));
             break;
         }
         case token_type_t::BUILTIN_FN: {
@@ -1145,7 +1146,7 @@ template <ast::IndexableID ID>
     case token_type_t::BUILTIN_STRUCT:
     case token_type_t::BUILTIN_UNION:  {
         if (const auto existing{resolving_.get_sema_type_opt(id)}) {
-            return_type = &*existing;
+            return_type = existing.get();
             break;
         }
 
