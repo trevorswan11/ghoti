@@ -51,3 +51,34 @@ pub const roundUpPage := fn(len: usize): usize {
     const ps := std.os.page_size();
     return (len + ps - 1uz) & ~(ps - 1uz);
 };
+
+/// Returns true if and only if the slices have the same length and all elements
+/// compare true using equality operator.
+pub constexpr eql := fn(T: type, a: []T, b: []T): bool {
+    if (a.len != b.len) return false;
+    if (a.len == 0) return true;
+    if (@typeInfo(T) != .float and a.ptr == b.ptr) return true;
+
+    for (a, b) |a_elem, b_elem| {
+        if (a_elem != b_elem) return false;
+    }
+    return true;
+};
+
+test "eql over bytes" {
+    @expect(eql(u8, "abcd", "abcd"));
+    @expect(!eql(u8, "abcdef", "abZdef"));
+    @expect(!eql(u8, "abcdefg", "abcdef"));
+}
+
+/// Returns true if haystack starts with needle.
+/// Time complexity: O(needle.len)
+pub constexpr startsWith := fn(T: type, haystack: []T, needle: []T): bool {
+    return if (needle.len > haystack.len) false else eql(T, haystack[0..needle.len], needle);
+};
+
+test "startsWith" {
+    @expect(startsWith(u8, "Bob", "Bo"));
+    @expect(!startsWith(u8, "haystack", "aystack"));
+    @expect(!startsWith(u8, "Needle in haystack", "haystack"));
+}
