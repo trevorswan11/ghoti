@@ -1329,7 +1329,7 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
     }
     case sema::type_kind::STRUCT: {
         const auto& st{denoted.get_data().as<sema::types::struct_t>()};
-        auto&       field_type{ctx_.get_builtin_type("FieldInfo")};
+        auto&       field_type{ctx_.get_builtin_type("StructFieldInfo")};
         const_array fields;
         for (usize idx{0}; idx < st.ast_fields.size(); ++idx) {
             const auto&  f{st.ast_fields[idx]};

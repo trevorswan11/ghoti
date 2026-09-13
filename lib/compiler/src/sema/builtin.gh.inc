@@ -169,14 +169,14 @@ pub const ArrayInfo := struct {
     pub is_volatile: bool,
 };
 
-pub const FieldInfo := struct {
+pub const StructFieldInfo := struct {
     pub name: []u8,
     pub @"type": type,
     pub has_default: bool,
 };
 
 pub const StructInfo := struct {
-    pub fields: []FieldInfo,
+    pub fields: []StructFieldInfo,
     pub is_extern: bool,
     pub is_packed: bool,
     pub backing_bits: u32,

@@ -1,7 +1,7 @@
 import std;
 
 const Point := @Struct(builtin.StructInfo{
-    .fields = [2]builtin.FieldInfo{
+    .fields = [2]builtin.StructFieldInfo{
         .{ .name = "x", .@"type" = i32, .has_default = false },
         .{ .name = "y", .@"type" = i32, .has_default = false },
         .{ .name = "z", .@"type" = i32, .has_default = true },
@@ -21,6 +21,3 @@ test "Type creation" {
     const p: Point = .{ .x = 2, .y = 9 };
     @expect(p.sum() == 12);
 }
-
-
-
