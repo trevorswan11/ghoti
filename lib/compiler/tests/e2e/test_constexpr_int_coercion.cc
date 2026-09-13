@@ -99,6 +99,35 @@ TEST_CASE("constexpr-fits implicit integer coercion runtime execution") {
             };
         )") == 80);
     }
+
+    SECTION("a shift between a constexpr_int literal and a concretely-typed constexpr local "
+            "still coerces back to a constexpr_int-returning function's declared return type") {
+        CHECK(helpers::compile_and_run(R"(
+            const maxUnsigned := fn(T: type): constexpr_int {
+                constexpr info := @typeInfo(T).int;
+                return (1 << info.bits) - 1;
+            };
+
+            pub const main := fn(): i32 {
+                if (maxUnsigned(u8) == 255 and maxUnsigned(u16) == 65535) { return 42; }
+                return 0;
+            };
+        )") == 42);
+    }
+
+    SECTION("a shift amount at or beyond the folding width's bit count does not fold as UB") {
+        CHECK(helpers::compile_and_run(R"(
+            const maxUnsigned := fn(T: type): constexpr_int {
+                constexpr info := @typeInfo(T).int;
+                return (1 << info.bits) - 1;
+            };
+
+            pub const main := fn(): i32 {
+                if (maxUnsigned(u64) == 18446744073709551615) { return 42; }
+                return 0;
+            };
+        )") == 42);
+    }
 }
 
 } // namespace ghoti::tests

@@ -21,6 +21,7 @@ pub const Alignment := enum : u8 {
         @assert(std.math.isPowerOfTwo(n));
         return @as(Alignment, @ctz(n));
     };
+
     pub constexpr of := fn(T: type): Alignment {
         return fromByteUnits(@alignOf(T));
     };
@@ -36,15 +37,25 @@ test "Alignment.of" {
     @expect(Alignment.of(i32) == .@"4");
     @expect(Alignment.of(i64) == .@"8");
 
-    @expect(Alignment.of(struct {
-        a: i32,
-        b: i32,
-    }) == .@"4");
+    @expect(
+        Alignment.of(
+            struct {
+                a: i32,
+                b: i32,
+            },
+        ) ==
+            .@"4",
+    );
 
-    @expect(Alignment.of(struct {
-        a: i32,
-        b: i64,
-    }) == .@"8");
+    @expect(
+        Alignment.of(
+            struct {
+                a: i32,
+                b: i64,
+            },
+        ) ==
+            .@"8",
+    );
 }
 
 pub const roundUpPage := fn(len: usize): usize {

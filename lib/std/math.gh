@@ -3,3 +3,64 @@ pub constexpr isPowerOfTwo := fn(int: auto): bool {
     @assert(int > 0);
     return (int & (int - 1)) == 0;
 };
+
+/// Returns an unsigned int type that can hold the number of bits in T - 1.
+/// Suitable for 0-based bit indices of T.
+pub constexpr Log2Int := fn(T: type): type {
+    if (T == constexpr_int) return constexpr_int;
+    constexpr bits: u16 = @typeInfo(T).int.bits;
+    constexpr log2_bits := 16 - @clz(bits - 1);
+    return @Int(.{ .bits = log2_bits, .signed = false, .is_constexpr = false });
+};
+
+test "Log2Int construction" {
+    @expect(Log2Int(constexpr_int) == constexpr_int);
+}
+
+/// Returns the maximum value of integer type T.
+pub constexpr maxInt := fn(T: type): constexpr_int {
+    constexpr info := @typeInfo(T).int;
+    return (1 << (info.bits - @intFromBool(info.signed))) - 1;
+};
+
+test "maxInt" {
+    @expect(maxInt(u1) == 1);
+    @expect(maxInt(u8) == 255);
+    @expect(maxInt(u16) == 65535);
+    @expect(maxInt(u32) == 4294967295);
+    @expect(maxInt(u64) == 18446744073709551615);
+    @expect(maxInt(u128) == 340282366920938463463374607431768211455);
+
+    @expect(maxInt(i1) == 0);
+    @expect(maxInt(i8) == 127);
+    @expect(maxInt(i16) == 32767);
+    @expect(maxInt(i32) == 2147483647);
+    @expect(maxInt(i63) == 4611686018427387903);
+    @expect(maxInt(i64) == 9223372036854775807);
+    @expect(maxInt(i128) == 170141183460469231731687303715884105727);
+}
+
+/// Returns the minimum value of integer type T.
+pub constexpr minInt := fn(T: type): constexpr_int {
+    constexpr info := @typeInfo(T).int;
+    return if constexpr (info.signed) -(1 << (info.bits - 1)) else 0;
+};
+
+test "minInt" {
+    @expect(minInt(u0) == 0);
+    @expect(minInt(u1) == 0);
+    @expect(minInt(u8) == 0);
+    @expect(minInt(u16) == 0);
+    @expect(minInt(u32) == 0);
+    @expect(minInt(u63) == 0);
+    @expect(minInt(u64) == 0);
+    @expect(minInt(u128) == 0);
+
+    @expect(minInt(i1) == -1);
+    @expect(minInt(i8) == -128);
+    @expect(minInt(i16) == -32768);
+    @expect(minInt(i32) == -2147483648);
+    @expect(minInt(i63) == -4611686018427387904);
+    @expect(minInt(i64) == -9223372036854775808);
+    @expect(minInt(i128) == -170141183460469231731687303715884105728);
+}

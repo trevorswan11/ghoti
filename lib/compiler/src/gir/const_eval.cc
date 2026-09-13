@@ -103,10 +103,39 @@ template <typename T>
         if constexpr (Integral<T>) { return make_scalar_const(l ^ r, res_type); }
         return stdx::none;
     case syntax::token_type_t::SHL:
-        if constexpr (Integral<T>) { return make_scalar_const(l << r, res_type); }
+        if constexpr (Integral<T>) {
+            // `l`/`r` fold at whatever narrow width happens to hold both operandsn - a
+            // native shift by >= the operand's bit width is UB, so redo it at 128 bits.
+            if constexpr (Signed<T>) {
+                if (r < T{0} || static_cast<u64>(r) >= sizeof(T) * 8) {
+                    const auto shift{r < T{0} ? u64{0} : static_cast<u64>(r)};
+                    return shift < 128 ? make_scalar_const(static_cast<i128>(l) << shift, res_type)
+                                       : make_scalar_const(i128{0}, res_type);
+                }
+            } else {
+                if (static_cast<u64>(r) >= sizeof(T) * 8) {
+                    const auto shift{static_cast<u64>(r)};
+                    return shift < 128 ? make_scalar_const(static_cast<u128>(l) << shift, res_type)
+                                       : make_scalar_const(u128{0}, res_type);
+                }
+            }
+            return make_scalar_const(l << r, res_type);
+        }
         return stdx::none;
     case syntax::token_type_t::SHR:
-        if constexpr (Integral<T>) { return make_scalar_const(l >> r, res_type); }
+        if constexpr (Integral<T>) {
+            // Shifting out every bit: unsigned settles at 0, signed at the sign fill.
+            if constexpr (Signed<T>) {
+                if (r < T{0} || static_cast<u64>(r) >= sizeof(T) * 8) {
+                    return make_scalar_const(l < T{0} ? T{-1} : T{0}, res_type);
+                }
+            } else {
+                if (static_cast<u64>(r) >= sizeof(T) * 8) {
+                    return make_scalar_const(T{0}, res_type);
+                }
+            }
+            return make_scalar_const(l >> r, res_type);
+        }
         return stdx::none;
     case syntax::token_type_t::EQ:    return const_value{l == r, bool_type};
     case syntax::token_type_t::NEQ:   return const_value{l != r, bool_type};

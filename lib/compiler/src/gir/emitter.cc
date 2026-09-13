@@ -712,8 +712,10 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, const sema::type& dest
     }
 
     // A compile-time known integer that provably fits dest_type coerces implicitly
+    // there's no cast to emit for it to reach codegen as.
     if (val.type && sema::is_integer(val.type->get_kind()) &&
-        sema::is_integer(dest_type.get_kind()) &&
+        (sema::is_integer(dest_type.get_kind()) ||
+         dest_type.get_kind() == sema::type_kind::CONSTEXPR_INT) &&
         !sema::is_same_unqualified(*val.type, dest_type)) {
         auto  folded{folded_int(val)};
         value v{val};

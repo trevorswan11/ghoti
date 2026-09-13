@@ -31,6 +31,31 @@ TEST_CASE("E2E: a generic `union` type constructor is usable as a return type") 
     )") == 41);
 }
 
+TEST_CASE("E2E: a `fn(T: type): type` returning an existing scalar type is usable as a value") {
+    CHECK(helpers::compile_and_run(R"(
+        const Ident := fn(T: type): type { return T; };
+
+        pub const main := fn(): i32 {
+            if (Ident(u8) == u8) { return 42; }
+            return 0;
+        };
+    )") == 42);
+}
+
+TEST_CASE("E2E: a `fn(T: type): type` with an early-return branch over `constexpr_int`") {
+    CHECK(helpers::compile_and_run(R"(
+        const Log2Int := fn(T: type): type {
+            if (T == constexpr_int) return constexpr_int;
+            return u8;
+        };
+
+        pub const main := fn(): i32 {
+            if (Log2Int(constexpr_int) == constexpr_int and Log2Int(i32) == u8) { return 42; }
+            return 0;
+        };
+    )") == 42);
+}
+
 TEST_CASE("E2E: a later parameter and the return type depend on an earlier parameter's type") {
     CHECK(helpers::compile_and_run(R"(
         const pick := fn(a: auto, b: @typeOf(a)): @typeOf(b) {
