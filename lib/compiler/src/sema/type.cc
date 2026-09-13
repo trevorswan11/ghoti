@@ -50,6 +50,17 @@ auto leaf_qualifier(const type& leaf) -> std::string_view {
     return is_same_unqualified(r->underlying, p->underlying);
 }
 
+[[nodiscard]] constexpr auto float_significand_bits(type_kind kind) noexcept -> u16 {
+    switch (kind) {
+    case type_kind::F16:  return 11;
+    case type_kind::F32:  return 24;
+    case type_kind::F64:  return 53;
+    case type_kind::F80:  return 64;
+    case type_kind::F128: return 113;
+    default:              return 0;
+    }
+}
+
 constexpr auto TYPE_KIND_NAMES{[] {
     stdx::fixed::enum_map<type_kind, string_utils::lowercase_str<32>> map{};
     for (const auto kind : stdx::enum_range<type_kind>()) {
@@ -248,6 +259,13 @@ auto is_implicit_widenable(const type& from, const type& to) noexcept -> bool {
 
     const auto from_int{as_integer(from)};
     if (!from_int) { return false; }
+
+    // A fixed-width integer widens to a float only when the float's significand can represent
+    // every value in the integer's range exactly
+    if (is_float(to_kind)) {
+        const auto sig_bits{float_significand_bits(to_kind)};
+        return from_int->is_signed ? from_int->bits <= sig_bits + 1 : from_int->bits <= sig_bits;
+    }
 
     // Narrow integers widen into the same-signedness pointer-sized type, mirroring the
     // pre-unification pair table (`i8..i32 -> isize`, `u8..u32 -> usize`).
