@@ -1739,6 +1739,17 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                          scalar.type->get_kind() == sema::type_kind::CONSTEXPR_INT) &&
                         sema::is_integer(sema_type->get_kind())) {
                         scalar = coerce_constexpr_int(scalar, *sema_type, *decl.value);
+                    } else if (decl.explicit_type && scalar.type &&
+                               sema::is_float(sema_type->get_kind()) &&
+                               (sema::is_integer(scalar.type->get_kind()) ||
+                                scalar.type->get_kind() == sema::type_kind::CONSTEXPR_INT) &&
+                               (scalar.type->get_kind() == sema::type_kind::CONSTEXPR_INT ||
+                                sema::is_implicit_widenable(*scalar.type, *sema_type))) {
+                        // An integer constant widening into a float-typed binding needs an
+                        // actual numeric conversion
+                        if (const auto iv{cv->as_int_opt()}) {
+                            scalar = value{static_cast<f64>(*iv), *sema_type};
+                        }
                     }
                     bound = scalar;
                 }
