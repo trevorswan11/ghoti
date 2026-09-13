@@ -54,6 +54,10 @@ auto body_typing_snapshot::diff_into(context& ctx, mod::module& m, body_type_dif
         const auto prev{matches.find(idx)};
         if (prev == matches.end() || prev->second != arm) { out.match_arms.emplace_back(idx, arm); }
     }
+
+    // Reset back to the pre-res baseline so a sibling replay diffs against the same starting point
+    m.if_constexpr_results = ifs;
+    m.match_arm_results    = matches;
 }
 
 auto body_typing_snapshot::restore_to(mod::module& m) const -> void {
