@@ -23,7 +23,7 @@ const Data := struct {
                 accumulator +=
                     match constexpr (field.@"type") {
                         f32 => @field(self, field.name),
-                        u32 => @as(@field(self, field.name)),
+                        u32 => @field(self, field.name),
                         _ => 0.0,
                     };
             }
