@@ -159,6 +159,23 @@ TEST_CASE("constexpr-fits implicit integer coercion runtime execution") {
             };
         )") == 42);
     }
+
+    SECTION("a chained double dot-access into an explicitly-typed constexpr decl does not spuriously "
+            "trip the shift-overflow safety check") {
+        CHECK(helpers::compile_and_run(R"(
+            const maxUnsigned := fn(T: type): constexpr_int {
+                constexpr bits: u16 = @typeInfo(T).int.bits;
+                return (1 << bits) - 1;
+            };
+
+            pub const main := fn(): i32 {
+                if (maxUnsigned(u16) == 65535 and maxUnsigned(u64) == 18446744073709551615) {
+                    return 42;
+                }
+                return 0;
+            };
+        )") == 42);
+    }
 }
 
 } // namespace ghoti::tests

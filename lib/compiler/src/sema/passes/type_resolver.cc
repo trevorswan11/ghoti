@@ -7341,11 +7341,10 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
     // keep the earlier instantiation's.
     const bool reresolve_local{
         for_generic_instantiation_ && reresolve_floor_ &&
-        !decl.explicit_type // Explicit type is authoritative
-        && [&] {
-               const auto lt{ctx_.registry.lookup_with_table(table_stack_, ident.name)};
-               return lt && lt->table_idx >= *reresolve_floor_;
-           }()};
+        (!decl.explicit_type || decl.has_modifier(ast::decl_modifiers::CONSTEXPR)) && [&] {
+            const auto lt{ctx_.registry.lookup_with_table(table_stack_, ident.name)};
+            return lt && lt->table_idx >= *reresolve_floor_;
+        }()};
 
     // Breaking out early is possible due to out of order semantics
     if (sym.get_status() == symbol_status::RESOLVED && !reresolve_local) {

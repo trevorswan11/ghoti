@@ -2174,6 +2174,13 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
     ASSERT(kind_opt, "Binary operator must be mapped to instruction kind");
     ASSERT(sema_type, "Binary expression must have a resolved sema type");
 
+    // A fully compile-time-known shift folds here, before real codegen reaches
+    // `emit_checked_binary`. Needed since an operand's*sema type can be narrower than the value's
+    // actual comptime-only dest
+    if (*kind_opt == instruction_kind::SHL || *kind_opt == instruction_kind::SHR) {
+        if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
+    }
+
     if (*kind_opt == instruction_kind::EQ || *kind_opt == instruction_kind::NE) {
         if (const auto tag_eq{try_emit_union_field_eq(binary.lhs, binary.rhs)}) {
             auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};

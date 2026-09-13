@@ -318,3 +318,5 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Coercion into `constexpr_int` now folds via constant evaluation
     - The shift fold promotes to 128-bit whenever the shift amount would exceed the narrow domain's width.
 - Stop crashing on constexpr negation of integers which should become 128 bit ints
+- Fix a bug involving silent wrong answers when multiple instantiations mix
+- Fix a crash resulting from a shift expression's LHS is peer-type resolution
