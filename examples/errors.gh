@@ -1,0 +1,34 @@
+import std;
+
+pub const main := fn(args: [][:0]u8): i32 {
+    if (args.len <= 1) {
+        std.io.eprintln("Expected at least 1 arg")!;
+        return 1;
+    }
+
+    const run := fn(): std.Result(void, std.io.Error) {
+        var file: std.io.File = .open(args[1], .{})?;
+        defer file.close();
+
+        var buf: [4096]mut u8 = undefined;
+        loop {
+            const n := file.read(buf)?;
+            if (n == 0) {
+                break;
+            } else {
+                std.io.println(buf[0..n])?;
+            }
+        }
+
+        return .{ .ok = {} };
+    };
+
+    return match (run()) {
+        .ok => 0,
+        .err => |e| blk: {
+            std.io.eprintln(@tagName(e))!;
+            break :blk 1;
+        },
+    };
+};
+

@@ -18,6 +18,7 @@ constexpr binding assignment_binding{bind_precedence::ASSIGNMENT, true};
 constexpr auto ALL_BINDINGS{stdx::fixed::enum_map<token_type_t, stdx::option<binding>>::from(
     stdx::option<binding>{stdx::none},
     map_pair{token_type_t::PLUS, bind_precedence::ADD_SUB},
+    map_pair{token_type_t::PLUS_PLUS, bind_precedence::ADD_SUB},
     map_pair{token_type_t::PLUS_PERCENT, bind_precedence::ADD_SUB},
     map_pair{token_type_t::MINUS, bind_precedence::ADD_SUB},
     map_pair{token_type_t::MINUS_PERCENT, bind_precedence::ADD_SUB},

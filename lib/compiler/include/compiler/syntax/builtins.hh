@@ -39,6 +39,22 @@ constexpr builtin_t TYPE_OF{"@typeOf", token_type_t::BUILTIN_TYPE_OF};
 constexpr builtin_t THIS{"@This", token_type_t::BUILTIN_THIS};
 constexpr builtin_t TAG_NAME{"@tagName", token_type_t::BUILTIN_TAG_NAME};
 constexpr builtin_t TYPE_NAME{"@typeName", token_type_t::BUILTIN_TYPE_NAME};
+constexpr builtin_t TYPE_INFO{"@typeInfo", token_type_t::BUILTIN_TYPE_INFO};
+constexpr builtin_t HAS_FIELD{"@hasField", token_type_t::BUILTIN_HAS_FIELD};
+constexpr builtin_t FIELD_TYPE{"@fieldType", token_type_t::BUILTIN_FIELD_TYPE};
+constexpr builtin_t FIELD{"@field", token_type_t::BUILTIN_FIELD};
+
+constexpr builtin_t INT{"@Int", token_type_t::BUILTIN_INT};
+constexpr builtin_t FLOAT{"@Float", token_type_t::BUILTIN_FLOAT};
+constexpr builtin_t POINTER{"@Pointer", token_type_t::BUILTIN_POINTER};
+constexpr builtin_t REFERENCE{"@Reference", token_type_t::BUILTIN_REFERENCE};
+constexpr builtin_t SLICE{"@Slice", token_type_t::BUILTIN_SLICE};
+constexpr builtin_t ARRAY{"@Array", token_type_t::BUILTIN_ARRAY};
+constexpr builtin_t FN{"@Fn", token_type_t::BUILTIN_FN};
+constexpr builtin_t FIELD_DEFAULT{"@fieldDefault", token_type_t::BUILTIN_FIELD_DEFAULT};
+constexpr builtin_t STRUCT{"@Struct", token_type_t::BUILTIN_STRUCT};
+constexpr builtin_t UNION{"@Union", token_type_t::BUILTIN_UNION};
+constexpr builtin_t ENUM{"@Enum", token_type_t::BUILTIN_ENUM};
 
 constexpr builtin_t MEMCPY{"@memcpy", token_type_t::BUILTIN_MEMCPY};
 constexpr builtin_t MEMSET{"@memset", token_type_t::BUILTIN_MEMSET};
@@ -77,6 +93,8 @@ constexpr builtin_t TARGET_FAMILY{"@targetFamily", token_type_t::BUILTIN_TARGET_
 
 constexpr builtin_t SET_EVAL_RECURSION_LIMIT{"@setEvalRecursionLimit",
                                              token_type_t::BUILTIN_SET_EVAL_RECURSION_LIMIT};
+constexpr builtin_t SET_EVAL_UNROLL_LIMIT{"@setEvalUnrollLimit",
+                                          token_type_t::BUILTIN_SET_EVAL_UNROLL_LIMIT};
 constexpr builtin_t SET_MAIN_SYMBOL{"@setMainSymbol", token_type_t::BUILTIN_SET_MAIN_SYMBOL};
 
 constexpr builtin_t PANIC{"@panic", token_type_t::BUILTIN_PANIC};
@@ -141,6 +159,21 @@ constexpr std::array ALL_BUILTINS{
     builtins::THIS,
     builtins::TAG_NAME,
     builtins::TYPE_NAME,
+    builtins::TYPE_INFO,
+    builtins::HAS_FIELD,
+    builtins::FIELD_TYPE,
+    builtins::FIELD,
+    builtins::INT,
+    builtins::FLOAT,
+    builtins::POINTER,
+    builtins::REFERENCE,
+    builtins::SLICE,
+    builtins::ARRAY,
+    builtins::FN,
+    builtins::FIELD_DEFAULT,
+    builtins::STRUCT,
+    builtins::UNION,
+    builtins::ENUM,
     builtins::MEMCPY,
     builtins::MEMSET,
     builtins::MEMMOVE,
@@ -172,6 +205,7 @@ constexpr std::array ALL_BUILTINS{
     builtins::TARGET_ENDIAN,
     builtins::TARGET_FAMILY,
     builtins::SET_EVAL_RECURSION_LIMIT,
+    builtins::SET_EVAL_UNROLL_LIMIT,
     builtins::SET_MAIN_SYMBOL,
     builtins::PANIC,
     builtins::TRAP,

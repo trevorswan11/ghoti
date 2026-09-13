@@ -22,6 +22,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
@@ -519,9 +520,10 @@ auto const_eval::force_deferred_function_params(sema::type& maybe_fn) -> void {
     const auto params{fn_data->params};
     const auto has_self{fn_data->has_self};
     const auto is_variadic{fn_data->is_variadic};
+    const auto conv{fn_data->conv};
     force_deferred_array_elements(params);
     auto& return_type{force_deferred_array(fn_data->return_type)};
-    maybe_fn.resolve<sema::types::function>(params, return_type, has_self, is_variadic);
+    maybe_fn.resolve<sema::types::function>(params, return_type, has_self, is_variadic, conv);
 }
 
 auto const_eval::resolve_deferred_array(const ast::explicit_array_type& array,
@@ -833,13 +835,14 @@ auto const_eval::coerce_dyn(const const_value& val, const sema::type& dest_type)
     if (!rec) { return stdx::none; }
 
     const auto vtable_sym{fmt::format("__vtable.{}", rec->body_scope_idx)};
-    if (std::ranges::none_of(module_->dyn_vtables,
+    auto&      vtable_owner{vtable_root_ ? *vtable_root_ : *module_};
+    if (std::ranges::none_of(vtable_owner.dyn_vtables,
                              [&](const auto& v) { return v.symbol == vtable_sym; })) {
         mod::dyn_vtable v{.symbol = vtable_sym, .slots = {}};
         for (const auto name : iface.method_names) {
             v.slots.emplace_back(scoped_symbol_name(rec->body_scope_idx, name));
         }
-        module_->dyn_vtables.emplace_back(std::move(v));
+        vtable_owner.dyn_vtables.emplace_back(std::move(v));
     }
 
     std::string data_sym;
@@ -1188,6 +1191,189 @@ auto const_eval::target_enum_value(std::string_view enum_name, std::string_view 
     return const_value{const_enum{std::string{member}, ordinal}, enum_type};
 }
 
+auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
+    PROFILE_FUNCTION();
+    auto& info_type{ctx_.get_builtin_type("TypeInfo")};
+    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+
+    // `@typeOf`'s own folding represents "this value denotes a type" the same way
+    const auto type_value{
+        [](sema::type& t) -> const_value { return const_value{stdx::option<sema::type&>{t}}; }};
+
+    const auto wrap{[&](std::string_view tag,
+                        const_struct     payload_struct,
+                        sema::type&      payload_ty) -> const_value {
+        std::vector<const_value> payload;
+        payload.emplace_back(const_value{std::move(payload_struct), payload_ty});
+        return const_value{const_union{std::string{tag}, std::move(payload)}, info_type};
+    }};
+    const auto tag_only{[&](std::string_view tag) -> const_value {
+        return wrap(tag, const_struct{}, ctx_.get_builtin_type("NoPayload"));
+    }};
+
+    switch (denoted.get_kind()) {
+    case sema::type_kind::INT: {
+        const_struct s;
+        s.fields.emplace("bits",
+                         const_value{u64{sema::int_width(denoted)}, ctx_.get_int(16, false)});
+        s.fields.emplace("signed", const_value{sema::is_signed_integer(denoted), bool_type});
+        return wrap("int", std::move(s), ctx_.get_builtin_type("IntInfo"));
+    }
+    case sema::type_kind::ISIZE:
+    case sema::type_kind::USIZE: {
+        const auto   ptr_bits{static_cast<u16>(
+            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? 64 : 32)};
+        const_struct s;
+        s.fields.emplace("bits", const_value{u64{ptr_bits}, ctx_.get_int(16, false)});
+        s.fields.emplace("signed", const_value{sema::is_signed_integer(denoted), bool_type});
+        return wrap("int", std::move(s), ctx_.get_builtin_type("IntInfo"));
+    }
+    case sema::type_kind::F16:
+    case sema::type_kind::F32:
+    case sema::type_kind::F64:
+    case sema::type_kind::F80:
+    case sema::type_kind::F128: {
+        const_struct s;
+        s.fields.emplace(
+            "bits",
+            const_value{u64{sema::float_bits(denoted.get_kind())}, ctx_.get_int(16, false)});
+        return wrap("float", std::move(s), ctx_.get_builtin_type("FloatInfo"));
+    }
+    case sema::type_kind::BOOL:      return tag_only("bool");
+    case sema::type_kind::VOID_:     return tag_only("void");
+    case sema::type_kind::NORETURN:  return tag_only("noreturn");
+    case sema::type_kind::OPAQUE:    return tag_only("opaque");
+    case sema::type_kind::TYPE:      return tag_only("type");
+    case sema::type_kind::POINTER:
+    case sema::type_kind::REFERENCE: {
+        const bool   is_ptr{denoted.get_kind() == sema::type_kind::POINTER};
+        auto&        underlying{is_ptr ? denoted.get_data().as<sema::types::pointer>().underlying
+                                       : denoted.get_data().as<sema::types::reference>().underlying};
+        const_struct s;
+        s.fields.emplace("child", type_value(underlying));
+        s.fields.emplace("is_mut", const_value{!denoted.is_constant(), bool_type});
+        s.fields.emplace("is_volatile", const_value{denoted.is_volatile(), bool_type});
+        return wrap(
+            is_ptr ? "pointer" : "reference", std::move(s), ctx_.get_builtin_type("PointerInfo"));
+    }
+    case sema::type_kind::SLICE: {
+        const auto&  sl{denoted.get_data().as<sema::types::slice>()};
+        const_struct s;
+        s.fields.emplace("child", type_value(sl.underlying));
+        s.fields.emplace("sentinel", const_value{sl.null_terminated, bool_type});
+        s.fields.emplace("is_mut", const_value{!denoted.is_constant(), bool_type});
+        s.fields.emplace("is_volatile", const_value{denoted.is_volatile(), bool_type});
+        return wrap("slice", std::move(s), ctx_.get_builtin_type("SliceInfo"));
+    }
+    case sema::type_kind::ARRAY: {
+        const auto&  ar{denoted.get_data().as<sema::types::array>()};
+        const_struct s;
+        s.fields.emplace("child", type_value(ar.underlying));
+        s.fields.emplace("len", const_value{u64{ar.len}, usize_type});
+        s.fields.emplace("sentinel", const_value{ar.null_terminated, bool_type});
+        s.fields.emplace("is_mut", const_value{!denoted.is_constant(), bool_type});
+        s.fields.emplace("is_volatile", const_value{denoted.is_volatile(), bool_type});
+        return wrap("array", std::move(s), ctx_.get_builtin_type("ArrayInfo"));
+    }
+    case sema::type_kind::FUNCTION: {
+        const auto& fn{denoted.get_data().as<sema::types::function>()};
+        auto&       type_type{ctx_.get_builtin_resolved_type(sema::type_kind::TYPE)};
+        const_array params;
+        for (auto* p : fn.params) { params.elements.emplace_back(type_value(*p)); }
+        auto& params_slice_type{ctx_.get_slice(sema::types::mut::CONSTANT, false, type_type)};
+        const_struct s;
+        s.fields.emplace("params", const_value{std::move(params), params_slice_type});
+        s.fields.emplace("return_type", type_value(fn.return_type));
+        s.fields.emplace("variadic", const_value{fn.is_variadic, bool_type});
+        s.fields.emplace("has_self", const_value{fn.has_self, bool_type});
+        s.fields.emplace("callconv",
+                         const_value{const_enum{std::string{ast::calling_convention_name(fn.conv)},
+                                                static_cast<i64>(fn.conv)},
+                                     ctx_.get_builtin_type("CallConv")});
+        return wrap("function", std::move(s), ctx_.get_builtin_type("FnInfo"));
+    }
+    case sema::type_kind::ENUM: {
+        const auto& en{denoted.get_data().as<sema::types::enum_t>()};
+        auto&       field_type{ctx_.get_builtin_type("EnumField")};
+        const_array fields;
+        for (usize idx{0}; idx < en.ast_enumerations.size(); ++idx) {
+            const auto& e{en.ast_enumerations[idx]};
+            const auto& vname{en.enclosing.ast.get_as<ast::identifier_expr>(e.name).name};
+            i64         val{static_cast<i64>(idx)};
+            if (e.value) {
+                auto&      enclosing_mod{const_cast<mod::module&>(en.enclosing)};
+                const_eval enclosing_eval{ctx_, enclosing_mod};
+                enclosing_eval.set_symbol_scoping(symbol_scoping_);
+                if (const auto ev{enclosing_eval.try_eval(*e.value)}) {
+                    val = static_cast<i64>(ev->as_int_opt().value_or(val));
+                }
+            }
+            const_struct fs;
+            fs.fields.emplace("name", const_value::make_string(ctx_, std::string{vname}));
+            fs.fields.emplace("value", const_value{val, ctx_.get_int(64, true)});
+            fields.elements.emplace_back(const_value{std::move(fs), field_type});
+        }
+        auto& field_slice_type{ctx_.get_slice(sema::types::mut::CONSTANT, false, field_type)};
+        const_struct s;
+        s.fields.emplace("tag_type", type_value(en.underlying));
+        s.fields.emplace("fields", const_value{std::move(fields), field_slice_type});
+        s.fields.emplace("exhaustive", const_value{!en.non_exhaustive, bool_type});
+        return wrap("enum", std::move(s), ctx_.get_builtin_type("EnumInfo"));
+    }
+    case sema::type_kind::STRUCT: {
+        const auto& st{denoted.get_data().as<sema::types::struct_t>()};
+        auto&       field_type{ctx_.get_builtin_type("FieldInfo")};
+        const_array fields;
+        for (usize idx{0}; idx < st.ast_fields.size(); ++idx) {
+            const auto&  f{st.ast_fields[idx]};
+            const auto&  fname{st.enclosing.ast.get_as<ast::identifier_expr>(f.name).name};
+            const_struct fs;
+            fs.fields.emplace("name", const_value::make_string(ctx_, std::string{fname}));
+            fs.fields.emplace("type", type_value(*st.fields[idx]));
+            fs.fields.emplace("has_default", const_value{f.default_value.has_value(), bool_type});
+            fields.elements.emplace_back(const_value{std::move(fs), field_type});
+        }
+        const auto ptr_bits{static_cast<u32>(
+            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? 64 : 32)};
+        auto&      field_slice_type{ctx_.get_slice(sema::types::mut::CONSTANT, false, field_type)};
+        const_struct s;
+        s.fields.emplace("fields", const_value{std::move(fields), field_slice_type});
+        s.fields.emplace("is_extern", const_value{st.is_c_abi, bool_type});
+        s.fields.emplace("is_packed", const_value{st.is_packed, bool_type});
+        s.fields.emplace("backing_bits",
+                         const_value{u64{sema::packed_backing_bits(st, ptr_bits).value_or(0)},
+                                     ctx_.get_int(32, false)});
+        return wrap("struct", std::move(s), ctx_.get_builtin_type("StructInfo"));
+    }
+    case sema::type_kind::UNION: {
+        const auto& ut{denoted.get_data().as<sema::types::union_t>()};
+        auto&       field_type{ctx_.get_builtin_type("UnionFieldInfo")};
+        const_array fields;
+        for (usize idx{0}; idx < ut.ast_fields.size(); ++idx) {
+            const_struct fs;
+            fs.fields.emplace(
+                "name",
+                const_value::make_string(
+                    ctx_,
+                    std::string{
+                        ut.enclosing.ast.get_as<ast::identifier_expr>(ut.ast_fields[idx].name)
+                            .name}));
+            fs.fields.emplace("type", type_value(*ut.fields[idx]));
+            fields.elements.emplace_back(const_value{std::move(fs), field_type});
+        }
+        auto& field_slice_type{ctx_.get_slice(sema::types::mut::CONSTANT, false, field_type)};
+        const_struct s;
+        s.fields.emplace("fields", const_value{std::move(fields), field_slice_type});
+        s.fields.emplace("is_extern", const_value{ut.is_c_abi, bool_type});
+        s.fields.emplace("is_packed", const_value{ut.is_packed, bool_type});
+        s.fields.emplace("tagged", const_value{!ut.is_untagged, bool_type});
+        return wrap("union", std::move(s), ctx_.get_builtin_type("UnionInfo"));
+    }
+    default: return tag_only("internal");
+    }
+}
+
 auto const_eval::eval_implicit_access(ast::node_id id, const ast::implicit_access_expr& implicit)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
@@ -1524,6 +1710,39 @@ auto const_eval::eval_assignment(ast::node_id                id,
     return stdx::none;
 }
 
+namespace {
+
+[[nodiscard]] auto string_to_byte_array(const std::string& s) -> const_array {
+    const_array arr;
+    arr.elements.reserve(s.size());
+    for (const char c : s) {
+        arr.elements.emplace_back(const_value{static_cast<u64>(static_cast<unsigned char>(c))});
+    }
+    return arr;
+}
+
+} // namespace
+
+auto const_eval::fold_concat(const const_value& lhs, const const_value& rhs, ast::node_id id)
+    -> stdx::option<const_value> {
+    const auto lhs_arr{lhs.as_opt<const_array>()};
+    const auto rhs_arr{rhs.as_opt<const_array>()};
+    const auto lhs_str{lhs.as_opt<std::string>()};
+    const auto rhs_str{rhs.as_opt<std::string>()};
+    if ((!lhs_arr && !lhs_str) || (!rhs_arr && !rhs_str)) { return stdx::none; }
+
+    const const_array lhs_bytes{lhs_str ? string_to_byte_array(*lhs_str) : *lhs_arr};
+    const const_array rhs_bytes{rhs_str ? string_to_byte_array(*rhs_str) : *rhs_arr};
+
+    const_array result;
+    result.elements.reserve(lhs_bytes.elements.size() + rhs_bytes.elements.size());
+    result.elements.insert(
+        result.elements.end(), lhs_bytes.elements.begin(), lhs_bytes.elements.end());
+    result.elements.insert(
+        result.elements.end(), rhs_bytes.elements.begin(), rhs_bytes.elements.end());
+    return const_value{std::move(result), module_->get_sema_type_opt(id)};
+}
+
 auto const_eval::fold_binary_values(syntax::token_type_t op_type,
                                     const const_value&   lhs,
                                     const const_value&   rhs,
@@ -1554,6 +1773,8 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
         // `constexpr_int` (or anything else non-scalar-width): no wrap, plain-op result stands.
         return folded;
     }
+
+    if (op_type == syntax::token_type_t::PLUS_PLUS) { return fold_concat(lhs, rhs, id); }
 
     auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
 
@@ -1803,7 +2024,22 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
     const auto& sym{*sym_opt};
 
     if (effective_tbl != module_->root_table_idx) {
-        if (!sym.has_kind() || sym.get_kind() != sema::symbol_kind::TYPE) { return stdx::none; }
+        if (!sym.has_kind()) { return stdx::none; }
+        if (sym.get_kind() != sema::symbol_kind::TYPE) {
+            // A local, immutable `const`/`constexpr`
+            if (sym.get_kind() == sema::symbol_kind::VALUE) {
+                if (const auto node{sym.get_data().as_opt<sema::symbols::node_t>()}) {
+                    if (const auto decl{module_->ast.get_as_opt<ast::decl_stmt>(*node)};
+                        decl && decl->value &&
+                        (decl->has_modifier(ast::decl_modifiers::CONSTEXPR) ||
+                         decl->has_modifier(ast::decl_modifiers::CONSTANT)) &&
+                        !decl->has_modifier(ast::decl_modifiers::VARIABLE)) {
+                        return try_eval(*decl->value);
+                    }
+                }
+            }
+            return stdx::none;
+        }
     }
 
     if (sym.has_kind() && sym.get_kind() == sema::symbol_kind::TYPE) {
@@ -2384,6 +2620,55 @@ auto const_eval::eval_builtin(ast::node_id          id,
         auto& arr_type{ctx_.get_array(sema::types::mut::CONSTANT, true, name.size() + 1, t_u8)};
         return const_value{std::move(name), arr_type};
     }
+    case syntax::token_type_t::BUILTIN_TYPE_INFO: {
+        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
+        const auto&               arg{call.arguments.front()};
+        stdx::option<sema::type&> target_type;
+        if (const auto type_id{arg.as_opt<ast::explicit_type_id>()}) {
+            target_type = module_->get_sema_type_opt(*type_id);
+        } else if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
+            target_type = module_->get_sema_type_opt(*expr_h);
+        }
+        if (!target_type) { return stdx::none; }
+        if (const auto dc{target_type->get_data().as_opt<sema::types::deferred_call>()}) {
+            if (const auto r{try_resolve_deferred_call(dc->call)}) { target_type.emplace(*r); }
+        }
+        if (target_type->get_kind() == sema::type_kind::TYPE) {
+            if (const auto m{target_type->get_data().as_opt<sema::types::meta_type>()}) {
+                target_type.emplace(m->instance);
+            }
+        }
+        return eval_type_info(*target_type);
+    }
+    case syntax::token_type_t::BUILTIN_HAS_FIELD:
+    case syntax::token_type_t::BUILTIN_FIELD_TYPE: {
+        VERIFY(call.arguments.size() == 2, "Arity mismatch not verified during resolution");
+        stdx::option<sema::type&> target_type;
+        if (const auto type_id{call.arguments[0].as_opt<ast::explicit_type_id>()}) {
+            target_type = module_->get_sema_type_opt(*type_id);
+        } else if (const auto expr_h{call.arguments[0].as_opt<ast::expr_handle>()}) {
+            target_type = module_->get_sema_type_opt(*expr_h);
+        }
+        if (!target_type) { return stdx::none; }
+        if (target_type->get_kind() == sema::type_kind::TYPE) {
+            if (const auto m{target_type->get_data().as_opt<sema::types::meta_type>()}) {
+                target_type.emplace(m->instance);
+            }
+        }
+        const auto name_expr{call.arguments[1].as_opt<ast::expr_handle>()};
+        if (!name_expr) { return stdx::none; }
+        const auto name_val{try_eval(*name_expr)};
+        const auto name{name_val ? name_val->as_opt<std::string>() : stdx::none};
+        if (!name) { return stdx::none; }
+
+        const auto found{sema::find_aggregate_field(*target_type, *name)};
+        if (builtin_type == syntax::token_type_t::BUILTIN_HAS_FIELD) {
+            auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+            return const_value{found.has_value(), bool_type};
+        }
+        if (!found) { return stdx::none; }
+        return const_value{stdx::option<sema::type&>{found->field_type}};
+    }
     case syntax::token_type_t::BUILTIN_TARGET_OS: {
         const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
         return target_enum_value("Os", facts.os);
@@ -2449,6 +2734,18 @@ auto const_eval::eval_builtin(ast::node_id          id,
                         recursion_limit_stack_.emplace_back(max_recursion_depth_);
                         max_recursion_depth_ = static_cast<usize>(*limit);
                     }
+                }
+            }
+        }
+        return const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+    }
+    case syntax::token_type_t::BUILTIN_SET_EVAL_UNROLL_LIMIT: {
+        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
+        const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
+        if (expr_h) {
+            if (const auto val{try_eval(*expr_h)}) {
+                if (const auto limit{val->as_int_opt()}; limit && *limit > 0) {
+                    ctx_.eval_unroll_limit = static_cast<usize>(*limit);
                 }
             }
         }
@@ -2572,6 +2869,17 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!target) { return stdx::none; }
         const auto ptr_bits{static_cast<u32>(
             codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? 64 : 32)};
+        // Unlike `@bitCast`/`@truncate`, `@as` rejects narrowing a CONCRETE  integer operand
+        if (builtin_type == syntax::token_type_t::BUILTIN_AS &&
+            sema::is_integer(target->get_kind()) &&
+            !sema::constexpr_int_fits(*src_int, *target, ptr_bits)) {
+            auto operand_node{*op_h};
+            if (const auto un{module_->ast.get_as_opt<ast::unary_expr>(operand_node)};
+                un && ast::node_id{operand_node}.get_token_type() == syntax::token_type_t::MINUS) {
+                operand_node = un->rhs;
+            }
+            if (!module_->ast[operand_node].is<ast::int_literal_expr>()) { return stdx::none; }
+        }
         if (const auto w{integer_target_width(*target, ptr_bits)}) {
             return wrap_to_width(*operand, w->first, w->second, target);
         }
@@ -2649,6 +2957,9 @@ auto const_eval::eval_constexpr_fn(ast::node_id                      call_id,
                                    stdx::option<const const_struct&> captures)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
+    // We have no notion of `rest.len`/`rest[k]`/`for constexpr (rest)` (all emitter/resolver work)
+    if (!fn_expr.parameters.empty() && fn_expr.parameters.back().is_pack) { return stdx::none; }
+
     const bool  has_self{fn_expr.self.has_value()};
     const usize expected_args{fn_expr.parameters.size() + (has_self ? 1UZ : 0UZ)};
     VERIFY(expected_args == args.size(),

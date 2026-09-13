@@ -62,6 +62,8 @@ class type_resolver {
     static auto resolve_types(mod::module& module, context& ctx) -> mod::module_state;
 
     template <ast::IndexableID ID> auto resolve(ID id) -> void {
+        // An untyped parameter pack (`rest...`) has no type node at all; nothing to resolve.
+        if (!id.is_valid()) { return last_type_.emplace(ctx_.get_poison()); }
         resolving_.ast[id].visit([&](const auto& data) -> void { visit(id, data); });
     }
 
@@ -89,6 +91,15 @@ class type_resolver {
         -> stdx::option<stdx::result<gsl::not_null<type*>, diagnostic>>;
     // Resolves and records the interface bounds of a generic function's `impl I` parameters.
     auto register_impl_param_bounds(type& fn_type, const ast::function_expr& fn) -> void;
+
+    // `lhs ++ rhs`: compile-time array/slice concatenation; sets `last_type_`.
+    auto
+    resolve_concat(ast::node_id id, const ast::binary_expr& binary, type& lhs_type, type& rhs_type)
+        -> void;
+    auto fold_concat_operand_len(ast::expr_handle operand, type& operand_type)
+        -> stdx::option<usize>;
+    // True when `expr` is a bare identifier declared `constexpr var` (no storage, no address).
+    auto names_constexpr_var(ast::expr_handle expr) -> bool;
 
     // Expands every parameterized `impl(P) ...` whose base ctor is `base_ctor_fn` for the freshly
     // materialized concrete target `concrete`, remapping its template typing and recording one
@@ -206,6 +217,17 @@ class type_resolver {
         ankerl::unordered_dense::map<const type*,
                                      std::vector<std::pair<u32, std::vector<const type*>>>>;
 
+    // A call's arguments after splicing in every `expr...` pack expansion in place
+    struct expanded_call_args {
+        std::vector<usize>          source_index; // names which syntactic argument a slot came from
+        std::vector<stdx::opt_size> pack_k;       // element index within that expansion
+    };
+
+    struct pack_binding {
+        std::string_view   name;
+        std::vector<type*> element_types;
+    };
+
   private:
     auto visit(ast::node_id, const ast::array_expr&) -> void;
     auto visit(ast::node_id, const ast::asm_expr&) -> void;
@@ -219,11 +241,53 @@ class type_resolver {
     auto resolve_call_args(gsl::span<const ast::call_expr::argument> args) -> resolve_result;
     [[nodiscard]] auto get_resolved_call_arg_type(const ast::call_expr::argument& arg)
         -> gsl::not_null<type*>;
+
+    // `none` on a `PACK_EXPANSION_MISPLACED` diagnostic (already recorded on `ctx_.diags`).
+    [[nodiscard]] auto expand_pack_call_args(const ast::call_expr& call)
+        -> stdx::option<expanded_call_args>;
+    // Folds `name_arg` to a compile-time string, with no lookup. Shared by any builtin that reads
+    // a field/member name from a call argument (`@hasField`/`@fieldType`/`@field`).
+    [[nodiscard]] auto resolve_field_name_string(const ast::call_expr::argument& name_arg)
+        -> stdx::option<std::string>;
+    // Folds `name_arg` to a compile-time string and looks it up as a data field of `denoted`.
+    // Shared by `@hasField`/`@fieldType`/`@field`.
+    [[nodiscard]] auto resolve_field_by_name(const ast::call_expr::argument& name_arg,
+                                             type& denoted) -> stdx::option<field_lookup_result>;
+    // Folds `desc_arg` (an `IntInfo`/`FloatInfo`/`PointerInfo`/`SliceInfo`/`ArrayInfo` value) to a
+    // compile-time struct. `none` when the argument isn't a foldable struct value.
+    [[nodiscard]] auto resolve_type_descriptor(const ast::call_expr::argument& desc_arg)
+        -> stdx::option<gir::const_struct>;
     // Evaluates `arg` as a compile-time enum constant
     [[nodiscard]] auto resolve_const_enum_arg(const ast::call_expr::argument& arg,
                                               std::string_view                builtin_name,
                                               std::string_view                what)
         -> stdx::result<gir::const_enum, diagnostic>;
+
+    // Aggregate synthesis for `@Struct`/`@Union`/`@Enum`
+    [[nodiscard]] auto synthesize_ident(std::string_view name, bool is_public)
+        -> ast::identifier_handle;
+    // Materializes a folded scalar `const_value` (int/bool/float/string only) back into an AST
+    // literal node, so it can serve as a field's `default_value` expression
+    [[nodiscard]] auto synthesize_const_literal(const gir::const_value& val)
+        -> stdx::option<ast::expr_handle>;
+    // Builds a `types::enum_t` directly from a folded `EnumInfo` descriptor
+    [[nodiscard]] auto
+    synthesize_enum(usize disc, source_location loc, const gir::const_struct& desc)
+        -> stdx::result<gsl::not_null<type*>, diagnostic>;
+    // Builds a `types::struct_t` directly from a folded `StructInfo` descriptor plus the
+    // `defaults...` pack's folded values
+    [[nodiscard]] auto synthesize_struct(usize                             disc,
+                                         source_location                   loc,
+                                         const gir::const_struct&          desc,
+                                         gsl::span<const gir::const_value> defaults)
+        -> stdx::result<gsl::not_null<type*>, diagnostic>;
+    // Builds a `types::union_t` directly from a folded `UnionInfo` descriptor plus the
+    // `defaults...` pack's folded values
+    [[nodiscard]] auto synthesize_union(usize                             disc,
+                                        source_location                   loc,
+                                        const gir::const_struct&          desc,
+                                        gsl::span<const gir::const_value> defaults)
+        -> stdx::result<gsl::not_null<type*>, diagnostic>;
     // Views a `constexpr_int` / `constexpr_float` as the concrete type it materializes to
     [[nodiscard]] auto constexpr_numeric_view(type& t) -> type&;
     [[nodiscard]] auto get_call_arg_location(const ast::call_expr::argument& arg)
@@ -303,6 +367,10 @@ class type_resolver {
     [[nodiscard]] auto get_rightmost_name(ast::expr_handle) const noexcept
         -> stdx::option<std::string_view>;
     template <ast::IndexableID ID> auto resolve_dot(ID, const ast::dot_expr&) -> void;
+    // `rest.len`; only reached when `dot.object` is a bare identifier naming `current_pack_`.
+    template <ast::IndexableID ID> auto resolve_pack_len(ID id, const ast::dot_expr& dot) -> void;
+    // `rest[k]`; only reached when `index.array` is a bare identifier naming `current_pack_`.
+    auto resolve_pack_index(ast::node_id id, const ast::index_expr& index) -> void;
 
     auto visit(ast::node_id, const ast::dot_expr&) -> void;
     auto visit(ast::node_id, const ast::range_expr&) -> void;
@@ -325,6 +393,14 @@ class type_resolver {
 
     // Resolves a `match constexpr`: folds the scrutinee, type-checks only the selected arm
     auto resolve_constexpr_match(ast::node_id, const ast::match_expr&, type& matcher_type) -> void;
+
+    // Resolves a `for constexpr`: unrolls into one resolve pass per compile-time-known iteration,
+    // diffing each into a per-iteration `body_type_diff` for the emitter to replay.
+    auto resolve_constexpr_for(ast::node_id, const ast::for_loop_expr&) -> void;
+
+    // Rejects a bare `break`/`continue` reaching a `for`/`while constexpr`'s own iteration
+    // boundary (nested ordinary loops declared inside the body are unaffected).
+    auto check_constexpr_loop_jumps(ast::stmt_handle body) -> void;
 
     auto visit(ast::node_id, const ast::match_expr&) -> void;
     auto visit(ast::node_id, const ast::reference_expr&) -> void;
@@ -461,6 +537,12 @@ class type_resolver {
     stdx::opt_size            reresolve_floor_{};
     stdx::opt_size            pending_impl_method_owner_;
     stdx::option<std::string> pending_param_impl_target_;
+
+    // Set by `instantiate_generic` to that inst's mangled name for the duration of body resolution
+    std::string typing_scope_prefix_{};
+
+    // Set by `instantiate_generic` for the duration of resolving one pack function's body
+    stdx::option<pack_binding> current_pack_;
 
     impl_param_bound_map_t impl_param_bounds_;
     named_test_map_t       named_tests_;

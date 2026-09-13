@@ -128,4 +128,110 @@ pub weak const expect_handler := fn(_: []u8, _: []u8, _: u32, _: u32): void {};
 pub weak const require_handler := fn(_: []u8, _: []u8, _: u32, _: u32): void {};
 
 pub weak const skip_handler := fn(_: []u8, _: []u8, _: u32, _: u32): void {};
+
+/// The kind of a type, as returned by `@typeInfo(T).kind` / `@tagName`.
+pub const TypeKind := enum {
+    int, float, @"bool", @"void", @"noreturn", @"opaque", @"type",
+    pointer, reference, slice, array,
+    @"struct", @"union", @"enum", function, internal,
+};
+
+/// Exact set of calling conventions ghoti supports, matching `ast::calling_convention` 1:1.
+pub const CallConv := enum { c, sysv, win64, stdcall, fastcall, aapcs };
+
+pub const IntInfo := struct {
+    pub bits: u16,
+    pub signed: bool,
+};
+
+pub const FloatInfo := struct {
+    pub bits: u16,
+};
+
+pub const PointerInfo := struct {
+    pub child: type,
+    pub is_mut: bool,
+    pub is_volatile: bool,
+};
+
+pub const SliceInfo := struct {
+    pub child: type,
+    pub sentinel: bool,
+    pub is_mut: bool,
+    pub is_volatile: bool,
+};
+
+pub const ArrayInfo := struct {
+    pub child: type,
+    pub len: usize,
+    pub sentinel: bool,
+    pub is_mut: bool,
+    pub is_volatile: bool,
+};
+
+pub const FieldInfo := struct {
+    pub name: []u8,
+    pub @"type": type,
+    pub has_default: bool,
+};
+
+pub const StructInfo := struct {
+    pub fields: []FieldInfo,
+    pub is_extern: bool,
+    pub is_packed: bool,
+    pub backing_bits: u32,
+};
+
+pub const UnionFieldInfo := struct {
+    pub name: []u8,
+    pub @"type": type,
+};
+
+pub const UnionInfo := struct {
+    pub fields: []UnionFieldInfo,
+    pub is_extern: bool,
+    pub is_packed: bool,
+    pub tagged: bool,
+};
+
+pub const EnumField := struct {
+    pub name: []u8,
+    pub value: i64,
+};
+
+pub const EnumInfo := struct {
+    pub tag_type: type,
+    pub fields: []EnumField,
+    pub exhaustive: bool,
+};
+
+pub const FnInfo := struct {
+    pub params: []type,
+    pub return_type: type,
+    pub variadic: bool,
+    pub has_self: bool,
+    pub @"callconv": CallConv,
+};
+
+const NoPayload := struct {};
+
+/// The keystone reflection value: `@typeInfo(T)` returns one of these, tagged by `TypeKind`.
+pub const TypeInfo := union {
+    int: IntInfo,
+    float: FloatInfo,
+    @"bool": NoPayload,
+    @"void": NoPayload,
+    @"noreturn": NoPayload,
+    @"opaque": NoPayload,
+    @"type": NoPayload,
+    internal: NoPayload,
+    pointer: PointerInfo,
+    reference: PointerInfo,
+    slice: SliceInfo,
+    array: ArrayInfo,
+    @"struct": StructInfo,
+    @"union": UnionInfo,
+    @"enum": EnumInfo,
+    function: FnInfo,
+};
 )"

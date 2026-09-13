@@ -51,6 +51,9 @@ class const_eval {
         symbol_scoping_ = scoping;
     }
 
+    // The module `coerce_dyn` registers a synthesized `__vtable.<N>` global onto
+    auto set_vtable_root_module(mod::module& root) noexcept -> void { vtable_root_ = root; }
+
     [[nodiscard]] auto scoped_symbol_name(usize owner_table_idx, std::string_view bare) const
         -> std::string {
         if (symbol_scoping_) { return symbol_scoping_->name_for(owner_table_idx, bare); }
@@ -65,6 +68,12 @@ class const_eval {
 
     // Attempt to evaluate node as a compile-time constant. Returns none if non-constant.
     [[nodiscard]] auto try_eval(ast::node_id id) -> stdx::option<const_value>;
+
+    // Folds two already-evaluated constants under `op_type` (e.g. for a `+=` on a folded local).
+    [[nodiscard]] auto fold_binary_values(syntax::token_type_t op_type,
+                                          const const_value&   lhs,
+                                          const const_value&   rhs,
+                                          ast::node_id         id) -> stdx::option<const_value>;
 
     [[nodiscard]] auto arm_pattern_matches(const ast::match_pattern_handle& pattern,
                                            const const_value&               target) -> bool {
@@ -135,10 +144,9 @@ class const_eval {
     auto eval_assignment(ast::node_id                id,
                          const ast::assignment_expr& assign,
                          syntax::token_type_t        op_type) -> stdx::option<const_value>;
-    auto fold_binary_values(syntax::token_type_t op_type,
-                            const const_value&   lhs,
-                            const const_value&   rhs,
-                            ast::node_id         id) -> stdx::option<const_value>;
+    // `lhs ++ rhs`: concatenates two array/slice/string constants; result type from `id`.
+    auto fold_concat(const const_value& lhs, const const_value& rhs, ast::node_id id)
+        -> stdx::option<const_value>;
     auto eval_unary(ast::node_id id, const ast::unary_expr& unary) -> stdx::option<const_value>;
     auto eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::option<const_value>;
     auto eval_ident(ast::node_id id, const ast::identifier_expr& ident)
@@ -150,10 +158,14 @@ class const_eval {
 
     [[nodiscard]] auto target_enum_value(std::string_view enum_name, std::string_view member)
         -> const_value;
-    auto eval_constexpr_fn(ast::node_id                      call_id,
-                           const ast::function_expr&         fn_expr,
-                           const std::vector<const_value>&   args,
-                           stdx::option<const const_struct&> captures = stdx::none)
+
+    // `@typeInfo(T)`: builds the `builtin::TypeInfo` tagged union for `denoted` (already
+    // unwrapped past any `TYPE`/`deferred_call` wrapper) by switching on its `type_kind`.
+    [[nodiscard]] auto eval_type_info(sema::type& denoted) -> const_value;
+    auto               eval_constexpr_fn(ast::node_id                      call_id,
+                                         const ast::function_expr&         fn_expr,
+                                         const std::vector<const_value>&   args,
+                                         stdx::option<const const_struct&> captures = stdx::none)
         -> stdx::option<const_value>;
 
     auto lookup_bound_callable(std::string_view name) -> stdx::option<bound_callable>;
@@ -200,6 +212,7 @@ class const_eval {
     std::vector<usize>                  recursion_limit_stack_;
     sema::context&                      ctx_;
     gsl::not_null<mod::module*>         module_;
+    stdx::option<mod::module&>          vtable_root_;
     stdx::option<sema::type&>           enclosing_type_;
     stdx::option<const symbol_scoping&> symbol_scoping_;
     std::vector<call_frame>             call_stack_;

@@ -3,9 +3,11 @@
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <ankerl/unordered_dense.h>
+#include <gsl/pointers>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/type_traits.hh>
@@ -41,7 +43,9 @@ class emitter {
     explicit emitter(sema::context& ctx, mod::module& ast_mod) noexcept
         : ctx_{ctx}, ast_module_{ast_mod}, const_eval_{ctx_, ast_mod},
           gir_module_{ast_mod, ctx_.arena}, runtime_safety_{ctx.runtime_safety},
-          target_ptr_bits_{codegen::target_facts::resolve(ctx.target_opts.triple_str).ptr_bits} {}
+          target_ptr_bits_{codegen::target_facts::resolve(ctx.target_opts.triple_str).ptr_bits} {
+        const_eval_.set_vtable_root_module(ast_module_);
+    }
     ~emitter() = default;
     MAKE_PINNED(emitter);
 
@@ -54,6 +58,13 @@ class emitter {
         bool                is_alloca{false};
         stdx::option<value> const_val;
         bool                is_const{false};
+        bool                is_constexpr_var{false}; // Mutable, but never materializes storage
+    };
+
+    // Set by `emit_generic_instantiation` for one pack function's body
+    struct pack_context {
+        std::string_view name;
+        usize            element_count{0};
     };
 
     struct loop_context {
@@ -102,10 +113,7 @@ class emitter {
     // Emits the member functions of an `impl [I for] T { ... }` block under names scoped to the
     // impl's own symbol table, plus any interface default methods the impl inherits.
     auto emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -> void;
-    // Emits one inherited interface default-method body for a concrete impl target. The body's
-    // AST lives in `iface_mod`; `self` is retyped to the target, bare `self.method(...)` calls
-    // are redirected to the impl's own methods, and `body_type_diff[typing_key]` is replayed so
-    // associated types resolve to the impl's bindings.
+    // Emits one inherited interface default-method body for a concrete impl target
     auto emit_impl_default_method(std::string_view          gir_name,
                                   usize                     impl_scope_idx,
                                   mod::module&              iface_mod,
@@ -158,6 +166,8 @@ class emitter {
     auto emit_defers_for_scope(usize scope_idx, bool error_edge = false) -> void;
     auto emit_defers_up_to(usize target_depth, bool error_edge = false) -> void;
     auto emit_lvalue(ast::node_id id) -> value;
+    // The lvalue of an already-bound local, by name
+    auto lvalue_of_binding(std::string_view name) -> value;
 
     // Emits a `panic_handler(msg, file, line, column)` call followed by `unreachable`
     auto emit_panic_call(std::string_view message, ast::node_id site) -> void;
@@ -195,6 +205,18 @@ class emitter {
     auto ensure_builtin_runtime(std::string_view name) -> void;
     auto spill_to_temporary(value val, sema::type& type, bool is_const = false) -> value;
     auto lvalue_of_expr(ast::node_id id, sema::type& sema_type) -> value;
+    // `@field(v, name)`'s own field address (data-field form only)
+    auto try_emit_field_builtin_addr(const ast::call_expr& call) -> stdx::option<value>;
+    // `@field(T, name)`'s (owner, name) pair, if arg0 folds to a type; `stdx::none` for the
+    // ordinary data-field form, where arg0 is an instance rather than a type.
+    auto resolve_static_field_ref(const ast::call_expr& call)
+        -> stdx::option<std::pair<gsl::not_null<sema::type*>, std::string>>;
+    // `@field(T, name)`'s static `var` / aggregate `const` member address, if `T` denotes a type
+    // and the member has real storage; `stdx::none` for a scalar `const` (no address) or the
+    // ordinary data-field form (`v` is an instance, not a type).
+    auto try_emit_static_field_builtin_addr(const ast::call_expr& call) -> stdx::option<value>;
+    // `@field(T, name)`'s folded value when `name` is a scalar `const` member with no address.
+    auto try_fold_static_field_builtin(const ast::call_expr& call) -> stdx::option<const_value>;
 
     // An escape hatch for materializing constant evaluated aggregates since they cannot
     // otherwise be represented as GIR instructions
@@ -251,6 +273,9 @@ class emitter {
                     stdx::option<std::string_view> label       = stdx::none,
                     stdx::option<local_id>         res_slot    = stdx::none,
                     stdx::option<sema::type&>      result_type = stdx::none) -> value;
+    // Repeatedly folds the condition and replays the body via `emit_block` for as long as it
+    // holds `true`; no runtime loop, no `body_type_diff`
+    auto emit_constexpr_while(ast::node_id id, const ast::while_loop_expr& while_loop) -> value;
     auto emit_do_while(ast::node_id                   id,
                        const ast::do_while_loop_expr& do_while,
                        stdx::option<std::string_view> label       = stdx::none,
@@ -266,6 +291,9 @@ class emitter {
                   stdx::option<std::string_view> label       = stdx::none,
                   stdx::option<local_id>         res_slot    = stdx::none,
                   stdx::option<sema::type&>      result_type = stdx::none) -> value;
+    // Replays each iteration the resolver already unrolled: no runtime loop, `N` straight-line
+    // blocks under that iteration's `body_type_diff` overlay and `constexpr_frame` binding.
+    auto emit_constexpr_for(ast::node_id id, const ast::for_loop_expr& for_loop) -> value;
     auto emit_label(ast::node_id id, const ast::label_expr& label) -> value;
     auto emit_binary(ast::node_id id, const ast::binary_expr& binary) -> value;
     // Detects `union_val == .field` and emits a tag comparison instead of a union-vs-field-type EQ
@@ -277,6 +305,26 @@ class emitter {
     // Keeps a tagged union's runtime discriminant in sync with a direct `union.field = ...` write
     auto sync_tagged_union_tag(ast::node_id assign_lhs) -> void;
     auto emit_assignment(ast::node_id id, const ast::assignment_expr& assign) -> value;
+    // If `assign` targets a `constexpr var`, folds it and rebinds in place. `none` otherwise
+    auto try_emit_constexpr_var_assignment(ast::node_id id, const ast::assignment_expr& assign)
+        -> stdx::option<value>;
+    // One level of `p.field = ...` / `p.field += ...` into an aggregate `constexpr var`
+    auto try_emit_constexpr_var_field_assignment(ast::node_id                id,
+                                                 const ast::assignment_expr& assign,
+                                                 std::string_view            root_name,
+                                                 local_binding&              binding,
+                                                 const ast::dot_expr& dot) -> stdx::option<value>;
+    // Same shape as the field form, for `arr[k] = ...` into an array-typed `constexpr var`.
+    auto try_emit_constexpr_var_element_assignment(ast::node_id                id,
+                                                   const ast::assignment_expr& assign,
+                                                   std::string_view            root_name,
+                                                   local_binding&              binding,
+                                                   const ast::index_expr&      idx)
+        -> stdx::option<value>;
+    // Walks a chain of `dot_expr`/`index_expr` wrappers down to its root identifier and returns
+    // that identifier's binding if it names a `constexpr var`
+    auto constexpr_var_root_binding(ast::expr_handle expr) -> stdx::option<local_binding&>;
+    auto update_constexpr_var(std::string_view name, const_value val) -> void;
 
     // Bit-packed `packed struct`/`packed union` field access: shift/mask over the backing int.
     [[nodiscard]] auto emit_packed_field_read(value                        backing_addr,
@@ -448,6 +496,12 @@ class emitter {
     stdx::opt_size emitting_impl_default_scope_;
     // For emitting a method body written directly in an `impl` block
     stdx::opt_size emitting_impl_body_scope_;
+
+    stdx::option<pack_context> current_pack_;
+
+    // Set by `emit_generic_instantiation` to that instantiation's mangled name for the duration
+    // of body emission
+    std::string typing_scope_prefix_{};
 };
 
 } // namespace ghoti::gir

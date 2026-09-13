@@ -41,6 +41,8 @@ class type_translator {
 
   private:
     using type_cache_t = ankerl::unordered_dense::map<const sema::type*, llvm::Type*>;
+    using aggregate_identity_cache_t =
+        ankerl::unordered_dense::map<sema::types::key_t, llvm::Type*>;
 
   private:
     auto translate_slice(const sema::types::slice& s) -> llvm::Type*;
@@ -53,11 +55,13 @@ class type_translator {
         -> llvm::Type*;
 
   private:
-    llvm::LLVMContext& context_;
-    llvm::Module&      module_;
-    type_cache_t       struct_cache_;
-    type_cache_t       union_cache_;
-    type_cache_t       closure_cache_;
+    llvm::LLVMContext&         context_;
+    llvm::Module&              module_;
+    type_cache_t               struct_cache_;
+    type_cache_t               union_cache_;
+    type_cache_t               closure_cache_;
+    aggregate_identity_cache_t struct_identity_cache_;
+    aggregate_identity_cache_t union_identity_cache_;
 };
 
 } // namespace ghoti::codegen
