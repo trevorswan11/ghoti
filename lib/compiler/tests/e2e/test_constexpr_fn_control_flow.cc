@@ -22,7 +22,7 @@ TEST_CASE("a `constexpr fn`'s unfoldable early-return condition doesn't get skip
 }
 
 TEST_CASE("`eql`-shaped constexpr fn: early length mismatch and content mismatch both fold "
-         "correctly") {
+          "correctly") {
     CHECK(helpers::compile_and_run_tests(R"(
         pub constexpr eql := fn(T: type, a: []T, b: []T): bool {
             if (a.len != b.len) return false;

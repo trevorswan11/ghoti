@@ -174,18 +174,19 @@ class type_resolver {
         MAKE_MOVE_CONSTRUCTABLE_ONLY(structural_type_stack);
 
         auto push(type& type) -> void { stack_.emplace_back(&type); }
+        auto push(type* type) -> void { stack_.emplace_back(type); }
         auto pop() noexcept -> void {
             if (!stack_.empty()) { stack_.pop_back(); }
         }
 
         // Only returns none when there are no types in the stack
         [[nodiscard]] auto peek() const noexcept -> stdx::option<type&> {
-            if (stack_.empty()) { return stdx::none; }
+            if (stack_.empty() || !stack_.back()) { return stdx::none; }
             return *stack_.back();
         }
 
       private:
-        std::vector<gsl::not_null<type*>> stack_;
+        std::vector<type*> stack_;
     };
 
     using structural_guard      = structural_type_stack::guard;
@@ -271,20 +272,17 @@ class type_resolver {
     [[nodiscard]] auto synthesize_const_literal(const gir::const_value& val)
         -> stdx::option<ast::expr_handle>;
     // Builds a `types::enum_t` directly from a folded `EnumInfo` descriptor
-    [[nodiscard]] auto
-    synthesize_enum(usize disc, source_location loc, const gir::const_struct& desc)
+    [[nodiscard]] auto synthesize_enum(source_location loc, const gir::const_struct& desc)
         -> stdx::result<gsl::not_null<type*>, diagnostic>;
     // Builds a `types::struct_t` directly from a folded `StructInfo` descriptor plus the
     // `defaults...` pack's folded values
-    [[nodiscard]] auto synthesize_struct(usize                             disc,
-                                         source_location                   loc,
+    [[nodiscard]] auto synthesize_struct(source_location                   loc,
                                          const gir::const_struct&          desc,
                                          gsl::span<const gir::const_value> defaults)
         -> stdx::result<gsl::not_null<type*>, diagnostic>;
     // Builds a `types::union_t` directly from a folded `UnionInfo` descriptor plus the
     // `defaults...` pack's folded values
-    [[nodiscard]] auto synthesize_union(usize                             disc,
-                                        source_location                   loc,
+    [[nodiscard]] auto synthesize_union(source_location                   loc,
                                         const gir::const_struct&          desc,
                                         gsl::span<const gir::const_value> defaults)
         -> stdx::result<gsl::not_null<type*>, diagnostic>;
