@@ -245,6 +245,10 @@ class type_resolver {
     // `none` on a `PACK_EXPANSION_MISPLACED` diagnostic (already recorded on `ctx_.diags`).
     [[nodiscard]] auto expand_pack_call_args(const ast::call_expr& call)
         -> stdx::option<expanded_call_args>;
+    // Folds `name_arg` to a compile-time string, with no lookup. Shared by any builtin that reads
+    // a field/member name from a call argument (`@hasField`/`@fieldType`/`@field`).
+    [[nodiscard]] auto resolve_field_name_string(const ast::call_expr::argument& name_arg)
+        -> stdx::option<std::string>;
     // Folds `name_arg` to a compile-time string and looks it up as a data field of `denoted`.
     // Shared by `@hasField`/`@fieldType`/`@field`.
     [[nodiscard]] auto resolve_field_by_name(const ast::call_expr::argument& name_arg,

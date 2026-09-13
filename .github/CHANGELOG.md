@@ -282,7 +282,11 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Rename `@this` builtin to `@This` to match type constructor and type name conventions
 - Resolve an issue that prevented dyn globals from being constructed
 - `fn(...) callconv(.x): T`: a function type annotation may specify its own calling convention, matching what a function declaration's signature already accepted
-- A struct/union member value-kind identifier no longer shadows a same-named outer type at a type-position reference that's already resolved (reverse declaration order is a known remaining gap)
+    - Fixed a bug where a mismatched calling convention (e.g. assigning a `.sysv` function to a `.c`-typed variable) went undetected
+- A struct/union member value-kind identifier no longer shadows a same-named outer type at a type-position reference, regardless of declaration order
+- `fn(T: type, x: T, ...)`: a value parameter typed via an earlier `T: type` parameter is now checked and coerced against T's actual bound value, instead of just taking on its own argument's type independently
+    - Lets a single-arg builtin like `@intCast(x)` in that position infer its target type from T
+    - A genuinely mismatched argument is now a clean compile error instead of an LLVM signature-mismatch crash
 - Several `TypeInfo`-related crashes: mismatched integer widths for `StructInfo.backing_bits`, materializing a slice-shaped compile-time value, and folding `isize`/`usize` type info
 - `@as`'s narrowing rejection is now enforced even when its argument folds at compile time; a bare integer literal (`@as(u8, -1)`) still wraps to its bit pattern
 - `match constexpr` capture is now foldable in nested constexpr contexts
@@ -297,4 +301,6 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `@Int`, `@Float`, `@Pointer`, `@Reference`, `@Slice`, `@Array`, `@Fn`, `@Struct`, `@Union`, `@Enum`: construct a new type from a compile-time descriptor, including synthesizing fresh aggregate types with real fields
 - `@hasField`, `@fieldType`: compile-time field introspection
 - `@field(value, name)`: reads or writes an instance's own struct/union field by a compile-time-known name (through pointers and references, lvalue-capable)
-    - Static/const/method access via a `type` first argument is a clean, explicit not-yet-implemented error, not a silent miscompile
+    - `@field(T, name)`: reads or writes a static `var` or `const` member of a type by a compile-time-known name, the same way `T.member` already does
+    - Method and bound access are explicitly rejected
+- `FieldInfo`/`UnionFieldInfo`'s `type_` field is now the raw identifier `@"type"`, now that a same-named field can no longer shadow the outer `type` builtin

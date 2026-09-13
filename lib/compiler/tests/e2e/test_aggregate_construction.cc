@@ -45,8 +45,8 @@ TEST_CASE("`@Struct` constructs a struct type from a `StructInfo` descriptor") {
         pub const main := fn(): i32 {
             const T := @Struct(builtin.StructInfo{
                 .fields = [2]builtin.FieldInfo{
-                    .{ .name = "x", .type_ = i32, .has_default = false },
-                    .{ .name = "y", .type_ = i32, .has_default = false },
+                    .{ .name = "x", .@"type" = i32, .has_default = false },
+                    .{ .name = "y", .@"type" = i32, .has_default = false },
                 },
                 .is_extern = false,
                 .is_packed = false,
@@ -63,8 +63,8 @@ TEST_CASE("`@Struct` applies `defaults...` to fields with `has_default = true`")
         pub const main := fn(): i32 {
             const T := @Struct(builtin.StructInfo{
                 .fields = [2]builtin.FieldInfo{
-                    .{ .name = "x", .type_ = i32, .has_default = false },
-                    .{ .name = "y", .type_ = i32, .has_default = true },
+                    .{ .name = "x", .@"type" = i32, .has_default = false },
+                    .{ .name = "y", .@"type" = i32, .has_default = true },
                 },
                 .is_extern = false,
                 .is_packed = false,
@@ -81,7 +81,7 @@ TEST_CASE("`@Struct` diagnoses a missing `defaults...` argument instead of crash
         pub const main := fn(): i32 {
             const T := @Struct(builtin.StructInfo{
                 .fields = [1]builtin.FieldInfo{
-                    .{ .name = "x", .type_ = i32, .has_default = true },
+                    .{ .name = "x", .@"type" = i32, .has_default = true },
                 },
                 .is_extern = false,
                 .is_packed = false,
@@ -99,8 +99,8 @@ TEST_CASE("`@Union` constructs an untagged union type from a `UnionInfo` descrip
         pub const main := fn(): i32 {
             const T := @Union(builtin.UnionInfo{
                 .fields = [2]builtin.UnionFieldInfo{
-                    .{ .name = "i", .type_ = i32 },
-                    .{ .name = "f", .type_ = f32 },
+                    .{ .name = "i", .@"type" = i32 },
+                    .{ .name = "f", .@"type" = f32 },
                 },
                 .is_extern = false,
                 .is_packed = false,
@@ -117,8 +117,8 @@ TEST_CASE("`@Union` constructs a tagged union type from a `UnionInfo` descriptor
         pub const main := fn(): i32 {
             const T := @Union(builtin.UnionInfo{
                 .fields = [2]builtin.UnionFieldInfo{
-                    .{ .name = "i", .type_ = i32 },
-                    .{ .name = "f", .type_ = f32 },
+                    .{ .name = "i", .@"type" = i32 },
+                    .{ .name = "f", .@"type" = f32 },
                 },
                 .is_extern = false,
                 .is_packed = false,

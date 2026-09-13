@@ -2799,6 +2799,43 @@ auto emitter::emit_asm(ast::node_id id, const ast::asm_expr& node) -> value {
     return value{void_val{}, void_type};
 }
 
+auto emitter::resolve_static_field_ref(const ast::call_expr& call)
+    -> stdx::option<std::pair<gsl::not_null<sema::type*>, std::string>> {
+    const auto obj_h{call.arguments[0].as_opt<ast::expr_handle>()};
+    const auto name_h{call.arguments[1].as_opt<ast::expr_handle>()};
+    if (!obj_h || !name_h) { return stdx::none; }
+
+    const auto owner_val{const_eval_.try_eval(*obj_h)};
+    const auto owner_opt{owner_val ? owner_val->as_opt<stdx::option<sema::type&>>() : stdx::none};
+    if (!owner_opt || !*owner_opt) { return stdx::none; }
+
+    const auto folded_name{const_eval_.try_eval(*name_h)};
+    if (!folded_name) { return stdx::none; }
+    const auto name{folded_name->as_opt<std::string>()};
+    if (!name) { return stdx::none; }
+
+    return std::pair{gsl::not_null{&**owner_opt}, std::string{*name}};
+}
+
+auto emitter::try_emit_static_field_builtin_addr(const ast::call_expr& call) -> stdx::option<value> {
+    const auto ref{resolve_static_field_ref(call)};
+    if (!ref) { return stdx::none; }
+    return try_static_member_ref(*ref->first, ref->second);
+}
+
+auto emitter::try_fold_static_field_builtin(const ast::call_expr& call)
+    -> stdx::option<const_value> {
+    const auto ref{resolve_static_field_ref(call)};
+    if (!ref || !ref->first->has_symbol_table_idx()) { return stdx::none; }
+    const auto sym{ctx_.registry.get(ref->first->get_symbol_table_idx()).get_opt(ref->second)};
+    if (!sym) { return stdx::none; }
+    const auto node{sym->get_data().as_opt<sema::symbols::node_t>()};
+    if (!node) { return stdx::none; }
+    const auto decl{active_ast().get_as_opt<ast::decl_stmt>(*node)};
+    if (!decl || !decl->value) { return stdx::none; }
+    return const_eval_.try_eval(*decl->value);
+}
+
 auto emitter::try_emit_field_builtin_addr(const ast::call_expr& call) -> stdx::option<value> {
     // The resolver already validated the field exists on the (non-type) object's own type;
     // data-field form only (see the resolver's own comment) - mirrors emit_dot's ordinary
@@ -2808,6 +2845,9 @@ auto emitter::try_emit_field_builtin_addr(const ast::call_expr& call) -> stdx::o
     const auto obj_h{call.arguments[0].as_opt<ast::expr_handle>()};
     const auto name_h{call.arguments[1].as_opt<ast::expr_handle>()};
     if (!obj_h || !name_h) { return stdx::none; }
+
+    // `T` denotes a type: this is the static-member form
+    if (resolve_static_field_ref(call)) { return try_emit_static_field_builtin_addr(call); }
 
     auto  obj_type{active_mod().get_sema_type_opt(*obj_h)};
     auto* denoted{obj_type.get()};
@@ -3042,6 +3082,10 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         case syntax::token_type_t::BUILTIN_FIELD: {
             if (const auto addr{try_emit_field_builtin_addr(call)}) {
                 return value{builder_.emit_load(*addr, ret_type), ret_type};
+            }
+            // A scalar `const` static member has no address; fold it directly instead.
+            if (const auto folded{try_fold_static_field_builtin(call)}) {
+                return materialize_const(*folded);
             }
             break;
         }

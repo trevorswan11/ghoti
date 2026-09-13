@@ -171,7 +171,7 @@ pub const ArrayInfo := struct {
 
 pub const FieldInfo := struct {
     pub name: []u8,
-    pub type_: type,
+    pub @"type": type,
     pub has_default: bool,
 };
 
@@ -184,7 +184,7 @@ pub const StructInfo := struct {
 
 pub const UnionFieldInfo := struct {
     pub name: []u8,
-    pub type_: type,
+    pub @"type": type,
 };
 
 pub const UnionInfo := struct {

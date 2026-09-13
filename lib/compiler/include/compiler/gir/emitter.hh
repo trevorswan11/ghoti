@@ -3,9 +3,11 @@
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <ankerl/unordered_dense.h>
+#include <gsl/pointers>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/type_traits.hh>
@@ -205,6 +207,16 @@ class emitter {
     auto lvalue_of_expr(ast::node_id id, sema::type& sema_type) -> value;
     // `@field(v, name)`'s own field address (data-field form only)
     auto try_emit_field_builtin_addr(const ast::call_expr& call) -> stdx::option<value>;
+    // `@field(T, name)`'s (owner, name) pair, if arg0 folds to a type; `stdx::none` for the
+    // ordinary data-field form, where arg0 is an instance rather than a type.
+    auto resolve_static_field_ref(const ast::call_expr& call)
+        -> stdx::option<std::pair<gsl::not_null<sema::type*>, std::string>>;
+    // `@field(T, name)`'s static `var` / aggregate `const` member address, if `T` denotes a type
+    // and the member has real storage; `stdx::none` for a scalar `const` (no address) or the
+    // ordinary data-field form (`v` is an instance, not a type).
+    auto try_emit_static_field_builtin_addr(const ast::call_expr& call) -> stdx::option<value>;
+    // `@field(T, name)`'s folded value when `name` is a scalar `const` member with no address.
+    auto try_fold_static_field_builtin(const ast::call_expr& call) -> stdx::option<const_value>;
 
     // An escape hatch for materializing constant evaluated aggregates since they cannot
     // otherwise be represented as GIR instructions

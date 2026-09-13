@@ -957,11 +957,47 @@ template <ast::IndexableID ID>
             gir::const_eval type_check{ctx_, resolving_};
             if (const auto folded{type_check.try_eval(*arg0_h)};
                 folded && folded->is<stdx::option<type&>>()) {
-                return make_sema_err(
-                    "@field: static/const/method access (a `type` first argument) is not yet "
-                    "implemented - only an instance's own data field is supported",
-                    error::FIELD_NOT_FOUND,
-                    get_call_arg_location(call.arguments[0]));
+                const auto owner_opt{folded->as_opt<stdx::option<type&>>()};
+                if (!owner_opt || !*owner_opt) {
+                    return make_sema_err("@field: type argument does not denote a concrete type",
+                                         error::FIELD_NOT_FOUND,
+                                         get_call_arg_location(call.arguments[0]));
+                }
+                auto& owner{**owner_opt};
+                const auto name{resolve_field_name_string(call.arguments[1])};
+                if (!name) {
+                    return make_sema_err(
+                        "@field: the name must be a compile-time-known string",
+                        error::FIELD_NOT_FOUND,
+                        get_call_arg_location(call.arguments[1]));
+                }
+
+                const auto not_found = [&] {
+                    return make_sema_err(
+                        fmt::format(
+                            "@field: '{}' has no static data member named '{}' (methods and "
+                            "bound access are not supported)",
+                            ctx_.type_display_name(owner),
+                            *name),
+                        error::FIELD_NOT_FOUND,
+                        get_call_arg_location(call.arguments[1]));
+                };
+                if (!owner.has_symbol_table_idx()) { return not_found(); }
+                const auto sym{ctx_.registry.get(owner.get_symbol_table_idx()).get_opt(*name)};
+                if (!sym || !sym->has_kind() || sym->get_kind() != symbol_kind::VALUE) {
+                    return not_found();
+                }
+                const auto member_node{sym->get_data().as_opt<symbols::node_t>()};
+                if (!member_node) { return not_found(); }
+                const auto member_decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*member_node)};
+                const bool is_fn_member{member_decl && member_decl->value &&
+                                        resolving_.ast[*member_decl->value]
+                                            .is<ast::function_expr>()};
+                if (is_fn_member || !resolving_.has_sema_type(*member_node)) {
+                    return not_found();
+                }
+                return_type = &resolving_.get_sema_type(*member_node);
+                break;
             }
         }
         auto* denoted{&arg_type};
@@ -1856,13 +1892,21 @@ auto type_resolver::expand_pack_call_args(const ast::call_expr& call)
     return out;
 }
 
-auto type_resolver::resolve_field_by_name(const ast::call_expr::argument& name_arg, type& denoted)
-    -> stdx::option<field_lookup_result> {
+auto type_resolver::resolve_field_name_string(const ast::call_expr::argument& name_arg)
+    -> stdx::option<std::string> {
     const auto expr_h{name_arg.as_opt<ast::expr_handle>()};
     if (!expr_h) { return stdx::none; }
     gir::const_eval evaluator{ctx_, resolving_};
     const auto      folded{evaluator.try_eval(*expr_h)};
-    const auto      name{folded ? folded->as_opt<std::string>() : stdx::none};
+    if (!folded) { return stdx::none; }
+    const auto name{folded->as_opt<std::string>()};
+    if (!name) { return stdx::none; }
+    return std::string{*name};
+}
+
+auto type_resolver::resolve_field_by_name(const ast::call_expr::argument& name_arg, type& denoted)
+    -> stdx::option<field_lookup_result> {
+    const auto name{resolve_field_name_string(name_arg)};
     if (!name) { return stdx::none; }
     return find_aggregate_field(denoted, *name);
 }
@@ -2044,11 +2088,11 @@ auto type_resolver::synthesize_struct(usize                             disc,
     for (usize i{0}; i < n; ++i) {
         const auto fs{fields_arr->elements[i].as_opt<gir::const_struct>()};
         const auto name_v{fs ? read_desc_field<std::string>(*fs, "name") : stdx::none};
-        const auto type_v{fs ? read_desc_field<sema::type&>(*fs, "type_") : stdx::none};
+        const auto type_v{fs ? read_desc_field<sema::type&>(*fs, "type") : stdx::none};
         const auto has_default_v{fs ? read_desc_field<bool>(*fs, "has_default") : stdx::none};
         if (!name_v || !type_v || !has_default_v) {
             return field_err(
-                "every element of 'fields' needs a compile-time 'name', 'type_', 'has_default'");
+                "every element of 'fields' needs a compile-time 'name', 'type', 'has_default'");
         }
         field_types[i] = type_v.get();
 
@@ -2165,9 +2209,9 @@ auto type_resolver::synthesize_union(usize                             disc,
     for (usize i{0}; i < n; ++i) {
         const auto fs{fields_arr->elements[i].as_opt<gir::const_struct>()};
         const auto name_v{fs ? read_desc_field<std::string>(*fs, "name") : stdx::none};
-        const auto type_v{fs ? read_desc_field<sema::type&>(*fs, "type_") : stdx::none};
+        const auto type_v{fs ? read_desc_field<sema::type&>(*fs, "type") : stdx::none};
         if (!name_v || !type_v) {
-            return field_err("every element of 'fields' needs a compile-time 'name' and 'type_'");
+            return field_err("every element of 'fields' needs a compile-time 'name' and 'type'");
         }
         field_types[i] = type_v.get();
 
@@ -2649,6 +2693,25 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
             auto       concrete_arg_types{ctx_.pool.get_many_unsafe(effective_arity)};
             bool       any_arg_poison{false};
             const auto fixed_params{params.subspan(param_offset)};
+            const auto& fn_params{fn_info_opt->fn_expr->parameters};
+            const auto& fn_ast{fn_info_opt->module->ast};
+
+            const auto find_bound_type_param = [&](usize idx) -> stdx::option<usize> {
+                if (idx >= fn_params.size() || !fn_params[idx].explicit_type.is_valid()) {
+                    return stdx::none;
+                }
+                const auto ident{
+                    fn_ast.get_as_opt<ast::identifier_expr>(fn_params[idx].explicit_type)};
+                if (!ident) { return stdx::none; }
+                for (usize k{0}; k < idx; ++k) {
+                    if (!fn_params[k].name.is<ast::identifier_expr>()) { continue; }
+                    if (fn_ast.get_as<ast::identifier_expr>(fn_params[k].name).name == ident->name) {
+                        return k;
+                    }
+                }
+                return stdx::none;
+            };
+
             for (usize i{0}; i < effective_arity; ++i) {
                 // Beyond the fixed parameters, every trailing argument is a pack element and
                 // types against the pack's own (generic) declared type.
@@ -2659,6 +2722,11 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 if (expanded.pack_k[i]) {
                     concrete_arg_types[i] = current_pack_->element_types[*expanded.pack_k[i]];
                     continue;
+                }
+
+                const auto bound_idx{find_bound_type_param(i)};
+                if (bound_idx && concrete_arg_types[*bound_idx]) {
+                    param_type = concrete_arg_types[*bound_idx];
                 }
 
                 const auto&                    arg{call.arguments[expanded.source_index[i]]};
@@ -2699,12 +2767,29 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                         return &constexpr_numeric_view(*arg_type);
                     });
                 // A poisoned argument yields `none`; record it and move on
-                if (result_arg_type) {
-                    concrete_arg_types[i] = result_arg_type.take();
-                } else {
+                if (!result_arg_type) {
                     concrete_arg_types[i] = nullptr;
                     any_arg_poison        = true;
+                    continue;
                 }
+                auto* resolved_type{result_arg_type.take()};
+                if (bound_idx && concrete_arg_types[*bound_idx] &&
+                    !sema::is_assignable(*resolved_type, *param_type)) {
+                    return last_type_.emplace(ctx_.poison_node(
+                        resolving_,
+                        id,
+                        fmt::format(
+                            "Argument {} of type '{}' is not assignable to parameter "
+                            "type '{}' (bound to '{}')",
+                            i,
+                            ctx_.type_display_name(*resolved_type),
+                            ctx_.type_display_name(*param_type),
+                            fn_ast.get_as<ast::identifier_expr>(fn_params[*bound_idx].name).name),
+                        error::TYPE_MISMATCH,
+                        get_call_arg_location(call.arguments[expanded.source_index[i]])));
+                }
+                concrete_arg_types[i] =
+                    bound_idx && concrete_arg_types[*bound_idx] ? param_type : resolved_type;
             }
             if (any_arg_poison) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
 
@@ -9396,12 +9481,14 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::identifier_expr& 
     }
 
     auto symbol_opt{ctx_.registry.lookup(table_stack_, ident.name)};
-    if (symbol_opt && symbol_opt->get_status() != sema::symbol_status::RESOLVING &&
+    bool overrode_shadow{false};
+    if (symbol_opt &&
         (!symbol_opt->has_kind() || symbol_opt->get_kind() != sema::symbol_kind::TYPE)) {
         for (const auto idx : table_stack_ | std::views::reverse) {
             if (const auto sym{ctx_.registry.get(idx).get_opt(ident.name)};
                 sym && sym->has_kind() && sym->get_kind() == sema::symbol_kind::TYPE) {
-                symbol_opt = *sym;
+                symbol_opt      = *sym;
+                overrode_shadow = true;
                 break;
             }
         }
@@ -9416,15 +9503,21 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::identifier_expr& 
     }
     auto& sym{*symbol_opt};
 
-    const auto forwarded_type{forward_type(resolving_, id.get_modifier(), sym)};
-    const auto mods{id.get_modifier()};
-    // A by-value reference to an aggregate whose own resolution has not started yet
-    if (forwarded_type && !forwarded_type->is_resolved() &&
-        sym.get_status() == symbol_status::UNRESOLVED &&
-        (mods.is_value() || (!mods.is_ptr() && !mods.is_ref()))) {
-        resolve_ident(id, ident);
+    // `resolve_ident` re-looks-up the name from scratch, which would just rediscover the
+    // shadowing symbol we already routed around above; resolve the override directly instead.
+    if (overrode_shadow) {
+        resolve_symbol(id, sym);
     } else {
-        forwarded_type ? last_type_.emplace(*forwarded_type) : resolve_ident(id, ident);
+        const auto forwarded_type{forward_type(resolving_, id.get_modifier(), sym)};
+        const auto mods{id.get_modifier()};
+        // A by-value reference to an aggregate whose own resolution has not started yet
+        if (forwarded_type && !forwarded_type->is_resolved() &&
+            sym.get_status() == symbol_status::UNRESOLVED &&
+            (mods.is_value() || (!mods.is_ptr() && !mods.is_ref()))) {
+            resolve_ident(id, ident);
+        } else {
+            forwarded_type ? last_type_.emplace(*forwarded_type) : resolve_ident(id, ident);
+        }
     }
 
     auto& resolved{apply_explicit_modifiers(id, *last_type_.take())};

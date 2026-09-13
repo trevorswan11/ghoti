@@ -69,6 +69,30 @@ TEST_CASE("a same-named sibling member doesn't shadow an outer type once it's it
     )") == 1);
 }
 
+TEST_CASE("a same-named sibling member doesn't shadow an outer type regardless of declaration "
+          "order") {
+    CHECK(helpers::compile_and_run(R"(
+        const Before := union {
+            other: void,
+            @"void": i32,
+        };
+        pub const main := fn(): i32 {
+            if (@bitSizeOf(@typeOf(Before{ .other = {} }.other)) != @bitSizeOf(void)) { return 1; }
+            return 0;
+        };
+    )") == 0);
+    CHECK(helpers::compile_and_run(R"(
+        const After := union {
+            @"void": i32,
+            other: void,
+        };
+        pub const main := fn(): i32 {
+            if (@bitSizeOf(@typeOf(After{ .other = {} }.other)) != @bitSizeOf(void)) { return 1; }
+            return 0;
+        };
+    )") == 0);
+}
+
 TEST_CASE("`@typeInfo` on integer and float types") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {

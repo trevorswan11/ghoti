@@ -70,11 +70,49 @@ TEST_CASE("`@field` rejects an unknown field name") {
     )");
 }
 
-TEST_CASE("`@field` on a type (not an instance) is a clean, explicit not-yet-implemented error") {
+TEST_CASE("`@field` on a type reads a static `const` member by a compile-time name") {
+    CHECK(helpers::compile_and_run(R"(
+        const Point := struct {
+            x: i32,
+            const ORIGIN_X: i32 = 7;
+        };
+        pub const main := fn(): i32 {
+            return @field(Point, "ORIGIN_X");
+        };
+    )") == 7);
+}
+
+TEST_CASE("`@field` on a type reads and writes a static `var` member by a compile-time name") {
+    CHECK(helpers::compile_and_run(R"(
+        const Point := struct {
+            x: i32,
+            var counter: i32 = 100;
+        };
+        pub const main := fn(): i32 {
+            @field(Point, "counter") = 200;
+            return @field(Point, "counter") + Point.counter;
+        };
+    )") == 400);
+}
+
+TEST_CASE("`@field` on a type rejects an instance-only data field") {
     helpers::expect_compile_error(R"(
         const Point := struct { x: i32, y: i32 };
         pub const main := fn(): i32 {
             return @field(Point, "x");
+        };
+    )");
+}
+
+TEST_CASE("`@field` on a type rejects a method (bound access is not supported)") {
+    helpers::expect_compile_error(R"(
+        const Point := struct {
+            x: i32,
+            const make := fn(): i32 { return 5; };
+        };
+        pub const main := fn(): i32 {
+            const f := @field(Point, "make");
+            return 0;
         };
     )");
 }

@@ -1330,7 +1330,7 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
             const auto&  fname{st.enclosing.ast.get_as<ast::identifier_expr>(f.name).name};
             const_struct fs;
             fs.fields.emplace("name", const_value::make_string(ctx_, std::string{fname}));
-            fs.fields.emplace("type_", type_value(*st.fields[idx]));
+            fs.fields.emplace("type", type_value(*st.fields[idx]));
             fs.fields.emplace("has_default", const_value{f.default_value.has_value(), bool_type});
             fields.elements.emplace_back(const_value{std::move(fs), field_type});
         }
@@ -1359,7 +1359,7 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
                     std::string{
                         ut.enclosing.ast.get_as<ast::identifier_expr>(ut.ast_fields[idx].name)
                             .name}));
-            fs.fields.emplace("type_", type_value(*ut.fields[idx]));
+            fs.fields.emplace("type", type_value(*ut.fields[idx]));
             fields.elements.emplace_back(const_value{std::move(fs), field_type});
         }
         auto& field_slice_type{ctx_.get_slice(sema::types::mut::CONSTANT, false, field_type)};
