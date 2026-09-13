@@ -1201,7 +1201,7 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
         if (ud->is_untagged) {
             auto* at{llvm::dyn_cast<llvm::ArrayType>(ty)};
             if (!at) { return llvm::Constant::getNullValue(ty); }
-            const u64   max_size{at->getNumElements()};
+            const auto  max_size{static_cast<usize>(at->getNumElements())};
             std::string bytes(max_size, '\0');
             if (!un->payload.empty()) {
                 if (const auto iv{un->payload.front().as_int_opt()}) {
@@ -1225,7 +1225,7 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
                 st, {tag_c, llvm::Constant::getNullValue(st->getElementType(1))});
         }
 
-        const u64   max_size{payload_arr_ty->getNumElements()};
+        const auto  max_size{static_cast<usize>(payload_arr_ty->getNumElements())};
         std::string bytes(max_size, '\0');
         if (!un->payload.empty()) {
             const auto& p{un->payload.front()};

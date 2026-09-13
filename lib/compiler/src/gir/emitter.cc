@@ -6437,11 +6437,13 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
     }
 
     // Every field the literal left out is guaranteed to have a default
-    for (u64 idx{0}; idx < st->ast_fields.size(); ++idx) {
+    for (usize idx{0}; idx < st->ast_fields.size(); ++idx) {
         if (provided.contains(idx) || !st->ast_fields[idx].default_value) { continue; }
         auto&      field_type{st->type_at(idx)};
-        const auto field_ptr{builder_.emit_get_element_ptr(
-            value{struct_slot, *sema_type}, {value{idx, usize_type}}, field_type)};
+        const auto field_ptr{
+            builder_.emit_get_element_ptr(value{struct_slot, *sema_type},
+                                          {value{static_cast<u64>(idx), usize_type}},
+                                          field_type)};
         const auto val{
             emit_field_default(*st->ast_fields[idx].default_value, st->enclosing, field_type)};
         builder_.emit_store(value{field_ptr, field_type}, val).is_initializer = true;
