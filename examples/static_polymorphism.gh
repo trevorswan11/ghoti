@@ -1,0 +1,18 @@
+const Doubler := interface { pub const apply := fn(&self, n: i32): i32; };
+
+const Twice := struct { k: i32 };
+
+impl Doubler for Twice {
+    pub const apply := fn(&self, n: i32): i32 {
+        return n * self.k;
+    };
+}
+
+const run := fn(d: &impl Doubler, n: i32): i32 {
+    return d.apply(n);
+};
+
+pub const main := fn(): i32 {
+    var t := Twice{ .k = 3 };
+    return run(t, 14);
+};
