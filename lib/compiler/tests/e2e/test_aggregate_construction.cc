@@ -113,7 +113,7 @@ TEST_CASE("`@Union` constructs an untagged union type from a `UnionInfo` descrip
 }
 
 TEST_CASE("`@Struct` widens an unsuffixed float `defaults...` value to a narrower field's own "
-         "type instead of defaulting it to `f64`") {
+          "type instead of defaulting it to `f64`") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             const T := @Struct(builtin.StructInfo{
@@ -147,6 +147,38 @@ TEST_CASE("`@Struct` diagnoses a field descriptor with a typo'd key instead of c
         };
     )",
                           sema::error::MISSING_FIELD));
+}
+
+TEST_CASE("`@Struct`/`@Union`/`@Enum` infer an implicit `.{...}` descriptor's type") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            const S := @Struct(.{
+                .fields = [1]builtin.StructFieldInfo{
+                    .{ .name = "x", .@"type" = i32, .has_default = false },
+                },
+                .is_extern = false,
+                .is_packed = false,
+                .backing_bits = 0,
+            });
+            const U := @Union(.{
+                .fields = [1]builtin.UnionFieldInfo{
+                    .{ .name = "x", .@"type" = i32 },
+                },
+                .is_extern = false,
+                .is_packed = false,
+                .tagged = false,
+            });
+            const E := @Enum(.{
+                .tag_type = i32,
+                .fields = [1]builtin.EnumField{ .{ .name = "a", .value = 5 } },
+                .exhaustive = true,
+            });
+            var s: S = .{ .x = 1 };
+            var u: U = .{ .x = 2 };
+            var e: E = E.a;
+            return s.x + u.x + @as(i32, e);
+        };
+    )") == 8);
 }
 
 TEST_CASE("`@Union` constructs a tagged union type from a `UnionInfo` descriptor") {

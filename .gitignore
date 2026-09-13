@@ -42,6 +42,8 @@
 *.idb
 *.pdb
 TMP_*
+*.ll
+*.gir
 
 # Kernel Module Compile Results
 *.cmd

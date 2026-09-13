@@ -31,7 +31,7 @@ TEST_CASE("`builtin.CallConv` matches `ast::calling_convention`'s spellings") {
 TEST_CASE("`builtin.IntInfo` carries a bit width and signedness") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            const info: builtin.IntInfo = .{ .bits = 32, .signed = true };
+            const info: builtin.IntInfo = .{ .bits = 32, .signed = true, .is_constexpr = false };
             return @intCast(i32, info.bits);
         };
     )") == 32);
@@ -40,7 +40,7 @@ TEST_CASE("`builtin.IntInfo` carries a bit width and signedness") {
 TEST_CASE("`builtin.FloatInfo` carries a bit width") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            const info: builtin.FloatInfo = .{ .bits = 64 };
+            const info: builtin.FloatInfo = .{ .bits = 64, .is_constexpr = false };
             return @intCast(i32, info.bits);
         };
     )") == 64);
@@ -118,6 +118,42 @@ TEST_CASE("`@typeInfo` on integer and float types") {
             };
         };
     )") == 64);
+}
+
+TEST_CASE("`@typeInfo`'s `IntInfo`/`FloatInfo` mark `comptime_int`/`comptime_float` via "
+          "`is_constexpr`") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            return match constexpr (@typeInfo(@typeOf(5))) {
+                .int => |i| @intFromBool(i.is_constexpr) * 100 + @intCast(i32, i.bits),
+                _ => -1,
+            };
+        };
+    )") == 132);
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            return match constexpr (@typeInfo(i32)) {
+                .int => |i| @intFromBool(i.is_constexpr),
+                _ => -1,
+            };
+        };
+    )") == 0);
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            return match constexpr (@typeInfo(@typeOf(5.0))) {
+                .float => |f| @intFromBool(f.is_constexpr) * 100 + @intCast(i32, f.bits),
+                _ => -1,
+            };
+        };
+    )") == 164);
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            return match constexpr (@typeInfo(f32)) {
+                .float => |f| @intFromBool(f.is_constexpr),
+                _ => -1,
+            };
+        };
+    )") == 0);
 }
 
 TEST_CASE("`@typeInfo` on `isize`/`usize` tags as `.int`, not `.internal`") {

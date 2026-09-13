@@ -1144,6 +1144,11 @@ template <ast::IndexableID ID>
     case token_type_t::BUILTIN_ENUM:
     case token_type_t::BUILTIN_STRUCT:
     case token_type_t::BUILTIN_UNION:  {
+        if (const auto existing{resolving_.get_sema_type_opt(id)}) {
+            return_type = &*existing;
+            break;
+        }
+
         const auto builtin_name{*syntax::get_builtin_opt(builtin_id)};
         const auto desc{resolve_type_descriptor(call.arguments[0])};
         if (!desc) {
@@ -1172,13 +1177,11 @@ template <ast::IndexableID ID>
             }
         }
 
-        const auto disc{id.get_index()};
         const auto loc{resolving_.ast.location_of(id)};
-        auto       synthesized = builtin_id == token_type_t::BUILTIN_ENUM
-                                     ? synthesize_enum(disc, loc, *desc)
-                                 : builtin_id == token_type_t::BUILTIN_STRUCT
-                                     ? synthesize_struct(disc, loc, *desc, defaults)
-                                     : synthesize_union(disc, loc, *desc, defaults);
+        auto synthesized = builtin_id == token_type_t::BUILTIN_ENUM ? synthesize_enum(loc, *desc)
+                           : builtin_id == token_type_t::BUILTIN_STRUCT
+                               ? synthesize_struct(loc, *desc, defaults)
+                               : synthesize_union(loc, *desc, defaults);
         if (!synthesized) { return stdx::err<diagnostic>{std::move(synthesized).error()}; }
 
         auto meta{ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, **synthesized}]};
@@ -1995,7 +1998,7 @@ auto type_resolver::synthesize_const_literal(const gir::const_value& val)
     return stdx::none;
 }
 
-auto type_resolver::synthesize_enum(usize disc, source_location loc, const gir::const_struct& desc)
+auto type_resolver::synthesize_enum(source_location loc, const gir::const_struct& desc)
     -> stdx::result<gsl::not_null<type*>, diagnostic> {
     const auto field_err{
         [&](std::string_view what) -> stdx::result<gsl::not_null<type*>, diagnostic> {
@@ -2048,9 +2051,7 @@ auto type_resolver::synthesize_enum(usize disc, source_location loc, const gir::
         resolving_.set_sema_type(name_ident, *tag_v);
     }
 
-    types::key_t key{type_kind::ENUM, types::mut::CONSTANT};
-    key.imprint(disc);
-    auto& enum_type{*ctx_.pool[key]};
+    auto& enum_type{*ctx_.pool[{type_kind::ENUM, types::mut::CONSTANT, scope_idx}]};
     enum_type.resolve_if<types::enum_t>(
         enumerations, !*exhaustive_v, *tag_v, gsl::span<type*>{}, resolving_);
     enum_type.set_symbol_table_idx(scope_idx);
@@ -2059,8 +2060,7 @@ auto type_resolver::synthesize_enum(usize disc, source_location loc, const gir::
 
 // Reads a `defaults...` pack argument in field order against `field_has_default`, checking each
 // value's static type against the matching field's own type
-auto type_resolver::synthesize_struct(usize                             disc,
-                                      source_location                   loc,
+auto type_resolver::synthesize_struct(source_location                   loc,
                                       const gir::const_struct&          desc,
                                       gsl::span<const gir::const_value> defaults)
     -> stdx::result<gsl::not_null<type*>, diagnostic> {
@@ -2162,9 +2162,7 @@ auto type_resolver::synthesize_struct(usize                             disc,
             loc);
     }
 
-    types::key_t key{type_kind::STRUCT, types::mut::CONSTANT};
-    key.imprint(disc);
-    auto& struct_type{*ctx_.pool[key]};
+    auto& struct_type{*ctx_.pool[{type_kind::STRUCT, types::mut::CONSTANT, scope_idx}]};
     struct_type.resolve_if<types::struct_t>(field_types,
                                             ast_fields,
                                             gsl::span<type*>{},
@@ -2176,8 +2174,7 @@ auto type_resolver::synthesize_struct(usize                             disc,
     return gsl::not_null{&struct_type};
 }
 
-auto type_resolver::synthesize_union(usize                             disc,
-                                     source_location                   loc,
+auto type_resolver::synthesize_union(source_location                   loc,
                                      const gir::const_struct&          desc,
                                      gsl::span<const gir::const_value> defaults)
     -> stdx::result<gsl::not_null<type*>, diagnostic> {
@@ -2240,9 +2237,7 @@ auto type_resolver::synthesize_union(usize                             disc,
         field_sym.set_status(symbol_status::RESOLVED);
     }
 
-    types::key_t key{type_kind::UNION, types::mut::CONSTANT};
-    key.imprint(disc);
-    auto& union_type{*ctx_.pool[key]};
+    auto& union_type{*ctx_.pool[{type_kind::UNION, types::mut::CONSTANT, scope_idx}]};
     union_type.resolve_if<types::union_t>(field_types,
                                           ast_fields,
                                           gsl::span<type*>{},
@@ -2964,8 +2959,62 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
         resolving_.set_sema_type(id, function_type->return_type);
         last_type_.emplace(function_type->return_type);
     } else if (const auto builtin_type{callee_data.as_opt<types::builtin_function>()}) {
+        // Let `.{...}` infer its fields without spelling out `builtin.XInfo{...}`.
+        using syntax::token_type_t;
+        stdx::option<type&> descriptor_hint;
+        switch (call.function->get_token_type()) {
+        case token_type_t::BUILTIN_INT:
+            descriptor_hint.emplace(ctx_.get_builtin_type("IntInfo"));
+            break;
+        case token_type_t::BUILTIN_FLOAT:
+            descriptor_hint.emplace(ctx_.get_builtin_type("FloatInfo"));
+            break;
+        case token_type_t::BUILTIN_POINTER:
+        case token_type_t::BUILTIN_REFERENCE:
+            descriptor_hint.emplace(ctx_.get_builtin_type("PointerInfo"));
+            break;
+        case token_type_t::BUILTIN_SLICE:
+            descriptor_hint.emplace(ctx_.get_builtin_type("SliceInfo"));
+            break;
+        case token_type_t::BUILTIN_ARRAY:
+            descriptor_hint.emplace(ctx_.get_builtin_type("ArrayInfo"));
+            break;
+        case token_type_t::BUILTIN_FN:
+            descriptor_hint.emplace(ctx_.get_builtin_type("FnInfo"));
+            break;
+        case token_type_t::BUILTIN_STRUCT:
+            descriptor_hint.emplace(ctx_.get_builtin_type("StructInfo"));
+            break;
+        case token_type_t::BUILTIN_UNION:
+            descriptor_hint.emplace(ctx_.get_builtin_type("UnionInfo"));
+            break;
+        case token_type_t::BUILTIN_ENUM:
+            descriptor_hint.emplace(ctx_.get_builtin_type("EnumInfo"));
+            break;
+        default: break;
+        }
+
+        auto args_result{resolve_result::OK};
+        if (descriptor_hint && !call.arguments.empty()) {
+            const structural_guard g{implicit_type_stack_, *descriptor_hint};
+            args_result = call.arguments[0].visit([this](auto arg_id) {
+                resolve(arg_id);
+                return last_type_.take()->is_poison() ? resolve_result::POISONED
+                                                      : resolve_result::OK;
+            });
+            if (args_result == resolve_result::OK && call.arguments.size() > 1) {
+                args_result = resolve_call_args(
+                    gsl::span<const ast::call_expr::argument>{call.arguments}.subspan(1));
+            }
+        } else if (call.function->get_token_type() == token_type_t::BUILTIN_TYPE_OF) {
+            const structural_guard shield{implicit_type_stack_, nullptr};
+            args_result = resolve_call_args(call.arguments);
+        } else {
+            args_result = resolve_call_args(call.arguments);
+        }
+
         // There's no need to check any further if the arguments are poisoned
-        if (resolve_call_args(call.arguments) == resolve_result::POISONED) {
+        if (args_result == resolve_result::POISONED) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
 

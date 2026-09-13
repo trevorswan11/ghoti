@@ -1224,6 +1224,7 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
         s.fields.emplace("bits",
                          const_value{u64{sema::int_width(denoted)}, ctx_.get_int(16, false)});
         s.fields.emplace("signed", const_value{sema::is_signed_integer(denoted), bool_type});
+        s.fields.emplace("is_constexpr", const_value{false, bool_type});
         return wrap("int", std::move(s), ctx_.get_builtin_type("IntInfo"));
     }
     case sema::type_kind::ISIZE:
@@ -1233,6 +1234,14 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
         const_struct s;
         s.fields.emplace("bits", const_value{u64{ptr_bits}, ctx_.get_int(16, false)});
         s.fields.emplace("signed", const_value{sema::is_signed_integer(denoted), bool_type});
+        s.fields.emplace("is_constexpr", const_value{false, bool_type});
+        return wrap("int", std::move(s), ctx_.get_builtin_type("IntInfo"));
+    }
+    case sema::type_kind::CONSTEXPR_INT: {
+        const_struct s;
+        s.fields.emplace("bits", const_value{u64{32}, ctx_.get_int(16, false)});
+        s.fields.emplace("signed", const_value{true, bool_type});
+        s.fields.emplace("is_constexpr", const_value{true, bool_type});
         return wrap("int", std::move(s), ctx_.get_builtin_type("IntInfo"));
     }
     case sema::type_kind::F16:
@@ -1244,6 +1253,13 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
         s.fields.emplace(
             "bits",
             const_value{u64{sema::float_bits(denoted.get_kind())}, ctx_.get_int(16, false)});
+        s.fields.emplace("is_constexpr", const_value{false, bool_type});
+        return wrap("float", std::move(s), ctx_.get_builtin_type("FloatInfo"));
+    }
+    case sema::type_kind::CONSTEXPR_FLOAT: {
+        const_struct s;
+        s.fields.emplace("bits", const_value{u64{64}, ctx_.get_int(16, false)});
+        s.fields.emplace("is_constexpr", const_value{true, bool_type});
         return wrap("float", std::move(s), ctx_.get_builtin_type("FloatInfo"));
     }
     case sema::type_kind::BOOL:      return tag_only("bool");
@@ -1685,7 +1701,13 @@ auto const_eval::match_pattern(const ast::match_pattern_handle& pattern_h,
         }
     }
 
-    if (const auto pat_val{try_eval(pattern_id)}) { return *pat_val == target; }
+    if (const auto pat_val{try_eval(pattern_id)}) {
+        if (const auto l{pat_val->as_opt<stdx::option<sema::type&>>()}) {
+            const auto r{target.as_opt<stdx::option<sema::type&>>()};
+            if (r && *l && *r) { return sema::is_same_unqualified(**l, **r); }
+        }
+        return *pat_val == target;
+    }
 
     return false;
 }
@@ -2007,7 +2029,6 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
                 if (const auto meta{sema_type->get_data().as_opt<sema::types::meta_type>()}) {
                     return const_value{meta->instance};
                 }
-                return const_value{*sema_type};
             }
         }
     }
