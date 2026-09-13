@@ -1,15 +1,18 @@
 import std;
 
-const Point := @Struct(builtin.StructInfo{
-    .fields = [2]builtin.StructFieldInfo{
-        .{ .name = "x", .@"type" = i32, .has_default = false },
-        .{ .name = "y", .@"type" = i32, .has_default = false },
-        .{ .name = "z", .@"type" = i32, .has_default = true },
+const Point := @Struct(
+    builtin.StructInfo{
+        .fields = [2]builtin.StructFieldInfo{
+            .{ .name = "x", .@"type" = i32, .has_default = false },
+            .{ .name = "y", .@"type" = i32, .has_default = false },
+            .{ .name = "z", .@"type" = i32, .has_default = true },
+        },
+        .is_extern = false,
+        .is_packed = false,
+        .backing_bits = 0,
     },
-    .is_extern = false,
-    .is_packed = false,
-    .backing_bits = 0,
-}, 1);
+    1,
+);
 
 impl Point {
     pub const sum := fn(self): i32 {

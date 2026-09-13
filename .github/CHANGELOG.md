@@ -293,7 +293,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Untyped packs (`rest...`) on function parameters, with forwarding (`f(rest...)`) and per-element access (`rest[k]`, `rest.len`)
 - `for constexpr` unrolls its block once per compile-time-known element, over any mix of parameter packs, ranges, and `constexpr` array/slice values in parallel (zipped by index), plus an optional trailing companion `0..` index
 - `while constexpr` unrolls while its `constexpr var` condition holds, bounded by `@setEvalUnrollLimit`
-- `constexpr var`: a compile-time-mutable binding, including aggregate (struct/array) values — field/element read, write, and compound assignment one level deep
+- `constexpr var`: a compile-time-mutable binding, including aggregate (struct/array) values
+- Fix a monomorphization bug in functions that take in a type to determine the types of the other parameters
 
 ## Reflection
 
@@ -303,4 +304,3 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `@field(value, name)`: reads or writes an instance's own struct/union field by a compile-time-known name (through pointers and references, lvalue-capable)
     - `@field(T, name)`: reads or writes a static `var` or `const` member of a type by a compile-time-known name, the same way `T.member` already does
     - Method and bound access are explicitly rejected
-- `StructFieldInfo`/`UnionFieldInfo`'s `type_` field is now the raw identifier `@"type"`, now that a same-named field can no longer shadow the outer `type` builtin
