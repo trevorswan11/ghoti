@@ -299,6 +299,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Arrays/Slices can be sliced with the indexing operator at compile time
 - `.ptr` comparison over two compile time arrays now work as intended
     - You cannot store the value of this for runtime use
+- Constant folded initializers are not type checked
+- Constant array values now correctly read their len field
+- Match over an enum with no catch-all now correctly errors with the missing enumerations
 
 ## Reflection
 
