@@ -3088,8 +3088,9 @@ auto type_resolver::visit(ID id, const ast::enum_expr& enum_expr) -> void {
     const structural_guard        g{user_type_stack_, enum_type};
 
     // The underlying type defaults to an i32 as it would in C or C++
-    auto& underlying_type{enum_expr.underlying ? resolving_.get_sema_type(*enum_expr.underlying)
-                                               : ctx_.get_int(32, true)};
+    auto& underlying_type{enum_expr.underlying
+                              ? denoted_type(resolving_.get_sema_type(*enum_expr.underlying))
+                              : ctx_.get_int(32, true)};
 
     for (const auto& [name, value] : enum_expr.enumerations) {
         if (value) { TRY_RESOLVE(*value); }
@@ -10188,6 +10189,16 @@ auto type_resolver::instantiate_generic(type&                             callee
 
         fn_mod.generic_instantiations.emplace_back(req);
         if (&resolving_ != &fn_mod) { resolving_.generic_instantiations.emplace_back(req); }
+    }
+
+    // A `fn(...): type` constructor that hands back an existing non-aggregate type by name,
+    // is itself a value denoting that type and must be wrapped back into a `type`-kind value
+    const auto dk{deduced_return_type->get_kind()};
+    if (is_type_ctor && dk != type_kind::TYPE && dk != type_kind::STRUCT &&
+        dk != type_kind::UNION && dk != type_kind::ENUM) {
+        auto& wrapped{*ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, *deduced_return_type}]};
+        wrapped.resolve_if<types::meta_type>(*deduced_return_type);
+        deduced_return_type = &wrapped;
     }
 
     return generic_instantiation_entry{

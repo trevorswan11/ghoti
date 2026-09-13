@@ -303,7 +303,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Constant array values now correctly read their len field
 - Match over an enum with no catch-all now correctly errors with the missing enumerations
 
-## Reflection
+### Reflection
 
 - `@typeInfo(T)`: a `TypeInfo` union describing any type's shape (int/float/pointer/reference/slice/array/struct/union/enum/fn/isize/usize/internal)
 - `@Int`, `@Float`, `@Pointer`, `@Reference`, `@Slice`, `@Array`, `@Fn`, `@Struct`, `@Union`, `@Enum`: construct a new type from a compile-time descriptor, including synthesizing fresh aggregate types with real fields
@@ -311,3 +311,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `@field(value, name)`: reads or writes an instance's own struct/union field by a compile-time-known name (through pointers and references, lvalue-capable)
     - `@field(T, name)`: reads or writes a static `var` or `const` member of a type by a compile-time-known name, the same way `T.member` already does
     - Method and bound access are explicitly rejected
+
+## alpha.6
+
+- Fix a bug that prevented type constructors that did not return aggregates from being used in any meaningful code

@@ -2182,6 +2182,17 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
             }
             return value{*tag_eq, sema_type};
         }
+
+        // A `type`-kind value (`u8`, `Log2Int(T)`, ...) has no runtime representation, so
+        // comparing two of them must fully const-fold rather than reach codegen.
+        const auto lhs_ty{active_mod().get_sema_type_opt(binary.lhs)};
+        const auto rhs_ty{active_mod().get_sema_type_opt(binary.rhs)};
+        if ((lhs_ty && lhs_ty->get_kind() == sema::type_kind::TYPE) ||
+            (rhs_ty && rhs_ty->get_kind() == sema::type_kind::TYPE)) {
+            const auto cv{const_eval_.try_eval(id)};
+            VERIFY(cv, "Comparison of type values must be constant-evaluable");
+            return materialize_const(*cv);
+        }
     }
 
     const auto lhs{emit_expression(binary.lhs)};
@@ -3457,6 +3468,13 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             break;
         }
         }
+    }
+
+    // `fn(...): type` is a compile-time type constructor with no runtime body
+    if (ret_type.get_kind() == sema::type_kind::TYPE) {
+        const auto cv{const_eval_.try_eval(id)};
+        VERIFY(cv, "Call to a type-constructor function must be constant-evaluable");
+        return cv->to_gir_value();
     }
 
     stdx::option<std::string> callee_name;
