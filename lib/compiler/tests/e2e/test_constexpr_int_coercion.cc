@@ -128,6 +128,37 @@ TEST_CASE("constexpr-fits implicit integer coercion runtime execution") {
             };
         )") == 42);
     }
+
+    SECTION("negating a type's narrowest representable magnitude does not fold as UB") {
+        CHECK(helpers::compile_and_run(R"(
+            const minInt := fn(T: type): constexpr_int {
+                constexpr info := @typeInfo(T).int;
+                return if constexpr (info.signed) -(1 << (info.bits - 1)) else 0;
+            };
+
+            pub const main := fn(): i32 {
+                if (minInt(i8) == -128 and minInt(i32) == -2147483648 and
+                    minInt(i64) == -9223372036854775808) {
+                    return 42;
+                }
+                return 0;
+            };
+        )") == 42);
+    }
+
+    SECTION("negating i128's own narrowest representable magnitude does not fold as UB") {
+        CHECK(helpers::compile_and_run(R"(
+            const minInt := fn(T: type): constexpr_int {
+                constexpr info := @typeInfo(T).int;
+                return if constexpr (info.signed) -(1 << (info.bits - 1)) else 0;
+            };
+
+            pub const main := fn(): i32 {
+                if (minInt(i128) == -170141183460469231731687303715884105728) { return 42; }
+                return 0;
+            };
+        )") == 42);
+    }
 }
 
 } // namespace ghoti::tests

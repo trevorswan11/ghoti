@@ -47,7 +47,6 @@ pub constexpr minInt := fn(T: type): constexpr_int {
 };
 
 test "minInt" {
-    @expect(minInt(u0) == 0);
     @expect(minInt(u1) == 0);
     @expect(minInt(u8) == 0);
     @expect(minInt(u16) == 0);

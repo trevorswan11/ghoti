@@ -317,3 +317,4 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fix a bug that prevented type constructors that did not return aggregates from being used in any meaningful code
 - Coercion into `constexpr_int` now folds via constant evaluation
     - The shift fold promotes to 128-bit whenever the shift amount would exceed the narrow domain's width.
+- Stop crashing on constexpr negation of integers which should become 128 bit ints

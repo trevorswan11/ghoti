@@ -2094,9 +2094,21 @@ auto const_eval::eval_unary(ast::node_id id, const ast::unary_expr& unary)
 
     const auto op_type{id.get_token_type()};
     if (op_type == syntax::token_type_t::MINUS) {
-        if (val->is<i64>()) { return const_value{-val->as<i64>(), val->get_type()}; }
+        if (val->is<i64>()) {
+            return make_scalar_const(-static_cast<i128>(val->as<i64>()), val->get_type());
+        }
         if (val->is<u64>()) {
-            return const_value{-static_cast<i64>(val->as<u64>()), val->get_type()};
+            return make_scalar_const(-static_cast<i128>(val->as<u64>()), val->get_type());
+        }
+        if (val->is<i128>()) { return const_value{-val->as<i128>(), val->get_type()}; }
+        if (val->is<u128>()) {
+            // 128 bits is as wide as this domain goes
+            const auto u{val->as<u128>()};
+            constexpr u128 abs_i128_min{u128{1} << 127};
+            if (u == abs_i128_min) {
+                return const_value{std::numeric_limits<i128>::min(), val->get_type()};
+            }
+            return const_value{-static_cast<i128>(u), val->get_type()};
         }
         if (val->is<f64>()) { return const_value{-val->as<f64>(), val->get_type()}; }
     } else if (op_type == syntax::token_type_t::MINUS_PERCENT) {
