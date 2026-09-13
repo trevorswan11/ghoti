@@ -112,6 +112,43 @@ TEST_CASE("`@Union` constructs an untagged union type from a `UnionInfo` descrip
     )") == 42);
 }
 
+TEST_CASE("`@Struct` widens an unsuffixed float `defaults...` value to a narrower field's own "
+         "type instead of defaulting it to `f64`") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            const T := @Struct(builtin.StructInfo{
+                .fields = [2]builtin.StructFieldInfo{
+                    .{ .name = "x", .@"type" = f32, .has_default = false },
+                    .{ .name = "y", .@"type" = f32, .has_default = true },
+                },
+                .is_extern = false,
+                .is_packed = false,
+                .backing_bits = 0,
+            }, 1.0f32);
+            var v: T = .{ .x = 2f32 };
+            return @as(i32, v.x + v.y);
+        };
+    )") == 3);
+}
+
+TEST_CASE("`@Struct` diagnoses a field descriptor with a typo'd key instead of crashing") {
+    CHECK(helpers::raised(R"(
+        pub const main := fn(): i32 {
+            const T := @Struct(builtin.StructInfo{
+                .fields = [1]builtin.StructFieldInfo{
+                    .{ .name = "x", .type_ = i32, .has_default = false },
+                },
+                .is_extern = false,
+                .is_packed = false,
+                .backing_bits = 0,
+            });
+            var v: T = .{ .x = 1 };
+            return v.x;
+        };
+    )",
+                          sema::error::MISSING_FIELD));
+}
+
 TEST_CASE("`@Union` constructs a tagged union type from a `UnionInfo` descriptor") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {

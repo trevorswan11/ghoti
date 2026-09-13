@@ -664,7 +664,15 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, const sema::type& dest
 
         // A foldable string constant arrives here carrying a slice type, no array lvalue to decay
         if (const auto cv{const_eval_.try_eval(*expr_id)}; cv && cv->is<std::string>()) {
-            return emit_string_as_slice(cv->as<std::string>(), dest_type);
+            // `dest_type` may be a generic callee's own declared parameter shape,
+            // shared and unsubstituted across every call site
+            const sema::type* slice_type{&dest_type};
+            if (sema::is_generic_type(dest_type)) {
+                if (const auto own_type{active_mod().get_sema_type_opt(*expr_id)}) {
+                    slice_type = own_type.get();
+                }
+            }
+            return emit_string_as_slice(cv->as<std::string>(), *slice_type);
         }
     }
     // A reference destination is one of the few positions that must see the raw reference value
@@ -2728,7 +2736,7 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
         const auto base_kind{map_binary_op(base_tok).value_or(instruction_kind::ADD)};
         auto&      target_type{*lhs_lval.type};
         const auto loaded{builder_.emit_load(lhs_lval, target_type)};
-        const auto rhs{emit_expression(assign.rhs)};
+        const auto rhs{emit_coerced_expr(assign.rhs, target_type)};
         const auto res_val{value{emit_checked_binary(base_kind,
                                                      value{loaded, target_type},
                                                      rhs,

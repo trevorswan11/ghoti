@@ -175,6 +175,9 @@ class type;
 [[nodiscard]] auto is_same_unqualified(const type& a, const type& b) noexcept -> bool;
 [[nodiscard]] auto is_assignable(const type& src, const type& dest) noexcept -> bool;
 
+// True when `t` still contains an unbound generic parameter rather than a fully concrete type.
+[[nodiscard]] auto is_generic_type(const type& t) noexcept -> bool;
+
 namespace types {
 
 struct unresolved {};

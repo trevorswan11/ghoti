@@ -396,4 +396,24 @@ TEST_CASE("a value parameter typed via an earlier `T: type` parameter rejects an
     )");
 }
 
+TEST_CASE("a generic `fn(T: type, a: []T, b: []T)` call correctly types both slice arguments "
+          "when one comes from `@typeInfo` reflection") {
+    CHECK(helpers::compile_and_run_tests(R"(
+        pub constexpr eql := fn(T: type, a: []T, b: []T): bool {
+            if (a.len != b.len) return false;
+            for (a, b) |a_elem, b_elem| { if (a_elem != b_elem) return false; }
+            return true;
+        };
+
+        const Data := struct { count_x: u32 };
+
+        test "field name from reflection compares correctly against another []u8 argument" {
+            const needle: []u8 = "count_x"[0..];
+            for constexpr (@typeInfo(Data).@"struct".fields) |field| {
+                @expect(eql(u8, field.name, needle));
+            }
+        }
+    )") == 0);
+}
+
 } // namespace ghoti::tests

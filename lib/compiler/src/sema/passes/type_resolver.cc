@@ -2341,30 +2341,6 @@ namespace {
     return std::ranges::any_of(fn.parameters, [](const auto& p) { return p.is_constexpr; });
 }
 
-[[nodiscard]] auto is_generic_type(const type& t) noexcept -> bool {
-    const auto kind{t.get_kind()};
-    if (kind == type_kind::AUTO) { return true; }
-
-    const auto& data{t.get_data()};
-    if (const auto deferred{data.as_opt<types::deferred_array>()}) {
-        return is_generic_type(deferred->underlying);
-    }
-    if (kind == type_kind::TYPE) { return true; }
-
-    if (const auto ptr{data.as_opt<types::pointer>()}) { return is_generic_type(ptr->underlying); }
-    if (const auto ref{data.as_opt<types::reference>()}) {
-        return is_generic_type(ref->underlying);
-    }
-    if (const auto slice{data.as_opt<types::slice>()}) {
-        return is_generic_type(slice->underlying);
-    }
-    if (const auto arr{data.as_opt<types::array>()}) { return is_generic_type(arr->underlying); }
-
-    // A fn-typed slot may bind either a plain function or a capturing closure at any call
-    if (kind == type_kind::FUNCTION) { return true; }
-    return false;
-}
-
 // A closure is only unsound to let escape its defining frame if it holds a ref into that frame
 [[nodiscard]] auto has_dangling_capture(const types::closure_t& cl) noexcept -> bool {
     return std::ranges::any_of(cl.captures, [](const types::closure_capture& capture) {
@@ -2535,19 +2511,30 @@ auto register_type_ctor_members(context&         ctx,
     }
     case type_kind::ARRAY: {
         const auto& arr{data.as<types::array>()};
-        return fmt::format("array{}_{}", arr.len, mangle_arg_type(reg, arr.underlying));
+        return fmt::format("array{}{}_{}{}",
+                           arr.len,
+                           arr.null_terminated ? "z" : "",
+                           arr.underlying.is_constant() ? "" : "mut_",
+                           mangle_arg_type(reg, arr.underlying));
     }
     case type_kind::SLICE: {
         const auto& sl{data.as<types::slice>()};
-        return fmt::format("slice_{}", mangle_arg_type(reg, sl.underlying));
+        return fmt::format("slice{}_{}{}",
+                           sl.null_terminated ? "z" : "",
+                           sl.underlying.is_constant() ? "" : "mut_",
+                           mangle_arg_type(reg, sl.underlying));
     }
     case type_kind::POINTER: {
         const auto& p{data.as<types::pointer>()};
-        return fmt::format("ptr_{}", mangle_arg_type(reg, p.underlying));
+        return fmt::format("ptr_{}{}",
+                           p.underlying.is_constant() ? "" : "mut_",
+                           mangle_arg_type(reg, p.underlying));
     }
     case type_kind::REFERENCE: {
         const auto& r{data.as<types::reference>()};
-        return fmt::format("ref_{}", mangle_arg_type(reg, r.underlying));
+        return fmt::format("ref_{}{}",
+                           r.underlying.is_constant() ? "" : "mut_",
+                           mangle_arg_type(reg, r.underlying));
     }
     default: return std::string{type_kind_display_name(t)};
     }
