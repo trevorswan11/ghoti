@@ -1,5 +1,7 @@
 ; Comments
 (comment) @comment
+(doc_comment) @comment.documentation
+(module_doc_comment) @comment.documentation
 
 ; Literals
 (string_literal) @string
@@ -32,6 +34,7 @@
 (enumerator name: (identifier) @property)
 (dot_expression member: (identifier) @property)
 (implicit_access_expression member: (identifier) @property)
+(module_access_expression member: (identifier) @property)
 
 ; Interface associated items and dyn associated-type bindings
 (associated_type name: (identifier) @property)
@@ -44,6 +47,7 @@
 (impl_parameter name: (identifier) @variable.parameter)
 (import_statement alias: (identifier) @type)
 (using_statement alias: (identifier) @type)
+(errdefer_statement capture: (identifier) @variable.parameter)
 
 ; Types used in position
 (decl_statement type: (identifier) @type)
@@ -79,6 +83,7 @@
   "match"
   "return"
   "defer"
+  "errdefer"
   "loop"
   "for"
   "while"
@@ -125,10 +130,16 @@
   ":="
   "+"
   "+="
+  "+%"
+  "+%="
   "-"
   "-="
+  "-%"
+  "-%="
   "*"
   "*="
+  "*%"
+  "*%="
   "/"
   "/="
   "%"
@@ -140,6 +151,8 @@
   "|="
   "<<"
   "<<="
+  "<<%"
+  "<<%="
   ">>"
   ">>="
   "~"
