@@ -886,12 +886,66 @@ auto const_eval::eval_array(ast::node_id id, const ast::array_expr& array)
     return const_value{std::move(arr), sema_type};
 }
 
+auto const_eval::eval_slice_index(ast::node_id           id,
+                                  const const_value&     target_val,
+                                  ast::node_id           range_id,
+                                  const ast::range_expr& range) -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
+    auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+
+    usize      len{0};
+    const auto arr{target_val.as_opt<const_array>()};
+    const auto str{target_val.as_opt<std::string>()};
+    if (arr) {
+        len = arr->elements.size();
+    } else if (str) {
+        len = str->size();
+    } else {
+        return stdx::none;
+    }
+
+    const auto lo_val{range.lhs ? try_eval(*range.lhs)
+                                : stdx::option<const_value>{const_value{u64{0}, usize_type}}};
+    const auto hi_val{range.rhs ? try_eval(*range.rhs) : stdx::none};
+    const auto lo_opt{lo_val ? lo_val->as_int_opt() : stdx::none};
+    const auto hi_opt{range.rhs ? (hi_val ? hi_val->as_int_opt() : stdx::none)
+                                : stdx::option<i128>{static_cast<i128>(len)}};
+    if (!lo_opt || !hi_opt) { return stdx::none; }
+
+    const bool inclusive{range_id.get_token_type() == syntax::token_type_t::DOT_DOT_EQ};
+    const i128 lo{*lo_opt};
+    const i128 hi{*hi_opt + (inclusive ? 1 : 0)};
+    if (lo < 0 || hi < lo || static_cast<usize>(hi) > len) {
+        ctx_.diags.emplace_back("Slice range is out of bounds",
+                                sema::error::CONSTEXPR_EVALUATION_FAILED,
+                                module_->ast.location_of(id));
+        return const_value::make_poison();
+    }
+
+    const auto lo_u{static_cast<usize>(lo)};
+    const auto hi_u{static_cast<usize>(hi)};
+    if (arr) {
+        const_array sub;
+        sub.elements.assign(arr->elements.begin() + static_cast<idiff>(lo_u),
+                            arr->elements.begin() + static_cast<idiff>(hi_u));
+        return const_value{std::move(sub), module_->get_sema_type_opt(id)};
+    }
+    return const_value{str->substr(lo_u, hi_u - lo_u), module_->get_sema_type_opt(id)};
+}
+
 auto const_eval::eval_index(ast::node_id id, const ast::index_expr& index_expr)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     const auto target_val{try_eval(index_expr.array)};
+    if (!target_val) { return stdx::none; }
+
+    const auto index_id{*index_expr.index};
+    if (const auto range{module_->ast.get_as_opt<ast::range_expr>(index_id)}) {
+        return eval_slice_index(id, *target_val, index_id, *range);
+    }
+
     const auto idx_val{try_eval(index_expr.index)};
-    if (!target_val || !idx_val) { return stdx::none; }
+    if (!idx_val) { return stdx::none; }
 
     const auto idx_opt{idx_val->as_int_opt()};
     if (!idx_opt || *idx_opt < 0) {
@@ -1088,6 +1142,18 @@ auto const_eval::eval_dot(ast::node_id, const ast::dot_expr& dot) -> stdx::optio
         return eval_type_member(**type_opt, member_name);
     }
 
+    // `.len` on a constant array/slice/string value, mirroring `eval_index`'s two backing forms.
+    if (member_name == "len") {
+        auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+        if (const auto arr{target_val->as_opt<const_array>()}) {
+            return const_value{u64{arr->elements.size()}, usize_type};
+        }
+        if (const auto str{target_val->as_opt<std::string>()}) {
+            return const_value{u64{str->size()}, usize_type};
+        }
+    }
+
+    // Cannot do anything with ptr at compile time
     return stdx::none;
 }
 
@@ -1127,6 +1193,14 @@ auto const_eval::eval_type_member(sema::type& denoted_in, std::string_view membe
                 }
             }
             return const_value{const_enum{std::string{member}, val}, type};
+        }
+    }
+
+    // A bare tag literal against a tagged union (`@typeInfo(T) == .float`)
+    if (const auto un{type.get_data().as_opt<sema::types::union_t>()}) {
+        for (const auto& f : un->ast_fields) {
+            const auto& vname{un->enclosing.ast.get_as<ast::identifier_expr>(f.name).name};
+            if (vname == member) { return const_value{const_union{std::string{member}, {}}, type}; }
         }
     }
 
@@ -1609,20 +1683,7 @@ auto const_eval::eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap)
                                                            : un->payload.front();
                             }
                             if (un->active_field == sema::builtin_impl::FLOW_BREAK) {
-                                if (id.get_token_type() == syntax::token_type_t::BANG) {
-                                    ctx_.diags.emplace_back(
-                                        shape->residual_is_void
-                                            ? "compile-time '!' unwrapped an empty optional"
-                                            : "compile-time '!' unwrapped an errored result",
-                                        sema::error::CONSTEXPR_EVALUATION_FAILED,
-                                        module_->ast.location_of(id));
-                                    return const_value::make_poison();
-                                }
-                                ctx_.diags.emplace_back(
-                                    "compile-time '?' on an errored or empty value",
-                                    sema::error::CONSTEXPR_EVALUATION_FAILED,
-                                    module_->ast.location_of(id));
-                                return const_value::make_poison();
+                                return stdx::none;
                             }
                         }
                     }
@@ -1887,6 +1948,14 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
         if (op_type == syntax::token_type_t::NEQ) { return const_value{!equal, bool_type}; }
     }
 
+    // `@typeInfo(T) == .float`: a tagged union compared against a bare (payload-less) variant
+    // literal only ever needs the active tag to match, never the payload.
+    if (lhs.is<const_union>() && rhs.is<const_union>()) {
+        const auto equal{lhs.as<const_union>().active_field == rhs.as<const_union>().active_field};
+        if (op_type == syntax::token_type_t::EQ) { return const_value{equal, bool_type}; }
+        if (op_type == syntax::token_type_t::NEQ) { return const_value{!equal, bool_type}; }
+    }
+
     // Type-valued operands: `@typeOf(x) == u8`, `T != i32`, ... in an `if constexpr`.
     if (lhs.is<stdx::option<sema::type&>>() && rhs.is<stdx::option<sema::type&>>()) {
         const auto l{lhs.as<stdx::option<sema::type&>>()};
@@ -1939,6 +2008,46 @@ auto const_eval::eval_binary(ast::node_id id, const ast::binary_expr& binary)
         const auto rhs{try_eval(binary.rhs)};
         if (!rhs || !rhs->is<bool>()) { return stdx::none; }
         return const_value{rhs->as<bool>(), ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    }
+
+    if (op_type == syntax::token_type_t::EQ || op_type == syntax::token_type_t::NEQ) {
+        // Allow implicit access equality comparison
+        const auto is_tagged_union{[&](ast::node_id n) {
+            const auto t{module_->get_sema_type_opt(n)};
+            const auto ut{t ? t->get_data().as_opt<sema::types::union_t>() : stdx::none};
+            return ut && !ut->is_untagged;
+        }};
+        const auto try_tag_cmp{
+            [&](ast::node_id val_node, ast::node_id tag_node) -> stdx::option<const_value> {
+                if (!module_->ast.get_as_opt<ast::implicit_access_expr>(tag_node) ||
+                    !is_tagged_union(val_node)) {
+                    return stdx::none;
+                }
+                const auto val{try_eval(val_node)};
+                const auto un{val ? val->as_opt<const_union>() : stdx::none};
+                if (!un) { return stdx::none; }
+                const auto& imp{module_->ast.get_as<ast::implicit_access_expr>(tag_node)};
+                const auto& member_ident{module_->ast.get_as<ast::identifier_expr>(imp.member)};
+                const bool  equal{un->active_field == member_ident.name};
+                return const_value{op_type == syntax::token_type_t::EQ ? equal : !equal,
+                                   ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+            }};
+        if (const auto r{try_tag_cmp(*binary.lhs, *binary.rhs)}) { return r; }
+        if (const auto r{try_tag_cmp(*binary.rhs, *binary.lhs)}) { return r; }
+
+        // Allow `a.ptr == b.ptr` over compile time constructs
+        const auto is_const_ptr_dot{[&](ast::node_id n) {
+            const auto dot{module_->ast.get_as_opt<ast::dot_expr>(n)};
+            if (!dot || module_->ast.get_as<ast::identifier_expr>(dot->member).name != "ptr") {
+                return false;
+            }
+            const auto obj{try_eval(dot->object)};
+            return obj && (obj->is<const_array>() || obj->is<std::string>());
+        }};
+        if (is_const_ptr_dot(*binary.lhs) && is_const_ptr_dot(*binary.rhs)) {
+            return const_value{op_type == syntax::token_type_t::NEQ,
+                               ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+        }
     }
 
     const auto lhs{try_eval(binary.lhs)};
@@ -3104,10 +3213,17 @@ auto const_eval::eval_if(ast::node_id, const ast::if_expr& if_expr) -> stdx::opt
         return stdx::none;
     }
 
+    const auto eval_branch{[&](const ast::stmt_handle& branch) -> stdx::option<const_value> {
+        if (const auto es{module_->ast.get_as_opt<ast::expr_stmt>(branch)}) {
+            return try_eval(es->expression);
+        }
+        return eval_stmt(branch);
+    }};
+
     if (cond->as<bool>()) {
-        return eval_stmt(if_expr.consequence);
+        return eval_branch(if_expr.consequence);
     } else if (if_expr.alternate) {
-        return eval_stmt(*if_expr.alternate);
+        return eval_branch(*if_expr.alternate);
     }
     return stdx::none;
 }
@@ -3201,6 +3317,13 @@ auto const_eval::eval_for(ast::node_id, const ast::for_loop_expr& loop)
             if (val) {
                 if (const auto arr{val->as_opt<const_array>()}) {
                     sequence = arr->elements;
+                } else if (const auto str{val->as_opt<std::string>()}) {
+                    // A `[]u8` string constant: same per-byte element view `eval_index` gives it.
+                    auto& u8_type{ctx_.get_int(8, false)};
+                    sequence.reserve(str->size());
+                    for (const char c : *str) {
+                        sequence.emplace_back(static_cast<u64>(static_cast<u8>(c)), u8_type);
+                    }
                 } else {
                     return unknown();
                 }

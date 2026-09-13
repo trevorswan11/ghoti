@@ -42,4 +42,24 @@ TEST_CASE("`eql`-shaped constexpr fn: early length mismatch and content mismatch
     )") == 0);
 }
 
+TEST_CASE("the same `eql`-shaped constexpr fn also folds at COMPILE TIME under `if constexpr` "
+          "(not just when run as a regular call)") {
+    CHECK(helpers::compile_and_run(R"(
+        constexpr eql := fn(T: type, a: []T, b: []T): bool {
+            if (a.len != b.len) return false;
+            if (a.len == 0) return true;
+            if (@typeInfo(T) != .float and a.ptr == b.ptr) return true;
+            for (a, b) |a_elem, b_elem| {
+                if (a_elem != b_elem) return false;
+            }
+            return true;
+        };
+        pub const main := fn(): i32 {
+            if constexpr (eql(u8, "abcd", "abcd")) {} else { @compileError("expected equal"); }
+            if constexpr (eql(u8, "abcd", "abZd")) { @compileError("expected not equal"); }
+            return 0;
+        };
+    )") == 0);
+}
+
 } // namespace ghoti::tests

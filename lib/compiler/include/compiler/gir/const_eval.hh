@@ -182,6 +182,11 @@ class const_eval {
     auto eval_array(ast::node_id id, const ast::array_expr& array) -> stdx::option<const_value>;
     auto eval_index(ast::node_id id, const ast::index_expr& index_expr)
         -> stdx::option<const_value>;
+    // `arr[lo..hi]` / `arr[lo..=hi]`: a compile-time sub-array/sub-string slice value.
+    auto eval_slice_index(ast::node_id           id,
+                          const const_value&     target_val,
+                          ast::node_id           range_id,
+                          const ast::range_expr& range) -> stdx::option<const_value>;
     auto eval_initializer(ast::node_id id, const ast::initializer_expr& init)
         -> stdx::option<const_value>;
     auto eval_dot(ast::node_id id, const ast::dot_expr& dot) -> stdx::option<const_value>;
