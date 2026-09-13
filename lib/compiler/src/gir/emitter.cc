@@ -5698,10 +5698,12 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
         }
     }
 
-    if (const auto cv{const_eval_.try_eval(id)}) {
-        if (const auto i{cv->as_int_opt()}) { return value{static_cast<i64>(*i), sema_type}; }
-        if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
-        if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
+    if (yields_value) {
+        if (const auto cv{const_eval_.try_eval(id)}) {
+            if (const auto i{cv->as_int_opt()}) { return value{static_cast<i64>(*i), sema_type}; }
+            if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
+            if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
+        }
     }
 
     auto fn_opt{builder_.get_function()};

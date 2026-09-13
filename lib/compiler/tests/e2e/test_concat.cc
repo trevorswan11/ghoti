@@ -1,7 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "helpers/codegen.hh"
-#include "helpers/sema.hh"
 
 namespace ghoti::tests {
 
@@ -55,14 +54,14 @@ TEST_CASE("`++` takes its sentinel from the right operand only") {
     )") == 0);
 }
 
-TEST_CASE("`++` on a local array identifier is a clean compile error, not a crash") {
-    helpers::expect_compile_error(R"(
+TEST_CASE("`++` concatenates two function-local constexpr array identifiers") {
+    CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             const a: [2]i32 = .{1, 2};
             constexpr combined := a ++ a;
-            return combined[0];
+            return combined[0] + combined[1] + combined[2] + combined[3];
         };
-    )");
+    )") == 6);
 }
 
 } // namespace ghoti::tests

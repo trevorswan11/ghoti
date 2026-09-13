@@ -2023,7 +2023,22 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
     const auto& sym{*sym_opt};
 
     if (effective_tbl != module_->root_table_idx) {
-        if (!sym.has_kind() || sym.get_kind() != sema::symbol_kind::TYPE) { return stdx::none; }
+        if (!sym.has_kind()) { return stdx::none; }
+        if (sym.get_kind() != sema::symbol_kind::TYPE) {
+            // A local, immutable `const`/`constexpr`
+            if (sym.get_kind() == sema::symbol_kind::VALUE) {
+                if (const auto node{sym.get_data().as_opt<sema::symbols::node_t>()}) {
+                    if (const auto decl{module_->ast.get_as_opt<ast::decl_stmt>(*node)};
+                        decl && decl->value &&
+                        (decl->has_modifier(ast::decl_modifiers::CONSTEXPR) ||
+                         decl->has_modifier(ast::decl_modifiers::CONSTANT)) &&
+                        !decl->has_modifier(ast::decl_modifiers::VARIABLE)) {
+                        return try_eval(*decl->value);
+                    }
+                }
+            }
+            return stdx::none;
+        }
     }
 
     if (sym.has_kind() && sym.get_kind() == sema::symbol_kind::TYPE) {
@@ -2853,6 +2868,17 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!target) { return stdx::none; }
         const auto ptr_bits{static_cast<u32>(
             codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? 64 : 32)};
+        // Unlike `@bitCast`/`@truncate`, `@as` rejects narrowing a CONCRETE  integer operand
+        if (builtin_type == syntax::token_type_t::BUILTIN_AS &&
+            sema::is_integer(target->get_kind()) &&
+            !sema::constexpr_int_fits(*src_int, *target, ptr_bits)) {
+            auto operand_node{*op_h};
+            if (const auto un{module_->ast.get_as_opt<ast::unary_expr>(operand_node)};
+                un && ast::node_id{operand_node}.get_token_type() == syntax::token_type_t::MINUS) {
+                operand_node = un->rhs;
+            }
+            if (!module_->ast[operand_node].is<ast::int_literal_expr>()) { return stdx::none; }
+        }
         if (const auto w{integer_target_width(*target, ptr_bits)}) {
             return wrap_to_width(*operand, w->first, w->second, target);
         }

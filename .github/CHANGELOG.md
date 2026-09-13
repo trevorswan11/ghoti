@@ -281,3 +281,20 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Resolve a bug that prevented top-level and aggregate-level generic functions from being monomorphized correctly
 - Rename `@this` builtin to `@This` to match type constructor and type name conventions
 - Resolve an issue that prevented dyn globals from being constructed
+- `fn(...) callconv(.x): T`: a function type annotation may specify its own calling convention, matching what a function declaration's signature already accepted
+- A struct/union member value-kind identifier no longer shadows a same-named outer type at a type-position reference that's already resolved (reverse declaration order is a known remaining gap)
+- Several `TypeInfo`-related crashes: mismatched integer widths for `StructInfo.backing_bits`, materializing a slice-shaped compile-time value, and folding `isize`/`usize` type info
+- `@as`'s narrowing rejection is now enforced even when its argument folds at compile time; a bare integer literal (`@as(u8, -1)`) still wraps to its bit pattern
+- `match constexpr` capture is now foldable in nested constexpr contexts
+- Untyped packs (`rest...`) on function parameters, with forwarding (`f(rest...)`) and per-element access (`rest[k]`, `rest.len`)
+- `for constexpr` unrolls its block once per compile-time-known element, over any mix of parameter packs, ranges, and `constexpr` array/slice values in parallel (zipped by index), plus an optional trailing companion `0..` index
+- `while constexpr` unrolls while its `constexpr var` condition holds, bounded by `@setEvalUnrollLimit`
+- `constexpr var`: a compile-time-mutable binding, including aggregate (struct/array) values — field/element read, write, and compound assignment one level deep
+
+## Reflection
+
+- `@typeInfo(T)`: a `TypeInfo` union describing any type's shape (int/float/pointer/reference/slice/array/struct/union/enum/fn/isize/usize/internal)
+- `@Int`, `@Float`, `@Pointer`, `@Reference`, `@Slice`, `@Array`, `@Fn`, `@Struct`, `@Union`, `@Enum`: construct a new type from a compile-time descriptor, including synthesizing fresh aggregate types with real fields
+- `@hasField`, `@fieldType`: compile-time field introspection
+- `@field(value, name)`: reads or writes an instance's own struct/union field by a compile-time-known name (through pointers and references, lvalue-capable)
+    - Static/const/method access via a `type` first argument is a clean, explicit not-yet-implemented error, not a silent miscompile

@@ -78,15 +78,15 @@ TEST_CASE("`for constexpr` unrolls over a module-level `constexpr` array") {
     )") == 60);
 }
 
-TEST_CASE("`for constexpr` over a function-local `constexpr` array is a clean compile error") {
-    helpers::expect_compile_error(R"(
+TEST_CASE("`for constexpr` unrolls over a function-local `constexpr` array") {
+    CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             constexpr arr: [3]i32 = .{10, 20, 30};
             var sum := 0;
             for constexpr (arr) |v| { sum = sum + v; }
             return sum;
         };
-    )");
+    )") == 60);
 }
 
 TEST_CASE("`for constexpr` unrolls over a range with a companion `0..` index") {

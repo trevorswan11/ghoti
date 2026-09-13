@@ -182,9 +182,6 @@ pub const StructInfo := struct {
     pub backing_bits: u32,
 };
 
-// A union field never has a default value at all (`ast::union_expr::field` carries no
-// `default_value` syntax) - a leaner shape than `FieldInfo` instead of a `has_default` that can
-// only ever read `false`.
 pub const UnionFieldInfo := struct {
     pub name: []u8,
     pub type_: type,
@@ -216,16 +213,6 @@ pub const FnInfo := struct {
     pub @"callconv": CallConv,
 };
 
-// A payload-less union arm's type. Deliberately not spelled `void` here: `TypeInfo` below has
-// arms literally *named* `bool`/`void`/etc. (mirroring `TypeKind`), and resolving a sibling arm's
-// bare `void` type from *inside* that union's own body found the union's own `void`-named arm (a
-// value symbol) ahead of the builtin `void` type - a real, narrow scoping bug where an inner
-// same-named member shadows an outer keyword-named type even in a position where only a type can
-// go. A `using void := void;`-style alias dodges the name collision but does not dodge the
-// deeper issue: LLVM's `void` has no size at all, and a codegen path that reaches it through an
-// alias asserts trying to size it (`getTypeInfo` on an unsized type) instead of routing around
-// it the way a bare `void` union arm already does elsewhere in this compiler. A zero-sized empty
-// struct sidesteps both problems - no colliding name, and a real (if empty) sized layout.
 const NoPayload := struct {};
 
 /// The keystone reflection value: `@typeInfo(T)` returns one of these, tagged by `TypeKind`.

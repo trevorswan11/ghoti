@@ -49,19 +49,20 @@ TEST_CASE("`for constexpr`'s trip count must be known at compile time") {
                           sema::error::CONSTEXPR_LOOP_COUNT_NOT_STATIC));
 }
 
-TEST_CASE("`for constexpr` takes at most one driving iterable and one companion `0..` range") {
+TEST_CASE("`for constexpr` rejects mismatched-length drivers and a non-trailing open range") {
     CHECK(helpers::raised(R"(
         const use := fn(): void {
             constexpr a: [2]i32 = .{1, 2};
-            constexpr b: [2]i32 = .{3, 4};
-            for constexpr (a, b, 0..) |x, y, i| { _ = x; _ = y; _ = i; }
+            constexpr b: [3]i32 = .{3, 4, 5};
+            for constexpr (a, b) |x, y| { _ = x; _ = y; }
         };
     )",
                           sema::error::CONSTEXPR_LOOP_COUNT_NOT_STATIC));
+
     CHECK(helpers::raised(R"(
         const use := fn(): void {
             constexpr a: [2]i32 = .{1, 2};
-            for constexpr (a, 1..3) |x, i| { _ = x; _ = i; }
+            for constexpr (0.., a) |i, x| { _ = i; _ = x; }
         };
     )",
                           sema::error::CONSTEXPR_LOOP_COUNT_NOT_STATIC));
