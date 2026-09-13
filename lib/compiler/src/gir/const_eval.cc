@@ -950,8 +950,9 @@ auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& 
             return const_value{std::move(arr), sema_type};
         }
 
-        const auto& table{ctx_.registry.get(sema_type->get_symbol_table_idx())};
-        if (const auto st{type_data.as_opt<sema::types::struct_t>()}) {
+        const auto table_idx{sema_type->get_symbol_table_idx_opt()};
+        if (const auto st{type_data.as_opt<sema::types::struct_t>()}; st && table_idx) {
+            const auto&  table{ctx_.registry.get(*table_idx)};
             const_struct struct_val;
             for (const auto& item : init.initializers) {
                 const auto& member_ident{
@@ -984,7 +985,12 @@ auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& 
                     module_->ast.get_as<ast::identifier_expr>(member_ident.member).name};
                 auto field_val{try_eval(item.value)};
                 if (!field_val) { return stdx::none; }
-                if (const auto proxy{table.get_proxy_opt(member_name)}) {
+                const auto proxy{
+                    [&]() -> decltype(ctx_.registry.get(*table_idx).get_proxy_opt(member_name)) {
+                        if (!table_idx) { return stdx::none; }
+                        return ctx_.registry.get(*table_idx).get_proxy_opt(member_name);
+                    }()};
+                if (proxy) {
                     const auto&       field_type{ut->type_at(proxy->index)};
                     const auto        p{field_type.get_data().as_opt<sema::types::pointer>()};
                     const auto        r{field_type.get_data().as_opt<sema::types::reference>()};
@@ -1504,7 +1510,10 @@ auto const_eval::eval_match(ast::node_id id, const ast::match_expr& match)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     const auto matcher_val{try_eval(match.matcher)};
-    if (!matcher_val) { return stdx::none; }
+    if (!matcher_val) {
+        cond_unknown_ = true;
+        return stdx::none;
+    }
 
     const auto eval_dispatch = [&](const ast::stmt_handle& dispatch) -> stdx::option<const_value> {
         return module_->ast[*dispatch].visit(
@@ -2995,13 +3004,17 @@ auto const_eval::eval_constexpr_fn(ast::node_id                      call_id,
     const usize prev_stack_size{recursion_limit_stack_.size()};
     call_stack_.emplace_back(std::move(frame));
     const default_counter::guard g{recursion_depth_};
+    const bool                   prev_cond_unknown{std::exchange(cond_unknown_, false)};
     const auto                   block_res{eval_stmt(fn_expr.body)};
+    const bool                   unknown{std::exchange(cond_unknown_, prev_cond_unknown)};
     call_stack_.pop_back();
     while (recursion_limit_stack_.size() > prev_stack_size) {
         max_recursion_depth_ = recursion_limit_stack_.back();
         recursion_limit_stack_.pop_back();
     }
-    return block_res;
+    // A dangling unknown-control-flow signal means some statement's control flow  couldn't be
+    // folded and the block bailed without an explicit `return`
+    return unknown ? stdx::none : block_res;
 }
 
 auto const_eval::eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_value> {
@@ -3044,6 +3057,9 @@ auto const_eval::eval_block(ast::node_id, const ast::block_stmt& block)
     PROFILE_FUNCTION();
     for (const auto& stmt : block.statements) {
         if (const auto res{eval_stmt(stmt)}) { return res; }
+        // An unfoldable `if`/loop condition earlier in this block means what happens next is
+        // unknown
+        if (cond_unknown_) { return stdx::none; }
     }
     return stdx::none;
 }
@@ -3062,7 +3078,10 @@ auto const_eval::eval_decl(ast::node_id, const ast::decl_stmt& decl) -> stdx::op
 auto const_eval::eval_if(ast::node_id, const ast::if_expr& if_expr) -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     const auto cond{try_eval(if_expr.condition)};
-    if (!cond || !cond->is<bool>()) { return stdx::none; }
+    if (!cond || !cond->is<bool>()) {
+        cond_unknown_ = true;
+        return stdx::none;
+    }
 
     if (cond->as<bool>()) {
         return eval_stmt(if_expr.consequence);
@@ -3077,10 +3096,14 @@ auto const_eval::eval_while(ast::node_id, const ast::while_loop_expr& loop)
     PROFILE_FUNCTION();
     while (true) {
         const auto cond{try_eval(loop.condition)};
-        if (!cond || !cond->is<bool>()) { return stdx::none; }
+        if (!cond || !cond->is<bool>()) {
+            cond_unknown_ = true;
+            return stdx::none;
+        }
         if (!cond->as<bool>()) { break; }
 
-        if (const auto body_res{eval_stmt(loop.block)}) { return body_res; }
+        const auto body_res{eval_stmt(loop.block)};
+        if (body_res || cond_unknown_) { return body_res; }
 
         if (loop.continuation) { DISCARD(try_eval(*loop.continuation)); }
     }
@@ -3091,10 +3114,14 @@ auto const_eval::eval_do_while(ast::node_id, const ast::do_while_loop_expr& loop
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     while (true) {
-        if (const auto body_res{eval_stmt(loop.block)}) { return body_res; }
+        const auto body_res{eval_stmt(loop.block)};
+        if (body_res || cond_unknown_) { return body_res; }
 
         const auto cond{try_eval(loop.condition)};
-        if (!cond || !cond->is<bool>()) { return stdx::none; }
+        if (!cond || !cond->is<bool>()) {
+            cond_unknown_ = true;
+            return stdx::none;
+        }
         if (!cond->as<bool>()) { break; }
     }
     return stdx::none;
@@ -3105,7 +3132,14 @@ auto const_eval::eval_for(ast::node_id, const ast::for_loop_expr& loop)
     PROFILE_FUNCTION();
     VERIFY(loop.iterables.size() == loop.captures.size(),
            "For loop iterables and captures must match in count");
-    if (loop.iterables.empty()) { return stdx::none; }
+    // Every early exit below means the set of values to iterate couldn't be determined, which
+    // is unknown control flow, not "zero iterations" - the caller must not keep evaluating
+    // later statements as if this loop had simply produced no value.
+    const auto unknown{[&] {
+        cond_unknown_ = true;
+        return stdx::none;
+    }};
+    if (loop.iterables.empty()) { return unknown(); }
 
     std::vector<std::vector<const_value>> iterable_sequences;
     iterable_sequences.reserve(loop.iterables.size());
@@ -3115,14 +3149,14 @@ auto const_eval::eval_for(ast::node_id, const ast::for_loop_expr& loop)
         const auto               iterable_id{*iterable_handle};
 
         if (const auto range{module_->ast.get_as_opt<ast::range_expr>(iterable_id)}) {
-            if (!range->lhs || !range->rhs) { return stdx::none; }
+            if (!range->lhs || !range->rhs) { return unknown(); }
             const auto start_val{try_eval(*range->lhs)};
             const auto end_val{try_eval(*range->rhs)};
-            if (!start_val || !end_val) { return stdx::none; }
+            if (!start_val || !end_val) { return unknown(); }
 
             const auto start_opt{start_val->as_int_opt()};
             const auto end_opt{end_val->as_int_opt()};
-            if (!start_opt || !end_opt) { return stdx::none; }
+            if (!start_opt || !end_opt) { return unknown(); }
 
             const auto start{*start_opt};
             const auto end{*end_opt};
@@ -3138,7 +3172,7 @@ auto const_eval::eval_for(ast::node_id, const ast::for_loop_expr& loop)
         } else if (const auto array{module_->ast.get_as_opt<ast::array_expr>(iterable_id)}) {
             for (const auto& item_h : array->items) {
                 const auto item_val{try_eval(item_h)};
-                if (!item_val) { return stdx::none; }
+                if (!item_val) { return unknown(); }
                 sequence.emplace_back(*item_val);
             }
         } else {
@@ -3147,10 +3181,10 @@ auto const_eval::eval_for(ast::node_id, const ast::for_loop_expr& loop)
                 if (const auto arr{val->as_opt<const_array>()}) {
                     sequence = arr->elements;
                 } else {
-                    return stdx::none;
+                    return unknown();
                 }
             } else {
-                return stdx::none;
+                return unknown();
             }
         }
 
@@ -3172,7 +3206,8 @@ auto const_eval::eval_for(ast::node_id, const ast::for_loop_expr& loop)
             }
         }
 
-        if (const auto body_res{eval_stmt(loop.block)}) { return body_res; }
+        const auto body_res{eval_stmt(loop.block)};
+        if (body_res || cond_unknown_) { return body_res; }
     }
 
     if (loop.non_break) { return eval_stmt(*loop.non_break); }

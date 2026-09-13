@@ -963,13 +963,12 @@ template <ast::IndexableID ID>
                                          error::FIELD_NOT_FOUND,
                                          get_call_arg_location(call.arguments[0]));
                 }
-                auto& owner{**owner_opt};
+                auto&      owner{**owner_opt};
                 const auto name{resolve_field_name_string(call.arguments[1])};
                 if (!name) {
-                    return make_sema_err(
-                        "@field: the name must be a compile-time-known string",
-                        error::FIELD_NOT_FOUND,
-                        get_call_arg_location(call.arguments[1]));
+                    return make_sema_err("@field: the name must be a compile-time-known string",
+                                         error::FIELD_NOT_FOUND,
+                                         get_call_arg_location(call.arguments[1]));
                 }
 
                 const auto not_found = [&] {
@@ -990,12 +989,10 @@ template <ast::IndexableID ID>
                 const auto member_node{sym->get_data().as_opt<symbols::node_t>()};
                 if (!member_node) { return not_found(); }
                 const auto member_decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*member_node)};
-                const bool is_fn_member{member_decl && member_decl->value &&
-                                        resolving_.ast[*member_decl->value]
-                                            .is<ast::function_expr>()};
-                if (is_fn_member || !resolving_.has_sema_type(*member_node)) {
-                    return not_found();
-                }
+                const bool is_fn_member{
+                    member_decl && member_decl->value &&
+                    resolving_.ast[*member_decl->value].is<ast::function_expr>()};
+                if (is_fn_member || !resolving_.has_sema_type(*member_node)) { return not_found(); }
                 return_type = &resolving_.get_sema_type(*member_node);
                 break;
             }
@@ -2124,6 +2121,12 @@ auto type_resolver::synthesize_struct(usize                             disc,
                     error::CONSTEXPR_EVALUATION_FAILED,
                     loc);
             }
+            // A synthetic aggregate never goes through `visit(struct_expr)`, so nothing else
+            // resolves this literal against the field's own type
+            {
+                const structural_guard inner_g{implicit_type_stack_, *type_v};
+                resolve(*lit);
+            }
             default_value.emplace(*lit);
         }
 
@@ -2690,9 +2693,9 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
 
         if (fn_info_opt && (any_param_generic(params) ||
                             any_param_constexpr(*fn_info_opt->fn_expr) || has_pack_param)) {
-            auto       concrete_arg_types{ctx_.pool.get_many_unsafe(effective_arity)};
-            bool       any_arg_poison{false};
-            const auto fixed_params{params.subspan(param_offset)};
+            auto        concrete_arg_types{ctx_.pool.get_many_unsafe(effective_arity)};
+            bool        any_arg_poison{false};
+            const auto  fixed_params{params.subspan(param_offset)};
             const auto& fn_params{fn_info_opt->fn_expr->parameters};
             const auto& fn_ast{fn_info_opt->module->ast};
 
@@ -2705,7 +2708,8 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 if (!ident) { return stdx::none; }
                 for (usize k{0}; k < idx; ++k) {
                     if (!fn_params[k].name.is<ast::identifier_expr>()) { continue; }
-                    if (fn_ast.get_as<ast::identifier_expr>(fn_params[k].name).name == ident->name) {
+                    if (fn_ast.get_as<ast::identifier_expr>(fn_params[k].name).name ==
+                        ident->name) {
                         return k;
                     }
                 }
