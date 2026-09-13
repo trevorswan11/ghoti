@@ -217,6 +217,9 @@ class const_eval {
     stdx::option<const symbol_scoping&> symbol_scoping_;
     std::vector<call_frame>             call_stack_;
     default_counter                     recursion_depth_;
+    // Set by `eval_if`/`eval_while`/`eval_do_while`/`eval_for` when a construct's own
+    // condition/iterable can't be folded.
+    bool cond_unknown_{false};
 
     ankerl::unordered_dense::map<memo_key, const_value, memo_key_hash> memo_cache_;
 };

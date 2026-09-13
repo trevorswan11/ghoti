@@ -31,4 +31,3 @@ pub const main := fn(args: [][:0]u8): i32 {
         },
     };
 };
-
