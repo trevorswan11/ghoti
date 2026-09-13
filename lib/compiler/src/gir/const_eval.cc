@@ -520,9 +520,10 @@ auto const_eval::force_deferred_function_params(sema::type& maybe_fn) -> void {
     const auto params{fn_data->params};
     const auto has_self{fn_data->has_self};
     const auto is_variadic{fn_data->is_variadic};
+    const auto conv{fn_data->conv};
     force_deferred_array_elements(params);
     auto& return_type{force_deferred_array(fn_data->return_type)};
-    maybe_fn.resolve<sema::types::function>(params, return_type, has_self, is_variadic);
+    maybe_fn.resolve<sema::types::function>(params, return_type, has_self, is_variadic, conv);
 }
 
 auto const_eval::resolve_deferred_array(const ast::explicit_array_type& array,
