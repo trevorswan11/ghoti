@@ -4709,6 +4709,11 @@ auto type_resolver::resolve_structural_access(type&                          obj
         target_type = &fn_data->return_type;
     }
 
+    if (target_type->get_data().is<types::deferred_array>()) {
+        gir::const_eval evaluator{ctx_, resolving_};
+        target_type = &evaluator.force_deferred_array(*target_type);
+    }
+
     auto&      object_data{target_type->get_data()};
     const auto enum_type{object_data.as_opt<types::enum_t>()};
     const auto struct_type{object_data.as_opt<types::struct_t>()};
@@ -5469,6 +5474,28 @@ auto type_resolver::validate_enum_arms(ast::node_id           match_id,
                                       fmt::join(enum_validator_.duplicates, ", ")),
                           error::DUPLICATE_ENUMERATION,
                           resolving_.ast.location_of(match_id)};
+    }
+
+    // Check for missing variants only if there's no catch-all
+    if (!match.catch_all_idx) {
+        if (const auto e_data{enum_type.get_data().as_opt<types::enum_t>()}) {
+            const auto& enclosing{e_data->enclosing};
+            for (const auto& e : e_data->ast_enumerations) {
+                const auto& variant_node{enclosing.ast.get_as<ast::identifier_expr>(e.name)};
+                if (!enum_validator_.seen.contains(variant_node.name)) {
+                    enum_validator_.missings.emplace_back(variant_node.name);
+                }
+            }
+        }
+
+        if (!enum_validator_.missings.empty()) {
+            return diagnostic{
+                fmt::format("Match expression is non-exhaustive; missing enumeration{}: {}",
+                            plurality(enum_validator_.missings),
+                            fmt::join(enum_validator_.missings, ", ")),
+                error::MISSING_FIELD,
+                resolving_.ast.location_of(match_id)};
+        }
     }
 
     // Check for unknown/extra variants

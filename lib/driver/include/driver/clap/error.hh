@@ -8,7 +8,7 @@
 
 namespace ghoti::clap {
 
-enum class error : u8 {
+enum class error : u64 {
     INVALID_OPTIMIZATION = 10,
     MISSING_SUBCOMMAND,
     MISSING_INPUT_FILE,
