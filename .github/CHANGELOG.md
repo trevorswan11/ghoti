@@ -303,4 +303,4 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `@field(value, name)`: reads or writes an instance's own struct/union field by a compile-time-known name (through pointers and references, lvalue-capable)
     - `@field(T, name)`: reads or writes a static `var` or `const` member of a type by a compile-time-known name, the same way `T.member` already does
     - Method and bound access are explicitly rejected
-- `FieldInfo`/`UnionFieldInfo`'s `type_` field is now the raw identifier `@"type"`, now that a same-named field can no longer shadow the outer `type` builtin
+- `StructFieldInfo`/`UnionFieldInfo`'s `type_` field is now the raw identifier `@"type"`, now that a same-named field can no longer shadow the outer `type` builtin

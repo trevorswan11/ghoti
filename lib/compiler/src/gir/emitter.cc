@@ -2817,7 +2817,8 @@ auto emitter::resolve_static_field_ref(const ast::call_expr& call)
     return std::pair{gsl::not_null{&**owner_opt}, std::string{*name}};
 }
 
-auto emitter::try_emit_static_field_builtin_addr(const ast::call_expr& call) -> stdx::option<value> {
+auto emitter::try_emit_static_field_builtin_addr(const ast::call_expr& call)
+    -> stdx::option<value> {
     const auto ref{resolve_static_field_ref(call)};
     if (!ref) { return stdx::none; }
     return try_static_member_ref(*ref->first, ref->second);
