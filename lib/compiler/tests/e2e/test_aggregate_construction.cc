@@ -44,7 +44,7 @@ TEST_CASE("`@Struct` constructs a struct type from a `StructInfo` descriptor") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             const T := @Struct(builtin.StructInfo{
-                .fields = [2]builtin.FieldInfo{
+                .fields = [2]builtin.StructFieldInfo{
                     .{ .name = "x", .@"type" = i32, .has_default = false },
                     .{ .name = "y", .@"type" = i32, .has_default = false },
                 },
@@ -62,7 +62,7 @@ TEST_CASE("`@Struct` applies `defaults...` to fields with `has_default = true`")
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             const T := @Struct(builtin.StructInfo{
-                .fields = [2]builtin.FieldInfo{
+                .fields = [2]builtin.StructFieldInfo{
                     .{ .name = "x", .@"type" = i32, .has_default = false },
                     .{ .name = "y", .@"type" = i32, .has_default = true },
                 },
@@ -80,7 +80,7 @@ TEST_CASE("`@Struct` diagnoses a missing `defaults...` argument instead of crash
     CHECK(helpers::raised(R"(
         pub const main := fn(): i32 {
             const T := @Struct(builtin.StructInfo{
-                .fields = [1]builtin.FieldInfo{
+                .fields = [1]builtin.StructFieldInfo{
                     .{ .name = "x", .@"type" = i32, .has_default = true },
                 },
                 .is_extern = false,
