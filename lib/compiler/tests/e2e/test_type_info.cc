@@ -365,4 +365,95 @@ TEST_CASE("a plain runtime `if` on a match-captured payload field reads it corre
     )") == 1);
 }
 
+TEST_CASE("`if constexpr` can fold a compile-time string's `.len`") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            if constexpr ("hello".len == 5) {
+                return 0;
+            }
+            return 1;
+        };
+    )") == 0);
+}
+
+TEST_CASE("`if constexpr` can fold a compile-time slice range `arr[lo..hi]`") {
+    CHECK(helpers::compile_and_run(R"(
+        constexpr eql := fn(T: type, a: []T, b: []T): bool {
+            if (a.len != b.len) return false;
+            for (a, b) |x, y| { if (x != y) return false; }
+            return true;
+        };
+        pub const main := fn(): i32 {
+            if constexpr (eql(u8, "hello world"[0..5], "hello")) {
+                return 0;
+            }
+            return 1;
+        };
+    )") == 0);
+}
+
+TEST_CASE("`if constexpr` can compare `@typeInfo(T)` against a bare tagged-union variant "
+          "literal") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            if constexpr (@typeInfo(u8) != .float) {
+                return 0;
+            }
+            return 1;
+        };
+    )") == 0);
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            if constexpr (@typeInfo(f32) == .float) {
+                return 0;
+            }
+            return 1;
+        };
+    )") == 0);
+}
+
+TEST_CASE("consecutive `for constexpr` iterations that fold `if constexpr` to the SAME branch "
+          "don't corrupt an adjacent iteration's own (different) verdict") {
+    CHECK(helpers::compile_and_run(R"(
+        const Data := struct { count_x: f32, count_y: u32, other: bool };
+        pub const main := fn(): i32 {
+            var acc: i32 = 0;
+            for constexpr (@typeInfo(Data).@"struct".fields) |field| {
+                if constexpr (field.name.len == 7) {
+                    acc += 1;
+                }
+            }
+            return acc;
+        };
+    )") == 2);
+}
+
+TEST_CASE("`if constexpr` calling a `std.mem`-shaped `startsWith`/`eql` pair folds per-field "
+          "inside a `for constexpr` over `@typeInfo(T).fields`") {
+    CHECK(helpers::compile_and_run(R"(
+        constexpr eql := fn(T: type, a: []T, b: []T): bool {
+            if (a.len != b.len) return false;
+            if (a.len == 0) return true;
+            if (@typeInfo(T) != .float and a.ptr == b.ptr) return true;
+            for (a, b) |a_elem, b_elem| {
+                if (a_elem != b_elem) return false;
+            }
+            return true;
+        };
+        constexpr startsWith := fn(T: type, haystack: []T, needle: []T): bool {
+            return if (needle.len > haystack.len) false else eql(T, haystack[0..needle.len], needle);
+        };
+        const Data := struct { count_x: f32, count_y: u32, other: bool };
+        pub const main := fn(): i32 {
+            var acc: i32 = 0;
+            for constexpr (@typeInfo(Data).@"struct".fields) |field| {
+                if constexpr (startsWith(u8, field.name, "count_")) {
+                    acc += 1;
+                }
+            }
+            return acc;
+        };
+    )") == 2);
+}
+
 } // namespace ghoti::tests

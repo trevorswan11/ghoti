@@ -295,6 +295,10 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `while constexpr` unrolls while its `constexpr var` condition holds, bounded by `@setEvalUnrollLimit`
 - `constexpr var`: a compile-time-mutable binding, including aggregate (struct/array) values
 - Fix a monomorphization bug in functions that take in a type to determine the types of the other parameters
+- Implicit access comparisons now work at compile time
+- Arrays/Slices can be sliced with the indexing operator at compile time
+- `.ptr` comparison over two compile time arrays now work as intended
+    - You cannot store the value of this for runtime use
 
 ## Reflection
 
