@@ -6,6 +6,7 @@
 
 #include <ankerl/unordered_dense.h>
 #include <stdx/arena.hh>
+#include <stdx/assert.hh>
 #include <stdx/fixed/string.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
@@ -34,6 +35,12 @@ class string_interner {
 
         index_.emplace(stored, stored);
         return stored;
+    }
+
+    // Asserts that the arena is actually valid
+    [[nodiscard]] auto arena() noexcept -> ghoti::arena& {
+        VERIFY(arena_, "Arena was not set and cannot back the AST");
+        return *arena_;
     }
 
     // Drops the dedup table and any overflow storage

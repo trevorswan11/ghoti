@@ -372,4 +372,28 @@ TEST_CASE("cross-module aggregate impl with generic member functions") {
     CHECK(exit_code == 12 + 14 + 30 + 20);
 }
 
+TEST_CASE("a value parameter typed via an earlier `T: type` parameter infers a single-arg "
+          "builtin's target type from T's bound value") {
+    CHECK(helpers::compile_and_run(R"(
+        const add := fn(T: type, x: T, y: T): T { return x + y; };
+        pub const main := fn(): i32 {
+            const a := add(i32, 10, 4);
+            const b := add(u8, 5u8, @intCast(a));
+            return a + @intCast(i32, b);
+        };
+    )") == 33);
+}
+
+TEST_CASE("a value parameter typed via an earlier `T: type` parameter rejects an argument that "
+          "doesn't fit T's bound value, instead of miscompiling") {
+    helpers::expect_compile_error(R"(
+        const add := fn(T: type, x: T, y: T): T { return x + y; };
+        pub const main := fn(): i32 {
+            const a := add(i32, 10, 4);
+            const b := add(u8, 5u8, a);
+            return a + @intCast(i32, b);
+        };
+    )");
+}
+
 } // namespace ghoti::tests

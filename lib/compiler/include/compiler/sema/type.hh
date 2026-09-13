@@ -21,6 +21,7 @@
 #include <stdx/variant.hh>
 
 #include "compiler/arena.hh"
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/ast/type.hh"
@@ -266,10 +267,11 @@ struct struct_t {
 };
 
 struct function {
-    gsl::span<type*> params;
-    type&            return_type;
-    bool             has_self;
-    bool             is_variadic{false};
+    gsl::span<type*>        params;
+    type&                   return_type;
+    bool                    has_self;
+    bool                    is_variadic{false};
+    ast::calling_convention conv{ast::calling_convention::C};
 };
 
 // Carries no storage and is never a value type; it only describes a contract
@@ -594,6 +596,14 @@ static_assert(stdx::TriviallyDestructible<type>);
 // field is laid out at bit offset 0). None if any field is ineligible or `N` exceeds 65535.
 [[nodiscard]] auto packed_union_backing_bits(const types::union_t& u, u32 ptr_bits) noexcept
     -> stdx::option<u32>;
+
+// A data field found by name on a `struct`/`union`
+struct field_lookup_result {
+    usize index;
+    type& field_type;
+};
+[[nodiscard]] auto find_aggregate_field(type& denoted, std::string_view name) noexcept
+    -> stdx::option<field_lookup_result>;
 
 // All associated type lifetimes are tied to the pool
 class type_pool {

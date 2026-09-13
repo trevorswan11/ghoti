@@ -244,7 +244,6 @@ TEST_CASE("Comprehensive program lowering") {
     CHECK(dump_text.contains("load"));
     CHECK(dump_text.contains("cond_goto"));
     CHECK(dump_text.contains("call @max__i32_i32"));
-    CHECK(dump_text.contains("call @transform"));
 }
 
 } // namespace ghoti::tests

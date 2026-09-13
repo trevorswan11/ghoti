@@ -91,6 +91,10 @@ enum class error : u8 {
     CFG_VALUE_EMPTY_GUARD,
     ILLEGAL_INTERFACE_MEMBER,
     IMPL_MISSING_TARGET,
+    PACK_PARAM_NOT_LAST,
+    PACK_EXPANSION_MISPLACED,
+    CONSTEXPR_LOOP_HAS_ELSE,
+    CONSTEXPR_LOOP_LABELED,
 };
 
 using diagnostic  = diagnostic<error>;

@@ -176,6 +176,22 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::THIS, params(), t_type);
     inject_function(bis::TAG_NAME, params(t_auto), t_c_str);
     inject_function(bis::TYPE_NAME, params(t_auto), t_c_str);
+    inject_function(bis::TYPE_INFO, params(t_auto), t_auto);
+    inject_function(bis::HAS_FIELD, params(t_auto, t_auto), t_bool);
+    inject_function(bis::FIELD_TYPE, params(t_auto, t_auto), t_type);
+    inject_function(bis::FIELD, params(t_auto, t_auto), t_auto);
+
+    inject_function(bis::INT, params(t_auto), t_type);
+    inject_function(bis::FLOAT, params(t_auto), t_type);
+    inject_function(bis::POINTER, params(t_auto), t_type);
+    inject_function(bis::REFERENCE, params(t_auto), t_type);
+    inject_function(bis::SLICE, params(t_auto), t_type);
+    inject_function(bis::ARRAY, params(t_auto), t_type);
+    inject_function(bis::FN, params(t_auto), t_type);
+    inject_function(bis::FIELD_DEFAULT, params(t_auto, t_auto), t_auto);
+    inject_function(bis::STRUCT, params(t_auto), t_type);
+    inject_function(bis::UNION, params(t_auto), t_type);
+    inject_function(bis::ENUM, params(t_auto), t_type);
 
     inject_function(bis::MEMCPY, params(t_auto, t_auto), t_void);
     inject_function(bis::MEMSET, params(t_auto, t_auto), t_void);
@@ -212,6 +228,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::TARGET_FAMILY, params(), t_c_str);
 
     inject_function(bis::SET_EVAL_RECURSION_LIMIT, params(t_usize), t_void);
+    inject_function(bis::SET_EVAL_UNROLL_LIMIT, params(t_usize), t_void);
     inject_function(bis::SET_MAIN_SYMBOL, params(t_c_str), t_void);
 
     inject_function(bis::PANIC, params(t_c_str), t_noreturn);

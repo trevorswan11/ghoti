@@ -164,8 +164,11 @@ auto dumper::visit(node_id, const call_expr& call) -> void {
     if (has_args) {
         const indent::guard g{indent_, true};
         fmt::println(out_, "{}Arguments:", indent_.current_branch());
-        dump_container(call.arguments, [this](const call_expr::argument& arg) -> void {
-            fmt::print(out_, "{}", indent_.current_branch());
+        usize idx{0};
+        dump_container(call.arguments, [this, &call, &idx](const call_expr::argument& arg) -> void {
+            const bool is_expansion{idx < call.pack_expansions.size() && call.pack_expansions[idx]};
+            ++idx;
+            fmt::print(out_, "{}{}", indent_.current_branch(), is_expansion ? "...: " : "");
             arg.visit([this](auto arg_id) -> void { dump(arg_id); });
         });
     }
@@ -244,7 +247,7 @@ auto dumper::visit(node_id, const enum_expr& enum_expr) -> void {
 
 auto dumper::visit(node_id, const for_loop_expr& for_loop) -> void {
     PROFILE_FUNCTION();
-    fmt::println(out_, "ForLoopExpression");
+    fmt::println(out_, "ForLoopExpression{}", for_loop.is_constexpr ? " (constexpr)" : "");
     {
         const indent::guard g{indent_, false};
         fmt::println(out_, "{}Iterables:", indent_.current_branch());
@@ -296,16 +299,19 @@ auto dumper::visit(node_id, const function_expr& function) -> void {
         dump_container(function.parameters,
                        [this](const function_expr::parameter& parameter) -> void {
                            fmt::println(out_,
-                                        "{}Param{}:",
+                                        "{}Param{}{}:",
                                         indent_.current_branch(),
-                                        parameter.is_constexpr ? " (constexpr)" : "");
+                                        parameter.is_constexpr ? " (constexpr)" : "",
+                                        parameter.is_pack ? " (pack)" : "");
                            {
-                               const indent::guard g_name{indent_, false};
+                               const bool          no_type{!parameter.explicit_type.is_valid()};
+                               const indent::guard g_name{indent_, no_type};
                                fmt::print(out_, "{}Name: ", indent_.current_branch());
                                dump(*parameter.name);
                            }
 
-                           {
+                           // An untyped pack (`rest...`) has no type to dump.
+                           if (parameter.explicit_type.is_valid()) {
                                const indent::guard g_type{indent_, true};
                                fmt::print(out_, "{}Type: ", indent_.current_branch());
                                dump(parameter.explicit_type);
@@ -888,7 +894,7 @@ auto dumper::visit(node_id, const interface_expr& node) -> void {
 
 auto dumper::visit(node_id, const while_loop_expr& while_expr) -> void {
     PROFILE_FUNCTION();
-    fmt::println(out_, "WhileLoopExpression");
+    fmt::println(out_, "WhileLoopExpression{}", while_expr.is_constexpr ? " (constexpr)" : "");
     {
         const indent::guard g{indent_, false};
         fmt::print(out_, "{}Condition: ", indent_.current_branch());

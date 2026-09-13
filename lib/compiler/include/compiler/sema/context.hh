@@ -62,6 +62,9 @@ struct context {
     // Observed by all const_eval memo caches.
     u64 env_epoch{0};
 
+    // Persists across all const evaluators
+    usize eval_unroll_limit{256};
+
     auto advance_epoch() noexcept -> u64 { return ++env_epoch; }
 
     context(mod::module_manager&         modules,
