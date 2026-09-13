@@ -174,10 +174,12 @@ constexpr auto LEGAL_MODIFIERS{
 
 [[nodiscard]] constexpr auto validate_modifiers(decl_modifiers modifiers) noexcept
     -> stdx::option<std::string> {
-    const auto mut_count{std::popcount(
-        std::to_underlying(modifiers & (decl_modifiers::VARIABLE | decl_modifiers::CONSTANT |
-                                        decl_modifiers::CONSTEXPR)))};
-    if (mut_count != 1) {
+    const auto mut_bits{modifiers & (decl_modifiers::VARIABLE | decl_modifiers::CONSTANT |
+                                     decl_modifiers::CONSTEXPR)};
+    const auto mut_count{std::popcount(std::to_underlying(mut_bits))};
+    // `constexpr var` is the one legal pair: a mutable comptime local.
+    const auto is_constexpr_var{mut_bits == (decl_modifiers::VARIABLE | decl_modifiers::CONSTEXPR)};
+    if (mut_count != 1 && !is_constexpr_var) {
         return fmt::format("Exactly one mutability modifier may be used; found {}", mut_count);
     }
 

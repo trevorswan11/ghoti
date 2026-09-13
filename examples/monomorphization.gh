@@ -1,0 +1,13 @@
+pub constexpr Array := fn(T: type, constexpr n: usize): type {
+    return [n]T;
+};
+
+pub const main := fn(): i32 {
+    var arr: Array(i32, 4) = .{ 1, 2, 3, 4 };
+    const sum := blk: {
+        var acc: i32 = 0;
+        for (arr) |a| { acc += a; };
+        break :blk acc;
+    };
+    return sum;
+};

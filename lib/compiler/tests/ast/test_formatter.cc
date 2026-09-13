@@ -433,6 +433,7 @@ const b := 2;
 TEST_CASE("formatter round trip: declarations and literals") {
     round_trips(R"(pub const version := "0.0.1";)");
     round_trips("constexpr SIZE := 2uz;");
+    round_trips("constexpr var n := 2uz;");
     round_trips("var a: i32 = undefined;");
     round_trips("var v: mut volatile i32 = 42;");
     round_trips("const v: volatile i32 = 42;");
@@ -453,6 +454,7 @@ TEST_CASE("formatter round trip: operators and grouping") {
     round_trips("_ = a +% b - c *% d + e <<% f;");
     round_trips("_ = -%a;");
     round_trips("var x: u8 = 0; x +%= 1; x -%= 1; x *%= 2; x <<%= 1;");
+    round_trips(R"(_ = "a" ++ "b" ++ c;)");
 }
 
 TEST_CASE("formatter round trip: precedence and nesting are preserved") {
@@ -659,7 +661,7 @@ TEST_CASE("formatter puts a blank line between consecutive impl methods") {
 }
 
 TEST_CASE("formatter puts a blank line between a struct field and its first method, and "
-         "between consecutive methods") {
+          "between consecutive methods") {
     CHECK(format_source("const S := struct { x: i32, pub const get := fn(&self): i32 "
                         "{ return self.x; }; pub const inc := fn(&mut self): void "
                         "{ self.x = self.x + 1; }; };") ==
@@ -723,8 +725,10 @@ TEST_CASE("formatter round trip: control flow") {
     round_trips("if (a) { b; } else { c; };");
     round_trips("if constexpr (a) { b; };");
     round_trips("while (true) : (i += 1) { a; } else return b;");
+    round_trips("while constexpr (a) { b; };");
     round_trips("do { a; } while (true);");
     round_trips("for (arr, l, p) |i, &mut j, _| { a; } else return b;");
+    round_trips("for constexpr (arr, 0..) |v, i| { b; };");
     round_trips("loop { a; };");
     round_trips("match (a) { b => |c| d, e => |_| f, g => h, _ => d, };");
     round_trips("match (n) { 1..10 => |v| v, 10..=20 => 2, _ => 0 };");
@@ -733,6 +737,15 @@ TEST_CASE("formatter round trip: control flow") {
     round_trips("match constexpr (n) { 1, 2 => |v| v, _ => 0 };");
     round_trips("a: { continue :a; };");
     round_trips(R"(test "dump" { import other; @expect(a == true); })");
+}
+
+TEST_CASE("formatter round trip: parameter packs") {
+    round_trips("const f := fn(a: i32, rest...): void {};");
+    round_trips("const f := fn(rest...): void {};");
+    round_trips("const f := fn(rest: impl Format...): void {};");
+    round_trips("const f := fn(rest: impl (A + B)...): void {};");
+    round_trips("const use := fn(): void { log(a, rest...); };");
+    round_trips("const use := fn(): void { dump(a, rest..., b); };");
 }
 
 TEST_CASE("formatter round trip: nested module") {

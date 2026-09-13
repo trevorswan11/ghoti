@@ -103,11 +103,12 @@ pub const Allocator := struct {
     ///
     /// For allocating a single item, see `create`.
     pub const alloc := fn(self, T: type, len: usize): std.Result([]mut T, AllocError) {
-        const size := @mulWithOverflow(@sizeOf(T), len); // guard the byte-count multiply
-        if (size.overflow) {
+        // Guard the byte-count multiply against overflow before it reaches the allocator.
+        var size: usize = undefined;
+        if (@mulWithOverflow(@sizeOf(T), len, ^mut size)) {
             return .{ .err = .out_of_memory };
         }
-        return match (self.vtable.alloc(size.value, .of(T))) {
+        return match (self.vtable.alloc(size, .of(T))) {
             .some => |raw| .{
                 .ok = @sliceFromPtr(@ptrCast(^mut T, raw), len),
             },
@@ -119,9 +120,10 @@ pub const Allocator := struct {
     /// If memory has length 0, free is a no-op.
     /// To free a single item, see `destroy`.
     pub const free := fn(self, T: type, mem: []mut T): void {
-        const size := @mulWithOverflow(@sizeOf(T), mem.len);
-        @assert(size.overflow, "Attempt to free overflowed allocation");
-        const raw := @sliceFromPtr(@ptrCast(^mut u8, mem.ptr), size.value);
+        var size: usize = undefined;
+        const overflowed := @mulWithOverflow(@sizeOf(T), mem.len, ^mut size);
+        @assert(!overflowed, "Attempt to free overflowed allocation");
+        const raw := @sliceFromPtr(@ptrCast(^mut u8, mem.ptr), size);
         return self.vtable.free(raw, .of(T));
     };
 

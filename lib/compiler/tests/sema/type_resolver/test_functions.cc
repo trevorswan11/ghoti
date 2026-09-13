@@ -156,7 +156,8 @@ TEST_CASE("Function explicit type resolution") {
         ctx->get_type(sema::type_kind::FUNCTION,
                       ctx->get_type(sema::type_kind::POINTER, ctx->get_int_type(32, true)),
                       ctx->get_int_type(32, false),
-                      ctx->get_type(sema::type_kind::BOOL));
+                      ctx->get_type(sema::type_kind::BOOL),
+                      ast::calling_convention::C);
     CHECK(type == expected_type);
 }
 
