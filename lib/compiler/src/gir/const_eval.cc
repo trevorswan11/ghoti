@@ -744,6 +744,14 @@ auto const_eval::eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::opt
     const auto sema_type{module_->get_sema_type_opt(id)};
     if (!sema_type) { return stdx::none; }
 
+    // `^.{a, b, c}` sugar: the resolver only ever yields a slice-typed result here for a bare
+    // initializer decaying into a known `[]T` context.
+    if (sema_type->get_kind() == sema::type_kind::SLICE) {
+        auto arr_val{try_eval(rhs)};
+        if (arr_val) { arr_val->set_type(*sema_type); }
+        return arr_val;
+    }
+
     const auto rhs_val{try_eval(rhs)};
     if (rhs_val && rhs_val->is<stdx::option<sema::type&>>()) {
         const auto& t_opt{rhs_val->as<stdx::option<sema::type&>>()};
@@ -787,7 +795,7 @@ auto const_eval::eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::opt
                 if (const auto decl{module_->ast.get_as_opt<ast::decl_stmt>(*node)}) {
                     if (decl->value && module_->ast.get_as_opt<ast::function_expr>(*decl->value)) {
                         const auto sym_name{scoped_symbol_name(*owner_table, ident->name)};
-                        return const_value{const_addr{sym_name}, sema_type};
+                        return const_value{const_addr{sym_name, {}}, sema_type};
                     }
                     if (decl->value) {
                         const auto& val_data{module_->ast[*decl->value]};
@@ -796,9 +804,21 @@ auto const_eval::eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::opt
                             return stdx::none;
                         }
                     }
+                    // A plain scalar/aggregate `const` (module-scope or local): carry its own
+                    // folded value as the pointee. A module-scope decl also gets a real
+                    // link-time symbol name; a local one has none, only the folded value.
+                    std::vector<const_value> pointee;
+                    if (decl->value) {
+                        if (auto val{try_eval(*decl->value)}; val && !val->is_poison()) {
+                            pointee.emplace_back(std::move(*val));
+                        }
+                    }
                     if (module_->root_table_idx && owner_table == module_->root_table_idx) {
                         const auto sym_name{scoped_symbol_name(*owner_table, ident->name)};
-                        return const_value{const_addr{sym_name}, sema_type};
+                        return const_value{const_addr{sym_name, std::move(pointee)}, sema_type};
+                    }
+                    if (!pointee.empty()) {
+                        return const_value{const_addr{{}, std::move(pointee)}, sema_type};
                     }
                 }
             }
@@ -833,10 +853,17 @@ auto const_eval::eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::opt
                     }
                     const auto sym_name{
                         scoped_symbol_name(*target_mod.root_table_idx, member_name)};
-                    return const_value{const_addr{sym_name}, sema_type};
+                    return const_value{const_addr{sym_name, {}}, sema_type};
                 }
             }
         }
+    }
+
+    // General fallback: `^<constexpr expr>` / `&<constexpr expr>` with no named/addressable
+    // symbol to reference
+    if (rhs_val && !rhs_val->is_poison() && !module_->ast.get_as_opt<ast::identifier_expr>(rhs) &&
+        !module_->ast.get_as_opt<ast::dot_expr>(rhs)) {
+        return const_value{const_addr{{}, {*rhs_val}}, *sema_type};
     }
 
     return stdx::none;
@@ -1317,8 +1344,11 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
         payload.emplace_back(const_value{std::move(payload_struct), payload_ty});
         return const_value{const_union{std::string{tag}, std::move(payload)}, info_type};
     }};
+    auto&      void_type{ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
     const auto tag_only{[&](std::string_view tag) -> const_value {
-        return wrap(tag, const_struct{}, ctx_.get_builtin_type("NoPayload"));
+        std::vector<const_value> payload;
+        payload.emplace_back(const_value{void_val{}, void_type});
+        return const_value{const_union{std::string{tag}, std::move(payload)}, info_type};
     }};
 
     switch (denoted.get_kind()) {
@@ -1454,9 +1484,23 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
             const auto&  f{st.ast_fields[idx]};
             const auto&  fname{st.enclosing.ast.get_as<ast::identifier_expr>(f.name).name};
             const_struct fs;
+            auto&        opaque_ptr_type{
+                ctx_.get_pointer(sema::types::mut::CONSTANT,
+                                 ctx_.get_builtin_resolved_type(sema::type_kind::OPAQUE))};
+            stdx::option<const_value> default_val;
+            if (f.default_value) {
+                auto* const prev_mod{module_.get()};
+                set_module(const_cast<mod::module&>(st.enclosing));
+                default_val = try_eval(*f.default_value);
+                set_module(*prev_mod);
+            }
             fs.fields.emplace("name", const_value::make_string(ctx_, std::string{fname}));
             fs.fields.emplace("type", type_value(*st.fields[idx]));
-            fs.fields.emplace("has_default", const_value{f.default_value.has_value(), bool_type});
+            fs.fields.emplace(
+                "default_value",
+                default_val && !default_val->is_poison()
+                    ? const_value{const_addr{{}, {std::move(*default_val)}}, opaque_ptr_type}
+                    : const_value{nullptr_val{}, opaque_ptr_type});
             fields.elements.emplace_back(const_value{std::move(fs), field_type});
         }
         const auto ptr_bits{static_cast<u32>(
@@ -2441,10 +2485,17 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
 
             if (method_fn && method_mod) {
                 std::vector<const_value> args;
+                // `Type.method(explicit_self, ...)`: `dot->object` names the type itself, not an
+                // instance, so `call.arguments[0]` already IS the self value
+                stdx::option<const_value> obj_val;
+                bool                      obj_is_type_ns{false};
                 if (method_fn->self) {
-                    const auto self_val{try_eval(dot->object)};
-                    if (!self_val) { return stdx::none; }
-                    args.emplace_back(*self_val);
+                    obj_val        = try_eval(dot->object);
+                    obj_is_type_ns = obj_val && obj_val->is<stdx::option<sema::type&>>();
+                }
+                if (method_fn->self && !obj_is_type_ns) {
+                    if (!obj_val) { return stdx::none; }
+                    args.emplace_back(*obj_val);
                 }
                 for (const auto& arg : call.arguments) {
                     if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
@@ -2955,6 +3006,18 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto bits{operand->as_uint_opt()};
         if (!bits) { return stdx::none; }
         return const_value{static_cast<u64>(*bits), usize_type};
+    }
+    case syntax::token_type_t::BUILTIN_PTR_CAST: {
+        // `@ptrCast(T, p)` reinterprets the same address; a folded operand's data (including a
+        // `const_addr`'s known pointee, if any) carries over unchanged, just re-tagged as `T`.
+        if (call.arguments.size() < 2) { return stdx::none; }
+        const auto op_h{call.arguments[1].as_opt<ast::expr_handle>()};
+        if (!op_h) { return stdx::none; }
+        auto operand{try_eval(*op_h)};
+        if (!operand) { return stdx::none; }
+        auto target{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
+        if (target) { operand->set_type(*target); }
+        return operand;
     }
     case syntax::token_type_t::BUILTIN_INT_CAST: {
         const auto op_arg_idx{call.arguments.size() == 1 ? 0UZ : 1UZ};

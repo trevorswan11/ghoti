@@ -12,7 +12,9 @@
 #include <llvm/Support/Casting.h>
 
 #include "compiler/sema/analyzer.hh"
+#include "compiler/sema/error.hh"
 #include "helpers/codegen.hh"
+#include "helpers/common.hh"
 #include "helpers/sema.hh"
 #include "support/test.hh"
 
@@ -167,12 +169,15 @@ TEST_CASE("Codegen: naked function carries the naked attribute and no synthesize
 TEST_CASE("Codegen: callconv sets the LLVM calling convention on the function and its call sites") {
     llvm::LLVMContext context;
 
-    auto [ctx, idx]{helpers::resolve_and_check(R"(
+    // `.win64` is only valid on an x86_64 target
+    auto [ctx, idx]{helpers::resolve_for_target(R"(
         pub const handler := fn() callconv(.win64): void {};
         pub const main := fn(args: [][:0]u8): void {
             handler();
         };
-    )")};
+    )",
+                                                "x86_64-unknown-linux-gnu")};
+    helpers::check_errors<sema::diagnostics>(ctx->root_mod);
 
     auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
     CHECK_FALSE(llvm::verifyModule(*llvm_mod));

@@ -2,16 +2,15 @@ import std;
 
 const Point := @Struct(
     .{
-        .fields = [2]builtin.StructFieldInfo{
-            .{ .name = "x", .@"type" = i32, .has_default = false },
-            .{ .name = "y", .@"type" = i32, .has_default = false },
-            .{ .name = "z", .@"type" = i32, .has_default = true },
+        .fields = ^.{
+            .{ .name = "x", .@"type" = i32 },
+            .{ .name = "y", .@"type" = i32 },
+            .{ .name = "z", .@"type" = i32, .default_value = @ptrCast(^opaque, ^1) },
         },
         .is_extern = false,
         .is_packed = false,
         .backing_bits = 0,
     },
-    1,
 );
 
 impl Point {

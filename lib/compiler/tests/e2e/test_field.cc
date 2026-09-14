@@ -89,10 +89,10 @@ TEST_CASE("`@field` on a type reads and writes a static `var` member by a compil
             var counter: i32 = 100;
         };
         pub const main := fn(): i32 {
-            @field(Point, "counter") = 200;
+            @field(Point, "counter") = 50;
             return @field(Point, "counter") + Point.counter;
         };
-    )") == 400);
+    )") == 100);
 }
 
 TEST_CASE("`@field` on a type rejects an instance-only data field") {

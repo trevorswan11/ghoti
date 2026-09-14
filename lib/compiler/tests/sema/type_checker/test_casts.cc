@@ -7,6 +7,69 @@
 
 namespace ghoti::tests {
 
+TEST_CASE("`@ptrCast`/`@alignCast`/`@intFromPtr` reject a non-pointer operand") {
+    SECTION("`@ptrCast` rejects a `&`-reference operand") {
+        CHECK(helpers::raised(R"(
+            pub const main := fn(): i32 {
+                const p: ^opaque = @ptrCast(^opaque, &42);
+                return 0;
+            };
+        )",
+                              sema::error::TYPE_MISMATCH));
+    }
+
+    SECTION("`@ptrCast` rejects a plain integer operand") {
+        CHECK(helpers::raised(R"(
+            pub const main := fn(): i32 {
+                const p: ^opaque = @ptrCast(^opaque, 42);
+                return 0;
+            };
+        )",
+                              sema::error::TYPE_MISMATCH));
+    }
+
+    SECTION("`@ptrCast` rejects a non-pointer target type") {
+        CHECK(helpers::raised(R"(
+            pub const main := fn(): i32 {
+                var x: i32 = 5;
+                const v: i32 = @ptrCast(i32, ^x);
+                return 0;
+            };
+        )",
+                              sema::error::TYPE_MISMATCH));
+    }
+
+    SECTION("`@alignCast` rejects a `&`-reference operand") {
+        CHECK(helpers::raised(R"(
+            pub const main := fn(): i32 {
+                const p: ^opaque = @alignCast(^opaque, &42);
+                return 0;
+            };
+        )",
+                              sema::error::TYPE_MISMATCH));
+    }
+
+    SECTION("`@intFromPtr` rejects a `&`-reference operand") {
+        CHECK(helpers::raised(R"(
+            pub const main := fn(): i32 {
+                const n: usize = @intFromPtr(&42);
+                return 0;
+            };
+        )",
+                              sema::error::TYPE_MISMATCH));
+    }
+
+    SECTION("`@ptrCast` with a real pointer operand still succeeds") {
+        helpers::type_check_and_verify(R"(
+            pub const main := fn(): i32 {
+                var x: i32 = 5;
+                const p: ^opaque = @ptrCast(^opaque, ^x);
+                return 0;
+            };
+        )");
+    }
+}
+
 TEST_CASE("Cast type checking") {
     SECTION("Valid pointer cast succeeds") {
         helpers::type_check_and_verify(R"(

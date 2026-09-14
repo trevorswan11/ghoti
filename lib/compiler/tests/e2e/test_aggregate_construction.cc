@@ -45,8 +45,8 @@ TEST_CASE("`@Struct` constructs a struct type from a `StructInfo` descriptor") {
         pub const main := fn(): i32 {
             const T := @Struct(builtin.StructInfo{
                 .fields = [2]builtin.StructFieldInfo{
-                    .{ .name = "x", .@"type" = i32, .has_default = false },
-                    .{ .name = "y", .@"type" = i32, .has_default = false },
+                    .{ .name = "x", .@"type" = i32 },
+                    .{ .name = "y", .@"type" = i32 },
                 },
                 .is_extern = false,
                 .is_packed = false,
@@ -58,40 +58,81 @@ TEST_CASE("`@Struct` constructs a struct type from a `StructInfo` descriptor") {
     )") == 30);
 }
 
-TEST_CASE("`@Struct` applies `defaults...` to fields with `has_default = true`") {
+TEST_CASE("`@Struct` accepts a `^.{...}` slice literal for its `fields` descriptor") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            const T := @Struct(builtin.StructInfo{
-                .fields = [2]builtin.StructFieldInfo{
-                    .{ .name = "x", .@"type" = i32, .has_default = false },
-                    .{ .name = "y", .@"type" = i32, .has_default = true },
+            const T := @Struct(.{
+                .fields = ^.{
+                    .{ .name = "x", .@"type" = i32 },
+                    .{ .name = "y", .@"type" = i32 },
+                    .{ .name = "z", .@"type" = i32, .default_value = @ptrCast(^opaque, ^1) },
                 },
                 .is_extern = false,
                 .is_packed = false,
                 .backing_bits = 0,
-            }, 99);
+            });
+            var v: T = .{ .x = 2, .y = 9 };
+            return v.x + v.y + v.z;
+        };
+    )") == 12);
+}
+
+TEST_CASE("`@Struct` applies a field's own `default_value`") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            const T := @Struct(builtin.StructInfo{
+                .fields = [2]builtin.StructFieldInfo{
+                    .{ .name = "x", .@"type" = i32 },
+                    .{ .name = "y", .@"type" = i32, .default_value = @ptrCast(^opaque, ^99) },
+                },
+                .is_extern = false,
+                .is_packed = false,
+                .backing_bits = 0,
+            });
             var v: T = .{ .x = 1 };
             return v.x + v.y;
         };
     )") == 100);
 }
 
-TEST_CASE("`@Struct` diagnoses a missing `defaults...` argument instead of crashing") {
-    CHECK(helpers::raised(R"(
+TEST_CASE("`@Struct`'s `default_value` accepts `^<module-scope const>`") {
+    CHECK(helpers::compile_and_run(R"(
+        const DEFAULT_Y: i32 = 99;
         pub const main := fn(): i32 {
             const T := @Struct(builtin.StructInfo{
-                .fields = [1]builtin.StructFieldInfo{
-                    .{ .name = "x", .@"type" = i32, .has_default = true },
+                .fields = [2]builtin.StructFieldInfo{
+                    .{ .name = "x", .@"type" = i32 },
+                    .{ .name = "y", .@"type" = i32, .default_value = @ptrCast(^opaque, ^DEFAULT_Y) },
                 },
                 .is_extern = false,
                 .is_packed = false,
                 .backing_bits = 0,
             });
-            var v: T = .{};
-            return v.x;
+            var v: T = .{ .x = 1 };
+            return v.x + v.y;
         };
-    )",
-                          sema::error::ARITY_MISMATCH));
+    )") == 100);
+}
+
+TEST_CASE("`@Struct`'s `default_value` accepts `^<local const>`") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            const local_default: i32 = 99;
+            const T := @Struct(builtin.StructInfo{
+                .fields = [2]builtin.StructFieldInfo{
+                    .{ .name = "x", .@"type" = i32 },
+                    .{ .name = "y",
+                       .@"type" = i32,
+                       .default_value = @ptrCast(^opaque, ^local_default) },
+                },
+                .is_extern = false,
+                .is_packed = false,
+                .backing_bits = 0,
+            });
+            var v: T = .{ .x = 1 };
+            return v.x + v.y;
+        };
+    )") == 100);
 }
 
 TEST_CASE("`@Union` constructs an untagged union type from a `UnionInfo` descriptor") {
@@ -112,19 +153,19 @@ TEST_CASE("`@Union` constructs an untagged union type from a `UnionInfo` descrip
     )") == 42);
 }
 
-TEST_CASE("`@Struct` widens an unsuffixed float `defaults...` value to a narrower field's own "
+TEST_CASE("`@Struct` widens an unsuffixed float `default_value` to a narrower field's own "
           "type instead of defaulting it to `f64`") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             const T := @Struct(builtin.StructInfo{
                 .fields = [2]builtin.StructFieldInfo{
-                    .{ .name = "x", .@"type" = f32, .has_default = false },
-                    .{ .name = "y", .@"type" = f32, .has_default = true },
+                    .{ .name = "x", .@"type" = f32 },
+                    .{ .name = "y", .@"type" = f32, .default_value = @ptrCast(^opaque, ^1.0f32) },
                 },
                 .is_extern = false,
                 .is_packed = false,
                 .backing_bits = 0,
-            }, 1.0f32);
+            });
             var v: T = .{ .x = 2f32 };
             return @as(i32, v.x + v.y);
         };
@@ -136,7 +177,7 @@ TEST_CASE("`@Struct` diagnoses a field descriptor with a typo'd key instead of c
         pub const main := fn(): i32 {
             const T := @Struct(builtin.StructInfo{
                 .fields = [1]builtin.StructFieldInfo{
-                    .{ .name = "x", .type_ = i32, .has_default = false },
+                    .{ .name = "x", .type_ = i32 },
                 },
                 .is_extern = false,
                 .is_packed = false,
@@ -154,7 +195,7 @@ TEST_CASE("`@Struct`/`@Union`/`@Enum` infer an implicit `.{...}` descriptor's ty
         pub const main := fn(): i32 {
             const S := @Struct(.{
                 .fields = [1]builtin.StructFieldInfo{
-                    .{ .name = "x", .@"type" = i32, .has_default = false },
+                    .{ .name = "x", .@"type" = i32 },
                 },
                 .is_extern = false,
                 .is_packed = false,

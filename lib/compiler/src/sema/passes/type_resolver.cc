@@ -471,20 +471,16 @@ template <ast::IndexableID ID>
     ASSERT(syntax::get_builtin_opt(builtin_id), "Cannot resolve non-builtin function");
 
     using syntax::token_type_t;
-    const auto is_expect_or_require{builtin_id == token_type_t::BUILTIN_EXPECT ||
+    const auto  is_expect_or_require{builtin_id == token_type_t::BUILTIN_EXPECT ||
                                     builtin_id == token_type_t::BUILTIN_REQUIRE};
-    const auto is_assert_or_verify{builtin_id == token_type_t::BUILTIN_ASSERT ||
+    const auto  is_assert_or_verify{builtin_id == token_type_t::BUILTIN_ASSERT ||
                                    builtin_id == token_type_t::BUILTIN_VERIFY};
-    const auto is_skip{builtin_id == token_type_t::BUILTIN_SKIP};
-    const auto is_inferrable_cast{builtin_id == token_type_t::BUILTIN_AS ||
+    const auto  is_skip{builtin_id == token_type_t::BUILTIN_SKIP};
+    const auto  is_inferrable_cast{builtin_id == token_type_t::BUILTIN_AS ||
                                   builtin_id == token_type_t::BUILTIN_INT_CAST ||
                                   builtin_id == token_type_t::BUILTIN_BIT_CAST ||
                                   builtin_id == token_type_t::BUILTIN_TRUNCATE ||
                                   builtin_id == token_type_t::BUILTIN_INT_FROM_BOOL};
-    // `@Struct(desc, defaults...)` / `@Union(desc, defaults...)` take a `defaults...` parameter
-    // pack
-    const auto  is_aggregate_with_defaults{builtin_id == token_type_t::BUILTIN_STRUCT ||
-                                          builtin_id == token_type_t::BUILTIN_UNION};
     const auto& params{builtin.params};
     if (is_expect_or_require || is_assert_or_verify || is_inferrable_cast) {
         if (call.arguments.empty() || call.arguments.size() > 2) {
@@ -492,12 +488,6 @@ template <ast::IndexableID ID>
                 fmt::format("Builtin expects 1 or 2 arguments, found {}", call.arguments.size()),
                 error::ARITY_MISMATCH,
                 resolving_.ast.location_of(call.function));
-        }
-    } else if (is_aggregate_with_defaults) {
-        if (call.arguments.empty()) {
-            return make_sema_err("Builtin expects at least 1 argument, found 0",
-                                 error::ARITY_MISMATCH,
-                                 resolving_.ast.location_of(call.function));
         }
     } else if (is_skip) {
         if (call.arguments.size() > 1) {
@@ -555,7 +545,28 @@ template <ast::IndexableID ID>
     switch (builtin_id) {
     case token_type_t::BUILTIN_ALIGN_CAST:
     case token_type_t::BUILTIN_PTR_CAST:   {
-        return_type = get_resolved_call_arg_type(call.arguments[0]);
+        const auto name{builtin_id == token_type_t::BUILTIN_ALIGN_CAST ? "@alignCast" : "@ptrCast"};
+        auto&      target{*get_resolved_call_arg_type(call.arguments[0])};
+        auto&      operand{*get_resolved_call_arg_type(call.arguments[1])};
+        if (!target.is_poison() && target.get_kind() != type_kind::POINTER) {
+            return make_sema_err(fmt::format("'{}' target type must be a pointer; found '{}'",
+                                             name,
+                                             type_kind_display_name(target)),
+                                 error::TYPE_MISMATCH,
+                                 get_call_arg_location(call.arguments[0]));
+        }
+        if (!operand.is_poison() && operand.get_kind() != type_kind::POINTER) {
+            const auto hint{operand.get_kind() == type_kind::REFERENCE
+                                ? " (did you mean `^` instead of `&`?)"
+                                : ""};
+            return make_sema_err(fmt::format("'{}' operand must be a pointer; found '{}'{}",
+                                             name,
+                                             type_kind_display_name(operand),
+                                             hint),
+                                 error::TYPE_MISMATCH,
+                                 get_call_arg_location(call.arguments[1]));
+        }
+        return_type = &target;
         break;
     }
     case token_type_t::BUILTIN_BIT_CAST: {
@@ -748,13 +759,29 @@ template <ast::IndexableID ID>
         return_type = ctx_.pool.strip_volatile(expr_type);
         break;
     }
-    case token_type_t::BUILTIN_INT_FROM_PTR:
+    case token_type_t::BUILTIN_INT_FROM_PTR: {
+        auto& operand{*get_resolved_call_arg_type(call.arguments[0])};
+        if (!operand.is_poison() && operand.get_kind() != type_kind::POINTER) {
+            const auto hint{operand.get_kind() == type_kind::REFERENCE
+                                ? " (did you mean `^` instead of `&`?)"
+                                : ""};
+            return make_sema_err(
+                fmt::format("'@intFromPtr' operand must be a pointer; found '{}'{}",
+                            type_kind_display_name(operand),
+                            hint),
+                error::TYPE_MISMATCH,
+                get_call_arg_location(call.arguments[0]));
+        }
+        ASSERT(builtin.return_type.get_kind() == type_kind::USIZE);
+        return_type = &builtin.return_type;
+        break;
+    }
     case token_type_t::BUILTIN_ALIGN_OF:
     case token_type_t::BUILTIN_SIZE_OF:
     case token_type_t::BUILTIN_BIT_SIZE_OF:
     case token_type_t::BUILTIN_CLZ:
     case token_type_t::BUILTIN_CTZ:
-    case token_type_t::BUILTIN_POPCOUNT:     {
+    case token_type_t::BUILTIN_POPCOUNT:    {
         ASSERT(builtin.return_type.get_kind() == type_kind::USIZE);
         return_type = &builtin.return_type;
         break;
@@ -1159,30 +1186,11 @@ template <ast::IndexableID ID>
                 get_call_arg_location(call.arguments[0]));
         }
 
-        std::vector<gir::const_value> defaults;
-        if (builtin_id != token_type_t::BUILTIN_ENUM) {
-            gir::const_eval evaluator{ctx_, resolving_};
-            defaults.reserve(call.arguments.size() - 1);
-            for (usize i{1}; i < call.arguments.size(); ++i) {
-                const auto expr_h{call.arguments[i].as_opt<ast::expr_handle>()};
-                const auto val{expr_h ? evaluator.try_eval(*expr_h) : stdx::none};
-                if (!val) {
-                    return make_sema_err(
-                        fmt::format("'{}': every 'defaults...' argument must be a compile-time "
-                                    "constant",
-                                    builtin_name),
-                        error::CONSTEXPR_EVALUATION_FAILED,
-                        get_call_arg_location(call.arguments[i]));
-                }
-                defaults.emplace_back(std::move(*val));
-            }
-        }
-
         const auto loc{resolving_.ast.location_of(id)};
         auto synthesized = builtin_id == token_type_t::BUILTIN_ENUM ? synthesize_enum(loc, *desc)
                            : builtin_id == token_type_t::BUILTIN_STRUCT
-                               ? synthesize_struct(loc, *desc, defaults)
-                               : synthesize_union(loc, *desc, defaults);
+                               ? synthesize_struct(loc, *desc)
+                               : synthesize_union(loc, *desc);
         if (!synthesized) { return stdx::err<diagnostic>{std::move(synthesized).error()}; }
 
         auto meta{ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, **synthesized}]};
@@ -2059,11 +2067,7 @@ auto type_resolver::synthesize_enum(source_location loc, const gir::const_struct
     return gsl::not_null{&enum_type};
 }
 
-// Reads a `defaults...` pack argument in field order against `field_has_default`, checking each
-// value's static type against the matching field's own type
-auto type_resolver::synthesize_struct(source_location                   loc,
-                                      const gir::const_struct&          desc,
-                                      gsl::span<const gir::const_value> defaults)
+auto type_resolver::synthesize_struct(source_location loc, const gir::const_struct& desc)
     -> stdx::result<gsl::not_null<type*>, diagnostic> {
     const auto field_err{
         [&](std::string_view what) -> stdx::result<gsl::not_null<type*>, diagnostic> {
@@ -2082,31 +2086,24 @@ auto type_resolver::synthesize_struct(source_location                   loc,
     auto       ast_fields{make_uninit_span<ast::struct_expr::field>(ctx_.arena, n)};
     auto       field_types{ctx_.pool.get_many_unsafe(n)};
     const auto scope_idx{ctx_.registry.create()};
-    usize      default_i{0};
     for (usize i{0}; i < n; ++i) {
         const auto fs{fields_arr->elements[i].as_opt<gir::const_struct>()};
         const auto name_v{fs ? read_desc_field<std::string>(*fs, "name") : stdx::none};
         const auto type_v{fs ? read_desc_field<sema::type&>(*fs, "type") : stdx::none};
-        const auto has_default_v{fs ? read_desc_field<bool>(*fs, "has_default") : stdx::none};
-        if (!name_v || !type_v || !has_default_v) {
-            return field_err(
-                "every element of 'fields' needs a compile-time 'name', 'type', 'has_default'");
+        if (!name_v || !type_v) {
+            return field_err("every element of 'fields' needs a compile-time 'name', 'type'");
         }
         field_types[i] = type_v.get();
 
         stdx::option<ast::expr_handle> default_value;
-        if (*has_default_v) {
-            if (default_i >= defaults.size()) {
-                return make_sema_err("'@Struct': fewer 'defaults...' arguments than fields with "
-                                     "'has_default = true'",
-                                     error::ARITY_MISMATCH,
-                                     loc);
-            }
-            const auto& dv{defaults[default_i++]};
+        const auto                     dv_field{fs->get_field_opt("default_value")};
+        const auto dv_addr{dv_field ? dv_field->as_opt<gir::const_addr>() : stdx::none};
+        if (dv_addr && !dv_addr->pointee.empty()) {
+            const auto& dv{dv_addr->pointee.front()};
             if (const auto dt{dv.get_type()}; dt && !is_assignable(*dt, *type_v)) {
                 return make_sema_err(
-                    fmt::format("'@Struct': default #{} has type '{}', expected '{}'",
-                                default_i,
+                    fmt::format("'@Struct': field '{}' default has type '{}', expected '{}'",
+                                *name_v,
                                 ctx_.type_display_name(*dt),
                                 ctx_.type_display_name(*type_v)),
                     error::TYPE_MISMATCH,
@@ -2114,13 +2111,11 @@ auto type_resolver::synthesize_struct(source_location                   loc,
             }
             const auto lit{synthesize_const_literal(dv)};
             if (!lit) {
-                return make_sema_err(
-                    fmt::format(
-                        "'@Struct': default #{} isn't a scalar (int/bool/float/string) - only "
-                        "those default kinds are supported",
-                        default_i),
-                    error::CONSTEXPR_EVALUATION_FAILED,
-                    loc);
+                return make_sema_err(fmt::format("'@Struct': field '{}' default isn't a supported "
+                                                 "scalar type (int/bool/float/string)",
+                                                 *name_v),
+                                     error::CONSTEXPR_EVALUATION_FAILED,
+                                     loc);
             }
             // A synthetic aggregate never goes through `visit(struct_expr)`, so nothing else
             // resolves this literal against the field's own type
@@ -2156,13 +2151,6 @@ auto type_resolver::synthesize_struct(source_location                   loc,
         field_sym.set_kind(symbol_kind::VALUE);
         field_sym.set_status(symbol_status::RESOLVED);
     }
-    if (default_i != defaults.size()) {
-        return make_sema_err(
-            "'@Struct': more 'defaults...' arguments than fields with 'has_default = true'",
-            error::ARITY_MISMATCH,
-            loc);
-    }
-
     auto& struct_type{*ctx_.pool[{type_kind::STRUCT, types::mut::CONSTANT, scope_idx}]};
     struct_type.resolve_if<types::struct_t>(field_types,
                                             ast_fields,
@@ -2175,9 +2163,7 @@ auto type_resolver::synthesize_struct(source_location                   loc,
     return gsl::not_null{&struct_type};
 }
 
-auto type_resolver::synthesize_union(source_location                   loc,
-                                     const gir::const_struct&          desc,
-                                     gsl::span<const gir::const_value> defaults)
+auto type_resolver::synthesize_union(source_location loc, const gir::const_struct& desc)
     -> stdx::result<gsl::not_null<type*>, diagnostic> {
     const auto field_err{
         [&](std::string_view what) -> stdx::result<gsl::not_null<type*>, diagnostic> {
@@ -2198,14 +2184,6 @@ auto type_resolver::synthesize_union(source_location                   loc,
     auto       ast_fields{make_uninit_span<ast::union_expr::field>(ctx_.arena, n)};
     auto       field_types{ctx_.pool.get_many_unsafe(n)};
     const auto scope_idx{ctx_.registry.create()};
-
-    // A union field never has a default (`UnionFieldInfo` carries no `has_default` at all
-    if (!defaults.empty()) {
-        return make_sema_err(
-            "'@Union': a union field never has a default; 'defaults...' must be empty",
-            error::ARITY_MISMATCH,
-            loc);
-    }
 
     for (usize i{0}; i < n; ++i) {
         const auto fs{fields_arr->elements[i].as_opt<gir::const_struct>()};
@@ -3537,6 +3515,16 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
                                                    resolving_.ast.location_of(id)));
     }
 
+    if (!target_supports_callconv(fn.conv)) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             fmt::format("`callconv(.{})` is not supported on the current target",
+                                         ast::calling_convention_name(fn.conv)),
+                             error::TYPE_MISMATCH,
+                             resolving_.ast.location_of(id)));
+    }
+
     if (fn.is_type_expr) {
         const auto true_param_count{fn.parameters.size() + (fn.self ? 1UZ : 0UZ)};
         auto       fn_param_types{ctx_.pool.get_many_unsafe(true_param_count)};
@@ -3889,6 +3877,19 @@ auto type_resolver::target_ptr_bits() const -> u32 {
 auto type_resolver::target_has_128bit_atomics() const -> bool {
     const auto arch{codegen::target_facts::resolve(ctx_.target_opts.triple_str).arch};
     return arch == "x86_64" || arch == "aarch64";
+}
+
+auto type_resolver::target_supports_callconv(ast::calling_convention conv) const -> bool {
+    if (conv == ast::calling_convention::C) { return true; }
+    const auto arch{codegen::target_facts::resolve(ctx_.target_opts.triple_str).arch};
+    switch (conv) {
+    case ast::calling_convention::SYSV:
+    case ast::calling_convention::WIN64:        return arch == "x86_64";
+    case ast::calling_convention::X86_STDCALL:
+    case ast::calling_convention::X86_FASTCALL: return arch == "x86" || arch == "x86_64";
+    case ast::calling_convention::AAPCS:        return arch == "arm" || arch == "thumb";
+    default:                                    return true;
+    }
 }
 
 template <ast::IndexableID ID> auto type_resolver::resolve_symbol(ID id, symbol& sym) -> void {

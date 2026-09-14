@@ -687,8 +687,16 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             const auto src_t{get_operand_type(inst.operands[0])};
             const auto dest_t{inst.type};
             if (src_t && dest_t && !src_t->is_poison() && !dest_t->is_poison()) {
-                if (src_t->get_kind() == type_kind::POINTER &&
-                    dest_t->get_kind() == type_kind::POINTER) {
+                const auto src_is_ptr{src_t->get_kind() == type_kind::POINTER};
+                const auto dest_is_ptr{dest_t->get_kind() == type_kind::POINTER};
+                if (!src_is_ptr || !dest_is_ptr) {
+                    emit_diagnostic(fmt::format("Cannot @ptrCast/@alignCast type '{}' to '{}'; "
+                                                "both must be pointer types",
+                                                type_kind_display_name(*src_t),
+                                                type_kind_display_name(*dest_t)),
+                                    error::TYPE_MISMATCH,
+                                    inst.location);
+                } else {
                     const auto src_ptr{src_t->get_data().as_opt<types::pointer>()};
                     const auto dest_ptr{dest_t->get_data().as_opt<types::pointer>()};
                     if (src_ptr && dest_ptr) {

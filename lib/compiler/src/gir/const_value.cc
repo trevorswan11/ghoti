@@ -45,6 +45,10 @@ auto const_closure::operator==(const const_closure& other) const noexcept -> boo
            captures == other.captures;
 }
 
+auto const_addr::operator==(const const_addr& other) const noexcept -> bool {
+    return symbol == other.symbol && pointee == other.pointee;
+}
+
 auto const_value::make_string(sema::context& ctx, std::string str) -> const_value {
     auto& t_u8{ctx.get_int(8, false)};
     auto& t_c_str{ctx.get_slice(sema::types::mut::CONSTANT, true, t_u8)};

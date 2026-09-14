@@ -7,9 +7,9 @@ namespace ghoti::tests {
 
 TEST_CASE("a `fn(...): T` type annotation accepts its own `callconv(.x)`") {
     CHECK(helpers::compile_and_run(R"(
-        const add := fn(a: i32, b: i32) callconv(.sysv): i32 { return a + b; };
+        const add := fn(a: i32, b: i32) callconv(.c): i32 { return a + b; };
         pub const main := fn(): i32 {
-            var fp: fn(a: i32, b: i32) callconv(.sysv): i32 = add;
+            var fp: fn(a: i32, b: i32) callconv(.c): i32 = add;
             return 7;
         };
     )") == 7);
@@ -27,7 +27,7 @@ TEST_CASE("a `fn(...): T` type annotation with no `callconv` still defaults to `
 
 TEST_CASE("assigning a mismatched-callconv function is rejected") {
     helpers::expect_compile_error(R"(
-        const add := fn(a: i32, b: i32) callconv(.sysv): i32 { return a + b; };
+        const add := fn(a: i32, b: i32) callconv(.win64): i32 { return a + b; };
         pub const main := fn(): i32 {
             var fp: fn(a: i32, b: i32) callconv(.c): i32 = add;
             return 0;

@@ -64,8 +64,11 @@ struct const_closure {
 };
 
 struct const_addr {
-    std::string        symbol;
-    [[nodiscard]] auto operator==(const const_addr&) const noexcept -> bool = default;
+    std::string symbol;
+    // The pointee's own folded value, when known at compile time. Empty when `symbol` alone
+    // identifies the address, or when the pointee's value genuinely isn't const-known.
+    std::vector<const_value> pointee;
+    [[nodiscard]] auto       operator==(const const_addr& other) const noexcept -> bool;
 };
 
 struct const_dyn_fat_ptr {

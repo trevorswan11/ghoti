@@ -1259,17 +1259,25 @@ auto initializer_expr::parse(syntax::parser& parser, stdx::option<expr_handle> o
     while (!parser.peek_token_is(syntax::token_type_t::RBRACE) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
         stdx::option<implicit_access_handle> member;
+        stdx::option<expr_handle>            positional_value;
         if (parser.peek_token_is(syntax::token_type_t::DOT)) {
-            // Named entry: `.field = value`
             parser.advance();
-            member.emplace(TRY(implicit_access_expr::parse(parser)));
-            TRY(parser.expect_peek(syntax::token_type_t::ASSIGN));
-            parser.advance();
+            const auto access{TRY(implicit_access_expr::parse(parser))};
+            if (access->is<initializer_expr>()) {
+                // A bare `.{...}` used positionally, e.g. as an array element: `implicit_access`
+                // already jumped into `initializer_expr::parse` and consumed the whole thing.
+                positional_value.emplace(access);
+            } else {
+                // Named entry: `.field = value`
+                member.emplace(access);
+                TRY(parser.expect_peek(syntax::token_type_t::ASSIGN));
+                parser.advance();
+            }
         } else {
             // Positional entry: `value` (array-style `T{ a, b, c }`)
             parser.advance();
         }
-        const auto value{TRY(parser.parse_expression())};
+        const auto value{positional_value ? *positional_value : TRY(parser.parse_expression())};
         initializers.emplace_back(member, value);
 
         if (!parser.peek_token_is(syntax::token_type_t::RBRACE)) {

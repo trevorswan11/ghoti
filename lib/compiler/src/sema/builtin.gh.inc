@@ -174,7 +174,8 @@ pub const ArrayInfo := struct {
 pub const StructFieldInfo := struct {
     pub name: []u8,
     pub @"type": type,
-    pub has_default: bool,
+    /// The field's default value, cast through `^opaque`, or `nullptr` for none.
+    pub default_value: ^opaque = nullptr,
 };
 
 pub const StructInfo := struct {
@@ -215,18 +216,16 @@ pub const FnInfo := struct {
     pub @"callconv": CallConv,
 };
 
-const NoPayload := struct {};
-
 /// The keystone reflection value: `@typeInfo(T)` returns one of these, tagged by `TypeKind`.
 pub const TypeInfo := union {
     int: IntInfo,
     float: FloatInfo,
-    @"bool": NoPayload,
-    @"void": NoPayload,
-    @"noreturn": NoPayload,
-    @"opaque": NoPayload,
-    @"type": NoPayload,
-    internal: NoPayload,
+    @"bool": void,
+    @"void": void,
+    @"noreturn": void,
+    @"opaque": void,
+    @"type": void,
+    internal: void,
     pointer: PointerInfo,
     reference: PointerInfo,
     slice: SliceInfo,

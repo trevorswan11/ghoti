@@ -274,17 +274,12 @@ class type_resolver {
     // Builds a `types::enum_t` directly from a folded `EnumInfo` descriptor
     [[nodiscard]] auto synthesize_enum(source_location loc, const gir::const_struct& desc)
         -> stdx::result<gsl::not_null<type*>, diagnostic>;
-    // Builds a `types::struct_t` directly from a folded `StructInfo` descriptor plus the
-    // `defaults...` pack's folded values
-    [[nodiscard]] auto synthesize_struct(source_location                   loc,
-                                         const gir::const_struct&          desc,
-                                         gsl::span<const gir::const_value> defaults)
+    // Builds a `types::struct_t` directly from a folded `StructInfo` descriptor; each field's
+    // own `default_value` supplies that field's default, if any
+    [[nodiscard]] auto synthesize_struct(source_location loc, const gir::const_struct& desc)
         -> stdx::result<gsl::not_null<type*>, diagnostic>;
-    // Builds a `types::union_t` directly from a folded `UnionInfo` descriptor plus the
-    // `defaults...` pack's folded values
-    [[nodiscard]] auto synthesize_union(source_location                   loc,
-                                        const gir::const_struct&          desc,
-                                        gsl::span<const gir::const_value> defaults)
+    // Builds a `types::union_t` directly from a folded `UnionInfo` descriptor
+    [[nodiscard]] auto synthesize_union(source_location loc, const gir::const_struct& desc)
         -> stdx::result<gsl::not_null<type*>, diagnostic>;
     // Views a `constexpr_int` / `constexpr_float` as the concrete type it materializes to
     [[nodiscard]] auto constexpr_numeric_view(type& t) -> type&;
@@ -507,6 +502,9 @@ class type_resolver {
     [[nodiscard]] auto target_has_x86_fp80() const -> bool;
     [[nodiscard]] auto target_ptr_bits() const -> u32;
     [[nodiscard]] auto target_has_128bit_atomics() const -> bool;
+    // `.c` is always portable; the other `callconv(...)` choices are only meaningful for the ISA
+    // they were named after (e.g. `.win64`/`.sysv` need x86_64, `.aapcs` needs 32-bit arm).
+    [[nodiscard]] auto target_supports_callconv(ast::calling_convention conv) const -> bool;
 
   private:
     mod::module&              resolving_;

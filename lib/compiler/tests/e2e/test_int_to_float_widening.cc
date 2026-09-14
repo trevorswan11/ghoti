@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "ghoti/config.h"
 #include "helpers/codegen.hh"
 
 namespace ghoti::tests {
@@ -39,13 +40,22 @@ TEST_CASE("a negative signed integer widens to a float with the correct sign and
     )") == 0);
 }
 
-TEST_CASE("a 64-bit integer widens to `f80`/`f128`, whose significand covers its full range") {
+#if GHOTI_ASM_HOST_X86_64
+TEST_CASE("a 64-bit integer widens to `f80`, whose significand covers its full range") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             const big: i64 = 9007199254740993; // 2^53 + 1: not exactly representable in f64
             const a: f80 = big;                // f80's 64-bit significand covers it exactly
             if (a != 9007199254740993.0) { return 1; }
+            return 0;
+        };
+    )") == 0);
+}
+#endif
 
+TEST_CASE("a 64-bit integer widens to `f128`, whose significand covers its full range") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
             const c: u64 = 18446744073709551615; // u64 max
             const d: f128 = c;                   // f128's 113-bit significand covers it exactly
             if (d != 18446744073709551615.0) { return 2; }
