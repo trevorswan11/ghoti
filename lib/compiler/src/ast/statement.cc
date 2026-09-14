@@ -475,12 +475,17 @@ auto import_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syn
     if (parser.current_token_is(syntax::token_type_t::PUBLIC)) { parser.advance(); }
     auto imported_core{TRY(parse_import_payload(parser))};
 
-    stdx::option<identifier_handle> imported_alias;
+    stdx::option<discardable_ident_handle> imported_alias;
     if (parser.peek_token_is(syntax::token_type_t::AS)) {
         parser.advance();
-        TRY(parser.expect_peek(syntax::token_type_t::IDENT));
-
-        imported_alias.emplace(TRY(identifier_expr::parse(parser)));
+        if (parser.peek_token_is(syntax::token_type_t::UNDERSCORE)) {
+            parser.advance();
+            imported_alias.emplace(parser.add_node<discardable_ident_handle, ast::discarded>(
+                parser.get_current_token()));
+        } else {
+            TRY(parser.expect_peek(syntax::token_type_t::IDENT));
+            imported_alias.emplace(discardable_ident_handle{TRY(identifier_expr::parse(parser))});
+        }
     } else if (imported_core->get_kind() == node_kind::STRING_EXPRESSION &&
                !parser.in_test_block()) {
         return make_syntax_err("All file imports must be aliased to an identifier",
@@ -495,12 +500,11 @@ auto import_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syn
 auto import_stmt::get_name(const AST& tree) const noexcept
     -> stdx::option<std::pair<ast::identifier_handle, std::string_view>> {
     if (alias) {
-        const auto  handle{*alias};
-        const auto& ident{tree.get_as<ast::identifier_expr>(handle)};
-        return std::pair{handle, ident.name};
+        return tree.get_as_opt<ast::identifier_expr>(*alias).transform([&](auto ident) {
+            return std::pair{ast::identifier_handle{*alias}, ident.name};
+        });
     }
 
-    // A string payload without an alias only occurs for an unaliased test-block import.
     return tree.get_as_opt<ast::identifier_expr>(payload).transform(
         [this](auto ident) { return std::pair{payload, ident.name}; });
 }

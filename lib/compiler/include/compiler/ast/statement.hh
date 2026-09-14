@@ -133,8 +133,8 @@ struct expr_stmt {
 class AST;
 
 struct import_stmt {
-    import_payload_handle           payload;
-    stdx::option<identifier_handle> alias;
+    import_payload_handle                  payload;
+    stdx::option<discardable_ident_handle> alias;
 
     [[nodiscard]] static constexpr auto is_public(ast::node_id id) noexcept -> bool {
         return id.get_token_type() == syntax::token_type_t::PUBLIC;

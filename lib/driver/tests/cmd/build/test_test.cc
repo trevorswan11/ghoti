@@ -192,6 +192,138 @@ TEST_CASE("test command execution") {
         CHECK(!cmd.execute());
     }
 
+    SECTION("An unaliased `test { import \"x.gh\"; }` import (no `as` at all) is discovered") {
+        codegen::llvm_scope scope;
+        tempfile            helper_file{"test_driver_helper_noalias.gh"};
+        tempfile            main_file{"test_driver_main_noalias.gh"};
+
+        {
+            std::ofstream out{helper_file.path};
+            fmt::print(out, R"(
+                test "imported module failing test" {{
+                    @require(false);
+                }}
+            )");
+        }
+
+        {
+            std::ofstream out{main_file.path};
+            fmt::print(out,
+                       R"(
+                test {{
+                    import "{}";
+                }}
+
+                test "main module test" {{
+                    @expect(true);
+                }}
+            )",
+                       helper_file.path.filename().string());
+        }
+
+        cmd::test_cmd cmd{{
+            .input_path = main_file,
+        }};
+        CHECK(!cmd.execute());
+    }
+
+    SECTION("A plain top-level import with a discardable (`as _`) alias is not discovered") {
+        codegen::llvm_scope scope;
+        tempfile            helper_file{"test_driver_helper_discard.gh"};
+        tempfile            main_file{"test_driver_main_discard_plain.gh"};
+
+        {
+            std::ofstream out{helper_file.path};
+            fmt::print(out, R"(
+                test "imported module failing test" {{
+                    @require(false);
+                }}
+            )");
+        }
+
+        {
+            std::ofstream out{main_file.path};
+            fmt::print(out,
+                       R"(
+                import "{}" as _;
+
+                test "main module test" {{
+                    @expect(true);
+                }}
+            )",
+                       helper_file.path.filename().string());
+        }
+
+        cmd::test_cmd cmd{{
+            .input_path = main_file,
+        }};
+        REQUIRE(cmd.execute());
+    }
+
+    SECTION("A `test { import \"x.gh\" as _; }` discardable-alias import is still discovered") {
+        codegen::llvm_scope scope;
+        tempfile            helper_file{"test_driver_helper_discard2.gh"};
+        tempfile            main_file{"test_driver_main_discard_test.gh"};
+
+        {
+            std::ofstream out{helper_file.path};
+            fmt::print(out, R"(
+                test "imported module failing test" {{
+                    @require(false);
+                }}
+            )");
+        }
+
+        {
+            std::ofstream out{main_file.path};
+            fmt::print(out,
+                       R"(
+                test {{
+                    import "{}" as _;
+                }}
+
+                test "main module test" {{
+                    @expect(true);
+                }}
+            )",
+                       helper_file.path.filename().string());
+        }
+
+        cmd::test_cmd cmd{{
+            .input_path = main_file,
+        }};
+        CHECK(!cmd.execute());
+    }
+
+    SECTION("A discardable-alias import binds no accessible symbol") {
+        codegen::llvm_scope scope;
+        tempfile            helper_file{"test_driver_helper_discard3.gh"};
+        tempfile            main_file{"test_driver_main_discard_inaccessible.gh"};
+
+        {
+            std::ofstream out{helper_file.path};
+            fmt::print(out, R"(
+                pub const helper_val := 42;
+            )");
+        }
+
+        {
+            std::ofstream out{main_file.path};
+            fmt::print(out,
+                       R"(
+                import "{}" as _;
+
+                test "tries to use the discarded alias" {{
+                    @expect(helper.helper_val == 42);
+                }}
+            )",
+                       helper_file.path.filename().string());
+        }
+
+        cmd::test_cmd cmd{{.input_path = main_file}};
+        CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::COMPILATION_FAILED);
+    }
+
     SECTION("A non-weak `test_runner` overrides the builtin default and passes") {
         codegen::llvm_scope scope;
         tempfile            src_file{"test_driver_custom_runner_pass.gh"};
