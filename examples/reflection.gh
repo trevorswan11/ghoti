@@ -5,7 +5,11 @@ const Point := @Struct(
         .fields = ^.{
             .{ .name = "x", .@"type" = i32 },
             .{ .name = "y", .@"type" = i32 },
-            .{ .name = "z", .@"type" = i32, .default_value = @ptrCast(^opaque, ^1) },
+            .{
+                .name = "z",
+                .@"type" = i32,
+                .default_value = @ptrCast(^opaque, ^1),
+            },
         },
         .is_extern = false,
         .is_packed = false,
@@ -23,3 +27,4 @@ test "Type creation" {
     const p: Point = .{ .x = 2, .y = 9 };
     @expect(p.sum() == 12);
 }
+
