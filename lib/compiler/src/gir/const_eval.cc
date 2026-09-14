@@ -1420,7 +1420,7 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
     }
     case sema::type_kind::ENUM: {
         const auto& en{denoted.get_data().as<sema::types::enum_t>()};
-        auto&       field_type{ctx_.get_builtin_type("EnumField")};
+        auto&       field_type{ctx_.get_builtin_type("EnumFieldInfo")};
         const_array fields;
         for (usize idx{0}; idx < en.ast_enumerations.size(); ++idx) {
             const auto& e{en.ast_enumerations[idx]};

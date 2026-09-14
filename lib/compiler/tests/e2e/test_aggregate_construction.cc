@@ -11,7 +11,7 @@ TEST_CASE("`@Enum` constructs an enum type from an `EnumInfo` descriptor") {
         pub const main := fn(): i32 {
             const T := @Enum(builtin.EnumInfo{
                 .tag_type = i32,
-                .fields = [2]builtin.EnumField{
+                .fields = [2]builtin.EnumFieldInfo{
                     .{ .name = "a", .value = 10 },
                     .{ .name = "b", .value = 20 },
                 },
@@ -28,7 +28,7 @@ TEST_CASE("`@Enum` variants are usable with `@tagName`") {
         pub const main := fn(): i32 {
             const T := @Enum(builtin.EnumInfo{
                 .tag_type = i32,
-                .fields = [2]builtin.EnumField{
+                .fields = [2]builtin.EnumFieldInfo{
                     .{ .name = "a", .value = 10 },
                     .{ .name = "b", .value = 20 },
                 },
@@ -170,7 +170,7 @@ TEST_CASE("`@Struct`/`@Union`/`@Enum` infer an implicit `.{...}` descriptor's ty
             });
             const E := @Enum(.{
                 .tag_type = i32,
-                .fields = [1]builtin.EnumField{ .{ .name = "a", .value = 5 } },
+                .fields = [1]builtin.EnumFieldInfo{ .{ .name = "a", .value = 5 } },
                 .exhaustive = true,
             });
             var s: S = .{ .x = 1 };

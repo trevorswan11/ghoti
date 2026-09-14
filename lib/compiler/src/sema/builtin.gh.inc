@@ -196,14 +196,14 @@ pub const UnionInfo := struct {
     pub tagged: bool,
 };
 
-pub const EnumField := struct {
+pub const EnumFieldInfo := struct {
     pub name: []u8,
     pub value: i64,
 };
 
 pub const EnumInfo := struct {
     pub tag_type: type,
-    pub fields: []EnumField,
+    pub fields: []EnumFieldInfo,
     pub exhaustive: bool,
 };
 
