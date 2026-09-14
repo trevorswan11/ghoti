@@ -1,11 +1,11 @@
 ---
-name: "Feature request"
+name: "Proposal"
 about: Suggest an idea
-labels: enhancement
+labels: proposal
 ---
 
 ## Summary
-Brief explanation of the feature.
+Brief explanation of the proposal.
 
 ### Basic example
 Include a basic example or links here.

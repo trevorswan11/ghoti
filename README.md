@@ -9,7 +9,7 @@ A compiled systems language combining modern, dual-mode polymorphism with transp
 <br/>
 <a href="https://github.com/trevorswan11/ghoti/issues/new?labels=bug&template=bug-report.md">Report Bug</a>
 &middot;
-<a href="https://github.com/trevorswan11/ghoti/issues/new?labels=enhancement&template=feature-request.md">Request Feature</a>
+<a href="https://github.com/trevorswan11/ghoti/issues/new?labels=enhancement&template=proposal.md">Request Feature</a>
 </p>
 
 ## About the Project
@@ -104,9 +104,10 @@ The language's website is written with [Go](https://go.dev/), [HTMX](https://htm
         - [x] Kaleidoscope examples
         - [ ] Test parity through the build system
     - [x] Compiler backend integration
-- [x] Tooling (available through subcommands)
+- [ ] Tooling (available through subcommands)
     - [x] LSP
     - [x] Formatter
+    - [ ] Translate C
 - [ ] Standard library
     - [x] Cross-platform support w/o forcing libc
     - [ ] Generic data structures
