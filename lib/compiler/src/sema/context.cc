@@ -319,13 +319,13 @@ auto context::lookup_constexpr_binding(std::string_view name) const
 
 auto context::get_builtin_type(std::string_view name) -> type& {
     VERIFY(prelude_index, "get_builtin_type requires inject_prelude to have run");
-    auto& enum_mod{modules.builtin_module()};
-    auto& enum_sym{registry.get(*enum_mod.root_table_idx).get(name)};
-    return enum_mod.get_sema_type(enum_sym.get_data().as<symbols::node_t>());
+    auto& builtin_mod{modules.builtin_module()};
+    auto& builtin_sym{registry.get(*builtin_mod.root_table_idx).get(name)};
+    return builtin_mod.get_sema_type(builtin_sym.get_data().as<symbols::node_t>());
 }
 
 auto context::type_display_name(const type& t) const -> std::string {
-    const type* denoted{&t};
+    gsl::not_null<const type*> denoted{&t};
     if (denoted->get_kind() == type_kind::TYPE) {
         if (const auto meta{denoted->get_data().as_opt<types::meta_type>()}) {
             denoted = &meta->instance;
