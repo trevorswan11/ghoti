@@ -557,12 +557,14 @@ fn addTooling(b: *std.Build, config: struct {
     check_step.dependOn(&config.cdb_gen.step);
 
     var counted_files: stdx.ArrayList([]const u8) = .init(b);
-    try stdx.utils.collectFilesInto(b, "lib", .{
+    try stdx.utils.collectFilesInto(b, "third-party", .{
         .allowed_extensions = &counted_extensions,
         .extra_files = &.{"build.zig"},
     }, &counted_files);
+    try stdx.utils.collectFilesInto(b, "lib", .{ .allowed_extensions = &counted_extensions }, &counted_files);
     try stdx.utils.collectFilesInto(b, "ghoti", .{ .allowed_extensions = &counted_extensions }, &counted_files);
     try stdx.utils.collectFilesInto(b, "site", .{ .allowed_extensions = &counted_extensions }, &counted_files);
+    try stdx.utils.collectFilesInto(b, "examples", .{ .allowed_extensions = &counted_extensions }, &counted_files);
     _ = LOCCounter.init(b, .{
         .counted_files = counted_files.wrapped.items,
         .file_buf_size = 1000 * 1024,

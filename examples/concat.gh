@@ -7,9 +7,9 @@ test "compile-time concatenation" {
 
 const plain: [2]u8 = .{ 1, 2 };
 
-test "sentinel concatenation" {
+test "concatenation takes its sentinel from the right operand only" {
     constexpr rhs_has_sentinel := plain ++ "cd";
-    @expect(@bitSizeOf(@typeOf(rhs_has_sentinel)) != @bitSizeOf([4:0]u8));
+    @expect(@bitSizeOf(@typeOf(rhs_has_sentinel)) == @bitSizeOf([4:0]u8));
     constexpr rhs_has_none := "ab" ++ plain;
-    @expect(@bitSizeOf(@typeOf(rhs_has_none)) != @bitSizeOf([4]u8));
+    @expect(@bitSizeOf(@typeOf(rhs_has_none)) == @bitSizeOf([4]u8));
 }

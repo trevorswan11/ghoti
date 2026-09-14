@@ -4862,14 +4862,24 @@ auto emitter::materialize_const(const const_value& cv) -> value {
             auto& elem_type{slice_data->underlying};
             auto& backing_type{ctx_.get_array(elem_type.is_constant() ? sema::types::mut::CONSTANT
                                                                       : sema::types::mut::MUTABLE,
-                                              false,
+                                              slice_data->null_terminated,
                                               arr->elements.size(),
                                               elem_type)};
             const auto slot{builder_.emit_alloca(backing_type)};
-            for (u64 i{0}; const auto& elem : arr->elements) {
+            u64        i{0};
+            for (const auto& elem : arr->elements) {
                 const auto elem_ptr{builder_.emit_get_element_ptr(
                     value{slot, backing_type}, {value{i++, usize_type}}, elem_type)};
                 builder_.emit_store(value{elem_ptr, elem_type}, materialize_const(elem))
+                    .is_initializer = true;
+            }
+
+            // A sentineled backing array's storage is one element wider than `arr->elements`; write
+            // that trailing zero byte for real rather than leaving it uninitialized.
+            if (slice_data->null_terminated) {
+                const auto sentinel_ptr{builder_.emit_get_element_ptr(
+                    value{slot, backing_type}, {value{i, usize_type}}, elem_type)};
+                builder_.emit_store(value{sentinel_ptr, elem_type}, value{u64{0}, elem_type})
                     .is_initializer = true;
             }
             auto decayed{emit_slice_from_array(value{slot, backing_type}, backing_type)};
@@ -4880,10 +4890,20 @@ auto emitter::materialize_const(const const_value& cv) -> value {
         ASSERT(arr_data, "const_array must materialize into an array sema type");
         auto&      elem_type{arr_data->underlying};
         const auto slot{builder_.emit_alloca(type)};
-        for (u64 i{0}; const auto& elem : arr->elements) {
+        u64        i{0};
+        for (const auto& elem : arr->elements) {
             const auto elem_ptr{builder_.emit_get_element_ptr(
                 value{slot, type}, {value{i++, usize_type}}, elem_type)};
             builder_.emit_store(value{elem_ptr, elem_type}, materialize_const(elem))
+                .is_initializer = true;
+        }
+
+        // Same story as the slice case above: the array type's own storage reserves one extra
+        // sentinel byte that `arr->elements` never includes.
+        if (arr_data->null_terminated) {
+            const auto sentinel_ptr{builder_.emit_get_element_ptr(
+                value{slot, type}, {value{i, usize_type}}, elem_type)};
+            builder_.emit_store(value{sentinel_ptr, elem_type}, value{u64{0}, elem_type})
                 .is_initializer = true;
         }
         const auto loaded{builder_.emit_load(value{slot, type}, type)};

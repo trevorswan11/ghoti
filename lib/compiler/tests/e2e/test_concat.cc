@@ -54,6 +54,21 @@ TEST_CASE("`++` takes its sentinel from the right operand only") {
     )") == 0);
 }
 
+TEST_CASE("`++` of a typed array with a sentineled string literal materializes every byte") {
+    CHECK(helpers::compile_and_run(R"(
+        const plain: [2]u8 = .{1, 2};
+        pub const main := fn(): i32 {
+            constexpr combined := plain ++ "cd";
+            if (combined[0] != 1) { return 1; }
+            if (combined[1] != 2) { return 2; }
+            if (combined[2] != 'c') { return 3; }
+            if (combined[3] != 'd') { return 4; }
+            if (combined[4] != 0) { return 5; }
+            return 0;
+        };
+    )") == 0);
+}
+
 TEST_CASE("`++` concatenates two function-local constexpr array identifiers") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {

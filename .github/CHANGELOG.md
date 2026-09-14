@@ -340,3 +340,4 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - The `@Union` builtin no longer takes in any defaults since they were just there to mimic struct behavior and did nothing (was a resolve error, now not even allowed)
 - The `NoPayload` marker in the builtin module has been replaced with void in the `typeInfo` union
     - This originally was here to get around a bug involving false name shadowing with raw idents that has since been fixed
+- Fix a crash resulting from stack corruption following concatenation of slice types

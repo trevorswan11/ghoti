@@ -1877,11 +1877,11 @@ auto const_eval::eval_assignment(ast::node_id                id,
 
 namespace {
 
-[[nodiscard]] auto string_to_byte_array(const std::string& s) -> const_array {
+[[nodiscard]] auto string_to_byte_array(const std::string& s, sema::type& u8_type) -> const_array {
     const_array arr;
     arr.elements.reserve(s.size());
     for (const char c : s) {
-        arr.elements.emplace_back(const_value{static_cast<u64>(static_cast<unsigned char>(c))});
+        arr.elements.emplace_back(const_value{static_cast<u64>(static_cast<u8>(c)), u8_type});
     }
     return arr;
 }
@@ -1896,8 +1896,9 @@ auto const_eval::fold_concat(const const_value& lhs, const const_value& rhs, ast
     const auto rhs_str{rhs.as_opt<std::string>()};
     if ((!lhs_arr && !lhs_str) || (!rhs_arr && !rhs_str)) { return stdx::none; }
 
-    const const_array lhs_bytes{lhs_str ? string_to_byte_array(*lhs_str) : *lhs_arr};
-    const const_array rhs_bytes{rhs_str ? string_to_byte_array(*rhs_str) : *rhs_arr};
+    auto&             u8_type{ctx_.get_int(8, false)};
+    const const_array lhs_bytes{lhs_str ? string_to_byte_array(*lhs_str, u8_type) : *lhs_arr};
+    const const_array rhs_bytes{rhs_str ? string_to_byte_array(*rhs_str, u8_type) : *rhs_arr};
 
     const_array result;
     result.elements.reserve(lhs_bytes.elements.size() + rhs_bytes.elements.size());
