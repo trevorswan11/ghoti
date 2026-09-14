@@ -826,14 +826,11 @@ auto const_eval::eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::opt
     }
 
     if (const auto dot{module_->ast.get_as_opt<ast::dot_expr>(rhs)}) {
-        const auto obj_val{try_eval(dot->object)};
-        if (!obj_val) { return stdx::none; }
-
-        const auto type_opt{obj_val->as_opt<stdx::option<sema::type&>>()};
-        if (!type_opt || !*type_opt) { return stdx::none; }
-        const auto m_data{(**type_opt).get_data().as_opt<sema::types::module>()};
-        if (!m_data) { return stdx::none; }
-        auto& target_mod{m_data->imported};
+        // `try_eval(dot->object)` alone doesn't resolve a bare module-alias identifier to
+        // anything; go through the same resolver here.
+        const auto target_mod_opt{resolve_module_chain(dot->object)};
+        if (!target_mod_opt) { return stdx::none; }
+        auto& target_mod{*target_mod_opt};
         if (!target_mod.root_table_idx) { return stdx::none; }
 
         const auto& member_name{module_->ast.get_as<ast::identifier_expr>(dot->member).name};
@@ -853,7 +850,15 @@ auto const_eval::eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::opt
                     }
                     const auto sym_name{
                         scoped_symbol_name(*target_mod.root_table_idx, member_name)};
-                    return const_value{const_addr{sym_name, {}}, sema_type};
+                    std::vector<const_value> pointee;
+                    if (decl->value) {
+                        const_eval inner_eval{ctx_, target_mod};
+                        inner_eval.set_symbol_scoping(symbol_scoping_);
+                        if (auto val{inner_eval.try_eval(*decl->value)}; val && !val->is_poison()) {
+                            pointee.emplace_back(std::move(*val));
+                        }
+                    }
+                    return const_value{const_addr{sym_name, std::move(pointee)}, sema_type};
                 }
             }
         }

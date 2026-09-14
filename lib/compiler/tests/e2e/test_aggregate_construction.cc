@@ -1,3 +1,5 @@
+#include <string_view>
+
 #include <catch2/catch_test_macros.hpp>
 
 #include "compiler/sema/error.hh"
@@ -5,6 +7,8 @@
 #include "helpers/sema.hh"
 
 namespace ghoti::tests {
+
+using helpers::mock_file;
 
 TEST_CASE("`@Enum` constructs an enum type from an `EnumInfo` descriptor") {
     CHECK(helpers::compile_and_run(R"(
@@ -133,6 +137,95 @@ TEST_CASE("`@Struct`'s `default_value` accepts `^<local const>`") {
             return v.x + v.y;
         };
     )") == 100);
+}
+
+TEST_CASE("`@Struct`'s `default_value` accepts a struct-typed value") {
+    CHECK(helpers::compile_and_run(R"(
+        const Point := struct { a: i32, b: i32 };
+        pub const main := fn(): i32 {
+            const T := @Struct(builtin.StructInfo{
+                .fields = [2]builtin.StructFieldInfo{
+                    .{ .name = "x", .@"type" = i32 },
+                    .{ .name = "pt",
+                       .@"type" = Point,
+                       .default_value = @ptrCast(^opaque, ^Point{ .a = 3, .b = 4 }) },
+                },
+                .is_extern = false,
+                .is_packed = false,
+                .backing_bits = 0,
+            });
+            var v: T = .{ .x = 1 };
+            return v.x + v.pt.a + v.pt.b;
+        };
+    )") == 8);
+}
+
+TEST_CASE("`@Struct`'s `default_value` accepts an array-typed value") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            const T := @Struct(builtin.StructInfo{
+                .fields = [1]builtin.StructFieldInfo{
+                    .{ .name = "arr",
+                       .@"type" = [2]i32,
+                       .default_value = @ptrCast(^opaque, ^[2]i32{ 5, 6 }) },
+                },
+                .is_extern = false,
+                .is_packed = false,
+                .backing_bits = 0,
+            });
+            var v: T = .{};
+            return v.arr[0] + v.arr[1];
+        };
+    )") == 11);
+}
+
+TEST_CASE("`@Struct`'s `default_value` recurses through a nested aggregate") {
+    CHECK(helpers::compile_and_run(R"(
+        const Inner := struct { n: i32 };
+        const Outer := struct { inner: Inner, tag: i32 };
+        pub const main := fn(): i32 {
+            const T := @Struct(builtin.StructInfo{
+                .fields = [1]builtin.StructFieldInfo{
+                    .{ .name = "o",
+                       .@"type" = Outer,
+                       .default_value = @ptrCast(
+                           ^opaque, ^Outer{ .inner = .{ .n = 7 }, .tag = 2 }) },
+                },
+                .is_extern = false,
+                .is_packed = false,
+                .backing_bits = 0,
+            });
+            var v: T = .{};
+            return v.o.inner.n + v.o.tag;
+        };
+    )") == 9);
+}
+
+TEST_CASE("`@Struct`'s `default_value` accepts `^<cross-module const>`") {
+    constexpr std::string_view defaults_gh{R"(
+        pub const DEFAULT_Y: i32 = 99;
+    )"};
+
+    CHECK(helpers::compile_and_run(
+              R"(
+            import "defaults.gh" as defaults;
+            pub const main := fn(): i32 {
+                const T := @Struct(builtin.StructInfo{
+                    .fields = [2]builtin.StructFieldInfo{
+                        .{ .name = "x", .@"type" = i32 },
+                        .{ .name = "y",
+                           .@"type" = i32,
+                           .default_value = @ptrCast(^opaque, ^defaults.DEFAULT_Y) },
+                    },
+                    .is_extern = false,
+                    .is_packed = false,
+                    .backing_bits = 0,
+                });
+                var v: T = .{ .x = 1 };
+                return v.x + v.y;
+            };
+        )",
+              {mock_file{"defaults.gh", defaults_gh, "defaults"}}) == 100);
 }
 
 TEST_CASE("`@Union` constructs an untagged union type from a `UnionInfo` descriptor") {

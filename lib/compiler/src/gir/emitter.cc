@@ -4879,7 +4879,7 @@ auto emitter::materialize_const(const const_value& cv) -> value {
             if (slice_data->null_terminated) {
                 const auto sentinel_ptr{builder_.emit_get_element_ptr(
                     value{slot, backing_type}, {value{i, usize_type}}, elem_type)};
-                builder_.emit_store(value{sentinel_ptr, elem_type}, value{u64{0}, elem_type})
+                builder_.emit_store(value{sentinel_ptr, elem_type}, value{zero_val{}, elem_type})
                     .is_initializer = true;
             }
             auto decayed{emit_slice_from_array(value{slot, backing_type}, backing_type)};
@@ -4903,7 +4903,7 @@ auto emitter::materialize_const(const const_value& cv) -> value {
         if (arr_data->null_terminated) {
             const auto sentinel_ptr{builder_.emit_get_element_ptr(
                 value{slot, type}, {value{i, usize_type}}, elem_type)};
-            builder_.emit_store(value{sentinel_ptr, elem_type}, value{u64{0}, elem_type})
+            builder_.emit_store(value{sentinel_ptr, elem_type}, value{zero_val{}, elem_type})
                 .is_initializer = true;
         }
         const auto loaded{builder_.emit_load(value{slot, type}, type)};
@@ -6409,7 +6409,7 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
                 builder_.emit_get_element_ptr(value{struct_slot, *sema_type},
                                               {value{static_cast<u64>(arr->len), usize_type}},
                                               elem_type)};
-            builder_.emit_store(value{sentinel_ptr, elem_type}, value{u64{0}, elem_type})
+            builder_.emit_store(value{sentinel_ptr, elem_type}, value{zero_val{}, elem_type})
                 .is_initializer = true;
         }
         const auto loaded{builder_.emit_load(value{struct_slot, *sema_type}, *sema_type)};

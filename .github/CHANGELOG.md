@@ -335,9 +335,11 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `@ptrCast`, `@alignCast` and int <-> ptr conversions now check for ptr types correctly with an error message
 - `@Struct` no longer takes a variadic default value string and instead takes an opaque pointer (nullable) for the default value
     - rvalues can now be addressed (`^`/`&`) at compile time for default struct values
-    - Only scalar types are supported at this time
 - Implicit access/initializer expressions now correctly parse in nested initializer expressions
 - The `@Union` builtin no longer takes in any defaults since they were just there to mimic struct behavior and did nothing (was a resolve error, now not even allowed)
 - The `NoPayload` marker in the builtin module has been replaced with void in the `typeInfo` union
     - This originally was here to get around a bug involving false name shadowing with raw idents that has since been fixed
 - Fix a crash resulting from stack corruption following concatenation of slice types
+- Sentinel bytes in arrays and slices of aggregates are now properly zeroed
+    - Nullptr is set for ptrs in slices
+    - Aggregates are completely zeroed out (instance fields set to 0)

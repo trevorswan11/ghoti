@@ -267,9 +267,14 @@ class type_resolver {
     // Aggregate synthesis for `@Struct`/`@Union`/`@Enum`
     [[nodiscard]] auto synthesize_ident(std::string_view name, bool is_public)
         -> ast::identifier_handle;
-    // Materializes a folded scalar `const_value` (int/bool/float/string only) back into an AST
-    // literal node, so it can serve as a field's `default_value` expression
-    [[nodiscard]] auto synthesize_const_literal(const gir::const_value& val)
+    // Builds the `.<name>` accessor of one synthesized initializer entry, for
+    // `synthesize_const_expr`'s struct/union cases
+    [[nodiscard]] auto synthesize_implicit_access(std::string_view name)
+        -> ast::implicit_access_handle;
+    // Materializes a folded `const_value` back into an AST expression node, so it can serve
+    // as a field's `default_value` expression. A pointer-typed value nested inside an aggregate
+    // isn't supported and yields `none`.
+    [[nodiscard]] auto synthesize_const_expr(const gir::const_value& val)
         -> stdx::option<ast::expr_handle>;
     // Builds a `types::enum_t` directly from a folded `EnumInfo` descriptor
     [[nodiscard]] auto synthesize_enum(source_location loc, const gir::const_struct& desc)

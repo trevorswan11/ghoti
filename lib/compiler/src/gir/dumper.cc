@@ -36,6 +36,7 @@ auto format_value(const value& val) -> std::string {
         [](stdx::option<sema::type&> t) { return t ? t->to_string() : "<null_type>"; },
         [](void_val) { return "void"; },
         [](undefined_val) { return "undefined"; },
+        [](zero_val) { return "zero"; },
         [](nullptr_val) { return "nullptr"; },
         [](auto v) { return fmt::format("{}", v); });
 }

@@ -159,6 +159,11 @@ struct void_val {
 struct undefined_val {
     [[nodiscard]] constexpr auto operator==(const undefined_val&) const noexcept -> bool = default;
 };
+
+// A zero-valued placeholder for an arbitrary type, lowered via `llvm::Constant::getNullValue`
+struct zero_val {
+    [[nodiscard]] constexpr auto operator==(const zero_val&) const noexcept -> bool = default;
+};
 struct nullptr_val {
     [[nodiscard]] constexpr auto operator==(const nullptr_val&) const noexcept -> bool = default;
 };
@@ -175,6 +180,7 @@ struct value {
                                  stdx::option<sema::type&>,
                                  void_val,
                                  undefined_val,
+                                 zero_val,
                                  nullptr_val>;
 
     data_t                    data{void_val{}};

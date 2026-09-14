@@ -1968,7 +1968,17 @@ auto type_resolver::synthesize_ident(std::string_view name, bool is_public)
     return ast::identifier_handle{id};
 }
 
-auto type_resolver::synthesize_const_literal(const gir::const_value& val)
+// Builds the `.<name> = <value>` accessor half of one synthesized initializer entry.
+auto type_resolver::synthesize_implicit_access(std::string_view name)
+    -> ast::implicit_access_handle {
+    const auto            member{synthesize_ident(name, false)};
+    const syntax::token_t tok{syntax::token_type_t::DOT, "."};
+    const auto id{resolving_.ast.add_node(tok, tok, ast::implicit_access_expr{.member = member})};
+    resolving_.sync_side_tables_for_new_node();
+    return ast::implicit_access_handle{id};
+}
+
+auto type_resolver::synthesize_const_expr(const gir::const_value& val)
     -> stdx::option<ast::expr_handle> {
     if (const auto b{val.as_opt<bool>()}) {
         const syntax::token_t tok{
@@ -2004,6 +2014,50 @@ auto type_resolver::synthesize_const_literal(const gir::const_value& val)
         resolving_.sync_side_tables_for_new_node();
         return ast::expr_handle{id};
     }
+
+    const syntax::token_t init_tok{syntax::token_type_t::DOT, "."};
+
+    if (const auto arr{val.as_opt<gir::const_array>()}) {
+        ast::initializer_expr init{.object_type = stdx::none, .initializers = {}};
+        init.initializers.reserve(arr->elements.size());
+        for (const auto& elem : arr->elements) {
+            const auto elem_expr{synthesize_const_expr(elem)};
+            if (!elem_expr) { return stdx::none; }
+            init.initializers.push_back({.member = stdx::none, .value = *elem_expr});
+        }
+        const auto id{resolving_.ast.add_node(init_tok, init_tok, std::move(init))};
+        resolving_.sync_side_tables_for_new_node();
+        return ast::expr_handle{id};
+    }
+
+    if (const auto st{val.as_opt<gir::const_struct>()}) {
+        ast::initializer_expr init{.object_type = stdx::none, .initializers = {}};
+        init.initializers.reserve(st->fields.size());
+        for (const auto& [name, field_val] : st->fields) {
+            const auto field_expr{synthesize_const_expr(field_val)};
+            if (!field_expr) { return stdx::none; }
+            init.initializers.push_back(
+                {.member = synthesize_implicit_access(name), .value = *field_expr});
+        }
+        const auto id{resolving_.ast.add_node(init_tok, init_tok, std::move(init))};
+        resolving_.sync_side_tables_for_new_node();
+        return ast::expr_handle{id};
+    }
+
+    if (const auto un{val.as_opt<gir::const_union>()}) {
+        if (un->payload.empty()) { return stdx::none; }
+        const auto payload_expr{synthesize_const_expr(un->payload.front())};
+        if (!payload_expr) { return stdx::none; }
+        ast::initializer_expr init{.object_type = stdx::none, .initializers = {}};
+        init.initializers.push_back(
+            {.member = synthesize_implicit_access(un->active_field), .value = *payload_expr});
+        const auto id{resolving_.ast.add_node(init_tok, init_tok, std::move(init))};
+        resolving_.sync_side_tables_for_new_node();
+        return ast::expr_handle{id};
+    }
+
+    // A pointer nested inside an aggregate default (as opposed to the top-level `^opaque`
+    // wrapper) isn't supported
     return stdx::none;
 }
 
@@ -2109,14 +2163,16 @@ auto type_resolver::synthesize_struct(source_location loc, const gir::const_stru
                     error::TYPE_MISMATCH,
                     loc);
             }
-            const auto lit{synthesize_const_literal(dv)};
+            const auto lit{synthesize_const_expr(dv)};
             if (!lit) {
-                return make_sema_err(fmt::format("'@Struct': field '{}' default isn't a supported "
-                                                 "scalar type (int/bool/float/string)",
-                                                 *name_v),
-                                     error::CONSTEXPR_EVALUATION_FAILED,
-                                     loc);
+                return make_sema_err(
+                    fmt::format("'@Struct': field '{}' default value isn't constant-representable "
+                                "(a pointer nested inside an aggregate default isn't supported)",
+                                *name_v),
+                    error::CONSTEXPR_EVALUATION_FAILED,
+                    loc);
             }
+
             // A synthetic aggregate never goes through `visit(struct_expr)`, so nothing else
             // resolves this literal against the field's own type
             {

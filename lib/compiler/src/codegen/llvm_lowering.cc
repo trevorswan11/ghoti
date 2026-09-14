@@ -1590,6 +1590,13 @@ auto llvm_lowering::lower_value(const gir::value& val, const sema::type* expecte
             if (llty->isVoidTy()) { return nullptr; }
             return llvm::UndefValue::get(llty);
         },
+        [this, &val, expected_type](gir::zero_val) -> llvm::Value* {
+            const auto ty{expected_type ? stdx::option<const sema::type&>{expected_type}
+                                        : val.type};
+            auto*      llty{ty ? types_.translate(*ty) : types_.get_int64_ty()};
+            if (llty->isVoidTy()) { return nullptr; }
+            return llvm::Constant::getNullValue(llty);
+        },
         [](gir::void_val) -> llvm::Value* { return nullptr; },
         [this](gir::nullptr_val) -> llvm::Value* {
             return llvm::ConstantPointerNull::get(types_.get_ptr_ty());
