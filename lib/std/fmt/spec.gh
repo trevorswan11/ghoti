@@ -1,0 +1,28 @@
+import std;
+
+pub const Align := enum : i32 { left, right, center };
+
+pub const Kind := enum : u8 {
+    @"d" = 'd',
+    @"x" = 'x',
+    @"X" = 'X',
+    @"b" = 'b',
+    @"o" = 'o',
+    @"c" = 'c',
+    @"s" = 's',
+    @"e" = 'e',
+    @"f" = 'f',
+    @"p" = 'p',
+};
+
+pub const Spec := struct {
+    pub arg_idx: std.Option(usize) = .{ .none = {} },
+    pub fill: u8 = ' ',
+    pub align: std.Option(Align) = .{ .none = {} },
+    pub plus: bool = false,
+    pub alt: bool = false, /// '#'
+    pub zero: bool = false, /// literal '0'
+    pub width: std.Option(usize) = .{ .none = {} },
+    pub precision: std.Option(usize) = .{ .none = {} },
+    pub kind: std.Option(Kind) = .{ .none = {} }, // none means default '{}'
+};

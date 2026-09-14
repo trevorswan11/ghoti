@@ -1,5 +1,17 @@
 pub constexpr Option := fn(T: type): type {
-    return union { some: T, none: void };
+    return union {
+        some: T,
+        none: void,
+
+        // TODO(tcs): Uncomment when this bug is fixed
+        // pub constexpr of := fn(val: T): @This() {
+        //     return .{ .some = val };
+        // };
+
+        // pub constexpr empty := fn(): @This() {
+        //     return .{ .none = {} };
+        // };
+    };
 };
 
 impl(T: type) builtin.Unwrappable for Option(T) {
