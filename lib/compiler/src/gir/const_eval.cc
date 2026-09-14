@@ -2103,7 +2103,7 @@ auto const_eval::eval_unary(ast::node_id id, const ast::unary_expr& unary)
         if (val->is<i128>()) { return const_value{-val->as<i128>(), val->get_type()}; }
         if (val->is<u128>()) {
             // 128 bits is as wide as this domain goes
-            const auto u{val->as<u128>()};
+            const auto     u{val->as<u128>()};
             constexpr u128 abs_i128_min{u128{1} << 127};
             if (u == abs_i128_min) {
                 return const_value{std::numeric_limits<i128>::min(), val->get_type()};

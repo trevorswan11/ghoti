@@ -2,6 +2,10 @@ import std;
 
 import "page_allocator.gh" as page_alloc;
 
+test {
+    import "page_allocator.gh" as _test_page_alloc;
+}
+
 pub using PageAllocator = page_alloc.PageAllocator;
 
 var page_alloc_impl: PageAllocator = .{};

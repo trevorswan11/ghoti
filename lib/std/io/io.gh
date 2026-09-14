@@ -6,6 +6,10 @@ import "seeker.gh" as seeker;
 import "stdio.gh" as stdio;
 import "fixed_buffer.gh" as fixed_buffer;
 
+test {
+    import "fixed_buffer.gh" as _test_fixed_buffer;
+}
+
 pub using Error = error.Error;
 pub using File = file.File;
 pub using Reader = reader.Reader;

@@ -85,13 +85,15 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
         const_eval_.resolve_all_deferred_types();
     }
 
-    const auto emit_top_level_stmt = [&](mod::module& module, ast::node_id id) {
+    const auto emit_top_level_stmt = [&](mod::module& module, ast::node_id id, bool emit_tests) {
         return module.ast[id].visit(
             [&](const auto&) {},
             [&](const ast::decl_stmt& decl) { emit_top_level_decl(id, decl); },
             [&](const ast::using_stmt& using_stmt) { emit_top_level_using(id, using_stmt); },
             [&](const ast::impl_stmt& impl) { emit_top_level_impl(id, impl); },
-            [&](const ast::test_stmt& test) { emit_top_level_test(id, test); });
+            [&](const ast::test_stmt& test) {
+                if (emit_tests) { emit_top_level_test(id, test); }
+            });
     };
 
     // Traverse all transitively imported modules reachable from ast_module_
@@ -113,6 +115,30 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
         }
     };
     collect_imported(collect_imported, ast_module_);
+
+    // Test discovery only follows `test { import "x.gh" as x; }`-nested imports, recursively
+    ankerl::unordered_dense::set<mod::module*> test_discovered;
+    test_discovered.insert(&ast_module_);
+    {
+        std::vector<mod::module*> frontier{&ast_module_};
+        while (!frontier.empty()) {
+            auto* cur{frontier.back()};
+            frontier.pop_back();
+            for (const auto root_id : cur->ast) {
+                const auto test{cur->ast.get_as_opt<ast::test_stmt>(root_id)};
+                if (!test) { continue; }
+                for (const auto& stmt : cur->ast.get_as<ast::block_stmt>(test->block)) {
+                    if (!cur->ast.get_as_opt<ast::import_stmt>(stmt)) { continue; }
+                    const auto sema_type{cur->get_sema_type_opt(stmt)};
+                    if (!sema_type) { continue; }
+                    const auto m_data{sema_type->get_data().as_opt<sema::types::module>()};
+                    if (!m_data) { continue; }
+                    auto& dep{m_data->imported};
+                    if (test_discovered.insert(&dep).second) { frontier.emplace_back(&dep); }
+                }
+            }
+        }
+    }
 
     // The compiler-provided `builtin` module is injected into the prelude, not imported
     if (include_builtin_test_runtime && ctx_.modules.has_builtin_module()) {
@@ -157,7 +183,9 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
 
     {
         PROFILE_SCOPE("emitter: emit root module");
-        for (const auto root_id : ast_module_.ast) { emit_top_level_stmt(ast_module_, root_id); }
+        for (const auto root_id : ast_module_.ast) {
+            emit_top_level_stmt(ast_module_, root_id, /*emit_tests=*/true);
+        }
         for (const auto& inst : ast_module_.generic_instantiations) {
             emit_generic_instantiation(inst);
         }
@@ -177,7 +205,10 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
             if (!other_mod || other_mod->is_poisoned() || other_mod->is_errored()) { continue; }
             auto prev_module{std::exchange(active_module_, other_mod)};
             const_eval_.set_module(*other_mod);
-            for (const auto root_id : other_mod->ast) { emit_top_level_stmt(*other_mod, root_id); }
+            const bool emit_tests{test_discovered.contains(other_mod)};
+            for (const auto root_id : other_mod->ast) {
+                emit_top_level_stmt(*other_mod, root_id, emit_tests);
+            }
             for (const auto& inst : other_mod->generic_instantiations) {
                 emit_generic_instantiation(inst);
             }

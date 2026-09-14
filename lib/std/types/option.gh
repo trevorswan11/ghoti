@@ -3,14 +3,13 @@ pub constexpr Option := fn(T: type): type {
         some: T,
         none: void,
 
-        // TODO(tcs): Uncomment when this bug is fixed
-        // pub constexpr of := fn(val: T): @This() {
-        //     return .{ .some = val };
-        // };
+        pub constexpr of := fn(val: T): @This() {
+            return .{ .some = val };
+        };
 
-        // pub constexpr empty := fn(): @This() {
-        //     return .{ .none = {} };
-        // };
+        pub constexpr empty := fn(): @This() {
+            return .{ .none = {} };
+        };
     };
 };
 

@@ -83,10 +83,10 @@ TEST_CASE("test command execution") {
         CHECK(!cmd.execute());
     }
 
-    SECTION("Tests in imported modules are discovered and executed") {
+    SECTION("A plain (non-test-wrapped) import does not discover the imported module's tests") {
         codegen::llvm_scope scope;
-        tempfile            helper_file{"test_driver_helper.gh"};
-        tempfile            main_file{"test_driver_main.gh"};
+        tempfile            helper_file{"test_driver_helper_plain.gh"};
+        tempfile            main_file{"test_driver_main_plain.gh"};
 
         {
             std::ofstream out{helper_file.path};
@@ -94,7 +94,7 @@ TEST_CASE("test command execution") {
                 pub const helper_val := 42;
 
                 test "imported module test" {{
-                    @expect(helper_val == 42);
+                    @require(false);
                 }}
             )");
         }
@@ -118,7 +118,44 @@ TEST_CASE("test command execution") {
         REQUIRE(cmd.execute());
     }
 
-    SECTION("Failing test in imported module fails test run") {
+    SECTION("Tests in a `test { import ... }`-nested module are discovered and executed") {
+        codegen::llvm_scope scope;
+        tempfile            helper_file{"test_driver_helper.gh"};
+        tempfile            main_file{"test_driver_main.gh"};
+
+        {
+            std::ofstream out{helper_file.path};
+            fmt::print(out, R"(
+                pub const helper_val := 42;
+
+                test "imported module test" {{
+                    @expect(helper_val == 42);
+                }}
+            )");
+        }
+
+        {
+            std::ofstream out{main_file.path};
+            fmt::print(out,
+                       R"(
+                test {{
+                    import "{}" as helper;
+                }}
+
+                test "main module test" {{
+                    @expect(true);
+                }}
+            )",
+                       helper_file.path.filename().string());
+        }
+
+        cmd::test_cmd cmd{{
+            .input_path = main_file,
+        }};
+        REQUIRE(cmd.execute());
+    }
+
+    SECTION("Failing test in a `test { import ... }`-nested module fails test run") {
         codegen::llvm_scope scope;
         tempfile            helper_file{"test_driver_helper_fail.gh"};
         tempfile            main_file{"test_driver_main_pass.gh"};
@@ -138,10 +175,12 @@ TEST_CASE("test command execution") {
             std::ofstream out{main_file.path};
             fmt::print(out,
                        R"(
-                import "{}" as helper;
+                test {{
+                    import "{}" as helper;
+                }}
 
                 test "main module test" {{
-                    @expect(helper.helper_val == 42);
+                    @expect(true);
                 }}
             )",
                        helper_file.path.filename().string());

@@ -3544,6 +3544,11 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     // The entire function lives inside of its preallocated scope
     auto& fn_type{resolving_.get_sema_type(id)};
 
+    if (for_generic_instantiation_ && reresolve_floor_ && fn_type.has_symbol_table_idx() &&
+        fn_type.get_symbol_table_idx() >= *reresolve_floor_) {
+        fn_type.unresolve();
+    }
+
     // `pre_register_impls` force-drives an impl target aggregate's decl; The
     // signature is already committed, so a re-entry is a no-op rather than an assertion failure.
     if (fn_type.is_resolved()) {
@@ -10127,8 +10132,12 @@ auto type_resolver::instantiate_generic(type&                             callee
                 auto& src_agg{*deduced_return_type};
                 auto& clone{clone_anonymous_aggregate(
                     ctx_, src_agg, fmt::format("{}#{}", mangled_name, agg_node->get_index()))};
-                register_type_ctor_members(
-                    ctx_, fn_mod, *agg_node, src_agg, clone, mangled_name, std::move(typing));
+                // Call an abstract instantiation built purely to compute a parameterized impl's
+                // signatures
+                if (!building_param_template_) {
+                    register_type_ctor_members(
+                        ctx_, fn_mod, *agg_node, src_agg, clone, mangled_name, std::move(typing));
+                }
 
                 // Hand this instantiation's `constexpr` parameter values to the member emit
                 std::vector<std::pair<std::string, gir::const_value>> ctor_bindings;
@@ -10147,7 +10156,7 @@ auto type_resolver::instantiate_generic(type&                             callee
 
                 // Expand any parameterized `impl(P) [I for] Ctor(P)` onto this instantiation
                 // (before `ctor_bindings` is moved -- the impl needs the ctor's folded values).
-                if (!ctx_.impls.param_records().empty()) {
+                if (!building_param_template_ && !ctx_.impls.param_records().empty()) {
                     instantiate_impls_for(clone,
                                           fn_mod,
                                           fn_info.node_id,

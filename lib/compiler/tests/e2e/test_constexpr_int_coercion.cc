@@ -160,8 +160,9 @@ TEST_CASE("constexpr-fits implicit integer coercion runtime execution") {
         )") == 42);
     }
 
-    SECTION("a chained double dot-access into an explicitly-typed constexpr decl does not spuriously "
-            "trip the shift-overflow safety check") {
+    SECTION(
+        "a chained double dot-access into an explicitly-typed constexpr decl does not spuriously "
+        "trip the shift-overflow safety check") {
         CHECK(helpers::compile_and_run(R"(
             const maxUnsigned := fn(T: type): constexpr_int {
                 constexpr bits: u16 = @typeInfo(T).int.bits;
