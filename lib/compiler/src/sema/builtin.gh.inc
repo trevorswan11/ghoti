@@ -199,7 +199,7 @@ pub const UnionInfo := struct {
 
 pub const EnumFieldInfo := struct {
     pub name: []u8,
-    pub value: i64,
+    pub value: constexpr_int,
 };
 
 pub const EnumInfo := struct {

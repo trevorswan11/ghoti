@@ -1460,18 +1460,20 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
         for (usize idx{0}; idx < en.ast_enumerations.size(); ++idx) {
             const auto& e{en.ast_enumerations[idx]};
             const auto& vname{en.enclosing.ast.get_as<ast::identifier_expr>(e.name).name};
-            i64         val{static_cast<i64>(idx)};
+            auto        val{static_cast<i128>(idx)};
             if (e.value) {
                 auto&      enclosing_mod{const_cast<mod::module&>(en.enclosing)};
                 const_eval enclosing_eval{ctx_, enclosing_mod};
                 enclosing_eval.set_symbol_scoping(symbol_scoping_);
                 if (const auto ev{enclosing_eval.try_eval(*e.value)}) {
-                    val = static_cast<i64>(ev->as_int_opt().value_or(val));
+                    val = ev->as_int_opt().value_or(val);
                 }
             }
             const_struct fs;
             fs.fields.emplace("name", const_value::make_string(ctx_, std::string{vname}));
-            fs.fields.emplace("value", const_value{val, ctx_.get_int(64, true)});
+            fs.fields.emplace(
+                "value",
+                const_value{val, ctx_.get_builtin_resolved_type(sema::type_kind::CONSTEXPR_INT)});
             fields.elements.emplace_back(const_value{std::move(fs), field_type});
         }
         auto& field_slice_type{ctx_.get_slice(sema::types::mut::CONSTANT, false, field_type)};

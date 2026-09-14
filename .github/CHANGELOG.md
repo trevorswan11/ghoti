@@ -343,3 +343,4 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Sentinel bytes in arrays and slices of aggregates are now properly zeroed
     - Nullptr is set for ptrs in slices
     - Aggregates are completely zeroed out (instance fields set to 0)
+- The `@Enum` builtin now takes in `EnumFieldInfo`'s value as a `constexpr_int` instead of an `i64`
