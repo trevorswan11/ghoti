@@ -500,9 +500,8 @@ auto import_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syn
 auto import_stmt::get_name(const AST& tree) const noexcept
     -> stdx::option<std::pair<ast::identifier_handle, std::string_view>> {
     if (alias) {
-        return tree.get_as_opt<ast::identifier_expr>(*alias).transform([&](auto ident) {
-            return std::pair{ast::identifier_handle{*alias}, ident.name};
-        });
+        return tree.get_as_opt<ast::identifier_expr>(*alias).transform(
+            [&](auto ident) { return std::pair{ast::identifier_handle{*alias}, ident.name}; });
     }
 
     return tree.get_as_opt<ast::identifier_expr>(payload).transform(

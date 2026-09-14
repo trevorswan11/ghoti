@@ -227,6 +227,8 @@ class emitter {
     }
     auto emit_array(ast::node_id id, const ast::array_expr& array) -> value;
     auto emit_slice_from_array(value arr_lval, const sema::type& arr_type) -> value;
+    auto emit_slice_literal_address(const ast::address_of_expr& addr, sema::type& slice_type)
+        -> value;
     // Materializes a folded string constant that is typed as a slice (`const S: []u8 = "..."`)
     // into a `{ptr, len}` value by spilling the bytes to a fresh array temporary and decaying it.
     auto emit_string_as_slice(const std::string& bytes, const sema::type& slice_type) -> value;
@@ -483,6 +485,7 @@ class emitter {
     default_counter               anon_test_desc_counter_;
     default_counter               anon_test_fn_counter_;
     default_counter               anon_fn_counter_;
+    default_counter               anon_slice_lit_counter_;
     std::vector<std::string>      open_fn_names_;
     std::vector<bool>             open_fn_is_closure_;
     std::vector<sema::type*>      user_type_stack_;

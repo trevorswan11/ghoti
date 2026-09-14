@@ -116,7 +116,7 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
     };
     collect_imported(collect_imported, ast_module_);
 
-    // Test discovery only follows `test { import "x.gh" as x; }`-nested imports, recursively
+    // Test discovery only follows `test { import "x.gh"...; }`-nested imports, recursively
     ankerl::unordered_dense::set<mod::module*> test_discovered;
     test_discovered.insert(&ast_module_);
     {
@@ -6866,10 +6866,43 @@ auto emitter::emit_slice_range(ast::node_id id, const ast::index_expr& index) ->
     return value{builder_.emit_load(value{slot, *result_type}, *result_type), result_type};
 }
 
+auto emitter::emit_slice_literal_address(const ast::address_of_expr& addr, sema::type& slice_type)
+    -> value {
+    PROFILE_FUNCTION();
+    const auto arr_type_opt{active_mod().get_sema_type_opt(*addr.rhs)};
+    ASSERT(arr_type_opt, "Slice-literal address-of must have a resolved backing array type");
+    auto& arr_type{const_cast<sema::type&>(*arr_type_opt)};
+
+    // When every element folds at compile time, the backing array is hoisted into a
+    // hidden static/read-only global, so the resulting slice can safely outlive this expression
+    if (const auto cv{const_eval_.try_eval(*addr.rhs)}; cv && !cv->is_poison()) {
+        const auto global_name{fmt::format(".slice_lit.{}", anon_slice_lit_counter_++)};
+        auto&      g{gir_module_.add_global(
+            global_name, arr_type, true, stdx::none, gir::linkage::INTERNAL)};
+        g.const_init.emplace(*cv);
+        const auto addr_id{builder_.emit_global_addr(global_name, arr_type, true)};
+        auto       decayed{emit_slice_from_array(value{addr_id, arr_type}, arr_type)};
+        decayed.type.emplace(slice_type);
+        return decayed;
+    }
+
+    // Otherwise it falls back to an ordinary stack temporary, scoped like any other
+    // address-of-local.
+    const auto arr_val{emit_expression_id_raw(*addr.rhs)};
+    const auto slot{spill_to_temporary(arr_val, arr_type, true)};
+    auto       decayed{emit_slice_from_array(slot, arr_type)};
+    decayed.type.emplace(slice_type);
+    return decayed;
+}
+
 auto emitter::emit_address_of(ast::node_id id, const ast::address_of_expr& addr) -> value {
     PROFILE_FUNCTION();
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Address of expression must have a resolved sema type");
+
+    if (sema_type->get_kind() == sema::type_kind::SLICE) {
+        return emit_slice_literal_address(addr, const_cast<sema::type&>(*sema_type));
+    }
 
     // `^r` on a reference aliases the referent, cannot have a pointer to a reference
     if (const auto rhs_type{active_mod().get_sema_type_opt(*addr.rhs)};

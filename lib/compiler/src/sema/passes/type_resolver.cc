@@ -6347,6 +6347,36 @@ auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> vo
 
 auto type_resolver::visit(ast::node_id id, const ast::address_of_expr& adr_of) -> void {
     PROFILE_FUNCTION();
+
+    // `^.{a, b, c}` sugar: when a bare (untyped) initializer targets a known slice type with a
+    // `const` element, resolve it as `[N]T` instead and yield the slice directly rather than a
+    // pointer-to-array; the emitter decays the (possibly static) backing array into it.
+    if (ref_addr_of_is_mutable(id) != types::mut::MUTABLE) {
+        if (const auto init{resolving_.ast.get_as_opt<ast::initializer_expr>(adr_of.rhs)};
+            init && !init->object_type) {
+            if (const auto implicit_type{implicit_type_stack_.peek()}) {
+                if (const auto slice_data{implicit_type->get_data().as_opt<types::slice>()};
+                    slice_data && slice_data->underlying.is_constant()) {
+                    auto& elem_type{slice_data->underlying};
+                    auto& array_type{ctx_.get_array(types::mut::CONSTANT,
+                                                    slice_data->null_terminated,
+                                                    init->initializers.size(),
+                                                    elem_type)};
+                    auto& slice_type{*implicit_type};
+                    {
+                        const structural_guard g{implicit_type_stack_, array_type};
+                        TRY_RESOLVE(adr_of.rhs);
+                    }
+                    if (last_type_->is_poison()) {
+                        return last_type_.emplace(ctx_.poison_node(resolving_, id));
+                    }
+                    resolving_.set_sema_type(id, slice_type);
+                    return last_type_.emplace(slice_type);
+                }
+            }
+        }
+    }
+
     {
         const mutating_context_guard g{in_mutating_context_,
                                        ref_addr_of_is_mutable(id) == types::mut::MUTABLE};

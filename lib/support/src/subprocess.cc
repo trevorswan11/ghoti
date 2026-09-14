@@ -103,7 +103,7 @@ auto self_exe_path() -> std::filesystem::path {
 }
 
 auto spawn_child(const mock_argv& args, std::chrono::milliseconds timeout) -> stdx::option<u32> {
-    // `milliseconds::max()` means "wait forever" — used for interactive child programs.
+    // `milliseconds::max()` means "wait forever"
     const bool no_timeout{timeout == std::chrono::milliseconds::max()};
 #if GHOTI_WINDOWS
     auto cmd_line{quote_arg_windows(args[0])};

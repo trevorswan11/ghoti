@@ -327,3 +327,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Imports inside of test blocks no longer require an alias as they may just used for discovery
 - Resolve an issue where build-obj on any file that imported std would fail to compile and crash
 - Imports may now be discarded with an underscore as their alias
+- Allow slices to be created from literal implicit access expressions via `^.{a, b, c}`
+    - Only possible when the result type is known
+    - Constant evaluatable slices are hoisted into static storage
+    - A literal can never be mutably taken implicitly

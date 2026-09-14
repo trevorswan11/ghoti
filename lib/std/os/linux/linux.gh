@@ -11,7 +11,7 @@ pub using Errno = errno.Errno;
 pub using mode_t = u16; /// matches the darwin backend so `io/file.gh`'s mode literals coerce
 pub constexpr EWOULDBLOCK := errno.EWOULDBLOCK;
 
-// <asm-generic/fcntl.h> — note these values differ from Darwin's.
+// <asm-generic/fcntl.h>
 pub const O_RDONLY: i32 = 0o0; /// open for reading only
 pub const O_WRONLY: i32 = 0o1; /// open for writing only
 pub const O_RDWR: i32 = 0o2; /// open for reading and writing
@@ -31,7 +31,7 @@ pub const SEEK_END: i32 = 2; /// set the file offset to EOF + `offset`
 /// `openat`/`mkdirat`/... resolve a relative path against the cwd when the dirfd is `AT_FDCWD`.
 pub const AT_FDCWD: usize = @bitCast(usize, -100z); // `(int)-100` reinterpreted as a register-wide unsigned
 
-// <linux/fcntl.h> / <linux/stat.h> — flags and masks for the *at() / statx calls.
+// <linux/fcntl.h> / <linux/stat.h>
 pub const AT_SYMLINK_NOFOLLOW: usize = 0x100uz; /// do not follow a trailing symlink
 pub const AT_EMPTY_PATH: usize = 0x1000uz; /// operate on the dirfd itself (empty path)
 pub const STATX_BASIC_STATS: usize = 0x7ffuz; /// the traditional stat(2) field set
@@ -39,7 +39,7 @@ pub const STATX_BASIC_STATS: usize = 0x7ffuz; /// the traditional stat(2) field 
 const S_IFMT: u16 = 0o170000u16; /// file-type mask within `stx_mode`
 const S_IFDIR: u16 = 0o040000u16; /// directory
 
-// <asm-generic/mman-common.h> — raw anonymous memory, the page-granular allocation primitive.
+// <asm-generic/mman-common.h>
 pub const PROT_READ: usize = 0x1uz; /// pages can be read
 pub const PROT_WRITE: usize = 0x2uz; /// pages can be written
 pub const MAP_PRIVATE: usize = 0x02uz; /// changes are private (copy-on-write)
@@ -316,10 +316,10 @@ pub const Statx := extern struct {
     pub stx_btime: StatxTimestamp, /// creation (birth)
     pub stx_ctime: StatxTimestamp, /// last status change
     pub stx_mtime: StatxTimestamp, /// last modification
-    pub stx_rdev_major: u32, /// device id (for a device special file) — major
-    pub stx_rdev_minor: u32, /// ... minor
-    pub stx_dev_major: u32, /// id of the device containing the file — major
-    pub stx_dev_minor: u32, /// ... minor
+    pub stx_rdev_major: u32, /// device id (for a device special file) [major]
+    pub stx_rdev_minor: u32, /// device id (for a device special file) [minor]
+    pub stx_dev_major: u32, /// id of the device containing the file [major]
+    pub stx_dev_minor: u32, /// id of the device containing the file [minor]
     pub stx_mnt_id: u64, /// mount id (Linux 5.8+)
     pub stx_dio_mem_align: u32, /// memory alignment for direct I/O (Linux 6.1+)
     pub stx_dio_offset_align: u32, /// file-offset alignment for direct I/O
