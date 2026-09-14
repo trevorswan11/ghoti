@@ -2407,6 +2407,30 @@ auto register_type_ctor_members(context&         ctx,
     for (auto& [_, ty] : typing.explicit_types) {
         if (ty) { ty.emplace(remap_type(ctx, *ty, src_agg, clone)); }
     }
+
+    // `body_typing_snapshot::diff_into` only captures a node whose type changed relative to the
+    // snapshot taken at the start of this instantiation. Directly scan every node in this module
+    // for a type that still transitively points at `src_agg` and pin its `clone`-remapped form into
+    // the diff explicitly, regardless of what `diff_into` captured.
+    auto& node_types{fn_mod.sema_side_tables.node_types.values};
+    for (usize idx{0}; idx < node_types.size(); ++idx) {
+        auto& ty{node_types[idx]};
+        if (!ty) { continue; }
+        auto& remapped{remap_type(ctx, *ty, src_agg, clone)};
+        if (&remapped != ty.get()) {
+            typing.node_types.emplace_back(idx, stdx::option<type&>{remapped});
+        }
+    }
+    auto& explicit_types{fn_mod.sema_side_tables.explicit_types.values};
+    for (usize idx{0}; idx < explicit_types.size(); ++idx) {
+        auto& ty{explicit_types[idx]};
+        if (!ty) { continue; }
+        auto& remapped{remap_type(ctx, *ty, src_agg, clone)};
+        if (&remapped != ty.get()) {
+            typing.explicit_types.emplace_back(idx, stdx::option<type&>{remapped});
+        }
+    }
+
     if (!typing.empty()) {
         ctx.instantiation_cache.set_body_type_diff(std::string{ctor_mangled}, std::move(typing));
     }

@@ -325,3 +325,4 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Tests are now only discovered by the root source file's test blocks
     - Placing imports inside of a test block here enables recursive discovery of that source files tests
     - Imports inside of test blocks no longer require an alias as they may just used for discovery
+- Resolve an issue where build-obj on any file that imported std would fail to compile and crash
