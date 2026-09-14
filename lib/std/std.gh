@@ -14,11 +14,11 @@ pub import "heap/heap.gh" as heap;
 pub import "math.gh" as math;
 
 test {
-    import "os/os.gh" as _test_os;
-    import "io/io.gh" as _test_io;
-    import "mem/mem.gh" as _test_mem;
-    import "heap/heap.gh" as _test_heap;
-    import "math.gh" as _test_math;
+    import "os/os.gh";
+    import "io/io.gh";
+    import "mem/mem.gh";
+    import "heap/heap.gh";
+    import "math.gh";
 }
 
 pub const panic_handler := fn(msg: []u8, file: []u8, _: u32, _: u32): noreturn {

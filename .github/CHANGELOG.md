@@ -324,3 +324,4 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fix a crash resulting from a generic type-constructor's nested member function (like `Option(T).of`) getting permanently marked "resolved" on first visit
 - Tests are now only discovered by the root source file's test blocks
     - Placing imports inside of a test block here enables recursive discovery of that source files tests
+    - Imports inside of test blocks no longer require an alias as they may just used for discovery

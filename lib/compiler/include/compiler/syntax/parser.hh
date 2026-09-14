@@ -204,6 +204,11 @@ class parser {
         return out;
     }
 
+    [[nodiscard]] auto in_test_block() const noexcept -> bool { return test_block_depth_; }
+    [[nodiscard]] auto enter_test_block() noexcept -> counter<u32>::guard {
+        return counter<u32>::guard{test_block_depth_};
+    }
+
   private:
     // Bounds recursive-descent depth so deep nesting reports a diagnostic, not a stack overflow.
     static constexpr u32 MAX_EXPRESSION_DEPTH{512};
@@ -244,6 +249,7 @@ class parser {
     depth_counter           expr_depth_;
 
     stdx::option<std::vector<ast::explicit_type_id>> pending_impl_bound_;
+    depth_counter                                    test_block_depth_;
 
     std::vector<pending_doc> pending_docs_;
     std::vector<pending_doc> pending_module_docs_;

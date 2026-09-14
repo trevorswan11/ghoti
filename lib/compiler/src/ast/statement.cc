@@ -481,7 +481,8 @@ auto import_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syn
         TRY(parser.expect_peek(syntax::token_type_t::IDENT));
 
         imported_alias.emplace(TRY(identifier_expr::parse(parser)));
-    } else if (imported_core->get_kind() == node_kind::STRING_EXPRESSION) {
+    } else if (imported_core->get_kind() == node_kind::STRING_EXPRESSION &&
+               !parser.in_test_block()) {
         return make_syntax_err("All file imports must be aliased to an identifier",
                                syntax::error::FILE_IMPORT_MISSING_ALIAS,
                                start_token);
@@ -492,16 +493,16 @@ auto import_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syn
 }
 
 auto import_stmt::get_name(const AST& tree) const noexcept
-    -> std::pair<ast::identifier_handle, std::string_view> {
+    -> stdx::option<std::pair<ast::identifier_handle, std::string_view>> {
     if (alias) {
         const auto  handle{*alias};
         const auto& ident{tree.get_as<ast::identifier_expr>(handle)};
-        return {handle, ident.name};
+        return std::pair{handle, ident.name};
     }
 
-    // This must be an ident as all strings have an alias
-    const auto& ident{tree.get_as<ast::identifier_expr>(payload)};
-    return {payload, ident.name};
+    // A string payload without an alias only occurs for an unaliased test-block import.
+    return tree.get_as_opt<ast::identifier_expr>(payload).transform(
+        [this](auto ident) { return std::pair{payload, ident.name}; });
 }
 
 auto return_stmt::parse(syntax::parser& parser, syntax::semicolon_behavior behavior)
@@ -541,6 +542,7 @@ auto test_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
     }
 
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
+    const auto         test_block_guard{parser.enter_test_block()};
     const block_handle block{TRY(block_stmt::parse(parser))};
     return parser.add_stmt<test_stmt>(start_token, description, block);
 }

@@ -3,16 +3,16 @@ import std;
 pub const Align := enum : i32 { left, right, center };
 
 pub const Kind := enum : u8 {
-    @"d" = 'd',
-    @"x" = 'x',
-    @"X" = 'X',
-    @"b" = 'b',
-    @"o" = 'o',
-    @"c" = 'c',
-    @"s" = 's',
-    @"e" = 'e',
-    @"f" = 'f',
-    @"p" = 'p',
+    d = 'd',
+    x = 'x',
+    X = 'X',
+    b = 'b',
+    o = 'o',
+    c = 'c',
+    s = 's',
+    e = 'e',
+    f = 'f',
+    p = 'p',
 };
 
 pub const Spec := struct {

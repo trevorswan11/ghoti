@@ -33,7 +33,7 @@ template <stdx::NumericIntegral Underlying> class counter {
     constexpr auto operator--() noexcept -> Underlying { return --count_; }
     constexpr auto operator--(i32) noexcept -> Underlying { return count_--; }
 
-    constexpr operator bool() noexcept { return count_ != static_cast<Underlying>(0); }
+    constexpr operator bool() const noexcept { return count_ != static_cast<Underlying>(0); }
     constexpr operator Underlying() noexcept { return count_; }
 
     constexpr auto               operator<=>(const counter&) const noexcept        = default;

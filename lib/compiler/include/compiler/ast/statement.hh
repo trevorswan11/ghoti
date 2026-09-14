@@ -144,7 +144,7 @@ struct import_stmt {
         -> stdx::result<stmt_handle, syntax::diagnostic>;
 
     [[nodiscard]] auto get_name(const AST& tree) const noexcept
-        -> std::pair<ast::identifier_handle, std::string_view>;
+        -> stdx::option<std::pair<ast::identifier_handle, std::string_view>>;
 };
 
 struct return_stmt {

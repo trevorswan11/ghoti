@@ -675,9 +675,9 @@ auto symbol_collector::visit(ast::node_id id, const ast::impl_stmt& impl) -> voi
 
 auto symbol_collector::collect_import_payload(const ast::import_stmt& import_stmt)
     -> std::pair<std::string_view, stdx::result<gsl::not_null<mod::module*>, mod::diagnostic>> {
-    const auto [_, name]{import_stmt.get_name(collecting_.ast)};
+    const auto             named{import_stmt.get_name(collecting_.ast)};
+    const std::string_view name{named ? named->second : std::string_view{}};
     if (const auto string{collecting_.ast.get_as_opt<ast::string_expr>(import_stmt.payload)}) {
-        ASSERT(import_stmt.alias, "File import without alias");
         return {name, ctx_.modules.try_get_file_module(string->value, collecting_.parent_path)};
     }
 
@@ -703,8 +703,21 @@ auto symbol_collector::visit(ast::node_id id, const ast::import_stmt& import_stm
         collect_symbols(*imported_mod, new_ctx);
     }
 
-    const auto [name_handle, _]{import_stmt.get_name(collecting_.ast)};
-    collecting_.add_identifier_position(name_handle);
+    const auto named{import_stmt.get_name(collecting_.ast)};
+
+    if (!named) {
+        if (imported_mod && !imported_mod->is_errored()) {
+            auto& type = *ctx_.pool[{
+                type_kind::MODULE, types::mut::CONSTANT, *imported_mod->root_table_idx}];
+            type.resolve<types::module>(*imported_mod);
+            collecting_.set_sema_type(id, type);
+        } else {
+            ctx_.poison_node(collecting_, id);
+        }
+        return;
+    }
+
+    collecting_.add_identifier_position(named->first);
     try_declare<symbols::node_t>(alias, id);
     if (imported_mod && !imported_mod->is_errored()) {
         // Its much easier for other steps to get the enclosing module if we resolve now

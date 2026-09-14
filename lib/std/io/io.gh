@@ -7,7 +7,7 @@ import "stdio.gh" as stdio;
 import "fixed_buffer.gh" as fixed_buffer;
 
 test {
-    import "fixed_buffer.gh" as _test_fixed_buffer;
+    import "fixed_buffer.gh";
 }
 
 pub using Error = error.Error;

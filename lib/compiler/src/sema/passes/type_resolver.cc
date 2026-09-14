@@ -8084,7 +8084,19 @@ auto type_resolver::visit(ast::node_id id, const ast::expr_stmt& expr) -> void {
 
 auto type_resolver::visit(ast::node_id id, const ast::import_stmt& import_stmt) -> void {
     PROFILE_FUNCTION();
-    const auto [ident_id, name]{import_stmt.get_name(resolving_.ast)};
+    const auto named{import_stmt.get_name(resolving_.ast)};
+
+    // An unaliased test-block import exists only to pull the target module's tests into discovery
+    if (!named) {
+        auto& import_type{resolving_.get_sema_type(id)};
+        if (const auto mod_opt{import_type.get_data().as_opt<types::module>()}) {
+            context new_ctx{ctx_};
+            resolve_types(mod_opt->imported, new_ctx);
+        }
+        return last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
+    }
+
+    const auto [ident_id, name]{*named};
     auto& sym{ctx_.registry.get_from(table_idx_, name)};
 
     const auto poison_out = [&] -> void {
