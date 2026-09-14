@@ -72,6 +72,7 @@ class emitter {
         segment_id                     break_target{0};
         segment_id                     continue_target{0};
         stdx::option<local_id>         result_slot;
+        usize                          scope_depth{0};
     };
 
     struct iterable_info {

@@ -4,6 +4,7 @@ import "allocator.gh" as allocator;
 
 pub using AllocatorVTable = allocator.AllocatorVTable;
 pub using Allocator = allocator.Allocator;
+pub using AllocError = allocator.AllocError;
 
 /// Stored as a power-of-two.
 pub const Alignment := enum : u8 {

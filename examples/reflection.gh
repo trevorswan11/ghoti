@@ -27,4 +27,3 @@ test "Type creation" {
     const p: Point = .{ .x = 2, .y = 9 };
     @expect(p.sum() == 12);
 }
-

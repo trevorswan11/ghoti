@@ -30,6 +30,7 @@ pub const Errno := enum : u32 {
     ERROR_FILENAME_EXCED_RANGE = 206u32,
     ERROR_NO_DATA = 232u32, // the pipe is being closed
     ERROR_DIRECTORY = 267u32, // "The directory name is invalid"
+    ERROR_INVALID_ADDRESS = 487u32,
     ERROR_OPERATION_ABORTED = 995u32,
     ERROR_IO_INCOMPLETE = 996u32,
     ERROR_IO_PENDING = 997u32,

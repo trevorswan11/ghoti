@@ -61,6 +61,43 @@ TEST_CASE("labeled loop yielding a struct value") {
     )") == 42);
 }
 
+TEST_CASE("`defer` in an enclosing scope runs exactly once when `return`ing a labeled block") {
+    CHECK(helpers::compile_and_run(R"(
+        const run := fn(log: ^mut i32): i32 {
+            defer *log = *log + 1;
+            return blk: {
+                var acc: i32 = 0;
+                acc += 1;
+                break :blk acc;
+            };
+        };
+        pub const main := fn(): i32 {
+            var log: i32 = 0;
+            _ = run(^mut log);
+            return log;
+        };
+    )") == 1);
+}
+
+TEST_CASE("`defer` in an enclosing scope runs exactly once when breaking a labeled loop used as "
+          "a `return` value") {
+    CHECK(helpers::compile_and_run(R"(
+        const run := fn(log: ^mut i32): i32 {
+            defer *log = *log + 1;
+            var i: i32 = 0;
+            return outer: loop {
+                i += 1;
+                if (i == 3) { break :outer i * 10; }
+            };
+        };
+        pub const main := fn(): i32 {
+            var log: i32 = 0;
+            const v := run(^mut log);
+            return v + log * 10;
+        };
+    )") == 40);
+}
+
 TEST_CASE("nested labeled loops break to the outer label with a value") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {

@@ -387,13 +387,13 @@ test "win32: mkdir of an existing directory reports it, not a spurious success" 
 test "win32: alloc gives zero-filled, writable memory that free releases" {
     const n: usize = 8192uz;
     const p := match (alloc(n)) { .ok => |q| q, .err => nullptr };
+    defer @expect(match (free(p, n)) { .ok => true, .err => false });
     @require(p);
 
     @expect(p[0] == 0u8 and p[n - 1uz] == 0u8); // VirtualAlloc zeroes committed pages
     p[0] = 0x41u8;
     p[n - 1uz] = 0x5Au8;
     @expect(p[0] == 0x41u8 and p[n - 1uz] == 0x5Au8);
-    @expect(match (free(p, n)) { .ok => true, .err => false });
 }
 
 var cached_page_size: std.Option(usize) = .{ .none = {} };

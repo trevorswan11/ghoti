@@ -1672,12 +1672,13 @@ auto emitter::emit_break(ast::node_id, const ast::break_stmt& brk) -> void {
     }
 
     for (usize idx{loop_stack_.size()}; idx > 0; --idx) {
-        const auto& [label, break_target, continue_target, result_slot] = loop_stack_[idx - 1];
+        const auto& [label, break_target, continue_target, result_slot, scope_depth] =
+            loop_stack_[idx - 1];
         if (!target_label || label == *target_label) {
             if (brk.expression && result_slot) {
                 builder_.emit_store(*result_slot, emit_expression(*brk.expression));
             }
-            emit_defers_up_to(idx);
+            emit_defers_up_to(scope_depth);
             builder_.emit_goto(break_target);
             return;
         }
@@ -1695,9 +1696,10 @@ auto emitter::emit_continue(ast::node_id, const ast::continue_stmt& cnt) -> void
     }
 
     for (usize idx{loop_stack_.size()}; idx > 0; --idx) {
-        const auto& [label, break_target, continue_target, result_slot]{loop_stack_[idx - 1]};
+        const auto& [label, break_target, continue_target, result_slot, scope_depth]{
+            loop_stack_[idx - 1]};
         if (!target_label || label == *target_label) {
-            emit_defers_up_to(idx);
+            emit_defers_up_to(scope_depth);
             builder_.emit_goto(continue_target);
             return;
         }
@@ -4184,6 +4186,7 @@ auto emitter::emit_while(ast::node_id                   id,
                                        .break_target    = exit_seg.get_id(),
                                        .continue_target = continue_target,
                                        .result_slot     = res_slot,
+                                       .scope_depth     = scopes_.size(),
                                    }};
 
         // Cond segment
@@ -4262,6 +4265,7 @@ auto emitter::emit_do_while(ast::node_id                   id,
                                        .break_target    = exit_seg.get_id(),
                                        .continue_target = cond_seg.get_id(),
                                        .result_slot     = res_slot,
+                                       .scope_depth     = scopes_.size(),
                                    }};
 
         // Body segment
@@ -4315,6 +4319,7 @@ auto emitter::emit_infinite_loop(ast::node_id                   id,
                                        .break_target    = exit_seg.get_id(),
                                        .continue_target = body_seg.get_id(),
                                        .result_slot     = res_slot,
+                                       .scope_depth     = scopes_.size(),
                                    }};
 
         // Body segment
@@ -4539,6 +4544,7 @@ auto emitter::emit_for(ast::node_id                   id,
                                            .break_target    = exit_seg.get_id(),
                                            .continue_target = step_seg.get_id(),
                                            .result_slot     = res_slot,
+                                           .scope_depth     = scopes_.size(),
                                        }};
 
         // Cond segment
@@ -4730,6 +4736,7 @@ auto emitter::emit_label(ast::node_id id, const ast::label_expr& label) -> value
                                                    .break_target    = exit_seg.get_id(),
                                                    .continue_target = exit_seg.get_id(),
                                                    .result_slot     = res_slot,
+                                                   .scope_depth     = scopes_.size(),
                                                }};
 
                 emit_expression_id(body_id);
@@ -4771,6 +4778,7 @@ auto emitter::emit_label(ast::node_id id, const ast::label_expr& label) -> value
                                                .break_target    = exit_seg.get_id(),
                                                .continue_target = exit_seg.get_id(),
                                                .result_slot     = res_slot,
+                                               .scope_depth     = scopes_.size(),
                                            }};
 
                 emit_block(block);
