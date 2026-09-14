@@ -320,3 +320,4 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Stop crashing on constexpr negation of integers which should become 128 bit ints
 - Fix a bug involving silent wrong answers when multiple instantiations mix
 - Fix a crash resulting from a shift expression's LHS is peer-type resolution
+- Fix an issue in GIR emission that would crash on usage of some builtin calls without a runtime representation

@@ -3473,7 +3473,14 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             return value{void_val{}, ret_type};
         }
         default: {
-            if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+            if (const auto cv{const_eval_.try_eval(id)}) {
+                // Aggregate consts have no scalar GIR representation
+                if (cv->is<const_struct>() || cv->is<const_array>() || cv->is<const_union>() ||
+                    cv->is<const_dyn_fat_ptr>()) {
+                    return materialize_const(*cv);
+                }
+                return cv->to_gir_value();
+            }
             break;
         }
         }

@@ -1,6 +1,9 @@
+#include <string_view>
+
 #include <catch2/catch_test_macros.hpp>
 
 #include "helpers/codegen.hh"
+#include "helpers/sema.hh"
 
 namespace ghoti::tests {
 
@@ -426,6 +429,31 @@ TEST_CASE("consecutive `for constexpr` iterations that fold `if constexpr` to th
             return acc;
         };
     )") == 2);
+}
+
+TEST_CASE("a bare (non-`match`) `@typeInfo(T).int` field access spilled to memory materializes the "
+          "real tagged-union payload") {
+    constexpr std::string_view MATH_MOD{R"(
+        pub constexpr maxIntBits := fn(T: type): i32 {
+            constexpr info := @typeInfo(T).int;
+            return @intCast(i32, info.bits);
+        };
+    )"};
+    CHECK(helpers::compile_and_run_tests(
+              R"(
+            import "sub/math.gh" as math;
+
+            pub constexpr eql := fn(T: type, a: []T, b: []T): bool {
+                if (a.len != b.len) return false;
+                return true;
+            };
+
+            test "dummy" { @expect(eql(u8, "ab", "ab")); }
+            test "maxIntBits(u1) reads the real payload" {
+                @expect(math.maxIntBits(u1) == 1);
+            }
+        )",
+              {helpers::mock_file{"sub/math.gh", MATH_MOD, "math"}}) == 0);
 }
 
 TEST_CASE("`if constexpr` calling a `std.mem`-shaped `startsWith`/`eql` pair folds per-field "
