@@ -488,6 +488,18 @@ auto type_pool::with_const(const type& t, bool is_const) -> gsl::not_null<type*>
     return new_type;
 }
 
+auto type_pool::with_volatile(const type& t, bool is_vol) -> gsl::not_null<type*> {
+    if (t.is_volatile() == is_vol) { return const_cast<type*>(&t); }
+    if (!is_vol) { return strip_modifiers(*this, t, types::mut::VOLATILE); }
+
+    auto key{t.get_key()};
+    key.set_mut(key.get_mut() | types::mut::VOLATILE);
+    auto new_type{(*this)[key]};
+    new_type->resolve_if<type::data_t>(t.get_data());
+    if (const auto idx{t.get_symbol_table_idx_opt()}) { new_type->set_symbol_table_idx(*idx); }
+    return new_type;
+}
+
 auto is_generic_type(const type& t) noexcept -> bool {
     const auto kind{t.get_kind()};
     if (kind == type_kind::AUTO) { return true; }

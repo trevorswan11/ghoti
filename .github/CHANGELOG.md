@@ -351,3 +351,6 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fix a bug where address-of a constexpr parameter (`^param`) silently failed to fold
 - Resolve stale cross-instantiation caching from @Struct(...)/@Union/@Enum call and local constexpr decls
 - Fixed a bug where `impl` members never attached to a reflection-built type
+- Fixed an issue where volatile would not allow type inference to propagate through the resolver's implicit type stack
+- Fixed an issue where volatile globals could never be initialized
+    - The constant evaluator can still not read or write to volatile memory post-init

@@ -4512,7 +4512,7 @@ auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -
     }
     auto& lhs_type{*last_type_.take()};
     {
-        const structural_guard g{implicit_type_stack_, lhs_type};
+        const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(lhs_type)};
         TRY_RESOLVE(assign.rhs);
     }
     auto& rhs_type{*last_type_};
@@ -4559,7 +4559,7 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
     TRY_RESOLVE(binary.lhs);
     auto* lhs_type{last_type_.take()};
     {
-        const structural_guard g{implicit_type_stack_, *lhs_type};
+        const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(*lhs_type)};
         TRY_RESOLVE(binary.rhs);
     }
     auto& rhs_type{*last_type_.take()};
@@ -4941,7 +4941,7 @@ auto type_resolver::resolve_structural_access(type&                          obj
     gsl::not_null<type*> result_type  = &ctx_.get_poison();
     if (member_symbol.get_kind() == symbol_kind::POISONED) { return result_type; }
 
-    if (enum_type) { return &enum_type->type_at(member_idx, object_type); }
+    if (enum_type) { return ctx_.pool.strip_volatile(enum_type->type_at(member_idx, object_type)); }
     if (struct_type) { return &struct_type->type_at(member_idx); }
     if (union_type) { return &union_type->type_at(member_idx); }
     UNREACHABLE("Error handling failed to catch invalid type");
@@ -6732,7 +6732,7 @@ auto type_resolver::visit(ast::node_id id, const ast::int_literal_expr& expr) ->
                 codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
             if (is_float(implicit_type->get_kind()) ||
                 constexpr_int_fits(static_cast<i128>(expr.value), *implicit_type, ptr_bits)) {
-                resolved = implicit_type.get();
+                resolved = ctx_.pool.strip_volatile(*implicit_type).get();
             }
         }
     }
@@ -6766,7 +6766,7 @@ auto type_resolver::visit(ast::node_id id, const ast::float_literal_expr& expr) 
     if (expr.width == 0) {
         if (const auto implicit_type{implicit_type_stack_.peek()};
             implicit_type && is_float(implicit_type->get_kind())) {
-            resolved = implicit_type.get();
+            resolved = ctx_.pool.strip_volatile(*implicit_type).get();
         }
     }
     last_type_.emplace(*resolved);
@@ -7555,7 +7555,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                     return last_type_.emplace(ctx_.poison_node(resolving_, id));
                 }
             } else {
-                type_guard.emplace(implicit_type_stack_, explicit_type);
+                type_guard.emplace(implicit_type_stack_, *ctx_.pool.strip_volatile(explicit_type));
                 resolving_.set_sema_type(id, explicit_type);
             }
         }
@@ -7566,10 +7566,12 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             resolve(*decl.value);
             if (last_type_->is_poison()) { return poison_out(); }
             auto& decl_value_type{*last_type_.take()};
+            auto& normalized_val_type{
+                decl.explicit_type ? decl_value_type : *ctx_.pool.strip_volatile(decl_value_type)};
             if (reresolve_local) {
-                resolving_.set_sema_type(id, decl_value_type);
+                resolving_.set_sema_type(id, normalized_val_type);
             } else {
-                resolving_.set_sema_type_if(id, decl_value_type);
+                resolving_.set_sema_type_if(id, normalized_val_type);
             }
         }
 
@@ -9679,6 +9681,9 @@ auto type_resolver::apply_explicit_modifiers(ast::explicit_type_id id, type& inn
         // Volatility is baked into mutability and should not be imprinted
         auto& new_vol_type{*ctx_.pool[new_key]};
         new_vol_type.resolve_if<type::data_t>(inner_type.get_data());
+        if (const auto idx{inner_type.get_symbol_table_idx_opt()}) {
+            new_vol_type.set_symbol_table_idx(*idx);
+        }
         return new_vol_type;
     }
     UNREACHABLE("A new type modifier was likely added yet unaccounted for");
