@@ -769,6 +769,12 @@ auto const_eval::eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::opt
     }
 
     if (const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(rhs)}) {
+        // A `constexpr` parameter or other local binding has no addressable symbol backing it
+        if (rhs_val && !rhs_val->is_poison() &&
+            (lookup_local_binding(ident->name) || ctx_.lookup_constexpr_binding(ident->name))) {
+            return const_value{const_addr{{}, {*rhs_val}}, *sema_type};
+        }
+
         const auto          table_idx{module_->get_symbol_table_opt(rhs)};
         const auto          effective_tbl{table_idx ? table_idx : module_->root_table_idx};
         stdx::option<usize> owner_table;
