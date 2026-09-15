@@ -17,6 +17,11 @@ TEST_CASE("`constexpr` on a `type` parameter is redundant") {
                          std::pair{0UZ, 24UZ}});
 }
 
+TEST_CASE("`constexpr` on a parameter typed by an earlier generic type param isn't redundant") {
+    helpers::resolve_and_check(
+        "const Point := fn(T: type, constexpr default_z: T): type { return T; };");
+}
+
 TEST_CASE("a `var` binding cannot hold a `type` value") {
     const auto mutable_type_diag = [](usize col) {
         return sema::diagnostic{"a 'type' value cannot be stored in a mutable ('var') binding; "

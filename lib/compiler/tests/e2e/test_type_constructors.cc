@@ -417,6 +417,34 @@ TEST_CASE("E2E: a type constructor's members read its `constexpr` value paramete
     }
 }
 
+TEST_CASE("A parameterized `impl` targeting a `@Struct`-built generic type constructor "
+          "attaches its members") {
+    CHECK(helpers::compile_and_run(R"(
+        const Point := fn(T: type, constexpr default_z: T): type {
+            return @Struct(.{
+                .fields = ^.{
+                    .{ .name = "x", .@"type" = T },
+                    .{ .name = "y", .@"type" = T },
+                    .{ .name = "z", .@"type" = T, .default_value = @ptrCast(^opaque, ^default_z) },
+                },
+                .is_extern = false,
+                .is_packed = false,
+                .backing_bits = 0,
+            });
+        };
+
+        impl(T: type, constexpr default_z: T) Point(T, default_z) {
+            pub const sum := fn(self): i32 { return self.x + self.y + self.z; };
+        }
+
+        pub const main := fn(): i32 {
+            const a: Point(i32, 1) = .{ .x = 2, .y = 9 };
+            const b: Point(i32, 7) = .{ .x = 2, .y = 9 };
+            return a.sum() + b.sum();   // (2+9+1) + (2+9+7)
+        };
+    )") == 12 + 18);
+}
+
 TEST_CASE("E2E: a type constructor member sizes a local `[n]T` from a `constexpr` parameter") {
     SECTION("the array length folds from the constructor's `constexpr` binding") {
         CHECK(helpers::compile_and_run(R"(
