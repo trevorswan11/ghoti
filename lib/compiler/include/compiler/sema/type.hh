@@ -649,6 +649,7 @@ class type_pool {
     // Returns t's const or mutable twin, whichever `is_const` asks for; t itself if it's
     // already in that state
     [[nodiscard]] auto with_const(const type& t, bool is_const) -> gsl::not_null<type*>;
+    [[nodiscard]] auto with_volatile(const type& t, bool is_vol) -> gsl::not_null<type*>;
 
   private:
     auto get_or_emplace(const types::key_t& key) -> gsl::not_null<type*>;

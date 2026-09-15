@@ -80,7 +80,8 @@ TEST_CASE("LLVM lowering volatile load and store") {
     auto                   llvm_mod{lowering.lower(gir_mod)};
     CHECK_FALSE(llvm::verifyModule(*llvm_mod));
     const auto ir_str{helpers::ir_text(*llvm_mod)};
-    CHECK(ir_str.contains("volatile"));
+    CHECK(ir_str.contains("store volatile"));
+    CHECK(ir_str.contains("load volatile"));
 }
 
 } // namespace ghoti::tests

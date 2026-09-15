@@ -50,10 +50,10 @@ class builder {
 
     // A store spliced into the entry segment, paired with `emit_alloca_in_entry` to initialize a
     // hoisted slot from an entry-live value (a parameter or a compile-time constant).
-    auto emit_store_in_entry(local_id dest, value val) -> void;
+    auto emit_store_in_entry(local_id dest, value val, bool is_volatile = false) -> void;
     auto emit_load(local_id src, sema::type& type) -> local_id;
     auto emit_load(value src, sema::type& type) -> local_id;
-    auto emit_store(local_id dest, value val) -> instruction&;
+    auto emit_store(local_id dest, value val, bool is_volatile = false) -> instruction&;
     auto emit_store(value dest, value val) -> instruction&;
     // Produces a temporary holding the address of a module-level / static-member global.
     auto emit_global_addr(std::string name, sema::type& type, bool is_const = false) -> local_id;
