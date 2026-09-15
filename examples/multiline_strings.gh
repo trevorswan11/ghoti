@@ -1,0 +1,10 @@
+import std;
+
+pub const main := fn(): void {
+    _ = std.io.println(
+        \\This is the way you use multiline
+        \\strings in ghoti
+        \\       you have "full" control of the raw string
+        ,
+    );
+};

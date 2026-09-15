@@ -472,9 +472,16 @@ auto lexer::read_multiline_string() noexcept -> token_t {
             peek_pos += 1;
         }
 
+        // Indentation before the continuation marker is allowed
+        usize marker_pos{peek_pos};
+        while (marker_pos < input_.size() &&
+               (input_[marker_pos] == ' ' || input_[marker_pos] == '\t')) {
+            marker_pos += 1;
+        }
+
         auto has_continuation{false};
-        if ((current_byte_ == '\n' || current_byte_ == '\r') && peek_pos + 1 < input_.size() &&
-            input_[peek_pos] == '\\' && input_[peek_pos + 1] == '\\') {
+        if ((current_byte_ == '\n' || current_byte_ == '\r') && marker_pos + 1 < input_.size() &&
+            input_[marker_pos] == '\\' && input_[marker_pos + 1] == '\\') {
             has_continuation = true;
         }
 
@@ -489,6 +496,9 @@ auto lexer::read_multiline_string() noexcept -> token_t {
         if (current_byte_ == '\r' && peek_pos_ < input_.size() && input_[peek_pos_] == '\n') {
             read_character();
         }
+
+        // consume the indentation preceding the "\\\\" line continuation marker
+        while (current_byte_ == ' ' || current_byte_ == '\t') { read_character(); }
 
         // consume the next "\\" line continuation
         read_character(2);

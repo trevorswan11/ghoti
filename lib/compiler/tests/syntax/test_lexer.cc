@@ -405,6 +405,22 @@ TEST_CASE("Lexing multiline string literals") {
                });
 }
 
+TEST_CASE("Lexing multiline string literals with indented continuations") {
+    test_lexer(R"(const s := \\First line
+    \\Second line
+    \\    still indented
+    ;
+)",
+               {
+                   {token_type_t::CONSTANT, "const"},
+                   {token_type_t::IDENT, "s"},
+                   {token_type_t::WALRUS, ":="},
+                   {token_type_t::MULTILINE_STRING,
+                    "First line\n    \\\\Second line\n    \\\\    still indented"},
+                   {token_type_t::SEMICOLON, ";"},
+               });
+}
+
 TEST_CASE("Lexing pointers and references") {
     test_lexer("& &mut * ^ ^mut nullptr",
                {

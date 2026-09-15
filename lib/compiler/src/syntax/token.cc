@@ -55,10 +55,14 @@ auto token_t::materialize_string() const -> std::string {
     for (usize i{0}; i < slice.size(); ++i) {
         const auto c{slice[i]};
 
-        // Skip a double backslash at start of line to clean the string
+        // Skip indentation followed by a double backslash at start of line to clean the string
         if (at_line_start) {
-            if (c == '\\' && i + 1 < slice.size() && slice[i + 1] == '\\') {
-                i += 1;
+            usize marker{i};
+            while (marker < slice.size() && (slice[marker] == ' ' || slice[marker] == '\t')) {
+                marker += 1;
+            }
+            if (marker + 1 < slice.size() && slice[marker] == '\\' && slice[marker + 1] == '\\') {
+                i = marker + 1;
                 continue;
             }
             at_line_start = false;

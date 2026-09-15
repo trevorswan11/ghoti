@@ -1,13 +1,14 @@
 #include "compiler/ast/formatter.hh"
 
 #include <cctype>
-#include <stdx/assert.hh>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include <fmt/format.h>
+#include <stdx/assert.hh>
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 #include <stdx/variant.hh>
@@ -1203,7 +1204,41 @@ auto formatter::visit(node_id, const implicit_access_expr& node) -> syntax::doc_
         return doc_manager_.text(txt);                                                    \
     }
 
-MAKE_VERBATIM_FORMAT(string_expr, node.spelling)
+auto formatter::visit(node_id id, const string_expr& node) -> syntax::doc_id {
+    if (id.get_token_type() != syntax::token_type_t::MULTILINE_STRING) {
+        return doc_manager_.text(node.spelling);
+    }
+
+    std::vector<syntax::doc_id> parts;
+    std::string_view            rest{node.spelling};
+    auto                        first{true};
+    while (true) {
+        const auto newline_pos{rest.find('\n')};
+        const auto no_newline{newline_pos == std::string_view::npos};
+        auto       line{no_newline ? rest : stdx::string::substr(rest, 0, newline_pos)};
+
+        if (!first) {
+            usize marker{0};
+            while (marker < line.size() && (line[marker] == ' ' || line[marker] == '\t')) {
+                marker += 1;
+            }
+            if (marker + 1 < line.size() && line[marker] == '\\' && line[marker + 1] == '\\') {
+                line = stdx::string::substr(line, marker + 2);
+            }
+        }
+
+        parts.emplace_back(doc_manager_.text("\\\\"));
+        parts.emplace_back(doc_manager_.text(line));
+        parts.emplace_back(doc_manager_.hard_line());
+
+        if (no_newline) { break; }
+        rest  = stdx::string::substr(rest, newline_pos + 1);
+        first = false;
+    }
+
+    return doc_manager_.concat(std::move(parts));
+}
+
 MAKE_VERBATIM_FORMAT(int_literal_expr, node.spelling)
 MAKE_VERBATIM_FORMAT(float_literal_expr, node.spelling)
 MAKE_VERBATIM_FORMAT(bool_expr,

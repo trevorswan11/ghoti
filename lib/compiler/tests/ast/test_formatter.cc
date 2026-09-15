@@ -923,6 +923,14 @@ TEST_CASE("formatter formats errdefer statements") {
     round_trips("const f := fn(): void {\n    errdefer |e| cleanup(e);\n};\n");
 }
 
+TEST_CASE("formatter round-trips multiline string literals") {
+    CHECK(format_source("const a := \\\\Hello\n\\\\World\n;\n") ==
+          "const a := \\\\Hello\n\\\\World\n;\n");
+    CHECK(format_source("const a := \\\\Hello, World!\n;\n") ==
+          "const a := \\\\Hello, World!\n;\n");
+    round_trips("const a := \\\\First line\n    \\\\Second line\n    \\\\    still indented\n;\n");
+}
+
 constexpr std::string_view corpus{
 #include "ast/golden.gh.inc"
 };

@@ -41,4 +41,10 @@ TEST_CASE("Promotion of multiline literals") {
     test_ml_string(R"(\\)", "");
 }
 
+TEST_CASE("Promotion of multiline literals with indented continuation markers") {
+    test_ml_string("Hello,\n    \\\\World!", "Hello,\nWorld!");
+    test_ml_string("Hello,\n\t\\\\World!", "Hello,\nWorld!");
+    test_ml_string("First\n  \\\\    Still indented", "First\n    Still indented");
+}
+
 } // namespace ghoti::tests
