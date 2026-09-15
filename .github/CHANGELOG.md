@@ -344,3 +344,10 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Nullptr is set for ptrs in slices
     - Aggregates are completely zeroed out (instance fields set to 0)
 - The `@Enum` builtin now takes in `EnumFieldInfo`'s value as a `constexpr_int` instead of an `i64`
+
+# v0.4.0
+
+- Fix erroneous "redundant constexpr" diagnostic resulting from constexpr function parameters with a generic `T: type` backing them
+- Fix a bug where address-of a constexpr parameter (`^param`) silently failed to fold
+- Resolve stale cross-instantiation caching from @Struct(...)/@Union/@Enum call and local constexpr decls
+- Fixed a bug where `impl` members never attached to a reflection-built type

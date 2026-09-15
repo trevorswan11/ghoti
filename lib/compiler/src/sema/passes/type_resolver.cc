@@ -1173,8 +1173,15 @@ template <ast::IndexableID ID>
     case token_type_t::BUILTIN_STRUCT:
     case token_type_t::BUILTIN_UNION:  {
         if (const auto existing{resolving_.get_sema_type_opt(id)}) {
-            return_type = existing.get();
-            break;
+            const auto& denoted{denoted_type(const_cast<type&>(*existing))};
+            const bool  stale_instantiation{
+                for_generic_instantiation_ && reresolve_floor_ &&
+                (denoted.is_poison() || (denoted.has_symbol_table_idx() &&
+                                         denoted.get_symbol_table_idx() >= *reresolve_floor_))};
+            if (!stale_instantiation) {
+                return_type = existing.get();
+                break;
+            }
         }
 
         const auto builtin_name{*syntax::get_builtin_opt(builtin_id)};
@@ -2385,7 +2392,7 @@ namespace {
     return false;
 }
 
-// The node id of the struct/union/enum literal a `fn(...): type` body returns, if any.
+// The node id of the struct/union/enum literal/synthesis a `fn(...): type` body returns, if any.
 [[nodiscard]] auto returned_aggregate_node(const ast::AST& ast, const ast::block_stmt& block)
     -> stdx::option<ast::node_id> {
     for (const auto& stmt : block) {
@@ -2393,6 +2400,15 @@ namespace {
         if (!ret || !ret->expression) { continue; }
         const ast::node_id expr{*ret->expression};
         if (expr.any<ast::struct_expr, ast::union_expr, ast::enum_expr>()) { return expr; }
+        if (const auto call{ast.get_as_opt<ast::call_expr>(expr)}) {
+            using syntax::token_type_t;
+            switch (call->function->get_token_type()) {
+            case token_type_t::BUILTIN_STRUCT:
+            case token_type_t::BUILTIN_UNION:
+            case token_type_t::BUILTIN_ENUM:   return expr;
+            default:                           break;
+            }
+        }
     }
     return stdx::none;
 }
@@ -3698,7 +3714,8 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
 
         auto& param_type{denoted_type(*last_type_.take())};
         // A `type`-typed value is always compile-time known, so `constexpr` adds nothing.
-        if (param.is_constexpr && param_type.get_kind() == type_kind::TYPE) {
+        if (param.is_constexpr && param_type.get_kind() == type_kind::TYPE &&
+            param.explicit_type.get_token_type() == syntax::token_type_t::TYPE_TYPE) {
             ctx_.diags.emplace_back(
                 "'constexpr' is redundant on a parameter of type 'type'; type values are "
                 "always compile-time known",
@@ -7654,7 +7671,9 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
 
-        if (!sym.has_kind()) {
+        // `reresolve_local` re-derives this decl's kind fresh even if a stale pass over this same
+        // generic instantiation already set it
+        if (!sym.has_kind() || reresolve_local) {
             if (type_data.is<types::builtin_function>() || type_data.is<types::function>()) {
                 sym.set_kind(symbol_kind::CALLABLE);
             } else if (resolved_type == ctx_.get_builtin_resolved_type(type_kind::TYPE)) {
@@ -10249,6 +10268,7 @@ auto type_resolver::instantiate_generic(type&                             callee
 
     // Copy into a per-instantiation type so `T(i32)` and `T(u8)` don't alias each other
     if (is_type_ctor) {
+        deduced_return_type = &denoted_type(*deduced_return_type);
         const auto k{deduced_return_type->get_kind()};
         if (k == type_kind::STRUCT || k == type_kind::UNION || k == type_kind::ENUM) {
             if (const auto agg_node{returned_aggregate_node(fn_mod.ast, block)}) {
