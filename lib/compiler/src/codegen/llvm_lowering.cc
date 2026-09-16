@@ -2176,6 +2176,14 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             builder_.CreateCall(trap_fn, {});
             return nullptr;
         }
+        case syntax::token_type_t::BUILTIN_RETURN_ADDRESS: {
+            auto* retaddr_fn{llvm::Intrinsic::getOrInsertDeclaration(
+                llvm_module_.get(), llvm::Intrinsic::returnaddress)};
+            auto* call_val{builder_.CreateCall(retaddr_fn, {builder_.getInt32(0)})};
+            auto* target_ty{inst.type ? types_.translate(*inst.type) : nullptr};
+            if (!target_ty) { target_ty = builder_.getIntPtrTy(llvm_module_->getDataLayout()); }
+            return builder_.CreatePtrToInt(call_val, target_ty, "return_address");
+        }
         case syntax::token_type_t::BUILTIN_EXPECT: {
             if (inst.operands.empty()) { return builder_.getInt1(true); }
             auto* cond_val{lower_value(inst.operands[0])};

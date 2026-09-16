@@ -827,6 +827,14 @@ template <ast::IndexableID ID>
             "explicit (non-auto) return type",
             error::TYPE_MISMATCH,
             resolving_.ast.location_of(id));
+    case token_type_t::BUILTIN_RETURN_ADDRESS:
+        if (open_function_nodes_.empty()) {
+            return make_sema_err("@returnAddress() may only be used inside of a function",
+                                 error::ILLEGAL_RETURN_ADDRESS_USAGE,
+                                 resolving_.ast.location_of(id));
+        }
+        return_type = &builtin.return_type;
+        break;
     case token_type_t::BUILTIN_PTR_FROM_ARRAY: {
         auto& array_type{*get_resolved_call_arg_type(call.arguments[0])};
         auto& type_data{array_type.get_data()};

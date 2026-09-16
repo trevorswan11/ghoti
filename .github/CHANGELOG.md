@@ -355,3 +355,4 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed an issue where volatile globals could never be initialized
     - The constant evaluator can still not read or write to volatile memory post-init
 - Resolve an issue that made function pointers always emit monomorphized intantiations
+- Add `@returnAddress` builtin to get the return address of the current function as a usize

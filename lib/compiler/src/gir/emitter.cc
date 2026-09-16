@@ -3239,6 +3239,12 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             builder_.emit_unreachable();
             return value{void_val{}, ret_type};
         }
+        case syntax::token_type_t::BUILTIN_RETURN_ADDRESS: {
+            if (const auto res{builder_.emit_builtin_call("@returnAddress", {}, ret_type)}) {
+                return value{*res, ret_type};
+            }
+            return value{void_val{}, ret_type};
+        }
         case syntax::token_type_t::BUILTIN_SRC: {
             // `@src()` yields a `builtin::SourceLocation` aggregate
             const auto         loc{active_ast().location_of(id)};
