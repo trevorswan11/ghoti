@@ -1869,9 +1869,11 @@ auto type_resolver::get_resolved_call_arg_type(const ast::call_expr::argument& a
         [this](ast::expr_handle id) -> auto& {
             // Labels store their actual type in nested node data
             if (const auto label{resolving_.ast.get_as_opt<ast::label_expr>(id)}) {
-                auto type{resolving_.get_sema_type_opt(label->name)};
-                ASSERT(type, "Labeled call arg was not typed");
-                return *type;
+                if (label->name) {
+                    auto type{resolving_.get_sema_type_opt(*label->name)};
+                    ASSERT(type, "Labeled call arg was not typed");
+                    return *type;
+                }
             }
 
             auto type{resolving_.get_sema_type_opt(id)};
@@ -5513,22 +5515,29 @@ auto type_resolver::visit(ast::node_id id, const ast::label_expr& label) -> void
 
     // Resolve the body but cache the label's type so the result can bind to the label
     TRY_RESOLVE(*label.body);
-    auto sym{resolve_symbol_info(label.name, stdx::none)};
-    if (!sym) { return; }
-    auto& label_data{symbols::label::from(*sym)};
+    if (label.name) {
+        auto sym{resolve_symbol_info(*label.name, stdx::none)};
+        if (!sym) { return; }
+        auto& label_data{symbols::label::from(*sym)};
 
-    // Labels may not be used outside of continues which don't push void
-    if (!label_data.has_yield_types()) {
-        label_data.add_yield_type(ctx_.get_builtin_resolved_type(type_kind::VOID_));
+        // Labels may not be used outside of continues which don't push void
+        if (!label_data.has_yield_types()) {
+            label_data.add_yield_type(ctx_.get_builtin_resolved_type(type_kind::VOID_));
+        }
+
+        // The last type inherits the result type to help propagation of poison
+        auto& result_type{constexpr_numeric_view(*label_data.get_yield_types()[0])};
+        ASSERT(result_type.is_resolved(), "The label's inner type should've been resolved");
+        label_type.resolve_if<type::data_t>(result_type.get_data());
+        resolving_.set_sema_type(*label.name, result_type);
+        resolving_.set_sema_type(id, result_type);
+        last_type_.emplace(result_type);
+    } else {
+        auto& void_type{ctx_.get_builtin_resolved_type(type_kind::VOID_)};
+        label_type.resolve_if<type::data_t>(void_type.get_data());
+        resolving_.set_sema_type(id, void_type);
+        last_type_.emplace(void_type);
     }
-
-    // The last type inherits the result type to help propagation of poison
-    auto& result_type{constexpr_numeric_view(*label_data.get_yield_types()[0])};
-    ASSERT(result_type.is_resolved(), "The label's inner type should've been resolved");
-    label_type.resolve_if<type::data_t>(result_type.get_data());
-    resolving_.set_sema_type(label.name, result_type);
-    resolving_.set_sema_type(id, result_type);
-    last_type_.emplace(result_type);
 }
 
 namespace {
@@ -7726,7 +7735,10 @@ auto type_resolver::check_deferred_body_jumps(ast::stmt_handle body) -> void {
         if (!n.is_valid()) { return; }
         resolving_.ast[n].visit(
             [&](const ast::label_expr& data) {
-                local_labels.emplace(resolving_.ast.get_as<ast::identifier_expr>(data.name).name);
+                if (data.name) {
+                    local_labels.emplace(
+                        resolving_.ast.get_as<ast::identifier_expr>(*data.name).name);
+                }
                 self(self, *data.body);
             },
             [&](const ast::while_loop_expr& data) { self(self, *data.block); },
@@ -7893,7 +7905,10 @@ auto type_resolver::check_constexpr_loop_jumps(ast::stmt_handle body) -> void {
         if (!n.is_valid()) { return; }
         resolving_.ast[n].visit(
             [&](const ast::label_expr& data) {
-                local_labels.emplace(resolving_.ast.get_as<ast::identifier_expr>(data.name).name);
+                if (data.name) {
+                    local_labels.emplace(
+                        resolving_.ast.get_as<ast::identifier_expr>(*data.name).name);
+                }
                 self(self, *data.body);
             },
             [&](const ast::while_loop_expr& data) { self(self, *data.block); },

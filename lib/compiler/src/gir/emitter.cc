@@ -93,6 +93,31 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
             [&](const ast::impl_stmt& impl) { emit_top_level_impl(id, impl); },
             [&](const ast::test_stmt& test) {
                 if (emit_tests) { emit_top_level_test(id, test); }
+            },
+            [&](const ast::block_stmt& block) {
+                if (block.is_constexpr) {
+                    const auto cv{const_eval_.try_eval(id)};
+                    if (!cv) {
+                        ctx_.diags.emplace_back(
+                            "Constexpr block could not be evaluated at compile time",
+                            sema::error::CONSTEXPR_EVALUATION_FAILED,
+                            module.ast.location_of(id));
+                    }
+                }
+            },
+            [&](const ast::expr_stmt& expr_st) {
+                const auto expr_id{expr_st.expression};
+                if (const auto lbl{module.ast.get_as_opt<ast::label_expr>(expr_id)}) {
+                    if (lbl->is_constexpr(module.ast)) {
+                        const auto cv{const_eval_.try_eval(expr_id)};
+                        if (!cv) {
+                            ctx_.diags.emplace_back(
+                                "Constexpr block could not be evaluated at compile time",
+                                sema::error::CONSTEXPR_EVALUATION_FAILED,
+                                module.ast.location_of(expr_id));
+                        }
+                    }
+                }
             });
     };
 
@@ -1548,7 +1573,19 @@ auto emitter::emit_stmt(const ast::stmt_handle& stmt) -> void {
     builder_.set_location(active_ast().location_of(stmt_id));
     active_ast()[stmt_id].visit(
         [&](const auto&) { UNREACHABLE("Unhandled statement node variant in emit_stmt"); },
-        [&](const ast::block_stmt& block) { emit_block(block); },
+        [&](const ast::block_stmt& block) {
+            if (block.is_constexpr) {
+                const auto cv{const_eval_.try_eval(stmt_id)};
+                if (!cv) {
+                    ctx_.diags.emplace_back(
+                        "Constexpr block could not be evaluated at compile time",
+                        sema::error::CONSTEXPR_EVALUATION_FAILED,
+                        active_ast().location_of(stmt_id));
+                }
+                return;
+            }
+            emit_block(block);
+        },
         [&](const ast::decl_stmt& decl) { emit_decl_stmt(stmt_id, decl); },
         [&](const ast::return_stmt& ret) { emit_return_stmt(stmt_id, ret); },
         [&](const ast::defer_stmt& def) { emit_defer_stmt(stmt_id, def); },
@@ -1578,6 +1615,16 @@ auto emitter::emit_stmt_as_value(const ast::stmt_handle& stmt) -> value {
             return emit_expression_id(expr_st.expression);
         },
         [&](const ast::block_stmt& block) -> value {
+            if (block.is_constexpr) {
+                const auto cv{const_eval_.try_eval(*stmt)};
+                if (!cv) {
+                    ctx_.diags.emplace_back(
+                        "Constexpr block could not be evaluated at compile time",
+                        sema::error::CONSTEXPR_EVALUATION_FAILED,
+                        active_ast().location_of(*stmt));
+                }
+                return value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+            }
             emit_block(block);
             return value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
         });
@@ -4721,10 +4768,26 @@ auto emitter::emit_for(ast::node_id                   id,
 
 auto emitter::emit_label(ast::node_id id, const ast::label_expr& label) -> value {
     PROFILE_FUNCTION();
-    const auto  sema_type{active_mod().get_sema_type_opt(id)};
-    const bool  yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
-    const auto& name_ident{active_ast().get_as<ast::identifier_expr>(label.name)};
-    const auto  label_name{name_ident.name};
+    const auto sema_type{active_mod().get_sema_type_opt(id)};
+    const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
+
+    if (label.is_constexpr(active_ast())) {
+        const auto cv{const_eval_.try_eval(id)};
+        if (!cv) {
+            ctx_.diags.emplace_back("Constexpr block could not be evaluated at compile time",
+                                    sema::error::CONSTEXPR_EVALUATION_FAILED,
+                                    active_ast().location_of(id));
+            return value{void_val{}, sema_type};
+        }
+        if (yields_value) { return cv->to_gir_value(); }
+        return value{void_val{}, sema_type};
+    }
+
+    stdx::option<std::string_view> label_name;
+    if (label.name) {
+        const auto& name_ident{active_ast().get_as<ast::identifier_expr>(*label.name)};
+        label_name = name_ident.name;
+    }
 
     stdx::option<local_id> res_slot;
     if (yields_value) { res_slot = builder_.emit_alloca(*sema_type); }
