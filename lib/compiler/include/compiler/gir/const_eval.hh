@@ -127,6 +127,18 @@ class const_eval {
         }
     };
 
+    enum class eval_signal_kind : u8 {
+        RETURN,
+        BREAK,
+        CONTINUE,
+    };
+
+    struct eval_signal {
+        stdx::option<eval_signal_kind> kind{};
+        stdx::option<std::string_view> target_label{};
+        stdx::option<const_value>      value{};
+    };
+
   private:
     [[nodiscard]] auto resolve_deferred_array(const ast::explicit_array_type& array,
                                               sema::type& item_type) -> stdx::option<sema::type&>;
@@ -173,6 +185,7 @@ class const_eval {
     auto eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_value>;
     auto eval_decl(ast::node_id id, const ast::decl_stmt& decl) -> stdx::option<const_value>;
     auto eval_block(ast::node_id id, const ast::block_stmt& block) -> stdx::option<const_value>;
+    auto eval_label(ast::node_id id, const ast::label_expr& label) -> stdx::option<const_value>;
     auto eval_if(ast::node_id id, const ast::if_expr& if_expr) -> stdx::option<const_value>;
     auto eval_while(ast::node_id id, const ast::while_loop_expr& loop) -> stdx::option<const_value>;
     auto eval_do_while(ast::node_id id, const ast::do_while_loop_expr& loop)
@@ -224,7 +237,8 @@ class const_eval {
     default_counter                     recursion_depth_;
     // Set by `eval_if`/`eval_while`/`eval_do_while`/`eval_for` when a construct's own
     // condition/iterable can't be folded.
-    bool cond_unknown_{false};
+    bool        cond_unknown_{false};
+    eval_signal current_signal_{};
 
     ankerl::unordered_dense::map<memo_key, const_value, memo_key_hash> memo_cache_;
 };

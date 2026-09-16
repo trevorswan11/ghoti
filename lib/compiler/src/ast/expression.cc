@@ -11,6 +11,7 @@
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/ast.hh"
 #include "compiler/ast/attributes.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
@@ -1306,7 +1307,47 @@ auto label_expr::parse(syntax::parser& parser, expr_handle name)
     const auto raw_stmt{TRY(parser.parse_statement())};
     const auto body{TRY(deconstruct_body(parser, raw_stmt))};
 
-    return parser.add_expr<label_expr>(start_token, name, body);
+    return parser.add_expr<label_expr>(
+        start_token, stdx::option<identifier_handle>{identifier_handle{name}}, body);
+}
+
+auto label_expr::is_constexpr(const AST& ast) const noexcept -> bool {
+    if (const auto block{ast.get_as_opt<block_stmt>(body)}) { return block->is_constexpr; }
+    return false;
+}
+
+auto parse_constexpr_expr(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
+    PROFILE_FUNCTION();
+    const auto start_token{parser.get_current_token()};
+
+    if (parser.peek_token_is(syntax::token_type_t::LBRACE)) {
+        parser.advance();
+        const auto raw_stmt{TRY(block_stmt::parse(parser, true))};
+        return parser.add_expr<label_expr>(
+            start_token, stdx::option<identifier_handle>{}, raw_stmt);
+    }
+
+    if (parser.peek_token_is(syntax::token_type_t::IDENT)) {
+        parser.advance();
+        const identifier_handle ident{TRY(identifier_expr::parse(parser))};
+        TRY(parser.expect_peek(syntax::token_type_t::COLON));
+        parser.advance();
+        const auto raw_stmt{TRY(parser.parse_statement())};
+        const auto body{TRY(label_expr::deconstruct_body(parser, raw_stmt))};
+        if (!body.is<block_stmt>()) {
+            return make_syntax_err("Constexpr labels may only be applied to blocks",
+                                   syntax::error::ILLEGAL_LABEL_STATEMENT,
+                                   parser.get_location_of(*raw_stmt));
+        }
+
+        parser.get_ast().get_as_mut<block_stmt>(*body).is_constexpr = true;
+        return parser.add_expr<label_expr>(
+            start_token, stdx::option<identifier_handle>{ident}, body);
+    }
+
+    return make_syntax_err("Expected '{' or label name after 'constexpr'",
+                           syntax::error::UNEXPECTED_TOKEN,
+                           parser.get_peek_token());
 }
 
 auto label_expr::deconstruct_body(syntax::parser& parser, stmt_handle raw_stmt)

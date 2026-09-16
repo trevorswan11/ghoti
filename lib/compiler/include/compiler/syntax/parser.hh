@@ -135,7 +135,7 @@ class parser {
     static auto get_prefix_fn_opt(token_type_t tt) noexcept -> stdx::option<prefix_fn>;
     static auto get_poll_infix_fn_opt(token_type_t tt) noexcept -> stdx::option<infix_fn>;
 
-    [[nodiscard]] auto get_ast() noexcept -> ast ::AST& { return *ast_; }
+    [[nodiscard]] auto get_ast() noexcept -> ast::AST& { return *ast_; }
 
     // Attaches any pending `///` lines sitting directly above `name` and below `floor_line`
     auto attach_member_doc(ast::identifier_handle name, usize floor_line) -> void;

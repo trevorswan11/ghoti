@@ -207,12 +207,27 @@ auto parser::parse_statement(semicolon_behavior behavior)
     -> stdx::result<ast::stmt_handle, diagnostic> {
     // Not all decls are public so the condition needs to be rechecked
     PROFILE_FUNCTION();
-    if (current_token_.type == token_type_t::PUBLIC) {
+    if (current_token_is(token_type_t::PUBLIC)) {
         switch (peek_token_.type) {
         case token_type_t::IMPORT: return ast::import_stmt::parse(*this);
         case token_type_t::USING:  return ast::using_stmt::parse(*this);
         default:                   return ast::decl_stmt::parse(*this);
         }
+    } else if (current_token_is(token_type_t::CONSTEXPR)) {
+        if (peek_token_is(token_type_t::LBRACE)) { return ast::block_stmt::parse(*this, true); }
+        if (peek_token_is(token_type_t::IDENT)) {
+            checkpoint cp{*this};
+            advance();
+            if (peek_token_is(token_type_t::COLON)) {
+                advance();
+                if (peek_token_is(token_type_t::LBRACE)) {
+                    rollback(cp);
+                    return ast::expr_stmt::parse(*this, behavior);
+                }
+            }
+            rollback(cp);
+        }
+        return ast::decl_stmt::parse(*this);
     } else if (current_token_.is_decl_token()) {
         return ast::decl_stmt::parse(*this);
     }
@@ -384,6 +399,7 @@ constexpr auto PREFIX_FNS = [] -> auto {
     for (const auto tt : ALL_PRIMITIVES) { fns[tt] = ast::identifier_expr::parse; }
     for (const auto tt : builtins::ALL_TOKEN_TYPES) { fns[tt] = ast::identifier_expr::parse; }
     fns[token_type_t::BUILTIN_CFG_VALUE] = ast::cfg_value_expr::parse;
+    fns[token_type_t::CONSTEXPR]         = ast::parse_constexpr_expr;
 
     return fns;
 }();

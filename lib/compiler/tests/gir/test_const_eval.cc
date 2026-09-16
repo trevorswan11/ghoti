@@ -11,6 +11,7 @@
 #include "compiler/sema/error.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
+#include "helpers/gir.hh"
 #include "helpers/sema.hh"
 #include "support/test.hh"
 
@@ -685,6 +686,24 @@ TEST_CASE("Const eval folds impl method call") {
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("a", idx)};
     const auto val_a{UNWRAP(evaluator.try_eval(*decl_a.value))};
     CHECK(val_a.as_int_opt() == 42);
+}
+
+TEST_CASE("unlabeled constexpr block in statement position executes at compile time") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        pub const main := fn(): i32 {
+            constexpr {
+                const a := 40;
+                const b := 2;
+                @assert(a + b == 42);
+            }
+            return 0;
+        };
+    )")};
+
+    // The constexpr block must have produced zero instructions in GIR, leaving only the return
+    const auto gir_text{helpers::dump_named_fn(*ctx, "main")};
+    CHECK(gir_text.contains("ret i32 0"));
+    CHECK_FALSE(gir_text.contains("add i32"));
 }
 
 } // namespace ghoti::tests

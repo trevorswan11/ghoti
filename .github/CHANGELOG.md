@@ -358,3 +358,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - The constant evaluator can still not read or write to volatile memory post-init
 - Resolve an issue that made function pointers always emit monomorphized intantiations
 - Add `@returnAddress` builtin to get the return address of the current function as a usize
+
+## alpha.2
+
+- Constexpr can now be applied to labels and blocks (expression slots and top level)
+    - They must be constant evaluatable and will error if not
+- `@assert` and `@verify` have been hardened such that they can work correctly in constexpr contexts

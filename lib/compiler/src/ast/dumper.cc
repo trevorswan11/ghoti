@@ -546,10 +546,10 @@ auto dumper::visit(node_id, const initializer_expr& init) -> void {
 auto dumper::visit(node_id, const label_expr& label) -> void {
     PROFILE_FUNCTION();
     fmt::println(out_, "Label Expression:");
-    {
+    if (label.name) {
         const indent::guard g{indent_, false};
         fmt::print(out_, "{}Label: ", indent_.current_branch());
-        dump(label.name);
+        dump(*label.name);
     }
 
     {
@@ -923,7 +923,7 @@ auto dumper::visit(node_id, const while_loop_expr& while_expr) -> void {
 
 auto dumper::visit(node_id, const block_stmt& block) -> void {
     PROFILE_FUNCTION();
-    fmt::println(out_, "BlockStatement");
+    fmt::println(out_, "BlockStatement{}", block.is_constexpr ? " (constexpr)" : "");
     if (block.empty()) {
         const indent::guard g{indent_, true};
         fmt::println(out_, "{}<empty>", indent_.current_branch());
