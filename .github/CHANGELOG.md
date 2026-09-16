@@ -347,6 +347,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 
 # v0.4.0
 
+## alpha.1
+
 - Fix erroneous "redundant constexpr" diagnostic resulting from constexpr function parameters with a generic `T: type` backing them
 - Fix a bug where address-of a constexpr parameter (`^param`) silently failed to fold
 - Resolve stale cross-instantiation caching from @Struct(...)/@Union/@Enum call and local constexpr decls
