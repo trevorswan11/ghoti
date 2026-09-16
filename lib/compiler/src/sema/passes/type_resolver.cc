@@ -2443,7 +2443,6 @@ auto register_type_ctor_members(context&         ctx,
     const auto members{aggregate_member_list(fn_mod.ast, agg_node)};
     if (!members) { return; }
 
-    bool any_fn_member{false};
     for (const auto& m : *members) {
         const auto decl{fn_mod.ast.get_as_opt<ast::decl_stmt>(*m)};
         if (!decl || !decl->value) { continue; }
@@ -2455,9 +2454,7 @@ auto register_type_ctor_members(context&         ctx,
             .gir_name    = fmt::format("{}.{}", ctor_mangled, name),
             .typing_key  = std::string{ctor_mangled},
         });
-        any_fn_member = true;
     }
-    if (!any_fn_member) { return; }
 
     // The replay must place `@This()` / `.{ ... }` / `^self` nodes at `clone`, not the shared
     // literal type that later instantiations overwrite.

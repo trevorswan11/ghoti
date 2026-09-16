@@ -142,12 +142,12 @@ pub const CallConv := enum { c, sysv, win64, stdcall, fastcall, aapcs };
 pub const IntInfo := struct {
     pub bits: u16,
     pub signed: bool,
-    pub is_constexpr: bool,
+    pub is_constexpr: bool = false,
 };
 
 pub const FloatInfo := struct {
     pub bits: u16,
-    pub is_constexpr: bool,
+    pub is_constexpr: bool = false,
 };
 
 pub const PointerInfo := struct {
