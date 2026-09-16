@@ -176,7 +176,7 @@ class type;
 [[nodiscard]] auto is_assignable(const type& src, const type& dest) noexcept -> bool;
 
 // True when `t` still contains an unbound generic parameter rather than a fully concrete type.
-[[nodiscard]] auto is_generic_type(const type& t) noexcept -> bool;
+[[nodiscard]] auto is_generic_type(const type& t, bool unmodified = true) noexcept -> bool;
 
 namespace types {
 
