@@ -162,4 +162,51 @@ TEST_CASE("GIR multiple instantiations with diverse types") {
     CHECK(has_test_multi);
 }
 
+TEST_CASE("Functions taking function pointer types do not trigger monomorphization") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        pub const main := fn(): void {
+            a(b);
+            a(c);
+        };
+
+        const a := fn(func: ^fn(): void): void {};
+        const b := fn(): void {};
+        const c := fn(): void {};
+    )")};
+
+    gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
+    const auto   gir_mod{emitter.emit()};
+
+    bool has_main{false};
+    bool has_a{false};
+    bool has_b{false};
+    bool has_c{false};
+
+    for (const auto& fn : gir_mod.get_functions()) {
+        const auto name{fn->get_name()};
+        CHECK_FALSE(name.contains("a__"));
+        if (name == "main") {
+            has_main = true;
+            std::ostringstream ss;
+            gir::dumper        dumper{ss};
+            dumper.dump(*fn);
+            const auto dump_text{ss.str()};
+            CHECK(dump_text.contains("call @a(\"b\")"));
+            CHECK(dump_text.contains("call @a(\"c\")"));
+        } else if (name == "a") {
+            has_a = true;
+            CHECK(fn->get_params().size() == 1);
+        } else if (name == "b") {
+            has_b = true;
+        } else if (name == "c") {
+            has_c = true;
+        }
+    }
+
+    CHECK(has_main);
+    CHECK(has_a);
+    CHECK(has_b);
+    CHECK(has_c);
+}
+
 } // namespace ghoti::tests
