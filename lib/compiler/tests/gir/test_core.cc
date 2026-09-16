@@ -1,4 +1,3 @@
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -7,7 +6,6 @@
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
-#include "compiler/gir/dumper.hh"
 #include "compiler/gir/emitter.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
@@ -15,6 +13,7 @@
 #include "compiler/gir/segment.hh"
 #include "compiler/sema/type.hh"
 #include "helpers/common.hh"
+#include "helpers/gir.hh"
 #include "helpers/sema.hh"
 
 namespace ghoti::tests {
@@ -231,11 +230,7 @@ TEST_CASE("Comprehensive program lowering") {
     gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
     const auto   gir_mod{emitter.emit()};
 
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(gir_mod);
-    const auto dump_text{ss.view()};
-
+    const auto dump_text{helpers::dump_gir(gir_mod)};
     CHECK(dump_text.contains("fn max__i32_i32"));
     CHECK(dump_text.contains("fn transform"));
     CHECK(dump_text.contains("test \"run_transform\""));

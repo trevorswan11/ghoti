@@ -1874,7 +1874,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
     // A fresh alloca is already uninitialized, so `= undefined` needs no store.
     if (decl.value && !active_ast().get_as_opt<ast::undefined_expr>(*decl.value)) {
         const value val{emit_coerced_expr(*decl.value, *sema_type)};
-        builder_.emit_store(slot, val).is_initializer = true;
+        builder_.emit_store(value{slot, *sema_type}, val).is_initializer = true;
     }
     scopes_.back().bindings.emplace(name,
                                     local_binding{
@@ -2977,7 +2977,9 @@ auto emitter::try_emit_field_builtin_addr(const ast::call_expr& call) -> stdx::o
     }
 
     // Struct/union field mutability is binding-based (#255)
-    auto& field_type{*ctx_.pool.with_const(raw_field_type, base_lval.type->is_constant())};
+    auto& field_type{*ctx_.pool.with_volatile(
+        *ctx_.pool.with_const(raw_field_type, base_lval.type->is_constant()),
+        base_lval.type && base_lval.type->is_volatile())};
 
     auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
     if (st) {
@@ -3235,6 +3237,12 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         case syntax::token_type_t::BUILTIN_TRAP: {
             builder_.emit_builtin_call("@trap", {}, ret_type);
             builder_.emit_unreachable();
+            return value{void_val{}, ret_type};
+        }
+        case syntax::token_type_t::BUILTIN_RETURN_ADDRESS: {
+            if (const auto res{builder_.emit_builtin_call("@returnAddress", {}, ret_type)}) {
+                return value{*res, ret_type};
+            }
             return value{void_val{}, ret_type};
         }
         case syntax::token_type_t::BUILTIN_SRC: {
@@ -5619,14 +5627,16 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
 
             // A reference/pointer-typed field or nested access needs one more indirection unwound
             if (const auto ref_data{obj_type->get_data().as_opt<sema::types::reference>()}) {
-                auto& ref_underlying{
-                    *ctx_.pool.with_const(ref_data->underlying, obj_type->is_constant())};
+                auto& ref_underlying{*ctx_.pool.with_volatile(
+                    *ctx_.pool.with_const(ref_data->underlying, obj_type->is_constant()),
+                    obj_type->is_volatile())};
                 base_lval.data = value::data_t{builder_.emit_load(base_lval, *obj_type)};
                 base_lval.type.emplace(ref_underlying);
                 obj_type = &ref_underlying;
             } else if (const auto ptr_data{obj_type->get_data().as_opt<sema::types::pointer>()}) {
-                auto& ptr_underlying{
-                    *ctx_.pool.with_const(ptr_data->underlying, obj_type->is_constant())};
+                auto&       ptr_underlying{*ctx_.pool.with_volatile(
+                    *ctx_.pool.with_const(ptr_data->underlying, obj_type->is_constant()),
+                    obj_type->is_volatile())};
                 const value loaded_ptr{builder_.emit_load(base_lval, *obj_type), *obj_type};
                 emit_null_pointer_check(loaded_ptr, id);
                 base_lval.data = loaded_ptr.data;
@@ -5664,10 +5674,14 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             const auto is_slice{obj_type->get_kind() == sema::type_kind::SLICE};
 
             // Binding based typing
-            auto& field_type{
+            auto* field_type_ptr{
                 (is_struct_or_union || is_slice)
-                    ? *ctx_.pool.with_const(raw_field_type, base_lval.type->is_constant())
-                    : raw_field_type};
+                    ? ctx_.pool.with_const(raw_field_type, base_lval.type->is_constant()).get()
+                    : &raw_field_type};
+            if (base_lval.type && base_lval.type->is_volatile()) {
+                field_type_ptr = ctx_.pool.with_volatile(*field_type_ptr, true).get();
+            }
+            auto& field_type{*field_type_ptr};
 
             if (const auto ut{obj_type->get_data().as_opt<sema::types::union_t>()}) {
                 if (ut->is_untagged) { return value{base_lval.data, field_type}; }
@@ -5707,20 +5721,23 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             ASSERT(obj_type_opt, "Index array operand must have a resolved type");
             auto* obj_type{obj_type_opt.get()};
             bool  element_is_const{obj_type->is_constant()};
+            bool  element_is_volatile{obj_type->is_volatile()};
             if (const auto ref_data{obj_type->get_data().as_opt<sema::types::reference>()}) {
                 auto& ref_underlying{const_cast<sema::type&>(ref_data->underlying)};
                 base_lval.data = value::data_t{builder_.emit_load(base_lval, *obj_type)};
                 base_lval.type.emplace(ref_underlying);
-                element_is_const = obj_type->is_constant();
-                obj_type         = &ref_data->underlying;
+                element_is_const    = obj_type->is_constant();
+                element_is_volatile = obj_type->is_volatile();
+                obj_type            = &ref_data->underlying;
             } else if (const auto ptr_data{obj_type->get_data().as_opt<sema::types::pointer>()}) {
                 auto&       ptr_underlying{const_cast<sema::type&>(ptr_data->underlying)};
                 const value loaded_ptr{builder_.emit_load(base_lval, *obj_type), *obj_type};
                 emit_null_pointer_check(loaded_ptr, id);
                 base_lval.data = loaded_ptr.data;
                 base_lval.type.emplace(ptr_underlying);
-                element_is_const = obj_type->is_constant();
-                obj_type         = &ptr_data->underlying;
+                element_is_const    = obj_type->is_constant();
+                element_is_volatile = obj_type->is_volatile();
+                obj_type            = &ptr_data->underlying;
             }
 
             if (const auto arr_data{obj_type->get_data().as_opt<sema::types::array>()}) {
@@ -5760,7 +5777,9 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                     builder_.set_segment(valid_seg);
                 }
 
-                auto& write_elem_type{*ctx_.pool.with_const(elem_type, obj_type->is_constant())};
+                auto&      write_elem_type{*ctx_.pool.with_volatile(
+                    *ctx_.pool.with_const(elem_type, obj_type->is_constant()),
+                    obj_type->is_volatile() || element_is_volatile)};
                 const auto elem_ptr{
                     builder_.emit_get_element_ptr(base_lval, {idx_val}, write_elem_type)};
                 return value{elem_ptr, write_elem_type};
@@ -5815,13 +5834,16 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                     builder_.set_segment(valid_seg);
                 }
 
-                auto& write_elem_type{*ctx_.pool.with_const(elem_type, obj_type->is_constant())};
+                auto&      write_elem_type{*ctx_.pool.with_volatile(
+                    *ctx_.pool.with_const(elem_type, obj_type->is_constant()),
+                    obj_type->is_volatile() || element_is_volatile)};
                 const auto elem_ptr{builder_.emit_get_element_ptr(
                     value{ptr_val, ptr_type}, {idx_val}, write_elem_type)};
                 return value{elem_ptr, write_elem_type};
             }
 
-            auto&      write_elem_type{*ctx_.pool.with_const(elem_type, element_is_const)};
+            auto&      write_elem_type{*ctx_.pool.with_volatile(
+                *ctx_.pool.with_const(elem_type, element_is_const), element_is_volatile)};
             const auto elem_ptr{
                 builder_.emit_get_element_ptr(base_lval, {idx_val}, write_elem_type)};
             return value{elem_ptr, write_elem_type};
@@ -6734,7 +6756,8 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
         // Fields come first in the symbol table; anything past them is a member declaration
         if (const auto st{obj_type->get_data().as_opt<sema::types::struct_t>()};
             st && member_idx < st->fields.size()) {
-            auto& field_type{sema_type ? *sema_type : *obj_type};
+            auto& raw_ft{sema_type ? *sema_type : *obj_type};
+            auto& field_type{*ctx_.pool.with_volatile(raw_ft, obj_type->is_volatile())};
             if (st->is_bit_packed()) {
                 return emit_packed_field_read(base_lval, *st, member_idx, field_type);
             }

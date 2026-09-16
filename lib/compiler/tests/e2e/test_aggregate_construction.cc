@@ -139,6 +139,29 @@ TEST_CASE("`@Struct`'s `default_value` accepts `^<local const>`") {
     )") == 100);
 }
 
+TEST_CASE("`@Struct`'s `default_value` accepts `^<constexpr parameter>` inside a generic "
+          "`fn(...): type` constructor") {
+    CHECK(helpers::compile_and_run(R"(
+        const Point := fn(T: type, constexpr default_z: T): type {
+            return @Struct(.{
+                .fields = ^.{
+                    .{ .name = "x", .@"type" = T },
+                    .{ .name = "y", .@"type" = T },
+                    .{ .name = "z", .@"type" = T, .default_value = @ptrCast(^opaque, ^default_z) },
+                },
+                .is_extern = false,
+                .is_packed = false,
+                .backing_bits = 0,
+            });
+        };
+
+        pub const main := fn(): i32 {
+            const p: Point(i32, 1) = .{ .x = 2, .y = 9 };
+            return p.x + p.y + p.z;
+        };
+    )") == 12);
+}
+
 TEST_CASE("`@Struct`'s `default_value` accepts a struct-typed value") {
     CHECK(helpers::compile_and_run(R"(
         const Point := struct { a: i32, b: i32 };

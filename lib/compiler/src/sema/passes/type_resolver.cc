@@ -827,6 +827,14 @@ template <ast::IndexableID ID>
             "explicit (non-auto) return type",
             error::TYPE_MISMATCH,
             resolving_.ast.location_of(id));
+    case token_type_t::BUILTIN_RETURN_ADDRESS:
+        if (open_function_nodes_.empty()) {
+            return make_sema_err("@returnAddress() may only be used inside of a function",
+                                 error::ILLEGAL_RETURN_ADDRESS_USAGE,
+                                 resolving_.ast.location_of(id));
+        }
+        return_type = &builtin.return_type;
+        break;
     case token_type_t::BUILTIN_PTR_FROM_ARRAY: {
         auto& array_type{*get_resolved_call_arg_type(call.arguments[0])};
         auto& type_data{array_type.get_data()};
@@ -1173,8 +1181,15 @@ template <ast::IndexableID ID>
     case token_type_t::BUILTIN_STRUCT:
     case token_type_t::BUILTIN_UNION:  {
         if (const auto existing{resolving_.get_sema_type_opt(id)}) {
-            return_type = existing.get();
-            break;
+            const auto& denoted{denoted_type(const_cast<type&>(*existing))};
+            const bool  stale_instantiation{
+                for_generic_instantiation_ && reresolve_floor_ &&
+                (denoted.is_poison() || (denoted.has_symbol_table_idx() &&
+                                         denoted.get_symbol_table_idx() >= *reresolve_floor_))};
+            if (!stale_instantiation) {
+                return_type = existing.get();
+                break;
+            }
         }
 
         const auto builtin_name{*syntax::get_builtin_opt(builtin_id)};
@@ -2385,7 +2400,7 @@ namespace {
     return false;
 }
 
-// The node id of the struct/union/enum literal a `fn(...): type` body returns, if any.
+// The node id of the struct/union/enum literal/synthesis a `fn(...): type` body returns, if any.
 [[nodiscard]] auto returned_aggregate_node(const ast::AST& ast, const ast::block_stmt& block)
     -> stdx::option<ast::node_id> {
     for (const auto& stmt : block) {
@@ -2393,6 +2408,15 @@ namespace {
         if (!ret || !ret->expression) { continue; }
         const ast::node_id expr{*ret->expression};
         if (expr.any<ast::struct_expr, ast::union_expr, ast::enum_expr>()) { return expr; }
+        if (const auto call{ast.get_as_opt<ast::call_expr>(expr)}) {
+            using syntax::token_type_t;
+            switch (call->function->get_token_type()) {
+            case token_type_t::BUILTIN_STRUCT:
+            case token_type_t::BUILTIN_UNION:
+            case token_type_t::BUILTIN_ENUM:   return expr;
+            default:                           break;
+            }
+        }
     }
     return stdx::none;
 }
@@ -3698,7 +3722,8 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
 
         auto& param_type{denoted_type(*last_type_.take())};
         // A `type`-typed value is always compile-time known, so `constexpr` adds nothing.
-        if (param.is_constexpr && param_type.get_kind() == type_kind::TYPE) {
+        if (param.is_constexpr && param_type.get_kind() == type_kind::TYPE &&
+            param.explicit_type.get_token_type() == syntax::token_type_t::TYPE_TYPE) {
             ctx_.diags.emplace_back(
                 "'constexpr' is redundant on a parameter of type 'type'; type values are "
                 "always compile-time known",
@@ -4495,7 +4520,7 @@ auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -
     }
     auto& lhs_type{*last_type_.take()};
     {
-        const structural_guard g{implicit_type_stack_, lhs_type};
+        const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(lhs_type)};
         TRY_RESOLVE(assign.rhs);
     }
     auto& rhs_type{*last_type_};
@@ -4542,7 +4567,7 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
     TRY_RESOLVE(binary.lhs);
     auto* lhs_type{last_type_.take()};
     {
-        const structural_guard g{implicit_type_stack_, *lhs_type};
+        const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(*lhs_type)};
         TRY_RESOLVE(binary.rhs);
     }
     auto& rhs_type{*last_type_.take()};
@@ -4924,7 +4949,7 @@ auto type_resolver::resolve_structural_access(type&                          obj
     gsl::not_null<type*> result_type  = &ctx_.get_poison();
     if (member_symbol.get_kind() == symbol_kind::POISONED) { return result_type; }
 
-    if (enum_type) { return &enum_type->type_at(member_idx, object_type); }
+    if (enum_type) { return ctx_.pool.strip_volatile(enum_type->type_at(member_idx, object_type)); }
     if (struct_type) { return &struct_type->type_at(member_idx); }
     if (union_type) { return &union_type->type_at(member_idx); }
     UNREACHABLE("Error handling failed to catch invalid type");
@@ -6715,7 +6740,7 @@ auto type_resolver::visit(ast::node_id id, const ast::int_literal_expr& expr) ->
                 codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
             if (is_float(implicit_type->get_kind()) ||
                 constexpr_int_fits(static_cast<i128>(expr.value), *implicit_type, ptr_bits)) {
-                resolved = implicit_type.get();
+                resolved = ctx_.pool.strip_volatile(*implicit_type).get();
             }
         }
     }
@@ -6749,7 +6774,7 @@ auto type_resolver::visit(ast::node_id id, const ast::float_literal_expr& expr) 
     if (expr.width == 0) {
         if (const auto implicit_type{implicit_type_stack_.peek()};
             implicit_type && is_float(implicit_type->get_kind())) {
-            resolved = implicit_type.get();
+            resolved = ctx_.pool.strip_volatile(*implicit_type).get();
         }
     }
     last_type_.emplace(*resolved);
@@ -7538,7 +7563,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                     return last_type_.emplace(ctx_.poison_node(resolving_, id));
                 }
             } else {
-                type_guard.emplace(implicit_type_stack_, explicit_type);
+                type_guard.emplace(implicit_type_stack_, *ctx_.pool.strip_volatile(explicit_type));
                 resolving_.set_sema_type(id, explicit_type);
             }
         }
@@ -7549,10 +7574,12 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             resolve(*decl.value);
             if (last_type_->is_poison()) { return poison_out(); }
             auto& decl_value_type{*last_type_.take()};
+            auto& normalized_val_type{
+                decl.explicit_type ? decl_value_type : *ctx_.pool.strip_volatile(decl_value_type)};
             if (reresolve_local) {
-                resolving_.set_sema_type(id, decl_value_type);
+                resolving_.set_sema_type(id, normalized_val_type);
             } else {
-                resolving_.set_sema_type_if(id, decl_value_type);
+                resolving_.set_sema_type_if(id, normalized_val_type);
             }
         }
 
@@ -7654,7 +7681,9 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
 
-        if (!sym.has_kind()) {
+        // `reresolve_local` re-derives this decl's kind fresh even if a stale pass over this same
+        // generic instantiation already set it
+        if (!sym.has_kind() || reresolve_local) {
             if (type_data.is<types::builtin_function>() || type_data.is<types::function>()) {
                 sym.set_kind(symbol_kind::CALLABLE);
             } else if (resolved_type == ctx_.get_builtin_resolved_type(type_kind::TYPE)) {
@@ -9660,6 +9689,9 @@ auto type_resolver::apply_explicit_modifiers(ast::explicit_type_id id, type& inn
         // Volatility is baked into mutability and should not be imprinted
         auto& new_vol_type{*ctx_.pool[new_key]};
         new_vol_type.resolve_if<type::data_t>(inner_type.get_data());
+        if (const auto idx{inner_type.get_symbol_table_idx_opt()}) {
+            new_vol_type.set_symbol_table_idx(*idx);
+        }
         return new_vol_type;
     }
     UNREACHABLE("A new type modifier was likely added yet unaccounted for");
@@ -10249,6 +10281,7 @@ auto type_resolver::instantiate_generic(type&                             callee
 
     // Copy into a per-instantiation type so `T(i32)` and `T(u8)` don't alias each other
     if (is_type_ctor) {
+        deduced_return_type = &denoted_type(*deduced_return_type);
         const auto k{deduced_return_type->get_kind()};
         if (k == type_kind::STRUCT || k == type_kind::UNION || k == type_kind::ENUM) {
             if (const auto agg_node{returned_aggregate_node(fn_mod.ast, block)}) {

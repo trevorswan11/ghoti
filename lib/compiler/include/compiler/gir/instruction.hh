@@ -238,6 +238,7 @@ struct instruction {
     bool                          is_const{false};
     bool                          is_initializer{false};
     bool                          is_checked{false};
+    bool                          explicit_volatile{false};
 
     stdx::option<u8> atomic_op{stdx::none};         // `@atomicRmw`'s op
     stdx::option<u8> atomic_order{stdx::none};      // `atomic_order` is the memory order
@@ -246,7 +247,7 @@ struct instruction {
     [[nodiscard]] auto is_terminator() const noexcept -> bool { return gir::is_terminator(kind); }
     [[nodiscard]] auto has_result() const noexcept -> bool { return result.has_value(); }
     [[nodiscard]] auto is_volatile() const noexcept -> bool {
-        return (type && type->is_volatile()) ||
+        return explicit_volatile || (type && type->is_volatile()) ||
                (!operands.empty() && operands.front().type && operands.front().type->is_volatile());
     }
 };

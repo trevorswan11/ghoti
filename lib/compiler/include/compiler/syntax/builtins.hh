@@ -121,6 +121,7 @@ constexpr builtin_t FENCE{"@fence", token_type_t::BUILTIN_FENCE};
 
 constexpr builtin_t COMPILE_ERROR{"@compileError", token_type_t::BUILTIN_COMPILE_ERROR};
 constexpr builtin_t EMBED{"@embed", token_type_t::BUILTIN_EMBED};
+constexpr builtin_t RETURN_ADDRESS{"@returnAddress", token_type_t::BUILTIN_RETURN_ADDRESS};
 constexpr builtin_t CFG{"@cfg", token_type_t::BUILTIN_CFG};
 constexpr builtin_t CFG_VALUE{"@cfgValue", token_type_t::BUILTIN_CFG_VALUE};
 
@@ -128,7 +129,7 @@ constexpr builtin_t CFG_VALUE{"@cfgValue", token_type_t::BUILTIN_CFG_VALUE};
 constexpr builtin_t DISCARDABLE{"@discardable", token_type_t::BUILTIN_DISCARDABLE};
 
 constexpr auto ALL_TOKEN_TYPES{
-    stdx::enum_range<token_type_t::BUILTIN_ALIGN_CAST, token_type_t::BUILTIN_EMBED>()};
+    stdx::enum_range<token_type_t::BUILTIN_ALIGN_CAST, token_type_t::BUILTIN_RETURN_ADDRESS>()};
 
 constexpr auto SPECIAL_FORM_TOKEN_TYPES{
     stdx::enum_range<token_type_t::BUILTIN_CFG, token_type_t::BUILTIN_CFG_VALUE>()};
@@ -229,6 +230,7 @@ constexpr std::array ALL_BUILTINS{
     builtins::DISCARDABLE,
     builtins::COMPILE_ERROR,
     builtins::EMBED,
+    builtins::RETURN_ADDRESS,
 };
 
 [[nodiscard]] auto get_builtin_opt(token_type_t tt) noexcept -> stdx::option<std::string_view>;

@@ -2,6 +2,7 @@
 
 #include <sstream>
 #include <string>
+#include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -11,7 +12,7 @@
 
 namespace ghoti::tests::helpers {
 
-auto dump_gir(const ctx_idx_pair& ctx_idx) -> std::string {
+template <> [[nodiscard]] auto dump_gir<ctx_idx_pair>(const ctx_idx_pair& ctx_idx) -> std::string {
     gir::emitter emitter{ctx_idx.first->analyzer.get_ctx(), ctx_idx.first->root_mod};
     const auto   gir_mod{emitter.emit()};
 

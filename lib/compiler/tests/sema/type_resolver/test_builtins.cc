@@ -430,4 +430,35 @@ TEST_CASE("@embed non-existent file produces sema error") {
             std::pair{0UZ, 21UZ}});
 }
 
+TEST_CASE("@returnAddress builtin in sema") {
+    SECTION("resolves to usize inside function") {
+        auto [ctx, idx]{helpers::resolve_and_check(R"(
+            pub const get_ret_addr := fn(): usize {
+                const addr := @returnAddress();
+                return addr;
+            };
+        )")};
+        CHECK(ctx->analyzer.get_ctx().diags.empty());
+    }
+
+    SECTION("fails outside of a function") {
+        helpers::test_resolver_fail(
+            "const addr := @returnAddress();",
+            sema::diagnostic{"@returnAddress() may only be used inside of a function",
+                             sema::error::ILLEGAL_RETURN_ADDRESS_USAGE,
+                             std::pair{0UZ, 28UZ}});
+    }
+
+    SECTION("fails with arguments") {
+        helpers::test_resolver_fail(
+            R"(pub const f := fn(): void {
+                    _ = @returnAddress(42);
+                };
+            )",
+            sema::diagnostic{"Builtin expects 0 arguments, found 1",
+                             sema::error::ARITY_MISMATCH,
+                             std::pair{1UZ, 24UZ}});
+    }
+}
+
 } // namespace ghoti::tests

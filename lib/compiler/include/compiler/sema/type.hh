@@ -176,7 +176,7 @@ class type;
 [[nodiscard]] auto is_assignable(const type& src, const type& dest) noexcept -> bool;
 
 // True when `t` still contains an unbound generic parameter rather than a fully concrete type.
-[[nodiscard]] auto is_generic_type(const type& t) noexcept -> bool;
+[[nodiscard]] auto is_generic_type(const type& t, bool unmodified = true) noexcept -> bool;
 
 namespace types {
 
@@ -649,6 +649,7 @@ class type_pool {
     // Returns t's const or mutable twin, whichever `is_const` asks for; t itself if it's
     // already in that state
     [[nodiscard]] auto with_const(const type& t, bool is_const) -> gsl::not_null<type*>;
+    [[nodiscard]] auto with_volatile(const type& t, bool is_vol) -> gsl::not_null<type*>;
 
   private:
     auto get_or_emplace(const types::key_t& key) -> gsl::not_null<type*>;

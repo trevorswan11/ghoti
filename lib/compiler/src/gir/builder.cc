@@ -54,18 +54,19 @@ auto builder::emit_alloca_in_entry(sema::type& type, bool is_const) -> local_id 
     return slot;
 }
 
-auto builder::emit_store_in_entry(local_id dest, value val) -> void {
+auto builder::emit_store_in_entry(local_id dest, value val, bool is_volatile) -> void {
     PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit store without an active function");
     const auto val_type{val.type};
     function_->get_segment(segment_id{0})
         ->insert_before_terminator({
-            .kind           = instruction_kind::STORE,
-            .type           = val_type,
-            .result         = dest,
-            .operands       = {std::move(val)},
-            .location       = location_,
-            .is_initializer = true,
+            .kind              = instruction_kind::STORE,
+            .type              = val_type,
+            .result            = dest,
+            .operands          = {std::move(val)},
+            .location          = location_,
+            .is_initializer    = true,
+            .explicit_volatile = is_volatile || (val_type && val_type->is_volatile()),
         });
 }
 
@@ -95,33 +96,38 @@ auto builder::emit_load(value src, sema::type& type) -> local_id {
     return dest;
 }
 
-auto builder::emit_store(local_id dest, value val) -> instruction& {
+auto builder::emit_store(local_id dest, value val, bool is_volatile) -> instruction& {
     PROFILE_FUNCTION();
     const auto val_type{val.type};
     return emit_instruction({
-        .kind     = instruction_kind::STORE,
-        .type     = val_type,
-        .result   = dest,
-        .operands = {std::move(val)},
+        .kind              = instruction_kind::STORE,
+        .type              = val_type,
+        .result            = dest,
+        .operands          = {std::move(val)},
+        .explicit_volatile = is_volatile || (val_type && val_type->is_volatile()),
     });
 }
 
 auto builder::emit_store(value dest, value val) -> instruction& {
     PROFILE_FUNCTION();
     const auto val_type{val.type};
+    const bool is_vol{(dest.type && dest.type->is_volatile()) ||
+                      (val.type && val.type->is_volatile())};
     if (const auto dest_local{dest.as_opt<local_id>()}) {
         return emit_instruction({
-            .kind     = instruction_kind::STORE,
-            .type     = val_type,
-            .result   = *dest_local,
-            .operands = {std::move(val)},
+            .kind              = instruction_kind::STORE,
+            .type              = val_type,
+            .result            = *dest_local,
+            .operands          = {std::move(val)},
+            .explicit_volatile = is_vol,
         });
     }
     return emit_instruction({
-        .kind     = instruction_kind::STORE,
-        .type     = val_type,
-        .result   = stdx::none,
-        .operands = {std::move(dest), std::move(val)},
+        .kind              = instruction_kind::STORE,
+        .type              = val_type,
+        .result            = stdx::none,
+        .operands          = {std::move(dest), std::move(val)},
+        .explicit_volatile = is_vol,
     });
 }
 
