@@ -11,6 +11,7 @@
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "helpers/sema.hh"
+#include "support/test.hh"
 
 namespace ghoti::tests {
 
@@ -37,7 +38,7 @@ TEST_CASE("Labeled for loop resolution") {
         const auto [sym, sym_data, node_data, type]{
             ctx->get_ast_type_sym_info<syms::label, ast::label_expr>(
                 "outer", idx + 1, stdx::none, &syms::label::get_definition)};
-        CHECK(ctx->root_mod.get_sema_type(node_data.name) == i32_type);
+        CHECK(ctx->root_mod.get_sema_type(UNWRAP(node_data.name)) == i32_type);
     }
 
     const auto check_capture = [&](std::string_view name) -> void {

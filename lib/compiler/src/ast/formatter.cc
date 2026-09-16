@@ -1095,7 +1095,11 @@ auto formatter::visit(node_id, const initializer_expr& node) -> syntax::doc_id {
 }
 
 auto formatter::visit(node_id, const label_expr& node) -> syntax::doc_id {
-    return doc_manager_.concat({format(node.name), doc_manager_.text(": "), format(node.body)});
+    if (node.name) {
+        return doc_manager_.concat(
+            {format(*node.name), doc_manager_.text(": "), format(node.body)});
+    }
+    return format(node.body);
 }
 
 auto formatter::visit(node_id id, const match_expr& node) -> syntax::doc_id {
@@ -1387,16 +1391,17 @@ auto formatter::visit(node_id id, const block_stmt& node) -> syntax::doc_id {
         body.emplace_back(dangling);
     }
 
+    const auto open_brace{node.is_constexpr ? "constexpr {" : "{"};
     if (body.empty()) {
         if (header_trailing != doc_manager_.nil()) {
             return doc_manager_.concat(
-                {doc_manager_.text("{"), header_trailing, doc_manager_.text("}")});
+                {doc_manager_.text(open_brace), header_trailing, doc_manager_.text("}")});
         }
-        return doc_manager_.text("{}");
+        return doc_manager_.text(node.is_constexpr ? "constexpr {}" : "{}");
     }
 
     std::vector<syntax::doc_id> open_parts;
-    open_parts.emplace_back(doc_manager_.text("{"));
+    open_parts.emplace_back(doc_manager_.text(open_brace));
     if (header_trailing != doc_manager_.nil()) { open_parts.emplace_back(header_trailing); }
 
     return doc_manager_.concat({

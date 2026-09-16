@@ -21,6 +21,8 @@ namespace syntax { class parser; } // namespace syntax
 
 namespace ast {
 
+class AST;
+
 struct array_expr {
     stdx::option<expr_handle> size;
     bool                      null_terminated;
@@ -326,16 +328,20 @@ struct initializer_expr {
 };
 
 struct label_expr {
-    identifier_handle   name;
-    labeled_node_handle body;
+    stdx::option<identifier_handle> name;
+    labeled_node_handle             body;
 
     [[nodiscard]] static auto parse(syntax::parser& parser, expr_handle name)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 
-  private:
+    [[nodiscard]] auto is_constexpr(const AST& ast) const noexcept -> bool;
+
     [[nodiscard]] static auto deconstruct_body(syntax::parser& parser, stmt_handle raw_stmt)
         -> stdx::result<labeled_node_handle, syntax::diagnostic>;
 };
+
+[[nodiscard]] auto parse_constexpr_expr(syntax::parser& parser)
+    -> stdx::result<expr_handle, syntax::diagnostic>;
 
 struct match_expr {
     struct arm {

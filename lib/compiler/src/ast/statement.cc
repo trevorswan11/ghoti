@@ -25,9 +25,14 @@
 
 namespace ghoti::ast {
 
-auto block_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
+auto block_stmt::parse(syntax::parser& parser, bool is_constexpr)
+    -> stdx::result<stmt_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
+
+    if (is_constexpr && parser.current_token_is(syntax::token_type_t::CONSTEXPR)) {
+        TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
+    }
 
     statements_t statements;
     while (!parser.peek_token_is(syntax::token_type_t::RBRACE) &&
@@ -37,7 +42,7 @@ auto block_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synt
     }
     TRY(parser.expect_peek(syntax::token_type_t::RBRACE));
 
-    return parser.add_stmt<block_stmt>(start_token, std::move(statements));
+    return parser.add_stmt<block_stmt>(start_token, std::move(statements), is_constexpr);
 }
 
 auto break_stmt::parse(syntax::parser& parser, syntax::semicolon_behavior behavior)
