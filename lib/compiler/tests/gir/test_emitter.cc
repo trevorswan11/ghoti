@@ -1,16 +1,15 @@
-#include <sstream>
 #include <string>
 
 #include <catch2/catch_test_macros.hpp>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
-#include "compiler/gir/dumper.hh"
 #include "compiler/gir/emitter.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/segment.hh"
 #include "compiler/sema/type.hh"
 #include "helpers/common.hh"
+#include "helpers/gir.hh"
 #include "helpers/sema.hh"
 
 namespace ghoti::tests {
@@ -96,10 +95,7 @@ TEST_CASE("Emitter linear function with binary arithmetic") {
     CHECK(inst1.operands[0].as<gir::local_id>() == *inst0.result);
 
     // Verify dump output
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(gir_mod);
-    const auto dump_text{ss.view()};
+    const auto dump_text{helpers::dump_gir(gir_mod)};
     CHECK(dump_text.contains("fn add(a: i32, b: i32) -> i32"));
     CHECK(dump_text.contains("%0 = add i32 param.0, param.1"));
     CHECK(dump_text.contains("ret i32 %0"));
