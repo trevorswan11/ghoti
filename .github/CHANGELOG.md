@@ -354,3 +354,4 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed an issue where volatile would not allow type inference to propagate through the resolver's implicit type stack
 - Fixed an issue where volatile globals could never be initialized
     - The constant evaluator can still not read or write to volatile memory post-init
+- Resolve an issue that made function pointers always emit monomorphized intantiations

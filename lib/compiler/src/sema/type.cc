@@ -500,27 +500,40 @@ auto type_pool::with_volatile(const type& t, bool is_vol) -> gsl::not_null<type*
     return new_type;
 }
 
-auto is_generic_type(const type& t) noexcept -> bool {
+auto is_generic_type(const type& t, bool unmodified) noexcept -> bool {
     const auto kind{t.get_kind()};
     if (kind == type_kind::AUTO) { return true; }
 
     const auto& data{t.get_data()};
     if (const auto deferred{data.as_opt<types::deferred_array>()}) {
-        return is_generic_type(deferred->underlying);
+        return is_generic_type(deferred->underlying, unmodified);
     }
     if (kind == type_kind::TYPE) { return true; }
 
-    if (const auto ptr{data.as_opt<types::pointer>()}) { return is_generic_type(ptr->underlying); }
+    if (const auto ptr{data.as_opt<types::pointer>()}) {
+        return is_generic_type(ptr->underlying, false);
+    }
     if (const auto ref{data.as_opt<types::reference>()}) {
-        return is_generic_type(ref->underlying);
+        return is_generic_type(ref->underlying, false);
     }
     if (const auto slice{data.as_opt<types::slice>()}) {
-        return is_generic_type(slice->underlying);
+        return is_generic_type(slice->underlying, false);
     }
-    if (const auto arr{data.as_opt<types::array>()}) { return is_generic_type(arr->underlying); }
+    if (const auto arr{data.as_opt<types::array>()}) {
+        return is_generic_type(arr->underlying, false);
+    }
 
-    // A fn-typed slot may bind either a plain function or a capturing closure at any call
-    if (kind == type_kind::FUNCTION) { return true; }
+    if (kind == type_kind::FUNCTION) {
+        // A raw fn-typed slot may bind either a plain function or a capturing closure at any call
+        if (unmodified) { return true; }
+        if (const auto fn{data.as_opt<types::function>()}) {
+            if (is_generic_type(fn->return_type, false)) { return true; }
+            for (const auto* p : fn->params) {
+                if (is_generic_type(*p, false)) { return true; }
+            }
+        }
+        return false;
+    }
     return false;
 }
 
