@@ -233,6 +233,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
 
     inject_function(bis::PANIC, params(t_c_str), t_noreturn);
     inject_function(bis::TRAP, params(), t_noreturn);
+    inject_function(bis::RETURN_ADDRESS, params(), t_usize);
     inject_function(bis::COMPILE_ERROR, params(t_c_str), t_noreturn);
     inject_function(bis::EMBED, params(t_c_str), t_auto);
 

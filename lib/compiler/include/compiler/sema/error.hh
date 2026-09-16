@@ -121,6 +121,7 @@ enum class error : u8 {
     FIELD_NOT_FOUND,
     PACK_EXPANSION_MISPLACED,
     FIELD_HAS_NO_DEFAULT,
+    ILLEGAL_RETURN_ADDRESS_USAGE,
 };
 
 using diagnostic  = diagnostic<error>;
