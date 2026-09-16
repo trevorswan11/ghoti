@@ -1,14 +1,14 @@
-#include <set>
-#include <sstream>
 #include <string>
 #include <string_view>
 
+#include <ankerl/unordered_dense.h>
 #include <catch2/catch_test_macros.hpp>
 
-#include "compiler/gir/dumper.hh"
 #include "compiler/gir/emitter.hh"
 #include "compiler/sema/type.hh"
+#include "helpers/gir.hh"
 #include "helpers/sema.hh"
+#include "support/test.hh"
 
 namespace ghoti::tests {
 
@@ -36,10 +36,7 @@ TEST_CASE("GIR single monomorphized instantiation") {
                       fn->get_type().get_data().as<sema::types::function>().return_type) == "i32");
         } else if (fn->get_name() == "test_fn") {
             has_test_fn = true;
-            std::ostringstream ss;
-            gir::dumper        dumper{ss};
-            dumper.dump(*fn);
-            const auto dump_text{ss.str()};
+            const auto dump_text{helpers::dump_gir(UNWRAP(fn))};
             CHECK(dump_text.contains("call @identity__i32"));
         }
     }
@@ -62,7 +59,7 @@ TEST_CASE("GIR constexpr parameter monomorphizes per value") {
     gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
     const auto   gir_mod{emitter.emit()};
 
-    std::set<std::string_view> shifted_variants;
+    ankerl::unordered_dense::set<std::string_view> shifted_variants;
     for (const auto& fn : gir_mod.get_functions()) {
         if (fn->get_name().starts_with("shifted__")) {
             shifted_variants.insert(fn->get_name());
@@ -86,13 +83,10 @@ TEST_CASE("GIR constexpr parameter sizes a type per instantiation") {
     gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
     const auto   gir_mod{emitter.emit()};
 
-    std::set<std::string> rets;
+    ankerl::unordered_dense::set<std::string> rets;
     for (const auto& fn : gir_mod.get_functions()) {
         if (!fn->get_name().starts_with("room__")) { continue; }
-        std::ostringstream ss;
-        gir::dumper        dumper{ss};
-        dumper.dump(*fn);
-        rets.insert(std::string{ss.view()});
+        rets.insert(helpers::dump_gir(UNWRAP(fn)));
     }
     // Two instantiations with different bodies: [2]i32 -> 8, [5]i32 -> 20.
     REQUIRE(rets.size() == 2);
@@ -111,7 +105,7 @@ TEST_CASE("GIR constexpr struct value dedups regardless of field order") {
     gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
     const auto   gir_mod{emitter.emit()};
 
-    std::set<std::string_view> dot_variants;
+    ankerl::unordered_dense::set<std::string_view> dot_variants;
     for (const auto& fn : gir_mod.get_functions()) {
         if (fn->get_name().starts_with("dot__")) { dot_variants.insert(fn->get_name()); }
     }
@@ -148,10 +142,7 @@ TEST_CASE("GIR multiple instantiations with diverse types") {
                   sema::type_kind::F64);
         } else if (fn->get_name() == "test_multi") {
             has_test_multi = true;
-            std::ostringstream ss;
-            gir::dumper        dumper{ss};
-            dumper.dump(*fn);
-            const auto dump_text{ss.str()};
+            const auto dump_text{helpers::dump_gir(UNWRAP(fn))};
             CHECK(dump_text.contains("call @add__i32_i32"));
             CHECK(dump_text.contains("call @add__f64_f64"));
         }
@@ -187,10 +178,7 @@ TEST_CASE("Functions taking function pointer types do not trigger monomorphizati
         CHECK_FALSE(name.contains("a__"));
         if (name == "main") {
             has_main = true;
-            std::ostringstream ss;
-            gir::dumper        dumper{ss};
-            dumper.dump(*fn);
-            const auto dump_text{ss.str()};
+            const auto dump_text{helpers::dump_gir(UNWRAP(fn))};
             CHECK(dump_text.contains("call @a(\"b\")"));
             CHECK(dump_text.contains("call @a(\"c\")"));
         } else if (name == "a") {

@@ -110,57 +110,56 @@ namespace {
     }
 }
 
-enum memory_order_t : u8 {
-    mo_relaxed = 0,
-    mo_acquire = 1,
-    mo_release = 2,
-    mo_acq_rel = 3,
-    mo_seq_cst = 4,
+enum class memory_order_t : u8 { // Mirrors builtin.gh.inc
+    relaxed = 0,
+    acquire = 1,
+    release = 2,
+    acq_rel = 3,
+    seq_cst = 4,
 };
 
 // `ord` is a `MemoryOrder` enum ordinal as folded from the atomic builtin
 [[nodiscard]] auto to_llvm_ordering(u8 ord) noexcept -> llvm::AtomicOrdering {
-    switch (ord) {
-    case mo_relaxed: return llvm::AtomicOrdering::Monotonic;
-    case mo_acquire: return llvm::AtomicOrdering::Acquire;
-    case mo_release: return llvm::AtomicOrdering::Release;
-    case mo_acq_rel: return llvm::AtomicOrdering::AcquireRelease;
-    case mo_seq_cst:
-    default:         return llvm::AtomicOrdering::SequentiallyConsistent;
+    switch (static_cast<memory_order_t>(ord)) {
+    case memory_order_t::relaxed: return llvm::AtomicOrdering::Monotonic;
+    case memory_order_t::acquire: return llvm::AtomicOrdering::Acquire;
+    case memory_order_t::release: return llvm::AtomicOrdering::Release;
+    case memory_order_t::acq_rel: return llvm::AtomicOrdering::AcquireRelease;
+    case memory_order_t::seq_cst:
+    default:                      return llvm::AtomicOrdering::SequentiallyConsistent;
     }
 }
 
-// Weak enum mirroring builtin.gh.inc
-enum atomic_rmw_op_t : u8 {
-    rmw_xchg = 0,
-    rmw_add  = 1,
-    rmw_sub  = 2,
-    rmw_band = 3,
-    rmw_nand = 4,
-    rmw_bor  = 5,
-    rmw_bxor = 6,
-    rmw_max  = 7,
-    rmw_min  = 8,
-    rmw_umax = 9,
-    rmw_umin = 10,
+enum class atomic_rmw_op_t : u8 { // Mirrors builtin.gh.inc
+    xchg = 0,
+    add  = 1,
+    sub  = 2,
+    band = 3,
+    nand = 4,
+    bor  = 5,
+    bxor = 6,
+    max  = 7,
+    min  = 8,
+    umax = 9,
+    umin = 10,
 };
 
 // `op` is an `AtomicRmwOp` enum ordinal
 [[nodiscard]] auto to_llvm_rmw_op(u8 op) noexcept -> llvm::AtomicRMWInst::BinOp {
     using Op = llvm::AtomicRMWInst::BinOp;
-    switch (op) {
-    case rmw_xchg: return Op::Xchg;
-    case rmw_add:  return Op::Add;
-    case rmw_sub:  return Op::Sub;
-    case rmw_band: return Op::And;
-    case rmw_nand: return Op::Nand;
-    case rmw_bor:  return Op::Or;
-    case rmw_bxor: return Op::Xor;
-    case rmw_max:  return Op::Max;
-    case rmw_min:  return Op::Min;
-    case rmw_umax: return Op::UMax;
-    case rmw_umin:
-    default:       return Op::UMin;
+    switch (static_cast<atomic_rmw_op_t>(op)) {
+    case atomic_rmw_op_t::xchg: return Op::Xchg;
+    case atomic_rmw_op_t::add:  return Op::Add;
+    case atomic_rmw_op_t::sub:  return Op::Sub;
+    case atomic_rmw_op_t::band: return Op::And;
+    case atomic_rmw_op_t::nand: return Op::Nand;
+    case atomic_rmw_op_t::bor:  return Op::Or;
+    case atomic_rmw_op_t::bxor: return Op::Xor;
+    case atomic_rmw_op_t::max:  return Op::Max;
+    case atomic_rmw_op_t::min:  return Op::Min;
+    case atomic_rmw_op_t::umax: return Op::UMax;
+    case atomic_rmw_op_t::umin:
+    default:                    return Op::UMin;
     }
 }
 

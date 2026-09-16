@@ -1,13 +1,12 @@
-#include <sstream>
-
 #include <catch2/catch_test_macros.hpp>
 #include <stdx/types.hh>
 
-#include "compiler/gir/dumper.hh"
 #include "compiler/gir/emitter.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/sema/error.hh"
+#include "helpers/gir.hh"
 #include "helpers/sema.hh"
+#include "support/test.hh"
 
 namespace ghoti::tests {
 
@@ -28,7 +27,7 @@ TEST_CASE("GIR if statement and if-else branching") {
     const auto   gir_mod{emitter.emit()};
 
     REQUIRE(gir_mod.get_functions().size() == 1);
-    const auto& fn{*gir_mod.get_functions()[0]};
+    const auto& fn{UNWRAP(gir_mod.get_functions()[0])};
     CHECK(fn.get_name() == "test_if");
 
     // Expect at least 4 segments: entry (0), consequence (1), alternate (2), merge (3)
@@ -73,14 +72,10 @@ TEST_CASE("GIR if expression yielding value") {
     const auto   gir_mod{emitter.emit()};
 
     REQUIRE(gir_mod.get_functions().size() == 1);
-    const auto& fn{*gir_mod.get_functions()[0]};
+    const auto& fn{UNWRAP(gir_mod.get_functions()[0])};
     CHECK(fn.get_name() == "choose");
 
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(gir_mod);
-    const auto dump_text{ss.view()};
-
+    const auto dump_text{helpers::dump_gir(gir_mod)};
     CHECK(dump_text.contains("cond_goto param.0 seg 1, seg 2"));
     CHECK(dump_text.contains("goto seg 3"));
     CHECK(dump_text.contains("ret i32"));
@@ -101,11 +96,11 @@ TEST_CASE("GIR constexpr if branching") {
     const auto   gir_mod{emitter.emit()};
 
     REQUIRE(gir_mod.get_functions().size() == 1);
-    const auto& fn{*gir_mod.get_functions()[0]};
+    const auto& fn{UNWRAP(gir_mod.get_functions()[0])};
 
     // Comptime folding should emit only active branch, no cond_goto
     REQUIRE(fn.get_segments().size() == 1);
-    const auto& seg{*fn.get_segments()[0]};
+    const auto& seg{UNWRAP(fn.get_segments()[0])};
     REQUIRE(seg.has_terminator());
     CHECK(seg.get_instructions().back()->kind == gir::instruction_kind::RET);
 }
@@ -167,14 +162,10 @@ TEST_CASE("GIR while loop with condition, body, and break") {
     const auto   gir_mod{emitter.emit()};
 
     REQUIRE(gir_mod.get_functions().size() == 1);
-    const auto& fn{*gir_mod.get_functions()[0]};
+    const auto& fn{UNWRAP(gir_mod.get_functions()[0])};
     CHECK(fn.get_name() == "count_up");
 
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(gir_mod);
-    const auto dump_text{ss.view()};
-
+    const auto dump_text{helpers::dump_gir(gir_mod)};
     CHECK(dump_text.contains("cond_goto"));
     CHECK(dump_text.contains("goto seg"));
     CHECK(dump_text.contains("ret i32"));
@@ -198,14 +189,10 @@ TEST_CASE("GIR while loop with continuation and else non_break") {
     const auto   gir_mod{emitter.emit()};
 
     REQUIRE(gir_mod.get_functions().size() == 1);
-    const auto& fn{*gir_mod.get_functions()[0]};
+    const auto& fn{UNWRAP(gir_mod.get_functions()[0])};
     CHECK(fn.get_name() == "while_full");
 
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(gir_mod);
-    const auto dump_text{ss.view()};
-
+    const auto dump_text{helpers::dump_gir(gir_mod)};
     CHECK(dump_text.contains("cond_goto"));
 }
 
@@ -224,15 +211,11 @@ TEST_CASE("GIR do-while loop") {
     const auto   gir_mod{emitter.emit()};
 
     REQUIRE(gir_mod.get_functions().size() == 1);
-    const auto& fn{*gir_mod.get_functions()[0]};
+    const auto& fn{UNWRAP(gir_mod.get_functions()[0])};
     CHECK(fn.get_name() == "test_do_while");
 
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(gir_mod);
-    const auto dump_text{ss.view()};
-
     // Body segment (1) is entered first, then cond_seg (2) jumps back to 1 or exits (3)
+    const auto dump_text{helpers::dump_gir(gir_mod)};
     CHECK(dump_text.contains("goto seg 1"));
     CHECK(dump_text.contains("cond_goto"));
 }
@@ -258,14 +241,10 @@ TEST_CASE("GIR infinite loop with break and continue") {
     const auto   gir_mod{emitter.emit()};
 
     REQUIRE(gir_mod.get_functions().size() == 1);
-    const auto& fn{*gir_mod.get_functions()[0]};
+    const auto& fn{UNWRAP(gir_mod.get_functions()[0])};
     CHECK(fn.get_name() == "test_infinite");
 
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(gir_mod);
-    const auto dump_text{ss.view()};
-
+    const auto dump_text{helpers::dump_gir(gir_mod)};
     CHECK(dump_text.contains("goto seg 1"));
     CHECK(dump_text.contains("ret i32"));
 }
@@ -293,18 +272,14 @@ TEST_CASE("GIR for loop over range iterables") {
 
     REQUIRE(gir_mod.get_functions().size() == 2);
 
-    const auto& fn0{*gir_mod.get_functions()[0]};
+    const auto& fn0{UNWRAP(gir_mod.get_functions()[0])};
     CHECK(fn0.get_name() == "sum_range");
 
     const auto& fn1{*gir_mod.get_functions()[1]};
     CHECK(fn1.get_name() == "sum_inclusive");
 
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(gir_mod);
-    const auto dump_text{ss.view()};
-
     // Both should contain comparisons (LT for .. and LE for ..=), step increments, and branch jumps
+    const auto dump_text{helpers::dump_gir(gir_mod)};
     CHECK(dump_text.contains("lt bool"));
     CHECK(dump_text.contains("le bool"));
     CHECK(dump_text.contains("add i32"));
@@ -327,14 +302,10 @@ TEST_CASE("Labeled GIR block yielding value via break") {
     const auto   gir_mod{emitter.emit()};
 
     REQUIRE(gir_mod.get_functions().size() == 1);
-    const auto& fn{*gir_mod.get_functions()[0]};
+    const auto& fn{UNWRAP(gir_mod.get_functions()[0])};
     CHECK(fn.get_name() == "compute_labeled");
 
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(gir_mod);
-    const auto dump_text{ss.view()};
-
+    const auto dump_text{helpers::dump_gir(gir_mod)};
     CHECK(dump_text.contains("store 100"));
     CHECK(dump_text.contains("store 200"));
     CHECK(dump_text.contains("ret i32"));
@@ -363,14 +334,10 @@ TEST_CASE("Labeled GIR nested loop break and continue") {
     const auto   gir_mod{emitter.emit()};
 
     REQUIRE(gir_mod.get_functions().size() == 1);
-    const auto& fn{*gir_mod.get_functions()[0]};
+    const auto& fn{UNWRAP(gir_mod.get_functions()[0])};
     CHECK(fn.get_name() == "nested_loops");
 
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(gir_mod);
-    const auto dump_text{ss.view()};
-
+    const auto dump_text{helpers::dump_gir(gir_mod)};
     CHECK(dump_text.contains("fn nested_loops() -> i32"));
 }
 
@@ -389,17 +356,13 @@ TEST_CASE("Short-circuit GIR boolean and / or expressions") {
 
     REQUIRE(gir_mod.get_functions().size() == 2);
 
-    const auto& fn_and{*gir_mod.get_functions()[0]};
+    const auto& fn_and{UNWRAP(gir_mod.get_functions()[0])};
     CHECK(fn_and.get_name() == "test_and");
 
     const auto& fn_or{*gir_mod.get_functions()[1]};
     CHECK(fn_or.get_name() == "test_or");
 
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(gir_mod);
-    const auto dump_text{ss.view()};
-
+    const auto dump_text{helpers::dump_gir(gir_mod)};
     CHECK(dump_text.contains("fn test_and(a: bool, b: bool) -> bool"));
     CHECK(dump_text.contains("fn test_or(a: bool, b: bool) -> bool"));
     CHECK(dump_text.contains("cond_goto param.0"));

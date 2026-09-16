@@ -1,14 +1,16 @@
 #include <algorithm>
-#include <sstream>
 #include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
+#include <stdx/option.hh>
 
-#include "compiler/gir/dumper.hh"
 #include "compiler/gir/emitter.hh"
+#include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/sema/analyzer.hh"
+#include "helpers/gir.hh"
 #include "helpers/sema.hh"
+#include "support/test.hh"
 
 namespace ghoti::tests {
 
@@ -35,11 +37,7 @@ TEST_CASE("GIR array indexing bounds checking") {
             continue;
         }
 
-        std::ostringstream ss;
-        gir::dumper        dumper{ss};
-        dumper.dump(*fn);
-        const auto dump_text{ss.view()};
-
+        const auto dump_text{helpers::dump_gir(UNWRAP(fn))};
         CHECK(dump_text.contains("lt bool"));
         CHECK(dump_text.contains("cond_goto"));
         CHECK(dump_text.contains("call @panic_handler"));
@@ -61,20 +59,15 @@ TEST_CASE("GIR @panic lowers to an overridable panic_handler call") {
 
     REQUIRE(gir_mod.get_functions().size() == 2);
 
-    const gir::function* boom{nullptr};
-    bool                 saw_panic_handler{false};
+    stdx::option<const gir::function&> boom;
+    bool                               saw_panic_handler{false};
     for (const auto& fn : gir_mod.get_functions()) {
-        if (fn->get_name() == "boom") { boom = fn; }
+        if (fn->get_name() == "boom") { boom.emplace(fn); }
         if (fn->get_name() == "panic_handler") { saw_panic_handler = true; }
     }
-    REQUIRE(boom);
     CHECK(saw_panic_handler);
 
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(*boom);
-    const auto dump_text{ss.view()};
-
+    const auto dump_text{helpers::dump_gir(UNWRAP(boom))};
     CHECK(dump_text.contains("call @panic_handler"));
     CHECK(dump_text.contains("\"kaboom\""));
     CHECK(dump_text.contains("unreachable"));
@@ -91,16 +84,13 @@ TEST_CASE("GIR a reached `unreachable` routes through panic_handler") {
     gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
     const auto   gir_mod{emitter.emit()};
 
-    const gir::function* pick{nullptr};
+    stdx::option<const gir::function&> pick;
     for (const auto& fn : gir_mod.get_functions()) {
-        if (fn->get_name() == "pick") { pick = fn; }
+        if (fn->get_name() == "pick") { pick.emplace(fn); }
     }
-    REQUIRE(pick);
 
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(*pick);
-    CHECK(ss.view().contains("call @panic_handler"));
+    const auto dump_text{helpers::dump_gir(UNWRAP(pick))};
+    CHECK(dump_text.contains("call @panic_handler"));
 }
 
 TEST_CASE("GIR array literal stack allocation and initialization") {
@@ -116,13 +106,7 @@ TEST_CASE("GIR array literal stack allocation and initialization") {
 
     // `test_array_lit` plus the `weak` `panic_handler` pulled in for the `a[1]` bounds check.
     REQUIRE(gir_mod.get_functions().size() == 2);
-    const auto& fn{*gir_mod.get_functions()[0]};
-
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(fn);
-    const auto dump_text{ss.view()};
-
+    const auto dump_text{helpers::dump_gir(UNWRAP(gir_mod.get_functions()[0]))};
     CHECK(dump_text.contains("alloca"));
     CHECK(dump_text.contains("get_element_ptr"));
 }
@@ -183,13 +167,7 @@ TEST_CASE("GIR builtins cast operations") {
     const auto   gir_mod{emitter.emit()};
 
     REQUIRE(gir_mod.get_functions().size() == 1);
-    const auto& fn{*gir_mod.get_functions()[0]};
-
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(fn);
-    const auto dump_text{ss.view()};
-
+    const auto dump_text{helpers::dump_gir(UNWRAP(gir_mod.get_functions()[0]))};
     CHECK(dump_text.contains("widen_cast"));
     CHECK(dump_text.contains("int_from_ptr"));
 }
@@ -203,14 +181,10 @@ TEST_CASE("GIR emit_gir integration in pipeline") {
 
     const auto gir_mod{ctx->analyzer.emit_gir(ctx->root_mod)};
     REQUIRE(gir_mod.get_functions().size() == 1);
-    const auto& fn{*gir_mod.get_functions()[0]};
+    const auto& fn{UNWRAP(gir_mod.get_functions()[0])};
     CHECK(fn.get_name() == "compute");
 
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(fn);
-    const auto dump_text{ss.view()};
-
+    const auto dump_text{helpers::dump_gir(fn)};
     CHECK(dump_text.contains("mul i32"));
     CHECK(dump_text.contains("add i32"));
     CHECK(dump_text.contains("ret i32"));
@@ -255,17 +229,12 @@ TEST_CASE("GIR slice indexing and fat pointer operations") {
         };
     )")};
 
-    const auto gir_mod{ctx->analyzer.emit_gir(ctx->root_mod)};
     // `slice_ops` plus the `weak` `panic_handler` pulled in for the `s[i]` bounds check.
+    const auto gir_mod{ctx->analyzer.emit_gir(ctx->root_mod)};
     REQUIRE(gir_mod.get_functions().size() == 2);
-    const auto& fn{*gir_mod.get_functions()[0]};
-
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(fn);
-    const auto dump_text{ss.view()};
 
     // Fat pointer field extraction (ptr at 0, len at 1), bounds check, and load
+    const auto dump_text{helpers::dump_gir(UNWRAP(gir_mod.get_functions()[0]))};
     CHECK(dump_text.contains("get_element_ptr"));
     CHECK(dump_text.contains("lt bool"));
     CHECK(dump_text.contains("cond_goto"));
@@ -289,11 +258,7 @@ TEST_CASE("GIR indirect call formatting") {
         gir_mod.get_functions(), [](const auto* f) { return f->get_name() == "call_indirect"; })};
     REQUIRE(fn_it != gir_mod.get_functions().end());
 
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(**fn_it);
-    const auto dump_text{ss.view()};
-
+    const auto dump_text{helpers::dump_gir(UNWRAP(*fn_it))};
     CHECK(dump_text.contains("call %"));
 }
 

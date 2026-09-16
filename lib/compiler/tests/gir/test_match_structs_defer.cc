@@ -1,12 +1,12 @@
-#include <sstream>
 #include <string>
 
 #include <catch2/catch_test_macros.hpp>
 #include <stdx/types.hh>
 
-#include "compiler/gir/dumper.hh"
 #include "compiler/gir/emitter.hh"
+#include "helpers/gir.hh"
 #include "helpers/sema.hh"
+#include "support/test.hh"
 
 namespace ghoti::tests {
 
@@ -25,14 +25,10 @@ TEST_CASE("GIR match literal patterns and value yield") {
     const auto   gir_mod{emitter.emit()};
 
     REQUIRE(gir_mod.get_functions().size() == 1);
-    const auto& fn{*gir_mod.get_functions()[0]};
+    const auto& fn{UNWRAP(gir_mod.get_functions()[0])};
     CHECK(fn.get_name() == "test_match");
 
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(fn);
-    const auto dump_text{ss.view()};
-
+    const auto dump_text{helpers::dump_gir(fn)};
     CHECK(dump_text.contains("eq bool"));
     CHECK(dump_text.contains("cond_goto"));
     CHECK(dump_text.contains("ret"));
@@ -59,13 +55,7 @@ TEST_CASE("GIR match enum patterns") {
     const auto   gir_mod{emitter.emit()};
 
     REQUIRE(gir_mod.get_functions().size() == 1);
-    const auto& fn{*gir_mod.get_functions()[0]};
-
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(fn);
-    const auto dump_text{ss.view()};
-
+    const auto dump_text{helpers::dump_gir(UNWRAP(gir_mod.get_functions()[0]))};
     CHECK(dump_text.contains("eq bool"));
     CHECK(dump_text.contains("cond_goto"));
     CHECK(dump_text.contains("ret"));
@@ -90,13 +80,7 @@ TEST_CASE("GIR match arm capture") {
     const auto   gir_mod{emitter.emit()};
 
     REQUIRE(gir_mod.get_functions().size() == 1);
-    const auto& fn{*gir_mod.get_functions()[0]};
-
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(fn);
-    const auto dump_text{ss.view()};
-
+    const auto dump_text{helpers::dump_gir(UNWRAP(gir_mod.get_functions()[0]))};
     CHECK(dump_text.contains("ret"));
 }
 
@@ -120,11 +104,7 @@ TEST_CASE("GIR struct initialization and field access") {
     const auto& fn{*gir_mod.get_functions()[0]};
     CHECK(fn.get_name() == "test_struct");
 
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(fn);
-    const auto dump_text{ss.view()};
-
+    const auto dump_text{helpers::dump_gir(fn)};
     CHECK(dump_text.contains("alloca"));
     CHECK(dump_text.contains("get_element_ptr"));
     CHECK(dump_text.contains("store"));
@@ -151,13 +131,7 @@ TEST_CASE("GIR struct field assignment and compound assignment") {
     const auto   gir_mod{emitter.emit()};
 
     REQUIRE(gir_mod.get_functions().size() == 1);
-    const auto& fn{*gir_mod.get_functions()[0]};
-
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(fn);
-    const auto dump_text{ss.view()};
-
+    const auto dump_text{helpers::dump_gir(UNWRAP(gir_mod.get_functions()[0]))};
     CHECK(dump_text.contains("get_element_ptr"));
     CHECK(dump_text.contains("store"));
     CHECK(dump_text.contains("add i32"));
@@ -175,13 +149,7 @@ TEST_CASE("GIR array index expression and assignment") {
 
     // `test_array` plus the `weak` `panic_handler` pulled in for the `arr[i]` bounds check.
     REQUIRE(gir_mod.get_functions().size() == 2);
-    const auto& fn{*gir_mod.get_functions()[0]};
-
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(fn);
-    const auto dump_text{ss.view()};
-
+    const auto dump_text{helpers::dump_gir(UNWRAP(gir_mod.get_functions()[0]))};
     CHECK(dump_text.contains("get_element_ptr"));
     CHECK(dump_text.contains("load"));
     CHECK(dump_text.contains("ret"));
@@ -201,13 +169,7 @@ TEST_CASE("GIR address_of and dereference") {
     const auto   gir_mod{emitter.emit()};
 
     REQUIRE(gir_mod.get_functions().size() == 2);
-    const auto& fn{*gir_mod.get_functions()[0]};
-
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(fn);
-    const auto dump_text{ss.view()};
-
+    const auto dump_text{helpers::dump_gir(UNWRAP(gir_mod.get_functions()[0]))};
     CHECK(dump_text.contains("address_of"));
     CHECK(dump_text.contains("store"));
     CHECK(dump_text.contains("load"));
@@ -231,12 +193,7 @@ TEST_CASE("GIR defer at block exit with LIFO execution") {
     const auto   gir_mod{emitter.emit()};
 
     REQUIRE(gir_mod.get_functions().size() == 1);
-    const auto& fn{*gir_mod.get_functions()[0]};
-
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(fn);
-    const auto dump_text{ss.view()};
+    const auto dump_text{helpers::dump_gir(UNWRAP(gir_mod.get_functions()[0]))};
 
     // First defer (+10) then second defer (*2) must appear in that order before return
     const auto plus_pos{dump_text.find("add i32")};
@@ -261,15 +218,9 @@ TEST_CASE("GIR defer at early return triggers unwinding") {
     gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
     const auto   gir_mod{emitter.emit()};
 
-    REQUIRE(gir_mod.get_functions().size() == 1);
-    const auto& fn{*gir_mod.get_functions()[0]};
-
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(fn);
-    const auto dump_text{ss.view()};
-
     // Defer store (100) must be present in return paths
+    REQUIRE(gir_mod.get_functions().size() == 1);
+    const auto dump_text{helpers::dump_gir(UNWRAP(gir_mod.get_functions()[0]))};
     CHECK(dump_text.contains("store 100"));
 }
 
@@ -296,12 +247,7 @@ TEST_CASE("GIR defer at loop break and continue unwinding") {
     const auto   gir_mod{emitter.emit()};
 
     REQUIRE(gir_mod.get_functions().size() == 1);
-    const auto& fn{*gir_mod.get_functions()[0]};
-
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(fn);
-    const auto dump_text{ss.view()};
+    const auto dump_text{helpers::dump_gir(UNWRAP(gir_mod.get_functions()[0]))};
 
     // Defer expression (i = i + 1) must be emitted across break, continue, and loop fallthrough
     CHECK(dump_text.contains("add i32"));
@@ -323,13 +269,7 @@ TEST_CASE("GIR match on boolean patterns") {
     const auto   gir_mod{emitter.emit()};
 
     REQUIRE(gir_mod.get_functions().size() == 1);
-    const auto& fn{*gir_mod.get_functions()[0]};
-
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(fn);
-    const auto dump_text{ss.view()};
-
+    const auto dump_text{helpers::dump_gir(UNWRAP(gir_mod.get_functions()[0]))};
     CHECK(dump_text.contains("eq bool"));
     CHECK(dump_text.contains("cond_goto"));
     CHECK(dump_text.contains("ret"));
@@ -359,13 +299,7 @@ TEST_CASE("GIR structs with nested struct field access") {
     const auto   gir_mod{emitter.emit()};
 
     REQUIRE(gir_mod.get_functions().size() == 1);
-    const auto& fn{*gir_mod.get_functions()[0]};
-
-    std::ostringstream ss;
-    gir::dumper        dumper{ss};
-    dumper.dump(fn);
-    const auto dump_text{ss.view()};
-
+    const auto dump_text{helpers::dump_gir(UNWRAP(gir_mod.get_functions()[0]))};
     CHECK(dump_text.contains("get_element_ptr"));
     CHECK(dump_text.contains("mul i32"));
     CHECK(dump_text.contains("ret"));
