@@ -7,9 +7,7 @@ pub constexpr Option := fn(T: type): type {
             return .{ .some = val };
         };
 
-        pub constexpr empty := fn(): @This() {
-            return .{ .none = {} };
-        };
+        pub constexpr empty: @This() = .{ .none = {} };
     };
 };
 

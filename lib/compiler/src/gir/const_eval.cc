@@ -43,6 +43,7 @@
 #include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
 #include "support/int128.hh"
+#include "support/scope_guard.hh"
 
 namespace ghoti::gir {
 
@@ -1331,10 +1332,38 @@ auto const_eval::eval_type_member(sema::type& denoted_in, std::string_view membe
         return stdx::none;
     }
 
-    if (&owner_mod == module_.get()) { return try_eval(*mdecl->value); }
-    const_eval owner_eval{ctx_, owner_mod};
-    owner_eval.set_symbol_scoping(symbol_scoping_);
-    return owner_eval.try_eval(*mdecl->value);
+    const auto                 prefix{ctx_.generic_functions.get_type_ctor_member_prefix(type)};
+    const auto                 diff{prefix ? ctx_.instantiation_cache.get_body_type_diff(*prefix)
+                                           : owner_mod.active_body_diff};
+    const mod::body_diff_guard diff_guard{owner_mod, diff};
+
+    stdx::option<ghoti::scope_guard<std::vector<sema::constexpr_frame>>> ctor_binding_guard;
+    if (prefix) {
+        if (const auto bindings{ctx_.instantiation_cache.get_type_ctor_bindings(*prefix)}) {
+            sema::constexpr_frame ctor_frame;
+            for (const auto& [name, val] : *bindings) { ctor_frame.insert_or_assign(name, val); }
+            ctor_binding_guard.emplace(ctx_.constexpr_binding_frames, std::move(ctor_frame));
+        }
+    }
+
+    auto result{[&] -> stdx::option<const_value> {
+        if (&owner_mod == module_.get()) { return try_eval(*mdecl->value); }
+        const_eval owner_eval{ctx_, owner_mod};
+        owner_eval.set_symbol_scoping(symbol_scoping_);
+        return owner_eval.try_eval(*mdecl->value);
+    }()};
+
+    if (result && prefix) {
+        if (mdecl->explicit_type) {
+            if (const auto decl_ty{owner_mod.get_sema_type_opt(*mdecl->explicit_type)}) {
+                result->set_type(*decl_ty);
+            }
+        } else {
+            result->set_type(type);
+        }
+    }
+
+    return result;
 }
 
 auto const_eval::target_enum_value(std::string_view enum_name, std::string_view member)

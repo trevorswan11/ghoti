@@ -16,13 +16,13 @@ pub const Kind := enum : u8 {
 };
 
 pub const Spec := struct {
-    pub arg_idx: std.Option(usize) = .{ .none = {} },
+    pub arg_idx: std.Option(usize) = .empty,
     pub fill: u8 = ' ',
-    pub align: std.Option(Align) = .{ .none = {} },
+    pub align: std.Option(Align) = .empty,
     pub plus: bool = false,
     pub alt: bool = false, /// '#'
     pub zero: bool = false, /// literal '0'
-    pub width: std.Option(usize) = .{ .none = {} },
-    pub precision: std.Option(usize) = .{ .none = {} },
-    pub kind: std.Option(Kind) = .{ .none = {} }, // none means default '{}'
+    pub width: std.Option(usize) = .empty,
+    pub precision: std.Option(usize) = .empty,
+    pub kind: std.Option(Kind) = .empty, // none means default '{}'
 };

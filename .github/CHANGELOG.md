@@ -364,3 +364,5 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Constexpr can now be applied to labels and blocks (expression slots and top level)
     - They must be constant evaluatable and will error if not
 - `@assert` and `@verify` have been hardened such that they can work correctly in constexpr contexts
+- Resolve an issue where implicit access would not work in some contexts
+    - Notably when accessing static constants (non-functions) in generic types

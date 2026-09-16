@@ -5018,12 +5018,11 @@ auto emitter::materialize_const(const const_value& cv) -> value {
         const auto union_data{type.get_data().as_opt<sema::types::union_t>()};
         ASSERT(union_data, "const_union must materialize into a union sema type");
         const auto slot{builder_.emit_alloca(type)};
-        ASSERT(!un->payload.empty(), "const_union must carry exactly one payload value");
-        const auto& field_val{un->payload.front()};
-
         if (union_data->is_untagged) {
-            builder_.emit_store(value{slot, type}, materialize_const(field_val)).is_initializer =
-                true;
+            if (!un->payload.empty()) {
+                builder_.emit_store(value{slot, type}, materialize_const(un->payload.front()))
+                    .is_initializer = true;
+            }
         } else {
             const auto& table{ctx_.registry.get(type.get_symbol_table_idx())};
             const auto  proxy{table.get_proxy_opt(un->active_field)};
@@ -5038,10 +5037,16 @@ auto emitter::materialize_const(const const_value& cv) -> value {
                 .emit_store(value{tag_ptr, i32_type}, value{static_cast<i64>(field_idx), i32_type})
                 .is_initializer = true;
 
-            const auto payload_ptr{builder_.emit_get_element_ptr(
-                value{slot, type}, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, field_type)};
-            builder_.emit_store(value{payload_ptr, field_type}, materialize_const(field_val))
-                .is_initializer = true;
+            if (!un->payload.empty()) {
+                const auto payload_ptr{
+                    builder_.emit_get_element_ptr(value{slot, type},
+                                                  {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}},
+                                                  field_type)};
+                builder_
+                    .emit_store(value{payload_ptr, field_type},
+                                materialize_const(un->payload.front()))
+                    .is_initializer = true;
+            }
         }
 
         const auto loaded{builder_.emit_load(value{slot, type}, type)};
@@ -7054,9 +7059,25 @@ auto emitter::emit_reference(ast::node_id id, const ast::reference_expr& ref) ->
 
 auto emitter::emit_implicit_access(ast::node_id id, const ast::implicit_access_expr& imp) -> value {
     PROFILE_FUNCTION();
-    const auto sema_type{active_mod().get_sema_type_opt(id)};
-    if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+    const auto  sema_type{active_mod().get_sema_type_opt(id)};
     const auto& ident{active_ast().get_as<ast::identifier_expr>(imp.member)};
+    auto        cv{const_eval_.try_eval(id)};
+    if (cv) {
+        if (cv->is<std::string>()) {
+            if (sema_type && sema_type->get_kind() == sema::type_kind::SLICE) {
+                return emit_string_as_slice(cv->as<std::string>(), *sema_type);
+            }
+        }
+        if (cv->is<const_struct>() || cv->is<const_array>() || cv->is<const_union>() ||
+            cv->is<const_addr>() || cv->is<const_dyn_fat_ptr>()) {
+            if (sema_type &&
+                (!cv->get_type() || !sema::is_same_unqualified(*cv->get_type(), *sema_type))) {
+                cv->set_type(*sema_type);
+            }
+            return materialize_const(*cv);
+        }
+        return cv->to_gir_value();
+    }
     return value{ref_symbol_name(id, ident.name), sema_type};
 }
 
