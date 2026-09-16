@@ -14,8 +14,8 @@ impl std.mem.AllocatorVTable for PageAllocator {
             "PageAllocator: alignment above the page size is not supported",
         );
         return match (std.os.alloc(len)) {
-            .ok => |p| .{ .some = p },
-            .err => .{ .none = {} },
+            .ok => |p| .of(p),
+            .err => .empty,
         };
     };
 
@@ -37,7 +37,7 @@ impl std.mem.AllocatorVTable for PageAllocator {
         if (self.resize(memory, alignment, new_len)) {
             return .{ .some = memory.ptr };
         }
-        return .{ .none = {} };
+        return .empty;
     };
 
     pub const free := fn(
