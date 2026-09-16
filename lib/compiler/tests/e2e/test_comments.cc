@@ -44,4 +44,49 @@ TEST_CASE("Comments in every plausible statement position are all skipped transp
     )") == 104);
 }
 
+TEST_CASE("@returnAddress execution and caller return address capture") {
+    SECTION("returns a non-zero address") {
+        CHECK(helpers::compile_and_run(R"(
+            pub const get_ret_addr := fn(): usize {
+                return @returnAddress();
+            };
+
+            pub const main := fn(): i32 {
+                const addr := get_ret_addr();
+                if (addr != 0) {
+                    return 42;
+                } else {
+                    return 0;
+                };
+            };
+        )") == 42);
+    }
+
+    SECTION("captures distinct return addresses from different callers") {
+        CHECK(helpers::compile_and_run(R"(
+            pub const get_ret_addr := fn(): usize {
+                return @returnAddress();
+            };
+
+            pub const caller_a := fn(): usize {
+                return get_ret_addr();
+            };
+
+            pub const caller_b := fn(): usize {
+                return get_ret_addr();
+            };
+
+            pub const main := fn(): i32 {
+                const a := caller_a();
+                const b := caller_b();
+                if (a != 0 and b != 0 and a != b) {
+                    return 42;
+                } else {
+                    return 0;
+                };
+            };
+        )") == 42);
+    }
+}
+
 } // namespace ghoti::tests
