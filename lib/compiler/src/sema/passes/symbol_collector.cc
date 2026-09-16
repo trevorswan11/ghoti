@@ -322,14 +322,16 @@ auto symbol_collector::visit(ast::node_id id, const ast::label_expr& label) -> v
     PROFILE_FUNCTION();
     const default_counter::guard g_label{in_label_scope_};
     const default_counter::guard g_expr{in_expr_scope_};
-    const auto&                  ident{collecting_.ast.get_as<ast::identifier_expr>(label.name)};
 
     // Labels and their associated nodes live in their own scope
     const auto  new_idx{ctx_.registry.create()};
     const scope s{table_stack_, new_idx, table_idx_};
-    if (try_declare<symbols::label>(ident.name, symbols::label::handle_t{id})) {
-        auto& sym{ctx_.registry.get_from(table_idx_, ident.name)};
-        sym.set_kind(symbol_kind::LABEL);
+    if (label.name) {
+        const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(*label.name)};
+        if (try_declare<symbols::label>(ident.name, symbols::label::handle_t{id})) {
+            auto& sym{ctx_.registry.get_from(table_idx_, ident.name)};
+            sym.set_kind(symbol_kind::LABEL);
+        }
     }
     collect(label.body);
 
@@ -489,7 +491,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::while_loop_expr& while_
 
 auto symbol_collector::visit(ast::node_id id, const ast::block_stmt& block) -> void {
     PROFILE_FUNCTION();
-    if (!in_expr_scope_ && table_stack_.size() == 1) {
+    if (!block.is_constexpr && !in_expr_scope_ && table_stack_.size() == 1) {
         ctx_.diags.emplace_back("Cannot have block at the top level",
                                 error::ILLEGAL_TOP_LEVEL_STATEMENT,
                                 collecting_.ast.location_of(id));
@@ -637,7 +639,6 @@ auto symbol_collector::visit(ast::node_id id, const ast::expr_stmt& expr) -> voi
         case node_kind::DO_WHILE_LOOP_EXPRESSION:
         case node_kind::FOR_LOOP_EXPRESSION:
         case node_kind::INFINITE_LOOP_EXPRESSION:
-        case node_kind::LABEL_EXPRESSION:
             ctx_.diags.emplace_back(
                 "Control-flow constructs are not allowed as statements at the top level; "
                 "use `@cfg` for conditional declarations, or bind the value with "
@@ -645,6 +646,18 @@ auto symbol_collector::visit(ast::node_id id, const ast::expr_stmt& expr) -> voi
                 error::ILLEGAL_TOP_LEVEL_STATEMENT,
                 collecting_.ast.location_of(id));
             break;
+        case node_kind::LABEL_EXPRESSION: {
+            const auto& lbl{collecting_.ast.get_as<ast::label_expr>(*expr.expression)};
+            if (!lbl.is_constexpr(collecting_.ast)) {
+                ctx_.diags.emplace_back(
+                    "Control-flow constructs are not allowed as statements at the top level; "
+                    "use `@cfg` for conditional declarations, or bind the value with "
+                    "`const x := ...`",
+                    error::ILLEGAL_TOP_LEVEL_STATEMENT,
+                    collecting_.ast.location_of(id));
+            }
+            break;
+        }
         default: break;
         }
     }
