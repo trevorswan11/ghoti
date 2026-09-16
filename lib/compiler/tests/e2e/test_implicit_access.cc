@@ -70,4 +70,43 @@ TEST_CASE("Implicit access on the left side of a comparison is rejected") {
     )");
 }
 
+TEST_CASE("Member constant on a generic type constructor returned via implicit access") {
+    CHECK(helpers::compile_and_run(R"(
+        pub constexpr Option := fn(T: type): type {
+            return union {
+                some: T,
+                none: void,
+
+                pub constexpr of := fn(val: T): @This() {
+                    return .{ .some = val };
+                };
+
+                pub constexpr empty: @This() = .{ .none = {} };
+            };
+        };
+
+        const get_val := fn(opt: Option(i32)): i32 {
+            match (opt) {
+                .some => |v| return v,
+                .none => return -1,
+            }
+        };
+
+        const make_opt := fn(valid: bool): Option(i32) {
+            if (valid) {
+                return .of(42);
+            }
+            return .empty;
+        };
+
+        pub const main := fn(): i32 {
+            const a := make_opt(true);
+            const b := make_opt(false);
+            if (get_val(a) != 42) { return 1; }
+            if (get_val(b) != -1) { return 2; }
+            return 0;
+        };
+    )") == 0);
+}
+
 } // namespace ghoti::tests
