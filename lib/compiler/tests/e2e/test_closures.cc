@@ -356,4 +356,24 @@ TEST_CASE("A closure cannot recurse by calling its own name") {
     )");
 }
 
+TEST_CASE("A function taking a function pointer executes passed functions directly") {
+    CHECK(helpers::compile_and_run(R"(
+        const apply := fn(func: ^fn(x: i32): i32, val: i32): i32 {
+            return func(val);
+        };
+
+        const double_it := fn(x: i32): i32 {
+            return x * 2;
+        };
+
+        const square_it := fn(x: i32): i32 {
+            return x * x;
+        };
+
+        pub const main := fn(): i32 {
+            return apply(double_it, 5) + apply(square_it, 5);
+        };
+    )") == 10 + 25);
+}
+
 } // namespace ghoti::tests
