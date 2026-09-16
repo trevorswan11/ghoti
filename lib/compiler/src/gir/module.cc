@@ -181,7 +181,9 @@ auto module::to_string() const -> std::string {
     std::ostringstream out;
     dumper             d{out};
     d.dump(*this);
-    return std::move(out).str();
+    auto result{std::move(out).str()};
+    if (result.ends_with('\n')) { result.pop_back(); }
+    return result;
 }
 
 } // namespace ghoti::gir

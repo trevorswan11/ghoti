@@ -312,6 +312,8 @@ TEST_CASE("build_obj command execution") {
         REQUIRE(std::filesystem::exists(gir_file.path));
         const auto gir_text{slurp(gir_file.path)};
         CHECK(gir_text.contains("fn add("));
+        CHECK(gir_text.ends_with('\n'));
+        CHECK_FALSE(gir_text.ends_with("\n\n"));
 
         REQUIRE(std::filesystem::exists(ir_file.path));
         const auto ir{slurp(ir_file.path)};
