@@ -13,6 +13,8 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <gsl/span>
+#include <gsl/util>
 #include <llvm/TargetParser/Triple.h>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
@@ -889,6 +891,7 @@ auto const_eval::eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::opt
                     if (decl->value) {
                         const_eval inner_eval{ctx_, target_mod};
                         inner_eval.set_symbol_scoping(symbol_scoping_);
+                        inner_eval.set_constexpr_context(is_constexpr_context());
                         if (auto val{inner_eval.try_eval(*decl->value)}; val && !val->is_poison()) {
                             pointee.emplace_back(std::move(*val));
                         }
@@ -1284,6 +1287,7 @@ auto const_eval::eval_type_member(sema::type& denoted_in, std::string_view membe
                 auto&      enclosing_mod{const_cast<mod::module&>(en->enclosing)};
                 const_eval enclosing_eval{ctx_, enclosing_mod};
                 enclosing_eval.set_symbol_scoping(symbol_scoping_);
+                enclosing_eval.set_constexpr_context(is_constexpr_context());
                 if (const auto ev{enclosing_eval.try_eval(*e.value)}) {
                     val = static_cast<i64>(ev->as_int_opt().value_or(val));
                 }
@@ -1358,6 +1362,7 @@ auto const_eval::eval_type_member(sema::type& denoted_in, std::string_view membe
         if (&owner_mod == module_.get()) { return try_eval(*mdecl->value); }
         const_eval owner_eval{ctx_, owner_mod};
         owner_eval.set_symbol_scoping(symbol_scoping_);
+        owner_eval.set_constexpr_context(is_constexpr_context());
         return owner_eval.try_eval(*mdecl->value);
     }()};
 
@@ -1528,6 +1533,7 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
                 auto&      enclosing_mod{const_cast<mod::module&>(en.enclosing)};
                 const_eval enclosing_eval{ctx_, enclosing_mod};
                 enclosing_eval.set_symbol_scoping(symbol_scoping_);
+                enclosing_eval.set_constexpr_context(is_constexpr_context());
                 if (const auto ev{enclosing_eval.try_eval(*e.value)}) {
                     val = ev->as_int_opt().value_or(val);
                 }
@@ -1736,6 +1742,7 @@ auto const_eval::eval_module_member(mod::module& target_mod, std::string_view me
 
     const_eval inner_eval{ctx_, target_mod};
     inner_eval.set_symbol_scoping(symbol_scoping_);
+    inner_eval.set_constexpr_context(is_constexpr_context());
     return inner_eval.try_eval(*decl->value);
 }
 
@@ -3374,10 +3381,14 @@ auto const_eval::eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_v
         [&](const ast::block_stmt& data) { return eval_block(*stmt, data); },
         [&](const ast::decl_stmt& data) { return eval_decl(*stmt, data); },
         [&](const ast::return_stmt& data) -> stdx::option<const_value> {
-            auto val        = data.expression
-                                  ? try_eval(*data.expression)
-                                  : const_value{void_val{},
+            auto val = data.expression
+                           ? try_eval(*data.expression)
+                           : const_value{void_val{},
                                          ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+            if (data.expression && !val) {
+                cond_unknown_ = true;
+                return stdx::none;
+            }
             current_signal_ = eval_signal{
                 .kind         = eval_signal_kind::RETURN,
                 .target_label = stdx::none,
@@ -3391,6 +3402,10 @@ auto const_eval::eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_v
             stdx::option<const_value> val;
             if (data.expression) {
                 val = try_eval(*data.expression);
+                if (!val) {
+                    cond_unknown_ = true;
+                    return stdx::none;
+                }
             } else {
                 val =
                     const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
@@ -3555,7 +3570,13 @@ auto const_eval::eval_if(ast::node_id, const ast::if_expr& if_expr) -> stdx::opt
 auto const_eval::eval_while(ast::node_id, const ast::while_loop_expr& loop)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
+    usize iterations{0};
     while (true) {
+        if (iterations >= ctx_.eval_unroll_limit) {
+            cond_unknown_ = true;
+            return stdx::none;
+        }
+        ++iterations;
         const auto cond{try_eval(loop.condition)};
         if (!cond || !cond->is<bool>()) {
             cond_unknown_ = true;
@@ -3590,7 +3611,13 @@ auto const_eval::eval_while(ast::node_id, const ast::while_loop_expr& loop)
 auto const_eval::eval_do_while(ast::node_id, const ast::do_while_loop_expr& loop)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
+    usize iterations{0};
     while (true) {
+        if (iterations >= ctx_.eval_unroll_limit) {
+            cond_unknown_ = true;
+            return stdx::none;
+        }
+        ++iterations;
         const auto body_res{eval_stmt(loop.block)};
         if (current_signal_.kind == eval_signal_kind::BREAK) {
             if (!current_signal_.target_label.has_value()) {
@@ -3727,6 +3754,491 @@ auto const_eval::eval_for(ast::node_id, const ast::for_loop_expr& loop)
     if (loop.non_break) { return eval_stmt(*loop.non_break); }
 
     return stdx::none;
+}
+
+auto const_eval::simulate_active_blocks(gsl::span<const sema::active_block_frame> blocks,
+                                        sema::constexpr_frame& out_frame) -> void {
+    if (blocks.empty()) { return; }
+    const constexpr_context_guard g{*this, true};
+
+    // Fast pre-scan: if none of the active blocks contain a `constexpr var` declaration,
+    // there are no mutable compile-time locals to track and we can bail out immediately.
+    active_cx_vars_.clear();
+    auto scan_decl = [&](const ast::stmt_handle& s) {
+        if (const auto decl = module_->ast.get_as_opt<ast::decl_stmt>(s)) {
+            if (decl->has_modifier(ast::decl_modifiers::CONSTEXPR) &&
+                decl->has_modifier(ast::decl_modifiers::VARIABLE)) {
+                const auto& ident = module_->ast.get_as<ast::identifier_expr>(decl->name);
+                active_cx_vars_.insert(ident.name);
+            }
+        }
+    };
+
+    for (const auto& frame : blocks) {
+        if (!frame.block) { continue; }
+        for (const auto& s : frame.block->statements) { scan_decl(s); }
+    }
+    if (active_cx_vars_.empty()) { return; }
+
+    // Ensure a call frame exists on `call_stack_` to host local bindings during simulation.
+    bool pushed_frame{false};
+    if (call_stack_.empty()) {
+        call_stack_.emplace_back();
+        pushed_frame = true;
+    }
+    const auto cleanup{gsl::finally([&] {
+        if (pushed_frame) { call_stack_.pop_back(); }
+    })};
+
+    // Seed the simulation frame with enclosing `constexpr` parameters and constants
+    for (const auto& outer_frame : ctx_.constexpr_binding_frames) {
+        for (const auto& [k, v] : outer_frame) {
+            call_stack_.back().bindings.insert_or_assign(k, v);
+        }
+    }
+
+    // Sequentially simulate preceding statements in each active block from outermost to innermost,
+    // stopping strictly before `current_stmt_idx` in each frame.
+    for (const auto& frame : blocks) {
+        if (!frame.block) { continue; }
+        for (usize i{0}; i < frame.current_stmt_idx && i < frame.block->statements.size(); ++i) {
+            simulate_stmt(frame.block->statements[i]);
+            if (cond_unknown_ || current_signal_.kind) {
+                out_frame.clear();
+                return;
+            }
+        }
+    }
+
+    // Export the materialized bindings so the caller can install them into
+    // `ctx_.constexpr_binding_frames` during isolated subexpression folding.
+    if (!cond_unknown_) {
+        for (const auto& [k, v] : call_stack_.back().bindings) { out_frame.insert_or_assign(k, v); }
+    }
+}
+
+auto const_eval::simulate_stmt(const ast::stmt_handle& stmt) -> void {
+    if (cond_unknown_ || current_signal_.kind) { return; }
+    module_->ast[*stmt].visit(
+        [&](const auto&) {},
+        [&](const ast::decl_stmt& decl) { simulate_decl(decl); },
+        [&](const ast::expr_stmt& expr_stmt) { simulate_expr(expr_stmt.expression); },
+        [&](const ast::block_stmt& block) { simulate_block(block); },
+        [&](const ast::break_stmt& data) {
+            stdx::option<std::string_view> lbl;
+            if (data.label) { lbl = module_->ast.get_as<ast::identifier_expr>(*data.label).name; }
+            current_signal_ = eval_signal{
+                .kind         = eval_signal_kind::BREAK,
+                .target_label = lbl,
+                .value        = stdx::none,
+            };
+        },
+        [&](const ast::continue_stmt& data) {
+            stdx::option<std::string_view> lbl;
+            if (data.label) { lbl = module_->ast.get_as<ast::identifier_expr>(*data.label).name; }
+            current_signal_ = eval_signal{
+                .kind         = eval_signal_kind::CONTINUE,
+                .target_label = lbl,
+                .value        = stdx::none,
+            };
+        },
+        [&](const ast::return_stmt& r) {
+            if (r.expression) { simulate_expr(*r.expression); }
+            current_signal_ = eval_signal{
+                .kind         = eval_signal_kind::RETURN,
+                .target_label = stdx::none,
+                .value        = stdx::none,
+            };
+        },
+        [&](const ast::discard_stmt& data) { simulate_expr(data.discarded); });
+}
+
+auto const_eval::simulate_expr(ast::node_id id) -> void {
+    if (cond_unknown_ || current_signal_.kind) { return; }
+    if (module_->ast[id].is<ast::unreachable_expr>()) {
+        if (is_constexpr_context()) {
+            ctx_.diags.emplace_back("reached unreachable code",
+                                    sema::error::UNREACHABLE_CODE_REACHED,
+                                    module_->ast.location_of(id));
+        }
+        cond_unknown_ = true;
+        return;
+    }
+
+    if (const auto assign = module_->ast.get_as_opt<ast::assignment_expr>(id)) {
+        simulate_assignment(id, *assign, id.get_token_type());
+    } else if (const auto if_expr = module_->ast.get_as_opt<ast::if_expr>(id)) {
+        simulate_if(*if_expr);
+    } else if (const auto while_loop = module_->ast.get_as_opt<ast::while_loop_expr>(id)) {
+        simulate_while(*while_loop);
+    } else if (const auto do_while = module_->ast.get_as_opt<ast::do_while_loop_expr>(id)) {
+        simulate_do_while(*do_while);
+    } else if (const auto for_loop = module_->ast.get_as_opt<ast::for_loop_expr>(id)) {
+        simulate_for(*for_loop);
+    } else if (const auto label = module_->ast.get_as_opt<ast::label_expr>(id)) {
+        simulate_expr(*label->body);
+    }
+}
+
+auto const_eval::simulate_decl(const ast::decl_stmt& decl) -> void {
+    if (!decl.has_modifier(ast::decl_modifiers::CONSTEXPR)) { return; }
+    const auto& ident = module_->ast.get_as<ast::identifier_expr>(decl.name);
+    if (decl.value) {
+        const auto val = try_eval(*decl.value);
+        if (val) {
+            if (!call_stack_.empty()) {
+                call_stack_.back().bindings.insert_or_assign(ident.name, *val);
+            }
+            if (decl.has_modifier(ast::decl_modifiers::VARIABLE)) {
+                active_cx_vars_.insert(ident.name);
+            }
+        } else {
+            cond_unknown_ = true;
+        }
+    }
+}
+
+auto const_eval::simulate_assignment(ast::node_id                id,
+                                     const ast::assignment_expr& assign,
+                                     syntax::token_type_t        op) -> void {
+    if (const auto ident = module_->ast.get_as_opt<ast::identifier_expr>(assign.lhs)) {
+        if (!active_cx_vars_.contains(ident->name)) { return; }
+        if (op == syntax::token_type_t::ASSIGN) {
+            const auto rhs{try_eval(assign.rhs)};
+            if (!rhs) {
+                cond_unknown_ = true;
+                return;
+            }
+            set_local_binding(ident->name, *rhs);
+            return;
+        }
+
+        // Compound assignment
+        if (const auto base_op = syntax::token_type::get_compound_base_op(op)) {
+            const auto lhs_val{try_eval(assign.lhs)};
+            const auto rhs_val{try_eval(assign.rhs)};
+            if (!lhs_val || !rhs_val) {
+                cond_unknown_ = true;
+                return;
+            }
+            const auto folded{fold_binary_values(*base_op, *lhs_val, *rhs_val, id)};
+            if (!folded) {
+                cond_unknown_ = true;
+                return;
+            }
+            set_local_binding(ident->name, *folded);
+            return;
+        }
+        cond_unknown_ = true;
+        return;
+    }
+
+    if (const auto dot{module_->ast.get_as_opt<ast::dot_expr>(assign.lhs)}) {
+        if (const auto root_ident{module_->ast.get_as_opt<ast::identifier_expr>(dot->object)}) {
+            if (!active_cx_vars_.contains(root_ident->name)) { return; }
+            const auto current{lookup_local_binding(root_ident->name)};
+
+            // There is nothing inside of other aggregates to write to
+            if (!current || (!current->is<const_struct>() && !current->is<const_union>())) {
+                cond_unknown_ = true;
+                return;
+            }
+
+            const auto& field_ident{module_->ast.get_as<ast::identifier_expr>(dot->member)};
+            const auto  rhs_val{try_eval(assign.rhs)};
+            if (!rhs_val) {
+                cond_unknown_ = true;
+                return;
+            }
+
+            stdx::option<const_value> new_field;
+            if (op == syntax::token_type_t::ASSIGN) {
+                new_field = rhs_val;
+            } else if (const auto base_op{syntax::token_type::get_compound_base_op(op)}) {
+                stdx::option<const_value> current_field;
+                if (const auto st{current->as_opt<const_struct>()}) {
+                    if (const auto f{st->get_field_opt(field_ident.name)}) { current_field = *f; }
+                }
+
+                if (!current_field) {
+                    cond_unknown_ = true;
+                    return;
+                }
+                new_field = fold_binary_values(*base_op, *current_field, *rhs_val, id);
+            }
+            if (!new_field) {
+                cond_unknown_ = true;
+                return;
+            }
+
+            auto rebuilt{*current};
+            if (auto st{rebuilt.as_opt<const_struct>()}) {
+                st->fields.insert_or_assign(std::string{field_ident.name}, *new_field);
+            } else {
+                auto& un{rebuilt.as<const_union>()};
+                un.active_field = std::string{field_ident.name};
+                if (un.payload.empty()) {
+                    un.payload.emplace_back(*new_field);
+                } else {
+                    un.payload.front() = *new_field;
+                }
+            }
+            set_local_binding(root_ident->name, std::move(rebuilt));
+            return;
+        }
+        return;
+    }
+
+    if (const auto idx{module_->ast.get_as_opt<ast::index_expr>(assign.lhs)}) {
+        if (const auto root_ident{module_->ast.get_as_opt<ast::identifier_expr>(idx->array)}) {
+            if (!active_cx_vars_.contains(root_ident->name)) { return; }
+            const auto current{lookup_local_binding(root_ident->name)};
+            if (!current || !current->is<const_array>()) {
+                cond_unknown_ = true;
+                return;
+            }
+
+            const auto idx_val{try_eval(idx->index)};
+            const auto idx_v{idx_val ? idx_val->as_uint_opt() : stdx::none};
+            if (!idx_v || *idx_v >= current->as<const_array>().elements.size()) {
+                cond_unknown_ = true;
+                return;
+            }
+
+            const usize k{static_cast<usize>(*idx_v)};
+            const auto  rhs_val{try_eval(assign.rhs)};
+            if (!rhs_val) {
+                cond_unknown_ = true;
+                return;
+            }
+
+            stdx::option<const_value> new_elem;
+            if (op == syntax::token_type_t::ASSIGN) {
+                new_elem = rhs_val;
+            } else if (const auto base_op{syntax::token_type::get_compound_base_op(op)}) {
+                new_elem = fold_binary_values(
+                    *base_op, current->as<const_array>().elements[k], *rhs_val, id);
+            }
+            if (!new_elem) {
+                cond_unknown_ = true;
+                return;
+            }
+
+            auto rebuilt{*current};
+            rebuilt.as<const_array>().elements[k] = *new_elem;
+            set_local_binding(root_ident->name, std::move(rebuilt));
+            return;
+        }
+        return;
+    }
+}
+
+auto const_eval::simulate_if(const ast::if_expr& if_expr) -> void {
+    const auto cond = try_eval(if_expr.condition);
+    if (!cond || !cond->is<bool>()) {
+        cond_unknown_ = true;
+        return;
+    }
+
+    if (cond->as<bool>()) {
+        simulate_stmt(if_expr.consequence);
+    } else if (if_expr.alternate) {
+        simulate_stmt(*if_expr.alternate);
+    }
+}
+
+auto const_eval::simulate_while(const ast::while_loop_expr& loop) -> void {
+    usize iterations{0};
+    while (true) {
+        if (iterations >= ctx_.eval_unroll_limit) {
+            cond_unknown_ = true;
+            return;
+        }
+        ++iterations;
+        const auto cond = try_eval(loop.condition);
+        if (!cond || !cond->is<bool>()) {
+            cond_unknown_ = true;
+            return;
+        }
+        if (!cond->as<bool>()) { break; }
+
+        simulate_stmt(loop.block);
+        if (current_signal_.kind == eval_signal_kind::BREAK) {
+            if (!current_signal_.target_label.has_value()) {
+                current_signal_ = eval_signal{};
+                break;
+            }
+            return;
+        }
+        if (current_signal_.kind == eval_signal_kind::CONTINUE) {
+            if (!current_signal_.target_label.has_value()) {
+                current_signal_ = eval_signal{};
+                if (loop.continuation) { simulate_expr(*loop.continuation); }
+                continue;
+            }
+            return;
+        }
+        if (current_signal_.kind || cond_unknown_) { return; }
+
+        if (loop.continuation) {
+            simulate_expr(*loop.continuation);
+            if (cond_unknown_) { return; }
+        }
+    }
+    if (loop.non_break && !current_signal_.kind) { simulate_stmt(*loop.non_break); }
+}
+
+auto const_eval::simulate_do_while(const ast::do_while_loop_expr& loop) -> void {
+    usize iterations{0};
+    while (true) {
+        if (iterations >= ctx_.eval_unroll_limit) {
+            cond_unknown_ = true;
+            return;
+        }
+        ++iterations;
+        simulate_stmt(loop.block);
+        if (current_signal_.kind == eval_signal_kind::BREAK) {
+            if (!current_signal_.target_label.has_value()) {
+                current_signal_ = eval_signal{};
+                break;
+            }
+            return;
+        }
+        if (current_signal_.kind == eval_signal_kind::CONTINUE) {
+            if (!current_signal_.target_label.has_value()) {
+                current_signal_ = eval_signal{};
+            } else {
+                return;
+            }
+        } else if (current_signal_.kind || cond_unknown_) {
+            return;
+        }
+
+        const auto cond = try_eval(loop.condition);
+        if (!cond || !cond->is<bool>()) {
+            cond_unknown_ = true;
+            return;
+        }
+        if (!cond->as<bool>()) { break; }
+    }
+}
+
+auto const_eval::simulate_for(const ast::for_loop_expr& loop) -> void {
+    if (loop.iterables.size() != loop.captures.size() || loop.iterables.empty()) {
+        cond_unknown_ = true;
+        return;
+    }
+
+    std::vector<std::vector<const_value>> iterable_sequences;
+    iterable_sequences.reserve(loop.iterables.size());
+
+    for (const auto& iterable_handle : loop.iterables) {
+        std::vector<const_value> sequence;
+        const auto               iterable_id{*iterable_handle};
+
+        if (const auto range = module_->ast.get_as_opt<ast::range_expr>(iterable_id)) {
+            if (!range->lhs || !range->rhs) {
+                cond_unknown_ = true;
+                return;
+            }
+            const auto start_val = try_eval(*range->lhs);
+            const auto end_val   = try_eval(*range->rhs);
+            if (!start_val || !end_val) {
+                cond_unknown_ = true;
+                return;
+            }
+
+            const auto start_opt{start_val->as_int_opt()};
+            const auto end_opt{end_val->as_int_opt()};
+            if (!start_opt || !end_opt) {
+                cond_unknown_ = true;
+                return;
+            }
+
+            const auto start{*start_opt};
+            const auto end{*end_opt};
+            const auto target_type{start_val->get_type()};
+
+            for (auto i{start}; i < end; ++i) {
+                if (start_val->is<u64>()) {
+                    sequence.emplace_back(static_cast<u64>(i), target_type);
+                } else {
+                    sequence.emplace_back(static_cast<i64>(i), target_type);
+                }
+            }
+        } else if (const auto array{module_->ast.get_as_opt<ast::array_expr>(iterable_id)}) {
+            for (const auto& item_h : array->items) {
+                const auto item_val{try_eval(item_h)};
+                if (!item_val) {
+                    cond_unknown_ = true;
+                    return;
+                }
+                sequence.emplace_back(*item_val);
+            }
+        } else {
+            if (const auto val{try_eval(iterable_id)}) {
+                if (const auto arr{val->as_opt<const_array>()}) {
+                    sequence = arr->elements;
+                } else if (const auto str{val->as_opt<std::string>()}) {
+                    auto& u8_type{ctx_.get_int(8, false)};
+                    sequence.reserve(str->size());
+                    for (const char c : *str) {
+                        sequence.emplace_back(static_cast<u64>(static_cast<u8>(c)), u8_type);
+                    }
+                } else {
+                    cond_unknown_ = true;
+                    return;
+                }
+            } else {
+                cond_unknown_ = true;
+                return;
+            }
+        }
+
+        iterable_sequences.emplace_back(std::move(sequence));
+    }
+
+    usize iter_count{iterable_sequences.front().size()};
+    for (const auto& seq : iterable_sequences) { iter_count = std::min(iter_count, seq.size()); }
+
+    for (usize step{0}; step < iter_count; ++step) {
+        for (usize idx{0}; idx < loop.captures.size(); ++idx) {
+            const auto& capture{loop.captures[idx]};
+            if (capture.payload.is<ast::identifier_expr>()) {
+                const auto& ident{module_->ast.get_as<ast::identifier_expr>(capture.payload)};
+                if (!call_stack_.empty()) {
+                    call_stack_.back().bindings.insert_or_assign(ident.name,
+                                                                 iterable_sequences[idx][step]);
+                }
+            }
+        }
+
+        simulate_stmt(loop.block);
+        if (current_signal_.kind == eval_signal_kind::BREAK) {
+            if (!current_signal_.target_label.has_value()) {
+                current_signal_ = eval_signal{};
+                break;
+            }
+            return;
+        }
+        if (current_signal_.kind == eval_signal_kind::CONTINUE) {
+            if (!current_signal_.target_label.has_value()) {
+                current_signal_ = eval_signal{};
+                continue;
+            }
+            return;
+        }
+        if (current_signal_.kind || cond_unknown_) { return; }
+    }
+
+    if (loop.non_break && !current_signal_.kind) { simulate_stmt(*loop.non_break); }
+}
+
+auto const_eval::simulate_block(const ast::block_stmt& block) -> void {
+    for (const auto& s : block.statements) {
+        simulate_stmt(s);
+        if (cond_unknown_ || current_signal_.kind) { return; }
+    }
 }
 
 } // namespace ghoti::gir

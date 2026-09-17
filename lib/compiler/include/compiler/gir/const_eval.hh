@@ -250,8 +250,12 @@ class const_eval {
     auto lookup_local_binding(std::string_view name) const noexcept -> stdx::option<const_value>;
     auto set_local_binding(std::string_view name, const_value val) -> bool;
 
+    // Simulates execution of a statement preceding the current evaluation site.
+    // Dispatches declarations, expressions/assignments, sub-blocks, and control-flow signals.
     auto simulate_stmt(const ast::stmt_handle& stmt) -> void;
     auto simulate_expr(ast::node_id id) -> void;
+
+    // Bails if the decl does not have a constexpr modifier
     auto simulate_decl(const ast::decl_stmt& decl) -> void;
     auto simulate_assignment(ast::node_id                id,
                              const ast::assignment_expr& assign,
