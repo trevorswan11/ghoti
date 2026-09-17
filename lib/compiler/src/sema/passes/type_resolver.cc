@@ -244,10 +244,19 @@ auto type_resolver::visit(ast::node_id id, const ast::array_expr& array) -> void
 
         const auto mutability{array_element_mutability(array.mut_elements)};
         if (array.size) {
-            gir::const_eval evaluator{ctx_, resolving_};
-            const auto      len_cv{evaluator.try_eval(*array.size)};
-            const auto      len{len_cv ? len_cv->as_uint_opt() : stdx::none};
+            // Install simulated constexpr_frame so array sizes can depend on preceding constexpr
+            // var mutations.
+            const constexpr_frame_guard                    sim_guard{ctx_.constexpr_binding_frames,
+                                                  make_simulated_frame()};
+            const auto                                     diags_before{ctx_.diags.size()};
+            gir::const_eval                                evaluator{ctx_, resolving_};
+            const gir::const_eval::constexpr_context_guard g{evaluator, true};
+            const auto                                     len_cv{evaluator.try_eval(*array.size)};
+            const auto len{len_cv ? len_cv->as_uint_opt() : stdx::none};
             if (!len) {
+                if (ctx_.diags.size() > diags_before) {
+                    return last_type_.emplace(ctx_.poison_node(resolving_, id));
+                }
                 return last_type_.emplace(
                     ctx_.poison_node(resolving_,
                                      id,
@@ -2931,16 +2940,22 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 }
             }
 
-            // Fold the argument supplied for each `constexpr` parameter to a compile-time value
+            // Fold the argument supplied for each `constexpr` parameter to a compile-time value.
+            // Install simulated constexpr_frame so argument folding observes preceding `constexpr
+            // var` mutations.
             const auto& cx_params{fn_info_opt->fn_expr->parameters};
             const auto  cx_count{static_cast<usize>(
                 std::ranges::count_if(cx_params, [](const auto& p) { return p.is_constexpr; }))};
             auto        constexpr_args{ctx_.arena.make_span<gir::const_value>(cx_count)};
+            const constexpr_frame_guard sim_guard{ctx_.constexpr_binding_frames,
+                                                  make_simulated_frame()};
             for (usize i{0}, cx_i{0}; i < cx_params.size() && i < call.arguments.size(); ++i) {
                 if (!cx_params[i].is_constexpr) { continue; }
                 stdx::option<gir::const_value> folded;
+                const auto                     diags_before_eval{ctx_.diags.size()};
                 if (const auto expr_h{call.arguments[i].as_opt<ast::expr_handle>()}) {
-                    gir::const_eval evaluator{ctx_, resolving_};
+                    gir::const_eval                                evaluator{ctx_, resolving_};
+                    const gir::const_eval::constexpr_context_guard g{evaluator, true};
                     if (auto cv{evaluator.try_eval(*expr_h)}; cv && !cv->is_poison()) {
                         folded.emplace(std::move(*cv));
                     } else if (auto ref{local_const_fn_ref(*expr_h)}) {
@@ -2951,6 +2966,9 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 }
 
                 if (!folded) {
+                    if (ctx_.diags.size() > diags_before_eval) {
+                        return last_type_.emplace(ctx_.poison_node(resolving_, id));
+                    }
                     const auto* arg_ty{concrete_arg_types[i]};
                     const auto  msg{arg_ty && arg_ty->get_kind() == type_kind::CLOSURE
                                         ? "a constexpr closure argument must capture only "
@@ -3127,9 +3145,13 @@ auto type_resolver::visit(ast::node_id id, const ast::do_while_loop_expr& do_whi
     // The loop itself holds the block index, not the block
     auto& loop_type{resolving_.get_sema_type(id)};
     {
-        const scope s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
-        const auto& block{resolving_.ast.get_as<ast::block_stmt>(do_while.block)};
-        for (const auto& stmt : block) { TRY_RESOLVE(stmt); }
+        const scope              s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
+        const auto&              block{resolving_.ast.get_as<ast::block_stmt>(do_while.block)};
+        const active_block_guard guard{active_blocks_, block};
+        for (usize idx{0}; idx < block.statements.size(); ++idx) {
+            active_blocks_.back().current_stmt_idx = idx;
+            TRY_RESOLVE(block.statements[idx]);
+        }
     }
 
     TRY_RESOLVE(do_while.condition);
@@ -3278,7 +3300,8 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
     auto&           loop_type{resolving_.get_sema_type(id)};
     const scope     s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
     gir::const_eval evaluator{ctx_, resolving_};
-    auto&           usize_type{ctx_.get_builtin_resolved_type(type_kind::USIZE)};
+    const gir::const_eval::constexpr_context_guard g{evaluator, true};
+    auto& usize_type{ctx_.get_builtin_resolved_type(type_kind::USIZE)};
 
     // A trailing open-ended `0..` range is the companion index, not a driver - same rule as v1,
     // just checked positionally last instead of assuming exactly two iterables total.
@@ -3340,6 +3363,7 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
                         resolving_.ast.location_of(driver_id)));
                 }
                 drv.elem_type = &slice_data->underlying;
+                const auto diags_before{ctx_.diags.size()};
                 const auto lo{range->lhs ? evaluator.try_eval(*range->lhs)
                                          : stdx::option<gir::const_value>{
                                                gir::const_value{u64{0}, *drv.elem_type}}};
@@ -3347,6 +3371,9 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
                 const auto lo_i{lo ? lo->as_int_opt() : stdx::none};
                 const auto hi_i{hi ? hi->as_int_opt() : stdx::none};
                 if (!lo_i || !hi_i) {
+                    if (ctx_.diags.size() > diags_before) {
+                        return last_type_.emplace(ctx_.poison_node(resolving_, id));
+                    }
                     return last_type_.emplace(ctx_.poison_node(
                         resolving_,
                         id,
@@ -3365,9 +3392,14 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
                     drv.elem_values.emplace_back(v.value_or(gir::const_value::make_poison()));
                 }
             } else {
+                const auto diags_before{ctx_.diags.size()};
                 const auto folded{evaluator.try_eval(driver_id)};
                 const auto arr{folded ? folded->as_opt<gir::const_array>() : stdx::none};
-                if (!arr) {
+                const auto str{folded ? folded->as_opt<std::string>() : stdx::none};
+                if (!arr && !str) {
+                    if (ctx_.diags.size() > diags_before) {
+                        return last_type_.emplace(ctx_.poison_node(resolving_, id));
+                    }
                     return last_type_.emplace(ctx_.poison_node(
                         resolving_,
                         id,
@@ -3376,12 +3408,24 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
                         error::CONSTEXPR_LOOP_COUNT_NOT_STATIC,
                         resolving_.ast.location_of(driver_id)));
                 }
-                this_count      = arr->elements.size();
-                drv.elem_values = arr->elements;
-                const auto arr_data{iterable_type.get_data().as_opt<types::array>()};
-                const auto sl_data{iterable_type.get_data().as_opt<types::slice>()};
-                drv.elem_type =
-                    arr_data ? &arr_data->underlying : (sl_data ? &sl_data->underlying : nullptr);
+                if (arr) {
+                    this_count      = arr->elements.size();
+                    drv.elem_values = arr->elements;
+                    const auto arr_data{iterable_type.get_data().as_opt<types::array>()};
+                    const auto sl_data{iterable_type.get_data().as_opt<types::slice>()};
+                    drv.elem_type = arr_data ? &arr_data->underlying
+                                             : (sl_data ? &sl_data->underlying : nullptr);
+                } else {
+                    // String literals and compile-time string/u8 slices fold to std::string.
+                    // Unpack individual character bytes as u8 compile-time constants.
+                    this_count = str->size();
+                    auto& u8_type{ctx_.get_int(8, false)};
+                    drv.elem_values.reserve(this_count);
+                    for (const char c : *str) {
+                        drv.elem_values.emplace_back(static_cast<u64>(static_cast<u8>(c)), u8_type);
+                    }
+                    drv.elem_type = &u8_type;
+                }
                 if (!drv.elem_type) {
                     return last_type_.emplace(ctx_.poison_node(
                         resolving_,
@@ -3463,8 +3507,10 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
         }
 
         const constexpr_frame_guard cfg{ctx_.constexpr_binding_frames, std::move(frame)};
-        for (const auto& stmt : block) {
-            resolve(stmt);
+        const active_block_guard    guard{active_blocks_, block};
+        for (usize idx{0}; idx < block.statements.size(); ++idx) {
+            active_blocks_.back().current_stmt_idx = idx;
+            resolve(block.statements[idx]);
             if (last_type_->is_poison()) { any_poison = true; }
         }
 
@@ -3569,8 +3615,12 @@ auto type_resolver::visit(ast::node_id id, const ast::for_loop_expr& for_expr) -
                 resolve_symbol_info(capture.payload, symbol_kind::VALUE);
             }
         }
-        const auto& block{resolving_.ast.get_as<ast::block_stmt>(for_expr.block)};
-        for (const auto& stmt : block) { TRY_RESOLVE(stmt); }
+        const auto&              block{resolving_.ast.get_as<ast::block_stmt>(for_expr.block)};
+        const active_block_guard guard{active_blocks_, block};
+        for (usize idx{0}; idx < block.statements.size(); ++idx) {
+            active_blocks_.back().current_stmt_idx = idx;
+            TRY_RESOLVE(block.statements[idx]);
+        }
     }
 
     if (for_expr.non_break) { TRY_RESOLVE(*for_expr.non_break); }
@@ -3768,8 +3818,12 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         .expected_type  = is_auto_return ? stdx::none : stdx::option<type&>{return_type},
     });
 
-    const auto& block{resolving_.ast.get_as<ast::block_stmt>(fn.body)};
-    for (const auto& stmt : block) { TRY_RESOLVE(stmt); }
+    const auto&              block{resolving_.ast.get_as<ast::block_stmt>(fn.body)};
+    const active_block_guard guard{active_blocks_, block};
+    for (usize idx{0}; idx < block.statements.size(); ++idx) {
+        active_blocks_.back().current_stmt_idx = idx;
+        TRY_RESOLVE(block.statements[idx]);
+    }
 
     auto tracker{std::move(return_trackers_.back())};
     return_trackers_.pop_back();
@@ -4298,7 +4352,12 @@ auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void 
     }
 
     if (if_expr.constexpr_condition) {
-        gir::const_eval evaluator{ctx_, resolving_};
+        // Install simulated constexpr_frame so condition folding observes preceding `constexpr var`
+        // mutations.
+        const constexpr_frame_guard                    sim_guard{ctx_.constexpr_binding_frames,
+                                              make_simulated_frame()};
+        gir::const_eval                                evaluator{ctx_, resolving_};
+        const gir::const_eval::constexpr_context_guard g{evaluator, true};
         if (const auto cond_cv{evaluator.try_eval(if_expr.condition)}) {
             if (const auto folded{cond_cv->as_opt<bool>()}) {
                 const auto arm_value_type{[&](ast::stmt_handle arm) -> type& {
@@ -4463,8 +4522,12 @@ auto type_resolver::visit(ast::node_id id, const ast::infinite_loop_expr& loop) 
     const scope s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
 
     // Just an abridged normal loop handler
-    const auto& block{resolving_.ast.get_as<ast::block_stmt>(loop.block)};
-    for (const auto& stmt : block) { TRY_RESOLVE(stmt); }
+    const auto&              block{resolving_.ast.get_as<ast::block_stmt>(loop.block)};
+    const active_block_guard guard{active_blocks_, block};
+    for (usize idx{0}; idx < block.statements.size(); ++idx) {
+        active_blocks_.back().current_stmt_idx = idx;
+        TRY_RESOLVE(block.statements[idx]);
+    }
     last_type_.emplace(loop_type);
 }
 
@@ -7386,9 +7449,13 @@ auto type_resolver::visit(ast::node_id id, const ast::while_loop_expr& while_loo
     // The loop itself holds the block index which houses captures, not the block
     auto& loop_type{resolving_.get_sema_type(id)};
     {
-        const scope s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
-        const auto& block{resolving_.ast.get_as<ast::block_stmt>(while_loop.block)};
-        for (const auto& stmt : block) { TRY_RESOLVE(stmt); }
+        const scope              s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
+        const auto&              block{resolving_.ast.get_as<ast::block_stmt>(while_loop.block)};
+        const active_block_guard guard{active_blocks_, block};
+        for (usize idx{0}; idx < block.statements.size(); ++idx) {
+            active_blocks_.back().current_stmt_idx = idx;
+            TRY_RESOLVE(block.statements[idx]);
+        }
     }
 
     if (while_loop.non_break) { TRY_RESOLVE(*while_loop.non_break); }
@@ -7407,10 +7474,24 @@ auto type_resolver::visit(ast::node_id id, const ast::block_stmt& block) -> void
     in_expr_branch_ = false;
 
     // Just an abridged loop handler
-    for (const auto& stmt : block) { TRY_RESOLVE(stmt); }
+    const active_block_guard guard{active_blocks_, block};
+    for (usize idx{0}; idx < block.statements.size(); ++idx) {
+        active_blocks_.back().current_stmt_idx = idx;
+        TRY_RESOLVE(block.statements[idx]);
+    }
     resolving_.set_sema_type(
         id, block_type.is_poison() ? ctx_.get_builtin_resolved_type(type_kind::VOID_) : block_type);
     last_type_.emplace(resolving_.get_sema_type(id));
+}
+
+// Materializes the current compile-time values of mutable `constexpr var` locals
+// by simulating preceding statements in the active lexical block hierarchy.
+auto type_resolver::make_simulated_frame() -> constexpr_frame {
+    constexpr_frame frame;
+    if (active_blocks_.empty()) { return frame; }
+    gir::const_eval evaluator{ctx_, resolving_};
+    evaluator.simulate_active_blocks(active_blocks_, frame);
+    return frame;
 }
 
 auto type_resolver::resolve_control_flow_label(stdx::option<ast::identifier_handle> label,
@@ -8357,8 +8438,12 @@ auto type_resolver::visit(ast::node_id id, const ast::test_stmt& test) -> void {
         }
     }
 
-    const auto& block{resolving_.ast.get_as<ast::block_stmt>(test.block)};
-    for (const auto& stmt : block) { TRY_RESOLVE(stmt); }
+    const auto&              block{resolving_.ast.get_as<ast::block_stmt>(test.block)};
+    const active_block_guard guard{active_blocks_, block};
+    for (usize idx{0}; idx < block.statements.size(); ++idx) {
+        active_blocks_.back().current_stmt_idx = idx;
+        TRY_RESOLVE(block.statements[idx]);
+    }
     last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
 }
 
@@ -8976,8 +9061,11 @@ auto type_resolver::resolve_param_impl_bodies(
             .is_auto_return = auto_ret,
             .expected_type  = auto_ret ? stdx::none : stdx::option<type&>{ret},
         });
-        for (const auto& stmt : impl_mod.ast.get_as<ast::block_stmt>(fn_expr.body)) {
-            inst.resolve(stmt);
+        const auto&              block{impl_mod.ast.get_as<ast::block_stmt>(fn_expr.body)};
+        const active_block_guard guard{inst.active_blocks_, block};
+        for (usize idx{0}; idx < block.statements.size(); ++idx) {
+            inst.active_blocks_.back().current_stmt_idx = idx;
+            inst.resolve(block.statements[idx]);
         }
         auto tracker{std::move(inst.return_trackers_.back())};
         inst.return_trackers_.pop_back();
@@ -10225,8 +10313,10 @@ auto type_resolver::instantiate_generic(type&                             callee
     bool resolved_poison{false};
     {
         PROFILE_SCOPE("instantiate_generic: resolve body");
-        for (const auto& stmt : block) {
-            inst_resolver.resolve(stmt);
+        const active_block_guard guard{inst_resolver.active_blocks_, block};
+        for (usize idx{0}; idx < block.statements.size(); ++idx) {
+            inst_resolver.active_blocks_.back().current_stmt_idx = idx;
+            inst_resolver.resolve(block.statements[idx]);
             if (inst_resolver.last_type_->is_poison()) { resolved_poison = true; }
         }
     }

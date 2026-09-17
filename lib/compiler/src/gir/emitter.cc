@@ -889,6 +889,8 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
     stdx::option<value>       init_val;
     stdx::option<const_value> const_init;
     if (decl.value && !active_ast().get_as_opt<ast::undefined_expr>(*decl.value)) {
+        const gir::const_eval::constexpr_context_guard g{const_eval_, true};
+        const auto                                     diags_before{ctx_.diags.size()};
         if (auto cv{const_eval_.try_eval(*decl.value)}) {
             if (is_const && cv->is<std::string>() && cv->get_type() &&
                 cv->get_type()->get_kind() == sema::type_kind::FUNCTION) {
@@ -919,9 +921,11 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                 init_val.emplace(v);
             }
         } else {
-            ctx_.diags.emplace_back("global variable initializer must be a constant expression",
-                                    sema::error::CONSTEXPR_EVALUATION_FAILED,
-                                    active_ast().location_of(*decl.value));
+            if (ctx_.diags.size() == diags_before) {
+                ctx_.diags.emplace_back("global variable initializer must be a constant expression",
+                                        sema::error::CONSTEXPR_EVALUATION_FAILED,
+                                        active_ast().location_of(*decl.value));
+            }
         }
     }
     auto& g{gir_module_.add_global(global_gir_name,
@@ -1815,6 +1819,12 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
             return;
         }
 
+        // If marked `constexpr`, evaluating the initializer is mandatory and treated as a
+        // compile-time context. Ordinary runtime `const` initializers are evaluated speculatively
+        // for constant folding optimizations.
+        const auto is_constexpr{decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
+        const gir::const_eval::constexpr_context_guard g{const_eval_, is_constexpr};
+        const auto                                     diags_before{ctx_.diags.size()};
         if (const auto cv{const_eval_.try_eval(*decl.value)}) {
             const auto is_aggregate_cv{cv->is<const_struct>() || cv->is<const_array>() ||
                                        cv->is<const_union>() || cv->is<const_dyn_fat_ptr>() ||
@@ -1879,10 +1889,15 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                 }
                 return;
             }
-        } else if (is_constexpr_var) {
-            ctx_.diags.emplace_back("`constexpr var` initializer must be known at compile time",
-                                    sema::error::CONSTEXPR_VAR_NOT_FOLDABLE,
-                                    active_ast().location_of(*decl.value));
+        } else if (decl.has_modifier(ast::decl_modifiers::CONSTEXPR)) {
+            if (ctx_.diags.size() == diags_before) {
+                const auto msg{is_constexpr_var
+                                   ? "`constexpr var` initializer must be known at compile time"
+                                   : "`constexpr` initializer must be known at compile time"};
+                ctx_.diags.emplace_back(msg,
+                                        sema::error::CONSTEXPR_VAR_NOT_FOLDABLE,
+                                        active_ast().location_of(*decl.value));
+            }
             return;
         }
 
@@ -4100,11 +4115,16 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
 
     // Constexpr condition evaluation fallback
     if (if_expr.constexpr_condition) {
+        const gir::const_eval::constexpr_context_guard g{const_eval_, true};
+        const auto                                     diags_before{ctx_.diags.size()};
         const auto cond_cv{const_eval_.try_eval(if_expr.condition)};
         if (!cond_cv) {
-            ctx_.diags.emplace_back("Constexpr if condition could not be evaluated at compile time",
-                                    sema::error::CONSTEXPR_EVALUATION_FAILED,
-                                    active_ast().location_of(if_expr.condition));
+            if (ctx_.diags.size() == diags_before) {
+                ctx_.diags.emplace_back(
+                    "Constexpr if condition could not be evaluated at compile time",
+                    sema::error::CONSTEXPR_EVALUATION_FAILED,
+                    active_ast().location_of(if_expr.condition));
+            }
             return value{undefined_val{}, sema_type};
         }
 
@@ -4189,13 +4209,17 @@ auto emitter::emit_constexpr_while(ast::node_id id, const ast::while_loop_expr& 
         // Each pass re-binds the loop's `constexpr var`(s) to their just-updated value; a stale
         // memoized fold of the condition (or anything the body reads) must not survive across it.
         const_eval_.clear_memo();
+        const gir::const_eval::constexpr_context_guard g{const_eval_, true};
+        const auto                                     diags_before{ctx_.diags.size()};
         const auto cond_val{const_eval_.try_eval(while_loop.condition)};
         const auto cond{cond_val ? cond_val->as_opt<bool>() : stdx::none};
         if (!cond) {
-            ctx_.diags.emplace_back(
-                "`while constexpr`'s condition must fold to a compile-time-known `bool`",
-                sema::error::CONSTEXPR_WHILE_NONFOLDABLE_COND,
-                active_ast().location_of(while_loop.condition));
+            if (ctx_.diags.size() == diags_before) {
+                ctx_.diags.emplace_back(
+                    "`while constexpr`'s condition must fold to a compile-time-known `bool`",
+                    sema::error::CONSTEXPR_WHILE_NONFOLDABLE_COND,
+                    active_ast().location_of(while_loop.condition));
+            }
             break;
         }
         if (!*cond) { break; }

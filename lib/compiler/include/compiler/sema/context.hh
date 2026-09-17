@@ -26,7 +26,15 @@
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 
+namespace ghoti::ast { struct block_stmt; } // namespace ghoti::ast
+
 namespace ghoti::sema {
+
+/// Tracks the active lexical block and statement position currently being type-resolved
+struct active_block_frame {
+    stdx::option<const ast::block_stmt&> block{};
+    usize                                current_stmt_idx{0};
+};
 
 using constexpr_frame = ankerl::unordered_dense::map<std::string_view, gir::const_value>;
 

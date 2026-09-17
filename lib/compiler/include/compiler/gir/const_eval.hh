@@ -30,6 +30,20 @@ namespace ghoti::gir {
 
 class const_eval {
   public:
+    struct constexpr_context_guard {
+        explicit constexpr_context_guard(const_eval& ce, bool enabled = true) noexcept
+            : ce_{ce}, prev_{ce.constexpr_context_} {
+            ce_.constexpr_context_ = enabled;
+        }
+        ~constexpr_context_guard() noexcept { ce_.constexpr_context_ = prev_; }
+        MAKE_PINNED(constexpr_context_guard);
+
+      private:
+        const_eval& ce_;
+        bool        prev_;
+    };
+
+  public:
     explicit const_eval(sema::context& ctx, mod::module& module) noexcept
         : ctx_{ctx}, module_{&module} {}
     ~const_eval() = default;
@@ -101,6 +115,17 @@ class const_eval {
 
     [[nodiscard]] auto coerce_dyn(const const_value& val, const sema::type& dest_type)
         -> stdx::option<const_value>;
+
+    /// Simulates the execution of preceding statements across active lexical blocks
+    /// up to each frame's `current_stmt_idx` for `constexpr var` observability
+    auto simulate_active_blocks(gsl::span<const sema::active_block_frame> blocks,
+                                sema::constexpr_frame&                    out_frame) -> void;
+
+    [[nodiscard]] auto is_constexpr_context() const noexcept -> bool {
+        return recursion_depth_ > 0 || constexpr_context_;
+    }
+
+    auto set_constexpr_context(bool enabled) noexcept -> void { constexpr_context_ = enabled; }
 
   private:
     struct call_frame {
@@ -225,19 +250,35 @@ class const_eval {
     auto lookup_local_binding(std::string_view name) const noexcept -> stdx::option<const_value>;
     auto set_local_binding(std::string_view name, const_value val) -> bool;
 
+    auto simulate_stmt(const ast::stmt_handle& stmt) -> void;
+    auto simulate_expr(ast::node_id id) -> void;
+    auto simulate_decl(const ast::decl_stmt& decl) -> void;
+    auto simulate_assignment(ast::node_id                id,
+                             const ast::assignment_expr& assign,
+                             syntax::token_type_t        op) -> void;
+    auto simulate_if(const ast::if_expr& if_expr) -> void;
+    auto simulate_while(const ast::while_loop_expr& loop) -> void;
+    auto simulate_do_while(const ast::do_while_loop_expr& loop) -> void;
+    auto simulate_for(const ast::for_loop_expr& loop) -> void;
+    auto simulate_block(const ast::block_stmt& block) -> void;
+
   private:
-    usize                               max_recursion_depth_{256};
-    std::vector<usize>                  recursion_limit_stack_;
-    sema::context&                      ctx_;
-    gsl::not_null<mod::module*>         module_;
-    stdx::option<mod::module&>          vtable_root_;
-    stdx::option<sema::type&>           enclosing_type_;
-    stdx::option<const symbol_scoping&> symbol_scoping_;
-    std::vector<call_frame>             call_stack_;
-    default_counter                     recursion_depth_;
+    // Names of mutable `constexpr var` bindings currently in scope during simulation.
+    ankerl::unordered_dense::set<std::string_view> active_cx_vars_;
+    usize                                          max_recursion_depth_{256};
+    std::vector<usize>                             recursion_limit_stack_;
+    sema::context&                                 ctx_;
+    gsl::not_null<mod::module*>                    module_;
+    stdx::option<mod::module&>                     vtable_root_;
+    stdx::option<sema::type&>                      enclosing_type_;
+    stdx::option<const symbol_scoping&>            symbol_scoping_;
+    std::vector<call_frame>                        call_stack_;
+    default_counter                                recursion_depth_;
+
     // Set by `eval_if`/`eval_while`/`eval_do_while`/`eval_for` when a construct's own
     // condition/iterable can't be folded.
     bool        cond_unknown_{false};
+    bool        constexpr_context_{false};
     eval_signal current_signal_{};
 
     ankerl::unordered_dense::map<memo_key, const_value, memo_key_hash> memo_cache_;

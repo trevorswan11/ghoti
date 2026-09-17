@@ -7,7 +7,7 @@ pub const Align := enum : i32 {
 
     /// Converts the provided byte to an alignment character
     pub constexpr from := fn(constexpr c: u8): @This() {
-        return match (c) {
+        return match constexpr (c) {
             '<' => .left,
             '>' => .right,
             '^' => .center,
@@ -17,7 +17,7 @@ pub const Align := enum : i32 {
 
     /// Checks if the provided byte is a valid alignment character
     pub constexpr isValid := fn(constexpr c: u8): bool {
-        return match (c) {
+        return match constexpr (c) {
             '<', '>', '^' => true,
             _ => false,
         };
@@ -62,57 +62,57 @@ pub const Spec := struct {
         constexpr var i := start;
 
         // Fill and align lookahead
-        if (i + 1 < fmt.len and Align.isValid(fmt[i + 1])) {
+        if constexpr (i + 1 < fmt.len and Align.isValid(fmt[i + 1])) {
             self.fill = fmt[i];
             self.align = .of(.from(fmt[i + 1]));
             i += 2;
-        } else if (i < fmt.len and Align.isValid(fmt[i])) {
+        } else if constexpr (i < fmt.len and Align.isValid(fmt[i])) {
             self.align = .of(.from(fmt[i]));
             i += 1;
         }
 
         // sign
-        if (i < fmt.len and fmt[i] == '+') {
+        if constexpr (i < fmt.len and fmt[i] == '+') {
             self.plus = true;
             i += 1;
         }
 
         // alt
-        if (i < fmt.len and fmt[i] == '#') {
+        if constexpr (i < fmt.len and fmt[i] == '#') {
             self.alt = true;
             i += 1;
         }
 
         // zero
-        if (i < fmt.len and fmt[i] == '0') {
+        if constexpr (i < fmt.len and fmt[i] == '0') {
             self.zero = true;
             i += 1;
         }
 
         // width
         constexpr width_start := i;
-        while (i < fmt.len and isDigit(fmt[i])) : (i += 1) {}
-        if (i > width_start) {
+        while constexpr (i < fmt.len and isDigit(fmt[i])) : (i += 1) {}
+        if constexpr (i > width_start) {
             self.width = .of(parseUsize(fmt[width_start..i]));
         }
 
         // precision
-        if (i < fmt.len and fmt[i] == '.') {
+        if constexpr (i < fmt.len and fmt[i] == '.') {
             i += 1;
             constexpr prec_start := i;
-            while (i < fmt.len and isDigit(fmt[i])) : (i += 1) {}
-            if (i == prec_start) {
+            while constexpr (i < fmt.len and isDigit(fmt[i])) : (i += 1) {}
+            if constexpr (i == prec_start) {
                 @compileError("fmt: bad spec: '.' with no precision digits");
             }
             self.precision = .of(parseUsize(fmt[prec_start..i]));
         }
 
         // kind
-        if (i < fmt.len and fmt[i] != '}') {
-            if (!Kind.isValid(fmt[i])) {
+        if constexpr (i < fmt.len and fmt[i] != '}') {
+            if constexpr (!Kind.isValid(fmt[i])) {
                 @compileError("fmt: bad spec: unrecognized type char");
             }
-            self.kind = @as(Kind, fmt[i]);
+            self.kind = .of(@as(Kind, fmt[i]));
             i += 1;
         }
 
@@ -120,12 +120,11 @@ pub const Spec := struct {
     };
 };
 
-// TODO(tcs): Uncomment when constexpr var fix lands
-// test "Spec.parseBody parses all spec inputs" {
-//     var s: Spec = .{};
-//     const end := s.parseBody("*^+08.3f}", 0);
-//     @expect(end == 8);
-// }
+test "Spec.parseBody parses all spec inputs" {
+    var s: Spec = .{};
+    const end := s.parseBody("*^+08.3f}", 0);
+    @expect(end == 8);
+}
 
 pub const Placeholder := struct {
     spec: Spec,
@@ -136,13 +135,13 @@ pub const Placeholder := struct {
         constexpr var s: Spec = .{};
 
         constexpr digit_start := i;
-        while (i < fmt.len and isDigit(fmt[i])) : (i += 1) {}
-        if (i > digit_start) {
+        while constexpr (i < fmt.len and isDigit(fmt[i])) : (i += 1) {}
+        if constexpr (i > digit_start) {
             s.arg_idx = .of(parseUsize(fmt[digit_start..i]));
         }
 
         // Without a colon the spec is extremely simple
-        if (i < fmt.len and fmt[i] == ':') {
+        if constexpr (i < fmt.len and fmt[i] == ':') {
             i += 1;
             i = s.parseBody(fmt, i);
         }
@@ -158,9 +157,10 @@ constexpr isDigit := fn(constexpr c: u8): bool {
     return c >= '0' and c <= '9';
 };
 
+/// Parses a decimal integer from a slice of ASCII digit bytes at compile time.
 constexpr parseUsize := fn(constexpr digits: []u8): usize {
     constexpr var n: usize = 0;
-    for (digits) |c| {
+    for constexpr (digits) |c| {
         n = n * 10 + @intCast(usize, c - '0');
     }
     return n;
@@ -226,7 +226,8 @@ pub constexpr validate := fn(constexpr fmt: []u8, constexpr arg_count: usize): v
         }
         i += 1;
     }
+
     if (placeholder_count != arg_count) {
         @compileError("fmt: wrong number of arguments");
-    };
+    }
 };

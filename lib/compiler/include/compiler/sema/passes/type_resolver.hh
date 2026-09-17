@@ -121,6 +121,7 @@ class type_resolver {
     using open_function_guard     = scope_guard<std::vector<ast::node_id>>;
     using self_recursion_guard    = scope_guard<std::vector<bool>>;
     using aggregate_resolve_guard = scope_guard<std::vector<usize>>;
+    using active_block_guard      = scope_guard<std::vector<active_block_frame>>;
 
     // Sets the flag to the provided value and resets it on destruction
     class mutating_context_guard {
@@ -430,6 +431,11 @@ class type_resolver {
 
     auto visit(ast::node_id, const ast::block_stmt&) -> void;
 
+    /// Runs a lightweight AST simulation over `active_blocks_` up to the current statement index,
+    /// materializing the latest compile-time values of mutable `constexpr var` locals.
+    /// The resulting frame is installed into `ctx_.constexpr_binding_frames` during isolated folds.
+    [[nodiscard]] auto make_simulated_frame() -> constexpr_frame;
+
     // Returns `true` if the resolution was successful
     [[nodiscard]] auto resolve_control_flow_label(stdx::option<ast::identifier_handle> label,
                                                   std::string_view                     stmt_name)
@@ -520,9 +526,10 @@ class type_resolver {
     std::vector<usize>        function_boundaries_;
     std::vector<ast::node_id> open_function_nodes_;
     std::vector<bool>         self_recursive_flags_;
-    // Node indices of `struct`/`union`/`enum` literals whose resolution is currently on the
-    // stack
+    // Stack of node indices of `struct`/`union`/`enum` literal resolution targets
     std::vector<usize> resolving_aggregate_nodes_;
+    // Stack of enclosing block statements and statement indices currently being resolved
+    std::vector<active_block_frame> active_blocks_;
 
     bool in_mutating_context_{false};
     bool for_generic_instantiation_{false};

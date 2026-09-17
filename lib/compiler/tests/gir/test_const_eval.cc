@@ -706,4 +706,138 @@ TEST_CASE("unlabeled constexpr block in statement position executes at compile t
     CHECK_FALSE(gir_text.contains("add i32"));
 }
 
+TEST_CASE("Const eval rejects reached unreachable code") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        constexpr bad := fn(): i32 {
+            unreachable;
+        };
+        const call_bad := bad();
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym, _, decl, type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("call_bad", idx)};
+    const auto val{evaluator.try_eval(*decl.value)};
+    CHECK_FALSE(val.has_value());
+
+    auto& diags{ctx->analyzer.get_ctx().diags};
+    REQUIRE_FALSE(diags.empty());
+    CHECK(diags[0].get_error() == sema::error::UNREACHABLE_CODE_REACHED);
+}
+
+TEST_CASE("Const eval unreachable in conditional branches") {
+    SECTION("Dead branch with unreachable does not error") {
+        auto [ctx, idx]{helpers::resolve_and_check(R"(
+            constexpr pick := fn(x: i32): i32 {
+                if (x == 0) {
+                    return 42;
+                } else {
+                    unreachable;
+                }
+            };
+            const a := pick(0);
+        )")};
+        gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+        const auto [sym, _, decl, type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("a", idx)};
+        const auto val{evaluator.try_eval(*decl.value)};
+        REQUIRE(val.has_value());
+        CHECK(val->as_int_opt() == 42);
+
+        auto& diags{ctx->analyzer.get_ctx().diags};
+        CHECK(diags.empty());
+    }
+
+    SECTION("Taken branch with unreachable errors") {
+        auto [ctx, idx]{helpers::resolve_and_check(R"(
+            constexpr pick := fn(x: i32): i32 {
+                if (x == 0) {
+                    return 42;
+                } else {
+                    unreachable;
+                }
+            };
+            const b := pick(1);
+        )")};
+        gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+        const auto [sym, _, decl, type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("b", idx)};
+        const auto val{evaluator.try_eval(*decl.value)};
+        CHECK_FALSE(val.has_value());
+
+        auto& diags{ctx->analyzer.get_ctx().diags};
+        REQUIRE_FALSE(diags.empty());
+        CHECK(diags[0].get_error() == sema::error::UNREACHABLE_CODE_REACHED);
+    }
+}
+
+TEST_CASE("Const eval unreachable in match expression") {
+    SECTION("Unreached catch-all arm does not error") {
+        auto [ctx, idx]{helpers::resolve_and_check(R"(
+            constexpr dispatch := fn(tag: i32): i32 {
+                return match (tag) {
+                    0 => 10,
+                    1 => 20,
+                    _ => unreachable,
+                };
+            };
+            const res := dispatch(0);
+        )")};
+        gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+        const auto [sym, _, decl, type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("res", idx)};
+        const auto val{evaluator.try_eval(*decl.value)};
+        REQUIRE(val.has_value());
+        CHECK(val->as_int_opt() == 10);
+
+        auto& diags{ctx->analyzer.get_ctx().diags};
+        CHECK(diags.empty());
+    }
+
+    SECTION("Reached unreachable arm errors") {
+        auto [ctx, idx]{helpers::resolve_and_check(R"(
+            constexpr dispatch := fn(tag: i32): i32 {
+                return match (tag) {
+                    0 => 10,
+                    _ => unreachable,
+                };
+            };
+            const res := dispatch(99);
+        )")};
+        gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+        const auto [sym, _, decl, type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("res", idx)};
+        const auto val{evaluator.try_eval(*decl.value)};
+        CHECK_FALSE(val.has_value());
+
+        auto& diags{ctx->analyzer.get_ctx().diags};
+        REQUIRE_FALSE(diags.empty());
+        CHECK(diags[0].get_error() == sema::error::UNREACHABLE_CODE_REACHED);
+    }
+}
+
+TEST_CASE("`for constexpr` iterating over `[]u8` parameter") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        constexpr parse_usize := fn(constexpr digits: []u8): usize {
+            constexpr var n: usize = 0;
+            for constexpr (digits) |c| {
+                n = n * 10 + @intCast(usize, c - '0');
+            }
+            return n;
+        };
+        const res := parse_usize("12345");
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym, _, decl, type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("res", idx)};
+    const auto val{evaluator.try_eval(*decl.value)};
+    REQUIRE(val.has_value());
+    CHECK(val->as_uint_opt() == 12'345);
+}
+
 } // namespace ghoti::tests

@@ -153,4 +153,92 @@ TEST_CASE("assigning more than one level into a `constexpr var` aggregate is a c
     )");
 }
 
+TEST_CASE("nested `constexpr` argument folding resolves mutated `constexpr var`") {
+    CHECK(helpers::compile_and_run(R"(
+        constexpr is_digit := fn(constexpr c: u8): bool {
+            return c >= '0' and c <= '9';
+        };
+        pub const main := fn(): i32 {
+            constexpr s := "a1b2";
+            constexpr var i: usize = 0;
+            i += 1;
+            if constexpr (is_digit(s[i])) {
+                return 42;
+            }
+            return 0;
+        };
+    )") == 42);
+}
+
+TEST_CASE("nested `constexpr` argument folding inside `while constexpr` condition") {
+    CHECK(helpers::compile_and_run(R"(
+        constexpr is_digit := fn(constexpr c: u8): bool {
+            return c >= '0' and c <= '9';
+        };
+        pub const main := fn(): i32 {
+            constexpr s := "123a";
+            constexpr var i: usize = 0;
+            while constexpr (i < s.len and is_digit(s[i])) : (i += 1) {}
+            return @intCast(i32, i);
+        };
+    )") == 3);
+}
+
+TEST_CASE("mutated `constexpr var` array element visible to nested `constexpr` call") {
+    CHECK(helpers::compile_and_run(R"(
+        constexpr double_val := fn(constexpr x: i32): i32 {
+            return x * 2;
+        };
+        pub const main := fn(): i32 {
+            constexpr var arr: [3]i32 = .{10, 20, 30};
+            arr[1] = 50;
+            constexpr doubled := double_val(arr[1]);
+            return doubled;
+        };
+    )") == 100);
+}
+
+TEST_CASE("mutated `constexpr var` struct field visible to nested `constexpr` call") {
+    CHECK(helpers::compile_and_run(R"(
+        const Point := struct { x: i32, y: i32 };
+        constexpr add_pts := fn(constexpr a: i32, constexpr b: i32): i32 {
+            return a + b;
+        };
+        pub const main := fn(): i32 {
+            constexpr var p := Point{ .x = 10, .y = 20 };
+            p.x += 5;
+            constexpr sum := add_pts(p.x, p.y);
+            return sum;
+        };
+    )") == 35);
+}
+
+TEST_CASE("`for constexpr` iterating over string slice in e2e execution") {
+    CHECK(helpers::compile_and_run(R"(
+        constexpr parse_usize := fn(constexpr digits: []u8): usize {
+            constexpr var n: usize = 0;
+            for constexpr (digits) |c| {
+                n = n * 10 + @intCast(usize, c - '0');
+            }
+            return n;
+        };
+        pub const main := fn(): i32 {
+            constexpr val := parse_usize("42");
+            return @intCast(i32, val);
+        };
+    )") == 42);
+}
+
+TEST_CASE("constexpr call reaching unreachable fails compilation") {
+    helpers::expect_compile_error(R"(
+        constexpr bad := fn(): i32 {
+            unreachable;
+        };
+        pub const main := fn(): i32 {
+            constexpr x := bad();
+            return x;
+        };
+    )");
+}
+
 } // namespace ghoti::tests
