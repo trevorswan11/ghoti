@@ -223,11 +223,15 @@ auto const_eval::try_eval(ast::node_id id) -> stdx::option<const_value> {
 
 auto const_eval::eval(ast::node_id id) -> const_value {
     PROFILE_FUNCTION();
-    auto res{try_eval(id)};
+    const constexpr_context_guard g{*this, true};
+    const auto                    diags_before{ctx_.diags.size()};
+    auto                          res{try_eval(id)};
     if (!res || res->is_poison()) {
-        ctx_.diags.emplace_back("Expression cannot be evaluated as a compile-time constant",
-                                sema::error::CONSTEXPR_EVALUATION_FAILED,
-                                module_->ast.location_of(id));
+        if (ctx_.diags.size() == diags_before) {
+            ctx_.diags.emplace_back("Expression cannot be evaluated as a compile-time constant",
+                                    sema::error::CONSTEXPR_EVALUATION_FAILED,
+                                    module_->ast.location_of(id));
+        }
         return const_value::make_poison();
     }
     return *res;
@@ -700,9 +704,13 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
             return const_value{nullptr_val{},
                                ctx_.get_builtin_resolved_type(sema::type_kind::NULLPTR)};
         },
-        [&](ast::unreachable_expr) {
-            return const_value{undefined_val{},
-                               ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN)};
+        [&](ast::unreachable_expr) -> stdx::option<const_value> {
+            if (is_constexpr_context()) {
+                ctx_.diags.emplace_back("reached unreachable code",
+                                        sema::error::UNREACHABLE_CODE_REACHED,
+                                        module_->ast.location_of(id));
+            }
+            return stdx::none;
         },
         [&](const ast::array_expr& data) { return eval_array(id, data); },
         [&](const ast::index_expr& data) { return eval_index(id, data); },
