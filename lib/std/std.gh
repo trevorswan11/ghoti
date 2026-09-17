@@ -18,6 +18,7 @@ test {
     import "io/io.gh";
     import "mem/mem.gh";
     import "heap/heap.gh";
+    import "fmt/fmt.gh";
     import "math.gh";
 }
 

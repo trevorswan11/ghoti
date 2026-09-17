@@ -1,6 +1,28 @@
 import std;
 
-pub const Align := enum : i32 { left, right, center };
+pub const Align := enum : i32 {
+    left,
+    right,
+    center,
+
+    /// Converts the provided byte to an alignment character
+    pub constexpr from := fn(constexpr c: u8): @This() {
+        return match (c) {
+            '<' => .left,
+            '>' => .right,
+            '^' => .center,
+            _ => unreachable,
+        };
+    };
+
+    /// Checks if the provided byte is a valid alignment character
+    pub constexpr isValid := fn(constexpr c: u8): bool {
+        return match (c) {
+            '<', '>', '^' => true,
+            _ => false,
+        };
+    };
+};
 
 pub const Kind := enum : u8 {
     d = 'd',
@@ -13,6 +35,15 @@ pub const Kind := enum : u8 {
     e = 'e',
     f = 'f',
     p = 'p',
+    @"?" = '?',
+
+    /// Checks if the provided byte is a valid kind character
+    const isValid := fn(constexpr byte: u8): bool {
+        return match (byte) {
+            'd', 'x', 'X', 'b', 'o', 'c', 's', 'e', 'f', 'p', '?' => true,
+            _ => false,
+        };
+    };
 };
 
 pub const Spec := struct {
@@ -25,4 +56,177 @@ pub const Spec := struct {
     pub width: std.Option(usize) = .empty,
     pub precision: std.Option(usize) = .empty,
     pub kind: std.Option(Kind) = .empty, // none means default '{}'
+
+    /// Populates the spec with parsed information from its body
+    pub constexpr parseBody := fn(&mut self, constexpr fmt: []u8, constexpr start: usize): usize {
+        constexpr var i := start;
+
+        // Fill and align lookahead
+        if (i + 1 < fmt.len and Align.isValid(fmt[i + 1])) {
+            self.fill = fmt[i];
+            self.align = .of(.from(fmt[i + 1]));
+            i += 2;
+        } else if (i < fmt.len and Align.isValid(fmt[i])) {
+            self.align = .of(.from(fmt[i]));
+            i += 1;
+        }
+
+        // sign
+        if (i < fmt.len and fmt[i] == '+') {
+            self.plus = true;
+            i += 1;
+        }
+
+        // alt
+        if (i < fmt.len and fmt[i] == '#') {
+            self.alt = true;
+            i += 1;
+        }
+
+        // zero
+        if (i < fmt.len and fmt[i] == '0') {
+            self.zero = true;
+            i += 1;
+        }
+
+        // width
+        constexpr width_start := i;
+        while (i < fmt.len and isDigit(fmt[i])) : (i += 1) {}
+        if (i > width_start) {
+            self.width = .of(parseUsize(fmt[width_start..i]));
+        }
+
+        // precision
+        if (i < fmt.len and fmt[i] == '.') {
+            i += 1;
+            constexpr prec_start := i;
+            while (i < fmt.len and isDigit(fmt[i])) : (i += 1) {}
+            if (i == prec_start) {
+                @compileError("fmt: bad spec: '.' with no precision digits");
+            }
+            self.precision = .of(parseUsize(fmt[prec_start..i]));
+        }
+
+        // kind
+        if (i < fmt.len and fmt[i] != '}') {
+            if (!Kind.isValid(fmt[i])) {
+                @compileError("fmt: bad spec: unrecognized type char");
+            }
+            self.kind = @as(Kind, fmt[i]);
+            i += 1;
+        }
+
+        return i;
+    };
+};
+
+// TODO(tcs): Uncomment when constexpr var fix lands
+// test "Spec.parseBody parses all spec inputs" {
+//     var s: Spec = .{};
+//     const end := s.parseBody("*^+08.3f}", 0);
+//     @expect(end == 8);
+// }
+
+pub const Placeholder := struct {
+    spec: Spec,
+    next: usize,
+
+    pub constexpr parse := fn(constexpr fmt: []u8, constexpr at: usize): @This() {
+        constexpr var i := at + 1;
+        constexpr var s: Spec = .{};
+
+        constexpr digit_start := i;
+        while (i < fmt.len and isDigit(fmt[i])) : (i += 1) {}
+        if (i > digit_start) {
+            s.arg_idx = .of(parseUsize(fmt[digit_start..i]));
+        }
+
+        // Without a colon the spec is extremely simple
+        if (i < fmt.len and fmt[i] == ':') {
+            i += 1;
+            i = s.parseBody(fmt, i);
+        }
+
+        return .{
+            .spec = s,
+            .next = i + 1,
+        };
+    };
+};
+
+constexpr isDigit := fn(constexpr c: u8): bool {
+    return c >= '0' and c <= '9';
+};
+
+constexpr parseUsize := fn(constexpr digits: []u8): usize {
+    constexpr var n: usize = 0;
+    for (digits) |c| {
+        n = n * 10 + @intCast(usize, c - '0');
+    }
+    return n;
+};
+
+pub constexpr nextPlaceholder := fn(constexpr fmt: []u8, constexpr from: usize): usize {
+    var i := from;
+    while (i < fmt.len) : (i += 1) {
+        if (fmt[i] == '{') {
+            // Ignore double {{
+            if (i + 1 < fmt.len and fmt[i + 1] == '{') {
+                i += 1;
+                continue;
+            }
+            return i;
+        }
+
+        if (fmt[i] == '}') {
+            // Ignore double }}
+            if (i + 1 < fmt.len and fmt[i + 1] == '}') {
+                i += 1;
+            }
+            continue;
+        }
+    }
+    return fmt.len;
+};
+
+test "nextPlaceholder skips escapes" {
+    @expect(nextPlaceholder("a{{b}}c{}", 0) == 7);
+    @expect(nextPlaceholder("no placeholders", 0) == 15);
+}
+
+pub constexpr validate := fn(constexpr fmt: []u8, constexpr arg_count: usize): void {
+    constexpr var i: usize = 0;
+    constexpr var placeholder_count: usize = 0;
+    while (i < fmt.len) {
+        if (fmt[i] == '{') {
+            if (i + 1 < fmt.len and fmt[i + 1] == '{') {
+                i += 2;
+                continue;
+            }
+
+            // parseAt will compile error internally if the spec is bad
+            constexpr parsed: Placeholder = .parse(fmt, i);
+            match constexpr (parsed.spec.arg_idx) {
+                .some => |arg_idx| if (arg_idx >= arg_count) {
+                    @compileError("fmt: explicit arg index out of range");
+                },
+                .none => {},
+            }
+            placeholder_count += 1;
+            i = parsed.next;
+            continue;
+        }
+
+        if (fmt[i] == '}') {
+            if (i + 1 < fmt.len and fmt[i + 1] == '}') {
+                i += 2;
+                continue;
+            }
+            @compileError("fmt: unmatched '}' in format string");
+        }
+        i += 1;
+    }
+    if (placeholder_count != arg_count) {
+        @compileError("fmt: wrong number of arguments");
+    };
 };

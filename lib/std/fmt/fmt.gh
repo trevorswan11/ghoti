@@ -1,5 +1,11 @@
 import std;
 
+import "spec.gh" as spec;
+
 using Writer = std.io.Writer;
 
 pub const Format := interface {};
+
+test {
+    import "spec.gh";
+}
