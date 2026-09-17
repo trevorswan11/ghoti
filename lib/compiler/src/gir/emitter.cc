@@ -420,16 +420,25 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
                 if (val.is<const_closure>()) {
                     bound = value{emit_constexpr_closure(val.as<const_closure>()), btype};
                 } else if (val.is<std::string>()) {
-                    bound = value{val.as<std::string>(), btype};
+                    // A string-literal constexpr arg bound to a `[]T` slice param needs a real
+                    // {ptr, len} fat pointer, not the raw bytes `btype` alone would store.
+                    const auto declared_type{fn_mod.get_sema_type_opt(param.explicit_type)};
+                    if (declared_type && declared_type->get_kind() == sema::type_kind::SLICE) {
+                        bound = emit_string_as_slice(val.as<std::string>(), *declared_type);
+                    } else {
+                        bound = value{val.as<std::string>(), btype};
+                    }
                 } else {
                     bound = materialize_const(val);
                 }
+                auto& bound_type{bound.type ? *bound.type : btype};
                 scopes_.back().bindings.emplace(p_name,
                                                 local_binding{
                                                     .id        = {0, local_kind::TEMPORARY},
-                                                    .type      = btype,
+                                                    .type      = bound_type,
                                                     .is_alloca = false,
                                                     .const_val = std::move(bound),
+                                                    .is_const  = bound_type.is_constant(),
                                                 });
                 continue;
             }
