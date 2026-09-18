@@ -634,6 +634,10 @@ auto const_eval::lookup_local_binding(std::string_view name) const noexcept
     for (auto& frame : call_stack_ | std::views::reverse) {
         if (auto it{frame.bindings.find(name)}; it != frame.bindings.end()) { return it->second; }
     }
+    if (const auto cx{ctx_.lookup_constexpr_binding(name)}) { return *cx; }
+    if (const auto it{global_cx_vars_.find(std::string{name})}; it != global_cx_vars_.end()) {
+        return it->second;
+    }
     return stdx::none;
 }
 
@@ -652,6 +656,69 @@ auto const_eval::set_local_binding(std::string_view name, const_value val) -> bo
             return true;
         }
     }
+
+    if (!module_->root_table_idx) { return false; }
+    const auto& table{ctx_.registry.get(*module_->root_table_idx)};
+    const auto  sym_opt{table.get_opt(name)};
+    if (!sym_opt) { return false; }
+    const auto node{sym_opt->get_data().as_opt<sema::symbols::node_t>()};
+    if (!node) { return false; }
+    const auto decl{module_->ast.get_as_opt<ast::decl_stmt>(*node)};
+    if (!decl) { return false; }
+
+    if (decl->has_modifier(ast::decl_modifiers::CONSTEXPR) &&
+        decl->has_modifier(ast::decl_modifiers::VARIABLE)) {
+        global_cx_vars_.insert_or_assign(std::string{name}, std::move(val));
+        return true;
+    }
+    return false;
+}
+
+auto const_eval::write_target(ast::node_id target, const_value val) -> bool {
+    PROFILE_FUNCTION();
+    if (!target.is_valid()) { return false; }
+
+    if (const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(target)}) {
+        return set_local_binding(ident->name, std::move(val));
+    }
+
+    if (const auto dot{module_->ast.get_as_opt<ast::dot_expr>(target)}) {
+        auto obj_val{try_eval(dot->object)};
+        if (!obj_val) { return false; }
+        const auto& member_ident{module_->ast.get_as<ast::identifier_expr>(dot->member)};
+        if (auto st{obj_val->as_opt<const_struct>()}) {
+            st->fields.insert_or_assign(std::string{member_ident.name}, std::move(val));
+            return write_target(dot->object, std::move(*obj_val));
+        }
+
+        if (auto un{obj_val->as_opt<const_union>()}) {
+            un->active_field = std::string{member_ident.name};
+            if (un->payload.empty()) {
+                un->payload.emplace_back(std::move(val));
+            } else {
+                un->payload.front() = std::move(val);
+            }
+            return write_target(dot->object, std::move(*obj_val));
+        }
+        return false;
+    }
+
+    if (const auto idx{module_->ast.get_as_opt<ast::index_expr>(target)}) {
+        auto arr_val{try_eval(idx->array)};
+        if (!arr_val) { return false; }
+        const auto idx_val{try_eval(idx->index)};
+        if (!idx_val) { return false; }
+        const auto k{idx_val->as_uint_opt()};
+        if (!k) { return false; }
+        if (auto arr{arr_val->as_opt<const_array>()}) {
+            if (*k < arr->elements.size()) {
+                arr->elements[*k] = std::move(val);
+                return write_target(idx->array, std::move(*arr_val));
+            }
+        }
+        return false;
+    }
+
     return false;
 }
 
@@ -741,6 +808,7 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
         },
         [&](const ast::while_loop_expr& data) { return eval_while(id, data); },
         [&](const ast::do_while_loop_expr& data) { return eval_do_while(id, data); },
+        [&](const ast::infinite_loop_expr& data) { return eval_infinite_loop(id, data); },
         [&](const ast::for_loop_expr& data) { return eval_for(id, data); },
         [&](const ast::label_expr& data) { return eval_label(id, data); },
         [&](const ast::block_stmt& data) -> stdx::option<const_value> {
@@ -1104,8 +1172,10 @@ auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& 
         }
 
         const auto table_idx{sema_type->get_symbol_table_idx_opt()};
-        if (const auto st{type_data.as_opt<sema::types::struct_t>()}; st && table_idx) {
-            const auto&  table{ctx_.registry.get(*table_idx)};
+        if (const auto st{type_data.as_opt<sema::types::struct_t>()}) {
+            const auto table{
+                table_idx ? stdx::option<const sema::symbol_table&>{ctx_.registry.get(*table_idx)}
+                          : stdx::none};
             const_struct struct_val;
             for (const auto& item : init.initializers) {
                 const auto& member_ident{
@@ -1114,19 +1184,66 @@ auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& 
                     module_->ast.get_as<ast::identifier_expr>(member_ident.member).name};
                 auto field_val{try_eval(item.value)};
                 if (!field_val) { return stdx::none; }
-                if (const auto proxy{table.get_proxy_opt(member_name)}) {
-                    const auto&       field_type{st->type_at(proxy->index)};
-                    const auto        p{field_type.get_data().as_opt<sema::types::pointer>()};
-                    const auto        r{field_type.get_data().as_opt<sema::types::reference>()};
-                    const sema::type* dyn_ptr{p ? &p->underlying : r ? &r->underlying : nullptr};
-                    if (dyn_ptr && dyn_ptr->get_kind() == sema::type_kind::DYN &&
-                        !field_val->is<const_dyn_fat_ptr>()) {
-                        field_val = coerce_dyn(*field_val, field_type);
-                        if (!field_val) { return stdx::none; }
+                if (table) {
+                    if (const auto proxy{table->get_proxy_opt(member_name)}) {
+                        const auto& field_type{st->type_at(proxy->index)};
+                        const auto  p{field_type.get_data().as_opt<sema::types::pointer>()};
+                        const auto  r{field_type.get_data().as_opt<sema::types::reference>()};
+                        const auto  dyn_ptr{p   ? stdx::option<const sema::type&>{p->underlying}
+                                            : r ? stdx::option<const sema::type&>{r->underlying}
+                                                : stdx::none};
+                        if (dyn_ptr && dyn_ptr->get_kind() == sema::type_kind::DYN &&
+                            !field_val->is<const_dyn_fat_ptr>()) {
+                            field_val = coerce_dyn(*field_val, field_type);
+                            if (!field_val) { return stdx::none; }
+                        }
                     }
                 }
                 struct_val.fields.emplace(std::string{member_name}, *field_val);
             }
+
+            const auto prefix{ctx_.generic_functions.get_type_ctor_member_prefix(*sema_type)};
+            const auto diff{prefix ? ctx_.instantiation_cache.get_body_type_diff(*prefix)
+                                   : st->enclosing.active_body_diff};
+            const mod::body_diff_guard diff_guard{const_cast<mod::module&>(st->enclosing), diff};
+
+            stdx::option<ghoti::scope_guard<std::vector<sema::constexpr_frame>>> ctor_binding_guard;
+            if (prefix) {
+                if (const auto bindings{ctx_.instantiation_cache.get_type_ctor_bindings(*prefix)}) {
+                    sema::constexpr_frame ctor_frame;
+                    for (const auto& [name, val] : *bindings) {
+                        ctor_frame.insert_or_assign(name, val);
+                    }
+                    ctor_binding_guard.emplace(ctx_.constexpr_binding_frames,
+                                               std::move(ctor_frame));
+                }
+            }
+
+            for (usize idx{0}; idx < st->ast_fields.size(); ++idx) {
+                const auto& f{st->ast_fields[idx]};
+                const auto& fname{st->enclosing.ast.get_as<ast::identifier_expr>(f.name).name};
+                if (struct_val.fields.contains(std::string{fname})) { continue; }
+                if (!f.default_value) { continue; }
+                auto* const prev{module_.get()};
+                if (&st->enclosing != prev) { set_module(const_cast<mod::module&>(st->enclosing)); }
+                auto def_val{try_eval(*f.default_value)};
+                if (&st->enclosing != prev) { set_module(*prev); }
+                if (!def_val) { return stdx::none; }
+
+                const auto& field_type{st->type_at(idx)};
+                const auto  p{field_type.get_data().as_opt<sema::types::pointer>()};
+                const auto  r{field_type.get_data().as_opt<sema::types::reference>()};
+                const auto  dyn_ptr{p   ? stdx::option<const sema::type&>{p->underlying}
+                                    : r ? stdx::option<const sema::type&>{r->underlying}
+                                        : stdx::none};
+                if (dyn_ptr && dyn_ptr->get_kind() == sema::type_kind::DYN &&
+                    !def_val->is<const_dyn_fat_ptr>()) {
+                    def_val = coerce_dyn(*def_val, field_type);
+                    if (!def_val) { return stdx::none; }
+                }
+                struct_val.fields.emplace(std::string{fname}, std::move(*def_val));
+            }
+
             return const_value{std::move(struct_val), sema_type};
         }
         if (const auto ut{type_data.as_opt<sema::types::union_t>()}) {
@@ -1220,6 +1337,59 @@ auto const_eval::eval_dot(ast::node_id, const ast::dot_expr& dot) -> stdx::optio
 
     if (const auto st{target_val->as_opt<const_struct>()}) {
         if (const auto f{st->get_field_opt(member_name)}) { return *f; }
+        auto sema_type{target_val->get_type()};
+        if (!sema_type) { sema_type = module_->get_sema_type_opt(dot.object); }
+        if (sema_type) {
+            if (const auto st_data{sema_type->get_data().as_opt<sema::types::struct_t>()}) {
+                for (usize idx{0}; idx < st_data->ast_fields.size(); ++idx) {
+                    const auto& f{st_data->ast_fields[idx]};
+                    const auto& fname{
+                        st_data->enclosing.ast.get_as<ast::identifier_expr>(f.name).name};
+                    if (fname == member_name && f.default_value) {
+                        const auto prefix{
+                            ctx_.generic_functions.get_type_ctor_member_prefix(*sema_type)};
+                        const auto                 diff{prefix
+                                                            ? ctx_.instantiation_cache.get_body_type_diff(*prefix)
+                                                            : st_data->enclosing.active_body_diff};
+                        const mod::body_diff_guard diff_guard{
+                            const_cast<mod::module&>(st_data->enclosing), diff};
+
+                        stdx::option<ghoti::scope_guard<std::vector<sema::constexpr_frame>>>
+                            ctor_binding_guard;
+                        if (prefix) {
+                            if (const auto bindings{
+                                    ctx_.instantiation_cache.get_type_ctor_bindings(*prefix)}) {
+                                sema::constexpr_frame ctor_frame;
+                                for (const auto& [name, val] : *bindings) {
+                                    ctor_frame.insert_or_assign(name, val);
+                                }
+                                ctor_binding_guard.emplace(ctx_.constexpr_binding_frames,
+                                                           std::move(ctor_frame));
+                            }
+                        }
+                        auto* const prev{module_.get()};
+                        if (&st_data->enclosing != prev) {
+                            set_module(const_cast<mod::module&>(st_data->enclosing));
+                        }
+                        auto def_val{try_eval(*f.default_value)};
+                        if (&st_data->enclosing != prev) { set_module(*prev); }
+                        if (def_val) {
+                            const auto& field_type{st_data->type_at(idx)};
+                            const auto  p{field_type.get_data().as_opt<sema::types::pointer>()};
+                            const auto  r{field_type.get_data().as_opt<sema::types::reference>()};
+                            const auto  dyn_ptr{p   ? stdx::option<sema::type&>{p->underlying}
+                                                : r ? stdx::option<sema::type&>{r->underlying}
+                                                    : stdx::none};
+                            if (dyn_ptr && dyn_ptr->get_kind() == sema::type_kind::DYN &&
+                                !def_val->is<const_dyn_fat_ptr>()) {
+                                def_val = coerce_dyn(*def_val, field_type);
+                            }
+                            if (def_val) { return *def_val; }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     if (const auto un{target_val->as_opt<const_union>()}) {
@@ -1820,7 +1990,8 @@ auto const_eval::eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap)
                 if (const auto fn_expr{decl_mod.ast.get_as_opt<ast::function_expr>(*decl->value)}) {
                     auto* const prev{module_.get()};
                     if (&decl_mod != prev) { set_module(const_cast<mod::module&>(decl_mod)); }
-                    const auto flow_val{eval_constexpr_fn(id, *fn_expr, {*operand})};
+                    std::vector<const_value> args{*operand};
+                    const auto               flow_val{eval_constexpr_fn(id, *fn_expr, args)};
                     if (&decl_mod != prev) { set_module(*prev); }
                     if (flow_val) {
                         // Inspect the active variant in the returned `Flow(Output, Residual)`
@@ -1833,6 +2004,17 @@ auto const_eval::eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap)
                                                            : un->payload.front();
                             }
                             if (un->active_field == sema::builtin_impl::FLOW_BREAK) {
+                                if (id.get_token_type() == syntax::token_type_t::QUESTION) {
+                                    const auto res{un->payload.empty() ? const_value{void_val{}}
+                                                                       : un->payload.front()};
+                                    current_error_val_ = res;
+                                    current_signal_    = eval_signal{
+                                           .kind         = eval_signal_kind::RETURN,
+                                           .target_label = stdx::none,
+                                           .value        = *operand,
+                                    };
+                                    return stdx::none;
+                                }
                                 return stdx::none;
                             }
                         }
@@ -1864,6 +2046,16 @@ auto const_eval::eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap)
             sema::error::CONSTEXPR_EVALUATION_FAILED,
             module_->ast.location_of(id));
         return const_value::make_poison();
+    }
+
+    if (id.get_token_type() == syntax::token_type_t::QUESTION) {
+        current_error_val_ = payload();
+        current_signal_    = eval_signal{
+               .kind         = eval_signal_kind::RETURN,
+               .target_label = stdx::none,
+               .value        = *operand,
+        };
+        return stdx::none;
     }
 
     ctx_.diags.emplace_back(
@@ -1927,13 +2119,10 @@ auto const_eval::eval_assignment(ast::node_id                id,
                                  const ast::assignment_expr& assign,
                                  syntax::token_type_t        op_type) -> stdx::option<const_value> {
     PROFILE_FUNCTION();
-    const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(assign.lhs)};
-    if (!ident) { return stdx::none; }
-
     if (op_type == syntax::token_type_t::ASSIGN) {
         const auto rhs{try_eval(assign.rhs)};
         if (!rhs) { return stdx::none; }
-        if (!set_local_binding(ident->name, *rhs)) { return stdx::none; }
+        if (!write_target(assign.lhs, *rhs)) { return stdx::none; }
         return rhs;
     }
 
@@ -1945,7 +2134,7 @@ auto const_eval::eval_assignment(ast::node_id                id,
         const auto folded{fold_binary_values(*base_op, *lhs_val, *rhs_val, id)};
         if (!folded) { return stdx::none; }
 
-        if (!set_local_binding(ident->name, *folded)) { return stdx::none; }
+        if (!write_target(assign.lhs, *folded)) { return stdx::none; }
         return folded;
     }
 
@@ -2265,6 +2454,9 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
     PROFILE_FUNCTION();
     if (auto local_val{lookup_local_binding(ident.name)}) { return local_val; }
     if (const auto cx{ctx_.lookup_constexpr_binding(ident.name)}) { return *cx; }
+    if (const auto it{global_cx_vars_.find(std::string{ident.name})}; it != global_cx_vars_.end()) {
+        return it->second;
+    }
 
     // `iN` / `uN` name a primitive integer type; yield it as a compile-time type value.
     if (syntax::token_type::is_int_type_lexeme(ident.name)) {
@@ -2450,18 +2642,30 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                         args.emplace_back(*arg_val);
                     }
                 }
+
                 auto* const prev{module_.get()};
                 if (callee_mod != prev) { set_module(*callee_mod); }
                 auto res{eval_constexpr_fn(id, *fn_expr, args)};
                 if (callee_mod != prev) { set_module(*prev); }
+                for (usize a{0}; a < call.arguments.size() && a < fn_expr->parameters.size(); ++a) {
+                    if (fn_expr->parameters[a].explicit_type.get_modifier().is_mutable_ref() &&
+                        a < args.size()) {
+                        if (const auto expr_h{call.arguments[a].as_opt<ast::expr_handle>()}) {
+                            DISCARD(write_target(*expr_h, args[a]));
+                        }
+                    }
+                }
                 return res;
             }
         }
     }
 
-    if (const auto dot{module_->ast.get_as_opt<ast::dot_expr>(call.function)}) {
-        if (!resolve_module_chain(dot->object)) {
-            const auto& member_ident{module_->ast.get_as<ast::identifier_expr>(dot->member)};
+    const auto dot{module_->ast.get_as_opt<ast::dot_expr>(call.function)};
+    const auto imp{module_->ast.get_as_opt<ast::implicit_access_expr>(call.function)};
+    if (dot || imp) {
+        if (!dot || !resolve_module_chain(dot->object)) {
+            const auto& member_ident{dot ? module_->ast.get_as<ast::identifier_expr>(dot->member)
+                                         : module_->ast.get_as<ast::identifier_expr>(imp->member)};
             stdx::option<mod::module&>              method_mod;
             stdx::option<const ast::function_expr&> method_fn;
 
@@ -2492,66 +2696,80 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                 }
             }
 
-            // If the callee is an `obj.method(...)` call, locate the method declaration:
+            stdx::option<const sema::type&> target_ty;
+            if (dot) {
+                if (const auto obj_ty{module_->get_sema_type_opt(dot->object)}) {
+                    target_ty.emplace(*obj_ty);
+                }
+            } else if (imp) {
+                if (const auto fn_ty{module_->get_sema_type_opt(call.function)}) {
+                    if (const auto fn{fn_ty->get_data().as_opt<sema::types::function>()}) {
+                        target_ty.emplace(fn->return_type);
+                    }
+                }
+            }
+
+            if (target_ty) {
+                if (const auto meta{target_ty->get_data().as_opt<sema::types::meta_type>()}) {
+                    target_ty.emplace(meta->instance);
+                }
+                if (const auto ptr{target_ty->get_data().as_opt<sema::types::pointer>()}) {
+                    target_ty.emplace(ptr->underlying);
+                } else if (const auto ref{target_ty->get_data().as_opt<sema::types::reference>()}) {
+                    target_ty.emplace(ref->underlying);
+                }
+            }
+
+            // If the callee is an `obj.method(...)` or `.method(...)` call, locate the method
+            // declaration:
             // 1. Look up extension methods on `target_ty` across registered `impl` blocks.
             // 2. Look up inherent methods directly declared in the aggregate's symbol table.
-            if (!method_fn) {
-                if (const auto obj_ty{module_->get_sema_type_opt(dot->object)}) {
-                    stdx::option<const sema::type&> target_ty{obj_ty};
-                    if (const auto ptr{target_ty->get_data().as_opt<sema::types::pointer>()}) {
-                        target_ty.emplace(ptr->underlying);
-                    } else if (const auto ref{
-                                   target_ty->get_data().as_opt<sema::types::reference>()}) {
-                        target_ty.emplace(ref->underlying);
-                    }
-
-                    // Extension method search via impl registry:
-                    for (const auto& em : ctx_.impls.methods_of(*target_ty)) {
-                        if (em.method->name == member_ident.name) {
-                            if (em.method->defining_mod) {
-                                method_mod.emplace(
-                                    const_cast<mod::module&>(*em.method->defining_mod));
-                            } else if (em.record->enclosing) {
-                                method_mod.emplace(const_cast<mod::module&>(*em.record->enclosing));
-                            } else {
-                                method_mod.emplace(module_);
-                            }
-                            if (const auto m_decl{
-                                    method_mod->ast.get_as_opt<ast::decl_stmt>(em.method->decl)}) {
-                                if (m_decl->value) {
-                                    if (const auto fn_opt{
-                                            method_mod->ast.get_as_opt<ast::function_expr>(
-                                                *m_decl->value)}) {
-                                        method_fn = fn_opt;
-                                    }
-                                }
-                            }
-                            break;
+            if (!method_fn && target_ty) {
+                // Extension method search via impl registry:
+                for (const auto& em : ctx_.impls.methods_of(*target_ty)) {
+                    if (em.method->name == member_ident.name) {
+                        if (em.method->defining_mod) {
+                            method_mod.emplace(const_cast<mod::module&>(*em.method->defining_mod));
+                        } else if (em.record->enclosing) {
+                            method_mod.emplace(const_cast<mod::module&>(*em.record->enclosing));
+                        } else {
+                            method_mod.emplace(module_);
                         }
-                    }
-                    if (!method_fn && target_ty->has_symbol_table_idx()) {
-                        const auto& table{ctx_.registry.get(target_ty->get_symbol_table_idx())};
-                        if (const auto sym{table.get_opt(member_ident.name)}) {
-                            if (const auto sym_node{
-                                    sym->get_data().as_opt<sema::symbols::node_t>()}) {
-                                const auto& d{target_ty->get_data()};
-                                if (const auto s{d.as_opt<sema::types::struct_t>()}) {
-                                    method_mod.emplace(const_cast<mod::module&>(s->enclosing));
-                                } else if (const auto u{d.as_opt<sema::types::union_t>()}) {
-                                    method_mod.emplace(const_cast<mod::module&>(u->enclosing));
-                                } else if (const auto e{d.as_opt<sema::types::enum_t>()}) {
-                                    method_mod.emplace(const_cast<mod::module&>(e->enclosing));
+
+                        if (const auto m_decl{
+                                method_mod->ast.get_as_opt<ast::decl_stmt>(em.method->decl)}) {
+                            if (m_decl->value) {
+                                if (const auto fn_opt{
+                                        method_mod->ast.get_as_opt<ast::function_expr>(
+                                            *m_decl->value)}) {
+                                    method_fn = fn_opt;
                                 }
-                                if (method_mod) {
-                                    if (const auto m_decl{
-                                            method_mod->ast.get_as_opt<ast::decl_stmt>(
-                                                *sym_node)}) {
-                                        if (m_decl->value) {
-                                            if (const auto fn_opt{
-                                                    method_mod->ast.get_as_opt<ast::function_expr>(
-                                                        *m_decl->value)}) {
-                                                method_fn = fn_opt;
-                                            }
+                            }
+                        }
+                        break;
+                    }
+                }
+
+                if (!method_fn && target_ty->has_symbol_table_idx()) {
+                    const auto& table{ctx_.registry.get(target_ty->get_symbol_table_idx())};
+                    if (const auto sym{table.get_opt(member_ident.name)}) {
+                        if (const auto sym_node{sym->get_data().as_opt<sema::symbols::node_t>()}) {
+                            const auto& d{target_ty->get_data()};
+                            if (const auto s{d.as_opt<sema::types::struct_t>()}) {
+                                method_mod.emplace(const_cast<mod::module&>(s->enclosing));
+                            } else if (const auto u{d.as_opt<sema::types::union_t>()}) {
+                                method_mod.emplace(const_cast<mod::module&>(u->enclosing));
+                            } else if (const auto e{d.as_opt<sema::types::enum_t>()}) {
+                                method_mod.emplace(const_cast<mod::module&>(e->enclosing));
+                            }
+                            if (method_mod) {
+                                if (const auto m_decl{
+                                        method_mod->ast.get_as_opt<ast::decl_stmt>(*sym_node)}) {
+                                    if (m_decl->value) {
+                                        if (const auto fn_opt{
+                                                method_mod->ast.get_as_opt<ast::function_expr>(
+                                                    *m_decl->value)}) {
+                                            method_fn = fn_opt;
                                         }
                                     }
                                 }
@@ -2567,11 +2785,11 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                 // instance, so `call.arguments[0]` already IS the self value
                 stdx::option<const_value> obj_val;
                 bool                      obj_is_type_ns{false};
-                if (method_fn->self) {
+                if (method_fn->self && dot) {
                     obj_val        = try_eval(dot->object);
                     obj_is_type_ns = obj_val && obj_val->is<stdx::option<sema::type&>>();
                 }
-                if (method_fn->self && !obj_is_type_ns) {
+                if (method_fn->self && dot && !obj_is_type_ns) {
                     if (!obj_val) { return stdx::none; }
                     args.emplace_back(*obj_val);
                 }
@@ -2584,8 +2802,44 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                 }
                 auto* const prev{module_.get()};
                 if (method_mod != prev) { set_module(*method_mod); }
+
+                const auto prefix{
+                    target_ty ? ctx_.generic_functions.get_type_ctor_member_prefix(*target_ty)
+                              : stdx::none};
+                const auto diff{prefix ? ctx_.instantiation_cache.get_body_type_diff(*prefix)
+                                       : method_mod->active_body_diff};
+                const mod::body_diff_guard diff_guard{*method_mod, diff};
+
+                stdx::option<ghoti::scope_guard<std::vector<sema::constexpr_frame>>>
+                    ctor_binding_guard;
+                if (prefix) {
+                    if (const auto bindings{
+                            ctx_.instantiation_cache.get_type_ctor_bindings(*prefix)}) {
+                        sema::constexpr_frame ctor_frame;
+                        for (const auto& [name, val] : *bindings) {
+                            ctor_frame.insert_or_assign(name, val);
+                        }
+                        ctor_binding_guard.emplace(ctx_.constexpr_binding_frames,
+                                                   std::move(ctor_frame));
+                    }
+                }
+
                 auto res{eval_constexpr_fn(id, *method_fn, args)};
                 if (method_mod != prev) { set_module(*prev); }
+                if (dot && method_fn->self && method_fn->self->modifier.is_mutable_ref() &&
+                    !args.empty()) {
+                    DISCARD(write_target(dot->object, args[0]));
+                }
+                const usize arg_offset{method_fn->self && dot && !obj_is_type_ns ? 1UZ : 0UZ};
+                for (usize a{0}; a < call.arguments.size() && a < method_fn->parameters.size();
+                     ++a) {
+                    if (method_fn->parameters[a].explicit_type.get_modifier().is_mutable_ref() &&
+                        (arg_offset + a) < args.size()) {
+                        if (const auto expr_h{call.arguments[a].as_opt<ast::expr_handle>()}) {
+                            DISCARD(write_target(*expr_h, args[arg_offset + a]));
+                        }
+                    }
+                }
                 return res;
             }
         }
@@ -3230,6 +3484,36 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (target->get_kind() == sema::type_kind::POINTER) {
             return const_value{static_cast<u64>(static_cast<u128>(*src_int)), target};
         }
+        if (const auto en{target->get_data().as_opt<sema::types::enum_t>()}) {
+            std::string name;
+            for (usize idx{0}; idx < en->ast_enumerations.size(); ++idx) {
+                const auto& e{en->ast_enumerations[idx]};
+                const auto& vname{en->enclosing.ast.get_as<ast::identifier_expr>(e.name).name};
+                auto        val{static_cast<i64>(idx)};
+                if (e.value) {
+                    auto&      enclosing_mod{const_cast<mod::module&>(en->enclosing)};
+                    const_eval enclosing_eval{ctx_, enclosing_mod};
+                    enclosing_eval.set_symbol_scoping(symbol_scoping_);
+                    enclosing_eval.set_constexpr_context(is_constexpr_context());
+                    if (const auto ev{enclosing_eval.try_eval(*e.value)}) {
+                        val = static_cast<i64>(ev->as_int_opt().value_or(val));
+                    }
+                }
+                if (val == static_cast<i64>(*src_int)) {
+                    name = std::string{vname};
+                    break;
+                }
+            }
+            // A value with no listed variant is only meaningful for a non-exhaustive enum
+            // (mirrors the runtime `_` fallback in `emitter::emit_runtime_tag_name`); an
+            // exhaustive enum has no valid fallback, so decline to fold and let the emitter's
+            // runtime cast guard trap on the invalid value instead.
+            if (name.empty()) {
+                if (!en->non_exhaustive) { return stdx::none; }
+                name = "_";
+            }
+            return const_value{const_enum{std::move(name), static_cast<i64>(*src_int)}, target};
+        }
         return stdx::none;
     }
     case syntax::token_type_t::BUILTIN_SET_MAIN_SYMBOL: {
@@ -3311,7 +3595,7 @@ auto const_eval::lookup_bound_callable(std::string_view name) -> stdx::option<bo
 
 auto const_eval::eval_constexpr_fn(ast::node_id                      call_id,
                                    const ast::function_expr&         fn_expr,
-                                   const std::vector<const_value>&   args,
+                                   std::vector<const_value>&         args,
                                    stdx::option<const const_struct&> captures)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
@@ -3355,6 +3639,7 @@ auto const_eval::eval_constexpr_fn(ast::node_id                      call_id,
     const default_counter::guard g{recursion_depth_};
     const bool                   prev_cond_unknown{std::exchange(cond_unknown_, false)};
     const auto                   prev_signal{std::exchange(current_signal_, eval_signal{})};
+    const auto                   prev_error_val{std::exchange(current_error_val_, stdx::none)};
     const auto                   block_res{eval_stmt(fn_expr.body)};
     const bool                   unknown{std::exchange(cond_unknown_, prev_cond_unknown)};
     stdx::option<const_value>    fn_result;
@@ -3363,7 +3648,31 @@ auto const_eval::eval_constexpr_fn(ast::node_id                      call_id,
     } else {
         fn_result = block_res;
     }
-    current_signal_ = prev_signal;
+    current_signal_    = prev_signal;
+    current_error_val_ = prev_error_val;
+
+    if (has_self && !args.empty()) {
+        const auto& self_ident{module_->ast.get_as<ast::identifier_expr>(*fn_expr.self->name)};
+        if (auto it{call_stack_.back().bindings.find(self_ident.name)};
+            it != call_stack_.back().bindings.end()) {
+            args[0] = it->second;
+        }
+    }
+    const usize p_offset{has_self ? 1UZ : 0UZ};
+    for (usize p = 0; p < fn_expr.parameters.size(); ++p) {
+        const auto& param{fn_expr.parameters[p]};
+        if (param.name.is<ast::identifier_expr>()) {
+            const auto& ident{module_->ast.get_as<ast::identifier_expr>(param.name)};
+            if (param.explicit_type.get_modifier().is_mutable_ref() &&
+                (p_offset + p) < args.size()) {
+                if (auto it{call_stack_.back().bindings.find(ident.name)};
+                    it != call_stack_.back().bindings.end()) {
+                    args[p_offset + p] = it->second;
+                }
+            }
+        }
+    }
+
     call_stack_.pop_back();
     while (recursion_limit_stack_.size() > prev_stack_size) {
         max_recursion_depth_ = recursion_limit_stack_.back();
@@ -3427,10 +3736,33 @@ auto const_eval::eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_v
             };
             return stdx::none;
         },
+        [&](const ast::defer_stmt& data) -> stdx::option<const_value> {
+            if (!call_stack_.empty()) {
+                call_stack_.back().defers.push_back(defer_entry{
+                    .stmt        = data.deferred,
+                    .is_errdefer = false,
+                    .capture     = stdx::none,
+                    .modifier    = {},
+                });
+            }
+            return stdx::none;
+        },
+        [&](const ast::errdefer_stmt& data) -> stdx::option<const_value> {
+            if (!call_stack_.empty()) {
+                call_stack_.back().defers.push_back(defer_entry{
+                    .stmt        = data.deferred,
+                    .is_errdefer = true,
+                    .capture     = data.capture,
+                    .modifier    = data.modifier,
+                });
+            }
+            return stdx::none;
+        },
         [&](const ast::discard_stmt& data) -> stdx::option<const_value> {
             if (module_->ast[data.discarded].is<ast::if_expr>() ||
                 module_->ast[data.discarded].is<ast::while_loop_expr>() ||
                 module_->ast[data.discarded].is<ast::do_while_loop_expr>() ||
+                module_->ast[data.discarded].is<ast::infinite_loop_expr>() ||
                 module_->ast[data.discarded].is<ast::for_loop_expr>() ||
                 module_->ast[data.discarded].is<ast::match_expr>() ||
                 module_->ast[data.discarded].is<ast::label_expr>()) {
@@ -3447,6 +3779,7 @@ auto const_eval::eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_v
             if (module_->ast[expr_id].is<ast::if_expr>() ||
                 module_->ast[expr_id].is<ast::while_loop_expr>() ||
                 module_->ast[expr_id].is<ast::do_while_loop_expr>() ||
+                module_->ast[expr_id].is<ast::infinite_loop_expr>() ||
                 module_->ast[expr_id].is<ast::for_loop_expr>() ||
                 module_->ast[expr_id].is<ast::match_expr>() ||
                 module_->ast[expr_id].is<ast::label_expr>()) {
@@ -3465,7 +3798,9 @@ auto const_eval::eval_block(ast::node_id, const ast::block_stmt& block)
     PROFILE_FUNCTION();
     call_stack_.emplace_back();
     stdx::option<const_value> result;
-    for (const auto& stmt : block.statements) {
+    for (usize idx{0}; idx < block.statements.size(); ++idx) {
+        const auto& stmt{block.statements[idx]};
+        const bool  is_last{idx + 1 == block.statements.size()};
         if (current_signal_.kind || cond_unknown_) { break; }
         const auto res{eval_stmt(stmt)};
         if (current_signal_.kind) {
@@ -3476,12 +3811,32 @@ auto const_eval::eval_block(ast::node_id, const ast::block_stmt& block)
             result = stdx::none;
             break;
         }
-        if (res) {
+        if (is_last && res) {
             result = res;
             break;
         }
     }
-    call_stack_.pop_back();
+
+    if (!call_stack_.empty()) {
+        auto       defers{std::move(call_stack_.back().defers)};
+        const auto saved_signal{current_signal_};
+        current_signal_ = eval_signal{};
+        const bool is_error_edge{current_error_val_.has_value()};
+        for (auto it{defers.rbegin()}; it != defers.rend(); ++it) {
+            const auto& entry{*it};
+            if (entry.is_errdefer && !is_error_edge) { continue; }
+            if (entry.is_errdefer && entry.capture &&
+                entry.capture->template is<ast::identifier_expr>()) {
+                const auto& ident{module_->ast.get_as<ast::identifier_expr>(**entry.capture)};
+                const_value bound_val{current_error_val_ ? *current_error_val_
+                                                         : const_value{void_val{}}};
+                call_stack_.back().bindings.insert_or_assign(ident.name, bound_val);
+            }
+            eval_stmt(entry.stmt);
+        }
+        current_signal_ = saved_signal;
+        call_stack_.pop_back();
+    }
     return result;
 }
 
@@ -3642,6 +3997,38 @@ auto const_eval::eval_do_while(ast::node_id, const ast::do_while_loop_expr& loop
             return stdx::none;
         }
         if (!cond->as<bool>()) { break; }
+    }
+    return stdx::none;
+}
+
+auto const_eval::eval_infinite_loop(ast::node_id, const ast::infinite_loop_expr& loop)
+    -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
+    usize iterations{0};
+    while (true) {
+        if (iterations >= ctx_.eval_unroll_limit) {
+            cond_unknown_ = true;
+            return stdx::none;
+        }
+        ++iterations;
+        const auto body_res{eval_stmt(loop.block)};
+        if (current_signal_.kind == eval_signal_kind::BREAK) {
+            if (!current_signal_.target_label.has_value()) {
+                const auto val{current_signal_.value};
+                current_signal_ = eval_signal{};
+                return val;
+            }
+            return current_signal_.value;
+        }
+        if (current_signal_.kind == eval_signal_kind::CONTINUE) {
+            if (!current_signal_.target_label.has_value()) {
+                current_signal_ = eval_signal{};
+                continue;
+            }
+            return current_signal_.value;
+        }
+        if (current_signal_.kind) { return current_signal_.value; }
+        if (cond_unknown_) { return stdx::none; }
     }
     return stdx::none;
 }
@@ -3824,6 +4211,26 @@ auto const_eval::simulate_stmt(const ast::stmt_handle& stmt) -> void {
         [&](const ast::decl_stmt& decl) { simulate_decl(decl); },
         [&](const ast::expr_stmt& expr_stmt) { simulate_expr(expr_stmt.expression); },
         [&](const ast::block_stmt& block) { simulate_block(block); },
+        [&](const ast::defer_stmt& data) {
+            if (!call_stack_.empty()) {
+                call_stack_.back().defers.push_back(defer_entry{
+                    .stmt        = data.deferred,
+                    .is_errdefer = false,
+                    .capture     = stdx::none,
+                    .modifier    = {},
+                });
+            }
+        },
+        [&](const ast::errdefer_stmt& data) {
+            if (!call_stack_.empty()) {
+                call_stack_.back().defers.push_back(defer_entry{
+                    .stmt        = data.deferred,
+                    .is_errdefer = true,
+                    .capture     = data.capture,
+                    .modifier    = data.modifier,
+                });
+            }
+        },
         [&](const ast::break_stmt& data) {
             stdx::option<std::string_view> lbl;
             if (data.label) { lbl = module_->ast.get_as<ast::identifier_expr>(*data.label).name; }
@@ -3873,10 +4280,14 @@ auto const_eval::simulate_expr(ast::node_id id) -> void {
         simulate_while(*while_loop);
     } else if (const auto do_while = module_->ast.get_as_opt<ast::do_while_loop_expr>(id)) {
         simulate_do_while(*do_while);
+    } else if (const auto infinite_loop = module_->ast.get_as_opt<ast::infinite_loop_expr>(id)) {
+        simulate_infinite_loop(*infinite_loop);
     } else if (const auto for_loop = module_->ast.get_as_opt<ast::for_loop_expr>(id)) {
         simulate_for(*for_loop);
     } else if (const auto label = module_->ast.get_as_opt<ast::label_expr>(id)) {
         simulate_expr(*label->body);
+    } else if (module_->ast[id].is<ast::call_expr>()) {
+        DISCARD(try_eval(id));
     }
 }
 
@@ -4234,10 +4645,60 @@ auto const_eval::simulate_for(const ast::for_loop_expr& loop) -> void {
     if (loop.non_break && !current_signal_.kind) { simulate_stmt(*loop.non_break); }
 }
 
+auto const_eval::simulate_infinite_loop(const ast::infinite_loop_expr& loop) -> void {
+    usize iterations{0};
+    while (true) {
+        if (iterations >= ctx_.eval_unroll_limit) {
+            cond_unknown_ = true;
+            return;
+        }
+        ++iterations;
+        simulate_stmt(loop.block);
+        if (current_signal_.kind == eval_signal_kind::BREAK) {
+            if (!current_signal_.target_label.has_value()) {
+                current_signal_ = eval_signal{};
+                break;
+            }
+            return;
+        }
+        if (current_signal_.kind == eval_signal_kind::CONTINUE) {
+            if (!current_signal_.target_label.has_value()) {
+                current_signal_ = eval_signal{};
+                continue;
+            } else {
+                return;
+            }
+        } else if (current_signal_.kind || cond_unknown_) {
+            return;
+        }
+    }
+}
+
 auto const_eval::simulate_block(const ast::block_stmt& block) -> void {
+    call_stack_.emplace_back();
     for (const auto& s : block.statements) {
         simulate_stmt(s);
-        if (cond_unknown_ || current_signal_.kind) { return; }
+        if (cond_unknown_ || current_signal_.kind) { break; }
+    }
+    if (!call_stack_.empty()) {
+        auto       defers{std::move(call_stack_.back().defers)};
+        const auto saved_signal{current_signal_};
+        current_signal_ = eval_signal{};
+        const bool is_error_edge{current_error_val_.has_value()};
+        for (auto it{defers.rbegin()}; it != defers.rend(); ++it) {
+            const auto& entry{*it};
+            if (entry.is_errdefer && !is_error_edge) { continue; }
+            if (entry.is_errdefer && entry.capture &&
+                entry.capture->template is<ast::identifier_expr>()) {
+                const auto& ident{module_->ast.get_as<ast::identifier_expr>(**entry.capture)};
+                const_value bound_val{current_error_val_ ? *current_error_val_
+                                                         : const_value{void_val{}}};
+                call_stack_.back().bindings.insert_or_assign(ident.name, bound_val);
+            }
+            simulate_stmt(entry.stmt);
+        }
+        current_signal_ = saved_signal;
+        call_stack_.pop_back();
     }
 }
 

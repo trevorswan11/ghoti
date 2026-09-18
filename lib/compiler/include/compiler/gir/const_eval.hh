@@ -128,8 +128,16 @@ class const_eval {
     auto set_constexpr_context(bool enabled) noexcept -> void { constexpr_context_ = enabled; }
 
   private:
+    struct defer_entry {
+        ast::stmt_handle                            stmt;
+        bool                                        is_errdefer{false};
+        stdx::option<ast::discardable_ident_handle> capture;
+        ast::type_modifier                          modifier;
+    };
+
     struct call_frame {
         ankerl::unordered_dense::map<std::string_view, const_value> bindings;
+        std::vector<defer_entry>                                    defers;
     };
 
     // A `constexpr` callable (closure or plain function) bound to `name` in scope
@@ -201,7 +209,7 @@ class const_eval {
     [[nodiscard]] auto eval_type_info(sema::type& denoted) -> const_value;
     auto               eval_constexpr_fn(ast::node_id                      call_id,
                                          const ast::function_expr&         fn_expr,
-                                         const std::vector<const_value>&   args,
+                                         std::vector<const_value>&         args,
                                          stdx::option<const const_struct&> captures = stdx::none)
         -> stdx::option<const_value>;
 
@@ -214,6 +222,8 @@ class const_eval {
     auto eval_if(ast::node_id id, const ast::if_expr& if_expr) -> stdx::option<const_value>;
     auto eval_while(ast::node_id id, const ast::while_loop_expr& loop) -> stdx::option<const_value>;
     auto eval_do_while(ast::node_id id, const ast::do_while_loop_expr& loop)
+        -> stdx::option<const_value>;
+    auto eval_infinite_loop(ast::node_id id, const ast::infinite_loop_expr& loop)
         -> stdx::option<const_value>;
     auto eval_for(ast::node_id id, const ast::for_loop_expr& loop) -> stdx::option<const_value>;
 
@@ -249,6 +259,7 @@ class const_eval {
 
     auto lookup_local_binding(std::string_view name) const noexcept -> stdx::option<const_value>;
     auto set_local_binding(std::string_view name, const_value val) -> bool;
+    auto write_target(ast::node_id target, const_value val) -> bool;
 
     // Simulates execution of a statement preceding the current evaluation site.
     // Dispatches declarations, expressions/assignments, sub-blocks, and control-flow signals.
@@ -263,6 +274,7 @@ class const_eval {
     auto simulate_if(const ast::if_expr& if_expr) -> void;
     auto simulate_while(const ast::while_loop_expr& loop) -> void;
     auto simulate_do_while(const ast::do_while_loop_expr& loop) -> void;
+    auto simulate_infinite_loop(const ast::infinite_loop_expr& loop) -> void;
     auto simulate_for(const ast::for_loop_expr& loop) -> void;
     auto simulate_block(const ast::block_stmt& block) -> void;
 
@@ -281,11 +293,13 @@ class const_eval {
 
     // Set by `eval_if`/`eval_while`/`eval_do_while`/`eval_for` when a construct's own
     // condition/iterable can't be folded.
-    bool        cond_unknown_{false};
-    bool        constexpr_context_{false};
-    eval_signal current_signal_{};
+    bool                      cond_unknown_{false};
+    bool                      constexpr_context_{false};
+    eval_signal               current_signal_{};
+    stdx::option<const_value> current_error_val_{};
 
     ankerl::unordered_dense::map<memo_key, const_value, memo_key_hash> memo_cache_;
+    ankerl::unordered_dense::map<std::string, const_value>             global_cx_vars_;
 };
 
 } // namespace ghoti::gir

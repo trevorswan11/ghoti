@@ -366,3 +366,13 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `@assert` and `@verify` have been hardened such that they can work correctly in constexpr contexts
 - Resolve an issue where implicit access would not work in some contexts
     - Notably when accessing static constants (non-functions) in generic types
+- Do-while and infinite loops can now be marked `constexpr`
+    - `do ... while constexpr (cond)` unrolls the loop upto the unroll limit
+    - `loop constexpr { ... }` unrolls the loop upto the unroll limit
+- Fixes a bug where compile time non-exhaustive enums could emit illegal instructions from `@tagName`
+- Fully support `constexpr var` in all compile time contexts
+    - This includes indexing, which was currently a blindspot of the evaluator
+- Allow control flow in constexpr loops only when in a compile time context
+- Add `unreachable` code detection to compile time code execution
+- Defer statements (includes errdefer with captures) now work in compile time contexts
+- Support global `constexpr var` declarations
