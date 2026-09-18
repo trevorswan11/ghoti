@@ -538,6 +538,7 @@ class type_resolver {
     bool in_expr_branch_{false};
     // Skips `if`/`match constexpr` folding and the throwaway `Ctor(<dummy>)` cache insert
     bool building_param_template_{false};
+    bool in_constexpr_loop_{false};
 
     // Set by a dedicated instantiation resolver: a body-local decl whose declaring scope index is
     // at or above this floor  is re-typed even though an earlier pass already left its symbol

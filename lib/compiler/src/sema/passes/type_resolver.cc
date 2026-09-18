@@ -3141,13 +3141,16 @@ auto type_resolver::visit(ast::node_id id, const ast::call_expr& call) -> void {
 
 auto type_resolver::visit(ast::node_id id, const ast::do_while_loop_expr& do_while) -> void {
     PROFILE_FUNCTION();
+    if (do_while.is_constexpr) { check_constexpr_loop_jumps(do_while.block); }
 
     // The loop itself holds the block index, not the block
     auto& loop_type{resolving_.get_sema_type(id)};
     {
-        const scope              s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
-        const auto&              block{resolving_.ast.get_as<ast::block_stmt>(do_while.block)};
-        const active_block_guard guard{active_blocks_, block};
+        const scope                  s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
+        const auto&                  block{resolving_.ast.get_as<ast::block_stmt>(do_while.block)};
+        const active_block_guard     guard{active_blocks_, block};
+        const mutating_context_guard cx_loop_g{in_constexpr_loop_,
+                                               do_while.is_constexpr || in_constexpr_loop_};
         for (usize idx{0}; idx < block.statements.size(); ++idx) {
             active_blocks_.back().current_stmt_idx = idx;
             TRY_RESOLVE(block.statements[idx]);
@@ -4351,7 +4354,7 @@ auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void 
         return last_type_.emplace(void_t);
     }
 
-    if (if_expr.constexpr_condition) {
+    if (if_expr.constexpr_condition && !in_constexpr_loop_) {
         // Install simulated constexpr_frame so condition folding observes preceding `constexpr var`
         // mutations.
         const constexpr_frame_guard                    sim_guard{ctx_.constexpr_binding_frames,
@@ -4518,12 +4521,15 @@ auto type_resolver::visit(ast::node_id id, const ast::index_expr& index) -> void
 
 auto type_resolver::visit(ast::node_id id, const ast::infinite_loop_expr& loop) -> void {
     PROFILE_FUNCTION();
+    if (loop.is_constexpr) { check_constexpr_loop_jumps(loop.block); }
     auto&       loop_type{resolving_.get_sema_type(id)};
     const scope s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
 
     // Just an abridged normal loop handler
-    const auto&              block{resolving_.ast.get_as<ast::block_stmt>(loop.block)};
-    const active_block_guard guard{active_blocks_, block};
+    const auto&                  block{resolving_.ast.get_as<ast::block_stmt>(loop.block)};
+    const active_block_guard     guard{active_blocks_, block};
+    const mutating_context_guard cx_loop_g{in_constexpr_loop_,
+                                           loop.is_constexpr || in_constexpr_loop_};
     for (usize idx{0}; idx < block.statements.size(); ++idx) {
         active_blocks_.back().current_stmt_idx = idx;
         TRY_RESOLVE(block.statements[idx]);
@@ -5866,8 +5872,10 @@ auto type_resolver::resolve_constexpr_match(ast::node_id           id,
                                             type&                  matcher_type) -> void {
     PROFILE_FUNCTION();
 
-    gir::const_eval evaluator{ctx_, resolving_};
-    const auto      scrutinee{evaluator.try_eval(match.matcher)};
+    const constexpr_frame_guard sim_guard{ctx_.constexpr_binding_frames, make_simulated_frame()};
+    gir::const_eval             evaluator{ctx_, resolving_};
+    const gir::const_eval::constexpr_context_guard g{evaluator, true};
+    const auto                                     scrutinee{evaluator.try_eval(match.matcher)};
     if (!scrutinee || scrutinee->is_poison()) {
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
@@ -7452,6 +7460,8 @@ auto type_resolver::visit(ast::node_id id, const ast::while_loop_expr& while_loo
         const scope              s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
         const auto&              block{resolving_.ast.get_as<ast::block_stmt>(while_loop.block)};
         const active_block_guard guard{active_blocks_, block};
+        const mutating_context_guard cx_loop_g{in_constexpr_loop_,
+                                               while_loop.is_constexpr || in_constexpr_loop_};
         for (usize idx{0}; idx < block.statements.size(); ++idx) {
             active_blocks_.back().current_stmt_idx = idx;
             TRY_RESOLVE(block.statements[idx]);
@@ -8009,7 +8019,11 @@ auto type_resolver::check_constexpr_loop_jumps(ast::stmt_handle body) -> void {
     collect_labels(collect_labels, *body);
 
     // `loop_depth` counts nested ordinary loops declared inside this constexpr loop's own body
-    auto check_jumps = [&](auto& self, ast::node_id n, usize loop_depth) -> void {
+    // `runtime_control_flow_depth` tracks nesting inside runtime branches (if/match)
+    auto check_jumps = [&](auto&        self,
+                           ast::node_id n,
+                           usize        loop_depth,
+                           usize        runtime_control_flow_depth) -> void {
         if (!n.is_valid()) { return; }
         resolving_.ast[n].visit(
             [&](const ast::break_stmt& data) {
@@ -8018,13 +8032,22 @@ auto type_resolver::check_constexpr_loop_jumps(ast::stmt_handle body) -> void {
                     data.label &&
                     !local_labels.contains(
                         resolving_.ast.get_as<ast::identifier_expr>(*data.label).name)};
-                if (unlabeled_and_local || labeled_outward) {
-                    ctx_.diags.emplace_back("'break' is not allowed inside a `for`/`while "
-                                            "constexpr` body",
+                if (labeled_outward) {
+                    ctx_.diags.emplace_back("'break' cannot target a loop outside a constexpr loop",
                                             error::CONSTEXPR_LOOP_BREAK,
                                             resolving_.ast.location_of(n));
+                } else if (unlabeled_and_local) {
+                    if (runtime_control_flow_depth > 0) {
+                        ctx_.diags.emplace_back(
+                            "'break' inside a constexpr loop is only allowed within compile-time "
+                            "control flow",
+                            error::CONSTEXPR_LOOP_BREAK,
+                            resolving_.ast.location_of(n));
+                    }
                 }
-                if (data.expression) { self(self, **data.expression, loop_depth); }
+                if (data.expression) {
+                    self(self, **data.expression, loop_depth, runtime_control_flow_depth);
+                }
             },
             [&](const ast::continue_stmt& data) {
                 const bool unlabeled_and_local{!data.label && loop_depth == 0};
@@ -8032,88 +8055,141 @@ auto type_resolver::check_constexpr_loop_jumps(ast::stmt_handle body) -> void {
                     data.label &&
                     !local_labels.contains(
                         resolving_.ast.get_as<ast::identifier_expr>(*data.label).name)};
-                if (unlabeled_and_local || labeled_outward) {
-                    ctx_.diags.emplace_back("'continue' is not allowed inside a `for`/`while "
-                                            "constexpr` body",
-                                            error::CONSTEXPR_LOOP_CONTINUE,
-                                            resolving_.ast.location_of(n));
-                }
-            },
-            [&](const ast::while_loop_expr& data) {
-                self(self, *data.condition, loop_depth);
-                if (data.continuation) { self(self, **data.continuation, loop_depth); }
-                self(self, *data.block, loop_depth + 1);
-                if (data.non_break) { self(self, **data.non_break, loop_depth); }
-            },
-            [&](const ast::for_loop_expr& data) {
-                for (const auto it : data.iterables) { self(self, *it, loop_depth); }
-                self(self, *data.block, loop_depth + 1);
-                if (data.non_break) { self(self, **data.non_break, loop_depth); }
-            },
-            [&](const ast::infinite_loop_expr& data) { self(self, *data.block, loop_depth + 1); },
-            [&](const ast::do_while_loop_expr& data) {
-                self(self, *data.condition, loop_depth);
-                self(self, *data.block, loop_depth + 1);
-            },
-            [&](const ast::block_stmt& data) {
-                for (const auto s : data) { self(self, *s, loop_depth); }
-            },
-            [&](const ast::expr_stmt& data) { self(self, *data.expression, loop_depth); },
-            [&](const ast::discard_stmt& data) { self(self, *data.discarded, loop_depth); },
-            [&](const ast::defer_stmt& data) { self(self, *data.deferred, loop_depth); },
-            [&](const ast::errdefer_stmt& data) { self(self, *data.deferred, loop_depth); },
-            [&](const ast::decl_stmt& data) {
-                if (data.value) { self(self, **data.value, loop_depth); }
-            },
-            [&](const ast::if_expr& data) {
-                self(self, *data.condition, loop_depth);
-                self(self, *data.consequence, loop_depth);
-                if (data.alternate) { self(self, *data.alternate, loop_depth); }
-            },
-            [&](const ast::match_expr& data) {
-                self(self, *data.matcher, loop_depth);
-                for (const auto& arm : data.arms) { self(self, *arm.dispatch, loop_depth); }
-            },
-            [&](const ast::binary_expr& data) {
-                self(self, *data.lhs, loop_depth);
-                self(self, *data.rhs, loop_depth);
-            },
-            [&](const ast::assignment_expr& data) {
-                self(self, *data.lhs, loop_depth);
-                self(self, *data.rhs, loop_depth);
-            },
-            [&](const ast::unary_expr& data) { self(self, *data.rhs, loop_depth); },
-            [&](const ast::reference_expr& data) { self(self, *data.rhs, loop_depth); },
-            [&](const ast::dereference_expr& data) { self(self, *data.rhs, loop_depth); },
-            [&](const ast::address_of_expr& data) { self(self, *data.rhs, loop_depth); },
-            [&](const ast::unwrap_expr& data) { self(self, *data.operand, loop_depth); },
-            [&](const ast::call_expr& data) {
-                self(self, *data.function, loop_depth);
-                for (const auto& arg : data.arguments) {
-                    if (const auto eh = arg.template as_opt<ast::expr_handle>()) {
-                        self(self, **eh, loop_depth);
+                if (labeled_outward) {
+                    ctx_.diags.emplace_back(
+                        "'continue' cannot target a loop outside a constexpr loop",
+                        error::CONSTEXPR_LOOP_CONTINUE,
+                        resolving_.ast.location_of(n));
+                } else if (unlabeled_and_local) {
+                    if (runtime_control_flow_depth > 0) {
+                        ctx_.diags.emplace_back(
+                            "'continue' inside a constexpr loop is only allowed within "
+                            "compile-time control flow (such as `if constexpr`)",
+                            error::CONSTEXPR_LOOP_CONTINUE,
+                            resolving_.ast.location_of(n));
                     }
                 }
             },
-            [&](const ast::dot_expr& data) { self(self, *data.object, loop_depth); },
+            [&](const ast::while_loop_expr& data) {
+                self(self, *data.condition, loop_depth, runtime_control_flow_depth);
+                if (data.continuation) {
+                    self(self, **data.continuation, loop_depth, runtime_control_flow_depth);
+                }
+                self(self, *data.block, loop_depth + 1, runtime_control_flow_depth);
+                if (data.non_break) {
+                    self(self, **data.non_break, loop_depth, runtime_control_flow_depth);
+                }
+            },
+            [&](const ast::for_loop_expr& data) {
+                for (const auto it : data.iterables) {
+                    self(self, *it, loop_depth, runtime_control_flow_depth);
+                }
+                self(self, *data.block, loop_depth + 1, runtime_control_flow_depth);
+                if (data.non_break) {
+                    self(self, **data.non_break, loop_depth, runtime_control_flow_depth);
+                }
+            },
+            [&](const ast::infinite_loop_expr& data) {
+                self(self, *data.block, loop_depth + 1, runtime_control_flow_depth);
+            },
+            [&](const ast::do_while_loop_expr& data) {
+                self(self, *data.condition, loop_depth, runtime_control_flow_depth);
+                self(self, *data.block, loop_depth + 1, runtime_control_flow_depth);
+            },
+            [&](const ast::block_stmt& data) {
+                for (const auto s : data) {
+                    self(self, *s, loop_depth, runtime_control_flow_depth);
+                }
+            },
+            [&](const ast::expr_stmt& data) {
+                self(self, *data.expression, loop_depth, runtime_control_flow_depth);
+            },
+            [&](const ast::discard_stmt& data) {
+                self(self, *data.discarded, loop_depth, runtime_control_flow_depth);
+            },
+            [&](const ast::defer_stmt& data) {
+                self(self, *data.deferred, loop_depth, runtime_control_flow_depth);
+            },
+            [&](const ast::errdefer_stmt& data) {
+                self(self, *data.deferred, loop_depth, runtime_control_flow_depth);
+            },
+            [&](const ast::decl_stmt& data) {
+                if (data.value) {
+                    self(self, **data.value, loop_depth, runtime_control_flow_depth);
+                }
+            },
+            [&](const ast::if_expr& data) {
+                self(self, *data.condition, loop_depth, runtime_control_flow_depth);
+                const usize next_depth{runtime_control_flow_depth +
+                                       (data.constexpr_condition ? 0 : 1)};
+                self(self, *data.consequence, loop_depth, next_depth);
+                if (data.alternate) { self(self, *data.alternate, loop_depth, next_depth); }
+            },
+            [&](const ast::match_expr& data) {
+                self(self, *data.matcher, loop_depth, runtime_control_flow_depth);
+                const usize next_depth{runtime_control_flow_depth + (data.is_constexpr ? 0 : 1)};
+                for (const auto& arm : data.arms) {
+                    self(self, *arm.dispatch, loop_depth, next_depth);
+                }
+            },
+            [&](const ast::binary_expr& data) {
+                self(self, *data.lhs, loop_depth, runtime_control_flow_depth);
+                self(self, *data.rhs, loop_depth, runtime_control_flow_depth);
+            },
+            [&](const ast::assignment_expr& data) {
+                self(self, *data.lhs, loop_depth, runtime_control_flow_depth);
+                self(self, *data.rhs, loop_depth, runtime_control_flow_depth);
+            },
+            [&](const ast::unary_expr& data) {
+                self(self, *data.rhs, loop_depth, runtime_control_flow_depth);
+            },
+            [&](const ast::reference_expr& data) {
+                self(self, *data.rhs, loop_depth, runtime_control_flow_depth);
+            },
+            [&](const ast::dereference_expr& data) {
+                self(self, *data.rhs, loop_depth, runtime_control_flow_depth);
+            },
+            [&](const ast::address_of_expr& data) {
+                self(self, *data.rhs, loop_depth, runtime_control_flow_depth);
+            },
+            [&](const ast::unwrap_expr& data) {
+                self(self, *data.operand, loop_depth, runtime_control_flow_depth);
+            },
+            [&](const ast::call_expr& data) {
+                self(self, *data.function, loop_depth, runtime_control_flow_depth);
+                for (const auto& arg : data.arguments) {
+                    if (const auto eh = arg.template as_opt<ast::expr_handle>()) {
+                        self(self, **eh, loop_depth, runtime_control_flow_depth);
+                    }
+                }
+            },
+            [&](const ast::dot_expr& data) {
+                self(self, *data.object, loop_depth, runtime_control_flow_depth);
+            },
             [&](const ast::index_expr& data) {
-                self(self, *data.array, loop_depth);
-                self(self, *data.index, loop_depth);
+                self(self, *data.array, loop_depth, runtime_control_flow_depth);
+                self(self, *data.index, loop_depth, runtime_control_flow_depth);
             },
             [&](const ast::range_expr& data) {
-                if (data.lhs) { self(self, **data.lhs, loop_depth); }
-                if (data.rhs) { self(self, **data.rhs, loop_depth); }
+                if (data.lhs) { self(self, **data.lhs, loop_depth, runtime_control_flow_depth); }
+                if (data.rhs) { self(self, **data.rhs, loop_depth, runtime_control_flow_depth); }
             },
             [&](const ast::array_expr& data) {
-                for (const auto item : data.items) { self(self, *item, loop_depth); }
+                for (const auto item : data.items) {
+                    self(self, *item, loop_depth, runtime_control_flow_depth);
+                }
             },
-            [&](const ast::label_expr& data) { self(self, *data.body, loop_depth); },
+            [&](const ast::label_expr& data) {
+                self(self, *data.body, loop_depth, runtime_control_flow_depth);
+            },
             [&](const ast::initializer_expr& data) {
-                for (const auto& init : data.initializers) { self(self, *init.value, loop_depth); }
+                for (const auto& init : data.initializers) {
+                    self(self, *init.value, loop_depth, runtime_control_flow_depth);
+                }
             },
             [&](const auto&) {});
     };
-    check_jumps(check_jumps, *body, 0);
+    check_jumps(check_jumps, *body, 0, 0);
 }
 
 auto type_resolver::visit(ast::node_id id, const ast::defer_stmt& defer) -> void {
