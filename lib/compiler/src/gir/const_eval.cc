@@ -4190,9 +4190,13 @@ auto const_eval::simulate_active_blocks(gsl::span<const sema::active_block_frame
         if (!frame.block) { continue; }
         for (usize i{0}; i < frame.current_stmt_idx && i < frame.block->statements.size(); ++i) {
             simulate_stmt(frame.block->statements[i]);
-            if (cond_unknown_ || current_signal_.kind) {
+            if (cond_unknown_) {
                 out_frame.clear();
                 return;
+            }
+            if (current_signal_.kind) {
+                current_signal_ = eval_signal{};
+                break;
             }
         }
     }

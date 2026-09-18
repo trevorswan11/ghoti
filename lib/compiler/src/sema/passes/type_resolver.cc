@@ -1693,6 +1693,10 @@ template <ast::IndexableID ID>
         break;
     }
     case token_type_t::BUILTIN_COMPILE_ERROR: {
+        if (in_constexpr_loop_) {
+            return_type = &builtin.return_type;
+            break;
+        }
         std::string message{"compilation aborted by @compileError"};
         if (!call.arguments.empty()) {
             if (const auto expr_h{call.arguments[0].as_opt<ast::expr_handle>()}) {

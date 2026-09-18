@@ -3323,6 +3323,22 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             emit_panic_call(message, id);
             return value{void_val{}, ret_type};
         }
+        case syntax::token_type_t::BUILTIN_COMPILE_ERROR: {
+            std::string message{"compilation aborted by @compileError"};
+            if (!call.arguments.empty()) {
+                if (const auto expr_h{call.arguments[0].as_opt<ast::expr_handle>()}) {
+                    if (const auto str_expr{active_ast().get_as_opt<ast::string_expr>(*expr_h)}) {
+                        message = std::string{str_expr->value};
+                    } else if (const auto cv{const_eval_.try_eval(*expr_h)}) {
+                        if (const auto s{cv->as_opt<std::string>()}) { message = *s; }
+                    }
+                }
+            }
+            ctx_.diags.emplace_back(std::move(message),
+                                    sema::error::COMPILE_ERROR_REACHED,
+                                    active_ast().location_of(call.function));
+            return value{undefined_val{}, ret_type};
+        }
         case syntax::token_type_t::BUILTIN_TRAP: {
             builder_.emit_builtin_call("@trap", {}, ret_type);
             builder_.emit_unreachable();

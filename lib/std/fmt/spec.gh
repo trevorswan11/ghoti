@@ -341,10 +341,9 @@ pub constexpr validate := fn(constexpr fmt: []u8, constexpr arg_count: usize): v
     }
 };
 
-// TODO: Uncomment me when underlying compiler bug is fixed
-// test "validate at compile time" {
-// _ = validate("{}", 1);
-// _ = validate("hello {0} world {1}", 2);
-// _ = validate("{{}} {}", 1);
-// _ = validate("{:#08x} = {:+5.2f}", 2);
-// }
+test "validate at compile time" {
+    validate("{}", 1);
+    validate("hello {0} world {1}", 2);
+    validate("{{}} {}", 1);
+    validate("{:#08x} = {:+5.2f}", 2);
+}
