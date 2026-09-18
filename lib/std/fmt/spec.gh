@@ -24,6 +24,24 @@ pub const Align := enum : i32 {
     };
 };
 
+test "Align at compile time" {
+    constexpr a_left := Align.from('<');
+    @expect(a_left == .left);
+    constexpr a_right := Align.from('>');
+    @expect(a_right == .right);
+    constexpr a_center := Align.from('^');
+    @expect(a_center == .center);
+
+    constexpr v_left := Align.isValid('<');
+    @expect(v_left == true);
+    constexpr v_right := Align.isValid('>');
+    @expect(v_right == true);
+    constexpr v_center := Align.isValid('^');
+    @expect(v_center == true);
+    constexpr v_bad := Align.isValid('x');
+    @expect(v_bad == false);
+}
+
 pub const Kind := enum : u8 {
     d = 'd',
     x = 'x',
@@ -38,13 +56,23 @@ pub const Kind := enum : u8 {
     @"?" = '?',
 
     /// Checks if the provided byte is a valid kind character
-    const isValid := fn(constexpr byte: u8): bool {
-        return match (byte) {
+    pub constexpr isValid := fn(constexpr byte: u8): bool {
+        return match constexpr (byte) {
             'd', 'x', 'X', 'b', 'o', 'c', 's', 'e', 'f', 'p', '?' => true,
             _ => false,
         };
     };
 };
+
+test "Kind.isValid at compile time" {
+    constexpr kinds := [_]u8{ 'd', 'x', 'X', 'b', 'o', 'c', 's', 'e', 'f', 'p', '?' };
+    for constexpr (kinds) |kind| {
+        constexpr k := Kind.isValid('d');
+        @expect(k == true);
+    }
+    constexpr k_invalid := Kind.isValid('z');
+    @expect(k_invalid == false);
+}
 
 pub const Spec := struct {
     pub arg_idx: std.Option(usize) = .empty,
@@ -120,10 +148,30 @@ pub const Spec := struct {
     };
 };
 
-test "Spec.parseBody parses all spec inputs" {
-    var s: Spec = .{};
-    const end := s.parseBody("*^+08.3f}", 0);
+test "Spec.parseBody parses all spec inputs at compile time" {
+    constexpr var s: Spec = .{};
+    constexpr end := s.parseBody("*^+08.3f}", 0);
     @expect(end == 8);
+    @expect(s.fill == '*');
+    match (s.align) {
+        .some => |a| @expect(a == .center),
+        .none => unreachable,
+    }
+    @expect(s.plus == true);
+    @expect(s.alt == false);
+    @expect(s.zero == true);
+    match (s.width) {
+        .some => |w| @expect(w == 8),
+        .none => unreachable,
+    }
+    match (s.precision) {
+        .some => |p| @expect(p == 3),
+        .none => unreachable,
+    }
+    match (s.kind) {
+        .some => |k| @expect(k == .f),
+        .none => unreachable,
+    }
 }
 
 pub const Placeholder := struct {
@@ -153,12 +201,58 @@ pub const Placeholder := struct {
     };
 };
 
-constexpr isDigit := fn(constexpr c: u8): bool {
+test "Placeholder.parse at compile time" {
+    constexpr p_empty := Placeholder.parse("{}", 0);
+    @expect(p_empty.next == 2);
+    @expect(p_empty.spec.fill == ' ');
+    @expect(p_empty.spec.plus == false);
+    @expect(p_empty.spec.alt == false);
+    @expect(p_empty.spec.zero == false);
+    match (p_empty.spec.arg_idx) {
+        .some => unreachable,
+        .none => {},
+    }
+
+    constexpr p_idx: Placeholder = .parse("{3}", 0);
+    @expect(p_idx.next == 3);
+    match (p_idx.spec.arg_idx) {
+        .some => |idx| @expect(idx == 3),
+        .none => unreachable,
+    }
+
+    constexpr p_spec: Placeholder = .parse("{2:#08x}", 0);
+    @expect(p_spec.next == 8);
+    match (p_spec.spec.arg_idx) {
+        .some => |idx| @expect(idx == 2),
+        .none => unreachable,
+    }
+    @expect(p_spec.spec.alt == true);
+    @expect(p_spec.spec.zero == true);
+    match (p_spec.spec.width) {
+        .some => |w| @expect(w == 8),
+        .none => unreachable,
+    }
+    match (p_spec.spec.kind) {
+        .some => |k| @expect(k == .x),
+        .none => unreachable,
+    }
+}
+
+pub constexpr isDigit := fn(constexpr c: u8): bool {
     return c >= '0' and c <= '9';
 };
 
+test "isDigit at compile time" {
+    constexpr d0 := isDigit('0');
+    @expect(d0 == true);
+    constexpr d9 := isDigit('9');
+    @expect(d9 == true);
+    constexpr da := isDigit('a');
+    @expect(da == false);
+}
+
 /// Parses a decimal integer from a slice of ASCII digit bytes at compile time.
-constexpr parseUsize := fn(constexpr digits: []u8): usize {
+pub constexpr parseUsize := fn(constexpr digits: []u8): usize {
     constexpr var n: usize = 0;
     for constexpr (digits) |c| {
         n = n * 10 + @intCast(usize, c - '0');
@@ -166,21 +260,30 @@ constexpr parseUsize := fn(constexpr digits: []u8): usize {
     return n;
 };
 
+test "parseUsize at compile time" {
+    constexpr n0 := parseUsize("0");
+    @expect(n0 == 0);
+    constexpr n42 := parseUsize("42");
+    @expect(n42 == 42);
+    constexpr n1234 := parseUsize("1234");
+    @expect(n1234 == 1234);
+}
+
 pub constexpr nextPlaceholder := fn(constexpr fmt: []u8, constexpr from: usize): usize {
-    var i := from;
-    while (i < fmt.len) : (i += 1) {
-        if (fmt[i] == '{') {
+    constexpr var i := from;
+    while constexpr (i < fmt.len) : (i += 1) {
+        if constexpr (fmt[i] == '{') {
             // Ignore double {{
-            if (i + 1 < fmt.len and fmt[i + 1] == '{') {
+            if constexpr (i + 1 < fmt.len and fmt[i + 1] == '{') {
                 i += 1;
                 continue;
             }
             return i;
         }
 
-        if (fmt[i] == '}') {
+        if constexpr (fmt[i] == '}') {
             // Ignore double }}
-            if (i + 1 < fmt.len and fmt[i + 1] == '}') {
+            if constexpr (i + 1 < fmt.len and fmt[i + 1] == '}') {
                 i += 1;
             }
             continue;
@@ -189,17 +292,23 @@ pub constexpr nextPlaceholder := fn(constexpr fmt: []u8, constexpr from: usize):
     return fmt.len;
 };
 
-test "nextPlaceholder skips escapes" {
-    @expect(nextPlaceholder("a{{b}}c{}", 0) == 7);
-    @expect(nextPlaceholder("no placeholders", 0) == 15);
+test "nextPlaceholder at compile time" {
+    constexpr p1 := nextPlaceholder("a{{b}}c{}", 0);
+    @expect(p1 == 7);
+    constexpr p2 := nextPlaceholder("no placeholders", 0);
+    @expect(p2 == 15);
+    constexpr p3 := nextPlaceholder("{}", 0);
+    @expect(p3 == 0);
+    constexpr p4 := nextPlaceholder("{{}}", 0);
+    @expect(p4 == 4);
 }
 
 pub constexpr validate := fn(constexpr fmt: []u8, constexpr arg_count: usize): void {
     constexpr var i: usize = 0;
     constexpr var placeholder_count: usize = 0;
-    while (i < fmt.len) {
-        if (fmt[i] == '{') {
-            if (i + 1 < fmt.len and fmt[i + 1] == '{') {
+    while constexpr (i < fmt.len) {
+        if constexpr (fmt[i] == '{') {
+            if constexpr (i + 1 < fmt.len and fmt[i + 1] == '{') {
                 i += 2;
                 continue;
             }
@@ -207,7 +316,7 @@ pub constexpr validate := fn(constexpr fmt: []u8, constexpr arg_count: usize): v
             // parseAt will compile error internally if the spec is bad
             constexpr parsed: Placeholder = .parse(fmt, i);
             match constexpr (parsed.spec.arg_idx) {
-                .some => |arg_idx| if (arg_idx >= arg_count) {
+                .some => |arg_idx| if constexpr (arg_idx >= arg_count) {
                     @compileError("fmt: explicit arg index out of range");
                 },
                 .none => {},
@@ -217,8 +326,8 @@ pub constexpr validate := fn(constexpr fmt: []u8, constexpr arg_count: usize): v
             continue;
         }
 
-        if (fmt[i] == '}') {
-            if (i + 1 < fmt.len and fmt[i + 1] == '}') {
+        if constexpr (fmt[i] == '}') {
+            if constexpr (i + 1 < fmt.len and fmt[i + 1] == '}') {
                 i += 2;
                 continue;
             }
@@ -227,7 +336,15 @@ pub constexpr validate := fn(constexpr fmt: []u8, constexpr arg_count: usize): v
         i += 1;
     }
 
-    if (placeholder_count != arg_count) {
+    if constexpr (placeholder_count != arg_count) {
         @compileError("fmt: wrong number of arguments");
     }
 };
+
+// TODO: Uncomment me when underlying compiler bug is fixed
+// test "validate at compile time" {
+// _ = validate("{}", 1);
+// _ = validate("hello {0} world {1}", 2);
+// _ = validate("{{}} {}", 1);
+// _ = validate("{:#08x} = {:+5.2f}", 2);
+// }
