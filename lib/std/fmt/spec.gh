@@ -347,3 +347,23 @@ test "validate at compile time" {
     validate("{{}} {}", 1);
     validate("{:#08x} = {:+5.2f}", 2);
 }
+
+pub const pad := fn(
+    w: &mut dyn std.io.Writer(Error = std.io.Error),
+    spec: Spec,
+    body: []u8,
+    default_align: Align,
+): std.Result(void, std.fmt.Error) {
+    match (spec.width) {
+        .some => |width| if (width <= body.len) return match(w.writeAll(body)) {
+            .ok => .{ .ok = {} },
+            .err => .{ .err = .io, }
+        };,
+        .none => return match(w.writeAll(body)) {
+            .ok => .{ .ok = {} },
+            .err => .{ .err = .io, }
+        }
+    }
+
+
+};

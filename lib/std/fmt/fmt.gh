@@ -3,8 +3,28 @@ import std;
 import "spec.gh" as spec;
 
 using Writer = std.io.Writer;
+using Spec = spec.Spec;
 
-pub const Format := interface {};
+pub const Error := enum { overflow, bad_spec, bad_arg, unsupported, io };
+
+pub const Format := interface {
+    const format := fn(
+        &self,
+        spec: Spec,
+        w: &mut dyn Writer(Error = std.io.Error),
+    ): std.Result(void, Error);
+};
+
+pub const format := fn(w: &mut impl Writer, constexpr fmt: []u8, args...): std.Result(void, Error) {
+    constexpr {
+        spec.validate(fmt, args.len);
+    }
+
+    var dyn_w: &mut dyn Writer(Error = sd.io.Error) = w;
+    constexpr var cursor: usize = 0;
+
+    for constexpr (args, 0..) |arg, i| {}
+};
 
 test {
     import "spec.gh";

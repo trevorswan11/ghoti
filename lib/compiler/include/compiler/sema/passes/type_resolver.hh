@@ -1,5 +1,6 @@
 #pragma once
 
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -10,6 +11,7 @@
 #include <gsl/pointers>
 #include <gsl/span>
 #include <stdx/assert.hh>
+#include <stdx/function.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
@@ -230,6 +232,15 @@ class type_resolver {
         std::vector<type*> element_types;
     };
 
+    struct binding_restore_guard {
+        std::vector<stdx::function<void(), 64>> restores;
+        binding_restore_guard() = default;
+        ~binding_restore_guard() {
+            for (auto fn : restores | std::views::reverse) { fn(); }
+        }
+        MAKE_PINNED(binding_restore_guard);
+    };
+
   private:
     auto visit(ast::node_id, const ast::array_expr&) -> void;
     auto visit(ast::node_id, const ast::asm_expr&) -> void;
@@ -431,9 +442,9 @@ class type_resolver {
 
     auto visit(ast::node_id, const ast::block_stmt&) -> void;
 
-    /// Runs a lightweight AST simulation over `active_blocks_` up to the current statement index,
-    /// materializing the latest compile-time values of mutable `constexpr var` locals.
-    /// The resulting frame is installed into `ctx_.constexpr_binding_frames` during isolated folds.
+    // Runs a lightweight AST simulation over `active_blocks_` up to the current statement index,
+    // materializing the latest compile-time values of mutable `constexpr var` locals.
+    // The resulting frame is installed into `ctx_.constexpr_binding_frames` during isolated folds.
     [[nodiscard]] auto make_simulated_frame() -> constexpr_frame;
 
     // Returns `true` if the resolution was successful

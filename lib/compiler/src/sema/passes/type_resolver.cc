@@ -2046,7 +2046,10 @@ auto type_resolver::synthesize_const_expr(const gir::const_value& val)
         for (const auto& elem : arr->elements) {
             const auto elem_expr{synthesize_const_expr(elem)};
             if (!elem_expr) { return stdx::none; }
-            init.initializers.push_back({.member = stdx::none, .value = *elem_expr});
+            init.initializers.emplace_back<ast::initializer_expr::initializer>({
+                .member = stdx::none,
+                .value  = *elem_expr,
+            });
         }
         const auto id{resolving_.ast.add_node(init_tok, init_tok, std::move(init))};
         resolving_.sync_side_tables_for_new_node();
@@ -2059,8 +2062,10 @@ auto type_resolver::synthesize_const_expr(const gir::const_value& val)
         for (const auto& [name, field_val] : st->fields) {
             const auto field_expr{synthesize_const_expr(field_val)};
             if (!field_expr) { return stdx::none; }
-            init.initializers.push_back(
-                {.member = synthesize_implicit_access(name), .value = *field_expr});
+            init.initializers.emplace_back<ast::initializer_expr::initializer>({
+                .member = synthesize_implicit_access(name),
+                .value  = *field_expr,
+            });
         }
         const auto id{resolving_.ast.add_node(init_tok, init_tok, std::move(init))};
         resolving_.sync_side_tables_for_new_node();
@@ -2072,8 +2077,10 @@ auto type_resolver::synthesize_const_expr(const gir::const_value& val)
         const auto payload_expr{synthesize_const_expr(un->payload.front())};
         if (!payload_expr) { return stdx::none; }
         ast::initializer_expr init{.object_type = stdx::none, .initializers = {}};
-        init.initializers.push_back(
-            {.member = synthesize_implicit_access(un->active_field), .value = *payload_expr});
+        init.initializers.emplace_back<ast::initializer_expr::initializer>({
+            .member = synthesize_implicit_access(un->active_field),
+            .value  = *payload_expr,
+        });
         const auto id{resolving_.ast.add_node(init_tok, init_tok, std::move(init))};
         resolving_.sync_side_tables_for_new_node();
         return ast::expr_handle{id};
@@ -3798,8 +3805,21 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         // instantiation should see the enclosing type's scope/self-binding
         const auto enclosing_for_generic{function_boundaries_.size() <= 1 ? user_type_stack_.peek()
                                                                           : stdx::none};
+
+        stdx::option<usize> enclosing_fn_table_idx;
+        if (enclosing_for_generic && enclosing_for_generic->has_symbol_table_idx()) {
+            const auto          agg_table_idx{enclosing_for_generic->get_symbol_table_idx()};
+            stdx::option<usize> preceding;
+            for (const auto idx : table_stack_) {
+                if (idx == agg_table_idx) {
+                    enclosing_fn_table_idx = preceding;
+                    break;
+                }
+                preceding.emplace(idx);
+            }
+        }
         ctx_.generic_functions.register_function(
-            fn_type, resolving_, id, fn, stdx::none, enclosing_for_generic);
+            fn_type, resolving_, id, fn, stdx::none, enclosing_for_generic, enclosing_fn_table_idx);
         register_impl_param_bounds(fn_type, fn);
         return last_type_.emplace(fn_type);
     }
@@ -9071,9 +9091,7 @@ auto type_resolver::resolve_param_impl_bodies(
             inst.resolve(param.explicit_type);
             if (inst.last_type_ && !inst.last_type_->is_poison()) {
                 auto& pty{denoted_type(*inst.last_type_.take())};
-                if (pty.get_kind() == type_kind::TYPE || param.is_constexpr) {
-                    is_generic_method = true;
-                }
+                if (is_generic_type(pty) || param.is_constexpr) { is_generic_method = true; }
                 impl_mod.set_sema_type(param.name, pty);
             }
             mark_resolved(param.name);
@@ -10159,6 +10177,7 @@ auto type_resolver::instantiate_generic(type&                             callee
     // diff
     ctx_.advance_epoch();
     const body_typing_snapshot snap{fn_mod};
+    binding_restore_guard      binding_restores;
 
     // Bind each `constexpr` parameter to its folded value while this instantiation's body is
     // resolved, so `const_eval` folds it there. `constexpr_args` is in parameter order.
@@ -10177,7 +10196,15 @@ auto type_resolver::instantiate_generic(type&                             callee
     stdx::option<const impl_record&> enclosing_impl;
     if (fn_info.enclosing_type) {
         for (const auto* r : ctx_.impls.records()) {
-            if (r->target_type == fn_info.enclosing_type) {
+            if (r->target_type != fn_info.enclosing_type) { continue; }
+            const bool is_member{std::ranges::any_of(r->methods, [&](const auto& m) {
+                if (m.decl.get_index() == fn_info.node_id.get_index()) { return true; }
+                if (!r->enclosing) { return false; }
+                const auto decl{r->enclosing->ast.get_as_opt<ast::decl_stmt>(m.decl)};
+                return decl && decl->value &&
+                       decl->value->get_index() == fn_info.node_id.get_index();
+            })};
+            if (is_member) {
                 enclosing_impl.emplace(r);
                 break;
             }
@@ -10192,9 +10219,29 @@ auto type_resolver::instantiate_generic(type&                             callee
             if (i < enclosing_impl->type_arguments.size() && enclosing_impl->type_arguments[i]) {
                 auto& concrete_t{denoted_type(*enclosing_impl->type_arguments[i])};
                 binding_frame.insert_or_assign(pname, gir::const_value{concrete_t});
+                {
+                    const auto param_name{impl_stmt.impl_params[i].name};
+                    const auto prev{fn_mod.sema_side_tables.node_types[param_name]};
+                    binding_restores.restores.emplace_back([&fn_mod, param_name, prev] {
+                        fn_mod.sema_side_tables.node_types[param_name] = prev;
+                    });
+                }
                 fn_mod.set_sema_type(impl_stmt.impl_params[i].name, concrete_t);
                 if (const auto s{
                         ctx_.registry.get_from_opt(enclosing_impl->body_scope_idx, pname)}) {
+                    const auto prev_kind{s->get_kind_opt()};
+                    const auto prev_status{s->get_status()};
+                    binding_restores.restores.emplace_back(
+                        [&ctx_ = ctx_,
+                         table_idx{enclosing_impl->body_scope_idx},
+                         pname,
+                         prev_kind,
+                         prev_status] {
+                            if (auto sym{ctx_.registry.get_from_opt(table_idx, pname)}) {
+                                if (prev_kind) { sym->set_kind(*prev_kind); }
+                                sym->set_status(prev_status);
+                            }
+                        });
                     s->set_kind(symbol_kind::VALUE);
                     s->set_status(symbol_status::RESOLVED);
                 }
@@ -10210,6 +10257,44 @@ auto type_resolver::instantiate_generic(type&                             callee
         }
     }
 
+    if (!enclosing_impl && fn_info.enclosing_type) {
+        if (const auto prefix{
+                ctx_.generic_functions.get_type_ctor_member_prefix(*fn_info.enclosing_type)}) {
+            if (const auto cx_bindings{ctx_.instantiation_cache.get_type_ctor_bindings(*prefix)}) {
+                for (const auto& [pname, val] : *cx_bindings) {
+                    binding_frame.insert_or_assign(pname, val);
+                    if (!fn_info.enclosing_fn_table_idx) { continue; }
+                    const auto vt{val.get_type()};
+                    if (!vt) { continue; }
+                    const auto table_idx{*fn_info.enclosing_fn_table_idx};
+                    const auto s{ctx_.registry.get_from_opt(table_idx, pname)};
+                    if (!s) { continue; }
+                    const auto p{s->get_data().as_opt<symbols::parameter>()};
+                    if (!p) { continue; }
+                    const ast::node_id decl_node{p->name};
+
+                    const auto prev_node_type{fn_mod.sema_side_tables.node_types[decl_node]};
+                    binding_restores.restores.emplace_back([&fn_mod, decl_node, prev_node_type] {
+                        fn_mod.sema_side_tables.node_types[decl_node] = prev_node_type;
+                    });
+                    fn_mod.set_sema_type(decl_node, *vt);
+
+                    const auto prev_kind{s->get_kind_opt()};
+                    const auto prev_status{s->get_status()};
+                    binding_restores.restores.emplace_back(
+                        [&ctx_ = ctx_, table_idx, pname, prev_kind, prev_status] {
+                            if (auto sym{ctx_.registry.get_from_opt(table_idx, pname)}) {
+                                if (prev_kind) { sym->set_kind(*prev_kind); }
+                                sym->set_status(prev_status);
+                            }
+                        });
+                    s->set_kind(symbol_kind::VALUE);
+                    s->set_status(symbol_status::RESOLVED);
+                }
+            }
+        }
+    }
+
     const constexpr_frame_guard cfg{ctx_.constexpr_binding_frames, std::move(binding_frame)};
 
     symbol_table_stack inst_stack;
@@ -10218,6 +10303,7 @@ auto type_resolver::instantiate_generic(type&                             callee
     if (enclosing_impl) {
         inst_stack.push(enclosing_impl->body_scope_idx);
     } else if (fn_info.enclosing_type && fn_info.enclosing_type->has_symbol_table_idx()) {
+        if (fn_info.enclosing_fn_table_idx) { inst_stack.push(*fn_info.enclosing_fn_table_idx); }
         inst_stack.push(fn_info.enclosing_type->get_symbol_table_idx());
     }
     inst_stack.push(fn_table_idx);
@@ -10235,9 +10321,25 @@ auto type_resolver::instantiate_generic(type&                             callee
             self_t.emplace(st.get());
         }
         if (self_t) {
+            {
+                const auto self_name{fn_expr.self->name};
+                const auto prev{fn_mod.sema_side_tables.node_types[self_name]};
+                binding_restores.restores.emplace_back([&fn_mod, self_name, prev] {
+                    fn_mod.sema_side_tables.node_types[self_name] = prev;
+                });
+            }
             fn_mod.set_sema_type(fn_expr.self->name, *self_t);
             if (const auto ident{fn_mod.ast.get_as_opt<ast::identifier_expr>(fn_expr.self->name)}) {
                 if (auto sym{ctx_.registry.get_from_opt(fn_table_idx, ident->name)}) {
+                    const auto prev_kind{sym->get_kind_opt()};
+                    const auto prev_status{sym->get_status()};
+                    binding_restores.restores.emplace_back(
+                        [&ctx_ = ctx_, fn_table_idx, name{ident->name}, prev_kind, prev_status] {
+                            if (auto s{ctx_.registry.get_from_opt(fn_table_idx, name)}) {
+                                if (prev_kind) { s->set_kind(*prev_kind); }
+                                s->set_status(prev_status);
+                            }
+                        });
                     sym->set_kind(symbol_kind::VALUE);
                     sym->set_status(symbol_status::RESOLVED);
                 }
@@ -10252,10 +10354,26 @@ auto type_resolver::instantiate_generic(type&                             callee
            "Arity should be validated in resolve_call");
     for (usize p_idx{0}; p_idx < fixed_param_count; ++p_idx) {
         const auto& param{fn_expr.parameters[p_idx]};
+        {
+            const auto param_name{param.name};
+            const auto prev{fn_mod.sema_side_tables.node_types[param_name]};
+            binding_restores.restores.emplace_back([&fn_mod, param_name, prev] {
+                fn_mod.sema_side_tables.node_types[param_name] = prev;
+            });
+        }
         fn_mod.set_sema_type(param.name, *concrete_args[p_idx]);
         if (param.name.is<ast::identifier_expr>()) {
             const auto& ident{fn_mod.ast.get_as<ast::identifier_expr>(param.name)};
             if (auto sym{ctx_.registry.get_from_opt(fn_table_idx, ident.name)}) {
+                const auto prev_kind{sym->get_kind_opt()};
+                const auto prev_status{sym->get_status()};
+                binding_restores.restores.emplace_back(
+                    [&ctx_ = ctx_, fn_table_idx, name{ident.name}, prev_kind, prev_status] {
+                        if (auto s{ctx_.registry.get_from_opt(fn_table_idx, name)}) {
+                            if (prev_kind) { s->set_kind(*prev_kind); }
+                            s->set_status(prev_status);
+                        }
+                    });
                 sym->set_kind(symbol_kind::VALUE);
                 sym->set_status(symbol_status::RESOLVED);
             }
@@ -10463,18 +10581,28 @@ auto type_resolver::instantiate_generic(type&                             callee
                         ctx_, fn_mod, *agg_node, src_agg, clone, mangled_name, std::move(typing));
                 }
 
-                // Hand this instantiation's `constexpr` parameter values to the member emit
+                // Hand this instantiation's `constexpr` parameter values, and any plain `type`
+                // parameters to the member emit
                 std::vector<std::pair<std::string, gir::const_value>> ctor_bindings;
                 for (usize p_idx{0}, cx_i{0}; p_idx < fn_expr.parameters.size(); ++p_idx) {
-                    if (!fn_expr.parameters[p_idx].is_constexpr) { continue; }
-                    if (cx_i >= constexpr_args.size()) { break; }
-                    if (fn_expr.parameters[p_idx].name.is<ast::identifier_expr>()) {
-                        const auto& p_name{
-                            fn_mod.ast.get_as<ast::identifier_expr>(fn_expr.parameters[p_idx].name)
-                                .name};
-                        ctor_bindings.emplace_back(std::string{p_name}, constexpr_args[cx_i]);
+                    const auto& param{fn_expr.parameters[p_idx]};
+                    if (param.is_constexpr) {
+                        if (cx_i < constexpr_args.size() && param.name.is<ast::identifier_expr>()) {
+                            const auto& p_name{
+                                fn_mod.ast.get_as<ast::identifier_expr>(param.name).name};
+                            ctor_bindings.emplace_back(std::string{p_name}, constexpr_args[cx_i]);
+                        }
+                        ++cx_i;
+                        continue;
                     }
-                    ++cx_i;
+
+                    if (p_idx < concrete_args.size() && param.name.is<ast::identifier_expr>()) {
+                        const auto& p_name{
+                            fn_mod.ast.get_as<ast::identifier_expr>(param.name).name};
+                        ctor_bindings.emplace_back(
+                            std::string{p_name},
+                            gir::const_value{denoted_type(*concrete_args[p_idx])});
+                    }
                 }
                 deduced_return_type = &clone;
 

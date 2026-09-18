@@ -2132,6 +2132,8 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
     std::vector<llvm::Value*> args;
     args.reserve(inst.operands.size() - 1);
     for (const auto& operand : inst.operands | std::views::drop(1)) {
+        // Match the direct-callee branch above
+        if (operand.type && operand.type->get_kind() == sema::type_kind::TYPE) { continue; }
         auto* arg_val{lower_value(operand)};
         if (!arg_val || arg_val->getType()->isVoidTy()) { continue; }
         if (operand.type &&

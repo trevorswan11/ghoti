@@ -29,6 +29,8 @@ struct generic_function_info {
     stdx::option<std::string_view>           name;
     // Enclosing struct/union/enum, if any; may not be resolved
     stdx::option<type&> enclosing_type{stdx::none};
+    // For a method declared directly in an aggregate returned by a `fn(...): type` ctor
+    stdx::option<usize> enclosing_fn_table_idx{stdx::none};
 };
 
 class generic_function_registry {
@@ -42,15 +44,17 @@ class generic_function_registry {
                            ast::node_id                   node_id,
                            const ast::function_expr&      fn_expr,
                            stdx::option<std::string_view> name           = stdx::none,
-                           stdx::option<type&>            enclosing_type = stdx::none) -> void {
+                           stdx::option<type&>            enclosing_type = stdx::none,
+                           stdx::option<usize> enclosing_fn_table_idx    = stdx::none) -> void {
         registry_.emplace(&fn_type,
                           generic_function_info{
-                              .module         = &module,
-                              .node_id        = node_id,
-                              .fn_expr        = &fn_expr,
-                              .fn_type        = &fn_type,
-                              .name           = name,
-                              .enclosing_type = enclosing_type,
+                              .module                 = &module,
+                              .node_id                = node_id,
+                              .fn_expr                = &fn_expr,
+                              .fn_type                = &fn_type,
+                              .name                   = name,
+                              .enclosing_type         = enclosing_type,
+                              .enclosing_fn_table_idx = enclosing_fn_table_idx,
                           });
     }
 

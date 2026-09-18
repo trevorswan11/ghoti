@@ -1671,6 +1671,9 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
         s.fields.emplace("is_volatile", const_value{denoted.is_volatile(), bool_type});
         return wrap("array", std::move(s), ctx_.get_builtin_type("ArrayInfo"));
     }
+    // A closure argument's static type is `CLOSURE`, not `FUNCTION` so take its sig
+    case sema::type_kind::CLOSURE:
+        return eval_type_info(denoted.get_data().as<sema::types::closure_t>().signature);
     case sema::type_kind::FUNCTION: {
         const auto& fn{denoted.get_data().as<sema::types::function>()};
         auto&       type_type{ctx_.get_builtin_resolved_type(sema::type_kind::TYPE)};

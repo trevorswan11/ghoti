@@ -149,6 +149,25 @@ auto remap_type(context& ctx, type& t, const type& from, type& to) -> type& {
             key.imprint(static_cast<u64>(fn.is_variadic));
             auto& nt{*ctx.pool[key]};
             nt.resolve_if<types::function>(new_params, new_ret, fn.has_self, fn.is_variadic);
+            if (t.has_symbol_table_idx()) { nt.set_symbol_table_idx(t.get_symbol_table_idx()); }
+
+            if (&nt != &t) {
+                if (auto info{ctx.generic_functions.get_opt(t)}) {
+                    stdx::option<type&> remapped_enclosing{info->enclosing_type};
+                    if (info->enclosing_type) {
+                        remapped_enclosing.emplace(
+                            remap_type(ctx, *info->enclosing_type, from, to));
+                    }
+                    ctx.generic_functions.register_function(nt,
+                                                            *info->module,
+                                                            info->node_id,
+                                                            *info->fn_expr,
+                                                            info->name,
+                                                            remapped_enclosing,
+                                                            info->enclosing_fn_table_idx);
+                }
+            }
+
             return nt;
         },
         [&t](const auto&) -> type& { return t; });
