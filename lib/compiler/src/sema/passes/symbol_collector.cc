@@ -731,7 +731,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::import_stmt& import_stm
     }
 
     collecting_.add_identifier_position(named->first);
-    try_declare<symbols::node_t>(alias, id);
+    if (!try_declare<symbols::node_t>(alias, id)) { return; }
     if (imported_mod && !imported_mod->is_errored()) {
         // Its much easier for other steps to get the enclosing module if we resolve now
         auto& type =
@@ -791,7 +791,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::using_stmt& using_stmt)
     collect(using_stmt.explicit_type);
     const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(using_stmt.alias)};
     collecting_.add_identifier_position(using_stmt.alias);
-    try_declare<symbols::node_t>(ident.name, id);
+    if (!try_declare<symbols::node_t>(ident.name, id)) { return; }
     ctx_.registry.get_from(table_idx_, ident.name).set_kind(symbol_kind::TYPE);
 }
 
