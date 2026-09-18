@@ -185,4 +185,89 @@ TEST_CASE("`for constexpr`'s `defer` fires at the end of each iteration") {
     )") == 12);
 }
 
+TEST_CASE("`while constexpr` allows compile-time `continue` and `break`") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            constexpr var n := 0;
+            constexpr var sum := 0;
+            while constexpr (n < 5) : (n = n + 1) {
+                if constexpr (n == 2) { continue; }
+                sum = sum + n;
+            }
+            return sum;
+        };
+    )") == 8);
+
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            constexpr var n := 0;
+            while constexpr (true) {
+                if constexpr (n == 3) { break; }
+                n = n + 1;
+            }
+            return n;
+        };
+    )") == 3);
+}
+
+TEST_CASE("`do ... while constexpr` unrolls and executes body at least once") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            constexpr var n := 0;
+            do {
+                n = n + 1;
+            } while constexpr (n < 4);
+            return n;
+        };
+    )") == 4);
+
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            constexpr var n := 0;
+            do {
+                n = n + 1;
+            } while constexpr (false);
+            return n;
+        };
+    )") == 1);
+
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            constexpr var n := 0;
+            do {
+                if constexpr (n == 2) { break; }
+                n = n + 1;
+            } while constexpr (n < 10);
+            return n;
+        };
+    )") == 2);
+}
+
+TEST_CASE("`loop constexpr` unrolls and breaks at compile time") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            constexpr var n := 0;
+            loop constexpr {
+                if constexpr (n == 5) { break; }
+                n = n + 1;
+            }
+            return n;
+        };
+    )") == 5);
+}
+
+TEST_CASE("`for constexpr` allows compile-time `continue` and `break`") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            var sum := 0;
+            for constexpr (0..5) |v| {
+                if constexpr (v == 2) { continue; }
+                if constexpr (v == 4) { break; }
+                sum = sum + v;
+            }
+            return sum;
+        };
+    )") == 0 + 1 + 3);
+}
+
 } // namespace ghoti::tests

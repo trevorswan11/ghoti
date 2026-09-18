@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/ast/statement.hh"
 #include "compiler/gir/const_eval.hh"
@@ -838,6 +839,180 @@ TEST_CASE("`for constexpr` iterating over `[]u8` parameter") {
     const auto val{evaluator.try_eval(*decl.value)};
     REQUIRE(val.has_value());
     CHECK(val->as_uint_opt() == 12'345);
+}
+
+TEST_CASE("`loop` infinite loop expression in `const_eval`") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        constexpr find_val := fn(): i32 {
+            constexpr var i := 0;
+            loop {
+                i = i + 1;
+                if (i < 5) { continue; }
+                if (i == 5) { break; }
+            }
+            return i;
+        };
+        const res := find_val();
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym, _, decl, type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("res", idx)};
+    const auto val{evaluator.try_eval(*decl.value)};
+    REQUIRE(val.has_value());
+    CHECK(val->as_int_opt() == 5);
+}
+
+TEST_CASE("`defer` in `const_eval`") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        constexpr test_defer := fn(): i32 {
+            constexpr var x := 1;
+            {
+                defer x = x + 10;
+                x = x + 1;
+            }
+            return x;
+        };
+        const res := test_defer();
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym, _, decl, type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("res", idx)};
+    const auto val{evaluator.try_eval(*decl.value)};
+    REQUIRE(val.has_value());
+    CHECK(val->as_int_opt() == 12);
+}
+
+TEST_CASE("multiple `defer` statements in `const_eval` execute in LIFO order") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        constexpr test_order := fn(): i32 {
+            constexpr var x := 0;
+            {
+                defer x = x * 10 + 1;
+                defer x = x * 10 + 2;
+                defer x = x * 10 + 3;
+                x = 4;
+            }
+            return x;
+        };
+        const res := test_order();
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym, _, decl, type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("res", idx)};
+    const auto val{evaluator.try_eval(*decl.value)};
+    REQUIRE(val.has_value());
+    CHECK(val->as_int_opt() == 4'321);
+}
+
+TEST_CASE("`errdefer` in `const_eval`") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
+        impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
+            using Output = T;
+            using Residual = E;
+            pub const branch := fn(self): builtin.Flow(T, E) {
+                return match (self) {
+                    .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
+                    .err => |e| builtin.Flow(T, E){ .@"break" = e },
+                };
+            };
+        }
+        impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
+            using From = E;
+            pub const fromResidual := fn(r: E): @This() { return .{ .err = r }; };
+        }
+
+        const R := Result(i32, i32);
+        constexpr fail := fn(): R { return R{ .err = 42 }; };
+        constexpr succeed := fn(): R { return R{ .ok = 100 }; };
+
+        constexpr var err_log: i32 = 0;
+        constexpr test_err := fn(): R {
+            errdefer |e| err_log = e;
+            const v := fail()?;
+            return R{ .ok = v };
+        };
+
+        const _dummy := test_err();
+        const final_log := err_log;
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym_d, _d, decl_d, type_d]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("_dummy", idx)};
+    DISCARD(evaluator.try_eval(*decl_d.value));
+
+    const auto [sym, _, decl, type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("final_log", idx)};
+    const auto val{evaluator.try_eval(*decl.value)};
+    REQUIRE(val.has_value());
+    CHECK(val->as_int_opt() == 42);
+}
+
+TEST_CASE("`errdefer` capture by const ref and const ptr in `const_eval`") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
+        impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
+            using Output = T;
+            using Residual = E;
+            pub const branch := fn(self): builtin.Flow(T, E) {
+                return match (self) {
+                    .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
+                    .err => |e| builtin.Flow(T, E){ .@"break" = e },
+                };
+            };
+        }
+        impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
+            using From = E;
+            pub const fromResidual := fn(r: E): @This() { return .{ .err = r }; };
+        }
+
+        const R := Result(i32, i32);
+        constexpr fail := fn(): R { return R{ .err = 77 }; };
+
+        constexpr var ref_log: i32 = 0;
+        constexpr test_ref := fn(): R {
+            errdefer |&e| ref_log = e;
+            const v := fail()?;
+            return R{ .ok = v };
+        };
+
+        constexpr var ptr_log: i32 = 0;
+        constexpr test_ptr := fn(): R {
+            errdefer |^p| ptr_log = *p;
+            const v := fail()?;
+            return R{ .ok = v };
+        };
+
+        const _r := test_ref();
+        const _p := test_ptr();
+        const final_ref := ref_log;
+        const final_ptr := ptr_log;
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym_r_d, _rd, decl_r_d, type_r_d]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("_r", idx)};
+    DISCARD(evaluator.try_eval(*decl_r_d.value));
+
+    const auto [sym_r, _1, decl_r, type_r]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("final_ref", idx)};
+    const auto val_r{evaluator.try_eval(*decl_r.value)};
+    REQUIRE(val_r.has_value());
+    CHECK(val_r->as_int_opt() == 77);
+
+    const auto [sym_p_d, _pd, decl_p_d, type_p_d]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("_p", idx)};
+    DISCARD(evaluator.try_eval(*decl_p_d.value));
+
+    const auto [sym_p, _2, decl_p, type_p]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("final_ptr", idx)};
+    const auto val_p{evaluator.try_eval(*decl_p.value)};
+    REQUIRE(val_p.has_value());
+    CHECK(val_p->as_int_opt() == 77);
 }
 
 } // namespace ghoti::tests
