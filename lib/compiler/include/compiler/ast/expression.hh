@@ -90,6 +90,7 @@ struct asm_expr {
 struct do_while_loop_expr {
     block_handle block;
     expr_handle  condition;
+    bool         is_constexpr{false};
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;
@@ -250,6 +251,7 @@ struct index_expr {
 
 struct infinite_loop_expr {
     block_handle block;
+    bool         is_constexpr{false};
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;

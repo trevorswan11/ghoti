@@ -843,7 +843,7 @@ auto formatter::visit(node_id, const do_while_loop_expr& node) -> syntax::doc_id
     return doc_manager_.concat({
         doc_manager_.text("do "),
         format(node.block),
-        doc_manager_.text(" while ("),
+        doc_manager_.text(node.is_constexpr ? " while constexpr (" : " while ("),
         format(node.condition),
         doc_manager_.text(")"),
     });
@@ -1040,7 +1040,8 @@ auto formatter::visit(node_id, const index_expr& node) -> syntax::doc_id {
 }
 
 auto formatter::visit(node_id, const infinite_loop_expr& node) -> syntax::doc_id {
-    return doc_manager_.concat({doc_manager_.text("loop "), format(node.block)});
+    return doc_manager_.concat(
+        {doc_manager_.text(node.is_constexpr ? "loop constexpr " : "loop "), format(node.block)});
 }
 
 auto formatter::visit(node_id id, const assignment_expr& node) -> syntax::doc_id {

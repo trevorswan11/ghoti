@@ -176,7 +176,7 @@ auto dumper::visit(node_id, const call_expr& call) -> void {
 
 auto dumper::visit(node_id, const do_while_loop_expr& do_while) -> void {
     PROFILE_FUNCTION();
-    fmt::println(out_, "DoWhileLoopExpression");
+    fmt::println(out_, "DoWhileLoopExpression{}", do_while.is_constexpr ? " (constexpr)" : "");
     {
         const indent::guard g{indent_, false};
         fmt::print(out_, "{}Body: ", indent_.current_branch());
@@ -424,7 +424,7 @@ auto dumper::visit(node_id, const index_expr& index) -> void {
 
 auto dumper::visit(node_id, const infinite_loop_expr& loop) -> void {
     PROFILE_FUNCTION();
-    fmt::println(out_, "InfiniteLoopExpression");
+    fmt::println(out_, "InfiniteLoopExpression{}", loop.is_constexpr ? " (constexpr)" : "");
     const auto& block{ast_.get_as<block_stmt>(*loop.block)};
     dump_node_list(block);
 }

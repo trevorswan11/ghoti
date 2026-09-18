@@ -727,9 +727,11 @@ TEST_CASE("formatter round trip: control flow") {
     round_trips("while (true) : (i += 1) { a; } else return b;");
     round_trips("while constexpr (a) { b; };");
     round_trips("do { a; } while (true);");
+    round_trips("do { a; } while constexpr (true);");
     round_trips("for (arr, l, p) |i, &mut j, _| { a; } else return b;");
     round_trips("for constexpr (arr, 0..) |v, i| { b; };");
     round_trips("loop { a; };");
+    round_trips("loop constexpr { a; };");
     round_trips("match (a) { b => |c| d, e => |_| f, g => h, _ => d, };");
     round_trips("match (n) { 1..10 => |v| v, 10..=20 => 2, _ => 0 };");
     round_trips("match (n) { 1, 2, 5..9 => |v| v, _ => 0 };");

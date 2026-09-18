@@ -351,6 +351,13 @@ auto do_while_loop_expr::parse(syntax::parser& parser)
 
     const block_handle block{TRY(block_stmt::parse(parser))};
     TRY(parser.expect_peek(syntax::token_type_t::WHILE));
+
+    bool is_constexpr{false};
+    if (parser.peek_token_is(syntax::token_type_t::CONSTEXPR)) {
+        parser.advance();
+        is_constexpr = true;
+    }
+
     TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
 
     if (parser.peek_token_is(syntax::token_type_t::RPAREN)) {
@@ -363,7 +370,7 @@ auto do_while_loop_expr::parse(syntax::parser& parser)
     // There's no continuation or non break clause so this is easy :)
     const auto condition{TRY(parser.parse_expression())};
     TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
-    return parser.add_expr<do_while_loop_expr>(start_token, block, condition);
+    return parser.add_expr<do_while_loop_expr>(start_token, block, condition, is_constexpr);
 }
 
 namespace {
@@ -1083,10 +1090,15 @@ auto infinite_loop_expr::parse(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
+    bool       is_constexpr{false};
+    if (parser.peek_token_is(syntax::token_type_t::CONSTEXPR)) {
+        parser.advance();
+        is_constexpr = true;
+    }
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
 
     const block_handle block{TRY(block_stmt::parse(parser))};
-    return parser.add_expr<infinite_loop_expr>(start_token, block);
+    return parser.add_expr<infinite_loop_expr>(start_token, block, is_constexpr);
 }
 
 auto cfg_value_expr::parse(syntax::parser& parser)
@@ -1373,9 +1385,24 @@ auto label_expr::deconstruct_body(syntax::parser& parser, stmt_handle raw_stmt)
             }
             return stmt.expression;
         case node_kind::DO_WHILE_LOOP_EXPRESSION:
-        case node_kind::IF_EXPRESSION:
+            if (parser.get_node<do_while_loop_expr>(*stmt.expression).is_constexpr) {
+                return make_syntax_err(
+                    "`do ... while constexpr` cannot be labeled; it has no `break`/"
+                    "`continue` to target",
+                    syntax::error::CONSTEXPR_LOOP_LABELED,
+                    parser.get_location_of(*raw_stmt));
+            }
+            return stmt.expression;
         case node_kind::INFINITE_LOOP_EXPRESSION:
-        case node_kind::MATCH_EXPRESSION:         return stmt.expression;
+            if (parser.get_node<infinite_loop_expr>(*stmt.expression).is_constexpr) {
+                return make_syntax_err("`loop constexpr` cannot be labeled; it has no `break`/"
+                                       "`continue` to target",
+                                       syntax::error::CONSTEXPR_LOOP_LABELED,
+                                       parser.get_location_of(*raw_stmt));
+            }
+            return stmt.expression;
+        case node_kind::IF_EXPRESSION:
+        case node_kind::MATCH_EXPRESSION: return stmt.expression;
         default:
             return make_syntax_err("Labeled expressions may only be conditionals or loops",
                                    syntax::error::ILLEGAL_LABEL_EXPRESSION,
