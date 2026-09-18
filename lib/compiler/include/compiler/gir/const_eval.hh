@@ -113,7 +113,7 @@ class const_eval {
     [[nodiscard]] static auto type_align_of(const sema::type& type, usize ptr_size) -> usize;
     [[nodiscard]] static auto type_size_of(const sema::type& type, usize ptr_size) -> usize;
 
-    [[nodiscard]] auto coerce_dyn(const const_value& val, const sema::type& dest_type)
+    [[nodiscard]] auto coerce_dyn(const const_value& val, sema::type& dest_type)
         -> stdx::option<const_value>;
 
     /// Simulates the execution of preceding statements across active lexical blocks

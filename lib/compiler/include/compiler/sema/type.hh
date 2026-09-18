@@ -216,7 +216,7 @@ struct enum_t {
     bool                                         non_exhaustive;
     type&                                        underlying;
     gsl::span<type*>                             members;
-    const mod::module&                           enclosing;
+    mod::module&                                 enclosing;
 
     [[nodiscard]] auto type_at(usize idx, type& object_type) const noexcept -> type& {
         // The index location entirely depends on the number of variants which always come first
@@ -231,7 +231,7 @@ struct union_t {
     gsl::span<type*>                        fields;
     gsl::span<const ast::union_expr::field> ast_fields;
     gsl::span<type*>                        members;
-    const mod::module&                      enclosing;
+    mod::module&                            enclosing;
     bool                                    is_untagged{false};
     bool                                    is_c_abi{false};
     bool                                    is_packed{false};
@@ -252,7 +252,7 @@ struct struct_t {
     gsl::span<type*>                         fields;
     gsl::span<const ast::struct_expr::field> ast_fields;
     gsl::span<type*>                         members;
-    const mod::module&                       enclosing;
+    mod::module&                             enclosing;
     bool                                     is_c_abi{false};
     bool                                     is_packed{false};
     gsl::span<u64>                           field_alignments;
@@ -291,7 +291,7 @@ struct interface_t {
     gsl::span<const ast::interface_expr::method>      ast_methods;
     gsl::span<const ast::interface_expr::assoc_type>  ast_assoc_types;
     gsl::span<const ast::interface_expr::assoc_const> ast_assoc_consts;
-    const mod::module&                                enclosing;
+    mod::module&                                      enclosing;
 
     [[nodiscard]] auto method_decl(usize i) const -> const ast::interface_expr::method& {
         return ast_methods[method_src_indices[i]];
@@ -643,26 +643,66 @@ class type_pool {
         return get_many(count, *get_or_emplace(common_key));
     }
 
-    [[nodiscard]] auto strip_const(const type& t) -> gsl::not_null<type*>;
-    [[nodiscard]] auto strip_volatile(const type& t) -> gsl::not_null<type*>;
+    template <typename Type> [[nodiscard]] auto strip_const(Type& t) -> gsl::not_null<Type*> {
+        if (!t.is_constant()) { return &t; }
+        return strip_modifiers(t, types::mut::CONSTANT);
+    }
 
-    // Returns t's const or mutable twin, whichever `is_const` asks for; t itself if it's
-    // already in that state
-    [[nodiscard]] auto with_const(const type& t, bool is_const) -> gsl::not_null<type*>;
-    [[nodiscard]] auto with_volatile(const type& t, bool is_vol) -> gsl::not_null<type*>;
+    template <typename Type> [[nodiscard]] auto strip_volatile(Type& t) -> gsl::not_null<Type*> {
+        if (!t.is_volatile()) { return &t; }
+        return strip_modifiers(t, types::mut::VOLATILE);
+    }
+
+    template <typename Type>
+    [[nodiscard]] auto with_const(Type& t, bool is_const) -> gsl::not_null<Type*> {
+        if (t.is_constant() == is_const) { return &t; }
+        if (!is_const) { return strip_modifiers(t, types::mut::CONSTANT); }
+
+        auto key{t.get_key()};
+        key.set_mut(key.get_mut() | types::mut::CONSTANT);
+        auto new_type{(*this)[key]};
+        new_type->template resolve_if<type::data_t>(t.get_data());
+        if (const auto idx{t.get_symbol_table_idx_opt()}) { new_type->set_symbol_table_idx(*idx); }
+        return new_type;
+    }
+
+    template <typename Type>
+    [[nodiscard]] auto with_volatile(Type& t, bool is_vol) -> gsl::not_null<Type*> {
+        if (t.is_volatile() == is_vol) { return &t; }
+        if (!is_vol) { return strip_modifiers(t, types::mut::VOLATILE); }
+
+        auto key{t.get_key()};
+        key.set_mut(key.get_mut() | types::mut::VOLATILE);
+        auto new_type{(*this)[key]};
+        new_type->template resolve_if<type::data_t>(t.get_data());
+        if (const auto idx{t.get_symbol_table_idx_opt()}) { new_type->set_symbol_table_idx(*idx); }
+        return new_type;
+    }
 
   private:
-    auto get_or_emplace(const types::key_t& key) -> gsl::not_null<type*>;
+    [[nodiscard]] auto get_or_emplace(const types::key_t& key) -> gsl::not_null<type*>;
+    [[nodiscard]] auto strip_modifiers(const type& old_type, types::mutability_modifiers mut)
+        -> gsl::not_null<type*>;
 
   private:
     ghoti::arena&                                     arena_;
     ankerl::unordered_dense::map<types::key_t, type*> cache_;
 };
 
+// Unwraps meta_type to obtain the denoted underlying instance type
+template <typename Type> [[nodiscard]] auto denoted_type(Type& t) noexcept -> Type& {
+    if (t.get_kind() == type_kind::TYPE) {
+        if (const auto meta{t.get_data().template as_opt<types::meta_type>()}) {
+            return meta->instance;
+        }
+    }
+    return t;
+}
+
 } // namespace ghoti::sema
 
 template <> struct ankerl::unordered_dense::hash<ghoti::sema::type> {
     using is_avalanching = void;
     using type_t         = ghoti::sema::type;
-    [[nodiscard]] auto operator()(const type_t& type) const noexcept { return type.hash(); }
+    [[nodiscard]] static auto operator()(const type_t& type) noexcept { return type.hash(); }
 };

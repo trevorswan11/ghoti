@@ -40,7 +40,7 @@ auto impl_registry::param_record_by_site(ast::node_id site, const mod::module& e
     -> stdx::option<parameterized_impl&> {
     for (auto* p : param_records_) {
         if (p->site.get_index() == site.get_index() && p->site.get_kind() == site.get_kind() &&
-            p->enclosing == &enclosing) {
+            opt_ref_matches(p->enclosing, &enclosing)) {
             return *p;
         }
     }
@@ -53,7 +53,7 @@ auto impl_registry::find_by_site(ast::node_id site, const mod::module& enclosing
     // block at the same index; match the owning module too
     for (auto* r : records_) {
         if (r->site.get_index() == site.get_index() && r->site.get_kind() == site.get_kind() &&
-            r->enclosing == &enclosing) {
+            opt_ref_matches(r->enclosing, &enclosing)) {
             return *r;
         }
     }
@@ -67,7 +67,7 @@ auto impl_registry::implements(const type& target, const type& iface) const noex
 auto impl_registry::methods_of(const type& target) const -> std::vector<extension_method> {
     std::vector<extension_method> out;
     for (const auto* r : records_) {
-        if (r->target_type != &target) { continue; }
+        if (!opt_ref_matches(r->target_type, &target)) { continue; }
         for (const auto& m : r->methods) {
             out.emplace_back<extension_method>({
                 .record = gsl::not_null<const impl_record*>{r},

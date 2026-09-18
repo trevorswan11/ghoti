@@ -56,9 +56,7 @@ class generic_function_registry {
 
     [[nodiscard]] auto get_opt(const type& fn_type) const noexcept
         -> stdx::option<const generic_function_info&> {
-        if (auto it{registry_.find(const_cast<type*>(&fn_type))}; it != registry_.end()) {
-            return it->second;
-        }
+        if (auto it{registry_.find(&fn_type)}; it != registry_.end()) { return it->second; }
         return stdx::none;
     }
 
@@ -95,9 +93,9 @@ class generic_function_registry {
     }
 
   private:
-    ankerl::unordered_dense::map<type*, generic_function_info> registry_;
-    ankerl::unordered_dense::map<const type*, std::string>     type_ctor_member_prefixes_;
-    ankerl::unordered_dense::map<const type*, std::string>     clone_discs_;
+    ankerl::unordered_dense::map<const type*, generic_function_info> registry_;
+    ankerl::unordered_dense::map<const type*, std::string>           type_ctor_member_prefixes_;
+    ankerl::unordered_dense::map<const type*, std::string>           clone_discs_;
 };
 
 struct generic_instantiation_request {

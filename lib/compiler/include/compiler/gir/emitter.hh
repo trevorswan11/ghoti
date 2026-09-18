@@ -233,12 +233,12 @@ class emitter {
         -> value;
     // Materializes a folded string constant that is typed as a slice (`const S: []u8 = "..."`)
     // into a `{ptr, len}` value by spilling the bytes to a fresh array temporary and decaying it.
-    auto emit_string_as_slice(const std::string& bytes, const sema::type& slice_type) -> value;
+    auto emit_string_as_slice(const std::string& bytes, sema::type& slice_type) -> value;
     // Builds a `&dyn I` / `^dyn I` fat pointer `{ data, vtable }` from `src` (a `&T` / `^T`)
-    auto emit_dyn_coercion(ast::expr_handle src, const sema::type& fat_type) -> value;
+    auto emit_dyn_coercion(ast::expr_handle src, sema::type& fat_type) -> value;
     // Lowers `expr[lo..{=}hi]` on an array or slice to a bounds-checked `{ptr, len}` subslice.
     auto emit_slice_range(ast::node_id id, const ast::index_expr& index) -> value;
-    auto emit_coerced_expr(ast::expr_handle expr_id, const sema::type& dest_type) -> value;
+    auto emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type) -> value;
     auto emit_generic_instantiation(const sema::generic_instantiation_request& req) -> void;
     auto emit_expression_id(ast::node_id id) -> value;
     // Produces a value exactly as resolved, including a bare reference-typed value where
@@ -262,9 +262,9 @@ class emitter {
                                        ast::node_id     site) -> void;
     auto emit_initializer(ast::node_id id, const ast::initializer_expr& init) -> value;
     // Emits a struct field's `= default` expression, coerced to `field_type`
-    auto               emit_field_default(ast::expr_handle   default_expr,
-                                          const mod::module& owner,
-                                          const sema::type&  field_type) -> value;
+    auto               emit_field_default(ast::expr_handle default_expr,
+                                          mod::module&     owner,
+                                          sema::type&      field_type) -> value;
     auto               emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value;
     [[nodiscard]] auto dot_object_is_type_namespace(const ast::dot_expr& dot) -> bool;
     auto               emit_index(ast::node_id id, const ast::index_expr& index) -> value;

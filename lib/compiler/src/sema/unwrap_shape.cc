@@ -20,14 +20,7 @@ namespace ghoti::sema {
 
 namespace {
 
-[[nodiscard]] auto denoted_type(const type& t) noexcept -> const type& {
-    if (t.get_kind() == type_kind::TYPE) {
-        if (const auto meta{t.get_data().as_opt<types::meta_type>()}) { return meta->instance; }
-    }
-    return t;
-}
-
-[[nodiscard]] auto unref_type(const type& t) noexcept -> const type& {
+[[nodiscard]] auto unref_type(type& t) noexcept -> type& {
     if (const auto ref{t.get_data().as_opt<types::reference>()}) { return ref->underlying; }
     return t;
 }
@@ -38,11 +31,11 @@ namespace {
 // in the impl's body scope. If the impl is parameterized (`from_parameterized`), any
 // sentinel types are remapped to concrete type arguments.
 auto find_assoc_type_alias(context& ctx, const impl_record& rec, std::string_view name)
-    -> stdx::option<const type&> {
+    -> stdx::option<type&> {
     if (const auto bsym{ctx.registry.get_from_opt(rec.body_scope_idx, name)}) {
         if (const auto bnode{bsym->get_data().as_opt<symbols::node_t>()}) {
-            const auto& mod{rec.enclosing ? *rec.enclosing : ctx.modules.builtin_module()};
-            stdx::option<const type&> result;
+            auto&               mod{rec.enclosing ? *rec.enclosing : ctx.modules.builtin_module()};
+            stdx::option<type&> result;
             if (const auto bu{mod.ast.get_as_opt<ast::using_stmt>(*bnode)}) {
                 if (const auto t{mod.get_sema_type_opt(bu->explicit_type)}) {
                     if (t->is_resolved() && !t->is_poison()) { result.emplace(denoted_type(*t)); }
@@ -57,11 +50,10 @@ auto find_assoc_type_alias(context& ctx, const impl_record& rec, std::string_vie
                 // replace sentinels with the actual concrete type arguments instantiated for this
                 // target.
                 if (rec.from_parameterized) {
-                    stdx::option<type&> r{const_cast<type&>(*result)};
+                    stdx::option<type&> r{result};
                     for (usize i{0}; i < rec.sentinels.size() && i < rec.type_arguments.size();
                          ++i) {
-                        r.emplace(remap_type(
-                            ctx, *r, *rec.sentinels[i], *const_cast<type*>(rec.type_arguments[i])));
+                        r.emplace(remap_type(ctx, *r, *rec.sentinels[i], *rec.type_arguments[i]));
                     }
                     return *r;
                 }
@@ -165,20 +157,19 @@ auto remap_type(context& ctx, type& t, const type& from, type& to) -> type& {
 // Queries whether `operand` implements `builtin.Unwrappable`. If so, extracts the
 // associated `Output` and `Residual` types and the `Flow(Output, Residual)` return
 // type of `branch(self)`.
-auto unwrap_shape_of(context& ctx, const type& operand) -> stdx::option<unwrap_info> {
+auto unwrap_shape_of(context& ctx, type& operand) -> stdx::option<unwrap_info> {
     if (!ctx.prelude_index) { return stdx::none; }
 
-    const auto& base{unref_type(denoted_type(operand))};
+    auto&       base{unref_type(denoted_type(operand))};
     const auto& iface{denoted_type(ctx.get_builtin_type(builtin_impl::UNWRAPPABLE))};
 
     const auto rec_opt{lookup_impl(ctx.impls, base, iface)};
     if (!rec_opt) { return stdx::none; }
     const auto& rec{*rec_opt};
 
-    stdx::option<const type&> output_type{find_assoc_type_alias(ctx, rec, builtin_impl::OUTPUT)};
-    stdx::option<const type&> residual_type{
-        find_assoc_type_alias(ctx, rec, builtin_impl::RESIDUAL)};
-    stdx::option<const type&> flow_type;
+    stdx::option<type&> output_type{find_assoc_type_alias(ctx, rec, builtin_impl::OUTPUT)};
+    stdx::option<type&> residual_type{find_assoc_type_alias(ctx, rec, builtin_impl::RESIDUAL)};
+    stdx::option<type&> flow_type;
 
     // Retrieve concrete `Flow(...)` return type from `branch(self)`
     if (const auto m{rec.find_method(builtin_impl::BRANCH)}; m && m->fn_type) {
@@ -201,17 +192,17 @@ auto unwrap_shape_of(context& ctx, const type& operand) -> stdx::option<unwrap_i
     };
 }
 
-auto rewrap_shape_of(context& ctx, const type& return_type) -> stdx::option<rewrap_info> {
+auto rewrap_shape_of(context& ctx, type& return_type) -> stdx::option<rewrap_info> {
     if (!ctx.prelude_index) { return stdx::none; }
 
-    const auto& base{unref_type(denoted_type(return_type))};
+    auto&       base{unref_type(denoted_type(return_type))};
     const auto& iface{denoted_type(ctx.get_builtin_type(builtin_impl::REWRAPPABLE))};
 
     const auto rec_opt{lookup_impl(ctx.impls, base, iface)};
     if (!rec_opt) { return stdx::none; }
     const auto& rec{*rec_opt};
 
-    stdx::option<const type&> from_type;
+    stdx::option<type&> from_type;
     if (const auto m{rec.find_method(builtin_impl::FROM_RESIDUAL)}; m && m->fn_type) {
         if (const auto fd{m->fn_type->get_data().as_opt<types::function>()}) {
             if (!fd->params.empty()) { from_type.emplace(*fd->params[0]); }

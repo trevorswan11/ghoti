@@ -139,13 +139,6 @@ namespace {
     return t.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE;
 }
 
-[[nodiscard]] auto denoted_type(type& t) -> type& {
-    if (t.get_kind() == type_kind::TYPE) {
-        if (const auto meta{t.get_data().as_opt<types::meta_type>()}) { return meta->instance; }
-    }
-    return t;
-}
-
 // Reads one field off a compile-time-known descriptor struct
 template <typename T>
 [[nodiscard]] auto read_desc_field(const gir::const_struct& desc, std::string_view name)
@@ -1043,9 +1036,9 @@ template <ast::IndexableID ID>
         }
         auto* denoted{&arg_type};
         if (const auto p{denoted->get_data().as_opt<types::pointer>()}) {
-            denoted = &const_cast<type&>(p->underlying);
+            denoted = &p->underlying;
         } else if (const auto r{denoted->get_data().as_opt<types::reference>()}) {
-            denoted = &const_cast<type&>(r->underlying);
+            denoted = &r->underlying;
         }
         const auto field{resolve_field_by_name(call.arguments[1], *denoted)};
         if (!field) {
@@ -1190,7 +1183,7 @@ template <ast::IndexableID ID>
     case token_type_t::BUILTIN_STRUCT:
     case token_type_t::BUILTIN_UNION:  {
         if (const auto existing{resolving_.get_sema_type_opt(id)}) {
-            const auto& denoted{denoted_type(const_cast<type&>(*existing))};
+            const auto& denoted{denoted_type(*existing)};
             const bool  stale_instantiation{
                 for_generic_instantiation_ && reresolve_floor_ &&
                 (denoted.is_poison() || (denoted.has_symbol_table_idx() &&
@@ -1243,15 +1236,15 @@ template <ast::IndexableID ID>
         const auto contiguous_of{[](type& t) -> stdx::option<std::pair<type&, bool>> {
             stdx::option<type&> u{t};
             if (const auto r{u->get_data().as_opt<types::reference>()}) {
-                u.emplace(const_cast<type&>(r->underlying));
+                u.emplace(r->underlying);
             } else if (const auto p{u->get_data().as_opt<types::pointer>()}) {
-                u.emplace(const_cast<type&>(p->underlying));
+                u.emplace(p->underlying);
             }
             if (const auto s{u->get_data().as_opt<types::slice>()}) {
-                return std::pair<type&, bool>{const_cast<type&>(s->underlying), !u->is_constant()};
+                return std::pair<type&, bool>{s->underlying, !u->is_constant()};
             }
             if (const auto a{u->get_data().as_opt<types::array>()}) {
-                return std::pair<type&, bool>{const_cast<type&>(a->underlying), !u->is_constant()};
+                return std::pair<type&, bool>{a->underlying, !u->is_constant()};
             }
             return stdx::none;
         }};
@@ -2877,7 +2870,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
             // An argument that still contains `auto` (`@typeOf(a)` where `a: auto`) can only be
             // resolved once the enclosing generic is instantiated
             const auto arg_contains_auto{[](auto&& self, const type& t) -> bool {
-                const auto& d{denoted_type(const_cast<type&>(t))};
+                const auto& d{denoted_type(t)};
                 if (d.get_kind() == type_kind::AUTO) { return true; }
                 const auto& data{d.get_data()};
                 if (const auto p{data.template as_opt<types::pointer>()}) {
@@ -4857,7 +4850,7 @@ auto type_resolver::resolve_impl_method_access(const type&      target,
             }
         }
         return stdx::result<gsl::not_null<type*>, diagnostic>{
-            gsl::not_null<type*>{const_cast<type*>(visible.front()->fn_type.get())}};
+            gsl::not_null<type*>{visible.front()->fn_type.get()}};
     }
 
     if (visible.size() > 1) {
@@ -6666,16 +6659,16 @@ auto type_resolver::visit(ast::node_id id, const ast::unwrap_expr& unwrap) -> vo
             loc));
     }
 
-    const type* payload_type{nominal_shape->output_type};
+    type* payload_type{nominal_shape->output_type};
 
     // `expr!` just projects the success payload with lowering handling the discriminant check
     if (!is_question) {
-        resolving_.set_sema_type(id, const_cast<type&>(*payload_type));
-        return last_type_.emplace(const_cast<type&>(*payload_type));
+        resolving_.set_sema_type(id, *payload_type);
+        return last_type_.emplace(*payload_type);
     }
 
     // A body re-typed by a dedicated instantiation resolver has no `open_function_nodes_` entry
-    stdx::option<const type&> ret_type;
+    stdx::option<type&> ret_type;
     if (!open_function_nodes_.empty()) {
         auto& fn_type{resolving_.get_sema_type(open_function_nodes_.back())};
         if (const auto fd{fn_type.get_data().as_opt<types::function>()}) {
@@ -6748,8 +6741,8 @@ auto type_resolver::visit(ast::node_id id, const ast::unwrap_expr& unwrap) -> vo
             loc));
     }
 
-    resolving_.set_sema_type(id, const_cast<type&>(*payload_type));
-    last_type_.emplace(const_cast<type&>(*payload_type));
+    resolving_.set_sema_type(id, *payload_type);
+    last_type_.emplace(*payload_type);
 }
 
 auto type_resolver::visit(ast::node_id id, const ast::implicit_access_expr& implicit_access)
@@ -6896,7 +6889,7 @@ auto type_resolver::using_rhs_value_name(ast::explicit_type_id rhs) const
                 }
                 return stdx::none;
             }
-            auto&      denoted{denoted_type(const_cast<type&>(*obj_type))};
+            auto&      denoted{denoted_type(*obj_type)};
             const auto tbl{denoted.get_symbol_table_idx_opt()};
             if (!tbl) { return stdx::none; }
             const auto& member{resolving_.ast.get_as<ast::identifier_expr>(e.member)};
@@ -8206,7 +8199,7 @@ auto type_resolver::visit(ast::node_id id, const ast::defer_stmt& defer) -> void
 auto type_resolver::visit(ast::node_id id, const ast::errdefer_stmt& errdef) -> void {
     PROFILE_FUNCTION();
 
-    stdx::option<const type&> ret_type;
+    stdx::option<type&> ret_type;
     if (!open_function_nodes_.empty()) {
         auto& fn_type{resolving_.get_sema_type(open_function_nodes_.back())};
         if (const auto fd{fn_type.get_data().as_opt<types::function>()}) {
@@ -8249,7 +8242,7 @@ auto type_resolver::visit(ast::node_id id, const ast::errdefer_stmt& errdef) -> 
 
     if (errdef.capture && errdef.capture->is<ast::identifier_expr>() &&
         resolving_.has_sema_type(id)) {
-        type* cap_type{const_cast<type*>(nominal_rewrap->from_type.get())};
+        type* cap_type{nominal_rewrap->from_type.get()};
         if (errdef.modifier.is_ref()) {
             cap_type = &ctx_.get_reference(types::mut::CONSTANT, *cap_type);
         } else if (errdef.modifier.is_ptr()) {
@@ -8573,7 +8566,7 @@ auto type_resolver::pre_register_impls() -> void {
         auto&       impl_type{resolving_.get_sema_type(root)};
         const scope s{table_stack_, impl_type.get_symbol_table_idx(), table_idx_};
 
-        stdx::option<const type&> interface_type;
+        stdx::option<type&> interface_type;
         if (impl->interface_type) {
             auto& it{resolve_impl_type_ref(*impl->interface_type)};
             if (it.is_poison()) { continue; }
@@ -8583,7 +8576,7 @@ auto type_resolver::pre_register_impls() -> void {
         if (target.is_poison()) { continue; }
 
         // A trait impl is legal in the module that declares `I` or `T`
-        stdx::option<const mod::module&> here{resolving_};
+        stdx::option<mod::module&> here{resolving_};
         const auto iface_mod{interface_type ? declaring_module_of(*interface_type) : stdx::none};
         const auto target_mod{declaring_module_of(target)};
         if (interface_type) {
@@ -8746,7 +8739,7 @@ auto type_resolver::register_parameterized_impl(ast::node_id root, const ast::im
     }
     if (!base_mod || !base_ctor_fn) { return; } // cannot anchor: skip quietly
 
-    stdx::option<const type&> iface_type;
+    stdx::option<type&> iface_type;
     if (impl.interface_type) {
         auto& it{resolve_impl_type_ref(*impl.interface_type)};
         if (it.is_poison()) { return; }
@@ -8779,7 +8772,7 @@ auto type_resolver::register_parameterized_impl(ast::node_id root, const ast::im
         mapping.emplace_back(slot);
     }
 
-    stdx::option<const mod::module&> here{resolving_};
+    stdx::option<mod::module&> here{resolving_};
     ctx_.impls.record_parameterized(parameterized_impl{
         .site              = root,
         .interface_type    = iface_type,
@@ -8805,7 +8798,7 @@ auto type_resolver::instantiate_impls_for(
             continue;
         }
         if (!pimpl->enclosing) { continue; }
-        auto&      impl_mod{const_cast<mod::module&>(*pimpl->enclosing)};
+        auto&      impl_mod{*pimpl->enclosing};
         const auto impl_stmt{impl_mod.ast.get_as_opt<ast::impl_stmt>(pimpl->site)};
         if (!impl_stmt) { continue; }
 
@@ -8908,7 +8901,7 @@ auto type_resolver::instantiate_impls_for(
                 if (!decl || !decl->value || !decl->value->is<ast::function_expr>()) { continue; }
                 if (typing.find_node_type(decl->value->get_index())) { continue; }
                 if (const auto t{impl_mod.get_sema_type_opt(*decl->value)}) {
-                    auto* remapped{remap_one(const_cast<type*>(t.get()))};
+                    auto* remapped{remap_one(t.get())};
                     typing.node_types.emplace_back((*member).get_index(), remapped);
                     typing.node_types.emplace_back(decl->value->get_index(), remapped);
                 }
@@ -8923,8 +8916,8 @@ auto type_resolver::instantiate_impls_for(
             ctx_.advance_epoch();
         }
 
-        std::vector<const type*> rec_sentinels;
-        std::vector<const type*> rec_type_args;
+        std::vector<type*> rec_sentinels;
+        std::vector<type*> rec_type_args;
         for (usize i{0}; i < tmpl.sentinels.size() && i < type_bounds.size(); ++i) {
             if (tmpl.sentinels[i] && type_bounds[i]) {
                 rec_sentinels.emplace_back(tmpl.sentinels[i]);
@@ -8960,7 +8953,7 @@ auto type_resolver::instantiate_impls_for(
             }
             if (!m.fn_type) {
                 if (const auto t{impl_mod.get_sema_type_opt(*decl->value)}) {
-                    m.fn_type = remap_one(const_cast<type*>(t.get()));
+                    m.fn_type = remap_one(t.get());
                 }
             }
             rec.methods.emplace_back(std::move(m));
@@ -9098,14 +9091,14 @@ auto type_resolver::resolve_param_impl_bodies(
             usize       pi{0};
             if (has_self) {
                 if (const auto st{impl_mod.get_sema_type_opt(fn_expr.self->name)}) {
-                    concrete_param_types[pi++] = const_cast<type*>(st.get());
+                    concrete_param_types[pi++] = st.get();
                 } else {
                     concrete_param_types[pi++] = &concrete;
                 }
             }
             for (const auto& param : fn_expr.parameters) {
                 if (const auto pt{impl_mod.get_sema_type_opt(param.name)}) {
-                    concrete_param_types[pi++] = const_cast<type*>(pt.get());
+                    concrete_param_types[pi++] = pt.get();
                 } else {
                     concrete_param_types[pi++] = &ctx_.get_poison();
                 }
@@ -9155,8 +9148,7 @@ auto type_resolver::resolve_param_impl_bodies(
         // evaluation at compile time so the monomorphized signature has the concrete union type.
         if (deduced_ret->get_data().is<types::deferred_call>()) {
             gir::const_eval evaluator{ctx_, impl_mod};
-            deduced_ret.emplace(
-                const_cast<type&>(denoted_type(evaluator.force_deferred_call(*deduced_ret))));
+            deduced_ret.emplace(denoted_type(evaluator.force_deferred_call(*deduced_ret)));
         }
 
         // Build the concrete `types::function` signature for the monomorphized method.
@@ -9168,14 +9160,14 @@ auto type_resolver::resolve_param_impl_bodies(
         usize       pi{0};
         if (has_self) {
             if (const auto st{impl_mod.get_sema_type_opt(fn_expr.self->name)}) {
-                concrete_param_types[pi++] = const_cast<type*>(st.get());
+                concrete_param_types[pi++] = st.get();
             } else {
                 concrete_param_types[pi++] = &concrete;
             }
         }
         for (const auto& param : fn_expr.parameters) {
             if (const auto pt{impl_mod.get_sema_type_opt(param.name)}) {
-                concrete_param_types[pi++] = const_cast<type*>(pt.get());
+                concrete_param_types[pi++] = pt.get();
             } else {
                 concrete_param_types[pi++] = &ctx_.get_poison();
             }
@@ -9217,7 +9209,7 @@ auto type_resolver::build_param_impl_template(const ast::impl_stmt& impl, ast::n
 
     // Bind each type param to its own opaque sentinel `type` and each `constexpr` param to a
     // dummy value, then resolve the target + members once
-    std::vector<const type*> sentinels;
+    std::vector<type*> sentinels;
     sentinels.reserve(impl.impl_params.size());
     constexpr_frame cx_dummy;
     for (const auto& p : impl.impl_params) {
@@ -9249,7 +9241,7 @@ auto type_resolver::build_param_impl_template(const ast::impl_stmt& impl, ast::n
     const mutating_context_guard tmode{building_param_template_, true};
 
     if (impl.interface_type) { resolve(*impl.interface_type); }
-    stdx::option<const type&>      abstract_target;
+    stdx::option<type&>            abstract_target;
     stdx::option<structural_guard> guard;
     resolve(impl.target_type);
     if (last_type_ && !last_type_->is_poison()) {
@@ -9524,10 +9516,7 @@ auto type_resolver::check_impl_conformance(const impl_record& rec, const types::
         for (usize p{first_param}; p < expected->params.size(); ++p) {
             auto& want_base{*expected->params[p]};
             auto& want{rec.interface_type && rec.target_type
-                           ? remap_type(ctx_,
-                                        const_cast<type&>(want_base),
-                                        *rec.interface_type,
-                                        const_cast<type&>(*rec.target_type))
+                           ? remap_type(ctx_, want_base, *rec.interface_type, *rec.target_type)
                            : want_base};
             auto& have{*got->params[p]};
             if (!types_match_with_assoc(rec, iface, want, have)) {
@@ -9542,12 +9531,10 @@ auto type_resolver::check_impl_conformance(const impl_record& rec, const types::
             }
         }
 
-        auto& expected_ret{rec.interface_type && rec.target_type
-                               ? remap_type(ctx_,
-                                            const_cast<type&>(expected->return_type),
-                                            *rec.interface_type,
-                                            const_cast<type&>(*rec.target_type))
-                               : const_cast<type&>(expected->return_type)};
+        auto& expected_ret{
+            rec.interface_type && rec.target_type
+                ? remap_type(ctx_, expected->return_type, *rec.interface_type, *rec.target_type)
+                : expected->return_type};
         if (!types_match_with_assoc(rec, iface, expected_ret, got->return_type)) {
             ctx_.diags.emplace_back(
                 fmt::format("method `{}`: return type does not match the requirement in `{}`",
@@ -9608,9 +9595,9 @@ auto type_resolver::resolve_inherited_default_methods(impl_record&              
     if (iface.method_names.size() <= iface.requirement_count) { return; }
     if (!rec.interface_type || !rec.target_type) { return; }
 
-    auto&       imod{const_cast<mod::module&>(iface.enclosing)};
+    auto&       imod{iface.enclosing};
     const auto  iface_scope{rec.interface_type->get_symbol_table_idx()};
-    auto&       target{const_cast<type&>(*rec.target_type)};
+    auto&       target{*rec.target_type};
     const auto& impl_mod{rec.enclosing ? *rec.enclosing : resolving_};
 
     // Rebind the interface's associated types to what this impl supplies
@@ -10203,8 +10190,7 @@ auto type_resolver::instantiate_generic(type&                             callee
             const auto& pname{
                 fn_mod.ast.get_as<ast::identifier_expr>(impl_stmt.impl_params[i].name).name};
             if (i < enclosing_impl->type_arguments.size() && enclosing_impl->type_arguments[i]) {
-                auto& concrete_t{
-                    denoted_type(const_cast<type&>(*enclosing_impl->type_arguments[i]))};
+                auto& concrete_t{denoted_type(*enclosing_impl->type_arguments[i])};
                 binding_frame.insert_or_assign(pname, gir::const_value{concrete_t});
                 fn_mod.set_sema_type(impl_stmt.impl_params[i].name, concrete_t);
                 if (const auto s{
@@ -10246,7 +10232,7 @@ auto type_resolver::instantiate_generic(type&                             callee
                                                          : &ctx_.get_reference(*m, enc);
             }
         } else if (const auto st{fn_mod.get_sema_type_opt(fn_expr.self->name)}) {
-            self_t.emplace(const_cast<type*>(st.get()));
+            self_t.emplace(st.get());
         }
         if (self_t) {
             fn_mod.set_sema_type(fn_expr.self->name, *self_t);

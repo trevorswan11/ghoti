@@ -448,55 +448,17 @@ auto type_pool::get_many(usize count, type& common_type) noexcept -> gsl::span<t
     return types;
 }
 
-namespace {
-
-auto strip_modifiers(type_pool& pool, const type& old_type, types::mutability_modifiers mut)
+auto type_pool::strip_modifiers(const type& old_type, types::mutability_modifiers mut)
     -> gsl::not_null<type*> {
     auto key{old_type.get_key()};
     key.set_mut(key.get_mut() & ~mut);
 
     // Resolve here since the type information doesn't contain modifier information
-    auto new_type{pool[key]};
+    auto new_type{(*this)[key]};
     new_type->resolve_if<type::data_t>(old_type.get_data());
     if (const auto idx{old_type.get_symbol_table_idx_opt()}) {
         new_type->set_symbol_table_idx(*idx);
     }
-    return new_type;
-}
-
-} // namespace
-
-auto type_pool::strip_const(const type& t) -> gsl::not_null<type*> {
-    if (!t.is_constant()) { return const_cast<type*>(&t); }
-    return strip_modifiers(*this, t, types::mut::CONSTANT);
-}
-
-auto type_pool::strip_volatile(const type& t) -> gsl::not_null<type*> {
-    if (!t.is_volatile()) { return const_cast<type*>(&t); }
-    return strip_modifiers(*this, t, types::mut::VOLATILE);
-}
-
-auto type_pool::with_const(const type& t, bool is_const) -> gsl::not_null<type*> {
-    if (t.is_constant() == is_const) { return const_cast<type*>(&t); }
-    if (!is_const) { return strip_modifiers(*this, t, types::mut::CONSTANT); }
-
-    auto key{t.get_key()};
-    key.set_mut(key.get_mut() | types::mut::CONSTANT);
-    auto new_type{(*this)[key]};
-    new_type->resolve_if<type::data_t>(t.get_data());
-    if (const auto idx{t.get_symbol_table_idx_opt()}) { new_type->set_symbol_table_idx(*idx); }
-    return new_type;
-}
-
-auto type_pool::with_volatile(const type& t, bool is_vol) -> gsl::not_null<type*> {
-    if (t.is_volatile() == is_vol) { return const_cast<type*>(&t); }
-    if (!is_vol) { return strip_modifiers(*this, t, types::mut::VOLATILE); }
-
-    auto key{t.get_key()};
-    key.set_mut(key.get_mut() | types::mut::VOLATILE);
-    auto new_type{(*this)[key]};
-    new_type->resolve_if<type::data_t>(t.get_data());
-    if (const auto idx{t.get_symbol_table_idx_opt()}) { new_type->set_symbol_table_idx(*idx); }
     return new_type;
 }
 

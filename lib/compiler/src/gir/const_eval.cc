@@ -543,12 +543,12 @@ auto const_eval::force_deferred_aggregate_fields(sema::type& maybe_aggregate) ->
 auto const_eval::force_deferred_indirection_underlying(sema::type& maybe_indirection) -> void {
     PROFILE_FUNCTION();
     if (const auto ref_data{maybe_indirection.get_data().as_opt<sema::types::reference>()}) {
-        auto& underlying{const_cast<sema::type&>(ref_data->underlying)};
+        auto& underlying{ref_data->underlying};
         maybe_indirection.resolve<sema::types::reference>(force_deferred_array(underlying));
         return;
     }
     if (const auto ptr_data{maybe_indirection.get_data().as_opt<sema::types::pointer>()}) {
-        auto& underlying{const_cast<sema::type&>(ptr_data->underlying)};
+        auto& underlying{ptr_data->underlying};
         maybe_indirection.resolve<sema::types::pointer>(force_deferred_array(underlying));
     }
 }
@@ -980,7 +980,7 @@ auto const_eval::eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::opt
     return stdx::none;
 }
 
-auto const_eval::coerce_dyn(const const_value& val, const sema::type& dest_type)
+auto const_eval::coerce_dyn(const const_value& val, sema::type& dest_type)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     const auto        p{dest_type.get_data().as_opt<sema::types::pointer>()};
@@ -1025,7 +1025,7 @@ auto const_eval::coerce_dyn(const const_value& val, const sema::type& dest_type)
                            .data_symbol   = std::move(data_sym),
                            .vtable_symbol = vtable_sym,
                        },
-                       const_cast<sema::type&>(dest_type)};
+                       dest_type};
 }
 
 auto const_eval::eval_array(ast::node_id id, const ast::array_expr& array)
@@ -1186,12 +1186,12 @@ auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& 
                 if (!field_val) { return stdx::none; }
                 if (table) {
                     if (const auto proxy{table->get_proxy_opt(member_name)}) {
-                        const auto& field_type{st->type_at(proxy->index)};
-                        const auto  p{field_type.get_data().as_opt<sema::types::pointer>()};
-                        const auto  r{field_type.get_data().as_opt<sema::types::reference>()};
-                        const auto  dyn_ptr{p   ? stdx::option<const sema::type&>{p->underlying}
-                                            : r ? stdx::option<const sema::type&>{r->underlying}
-                                                : stdx::none};
+                        auto&      field_type{st->type_at(proxy->index)};
+                        const auto p{field_type.get_data().as_opt<sema::types::pointer>()};
+                        const auto r{field_type.get_data().as_opt<sema::types::reference>()};
+                        const auto dyn_ptr{p   ? stdx::option<const sema::type&>{p->underlying}
+                                           : r ? stdx::option<const sema::type&>{r->underlying}
+                                               : stdx::none};
                         if (dyn_ptr && dyn_ptr->get_kind() == sema::type_kind::DYN &&
                             !field_val->is<const_dyn_fat_ptr>()) {
                             field_val = coerce_dyn(*field_val, field_type);
@@ -1205,7 +1205,7 @@ auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& 
             const auto prefix{ctx_.generic_functions.get_type_ctor_member_prefix(*sema_type)};
             const auto diff{prefix ? ctx_.instantiation_cache.get_body_type_diff(*prefix)
                                    : st->enclosing.active_body_diff};
-            const mod::body_diff_guard diff_guard{const_cast<mod::module&>(st->enclosing), diff};
+            const mod::body_diff_guard diff_guard{st->enclosing, diff};
 
             stdx::option<ghoti::scope_guard<std::vector<sema::constexpr_frame>>> ctor_binding_guard;
             if (prefix) {
@@ -1225,17 +1225,17 @@ auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& 
                 if (struct_val.fields.contains(std::string{fname})) { continue; }
                 if (!f.default_value) { continue; }
                 auto* const prev{module_.get()};
-                if (&st->enclosing != prev) { set_module(const_cast<mod::module&>(st->enclosing)); }
+                if (&st->enclosing != prev) { set_module(st->enclosing); }
                 auto def_val{try_eval(*f.default_value)};
                 if (&st->enclosing != prev) { set_module(*prev); }
                 if (!def_val) { return stdx::none; }
 
-                const auto& field_type{st->type_at(idx)};
-                const auto  p{field_type.get_data().as_opt<sema::types::pointer>()};
-                const auto  r{field_type.get_data().as_opt<sema::types::reference>()};
-                const auto  dyn_ptr{p   ? stdx::option<const sema::type&>{p->underlying}
-                                    : r ? stdx::option<const sema::type&>{r->underlying}
-                                        : stdx::none};
+                auto&      field_type{st->type_at(idx)};
+                const auto p{field_type.get_data().as_opt<sema::types::pointer>()};
+                const auto r{field_type.get_data().as_opt<sema::types::reference>()};
+                const auto dyn_ptr{p   ? stdx::option<const sema::type&>{p->underlying}
+                                   : r ? stdx::option<const sema::type&>{r->underlying}
+                                       : stdx::none};
                 if (dyn_ptr && dyn_ptr->get_kind() == sema::type_kind::DYN &&
                     !def_val->is<const_dyn_fat_ptr>()) {
                     def_val = coerce_dyn(*def_val, field_type);
@@ -1261,7 +1261,7 @@ auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& 
                         return ctx_.registry.get(*table_idx).get_proxy_opt(member_name);
                     }()};
                 if (proxy) {
-                    const auto&       field_type{ut->type_at(proxy->index)};
+                    auto&             field_type{ut->type_at(proxy->index)};
                     const auto        p{field_type.get_data().as_opt<sema::types::pointer>()};
                     const auto        r{field_type.get_data().as_opt<sema::types::reference>()};
                     const sema::type* dyn_ptr{p ? &p->underlying : r ? &r->underlying : nullptr};
@@ -1351,8 +1351,7 @@ auto const_eval::eval_dot(ast::node_id, const ast::dot_expr& dot) -> stdx::optio
                         const auto                 diff{prefix
                                                             ? ctx_.instantiation_cache.get_body_type_diff(*prefix)
                                                             : st_data->enclosing.active_body_diff};
-                        const mod::body_diff_guard diff_guard{
-                            const_cast<mod::module&>(st_data->enclosing), diff};
+                        const mod::body_diff_guard diff_guard{st_data->enclosing, diff};
 
                         stdx::option<ghoti::scope_guard<std::vector<sema::constexpr_frame>>>
                             ctor_binding_guard;
@@ -1368,18 +1367,16 @@ auto const_eval::eval_dot(ast::node_id, const ast::dot_expr& dot) -> stdx::optio
                             }
                         }
                         auto* const prev{module_.get()};
-                        if (&st_data->enclosing != prev) {
-                            set_module(const_cast<mod::module&>(st_data->enclosing));
-                        }
+                        if (&st_data->enclosing != prev) { set_module(st_data->enclosing); }
                         auto def_val{try_eval(*f.default_value)};
                         if (&st_data->enclosing != prev) { set_module(*prev); }
                         if (def_val) {
-                            const auto& field_type{st_data->type_at(idx)};
-                            const auto  p{field_type.get_data().as_opt<sema::types::pointer>()};
-                            const auto  r{field_type.get_data().as_opt<sema::types::reference>()};
-                            const auto  dyn_ptr{p   ? stdx::option<sema::type&>{p->underlying}
-                                                : r ? stdx::option<sema::type&>{r->underlying}
-                                                    : stdx::none};
+                            auto&      field_type{st_data->type_at(idx)};
+                            const auto p{field_type.get_data().as_opt<sema::types::pointer>()};
+                            const auto r{field_type.get_data().as_opt<sema::types::reference>()};
+                            const auto dyn_ptr{p   ? stdx::option<sema::type&>{p->underlying}
+                                               : r ? stdx::option<sema::type&>{r->underlying}
+                                                   : stdx::none};
                             if (dyn_ptr && dyn_ptr->get_kind() == sema::type_kind::DYN &&
                                 !def_val->is<const_dyn_fat_ptr>()) {
                                 def_val = coerce_dyn(*def_val, field_type);
@@ -1454,7 +1451,7 @@ auto const_eval::eval_type_member(sema::type& denoted_in, std::string_view membe
             if (e.value) {
                 // The initializer node lives in the enum's defining module's AST arena, not
                 // necessarily the module currently being const-evaluated.
-                auto&      enclosing_mod{const_cast<mod::module&>(en->enclosing)};
+                auto&      enclosing_mod{en->enclosing};
                 const_eval enclosing_eval{ctx_, enclosing_mod};
                 enclosing_eval.set_symbol_scoping(symbol_scoping_);
                 enclosing_eval.set_constexpr_context(is_constexpr_context());
@@ -1487,7 +1484,7 @@ auto const_eval::eval_type_member(sema::type& denoted_in, std::string_view membe
     if (!node) { return stdx::none; }
 
     // The member decl belongs to the type's own defining module
-    stdx::option<const mod::module&> owner;
+    stdx::option<mod::module&> owner;
     if (const auto s{type.get_data().as_opt<sema::types::struct_t>()}) {
         owner.emplace(s->enclosing);
     } else if (const auto u{type.get_data().as_opt<sema::types::union_t>()}) {
@@ -1496,7 +1493,7 @@ auto const_eval::eval_type_member(sema::type& denoted_in, std::string_view membe
         owner.emplace(e->enclosing);
     }
     if (!owner) { return stdx::none; }
-    auto& owner_mod{const_cast<mod::module&>(*owner)};
+    auto& owner_mod{*owner};
 
     const auto mdecl{owner_mod.ast.get_as_opt<ast::decl_stmt>(*node)};
     if (!mdecl || !mdecl->value ||
@@ -1700,7 +1697,7 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
             const auto& vname{en.enclosing.ast.get_as<ast::identifier_expr>(e.name).name};
             auto        val{static_cast<i128>(idx)};
             if (e.value) {
-                auto&      enclosing_mod{const_cast<mod::module&>(en.enclosing)};
+                auto&      enclosing_mod{en.enclosing};
                 const_eval enclosing_eval{ctx_, enclosing_mod};
                 enclosing_eval.set_symbol_scoping(symbol_scoping_);
                 enclosing_eval.set_constexpr_context(is_constexpr_context());
@@ -1736,7 +1733,7 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
             stdx::option<const_value> default_val;
             if (f.default_value) {
                 auto* const prev_mod{module_.get()};
-                set_module(const_cast<mod::module&>(st.enclosing));
+                set_module(st.enclosing);
                 default_val = try_eval(*f.default_value);
                 set_module(*prev_mod);
             }
@@ -1982,14 +1979,14 @@ auto const_eval::eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap)
 
     // Evaluate `branch(self)` on the operand at compile time to obtain the Flow tagged union.
     if (const auto branch_m{shape->impl->find_method(sema::builtin_impl::BRANCH)}) {
-        const auto& decl_mod{branch_m->defining_mod   ? *branch_m->defining_mod
-                             : shape->impl->enclosing ? *shape->impl->enclosing
-                                                      : *module_};
+        auto& decl_mod{branch_m->defining_mod   ? *branch_m->defining_mod
+                       : shape->impl->enclosing ? *shape->impl->enclosing
+                                                : *module_};
         if (const auto decl{decl_mod.ast.get_as_opt<ast::decl_stmt>(branch_m->decl)}) {
             if (decl->value) {
                 if (const auto fn_expr{decl_mod.ast.get_as_opt<ast::function_expr>(*decl->value)}) {
                     auto* const prev{module_.get()};
-                    if (&decl_mod != prev) { set_module(const_cast<mod::module&>(decl_mod)); }
+                    if (&decl_mod != prev) { set_module(decl_mod); }
                     std::vector<const_value> args{*operand};
                     const auto               flow_val{eval_constexpr_fn(id, *fn_expr, args)};
                     if (&decl_mod != prev) { set_module(*prev); }
@@ -2674,9 +2671,9 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                     if (r->body_scope_idx == *owner) {
                         if (const auto m{r->find_method(member_ident.name)}) {
                             if (m->defining_mod) {
-                                method_mod.emplace(const_cast<mod::module&>(*m->defining_mod));
+                                method_mod.emplace(*m->defining_mod);
                             } else if (r->enclosing) {
-                                method_mod.emplace(const_cast<mod::module&>(*r->enclosing));
+                                method_mod.emplace(*r->enclosing);
                             } else {
                                 method_mod.emplace(module_);
                             }
@@ -2729,9 +2726,9 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                 for (const auto& em : ctx_.impls.methods_of(*target_ty)) {
                     if (em.method->name == member_ident.name) {
                         if (em.method->defining_mod) {
-                            method_mod.emplace(const_cast<mod::module&>(*em.method->defining_mod));
+                            method_mod.emplace(*em.method->defining_mod);
                         } else if (em.record->enclosing) {
-                            method_mod.emplace(const_cast<mod::module&>(*em.record->enclosing));
+                            method_mod.emplace(*em.record->enclosing);
                         } else {
                             method_mod.emplace(module_);
                         }
@@ -2756,11 +2753,11 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                         if (const auto sym_node{sym->get_data().as_opt<sema::symbols::node_t>()}) {
                             const auto& d{target_ty->get_data()};
                             if (const auto s{d.as_opt<sema::types::struct_t>()}) {
-                                method_mod.emplace(const_cast<mod::module&>(s->enclosing));
+                                method_mod.emplace(s->enclosing);
                             } else if (const auto u{d.as_opt<sema::types::union_t>()}) {
-                                method_mod.emplace(const_cast<mod::module&>(u->enclosing));
+                                method_mod.emplace(u->enclosing);
                             } else if (const auto e{d.as_opt<sema::types::enum_t>()}) {
-                                method_mod.emplace(const_cast<mod::module&>(e->enclosing));
+                                method_mod.emplace(e->enclosing);
                             }
                             if (method_mod) {
                                 if (const auto m_decl{
@@ -3491,7 +3488,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
                 const auto& vname{en->enclosing.ast.get_as<ast::identifier_expr>(e.name).name};
                 auto        val{static_cast<i64>(idx)};
                 if (e.value) {
-                    auto&      enclosing_mod{const_cast<mod::module&>(en->enclosing)};
+                    auto&      enclosing_mod{en->enclosing};
                     const_eval enclosing_eval{ctx_, enclosing_mod};
                     enclosing_eval.set_symbol_scoping(symbol_scoping_);
                     enclosing_eval.set_constexpr_context(is_constexpr_context());
