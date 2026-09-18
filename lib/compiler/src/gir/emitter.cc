@@ -1732,9 +1732,19 @@ auto emitter::emit_break(ast::node_id, const ast::break_stmt& brk) -> void {
     }
 
     for (usize idx{loop_stack_.size()}; idx > 0; --idx) {
-        const auto& [label, break_target, continue_target, result_slot, scope_depth] =
+        const auto& [label, break_target, continue_target, result_slot, scope_depth, is_constexpr] =
             loop_stack_[idx - 1];
         if (!target_label || label == *target_label) {
+            if (is_constexpr) {
+                if (brk.expression) {
+                    const auto val{emit_expression(*brk.expression)};
+                    if (result_slot) { builder_.emit_store(*result_slot, val); }
+                    constexpr_loop_break_value_.emplace(val);
+                }
+                emit_defers_up_to(scope_depth);
+                constexpr_loop_break_ = true;
+                return;
+            }
             if (brk.expression && result_slot) {
                 builder_.emit_store(*result_slot, emit_expression(*brk.expression));
             }
@@ -1756,9 +1766,14 @@ auto emitter::emit_continue(ast::node_id, const ast::continue_stmt& cnt) -> void
     }
 
     for (usize idx{loop_stack_.size()}; idx > 0; --idx) {
-        const auto& [label, break_target, continue_target, result_slot, scope_depth]{
+        const auto& [label, break_target, continue_target, result_slot, scope_depth, is_constexpr]{
             loop_stack_[idx - 1]};
         if (!target_label || label == *target_label) {
+            if (is_constexpr) {
+                emit_defers_up_to(scope_depth);
+                constexpr_loop_continue_ = true;
+                return;
+            }
             emit_defers_up_to(scope_depth);
             builder_.emit_goto(continue_target);
             return;
@@ -1774,10 +1789,13 @@ auto emitter::emit_block(const ast::block_stmt& block) -> void {
     for (const auto& stmt : block.statements) {
         // A folded `if constexpr` arm (or any diverging statement) can terminate the block
         if (const auto seg{builder_.get_segment()}; seg && seg->has_terminator()) { break; }
+        if (constexpr_loop_continue_ || constexpr_loop_break_) { break; }
         emit_stmt(stmt);
     }
-    if (const auto seg{builder_.get_segment()}; !seg || !seg->has_terminator()) {
-        emit_defers_for_scope(scopes_.size() - 1);
+    if (!constexpr_loop_continue_ && !constexpr_loop_break_) {
+        if (const auto seg{builder_.get_segment()}; !seg || !seg->has_terminator()) {
+            emit_defers_for_scope(scopes_.size() - 1);
+        }
     }
 }
 
@@ -1884,7 +1902,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                                                     .is_const         = true,
                                                     .is_constexpr_var = is_constexpr_var,
                                                 });
-                if (is_constexpr_var) {
+                if (is_constexpr) {
                     ctx_.constexpr_binding_frames.back().insert_or_assign(name, *cv);
                 }
                 return;
@@ -4106,11 +4124,15 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
                             : (emit_stmt(arm), value{void_val{}, sema_type});
     }};
 
+    const bool in_cx_loop{
+        std::ranges::any_of(loop_stack_, [](const auto& l) { return l.is_constexpr; })};
     // The type resolver already folded this `if constexpr`
-    if (const auto br{active_mod().get_if_branch_opt(id.get_index())}) {
-        if (*br == mod::if_branch::CONSEQUENCE) { return emit_single_arm(if_expr.consequence); }
-        if (if_expr.alternate) { return emit_single_arm(*if_expr.alternate); }
-        return value{void_val{}, sema_type};
+    if (!in_cx_loop) {
+        if (const auto br{active_mod().get_if_branch_opt(id.get_index())}) {
+            if (*br == mod::if_branch::CONSEQUENCE) { return emit_single_arm(if_expr.consequence); }
+            if (if_expr.alternate) { return emit_single_arm(*if_expr.alternate); }
+            return value{void_val{}, sema_type};
+        }
     }
 
     // Constexpr condition evaluation fallback
@@ -4233,7 +4255,30 @@ auto emitter::emit_constexpr_while(ast::node_id id, const ast::while_loop_expr& 
             break;
         }
         ++iterations;
-        emit_block(block);
+        {
+            const loop_context_guard g_loop{loop_stack_,
+                                            loop_context{
+                                                .label           = stdx::none,
+                                                .break_target    = segment_id{0},
+                                                .continue_target = segment_id{0},
+                                                .result_slot     = stdx::none,
+                                                .scope_depth     = scopes_.size(),
+                                                .is_constexpr    = true,
+                                            }};
+            emit_block(block);
+        }
+        if (const auto cur_seg{builder_.get_segment()}; cur_seg && cur_seg->has_terminator()) {
+            break;
+        }
+        if (constexpr_loop_break_) {
+            constexpr_loop_break_ = false;
+            break;
+        }
+        if (constexpr_loop_continue_) {
+            constexpr_loop_continue_ = false;
+            if (while_loop.continuation) { emit_expression(*while_loop.continuation); }
+            continue;
+        }
         if (while_loop.continuation) { emit_expression(*while_loop.continuation); }
     }
     return value{void_val{}, void_type};
@@ -4324,12 +4369,74 @@ auto emitter::emit_while(ast::node_id                   id,
     return value{void_val{}, sema_type};
 }
 
+auto emitter::emit_constexpr_do_while(ast::node_id id, const ast::do_while_loop_expr& do_while)
+    -> value {
+    PROFILE_FUNCTION();
+    auto&       void_type{ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+    const auto& block{active_ast().get_as<ast::block_stmt>(do_while.block)};
+
+    usize iterations{0};
+    while (true) {
+        if (iterations >= ctx_.eval_unroll_limit) {
+            ctx_.diags.emplace_back(
+                fmt::format(
+                    "`do ... while constexpr` exceeded its unroll limit of {}; raise it with "
+                    "`@setEvalUnrollLimit`",
+                    ctx_.eval_unroll_limit),
+                sema::error::CONSTEXPR_LOOP_LIMIT,
+                active_ast().location_of(id));
+            break;
+        }
+        ++iterations;
+        const_eval_.clear_memo();
+
+        {
+            const loop_context_guard g_loop{loop_stack_,
+                                            loop_context{
+                                                .label           = stdx::none,
+                                                .break_target    = segment_id{0},
+                                                .continue_target = segment_id{0},
+                                                .result_slot     = stdx::none,
+                                                .scope_depth     = scopes_.size(),
+                                                .is_constexpr    = true,
+                                            }};
+            emit_block(block);
+        }
+        if (const auto cur_seg{builder_.get_segment()}; cur_seg && cur_seg->has_terminator()) {
+            break;
+        }
+        if (constexpr_loop_break_) {
+            constexpr_loop_break_ = false;
+            break;
+        }
+        if (constexpr_loop_continue_) { constexpr_loop_continue_ = false; }
+
+        const_eval_.clear_memo();
+        const gir::const_eval::constexpr_context_guard g{const_eval_, true};
+        const auto                                     diags_before{ctx_.diags.size()};
+        const auto cond_val{const_eval_.try_eval(do_while.condition)};
+        const auto cond{cond_val ? cond_val->as_opt<bool>() : stdx::none};
+        if (!cond) {
+            if (ctx_.diags.size() == diags_before) {
+                ctx_.diags.emplace_back(
+                    "`do ... while constexpr`'s condition must fold to a compile-time-known `bool`",
+                    sema::error::CONSTEXPR_WHILE_NONFOLDABLE_COND,
+                    active_ast().location_of(do_while.condition));
+            }
+            break;
+        }
+        if (!*cond) { break; }
+    }
+    return value{void_val{}, void_type};
+}
+
 auto emitter::emit_do_while(ast::node_id                   id,
                             const ast::do_while_loop_expr& do_while,
                             stdx::option<std::string_view> label,
                             stdx::option<local_id>         res_slot,
                             stdx::option<sema::type&>      result_type) -> value {
     PROFILE_FUNCTION();
+    if (do_while.is_constexpr) { return emit_constexpr_do_while(id, do_while); }
     const auto sema_type{result_type ? result_type : active_mod().get_sema_type_opt(id)};
     const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
 
@@ -4378,12 +4485,60 @@ auto emitter::emit_do_while(ast::node_id                   id,
     return value{void_val{}, sema_type};
 }
 
+auto emitter::emit_constexpr_infinite_loop(ast::node_id id, const ast::infinite_loop_expr& loop)
+    -> value {
+    PROFILE_FUNCTION();
+    auto&       void_type{ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+    const auto& block{active_ast().get_as<ast::block_stmt>(loop.block)};
+
+    usize iterations{0};
+    while (true) {
+        if (iterations >= ctx_.eval_unroll_limit) {
+            ctx_.diags.emplace_back(
+                fmt::format("`loop constexpr` exceeded its unroll limit of {}; raise it with "
+                            "`@setEvalUnrollLimit`",
+                            ctx_.eval_unroll_limit),
+                sema::error::CONSTEXPR_LOOP_LIMIT,
+                active_ast().location_of(id));
+            break;
+        }
+        ++iterations;
+
+        const_eval_.clear_memo();
+        {
+            const loop_context_guard g_loop{loop_stack_,
+                                            loop_context{
+                                                .label           = stdx::none,
+                                                .break_target    = segment_id{0},
+                                                .continue_target = segment_id{0},
+                                                .result_slot     = stdx::none,
+                                                .scope_depth     = scopes_.size(),
+                                                .is_constexpr    = true,
+                                            }};
+            emit_block(block);
+        }
+        if (const auto cur_seg{builder_.get_segment()}; cur_seg && cur_seg->has_terminator()) {
+            break;
+        }
+        if (constexpr_loop_break_) {
+            constexpr_loop_break_ = false;
+            break;
+        }
+        if (constexpr_loop_continue_) {
+            constexpr_loop_continue_ = false;
+            continue;
+        }
+    }
+    return value{void_val{}, void_type};
+}
+
 auto emitter::emit_infinite_loop(ast::node_id                   id,
                                  const ast::infinite_loop_expr& loop,
                                  stdx::option<std::string_view> label,
                                  stdx::option<local_id>         res_slot,
                                  stdx::option<sema::type&>      result_type) -> value {
     PROFILE_FUNCTION();
+    if (loop.is_constexpr) { return emit_constexpr_infinite_loop(id, loop); }
     const auto sema_type{result_type ? result_type : active_mod().get_sema_type_opt(id)};
     const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
 
@@ -4510,7 +4665,29 @@ auto emitter::emit_constexpr_for(ast::node_id id, const ast::for_loop_expr& for_
             cx_frame.insert_or_assign(*companion_name, (*cx_args)[i++]);
         }
         const constexpr_frame_guard cfg{ctx_.constexpr_binding_frames, std::move(cx_frame)};
-        emit_block(block);
+        {
+            const loop_context_guard g_loop{loop_stack_,
+                                            loop_context{
+                                                .label           = stdx::none,
+                                                .break_target    = segment_id{0},
+                                                .continue_target = segment_id{0},
+                                                .result_slot     = stdx::none,
+                                                .scope_depth     = scopes_.size(),
+                                                .is_constexpr    = true,
+                                            }};
+            emit_block(block);
+        }
+        if (const auto cur_seg{builder_.get_segment()}; cur_seg && cur_seg->has_terminator()) {
+            break;
+        }
+        if (constexpr_loop_break_) {
+            constexpr_loop_break_ = false;
+            break;
+        }
+        if (constexpr_loop_continue_) {
+            constexpr_loop_continue_ = false;
+            continue;
+        }
     }
 
     return value{void_val{}, void_type};

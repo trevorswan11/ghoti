@@ -93,21 +93,93 @@ TEST_CASE("`for constexpr`'s break/continue restriction does not reach a nested 
     )");
 }
 
-TEST_CASE("`while constexpr` rejects a `break`/`continue` at its own iteration boundary") {
+TEST_CASE("`while constexpr` rejects runtime `break`/`continue`") {
     CHECK(helpers::raised(R"(
         const use := fn(): void {
-            constexpr var n := 0;
-            while constexpr (n < 3) { break; n = n + 1; }
+            var n := 0;
+            while constexpr (true) { if (n == 1) { break; } n = n + 1; }
         };
     )",
                           sema::error::CONSTEXPR_LOOP_BREAK));
     CHECK(helpers::raised(R"(
         const use := fn(): void {
-            constexpr var n := 0;
-            while constexpr (n < 3) { continue; n = n + 1; }
+            var n := 0;
+            while constexpr (true) { if (n == 1) { continue; } n = n + 1; }
         };
     )",
                           sema::error::CONSTEXPR_LOOP_CONTINUE));
+}
+
+TEST_CASE("`while constexpr` allows compile-time `break` and `continue`") {
+    helpers::resolve_and_check(R"(
+        const use := fn(): void {
+            constexpr var n := 0;
+            while constexpr (n < 5) {
+                if constexpr (n == 2) {
+                    n = n + 2;
+                    continue;
+                }
+                if constexpr (n >= 4) {
+                    break;
+                }
+                n = n + 1;
+            }
+        };
+    )");
+}
+
+TEST_CASE("`do ... while constexpr` rejects runtime jumps and allows compile-time jumps") {
+    CHECK(helpers::raised(R"(
+        const use := fn(): void {
+            var n := 0;
+            do { if (n == 1) { break; } } while constexpr (true);
+        };
+    )",
+                          sema::error::CONSTEXPR_LOOP_BREAK));
+    CHECK(helpers::raised(R"(
+        const use := fn(): void {
+            var n := 0;
+            do { if (n == 1) { continue; } } while constexpr (true);
+        };
+    )",
+                          sema::error::CONSTEXPR_LOOP_CONTINUE));
+
+    helpers::resolve_and_check(R"(
+        const use := fn(): void {
+            constexpr var n := 0;
+            do {
+                if constexpr (n == 1) { break; }
+                n = n + 1;
+            } while constexpr (n < 5);
+        };
+    )");
+}
+
+TEST_CASE("`loop constexpr` rejects runtime jumps and allows compile-time jumps") {
+    CHECK(helpers::raised(R"(
+        const use := fn(): void {
+            var n := 0;
+            loop constexpr { if (n == 1) { break; } }
+        };
+    )",
+                          sema::error::CONSTEXPR_LOOP_BREAK));
+    CHECK(helpers::raised(R"(
+        const use := fn(): void {
+            var n := 0;
+            loop constexpr { if (n == 1) { continue; } }
+        };
+    )",
+                          sema::error::CONSTEXPR_LOOP_CONTINUE));
+
+    helpers::resolve_and_check(R"(
+        const use := fn(): void {
+            constexpr var n := 0;
+            loop constexpr {
+                if constexpr (n == 3) { break; }
+                n = n + 1;
+            }
+        };
+    )");
 }
 
 } // namespace ghoti::tests

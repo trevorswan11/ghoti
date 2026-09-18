@@ -68,11 +68,12 @@ class emitter {
     };
 
     struct loop_context {
-        stdx::option<std::string_view> label;
+        stdx::option<std::string_view> label{};
         segment_id                     break_target{0};
         segment_id                     continue_target{0};
-        stdx::option<local_id>         result_slot;
+        stdx::option<local_id>         result_slot{};
         usize                          scope_depth{0};
+        bool                           is_constexpr{false};
     };
 
     struct iterable_info {
@@ -284,11 +285,14 @@ class emitter {
                        stdx::option<std::string_view> label       = stdx::none,
                        stdx::option<local_id>         res_slot    = stdx::none,
                        stdx::option<sema::type&>      result_type = stdx::none) -> value;
+    auto emit_constexpr_do_while(ast::node_id id, const ast::do_while_loop_expr& do_while) -> value;
     auto emit_infinite_loop(ast::node_id                   id,
                             const ast::infinite_loop_expr& loop,
                             stdx::option<std::string_view> label       = stdx::none,
                             stdx::option<local_id>         res_slot    = stdx::none,
                             stdx::option<sema::type&>      result_type = stdx::none) -> value;
+    auto emit_constexpr_infinite_loop(ast::node_id id, const ast::infinite_loop_expr& loop)
+        -> value;
     auto emit_for(ast::node_id                   id,
                   const ast::for_loop_expr&      for_loop,
                   stdx::option<std::string_view> label       = stdx::none,
@@ -482,6 +486,9 @@ class emitter {
     module                        gir_module_;
     std::vector<scope_frame>      scopes_;
     std::vector<loop_context>     loop_stack_;
+    bool                          constexpr_loop_continue_{false};
+    bool                          constexpr_loop_break_{false};
+    stdx::option<value>           constexpr_loop_break_value_{};
     stdx::option<value>           current_error_slot_{};
     default_counter               anon_test_desc_counter_;
     default_counter               anon_test_fn_counter_;
