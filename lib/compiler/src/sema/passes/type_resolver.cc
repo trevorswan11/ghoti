@@ -2460,6 +2460,9 @@ auto register_type_ctor_members(context&         ctx,
         const auto decl{fn_mod.ast.get_as_opt<ast::decl_stmt>(*m)};
         if (!decl || !decl->value) { continue; }
         if (!fn_mod.ast.get_as_opt<ast::function_expr>(*decl->value)) { continue; }
+        if (const auto fn_type{fn_mod.get_sema_type_opt(*decl->value)}) {
+            if (ctx.generic_functions.get_opt(*fn_type)) { continue; }
+        }
         const auto& name{fn_mod.ast.get_as<ast::identifier_expr>(decl->name).name};
         fn_mod.type_ctor_member_emits.emplace_back<type_ctor_member_emit>({
             .owner_clone = &clone,
@@ -2829,7 +2832,11 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                                                       .get_data()
                                                       .template as_opt<symbols::node_t>()}) {
                                         if (resolving_.has_sema_type(*node)) {
-                                            return resolving_.get_sema_type(*node);
+                                            auto& decl_ty{resolving_.get_sema_type(*node)};
+                                            auto& denoted{denoted_type(decl_ty)};
+                                            if (denoted.get_kind() != type_kind::TYPE) {
+                                                return denoted;
+                                            }
                                         }
                                     }
                                 }
@@ -2841,7 +2848,20 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                         if (arg_type->is_poison()) { return stdx::none; }
                         // `@typeOf(x)` in a `type` argument position denotes the type it wraps.
                         if (param_type->get_kind() == type_kind::TYPE) {
-                            return denoted_type(*arg_type);
+                            auto& denoted{denoted_type(*arg_type)};
+                            if (denoted.get_kind() != type_kind::TYPE) { return denoted; }
+                            if constexpr (std::convertible_to<decltype(arg_id), ast::node_id>) {
+                                gir::const_eval evaluator{ctx_, resolving_};
+                                if (const auto cv{evaluator.try_eval(ast::node_id{arg_id})};
+                                    cv && cv->template is<stdx::option<sema::type&>>()) {
+                                    if (const stdx::option<sema::type&> t{
+                                            cv->template as<stdx::option<sema::type&>>()};
+                                        t && t->is_resolved()) {
+                                        return denoted_type(*t);
+                                    }
+                                }
+                            }
+                            return denoted;
                         }
                         // A `constexpr_*` literal argument materializes before it binds a
                         // generic `T` / `auto` parameter, keeping instantiations concrete.
@@ -3003,9 +3023,28 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
 
             // Copy out of the registry before instantiating: resolving the generic's body may
             // recursively register further generic functions
-            const generic_function_info fn_info_copy{*fn_info_opt};
-            const auto                  diags_before_inst{ctx_.diags.size()};
-            auto                        inst_res{
+            generic_function_info fn_info_copy{*fn_info_opt};
+
+            if (dot_call && is_obj_instance && fn_info_copy.enclosing_type) {
+                if (const auto recv_t{resolving_.get_sema_type_opt(dot_call->object)}) {
+                    auto* target{recv_t.get()};
+                    if (const auto p{target->get_data().as_opt<types::pointer>()}) {
+                        target = &p->underlying;
+                    } else if (const auto r{target->get_data().as_opt<types::reference>()}) {
+                        target = &r->underlying;
+                    }
+                    auto&      denoted{denoted_type(*target)};
+                    const auto dk{denoted.get_kind()};
+                    if (denoted.is_resolved() &&
+                        (dk == type_kind::STRUCT || dk == type_kind::UNION ||
+                         dk == type_kind::ENUM)) {
+                        fn_info_copy.enclosing_type.emplace(denoted);
+                    }
+                }
+            }
+
+            const auto diags_before_inst{ctx_.diags.size()};
+            auto       inst_res{
                 instantiate_generic(callee_type, fn_info_copy, concrete_arg_types, constexpr_args)};
             if (!inst_res) {
                 // `instantiate_generic` may have already reported so only report if not
@@ -7593,9 +7632,17 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
 
     // A dedicated instantiation resolver re-types a body a previous monomorphization already
     // resolved; its body-local decls must resolve again and overwrite their node types rather than
-    // keep the earlier instantiation's.
+    // keep the earlier instantiation's
+    const bool value_is_deferred_generic_method{[&] {
+        if (!decl.value) { return false; }
+        const auto fn_expr{resolving_.ast.get_as_opt<ast::function_expr>(*decl.value)};
+        if (!fn_expr || !fn_expr->self) { return false; }
+        const auto existing{resolving_.get_sema_type_opt(*decl.value)};
+        return existing && existing->is_resolved() &&
+               ctx_.generic_functions.get_opt(*existing).has_value();
+    }()};
     const bool reresolve_local{
-        for_generic_instantiation_ && reresolve_floor_ &&
+        !value_is_deferred_generic_method && for_generic_instantiation_ && reresolve_floor_ &&
         (!decl.explicit_type || decl.has_modifier(ast::decl_modifiers::CONSTEXPR)) && [&] {
             const auto lt{ctx_.registry.lookup_with_table(table_stack_, ident.name)};
             return lt && lt->table_idx >= *reresolve_floor_;
