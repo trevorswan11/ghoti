@@ -11,7 +11,8 @@ pub import "io/io.gh" as io;
 pub import "testing/testing.gh" as testing;
 pub import "mem/mem.gh" as mem;
 pub import "heap/heap.gh" as heap;
-pub import "math.gh" as math;
+pub import "fmt/fmt.gh" as fmt;
+pub import "math/math.gh" as math;
 
 test {
     import "os/os.gh";

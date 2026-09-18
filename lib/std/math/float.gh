@@ -1,0 +1,151 @@
+// import std;
+pub constexpr isNan := fn(val: auto): bool {
+    return val != val;
+};
+
+/// Creates floating point type T from an unbiased exponent and raw mantissa.
+pub constexpr reconstructFloat := fn(
+    T: type,
+    constexpr exponent: constexpr_int,
+    constexpr mantissa: constexpr_int,
+): T {
+    const TBits := @Int(
+        .{
+            .bits = @bitSizeOf(T),
+            .signed = false,
+        },
+    );
+    const biased_exponent := @as(TBits, exponent + floatExponentMax(T));
+    return @as(T, @bitCast((biased_exponent << floatMantissaBits(T)) | @as(TBits, mantissa)));
+};
+
+/// Creates a raw "1.0" mantissa for floating point type T
+pub constexpr mantissaOne := fn(T: type): constexpr_int {
+    constexpr {
+        @assert(@typeInfo(T) == .float);
+    }
+    return if (@typeInfo(T).float.bits == 80) 1 << floatFractionalBits(T) else 0;
+};
+
+/// Returns the number of fractional bits in the mantissa of floating point type T.
+pub constexpr floatFractionalBits := fn(T: type): constexpr_int {
+    constexpr {
+        @assert(@typeInfo(T) == .float);
+    }
+
+    // standard IEEE floats have an implicit 0.m or 1.m integer part
+    return match constexpr (@typeInfo(T).float.bits) {
+        16 => 10,
+        32 => 23,
+        64 => 52,
+        80 => 63, // f80 is special and has an explicitly stored bit in the MSB
+        128 => 112,
+        _ => @compileError("unknown floating point type " ++ @typeName(T)),
+    };
+};
+
+/// Returns the number of bits in the mantissa of floating point type T.
+pub constexpr floatMantissaBits := fn(T: type): constexpr_int {
+    constexpr {
+        @assert(@typeInfo(T) == .float);
+    }
+
+    return match constexpr (@typeInfo(T).float.bits) {
+        16 => 10,
+        32 => 23,
+        64 => 52,
+        80 => 64,
+        128 => 112,
+        _ => @compileError("unknown floating point type " ++ @typeName(T)),
+    };
+};
+
+/// Returns the number of bits in the exponent of floating point type T.
+pub constexpr floatExponentBits := fn(T: type): constexpr_int {
+    constexpr {
+        @assert(@typeInfo(T) == .float);
+    }
+
+    return match constexpr (@typeInfo(T).float.bits) {
+        16 => 5,
+        32 => 8,
+        64 => 11,
+        80 => 15,
+        128 => 15,
+        _ => @compileError("unknown floating point type " ++ @typeName(T)),
+    };
+};
+
+/// Returns the minimum exponent that can represent a normalized value in floating point type T.
+pub constexpr floatExponentMin := fn(T: type): constexpr_int {
+    return -floatExponentMax(T) + 1;
+};
+
+/// Returns the maximum exponent that can represent a normalized value in floating point type T.
+pub constexpr floatExponentMax := fn(T: type): constexpr_int {
+    return (1 << (floatExponentBits(T) - 1)) - 1;
+};
+
+/// Returns the canonical quiet NaN representation for a floating point `Type`.
+pub constexpr nan := fn(T: type): T {
+    constexpr RuntimeType := match constexpr (T) {
+        constexpr_float => f128, // any float type will do
+        _ => T,
+    };
+    return reconstructFloat(
+        RuntimeType,
+        floatExponentMax(RuntimeType) + 1,
+        mantissaOne(RuntimeType) | 1 << (floatFractionalBits(RuntimeType) - 1),
+    );
+};
+
+// TODO(tcs): Fix whatever is happening here
+//
+// (nix) ➜  ghoti git:(feat/std-fmt) ✗ ghoti test lib/std/math/float.gh
+// /Volumes/SwanSSD/dev/ghoti/lib/std/math/float.gh:98:25: error: argument to a constexpr parameter must be a compile-time constant
+//     floatExponentMax(RuntimeType) + 1,
+//
+// test "Quiet NaN canonical representation" {
+//     const qnan_u16: u16 = 0x7E00;
+//     @expect(qnan_u16 == @as(u16, @bitCast(nan(f16))));
+//     const qnan_u32: u32 = 0x7FC00000;
+//     @expect(qnan_u32 == @as(u32, @bitCast(nan(f32))));
+//     const qnan_u64: u64 = 0x7FF8000000000000;
+//     @expect(qnan_u64 == @as(u64, @bitCast(nan(f64))));
+//     const qnan_u80: u80 = 0x7FFFC000000000000000;
+//     @expect(qnan_u80 == @as(u80, @bitCast(nan(f80))));
+//     const qnan_u128: u128 = 0x7FFF8000000000000000000000000000;
+//     @expect(qnan_u128 == @as(u128, @bitCast(nan(f128))));
+// }
+
+/// Returns a signalling NaN representation for a floating point `Type`.
+pub constexpr snan := fn(T: type): T {
+    constexpr RuntimeType := match constexpr (T) {
+        _ => T,
+        constexpr_float => f128, // any float type will do
+    };
+    return reconstructFloat(
+        RuntimeType,
+        floatExponentMax(RuntimeType) + 1,
+        mantissaOne(RuntimeType) | 1 << (floatFractionalBits(RuntimeType) - 2),
+    );
+};
+
+// TODO(tcs): Fix whatever is happening here
+//
+// (nix) ➜  ghoti git:(feat/std-fmt) ✗ ghoti test lib/std/math/float.gh
+// /Volumes/SwanSSD/dev/ghoti/lib/std/math/float.gh:98:25: error: argument to a constexpr parameter must be a compile-time constant
+//     floatExponentMax(RuntimeType) + 1,
+//
+// test "Signalling NaN canonical representation" {
+//     const snan_u16: u16 = 0x7D00;
+//     @expect(snan_u16, @as(u16, @bitCast(snan(f16))));
+//     const snan_u32: u32 = 0x7FA00000;
+//     @expect(snan_u32, @as(u32, @bitCast(snan(f32))));
+//     const snan_u64: u64 = 0x7FF4000000000000;
+//     @expect(snan_u64, @as(u64, @bitCast(snan(f64))));
+//     const snan_u80: u80 = 0x7FFFA000000000000000;
+//     @expect(snan_u80, @as(u80, @bitCast(snan(f80))));
+//     const snan_u128: u128 = 0x7FFF4000000000000000000000000000;
+//     @expect(snan_u128, @as(u128, @bitCast(snan(f128))));
+// }
