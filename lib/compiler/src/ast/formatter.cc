@@ -1137,7 +1137,7 @@ auto formatter::visit(node_id id, const match_expr& node) -> syntax::doc_id {
             parts.emplace_back(format(*arm.capture));
             parts.emplace_back(doc_manager_.text("| "));
         }
-        parts.emplace_back(format(arm.dispatch));
+        parts.emplace_back(tail_clause(arm.dispatch));
 
         const auto end_line{ast_.end_location_of(arm.dispatch).line};
         auto       arm_doc{doc_manager_.concat(std::move(parts))};

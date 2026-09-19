@@ -226,6 +226,25 @@ TEST_CASE("formatter lays out if / match") {
 )");
 }
 
+TEST_CASE("formatter does not double-terminate a jump-statement match arm") {
+    round_trips("match (u) { .a => return 1, .b => return 2 };");
+    round_trips("match (u) { .a => break :l 1, .b => continue, };");
+    round_trips(R"(const f := fn(u: U, w: i32): i32 {
+    match (u) {
+        .a => |v| if (v <= w) return match (v) {
+            0 => 1,
+            _ => 2,
+        },
+        .b => return match (w) {
+            0 => 1,
+            _ => 2,
+        },
+    }
+    return 0;
+};
+)");
+}
+
 TEST_CASE("formatter keeps a trailing comment after an inline match statement") {
     CHECK(format_source("_ = match (f()) { .a => 1, .b => 2 }; // note\n") ==
           "_ = match (f()) { .a => 1, .b => 2 }; // note\n");
