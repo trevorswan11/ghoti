@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <limits>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -59,6 +60,11 @@ namespace {
     return sema::is_float(k) || k == sema::type_kind::CONSTEXPR_FLOAT;
 }
 
+// Neither `constexpr_int` nor `constexpr_float` has a concrete width/kind of its own
+[[nodiscard]] auto is_untyped_constexpr(sema::type_kind k) noexcept -> bool {
+    return k == sema::type_kind::CONSTEXPR_INT || k == sema::type_kind::CONSTEXPR_FLOAT;
+}
+
 [[nodiscard]] auto is_float_type(const gir::instruction&    inst,
                                  stdx::option<llvm::Value&> val) noexcept -> bool {
     // Any float (or `constexpr_float`) operand makes the operation floating point.
@@ -73,9 +79,24 @@ namespace {
     return val && val->getType()->isFloatingPointTy();
 }
 
+[[nodiscard]] auto constexpr_operand_is_nonnegative(const gir::value& val) noexcept -> bool {
+    if (const auto v{val.as_opt<i64>()}) { return *v >= 0; }
+    if (const auto v{val.as_opt<i128>()}) { return *v >= 0; }
+    return val.is<u64>() || val.is<u128>();
+}
+
 [[nodiscard]] auto is_signed_type(const gir::instruction& inst) noexcept -> bool {
+    if (!inst.operands.empty() && inst.operands[0].type &&
+        inst.operands[0].type->get_kind() == sema::type_kind::CONSTEXPR_INT) {
+        // `constexpr_int` alone carries no real signedness
+        for (const auto& op : inst.operands | std::views::drop(1)) {
+            if (op.type && op.type->get_kind() != sema::type_kind::CONSTEXPR_INT) {
+                return sema::is_signed_integer(*op.type);
+            }
+        }
+        return true;
+    }
     if (!inst.operands.empty() && inst.operands[0].type) {
-        if (inst.operands[0].type->get_kind() == sema::type_kind::CONSTEXPR_INT) { return true; }
         return sema::is_signed_integer(*inst.operands[0].type);
     }
     if (inst.type) { return sema::is_signed_integer(*inst.type); }
@@ -1517,8 +1538,8 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
     return llvm_fn;
 }
 
-auto llvm_lowering::lower_value(const gir::value& val, const sema::type* expected_type)
-    -> llvm::Value* {
+auto llvm_lowering::lower_value(const gir::value&               val,
+                                stdx::option<const sema::type&> expected_type) -> llvm::Value* {
     PROFILE_FUNCTION();
     return val.data.visit(
         [this](gir::local_id loc) -> llvm::Value* {
@@ -1528,25 +1549,45 @@ auto llvm_lowering::lower_value(const gir::value& val, const sema::type* expecte
         },
         [this, &val, expected_type](i64 i) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
-                     : val.type    ? types_.translate(*val.type)
+                     : val.type    ? (val.type->get_kind() == sema::type_kind::CONSTEXPR_INT &&
+                                           (i < std::numeric_limits<i32>::min() ||
+                                            i > std::numeric_limits<i32>::max())
+                                          ? types_.get_int64_ty()
+                                          : types_.translate(*val.type))
                                    : types_.get_int64_ty()};
             return int_or_ptr_constant(static_cast<u128>(i), ty);
         },
         [this, &val, expected_type](u64 u) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
-                     : val.type    ? types_.translate(*val.type)
+                     : val.type    ? (val.type->get_kind() == sema::type_kind::CONSTEXPR_INT &&
+                                           u > std::numeric_limits<u32>::max()
+                                          ? types_.get_int64_ty()
+                                          : types_.translate(*val.type))
                                    : types_.get_int64_ty()};
             return int_or_ptr_constant(u, ty);
         },
         [this, &val, expected_type](i128 w) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
-                     : val.type    ? types_.translate(*val.type)
-                                   : types_.get_int64_ty()};
+                     : val.type
+                         ? (val.type->get_kind() == sema::type_kind::CONSTEXPR_INT &&
+                                    (w < static_cast<i128>(std::numeric_limits<i32>::min()) ||
+                                     w > static_cast<i128>(std::numeric_limits<i32>::max()))
+                                ? (w < static_cast<i128>(std::numeric_limits<i64>::min()) ||
+                                           w > static_cast<i128>(std::numeric_limits<i64>::max())
+                                       ? llvm::Type::getInt128Ty(context_)
+                                       : types_.get_int64_ty())
+                                : types_.translate(*val.type))
+                         : types_.get_int64_ty()};
             return int_or_ptr_constant(static_cast<u128>(w), ty);
         },
         [this, &val, expected_type](u128 w) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
-                     : val.type    ? types_.translate(*val.type)
+                     : val.type    ? (val.type->get_kind() == sema::type_kind::CONSTEXPR_INT &&
+                                           w > std::numeric_limits<u32>::max()
+                                          ? (w > std::numeric_limits<u64>::max()
+                                                 ? llvm::Type::getInt128Ty(context_)
+                                                 : types_.get_int64_ty())
+                                          : types_.translate(*val.type))
                                    : types_.get_int64_ty()};
             return int_or_ptr_constant(w, ty);
         },
@@ -1558,8 +1599,8 @@ auto llvm_lowering::lower_value(const gir::value& val, const sema::type* expecte
         },
         [this](bool b) -> llvm::Value* { return llvm::ConstantInt::getBool(context_, b); },
         [this, &val, expected_type](const std::string& str) -> llvm::Value* {
-            const sema::type* ty{expected_type};
-            if (!ty && val.type) { ty = &*val.type; }
+            auto ty{expected_type};
+            if (!ty && val.type) { ty = val.type; }
             // A fn-typed string value names a function rather than holding string data
             if (ty && ty->get_kind() == sema::type_kind::FUNCTION) {
                 if (auto* fn{resolve_named_function(str)}) { return fn; }
@@ -1579,13 +1620,13 @@ auto llvm_lowering::lower_value(const gir::value& val, const sema::type* expecte
         [this, &val, expected_type](gir::undefined_val) -> llvm::Value* {
             // A bare `undefined` may still carry the placeholder UNDEFINED/POISON type; fall back
             // to the expected type.
-            const auto        usable{[](const sema::type* t) {
+            const auto usable{[](stdx::option<const sema::type&> t) {
                 return t && !t->is_poison() && t->get_kind() != sema::type_kind::UNDEFINED;
             }};
-            const sema::type* ty{usable(val.type ? &*val.type : nullptr) ? &*val.type
-                                 : usable(expected_type)                 ? expected_type
-                                                                         : nullptr};
-            auto*             llty{ty ? types_.translate(*ty) : types_.get_int64_ty()};
+            const auto ty{usable(val.type)        ? val.type
+                          : usable(expected_type) ? expected_type
+                                                  : stdx::none};
+            auto*      llty{ty ? types_.translate(*ty) : types_.get_int64_ty()};
             if (llty->isVoidTy()) { return nullptr; }
             return llvm::UndefValue::get(llty);
         },
@@ -1600,7 +1641,7 @@ auto llvm_lowering::lower_value(const gir::value& val, const sema::type* expecte
         [this](gir::nullptr_val) -> llvm::Value* {
             return llvm::ConstantPointerNull::get(types_.get_ptr_ty());
         },
-        [](const stdx::option<sema::type&>&) -> llvm::Value* { return nullptr; });
+        [](stdx::option<sema::type&>) -> llvm::Value* { return nullptr; });
 }
 
 auto llvm_lowering::lower_instruction(const gir::instruction& inst) -> void {
@@ -1869,12 +1910,30 @@ auto llvm_lowering::emit_global_addr(const gir::instruction& inst) -> llvm::Valu
 auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
     ASSERT(inst.operands.size() >= 2, "Binary instruction requires at least 2 operands");
-    auto* lhs{lower_value(inst.operands[0])};
-    auto* rhs{lower_value(inst.operands[1])};
+    const auto op0_ty{inst.operands[0].type};
+    const auto op1_ty{inst.operands[1].type};
+    const auto lhs_exp{(op0_ty && !is_untyped_constexpr(op0_ty->get_kind())) ? op0_ty : op1_ty};
+    const auto rhs_exp{(op1_ty && !is_untyped_constexpr(op1_ty->get_kind())) ? op1_ty : op0_ty};
+    auto*      lhs{lower_value(inst.operands[0], lhs_exp)};
+    auto*      rhs{lower_value(inst.operands[1], rhs_exp)};
     ASSERT(lhs && rhs, "Binary operands must lower to non-null LLVM values");
 
     const bool is_flt{is_float_type(inst, lhs)};
     const bool is_sgn{is_signed_type(inst)};
+
+    if (!is_flt && lhs->getType() != rhs->getType()) {
+        if (auto* lhs_int{llvm::dyn_cast<llvm::IntegerType>(lhs->getType())}) {
+            if (auto* rhs_int{llvm::dyn_cast<llvm::IntegerType>(rhs->getType())}) {
+                if (lhs_int->getBitWidth() < rhs_int->getBitWidth()) {
+                    lhs = is_sgn ? builder_.CreateSExt(lhs, rhs_int, "arithext")
+                                 : builder_.CreateZExt(lhs, rhs_int, "arithext");
+                } else if (rhs_int->getBitWidth() < lhs_int->getBitWidth()) {
+                    rhs = is_sgn ? builder_.CreateSExt(rhs, lhs_int, "arithext")
+                                 : builder_.CreateZExt(rhs, lhs_int, "arithext");
+                }
+            }
+        }
+    }
 
     if (inst.is_checked && !is_flt) {
         if (auto* checked{emit_checked_arith(inst, lhs, rhs, is_sgn)}) { return checked; }
@@ -1937,12 +1996,30 @@ auto llvm_lowering::emit_unary(const gir::instruction& inst) -> llvm::Value* {
 auto llvm_lowering::emit_comparison(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
     ASSERT(inst.operands.size() >= 2, "Comparison requires 2 operands");
-    auto* lhs{lower_value(inst.operands[0])};
-    auto* rhs{lower_value(inst.operands[1])};
+    const auto op0_ty{inst.operands[0].type};
+    const auto op1_ty{inst.operands[1].type};
+    const auto lhs_exp{(op0_ty && !is_untyped_constexpr(op0_ty->get_kind())) ? op0_ty : op1_ty};
+    const auto rhs_exp{(op1_ty && !is_untyped_constexpr(op1_ty->get_kind())) ? op1_ty : op0_ty};
+    auto*      lhs{lower_value(inst.operands[0], lhs_exp)};
+    auto*      rhs{lower_value(inst.operands[1], rhs_exp)};
     ASSERT(lhs && rhs, "Comparison operands must lower to non-null LLVM values");
 
     const bool is_flt{is_float_type(inst, lhs)};
     const bool is_sgn{is_signed_type(inst)};
+
+    if (!is_flt && lhs->getType() != rhs->getType()) {
+        if (auto* lhs_int{llvm::dyn_cast<llvm::IntegerType>(lhs->getType())}) {
+            if (auto* rhs_int{llvm::dyn_cast<llvm::IntegerType>(rhs->getType())}) {
+                if (lhs_int->getBitWidth() < rhs_int->getBitWidth()) {
+                    lhs = is_sgn ? builder_.CreateSExt(lhs, rhs_int, "cmpext")
+                                 : builder_.CreateZExt(lhs, rhs_int, "cmpext");
+                } else if (rhs_int->getBitWidth() < lhs_int->getBitWidth()) {
+                    rhs = is_sgn ? builder_.CreateSExt(rhs, lhs_int, "cmpext")
+                                 : builder_.CreateZExt(rhs, lhs_int, "cmpext");
+                }
+            }
+        }
+    }
 
     if (is_flt) {
         switch (inst.kind) {
@@ -1983,14 +2060,20 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
     ASSERT(!inst.operands.empty(), "Cast instruction requires an operand");
     ASSERT(inst.type, "Cast instruction requires a target type");
+    // The operand must lower as its own type, not the cast's target type
     auto* val{lower_value(inst.operands[0])};
     auto* target_ty{types_.translate(*inst.type)};
     ASSERT(val && target_ty, "Cast operand and target type must be valid");
 
     auto* src_ty{val->getType()};
     switch (inst.kind) {
-    case gir::instruction_kind::INT_CAST:
-        return builder_.CreateIntCast(val, target_ty, is_signed_type(inst));
+    case gir::instruction_kind::INT_CAST: {
+        const bool is_sgn{inst.operands[0].type && inst.operands[0].type->get_kind() ==
+                                                       sema::type_kind::CONSTEXPR_INT
+                              ? !constexpr_operand_is_nonnegative(inst.operands[0])
+                              : is_signed_type(inst)};
+        return builder_.CreateIntCast(val, target_ty, is_sgn);
+    }
     case gir::instruction_kind::TRUNC_CAST: return builder_.CreateTrunc(val, target_ty, "trunc");
     case gir::instruction_kind::WIDEN_CAST: {
         const bool src_is_flt{src_ty->isFloatingPointTy()};

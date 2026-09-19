@@ -376,3 +376,4 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Add `unreachable` code detection to compile time code execution
 - Defer statements (includes errdefer with captures) now work in compile time contexts
 - Support global `constexpr var` declarations
+- Resolve a codegen error that resulted in misrepresenting signedness in constexpr int literals
