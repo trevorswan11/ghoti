@@ -12,6 +12,7 @@
 #include <gsl/span_ext>
 #include <stdx/assert.hh>
 #include <stdx/hash.hh>
+#include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
@@ -27,7 +28,7 @@ class type;
 
 // Constexpr argument values per monomorphization, keyed by mangled name
 using constexpr_arg_map = ankerl::unordered_dense::map<std::string,
-                                                       std::vector<gir::const_value>,
+                                                       stdx::box<std::vector<gir::const_value>>,
                                                        stdx::string_transparent_hash,
                                                        stdx::string_transparent_eq>;
 
@@ -35,7 +36,7 @@ using constexpr_arg_map = ankerl::unordered_dense::map<std::string,
 // member functions can read them at emit time. Keyed by the constructor's mangled name.
 using type_ctor_binding_map =
     ankerl::unordered_dense::map<std::string,
-                                 std::vector<std::pair<std::string, gir::const_value>>,
+                                 stdx::box<std::vector<std::pair<std::string, gir::const_value>>>,
                                  stdx::string_transparent_hash,
                                  stdx::string_transparent_eq>;
 
@@ -97,8 +98,10 @@ struct body_type_diff {
         return stdx::none;
     }
 };
-using body_type_diff_map = ankerl::unordered_dense::
-    map<std::string, body_type_diff, stdx::string_transparent_hash, stdx::string_transparent_eq>;
+using body_type_diff_map = ankerl::unordered_dense::map<std::string,
+                                                        stdx::box<body_type_diff>,
+                                                        stdx::string_transparent_hash,
+                                                        stdx::string_transparent_eq>;
 
 struct generic_instantiation_key {
     gsl::not_null<type*>              generic_fn_type;
@@ -152,40 +155,50 @@ class generic_instantiation_cache {
 
     // Emit-time replay data, keyed by mangled instantiation name
     auto set_body_type_diff(std::string key, body_type_diff diff) -> void {
-        body_type_diffs_.insert_or_assign(std::move(key), std::move(diff));
+        if (body_type_diffs_.contains(key)) { return; }
+        body_type_diffs_.insert_or_assign(std::move(key),
+                                          stdx::box<body_type_diff>::make(std::move(diff)));
     }
 
     [[nodiscard]] auto get_body_type_diff(std::string_view key) const noexcept
         -> stdx::option<const body_type_diff&> {
         if (const auto it{body_type_diffs_.find(std::string{key})}; it != body_type_diffs_.end()) {
-            return it->second;
+            return *it->second;
         }
         return stdx::none;
     }
 
+    // First write wins
     auto set_constexpr_args(std::string key, std::vector<gir::const_value> args) -> void {
-        constexpr_args_.insert_or_assign(std::move(key), std::move(args));
+        if (constexpr_args_.contains(key)) { return; }
+        constexpr_args_.insert_or_assign(
+            std::move(key), stdx::make_box<std::vector<gir::const_value>>(std::move(args)));
     }
 
     [[nodiscard]] auto get_constexpr_args(std::string_view key) const noexcept
         -> stdx::option<const std::vector<gir::const_value>&> {
         if (const auto it{constexpr_args_.find(std::string{key})}; it != constexpr_args_.end()) {
-            return it->second;
+            return *it->second;
         }
         return stdx::none;
     }
 
+    // First write wins
     auto set_type_ctor_bindings(std::string                                           key,
                                 std::vector<std::pair<std::string, gir::const_value>> bindings)
         -> void {
-        type_ctor_bindings_.insert_or_assign(std::move(key), std::move(bindings));
+        if (type_ctor_bindings_.contains(key)) { return; }
+        type_ctor_bindings_.insert_or_assign(
+            std::move(key),
+            stdx::make_box<std::vector<std::pair<std::string, gir::const_value>>>(
+                std::move(bindings)));
     }
 
     [[nodiscard]] auto get_type_ctor_bindings(std::string_view key) const noexcept
         -> stdx::option<const std::vector<std::pair<std::string, gir::const_value>>&> {
         if (const auto it{type_ctor_bindings_.find(std::string{key})};
             it != type_ctor_bindings_.end()) {
-            return it->second;
+            return *it->second;
         }
         return stdx::none;
     }
@@ -195,6 +208,13 @@ class generic_instantiation_cache {
     body_type_diff_map    body_type_diffs_;
     constexpr_arg_map     constexpr_args_;
     type_ctor_binding_map type_ctor_bindings_;
+};
+
+// Every `set_sema_type`/`set_sema_type_if` write `mod::module` makes while this is installed as
+// its `active_write_log`
+struct body_write_log {
+    std::vector<usize> node_idxs;
+    std::vector<usize> explicit_idxs;
 };
 
 // Snapshots a module's typing side tables so a scoped body resolution can be diffed back out as a
@@ -207,7 +227,10 @@ struct body_typing_snapshot {
 
     // Folds every still-deferred `[n]T` under the active `constexpr` frame, then records each
     // side-table entry the resolution changed into `out`.
-    auto diff_into(context& ctx, mod::module& m, body_type_diff& out) const -> void;
+    auto diff_into(context&                            ctx,
+                   mod::module&                        m,
+                   body_type_diff&                     out,
+                   stdx::option<const body_write_log&> write_log = stdx::none) const -> void;
 
     // Restores `m`'s side tables and branch cache back to the captured state.
     auto restore_to(mod::module& m) const -> void;

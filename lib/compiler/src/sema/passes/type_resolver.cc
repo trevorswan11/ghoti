@@ -10442,6 +10442,14 @@ auto type_resolver::instantiate_generic(type&                             callee
         }
     }
 
+    // Record so the diff below can be built from exactly what was written rather than
+    // inferred by comparing against `snap`
+    sema::body_write_log write_log;
+    const auto           prev_write_log{fn_mod.active_write_log};
+    fn_mod.active_write_log = &write_log;
+    const auto restore_write_log{
+        gsl::finally([&fn_mod, prev_write_log] { fn_mod.active_write_log = prev_write_log; })};
+
     type_resolver inst_resolver{fn_mod, ctx_, fn_table_idx, std::move(inst_stack)};
     inst_resolver.for_generic_instantiation_ = true;
     inst_resolver.typing_scope_prefix_       = mangled_name;
@@ -10579,7 +10587,7 @@ auto type_resolver::instantiate_generic(type&                             callee
     // Diff the side tables against the snapshot (folding any `constexpr`-sized `[n]T` first): all
     // this instantiation's body/signature typing, to be replayed at emit time.
     body_type_diff typing;
-    snap.diff_into(ctx_, fn_mod, typing);
+    snap.diff_into(ctx_, fn_mod, typing, &write_log);
 
     // The per-inst typing lives in `typing` and must not leak into `fn_mod`'s shared side tables
     const auto rollback_poisoned{[](auto& live, const auto& snapshot, const auto& changed) {

@@ -33,6 +33,21 @@ test "Result.mapErr transforms error variant" {
     );
 }
 
+test "Result.mapErr distinguishes error types across three instantiations" {
+    const b: Result(void, i32) = .{ .err = 2 };
+    const mapped_u8 := b.mapErr(
+        fn(_: i32): u8 {
+            return 7;
+        },
+    );
+    @expect(
+        match (mapped_u8) {
+            .ok => false,
+            .err => |e| e == 7,
+        },
+    );
+}
+
 impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
     using Output = T;
     using Residual = E;

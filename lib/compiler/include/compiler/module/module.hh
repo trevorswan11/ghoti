@@ -36,7 +36,12 @@
 #include "support/diagnostic.hh"
 #include "support/source_file.hh"
 
-namespace ghoti::sema { struct body_type_diff; } // namespace ghoti::sema
+namespace ghoti::sema {
+
+struct body_type_diff;
+struct body_write_log;
+
+} // namespace ghoti::sema
 
 namespace ghoti::mod {
 
@@ -104,6 +109,10 @@ struct module {
 
     // Active emit-local overlay for generic instantiations / type ctor members / inherited defaults
     stdx::option<const sema::body_type_diff&> active_body_diff;
+    stdx::option<sema::body_write_log&>       active_write_log{};
+
+    auto record_node_write(usize idx) noexcept -> void;
+    auto record_explicit_write(usize idx) noexcept -> void;
 
     // Cond discardable `decl_stmt` node index -> the folded truth of the condition
     ankerl::unordered_dense::map<usize, bool> discardable_conditions;
@@ -280,8 +289,10 @@ struct module {
     constexpr auto set_sema_type(ID id, sema::type& type) noexcept -> void {
         if constexpr (ast::IndexableNodeID<ID>) {
             sema_side_tables.node_types[id].emplace(type);
+            record_node_write(id.get_index());
         } else {
             sema_side_tables.explicit_types[id].emplace(type);
+            record_explicit_write(id.get_index());
         }
     }
 
@@ -291,8 +302,10 @@ struct module {
         if (has_sema_type(id)) { return false; }
         if constexpr (ast::IndexableNodeID<ID>) {
             sema_side_tables.node_types[id].emplace(type);
+            record_node_write(id.get_index());
         } else {
             sema_side_tables.explicit_types[id].emplace(type);
+            record_explicit_write(id.get_index());
         }
         return true;
     }

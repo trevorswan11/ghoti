@@ -176,6 +176,14 @@ auto module::get_overlay_explicit_type(usize idx) const noexcept
     return active_body_diff->find_explicit_type(idx);
 }
 
+auto module::record_node_write(usize idx) noexcept -> void {
+    if (active_write_log) { active_write_log->node_idxs.emplace_back(idx); }
+}
+
+auto module::record_explicit_write(usize idx) noexcept -> void {
+    if (active_write_log) { active_write_log->explicit_idxs.emplace_back(idx); }
+}
+
 auto module::get_overlay_call_target(usize idx) const noexcept
     -> stdx::option<stdx::option<std::string_view>> {
     if (!active_body_diff) { return stdx::none; }
