@@ -4989,14 +4989,8 @@ auto type_resolver::resolve_structural_access(type&                          obj
                     error::SEALED_METHOD,
                     resolving_.ast.location_of(member));
             }
-            type* sig{iface.method_sigs[i]};
-            for (usize k{0}; k < dyn->assoc_bindings.size() && k < iface.ast_assoc_types.size();
-                 ++k) {
-                if (!dyn->assoc_bindings[k]) { continue; }
-                auto& ph{assoc_type_placeholder((*iface.ast_assoc_types[k].name).get_index())};
-                sig = &remap_type(ctx_, *sig, ph, *dyn->assoc_bindings[k]);
-            }
-            return gsl::not_null<type*>{sig};
+            auto& sig{resolve_dyn_method_signature(*dyn, iface, i)};
+            return gsl::not_null<type*>{&sig};
         }
         return make_sema_err(fmt::format("`dyn {}` has no method `{}`",
                                          ctx_.type_display_name(dyn->interface),
@@ -9830,6 +9824,90 @@ auto type_resolver::resolve_inherited_default_methods(impl_record&              
             .signature    = sig_node,
         });
     }
+}
+
+auto type_resolver::resolve_dyn_method_signature(const types::dyn_t&       dyn,
+                                                 const types::interface_t& iface,
+                                                 usize                     method_idx) -> type& {
+    PROFILE_FUNCTION();
+    auto& fallback{*iface.method_sigs[method_idx]};
+
+    const auto& m{iface.method_decl(method_idx)};
+    auto&       imod{iface.enclosing};
+    const auto& fn_expr{imod.ast.get_as<ast::function_expr>(*m.signature)};
+
+    // Rebind each associated type straight to this `dyn`'s concrete binding for re-resolution.
+    struct saved_assoc {
+        gsl::not_null<symbol*> sym;
+        ast::identifier_handle name_node;
+        stdx::option<type&>    prev_type;
+        symbol_status          prev_status;
+    };
+    std::vector<saved_assoc> restore;
+    const auto               iface_scope{dyn.interface.get_symbol_table_idx()};
+    for (usize k{0}; k < iface.assoc_type_names.size() && k < iface.ast_assoc_types.size(); ++k) {
+        if (k >= dyn.assoc_bindings.size() || !dyn.assoc_bindings[k]) { continue; }
+        const auto name{iface.assoc_type_names[k]};
+        const auto isym{ctx_.registry.get_from_opt(iface_scope, name)};
+        if (!isym) { continue; }
+        const auto at_name{iface.ast_assoc_types[k].name};
+        restore.emplace_back<saved_assoc>({
+            .sym         = isym.get(),
+            .name_node   = at_name,
+            .prev_type   = imod.get_sema_type_opt(at_name),
+            .prev_status = isym->get_status(),
+        });
+        imod.set_sema_type(at_name, denoted_type(*dyn.assoc_bindings[k]));
+        isym->set_status(symbol_status::RESOLVED);
+    }
+    const auto restore_assoc{gsl::finally([&] {
+        for (const auto& s : restore) {
+            s.sym->set_status(s.prev_status);
+            if (s.prev_type) { imod.set_sema_type(s.name_node, *s.prev_type); }
+        }
+    })};
+
+    // A required method's own `function_expr` node is never given a sema type
+    symbol_table_stack stk;
+    stk.push(*ctx_.prelude_index);
+    if (imod.root_table_idx) { stk.push(*imod.root_table_idx); }
+    stk.push(iface_scope);
+    type_resolver inst{imod, ctx_, iface_scope, std::move(stk)};
+    inst.for_generic_instantiation_ = true;
+    inst.reresolve_floor_.emplace(iface_scope);
+
+    const body_typing_snapshot snap{imod};
+    const auto                 fallback_fn{fallback.get_data().as_opt<types::function>()};
+    auto  params{ctx_.pool.get_many_unsafe(fn_expr.parameters.size() + (fn_expr.self ? 1 : 0))};
+    usize pi{0};
+    if (fn_expr.self) {
+        // `self` isn't part of what a `dyn`'s associated-type binding can affect
+        params[pi++] =
+            fallback_fn && !fallback_fn->params.empty() ? fallback_fn->params[0] : &fallback;
+    }
+    for (const auto& param : fn_expr.parameters) {
+        inst.resolve(param.explicit_type);
+        auto& pt{inst.last_type_ && !inst.last_type_->is_poison()
+                     ? denoted_type(*inst.last_type_.take())
+                     : ctx_.get_poison()};
+        params[pi++] = &pt;
+    }
+
+    inst.resolve(fn_expr.explicit_return_type);
+    auto& ret{inst.last_type_ && !inst.last_type_->is_poison()
+                  ? denoted_type(*inst.last_type_.take())
+                  : ctx_.get_builtin_resolved_type(type_kind::VOID_)};
+
+    types::key_t key{type_kind::FUNCTION, types::mut::CONSTANT};
+    for (const auto* p : params) { key.imprint(*p); }
+    key.imprint(ret);
+    key.imprint(fn_expr.conv);
+    auto& concrete_fn{*ctx_.pool[key]};
+    concrete_fn.resolve_if<types::function>(
+        params, ret, fn_expr.self.has_value(), fn_expr.variadic, fn_expr.conv);
+
+    snap.restore_to(imod);
+    return concrete_fn;
 }
 
 auto type_resolver::visit(ast::node_id id, const ast::using_stmt& using_stmt) -> void {

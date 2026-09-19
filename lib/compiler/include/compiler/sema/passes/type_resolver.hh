@@ -468,6 +468,10 @@ class type_resolver {
     // concrete target so cross-module defaults work
     auto resolve_inherited_default_methods(impl_record& rec, const types::interface_t& iface)
         -> void;
+    // The concrete signature of a `dyn I(Assoc = T, ...)` method call
+    auto resolve_dyn_method_signature(const types::dyn_t&       dyn,
+                                      const types::interface_t& iface,
+                                      usize                     method_idx) -> type&;
     auto visit(ast::node_id, const ast::import_stmt&) -> void;
     auto visit(ast::node_id, const ast::return_stmt&) -> void;
     auto visit(ast::node_id, const ast::test_stmt&) -> void;
