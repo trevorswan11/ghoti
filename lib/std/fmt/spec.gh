@@ -354,16 +354,33 @@ pub const pad := fn(
     body: []u8,
     default_align: Align,
 ): std.Result(void, std.fmt.Error) {
-    match (spec.width) {
-        .some => |width| if (width <= body.len) return match(w.writeAll(body)) {
-            .ok => .{ .ok = {} },
-            .err => .{ .err = .io, }
-        };,
-        .none => return match(w.writeAll(body)) {
-            .ok => .{ .ok = {} },
-            .err => .{ .err = .io, }
-        }
+    const toIOErr := fn(_: std.io.Error): std.fmt.Error {
+        return .io;
+    };
+
+    const width := match (spec.width) {
+        .some => |explicit_width| explicit_width,
+        .none => return w.writeAll(body).mapErr(toIOErr),
+    };
+    if (width <= body.len) return w.writeAll(body).mapErr(toIOErr);
+
+    const padding := width - body.len;
+    const a := spec.align.orElse(default_align);
+
+    const left_pad := match (a) {
+        .left => 0uz,
+        .right => padding,
+        .center => padding / 2,
+    };
+    const right_pad := padding - left_pad;
+
+    for (0..left_pad) |_| {
+        w.writeByte(spec.fill).mapErr(toIOErr)?;
     }
+    w.writeAll(body).mapErr(toIOErr)?;
 
-
+    for (0..right_pad) |_| {
+        w.writeByte(spec.fill).mapErr(toIOErr)?;
+    }
+    return .{ .ok = {} };
 };
