@@ -168,6 +168,8 @@ struct module {
         -> stdx::option<stdx::option<sema::type&>>;
     [[nodiscard]] auto get_overlay_explicit_type(usize idx) const noexcept
         -> stdx::option<stdx::option<sema::type&>>;
+    [[nodiscard]] auto get_overlay_call_target(usize idx) const noexcept
+        -> stdx::option<stdx::option<std::string_view>>;
     [[nodiscard]] auto get_if_branch_opt(usize node_idx) const noexcept -> stdx::option<if_branch>;
     [[nodiscard]] auto get_match_arm_opt(usize node_idx) const noexcept -> stdx::opt_size;
 
@@ -221,6 +223,9 @@ struct module {
     [[nodiscard]] auto get_generic_call_target_opt(ID id) const noexcept
         -> stdx::option<std::string_view> {
         if constexpr (ast::IndexableNodeID<ID>) {
+            if (active_body_diff) {
+                if (const auto ov{get_overlay_call_target(id.get_index())}) { return *ov; }
+            }
             if (const auto& target{sema_side_tables.generic_call_targets[id]}) {
                 return std::string_view{*target};
             }

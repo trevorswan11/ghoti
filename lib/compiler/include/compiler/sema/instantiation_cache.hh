@@ -42,14 +42,15 @@ using type_ctor_binding_map =
 // Per-monomorphization body typing, replayed at emit time: `[n]T` with a `constexpr n`, and the
 // `@This()` shape of a `fn(T): type` constructor's member functions.
 struct body_type_diff {
-    std::vector<std::pair<usize, stdx::option<type&>>> node_types;
-    std::vector<std::pair<usize, stdx::option<type&>>> explicit_types;
-    std::vector<std::pair<usize, mod::if_branch>>      if_branches;
-    std::vector<std::pair<usize, usize>>               match_arms;
+    std::vector<std::pair<usize, stdx::option<type&>>>       node_types;
+    std::vector<std::pair<usize, stdx::option<type&>>>       explicit_types;
+    std::vector<std::pair<usize, mod::if_branch>>            if_branches;
+    std::vector<std::pair<usize, usize>>                     match_arms;
+    std::vector<std::pair<usize, stdx::option<std::string>>> call_targets;
 
     [[nodiscard]] auto empty() const noexcept -> bool {
         return node_types.empty() && explicit_types.empty() && if_branches.empty() &&
-               match_arms.empty();
+               match_arms.empty() && call_targets.empty();
     }
 
     // An outer `none` means the idx doesn't exist, inner means node has no sema type
@@ -57,6 +58,18 @@ struct body_type_diff {
         -> stdx::option<stdx::option<type&>> {
         for (auto [node_idx, ty] : node_types | std::views::reverse) {
             if (node_idx == idx) { return ty; }
+        }
+        return stdx::none;
+    }
+
+    // An outer `none` means the idx doesn't exist, inner means the node has no resolved target
+    [[nodiscard]] auto find_call_target(usize idx) const noexcept
+        -> stdx::option<stdx::option<std::string_view>> {
+        for (const auto& [node_idx, target] : call_targets | std::views::reverse) {
+            if (node_idx == idx) {
+                if (target) { return stdx::option<std::string_view>{*target}; }
+                return stdx::option<std::string_view>{stdx::none};
+            }
         }
         return stdx::none;
     }
@@ -190,7 +203,7 @@ struct body_typing_snapshot {
     explicit body_typing_snapshot(const mod::module& m)
         : nodes{m.sema_side_tables.node_types.values},
           types{m.sema_side_tables.explicit_types.values}, ifs{m.if_constexpr_results},
-          matches{m.match_arm_results} {}
+          matches{m.match_arm_results}, calls{m.sema_side_tables.generic_call_targets.values} {}
 
     // Folds every still-deferred `[n]T` under the active `constexpr` frame, then records each
     // side-table entry the resolution changed into `out`.
@@ -203,6 +216,7 @@ struct body_typing_snapshot {
     std::vector<stdx::option<type&>>                    types;
     ankerl::unordered_dense::map<usize, mod::if_branch> ifs;
     ankerl::unordered_dense::map<usize, usize>          matches;
+    std::vector<stdx::option<std::string>>              calls;
 };
 
 } // namespace ghoti::sema

@@ -60,8 +60,13 @@ template <typename T>
     } else if constexpr (Signed<T>) {
         const auto w{static_cast<i128>(v)};
         if (w >= static_cast<i128>(std::numeric_limits<i64>::min()) &&
-            w <= static_cast<i128>(std::numeric_limits<u64>::max())) {
+            w <= static_cast<i128>(std::numeric_limits<i64>::max())) {
             return const_value{static_cast<i64>(w), t};
+        }
+        // Positive but too large for `i64` (e.g. `1 << 63`): store as `u64` rather than
+        // narrowing into `i64` and silently wrapping to a negative value.
+        if (w > 0 && w <= static_cast<i128>(std::numeric_limits<u64>::max())) {
+            return const_value{static_cast<u64>(w), t};
         }
         return const_value{w, t};
     } else {
@@ -107,22 +112,16 @@ template <typename T>
         return stdx::none;
     case syntax::token_type_t::SHL:
         if constexpr (Integral<T>) {
-            // `l`/`r` fold at whatever narrow width happens to hold both operandsn - a
-            // native shift by >= the operand's bit width is UB, so redo it at 128 bits.
+            // `l`/`r` fold at whatever narrow width happens to hold both operands
             if constexpr (Signed<T>) {
-                if (r < T{0} || static_cast<u64>(r) >= sizeof(T) * 8) {
-                    const auto shift{r < T{0} ? u64{0} : static_cast<u64>(r)};
-                    return shift < 128 ? make_scalar_const(static_cast<i128>(l) << shift, res_type)
-                                       : make_scalar_const(i128{0}, res_type);
-                }
+                const auto shift{r < T{0} ? u64{0} : static_cast<u64>(r)};
+                return shift < 128 ? make_scalar_const(static_cast<i128>(l) << shift, res_type)
+                                   : make_scalar_const(i128{0}, res_type);
             } else {
-                if (static_cast<u64>(r) >= sizeof(T) * 8) {
-                    const auto shift{static_cast<u64>(r)};
-                    return shift < 128 ? make_scalar_const(static_cast<u128>(l) << shift, res_type)
-                                       : make_scalar_const(u128{0}, res_type);
-                }
+                const auto shift{static_cast<u64>(r)};
+                return shift < 128 ? make_scalar_const(static_cast<u128>(l) << shift, res_type)
+                                   : make_scalar_const(u128{0}, res_type);
             }
-            return make_scalar_const(l << r, res_type);
         }
         return stdx::none;
     case syntax::token_type_t::SHR:
@@ -167,8 +166,14 @@ template <typename T>
                                  u16                       bits,
                                  bool                      is_signed,
                                  stdx::option<sema::type&> res_type) -> const_value {
-    // A no-op past 128 bits: the fold already happened in the 128-bit comptime domain
-    if (bits == 0 || bits >= 128) { return folded; }
+    // No bit-masking is needed at or past 128 bits: the fold already happened in constexpr
+    if (bits == 0 || bits >= 128) {
+        if (!res_type) { return folded; }
+        if (is_signed) {
+            return make_scalar_const(static_cast<i128>(folded.as_int_opt().value_or(0)), res_type);
+        }
+        return make_scalar_const(static_cast<u128>(folded.as_int_opt().value_or(0)), res_type);
+    }
     const u128 mask{(u128{1} << bits) - 1};
     // Two's-complement bit pattern of the source, valid for negative operands too
     const auto raw{static_cast<u128>(folded.as_int_opt().value_or(0))};
@@ -1933,8 +1938,10 @@ auto const_eval::eval_match(ast::node_id id, const ast::match_expr& match)
             });
     };
 
-    for (const auto& arm : match.arms) {
-        const bool arm_matches{std::ranges::any_of(arm.patterns, [&](const auto& pattern) {
+    for (usize i{0}; i < match.arms.size(); ++i) {
+        if (match.catch_all_idx && i == *match.catch_all_idx) { continue; }
+        const auto& arm{match.arms[i]};
+        const bool  arm_matches{std::ranges::any_of(arm.patterns, [&](const auto& pattern) {
             return match_pattern(pattern, *matcher_val);
         })};
         if (arm_matches) {
@@ -2854,6 +2861,31 @@ auto const_eval::eval_builtin(ast::node_id          id,
     PROFILE_FUNCTION();
     auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
 
+    const auto eval_type_argument =
+        [&](const ast::call_expr::argument& arg) -> stdx::option<sema::type&> {
+        stdx::option<sema::type&> target_type;
+        if (const auto type_id{arg.as_opt<ast::explicit_type_id>()}) {
+            target_type = module_->get_sema_type_opt(*type_id);
+        } else if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
+            if (const auto val{try_eval(*expr_h)}) {
+                if (val->is<stdx::option<sema::type&>>()) {
+                    target_type = val->as<stdx::option<sema::type&>>();
+                }
+            }
+            if (!target_type) { target_type = module_->get_sema_type_opt(*expr_h); }
+        }
+        if (!target_type) { return stdx::none; }
+        if (const auto dc{target_type->get_data().as_opt<sema::types::deferred_call>()}) {
+            if (const auto r{try_resolve_deferred_call(dc->call)}) { target_type.emplace(*r); }
+        }
+        if (target_type->get_kind() == sema::type_kind::TYPE) {
+            if (const auto m{target_type->get_data().as_opt<sema::types::meta_type>()}) {
+                target_type.emplace(m->instance);
+            }
+        }
+        return target_type;
+    };
+
     switch (builtin_type) {
     case syntax::token_type_t::BUILTIN_THIS: {
         // The call node carries the enclosing structural type
@@ -2867,18 +2899,8 @@ auto const_eval::eval_builtin(ast::node_id          id,
     }
     case syntax::token_type_t::BUILTIN_SIZE_OF: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
-        const auto&               arg{call.arguments.front()};
-        stdx::option<sema::type&> target_type;
-        if (const auto type_id{arg.as_opt<ast::explicit_type_id>()}) {
-            target_type = module_->get_sema_type_opt(*type_id);
-        } else if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
-            target_type = module_->get_sema_type_opt(*expr_h);
-        }
+        const auto target_type{eval_type_argument(call.arguments.front())};
         if (!target_type) { return stdx::none; }
-
-        if (const auto dc{target_type->get_data().as_opt<sema::types::deferred_call>()}) {
-            if (const auto r{try_resolve_deferred_call(dc->call)}) { target_type.emplace(*r); }
-        }
 
         const auto ptr_size{
             codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? usize{8}
@@ -2901,18 +2923,8 @@ auto const_eval::eval_builtin(ast::node_id          id,
     }
     case syntax::token_type_t::BUILTIN_ALIGN_OF: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
-        const auto&               arg{call.arguments.front()};
-        stdx::option<sema::type&> target_type;
-        if (const auto type_id = arg.as_opt<ast::explicit_type_id>()) {
-            target_type = module_->get_sema_type_opt(*type_id);
-        } else if (const auto expr_h = arg.as_opt<ast::expr_handle>()) {
-            target_type = module_->get_sema_type_opt(*expr_h);
-        }
+        const auto target_type{eval_type_argument(call.arguments.front())};
         if (!target_type) { return stdx::none; }
-
-        if (const auto dc{target_type->get_data().as_opt<sema::types::deferred_call>()}) {
-            if (const auto r{try_resolve_deferred_call(dc->call)}) { target_type.emplace(*r); }
-        }
 
         const auto ptr_size{
             codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? usize{8}
@@ -2926,24 +2938,8 @@ auto const_eval::eval_builtin(ast::node_id          id,
     }
     case syntax::token_type_t::BUILTIN_BIT_SIZE_OF: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
-        const auto&               arg{call.arguments.front()};
-        stdx::option<sema::type&> target_type;
-        if (const auto type_id{arg.as_opt<ast::explicit_type_id>()}) {
-            target_type = module_->get_sema_type_opt(*type_id);
-        } else if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
-            target_type = module_->get_sema_type_opt(*expr_h);
-        }
+        const auto target_type{eval_type_argument(call.arguments.front())};
         if (!target_type) { return stdx::none; }
-
-        if (const auto dc{target_type->get_data().as_opt<sema::types::deferred_call>()}) {
-            if (const auto r{try_resolve_deferred_call(dc->call)}) { target_type.emplace(*r); }
-        }
-        // `@bitSizeOf(@typeOf(x))` hands us a `meta_type`; unwrap to the denoted type.
-        if (target_type->get_kind() == sema::type_kind::TYPE) {
-            if (const auto m{target_type->get_data().as_opt<sema::types::meta_type>()}) {
-                target_type.emplace(m->instance);
-            }
-        }
 
         const auto ptr_size{
             codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? usize{8}
@@ -2986,36 +2982,13 @@ auto const_eval::eval_builtin(ast::node_id          id,
     }
     case syntax::token_type_t::BUILTIN_IMPLEMENTS: {
         VERIFY(call.arguments.size() == 2, "Arity mismatch not verified during resolution");
-        const auto arg_type{[&](const ast::call_expr::argument& a) -> stdx::option<sema::type&> {
-            if (const auto tid{a.as_opt<ast::explicit_type_id>()}) {
-                return module_->get_sema_type_opt(*tid);
-            }
-            if (const auto eh{a.as_opt<ast::expr_handle>()}) {
-                return module_->get_sema_type_opt(*eh);
-            }
-            return stdx::none;
-        }};
-
-        const auto denote{[](sema::type& t) -> sema::type& {
-            if (t.get_kind() == sema::type_kind::TYPE) {
-                if (const auto m{t.get_data().as_opt<sema::types::meta_type>()}) {
-                    return m->instance;
-                }
-            }
-            return t;
-        }};
-
-        auto t0{arg_type(call.arguments[0])};
-        auto t1{arg_type(call.arguments[1])};
+        auto t0{eval_type_argument(call.arguments[0])};
+        auto t1{eval_type_argument(call.arguments[1])};
         if (!t0 || !t1) { return stdx::none; }
 
-        auto& target{denote(*t0)};
-        auto& iface{denote(*t1)};
         auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
-        if (iface.get_kind() != sema::type_kind::INTERFACE) {
-            return const_value{false, bool_type};
-        }
-        return const_value{ctx_.impls.implements(target, iface), bool_type};
+        if (t1->get_kind() != sema::type_kind::INTERFACE) { return const_value{false, bool_type}; }
+        return const_value{ctx_.impls.implements(*t0, *t1), bool_type};
     }
     case syntax::token_type_t::BUILTIN_ABS: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
@@ -3168,13 +3141,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
     }
     case syntax::token_type_t::BUILTIN_TYPE_NAME: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
-        const auto&               arg{call.arguments.front()};
-        stdx::option<sema::type&> target_type;
-        if (const auto type_id{arg.as_opt<ast::explicit_type_id>()}) {
-            target_type = module_->get_sema_type_opt(*type_id);
-        } else if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
-            target_type = module_->get_sema_type_opt(*expr_h);
-        }
+        const auto target_type{eval_type_argument(call.arguments.front())};
         if (!target_type) { return stdx::none; }
 
         // Match the resolver: a fixed-length, null-terminated byte array (like a string literal).
@@ -3185,39 +3152,15 @@ auto const_eval::eval_builtin(ast::node_id          id,
     }
     case syntax::token_type_t::BUILTIN_TYPE_INFO: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
-        const auto&               arg{call.arguments.front()};
-        stdx::option<sema::type&> target_type;
-        if (const auto type_id{arg.as_opt<ast::explicit_type_id>()}) {
-            target_type = module_->get_sema_type_opt(*type_id);
-        } else if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
-            target_type = module_->get_sema_type_opt(*expr_h);
-        }
+        const auto target_type{eval_type_argument(call.arguments.front())};
         if (!target_type) { return stdx::none; }
-        if (const auto dc{target_type->get_data().as_opt<sema::types::deferred_call>()}) {
-            if (const auto r{try_resolve_deferred_call(dc->call)}) { target_type.emplace(*r); }
-        }
-        if (target_type->get_kind() == sema::type_kind::TYPE) {
-            if (const auto m{target_type->get_data().as_opt<sema::types::meta_type>()}) {
-                target_type.emplace(m->instance);
-            }
-        }
         return eval_type_info(*target_type);
     }
     case syntax::token_type_t::BUILTIN_HAS_FIELD:
     case syntax::token_type_t::BUILTIN_FIELD_TYPE: {
         VERIFY(call.arguments.size() == 2, "Arity mismatch not verified during resolution");
-        stdx::option<sema::type&> target_type;
-        if (const auto type_id{call.arguments[0].as_opt<ast::explicit_type_id>()}) {
-            target_type = module_->get_sema_type_opt(*type_id);
-        } else if (const auto expr_h{call.arguments[0].as_opt<ast::expr_handle>()}) {
-            target_type = module_->get_sema_type_opt(*expr_h);
-        }
+        const auto target_type{eval_type_argument(call.arguments[0])};
         if (!target_type) { return stdx::none; }
-        if (target_type->get_kind() == sema::type_kind::TYPE) {
-            if (const auto m{target_type->get_data().as_opt<sema::types::meta_type>()}) {
-                target_type.emplace(m->instance);
-            }
-        }
         const auto name_expr{call.arguments[1].as_opt<ast::expr_handle>()};
         if (!name_expr) { return stdx::none; }
         const auto name_val{try_eval(*name_expr)};

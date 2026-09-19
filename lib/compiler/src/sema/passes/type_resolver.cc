@@ -536,7 +536,7 @@ template <ast::IndexableID ID>
             args.target_loc = resolving_.ast.location_of(call.function);
             args.operand.emplace(call.arguments[0]);
         } else {
-            args.target.emplace(get_resolved_call_arg_type(call.arguments[0]));
+            args.target.emplace(denoted_type(*get_resolved_call_arg_type(call.arguments[0])));
             args.target_loc = get_call_arg_location(call.arguments[0]);
             args.operand.emplace(call.arguments[1]);
         }
@@ -2459,9 +2459,12 @@ auto register_type_ctor_members(context&         ctx,
     for (const auto& m : *members) {
         const auto decl{fn_mod.ast.get_as_opt<ast::decl_stmt>(*m)};
         if (!decl || !decl->value) { continue; }
-        if (!fn_mod.ast.get_as_opt<ast::function_expr>(*decl->value)) { continue; }
-        if (const auto fn_type{fn_mod.get_sema_type_opt(*decl->value)}) {
-            if (ctx.generic_functions.get_opt(*fn_type)) { continue; }
+        const auto fn_expr{fn_mod.ast.get_as_opt<ast::function_expr>(*decl->value)};
+        if (!fn_expr) { continue; }
+        if (fn_expr->self) {
+            if (const auto fn_type{fn_mod.get_sema_type_opt(*decl->value)}) {
+                if (ctx.generic_functions.get_opt(*fn_type)) { continue; }
+            }
         }
         const auto& name{fn_mod.ast.get_as<ast::identifier_expr>(decl->name).name};
         fn_mod.type_ctor_member_emits.emplace_back<type_ctor_member_emit>({
@@ -2822,14 +2825,17 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                         if (param_type->get_kind() == type_kind::TYPE) {
                             if (const auto ident{
                                     resolving_.ast.get_as_opt<ast::identifier_expr>(arg_id)}) {
-                                if (auto sym{ctx_.registry.lookup(table_stack_, ident->name)}) {
-                                    if (auto b{sym.value()
-                                                   .get_data()
+                                if (auto sym{ctx_.registry.lookup_with_table(table_stack_,
+                                                                             ident->name)}) {
+                                    resolving_.set_symbol_table(arg_id, sym->table_idx);
+                                    if constexpr (std::same_as<decltype(arg_id), ast::node_id>) {
+                                        resolving_.add_identifier_position(arg_id);
+                                    }
+                                    if (auto b{sym->symbol.get_data()
                                                    .template as_opt<symbols::builtin>()}) {
                                         return b.value().get_type();
                                     }
-                                    if (auto node{sym.value()
-                                                      .get_data()
+                                    if (auto node{sym->symbol.get_data()
                                                       .template as_opt<symbols::node_t>()}) {
                                         if (resolving_.has_sema_type(*node)) {
                                             auto& decl_ty{resolving_.get_sema_type(*node)};

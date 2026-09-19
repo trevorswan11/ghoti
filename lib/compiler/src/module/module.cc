@@ -176,6 +176,12 @@ auto module::get_overlay_explicit_type(usize idx) const noexcept
     return active_body_diff->find_explicit_type(idx);
 }
 
+auto module::get_overlay_call_target(usize idx) const noexcept
+    -> stdx::option<stdx::option<std::string_view>> {
+    if (!active_body_diff) { return stdx::none; }
+    return active_body_diff->find_call_target(idx);
+}
+
 auto module::get_if_branch_opt(usize node_idx) const noexcept -> stdx::option<if_branch> {
     if (active_body_diff) {
         if (const auto br{active_body_diff->find_if_branch(node_idx)}) { return br; }

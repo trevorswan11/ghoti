@@ -348,6 +348,19 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
             ++cx_i;
         }
     }
+
+    // A bare `T: type` parameter has no runtime representation
+    for (const auto& param : fn_expr.parameters) {
+        if (param.is_constexpr || param.is_pack || !param.name.is<ast::identifier_expr>()) {
+            continue;
+        }
+        const auto decl_ty{fn_mod.get_sema_type_opt(param.explicit_type)};
+        if (!decl_ty || decl_ty->get_kind() != sema::type_kind::TYPE) { continue; }
+        const auto bound_ty{fn_mod.get_sema_type_opt(param.name)};
+        if (!bound_ty) { continue; }
+        const auto& p_name{fn_mod.ast.get_as<ast::identifier_expr>(param.name).name};
+        cx_frame.insert_or_assign(p_name, const_value{*bound_ty});
+    }
     const constexpr_frame_guard cx_frame_guard{ctx_.constexpr_binding_frames, std::move(cx_frame)};
 
     // Overlay this monomorphization's body typing onto the shared AST nodes during emission

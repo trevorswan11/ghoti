@@ -46,6 +46,14 @@ auto body_typing_snapshot::diff_into(context& ctx, mod::module& m, body_type_dif
     collect(m.sema_side_tables.explicit_types.values, types, out.explicit_types);
     for (const auto& [slot, original] : folded) { slot->emplace(*original); }
 
+    const auto& live_calls{m.sema_side_tables.generic_call_targets.values};
+    for (usize i{0}; i < live_calls.size(); ++i) {
+        if (!live_calls[i]) { continue; }
+        if (i >= calls.size() || calls[i] != live_calls[i]) {
+            out.call_targets.emplace_back(i, live_calls[i]);
+        }
+    }
+
     for (const auto& [idx, br] : m.if_constexpr_results) {
         const auto prev{ifs.find(idx)};
         if (prev == ifs.end() || prev->second != br) { out.if_branches.emplace_back(idx, br); }
@@ -61,10 +69,11 @@ auto body_typing_snapshot::diff_into(context& ctx, mod::module& m, body_type_dif
 }
 
 auto body_typing_snapshot::restore_to(mod::module& m) const -> void {
-    m.sema_side_tables.node_types.values     = nodes;
-    m.sema_side_tables.explicit_types.values = types;
-    m.if_constexpr_results                   = ifs;
-    m.match_arm_results                      = matches;
+    m.sema_side_tables.node_types.values           = nodes;
+    m.sema_side_tables.explicit_types.values       = types;
+    m.if_constexpr_results                         = ifs;
+    m.match_arm_results                            = matches;
+    m.sema_side_tables.generic_call_targets.values = calls;
 }
 
 } // namespace ghoti::sema
