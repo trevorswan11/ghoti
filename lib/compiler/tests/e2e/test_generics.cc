@@ -103,6 +103,46 @@ TEST_CASE("the `?` operator works inside a generic function body") {
     )") == 8);
 }
 
+TEST_CASE("a `using` alias inside a generic body re-resolves per instantiation") {
+    CHECK(helpers::compile_and_run(R"(
+        const Result := fn(T: type, E: type): type {
+            return union {
+                ok: T,
+                err: E,
+
+                pub constexpr mapErr := fn(&self, func: auto): auto {
+                    constexpr fn_info := @typeInfo(@typeOf(func));
+                    const NewErr := fn_info.function.return_type;
+                    using NewRes = Result(T, NewErr);
+                    return match (self) {
+                        .ok => |happy| NewRes{ .ok = happy },
+                        .err => |sad| NewRes{ .err = func(sad) },
+                    };
+                };
+            };
+        };
+
+        pub const main := fn(): i32 {
+            const a: Result(void, i32) = .{ .err = 1 };
+            const mapped_bool := a.mapErr(fn(val: i32): bool { return val != 0; });
+            const bool_ok := match (mapped_bool) {
+                .ok => false,
+                .err => |e| e == true,
+            };
+
+            const toU8 := fn(_: i32): u8 { return 7; };
+            const b: Result(void, i32) = .{ .err = 2 };
+            const mapped_u8 := b.mapErr(toU8);
+            const u8_ok := match (mapped_u8) {
+                .ok => false,
+                .err => |e| e == 7,
+            };
+
+            return if (bool_ok and u8_ok) 1 else 0;
+        };
+    )") == 1);
+}
+
 TEST_CASE("Multi-method struct with generic Result error checks compiles") {
     const auto exit_code{helpers::compile_and_run(R"(
         const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };

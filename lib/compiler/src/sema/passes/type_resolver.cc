@@ -2582,11 +2582,10 @@ auto register_type_ctor_members(context&         ctx,
     }
     const auto& data{t.get_data()};
     switch (t.get_kind()) {
-    case type_kind::INT:     return type_kind_display_name(t); // `i32`, `u17`, ... (width-distinct)
+    case type_kind::INT:    return type_kind_display_name(t); // `i32`, `u17`, ... (width-distinct)
     case type_kind::STRUCT:
     case type_kind::UNION:
-    case type_kind::ENUM:
-    case type_kind::CLOSURE: {
+    case type_kind::ENUM:   {
         const auto kind_name{type_kind_display_name(t)};
         if (const auto disc{reg.get_clone_disc(t)}) {
             return fmt::format("{}${}", kind_name, sanitize_mangled(*disc));
@@ -2595,6 +2594,10 @@ auto register_type_ctor_members(context&         ctx,
             return fmt::format("{}{}", kind_name, t.get_symbol_table_idx());
         }
         return std::string{kind_name};
+    }
+    case type_kind::CLOSURE: {
+        const auto& cl{data.as<types::closure_t>()};
+        return "closure_" + mangle_arg_type(reg, cl.signature);
     }
     case type_kind::FUNCTION: {
         const auto& fn{data.as<types::function>()};
@@ -9835,7 +9838,13 @@ auto type_resolver::visit(ast::node_id id, const ast::using_stmt& using_stmt) ->
     // Search the whole stack, not just `table_idx_`, this can be reached out of decl order
     auto sym{ctx_.registry.lookup(table_stack_, ident.name)};
     if (!sym) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
-    if (sym->get_status() == symbol_status::RESOLVED) {
+
+    const bool reresolve_local{for_generic_instantiation_ && reresolve_floor_ && [&] {
+        const auto lt{ctx_.registry.lookup_with_table(table_stack_, ident.name)};
+        return lt && lt->table_idx >= *reresolve_floor_;
+    }()};
+
+    if (sym->get_status() == symbol_status::RESOLVED && !reresolve_local) {
         auto& void_type{ctx_.get_builtin_resolved_type(type_kind::VOID_)};
         if (!resolving_.has_sema_type(id)) {
             resolving_.set_sema_type(using_stmt.alias, void_type);
