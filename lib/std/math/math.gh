@@ -63,3 +63,7 @@ test "minInt" {
     @expect(minInt(i64) == -9223372036854775808);
     @expect(minInt(i128) == -170141183460469231731687303715884105728);
 }
+
+test {
+    import "float.gh";
+}

@@ -15,8 +15,8 @@ pub constexpr reconstructFloat := fn(
             .signed = false,
         },
     );
-    const biased_exponent := @as(TBits, exponent + floatExponentMax(T));
-    return @as(T, @bitCast((biased_exponent << floatMantissaBits(T)) | @as(TBits, mantissa)));
+    const biased_exponent := @intCast(TBits, exponent + floatExponentMax(T));
+    return @as(T, @bitCast((biased_exponent << floatMantissaBits(T)) | @intCast(TBits, mantissa)));
 };
 
 /// Creates a raw "1.0" mantissa for floating point type T
@@ -99,24 +99,22 @@ pub constexpr nan := fn(T: type): T {
     );
 };
 
-// TODO(tcs): Fix whatever is happening here
-//
-// (nix) ➜  ghoti git:(feat/std-fmt) ✗ ghoti test lib/std/math/float.gh
-// /Volumes/SwanSSD/dev/ghoti/lib/std/math/float.gh:98:25: error: argument to a constexpr parameter must be a compile-time constant
-//     floatExponentMax(RuntimeType) + 1,
-//
-// test "Quiet NaN canonical representation" {
-//     const qnan_u16: u16 = 0x7E00;
-//     @expect(qnan_u16 == @as(u16, @bitCast(nan(f16))));
-//     const qnan_u32: u32 = 0x7FC00000;
-//     @expect(qnan_u32 == @as(u32, @bitCast(nan(f32))));
-//     const qnan_u64: u64 = 0x7FF8000000000000;
-//     @expect(qnan_u64 == @as(u64, @bitCast(nan(f64))));
-//     const qnan_u80: u80 = 0x7FFFC000000000000000;
-//     @expect(qnan_u80 == @as(u80, @bitCast(nan(f80))));
-//     const qnan_u128: u128 = 0x7FFF8000000000000000000000000000;
-//     @expect(qnan_u128 == @as(u128, @bitCast(nan(f128))));
-// }
+test "Quiet NaN canonical representation" {
+    const qnan_u16: u16 = 0x7E00;
+    @expect(qnan_u16 == @as(u16, @bitCast(nan(f16))));
+    const qnan_u32: u32 = 0x7FC00000;
+    @expect(qnan_u32 == @as(u32, @bitCast(nan(f32))));
+    const qnan_u64: u64 = 0x7FF8000000000000;
+    @expect(qnan_u64 == @as(u64, @bitCast(nan(f64))));
+
+    @cfg (arch == .x86_64 or arch == .x86) {
+        const qnan_u80: u80 = 0x7FFFC000000000000000;
+        @expect(qnan_u80 == @as(u80, @bitCast(nan(f80))));
+    }
+
+    const qnan_u128: u128 = 0x7FFF8000000000000000000000000000;
+    @expect(qnan_u128 == @as(u128, @bitCast(nan(f128))));
+}
 
 /// Returns a signalling NaN representation for a floating point `Type`.
 pub constexpr snan := fn(T: type): T {
@@ -131,21 +129,19 @@ pub constexpr snan := fn(T: type): T {
     );
 };
 
-// TODO(tcs): Fix whatever is happening here
-//
-// (nix) ➜  ghoti git:(feat/std-fmt) ✗ ghoti test lib/std/math/float.gh
-// /Volumes/SwanSSD/dev/ghoti/lib/std/math/float.gh:98:25: error: argument to a constexpr parameter must be a compile-time constant
-//     floatExponentMax(RuntimeType) + 1,
-//
-// test "Signalling NaN canonical representation" {
-//     const snan_u16: u16 = 0x7D00;
-//     @expect(snan_u16, @as(u16, @bitCast(snan(f16))));
-//     const snan_u32: u32 = 0x7FA00000;
-//     @expect(snan_u32, @as(u32, @bitCast(snan(f32))));
-//     const snan_u64: u64 = 0x7FF4000000000000;
-//     @expect(snan_u64, @as(u64, @bitCast(snan(f64))));
-//     const snan_u80: u80 = 0x7FFFA000000000000000;
-//     @expect(snan_u80, @as(u80, @bitCast(snan(f80))));
-//     const snan_u128: u128 = 0x7FFF4000000000000000000000000000;
-//     @expect(snan_u128, @as(u128, @bitCast(snan(f128))));
-// }
+test "Signalling NaN canonical representation" {
+    const snan_u16: u16 = 0x7D00;
+    @expect(snan_u16 == @as(u16, @bitCast(snan(f16))));
+    const snan_u32: u32 = 0x7FA00000;
+    @expect(snan_u32 == @as(u32, @bitCast(snan(f32))));
+    const snan_u64: u64 = 0x7FF4000000000000;
+    @expect(snan_u64 == @as(u64, @bitCast(snan(f64))));
+
+    @cfg (arch == .x86_64 or arch == .x86) {
+        const snan_u80: u80 = 0x7FFFA000000000000000;
+        @expect(snan_u80 == @as(u80, @bitCast(snan(f80))));
+    }
+
+    const snan_u128: u128 = 0x7FFF4000000000000000000000000000;
+    @expect(snan_u128 == @as(u128, @bitCast(snan(f128))));
+}

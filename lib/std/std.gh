@@ -20,7 +20,7 @@ test {
     import "mem/mem.gh";
     import "heap/heap.gh";
     import "fmt/fmt.gh";
-    import "math.gh";
+    import "math/math.gh";
 }
 
 pub const panic_handler := fn(msg: []u8, file: []u8, _: u32, _: u32): noreturn {
