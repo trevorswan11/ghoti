@@ -74,7 +74,12 @@ auto break_stmt::parse(syntax::parser& parser, syntax::semicolon_behavior behavi
                                syntax::error::VALUED_BREAK_MISSING_LABEL,
                                start_token);
     }
-    if (behavior != syntax::semicolon_behavior::DISALLOW) { TRY(parser.expect_semicolon()); }
+    if (behavior == syntax::semicolon_behavior::REQUIRE) {
+        TRY(parser.expect_semicolon());
+    } else if (behavior == syntax::semicolon_behavior::ALLOWED &&
+               parser.peek_token_is(syntax::token_type_t::SEMICOLON)) {
+        parser.advance();
+    }
     return parser.add_stmt<break_stmt>(start_token, label, value);
 }
 
@@ -155,8 +160,11 @@ auto continue_stmt::parse(syntax::parser& parser, syntax::semicolon_behavior beh
                                start_token);
     }
 
-    if (behavior != syntax::semicolon_behavior::DISALLOW) {
+    if (behavior == syntax::semicolon_behavior::REQUIRE) {
         TRY(parser.expect_peek(syntax::token_type_t::SEMICOLON));
+    } else if (behavior == syntax::semicolon_behavior::ALLOWED &&
+               parser.peek_token_is(syntax::token_type_t::SEMICOLON)) {
+        parser.advance();
     }
     return parser.add_stmt<continue_stmt>(start_token, label);
 }
@@ -528,7 +536,12 @@ auto return_stmt::parse(syntax::parser& parser, syntax::semicolon_behavior behav
         value.emplace(TRY(parser.parse_expression()));
     }
 
-    if (behavior != syntax::semicolon_behavior::DISALLOW) { TRY(parser.expect_semicolon()); }
+    if (behavior == syntax::semicolon_behavior::REQUIRE) {
+        TRY(parser.expect_semicolon());
+    } else if (behavior == syntax::semicolon_behavior::ALLOWED &&
+               parser.peek_token_is(syntax::token_type_t::SEMICOLON)) {
+        parser.advance();
+    }
     return parser.add_stmt<return_stmt>(start_token, value);
 }
 
