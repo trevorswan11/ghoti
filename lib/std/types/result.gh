@@ -24,7 +24,13 @@ test "Result.mapErr transforms error variant" {
             return false;
         },
     );
-    @expect(mapped == .err);
+
+    @expect(
+        match (mapped) {
+            .ok => false,
+            .err => |e| e == false,
+        },
+    );
 }
 
 impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {

@@ -8,8 +8,21 @@ pub constexpr Option := fn(T: type): type {
         };
 
         pub constexpr empty: @This() = .{ .none = {} };
+        pub constexpr orElse := fn(&self, default: T): T {
+            return match (self) {
+                .some => |s| s,
+                .none => default,
+            };
+        };
     };
 };
+
+test "Option.orElse returns the default when disengaged" {
+    var o: Option(i32) = .of(1);
+    @expect(o.orElse(20) == 1);
+    o = .empty;
+    @expect(o.orElse(42) == 42);
+}
 
 impl(T: type) builtin.Unwrappable for Option(T) {
     using Output = T;
