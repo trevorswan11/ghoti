@@ -377,3 +377,5 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Defer statements (includes errdefer with captures) now work in compile time contexts
 - Support global `constexpr var` declarations
 - Resolve a codegen error that resulted in misrepresenting signedness in constexpr int literals
+- `return`/`break`/`continue` nested inside a match arm's `if` (no `else`) no longer require a trailing semicolon
+- The formatter now supports `match` arms whose body is a jump statement
