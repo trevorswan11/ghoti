@@ -348,16 +348,16 @@ test "validate at compile time" {
     validate("{:#08x} = {:+5.2f}", 2);
 }
 
+const toIOErr := fn(_: std.io.Error): std.fmt.Error {
+    return .io;
+};
+
 pub const pad := fn(
     w: &mut dyn std.io.Writer(Error = std.io.Error),
     spec: Spec,
     body: []u8,
     default_align: Align,
 ): std.Result(void, std.fmt.Error) {
-    const toIOErr := fn(_: std.io.Error): std.fmt.Error {
-        return .io;
-    };
-
     const width := match (spec.width) {
         .some => |explicit_width| explicit_width,
         .none => return w.writeAll(body).mapErr(toIOErr),
@@ -365,9 +365,7 @@ pub const pad := fn(
     if (width <= body.len) return w.writeAll(body).mapErr(toIOErr);
 
     const padding := width - body.len;
-    const a := spec.align.orElse(default_align);
-
-    const left_pad := match (a) {
+    const left_pad := match (spec.align.orElse(default_align)) {
         .left => 0uz,
         .right => padding,
         .center => padding / 2,
@@ -383,4 +381,61 @@ pub const pad := fn(
         w.writeByte(spec.fill).mapErr(toIOErr)?;
     }
     return .{ .ok = {} };
+};
+
+test "pad applies default and explicit alignment" {
+    var backing: [16]mut u8 = undefined;
+    var stream: std.io.FixedBufferStream = .{ .buf = backing };
+
+    @expect(pad(^mut stream, .{ .width = .of(6) }, "hi", .left) == .ok);
+    @expect(std.mem.eql(u8, "hi    ", backing[..stream.pos]));
+
+    stream.pos = 0;
+    @expect(pad(^mut stream, .{ .width = .of(6), .align = .of(.right) }, "hi", .left) == .ok);
+    @expect(std.mem.eql(u8, "    hi", backing[..stream.pos]));
+};
+
+/// Write N bytes of value `byte` to the writer
+pub const writeFillN := fn(
+    w: &mut dyn std.io.Writer(Error = std.io.Error),
+    byte: u8,
+    n: usize,
+): std.Result(void, std.fmt.Error) {
+    for (0..n) |_| {
+        w.writeByte(byte).mapErr(toIOErr)?;
+    }
+    return .{ .ok = {} };
+};
+
+/// Writes a literal/escaped curly brace sequence to the writer
+pub const writeLiteral := fn(
+    w: &mut dyn std.io.Writer(Error = std.io.Error),
+    raw: []u8,
+): std.Result(void, std.fmt.Error) {
+    var start: usize = 0;
+    var i: usize = 0;
+    loop {
+        if (i >= raw.len) break;
+        if (raw[i] == '{' or raw[i] == '}') {
+            if (i > start) {
+                w.writeAll(raw[start..i]).mapErr(toIOErr)?;
+            }
+            w.writeByte(raw[i]).mapErr(toIOErr)?;
+            i += 2;
+            start = i;
+            continue;
+        }
+        i += 1;
+    }
+    if (raw.len > start) {
+        w.writeAll(raw[start..]).mapErr(toIOErr)?;
+    }
+    return .{ .ok = {} };
+};
+
+test "writeLiteral unescapes braces and coalesces runs" {
+    var backing: [16]mut u8 = undefined;
+    var stream: std.io.FixedBufferStream = .{ .buf = backing };
+    @expect(writeLiteral(&mut stream, "a{{b}}c") == .ok);
+    @expect(std.mem.eql(u8, "a{b}c", backing[..stream.pos]));
 };
