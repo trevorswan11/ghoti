@@ -732,6 +732,21 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
     }
 
     if (dest_type.get_kind() == sema::type_kind::SLICE) {
+        if (active_ast().get_as_opt<ast::string_expr>(expr_id)) {
+            sema::type* slice_type{&dest_type};
+            if (sema::is_generic_type(dest_type)) {
+                if (const auto own_type{active_mod().get_sema_type_opt(*expr_id)}) {
+                    slice_type = own_type.get();
+                }
+            }
+            // The generic substitution above may resolve to the pre-decay array
+            if (slice_type->get_kind() == sema::type_kind::SLICE) {
+                if (const auto cv{const_eval_.try_eval(*expr_id)}; cv && cv->is<std::string>()) {
+                    return emit_string_as_slice(cv->as<std::string>(), *slice_type);
+                }
+            }
+        }
+
         if (const auto rhs_type{active_mod().get_sema_type_opt(expr_id)}) {
             if (rhs_type->get_kind() == sema::type_kind::ARRAY) {
                 return emit_slice_from_array(emit_lvalue(expr_id), *rhs_type);
@@ -5335,10 +5350,12 @@ auto emitter::emit_string_as_slice(const std::string& bytes, sema::type& slice_t
     PROFILE_FUNCTION();
     const auto sl{slice_type.get_data().as_opt<sema::types::slice>()};
     ASSERT(sl, "emit_string_as_slice requires a slice sema type");
-    const auto mutability{slice_type.is_constant() ? sema::types::mut::CONSTANT
-                                                   : sema::types::mut::MUTABLE};
-    // Back the slice with a NUL-terminated array regardless of the slice's own sentinel flag
-    auto&      arr_type{ctx_.get_array(mutability, true, bytes.size(), sl->underlying)};
+
+    // A `[]u8` destination never needs a writable copy
+    if (slice_type.is_constant()) { return materialize_string_slice(bytes, slice_type); }
+
+    // A mutable destination needs a fresh, per-call writable buffer
+    auto& arr_type{ctx_.get_array(sema::types::mut::MUTABLE, true, bytes.size(), sl->underlying)};
     const auto slot{builder_.emit_alloca(arr_type)};
     builder_.emit_store(value{slot, arr_type}, value{std::string{bytes}, arr_type}).is_initializer =
         true;

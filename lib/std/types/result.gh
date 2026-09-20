@@ -1,7 +1,21 @@
+import std;
+
 pub constexpr Result := fn(T: type, E: type): type {
     return union {
         ok: T,
         err: E,
+
+        pub constexpr map := fn(&self, func: auto): auto {
+            constexpr fn_info := @typeInfo(@typeOf(func));
+            @assert(fn_info == .function, "map requires a function argument");
+            const NewOk := fn_info.function.return_type;
+            using NewRes = Result(NewOk, E);
+
+            return match (self) {
+                .ok => |happy| NewRes{ .ok = func(happy) },
+                .err => |sad| NewRes{ .err = sad },
+            };
+        };
 
         pub constexpr mapErr := fn(&self, func: auto): auto {
             constexpr fn_info := @typeInfo(@typeOf(func));
@@ -17,6 +31,22 @@ pub constexpr Result := fn(T: type, E: type): type {
     };
 };
 
+test "Result.map transforms ok variant" {
+    const a: Result(i32, bool) = .{ .ok = 1 };
+    const mapped := a.map(
+        fn(val: i32): []u8 {
+            return "Hello, World!";
+        },
+    );
+
+    @expect(
+        match (mapped) {
+            .ok => |o| std.mem.eql(u8, o, "Hello, World!"),
+            .err => false,
+        },
+    );
+}
+
 test "Result.mapErr transforms error variant" {
     const a: Result(void, i32) = .{ .err = 1 };
     const mapped := a.mapErr(
@@ -31,15 +61,14 @@ test "Result.mapErr transforms error variant" {
             .err => |e| e == false,
         },
     );
-}
 
-test "Result.mapErr distinguishes error types across three instantiations" {
     const b: Result(void, i32) = .{ .err = 2 };
     const mapped_u8 := b.mapErr(
         fn(_: i32): u8 {
             return 7;
         },
     );
+
     @expect(
         match (mapped_u8) {
             .ok => false,

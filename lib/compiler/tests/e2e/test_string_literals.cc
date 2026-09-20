@@ -194,4 +194,17 @@ TEST_CASE("Top-level string const assigned to slice emits valid global init") {
     CHECK(exit_code == 7);
 }
 
+TEST_CASE("A string literal returned from a non-foldable call outlives the callee's frame") {
+    CHECK(helpers::compile_and_run(R"(
+        var g: i32 = 5;
+        const named := fn(val: i32): []u8 { return "Hi"; };
+        const clobber_stack := fn(): i32 { return 99; };
+        pub const main := fn(): i32 {
+            const v := named(g);
+            const c := clobber_stack();
+            return if (v.len == 2 and v[0] == 'H' and v[1] == 'i' and c == 99) 0 else 1;
+        };
+    )") == 0);
+}
+
 } // namespace ghoti::tests
