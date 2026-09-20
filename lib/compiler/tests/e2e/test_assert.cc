@@ -30,10 +30,8 @@ TEST_CASE("a failing @verify aborts through the panic handler at runtime", "[.pa
 TEST_CASE("@verify routes its message to the panic handler, which can observe it", "[.panic]") {
     CHECK(helpers::compile_and_run(R"(
         pub var last_msg_len: usize = 0;
-        pub weak const panic_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): noreturn {
-            _ = file;
-            _ = line;
-            _ = column;
+        pub weak const panic_handler := fn(msg: []u8, loc: builtin.SourceLocation): noreturn {
+            _ = loc;
             last_msg_len = msg.len;
             @trap();
         };

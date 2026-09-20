@@ -171,7 +171,7 @@ class emitter {
     // The lvalue of an already-bound local, by name
     auto lvalue_of_binding(std::string_view name) -> value;
 
-    // Emits a `panic_handler(msg, file, line, column)` call followed by `unreachable`
+    // Emits a `panic_handler(msg, loc: SourceLocation)` call followed by `unreachable`
     auto emit_panic_call(std::string_view message, ast::node_id site) -> void;
     auto emit_enum_cast_guard(ast::node_id     site,
                               const value&     enum_val,

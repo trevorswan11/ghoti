@@ -69,9 +69,7 @@ pub const SourceLocation := struct {
 
 pub const Test := struct {
     pub name: []u8,
-    pub file: []u8,
-    pub line: u32,
-    pub column: u32,
+    pub loc: SourceLocation,
     pub func: fn(): bool,
 };
 
@@ -115,19 +113,19 @@ pub weak const test_runner := fn(_: [][:0]u8, tests: []Test): i32 {
     return failures;
 };
 
-pub weak const panic_handler := fn(_: []u8, _: []u8, _: u32, _: u32): noreturn {
+pub weak const panic_handler := fn(_: []u8, _: SourceLocation): noreturn {
     @trap();
 };
 
-pub weak const assert_handler := fn(_: []u8, _: []u8, _: u32, _: u32): void {
+pub weak const assert_handler := fn(_: []u8, _: SourceLocation): void {
     @trap();
 };
 
-pub weak const expect_handler := fn(_: []u8, _: []u8, _: u32, _: u32): void {};
+pub weak const expect_handler := fn(_: []u8, _: SourceLocation): void {};
 
-pub weak const require_handler := fn(_: []u8, _: []u8, _: u32, _: u32): void {};
+pub weak const require_handler := fn(_: []u8, _: SourceLocation): void {};
 
-pub weak const skip_handler := fn(_: []u8, _: []u8, _: u32, _: u32): void {};
+pub weak const skip_handler := fn(_: []u8, _: SourceLocation): void {};
 
 /// The kind of a type, as returned by `@typeInfo(T).kind` / `@tagName`.
 pub const TypeKind := enum {

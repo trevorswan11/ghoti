@@ -121,7 +121,7 @@ TEST_CASE("Codegen: a non-weak panic_handler overrides the builtin default") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const panic_handler := fn(msg: []u8, file: []u8, line: u32, column: u32): noreturn {
+        pub const panic_handler := fn(msg: []u8, loc: builtin.SourceLocation): noreturn {
             @trap();
         };
         pub const main := fn(args: [][:0]u8): void {

@@ -12,7 +12,6 @@
 
 #include <fmt/format.h>
 #include <gsl/pointers>
-#include <gsl/span>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/CallingConv.h>
 #include <llvm/IR/Constants.h>
@@ -844,10 +843,12 @@ auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod, bool rec
     }
 
     auto* slice_ty{types_.translate_slice_type()};
-    // Mirrors `builtin::Test { name: []u8, file: []u8, line: u32, column: u32, func: fn(): bool }`
-    auto* test_struct_ty{llvm::StructType::get(
-        context_,
-        {slice_ty, slice_ty, types_.get_int32_ty(), types_.get_int32_ty(), types_.get_ptr_ty()})};
+    // Mirrors `builtin.SourceLocation { file: []u8, line: u32, column: u32 }`
+    auto* loc_struct_ty{
+        llvm::StructType::get(context_, {slice_ty, types_.get_int32_ty(), types_.get_int32_ty()})};
+    // Mirrors `builtin.Test { name: []u8, loc: SourceLocation, func: fn(): bool }`
+    auto* test_struct_ty{
+        llvm::StructType::get(context_, {slice_ty, loc_struct_ty, types_.get_ptr_ty()})};
 
     const auto& test_fns{gir_mod.get_test_functions()};
     const auto  test_count{test_fns.size()};
@@ -888,9 +889,10 @@ auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod, bool rec
 
         auto* line_val{llvm::ConstantInt::get(types_.get_int32_ty(), fn->get_test_line())};
         auto* col_val{llvm::ConstantInt::get(types_.get_int32_ty(), fn->get_test_column())};
+        auto* loc_val{llvm::ConstantStruct::get(loc_struct_ty, {file_slice, line_val, col_val})};
 
-        test_descriptors.emplace_back(llvm::ConstantStruct::get(
-            test_struct_ty, {name_slice, file_slice, line_val, col_val, test_llvm_fn}));
+        test_descriptors.emplace_back(
+            llvm::ConstantStruct::get(test_struct_ty, {name_slice, loc_val, test_llvm_fn}));
     }
 
     auto* test_array_ty{llvm::ArrayType::get(test_struct_ty, std::max(test_count, usize{1}))};
@@ -979,25 +981,19 @@ auto llvm_lowering::define_test_take_skipped() -> void {
     b.CreateRet(was_skipped);
 }
 
-auto llvm_lowering::emit_context_handler_call(const gir::instruction&   inst,
-                                              std::string_view          handler_name,
-                                              gsl::span<const usize, 4> order) -> void {
+auto llvm_lowering::emit_context_handler_call(const gir::instruction& inst,
+                                              std::string_view        handler_name,
+                                              usize                   msg_idx,
+                                              usize                   loc_idx) -> void {
     PROFILE_FUNCTION();
     auto* handler_fn{llvm_module_->getFunction(handler_name)};
     if (!handler_fn) { return; }
 
     auto* fn_ty{handler_fn->getFunctionType()};
-    if (fn_ty->getNumParams() != 4) { return; }
-    for (const auto idx : order) {
-        if (idx >= inst.operands.size()) { return; }
-    }
+    if (fn_ty->getNumParams() != 2) { return; }
+    if (msg_idx >= inst.operands.size() || loc_idx + 2 >= inst.operands.size()) { return; }
 
-    std::vector<llvm::Value*> args;
-    args.reserve(4);
-    for (u32 param_idx{0}; param_idx < 4; ++param_idx) {
-        auto*       param_ty{fn_ty->getParamType(param_idx)};
-        const auto& op{inst.operands[order[param_idx]]};
-
+    const auto make_arg{[&](const gir::value& op, llvm::Type* param_ty) -> llvm::Value* {
         if (const auto str{op.as_opt<std::string>()}) {
             // A raw string operand (`file`, `msg`) becomes a `[]u8` slice `{ ptr, len }`.
             auto* gstr{builder_.CreateGlobalString(*str, "ch.str")};
@@ -1008,37 +1004,48 @@ auto llvm_lowering::emit_context_handler_call(const gir::instruction&   inst,
                 slice = builder_.CreateInsertValue(slice,
                                                    builder_.getInt64(str->size()),
                                                    {static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX)});
-                args.push_back(slice);
-            } else {
-                args.push_back(gstr);
+                return slice;
             }
-            continue;
+            return gstr;
         }
 
         auto* v{lower_value(op)};
-        if (!v) { return; }
-        if (v->getType() != param_ty && v->getType()->isIntegerTy() && param_ty->isIntegerTy()) {
+        if (v && v->getType() != param_ty && v->getType()->isIntegerTy() &&
+            param_ty->isIntegerTy()) {
             v = builder_.CreateZExtOrTrunc(v, param_ty);
         }
-        args.push_back(v);
-    }
+        return v;
+    }};
 
-    builder_.CreateCall(handler_fn, args);
+    auto* msg_arg{make_arg(inst.operands[msg_idx], fn_ty->getParamType(0))};
+    if (!msg_arg) { return; }
+
+    auto* loc_ty{llvm::cast<llvm::StructType>(fn_ty->getParamType(1))};
+    auto* file_arg{make_arg(inst.operands[loc_idx], loc_ty->getElementType(0))};
+    auto* line_v{lower_value(inst.operands[loc_idx + 1])};
+    auto* col_v{lower_value(inst.operands[loc_idx + 2])};
+    if (!file_arg || !line_v || !col_v) { return; }
+
+    llvm::Value* loc_arg{llvm::UndefValue::get(loc_ty)};
+    loc_arg = builder_.CreateInsertValue(loc_arg, file_arg, {0U});
+    loc_arg = builder_.CreateInsertValue(loc_arg, line_v, {1U});
+    loc_arg = builder_.CreateInsertValue(loc_arg, col_v, {2U});
+
+    builder_.CreateCall(handler_fn, {msg_arg, loc_arg});
 }
 
 auto llvm_lowering::emit_lowered_panic(std::string_view message, const gir::instruction& inst)
     -> void {
     PROFILE_FUNCTION();
     auto* panic_fn{llvm_module_->getFunction("panic_handler")};
-    if (!panic_fn || panic_fn->getFunctionType()->getNumParams() != 4) {
+    if (!panic_fn || panic_fn->getFunctionType()->getNumParams() != 2) {
         auto* trap{
             llvm::Intrinsic::getOrInsertDeclaration(llvm_module_.get(), llvm::Intrinsic::trap)};
         builder_.CreateCall(trap, {});
         return;
     }
 
-    auto*      slice_ty{types_.translate_slice_type()};
-    const auto make_slice{[&](std::string_view text) -> llvm::Value* {
+    const auto make_slice{[&](std::string_view text, llvm::Type* slice_ty) -> llvm::Value* {
         auto*        gstr{builder_.CreateGlobalString(std::string{text}, "panic.str")};
         llvm::Value* slice{llvm::UndefValue::get(slice_ty)};
         slice =
@@ -1048,14 +1055,19 @@ auto llvm_lowering::emit_lowered_panic(std::string_view message, const gir::inst
         return slice;
     }};
 
-    const auto                loc{inst.location.value_or(source_location{})};
-    std::vector<llvm::Value*> args{
-        make_slice(message),
-        make_slice(llvm_module_->getName()),
-        builder_.getInt32(static_cast<u32>(loc.line)),
-        builder_.getInt32(static_cast<u32>(loc.column)),
-    };
-    builder_.CreateCall(panic_fn, args);
+    auto* msg_ty{panic_fn->getFunctionType()->getParamType(0)};
+    auto* loc_ty{llvm::cast<llvm::StructType>(panic_fn->getFunctionType()->getParamType(1))};
+
+    const auto   loc{inst.location.value_or(source_location{})};
+    llvm::Value* loc_arg{llvm::UndefValue::get(loc_ty)};
+    loc_arg = builder_.CreateInsertValue(
+        loc_arg, make_slice(llvm_module_->getName(), loc_ty->getElementType(0)), {0U});
+    loc_arg =
+        builder_.CreateInsertValue(loc_arg, builder_.getInt32(static_cast<u32>(loc.line)), {1U});
+    loc_arg =
+        builder_.CreateInsertValue(loc_arg, builder_.getInt32(static_cast<u32>(loc.column)), {2U});
+
+    builder_.CreateCall(panic_fn, {make_slice(message, msg_ty), loc_arg});
 }
 
 auto llvm_lowering::emit_arith_guard(llvm::Value*            bad,
@@ -2294,7 +2306,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             builder_.SetInsertPoint(fail_bb);
             auto* failed_flag{get_or_create_test_failed_flag()};
             builder_.CreateStore(builder_.getInt1(true), failed_flag);
-            emit_context_handler_call(inst, "expect_handler", std::array{4UZ, 1UZ, 2UZ, 3UZ});
+            emit_context_handler_call(inst, "expect_handler", 4UZ, 1UZ);
             builder_.CreateBr(cont_bb);
 
             builder_.SetInsertPoint(cont_bb);
@@ -2326,7 +2338,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             builder_.SetInsertPoint(fail_bb);
             auto* failed_flag{get_or_create_test_failed_flag()};
             builder_.CreateStore(builder_.getInt1(true), failed_flag);
-            emit_context_handler_call(inst, "require_handler", std::array{4UZ, 1UZ, 2UZ, 3UZ});
+            emit_context_handler_call(inst, "require_handler", 4UZ, 1UZ);
             builder_.CreateRet(builder_.getInt1(false));
 
             builder_.SetInsertPoint(cont_bb);
@@ -2366,7 +2378,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
                 emit_lowered_panic(msg, inst);
                 builder_.CreateUnreachable();
             } else {
-                emit_context_handler_call(inst, "assert_handler", std::array{4UZ, 1UZ, 2UZ, 3UZ});
+                emit_context_handler_call(inst, "assert_handler", 4UZ, 1UZ);
                 builder_.CreateBr(cont_bb);
             }
 
@@ -2375,7 +2387,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
         }
         case syntax::token_type_t::BUILTIN_SKIP: {
             builder_.CreateStore(builder_.getInt1(true), get_or_create_test_skipped_flag());
-            emit_context_handler_call(inst, "skip_handler", std::array{0UZ, 1UZ, 2UZ, 3UZ});
+            emit_context_handler_call(inst, "skip_handler", 0UZ, 1UZ);
             return nullptr;
         }
         case syntax::token_type_t::BUILTIN_SRC: {

@@ -4,7 +4,6 @@
 #include <string_view>
 
 #include <ankerl/unordered_dense.h>
-#include <gsl/span>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalVariable.h>
@@ -128,11 +127,11 @@ class llvm_lowering {
     auto get_or_create_test_skipped_flag() -> llvm::GlobalVariable*;
     auto define_test_take_skipped() -> void;
 
-    // Calls a weak `builtin` context handler `handler(msg, file, line, column)`. `order`
-    // lists which instruction operand feeds each of those four parameters
-    auto emit_context_handler_call(const gir::instruction&   inst,
-                                   std::string_view          handler_name,
-                                   gsl::span<const usize, 4> order) -> void;
+    // Calls a weak `builtin` context handler `handler(msg, loc: SourceLocation)`
+    auto emit_context_handler_call(const gir::instruction& inst,
+                                   std::string_view        handler_name,
+                                   usize                   msg_idx,
+                                   usize                   loc_idx) -> void;
 
     auto emit_lowered_panic(std::string_view message, const gir::instruction& inst) -> void;
     auto emit_arith_guard(llvm::Value* bad, std::string_view message, const gir::instruction& inst)

@@ -25,15 +25,15 @@ test {
     import "types/option.gh";
 }
 
-pub const panic_handler := fn(msg: []u8, file: []u8, _: u32, _: u32): noreturn {
-    _ = io.eprint(file);
+pub const panic_handler := fn(msg: []u8, loc: builtin.SourceLocation): noreturn {
+    _ = io.eprint(loc.file);
     _ = io.eprint(": ");
     _ = io.eprintln(msg);
     @trap();
 };
 
-pub const assert_handler := fn(msg: []u8, file: []u8, _: u32, _: u32): void {
-    _ = io.eprint(file);
+pub const assert_handler := fn(msg: []u8, loc: builtin.SourceLocation): void {
+    _ = io.eprint(loc.file);
     _ = io.eprint(": ");
     _ = io.eprintln(msg);
     @trap();

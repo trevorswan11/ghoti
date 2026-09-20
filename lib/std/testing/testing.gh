@@ -27,9 +27,9 @@ pub const test_runner := fn(args: [][:0]u8, tests: []Test): i32 {
     return if (failures > 0) 1 else 0;
 };
 
-pub const expect_handler := fn(msg: []u8, file: []u8, _: u32, _: u32): void {
+pub const expect_handler := fn(msg: []u8, loc: builtin.SourceLocation): void {
     std.io.eprint("Test failed: ")!;
-    std.io.eprint(file)!;
+    std.io.eprint(loc.file)!;
     if (msg.len > 0) {
         std.io.eprint(": (EXPECTED)")!;
         std.io.eprintln(msg)!;
@@ -38,9 +38,9 @@ pub const expect_handler := fn(msg: []u8, file: []u8, _: u32, _: u32): void {
     }
 };
 
-pub const require_handler := fn(msg: []u8, file: []u8, _: u32, _: u32): void {
+pub const require_handler := fn(msg: []u8, loc: builtin.SourceLocation): void {
     std.io.eprint("Test failed: ")!;
-    std.io.eprint(file)!;
+    std.io.eprint(loc.file)!;
     if (msg.len > 0) {
         std.io.eprint(": (REQUIRED) ")!;
         std.io.eprintln(msg)!;
@@ -49,9 +49,9 @@ pub const require_handler := fn(msg: []u8, file: []u8, _: u32, _: u32): void {
     }
 };
 
-pub const skip_handler := fn(msg: []u8, file: []u8, _: u32, _: u32): void {
+pub const skip_handler := fn(msg: []u8, loc: builtin.SourceLocation): void {
     std.io.eprint("Test failed: ")!;
-    std.io.eprint(file)!;
+    std.io.eprint(loc.file)!;
     if (msg.len > 0) {
         std.io.eprint(": (SKIPP ED)")!;
         std.io.eprintln(msg)!;

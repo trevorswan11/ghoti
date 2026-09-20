@@ -380,3 +380,5 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `return`/`break`/`continue` nested inside a match arm's `if` (no `else`) no longer require a trailing semicolon
 - The formatter now supports `match` arms whose body is a jump statement
 - Fixed a bug where string literals could not be returned from functions
+- Builtin handlers now take in a `builtin.SourceLocation` instead of listing the parameters manually
+- `builtin.Test` now holds a `builtin.SourceLocation` instead of the members directly

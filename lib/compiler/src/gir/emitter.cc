@@ -5382,13 +5382,19 @@ auto emitter::emit_panic_call(std::string_view message, ast::node_id site) -> vo
     auto&      u32_type{ctx_.get_int(32, false)};
     auto&      noreturn_type{ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN)};
     auto&      cstr_type{ctx_.get_slice(sema::types::mut::CONSTANT, true, ctx_.get_int(8, false))};
+    auto&      loc_type{ctx_.get_builtin_type("SourceLocation")};
 
-    // `panic_handler(msg, file, line, col)` takes `[]u8` slices: materialize proper `{ ptr, len }`
+    // `panic_handler(msg, loc)` takes a `[]u8` slice and a `SourceLocation` aggregate
+    std::vector<value> loc_args;
+    loc_args.emplace_back(
+        const_value::make_string(ctx_, active_mod().path.string()).to_gir_value());
+    loc_args.emplace_back(value{static_cast<u64>(loc.line), u32_type});
+    loc_args.emplace_back(value{static_cast<u64>(loc.column), u32_type});
+    const auto loc_res{builder_.emit_builtin_call("@src", std::move(loc_args), loc_type)};
+
     std::vector<value> args;
     args.emplace_back(materialize_string_slice(message, cstr_type));
-    args.emplace_back(materialize_string_slice(active_mod().path.string(), cstr_type));
-    args.emplace_back(value{static_cast<u64>(loc.line), u32_type});
-    args.emplace_back(value{static_cast<u64>(loc.column), u32_type});
+    args.emplace_back(loc_res ? value{*loc_res, loc_type} : value{void_val{}, loc_type});
 
     builder_.emit_call("panic_handler", std::move(args), noreturn_type);
     builder_.emit_unreachable();
