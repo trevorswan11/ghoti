@@ -393,7 +393,7 @@ test "pad applies default and explicit alignment" {
     stream.pos = 0;
     @expect(pad(^mut stream, .{ .width = .of(6), .align = .of(.right) }, "hi", .left) == .ok);
     @expect(std.mem.eql(u8, "    hi", backing[..stream.pos]));
-};
+}
 
 /// Write N bytes of value `byte` to the writer
 pub const writeFillN := fn(
@@ -438,4 +438,4 @@ test "writeLiteral unescapes braces and coalesces runs" {
     var stream: std.io.FixedBufferStream = .{ .buf = backing };
     @expect(writeLiteral(&mut stream, "a{{b}}c") == .ok);
     @expect(std.mem.eql(u8, "a{b}c", backing[..stream.pos]));
-};
+}

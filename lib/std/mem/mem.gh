@@ -7,8 +7,7 @@ pub using Allocator = allocator.Allocator;
 pub using AllocError = allocator.AllocError;
 
 /// Stored as a power-of-two.
-pub const Alignment := enum : u8 {
-    // TODO(tcs): Use math.Log2Int for backing when #247 and #251 land
+pub const Alignment := enum : std.math.Log2Int(usize) {
     @"1" = 0,
     @"2" = 1,
     @"4" = 2,
