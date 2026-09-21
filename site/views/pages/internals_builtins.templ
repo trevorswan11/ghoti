@@ -64,8 +64,8 @@ templ InternalsBuiltinsPage() {
 		<li>a bit-packed <code>packed struct</code> / <code>packed union</code> &rarr; the backing-integer width</li>
 		<li>anything else &rarr; <code>{ "@sizeOf" }(T) * 8</code></li>
 	</ul>
-	<h3>{ "@typeOf" }</h3>
-	<pre><code class="language-ghoti">{ `@typeOf(expression: auto): type` }</code></pre>
+	<h3>{ "@TypeOf" }</h3>
+	<pre><code class="language-ghoti">{ `@TypeOf(expression: auto): type` }</code></pre>
 	<p>Returns the type of the provided expression.</p>
 	<h3>{ "@this" }</h3>
 	<pre><code class="language-ghoti">{ `@this(): type` }</code></pre>
@@ -81,7 +81,7 @@ templ InternalsBuiltinsPage() {
 	<h3>{ "@implements" }</h3>
 	<pre><code class="language-ghoti">{ `@implements(T_or_value: auto, I: type): bool` }</code></pre>
 	<p>
-		A <code>constexpr</code> is-a predicate. The first argument may be a type or a value (a value is treated as <code>{ "@typeOf(value)" }</code>); <code>I</code> is an interface or an intersection <code>(A + B)</code>. Folds to <code>true</code> when the type implements every interface named, <code>false</code> otherwise.
+		A <code>constexpr</code> is-a predicate. The first argument may be a type or a value (a value is treated as <code>{ "@TypeOf(value)" }</code>); <code>I</code> is an interface or an intersection <code>(A + B)</code>. Folds to <code>true</code> when the type implements every interface named, <code>false</code> otherwise.
 	</p>
 	<h2>Target Information</h2>
 	<h3>{ "@targetOs" }</h3>
@@ -130,7 +130,7 @@ templ InternalsBuiltinsPage() {
 	<pre><code class="language-ghoti">{ `@popCount(expression: auto): usize` }</code></pre>
 	<p>Computes the number of set bits in the expression's binary representation.</p>
 	<h3>{ "@abs" }</h3>
-	<pre><code class="language-ghoti">{ `@abs(expression: auto): @typeOf(expression)` }</code></pre>
+	<pre><code class="language-ghoti">{ `@abs(expression: auto): @TypeOf(expression)` }</code></pre>
 	<p>Computes the absolute value of the passed expression.</p>
 	<h3>{ "@min / @max" }</h3>
 	<pre>

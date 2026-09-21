@@ -67,7 +67,7 @@ TEST_CASE("@bitSizeOf differs from @sizeOf for sub-byte and odd widths") {
             // u9 occupies 2 ABI bytes but only 9 bits
             if (@sizeOf(u9) != 2 or @bitSizeOf(u9) != 9) { return 1; }
             var x: u17 = 3;
-            if (@bitSizeOf(@typeOf(x)) != 17) { return 2; }
+            if (@bitSizeOf(@TypeOf(x)) != 17) { return 2; }
             return 0;
         };
     )") == 0);

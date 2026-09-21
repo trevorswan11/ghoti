@@ -788,7 +788,7 @@ template <ast::IndexableID ID>
         return_type = &builtin.return_type;
         break;
     }
-    // @typeOf returns a type as per documentation, but it's not the literal `type` type
+    // @TypeOf returns a type as per documentation, but it's not the literal `type` type
     case token_type_t::BUILTIN_TYPE_OF: {
         ASSERT(builtin.return_type.get_kind() == type_kind::TYPE);
         auto&       instance_type{*get_resolved_call_arg_type(call.arguments[0])};
@@ -1346,7 +1346,7 @@ template <ast::IndexableID ID>
         return_type = &ctx_.get_builtin_resolved_type(type_kind::VOID_);
         break;
     }
-    // These return @typeOf(expression) which is trivial
+    // These return @TypeOf(expression) which is trivial
     case token_type_t::BUILTIN_MUL_ADD:
     case token_type_t::BUILTIN_ABS:     {
         return_type = get_resolved_call_arg_type(call.arguments[0]);
@@ -2855,7 +2855,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                         if (!last_type_) { return stdx::none; }
                         auto* arg_type{last_type_.take()};
                         if (arg_type->is_poison()) { return stdx::none; }
-                        // `@typeOf(x)` in a `type` argument position denotes the type it wraps.
+                        // `@TypeOf(x)` in a `type` argument position denotes the type it wraps.
                         if (param_type->get_kind() == type_kind::TYPE) {
                             auto& denoted{denoted_type(*arg_type)};
                             if (denoted.get_kind() != type_kind::TYPE) { return denoted; }
@@ -2903,7 +2903,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
             }
             if (any_arg_poison) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
 
-            // An argument that still contains `auto` (`@typeOf(a)` where `a: auto`) can only be
+            // An argument that still contains `auto` (`@TypeOf(a)` where `a: auto`) can only be
             // resolved once the enclosing generic is instantiated
             const auto arg_contains_auto{[](auto&& self, const type& t) -> bool {
                 const auto& d{denoted_type(t)};
@@ -10654,7 +10654,7 @@ auto type_resolver::instantiate_generic(type&                             callee
                                                  std::move(type_param_frame)};
     inst_resolver.resolve(fn_expr.explicit_return_type);
     if (inst_resolver.last_type_->is_poison()) { return stdx::none; }
-    // `denoted_type` unwraps a `@typeOf(param)` return annotation to the type it names, so it
+    // `denoted_type` unwraps a `@TypeOf(param)` return annotation to the type it names, so it
     // isn't mistaken for a `fn(...): type` type constructor.
     auto&      return_type{denoted_type(*inst_resolver.last_type_.take())};
     const auto is_auto_return{return_type.get_kind() == type_kind::AUTO};

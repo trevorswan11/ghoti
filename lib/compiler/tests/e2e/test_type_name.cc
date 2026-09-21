@@ -41,7 +41,7 @@ TEST_CASE("`@typeName` takes the type of a value expression") {
 
         pub const main := fn(): i32 {
             var w: Widget = .{ .n = 0 };
-            const s := @typeName(@typeOf(w));
+            const s := @typeName(@TypeOf(w));
             return @intCast(i32, s.len) * 10 + @as(i32, s[0]) - 100;
         };
     )") == (7 * 10 + 'W' - 100));

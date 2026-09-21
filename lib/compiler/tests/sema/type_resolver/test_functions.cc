@@ -22,7 +22,7 @@ namespace syms = sema::symbols;
 
 TEST_CASE("Function declaration and call type resolution") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const a := fn(b: i32, c: ^@typeOf(b), d: [:0]u8): bool {
+        const a := fn(b: i32, c: ^@TypeOf(b), d: [:0]u8): bool {
             return true;
         };
 
@@ -163,12 +163,12 @@ TEST_CASE("Function explicit type resolution") {
 
 TEST_CASE("Function with syntactically ambiguous arguments") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        using a = @typeOf(^i32);
-        using b = @typeOf(^mut i32);
-        using c = @typeOf(&i32);
-        using d = @typeOf(&mut i32);
-        using e = @typeOf(^^i32);
-        using f = @typeOf(^mut ^i32);
+        using a = @TypeOf(^i32);
+        using b = @TypeOf(^mut i32);
+        using c = @TypeOf(&i32);
+        using d = @TypeOf(&mut i32);
+        using e = @TypeOf(^^i32);
+        using f = @TypeOf(^mut ^i32);
     )")};
 
     const auto check_ambiguous = [&](std::string_view  name,

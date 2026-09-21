@@ -35,13 +35,13 @@ test "is_power_of_two" {
 pub constexpr int_cast := fn(T: type, x: auto): std.Option(T) {
     constexpr {
         @assert(@typeInfo(T) == .int);
-        @assert(@typeInfo(@typeOf(x)) == .int);
+        @assert(@typeInfo(@TypeOf(x)) == .int);
     }
-    constexpr is_constexpr := @typeOf(x) == constexpr_int;
+    constexpr is_constexpr := @TypeOf(x) == constexpr_int;
 
-    if ((is_constexpr or max_int(@typeOf(x)) > max_int(T)) and x > max_int(T)) {
+    if ((is_constexpr or max_int(@TypeOf(x)) > max_int(T)) and x > max_int(T)) {
         return .empty;
-    } else if ((is_constexpr or min_int(@typeOf(x)) < min_int(T)) and x < min_int(T)) {
+    } else if ((is_constexpr or min_int(@TypeOf(x)) < min_int(T)) and x < min_int(T)) {
         return .empty;
     }
     return .of(@intCast(T, x));
@@ -59,8 +59,8 @@ test "int_cast" {
 
     @expect(int_cast(u8, 255)! == 255u8);
     @expect(int_cast(u8, 255u32)! == 255u8);
-    @expect(@typeOf(int_cast(u8, 255)!) == u8);
-    @expect(@typeOf(int_cast(u8, 255u32)!) == u8);
+    @expect(@TypeOf(int_cast(u8, 255)!) == u8);
+    @expect(@TypeOf(int_cast(u8, 255u32)!) == u8);
 }
 
 /// Returns an unsigned int type that can hold the number of bits in T - 1.

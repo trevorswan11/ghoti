@@ -46,9 +46,9 @@ TEST_CASE("`++` takes its sentinel from the right operand only") {
         const plain: [2]u8 = .{1, 2};
         pub const main := fn(): i32 {
             constexpr rhs_has_sentinel := plain ++ "cd";
-            if (@bitSizeOf(@typeOf(rhs_has_sentinel)) != @bitSizeOf([4:0]u8)) { return 1; }
+            if (@bitSizeOf(@TypeOf(rhs_has_sentinel)) != @bitSizeOf([4:0]u8)) { return 1; }
             constexpr rhs_has_none := "ab" ++ plain;
-            if (@bitSizeOf(@typeOf(rhs_has_none)) != @bitSizeOf([4]u8)) { return 2; }
+            if (@bitSizeOf(@TypeOf(rhs_has_none)) != @bitSizeOf([4]u8)) { return 2; }
             return 0;
         };
     )") == 0);

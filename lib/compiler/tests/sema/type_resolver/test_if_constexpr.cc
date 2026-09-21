@@ -56,7 +56,7 @@ TEST_CASE("if constexpr: a non-foldable condition still resolves both arms") {
 TEST_CASE("if constexpr: a generic body prunes per instantiation") {
     CHECK(helpers::resolve_diags(R"(
         const pick := fn(x: auto): i32 {
-            if constexpr (@typeOf(x) == u8) {
+            if constexpr (@TypeOf(x) == u8) {
                 return undeclared_only_in_dead_generic_arm(x);
             } else {
                 return 32;

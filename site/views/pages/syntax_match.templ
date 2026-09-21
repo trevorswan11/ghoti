@@ -54,5 +54,5 @@ templ SyntaxMatchPage() {
 			</ul>
 		</li>
 	</ul>
-	<pre><code class="language-ghoti">{ "match (a) { 2 => { c; }, _ => d }; // Standard match on a non-union value\nmatch (a) { .b => |b| { c; } }; // Match on a union value that has a field `b`\nmatch (n) { 1, 2, 3 => |v| v * 2, 4..8 => 0, _ => -1 }; // Multi-value and range arms\nmatch constexpr (@typeOf(x)) { i32 => small(), _ => big() }; // Compile-time arm selection" }</code></pre>
+	<pre><code class="language-ghoti">{ "match (a) { 2 => { c; }, _ => d }; // Standard match on a non-union value\nmatch (a) { .b => |b| { c; } }; // Match on a union value that has a field `b`\nmatch (n) { 1, 2, 3 => |v| v * 2, 4..8 => 0, _ => -1 }; // Multi-value and range arms\nmatch constexpr (@TypeOf(x)) { i32 => small(), _ => big() }; // Compile-time arm selection" }</code></pre>
 }

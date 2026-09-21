@@ -128,7 +128,7 @@ a.b;   // Syntactic sugar
 	</ul>
 	<h2>Type Introspection</h2>
 	<ul>
-		<li>You can get the type of a value by using the <code>{ "@typeOf" }</code> builtin</li>
+		<li>You can get the type of a value by using the <code>{ "@TypeOf" }</code> builtin</li>
 		<li>You can get the size of a type (in bytes) by using the <code>{ "@sizeOf" }</code> builtin</li>
 		<li>You can get the exact bit width of a type by using the <code>{ "@bitSizeOf" }</code> builtin &mdash; for <code>iN</code>/<code>uN</code> this is <code>N</code>, for a bit-packed <code>packed</code> aggregate it is the backing-integer width, and for everything else it is <code>{ "@sizeOf" }(T) * 8</code></li>
 		<li>You can get the align of a type by using the <code>{ "@alignOf" }</code> builtin</li>
@@ -212,7 +212,7 @@ a.b;   // Syntactic sugar
 				<li>Compile-time known; folds at 128-bit (int) / <code>f64</code> (float) precision</li>
 				<li>Coerces implicitly to any concrete numeric type it fits &mdash; an out-of-range <code>constexpr_int</code> is a compile error, not a silent wrap</li>
 				<li>Materializes as <code>i32</code> / <code>f64</code> at a <code>var</code> binding, a generic / <code>auto</code> parameter, an inferred return type, a struct field, or any un-anchored runtime use; an un-annotated <code>const</code> keeps the constexpr type</li>
-				<li>Spellable in type position &mdash; mainly to alias what <code>{ "@typeOf" }</code> of an unsuffixed literal yields</li>
+				<li>Spellable in type position &mdash; mainly to alias what <code>{ "@TypeOf" }</code> of an unsuffixed literal yields</li>
 			</ul>
 		</li>
 		<li>

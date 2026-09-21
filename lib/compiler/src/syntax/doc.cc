@@ -55,14 +55,11 @@ auto doc_manager::contains_hard_break(doc_id id, bool nested) const noexcept -> 
     return (*this)[id].visit(
         [&](docs::text) { return false; },
         [&](const docs::concat& c) {
-            return std::ranges::any_of(c.children, [&](doc_id child) {
-                return contains_hard_break(child, nested);
-            });
+            return std::ranges::any_of(
+                c.children, [&](doc_id child) { return contains_hard_break(child, nested); });
         },
         [&](docs::indent i) { return contains_hard_break(i.child, true); },
-        [&](docs::group g) {
-            return g.force_break || contains_hard_break(g.child, nested);
-        },
+        [&](docs::group g) { return g.force_break || contains_hard_break(g.child, nested); },
         [&](docs::line_or_space) { return false; },
         [&](docs::hard_line) { return nested; },
         [&](docs::soft_line) { return false; },

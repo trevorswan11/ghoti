@@ -80,7 +80,7 @@ TEST_CASE("a same-named sibling member doesn't shadow an outer type regardless o
             @"void": i32,
         };
         pub const main := fn(): i32 {
-            if (@bitSizeOf(@typeOf(Before{ .other = {} }.other)) != @bitSizeOf(void)) { return 1; }
+            if (@bitSizeOf(@TypeOf(Before{ .other = {} }.other)) != @bitSizeOf(void)) { return 1; }
             return 0;
         };
     )") == 0);
@@ -90,7 +90,7 @@ TEST_CASE("a same-named sibling member doesn't shadow an outer type regardless o
             other: void,
         };
         pub const main := fn(): i32 {
-            if (@bitSizeOf(@typeOf(After{ .other = {} }.other)) != @bitSizeOf(void)) { return 1; }
+            if (@bitSizeOf(@TypeOf(After{ .other = {} }.other)) != @bitSizeOf(void)) { return 1; }
             return 0;
         };
     )") == 0);
@@ -127,7 +127,7 @@ TEST_CASE("`@typeInfo`'s `IntInfo`/`FloatInfo` mark `comptime_int`/`comptime_flo
           "`is_constexpr`") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            return match constexpr (@typeInfo(@typeOf(5))) {
+            return match constexpr (@typeInfo(@TypeOf(5))) {
                 .int => |i| @intFromBool(i.is_constexpr) * 100 + @intCast(i32, i.bits),
                 _ => -1,
             };
@@ -143,7 +143,7 @@ TEST_CASE("`@typeInfo`'s `IntInfo`/`FloatInfo` mark `comptime_int`/`comptime_flo
     )") == 0);
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            return match constexpr (@typeInfo(@typeOf(5.0))) {
+            return match constexpr (@typeInfo(@TypeOf(5.0))) {
                 .float => |f| @intFromBool(f.is_constexpr) * 100 + @intCast(i32, f.bits),
                 _ => -1,
             };

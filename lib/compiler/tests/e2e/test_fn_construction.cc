@@ -27,7 +27,7 @@ TEST_CASE("`@typeInfo` reports a function's params/return/variadic/has_self/call
         const add := fn(a: i32, b: i32): i32 { return a + b; };
         pub const main := fn(): i32 {
             var result := 0;
-            match constexpr (@typeInfo(@typeOf(add))) {
+            match constexpr (@typeInfo(@TypeOf(add))) {
                 .function => |info| {
                     result = if (info.variadic) 100 else 1;
                     result = result + if (info.has_self) 100 else 0;

@@ -42,7 +42,7 @@ templ SyntaxFunctionsPage() {
 			A parameter's type may depend on an earlier parameter, and the return type may depend on any parameter
 			<ul>
 				<li>Earlier parameters are in scope for later parameter types and for the return type</li>
-				<li>Builtins like <code>{ "@typeOf" }</code> and type-constructor calls may be used in those positions</li>
+				<li>Builtins like <code>{ "@TypeOf" }</code> and type-constructor calls may be used in those positions</li>
 			</ul>
 		</li>
 	</ul>
@@ -50,7 +50,7 @@ templ SyntaxFunctionsPage() {
 		<code class="language-ghoti">
 			{ `const Box := fn(T: type): type { return struct { val: T }; };
 
-const rewrap := fn(a: auto, b: Box(@typeOf(a))): @typeOf(b) {
+const rewrap := fn(a: auto, b: Box(@TypeOf(a))): @TypeOf(b) {
     return b;
 };` }
 		</code>

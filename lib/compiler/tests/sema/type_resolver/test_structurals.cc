@@ -243,7 +243,7 @@ TEST_CASE("Incomplete type used during resolution") {
 TEST_CASE("Forward reference to a later struct field is reported as an ordering error, not a "
           "cyclic dependency") {
     helpers::test_resolver_fail(
-        "const S := struct { a: @typeOf(b), b: i32, };",
+        "const S := struct { a: @TypeOf(b), b: i32, };",
         sema::diagnostic{"'b' is referenced before its declaration; forward references to "
                          "struct/union fields, function parameters, and enum members are not "
                          "supported; declare 'b' earlier",

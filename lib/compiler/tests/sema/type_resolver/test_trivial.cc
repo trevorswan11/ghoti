@@ -189,7 +189,7 @@ fn(): void {
 TEST_CASE("Call resolution edge cases") {
     helpers::resolve_and_check(
         "@sizeOf(blk: { if (1 + 1 == 2) { break :blk i32; } else { break :blk f64; } });");
-    helpers::resolve_and_check("@typeOf([]i32);");
+    helpers::resolve_and_check("@TypeOf([]i32);");
     helpers::test_resolver_fail("const a := b; const c := a();",
                                 sema::diagnostic{"Use of undeclared identifier 'b'",
                                                  sema::error::UNDECLARED_IDENTIFIER,

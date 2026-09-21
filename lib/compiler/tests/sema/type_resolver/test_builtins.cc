@@ -122,7 +122,7 @@ TEST_CASE("Builtin this introspection") {
 
 TEST_CASE("Deferred return type from typeOf") {
     auto [ctx,
-          idx]{helpers::resolve_and_check("const a := fn(): type {}; using B = @typeOf(a());")};
+          idx]{helpers::resolve_and_check("const a := fn(): type {}; using B = @TypeOf(a());")};
 
     const auto [sym, sym_data, node_data, type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::using_stmt>("B", idx)};
@@ -135,10 +135,10 @@ TEST_CASE("Deferred return type from typeOf") {
 
 TEST_CASE("typeOf denotes the wrapped type in a value's or parameter's explicit type") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Alias := @typeOf(0);
+        const Alias := @TypeOf(0);
         const via_alias: Alias = 7;
-        const direct: @typeOf(false) = true;
-        const echo := fn(x: auto, y: @typeOf(x)): auto { return y; };
+        const direct: @TypeOf(false) = true;
+        const echo := fn(x: auto, y: @TypeOf(x)): auto { return y; };
         const call_echo := echo(1, 2);
     )")};
 
@@ -160,7 +160,7 @@ TEST_CASE("typeOf denotes the wrapped type in a value's or parameter's explicit 
 
 TEST_CASE("A return type may depend on a parameter whose type depends on an earlier parameter") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const chain := fn(a: auto, b: @typeOf(a)): @typeOf(b) { return b; };
+        const chain := fn(a: auto, b: @TypeOf(a)): @TypeOf(b) { return b; };
         const call_chain := chain(1, 2);
     )")};
 
@@ -173,7 +173,7 @@ TEST_CASE("A return type may depend on a parameter whose type depends on an earl
 TEST_CASE("A later parameter's type may be a type-constructor call over an earlier parameter") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const Box := fn(T: type): type { return struct { val: T }; };
-        const unbox := fn(a: auto, b: Box(@typeOf(a))): i32 { return b.val; };
+        const unbox := fn(a: auto, b: Box(@TypeOf(a))): i32 { return b.val; };
         const boxed: Box(i32) = .{ .val = 2 };
         const call_unbox := unbox(1, boxed);
     )")};

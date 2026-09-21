@@ -189,7 +189,7 @@ pub const main := fn(): i32 {
 	<h2>{ "@implements" }</h2>
 	<ul>
 		<li><code>{ "@implements(T | value, I)" }</code> is a <code>constexpr bool</code> is-a predicate, usable anywhere a <code>constexpr</code> bool is</li>
-		<li>The first argument may be a type or a value (a value is treated as <code>{ "@typeOf(value)" }</code>)</li>
+		<li>The first argument may be a type or a value (a value is treated as <code>{ "@TypeOf(value)" }</code>)</li>
 		<li><code>I</code> may be an intersection: <code>{ "@implements(File, (Reader + Writer))" }</code></li>
 		<li>It returns <code>false</code> on a non-conforming argument</li>
 	</ul>

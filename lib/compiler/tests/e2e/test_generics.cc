@@ -111,7 +111,7 @@ TEST_CASE("a `using` alias inside a generic body re-resolves per instantiation")
                 err: E,
 
                 pub constexpr mapErr := fn(&self, func: auto): auto {
-                    constexpr fn_info := @typeInfo(@typeOf(func));
+                    constexpr fn_info := @typeInfo(@TypeOf(func));
                     const NewErr := fn_info.function.return_type;
                     using NewRes = Result(T, NewErr);
                     return match (self) {

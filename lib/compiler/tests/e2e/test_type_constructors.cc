@@ -58,7 +58,7 @@ TEST_CASE("E2E: a `fn(T: type): type` with an early-return branch over `constexp
 
 TEST_CASE("E2E: a later parameter and the return type depend on an earlier parameter's type") {
     CHECK(helpers::compile_and_run(R"(
-        const pick := fn(a: auto, b: @typeOf(a)): @typeOf(b) {
+        const pick := fn(a: auto, b: @TypeOf(a)): @TypeOf(b) {
             return a + b;
         };
 
@@ -73,7 +73,7 @@ TEST_CASE("E2E: a later parameter's type is a type-constructor call over an earl
     CHECK(helpers::compile_and_run(R"(
         const Box := fn(T: type): type { return struct { val: T }; };
 
-        const unbox := fn(a: auto, b: Box(@typeOf(a))): i32 {
+        const unbox := fn(a: auto, b: Box(@TypeOf(a))): i32 {
             return b.val;
         };
 
@@ -89,7 +89,7 @@ TEST_CASE("E2E: the return type may also be a type-constructor call over an earl
     CHECK(helpers::compile_and_run(R"(
         const Box := fn(T: type): type { return struct { val: T }; };
 
-        const rewrap := fn(a: auto, b: Box(@typeOf(a))): @typeOf(b) {
+        const rewrap := fn(a: auto, b: Box(@TypeOf(a))): @TypeOf(b) {
             return b;
         };
 

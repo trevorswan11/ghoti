@@ -76,17 +76,17 @@ TEST_CASE("an un-anchored constexpr_int materializes as i32 at runtime") {
             if (run != 15) { return 1; }
             const e := echo(9);             // auto param materializes -> i32
             if (@as(i32, e) != 9) { return 2; }
-            if (@bitSizeOf(@typeOf(run)) != 32) { return 3; }
+            if (@bitSizeOf(@TypeOf(run)) != 32) { return 3; }
             return 0;
         };
     )") == 0);
 }
 
-TEST_CASE("@typeOf of an unsuffixed literal is constexpr_int / constexpr_float") {
+TEST_CASE("@TypeOf of an unsuffixed literal is constexpr_int / constexpr_float") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            const I := @typeOf(0);
-            const F := @typeOf(0.0);
+            const I := @TypeOf(0);
+            const F := @TypeOf(0.0);
             const a: I = 123;               // constexpr_int alias still coerces
             const b: F = 1.5;
             if (@intCast(i32, @as(i64, a)) != 123) { return 1; }

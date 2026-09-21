@@ -135,9 +135,9 @@ TEST_CASE("Illegal arrays dependent on incomplete types") {
 
     helpers::test_resolver_fail("const A := struct { a: [3]A, };", expected_diag(26));
     helpers::test_resolver_fail("const A := struct { a: [3]@This(), };", expected_diag(26));
-    helpers::test_resolver_fail("const A := struct { a: @typeOf([3]A), };", expected_diag(34));
+    helpers::test_resolver_fail("const A := struct { a: @TypeOf([3]A), };", expected_diag(34));
     helpers::test_resolver_fail("const A := union { a: [1]A, };", expected_diag(25));
-    helpers::test_resolver_fail("const A := union { a: @typeOf([1]A), };", expected_diag(33));
+    helpers::test_resolver_fail("const A := union { a: @TypeOf([1]A), };", expected_diag(33));
     helpers::test_resolver_fail("const A := struct { a: auto = [_]A{}, };", expected_diag(33));
 }
 

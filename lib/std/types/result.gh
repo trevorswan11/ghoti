@@ -6,7 +6,7 @@ pub constexpr Result := fn(T: type, E: type): type {
         err: E,
 
         pub constexpr map := fn(&self, func: auto): auto {
-            constexpr fn_info := @typeInfo(@typeOf(func));
+            constexpr fn_info := @typeInfo(@TypeOf(func));
             @assert(fn_info == .function, "map requires a function argument");
             const NewOk := fn_info.function.return_type;
             using NewRes = Result(NewOk, E);
@@ -18,7 +18,7 @@ pub constexpr Result := fn(T: type, E: type): type {
         };
 
         pub constexpr map_err := fn(&self, func: auto): auto {
-            constexpr fn_info := @typeInfo(@typeOf(func));
+            constexpr fn_info := @typeInfo(@TypeOf(func));
             @assert(fn_info == .function, "map_err requires a function argument");
             const NewErr := fn_info.function.return_type;
             using NewRes = Result(T, NewErr);

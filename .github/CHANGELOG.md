@@ -382,3 +382,4 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed a bug where string literals could not be returned from functions
 - Builtin handlers now take in a `builtin.SourceLocation` instead of listing the parameters manually
 - `builtin.Test` now holds a `builtin.SourceLocation` instead of the members directly
+- Rename typeOf builtin to TypeOf

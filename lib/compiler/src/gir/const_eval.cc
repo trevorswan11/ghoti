@@ -1578,7 +1578,7 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
     auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
     auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
 
-    // `@typeOf`'s own folding represents "this value denotes a type" the same way
+    // `@TypeOf`'s own folding represents "this value denotes a type" the same way
     const auto type_value{
         [](sema::type& t) -> const_value { return const_value{stdx::option<sema::type&>{t}}; }};
 
@@ -2303,7 +2303,7 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
         if (op_type == syntax::token_type_t::NEQ) { return const_value{!equal, bool_type}; }
     }
 
-    // Type-valued operands: `@typeOf(x) == u8`, `T != i32`, ... in an `if constexpr`.
+    // Type-valued operands: `@TypeOf(x) == u8`, `T != i32`, ... in an `if constexpr`.
     if (lhs.is<stdx::option<sema::type&>>() && rhs.is<stdx::option<sema::type&>>()) {
         const auto l{lhs.as<stdx::option<sema::type&>>()};
         const auto r{rhs.as<stdx::option<sema::type&>>()};

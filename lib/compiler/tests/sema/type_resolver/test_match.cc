@@ -418,7 +418,7 @@ TEST_CASE("Illegal resolved arbitrary matcher type") {
     };
 
     // A `type`-valued scrutinee is now a compile-time type match, which needs a `_` arm.
-    helpers::test_resolver_fail("match (@typeOf(i32)) { 3 => 5 };",
+    helpers::test_resolver_fail("match (@TypeOf(i32)) { 3 => 5 };",
                                 sema::diagnostic{"A 'match' on a type requires a catch-all '_' arm",
                                                  sema::error::ILLEGAL_MATCH_PATTERN,
                                                  std::pair{0UZ, 0UZ}});
