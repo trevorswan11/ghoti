@@ -127,25 +127,18 @@ pub weak const require_handler := fn(_: []u8, _: SourceLocation): void {};
 
 pub weak const skip_handler := fn(_: []u8, _: SourceLocation): void {};
 
-/// The kind of a type, as returned by `@typeInfo(T).kind` / `@tagName`.
-pub const TypeKind := enum {
-    int, float, @"bool", @"void", @"noreturn", @"opaque", @"type",
-    pointer, reference, slice, array,
-    @"struct", @"union", @"enum", function, internal,
-};
-
 /// Exact set of calling conventions ghoti supports, matching `ast::calling_convention` 1:1.
 pub const CallConv := enum { c, sysv, win64, stdcall, fastcall, aapcs };
 
+pub const Signedness := enum { signed, unsigned };
+
 pub const IntInfo := struct {
     pub bits: u16,
-    pub signed: bool,
-    pub is_constexpr: bool = false,
+    pub signedness: Signedness,
 };
 
 pub const FloatInfo := struct {
     pub bits: u16,
-    pub is_constexpr: bool = false,
 };
 
 pub const PointerInfo := struct {
@@ -214,10 +207,12 @@ pub const FnInfo := struct {
     pub @"callconv": CallConv,
 };
 
-/// The keystone reflection value: `@typeInfo(T)` returns one of these, tagged by `TypeKind`.
+/// The keystone reflection value: `@typeInfo(T)` returns one of these.
 pub const TypeInfo := union {
     int: IntInfo,
     float: FloatInfo,
+    @"constexpr_int": void,
+    @"constexpr_float": void,
     @"bool": void,
     @"void": void,
     @"noreturn": void,

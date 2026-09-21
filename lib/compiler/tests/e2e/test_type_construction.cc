@@ -8,14 +8,14 @@ namespace ghoti::tests {
 TEST_CASE("`@Int` constructs an integer type from an `IntInfo` descriptor") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            const T := @Int(.{ .bits = 32, .signed = true, .is_constexpr = false });
+            const T := @Int(.{ .bits = 32, .signedness = .signed });
             var a: T = 42;
             return a;
         };
     )") == 42);
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            const T := @Int(.{ .bits = 8, .signed = false, .is_constexpr = false });
+            const T := @Int(.{ .bits = 8, .signedness = .unsigned });
             var a: T = 200;
             return @intCast(i32, a);
         };
@@ -25,7 +25,7 @@ TEST_CASE("`@Int` constructs an integer type from an `IntInfo` descriptor") {
 TEST_CASE("`@Float` constructs a floating-point type from a `FloatInfo` descriptor") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            const T := @Float(.{ .bits = 64, .is_constexpr = false });
+            const T := @Float(.{ .bits = 64 });
             var b: T = 3.5;
             return if (b == 3.5) 1 else 0;
         };
@@ -35,7 +35,7 @@ TEST_CASE("`@Float` constructs a floating-point type from a `FloatInfo` descript
 TEST_CASE("`@Float` rejects a bit width with no matching floating-point type") {
     helpers::expect_compile_error(R"(
         pub const main := fn(): i32 {
-            const T := @Float(.{ .bits = 24, .is_constexpr = false });
+            const T := @Float(.{ .bits = 24 });
             var b: T = 0.0;
             return 0;
         };

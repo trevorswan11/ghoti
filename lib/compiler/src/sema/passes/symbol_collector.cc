@@ -324,7 +324,8 @@ auto symbol_collector::visit(ast::node_id id, const ast::label_expr& label) -> v
     const default_counter::guard g_expr{in_expr_scope_};
 
     // Labels and their associated nodes live in their own scope
-    const auto  new_idx{ctx_.registry.create()};
+    const auto new_idx{ctx_.registry.create()};
+    collecting_.set_symbol_table(id, new_idx);
     const scope s{table_stack_, new_idx, table_idx_};
     if (label.name) {
         const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(*label.name)};

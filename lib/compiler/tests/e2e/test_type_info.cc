@@ -7,13 +7,13 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("`builtin.TypeKind` values construct and match") {
+TEST_CASE("`builtin.Signedness` values construct and match") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            const k: builtin.TypeKind = .int;
-            return match (k) {
-                .int => 1,
-                _ => 0,
+            const s: builtin.Signedness = .signed;
+            return match (s) {
+                .signed => 1,
+                .unsigned => 0,
             };
         };
     )") == 1);
@@ -34,7 +34,7 @@ TEST_CASE("`builtin.CallConv` matches `ast::calling_convention`'s spellings") {
 TEST_CASE("`builtin.IntInfo` carries a bit width and signedness") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            const info: builtin.IntInfo = .{ .bits = 32, .signed = true, .is_constexpr = false };
+            const info: builtin.IntInfo = .{ .bits = 32, .signedness = .signed };
             return @intCast(i32, info.bits);
         };
     )") == 32);
@@ -43,13 +43,13 @@ TEST_CASE("`builtin.IntInfo` carries a bit width and signedness") {
 TEST_CASE("`builtin.FloatInfo` carries a bit width") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            const info: builtin.FloatInfo = .{ .bits = 64, .is_constexpr = false };
+            const info: builtin.FloatInfo = .{ .bits = 64 };
             return @intCast(i32, info.bits);
         };
     )") == 64);
 }
 
-TEST_CASE("the full `builtin.TypeInfo` union (all 16 arms) resolves cleanly") {
+TEST_CASE("the full `builtin.TypeInfo` union (all 18 arms) resolves cleanly") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             const T: type = builtin.TypeInfo;
@@ -100,7 +100,7 @@ TEST_CASE("`@typeInfo` on integer and float types") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             return match constexpr (@typeInfo(i32)) {
-                .int => |i| @intFromBool(i.signed) + @intCast(i32, i.bits),
+                .int => |i| @intFromBool(i.signedness == .signed) + @intCast(i32, i.bits),
                 _ => 0,
             };
         };
@@ -108,7 +108,7 @@ TEST_CASE("`@typeInfo` on integer and float types") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             return match constexpr (@typeInfo(u8)) {
-                .int => |i| (1 - @intFromBool(i.signed)) * @intCast(i32, i.bits),
+                .int => |i| @intFromBool(i.signedness == .unsigned) * @intCast(i32, i.bits),
                 _ => 0,
             };
         };
@@ -123,47 +123,46 @@ TEST_CASE("`@typeInfo` on integer and float types") {
     )") == 64);
 }
 
-TEST_CASE("`@typeInfo`'s `IntInfo`/`FloatInfo` mark `comptime_int`/`comptime_float` via "
-          "`is_constexpr`") {
+TEST_CASE("`@typeInfo` on `constexpr_int` and `constexpr_float`") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            return match constexpr (@typeInfo(@TypeOf(5))) {
-                .int => |i| @intFromBool(i.is_constexpr) * 100 + @intCast(i32, i.bits),
-                _ => -1,
+            return match constexpr (@typeInfo(constexpr_int)) {
+                .@"constexpr_int" => 1,
+                _ => 0,
             };
         };
-    )") == 132);
+    )") == 1);
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            return match constexpr (@typeInfo(i32)) {
-                .int => |i| @intFromBool(i.is_constexpr),
-                _ => -1,
+            return match constexpr (@typeInfo(@TypeOf(42))) {
+                .@"constexpr_int" => 1,
+                _ => 0,
             };
         };
-    )") == 0);
+    )") == 1);
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            return match constexpr (@typeInfo(@TypeOf(5.0))) {
-                .float => |f| @intFromBool(f.is_constexpr) * 100 + @intCast(i32, f.bits),
-                _ => -1,
+            return match constexpr (@typeInfo(constexpr_float)) {
+                .@"constexpr_float" => 1,
+                _ => 0,
             };
         };
-    )") == 164);
+    )") == 1);
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            return match constexpr (@typeInfo(f32)) {
-                .float => |f| @intFromBool(f.is_constexpr),
-                _ => -1,
+            return match constexpr (@typeInfo(@TypeOf(3.14))) {
+                .@"constexpr_float" => 1,
+                _ => 0,
             };
         };
-    )") == 0);
+    )") == 1);
 }
 
 TEST_CASE("`@typeInfo` on `isize`/`usize` tags as `.int`, not `.internal`") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             return match constexpr (@typeInfo(usize)) {
-                .int => |i| (1 - @intFromBool(i.signed)) * @intCast(i32, i.bits),
+                .int => |i| @intFromBool(i.signedness == .unsigned) * @intCast(i32, i.bits),
                 _ => -1,
             };
         };
@@ -171,7 +170,7 @@ TEST_CASE("`@typeInfo` on `isize`/`usize` tags as `.int`, not `.internal`") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             return match constexpr (@typeInfo(isize)) {
-                .int => |i| @intFromBool(i.signed) * 10 + @intCast(i32, i.bits),
+                .int => |i| @intFromBool(i.signedness == .signed) * 10 + @intCast(i32, i.bits),
                 _ => -1,
             };
         };

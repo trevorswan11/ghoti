@@ -199,6 +199,14 @@ template <typename T>
     }
 }
 
+// Same as `integer_target_width`, but an untyped comptime int operand resolves as `i32`
+[[nodiscard]] auto integer_or_constexpr_width(const sema::type& t, u32 ptr_bits)
+    -> stdx::option<u16> {
+    if (t.get_kind() == sema::type_kind::CONSTEXPR_INT) { return u16{32}; }
+    if (const auto w{integer_target_width(t, ptr_bits)}) { return w->first; }
+    return stdx::none;
+}
+
 } // namespace
 
 auto const_eval::try_eval(ast::node_id id) -> stdx::option<const_value> {
@@ -799,7 +807,16 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
         [&](const ast::binary_expr& data) { return eval_binary(id, data); },
         [&](const ast::unary_expr& data) { return eval_unary(id, data); },
         [&](const ast::identifier_expr& data) { return eval_ident(id, data); },
-        [&](const ast::call_expr& data) { return eval_call(id, data); },
+        [&](const ast::call_expr& data) -> stdx::option<const_value> {
+            if (const auto res{eval_call(id, data)}) { return res; }
+            if (const auto sema_type{module_->get_sema_type_opt(id)};
+                sema_type && sema_type->get_kind() == sema::type_kind::TYPE) {
+                if (const auto meta{sema_type->get_data().as_opt<sema::types::meta_type>()}) {
+                    return const_value{meta->instance};
+                }
+            }
+            return stdx::none;
+        },
         [&](const ast::if_expr& data) { return eval_if(id, data); },
         [&](const ast::cfg_value_expr&) -> stdx::option<const_value> {
             // The cfg pass already settled this; read its verdict.
@@ -1601,8 +1618,11 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
         const_struct s;
         s.fields.emplace("bits",
                          const_value{u64{sema::int_width(denoted)}, ctx_.get_int(16, false)});
-        s.fields.emplace("signed", const_value{sema::is_signed_integer(denoted), bool_type});
-        s.fields.emplace("is_constexpr", const_value{false, bool_type});
+        const bool is_signed{sema::is_signed_integer(denoted)};
+        s.fields.emplace(
+            "signedness",
+            const_value{const_enum{is_signed ? "signed" : "unsigned", is_signed ? 0 : 1},
+                        ctx_.get_builtin_type("Signedness")});
         return wrap("int", std::move(s), ctx_.get_builtin_type("IntInfo"));
     }
     case sema::type_kind::ISIZE:
@@ -1611,42 +1631,33 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
             codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? 64 : 32)};
         const_struct s;
         s.fields.emplace("bits", const_value{u64{ptr_bits}, ctx_.get_int(16, false)});
-        s.fields.emplace("signed", const_value{sema::is_signed_integer(denoted), bool_type});
-        s.fields.emplace("is_constexpr", const_value{false, bool_type});
+        const bool is_signed{sema::is_signed_integer(denoted)};
+        s.fields.emplace(
+            "signedness",
+            const_value{const_enum{is_signed ? "signed" : "unsigned", is_signed ? 0 : 1},
+                        ctx_.get_builtin_type("Signedness")});
         return wrap("int", std::move(s), ctx_.get_builtin_type("IntInfo"));
     }
-    case sema::type_kind::CONSTEXPR_INT: {
-        const_struct s;
-        s.fields.emplace("bits", const_value{u64{32}, ctx_.get_int(16, false)});
-        s.fields.emplace("signed", const_value{true, bool_type});
-        s.fields.emplace("is_constexpr", const_value{true, bool_type});
-        return wrap("int", std::move(s), ctx_.get_builtin_type("IntInfo"));
-    }
+    case sema::type_kind::CONSTEXPR_INT: return tag_only("constexpr_int");
     case sema::type_kind::F16:
     case sema::type_kind::F32:
     case sema::type_kind::F64:
     case sema::type_kind::F80:
-    case sema::type_kind::F128: {
+    case sema::type_kind::F128:          {
         const_struct s;
         s.fields.emplace(
             "bits",
             const_value{u64{sema::float_bits(denoted.get_kind())}, ctx_.get_int(16, false)});
-        s.fields.emplace("is_constexpr", const_value{false, bool_type});
         return wrap("float", std::move(s), ctx_.get_builtin_type("FloatInfo"));
     }
-    case sema::type_kind::CONSTEXPR_FLOAT: {
-        const_struct s;
-        s.fields.emplace("bits", const_value{u64{64}, ctx_.get_int(16, false)});
-        s.fields.emplace("is_constexpr", const_value{true, bool_type});
-        return wrap("float", std::move(s), ctx_.get_builtin_type("FloatInfo"));
-    }
-    case sema::type_kind::BOOL:      return tag_only("bool");
-    case sema::type_kind::VOID_:     return tag_only("void");
-    case sema::type_kind::NORETURN:  return tag_only("noreturn");
-    case sema::type_kind::OPAQUE:    return tag_only("opaque");
-    case sema::type_kind::TYPE:      return tag_only("type");
+    case sema::type_kind::CONSTEXPR_FLOAT: return tag_only("constexpr_float");
+    case sema::type_kind::BOOL:            return tag_only("bool");
+    case sema::type_kind::VOID_:           return tag_only("void");
+    case sema::type_kind::NORETURN:        return tag_only("noreturn");
+    case sema::type_kind::OPAQUE:          return tag_only("opaque");
+    case sema::type_kind::TYPE:            return tag_only("type");
     case sema::type_kind::POINTER:
-    case sema::type_kind::REFERENCE: {
+    case sema::type_kind::REFERENCE:       {
         const bool   is_ptr{denoted.get_kind() == sema::type_kind::POINTER};
         auto&        underlying{is_ptr ? denoted.get_data().as<sema::types::pointer>().underlying
                                        : denoted.get_data().as<sema::types::reference>().underlying};
@@ -3011,7 +3022,15 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!arg) { return stdx::none; }
         if (!arg->is<u64>() && !arg->is<i64>()) { return stdx::none; }
         const auto v{arg->is<u64>() ? arg->as<u64>() : static_cast<u64>(arg->as<i64>())};
-        return const_value{static_cast<u64>(std::countl_zero(v)), usize_type};
+        const auto ptr_bits{codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
+        const auto arg_ty{arg->get_type()};
+        const auto bits_opt{arg_ty ? integer_or_constexpr_width(*arg_ty, ptr_bits) : stdx::none};
+        if (!bits_opt) { return stdx::none; }
+        const auto bits{*bits_opt};
+        auto&      res_type{module_->get_sema_type_opt(id).value_or(usize_type)};
+        // Leading zeros within the operand's own bit width, not the 64-bit storage word
+        const auto clz{static_cast<u64>(std::countl_zero(v)) - (64 - static_cast<u64>(bits))};
+        return const_value{clz, res_type};
     }
     case syntax::token_type_t::BUILTIN_CTZ: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
@@ -3021,7 +3040,15 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!arg) { return stdx::none; }
         if (!arg->is<u64>() && !arg->is<i64>()) { return stdx::none; }
         const auto v{arg->is<u64>() ? arg->as<u64>() : static_cast<u64>(arg->as<i64>())};
-        return const_value{static_cast<u64>(std::countr_zero(v)), usize_type};
+        const auto ptr_bits{codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
+        const auto arg_ty{arg->get_type()};
+        const auto bits_opt{arg_ty ? integer_or_constexpr_width(*arg_ty, ptr_bits) : stdx::none};
+        if (!bits_opt) { return stdx::none; }
+        const auto bits{*bits_opt};
+        auto&      res_type{module_->get_sema_type_opt(id).value_or(usize_type)};
+        // A zero operand has no set bits within its own width
+        const auto ctz{std::min(static_cast<u64>(std::countr_zero(v)), static_cast<u64>(bits))};
+        return const_value{ctz, res_type};
     }
     case syntax::token_type_t::BUILTIN_POPCOUNT: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
@@ -3031,7 +3058,8 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!arg) { return stdx::none; }
         if (!arg->is<u64>() && !arg->is<i64>()) { return stdx::none; }
         const auto v{arg->is<u64>() ? arg->as<u64>() : static_cast<u64>(arg->as<i64>())};
-        return const_value{static_cast<u64>(std::popcount(v)), usize_type};
+        auto&      res_type{module_->get_sema_type_opt(id).value_or(usize_type)};
+        return const_value{static_cast<u64>(std::popcount(v)), res_type};
     }
     case syntax::token_type_t::BUILTIN_MIN:
     case syntax::token_type_t::BUILTIN_MAX:

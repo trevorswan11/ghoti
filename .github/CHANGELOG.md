@@ -383,3 +383,6 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Builtin handlers now take in a `builtin.SourceLocation` instead of listing the parameters manually
 - `builtin.Test` now holds a `builtin.SourceLocation` instead of the members directly
 - Rename typeOf builtin to TypeOf
+- Make int info signed flag represented by an enum with enumerations `signed` and `unsigned`
+- Map `constexpr_int` and `constexpr_float` to their own unique variants in the type info tagged union
+- Remove `TypeKind` artifact from builtin types

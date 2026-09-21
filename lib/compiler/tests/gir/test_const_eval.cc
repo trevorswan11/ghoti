@@ -135,7 +135,7 @@ TEST_CASE("Compile-time builtins constant eval") {
     check_u64("al_u32", 4);
     check_u64("al_u64", 8);
     check_u64("v_abs", 42);
-    check_u64("v_clz", 63);
+    check_u64("v_clz", 31);
     check_u64("v_pop", 3);
 }
 

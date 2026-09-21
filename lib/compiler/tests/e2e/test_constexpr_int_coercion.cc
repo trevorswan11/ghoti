@@ -133,7 +133,7 @@ TEST_CASE("constexpr-fits implicit integer coercion runtime execution") {
         CHECK(helpers::compile_and_run(R"(
             const minInt := fn(T: type): constexpr_int {
                 constexpr info := @typeInfo(T).int;
-                return if constexpr (info.signed) -(1 << (info.bits - 1)) else 0;
+                return if constexpr (info.signedness == .signed) -(1 << (info.bits - 1)) else 0;
             };
 
             pub const main := fn(): i32 {
@@ -150,7 +150,7 @@ TEST_CASE("constexpr-fits implicit integer coercion runtime execution") {
         CHECK(helpers::compile_and_run(R"(
             const minInt := fn(T: type): constexpr_int {
                 constexpr info := @typeInfo(T).int;
-                return if constexpr (info.signed) -(1 << (info.bits - 1)) else 0;
+                return if constexpr (info.signedness == .signed) -(1 << (info.bits - 1)) else 0;
             };
 
             pub const main := fn(): i32 {

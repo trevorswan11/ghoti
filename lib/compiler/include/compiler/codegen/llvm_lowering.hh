@@ -102,6 +102,10 @@ class llvm_lowering {
     auto emit_builtin_call(const gir::instruction& inst) -> llvm::Value*;
     auto emit_inline_asm(const gir::instruction& inst) -> llvm::Value*;
 
+    // Widens or narrows a `@clz`/`@ctz`/`@popCount` intrinsic result to the builtin's sema return
+    // type
+    auto fixup_bit_count_result(llvm::Value* res, stdx::option<sema::type&> target) -> llvm::Value*;
+
     auto emit_ret(const gir::instruction& inst) -> void;
     auto emit_goto(const gir::instruction& inst) -> void;
     auto emit_cond_goto(const gir::instruction& inst) -> void;

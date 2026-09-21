@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cctype>
 #include <concepts>
 #include <filesystem>
@@ -780,12 +781,27 @@ template <ast::IndexableID ID>
     }
     case token_type_t::BUILTIN_ALIGN_OF:
     case token_type_t::BUILTIN_SIZE_OF:
-    case token_type_t::BUILTIN_BIT_SIZE_OF:
-    case token_type_t::BUILTIN_CLZ:
-    case token_type_t::BUILTIN_CTZ:
-    case token_type_t::BUILTIN_POPCOUNT:    {
+    case token_type_t::BUILTIN_BIT_SIZE_OF: {
         ASSERT(builtin.return_type.get_kind() == type_kind::USIZE);
         return_type = &builtin.return_type;
+        break;
+    }
+    // The result is an unsigned integer with the minimum number of bits needed to represent the
+    // operand type's own bit width
+    case token_type_t::BUILTIN_CLZ:
+    case token_type_t::BUILTIN_CTZ:
+    case token_type_t::BUILTIN_POPCOUNT: {
+        auto& operand_type{constexpr_numeric_view(*get_resolved_call_arg_type(call.arguments[0]))};
+        const auto width{integer_effective_bits(operand_type, target_ptr_bits())};
+        if (width == 0) {
+            return make_sema_err(fmt::format("'{}' operand must be an integer type; found '{}'",
+                                             *syntax::get_builtin_opt(builtin_id),
+                                             type_kind_display_name(operand_type)),
+                                 error::TYPE_MISMATCH,
+                                 get_call_arg_location(call.arguments[0]));
+        }
+        const auto result_bits{std::bit_width(static_cast<u64>(width))};
+        return_type = &ctx_.get_int(static_cast<u16>(result_bits), false);
         break;
     }
     // @TypeOf returns a type as per documentation, but it's not the literal `type` type
@@ -944,7 +960,7 @@ template <ast::IndexableID ID>
     }
     case token_type_t::BUILTIN_TYPE_INFO: {
         DISCARD(get_resolved_call_arg_type(call.arguments[0]));
-        return_type = &ctx_.get_builtin_type("TypeInfo");
+        return_type = &denoted_type(ctx_.get_builtin_type("TypeInfo"));
         break;
     }
     case token_type_t::BUILTIN_HAS_FIELD: {
@@ -1083,8 +1099,17 @@ template <ast::IndexableID ID>
         switch (builtin_id) {
         case token_type_t::BUILTIN_INT: {
             TRY_DESC_FIELD(bits_v, u64, "bits");
-            TRY_DESC_FIELD(signed_v, bool, "signed");
-            return_type = wrap_type(ctx_.get_int(static_cast<u16>(*bits_v), *signed_v));
+            auto signedness_v{read_desc_field<gir::const_enum>(*desc, "signedness")};
+            if (!signedness_v) { signedness_v = read_desc_field<gir::const_enum>(*desc, "signed"); }
+            if (!signedness_v) { return field_err("signedness"); }
+            if (signedness_v->name != "signed" && signedness_v->name != "unsigned") {
+                return make_sema_err(
+                    fmt::format("'@Int': unknown signedness '{}'", signedness_v->name),
+                    error::TYPE_MISMATCH,
+                    get_call_arg_location(call.arguments[0]));
+            }
+            const bool is_signed{signedness_v->name == "signed"};
+            return_type = wrap_type(ctx_.get_int(static_cast<u16>(*bits_v), is_signed));
             break;
         }
         case token_type_t::BUILTIN_FLOAT: {
@@ -5656,8 +5681,14 @@ auto type_resolver::visit(ast::node_id id, const ast::initializer_expr& init) ->
 
 auto type_resolver::visit(ast::node_id id, const ast::label_expr& label) -> void {
     PROFILE_FUNCTION();
-    auto&       label_type{resolving_.get_sema_type(id)};
-    const scope s{table_stack_, label_type.get_symbol_table_idx(), table_idx_};
+    auto&      label_type{resolving_.get_sema_type(id)};
+    const auto table_opt{resolving_.get_symbol_table_opt(id)};
+    const auto table_idx{
+        table_opt
+            ? *table_opt
+            : (label_type.has_symbol_table_idx() ? label_type.get_symbol_table_idx() : usize{0})};
+    resolving_.set_symbol_table(id, table_idx);
+    const scope s{table_stack_, table_idx, table_idx_};
 
     // Resolve the body but cache the label's type so the result can bind to the label
     TRY_RESOLVE(*label.body);
@@ -5891,7 +5922,7 @@ auto type_resolver::resolve_type_match(ast::node_id           id,
                                                        error::ILLEGAL_MATCH_PATTERN,
                                                        resolving_.ast.location_of(*arm.capture)));
         }
-        if (i == *match.catch_all_idx) { continue; }
+        if (match.catch_all_idx && i == *match.catch_all_idx) { continue; }
 
         for (const auto& pattern : arm.patterns) {
             resolve(pattern);
@@ -5922,9 +5953,17 @@ auto type_resolver::resolve_type_match(ast::node_id           id,
     }
 
     if (concrete && !selected) { selected = match.catch_all_idx; }
+    if (!selected) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             "'match' on type has no arm matching the scrutinee and no '_' arm",
+                             error::CONSTEXPR_EVALUATION_FAILED,
+                             resolving_.ast.location_of(id)));
+    }
 
     // Type-check only the live arm's body
-    const usize live_arm{selected ? *selected : *match.catch_all_idx};
+    const usize live_arm{*selected};
     const auto& live{match.arms[live_arm]};
     {
         auto&       live_table_type{resolving_.get_sema_type(live)};
@@ -6010,11 +6049,12 @@ auto type_resolver::resolve_constexpr_match(ast::node_id           id,
                     resolving_.ast.location_of(*live.capture)));
             }
 
-            type* cap_type{&denoted_type(matcher_type)};
-            if (const auto ud{matcher_type.get_data().as_opt<types::union_t>()}) {
+            auto& effective_matcher{denoted_type(matcher_type)};
+            type* cap_type{&effective_matcher};
+            if (const auto ud{effective_matcher.get_data().as_opt<types::union_t>()}) {
                 if (const auto ia{resolving_.ast.get_as_opt<ast::implicit_access_expr>(
                         *live.primary_pattern())}) {
-                    const auto& table{ctx_.registry.get(matcher_type.get_symbol_table_idx())};
+                    const auto& table{ctx_.registry.get(effective_matcher.get_symbol_table_idx())};
                     const auto& pident{resolving_.ast.get_as<ast::identifier_expr>(ia->member)};
                     cap_type = &ud->type_at(table.get_proxy(pident.name).index);
                 }

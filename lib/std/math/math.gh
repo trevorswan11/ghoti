@@ -35,14 +35,22 @@ test "is_power_of_two" {
 pub constexpr int_cast := fn(T: type, x: auto): std.Option(T) {
     constexpr {
         @assert(@typeInfo(T) == .int);
-        @assert(@typeInfo(@TypeOf(x)) == .int);
+        @assert(@typeInfo(@TypeOf(x)) == .int or @typeInfo(@TypeOf(x)) == .@"constexpr_int");
     }
     constexpr is_constexpr := @TypeOf(x) == constexpr_int;
 
-    if ((is_constexpr or max_int(@TypeOf(x)) > max_int(T)) and x > max_int(T)) {
-        return .empty;
-    } else if ((is_constexpr or min_int(@TypeOf(x)) < min_int(T)) and x < min_int(T)) {
-        return .empty;
+    if constexpr (!is_constexpr) {
+        if (max_int(@TypeOf(x)) > max_int(T) and x > max_int(T)) {
+            return .empty;
+        } else if (min_int(@TypeOf(x)) < min_int(T) and x < min_int(T)) {
+            return .empty;
+        }
+    } else {
+        if (x > max_int(T)) {
+            return .empty;
+        } else if (x < min_int(T)) {
+            return .empty;
+        }
     }
     return .of(@intCast(T, x));
 };
@@ -66,20 +74,24 @@ test "int_cast" {
 /// Returns an unsigned int type that can hold the number of bits in T - 1.
 /// Suitable for 0-based bit indices of T.
 pub constexpr Log2Int := fn(T: type): type {
-    if (T == constexpr_int) return constexpr_int;
-    constexpr bits: u16 = @typeInfo(T).int.bits;
-    constexpr log2_bits := 16 - @clz(bits - 1);
-    return @Int(.{ .bits = log2_bits, .signed = false });
+    if constexpr (T == constexpr_int) {
+        return constexpr_int;
+    } else {
+        constexpr bits: u16 = @typeInfo(T).int.bits;
+        constexpr log2_bits := if (bits <= 1) 1 else 16 - @clz(bits - 1);
+        return @Int(.{ .bits = log2_bits, .signedness = .unsigned });
+    }
 };
 
 test "Log2Int construction" {
     @expect(Log2Int(constexpr_int) == constexpr_int);
+    @expect(Log2Int(u64) == u6);
 }
 
 /// Returns the maximum value of integer type T.
 pub constexpr max_int := fn(T: type): constexpr_int {
     constexpr info := @typeInfo(T).int;
-    return (1 << (info.bits - @intFromBool(info.signed))) - 1;
+    return (1 << (info.bits - @intFromBool(info.signedness == .signed))) - 1;
 };
 
 test "max_int" {
@@ -102,7 +114,7 @@ test "max_int" {
 /// Returns the minimum value of integer type T.
 pub constexpr min_int := fn(T: type): constexpr_int {
     constexpr info := @typeInfo(T).int;
-    return if constexpr (info.signed) -(1 << (info.bits - 1)) else 0;
+    return if constexpr (info.signedness == .signed) -(1 << (info.bits - 1)) else 0;
 };
 
 test "min_int" {

@@ -2262,6 +2262,18 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
     return call_inst;
 }
 
+auto llvm_lowering::fixup_bit_count_result(llvm::Value* res, stdx::option<sema::type&> target)
+    -> llvm::Value* {
+    if (!target) { return res; }
+    auto* target_ty{types_.translate(*target)};
+    if (!target_ty || res->getType() == target_ty) { return res; }
+    const auto res_bits{res->getType()->getIntegerBitWidth()};
+    const auto target_bits{target_ty->getIntegerBitWidth()};
+    if (target_bits > res_bits) { return builder_.CreateZExt(res, target_ty); }
+    if (target_bits < res_bits) { return builder_.CreateTrunc(res, target_ty); }
+    return res;
+}
+
 auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
     stdx::option<syntax::token_type_t> builtin_tok;
@@ -2516,20 +2528,13 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             return nullptr;
         }
 
-        // Bit operations
         case syntax::token_type_t::BUILTIN_CLZ: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* val{lower_value(inst.operands[0])}) {
                 auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
                     llvm_module_.get(), llvm::Intrinsic::ctlz, {val->getType()})};
                 auto* res{builder_.CreateCall(fn, {val, builder_.getInt1(false)})};
-                if (inst.type) {
-                    if (auto* target_ty{types_.translate(*inst.type)};
-                        target_ty && res->getType() != target_ty) {
-                        return builder_.CreateZExt(res, target_ty);
-                    }
-                }
-                return res;
+                return fixup_bit_count_result(res, inst.type);
             }
             return nullptr;
         }
@@ -2539,13 +2544,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
                 auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
                     llvm_module_.get(), llvm::Intrinsic::cttz, {val->getType()})};
                 auto* res{builder_.CreateCall(fn, {val, builder_.getInt1(false)})};
-                if (inst.type) {
-                    if (auto* target_ty{types_.translate(*inst.type)};
-                        target_ty && res->getType() != target_ty) {
-                        return builder_.CreateZExt(res, target_ty);
-                    }
-                }
-                return res;
+                return fixup_bit_count_result(res, inst.type);
             }
             return nullptr;
         }
@@ -2555,13 +2554,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
                 auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
                     llvm_module_.get(), llvm::Intrinsic::ctpop, {val->getType()})};
                 auto* res{builder_.CreateCall(fn, {val})};
-                if (inst.type) {
-                    if (auto* target_ty{types_.translate(*inst.type)};
-                        target_ty && res->getType() != target_ty) {
-                        return builder_.CreateZExt(res, target_ty);
-                    }
-                }
-                return res;
+                return fixup_bit_count_result(res, inst.type);
             }
             return nullptr;
         }
