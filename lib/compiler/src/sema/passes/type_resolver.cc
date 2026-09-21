@@ -4722,8 +4722,12 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
     }
     auto& rhs_type{*last_type_.take()};
 
+    // A shift's RHS is a bit count, not a peer value of the LHS being shifted
+    const auto op{id.get_token_type()};
+    const bool is_shift_op{op == syntax::token_type_t::SHL || op == syntax::token_type_t::SHR};
+
     // Peer typing for `constexpr_int` / `constexpr_float` operands
-    {
+    if (!is_shift_op) {
         const auto lk{lhs_type->get_kind()};
         const auto rk{rhs_type.get_kind()};
         if (is_constexpr_numeric(lk) && is_numeric(rk) && !is_constexpr_numeric(rk)) {

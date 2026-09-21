@@ -103,7 +103,8 @@ namespace {
                 return sema::is_signed_integer(*op.type);
             }
         }
-        return true;
+        return !std::ranges::all_of(
+            inst.operands, [](const auto& op) { return constexpr_operand_is_nonnegative(op); });
     }
     if (!inst.operands.empty() && inst.operands[0].type) {
         return sema::is_signed_integer(*inst.operands[0].type);

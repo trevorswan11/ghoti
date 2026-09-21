@@ -37,7 +37,7 @@ pub constexpr int_cast := fn(T: type, x: auto): std.Option(T) {
         @assert(@typeInfo(T) == .int);
         @assert(@typeInfo(@typeOf(x)) == .int);
     }
-    constexpr is_constexpr := @typeInfo(@typeOf(x)).int.is_constexpr;
+    constexpr is_constexpr := @typeOf(x) == constexpr_int;
 
     if ((is_constexpr or max_int(@typeOf(x)) > max_int(T)) and x > max_int(T)) {
         return .empty;
@@ -52,7 +52,15 @@ test "int_cast" {
     @expect(int_cast(u8, 300u32) == .none);
     @expect(int_cast(i8, -200) == .none);
     @expect(int_cast(i8, -200i32) == .none);
-    // @expect(int_cast(u8, -1) == .none); // TODO(tcs): Panics with integer out of range
+    @expect(int_cast(u8, -1) == .none);
+    @expect(int_cast(u8, -1i8) == .none);
+    @expect(int_cast(u64, -1) == .none);
+    @expect(int_cast(u64, -1i8) == .none);
+
+    @expect(int_cast(u8, 255)! == 255u8);
+    @expect(int_cast(u8, 255u32)! == 255u8);
+    @expect(@typeOf(int_cast(u8, 255)!) == u8);
+    @expect(@typeOf(int_cast(u8, 255u32)!) == u8);
 }
 
 /// Returns an unsigned int type that can hold the number of bits in T - 1.
@@ -61,7 +69,7 @@ pub constexpr Log2Int := fn(T: type): type {
     if (T == constexpr_int) return constexpr_int;
     constexpr bits: u16 = @typeInfo(T).int.bits;
     constexpr log2_bits := 16 - @clz(bits - 1);
-    return @Int(.{ .bits = log2_bits, .signed = false, .is_constexpr = false });
+    return @Int(.{ .bits = log2_bits, .signed = false });
 };
 
 test "Log2Int construction" {
