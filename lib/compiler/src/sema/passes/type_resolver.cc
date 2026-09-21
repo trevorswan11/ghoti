@@ -10676,6 +10676,11 @@ auto type_resolver::instantiate_generic(type&                             callee
     rollback_poisoned(fn_mod.sema_side_tables.node_types.values, snap.nodes, typing.node_types);
     rollback_poisoned(
         fn_mod.sema_side_tables.explicit_types.values, snap.types, typing.explicit_types);
+    for (const auto& [idx, target] : typing.call_targets) {
+        if (idx < snap.calls.size()) {
+            fn_mod.sema_side_tables.generic_call_targets.values[idx] = snap.calls[idx];
+        }
+    }
     ctx_.advance_epoch();
 
     auto tracker{std::move(inst_resolver.return_trackers_.back())};

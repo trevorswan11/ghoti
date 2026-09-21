@@ -64,6 +64,16 @@ namespace {
     return k == sema::type_kind::CONSTEXPR_INT || k == sema::type_kind::CONSTEXPR_FLOAT;
 }
 
+// The concrete peer type two operands should lower against, or none if both are
+// `is_untyped_constexpr`
+[[nodiscard]] auto concrete_peer_type(stdx::option<sema::type&> op0_ty,
+                                      stdx::option<sema::type&> op1_ty)
+    -> stdx::option<sema::type&> {
+    if (op0_ty && !is_untyped_constexpr(op0_ty->get_kind())) { return op0_ty; }
+    if (op1_ty && !is_untyped_constexpr(op1_ty->get_kind())) { return op1_ty; }
+    return stdx::none;
+}
+
 [[nodiscard]] auto is_float_type(const gir::instruction&    inst,
                                  stdx::option<llvm::Value&> val) noexcept -> bool {
     // Any float (or `constexpr_float`) operand makes the operation floating point.
@@ -1924,10 +1934,9 @@ auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {
     ASSERT(inst.operands.size() >= 2, "Binary instruction requires at least 2 operands");
     const auto op0_ty{inst.operands[0].type};
     const auto op1_ty{inst.operands[1].type};
-    const auto lhs_exp{(op0_ty && !is_untyped_constexpr(op0_ty->get_kind())) ? op0_ty : op1_ty};
-    const auto rhs_exp{(op1_ty && !is_untyped_constexpr(op1_ty->get_kind())) ? op1_ty : op0_ty};
-    auto*      lhs{lower_value(inst.operands[0], lhs_exp)};
-    auto*      rhs{lower_value(inst.operands[1], rhs_exp)};
+    const auto peer_ty{concrete_peer_type(op0_ty, op1_ty)};
+    auto*      lhs{lower_value(inst.operands[0], peer_ty)};
+    auto*      rhs{lower_value(inst.operands[1], peer_ty)};
     ASSERT(lhs && rhs, "Binary operands must lower to non-null LLVM values");
 
     const bool is_flt{is_float_type(inst, lhs)};
@@ -2010,10 +2019,9 @@ auto llvm_lowering::emit_comparison(const gir::instruction& inst) -> llvm::Value
     ASSERT(inst.operands.size() >= 2, "Comparison requires 2 operands");
     const auto op0_ty{inst.operands[0].type};
     const auto op1_ty{inst.operands[1].type};
-    const auto lhs_exp{(op0_ty && !is_untyped_constexpr(op0_ty->get_kind())) ? op0_ty : op1_ty};
-    const auto rhs_exp{(op1_ty && !is_untyped_constexpr(op1_ty->get_kind())) ? op1_ty : op0_ty};
-    auto*      lhs{lower_value(inst.operands[0], lhs_exp)};
-    auto*      rhs{lower_value(inst.operands[1], rhs_exp)};
+    const auto peer_ty{concrete_peer_type(op0_ty, op1_ty)};
+    auto*      lhs{lower_value(inst.operands[0], peer_ty)};
+    auto*      rhs{lower_value(inst.operands[1], peer_ty)};
     ASSERT(lhs && rhs, "Comparison operands must lower to non-null LLVM values");
 
     const bool is_flt{is_float_type(inst, lhs)};

@@ -1,5 +1,18 @@
 import std;
 
+import "float.gh" as float;
+
+pub constexpr is_nan := float.is_nan;
+pub constexpr reconstruct_float := float.reconstruct_float;
+pub constexpr mantissa_one := float.mantissa_one;
+pub constexpr float_fractional_bits := float.float_fractional_bits;
+pub constexpr float_mantissa_bits := float.float_mantissa_bits;
+pub constexpr float_exponent_bits := float.float_exponent_bits;
+pub constexpr float_exponent_min := float.float_exponent_min;
+pub constexpr float_exponent_max := float.float_exponent_max;
+pub constexpr nan := float.nan;
+pub constexpr snan := float.snan;
+
 /// Asserts that `int` is strictly positive
 pub constexpr is_power_of_two := fn(int: auto): bool {
     @assert(int > 0);
@@ -19,7 +32,28 @@ test "is_power_of_two" {
 }
 
 /// Cast an integer to a different integer type only if it fits.
-pub constexpr int_cast := fn(T: type, x: auto): std.Option(T) {};
+pub constexpr int_cast := fn(T: type, x: auto): std.Option(T) {
+    constexpr {
+        @assert(@typeInfo(T) == .int);
+        @assert(@typeInfo(@typeOf(x)) == .int);
+    }
+    constexpr is_constexpr := @typeInfo(@typeOf(x)).int.is_constexpr;
+
+    if ((is_constexpr or max_int(@typeOf(x)) > max_int(T)) and x > max_int(T)) {
+        return .empty;
+    } else if ((is_constexpr or min_int(@typeOf(x)) < min_int(T)) and x < min_int(T)) {
+        return .empty;
+    }
+    return .of(@intCast(T, x));
+};
+
+test "int_cast" {
+    @expect(int_cast(u8, 300) == .none);
+    @expect(int_cast(u8, 300u32) == .none);
+    @expect(int_cast(i8, -200) == .none);
+    @expect(int_cast(i8, -200i32) == .none);
+    // @expect(int_cast(u8, -1) == .none); // TODO(tcs): Panics with integer out of range
+}
 
 /// Returns an unsigned int type that can hold the number of bits in T - 1.
 /// Suitable for 0-based bit indices of T.
@@ -39,18 +73,6 @@ pub constexpr max_int := fn(T: type): constexpr_int {
     constexpr info := @typeInfo(T).int;
     return (1 << (info.bits - @intFromBool(info.signed))) - 1;
 };
-
-import "float.gh" as float;
-pub constexpr is_nan := float.is_nan;
-pub constexpr reconstruct_float := float.reconstruct_float;
-pub constexpr mantissa_one := float.mantissa_one;
-pub constexpr float_fractional_bits := float.float_fractional_bits;
-pub constexpr float_mantissa_bits := float.float_mantissa_bits;
-pub constexpr float_exponent_bits := float.float_exponent_bits;
-pub constexpr float_exponent_min := float.float_exponent_min;
-pub constexpr float_exponent_max := float.float_exponent_max;
-pub constexpr nan := float.nan;
-pub constexpr snan := float.snan;
 
 test "max_int" {
     @expect(max_int(u1) == 1);

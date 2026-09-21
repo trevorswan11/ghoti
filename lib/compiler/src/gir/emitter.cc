@@ -3662,6 +3662,15 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         return cv->to_gir_value();
     }
 
+    if (ret_type.get_kind() == sema::type_kind::CONSTEXPR_INT ||
+        ret_type.get_kind() == sema::type_kind::CONSTEXPR_FLOAT) {
+        const auto cv{const_eval_.try_eval(id)};
+        VERIFY(cv,
+               "Call to a function returning 'constexpr_int'/'constexpr_float' must be "
+               "constant-evaluable");
+        return cv->to_gir_value();
+    }
+
     stdx::option<std::string> callee_name;
     stdx::option<value>       indirect_callee;
     stdx::option<value>       dyn_self_data; // `w.data` for a `&dyn I` method call
