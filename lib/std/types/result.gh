@@ -33,48 +33,36 @@ pub constexpr Result := fn(T: type, E: type): type {
 
 test "Result.map transforms ok variant" {
     const a: Result(i32, bool) = .{ .ok = 1 };
-    const mapped := a.map(
-        fn(val: i32): []u8 {
-            return "Hello, World!";
-        },
-    );
+    const mapped := a.map(fn(val: i32): []u8 {
+        return "Hello, World!";
+    });
 
-    @expect(
-        match (mapped) {
-            .ok => |o| std.mem.eql(u8, o, "Hello, World!"),
-            .err => false,
-        },
-    );
+    @expect(match (mapped) {
+        .ok => |o| std.mem.eql(u8, o, "Hello, World!"),
+        .err => false,
+    });
 }
 
 test "Result.map_err transforms error variant" {
     const a: Result(void, i32) = .{ .err = 1 };
-    const mapped := a.map_err(
-        fn(val: i32): bool {
-            return false;
-        },
-    );
+    const mapped := a.map_err(fn(val: i32): bool {
+        return false;
+    });
 
-    @expect(
-        match (mapped) {
-            .ok => false,
-            .err => |e| e == false,
-        },
-    );
+    @expect(match (mapped) {
+        .ok => false,
+        .err => |e| e == false,
+    });
 
     const b: Result(void, i32) = .{ .err = 2 };
-    const mapped_u8 := b.map_err(
-        fn(_: i32): u8 {
-            return 7;
-        },
-    );
+    const mapped_u8 := b.map_err(fn(_: i32): u8 {
+        return 7;
+    });
 
-    @expect(
-        match (mapped_u8) {
-            .ok => false,
-            .err => |e| e == 7,
-        },
-    );
+    @expect(match (mapped_u8) {
+        .ok => false,
+        .err => |e| e == 7,
+    });
 }
 
 impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {

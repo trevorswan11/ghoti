@@ -8,12 +8,10 @@ pub constexpr reconstruct_float := fn(
     constexpr exponent: constexpr_int,
     constexpr mantissa: constexpr_int,
 ): T {
-    const TBits := @Int(
-        .{
-            .bits = @bitSizeOf(T),
-            .signed = false,
-        },
-    );
+    const TBits := @Int(.{
+        .bits = @bitSizeOf(T),
+        .signed = false,
+    });
     const biased_exponent := @intCast(TBits, exponent + float_exponent_max(T));
     return @bitCast(T, (biased_exponent << float_mantissa_bits(T)) | @intCast(TBits, mantissa));
 };

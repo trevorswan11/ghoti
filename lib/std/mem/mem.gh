@@ -37,25 +37,15 @@ test "Alignment.of" {
     @expect(Alignment.of(i32) == .@"4");
     @expect(Alignment.of(i64) == .@"8");
 
-    @expect(
-        Alignment.of(
-            struct {
-                a: i32,
-                b: i32,
-            },
-        ) ==
-            .@"4",
-    );
+    @expect(Alignment.of(struct {
+        a: i32,
+        b: i32,
+    }) == .@"4");
 
-    @expect(
-        Alignment.of(
-            struct {
-                a: i32,
-                b: i64,
-            },
-        ) ==
-            .@"8",
-    );
+    @expect(Alignment.of(struct {
+        a: i32,
+        b: i64,
+    }) == .@"8");
 }
 
 pub const round_up_page := fn(len: usize): usize {

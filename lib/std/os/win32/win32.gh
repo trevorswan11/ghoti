@@ -336,28 +336,22 @@ test "win32: opening a missing file reports not-found" {
         FILE_ATTRIBUTE_NORMAL,
     );
 
-    @expect(
-        match (r) {
-            .ok => false,
-            .err => |e| e == .ERROR_FILE_NOT_FOUND or e == .ERROR_PATH_NOT_FOUND,
-        },
-    );
+    @expect(match (r) {
+        .ok => false,
+        .err => |e| e == .ERROR_FILE_NOT_FOUND or e == .ERROR_PATH_NOT_FOUND,
+    });
 }
 
 test "win32: stat reports a real size for a file and the directory flag for a dir" {
-    @expect(
-        match (stat("C:/Windows/System32/kernel32.dll")) {
-            .ok => |s| s.size() > 0u64 and !s.is_dir(),
-            .err => false,
-        },
-    );
+    @expect(match (stat("C:/Windows/System32/kernel32.dll")) {
+        .ok => |s| s.size() > 0u64 and !s.is_dir(),
+        .err => false,
+    });
     @expect(match (stat("C:/Windows/System32")) { .ok => |s| s.is_dir(), .err => false });
-    @expect(
-        match (stat("C:/Windows/System32/ghoti-no-such-file.xyz")) {
-            .ok => false,
-            .err => |e| e == .ERROR_FILE_NOT_FOUND or e == .ERROR_PATH_NOT_FOUND,
-        },
-    );
+    @expect(match (stat("C:/Windows/System32/ghoti-no-such-file.xyz")) {
+        .ok => false,
+        .err => |e| e == .ERROR_FILE_NOT_FOUND or e == .ERROR_PATH_NOT_FOUND,
+    });
 }
 
 test "win32: fstat on an open handle sees the file size" {
@@ -376,12 +370,10 @@ test "win32: fstat on an open handle sees the file size" {
 }
 
 test "win32: mkdir of an existing directory reports it, not a spurious success" {
-    @expect(
-        match (mkdir("C:/Windows")) {
-            .ok => false,
-            .err => |e| e == .ERROR_ALREADY_EXISTS or e == .ERROR_ACCESS_DENIED,
-        },
-    );
+    @expect(match (mkdir("C:/Windows")) {
+        .ok => false,
+        .err => |e| e == .ERROR_ALREADY_EXISTS or e == .ERROR_ACCESS_DENIED,
+    });
 }
 
 test "win32: alloc gives zero-filled, writable memory that free releases" {
