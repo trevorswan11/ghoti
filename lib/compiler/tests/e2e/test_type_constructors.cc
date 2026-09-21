@@ -532,4 +532,45 @@ TEST_CASE("E2E: a plain generic fn sizes a local `[n]mut T` from a `constexpr` p
     )") == 28);
 }
 
+TEST_CASE("A generic union's own inline method still works after an explicit qualified "
+          "constructor call, even when the type also has `impl(T) Trait for Ctor(T)` blocks") {
+    CHECK(helpers::compile_and_run_tests(R"(
+        const Option := fn(T: type): type {
+            return union {
+                some: T,
+                none: void,
+
+                pub constexpr of := fn(val: T): @This() { return .{ .some = val }; };
+
+                pub constexpr unwrap_or := fn(&self, default: T): T {
+                    return match (self) {
+                        .some => |s| s,
+                        .none => default,
+                    };
+                };
+            };
+        };
+
+        impl(T: type) builtin.Unwrappable for Option(T) {
+            using Output = T;
+            using Residual = void;
+            pub const branch := fn(self): builtin.Flow(T, void) {
+                return match (self) {
+                    .some => |v| builtin.Flow(T, void){ .@"continue" = v },
+                    .none => builtin.Flow(T, void){ .@"break" = {} },
+                };
+            };
+        }
+        impl(T: type) builtin.Rewrappable for Option(T) {
+            using From = void;
+            pub const from_residual := fn(_: void): @This() { return .{ .none = {} }; };
+        }
+
+        test "explicit qualified ctor call + own inline method" {
+            var a: Option(u8) = Option(u8).of(5u8);
+            @expect(a.unwrap_or(0) == 5);
+        }
+    )") == 0);
+}
+
 } // namespace ghoti::tests

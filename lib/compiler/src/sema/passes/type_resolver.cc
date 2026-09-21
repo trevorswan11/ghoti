@@ -3845,8 +3845,25 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     auto& return_type{*last_type_.take()};
     ASSERT(!fn_type.is_resolved(), "Valued function must not be resolved");
 
+    const auto self_offset{fn.self.has_value() ? 1UZ : 0UZ};
+    const bool any_param_needs_own_instantiation{[&] {
+        if (self_offset && is_generic_type(*param_types[0])) { return true; }
+        for (usize i{self_offset}; i < param_types.size(); ++i) {
+            const auto& pt{*param_types[i]};
+            if (pt.get_kind() == type_kind::TYPE) {
+                if (fn.parameters[i - self_offset].explicit_type.get_token_type() ==
+                    syntax::token_type_t::TYPE_TYPE) {
+                    return true;
+                }
+                continue;
+            }
+            if (is_generic_type(pt)) { return true; }
+        }
+        return false;
+    }()};
+
     // A `constexpr` parameter makes the function a template, monomorphized per value
-    if (any_param_generic(param_types) || any_param_constexpr(fn)) {
+    if (any_param_needs_own_instantiation || any_param_constexpr(fn)) {
         fn_type.resolve<types::function>(
             param_types, return_type, fn.self.has_value(), fn.variadic, fn.conv);
         // Only a function directly at the impl/aggregate level is a genuine method whose
@@ -9296,6 +9313,9 @@ auto type_resolver::build_param_impl_template(const ast::impl_stmt& impl, ast::n
             resolving_.set_sema_type(p.name, sentinel);
             resolve_symbol_info(p.name, symbol_kind::TYPE);
             sentinels.emplace_back(&sentinel);
+            // Without this, a `type`-argument fold  finds no binding for `T` in this frame
+            cx_dummy.insert_or_assign(resolving_.ast.get_as<ast::identifier_expr>(p.name).name,
+                                      gir::const_value{sentinel});
         }
     }
     const constexpr_frame_guard cx_guard{ctx_.constexpr_binding_frames, std::move(cx_dummy)};
@@ -10531,6 +10551,7 @@ auto type_resolver::instantiate_generic(type&                             callee
     type_resolver inst_resolver{fn_mod, ctx_, fn_table_idx, std::move(inst_stack)};
     inst_resolver.for_generic_instantiation_ = true;
     inst_resolver.typing_scope_prefix_       = mangled_name;
+    inst_resolver.building_param_template_   = building_param_template_;
 
     // Re-type body-local decls this instantiation reaches even if a prior monomorphization of the
     // same generic already resolved them
