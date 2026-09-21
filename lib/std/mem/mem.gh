@@ -17,20 +17,20 @@ pub const Alignment := enum : std.math.Log2Int(usize) {
     @"64" = 6,
     _,
 
-    pub constexpr fromByteUnits := fn(n: usize): Alignment {
-        @assert(std.math.isPowerOfTwo(n));
+    pub constexpr from_byte_units := fn(n: usize): Alignment {
+        @assert(std.math.is_power_of_two(n));
         return @as(Alignment, @ctz(n));
     };
 
     pub constexpr of := fn(T: type): Alignment {
-        return fromByteUnits(@alignOf(T));
+        return from_byte_units(@alignOf(T));
     };
 };
 
-test "Alignment.fromByteUnits" {
-    @expect(Alignment.fromByteUnits(0b1) == .@"1");
-    @expect(Alignment.fromByteUnits(0b1000) == .@"8");
-    @expect(Alignment.fromByteUnits(0b100000) == .@"32");
+test "Alignment.from_byte_units" {
+    @expect(Alignment.from_byte_units(0b1) == .@"1");
+    @expect(Alignment.from_byte_units(0b1000) == .@"8");
+    @expect(Alignment.from_byte_units(0b100000) == .@"32");
 }
 
 test "Alignment.of" {
@@ -58,7 +58,7 @@ test "Alignment.of" {
     );
 }
 
-pub const roundUpPage := fn(len: usize): usize {
+pub const round_up_page := fn(len: usize): usize {
     const ps := std.os.page_size();
     return (len + ps - 1uz) & ~(ps - 1uz);
 };
@@ -84,12 +84,12 @@ test "eql over bytes" {
 
 /// Returns true if haystack starts with needle.
 /// Time complexity: O(needle.len)
-pub constexpr startsWith := fn(T: type, haystack: []T, needle: []T): bool {
+pub constexpr starts_with := fn(T: type, haystack: []T, needle: []T): bool {
     return if (needle.len > haystack.len) false else eql(T, haystack[0..needle.len], needle);
 };
 
-test "startsWith" {
-    @expect(startsWith(u8, "Bob", "Bo"));
-    @expect(!startsWith(u8, "haystack", "aystack"));
-    @expect(!startsWith(u8, "Needle in haystack", "haystack"));
+test "starts_with" {
+    @expect(starts_with(u8, "Bob", "Bo"));
+    @expect(!starts_with(u8, "haystack", "aystack"));
+    @expect(!starts_with(u8, "Needle in haystack", "haystack"));
 }

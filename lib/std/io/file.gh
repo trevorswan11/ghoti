@@ -44,7 +44,7 @@ pub const File := struct {
             const share: u32 = os.FILE_SHARE_READ | os.FILE_SHARE_WRITE | os.FILE_SHARE_DELETE;
             return match (os.open(path, access, share, disp, os.FILE_ATTRIBUTE_NORMAL)) {
                 .ok => |h| .{ .ok = .{ .handle = h } },
-                .err => |e| .{ .err = .fromOs(e) },
+                .err => |e| .{ .err = .from_os(e) },
             };
         } else {
             var oflags: i32 = match (flags.access) {
@@ -60,7 +60,7 @@ pub const File := struct {
             return match (os.open(path, oflags, mode)) {
                 // umask applies
                 .ok => |h| .{ .ok = .{ .handle = h } },
-                .err => |e| .{ .err = .fromOs(e) },
+                .err => |e| .{ .err = .from_os(e) },
             };
         }
     };
@@ -69,7 +69,7 @@ pub const File := struct {
     pub @discardable const close := fn(&self): Result(void, io.Error) {
         return match (os.close(self.handle)) {
             .ok => .{ .ok = {} },
-            .err => |e| .{ .err = .fromOs(e) },
+            .err => |e| .{ .err = .from_os(e) },
         };
     };
 };
@@ -79,7 +79,7 @@ impl io.Reader for File {
     pub const read := fn(&mut self, buf: []mut u8): Result(usize, Error) {
         return match (os.read(self.handle, buf)) {
             .ok => |n| .{ .ok = n },
-            .err => |e| .{ .err = .fromOs(e) },
+            .err => |e| .{ .err = .from_os(e) },
         };
     };
 }
@@ -89,7 +89,7 @@ impl io.Writer for File {
     pub const write := fn(&mut self, bytes: []u8): Result(usize, Error) {
         return match (os.write(self.handle, bytes)) {
             .ok => |n| .{ .ok = n },
-            .err => |e| .{ .err = .fromOs(e) },
+            .err => |e| .{ .err = .from_os(e) },
         };
     };
 }
@@ -99,7 +99,7 @@ impl io.Seeker for File {
     pub const seek := fn(&mut self, offset: i64, whence: io.Whence): Result(i64, Error) {
         return match (os.lseek(self.handle, offset, @as(i32, whence))) {
             .ok => |p| .{ .ok = p },
-            .err => |e| .{ .err = .fromOs(e) },
+            .err => |e| .{ .err = .from_os(e) },
         };
     };
 }

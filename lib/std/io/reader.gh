@@ -7,7 +7,7 @@ pub const Reader := interface {
     pub const read := fn(&mut self, buf: []mut u8): std.Result(usize, Error);
 
     /// Try to read into the provided byte buffer
-    pub const readAll := fn(&mut self, buf: []mut u8): std.Result(usize, Error) {
+    pub const read_all := fn(&mut self, buf: []mut u8): std.Result(usize, Error) {
         var i: usize = 0;
         loop {
             if (i == buf.len) {

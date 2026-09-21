@@ -155,7 +155,7 @@ impl builtin.Unwrappable for R {
 }
 impl builtin.Rewrappable for R {
     using From = i32;
-    pub const fromResidual := fn(r: i32): @This() { return .{ .err = r }; };
+    pub const from_residual := fn(r: i32): @This() { return .{ .err = r }; };
 }
 const f := fn(): R {
     defer {

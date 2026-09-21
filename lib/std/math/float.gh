@@ -1,9 +1,9 @@
-pub constexpr isNan := fn(val: auto): bool {
+pub constexpr is_nan := fn(val: auto): bool {
     return val != val;
 };
 
 /// Creates floating point type T from an unbiased exponent and raw mantissa.
-pub constexpr reconstructFloat := fn(
+pub constexpr reconstruct_float := fn(
     T: type,
     constexpr exponent: constexpr_int,
     constexpr mantissa: constexpr_int,
@@ -14,20 +14,20 @@ pub constexpr reconstructFloat := fn(
             .signed = false,
         },
     );
-    const biased_exponent := @intCast(TBits, exponent + floatExponentMax(T));
-    return @bitCast(T, (biased_exponent << floatMantissaBits(T)) | @intCast(TBits, mantissa));
+    const biased_exponent := @intCast(TBits, exponent + float_exponent_max(T));
+    return @bitCast(T, (biased_exponent << float_mantissa_bits(T)) | @intCast(TBits, mantissa));
 };
 
 /// Creates a raw "1.0" mantissa for floating point type T
-pub constexpr mantissaOne := fn(T: type): constexpr_int {
+pub constexpr mantissa_one := fn(T: type): constexpr_int {
     constexpr {
         @assert(@typeInfo(T) == .float);
     }
-    return if (@typeInfo(T).float.bits == 80) 1 << floatFractionalBits(T) else 0;
+    return if (@typeInfo(T).float.bits == 80) 1 << float_fractional_bits(T) else 0;
 };
 
 /// Returns the number of fractional bits in the mantissa of floating point type T.
-pub constexpr floatFractionalBits := fn(T: type): constexpr_int {
+pub constexpr float_fractional_bits := fn(T: type): constexpr_int {
     constexpr {
         @assert(@typeInfo(T) == .float);
     }
@@ -44,7 +44,7 @@ pub constexpr floatFractionalBits := fn(T: type): constexpr_int {
 };
 
 /// Returns the number of bits in the mantissa of floating point type T.
-pub constexpr floatMantissaBits := fn(T: type): constexpr_int {
+pub constexpr float_mantissa_bits := fn(T: type): constexpr_int {
     constexpr {
         @assert(@typeInfo(T) == .float);
     }
@@ -60,7 +60,7 @@ pub constexpr floatMantissaBits := fn(T: type): constexpr_int {
 };
 
 /// Returns the number of bits in the exponent of floating point type T.
-pub constexpr floatExponentBits := fn(T: type): constexpr_int {
+pub constexpr float_exponent_bits := fn(T: type): constexpr_int {
     constexpr {
         @assert(@typeInfo(T) == .float);
     }
@@ -76,13 +76,13 @@ pub constexpr floatExponentBits := fn(T: type): constexpr_int {
 };
 
 /// Returns the minimum exponent that can represent a normalized value in floating point type T.
-pub constexpr floatExponentMin := fn(T: type): constexpr_int {
-    return -floatExponentMax(T) + 1;
+pub constexpr float_exponent_min := fn(T: type): constexpr_int {
+    return -float_exponent_max(T) + 1;
 };
 
 /// Returns the maximum exponent that can represent a normalized value in floating point type T.
-pub constexpr floatExponentMax := fn(T: type): constexpr_int {
-    return (1 << (floatExponentBits(T) - 1)) - 1;
+pub constexpr float_exponent_max := fn(T: type): constexpr_int {
+    return (1 << (float_exponent_bits(T) - 1)) - 1;
 };
 
 /// Returns the canonical quiet NaN representation for a floating point `Type`.
@@ -91,10 +91,10 @@ pub constexpr nan := fn(T: type): T {
         constexpr_float => f128, // any float type will do
         _ => T,
     };
-    return reconstructFloat(
+    return reconstruct_float(
         RuntimeType,
-        floatExponentMax(RuntimeType) + 1,
-        mantissaOne(RuntimeType) | 1 << (floatFractionalBits(RuntimeType) - 1),
+        float_exponent_max(RuntimeType) + 1,
+        mantissa_one(RuntimeType) | 1 << (float_fractional_bits(RuntimeType) - 1),
     );
 };
 
@@ -121,10 +121,10 @@ pub constexpr snan := fn(T: type): T {
         _ => T,
         constexpr_float => f128, // any float type will do
     };
-    return reconstructFloat(
+    return reconstruct_float(
         RuntimeType,
-        floatExponentMax(RuntimeType) + 1,
-        mantissaOne(RuntimeType) | 1 << (floatFractionalBits(RuntimeType) - 2),
+        float_exponent_max(RuntimeType) + 1,
+        mantissa_one(RuntimeType) | 1 << (float_fractional_bits(RuntimeType) - 2),
     );
 };
 

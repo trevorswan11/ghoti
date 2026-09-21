@@ -19,7 +19,7 @@ const Data := struct {
     const countStuff := fn(self): f64 {
         var accumulator: f64 = 0;
         for constexpr (@typeInfo(@This()).@"struct".fields) |field| {
-            if (std.mem.startsWith(u8, field.name, "count_")) {
+            if (std.mem.starts_with(u8, field.name, "count_")) {
                 accumulator +=
                     match constexpr (field.@"type") {
                         f32 => @field(self, field.name),

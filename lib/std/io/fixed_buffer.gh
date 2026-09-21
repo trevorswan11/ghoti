@@ -80,23 +80,23 @@ test "fixed_buffer: reading past the end returns a short count, then zero" {
     @expect(match (s.read(out[..])) { .ok => |n| n == 0, .err => false }); // EOF
 }
 
-test "fixed_buffer: readAll fills the buffer and then stops at EOF" {
+test "fixed_buffer: read_all fills the buffer and then stops at EOF" {
     var backing := [6]mut u8{ 'a', 'b', 'c', 'd', 'e', 'f' };
     var s: FixedBufferStream = .{ .buf = backing };
 
     var out: [4]mut u8 = undefined;
-    @expect(match (s.readAll(out[..])) { .ok => |n| n == 4, .err => false });
+    @expect(match (s.read_all(out[..])) { .ok => |n| n == 4, .err => false });
     @expect(out[0] == 'a');
     @expect(out[3] == 'd');
     var rest: [8]mut u8 = undefined; // asks for 8, only 'e','f' remain
-    @expect(match (s.readAll(rest[..])) { .ok => |n| n == 2, .err => false });
+    @expect(match (s.read_all(rest[..])) { .ok => |n| n == 2, .err => false });
 }
 
-test "fixed_buffer: writeAll writes every byte; writeByte appends one" {
+test "fixed_buffer: write_all writes every byte; write_byte appends one" {
     var backing: [16]mut u8 = undefined;
     var s: FixedBufferStream = .{ .buf = backing };
-    @expect(s.writeAll("abcdefgh") == .ok);
-    @expect(s.writeByte('!') == .ok);
+    @expect(s.write_all("abcdefgh") == .ok);
+    @expect(s.write_byte('!') == .ok);
     @expect(s.pos == 9);
     @expect(backing[0] == 'a');
     @expect(backing[7] == 'h');
@@ -113,7 +113,7 @@ test "fixed_buffer: write is short when nearly full, then reports no_space" {
     @expect(backing[2] == 'c');
     @expect(backing[3] == 'd');
     @expect(match (s.write("!")) { .ok => false, .err => |e| e == .no_space });
-    @expect(match (s.writeAll("!")) { .ok => false, .err => |e| e == .no_space });
+    @expect(match (s.write_all("!")) { .ok => false, .err => |e| e == .no_space });
 }
 
 test "fixed_buffer: seek from start, current, end; then read at the new pos" {

@@ -25,7 +25,7 @@ impl std.mem.AllocatorVTable for PageAllocator {
         alignment: std.mem.Alignment,
         new_len: usize,
     ): bool {
-        return std.mem.roundUpPage(new_len) <= std.mem.roundUpPage(memory.len);
+        return std.mem.round_up_page(new_len) <= std.mem.round_up_page(memory.len);
     };
 
     pub const remap := fn(

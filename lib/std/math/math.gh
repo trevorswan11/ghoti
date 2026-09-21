@@ -1,8 +1,25 @@
+import std;
+
 /// Asserts that `int` is strictly positive
-pub constexpr isPowerOfTwo := fn(int: auto): bool {
+pub constexpr is_power_of_two := fn(int: auto): bool {
     @assert(int > 0);
     return (int & (int - 1)) == 0;
 };
+
+test "is_power_of_two" {
+    @expect(is_power_of_two(1u8));
+    @expect(is_power_of_two(2));
+    @expect(!is_power_of_two(3i16));
+    @expect(is_power_of_two(4));
+    @expect(!is_power_of_two(31u32));
+    @expect(is_power_of_two(32));
+    @expect(!is_power_of_two(63i64));
+    @expect(is_power_of_two(128));
+    @expect(is_power_of_two(256u128));
+}
+
+/// Cast an integer to a different integer type only if it fits.
+pub constexpr int_cast := fn(T: type, x: auto): std.Option(T) {};
 
 /// Returns an unsigned int type that can hold the number of bits in T - 1.
 /// Suitable for 0-based bit indices of T.
@@ -18,50 +35,62 @@ test "Log2Int construction" {
 }
 
 /// Returns the maximum value of integer type T.
-pub constexpr maxInt := fn(T: type): constexpr_int {
+pub constexpr max_int := fn(T: type): constexpr_int {
     constexpr info := @typeInfo(T).int;
     return (1 << (info.bits - @intFromBool(info.signed))) - 1;
 };
 
-test "maxInt" {
-    @expect(maxInt(u1) == 1);
-    @expect(maxInt(u8) == 255);
-    @expect(maxInt(u16) == 65535);
-    @expect(maxInt(u32) == 4294967295);
-    @expect(maxInt(u64) == 18446744073709551615);
-    @expect(maxInt(u128) == 340282366920938463463374607431768211455);
+import "float.gh" as float;
+pub constexpr is_nan := float.is_nan;
+pub constexpr reconstruct_float := float.reconstruct_float;
+pub constexpr mantissa_one := float.mantissa_one;
+pub constexpr float_fractional_bits := float.float_fractional_bits;
+pub constexpr float_mantissa_bits := float.float_mantissa_bits;
+pub constexpr float_exponent_bits := float.float_exponent_bits;
+pub constexpr float_exponent_min := float.float_exponent_min;
+pub constexpr float_exponent_max := float.float_exponent_max;
+pub constexpr nan := float.nan;
+pub constexpr snan := float.snan;
 
-    @expect(maxInt(i1) == 0);
-    @expect(maxInt(i8) == 127);
-    @expect(maxInt(i16) == 32767);
-    @expect(maxInt(i32) == 2147483647);
-    @expect(maxInt(i63) == 4611686018427387903);
-    @expect(maxInt(i64) == 9223372036854775807);
-    @expect(maxInt(i128) == 170141183460469231731687303715884105727);
+test "max_int" {
+    @expect(max_int(u1) == 1);
+    @expect(max_int(u8) == 255);
+    @expect(max_int(u16) == 65535);
+    @expect(max_int(u32) == 4294967295);
+    @expect(max_int(u64) == 18446744073709551615);
+    @expect(max_int(u128) == 340282366920938463463374607431768211455);
+
+    @expect(max_int(i1) == 0);
+    @expect(max_int(i8) == 127);
+    @expect(max_int(i16) == 32767);
+    @expect(max_int(i32) == 2147483647);
+    @expect(max_int(i63) == 4611686018427387903);
+    @expect(max_int(i64) == 9223372036854775807);
+    @expect(max_int(i128) == 170141183460469231731687303715884105727);
 }
 
 /// Returns the minimum value of integer type T.
-pub constexpr minInt := fn(T: type): constexpr_int {
+pub constexpr min_int := fn(T: type): constexpr_int {
     constexpr info := @typeInfo(T).int;
     return if constexpr (info.signed) -(1 << (info.bits - 1)) else 0;
 };
 
-test "minInt" {
-    @expect(minInt(u1) == 0);
-    @expect(minInt(u8) == 0);
-    @expect(minInt(u16) == 0);
-    @expect(minInt(u32) == 0);
-    @expect(minInt(u63) == 0);
-    @expect(minInt(u64) == 0);
-    @expect(minInt(u128) == 0);
+test "min_int" {
+    @expect(min_int(u1) == 0);
+    @expect(min_int(u8) == 0);
+    @expect(min_int(u16) == 0);
+    @expect(min_int(u32) == 0);
+    @expect(min_int(u63) == 0);
+    @expect(min_int(u64) == 0);
+    @expect(min_int(u128) == 0);
 
-    @expect(minInt(i1) == -1);
-    @expect(minInt(i8) == -128);
-    @expect(minInt(i16) == -32768);
-    @expect(minInt(i32) == -2147483648);
-    @expect(minInt(i63) == -4611686018427387904);
-    @expect(minInt(i64) == -9223372036854775808);
-    @expect(minInt(i128) == -170141183460469231731687303715884105728);
+    @expect(min_int(i1) == -1);
+    @expect(min_int(i8) == -128);
+    @expect(min_int(i16) == -32768);
+    @expect(min_int(i32) == -2147483648);
+    @expect(min_int(i63) == -4611686018427387904);
+    @expect(min_int(i64) == -9223372036854775808);
+    @expect(min_int(i128) == -170141183460469231731687303715884105728);
 }
 
 test {

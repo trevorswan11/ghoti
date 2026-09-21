@@ -8,7 +8,9 @@ pub constexpr Option := fn(T: type): type {
         };
 
         pub constexpr empty: @This() = .{ .none = {} };
-        pub constexpr orElse := fn(&self, default: T): T {
+
+        /// Returns the contained `some` value or a provided default.
+        pub constexpr unwrap_or := fn(&self, default: T): T {
             return match (self) {
                 .some => |s| s,
                 .none => default,
@@ -17,11 +19,11 @@ pub constexpr Option := fn(T: type): type {
     };
 };
 
-test "Option.orElse returns the default when disengaged" {
+test "Option.unwrap_or returns the default when disengaged" {
     var o: Option(i32) = .of(1);
-    @expect(o.orElse(20) == 1);
+    @expect(o.unwrap_or(20) == 1);
     o = .empty;
-    @expect(o.orElse(42) == 42);
+    @expect(o.unwrap_or(42) == 42);
 }
 
 impl(T: type) builtin.Unwrappable for Option(T) {
@@ -37,7 +39,7 @@ impl(T: type) builtin.Unwrappable for Option(T) {
 
 impl(T: type) builtin.Rewrappable for Option(T) {
     using From = void;
-    pub const fromResidual := fn(_: void): @This() {
+    pub const from_residual := fn(_: void): @This() {
         return .{ .none = {} };
     };
 }

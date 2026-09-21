@@ -16,7 +16,7 @@ pub const Align := enum : i32 {
     };
 
     /// Checks if the provided byte is a valid alignment character
-    pub constexpr isValid := fn(constexpr c: u8): bool {
+    pub constexpr is_valid := fn(constexpr c: u8): bool {
         return match constexpr (c) {
             '<', '>', '^' => true,
             _ => false,
@@ -32,13 +32,13 @@ test "Align at compile time" {
     constexpr a_center := Align.from('^');
     @expect(a_center == .center);
 
-    constexpr v_left := Align.isValid('<');
+    constexpr v_left := Align.is_valid('<');
     @expect(v_left == true);
-    constexpr v_right := Align.isValid('>');
+    constexpr v_right := Align.is_valid('>');
     @expect(v_right == true);
-    constexpr v_center := Align.isValid('^');
+    constexpr v_center := Align.is_valid('^');
     @expect(v_center == true);
-    constexpr v_bad := Align.isValid('x');
+    constexpr v_bad := Align.is_valid('x');
     @expect(v_bad == false);
 }
 
@@ -56,7 +56,7 @@ pub const Kind := enum : u8 {
     @"?" = '?',
 
     /// Checks if the provided byte is a valid kind character
-    pub constexpr isValid := fn(constexpr byte: u8): bool {
+    pub constexpr is_valid := fn(constexpr byte: u8): bool {
         return match constexpr (byte) {
             'd', 'x', 'X', 'b', 'o', 'c', 's', 'e', 'f', 'p', '?' => true,
             _ => false,
@@ -64,13 +64,13 @@ pub const Kind := enum : u8 {
     };
 };
 
-test "Kind.isValid at compile time" {
+test "Kind.is_valid at compile time" {
     constexpr kinds := [_]u8{ 'd', 'x', 'X', 'b', 'o', 'c', 's', 'e', 'f', 'p', '?' };
     for constexpr (kinds) |kind| {
-        constexpr k := Kind.isValid('d');
+        constexpr k := Kind.is_valid('d');
         @expect(k == true);
     }
-    constexpr k_invalid := Kind.isValid('z');
+    constexpr k_invalid := Kind.is_valid('z');
     @expect(k_invalid == false);
 }
 
@@ -86,15 +86,15 @@ pub const Spec := struct {
     pub kind: std.Option(Kind) = .empty, // none means default '{}'
 
     /// Populates the spec with parsed information from its body
-    pub constexpr parseBody := fn(&mut self, constexpr fmt: []u8, constexpr start: usize): usize {
+    pub constexpr parse_body := fn(&mut self, constexpr fmt: []u8, constexpr start: usize): usize {
         constexpr var i := start;
 
         // Fill and align lookahead
-        if constexpr (i + 1 < fmt.len and Align.isValid(fmt[i + 1])) {
+        if constexpr (i + 1 < fmt.len and Align.is_valid(fmt[i + 1])) {
             self.fill = fmt[i];
             self.align = .of(.from(fmt[i + 1]));
             i += 2;
-        } else if constexpr (i < fmt.len and Align.isValid(fmt[i])) {
+        } else if constexpr (i < fmt.len and Align.is_valid(fmt[i])) {
             self.align = .of(.from(fmt[i]));
             i += 1;
         }
@@ -119,25 +119,25 @@ pub const Spec := struct {
 
         // width
         constexpr width_start := i;
-        while constexpr (i < fmt.len and isDigit(fmt[i])) : (i += 1) {}
+        while constexpr (i < fmt.len and is_digit(fmt[i])) : (i += 1) {}
         if constexpr (i > width_start) {
-            self.width = .of(parseUsize(fmt[width_start..i]));
+            self.width = .of(parse_usize(fmt[width_start..i]));
         }
 
         // precision
         if constexpr (i < fmt.len and fmt[i] == '.') {
             i += 1;
             constexpr prec_start := i;
-            while constexpr (i < fmt.len and isDigit(fmt[i])) : (i += 1) {}
+            while constexpr (i < fmt.len and is_digit(fmt[i])) : (i += 1) {}
             if constexpr (i == prec_start) {
                 @compileError("fmt: bad spec: '.' with no precision digits");
             }
-            self.precision = .of(parseUsize(fmt[prec_start..i]));
+            self.precision = .of(parse_usize(fmt[prec_start..i]));
         }
 
         // kind
         if constexpr (i < fmt.len and fmt[i] != '}') {
-            if constexpr (!Kind.isValid(fmt[i])) {
+            if constexpr (!Kind.is_valid(fmt[i])) {
                 @compileError("fmt: bad spec: unrecognized type char");
             }
             self.kind = .of(@as(Kind, fmt[i]));
@@ -148,9 +148,9 @@ pub const Spec := struct {
     };
 };
 
-test "Spec.parseBody parses all spec inputs at compile time" {
+test "Spec.parse_body parses all spec inputs at compile time" {
     constexpr var s: Spec = .{};
-    constexpr end := s.parseBody("*^+08.3f}", 0);
+    constexpr end := s.parse_body("*^+08.3f}", 0);
     @expect(end == 8);
     @expect(s.fill == '*');
     match (s.align) {
@@ -183,15 +183,15 @@ pub const Placeholder := struct {
         constexpr var s: Spec = .{};
 
         constexpr digit_start := i;
-        while constexpr (i < fmt.len and isDigit(fmt[i])) : (i += 1) {}
+        while constexpr (i < fmt.len and is_digit(fmt[i])) : (i += 1) {}
         if constexpr (i > digit_start) {
-            s.arg_idx = .of(parseUsize(fmt[digit_start..i]));
+            s.arg_idx = .of(parse_usize(fmt[digit_start..i]));
         }
 
         // Without a colon the spec is extremely simple
         if constexpr (i < fmt.len and fmt[i] == ':') {
             i += 1;
-            i = s.parseBody(fmt, i);
+            i = s.parse_body(fmt, i);
         }
 
         return .{
@@ -238,21 +238,21 @@ test "Placeholder.parse at compile time" {
     }
 }
 
-pub constexpr isDigit := fn(constexpr c: u8): bool {
+pub constexpr is_digit := fn(constexpr c: u8): bool {
     return c >= '0' and c <= '9';
 };
 
-test "isDigit at compile time" {
-    constexpr d0 := isDigit('0');
+test "is_digit at compile time" {
+    constexpr d0 := is_digit('0');
     @expect(d0 == true);
-    constexpr d9 := isDigit('9');
+    constexpr d9 := is_digit('9');
     @expect(d9 == true);
-    constexpr da := isDigit('a');
+    constexpr da := is_digit('a');
     @expect(da == false);
 }
 
 /// Parses a decimal integer from a slice of ASCII digit bytes at compile time.
-pub constexpr parseUsize := fn(constexpr digits: []u8): usize {
+pub constexpr parse_usize := fn(constexpr digits: []u8): usize {
     constexpr var n: usize = 0;
     for constexpr (digits) |c| {
         n = n * 10 + @intCast(usize, c - '0');
@@ -260,16 +260,16 @@ pub constexpr parseUsize := fn(constexpr digits: []u8): usize {
     return n;
 };
 
-test "parseUsize at compile time" {
-    constexpr n0 := parseUsize("0");
+test "parse_usize at compile time" {
+    constexpr n0 := parse_usize("0");
     @expect(n0 == 0);
-    constexpr n42 := parseUsize("42");
+    constexpr n42 := parse_usize("42");
     @expect(n42 == 42);
-    constexpr n1234 := parseUsize("1234");
+    constexpr n1234 := parse_usize("1234");
     @expect(n1234 == 1234);
 }
 
-pub constexpr nextPlaceholder := fn(constexpr fmt: []u8, constexpr from: usize): usize {
+pub constexpr next_placeholder := fn(constexpr fmt: []u8, constexpr from: usize): usize {
     constexpr var i := from;
     while constexpr (i < fmt.len) : (i += 1) {
         if constexpr (fmt[i] == '{') {
@@ -292,14 +292,14 @@ pub constexpr nextPlaceholder := fn(constexpr fmt: []u8, constexpr from: usize):
     return fmt.len;
 };
 
-test "nextPlaceholder at compile time" {
-    constexpr p1 := nextPlaceholder("a{{b}}c{}", 0);
+test "next_placeholder at compile time" {
+    constexpr p1 := next_placeholder("a{{b}}c{}", 0);
     @expect(p1 == 7);
-    constexpr p2 := nextPlaceholder("no placeholders", 0);
+    constexpr p2 := next_placeholder("no placeholders", 0);
     @expect(p2 == 15);
-    constexpr p3 := nextPlaceholder("{}", 0);
+    constexpr p3 := next_placeholder("{}", 0);
     @expect(p3 == 0);
-    constexpr p4 := nextPlaceholder("{{}}", 0);
+    constexpr p4 := next_placeholder("{{}}", 0);
     @expect(p4 == 4);
 }
 
@@ -348,7 +348,7 @@ test "validate at compile time" {
     validate("{:#08x} = {:+5.2f}", 2);
 }
 
-const toIOErr := fn(_: std.io.Error): std.fmt.Error {
+const to_io_err := fn(_: std.io.Error): std.fmt.Error {
     return .io;
 };
 
@@ -360,12 +360,12 @@ pub const pad := fn(
 ): std.Result(void, std.fmt.Error) {
     const width := match (spec.width) {
         .some => |explicit_width| explicit_width,
-        .none => return w.writeAll(body).mapErr(toIOErr),
+        .none => return w.write_all(body).map_err(to_io_err),
     };
-    if (width <= body.len) return w.writeAll(body).mapErr(toIOErr);
+    if (width <= body.len) return w.write_all(body).map_err(to_io_err);
 
     const padding := width - body.len;
-    const left_pad := match (spec.align.orElse(default_align)) {
+    const left_pad := match (spec.align.unwrap_or(default_align)) {
         .left => 0uz,
         .right => padding,
         .center => padding / 2,
@@ -373,12 +373,12 @@ pub const pad := fn(
     const right_pad := padding - left_pad;
 
     for (0..left_pad) |_| {
-        w.writeByte(spec.fill).mapErr(toIOErr)?;
+        w.write_byte(spec.fill).map_err(to_io_err)?;
     }
-    w.writeAll(body).mapErr(toIOErr)?;
+    w.write_all(body).map_err(to_io_err)?;
 
     for (0..right_pad) |_| {
-        w.writeByte(spec.fill).mapErr(toIOErr)?;
+        w.write_byte(spec.fill).map_err(to_io_err)?;
     }
     return .{ .ok = {} };
 };
@@ -396,19 +396,19 @@ test "pad applies default and explicit alignment" {
 }
 
 /// Write N bytes of value `byte` to the writer
-pub const writeFillN := fn(
+pub const write_fill_n := fn(
     w: &mut dyn std.io.Writer(Error = std.io.Error),
     byte: u8,
     n: usize,
 ): std.Result(void, std.fmt.Error) {
     for (0..n) |_| {
-        w.writeByte(byte).mapErr(toIOErr)?;
+        w.write_byte(byte).map_err(to_io_err)?;
     }
     return .{ .ok = {} };
 };
 
 /// Writes a literal/escaped curly brace sequence to the writer
-pub const writeLiteral := fn(
+pub const write_literal := fn(
     w: &mut dyn std.io.Writer(Error = std.io.Error),
     raw: []u8,
 ): std.Result(void, std.fmt.Error) {
@@ -418,9 +418,9 @@ pub const writeLiteral := fn(
         if (i >= raw.len) break;
         if (raw[i] == '{' or raw[i] == '}') {
             if (i > start) {
-                w.writeAll(raw[start..i]).mapErr(toIOErr)?;
+                w.write_all(raw[start..i]).map_err(to_io_err)?;
             }
-            w.writeByte(raw[i]).mapErr(toIOErr)?;
+            w.write_byte(raw[i]).map_err(to_io_err)?;
             i += 2;
             start = i;
             continue;
@@ -428,14 +428,14 @@ pub const writeLiteral := fn(
         i += 1;
     }
     if (raw.len > start) {
-        w.writeAll(raw[start..]).mapErr(toIOErr)?;
+        w.write_all(raw[start..]).map_err(to_io_err)?;
     }
     return .{ .ok = {} };
 };
 
-test "writeLiteral unescapes braces and coalesces runs" {
+test "write_literal unescapes braces and coalesces runs" {
     var backing: [16]mut u8 = undefined;
     var stream: std.io.FixedBufferStream = .{ .buf = backing };
-    @expect(writeLiteral(&mut stream, "a{{b}}c") == .ok);
+    @expect(write_literal(&mut stream, "a{{b}}c") == .ok);
     @expect(std.mem.eql(u8, "a{b}c", backing[..stream.pos]));
 }

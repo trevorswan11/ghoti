@@ -90,7 +90,7 @@ TEST_CASE("the `?` operator works inside a generic function body") {
         }
         impl builtin.Rewrappable for R {
             using From = u8;
-            pub const fromResidual := fn(r: u8): @This() { return .{ .err = r }; };
+            pub const from_residual := fn(r: u8): @This() { return .{ .err = r }; };
         }
         const first := fn(T: type, r: R): R {
             const v := r?;

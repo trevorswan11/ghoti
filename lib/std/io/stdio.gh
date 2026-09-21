@@ -9,7 +9,7 @@ using File = std.io.File;
 pub const stdout := fn(): Result(File, Error) {
     return match (std.os.stdout()) {
         .ok => |h| .{ .ok = .{ .handle = h } },
-        .err => |e| .{ .err = .fromOs(e) },
+        .err => |e| .{ .err = .from_os(e) },
     };
 };
 
@@ -17,7 +17,7 @@ pub const stdout := fn(): Result(File, Error) {
 pub const stdin := fn(): Result(File, Error) {
     return match (std.os.stdin()) {
         .ok => |h| .{ .ok = .{ .handle = h } },
-        .err => |e| .{ .err = .fromOs(e) },
+        .err => |e| .{ .err = .from_os(e) },
     };
 };
 
@@ -25,32 +25,32 @@ pub const stdin := fn(): Result(File, Error) {
 pub const stderr := fn(): Result(File, Error) {
     return match (std.os.stderr()) {
         .ok => |h| .{ .ok = .{ .handle = h } },
-        .err => |e| .{ .err = .fromOs(e) },
+        .err => |e| .{ .err = .from_os(e) },
     };
 };
 
 /// Print the contents of `bytes` to stdout
 pub const print := fn(bytes: []u8): Result(void, Error) {
     var f := stdout()?;
-    return f.writeAll(bytes);
+    return f.write_all(bytes);
 };
 
 /// Print the contents of `bytes` to stdout, followed by a newline
 pub const println := fn(bytes: []u8): Result(void, Error) {
     var f := stdout()?;
-    f.writeAll(bytes)?;
-    return f.writeByte('\n');
+    f.write_all(bytes)?;
+    return f.write_byte('\n');
 };
 
 /// Print the contents of `bytes` to stderr
 pub const eprint := fn(bytes: []u8): Result(void, Error) {
     var f := stderr()?;
-    return f.writeAll(bytes);
+    return f.write_all(bytes);
 };
 
 /// Print the contents of `bytes` to stderr, followed by a newline
 pub const eprintln := fn(bytes: []u8): Result(void, Error) {
     var f := stderr()?;
-    f.writeAll(bytes)?;
-    return f.writeByte('\n');
+    f.write_all(bytes)?;
+    return f.write_byte('\n');
 };

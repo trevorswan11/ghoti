@@ -7,7 +7,7 @@ pub const Writer := interface {
     pub const write := fn(&mut self, bytes: []u8): std.Result(usize, Error);
 
     /// Write all the contents of `bytes` until it's 'empty'
-    pub const writeAll := fn(&mut self, bytes: []u8): std.Result(void, Error) {
+    pub const write_all := fn(&mut self, bytes: []u8): std.Result(void, Error) {
         var off: usize = 0;
         loop {
             if (off == bytes.len) {
@@ -20,8 +20,8 @@ pub const Writer := interface {
     };
 
     /// Write a single byte
-    pub const writeByte := fn(&mut self, b: u8): std.Result(void, Error) {
+    pub const write_byte := fn(&mut self, b: u8): std.Result(void, Error) {
         const one := [1uz]u8{ b };
-        return self.writeAll(one);
+        return self.write_all(one);
     };
 };

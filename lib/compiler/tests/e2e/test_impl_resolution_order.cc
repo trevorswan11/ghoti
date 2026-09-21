@@ -255,7 +255,7 @@ TEST_CASE(
         }
         impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
             using From = E;
-            pub const fromResidual := fn(r: E): @This() { return .{ .err = r }; };
+            pub const from_residual := fn(r: E): @This() { return .{ .err = r }; };
         }
     )"};
     constexpr std::string_view writer_gh{R"(
@@ -320,7 +320,7 @@ TEST_CASE("E2E: one inherited cross-module default method calls another through 
         }
         impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
             using From = E;
-            pub const fromResidual := fn(r: E): @This() { return .{ .err = r }; };
+            pub const from_residual := fn(r: E): @This() { return .{ .err = r }; };
         }
     )"};
     constexpr std::string_view writer_gh{R"(
@@ -388,7 +388,7 @@ TEST_CASE("E2E: a second impl of the same interface still inherits its default m
         }
         impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
             using From = E;
-            pub const fromResidual := fn(r: E): @This() { return .{ .err = r }; };
+            pub const from_residual := fn(r: E): @This() { return .{ .err = r }; };
         }
     )"};
     constexpr std::string_view reader_gh{R"(

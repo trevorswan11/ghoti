@@ -17,9 +17,9 @@ pub constexpr Result := fn(T: type, E: type): type {
             };
         };
 
-        pub constexpr mapErr := fn(&self, func: auto): auto {
+        pub constexpr map_err := fn(&self, func: auto): auto {
             constexpr fn_info := @typeInfo(@typeOf(func));
-            @assert(fn_info == .function, "mapErr requires a function argument");
+            @assert(fn_info == .function, "map_err requires a function argument");
             const NewErr := fn_info.function.return_type;
             using NewRes = Result(T, NewErr);
 
@@ -47,9 +47,9 @@ test "Result.map transforms ok variant" {
     );
 }
 
-test "Result.mapErr transforms error variant" {
+test "Result.map_err transforms error variant" {
     const a: Result(void, i32) = .{ .err = 1 };
-    const mapped := a.mapErr(
+    const mapped := a.map_err(
         fn(val: i32): bool {
             return false;
         },
@@ -63,7 +63,7 @@ test "Result.mapErr transforms error variant" {
     );
 
     const b: Result(void, i32) = .{ .err = 2 };
-    const mapped_u8 := b.mapErr(
+    const mapped_u8 := b.map_err(
         fn(_: i32): u8 {
             return 7;
         },
@@ -90,7 +90,7 @@ impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
 
 impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
     using From = E;
-    pub const fromResidual := fn(r: E): @This() {
+    pub const from_residual := fn(r: E): @This() {
         return .{ .err = r };
     };
 }

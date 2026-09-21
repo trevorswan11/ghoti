@@ -93,7 +93,7 @@ pub const Unwrappable := interface {
 /// value from an unwrap expression's residual payload during `?` propagation.
 pub const Rewrappable := interface {
     From: type;
-    pub const fromResidual := fn(r: From): @This();
+    pub const from_residual := fn(r: From): @This();
 };
 
 extern const __ghoti_test_take_skipped: fn(): bool;

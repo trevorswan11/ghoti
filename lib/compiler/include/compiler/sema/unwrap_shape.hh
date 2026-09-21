@@ -24,7 +24,7 @@ inline constexpr std::string_view OUTPUT{"Output"};
 inline constexpr std::string_view RESIDUAL{"Residual"};
 inline constexpr std::string_view FROM{"From"};
 inline constexpr std::string_view BRANCH{"branch"};
-inline constexpr std::string_view FROM_RESIDUAL{"fromResidual"};
+inline constexpr std::string_view FROM_RESIDUAL{"from_residual"};
 inline constexpr std::string_view FLOW_CONTINUE{"continue"};
 inline constexpr std::string_view FLOW_BREAK{"break"};
 
@@ -68,7 +68,7 @@ struct rewrap_info {
 // Resolves whether `operand` implements `builtin.Unwrappable`, extracting its `branch()` shape.
 [[nodiscard]] auto unwrap_shape_of(context& ctx, type& operand) -> stdx::option<unwrap_info>;
 
-// Resolves whether `return_type` implements `builtin.Rewrappable`, extracting its `fromResidual()`
+// Resolves whether `return_type` implements `builtin.Rewrappable`, extracting its `from_residual()`
 // shape.
 [[nodiscard]] auto rewrap_shape_of(context& ctx, type& return_type) -> stdx::option<rewrap_info>;
 

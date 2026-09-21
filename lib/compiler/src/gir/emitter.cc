@@ -6691,7 +6691,7 @@ auto emitter::emit_unwrap_propagation(value                    flow_slot,
     }
 
     // Rewrap the residual into the enclosing function's return type using
-    // `Rewrappable.fromResidual`.
+    // `Rewrappable.from_residual`.
     const auto rewrap{rewrap_shape_of(ctx_, ret_type)};
     ASSERT(rewrap, "`?` propagation return type must implement Rewrappable");
 
