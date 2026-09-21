@@ -51,6 +51,25 @@ auto doc_manager::join(std::vector<doc_id> items, doc_id sep) -> doc_id {
     return concat(std::move(out));
 }
 
+auto doc_manager::contains_hard_break(doc_id id, bool nested) const noexcept -> bool {
+    return (*this)[id].visit(
+        [&](docs::text) { return false; },
+        [&](const docs::concat& c) {
+            return std::ranges::any_of(c.children, [&](doc_id child) {
+                return contains_hard_break(child, nested);
+            });
+        },
+        [&](docs::indent i) { return contains_hard_break(i.child, true); },
+        [&](docs::group g) {
+            return g.force_break || contains_hard_break(g.child, nested);
+        },
+        [&](docs::line_or_space) { return false; },
+        [&](docs::hard_line) { return nested; },
+        [&](docs::soft_line) { return false; },
+        [&](docs::if_break b) { return contains_hard_break(b.when_flat, nested); },
+        [&](docs::align a) { return contains_hard_break(a.child, nested); });
+}
+
 auto doc_manager::delimited(std::string_view    open,
                             std::string_view    close,
                             std::vector<doc_id> items,

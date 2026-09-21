@@ -110,6 +110,10 @@ class doc_manager {
     [[nodiscard]] auto if_break(syntax::doc_id when_broken, syntax::doc_id when_flat)
         -> syntax::doc_id;
 
+    // True if `id` renders across multiple lines regardless of the width it's placed at
+    [[nodiscard]] auto contains_hard_break(syntax::doc_id id, bool nested = false) const noexcept
+        -> bool;
+
     // Interleaves `sep` between `items`.
     [[nodiscard]] auto join(std::vector<syntax::doc_id> items, syntax::doc_id sep)
         -> syntax::doc_id;

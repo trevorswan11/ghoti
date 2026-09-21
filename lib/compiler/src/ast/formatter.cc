@@ -833,6 +833,15 @@ auto formatter::visit(node_id, const call_expr& node) -> syntax::doc_id {
         }
         args.emplace_back(rendered);
     }
+
+    if (args.size() == 1 && doc_manager_.contains_hard_break(args[0])) {
+        return doc_manager_.concat({
+            format(node.function),
+            doc_manager_.text("("),
+            args[0],
+            doc_manager_.text(")"),
+        });
+    }
     return doc_manager_.concat({
         format(node.function),
         doc_manager_.delimited("(", ")", std::move(args), false, true, node.args_force_break),
@@ -1054,15 +1063,17 @@ auto formatter::visit(node_id id, const assignment_expr& node) -> syntax::doc_id
 }
 
 auto formatter::visit(node_id id, const binary_expr& node) -> syntax::doc_id {
-    return doc_manager_.group(doc_manager_.concat({
-        format(node.lhs),
-        doc_manager_.nest(doc_manager_.concat({
-            doc_manager_.text(" "),
-            doc_manager_.text(operator_spelling(id.get_token_type())),
-            doc_manager_.line(),
-            format(node.rhs),
-        })),
-    }));
+    auto lhs{format(node.lhs)};
+    auto tail{doc_manager_.nest(doc_manager_.concat({
+        doc_manager_.text(" "),
+        doc_manager_.text(operator_spelling(id.get_token_type())),
+        doc_manager_.line(),
+        format(node.rhs),
+    }))};
+    if (doc_manager_.contains_hard_break(lhs)) {
+        return doc_manager_.concat({lhs, doc_manager_.group(tail)});
+    }
+    return doc_manager_.group(doc_manager_.concat({lhs, tail}));
 }
 
 auto formatter::visit(node_id, const dot_expr& node) -> syntax::doc_id {
