@@ -178,6 +178,28 @@ auto analyzer::emit_llvm_ir_text(gir::module& gir_module, const codegen::optimiz
     return codegen::llvm_lowering::to_ir_string(*llvm_mod);
 }
 
+namespace {
+
+auto prune_to_test_reachable(gir::module& gir_module) -> void {
+    std::vector<std::string_view> roots;
+    for (const auto* fn : gir_module.get_test_functions()) { roots.emplace_back(fn->get_name()); }
+    roots.emplace_back("test_runner");
+    roots.emplace_back("expect_handler");
+    roots.emplace_back("require_handler");
+    roots.emplace_back("skip_handler");
+    gir_module.prune_unreachable(roots);
+}
+
+} // namespace
+
+auto analyzer::emit_llvm_ir_text_test_executable(gir::module&                      gir_module,
+                                                 const codegen::optimizer_options& options)
+    -> stdx::result<std::string, codegen::diagnostic> {
+    PROFILE_FUNCTION();
+    prune_to_test_reachable(gir_module);
+    return emit_llvm_ir_text(gir_module, options);
+}
+
 auto analyzer::emit_asm_text(gir::module&                      gir_module,
                              const codegen::target_options&    target_opts,
                              const codegen::optimizer_options& opt_options)
@@ -194,6 +216,15 @@ auto analyzer::emit_asm_text(gir::module&                      gir_module,
 
     auto llvm_mod{TRY(emit_llvm_ir(gir_module, context, opts))};
     return codegen::emit_asm_string(*llvm_mod, *target_machine);
+}
+
+auto analyzer::emit_asm_text_test_executable(gir::module&                      gir_module,
+                                             const codegen::target_options&    target_opts,
+                                             const codegen::optimizer_options& opt_options)
+    -> stdx::result<std::string, codegen::diagnostic> {
+    PROFILE_FUNCTION();
+    prune_to_test_reachable(gir_module);
+    return emit_asm_text(gir_module, target_opts, opt_options);
 }
 
 auto analyzer::validate_main_entry(const mod::module& root_module) const
@@ -419,14 +450,7 @@ auto analyzer::emit_llvm_ir_test_executable(gir::module&                      gi
                                             const codegen::optimizer_options& options)
     -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic> {
     PROFILE_FUNCTION();
-    std::vector<std::string_view> roots;
-    for (const auto* fn : gir_module.get_test_functions()) { roots.emplace_back(fn->get_name()); }
-    roots.emplace_back("test_runner");
-    // Weak context handlers are invoked from lowered code so pin them here
-    roots.emplace_back("expect_handler");
-    roots.emplace_back("require_handler");
-    roots.emplace_back("skip_handler");
-    gir_module.prune_unreachable(roots);
+    prune_to_test_reachable(gir_module);
     codegen::llvm_lowering lowering{context, gir_module.get_ast_module().path.string()};
     bool                   recover_args{true};
     if (options.target_machine) {

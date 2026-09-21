@@ -77,7 +77,8 @@ struct options {
     // --emit-gir / --emit-llvm-ir / --emit-asm, if any.
     [[nodiscard]] auto emit_debug_artifacts(sema::analyzer& analyzer,
                                             gir::module&    gir_mod,
-                                            std::ostream&   error_stream) const
+                                            std::ostream&   error_stream,
+                                            bool            for_test_executable = false) const
         -> stdx::result<void, clap::error>;
 
     // Converts the input path from absolute to relative if needed

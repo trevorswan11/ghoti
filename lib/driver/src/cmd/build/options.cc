@@ -236,7 +236,8 @@ auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_v
 
 auto options::emit_debug_artifacts(sema::analyzer& analyzer,
                                    gir::module&    gir_mod,
-                                   std::ostream&   error_stream) const
+                                   std::ostream&   error_stream,
+                                   bool            for_test_executable) const
     -> stdx::result<void, clap::error> {
     const auto write_file{[&](const std::filesystem::path& path,
                               std::string_view             contents,
@@ -261,7 +262,8 @@ auto options::emit_debug_artifacts(sema::analyzer& analyzer,
     if (emit_gir_path) { TRY(write_file(*emit_gir_path, gir_mod.to_string(), "GIR")); }
 
     if (emit_llvm_ir_path) {
-        auto ir{analyzer.emit_llvm_ir_text(gir_mod, opt_opts)};
+        auto ir{for_test_executable ? analyzer.emit_llvm_ir_text_test_executable(gir_mod, opt_opts)
+                                    : analyzer.emit_llvm_ir_text(gir_mod, opt_opts)};
         if (!ir) {
             return clap::fatal_error(error_stream,
                                      ir.error().get_message().value_or(GHOTI_UNKNOWN_ERROR),
@@ -271,7 +273,9 @@ auto options::emit_debug_artifacts(sema::analyzer& analyzer,
     }
 
     if (emit_asm_path) {
-        auto asm_text{analyzer.emit_asm_text(gir_mod, target_opts, opt_opts)};
+        auto asm_text{for_test_executable
+                          ? analyzer.emit_asm_text_test_executable(gir_mod, target_opts, opt_opts)
+                          : analyzer.emit_asm_text(gir_mod, target_opts, opt_opts)};
         if (!asm_text) {
             return clap::fatal_error(error_stream,
                                      asm_text.error().get_message().value_or(GHOTI_UNKNOWN_ERROR),
