@@ -381,6 +381,7 @@ auto analyzer::emit_object(gir::module&                      gir_module,
         opts.level = target_opts.level;
     }
 
+    gir_module.prune_unreachable({});
     auto llvm_mod{TRY(emit_llvm_ir(gir_module, context, opts))};
     return codegen::emit_object_file(*llvm_mod, *target_machine, output_path);
 }

@@ -64,6 +64,11 @@ namespace {
     return k == sema::type_kind::CONSTEXPR_INT || k == sema::type_kind::CONSTEXPR_FLOAT;
 }
 
+[[nodiscard]] auto is_comptime_only_signature(const sema::types::function& fn_data) noexcept
+    -> bool {
+    return fn_data.return_type.get_kind() == sema::type_kind::TYPE;
+}
+
 // The concrete peer type two operands should lower against, or none if both are
 // `is_untyped_constexpr`
 [[nodiscard]] auto concrete_peer_type(stdx::option<sema::type&> op0_ty,
@@ -1483,7 +1488,19 @@ auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function*
 auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
     PROFILE_FUNCTION();
     auto* llvm_fn{declare_function(fn)};
-    if (fn.get_linkage() == gir::linkage::EXTERN || fn.get_segments().empty()) { return llvm_fn; }
+    if (!llvm_fn) { return llvm_fn; }
+    const auto* target_t{&fn.get_type()};
+    if (const auto ref{target_t->get_data().as_opt<sema::types::reference>()}) {
+        target_t = &ref->underlying;
+    }
+    if (const auto ptr{target_t->get_data().as_opt<sema::types::pointer>()}) {
+        target_t = &ptr->underlying;
+    }
+    const auto fn_data{target_t->get_data().as_opt<sema::types::function>()};
+    if (fn.get_linkage() == gir::linkage::EXTERN || fn.get_segments().empty() ||
+        (fn_data && is_comptime_only_signature(*fn_data))) {
+        return llvm_fn;
+    }
     clear_locals();
 
     // Pre-allocate basic blocks for all segments
