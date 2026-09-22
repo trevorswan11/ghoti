@@ -63,7 +63,6 @@ constexpr auto ALL_OPERATORS{
                                                    operators::EQ,
                                                    operators::NEQ,
                                                    operators::ELLIPSIS,
-                                                   operators::COLON_COLON,
                                                    operators::DOT,
                                                    operators::DOT_DOT,
                                                    operators::DOT_DOT_EQ,

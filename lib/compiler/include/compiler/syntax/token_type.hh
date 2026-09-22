@@ -90,7 +90,6 @@ enum class token_type_t : u8 {
     COMMA,
     COLON,
     SEMICOLON,
-    COLON_COLON,
     ELLIPSIS,
 
     LPAREN,

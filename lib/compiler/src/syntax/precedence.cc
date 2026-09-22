@@ -63,7 +63,6 @@ constexpr auto ALL_BINDINGS{stdx::fixed::enum_map<token_type_t, stdx::option<bin
     map_pair{token_type_t::NOT_ASSIGN, assignment_binding},
     map_pair{token_type_t::XOR_ASSIGN, assignment_binding},
     map_pair{token_type_t::DOT, bind_precedence::SCOPE_RESOLUTION},
-    map_pair{token_type_t::COLON_COLON, bind_precedence::SCOPE_RESOLUTION},
     map_pair{token_type_t::LBRACE, bind_precedence::INITIALIZATION},
     map_pair{token_type_t::COLON, bind_precedence::LABEL})};
 // NOLINTEND

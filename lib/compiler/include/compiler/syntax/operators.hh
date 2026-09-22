@@ -62,7 +62,6 @@ constexpr operator_t EQ{"==", token_type_t::EQ};
 constexpr operator_t NEQ{"!=", token_type_t::NEQ};
 
 constexpr operator_t ELLIPSIS{"...", token_type_t::ELLIPSIS};
-constexpr operator_t COLON_COLON{"::", token_type_t::COLON_COLON};
 constexpr operator_t DOT{".", token_type_t::DOT};
 constexpr operator_t DOT_DOT{"..", token_type_t::DOT_DOT};
 constexpr operator_t DOT_DOT_EQ{"..=", token_type_t::DOT_DOT_EQ};
