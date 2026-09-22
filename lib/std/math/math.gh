@@ -87,8 +87,8 @@ pub constexpr Log2Int := fn(T: type): type {
 test "Log2Int construction" {
     @expect(Log2Int(constexpr_int) == constexpr_int);
     @expect(Log2Int(u64) == u6);
-    @expect(Log2Int(u65) == u6);
-    // @expect(Log2Int(u32) == u5); // TODO(tcs): Fails due to a monomorph bug
+    @expect(Log2Int(u65) == u7);
+    @expect(Log2Int(u32) == u5);
 }
 
 /// Returns the maximum value of integer type T.

@@ -207,6 +207,22 @@ template <typename T>
     return stdx::none;
 }
 
+// Reads one field off a compile-time-known descriptor struct
+template <typename T>
+[[nodiscard]] auto desc_field(const const_struct& desc, std::string_view name) -> stdx::option<T> {
+    const auto field{desc.get_field_opt(name)};
+    if (!field) { return stdx::none; }
+    if constexpr (std::is_same_v<T, u64>) {
+        return field->as_u64_opt();
+    } else if constexpr (std::is_same_v<T, sema::type&>) {
+        const auto v{field->as_opt<stdx::option<sema::type&>>()};
+        if (!v || !*v) { return stdx::none; }
+        return **v;
+    } else {
+        return field->as_opt<T>().materialize();
+    }
+}
+
 } // namespace
 
 auto const_eval::try_eval(ast::node_id id) -> stdx::option<const_value> {
@@ -3000,6 +3016,111 @@ auto const_eval::eval_builtin(ast::node_id          id,
         auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
         if (t1->get_kind() != sema::type_kind::INTERFACE) { return const_value{false, bool_type}; }
         return const_value{ctx_.impls.implements(*t0, *t1), bool_type};
+    }
+    case syntax::token_type_t::BUILTIN_INT:
+    case syntax::token_type_t::BUILTIN_FLOAT:
+    case syntax::token_type_t::BUILTIN_POINTER:
+    case syntax::token_type_t::BUILTIN_REFERENCE:
+    case syntax::token_type_t::BUILTIN_SLICE:
+    case syntax::token_type_t::BUILTIN_ARRAY:
+    case syntax::token_type_t::BUILTIN_FN:        {
+        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
+        const auto desc_h{call.arguments[0].as_opt<ast::expr_handle>()};
+        if (!desc_h) { return stdx::none; }
+        const auto desc_val{try_eval(*desc_h)};
+        const auto desc{desc_val ? desc_val->as_opt<const_struct>() : stdx::none};
+        if (!desc) { return stdx::none; }
+
+        switch (builtin_type) {
+        case syntax::token_type_t::BUILTIN_INT: {
+            const auto bits_v{desc_field<u64>(*desc, "bits")};
+            auto       signedness_v{desc_field<const_enum>(*desc, "signedness")};
+            if (!signedness_v) { signedness_v = desc_field<const_enum>(*desc, "signed"); }
+            if (!bits_v || !signedness_v) { return stdx::none; }
+            if (signedness_v->name != "signed" && signedness_v->name != "unsigned") {
+                return stdx::none;
+            }
+            return const_value{
+                ctx_.get_int(static_cast<u16>(*bits_v), signedness_v->name == "signed")};
+        }
+        case syntax::token_type_t::BUILTIN_FLOAT: {
+            const auto bits_v{desc_field<u64>(*desc, "bits")};
+            if (!bits_v) { return stdx::none; }
+            sema::type_kind kind{};
+            switch (*bits_v) {
+            case 16:  kind = sema::type_kind::F16; break;
+            case 32:  kind = sema::type_kind::F32; break;
+            case 64:  kind = sema::type_kind::F64; break;
+            case 80:  kind = sema::type_kind::F80; break;
+            case 128: kind = sema::type_kind::F128; break;
+            default:  return stdx::none;
+            }
+            return const_value{ctx_.get_builtin_resolved_type(kind)};
+        }
+        case syntax::token_type_t::BUILTIN_POINTER:
+        case syntax::token_type_t::BUILTIN_REFERENCE: {
+            const auto child_v{desc_field<sema::type&>(*desc, "child")};
+            const auto mut_v{desc_field<bool>(*desc, "is_mut")};
+            const auto vol_v{desc_field<bool>(*desc, "is_volatile")};
+            if (!child_v || !mut_v || !vol_v) { return stdx::none; }
+            auto mods{*mut_v ? sema::types::mut::MUTABLE : sema::types::mut::CONSTANT};
+            if (*vol_v) { mods |= sema::types::mut::VOLATILE; }
+            return const_value{builtin_type == syntax::token_type_t::BUILTIN_POINTER
+                                   ? ctx_.get_pointer(mods, *child_v)
+                                   : ctx_.get_reference(mods, *child_v)};
+        }
+        case syntax::token_type_t::BUILTIN_SLICE: {
+            const auto child_v{desc_field<sema::type&>(*desc, "child")};
+            const auto sentinel_v{desc_field<bool>(*desc, "sentinel")};
+            const auto mut_v{desc_field<bool>(*desc, "is_mut")};
+            const auto vol_v{desc_field<bool>(*desc, "is_volatile")};
+            if (!child_v || !sentinel_v || !mut_v || !vol_v) { return stdx::none; }
+            auto mods{*mut_v ? sema::types::mut::MUTABLE : sema::types::mut::CONSTANT};
+            if (*vol_v) { mods |= sema::types::mut::VOLATILE; }
+            return const_value{ctx_.get_slice(mods, *sentinel_v, *child_v)};
+        }
+        case syntax::token_type_t::BUILTIN_ARRAY: {
+            const auto child_v{desc_field<sema::type&>(*desc, "child")};
+            const auto len_v{desc_field<u64>(*desc, "len")};
+            const auto sentinel_v{desc_field<bool>(*desc, "sentinel")};
+            const auto mut_v{desc_field<bool>(*desc, "is_mut")};
+            const auto vol_v{desc_field<bool>(*desc, "is_volatile")};
+            if (!child_v || !len_v || !sentinel_v || !mut_v || !vol_v) { return stdx::none; }
+            auto mods{*mut_v ? sema::types::mut::MUTABLE : sema::types::mut::CONSTANT};
+            if (*vol_v) { mods |= sema::types::mut::VOLATILE; }
+            return const_value{
+                ctx_.get_array(mods, *sentinel_v, static_cast<usize>(*len_v), *child_v)};
+        }
+        case syntax::token_type_t::BUILTIN_FN: {
+            const auto params_arr{desc_field<const_array>(*desc, "params")};
+            const auto ret_v{desc_field<sema::type&>(*desc, "return_type")};
+            const auto variadic_v{desc_field<bool>(*desc, "variadic")};
+            const auto has_self_v{desc_field<bool>(*desc, "has_self")};
+            const auto callconv_v{desc_field<const_enum>(*desc, "callconv")};
+            if (!params_arr || !ret_v || !variadic_v || !has_self_v || !callconv_v) {
+                return stdx::none;
+            }
+            const auto conv{ast::calling_convention_from_name(callconv_v->name)};
+            if (!conv) { return stdx::none; }
+
+            auto param_types{ctx_.pool.get_many_unsafe(params_arr->elements.size())};
+            for (usize i{0}; i < params_arr->elements.size(); ++i) {
+                const auto pt{params_arr->elements[i].as_opt<stdx::option<sema::type&>>()};
+                if (!pt || !*pt) { return stdx::none; }
+                param_types[i] = &**pt;
+            }
+
+            sema::types::key_t fn_key{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT};
+            for (const auto* p : param_types) { fn_key.imprint(*p); }
+            fn_key.imprint(*ret_v);
+            fn_key.imprint(*conv);
+            auto& built{*ctx_.pool[fn_key]};
+            built.resolve_if<sema::types::function>(
+                param_types, *ret_v, *has_self_v, *variadic_v, *conv);
+            return const_value{built};
+        }
+        default: return stdx::none;
+        }
     }
     case syntax::token_type_t::BUILTIN_ABS: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
