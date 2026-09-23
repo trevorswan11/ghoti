@@ -172,6 +172,9 @@ class type;
 
 class type;
 
+// Declared names of user struct/enum/union types, keyed by their type
+using type_name_map = ankerl::unordered_dense::map<const type*, std::string_view>;
+
 [[nodiscard]] auto is_same_unqualified(const type& a, const type& b) noexcept -> bool;
 [[nodiscard]] auto is_assignable(const type& src, const type& dest) noexcept -> bool;
 
@@ -506,8 +509,10 @@ class type {
 
     [[nodiscard]] auto get_kind() const noexcept -> type_kind { return key_.get_kind(); }
 
-    // Renders a human-readable form, e.g. "^i32", "[]u8", "fn(i32, ...) -> bool"
-    [[nodiscard]] auto to_string() const -> std::string;
+    // Renders a human-readable form, e.g. "^i32", "[]u8", "fn(i32, ...) -> bool". User aggregates
+    // found in `names`, at any depth, render by their declared name.
+    [[nodiscard]] auto to_string(stdx::option<const type_name_map&> names = stdx::none) const
+        -> std::string;
 
     // Intended for use on pass 1 only
     constexpr auto set_symbol_table_idx(usize idx) noexcept -> void {

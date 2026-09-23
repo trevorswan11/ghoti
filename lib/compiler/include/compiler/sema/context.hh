@@ -61,7 +61,7 @@ struct context {
     std::vector<constexpr_frame> constexpr_binding_frames;
 
     // Declared names for user struct/enum/union types, for `@typeName`
-    ankerl::unordered_dense::map<const type*, std::string_view> user_type_names;
+    type_name_map& user_type_names;
 
     // Cache of read embedded files (path string -> optional file contents)
     ankerl::unordered_dense::map<std::string, stdx::option<std::string>> embed_cache;
@@ -87,8 +87,8 @@ struct context {
             codegen::target_options      target_opts = {}) noexcept
         : modules{modules}, registry{registry}, pool{pool}, generic_functions{generic_functions},
           instantiation_cache{instantiation_cache}, impls{impls}, arena{arena},
-          diags{std::move(diags)}, error_stream{error_stream}, target_opts{std::move(target_opts)} {
-    }
+          diags{std::move(diags)}, error_stream{error_stream}, target_opts{std::move(target_opts)},
+          user_type_names{*arena.make<type_name_map>()} {}
     ~context() = default;
 
     // Creates a copy with identical data but a new diagnostic list

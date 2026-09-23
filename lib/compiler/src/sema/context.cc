@@ -333,10 +333,7 @@ auto context::type_display_name(const type& t) const -> std::string {
         }
     }
 
-    if (const auto it{user_type_names.find(denoted)}; it != user_type_names.end()) {
-        return std::string{it->second};
-    }
-    return denoted->to_string();
+    return denoted->to_string(&user_type_names);
 }
 
 auto context::read_embed_file(const std::filesystem::path& path)

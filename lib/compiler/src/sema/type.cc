@@ -429,7 +429,13 @@ auto cast_rejection_reason(const type& from, const type& to, u32 ptr_bits)
     return stdx::none;
 }
 
-auto type::to_string() const -> std::string {
+auto type::to_string(stdx::option<const type_name_map&> names) const -> std::string {
+    if (names) {
+        if (const auto it{names->find(this)}; it != names->end()) {
+            return std::string{it->second};
+        }
+    }
+
     // An INT's width lives on the key, so it stringifies even before the payload is resolved.
     if (get_kind() == type_kind::INT) {
         const auto info{as_integer(*this)};
@@ -437,37 +443,45 @@ auto type::to_string() const -> std::string {
             "{}{}{}", leaf_qualifier(*this), info->is_signed ? 'i' : 'u', info->bits);
     }
     return data_.visit(
-        [this](types::pointer ptr) {
-            return fmt::format("^{}{}", container_qualifier(*this), ptr.underlying.to_string());
+        [this, names](types::pointer ptr) {
+            return fmt::format(
+                "^{}{}", container_qualifier(*this), ptr.underlying.to_string(names));
         },
-        [this](types::reference ref) {
-            return fmt::format("&{}{}", container_qualifier(*this), ref.underlying.to_string());
+        [this, names](types::reference ref) {
+            return fmt::format(
+                "&{}{}", container_qualifier(*this), ref.underlying.to_string(names));
         },
-        [this](types::slice slice) {
+        [this, names](types::slice slice) {
             return fmt::format("[{}]{}{}",
                                slice.null_terminated ? ":0" : "",
                                container_qualifier(*this),
-                               slice.underlying.to_string());
+                               slice.underlying.to_string(names));
         },
-        [this](types::array arr) {
+        [this, names](types::array arr) {
             return fmt::format("[{}{}]{}{}",
                                arr.len,
                                arr.null_terminated ? ":0" : "",
                                container_qualifier(*this),
-                               arr.underlying.to_string());
+                               arr.underlying.to_string(names));
         },
-        [](types::function fn) {
-            auto params_str{fmt::to_string(fmt::join(
-                fn.params | std::views::transform([](type* param) { return param->to_string(); }),
-                ", "))};
+        [names](types::function fn) {
+            auto params_str{
+                fmt::to_string(fmt::join(fn.params | std::views::transform([names](type* param) {
+                                             return param->to_string(names);
+                                         }),
+                                         ", "))};
             if (fn.is_variadic) { params_str += params_str.empty() ? "..." : ", ..."; }
-            return fmt::format("fn({}): {}", params_str, fn.return_type.to_string());
+            return fmt::format("fn({}): {}", params_str, fn.return_type.to_string(names));
         },
-        [](types::closure_t c) { return fmt::format("closure {}", c.signature.to_string()); },
+        [names](types::closure_t c) {
+            return fmt::format("closure {}", c.signature.to_string(names));
+        },
         [](types::module mod) {
             return fmt::format("module {}", mod.imported.path.stem().string());
         },
-        [](types::enum_t e) { return fmt::format("enum : {}", e.underlying.to_string()); },
+        [names](types::enum_t e) {
+            return fmt::format("enum : {}", e.underlying.to_string(names));
+        },
         [this](const auto&) {
             return fmt::format("{}{}", leaf_qualifier(*this), type_kind_display_name(get_kind()));
         });
