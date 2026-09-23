@@ -50,6 +50,48 @@ auto leaf_qualifier(const type& leaf) -> std::string_view {
     return is_same_unqualified(r->underlying, p->underlying);
 }
 
+// Copying an array copies its element values, so the element's own qualifier is irrelevant and
+// nested arrays recurse as values
+[[nodiscard]] auto is_elem_value_copyable(const type& src_elem, const type& dest_elem) noexcept
+    -> bool {
+    if (src_elem == dest_elem) { return true; }
+
+    const auto src_kind{src_elem.get_kind()};
+    const auto dest_kind{dest_elem.get_kind()};
+    const auto is_view{[](type_kind kind) {
+        return kind == type_kind::POINTER || kind == type_kind::REFERENCE ||
+               kind == type_kind::SLICE;
+    }};
+
+    if (is_view(src_kind) || is_view(dest_kind)) {
+        if (src_elem.is_constant() && !dest_elem.is_constant()) { return false; }
+        if (ref_elem_decays_to_ptr(src_elem, dest_elem)) { return true; }
+        if (src_kind != dest_kind) { return false; }
+        const auto view_parts{[](const type& t) -> std::pair<stdx::option<const type&>, bool> {
+            const auto& data{t.get_data()};
+            if (const auto p{data.as_opt<types::pointer>()}) { return {p->underlying, false}; }
+            if (const auto r{data.as_opt<types::reference>()}) { return {r->underlying, false}; }
+            if (const auto sl{data.as_opt<types::slice>()}) {
+                return {sl->underlying, sl->null_terminated};
+            }
+            return {stdx::none, false};
+        }};
+        const auto [src_pointee, src_nt]{view_parts(src_elem)};
+        const auto [dest_pointee, dest_nt]{view_parts(dest_elem)};
+        if (!src_pointee || !dest_pointee || src_nt != dest_nt) { return false; }
+        if (src_pointee->is_constant() && !dest_pointee->is_constant()) { return false; }
+        return is_same_unqualified(*src_pointee, *dest_pointee);
+    }
+
+    if (const auto a_src{src_elem.get_data().as_opt<types::array>()}) {
+        const auto a_dest{dest_elem.get_data().as_opt<types::array>()};
+        return a_dest && a_src->len == a_dest->len &&
+               a_src->null_terminated == a_dest->null_terminated &&
+               is_elem_value_copyable(a_src->underlying, a_dest->underlying);
+    }
+    return is_same_unqualified(src_elem, dest_elem);
+}
+
 [[nodiscard]] constexpr auto float_significand_bits(type_kind kind) noexcept -> u16 {
     switch (kind) {
     case type_kind::F16:  return 11;
@@ -667,12 +709,8 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
             if (a_src->len != a_dest->len || a_src->null_terminated != a_dest->null_terminated) {
                 return false;
             }
-            if (a_src->underlying.is_constant() && !a_dest->underlying.is_constant()) {
-                return false;
-            }
-            if (src.is_constant() && !dest.is_constant()) { return false; }
-            return is_same_unqualified(a_src->underlying, a_dest->underlying) ||
-                   ref_elem_decays_to_ptr(a_src->underlying, a_dest->underlying);
+            // Arrays are values: assignment copies, so element constness never blocks the copy
+            return is_elem_value_copyable(a_src->underlying, a_dest->underlying);
         }
         default: break;
         }

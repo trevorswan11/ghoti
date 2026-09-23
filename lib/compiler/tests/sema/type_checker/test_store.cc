@@ -110,6 +110,83 @@ TEST_CASE("Type checker store and assignment validation") {
                              sema::error::ASSIGNMENT_TO_CONST,
                              std::pair{3UZ, 23UZ}});
     }
+
+    SECTION("Copying a const-element array into mutable-element storage succeeds") {
+        helpers::type_check_and_verify(R"(
+            const make := fn(): [3]u8 { return [3]u8{1, 2, 3}; };
+            const f := fn(): void {
+                const arr: [3]u8 = .{1, 2, 3};
+                var m: [3]mut u8 = arr;
+                var n: [3]mut u8 = [3]u8{1, 2, 3};
+                var k: [3]mut u8 = make();
+                const h: [2][2]u8 = .{.{1, 2}, .{3, 4}};
+                var g: [2]mut [2]mut u8 = h;
+                m[0] = 10;
+                n[0] = 1;
+                k[0] = 1;
+                g[0][0] = 1;
+                m = arr;
+            };
+        )");
+    }
+
+    SECTION("Copying a mutable-element array into const-element storage succeeds") {
+        helpers::type_check_and_verify(R"(
+            const f := fn(): void {
+                var m: [3]mut u8 = .{1, 2, 3};
+                const c: [3]u8 = m;
+            };
+        )");
+    }
+
+    SECTION("Const-element array argument binds a mutable-element array parameter") {
+        helpers::type_check_and_verify(R"(
+            const g := fn(a: [3]mut u8): u8 { return a[0]; };
+            const f := fn(): void {
+                const arr: [3]u8 = .{1, 2, 3};
+                _ = g(arr);
+            };
+        )");
+    }
+
+    SECTION("Array copy still rejects gaining pointee mutability through pointer elements") {
+        helpers::test_checker_fail(
+            R"(
+            const f := fn(p: ^u8): void {
+                const arr: [2]^u8 = .{p, p};
+                var m: [2]mut ^mut u8 = arr;
+            };
+        )",
+            sema::diagnostic{"Type mismatch in store: cannot assign 'array' to 'array'",
+                             sema::error::TYPE_MISMATCH,
+                             std::pair{3UZ, 40UZ}});
+    }
+
+    SECTION("Array copy still rejects gaining mutability through slice elements") {
+        helpers::test_checker_fail(
+            R"(
+            const f := fn(s: []u8): void {
+                const arr: [2][]u8 = .{s, s};
+                var m: [2][]mut u8 = arr;
+            };
+        )",
+            sema::diagnostic{"Type mismatch in store: cannot assign 'array' to 'array'",
+                             sema::error::TYPE_MISMATCH,
+                             std::pair{3UZ, 37UZ}});
+    }
+
+    SECTION("Const-element array still does not coerce to a mutable-element slice") {
+        helpers::test_checker_fail(
+            R"(
+            const f := fn(): void {
+                var arr: [3]u8 = .{1, 2, 3};
+                const s: []mut u8 = arr;
+            };
+        )",
+            sema::diagnostic{"Type mismatch in store: cannot assign 'slice' to 'slice'",
+                             sema::error::TYPE_MISMATCH,
+                             std::pair{3UZ, 16UZ}});
+    }
 }
 
 } // namespace ghoti::tests
