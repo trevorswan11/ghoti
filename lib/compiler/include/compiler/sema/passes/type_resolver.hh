@@ -312,6 +312,10 @@ class type_resolver {
     // The compile-time-known element count of an array- or slice-valued expression: an array's
     // length, a constant-bounded range index, or a `const` bound to one of those
     [[nodiscard]] auto known_length(ast::node_id expr) -> stdx::option<u64>;
+    // `dst[lo..hi] = src` / `*dst = src`: checks `src` is an equally sized array or slice
+    auto resolve_slice_copy(ast::node_id                id,
+                            const ast::assignment_expr& assign,
+                            ast::expr_handle            dest) -> void;
     [[nodiscard]] auto constexpr_closure_value(ast::expr_handle expr)
         -> stdx::option<gir::const_value>;
 

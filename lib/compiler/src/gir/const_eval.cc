@@ -734,6 +734,43 @@ auto const_eval::eval_slice_copy(ast::node_id id, ast::node_id slice_expr)
     return stdx::none;
 }
 
+// `container[lo..hi] = val`: splices `val`'s elements over that range, then writes the container
+// back to wherever it lives
+auto const_eval::write_range_target(const ast::index_expr& target,
+                                    const ast::range_expr& range,
+                                    const_value            container,
+                                    const_value            val) -> bool {
+    PROFILE_FUNCTION();
+    auto&      u8_type{ctx_.get_int(8, false)};
+    const auto as_array{[&](const_value& v) -> stdx::option<const_array> {
+        if (const auto str{v.as_opt<std::string>()}) { return string_to_byte_array(*str, u8_type); }
+        if (const auto arr{v.as_opt<const_array>()}) { return *arr; }
+        return stdx::none;
+    }};
+    auto dest{as_array(container)};
+    const auto src{as_array(val)};
+    if (!dest || !src) { return false; }
+
+    const auto bound{[&](ast::expr_handle h) -> stdx::option<i128> {
+        const auto cv{try_eval(h)};
+        return cv ? cv->as_int_opt() : stdx::none;
+    }};
+    const auto lo{range.lhs ? bound(*range.lhs) : stdx::option<i128>{0}};
+    auto       hi{range.rhs ? bound(*range.rhs)
+                            : stdx::option<i128>{static_cast<i128>(dest->elements.size())}};
+    if (range.rhs && hi && (*target.index).get_token_type() == syntax::token_type_t::DOT_DOT_EQ) {
+        *hi += 1;
+    }
+    if (!lo || !hi || *lo < 0 || *hi < *lo ||
+        static_cast<usize>(*hi) > dest->elements.size() ||
+        static_cast<usize>(*hi - *lo) != src->elements.size()) {
+        return false;
+    }
+
+    std::ranges::copy(src->elements, dest->elements.begin() + static_cast<idiff>(*lo));
+    return write_target(target.array, const_value{std::move(*dest), container.get_type()});
+}
+
 auto const_eval::write_target(ast::node_id target, const_value val) -> bool {
     PROFILE_FUNCTION();
     if (!target.is_valid()) { return false; }
@@ -763,9 +800,21 @@ auto const_eval::write_target(ast::node_id target, const_value val) -> bool {
         return false;
     }
 
+    // `*s = v` over a range writes through that range, but a `const` slice binding only names a
+    // copy here, so writing through one can't be folded
+    if (const auto deref{module_->ast.get_as_opt<ast::dereference_expr>(target)}) {
+        const auto rhs_type{module_->get_sema_type_opt(deref->rhs)};
+        if (!rhs_type || !rhs_type->get_data().is<sema::types::slice>()) { return false; }
+        if (!module_->ast.get_as_opt<ast::index_expr>(deref->rhs)) { return false; }
+        return write_target(deref->rhs, std::move(val));
+    }
+
     if (const auto idx{module_->ast.get_as_opt<ast::index_expr>(target)}) {
         auto arr_val{try_eval(idx->array)};
         if (!arr_val) { return false; }
+        if (const auto range{module_->ast.get_as_opt<ast::range_expr>(idx->index)}) {
+            return write_range_target(*idx, *range, std::move(*arr_val), std::move(val));
+        }
         const auto idx_val{try_eval(idx->index)};
         if (!idx_val) { return false; }
         const auto k{idx_val->as_uint_opt()};

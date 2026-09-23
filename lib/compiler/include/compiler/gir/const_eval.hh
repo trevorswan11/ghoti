@@ -177,6 +177,10 @@ class const_eval {
         -> stdx::option<sema::type&>;
     [[nodiscard]] auto eval_slice_copy(ast::node_id id, ast::node_id slice_expr)
         -> stdx::option<const_value>;
+    auto write_range_target(const ast::index_expr& target,
+                            const ast::range_expr& range,
+                            const_value            container,
+                            const_value            val) -> bool;
     auto               force_deferred_function_params(sema::type& maybe_fn) -> void;
     auto               force_deferred_aggregate_fields(sema::type& maybe_aggregate) -> void;
     auto               force_deferred_indirection_underlying(sema::type& maybe_indirection) -> void;

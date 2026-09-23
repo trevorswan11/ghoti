@@ -169,4 +169,56 @@ TEST_CASE("Constant range bounds are checked against a known container length") 
                          std::pair{0UZ, 70UZ}});
 }
 
+TEST_CASE("Copying into a slice range is checked statically") {
+    constexpr std::string_view prefix{"const f := fn(): void { var a: [4]mut u8 = .{ 1, 2, 3, 4 }; "};
+    const auto at{[&](usize col) { return std::pair{0UZ, prefix.size() + col}; }};
+    const auto src{[&](std::string_view body) { return fmt::format("{}{} }};", prefix, body); }};
+
+    SECTION("length mismatch") {
+        helpers::test_resolver_fail(
+            src("const b: [3]u8 = .{ 9, 8, 7 }; a[1..3] = b;"),
+            sema::diagnostic{"Cannot copy 3 elements into a slice of length 2",
+                             sema::error::SLICE_LENGTH_MISMATCH,
+                             at(41)});
+    }
+    SECTION("unknown destination length") {
+        helpers::test_resolver_fail(
+            src("var i: usize = 1; const b: [2]u8 = .{ 9, 8 }; a[i..] = b;"),
+            sema::diagnostic{"Cannot copy into a slice whose length is not known at compile time; "
+                             "slice it with constant bounds first (e.g. `s[i..][0..n]`)",
+                             sema::error::UNKNOWN_SLICE_LENGTH,
+                             at(47)});
+    }
+    SECTION("unknown source length") {
+        helpers::test_resolver_fail(
+            src("var i: usize = 1; a[0..2] = a[i..];"),
+            sema::diagnostic{"Cannot copy from a slice whose length is not known at compile time; "
+                             "slice it with constant bounds first (e.g. `s[i..][0..n]`)",
+                             sema::error::UNKNOWN_SLICE_LENGTH,
+                             at(29)});
+    }
+    SECTION("element type mismatch") {
+        helpers::test_resolver_fail(
+            src("const b: [2]i32 = .{ 9, 8 }; a[1..3] = b;"),
+            sema::diagnostic{"Cannot copy 'i32' elements into a slice of 'u8'",
+                             sema::error::TYPE_MISMATCH,
+                             at(39)});
+    }
+    SECTION("immutable destination") {
+        helpers::test_resolver_fail(
+            "const f := fn(): void { const a: [4]u8 = .{ 1, 2, 3, 4 }; a[1..3] = .{ 9, 8 }; };",
+            sema::diagnostic{"Cannot copy into a slice of immutable elements; the destination "
+                             "needs `mut` elements",
+                             sema::error::ASSIGNMENT_TO_CONST,
+                             std::pair{0UZ, 59UZ}});
+    }
+    SECTION("compound assignment") {
+        helpers::test_resolver_fail(
+            src("a[1..3] += .{ 9, 8 };"),
+            sema::diagnostic{"A slice range can only be the target of a plain `=` copy",
+                             sema::error::TYPE_MISMATCH,
+                             at(1)});
+    }
+}
+
 } // namespace ghoti::tests

@@ -2897,6 +2897,12 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
         }
     }
 
+    // Copying into a slice range moves the source's elements in; the lengths match statically
+    if (const auto dest{sema::slice_copy_destination(active_mod(), assign.lhs)}) {
+        emit_mem_intrinsic(id, *dest, assign.rhs, syntax::token_type_t::BUILTIN_MEMMOVE, false);
+        return value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+    }
+
     sync_tagged_union_tag(assign.lhs);
     auto lhs_lval{emit_lvalue(assign.lhs)};
     ASSERT(lhs_lval.type, "Assignment LHS must have a resolved type");
@@ -3638,7 +3644,10 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         case syntax::token_type_t::BUILTIN_MEMCPY:
         case syntax::token_type_t::BUILTIN_MEMSET:
         case syntax::token_type_t::BUILTIN_MEMMOVE: {
-            emit_mem_intrinsic(id, call, fn_token);
+            emit_mem_intrinsic(id,
+                               *call.arguments[0].as_opt<ast::expr_handle>(),
+                               *call.arguments[1].as_opt<ast::expr_handle>(),
+                               fn_token);
             return value{void_val{}, ret_type};
         }
         default: {
@@ -6483,9 +6492,11 @@ auto emitter::emit_union_active_field_guard(value            union_addr,
     builder_.set_segment(active_seg);
 }
 
-auto emitter::emit_mem_intrinsic(ast::node_id          id,
-                                 const ast::call_expr& call,
-                                 syntax::token_type_t  builtin) -> void {
+auto emitter::emit_mem_intrinsic(ast::node_id         id,
+                                 ast::expr_handle     dest_h,
+                                 ast::expr_handle     rhs_h,
+                                 syntax::token_type_t builtin,
+                                 bool                 check_lengths) -> void {
     PROFILE_FUNCTION();
     auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
     auto& u8_type{ctx_.get_int(8, false)};
@@ -6558,9 +6569,6 @@ auto emitter::emit_mem_intrinsic(ast::node_id          id,
                      usize_type};
     }};
 
-    const auto dest_h{*call.arguments[0].as_opt<ast::expr_handle>()};
-    const auto rhs_h{*call.arguments[1].as_opt<ast::expr_handle>()};
-
     auto [dest_ptr, dest_len]{decompose(dest_h)};
     const auto dest_bytes{to_bytes(dest_len, elem_size(dest_h))};
     const auto name{*syntax::get_builtin_opt(builtin)};
@@ -6574,7 +6582,7 @@ auto emitter::emit_mem_intrinsic(ast::node_id          id,
     auto [src_ptr, src_len]{decompose(rhs_h)};
 
     // `@memcpy` / `@memmove` require equal lengths; guard it when safety checks are on.
-    if (runtime_safety_) {
+    if (runtime_safety_ && check_lengths) {
         const auto eq{builder_.emit_binary(instruction_kind::EQ, dest_len, src_len, bool_type)};
         auto       fn_opt{builder_.get_function()};
         ASSERT(fn_opt, "mem intrinsic must be within an active function");

@@ -566,6 +566,23 @@ auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {
     }
 }
 
+auto slice_copy_destination(const mod::module& m, ast::node_id lhs)
+    -> stdx::option<ast::expr_handle> {
+    const auto is_slice{[&](ast::node_id expr) {
+        const auto t{m.get_sema_type_opt(expr)};
+        return t && t->get_data().is<types::slice>();
+    }};
+    if (const auto index{m.ast.get_as_opt<ast::index_expr>(lhs)};
+        index && m.ast.get_as_opt<ast::range_expr>(index->index) && is_slice(lhs)) {
+        return ast::expr_handle{lhs};
+    }
+    if (const auto deref{m.ast.get_as_opt<ast::dereference_expr>(lhs)};
+        deref && is_slice(deref->rhs)) {
+        return deref->rhs;
+    }
+    return stdx::none;
+}
+
 auto is_assignable(const type& src, const type& dest) noexcept -> bool {
     if (src == dest) { return true; }
     if (src.is_poison() || dest.is_poison()) { return true; }

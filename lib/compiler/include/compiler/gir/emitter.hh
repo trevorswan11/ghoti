@@ -247,10 +247,13 @@ class emitter {
     auto emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value;
     auto emit_match(ast::node_id id, const ast::match_expr& match) -> value;
 
-    // @mem* decompose the slice args into a data pointer + byte length
-    auto emit_mem_intrinsic(ast::node_id          id,
-                            const ast::call_expr& call,
-                            syntax::token_type_t  builtin) -> void;
+    // @mem* decompose the slice args into a data pointer + byte length. A length check is only
+    // needed when the operands' lengths were not already proven equal statically.
+    auto emit_mem_intrinsic(ast::node_id         id,
+                            ast::expr_handle     dest_h,
+                            ast::expr_handle     rhs_h,
+                            syntax::token_type_t builtin,
+                            bool                 check_lengths = true) -> void;
 
     auto emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> value;
     auto emit_unwrap_propagation(value                    operand_addr,

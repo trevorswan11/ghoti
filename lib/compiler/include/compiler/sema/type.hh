@@ -175,6 +175,11 @@ class type;
 [[nodiscard]] auto is_same_unqualified(const type& a, const type& b) noexcept -> bool;
 [[nodiscard]] auto is_assignable(const type& src, const type& dest) noexcept -> bool;
 
+// The slice written through when an assignment copies elements into one (`s[lo..hi] = src` or
+// `*s = src`), rather than storing to a single place
+[[nodiscard]] auto slice_copy_destination(const mod::module& m, ast::node_id lhs)
+    -> stdx::option<ast::expr_handle>;
+
 // True when `t` still contains an unbound generic parameter rather than a fully concrete type.
 [[nodiscard]] auto is_generic_type(const type& t, bool unmodified = true) noexcept -> bool;
 

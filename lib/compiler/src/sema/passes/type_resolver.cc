@@ -4786,6 +4786,9 @@ auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -
         TRY_RESOLVE(assign.lhs);
     }
     auto& lhs_type{*last_type_.take()};
+    if (const auto dest{slice_copy_destination(resolving_, assign.lhs)}) {
+        return resolve_slice_copy(id, assign, *dest);
+    }
     {
         const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(lhs_type)};
         TRY_RESOLVE(assign.rhs);
@@ -4815,6 +4818,92 @@ auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -
 
     // Only pass 3 can verify assignment allowance due to mutability semantics
     resolving_.set_sema_type(id, *last_type_);
+}
+
+auto type_resolver::resolve_slice_copy(ast::node_id                id,
+                                       const ast::assignment_expr& assign,
+                                       ast::expr_handle            dest) -> void {
+    auto&       dest_type{resolving_.get_sema_type(dest)};
+    auto&       dest_elem{dest_type.get_data().as<types::slice>().underlying};
+    const auto  fail{[&](std::string message, error err, ast::node_id at) {
+        last_type_.emplace(
+            ctx_.poison_node(resolving_, id, std::move(message), err, resolving_.ast.location_of(at)));
+    }};
+
+    if (id.get_token_type() != syntax::token_type_t::ASSIGN) {
+        return fail("A slice range can only be the target of a plain `=` copy",
+                    error::TYPE_MISMATCH,
+                    id);
+    }
+    if (dest_type.is_constant()) {
+        return fail("Cannot copy into a slice of immutable elements; the destination needs `mut` "
+                    "elements",
+                    error::ASSIGNMENT_TO_CONST,
+                    assign.lhs);
+    }
+    const auto dest_len{known_length(dest)};
+    if (!dest_len) {
+        return fail("Cannot copy into a slice whose length is not known at compile time; slice it "
+                    "with constant bounds first (e.g. `s[i..][0..n]`)",
+                    error::UNKNOWN_SLICE_LENGTH,
+                    assign.lhs);
+    }
+
+    // `.{...}` on the right infers as an array of the destination's length
+    {
+        auto& expected{ctx_.get_array(types::mut::CONSTANT, false, *dest_len, dest_elem)};
+        const structural_guard g{implicit_type_stack_, expected};
+        TRY_RESOLVE(assign.rhs);
+    }
+    auto& rhs_type{*last_type_.take()};
+
+    auto* src_type{&rhs_type};
+    if (const auto ref{src_type->get_data().as_opt<types::reference>()}) {
+        src_type = &ref->underlying;
+    }
+    if (src_type->get_data().is<types::deferred_array>()) {
+        gir::const_eval evaluator{ctx_, resolving_};
+        src_type = &evaluator.force_deferred_array(*src_type);
+    }
+
+    stdx::option<u64>         src_len;
+    stdx::option<const type&> src_elem;
+    if (const auto arr{src_type->get_data().as_opt<types::array>()}) {
+        src_len  = arr->len;
+        src_elem = arr->underlying;
+    } else if (const auto slice{src_type->get_data().as_opt<types::slice>()}) {
+        src_len  = known_length(assign.rhs);
+        src_elem = slice->underlying;
+    } else {
+        return fail(fmt::format("Cannot copy '{}' into a slice; expected an array or slice",
+                                ctx_.type_display_name(rhs_type)),
+                    error::TYPE_MISMATCH,
+                    assign.rhs);
+    }
+
+    if (!is_same_unqualified(*src_elem, dest_elem)) {
+        return fail(fmt::format("Cannot copy '{}' elements into a slice of '{}'",
+                                ctx_.type_display_name(*src_elem),
+                                ctx_.type_display_name(dest_elem)),
+                    error::TYPE_MISMATCH,
+                    assign.rhs);
+    }
+    if (!src_len) {
+        return fail("Cannot copy from a slice whose length is not known at compile time; slice it "
+                    "with constant bounds first (e.g. `s[i..][0..n]`)",
+                    error::UNKNOWN_SLICE_LENGTH,
+                    assign.rhs);
+    }
+    if (*src_len != *dest_len) {
+        return fail(fmt::format("Cannot copy {} elements into a slice of length {}",
+                                *src_len,
+                                *dest_len),
+                    error::SLICE_LENGTH_MISMATCH,
+                    assign.rhs);
+    }
+
+    resolving_.set_sema_type(id, rhs_type);
+    last_type_.emplace(rhs_type);
 }
 
 auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> void {
