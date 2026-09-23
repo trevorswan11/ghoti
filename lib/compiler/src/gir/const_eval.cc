@@ -543,6 +543,32 @@ auto const_eval::force_deferred_array(sema::type& maybe_deferred) -> sema::type&
     return maybe_deferred;
 }
 
+auto const_eval::force_deferred_layout(sema::type& type) -> stdx::option<sema::type&> {
+    PROFILE_FUNCTION();
+    auto&       forced{force_deferred_array(type)};
+    const auto& data{forced.get_data()};
+    if (data.is<sema::types::deferred_array>()) { return stdx::none; }
+    if (const auto arr{data.as_opt<sema::types::array>()}) {
+        if (!force_deferred_layout(arr->underlying)) { return stdx::none; }
+        return forced;
+    }
+
+    // Fields are forced in place; each placeholder folds its dimension in its declaring module
+    gsl::span<sema::type*> fields;
+    if (const auto st{data.as_opt<sema::types::struct_t>()}) {
+        fields = st->fields;
+    } else if (const auto ut{data.as_opt<sema::types::union_t>()}) {
+        fields = ut->fields;
+    }
+    for (auto& field : fields) {
+        if (field == nullptr) { continue; }
+        const auto concrete{force_deferred_layout(*field)};
+        if (!concrete) { return stdx::none; }
+        field = &*concrete;
+    }
+    return forced;
+}
+
 auto const_eval::force_deferred_array_elements(gsl::span<sema::type*> elements) -> void {
     PROFILE_FUNCTION();
     for (auto& element : elements) { element = &force_deferred_array(*element); }
@@ -2990,6 +3016,14 @@ auto const_eval::eval_builtin(ast::node_id          id,
         return target_type;
     };
 
+    // A `[N]T` still deferred at resolution time (directly or as a field) has no layout yet
+    const auto eval_layout_argument =
+        [&](const ast::call_expr::argument& arg) -> stdx::option<sema::type&> {
+        const auto target_type{eval_type_argument(arg)};
+        if (!target_type) { return stdx::none; }
+        return force_deferred_layout(*target_type);
+    };
+
     switch (builtin_type) {
     case syntax::token_type_t::BUILTIN_THIS: {
         // The call node carries the enclosing structural type
@@ -3003,46 +3037,29 @@ auto const_eval::eval_builtin(ast::node_id          id,
     }
     case syntax::token_type_t::BUILTIN_SIZE_OF: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
-        const auto target_type{eval_type_argument(call.arguments.front())};
+        const auto target_type{eval_layout_argument(call.arguments.front())};
         if (!target_type) { return stdx::none; }
 
         const auto ptr_size{
             codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? usize{8}
                                                                                       : usize{4}};
-        if (const auto def{target_type->get_data().as_opt<sema::types::deferred_array>()}) {
-            if (def->array.dimension) {
-                const auto dim_opt{eval_type_dim(*def->array.dimension)};
-                const auto len{dim_opt.value_or(0)};
-                const auto elem_size{type_size_of(def->underlying, ptr_size)};
-                const auto elem_align{type_align_of(def->underlying, ptr_size)};
-                const auto elem_stride{elem_align > 0
-                                           ? (elem_size + elem_align - 1) / elem_align * elem_align
-                                           : elem_size};
-                const auto total_sz{len * (elem_stride == 0 ? elem_size : elem_stride)};
-                return const_value{static_cast<u64>(total_sz), usize_type};
-            }
-        }
         const auto sz{type_size_of(*target_type, ptr_size)};
         return const_value{static_cast<u64>(sz), usize_type};
     }
     case syntax::token_type_t::BUILTIN_ALIGN_OF: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
-        const auto target_type{eval_type_argument(call.arguments.front())};
+        const auto target_type{eval_layout_argument(call.arguments.front())};
         if (!target_type) { return stdx::none; }
 
         const auto ptr_size{
             codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? usize{8}
                                                                                       : usize{4}};
-        if (const auto def{target_type->get_data().as_opt<sema::types::deferred_array>()}) {
-            return const_value{static_cast<u64>(type_align_of(def->underlying, ptr_size)),
-                               usize_type};
-        }
         const auto al{type_align_of(*target_type, ptr_size)};
         return const_value{static_cast<u64>(al), usize_type};
     }
     case syntax::token_type_t::BUILTIN_BIT_SIZE_OF: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
-        const auto target_type{eval_type_argument(call.arguments.front())};
+        const auto target_type{eval_layout_argument(call.arguments.front())};
         if (!target_type) { return stdx::none; }
 
         const auto ptr_size{

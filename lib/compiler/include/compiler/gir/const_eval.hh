@@ -185,7 +185,9 @@ class const_eval {
     auto force_deferred_aggregate_fields(sema::type& maybe_aggregate) -> void;
     auto force_deferred_indirection_underlying(sema::type& maybe_indirection) -> void;
     auto force_deferred_array_elements(gsl::span<sema::type*> elements) -> void;
-    auto resolve_deferred_call(const ast::call_expr& call) -> sema::type&;
+    // Deep-forces array placeholders reachable by value; `none` if any stays deferred
+    [[nodiscard]] auto force_deferred_layout(sema::type& type) -> stdx::option<sema::type&>;
+    auto               resolve_deferred_call(const ast::call_expr& call) -> sema::type&;
     // As above but yields `none` instead of a diagnostic when the call cannot be evaluated yet.
     [[nodiscard]] auto try_resolve_deferred_call(const ast::call_expr& call)
         -> stdx::option<sema::type&>;
