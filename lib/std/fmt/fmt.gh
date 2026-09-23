@@ -2,8 +2,22 @@ import std;
 
 import "spec.gh" as spec;
 
+pub using Spec = spec.Spec;
+
+test {
+    import "spec.gh";
+}
+
+import "int.gh" as int;
+
+// pub constexpr digits2 := int.digits2; // TODO(tcs): Compile error?
+pub const formatIntAny := int.formatIntAny;
+
+test {
+    import "int.gh";
+}
+
 using Writer = std.io.Writer;
-using Spec = spec.Spec;
 
 pub const Error := enum { overflow, bad_spec, bad_arg, unsupported, io };
 
@@ -15,6 +29,8 @@ pub const Format := interface {
     ): std.Result(void, Error);
 };
 
+pub const Case := enum : u1 { lower, upper };
+
 pub const format := fn(w: &mut impl Writer, constexpr fmt: []u8, args...): std.Result(void, Error) {
     constexpr {
         spec.validate(fmt, args.len);
@@ -25,7 +41,3 @@ pub const format := fn(w: &mut impl Writer, constexpr fmt: []u8, args...): std.R
 
     for constexpr (args, 0..) |arg, i| {}
 };
-
-test {
-    import "spec.gh";
-}
