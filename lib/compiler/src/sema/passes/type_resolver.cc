@@ -2368,7 +2368,7 @@ auto type_resolver::known_length(ast::node_id expr) -> stdx::option<u64> {
             return cv->as_int_opt();
         }};
 
-        const auto lo{range->lhs ? fold(*range->lhs) : stdx::option<i128>{0}};
+        const auto         lo{range->lhs ? fold(*range->lhs) : stdx::option<i128>{0}};
         stdx::option<i128> hi;
         if (range->rhs) {
             const bool inclusive{(*index->index).get_token_type() ==
@@ -4692,14 +4692,14 @@ auto type_resolver::visit(ast::node_id id, const ast::index_expr& index) -> void
             const bool      inclusive{(*index.index).get_token_type() ==
                                  syntax::token_type_t::DOT_DOT_EQ};
             if (hi && *hi + (inclusive ? 1 : 0) > static_cast<i128>(*container_len)) {
-                return last_type_.emplace(ctx_.poison_node(
-                    resolving_,
-                    id,
-                    fmt::format("Slice end {} is out of bounds for a length of {}",
-                                static_cast<i64>(*hi + (inclusive ? 1 : 0)),
-                                *container_len),
-                    error::SLICE_OUT_OF_BOUNDS,
-                    resolving_.ast.location_of(index.index)));
+                return last_type_.emplace(
+                    ctx_.poison_node(resolving_,
+                                     id,
+                                     fmt::format("Slice end {} is out of bounds for a length of {}",
+                                                 static_cast<i64>(*hi + (inclusive ? 1 : 0)),
+                                                 *container_len),
+                                     error::SLICE_OUT_OF_BOUNDS,
+                                     resolving_.ast.location_of(index.index)));
             }
         }
     }
@@ -4823,17 +4823,16 @@ auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -
 auto type_resolver::resolve_slice_copy(ast::node_id                id,
                                        const ast::assignment_expr& assign,
                                        ast::expr_handle            dest) -> void {
-    auto&       dest_type{resolving_.get_sema_type(dest)};
-    auto&       dest_elem{dest_type.get_data().as<types::slice>().underlying};
-    const auto  fail{[&](std::string message, error err, ast::node_id at) {
-        last_type_.emplace(
-            ctx_.poison_node(resolving_, id, std::move(message), err, resolving_.ast.location_of(at)));
+    auto&      dest_type{resolving_.get_sema_type(dest)};
+    auto&      dest_elem{dest_type.get_data().as<types::slice>().underlying};
+    const auto fail{[&](std::string message, error err, ast::node_id at) {
+        last_type_.emplace(ctx_.poison_node(
+            resolving_, id, std::move(message), err, resolving_.ast.location_of(at)));
     }};
 
     if (id.get_token_type() != syntax::token_type_t::ASSIGN) {
-        return fail("A slice range can only be the target of a plain `=` copy",
-                    error::TYPE_MISMATCH,
-                    id);
+        return fail(
+            "A slice range can only be the target of a plain `=` copy", error::TYPE_MISMATCH, id);
     }
     if (dest_type.is_constant()) {
         return fail("Cannot copy into a slice of immutable elements; the destination needs `mut` "
@@ -4895,11 +4894,10 @@ auto type_resolver::resolve_slice_copy(ast::node_id                id,
                     assign.rhs);
     }
     if (*src_len != *dest_len) {
-        return fail(fmt::format("Cannot copy {} elements into a slice of length {}",
-                                *src_len,
-                                *dest_len),
-                    error::SLICE_LENGTH_MISMATCH,
-                    assign.rhs);
+        return fail(
+            fmt::format("Cannot copy {} elements into a slice of length {}", *src_len, *dest_len),
+            error::SLICE_LENGTH_MISMATCH,
+            assign.rhs);
     }
 
     resolving_.set_sema_type(id, rhs_type);
@@ -6909,8 +6907,8 @@ auto type_resolver::visit(ast::node_id id, const ast::dereference_expr& deref) -
                 error::UNKNOWN_SLICE_LENGTH,
                 resolving_.ast.location_of(id)));
         }
-        last_type_.emplace(ctx_.get_array(
-            container_element_mutability(rhs_type), false, *len, slice->underlying));
+        last_type_.emplace(
+            ctx_.get_array(container_element_mutability(rhs_type), false, *len, slice->underlying));
     } else {
         return last_type_.emplace(
             ctx_.poison_node(resolving_,

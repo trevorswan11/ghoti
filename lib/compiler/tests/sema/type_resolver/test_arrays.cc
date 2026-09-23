@@ -170,7 +170,8 @@ TEST_CASE("Constant range bounds are checked against a known container length") 
 }
 
 TEST_CASE("Copying into a slice range is checked statically") {
-    constexpr std::string_view prefix{"const f := fn(): void { var a: [4]mut u8 = .{ 1, 2, 3, 4 }; "};
+    constexpr std::string_view prefix{
+        "const f := fn(): void { var a: [4]mut u8 = .{ 1, 2, 3, 4 }; "};
     const auto at{[&](usize col) { return std::pair{0UZ, prefix.size() + col}; }};
     const auto src{[&](std::string_view body) { return fmt::format("{}{} }};", prefix, body); }};
 

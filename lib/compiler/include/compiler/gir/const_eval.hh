@@ -181,11 +181,11 @@ class const_eval {
                             const ast::range_expr& range,
                             const_value            container,
                             const_value            val) -> bool;
-    auto               force_deferred_function_params(sema::type& maybe_fn) -> void;
-    auto               force_deferred_aggregate_fields(sema::type& maybe_aggregate) -> void;
-    auto               force_deferred_indirection_underlying(sema::type& maybe_indirection) -> void;
-    auto               force_deferred_array_elements(gsl::span<sema::type*> elements) -> void;
-    auto               resolve_deferred_call(const ast::call_expr& call) -> sema::type&;
+    auto force_deferred_function_params(sema::type& maybe_fn) -> void;
+    auto force_deferred_aggregate_fields(sema::type& maybe_aggregate) -> void;
+    auto force_deferred_indirection_underlying(sema::type& maybe_indirection) -> void;
+    auto force_deferred_array_elements(gsl::span<sema::type*> elements) -> void;
+    auto resolve_deferred_call(const ast::call_expr& call) -> sema::type&;
     // As above but yields `none` instead of a diagnostic when the call cannot be evaluated yet.
     [[nodiscard]] auto try_resolve_deferred_call(const ast::call_expr& call)
         -> stdx::option<sema::type&>;

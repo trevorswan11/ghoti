@@ -314,9 +314,7 @@ auto const_eval::resolve_all_deferred_arrays() -> void {
     for (auto& type_opt : module_->sema_side_tables.explicit_types.values) {
         if (!type_opt) { continue; }
         if (const auto def{type_opt->get_data().as_opt<sema::types::deferred_array>()}) {
-            if (auto concrete{resolve_deferred_array(*def)}) {
-                type_opt.emplace(*concrete);
-            }
+            if (auto concrete{resolve_deferred_array(*def)}) { type_opt.emplace(*concrete); }
         }
         force_deferred_function_params(*type_opt);
         force_deferred_aggregate_fields(*type_opt);
@@ -326,9 +324,7 @@ auto const_eval::resolve_all_deferred_arrays() -> void {
     for (auto& type_opt : module_->sema_side_tables.node_types.values) {
         if (!type_opt) { continue; }
         if (const auto def{type_opt->get_data().as_opt<sema::types::deferred_array>()}) {
-            if (auto concrete{resolve_deferred_array(*def)}) {
-                type_opt.emplace(*concrete);
-            }
+            if (auto concrete{resolve_deferred_array(*def)}) { type_opt.emplace(*concrete); }
         }
         force_deferred_function_params(*type_opt);
         force_deferred_aggregate_fields(*type_opt);
@@ -543,9 +539,7 @@ auto const_eval::force_deferred_array(sema::type& maybe_deferred) -> sema::type&
     PROFILE_FUNCTION();
     const auto deferred{maybe_deferred.get_data().as_opt<sema::types::deferred_array>()};
     if (!deferred) { return maybe_deferred; }
-    if (auto concrete{resolve_deferred_array(*deferred)}) {
-        return *concrete;
-    }
+    if (auto concrete{resolve_deferred_array(*deferred)}) { return *concrete; }
     return maybe_deferred;
 }
 
@@ -747,7 +741,7 @@ auto const_eval::write_range_target(const ast::index_expr& target,
         if (const auto arr{v.as_opt<const_array>()}) { return *arr; }
         return stdx::none;
     }};
-    auto dest{as_array(container)};
+    auto       dest{as_array(container)};
     const auto src{as_array(val)};
     if (!dest || !src) { return false; }
 
@@ -761,8 +755,7 @@ auto const_eval::write_range_target(const ast::index_expr& target,
     if (range.rhs && hi && (*target.index).get_token_type() == syntax::token_type_t::DOT_DOT_EQ) {
         *hi += 1;
     }
-    if (!lo || !hi || *lo < 0 || *hi < *lo ||
-        static_cast<usize>(*hi) > dest->elements.size() ||
+    if (!lo || !hi || *lo < 0 || *hi < *lo || static_cast<usize>(*hi) > dest->elements.size() ||
         static_cast<usize>(*hi - *lo) != src->elements.size()) {
         return false;
     }

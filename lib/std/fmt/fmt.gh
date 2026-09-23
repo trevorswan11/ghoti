@@ -10,7 +10,7 @@ test {
 
 import "int.gh" as int;
 
-// pub constexpr digits2 := int.digits2; // TODO(tcs): Compile error?
+pub constexpr digits2 := int.digits2;
 pub const formatIntAny := int.formatIntAny;
 
 test {

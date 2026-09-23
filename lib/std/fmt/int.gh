@@ -4,13 +4,17 @@
 import std;
 
 /// Converts values in the range [0, 100) to a base 10 string.
-pub constexpr digits2 := fn(value: u8): struct { pub first: u8, pub second: u8 } {
+pub constexpr digits2 := fn(value: u8): [2]u8 {
     @assert(value < 100, "digits2 is bounded above by 100");
     constexpr lookup := "00010203040506070809101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354555657585960616263646566676869707172737475767778798081828384858687888990919293949596979899";
-    const slice := lookup[value * 2..][0..2];
-    // TODO(tcs): Make this return a [2]u8 once these can be assigned to slices (#340)
-    return .{ .first = slice[0], .second = slice[1] };
+    return *lookup[value * 2..][0..2];
 };
+
+test "digits2" {
+    const d := digits2(42);
+    @expect(d[0] == '4' and d[1] == '2');
+    @expect(digits2(7)[0] == '0');
+}
 
 pub constexpr digit_to_char := fn(digit: u8, case: std.fmt.Case): u8 {
     return match (digit) {
@@ -48,9 +52,7 @@ pub const formatIntAny := fn(
     if (base == 10) {
         while (a >= 100) : (a = @divTrunc(a, 100)) {
             index -= 2;
-            const digits := digits2(@intCast(a % 100));
-            buf[index..][0] = digits.first;
-            buf[index..][1] = digits.second;
+            buf[index..][0..2] = digits2(@intCast(a % 100));
         }
 
         if (a < 10) {
@@ -58,9 +60,7 @@ pub const formatIntAny := fn(
             buf[index] = '0' + @as(u8, @intCast(a));
         } else {
             index -= 2;
-            const digits := digits2(@intCast(a % 100));
-            buf[index..][0] = digits.first;
-            buf[index..][1] = digits.second;
+            buf[index..][0..2] = digits2(@intCast(a % 100));
         }
     } else {
         loop {
@@ -96,4 +96,15 @@ test {
     var backing: [1024]mut u8 = undefined;
     var stream: std.io.FixedBufferStream = .{ .buf = backing };
     _ = formatIntAny(&mut stream, 1u16, 2, .lower, .{});
+}
+
+test "formatIntAny base 10" {
+    var backing: [32]mut u8 = undefined;
+    var stream: std.io.FixedBufferStream = .{ .buf = backing };
+    _ = formatIntAny(&mut stream, 12345u16, 10, .lower, .{});
+    @expect(std.mem.eql(u8, "12345", backing[..stream.pos]));
+
+    stream.pos = 0;
+    _ = formatIntAny(&mut stream, 42u16, 10, .lower, .{});
+    @expect(std.mem.eql(u8, "42", backing[..stream.pos]));
 }
