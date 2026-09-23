@@ -543,14 +543,47 @@ auto const_eval::force_deferred_array(sema::type& maybe_deferred) -> sema::type&
     return maybe_deferred;
 }
 
+// An already-concrete `[N]` can still hold a placeholder element (`[N][M]T`)
+auto const_eval::rebuild_array(sema::type& array_type, sema::type& underlying) -> sema::type& {
+    const auto& arr{array_type.get_data().as<sema::types::array>()};
+    if (&arr.underlying == &underlying) { return array_type; }
+    return ctx_.get_array(array_type.get_key().get_mut(), arr.null_terminated, arr.len, underlying);
+}
+
+auto const_eval::force_deferred_type(sema::type& maybe_deferred) -> sema::type& {
+    PROFILE_FUNCTION();
+    auto&       forced{force_deferred_array(maybe_deferred)};
+    const auto& data{forced.get_data()};
+    if (const auto arr{data.as_opt<sema::types::array>()}) {
+        return rebuild_array(forced, force_deferred_type(arr->underlying));
+    }
+    if (const auto ptr{data.as_opt<sema::types::pointer>()}) {
+        auto& underlying{force_deferred_type(ptr->underlying)};
+        if (&underlying != &ptr->underlying) { forced.resolve<sema::types::pointer>(underlying); }
+    } else if (const auto ref{data.as_opt<sema::types::reference>()}) {
+        auto& underlying{force_deferred_type(ref->underlying)};
+        if (&underlying != &ref->underlying) { forced.resolve<sema::types::reference>(underlying); }
+    } else if (const auto slice{data.as_opt<sema::types::slice>()}) {
+        auto& underlying{force_deferred_type(slice->underlying)};
+        if (&underlying != &slice->underlying) {
+            const auto null_terminated{slice->null_terminated};
+            forced.resolve<sema::types::slice>(underlying, null_terminated);
+        }
+    } else if (data.is<sema::types::function>()) {
+        force_deferred_function_params(forced);
+    }
+    return forced;
+}
+
 auto const_eval::force_deferred_layout(sema::type& type) -> stdx::option<sema::type&> {
     PROFILE_FUNCTION();
     auto&       forced{force_deferred_array(type)};
     const auto& data{forced.get_data()};
     if (data.is<sema::types::deferred_array>()) { return stdx::none; }
     if (const auto arr{data.as_opt<sema::types::array>()}) {
-        if (!force_deferred_layout(arr->underlying)) { return stdx::none; }
-        return forced;
+        const auto underlying{force_deferred_layout(arr->underlying)};
+        if (!underlying) { return stdx::none; }
+        return rebuild_array(forced, *underlying);
     }
 
     // Fields are forced in place; each placeholder folds its dimension in its declaring module
@@ -3109,7 +3142,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
 
         auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
         if (t1->get_kind() != sema::type_kind::INTERFACE) { return const_value{false, bool_type}; }
-        return const_value{ctx_.impls.implements(*t0, *t1), bool_type};
+        return const_value{ctx_.impls.implements(force_deferred_type(*t0), *t1), bool_type};
     }
     case syntax::token_type_t::BUILTIN_INT:
     case syntax::token_type_t::BUILTIN_FLOAT:
@@ -3388,7 +3421,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!target_type) { return stdx::none; }
 
         // Match the resolver: a fixed-length, null-terminated byte array (like a string literal).
-        auto  name{ctx_.type_display_name(*target_type)};
+        auto  name{ctx_.type_display_name(force_deferred_type(*target_type))};
         auto& t_u8{ctx_.get_int(8, false)};
         auto& arr_type{ctx_.get_array(sema::types::mut::CONSTANT, true, name.size() + 1, t_u8)};
         return const_value{std::move(name), arr_type};
@@ -3397,7 +3430,10 @@ auto const_eval::eval_builtin(ast::node_id          id,
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto target_type{eval_type_argument(call.arguments.front())};
         if (!target_type) { return stdx::none; }
-        return eval_type_info(*target_type);
+        // An unfolded `[N]T` would otherwise report as `.type`
+        auto& forced{force_deferred_type(*target_type)};
+        if (forced.get_data().is<sema::types::deferred_array>()) { return stdx::none; }
+        return eval_type_info(forced);
     }
     case syntax::token_type_t::BUILTIN_HAS_FIELD:
     case syntax::token_type_t::BUILTIN_FIELD_TYPE: {

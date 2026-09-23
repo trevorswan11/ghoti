@@ -959,8 +959,11 @@ template <ast::IndexableID ID>
         break;
     }
     case token_type_t::BUILTIN_TYPE_NAME: {
-        auto&      arg_type{*get_resolved_call_arg_type(call.arguments[0])};
-        const auto name{ctx_.type_display_name(arg_type)};
+        // Fold any `[N]T` first so the length agrees with the name GIR later materializes
+        auto&           arg_type{*get_resolved_call_arg_type(call.arguments[0])};
+        gir::const_eval evaluator{ctx_, resolving_};
+        auto&           named{evaluator.force_deferred_type(denoted_type(arg_type))};
+        const auto      name{ctx_.type_display_name(named)};
         return_type =
             &ctx_.get_array(types::mut::CONSTANT, true, name.size() + 1, ctx_.get_int(8, false));
         break;

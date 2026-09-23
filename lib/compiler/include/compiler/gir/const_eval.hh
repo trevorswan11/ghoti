@@ -107,6 +107,9 @@ class const_eval {
     // Forces a single possibly-deferred array type to its concrete resolved form
     [[nodiscard]] auto force_deferred_array(sema::type& maybe_deferred) -> sema::type&;
 
+    // As above, and also through pointer, reference, slice, and function signature types
+    [[nodiscard]] auto force_deferred_type(sema::type& maybe_deferred) -> sema::type&;
+
     // Forces a `fn(...): type` deferred-call type to the type it produces
     [[nodiscard]] auto force_deferred_call(sema::type& maybe_deferred) -> sema::type&;
 
@@ -187,6 +190,7 @@ class const_eval {
     auto force_deferred_array_elements(gsl::span<sema::type*> elements) -> void;
     // Deep-forces array placeholders reachable by value; `none` if any stays deferred
     [[nodiscard]] auto force_deferred_layout(sema::type& type) -> stdx::option<sema::type&>;
+    [[nodiscard]] auto rebuild_array(sema::type& array_type, sema::type& underlying) -> sema::type&;
     auto               resolve_deferred_call(const ast::call_expr& call) -> sema::type&;
     // As above but yields `none` instead of a diagnostic when the call cannot be evaluated yet.
     [[nodiscard]] auto try_resolve_deferred_call(const ast::call_expr& call)
