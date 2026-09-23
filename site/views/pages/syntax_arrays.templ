@@ -73,9 +73,12 @@ var a: &[]&^mut T; // Analogous slice type` }
 	</pre>
 	<ul>
 		<li>
-			Arrays do not implicitly 'decay' to slices or pointers
+			Arrays implicitly coerce to slices (but never to pointers)
 			<ul>
-				<li>To pass an array to a function that expects a slice, you should use the respective reference operator (<code>&amp;</code> or <code>&amp;mut</code>) depending on the context. This is similar to Zig's array/slice syntax</li>
+				<li>An array value (<code>[N]T</code>) or a reference to one (<code>&amp;[N]T</code>) can be used wherever a <code>[]T</code> is expected. The resulting slice points at the original array (it is not a copy) and its <code>len</code> is <code>N</code></li>
+				<li>The slice is only mutable when the array's elements are (<code>[N]mut T</code> -&gt; <code>[]mut T</code>)</li>
+				<li>Taking <code>&amp;arr</code> / <code>^arr</code> still yields a reference / pointer to the array itself (<code>&amp;[N]T</code> / <code>^[N]T</code>). The slice only appears when the destination is a slice type</li>
+				<li>A raw pointer to an array (<code>^[N]T</code>) does not coerce to a slice. Use <code>{ "@sliceFromPtr" }</code> or slice the array with a range instead</li>
 			</ul>
 		</li>
 	</ul>
@@ -105,9 +108,6 @@ var a: &[]&^mut T; // Analogous slice type` }
 		<li>An attempt to index outside of the bounds of an array results in a crash</li>
 		<li>
 			Indexing may be done on an array, slice, or raw pointer
-			<ul>
-				<li>It is not permitted to index through a reference</li>
-			</ul>
 		</li>
 	</ul>
 	<h2>Memory layout</h2>

@@ -352,4 +352,64 @@ TEST_CASE("Array copy of pointer and slice elements still aliases their pointees
     )") == 7 + 'z' + 'a');
 }
 
+TEST_CASE("A reference to an array coerces to a slice through the reference") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            const x: [2]u8 = .{1, 2};
+            const t: []u8 = &x;
+            return @as(i32, t[1]) + @as(i32, @intCast(t.len)) * 10;
+        };
+    )") == 22);
+}
+
+TEST_CASE("A reference to a nested array coerces to a slice of arrays") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            const m: [2][2]u8 = .{.{1, 2}, .{3, 4}};
+            const u: [][2]u8 = &m;
+            return @as(i32, u[1][0]) + @as(i32, u[1][1]) + @as(i32, @intCast(u.len)) * 10;
+        };
+    )") == 27);
+}
+
+TEST_CASE("A mut reference to an array coerces to a mut slice aliasing the array") {
+    CHECK(helpers::compile_and_run(R"(
+        const bump := fn(s: []mut i32): void {
+            s[0] = s[0] + 10;
+        };
+        pub const main := fn(): i32 {
+            var arr := [3]mut i32{1, 2, 3};
+            bump(&mut arr);
+            const r: &mut [3]mut i32 = &mut arr;
+            const sl: []mut i32 = r;
+            sl[2] = 30;
+            return arr[0] + arr[2];
+        };
+    )") == 11 + 30);
+}
+
+TEST_CASE("A reference to an array stays an array reference outside a slice context") {
+    CHECK(helpers::compile_and_run(R"(
+        const second := fn(a: &[3]i32): i32 {
+            return a[1];
+        };
+        pub const main := fn(): i32 {
+            const arr := [3]i32{4, 5, 6};
+            const r := &arr;
+            const copy: [3]i32 = r;
+            return second(r) + copy[2] + @as(i32, @intCast(r.len));
+        };
+    )") == 5 + 6 + 3);
+}
+
+TEST_CASE("A pointer to an array does not coerce to a slice") {
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            const x: [2]u8 = .{1, 2};
+            const t: []u8 = ^x;
+            return @as(i32, t[1]);
+        };
+    )");
+}
+
 } // namespace ghoti::tests

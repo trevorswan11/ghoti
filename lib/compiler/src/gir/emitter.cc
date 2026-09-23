@@ -751,6 +751,14 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
             if (rhs_type->get_kind() == sema::type_kind::ARRAY) {
                 return emit_slice_from_array(emit_lvalue(expr_id), *rhs_type);
             }
+            // `&[N]T` -> `[]T`: the reference already is the array's address, so decay through it
+            // rather than loading the array bytes into the slice slot
+            if (const auto ref{rhs_type->get_data().as_opt<sema::types::reference>()};
+                ref && ref->underlying.get_kind() == sema::type_kind::ARRAY) {
+                auto arr_addr{emit_expression_id_raw(*expr_id)};
+                arr_addr.type.emplace(ref->underlying);
+                return emit_slice_from_array(arr_addr, ref->underlying);
+            }
         }
 
         // A foldable string constant arrives here carrying a slice type, no array lvalue to decay
