@@ -573,6 +573,16 @@ auto const_eval::force_deferred_indirection_underlying(sema::type& maybe_indirec
     if (const auto ptr_data{maybe_indirection.get_data().as_opt<sema::types::pointer>()}) {
         auto& underlying{ptr_data->underlying};
         maybe_indirection.resolve<sema::types::pointer>(force_deferred_array(underlying));
+        return;
+    }
+
+    // `[][N]T`: the slice element is a sized array placeholder
+    if (const auto slice_data{maybe_indirection.get_data().as_opt<sema::types::slice>()}) {
+        auto& underlying{slice_data->underlying};
+        if (!underlying.get_data().is<sema::types::deferred_array>()) { return; }
+        const auto null_terminated{slice_data->null_terminated};
+        maybe_indirection.resolve<sema::types::slice>(force_deferred_array(underlying),
+                                                      null_terminated);
     }
 }
 
@@ -604,11 +614,14 @@ auto const_eval::resolve_deferred_array(const sema::types::deferred_array& defer
     }
     const auto cv{try_eval(*array.dimension)};
     if (!cv || cv->is_poison()) { return stdx::none; }
+    // A nested `[N][M]T` element is itself a deferred placeholder and must fold first
+    auto& underlying{force_deferred_array(deferred.underlying)};
+    if (underlying.get_data().is<sema::types::deferred_array>()) { return stdx::none; }
+
     const auto len{cv->as_uint_opt().value_or(0)};
     const auto mutability{array.mut_elements ? sema::types::mut::MUTABLE
                                              : sema::types::mut::CONSTANT};
-    return ctx_.get_array(
-        mutability, array.null_terminated, static_cast<usize>(len), deferred.underlying);
+    return ctx_.get_array(mutability, array.null_terminated, static_cast<usize>(len), underlying);
 }
 
 auto const_eval::try_resolve_deferred_call(const ast::call_expr& call)

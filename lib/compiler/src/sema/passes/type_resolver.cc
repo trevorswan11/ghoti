@@ -269,7 +269,14 @@ auto type_resolver::visit(ast::node_id id, const ast::array_expr& array) -> void
 
     // Resolve the element type first so each item can be typed against it
     resolve(array.item_explicit_type);
-    auto& item_type{*last_type_.take()};
+    auto* item_slot{&*last_type_.take()};
+    // Fold sized element types so the items and the array's element slot see the concrete `[M]T`
+    // rather than `type`
+    if (item_slot->get_data().is<types::deferred_array>()) {
+        gir::const_eval evaluator{ctx_, resolving_};
+        item_slot = &evaluator.force_deferred_array(*item_slot);
+    }
+    auto& item_type{*item_slot};
     if (item_type.is_resolved() && item_type.get_kind() != type_kind::AUTO) {
         const structural_guard g{implicit_type_stack_, item_type};
         for (const auto& item : array.items) { resolve(item); }
