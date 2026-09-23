@@ -270,6 +270,10 @@ class emitter {
     auto               emit_index(ast::node_id id, const ast::index_expr& index) -> value;
     auto               emit_address_of(ast::node_id id, const ast::address_of_expr& addr) -> value;
     auto emit_dereference(ast::node_id id, const ast::dereference_expr& deref) -> value;
+    // A slice-valued expression's elements pointer, viewed as a pointer to `elems_type`
+    auto emit_slice_elements_addr(ast::expr_handle slice_expr,
+                                  sema::type&      slice_type,
+                                  sema::type&      elems_type) -> value;
     auto emit_reference(ast::node_id id, const ast::reference_expr& ref) -> value;
     auto emit_implicit_access(ast::node_id id, const ast::implicit_access_expr& imp) -> value;
     auto emit_while(ast::node_id                   id,

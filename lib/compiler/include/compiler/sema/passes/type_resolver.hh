@@ -309,6 +309,9 @@ class type_resolver {
     auto check_unused_result(ast::node_id stmt_id, const ast::expr_stmt& stmt) -> void;
 
     [[nodiscard]] auto local_const_fn_ref(ast::expr_handle expr) -> stdx::option<gir::const_value>;
+    // The compile-time-known element count of an array- or slice-valued expression: an array's
+    // length, a constant-bounded range index, or a `const` bound to one of those
+    [[nodiscard]] auto known_length(ast::node_id expr) -> stdx::option<u64>;
     [[nodiscard]] auto constexpr_closure_value(ast::expr_handle expr)
         -> stdx::option<gir::const_value>;
 

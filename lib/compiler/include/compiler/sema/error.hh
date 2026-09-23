@@ -123,6 +123,9 @@ enum class error : u8 {
     PACK_EXPANSION_MISPLACED,
     FIELD_HAS_NO_DEFAULT,
     ILLEGAL_RETURN_ADDRESS_USAGE,
+    SLICE_OUT_OF_BOUNDS,
+    UNKNOWN_SLICE_LENGTH,
+    SLICE_LENGTH_MISMATCH,
 };
 
 using diagnostic  = diagnostic<error>;

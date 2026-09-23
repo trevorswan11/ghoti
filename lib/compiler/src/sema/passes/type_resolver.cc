@@ -2339,6 +2339,66 @@ auto type_resolver::synthesize_union(source_location loc, const gir::const_struc
     return gsl::not_null{&union_type};
 }
 
+auto type_resolver::known_length(ast::node_id expr) -> stdx::option<u64> {
+    // An array carries its length in its type
+    if (const auto expr_type{resolving_.get_sema_type_opt(expr)}) {
+        auto* target{expr_type.get()};
+        if (const auto ref{target->get_data().as_opt<types::reference>()}) {
+            target = &ref->underlying;
+        }
+        if (target->get_data().is<types::deferred_array>()) {
+            gir::const_eval evaluator{ctx_, resolving_};
+            target = &evaluator.force_deferred_array(*target);
+        }
+        if (const auto arr{target->get_data().as_opt<types::array>()}) { return arr->len; }
+    }
+
+    if (const auto str{resolving_.ast.get_as_opt<ast::string_expr>(expr)}) {
+        return str->value.size();
+    }
+
+    if (const auto index{resolving_.ast.get_as_opt<ast::index_expr>(expr)}) {
+        const auto range{resolving_.ast.get_as_opt<ast::range_expr>(index->index)};
+        if (!range) { return stdx::none; }
+
+        gir::const_eval evaluator{ctx_, resolving_};
+        const auto      fold{[&](ast::expr_handle bound) -> stdx::option<i128> {
+            const auto cv{evaluator.try_eval(bound)};
+            if (!cv || cv->is_poison()) { return stdx::none; }
+            return cv->as_int_opt();
+        }};
+
+        const auto lo{range->lhs ? fold(*range->lhs) : stdx::option<i128>{0}};
+        stdx::option<i128> hi;
+        if (range->rhs) {
+            const bool inclusive{(*index->index).get_token_type() ==
+                                 syntax::token_type_t::DOT_DOT_EQ};
+            hi = fold(*range->rhs).transform([&](i128 h) { return h + (inclusive ? 1 : 0); });
+        } else if (const auto container_len{known_length(index->array)}) {
+            hi = static_cast<i128>(*container_len);
+        }
+        if (!lo || !hi || *lo < 0 || *hi < *lo) { return stdx::none; }
+        return static_cast<u64>(*hi - *lo);
+    }
+
+    // A `const` binding keeps the length of the expression it was initialized with
+    if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(expr)}) {
+        const auto table_idx{resolving_.get_symbol_table_opt(expr)};
+        if (!table_idx) { return stdx::none; }
+        const auto sym{ctx_.registry.get(*table_idx).get_opt(ident->name)};
+        if (!sym) { return stdx::none; }
+        const auto node{sym->get_data().as_opt<symbols::node_t>()};
+        if (!node) { return stdx::none; }
+        const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
+        if (!decl || !decl->value || decl->has_modifier(ast::decl_modifiers::VARIABLE)) {
+            return stdx::none;
+        }
+        return known_length(*decl->value);
+    }
+
+    return stdx::none;
+}
+
 auto type_resolver::local_const_fn_ref(ast::expr_handle expr) -> stdx::option<gir::const_value> {
     const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(expr)};
     if (!ident) { return stdx::none; }
@@ -4622,6 +4682,28 @@ auto type_resolver::visit(ast::node_id id, const ast::index_expr& index) -> void
     }
     auto& access_type{*last_type_.take()};
 
+    // A constant range over a container of known length is bounds-checked statically
+    if (const auto range{resolving_.ast.get_as_opt<ast::range_expr>(index.index)};
+        range && range->rhs) {
+        if (const auto container_len{known_length(index.array)}) {
+            gir::const_eval evaluator{ctx_, resolving_};
+            const auto      hi_cv{evaluator.try_eval(*range->rhs)};
+            const auto      hi{hi_cv && !hi_cv->is_poison() ? hi_cv->as_int_opt() : stdx::none};
+            const bool      inclusive{(*index.index).get_token_type() ==
+                                 syntax::token_type_t::DOT_DOT_EQ};
+            if (hi && *hi + (inclusive ? 1 : 0) > static_cast<i128>(*container_len)) {
+                return last_type_.emplace(ctx_.poison_node(
+                    resolving_,
+                    id,
+                    fmt::format("Slice end {} is out of bounds for a length of {}",
+                                static_cast<i64>(*hi + (inclusive ? 1 : 0)),
+                                *container_len),
+                    error::SLICE_OUT_OF_BOUNDS,
+                    resolving_.ast.location_of(index.index)));
+            }
+        }
+    }
+
     // There may be a slice accessor which results in a slice type and should mirror parent
     if (access_type.get_data().is<types::slice>()) {
         // The subslice is writable iff the source container's elements are
@@ -6726,6 +6808,20 @@ auto type_resolver::visit(ast::node_id id, const ast::dereference_expr& deref) -
         last_type_.emplace(pointer->underlying);
     } else if (const auto ref{rhs_type.get_data().as_opt<types::reference>()}) {
         last_type_.emplace(ref->underlying);
+    } else if (const auto slice{rhs_type.get_data().as_opt<types::slice>()}) {
+        // Dereferencing a slice copies its elements out into an array of the same length
+        const auto len{known_length(deref.rhs)};
+        if (!len) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                "Cannot dereference a slice whose length is not known at compile time; slice it "
+                "with constant bounds first (e.g. `s[i..][0..n]`)",
+                error::UNKNOWN_SLICE_LENGTH,
+                resolving_.ast.location_of(id)));
+        }
+        last_type_.emplace(ctx_.get_array(
+            container_element_mutability(rhs_type), false, *len, slice->underlying));
     } else {
         return last_type_.emplace(
             ctx_.poison_node(resolving_,

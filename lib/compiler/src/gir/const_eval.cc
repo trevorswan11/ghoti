@@ -705,6 +705,35 @@ auto const_eval::set_local_binding(std::string_view name, const_value val) -> bo
     return false;
 }
 
+namespace {
+
+[[nodiscard]] auto string_to_byte_array(const std::string& s, sema::type& u8_type) -> const_array {
+    const_array arr;
+    arr.elements.reserve(s.size());
+    for (const char c : s) {
+        arr.elements.emplace_back(const_value{static_cast<u64>(static_cast<u8>(c)), u8_type});
+    }
+    return arr;
+}
+
+} // namespace
+
+// `*slice`: the slice's elements as an array value of the dereference's own type
+auto const_eval::eval_slice_copy(ast::node_id id, ast::node_id slice_expr)
+    -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
+    auto val{try_eval(slice_expr)};
+    if (!val || val->is_poison()) { return val; }
+    if (const auto str{val->as_opt<std::string>()}) {
+        return const_value{string_to_byte_array(*str, ctx_.get_int(8, false)),
+                           module_->get_sema_type_opt(id)};
+    }
+    if (auto arr{val->as_opt<const_array>()}) {
+        return const_value{std::move(*arr), module_->get_sema_type_opt(id)};
+    }
+    return stdx::none;
+}
+
 auto const_eval::write_target(ast::node_id target, const_value val) -> bool {
     PROFILE_FUNCTION();
     if (!target.is_valid()) { return false; }
@@ -866,6 +895,10 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
             }
             if (const auto addr{module_->ast.get_as_opt<ast::address_of_expr>(data.rhs)}) {
                 return try_eval(addr->rhs);
+            }
+            const auto rhs_type{module_->get_sema_type_opt(data.rhs)};
+            if (rhs_type && rhs_type->get_data().is<sema::types::slice>()) {
+                return eval_slice_copy(id, data.rhs);
             }
             return try_eval(data.rhs);
         },
@@ -2176,19 +2209,6 @@ auto const_eval::eval_assignment(ast::node_id                id,
 
     return stdx::none;
 }
-
-namespace {
-
-[[nodiscard]] auto string_to_byte_array(const std::string& s, sema::type& u8_type) -> const_array {
-    const_array arr;
-    arr.elements.reserve(s.size());
-    for (const char c : s) {
-        arr.elements.emplace_back(const_value{static_cast<u64>(static_cast<u8>(c)), u8_type});
-    }
-    return arr;
-}
-
-} // namespace
 
 auto const_eval::fold_concat(const const_value& lhs, const const_value& rhs, ast::node_id id)
     -> stdx::option<const_value> {

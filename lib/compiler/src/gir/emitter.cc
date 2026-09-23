@@ -6184,6 +6184,11 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             ASSERT(sema_type, "Dereference lvalue must have a resolved sema type");
             // The referent's own type defaults const
             const auto ptr_type{active_mod().get_sema_type_opt(*deref.rhs)};
+            // `*slice` names the slice's elements viewed as one array
+            if (ptr_type && ptr_type->get_data().is<sema::types::slice>()) {
+                const auto elems{emit_slice_elements_addr(deref.rhs, *ptr_type, *sema_type)};
+                return value{elems.data, *sema_type};
+            }
             auto&      referent_type{
                 *ctx_.pool.with_const(*sema_type, ptr_type && ptr_type->is_constant())};
             const auto raw_ptr{emit_expression_id_raw(*deref.rhs)};
@@ -7303,11 +7308,34 @@ auto emitter::emit_dereference(ast::node_id id, const ast::dereference_expr& der
     PROFILE_FUNCTION();
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Dereference expression must have a resolved sema type");
+    auto& elem_type{*sema_type};
+
+    // `*slice` copies the (statically sized) elements out as an array
+    const auto rhs_type{active_mod().get_sema_type_opt(*deref.rhs)};
+    if (rhs_type && rhs_type->get_data().is<sema::types::slice>()) {
+        const auto elems{emit_slice_elements_addr(deref.rhs, *rhs_type, elem_type)};
+        return value{builder_.emit_load(elems, elem_type), sema_type};
+    }
+
     const auto ptr_val{emit_expression_id_raw(*deref.rhs)};
-    auto&      elem_type{*sema_type};
     emit_null_pointer_check(ptr_val, id);
     const auto loaded{builder_.emit_load(ptr_val, elem_type)};
     return value{loaded, sema_type};
+}
+
+auto emitter::emit_slice_elements_addr(ast::expr_handle slice_expr,
+                                       sema::type&      slice_type,
+                                       sema::type&      elems_type) -> value {
+    PROFILE_FUNCTION();
+    auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    auto& ptr_type{ctx_.get_pointer(
+        slice_type.is_constant() ? sema::types::mut::CONSTANT : sema::types::mut::MUTABLE,
+        elems_type)};
+
+    const auto slot{spill_to_temporary(emit_expression(slice_expr), slice_type)};
+    const auto ptr_field{builder_.emit_get_element_ptr(
+        slot, {value{SLICE_PTR_FIELD_INDEX, usize_type}}, ptr_type)};
+    return value{builder_.emit_load(value{ptr_field, ptr_type}, ptr_type), ptr_type};
 }
 
 auto emitter::emit_reference(ast::node_id id, const ast::reference_expr& ref) -> value {

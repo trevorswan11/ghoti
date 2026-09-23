@@ -175,6 +175,8 @@ class const_eval {
   private:
     [[nodiscard]] auto resolve_deferred_array(const sema::types::deferred_array& deferred)
         -> stdx::option<sema::type&>;
+    [[nodiscard]] auto eval_slice_copy(ast::node_id id, ast::node_id slice_expr)
+        -> stdx::option<const_value>;
     auto               force_deferred_function_params(sema::type& maybe_fn) -> void;
     auto               force_deferred_aggregate_fields(sema::type& maybe_aggregate) -> void;
     auto               force_deferred_indirection_underlying(sema::type& maybe_indirection) -> void;

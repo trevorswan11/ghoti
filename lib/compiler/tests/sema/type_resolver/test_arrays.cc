@@ -141,4 +141,32 @@ TEST_CASE("Illegal arrays dependent on incomplete types") {
     helpers::test_resolver_fail("const A := struct { a: auto = [_]A{}, };", expected_diag(33));
 }
 
+TEST_CASE("Dereferencing a slice needs a compile-time-known length") {
+    helpers::test_resolver_fail(
+        "const f := fn(s: []u8): [2]u8 { return *s; };",
+        sema::diagnostic{"Cannot dereference a slice whose length is not known at compile time; "
+                         "slice it with constant bounds first (e.g. `s[i..][0..n]`)",
+                         sema::error::UNKNOWN_SLICE_LENGTH,
+                         std::pair{0UZ, 39UZ}});
+    helpers::test_resolver_fail(
+        "const f := fn(s: []u8, i: usize): [2]u8 { return *s[i..]; };",
+        sema::diagnostic{"Cannot dereference a slice whose length is not known at compile time; "
+                         "slice it with constant bounds first (e.g. `s[i..][0..n]`)",
+                         sema::error::UNKNOWN_SLICE_LENGTH,
+                         std::pair{0UZ, 49UZ}});
+}
+
+TEST_CASE("Constant range bounds are checked against a known container length") {
+    helpers::test_resolver_fail(
+        "const f := fn(): void { const a: [4]u8 = .{ 1, 2, 3, 4 }; _ = a[1..9]; };",
+        sema::diagnostic{"Slice end 9 is out of bounds for a length of 4",
+                         sema::error::SLICE_OUT_OF_BOUNDS,
+                         std::pair{0UZ, 64UZ}});
+    helpers::test_resolver_fail(
+        "const f := fn(): void { const a: [4]u8 = .{ 1, 2, 3, 4 }; _ = a[0..2][0..=2]; };",
+        sema::diagnostic{"Slice end 3 is out of bounds for a length of 2",
+                         sema::error::SLICE_OUT_OF_BOUNDS,
+                         std::pair{0UZ, 70UZ}});
+}
+
 } // namespace ghoti::tests
