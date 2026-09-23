@@ -13,6 +13,10 @@ pub constexpr float_exponent_max := float.float_exponent_max;
 pub constexpr nan := float.nan;
 pub constexpr snan := float.snan;
 
+test {
+    import "float.gh";
+}
+
 /// Asserts that `int` is strictly positive
 pub constexpr is_power_of_two := fn(int: auto): bool {
     @assert(int > 0);
@@ -138,6 +142,42 @@ test "min_int" {
     @expect(min_int(i128) == -170141183460469231731687303715884105728);
 }
 
-test {
-    import "float.gh";
+// TODO(tcs): Add a way to see if we're in a constexpr context to make min and max constexpr friendly
+
+/// Returns the maximum of at least two values which are implicitly convertible
+pub constexpr max := fn(a: auto, b: auto, c...): auto {
+    var largest := if (a > b) a else b;
+    for constexpr (c) |arg| {
+        if (arg > largest) largest = arg;
+    }
+    return largest;
+};
+
+test "max" {
+    @expect(max(1, 2) == 2);
+    @expect(max(-4, -123) == -4);
+    @expect(max(-4, -123, 45) == 45);
+    @expect(max(-4, -123, 45, 78, 90, -23) == 90);
+    // constexpr {
+    //     @assert(max(1, 2) == 2);
+    // }
+}
+
+/// Returns the minimum of at least two values which are implicitly convertible
+pub constexpr min := fn(a: auto, b: auto, c...): auto {
+    var smallest := if (a < b) a else b;
+    for constexpr (c) |arg| {
+        if (arg < smallest) smallest = arg;
+    }
+    return smallest;
+};
+
+test "min" {
+    @expect(min(1, 2) == 1);
+    @expect(min(-4, -123) == -123);
+    @expect(min(-4, -123, 45) == -123);
+    @expect(min(-4, -1, 45, 78, 90, -23) == -23);
+    // constexpr {
+    //     @assert(min(1, 2) == 1);
+    // }
 }
