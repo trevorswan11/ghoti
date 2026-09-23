@@ -173,8 +173,8 @@ class const_eval {
     };
 
   private:
-    [[nodiscard]] auto resolve_deferred_array(const ast::explicit_array_type& array,
-                                              sema::type& item_type) -> stdx::option<sema::type&>;
+    [[nodiscard]] auto resolve_deferred_array(const sema::types::deferred_array& deferred)
+        -> stdx::option<sema::type&>;
     auto               force_deferred_function_params(sema::type& maybe_fn) -> void;
     auto               force_deferred_aggregate_fields(sema::type& maybe_aggregate) -> void;
     auto               force_deferred_indirection_underlying(sema::type& maybe_indirection) -> void;

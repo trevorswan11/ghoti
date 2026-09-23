@@ -128,7 +128,7 @@ auto remap_type(context& ctx, type& t, const type& from, type& to) -> type& {
             auto& u{remap_type(ctx, da.underlying, from, to)};
             if (&u == &da.underlying) { return t; }
             auto& nt{*ctx.pool[{type_kind::TYPE, t.get_key().get_mut(), &da.array, &u}]};
-            nt.resolve_if<types::deferred_array>(da.array, u);
+            nt.resolve_if<types::deferred_array>(da.array, u, da.enclosing);
             return nt;
         },
         [&](types::function fn) -> type& {

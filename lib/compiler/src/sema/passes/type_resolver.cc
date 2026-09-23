@@ -3122,8 +3122,12 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
         }
         if (any_arg_poison) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
 
+        // A `[n]T` return is a (not yet folded) array value, not a type
+        const auto returns_deferred_array{
+            function_type->return_type.get_data().is<types::deferred_array>()};
+
         // Functions that return a type cannot be resolved until the constant evaluator
-        if (function_type->return_type.get_kind() == type_kind::TYPE &&
+        if (function_type->return_type.get_kind() == type_kind::TYPE && !returns_deferred_array &&
             !any_param_generic(function_type->params)) {
             auto& deferred_type{*ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, &call}]};
             deferred_type.resolve_if<types::deferred_call>(call);
@@ -3132,9 +3136,15 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
             return last_type_.emplace(deferred_type);
         }
 
+        auto* return_type{&function_type->return_type};
+        if (returns_deferred_array) {
+            gir::const_eval evaluator{ctx_, resolving_};
+            return_type = &evaluator.force_deferred_array(*return_type);
+        }
+
         // Only arity is checked since the type checker will handle the rest
-        resolving_.set_sema_type(id, function_type->return_type);
-        last_type_.emplace(function_type->return_type);
+        resolving_.set_sema_type(id, *return_type);
+        last_type_.emplace(*return_type);
     } else if (const auto builtin_type{callee_data.as_opt<types::builtin_function>()}) {
         // Let `.{...}` infer its fields without spelling out `builtin.XInfo{...}`.
         using syntax::token_type_t;
@@ -10241,7 +10251,7 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_array_ty
 
         TRY_RESOLVE(*array.dimension);
         last_type_.emplace(ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, &array}]);
-        last_type_->resolve_if<types::deferred_array>(array, item_type);
+        last_type_->resolve_if<types::deferred_array>(array, item_type, resolving_);
     } else {
         last_type_.emplace(ctx_.get_slice(
             array_element_mutability(array.mut_elements), null_terminated, item_type));

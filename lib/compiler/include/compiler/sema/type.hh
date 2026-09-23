@@ -346,6 +346,7 @@ struct deferred_call {
 struct deferred_array {
     const ast::explicit_array_type& array;
     type&                           underlying;
+    mod::module&                    enclosing; // owns `array`'s dimension node
 };
 
 enum class mutability_modifiers : u8 {

@@ -314,7 +314,7 @@ auto const_eval::resolve_all_deferred_arrays() -> void {
     for (auto& type_opt : module_->sema_side_tables.explicit_types.values) {
         if (!type_opt) { continue; }
         if (const auto def{type_opt->get_data().as_opt<sema::types::deferred_array>()}) {
-            if (auto concrete{resolve_deferred_array(def->array, def->underlying)}) {
+            if (auto concrete{resolve_deferred_array(*def)}) {
                 type_opt.emplace(*concrete);
             }
         }
@@ -326,7 +326,7 @@ auto const_eval::resolve_all_deferred_arrays() -> void {
     for (auto& type_opt : module_->sema_side_tables.node_types.values) {
         if (!type_opt) { continue; }
         if (const auto def{type_opt->get_data().as_opt<sema::types::deferred_array>()}) {
-            if (auto concrete{resolve_deferred_array(def->array, def->underlying)}) {
+            if (auto concrete{resolve_deferred_array(*def)}) {
                 type_opt.emplace(*concrete);
             }
         }
@@ -543,7 +543,7 @@ auto const_eval::force_deferred_array(sema::type& maybe_deferred) -> sema::type&
     PROFILE_FUNCTION();
     const auto deferred{maybe_deferred.get_data().as_opt<sema::types::deferred_array>()};
     if (!deferred) { return maybe_deferred; }
-    if (auto concrete{resolve_deferred_array(deferred->array, deferred->underlying)}) {
+    if (auto concrete{resolve_deferred_array(*deferred)}) {
         return *concrete;
     }
     return maybe_deferred;
@@ -597,22 +597,24 @@ auto const_eval::force_deferred_function_params(sema::type& maybe_fn) -> void {
     maybe_fn.resolve<sema::types::function>(params, return_type, has_self, is_variadic, conv);
 }
 
-auto const_eval::resolve_deferred_array(const ast::explicit_array_type& array,
-                                        sema::type& item_type) -> stdx::option<sema::type&> {
+auto const_eval::resolve_deferred_array(const sema::types::deferred_array& deferred)
+    -> stdx::option<sema::type&> {
     PROFILE_FUNCTION();
+    const auto& array{deferred.array};
     ASSERT(array.dimension, "Deferred array type must have a dimension");
-    // `array` can belong to a different module's AST when a type is re-exported across modules;
-    // its dimension node only indexes that module's tables. Leave the type deferred here rather
-    // than indexing ours out of bounds - the declaring module's own pass resolves it.
-    if (array.dimension->get_index() >= module_->sema_side_tables.node_types.values.size()) {
-        return stdx::none;
+    // A type surfacing from another module (a call into it, a re-export) has its dimension node
+    // in that module's AST, so it has to be folded there
+    if (&deferred.enclosing != module_) {
+        const_eval foreign{ctx_, deferred.enclosing};
+        return foreign.resolve_deferred_array(deferred);
     }
     const auto cv{try_eval(*array.dimension)};
     if (!cv || cv->is_poison()) { return stdx::none; }
     const auto len{cv->as_uint_opt().value_or(0)};
     const auto mutability{array.mut_elements ? sema::types::mut::MUTABLE
                                              : sema::types::mut::CONSTANT};
-    return ctx_.get_array(mutability, array.null_terminated, static_cast<usize>(len), item_type);
+    return ctx_.get_array(
+        mutability, array.null_terminated, static_cast<usize>(len), deferred.underlying);
 }
 
 auto const_eval::try_resolve_deferred_call(const ast::call_expr& call)
