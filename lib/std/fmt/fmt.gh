@@ -3,6 +3,10 @@ import std;
 import "spec.gh" as spec;
 
 pub using Spec = spec.Spec;
+pub const pad := spec.pad;
+pub const write_fill_n := spec.write_fill_n;
+pub const pad_number := spec.pad_number;
+pub const write_literal := spec.write_literal;
 
 test {
     import "spec.gh";
@@ -11,7 +15,8 @@ test {
 import "int.gh" as int;
 
 pub constexpr digits2 := int.digits2;
-pub const formatIntAny := int.formatIntAny;
+pub const formatIntRadix := int.formatIntRadix;
+pub const formatInt := int.formatInt;
 
 test {
     import "int.gh";

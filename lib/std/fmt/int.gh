@@ -1,6 +1,4 @@
-//! Integer formatting, referencing Zig's implementation
-//! https://codeberg.org/ziglang/zig/src/branch/master/lib/std/Io/Writer.zig#L1608
-//! Zig is licensed under the MIT license
+//! Integer formatting low-level API surface
 import std;
 
 /// Converts values in the range [0, 100) to a base 10 string.
@@ -30,7 +28,9 @@ test "digit_to_char" {
     @expect(digit_to_char(10, .upper) == 'A');
 }
 
-pub const formatIntAny := fn(
+/// Formats an integer in an explicit radix and case.
+/// Only the padding, sign, and alt fields of `spec` are used, `spec.kind` is ignored
+pub const formatIntRadix := fn(
     w: &mut dyn std.io.Writer(Error = std.io.Error),
     value: auto,
     base: u8,
@@ -44,17 +44,20 @@ pub const formatIntAny := fn(
     constexpr min_int_bits := @max(value_info.bits, 8u16);
     using MinInt = @Int(.{ .signedness = .unsigned, .bits = min_int_bits });
 
-    // The worst case in terms of space needed is base 2, plus 1 for the sign
-    var buf: [1 + @max(value_info.bits, 1u16)]mut u8 = undefined;
+    // The worst case in terms of space needed is base 2, plus 1 for the sign and 2 for the alt prefix
+    var buf: [1 + 2 + @max(value_info.bits, 1u16)]mut u8 = undefined;
 
-    var a: MinInt = undefined;
-    if constexpr (value_info.signedness == .signed) {
-        using SameUnsigned = @Int(.{ .signedness = .unsigned, .bits = value_info.bits });
-        const bits := @bitCast(SameUnsigned, value);
-        a = if (value < 0) 0 -% bits else bits;
-    } else {
-        a = value;
-    }
+    var is_negative := false;
+    var a: MinInt = blk: {
+        if constexpr (value_info.signedness == .signed) {
+            using SameUnsigned = @Int(.{ .signedness = .unsigned, .bits = value_info.bits });
+            const bits := @bitCast(SameUnsigned, value);
+            is_negative = value < 0;
+            break :blk if (is_negative) 0 -% bits else bits;
+        } else {
+            break :blk value;
+        }
+    };
     var index := buf.len;
 
     if (base == 10) {
@@ -79,76 +82,181 @@ pub const formatIntAny := fn(
             if (a == 0) break;
         }
     }
+    const digits_start := index;
 
-    if constexpr (value_info.signedness == .signed) {
-        if (value < 0) {
-            // Negative integer
-            index -= 1;
-            buf[index] = '-';
-        } else if (spec.width == .none or spec.width.some == 0) {
-            // Positive integer, omit the plus sign
-        } else {
-            // Positive integer
-            index -= 1;
-            buf[index] = '+';
+    if (spec.alt) {
+        const radix_char: u8 = match (base) {
+            16 => 'x',
+            8 => 'o',
+            2 => 'b',
+            _ => 0,
+        };
+        if (radix_char != 0) {
+            index -= 2;
+            buf[index] = '0';
+            buf[index + 1] = radix_char;
         }
     }
 
-    // TODO(tcs): Use spec here to finish formatting
-    return w.write_all(buf[index..]).map_err(fn(_: std.io.Error): std.fmt.Error {
-        return .io;
-    });
+    if (is_negative) {
+        index -= 1;
+        buf[index] = '-';
+    } else if (spec.plus) {
+        index -= 1;
+        buf[index] = '+';
+    }
+
+    return std.fmt.pad_number(w, spec, buf[index..], digits_start - index);
 };
 
-test {
-    var backing: [1024]mut u8 = undefined;
-    var stream: std.io.FixedBufferStream = .{ .buf = backing };
-    _ = formatIntAny(&mut stream, 1u16, 2, .lower, .{});
-    _ = formatIntAny(&mut stream, 1u32, 2, .lower, .{});
-}
+/// Formats an integer according to `spec.kind`, defaulting to base 10
+pub const formatInt := fn(
+    w: &mut dyn std.io.Writer(Error = std.io.Error),
+    value: auto,
+    spec: std.fmt.Spec,
+): std.Result(void, std.fmt.Error) {
+    return match (spec.kind.unwrap_or(.d)) {
+        .d, .@"?" => formatIntRadix(w, value, 10, .lower, spec),
+        .x => formatIntRadix(w, value, 16, .lower, spec),
+        .X => formatIntRadix(w, value, 16, .upper, spec),
+        .b => formatIntRadix(w, value, 2, .lower, spec),
+        .o => formatIntRadix(w, value, 8, .lower, spec),
+        .c => blk: {
+            constexpr value_info := @typeInfo(@TypeOf(value)).int;
+            if constexpr (value_info.signedness == .signed) {
+                if (value < 0) break :blk .{ .err = .bad_arg };
+            }
+            if constexpr (value_info.bits > 8) {
+                if (value > 255) break :blk .{ .err = .bad_arg };
+            }
 
-test "formatIntAny base 10" {
+            break :blk std.fmt.pad(w, spec, ^.{ @intCast(u8, value) }, .left);
+        },
+        .e => .{ .err = .unsupported },
+        .s, .f, .p => .{ .err = .bad_spec },
+    };
+};
+
+/// Formats `value` with `formatInt` and compares the output against `expected`
+const expect_int := fn(value: auto, spec: std.fmt.Spec, expected: []u8): bool {
+    var backing: [64]mut u8 = undefined;
+    var stream: std.io.FixedBufferStream = .{ .buf = backing };
+    return match (formatInt(&mut stream, value, spec)) {
+        .ok => std.mem.eql(u8, expected, backing[..stream.pos]),
+        .err => false,
+    };
+};
+
+/// Formats `value` with `formatInt` and checks that it fails with `expected`
+const expect_int_err := fn(value: auto, spec: std.fmt.Spec, expected: std.fmt.Error): bool {
+    var backing: [64]mut u8 = undefined;
+    var stream: std.io.FixedBufferStream = .{ .buf = backing };
+    return match (formatInt(&mut stream, value, spec)) {
+        .ok => false,
+        .err => |e| e == expected,
+    };
+};
+
+test "formatIntRadix base 10" {
     var backing: [32]mut u8 = undefined;
     var stream: std.io.FixedBufferStream = .{ .buf = backing };
-    _ = formatIntAny(&mut stream, 12345u16, 10, .lower, .{});
+    _ = formatIntRadix(&mut stream, 12345u16, 10, .lower, .{});
     @expect(std.mem.eql(u8, "12345", backing[..stream.pos]));
 
     stream.pos = 0;
-    _ = formatIntAny(&mut stream, 42u16, 10, .lower, .{});
+    _ = formatIntRadix(&mut stream, 42u16, 10, .lower, .{});
     @expect(std.mem.eql(u8, "42", backing[..stream.pos]));
 
     stream.pos = 0;
-    _ = formatIntAny(&mut stream, -42i32, 10, .lower, .{});
+    _ = formatIntRadix(&mut stream, -42i32, 10, .lower, .{});
     @expect(std.mem.eql(u8, "-42", backing[..stream.pos]));
 
     stream.pos = 0;
-    _ = formatIntAny(&mut stream, 1234567u32, 10, .lower, .{});
+    _ = formatIntRadix(&mut stream, 1234567u32, 10, .lower, .{});
     @expect(std.mem.eql(u8, "1234567", backing[..stream.pos]));
 
     stream.pos = 0;
-    _ = formatIntAny(&mut stream, 7i8, 10, .lower, .{});
+    _ = formatIntRadix(&mut stream, 7i8, 10, .lower, .{});
     @expect(std.mem.eql(u8, "7", backing[..stream.pos]));
 
     stream.pos = 0;
-    _ = formatIntAny(&mut stream, -128i8, 10, .lower, .{});
+    _ = formatIntRadix(&mut stream, -128i8, 10, .lower, .{});
     @expect(std.mem.eql(u8, "-128", backing[..stream.pos]));
 
     stream.pos = 0;
-    _ = formatIntAny(&mut stream, 18446744073709551615u64, 10, .lower, .{});
+    _ = formatIntRadix(&mut stream, 18446744073709551615u64, 10, .lower, .{});
     @expect(std.mem.eql(u8, "18446744073709551615", backing[..stream.pos]));
 }
 
-test "formatIntAny other bases" {
+test "formatIntRadix other bases" {
     var backing: [32]mut u8 = undefined;
     var stream: std.io.FixedBufferStream = .{ .buf = backing };
-    _ = formatIntAny(&mut stream, 5u16, 2, .lower, .{});
+    _ = formatIntRadix(&mut stream, 5u16, 2, .lower, .{});
     @expect(std.mem.eql(u8, "101", backing[..stream.pos]));
 
     stream.pos = 0;
-    _ = formatIntAny(&mut stream, 255u32, 16, .upper, .{});
+    _ = formatIntRadix(&mut stream, 255u32, 16, .upper, .{});
     @expect(std.mem.eql(u8, "FF", backing[..stream.pos]));
 
     stream.pos = 0;
-    _ = formatIntAny(&mut stream, -255i64, 16, .lower, .{});
+    _ = formatIntRadix(&mut stream, -255i64, 16, .lower, .{});
     @expect(std.mem.eql(u8, "-ff", backing[..stream.pos]));
+}
+
+test "formatInt width, fill, and align" {
+    @expect(expect_int(42u16, .{ .width = .of(5) }, "   42"));
+    @expect(expect_int(42i32, .{ .width = .of(5) }, "   42"));
+    @expect(expect_int(42i32, .{ .width = .of(5), .align = .of(.left) }, "42   "));
+    @expect(expect_int(42i32, .{ .width = .of(6), .align = .of(.center) }, "  42  "));
+    @expect(expect_int(42i32, .{ .width = .of(6), .fill = '*', .align = .of(.right) }, "****42"));
+    @expect(expect_int(12345i32, .{ .width = .of(2) }, "12345"));
+    @expect(expect_int(
+        255u32,
+        .{ .width = .of(8), .fill = '0', .align = .of(.right), .kind = .of(.x) },
+        "000000ff",
+    ));
+}
+
+test "formatInt sign and zero padding" {
+    @expect(expect_int(-3i32, .{ .width = .of(8), .zero = true }, "-0000003"));
+    @expect(expect_int(-3i32, .{ .width = .of(8), .zero = true, .align = .of(.left) }, "-0000003"));
+    @expect(expect_int(5u8, .{ .plus = true }, "+5"));
+    @expect(expect_int(5i32, .{ .plus = true, .width = .of(8), .zero = true }, "+0000005"));
+    @expect(expect_int(-128i8, .{ .width = .of(6), .zero = true }, "-00128"));
+}
+
+test "formatInt kinds and alt prefixes" {
+    @expect(expect_int(255u32, .{ .kind = .of(.x) }, "ff"));
+    @expect(expect_int(255u32, .{ .kind = .of(.X) }, "FF"));
+    @expect(expect_int(5u32, .{ .kind = .of(.b) }, "101"));
+    @expect(expect_int(8u32, .{ .kind = .of(.o) }, "10"));
+    @expect(expect_int(-7i32, .{ .kind = .of(.@"?") }, "-7"));
+    @expect(expect_int(255u32, .{ .alt = true, .kind = .of(.x) }, "0xff"));
+    @expect(expect_int(255u32, .{ .alt = true, .kind = .of(.X) }, "0xFF"));
+    @expect(expect_int(
+        255u32,
+        .{ .alt = true, .zero = true, .width = .of(10), .kind = .of(.x) },
+        "0x000000ff",
+    ));
+    @expect(expect_int(5u32, .{ .alt = true, .kind = .of(.b) }, "0b101"));
+    @expect(expect_int(8u32, .{ .alt = true, .kind = .of(.o) }, "0o10"));
+    @expect(expect_int(0u32, .{ .alt = true, .kind = .of(.x) }, "0x0"));
+    @expect(expect_int(-255i32, .{ .alt = true, .kind = .of(.x) }, "-0xff"));
+    @expect(expect_int(42u32, .{ .alt = true }, "42"));
+    @expect(expect_int(5i32, .{ .precision = .of(3) }, "5"));
+}
+
+test "formatInt char kind" {
+    @expect(expect_int(65u8, .{ .kind = .of(.c) }, "A"));
+    @expect(expect_int(65i32, .{ .kind = .of(.c), .width = .of(3), .align = .of(.right) }, "  A"));
+    @expect(expect_int(65u8, .{ .kind = .of(.c), .width = .of(3) }, "A  "));
+    @expect(expect_int_err(300u16, .{ .kind = .of(.c) }, .bad_arg));
+    @expect(expect_int_err(-1i32, .{ .kind = .of(.c) }, .bad_arg));
+}
+
+test "formatInt rejects non-integer kinds" {
+    @expect(expect_int_err(1u32, .{ .kind = .of(.s) }, .bad_spec));
+    @expect(expect_int_err(1u32, .{ .kind = .of(.f) }, .bad_spec));
+    @expect(expect_int_err(1u32, .{ .kind = .of(.p) }, .bad_spec));
+    @expect(expect_int_err(1u32, .{ .kind = .of(.e) }, .unsupported));
 }
