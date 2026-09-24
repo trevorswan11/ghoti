@@ -213,7 +213,7 @@ template <Diagnostic D> class diagnostic_list {
         diagnostic_list rest{in_terminal_};
         if (from >= diagnostics_.size()) { return rest; }
         for (usize i{from}; i < diagnostics_.size(); ++i) {
-            rest.diagnostics_.push_back(diagnostics_[i]);
+            rest.diagnostics_.emplace_back(diagnostics_[i]);
         }
         diagnostics_.erase(diagnostics_.begin() + static_cast<idiff>(from), diagnostics_.end());
         return rest;

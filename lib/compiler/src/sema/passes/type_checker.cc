@@ -34,8 +34,18 @@ auto type_checker::check_types(gir::module& gir_mod, mod::module& ast_mod, conte
     PROFILE_FUNCTION();
     type_checker checker{gir_mod, ctx};
 
-    for (const auto& fn : gir_mod.get_functions()) { checker.check_function(*fn); }
-    if (!ctx.diags.empty() || ast_mod.is_poisoned()) {
+    // A monomorph of another module's generic reports into that module, whose source it points at
+    bool attributed_foreign{false};
+    for (const auto& fn : gir_mod.get_functions()) {
+        const auto diags_before{ctx.diags.size()};
+        checker.check_function(*fn);
+        const auto source_mod{fn->get_source_module()};
+        if (source_mod && &*source_mod != &ast_mod && ctx.diags.size() > diags_before) {
+            source_mod->absorb_sema_diagnostics(ctx.diags.split_off(diags_before));
+            attributed_foreign = true;
+        }
+    }
+    if (!ctx.diags.empty() || ast_mod.is_poisoned() || attributed_foreign) {
         return ast_mod.error_out(std::move(ctx.diags), mod::module_state::POISONED_TYPE_RESOLVED);
     }
     return ast_mod.state;

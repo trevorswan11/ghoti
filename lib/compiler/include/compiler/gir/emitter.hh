@@ -22,6 +22,7 @@
 #include "compiler/gir/builder.hh"
 #include "compiler/gir/const_eval.hh"
 #include "compiler/gir/const_value.hh"
+#include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/gir/symbol_scoping.hh"
@@ -463,6 +464,17 @@ class emitter {
         return self.active_module_->ast;
     }
 
+    // Adds a GIR function attributed to the module whose AST its body is emitted from
+    template <typename... Args> auto add_gir_function(Args&&... args) -> function& {
+        auto& fn{gir_module_.add_function(std::forward<Args>(args)...)};
+        fn.set_source_module(active_mod());
+        return fn;
+    }
+
+    // Moves diagnostics reported since `diags_before` onto `owner` when it is a foreign module,
+    // so they print against the file their locations point into
+    auto attribute_diags(mod::module& owner, usize diags_before) -> void;
+
     // The symbol table that owns a definition currently being emitted: the enclosing aggregate
     // literal's table for a member, otherwise the active module's root table.
     [[nodiscard]] auto current_owner_table_idx() const noexcept -> usize {
@@ -488,6 +500,7 @@ class emitter {
     sema::context&                ctx_;
     mod::module&                  ast_module_;
     stdx::option<mod::module&>    active_module_{ast_module_};
+    bool                          attributed_foreign_diags_{false};
     const_eval                    const_eval_;
     builder                       builder_;
     module                        gir_module_;

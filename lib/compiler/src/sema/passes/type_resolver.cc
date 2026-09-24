@@ -7908,9 +7908,10 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
         return existing && existing->is_resolved() &&
                ctx_.generic_functions.get_opt(*existing).has_value();
     }()};
+    // An explicit annotation is re-resolved too, since it may name a generic parameter
+    // (`var a: T`, `var a: @TypeOf(value)`, a `using` alias built from either)
     const bool reresolve_local{
-        !value_is_deferred_generic_method && for_generic_instantiation_ && reresolve_floor_ &&
-        (!decl.explicit_type || decl.has_modifier(ast::decl_modifiers::CONSTEXPR)) && [&] {
+        !value_is_deferred_generic_method && for_generic_instantiation_ && reresolve_floor_ && [&] {
             const auto lt{ctx_.registry.lookup_with_table(table_stack_, ident.name)};
             return lt && lt->table_idx >= *reresolve_floor_;
         }()};
@@ -7949,6 +7950,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
 
     {
         stdx::option<structural_guard> type_guard;
+        bool                           annotation_typed_decl{false};
 
         // With an explicit type, the ident should always adopt that exact type
         if (decl.explicit_type) {
@@ -7993,18 +7995,19 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             } else {
                 type_guard.emplace(implicit_type_stack_, *ctx_.pool.strip_volatile(explicit_type));
                 resolving_.set_sema_type(id, explicit_type);
+                annotation_typed_decl = true;
             }
         }
 
         // Only update the decl value type if it hasn't been set unless this is an instantiation
-        // re-typing a body-local decl
+        // re-typing a body-local decl (whose annotation, if any, was just re-set above)
         if (decl.value) {
             resolve(*decl.value);
             if (last_type_->is_poison()) { return poison_out(); }
             auto& decl_value_type{*last_type_.take()};
             auto& normalized_val_type{
                 decl.explicit_type ? decl_value_type : *ctx_.pool.strip_volatile(decl_value_type)};
-            if (reresolve_local) {
+            if (reresolve_local && !annotation_typed_decl) {
                 resolving_.set_sema_type(id, normalized_val_type);
             } else {
                 resolving_.set_sema_type_if(id, normalized_val_type);
@@ -10443,7 +10446,9 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_array_ty
         }
 
         TRY_RESOLVE(*array.dimension);
-        last_type_.emplace(ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, &array}]);
+        // Keyed on the element type too, so a generic's `[n]T` doesn't keep the first
+        // instantiation's `T`
+        last_type_.emplace(ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, &array, &item_type}]);
         last_type_->resolve_if<types::deferred_array>(array, item_type, resolving_);
     } else {
         last_type_.emplace(ctx_.get_slice(

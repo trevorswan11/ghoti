@@ -228,7 +228,8 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
         PROFILE_SCOPE("emitter: emit imported modules");
         for (auto* other_mod : imported_mods) {
             if (!other_mod || other_mod->is_poisoned() || other_mod->is_errored()) { continue; }
-            auto prev_module{std::exchange(active_module_, other_mod)};
+            const auto diags_before{ctx_.diags.size()};
+            auto       prev_module{std::exchange(active_module_, other_mod)};
             const_eval_.set_module(*other_mod);
             const bool emit_tests{test_discovered.contains(other_mod)};
             for (const auto root_id : other_mod->ast) {
@@ -245,10 +246,16 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
             }
             active_module_ = prev_module;
             const_eval_.set_module(*prev_module);
+            attribute_diags(*other_mod, diags_before);
         }
     }
 
     for (const auto name : pending_builtin_runtime_) { ensure_builtin_runtime(name); }
+
+    // A foreign module's errors still have to stop this module's compilation
+    if (attributed_foreign_diags_) {
+        ast_module_.error_out(ctx_.diags.split_off(0), mod::module_state::POISONED_TYPE_RESOLVED);
+    }
 
 #ifdef GHOTI_DEBUG
     for (const auto& [m, expected_sum] : pre_emit_checksums) {
@@ -325,13 +332,14 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
     fn_type.resolve_if<sema::types::function>(
         full_param_types, *req.return_type, has_self, fn_expr.variadic);
 
-    auto& fn{gir_module_.add_function(
+    const auto diags_before{ctx_.diags.size()};
+    auto       prev_module{std::exchange(active_module_, &fn_mod)};
+    const_eval_.set_module(fn_mod);
+
+    auto& fn{add_gir_function(
         req.mangled_name, fn_type, false, false, fn_expr.variadic, gir::linkage::INTERNAL)};
     auto& entry{fn.add_segment()};
     builder_.set_insert_point(fn, entry);
-
-    auto prev_module{std::exchange(active_module_, &fn_mod)};
-    const_eval_.set_module(fn_mod);
 
     // Re-bind `constexpr` parameters so `const_eval` folds them the same way it did at resolution
     sema::constexpr_frame                                                             cx_frame;
@@ -498,6 +506,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
     current_pack_.reset();
     active_module_ = prev_module;
     if (prev_module) { const_eval_.set_module(*prev_module); }
+    attribute_diags(fn_mod, diags_before);
 }
 
 auto emitter::emit_type_ctor_member(mod::module& owner_mod, const sema::type_ctor_member_emit& tcm)
@@ -509,7 +518,8 @@ auto emitter::emit_type_ctor_member(mod::module& owner_mod, const sema::type_cto
     const auto  fn_expr{owner_mod.ast.get_as_opt<ast::function_expr>(*decl.value)};
     if (!fn_expr) { return; }
 
-    auto prev_module{std::exchange(active_module_, &owner_mod)};
+    const auto diags_before{ctx_.diags.size()};
+    auto       prev_module{std::exchange(active_module_, &owner_mod)};
     const_eval_.set_module(owner_mod);
     const_eval_.clear_memo();
 
@@ -530,6 +540,13 @@ auto emitter::emit_type_ctor_member(mod::module& owner_mod, const sema::type_cto
 
     active_module_ = prev_module;
     if (prev_module) { const_eval_.set_module(*prev_module); }
+    attribute_diags(owner_mod, diags_before);
+}
+
+auto emitter::attribute_diags(mod::module& owner, usize diags_before) -> void {
+    if (&owner == &ast_module_ || ctx_.diags.size() <= diags_before) { return; }
+    owner.absorb_sema_diagnostics(ctx_.diags.split_off(diags_before));
+    attributed_foreign_diags_ = true;
 }
 
 namespace {
@@ -898,13 +915,13 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
     } else if (decl.has_modifier(ast::decl_modifiers::EXTERN)) {
         if (gir_module_.has_function(name)) { return; }
         if (const auto fn_data{sema_type->get_data().as_opt<sema::types::function>()}) {
-            auto& fn{gir_module_.add_function(std::string{name},
-                                              *sema_type,
-                                              false,
-                                              false,
-                                              fn_data->is_variadic,
-                                              gir::linkage::EXTERN,
-                                              get_extern_target(active_ast(), decl))};
+            auto& fn{add_gir_function(std::string{name},
+                                      *sema_type,
+                                      false,
+                                      false,
+                                      fn_data->is_variadic,
+                                      gir::linkage::EXTERN,
+                                      get_extern_target(active_ast(), decl))};
             fn.set_link_name(get_link_name(active_ast(), decl));
             fn.set_weak(decl.has_modifier(ast::decl_modifiers::WEAK));
             for (usize i{0}; const auto& param : fn_data->params) {
@@ -1069,7 +1086,7 @@ auto emitter::emit_impl_default_method(std::string_view          gir_name,
     auto sema_type{concrete_sig ? concrete_sig : active_mod().get_sema_type_opt(sig_id)};
     if (!sema_type) { return; }
 
-    auto& fn{gir_module_.add_function(
+    auto& fn{add_gir_function(
         std::string{gir_name}, *sema_type, false, false, fn_expr.variadic, gir::linkage::INTERNAL)};
     auto& entry{fn.add_segment()};
     builder_.set_insert_point(fn, entry);
@@ -1153,7 +1170,7 @@ auto emitter::emit_top_level_test(ast::node_id id, const ast::test_stmt& test) -
     const auto loc{active_ast().location_of(id)};
     const auto unique_fn_name{fmt::format("__ghoti_test_fn_{}", anon_test_fn_counter_++)};
 
-    auto& fn{gir_module_.add_function(unique_fn_name, test_fn_type, true, false)};
+    auto& fn{add_gir_function(unique_fn_name, test_fn_type, true, false)};
     fn.set_test_desc(*test_desc);
     fn.set_test_location(
         active_mod().path.string(), static_cast<u32>(loc.line), static_cast<u32>(loc.column));
@@ -1183,8 +1200,8 @@ auto emitter::emit_function(ast::node_id                   id,
     const auto is_constexpr{decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
     // A name-override emit is a per-instantiation monomorph
     const auto linkage{name_override ? gir::linkage::INTERNAL : get_decl_linkage(decl)};
-    auto&      fn{gir_module_.add_function(
-        gir_name, *sema_type, false, is_constexpr, fn_expr.variadic, linkage)};
+    auto&      fn{
+        add_gir_function(gir_name, *sema_type, false, is_constexpr, fn_expr.variadic, linkage)};
     if (!name_override) { fn.set_link_name(get_link_name(active_ast(), decl)); }
     fn.set_weak(decl.has_modifier(ast::decl_modifiers::WEAK));
     fn.set_naked(fn_expr.is_naked);
@@ -1277,7 +1294,7 @@ auto emitter::emit_anonymous_function(ast::node_id id, const ast::function_expr&
     auto&      fn_type{*sema_type};
     const auto anon_name{fmt::format("anonymous_fn{}", anon_fn_counter_++)};
 
-    auto& fn{gir_module_.add_function(anon_name, fn_type, false, false, fn_expr.variadic)};
+    auto& fn{add_gir_function(anon_name, fn_type, false, false, fn_expr.variadic)};
     fn.set_calling_conv(fn_expr.conv);
     const auto prev_fn{builder_.get_function()};
     const auto prev_seg{builder_.get_segment()};
@@ -1337,7 +1354,7 @@ auto emitter::emit_named_local_function(std::string_view          name,
     const auto anon_name{fmt::format("localfn.{}", id.get_index())};
     if (gir_module_.has_function(anon_name)) { return anon_name; }
 
-    auto& fn{gir_module_.add_function(anon_name, fn_type, false, false, fn_expr.variadic)};
+    auto& fn{add_gir_function(anon_name, fn_type, false, false, fn_expr.variadic)};
     fn.set_calling_conv(fn_expr.conv);
     const auto prev_fn{builder_.get_function()};
     const auto prev_seg{builder_.get_segment()};
@@ -1420,7 +1437,7 @@ auto emitter::emit_closure_function(const ast::function_expr&     fn_expr,
     const auto impl_sig_data{cl.impl_signature.get_data().as_opt<sema::types::function>()};
     ASSERT(impl_sig_data, "Closure implementation signature must contain function type data");
 
-    auto& fn{gir_module_.add_function(fn_name, cl.impl_signature, false, false, fn_expr.variadic)};
+    auto&      fn{add_gir_function(fn_name, cl.impl_signature, false, false, fn_expr.variadic)};
     const auto prev_fn{builder_.get_function()};
     const auto prev_seg{builder_.get_segment()};
 
@@ -1550,7 +1567,7 @@ auto emitter::emit_constexpr_closure(const const_closure& cl) -> std::string {
     const auto sig_data{sig.get_data().as_opt<sema::types::function>()};
     ASSERT(sig_data, "constexpr callable must have a function signature");
 
-    auto&      fn{gir_module_.add_function(fn_name, sig, false, false, fn_expr.variadic)};
+    auto&      fn{add_gir_function(fn_name, sig, false, false, fn_expr.variadic)};
     const auto prev_fn{builder_.get_function()};
     const auto prev_seg{builder_.get_segment()};
     auto       prev_module{std::exchange(active_module_, &def_mod)};

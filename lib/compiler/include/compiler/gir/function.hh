@@ -19,6 +19,8 @@
 #include "compiler/gir/segment.hh"
 #include "compiler/sema/type.hh"
 
+namespace ghoti::mod { struct module; } // namespace ghoti::mod
+
 namespace ghoti::gir {
 
 struct parameter {
@@ -61,6 +63,12 @@ class function {
     MAKE_DEDUCING_GETTER(params);
     MAKE_DEDUCING_GETTER(segments);
 
+    // The AST module this function's body was emitted from, which owns its diagnostics' locations
+    [[nodiscard]] auto get_source_module() const noexcept -> stdx::option<mod::module&> {
+        return source_module_;
+    }
+    auto set_source_module(mod::module& m) -> void { source_module_.emplace(m); }
+
     auto set_link_name(std::string name) -> void { link_name_ = std::move(name); }
     auto set_weak(bool weak) -> void { is_weak_ = weak; }
     auto set_naked(bool naked) -> void { is_naked_ = naked; }
@@ -96,25 +104,26 @@ class function {
     [[nodiscard]] auto local_count() const noexcept -> usize { return next_local_index_; }
 
   private:
-    ghoti::arena&           arena_;
-    std::string             name_;
-    sema::type&             type_;
-    std::vector<parameter*> params_;
-    std::vector<segment*>   segments_;
-    usize                   next_local_index_{0};
-    bool                    is_test_{false};
-    bool                    is_constexpr_{false};
-    bool                    is_variadic_{false};
-    bool                    is_weak_{false};
-    bool                    is_naked_{false};
-    ast::calling_convention calling_conv_{ast::calling_convention::C};
-    gir::linkage            linkage_{linkage::INTERNAL};
-    std::string             abi_name_{"c"};
-    std::string             link_name_;
-    std::string             test_desc_;
-    std::string             test_file_;
-    u32                     test_line_{1};
-    u32                     test_column_{1};
+    ghoti::arena&              arena_;
+    std::string                name_;
+    sema::type&                type_;
+    std::vector<parameter*>    params_;
+    std::vector<segment*>      segments_;
+    usize                      next_local_index_{0};
+    bool                       is_test_{false};
+    bool                       is_constexpr_{false};
+    bool                       is_variadic_{false};
+    bool                       is_weak_{false};
+    bool                       is_naked_{false};
+    ast::calling_convention    calling_conv_{ast::calling_convention::C};
+    gir::linkage               linkage_{linkage::INTERNAL};
+    std::string                abi_name_{"c"};
+    std::string                link_name_;
+    std::string                test_desc_;
+    std::string                test_file_;
+    u32                        test_line_{1};
+    u32                        test_column_{1};
+    stdx::option<mod::module&> source_module_;
 };
 
 } // namespace ghoti::gir

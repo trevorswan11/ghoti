@@ -1,8 +1,11 @@
+#include <string_view>
 #include <utility>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "compiler/module/module.hh"
 #include "compiler/sema/error.hh"
+#include "helpers/common.hh"
 #include "helpers/sema.hh"
 
 namespace ghoti::tests {
@@ -126,6 +129,53 @@ TEST_CASE("Discard statement evaluating expression") {
             return x;
         };
     )");
+}
+
+TEST_CASE("A post-resolution error inside an imported generic's monomorph is attributed to the "
+          "defining module") {
+    const auto check_attributed{[](std::string_view dep_gh, sema::error expected) {
+        auto [ctx, idx]{helpers::type_check(
+            R"(import "dep.gh" as dep; pub const main := fn(): i32 { return dep.g(5u32); };)",
+            helpers::make_vector<helpers::mock_file>(
+                helpers::mock_file{.path = "dep.gh", .source = dep_gh}))};
+
+        // The root module still stops compiling, but prints nothing against its own source
+        CHECK(ctx->root_mod.is_poisoned());
+        if (const auto root_diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()}) {
+            CHECK(root_diags->empty());
+        }
+
+        auto&       dep_module{*UNWRAP(ctx->manager.try_get_file_module("dep.gh"))};
+        const auto& diags{UNWRAP(dep_module.diagnostics.as_opt<sema::diagnostics>())};
+        REQUIRE_FALSE(diags.empty());
+        for (const auto& d : diags) {
+            CHECK(d.get_error() == expected);
+            const auto loc{UNWRAP(d.to_formattable().location)};
+            const auto [line, _]{dep_module.source.get_diagnostic_strings(loc)};
+            CHECK(line != "<invalid line>");
+        }
+    }};
+
+    SECTION("type checker") {
+        check_attributed(R"(
+            pub const g := fn(x: auto): i32 {
+                const y: u16 = 2;
+                return @intCast(x % y);
+            };
+        )",
+                         sema::error::OPERATOR_TYPE_MISMATCH);
+    }
+
+    SECTION("GIR emission") {
+        check_attributed(R"(
+            pub const g := fn(x: auto): i32 {
+                var a: u16 = 0;
+                a = x;
+                return a;
+            };
+        )",
+                         sema::error::TYPE_MISMATCH);
+    }
 }
 
 } // namespace ghoti::tests

@@ -46,7 +46,15 @@ pub const formatIntAny := fn(
 
     // The worst case in terms of space needed is base 2, plus 1 for the sign
     var buf: [1 + @max(value_info.bits, 1u16)]mut u8 = undefined;
-    var a: MinInt = @abs(value);
+
+    var a: MinInt = undefined;
+    if constexpr (value_info.signedness == .signed) {
+        using SameUnsigned = @Int(.{ .signedness = .unsigned, .bits = value_info.bits });
+        const bits := @bitCast(SameUnsigned, value);
+        a = if (value < 0) 0 -% bits else bits;
+    } else {
+        a = value;
+    }
     var index := buf.len;
 
     if (base == 10) {
@@ -96,6 +104,7 @@ test {
     var backing: [1024]mut u8 = undefined;
     var stream: std.io.FixedBufferStream = .{ .buf = backing };
     _ = formatIntAny(&mut stream, 1u16, 2, .lower, .{});
+    _ = formatIntAny(&mut stream, 1u32, 2, .lower, .{});
 }
 
 test "formatIntAny base 10" {
@@ -107,4 +116,39 @@ test "formatIntAny base 10" {
     stream.pos = 0;
     _ = formatIntAny(&mut stream, 42u16, 10, .lower, .{});
     @expect(std.mem.eql(u8, "42", backing[..stream.pos]));
+
+    stream.pos = 0;
+    _ = formatIntAny(&mut stream, -42i32, 10, .lower, .{});
+    @expect(std.mem.eql(u8, "-42", backing[..stream.pos]));
+
+    stream.pos = 0;
+    _ = formatIntAny(&mut stream, 1234567u32, 10, .lower, .{});
+    @expect(std.mem.eql(u8, "1234567", backing[..stream.pos]));
+
+    stream.pos = 0;
+    _ = formatIntAny(&mut stream, 7i8, 10, .lower, .{});
+    @expect(std.mem.eql(u8, "7", backing[..stream.pos]));
+
+    stream.pos = 0;
+    _ = formatIntAny(&mut stream, -128i8, 10, .lower, .{});
+    @expect(std.mem.eql(u8, "-128", backing[..stream.pos]));
+
+    stream.pos = 0;
+    _ = formatIntAny(&mut stream, 18446744073709551615u64, 10, .lower, .{});
+    @expect(std.mem.eql(u8, "18446744073709551615", backing[..stream.pos]));
+}
+
+test "formatIntAny other bases" {
+    var backing: [32]mut u8 = undefined;
+    var stream: std.io.FixedBufferStream = .{ .buf = backing };
+    _ = formatIntAny(&mut stream, 5u16, 2, .lower, .{});
+    @expect(std.mem.eql(u8, "101", backing[..stream.pos]));
+
+    stream.pos = 0;
+    _ = formatIntAny(&mut stream, 255u32, 16, .upper, .{});
+    @expect(std.mem.eql(u8, "FF", backing[..stream.pos]));
+
+    stream.pos = 0;
+    _ = formatIntAny(&mut stream, -255i64, 16, .lower, .{});
+    @expect(std.mem.eql(u8, "-ff", backing[..stream.pos]));
 }

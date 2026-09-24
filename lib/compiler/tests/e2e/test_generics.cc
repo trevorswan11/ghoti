@@ -436,6 +436,60 @@ TEST_CASE("a value parameter typed via an earlier `T: type` parameter rejects an
     )");
 }
 
+TEST_CASE("a generic's body-local annotated decl is re-typed for each instantiation") {
+    SECTION("`var a: @TypeOf(value)` with two `auto` widths") {
+        CHECK(helpers::compile_and_run(R"(
+            const f := fn(value: auto): u8 {
+                var a: @TypeOf(value) = value;
+                return @intCast(a % 3);
+            };
+            pub const main := fn(): i32 {
+                return @as(i32, f(5u16)) + @as(i32, f(70000u32));   // 2 + 1
+            };
+        )") == 3);
+    }
+
+    SECTION("`var a: T` with two `T: type` arguments") {
+        CHECK(helpers::compile_and_run(R"(
+            const f := fn(T: type, value: T): u8 {
+                var a: T = value;
+                return @intCast(a % 3);
+            };
+            pub const main := fn(): i32 {
+                return @as(i32, f(u16, 5)) + @as(i32, f(u32, 70000));   // 2 + 1
+            };
+        )") == 3);
+    }
+
+    SECTION("a `using` alias sized from `@typeInfo(@TypeOf(value))`") {
+        CHECK(helpers::compile_and_run(R"(
+            const f := fn(value: auto, base: u8): u8 {
+                constexpr info := @typeInfo(@TypeOf(value)).int;
+                constexpr bits := @max(info.bits, 8u16);
+                using MinInt = @Int(.{ .signedness = .unsigned, .bits = bits });
+                var a: MinInt = value;
+                const d := a % @intCast(MinInt, base);
+                return @intCast(d);
+            };
+            pub const main := fn(): i32 {
+                return @as(i32, f(5u16, 2)) + @as(i32, f(70003u32, 4));   // 1 + 3
+            };
+        )") == 4);
+    }
+
+    SECTION("a `[n]T` local keeps each instantiation's own element type") {
+        CHECK(helpers::compile_and_run(R"(
+            const f := fn(T: type, value: T): i32 {
+                var buf: [2]mut T = undefined;
+                buf[0] = value;
+                buf[1] = value;
+                return @intCast(buf[0] + buf[1]);
+            };
+            pub const main := fn(): i32 { return f(u8, 3) + f(i64, 20); };
+        )") == 46);
+    }
+}
+
 TEST_CASE("a generic `fn(T: type, a: []T, b: []T)` call correctly types both slice arguments "
           "when one comes from `@typeInfo` reflection") {
     CHECK(helpers::compile_and_run_tests(R"(

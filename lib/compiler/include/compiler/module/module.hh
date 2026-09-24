@@ -145,6 +145,17 @@ struct module {
         return state;
     }
 
+    // Poisons the module with `list`, keeping any sema diagnostics it already reported
+    auto absorb_sema_diagnostics(sema::diagnostics&& list) -> void {
+        if (list.empty()) { return; }
+        if (auto existing{diagnostics.as_opt<sema::diagnostics>()}) {
+            for (const auto& d : list) { existing->push_back(d); }
+            if (is_ok()) { state = module_state::POISONED_TYPE_RESOLVED; }
+            return;
+        }
+        error_out(std::move(list), module_state::POISONED_TYPE_RESOLVED);
+    }
+
     // Prints the modules diagnostics to the stream, doing nothing if an error state is not present
     auto print_diagnostics(std::ostream& os) const -> void;
 

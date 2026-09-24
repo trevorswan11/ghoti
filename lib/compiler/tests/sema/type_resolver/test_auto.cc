@@ -438,6 +438,55 @@ TEST_CASE("Generic functions with complex types and chaining") {
     }
 }
 
+TEST_CASE("A generic body-local decl's explicit annotation is re-typed per instantiation") {
+    const auto check_widths{[](std::string_view src) {
+        auto [ctx, idx]{helpers::type_check_and_verify(src)};
+        const auto [_x, _xd, _xn, x_type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("x", idx)};
+        const auto [_y, _yd, _yn, y_type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("y", idx)};
+        CHECK(x_type == ctx->get_int_type(16, false));
+        CHECK(y_type == ctx->get_int_type(32, false));
+    }};
+
+    SECTION("`@TypeOf` of an `auto` parameter") {
+        check_widths(R"(
+            const f := fn(value: auto): auto {
+                var a: @TypeOf(value) = value;
+                return a;
+            };
+            const x := f(5u16);
+            const y := f(7u32);
+        )");
+    }
+
+    SECTION("A `T: type` parameter") {
+        check_widths(R"(
+            const f := fn(T: type, value: T): auto {
+                var a: T = value;
+                return a;
+            };
+            const x := f(u16, 5);
+            const y := f(u32, 7);
+        )");
+    }
+
+    SECTION("A `using` alias built from `@typeInfo(@TypeOf(value))`") {
+        check_widths(R"(
+            const f := fn(value: auto, base: u8): auto {
+                constexpr info := @typeInfo(@TypeOf(value)).int;
+                constexpr bits := @max(info.bits, 8u16);
+                using MinInt = @Int(.{ .signedness = .unsigned, .bits = bits });
+                var a: MinInt = value;
+                const d: MinInt = a % @intCast(MinInt, base);
+                return d;
+            };
+            const x := f(5u16, 2);
+            const y := f(7u32, 4);
+        )");
+    }
+}
+
 TEST_CASE("Dereferencing pointer and reference expressions") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const p: ^i32 = undefined;

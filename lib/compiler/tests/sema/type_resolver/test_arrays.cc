@@ -27,7 +27,8 @@ TEST_CASE("Array resolution with explicit type") {
         UNWRAP(ctx->root_mod.ast.get_as_opt<ast::explicit_array_type>(*node_data.explicit_type))};
 
     // The explicit type in the decl can't have a true size at this point
-    const auto& array_type{ctx->get_type(sema::type_kind::TYPE, &array)};
+    const auto& item_type{ctx->get_int_type(32, true)};
+    const auto& array_type{ctx->get_type(sema::type_kind::TYPE, &array, &item_type)};
     CHECK(type == array_type);
     const auto& ident_type{UNWRAP(ctx->root_mod.get_sema_type_opt(node_data.name))};
     CHECK(ident_type == array_type);
@@ -35,7 +36,6 @@ TEST_CASE("Array resolution with explicit type") {
     CHECK(et_type == array_type);
 
     // The actual value type is properly typed
-    const auto& item_type{ctx->get_int_type(32, true)};
     const auto& array_literal_type{ctx->get_type(sema::type_kind::ARRAY, false, 2, item_type)};
     const auto& value_type{UNWRAP(ctx->root_mod.get_sema_type_opt(*node_data.value))};
     CHECK(value_type == array_literal_type);
