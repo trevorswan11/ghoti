@@ -67,7 +67,7 @@ pub const Kind := enum : u8 {
 test "Kind.is_valid at compile time" {
     constexpr kinds := [_]u8{ 'd', 'x', 'X', 'b', 'o', 'c', 's', 'e', 'f', 'p', '?' };
     for constexpr (kinds) |kind| {
-        constexpr k := Kind.is_valid('d');
+        constexpr k := Kind.is_valid(kind);
         @expect(k == true);
     }
     constexpr k_invalid := Kind.is_valid('z');
@@ -406,6 +406,65 @@ pub const write_fill_n := fn(
     }
     return .{ .ok = {} };
 };
+
+/// Writes `body` padded per `spec`, where `body[..prefix_len]` is a sign/radix prefix.
+/// The zero flag overrides fill/align and places '0's between the prefix and the digits
+pub const pad_number := fn(
+    w: &mut dyn std.io.Writer(Error = std.io.Error),
+    spec: Spec,
+    body: []u8,
+    prefix_len: usize,
+): std.Result(void, std.fmt.Error) {
+    const width := match (spec.width) {
+        .some => |explicit_width| explicit_width,
+        .none => return w.write_all(body).map_err(to_io_err),
+    };
+    if (width <= body.len) return w.write_all(body).map_err(to_io_err);
+
+    if (spec.zero) {
+        w.write_all(body[..prefix_len]).map_err(to_io_err)?;
+        write_fill_n(w, '0', width - body.len)?;
+        return w.write_all(body[prefix_len..]).map_err(to_io_err);
+    }
+    return pad(w, spec, body, .right);
+};
+
+test "pad_number places zeros after the prefix and defers to pad otherwise" {
+    var backing: [16]mut u8 = undefined;
+    var stream: std.io.FixedBufferStream = .{ .buf = backing };
+
+    @expect(pad_number(&mut stream, .{}, "-0x1f", 3) == .ok);
+    @expect(std.mem.eql(u8, "-0x1f", backing[..stream.pos]));
+
+    stream.pos = 0;
+    @expect(pad_number(&mut stream, .{ .width = .of(3), .zero = true }, "-0x1f", 3) == .ok);
+    @expect(std.mem.eql(u8, "-0x1f", backing[..stream.pos]));
+
+    stream.pos = 0;
+    @expect(pad_number(&mut stream, .{ .width = .of(8), .zero = true }, "-0x1f", 3) == .ok);
+    @expect(std.mem.eql(u8, "-0x0001f", backing[..stream.pos]));
+
+    stream.pos = 0;
+    const zero_with_align: Spec = .{
+        .width = .of(6),
+        .zero = true,
+        .fill = '*',
+        .align = .of(.left),
+    };
+    @expect(pad_number(&mut stream, zero_with_align, "-42", 1) == .ok);
+    @expect(std.mem.eql(u8, "-00042", backing[..stream.pos]));
+
+    stream.pos = 0;
+    @expect(pad_number(&mut stream, .{ .width = .of(6) }, "-42", 1) == .ok);
+    @expect(std.mem.eql(u8, "   -42", backing[..stream.pos]));
+
+    stream.pos = 0;
+    @expect(
+        pad_number(&mut stream, .{ .width = .of(6), .fill = '*', .align = .of(.center) }, "42", 0) ==
+            .ok,
+    );
+    @expect(std.mem.eql(u8, "**42**", backing[..stream.pos]));
+}
 
 /// Writes a literal/escaped curly brace sequence to the writer
 pub const write_literal := fn(
