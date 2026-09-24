@@ -5879,6 +5879,15 @@ auto type_resolver::visit(ast::node_id id, const ast::label_expr& label) -> void
     resolving_.set_symbol_table(id, table_idx);
     const scope s{table_stack_, table_idx, table_idx_};
 
+    // The label symbol is shared across generic instantiations, so drop yields from a prior pass
+    if (label.name) {
+        const auto& ident{resolving_.ast.get_as<ast::identifier_expr>(*label.name)};
+        if (auto sym{ctx_.registry.lookup(table_stack_, ident.name)};
+            sym && sym->get_kind() == symbol_kind::LABEL) {
+            symbols::label::from(*sym).clear_yield_types();
+        }
+    }
+
     // Resolve the body but cache the label's type so the result can bind to the label
     TRY_RESOLVE(*label.body);
     if (label.name) {

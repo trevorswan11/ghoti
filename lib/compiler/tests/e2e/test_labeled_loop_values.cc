@@ -117,4 +117,49 @@ TEST_CASE("nested labeled loops break to the outer label with a value") {
     )") == 7);
 }
 
+TEST_CASE("labeled block values are re-typed per generic instantiation") {
+    CHECK(helpers::compile_and_run(R"(
+        const widen := fn(value: auto): u64 {
+            const a := blk: {
+                break :blk value;
+            };
+            return @intCast(u64, a);
+        };
+        const magnitude := fn(value: auto): u64 {
+            constexpr info := @typeInfo(@TypeOf(value)).int;
+            using Unsigned = @Int(.{ .signedness = .unsigned, .bits = info.bits });
+            const a: Unsigned = blk: {
+                if constexpr (info.signedness == .signed) {
+                    const bits := @bitCast(Unsigned, value);
+                    break :blk if (value < 0) 0 -% bits else bits;
+                } else {
+                    break :blk value;
+                }
+            };
+            return @intCast(u64, a);
+        };
+        pub const main := fn(): i32 {
+            const w := widen(1u8) + widen(20u32) + widen(300u64);
+            const m := magnitude(-5i8) + magnitude(40u16) + magnitude(-500i64);
+            return @intCast(i32, w + m) - 800;
+        };
+    )") == 66);
+}
+
+TEST_CASE("labeled loop values are re-typed per generic instantiation") {
+    CHECK(helpers::compile_and_run(R"(
+        const first_over := fn(limit: auto): u64 {
+            var i: @TypeOf(limit) = 0;
+            const found := search: loop {
+                i += 1;
+                if (i > limit) { break :search i; }
+            };
+            return @intCast(u64, found);
+        };
+        pub const main := fn(): i32 {
+            return @intCast(i32, first_over(3u8) + first_over(1000u32)) - 1000;
+        };
+    )") == 5);
+}
+
 } // namespace ghoti::tests

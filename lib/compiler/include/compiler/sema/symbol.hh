@@ -83,6 +83,7 @@ class label {
 
     [[nodiscard]] auto has_yield_types() const noexcept -> bool { return !yield_types_.empty(); }
     auto               add_yield_type(type& type) -> void { yield_types_.emplace_back(&type); }
+    auto               clear_yield_types() noexcept -> void { yield_types_.clear(); }
 
     // Gets the Label data from the symbol, asserting the underlying data is a label
     [[nodiscard]] static auto from(symbol& symbol) -> label&;
