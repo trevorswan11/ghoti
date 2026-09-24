@@ -141,8 +141,7 @@ using stmt_handle = handle<node_kind::BLOCK_STATEMENT,
                            node_kind::RETURN_STATEMENT,
                            node_kind::BREAK_STATEMENT,
                            node_kind::CONTINUE_STATEMENT,
-                           node_kind::TEST_STATEMENT,
-                           node_kind::USING_STATEMENT>;
+                           node_kind::TEST_STATEMENT>;
 
 struct decl_stmt;
 using decl_handle   = handle<node_kind::DECL_STATEMENT>;
@@ -151,8 +150,7 @@ using import_handle = ast::handle<ast::node_kind::IMPORT_STATEMENT>;
 using import_payload_handle =
     handle<node_kind::STRING_EXPRESSION, node_kind::IDENTIFIER_EXPRESSION>;
 
-using member_handle =
-    handle<node_kind::DECL_STATEMENT, node_kind::IMPORT_STATEMENT, node_kind::USING_STATEMENT>;
+using member_handle = handle<node_kind::DECL_STATEMENT, node_kind::IMPORT_STATEMENT>;
 using member_list = std::vector<member_handle>;
 
 using labeled_node_handle = handle<node_kind::DO_WHILE_LOOP_EXPRESSION,

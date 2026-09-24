@@ -264,6 +264,10 @@ TEST_CASE("Lexing keywords") {
                });
 }
 
+TEST_CASE("Lexing `using` as a plain identifier") {
+    test_lexer("using", {{token_type_t::IDENT, "using"}});
+}
+
 TEST_CASE("Lexing interface / impl / dyn keywords") {
     test_lexer("impl interface dyn",
                {

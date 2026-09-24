@@ -98,7 +98,6 @@ class symbol_collector {
     auto visit(ast::node_id, const ast::import_stmt&) -> void;
     auto visit(ast::node_id, const ast::return_stmt&) -> void;
     auto visit(ast::node_id, const ast::test_stmt&) -> void;
-    auto visit(ast::node_id, const ast::using_stmt&) -> void;
 
     auto visit(ast::explicit_type_id, const ast::identifier_expr&) -> void;
     auto visit(ast::explicit_type_id, const ast::dot_expr&) -> void;

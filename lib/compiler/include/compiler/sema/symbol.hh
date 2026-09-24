@@ -67,9 +67,7 @@ class builtin {
     type&           type_;
 };
 
-using node_t = ast::handle<ast::node_kind::DECL_STATEMENT,
-                           ast::node_kind::USING_STATEMENT,
-                           ast::node_kind::IMPORT_STATEMENT>;
+using node_t = ast::handle<ast::node_kind::DECL_STATEMENT, ast::node_kind::IMPORT_STATEMENT>;
 
 class label {
   public:

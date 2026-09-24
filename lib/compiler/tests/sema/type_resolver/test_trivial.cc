@@ -63,6 +63,10 @@ TEST_CASE("Type alias resolution") {
     CHECK(c_type == ctx->get_type(sema::type_kind::REFERENCE, bool_ref));
 }
 
+TEST_CASE("`using` can name an ordinary binding") {
+    helpers::resolve_and_check("const using := 3; const x: i32 = using;");
+}
+
 TEST_CASE("A `const` alias names a value or a type by what its right-hand side denotes") {
     helpers::resolve_and_check("const BASE := 42; const K := BASE; const x: i32 = K;");
     helpers::resolve_and_check("const S := struct { x: i32 }; const T := S; var t: T = undefined;");

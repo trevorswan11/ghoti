@@ -1184,23 +1184,6 @@ auto dumper::visit(node_id, const test_stmt& test) -> void {
     }
 }
 
-auto dumper::visit(node_id id, const using_stmt& using_stmt) -> void {
-    PROFILE_FUNCTION();
-    fmt::println(out_, "UsingStatement");
-    {
-        const indent::guard g{indent_, false};
-        fmt::println(out_, "{}Public: {}", indent_.current_branch(), using_stmt::is_public(id));
-        fmt::print(out_, "{}Alias: ", indent_.current_branch());
-        dump(using_stmt.alias);
-    }
-
-    {
-        const indent::guard g{indent_, true};
-        fmt::print(out_, "{}Type: ", indent_.current_branch());
-        dump(using_stmt.explicit_type);
-    }
-}
-
 #define MAKE_EXPLICIT_TYPE_DUMP(TypeData)                                \
     auto dumper::visit(explicit_type_id, const TypeData& type) -> void { \
         PROFILE_FUNCTION();                                              \

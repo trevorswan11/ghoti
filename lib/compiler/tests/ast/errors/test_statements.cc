@@ -165,7 +165,6 @@ TEST_CASE("Illegal deferred statements") {
     helpers::test_parser_fail("defer import std;", expected_diag());
     helpers::test_parser_fail("defer return 3;", expected_diag());
     helpers::test_parser_fail("defer var a: i32 = 2;", expected_diag());
-    helpers::test_parser_fail("defer using a = i32;", expected_diag());
 }
 
 TEST_CASE("Missing deferred statements") {
@@ -294,25 +293,11 @@ TEST_CASE("Empty test description") {
                                                  std::pair{0UZ, 5UZ}});
 }
 
-TEST_CASE("Missing alias") {
+TEST_CASE("`using` is an ordinary identifier") {
     helpers::test_parser_fail(
-        "using &[0x2UZ][N]*E;",
+        "using T = i32;",
         syntax::diagnostic{
-            "Expected token IDENT, found BW_AND", syntax::error::UNEXPECTED_TOKEN, 0, 6});
-}
-
-TEST_CASE("Missing type") {
-    helpers::test_parser_fail(
-        "using T;",
-        syntax::diagnostic{
-            "Expected token ASSIGN, found SEMICOLON", syntax::error::UNEXPECTED_TOKEN, 0, 7});
-}
-
-TEST_CASE("Illegal identifier alias") {
-    helpers::test_parser_fail(
-        "using type = T;",
-        syntax::diagnostic{
-            "Expected token IDENT, found TYPE_TYPE", syntax::error::UNEXPECTED_TOKEN, 0, 6});
+            "Expected token SEMICOLON, found IDENT", syntax::error::UNEXPECTED_TOKEN, 0, 6});
 }
 
 } // namespace ghoti::tests

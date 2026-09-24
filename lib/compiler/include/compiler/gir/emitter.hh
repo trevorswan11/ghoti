@@ -111,7 +111,6 @@ class emitter {
 
   private:
     auto emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -> void;
-    auto emit_top_level_using(ast::node_id id, const ast::using_stmt& using_stmt) -> void;
     auto emit_top_level_test(ast::node_id id, const ast::test_stmt& test) -> void;
     // Emits the member functions of an `impl [I for] T { ... }` block under names scoped to the
     // impl's own symbol table, plus any interface default methods the impl inherits.

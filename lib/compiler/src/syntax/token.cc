@@ -98,8 +98,7 @@ auto token_t::is_decl_token() const noexcept -> bool {
 
 auto token_t::is_member_token() const noexcept -> bool {
     switch (type) {
-    case token_type_t::IMPORT:
-    case token_type_t::USING:  return true;
+    case token_type_t::IMPORT: return true;
     default:                   return is_decl_token();
     }
 }

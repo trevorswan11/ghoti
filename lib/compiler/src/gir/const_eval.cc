@@ -2032,17 +2032,6 @@ auto const_eval::resolve_module_chain(ast::node_id node) -> stdx::option<mod::mo
             if (!m_data) { return stdx::none; }
             return m_data->imported;
         }
-        if (const auto snode{sym->get_data().as_opt<sema::symbols::node_t>()}) {
-            if (const auto using_stmt{module_->ast.get_as_opt<ast::using_stmt>(*snode)}) {
-                auto aliased{module_->get_sema_type_opt(using_stmt->explicit_type)};
-                if (!aliased) { aliased = module_->get_sema_type_opt(*snode); }
-                if (aliased) {
-                    if (const auto m_data{aliased->get_data().as_opt<sema::types::module>()}) {
-                        return m_data->imported;
-                    }
-                }
-            }
-        }
         return stdx::none;
     }
 
@@ -2070,17 +2059,6 @@ auto const_eval::resolve_module_chain(ast::node_id node) -> stdx::option<mod::mo
             const auto m_data{sema_type->get_data().as_opt<sema::types::module>()};
             if (!m_data) { return stdx::none; }
             return m_data->imported;
-        }
-        if (const auto snode{sym->get_data().as_opt<sema::symbols::node_t>()}) {
-            if (const auto using_stmt{outer_mod->ast.get_as_opt<ast::using_stmt>(*snode)}) {
-                auto aliased{outer_mod->get_sema_type_opt(using_stmt->explicit_type)};
-                if (!aliased) { aliased = outer_mod->get_sema_type_opt(*snode); }
-                if (aliased) {
-                    if (const auto m_data{aliased->get_data().as_opt<sema::types::module>()}) {
-                        return m_data->imported;
-                    }
-                }
-            }
         }
         return stdx::none;
     }
@@ -2114,14 +2092,6 @@ auto const_eval::eval_module_member(mod::module& target_mod, std::string_view me
     if (!sym) { return stdx::none; }
     const auto node{sym->get_data().as_opt<sema::symbols::node_t>()};
     if (!node) { return stdx::none; }
-
-    if (const auto using_stmt{target_mod.ast.get_as_opt<ast::using_stmt>(*node)}) {
-        // Yield the aliased type so `mod::Alias.MEMBER` can resolve through it
-        if (const auto aliased{target_mod.get_sema_type_opt(using_stmt->explicit_type)}) {
-            return const_value{*aliased};
-        }
-        return stdx::none;
-    }
 
     const auto decl{target_mod.ast.get_as_opt<ast::decl_stmt>(*node)};
     if (!decl || !decl->value) { return stdx::none; }
@@ -2760,14 +2730,6 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
             return const_value{builtin_sym->get_type()};
         }
         if (const auto node{sym.get_data().as_opt<sema::symbols::node_t>()}) {
-            if (const auto using_stmt{module_->ast.get_as_opt<ast::using_stmt>(*node)}) {
-                if (const auto sema_type{module_->get_sema_type_opt(using_stmt->explicit_type)}) {
-                    return const_value{*sema_type};
-                }
-                if (const auto sema_type{module_->get_sema_type_opt(*node)}) {
-                    return const_value{*sema_type};
-                }
-            }
             if (const auto decl{module_->ast.get_as_opt<ast::decl_stmt>(*node)}) {
                 if (decl->value) {
                     const auto& node_data{module_->ast[*decl->value]};

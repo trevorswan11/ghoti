@@ -69,8 +69,7 @@ constexpr auto NODE_NAMES{stdx::fixed::enum_map<node_kind, std::string_view>::fr
     name_mapping{node_kind::IMPL_STATEMENT, "statement"},
     name_mapping{node_kind::IMPORT_STATEMENT, "statement"},
     name_mapping{node_kind::RETURN_STATEMENT, "statement"},
-    name_mapping{node_kind::TEST_STATEMENT, "statement"},
-    name_mapping{node_kind::USING_STATEMENT, "statement"})};
+    name_mapping{node_kind::TEST_STATEMENT, "statement"})};
 
 } // namespace
 

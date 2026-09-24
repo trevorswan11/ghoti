@@ -148,7 +148,6 @@ class formatter {
     auto visit(node_id, const import_stmt&) -> syntax::doc_id;
     auto visit(node_id, const return_stmt&) -> syntax::doc_id;
     auto visit(node_id, const test_stmt&) -> syntax::doc_id;
-    auto visit(node_id, const using_stmt&) -> syntax::doc_id;
     auto visit(node_id, stdx::monostate) -> syntax::doc_id;
 
     auto visit(explicit_type_id, const identifier_expr&) -> syntax::doc_id;

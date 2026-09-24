@@ -89,7 +89,6 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
         return module.ast[id].visit(
             [&](const auto&) {},
             [&](const ast::decl_stmt& decl) { emit_top_level_decl(id, decl); },
-            [&](const ast::using_stmt& using_stmt) { emit_top_level_using(id, using_stmt); },
             [&](const ast::impl_stmt& impl) { emit_top_level_impl(id, impl); },
             [&](const ast::test_stmt& test) {
                 if (emit_tests) { emit_top_level_test(id, test); }
@@ -1015,14 +1014,6 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
     g.is_weak         = decl.has_modifier(ast::decl_modifiers::WEAK);
 }
 
-auto emitter::emit_top_level_using(ast::node_id, const ast::using_stmt& using_stmt) -> void {
-    PROFILE_FUNCTION();
-    const auto& name_ident{active_ast().get_as<ast::identifier_expr>(using_stmt.alias)};
-    const auto  sema_type{active_mod().get_sema_type_opt(using_stmt.explicit_type)};
-    ASSERT(sema_type, "Using statement explicit type must be resolved");
-    gir_module_.add_type(std::string{name_ident.name}, *sema_type);
-}
-
 auto emitter::emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -> void {
     PROFILE_FUNCTION();
     if (!impl.impl_params.empty()) { return; } // parameterized: Phase 2.x
@@ -1680,9 +1671,8 @@ auto emitter::emit_stmt(const ast::stmt_handle& stmt) -> void {
         [&](const ast::break_stmt& brk) { emit_break(stmt_id, brk); },
         [&](const ast::continue_stmt& cnt) { emit_continue(stmt_id, cnt); },
         [&](const ast::discard_stmt& discard) { emit_expression(discard.discarded); },
-        // A local `import` or `using` only brings a name into scope; no GIR instructions needed.
-        [&](const ast::import_stmt&) {},
-        [&](const ast::using_stmt&) {});
+        // A local `import` only brings a name into scope; no GIR instructions needed.
+        [&](const ast::import_stmt&) {});
 }
 
 auto emitter::retype_if_undefined(value v, sema::type& result_type) -> value {

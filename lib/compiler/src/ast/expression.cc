@@ -1,5 +1,6 @@
 #include "compiler/ast/expression.hh"
 
+#include <concepts>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -379,10 +380,9 @@ namespace {
     -> stdx::result<member_handle, syntax::diagnostic> {
     switch (member->get_kind()) {
     case node_kind::DECL_STATEMENT:
-    case node_kind::USING_STATEMENT:
     case node_kind::IMPORT_STATEMENT: return member_handle{member};
     default:
-        return make_syntax_err("Members must be declarations, `using` aliases, or imports",
+        return make_syntax_err("Members must be declarations or imports",
                                syntax::error::INVALID_MEMBER,
                                parser.get_location_of(*member));
     }
@@ -1578,6 +1578,15 @@ template <NodeData Expr>
     parser.advance();
 
     const auto operand{TRY(parser.parse_expression(syntax::bind_precedence::PREFIX))};
+    // Pointer/reference types are formed over a named type, never a type literal in place
+    constexpr bool forms_type{std::same_as<Expr, reference_expr> ||
+                              std::same_as<Expr, address_of_expr>};
+    if (forms_type && operand.template any<struct_expr, union_expr, enum_expr, interface_expr>()) {
+        return make_syntax_err(
+            "A struct, union, enum, or interface literal cannot take a type modifier",
+            syntax::error::ILLEGAL_MODIFIED_TYPE_LITERAL,
+            prefix_token);
+    }
     return parser.add_expr<Expr>(prefix_token, operand);
 }
 

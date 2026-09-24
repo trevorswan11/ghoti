@@ -101,7 +101,6 @@ enum class token_type_t : u8 {
 
     SINGLE_QUOTE,
     UNDERSCORE,
-    USING,
     AND_MUT,
     CARET_MUT,
 

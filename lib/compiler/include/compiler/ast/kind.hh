@@ -60,7 +60,6 @@ enum class node_kind : u8 {
     IMPORT_STATEMENT,
     RETURN_STATEMENT,
     TEST_STATEMENT,
-    USING_STATEMENT,
 
     DISCARDED, // Represented by stdx::monostate
 };
@@ -118,8 +117,7 @@ enum class node_kind : u8 {
     X(impl_stmt)            \
     X(import_stmt)          \
     X(return_stmt)          \
-    X(test_stmt)            \
-    X(using_stmt)
+    X(test_stmt)
 
 // DOES NOT INCLUDE DISCARDED
 #define FOREACH_AST_NODE(X) \
@@ -230,7 +228,6 @@ NODE_KIND_OF_TRAIT(impl_stmt, IMPL_STATEMENT)
 NODE_KIND_OF_TRAIT(import_stmt, IMPORT_STATEMENT)
 NODE_KIND_OF_TRAIT(return_stmt, RETURN_STATEMENT)
 NODE_KIND_OF_TRAIT(test_stmt, TEST_STATEMENT)
-NODE_KIND_OF_TRAIT(using_stmt, USING_STATEMENT)
 NODE_KIND_OF_TRAIT(discarded, DISCARDED)
 
 #undef KIND_OF_TRAIT

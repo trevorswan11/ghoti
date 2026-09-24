@@ -641,20 +641,4 @@ auto impl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
                                       impl_params_force_break);
 }
 
-auto using_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
-    // A start token of public is guaranteed to be followed by an import
-    PROFILE_FUNCTION();
-    const auto start_token{parser.get_current_token()};
-    if (parser.current_token_is(syntax::token_type_t::PUBLIC)) { parser.advance(); }
-
-    TRY(parser.expect_peek(syntax::token_type_t::IDENT));
-    const identifier_handle alias{TRY(identifier_expr::parse(parser))};
-
-    TRY(parser.expect_peek(syntax::token_type_t::ASSIGN));
-    const auto type{TRY(explicit_type::parse(parser))};
-
-    TRY(parser.expect_peek(syntax::token_type_t::SEMICOLON));
-    return parser.add_stmt<using_stmt>(start_token, alias, type);
-}
-
 } // namespace ghoti::ast

@@ -448,11 +448,6 @@ class type_resolver {
     // returns whether it did
     auto reject_type_as_value(ast::expr_handle value, const type& expected) -> bool;
 
-    // If a `using` RHS is a bare-name form (`X`, `mod.X`) that resolves to a value symbol
-    // rather than a type, returns that name so the caller can reject the alias.
-    [[nodiscard]] auto using_rhs_value_name(ast::explicit_type_id rhs) const
-        -> stdx::option<std::string_view>;
-
     template <ast::IndexableID ID> auto visit(ID, const ast::struct_expr&) -> void;
     template <ast::IndexableID ID> auto visit(ID, const ast::union_expr&) -> void;
     template <ast::IndexableID ID> auto visit(ID, const ast::interface_expr&) -> void;
@@ -495,7 +490,6 @@ class type_resolver {
     auto visit(ast::node_id, const ast::import_stmt&) -> void;
     auto visit(ast::node_id, const ast::return_stmt&) -> void;
     auto visit(ast::node_id, const ast::test_stmt&) -> void;
-    auto visit(ast::node_id, const ast::using_stmt&) -> void;
     auto visit(ast::node_id, ast::discarded) noexcept -> void {}
 
     // Creates a potentially new type with the id-stored modifiers

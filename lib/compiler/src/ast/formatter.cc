@@ -277,9 +277,6 @@ auto formatter::is_function_or_aggregate_node(node_id id) const -> bool {
             return true;
         }
     }
-    if (const auto us{ast_.get_as_opt<using_stmt>(id)}) {
-        if (is_aggregate(us->explicit_type)) { return true; }
-    }
     return false;
 }
 
@@ -1573,17 +1570,6 @@ auto formatter::visit(node_id, const impl_stmt& node) -> syntax::doc_id {
     head.emplace_back(force_broken_body(doc_manager_, std::move(entries)));
 
     return doc_manager_.concat(std::move(head));
-}
-
-auto formatter::visit(node_id id, const using_stmt& node) -> syntax::doc_id {
-    return doc_manager_.concat({
-        using_stmt::is_public(id) ? doc_manager_.text("pub ") : doc_manager_.nil(),
-        doc_manager_.text("using "),
-        format(node.alias),
-        doc_manager_.text(" = "),
-        format(node.explicit_type),
-        doc_manager_.text(";"),
-    });
 }
 
 auto formatter::visit(node_id, stdx::monostate) -> syntax::doc_id { return doc_manager_.text("_"); }

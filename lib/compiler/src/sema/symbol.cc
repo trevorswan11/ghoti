@@ -41,9 +41,6 @@ template <typename Handle>
             if (const auto decl{module.ast.get_as_opt<ast::decl_stmt>(node)}) {
                 return span_of(module, decl->name);
             }
-            if (const auto using_stmt{module.ast.get_as_opt<ast::using_stmt>(node)}) {
-                return span_of(module, using_stmt->alias);
-            }
             if (const auto import_stmt{module.ast.get_as_opt<ast::import_stmt>(node)}) {
                 if (import_stmt->alias) { return span_of(module, *import_stmt->alias); }
             }
@@ -90,7 +87,6 @@ auto symbol::is_public(const mod::module& module) const noexcept -> bool {
             case ast::node_kind::DECL_STATEMENT:
                 return module.ast.get_as<ast::decl_stmt>(*node).has_modifier(
                     ast::decl_modifiers::PUBLIC);
-            case ast::node_kind::USING_STATEMENT:
             case ast::node_kind::IMPORT_STATEMENT:
                 return node->get_token_type() == syntax::token_type_t::PUBLIC;
             default: return false;

@@ -4099,10 +4099,6 @@ namespace {
         if ((!mod || (!mod->is_ptr() && !mod->is_ref())) && !is_agg) { return stdx::none; }
         return target_mod.get_sema_type_opt(*decl->value);
     }
-
-    if (const auto alias{target_mod.ast.get_as_opt<ast::using_stmt>(*node)}) {
-        return target_mod.get_sema_type_opt(alias->explicit_type);
-    }
     return stdx::none;
 }
 
@@ -7314,30 +7310,6 @@ auto type_resolver::dot_member_symbol(const ast::dot_expr& dot) const -> const s
     return sym ? &*sym : nullptr;
 }
 
-auto type_resolver::using_rhs_value_name(ast::explicit_type_id rhs) const
-    -> stdx::option<std::string_view> {
-    const auto is_value_sym{[](const sema::symbol& sym) -> bool {
-        return sym.has_kind() && sym.get_kind() == symbol_kind::VALUE;
-    }};
-
-    return resolving_.ast[rhs].visit(
-        [&](const ast::identifier_expr& e) -> stdx::option<std::string_view> {
-            if (syntax::token_type::is_int_type_lexeme(e.name)) { return stdx::none; }
-            if (const auto sym{ctx_.registry.lookup(table_stack_, e.name)};
-                sym && is_value_sym(*sym)) {
-                return e.name;
-            }
-            return stdx::none;
-        },
-        [&](const ast::dot_expr& e) -> stdx::option<std::string_view> {
-            if (const auto* sym{dot_member_symbol(e)}; sym && is_value_sym(*sym)) {
-                return resolving_.ast.get_as<ast::identifier_expr>(e.member).name;
-            }
-            return stdx::none;
-        },
-        [](const auto&) -> stdx::option<std::string_view> { return stdx::none; });
-}
-
 namespace {
 
 [[nodiscard]] auto incomplete_field(std::string_view name, const source_location& location)
@@ -8020,7 +7992,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                ctx_.generic_functions.get_opt(*existing).has_value();
     }()};
     // An explicit annotation is re-resolved too, since it may name a generic parameter
-    // (`var a: T`, `var a: @TypeOf(value)`, a `using` alias built from either)
+    // (`var a: T`, `var a: @TypeOf(value)`, a type alias built from either)
     const bool reresolve_local{
         !value_is_deferred_generic_method && for_generic_instantiation_ && reresolve_floor_ && [&] {
             const auto lt{ctx_.registry.lookup_with_table(table_stack_, ident.name)};
@@ -10107,10 +10079,7 @@ auto type_resolver::resolve_inherited_default_methods(impl_record&              
         if (!bnode) { continue; }
 
         stdx::option<type&> bound;
-        if (const auto bu{impl_mod.ast.get_as_opt<ast::using_stmt>(*bnode)}) {
-            bound = impl_mod.get_sema_type_opt(bu->explicit_type);
-        } else if (const auto bd{impl_mod.ast.get_as_opt<ast::decl_stmt>(*bnode)};
-                   bd && bd->value) {
+        if (const auto bd{impl_mod.ast.get_as_opt<ast::decl_stmt>(*bnode)}; bd && bd->value) {
             bound = impl_mod.get_sema_type_opt(*bd->value);
         }
         if (!bound || !bound->is_resolved()) { continue; }
@@ -10330,75 +10299,6 @@ auto type_resolver::resolve_dyn_method_signature(const types::dyn_t&       dyn,
 
     snap.restore_to(imod);
     return concrete_fn;
-}
-
-auto type_resolver::visit(ast::node_id id, const ast::using_stmt& using_stmt) -> void {
-    PROFILE_FUNCTION();
-    const auto& ident{resolving_.ast.get_as<ast::identifier_expr>(using_stmt.alias)};
-    // Search the whole stack, not just `table_idx_`, this can be reached out of decl order
-    auto sym{ctx_.registry.lookup(table_stack_, ident.name)};
-    if (!sym) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
-
-    const bool reresolve_local{for_generic_instantiation_ && reresolve_floor_ && [&] {
-        const auto lt{ctx_.registry.lookup_with_table(table_stack_, ident.name)};
-        return lt && lt->table_idx >= *reresolve_floor_;
-    }()};
-
-    if (sym->get_status() == symbol_status::RESOLVED && !reresolve_local) {
-        auto& void_type{ctx_.get_builtin_resolved_type(type_kind::VOID_)};
-        if (!resolving_.has_sema_type(id)) {
-            resolving_.set_sema_type(using_stmt.alias, void_type);
-            resolving_.set_sema_type(id, void_type);
-        }
-        return last_type_.emplace(void_type);
-    }
-
-    const auto poison_out = [&] -> void {
-        resolving_.set_sema_type(using_stmt.alias, *last_type_);
-        resolving_.set_sema_type(id, *last_type_);
-        ctx_.poison_symbol(*sym);
-    };
-
-    // Bind the resolved type to the symbol now that its been collected
-    sym->set_status(symbol_status::RESOLVING);
-    resolve(using_stmt.explicit_type);
-    if (last_type_->is_poison()) { return poison_out(); }
-    auto* explicit_type_p{last_type_.take()};
-    // `using X = MakesAType()`
-    if (explicit_type_p->get_data().is<types::deferred_call>()) {
-        const auto&     dc_call{explicit_type_p->get_data().as<types::deferred_call>().call};
-        gir::const_eval evaluator{ctx_, resolving_};
-        explicit_type_p = &denoted_type(evaluator.force_deferred_call(*explicit_type_p));
-        register_non_generic_type_ctor_members(*explicit_type_p, dc_call);
-    }
-    auto& explicit_type{*explicit_type_p};
-    if (explicit_type.get_kind() == type_kind::AUTO) {
-        last_type_.emplace(ctx_.poison_node(resolving_,
-                                            id,
-                                            "Type aliases cannot be 'auto'",
-                                            error::ILLEGAL_AUTO_USAGE,
-                                            resolving_.ast.location_of(using_stmt.explicit_type)));
-        return poison_out();
-    }
-
-    // `using` aliases a type, catch accidental use of a value on the RHS
-    if (const auto value_name{using_rhs_value_name(using_stmt.explicit_type)}) {
-        last_type_.emplace(ctx_.poison_node(
-            resolving_,
-            id,
-            fmt::format("'using' aliases a type, but '{}' is a value; use 'const' or "
-                        "'constexpr' to alias a value",
-                        *value_name),
-            error::TYPE_MISMATCH,
-            resolving_.ast.location_of(using_stmt.explicit_type)));
-        return poison_out();
-    }
-    resolving_.set_sema_type(id, explicit_type);
-
-    sym->set_status(symbol_status::RESOLVED);
-    resolve(using_stmt.alias);
-    if (last_type_->is_poison()) { return poison_out(); }
-    last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
 }
 
 // Without a modifier or with poison the result should be the same as the node

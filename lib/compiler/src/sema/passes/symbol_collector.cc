@@ -792,15 +792,6 @@ auto symbol_collector::visit(ast::node_id id, const ast::test_stmt& test) -> voi
     collecting_.set_sema_type(id, *last_type_.take());
 }
 
-auto symbol_collector::visit(ast::node_id id, const ast::using_stmt& using_stmt) -> void {
-    PROFILE_FUNCTION();
-    collect(using_stmt.explicit_type);
-    const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(using_stmt.alias)};
-    collecting_.add_identifier_position(using_stmt.alias);
-    if (!try_declare<symbols::node_t>(ident.name, id)) { return; }
-    ctx_.registry.get_from(table_idx_, ident.name).set_kind(symbol_kind::TYPE);
-}
-
 AST_TYPE_VISITOR_NOOP(symbol_collector, identifier_expr)
 AST_TYPE_VISITOR_NOOP(symbol_collector, dot_expr)
 
