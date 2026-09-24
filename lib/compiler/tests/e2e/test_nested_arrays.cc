@@ -27,9 +27,9 @@ TEST_CASE("Nested array row stores do not alias") {
             h[0] = row(1, 2);
             h[1] = row(3, 4);
             return @as(i32, h[0][0]) + @as(i32, h[0][1]) * 10 + @as(i32, h[1][0]) * 30 +
-                   @as(i32, h[1][1]) * 40;
+                   @as(i32, h[1][1]) * 40 - 200;
         };
-    )") == 271);
+    )") == 71);
 }
 
 TEST_CASE("Nested implicit literal initializes a const nested array") {
