@@ -130,7 +130,7 @@ pub weak const skip_handler := fn(_: []u8, _: SourceLocation): void {};
 /// Exact set of calling conventions ghoti supports, matching `ast::calling_convention` 1:1.
 pub const CallConv := enum { c, sysv, win64, stdcall, fastcall, aapcs };
 
-pub const Signedness := enum { signed, unsigned };
+pub const Signedness := enum : u1 { signed, unsigned };
 
 pub const IntInfo := struct {
     pub bits: u16,
