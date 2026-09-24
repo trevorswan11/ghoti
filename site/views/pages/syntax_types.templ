@@ -64,11 +64,11 @@ func(&mut P);` }
 	</pre>
 	<ul>
 		<li>In the above example, the call expression is parsed as taking in a mutable reference to a declaration P</li>
-		<li>If you instead meant for <code>&amp;mut P</code> to be a type, you can circumvent this priority by using a <code>using</code> statement</li>
+		<li>If you instead meant for <code>&amp;mut P</code> to be a type, you can circumvent this priority by aliasing the type with a <code>const</code> declaration</li>
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `using tP = &mut P;
+			{ `const tP := &mut P;
 const func := fn(p: type): void { ... };
 func(tP);` }
 		</code>
@@ -80,7 +80,7 @@ func(tP);` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `using Callback = fn(status: i32, result: ^bool): void;
+			{ `const Callback := fn(status: i32, result: ^bool): void;
 const register := fn(cb: Callback): void { ... };` }
 		</code>
 	</pre>

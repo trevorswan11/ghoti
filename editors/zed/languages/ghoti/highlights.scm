@@ -98,7 +98,6 @@
   "break"
   "import"
   "as"
-  "using"
   "pub"
   "extern"
   "export"

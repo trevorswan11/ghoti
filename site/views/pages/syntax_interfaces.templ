@@ -7,7 +7,7 @@ templ SyntaxInterfacesPage() {
 			An interface is declared with the standard declaration syntax and the <code>interface</code> type-expression prefix, akin to <code>struct</code> / <code>enum</code> / <code>union</code>
 			<ul>
 				<li>The declaration must be <code>const</code></li>
-				<li>An interface is a first-class <code>type</code> value: <code>constexpr</code>-composable, <code>using</code>-aliasable, re-exportable, and usable as a <code>T: type</code> argument</li>
+				<li>An interface is a first-class <code>type</code> value: <code>constexpr</code>-composable, aliasable with <code>const</code>, re-exportable, and usable as a <code>T: type</code> argument</li>
 			</ul>
 		</li>
 		<li>
@@ -65,11 +65,11 @@ const Marker := interface {};   // zero-member marker interface` }
 		<li>
 			<strong>Trait impl</strong>: <code>{ "impl I for T { ... }" }</code>
 			<ul>
-				<li>Binds each associated type with <code>using Name = ...</code> and overrides associated const defaults with <code>const N := ...</code></li>
+				<li>Binds each associated type with <code>const Name := ...</code> and overrides associated const defaults with <code>const N := ...</code></li>
 				<li>Supplies every required method; omitting a defaulted method inherits the interface's body</li>
 				<li>Inside the block <code>self</code> has type <code>T</code>; bare sibling names resolve against <code>T</code>, the interface's associated items, and the other methods in the block</li>
 				<li>After the impl, both <code>t.method(x)</code> and <code>T.method(&amp;t, x)</code> resolve</li>
-				<li>A trait impl satisfies a contract and nothing more: a <code>const</code> / <code>using</code> whose name is not an associated item of <code>I</code> is rejected. A static <code>var</code> is the one exception (it lowers to an <code>(I, T)</code>-keyed global)</li>
+				<li>A trait impl satisfies a contract and nothing more: a <code>const</code> whose name is not an associated item of <code>I</code> is rejected. A static <code>var</code> is the one exception (it lowers to an <code>(I, T)</code>-keyed global)</li>
 			</ul>
 		</li>
 		<li>
@@ -94,7 +94,7 @@ const Marker := interface {};   // zero-member marker interface` }
 			{ `const File := struct { fd: i32 };
 
 impl Writer for File {
-    using Error = i32;                 // bind the associated type
+    const Error := i32;                // bind the associated type
     const preferred_chunk := 8192;     // override the default
 
     pub const write := fn(&mut self, bytes: []u8): usize { return bytes.len; };
