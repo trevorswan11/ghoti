@@ -14,8 +14,8 @@ namespace {
 constexpr std::string_view RESULT_PRELUDE = R"(
 const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
 impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
-    using Output = T;
-    using Residual = E;
+    const Output := T;
+    const Residual := E;
     pub const branch := fn(self): builtin.Flow(T, E) {
         return match (self) {
             .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
@@ -24,13 +24,13 @@ impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
     };
 }
 impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
-    using From = E;
+    const From := E;
     pub const from_residual := fn(r: E): @This() { return .{ .err = r }; };
 }
 const Option := fn(T: type): type { return union { some: T, none: void }; };
 impl(T: type) builtin.Unwrappable for Option(T) {
-    using Output = T;
-    using Residual = void;
+    const Output := T;
+    const Residual := void;
     pub const branch := fn(self): builtin.Flow(T, void) {
         return match (self) {
             .some => |v| builtin.Flow(T, void){ .@"continue" = v },
@@ -39,7 +39,7 @@ impl(T: type) builtin.Unwrappable for Option(T) {
     };
 }
 impl(T: type) builtin.Rewrappable for Option(T) {
-    using From = void;
+    const From := void;
     pub const from_residual := fn(_: void): @This() { return .{ .none = {} }; };
 }
 )";
@@ -163,8 +163,8 @@ TEST_CASE("Nominal Unwrappable and Rewrappable resolution") {
         helpers::resolve_and_check(R"(
         const MyRes := union { val: i32, fail: u8 };
         impl builtin.Unwrappable for MyRes {
-            using Output = i32;
-            using Residual = u8;
+            const Output := i32;
+            const Residual := u8;
             pub const branch := fn(self): builtin.Flow(i32, u8) {
                 return match (self) {
                     .val => |v| builtin.Flow(i32, u8){ .@"continue" = v },
@@ -173,7 +173,7 @@ TEST_CASE("Nominal Unwrappable and Rewrappable resolution") {
             };
         }
         impl builtin.Rewrappable for MyRes {
-            using From = u8;
+            const From := u8;
             pub const from_residual := fn(r: u8): @This() { return MyRes{ .fail = r }; };
         }
         const f := fn(m: MyRes): MyRes {
@@ -190,8 +190,8 @@ TEST_CASE("Nominal Unwrappable and Rewrappable resolution") {
         helpers::resolve_and_check(R"(
         const MyRes := union { val: i32, fail: u8 };
         impl builtin.Unwrappable for MyRes {
-            using Output = i32;
-            using Residual = u8;
+            const Output := i32;
+            const Residual := u8;
             pub const branch := fn(self): builtin.Flow(i32, u8) {
                 return match (self) {
                     .val => |v| builtin.Flow(i32, u8){ .@"continue" = v },
@@ -201,7 +201,7 @@ TEST_CASE("Nominal Unwrappable and Rewrappable resolution") {
         }
         const BigRes := union { val: i32, fail: u32 };
         impl builtin.Rewrappable for BigRes {
-            using From = u32;
+            const From := u32;
             pub const from_residual := fn(r: u32): @This() { return BigRes{ .fail = r }; };
         }
         const f := fn(m: MyRes): BigRes {
@@ -216,8 +216,8 @@ TEST_CASE("Nominal Unwrappable and Rewrappable resolution") {
             R"(
 const BigRes := union { val: i32, fail: u32 };
 impl builtin.Unwrappable for BigRes {
-    using Output = i32;
-    using Residual = u32;
+    const Output := i32;
+    const Residual := u32;
     pub const branch := fn(self): builtin.Flow(i32, u32) {
         return match (self) {
             .val => |v| builtin.Flow(i32, u32){ .@"continue" = v },
@@ -227,7 +227,7 @@ impl builtin.Unwrappable for BigRes {
 }
 const SmallRes := union { val: i32, fail: u8 };
 impl builtin.Rewrappable for SmallRes {
-    using From = u8;
+    const From := u8;
     pub const from_residual := fn(r: u8): @This() { return SmallRes{ .fail = r }; };
 }
 const f := fn(m: BigRes): SmallRes {

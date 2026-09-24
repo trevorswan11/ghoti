@@ -69,10 +69,10 @@ TEST_CASE("reference to a global constant aggregate, then field access") {
     )") == 42);
 }
 
-TEST_CASE("`using T = other.Enum` then `alias.T.M` evaluates cleanly") {
+TEST_CASE("`const T := other.Enum` then `alias.T.M` evaluates cleanly") {
     constexpr std::string_view ENUM_MOD{R"(
         pub const E := enum : u32 { A = 1u32, B = 2u32, C = 7u32, _ };
-        pub using Alias = E;
+        pub const Alias := E;
     )"};
     const auto                 exit_code{helpers::compile_and_run(
         R"(
@@ -93,7 +93,7 @@ TEST_CASE("Local module alias `alias.E.C` resolves cleanly without ICmp crash") 
     const auto                 exit_code{helpers::compile_and_run(
         R"(
             import "pkg.gh" as pkg;
-            using my_pkg = pkg;
+            const my_pkg := pkg;
             pub const main := fn(): i32 {
                 const e: my_pkg.E = my_pkg.E.C;
                 return if (e == my_pkg.E.C) 7 else 1;

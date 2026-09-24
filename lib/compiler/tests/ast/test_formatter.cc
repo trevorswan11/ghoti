@@ -86,8 +86,8 @@ TEST_CASE("formatter round-trips leaf statements") {
     CHECK(format_source("import std;") == "import std;\n");
     CHECK(format_source(R"(pub import "ast/node.p" as node;)") ==
           "pub import \"ast/node.p\" as node;\n");
-    CHECK(format_source("using T = i32;") == "using T = i32;\n");
-    CHECK(format_source("pub using a = ^^i32;") == "pub using a = ^^i32;\n");
+    CHECK(format_source("const T := i32;") == "const T := i32;\n");
+    CHECK(format_source("pub const a := ^^i32;") == "pub const a := ^^i32;\n");
     CHECK(format_source("break :blk a;") == "break :blk a;\n");
     CHECK(format_source("continue;") == "continue;\n");
     CHECK(format_source("return enum { RED };") == "return enum { RED };\n");
@@ -510,7 +510,7 @@ TEST_CASE("formatter round trip: functions and types") {
     round_trips("fn(^mut this, a: A, b: ^B, ): i32 { c; };");
     round_trips("fn(self): i32 {};");
     round_trips("pub const min := fn(a: auto, b: auto): auto { return if (a < b) a else b; };");
-    round_trips("using T = i32; pub using a = ^^i32;");
+    round_trips("const T := i32; pub const a := ^^i32;");
     round_trips("var a: std.ArrayList(u8) = undefined; var a: List(i32) = undefined; var a: []i32 "
                 "= undefined;");
     round_trips("extern const foo: fn(): i32;");
@@ -533,7 +533,7 @@ TEST_CASE("formatter round trip: raw identifiers") {
     round_trips(R"(pub const @"match" := 1;)");
     round_trips(R"(const x := @"struct".field;)");
     round_trips(R"(const f := fn(@"fn": i32, @"i32": i32): i32 { return @"fn" + @"i32"; };)");
-    round_trips(R"(using @"union" = i32;)");
+    round_trips(R"(const @"union" := i32;)");
     round_trips(R"(const s := extern struct { @"struct": i32, @"enum": u8 };)");
     // A name needing no escaping must format bare, even when written raw in the source.
     CHECK(format_source(R"(const @"plain" := 0;)") == "const plain := 0;\n");
@@ -728,7 +728,7 @@ TEST_CASE("formatter round trip: interfaces and impls") {
                 "pub const next := fn(&mut self): Item; "
                 "const seal := fn(&self): void; "
                 "pub const drain := fn(&mut self): void { self.seal(); }; };");
-    round_trips("using X = interface { pub const f := fn(^self): i32; };");
+    round_trips("const X := interface { pub const f := fn(^self): i32; };");
     round_trips("impl File { pub const make := fn(): @This() { return .{}; }; }");
     round_trips("impl Writer for File { pub const write := fn(&mut self, b: []u8): R { c; }; }");
     round_trips("impl(T: type) Debug for Box(T) { pub const fmt := fn(&self): void {}; }");
@@ -748,8 +748,8 @@ TEST_CASE("formatter round trip: @cfg groups inside aggregate bodies") {
 TEST_CASE("formatter round trip: @cfg groups gating aggregate members") {
     round_trips("const S := struct { a: i32, const k := 1; "
                 "@cfg(os == .linux) { const l := fn(): i32 { return 1; }; } };");
-    round_trips("const S := struct { a: i32, @cfg(ptr_bits == 64) { using W = u64; } "
-                "else { using W = u32; } };");
+    round_trips("const S := struct { a: i32, @cfg(ptr_bits == 64) { const W := u64; } "
+                "else { const W := u32; } };");
     round_trips("const E := enum { A, @cfg(os == .linux) { const tag := 1; } "
                 "else { const tag := 2; } };");
 }

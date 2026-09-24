@@ -1,9 +1,9 @@
 //! Basic wrappers over standard IO streams
 import std;
 
-using Result = std.Result;
-using Error = std.io.Error;
-using File = std.io.File;
+const Result := std.Result;
+const Error := std.io.Error;
+const File := std.io.File;
 
 /// The standard output stream, infallible on POSIX
 pub const stdout := fn(): Result(File, Error) {

@@ -79,8 +79,8 @@ TEST_CASE("the `?` operator works inside a generic function body") {
     CHECK(helpers::compile_and_run(R"(
         const R := union { ok: i32, err: u8 };
         impl builtin.Unwrappable for R {
-            using Output = i32;
-            using Residual = u8;
+            const Output := i32;
+            const Residual := u8;
             pub const branch := fn(self): builtin.Flow(i32, u8) {
                 return match (self) {
                     .ok => |v| builtin.Flow(i32, u8){ .@"continue" = v },
@@ -89,7 +89,7 @@ TEST_CASE("the `?` operator works inside a generic function body") {
             };
         }
         impl builtin.Rewrappable for R {
-            using From = u8;
+            const From := u8;
             pub const from_residual := fn(r: u8): @This() { return .{ .err = r }; };
         }
         const first := fn(T: type, r: R): R {
@@ -113,7 +113,7 @@ TEST_CASE("a `using` alias inside a generic body re-resolves per instantiation")
                 pub constexpr mapErr := fn(&self, func: auto): auto {
                     constexpr fn_info := @typeInfo(@TypeOf(func));
                     const NewErr := fn_info.function.return_type;
-                    using NewRes = Result(T, NewErr);
+                    const NewRes := Result(T, NewErr);
                     return match (self) {
                         .ok => |happy| NewRes{ .ok = happy },
                         .err => |sad| NewRes{ .err = func(sad) },
@@ -466,7 +466,7 @@ TEST_CASE("a generic's body-local annotated decl is re-typed for each instantiat
             const f := fn(value: auto, base: u8): u8 {
                 constexpr info := @typeInfo(@TypeOf(value)).int;
                 constexpr bits := @max(info.bits, 8u16);
-                using MinInt = @Int(.{ .signedness = .unsigned, .bits = bits });
+                const MinInt := @Int(.{ .signedness = .unsigned, .bits = bits });
                 var a: MinInt = value;
                 const d := a % @intCast(MinInt, base);
                 return @intCast(d);

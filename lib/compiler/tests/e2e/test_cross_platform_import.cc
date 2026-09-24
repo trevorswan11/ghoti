@@ -33,14 +33,14 @@ constexpr std::string_view PLAT_WINDOWS{R"(
 // Mirrors `lib/std/os/os.gh`: a `@cfg(os)` backend select that flat-re-exports
 constexpr std::string_view OS_BACKEND_DARWIN{R"(
     pub const Errno := enum : i32 { OK = 0, NOPE = 1, _ };
-    pub using Handle = i32;
+    pub const Handle := i32;
     pub const answer := fn(): i32 { return 7; };
     pub const WHENCE_END: i32 = 2;
 )"};
 
 constexpr std::string_view OS_BACKEND_WINDOWS{R"(
     pub const Errno := enum : u32 { OK = 0u32, NOPE = 1u32, _ };
-    pub using Handle = ^mut opaque;
+    pub const Handle := ^mut opaque;
     pub const answer := fn(): i32 { return 7; };
     pub const WHENCE_END: i32 = 2;
 )"};
@@ -50,9 +50,9 @@ constexpr std::string_view OS_SELECT{R"(
     else @cfg(os == .windows) import "os_windows.gh" as backend;
     else @compileError("unsupported target OS");
 
-    pub using Handle = backend.Handle;
-    pub using Errno = backend.Errno;
-    pub using answer = backend.answer;
+    pub const Handle := backend.Handle;
+    pub const Errno := backend.Errno;
+    pub const answer := backend.answer;
     pub const WHENCE_END := backend.WHENCE_END;
 )"};
 

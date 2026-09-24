@@ -135,13 +135,14 @@ TEST_CASE("Self parameters in structural types") {
 }
 
 TEST_CASE("Deferred return type from user function") {
-    auto [ctx, idx]{helpers::resolve_and_check("const a := fn(): type {}; using B = a();")};
+    auto [ctx, idx]{helpers::resolve_and_check("const a := fn(): type {}; const B := a();")};
 
-    const auto [sym, sym_data, node_data, type]{
-        ctx->get_ast_type_sym_info<syms::node_t, ast::using_stmt>("B", idx)};
+    const auto [sym, sym_data, node_data]{
+        ctx->get_ast_sym_info<syms::node_t, ast::decl_stmt>("B", idx)};
 
-    const auto& call =
-        UNWRAP(ctx->root_mod.ast.get_as_opt<ast::call_expr>(node_data.explicit_type));
+    // The call itself stays deferred; the alias folds it
+    const auto& call = UNWRAP(ctx->root_mod.ast.get_as_opt<ast::call_expr>(*node_data.value));
+    const auto& type{UNWRAP(ctx->root_mod.get_sema_type_opt(*node_data.value))};
     CHECK(type == ctx->get_type(sema::type_kind::TYPE, &call));
     CHECK(&call == &UNWRAP(type.get_data().as_opt<sema::types::deferred_call>()).call);
 }
@@ -161,12 +162,12 @@ TEST_CASE("Function explicit type resolution") {
 
 TEST_CASE("Function with syntactically ambiguous arguments") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        using a = @TypeOf(^i32);
-        using b = @TypeOf(^mut i32);
-        using c = @TypeOf(&i32);
-        using d = @TypeOf(&mut i32);
-        using e = @TypeOf(^^i32);
-        using f = @TypeOf(^mut ^i32);
+        const a := @TypeOf(^i32);
+        const b := @TypeOf(^mut i32);
+        const c := @TypeOf(&i32);
+        const d := @TypeOf(&mut i32);
+        const e := @TypeOf(^^i32);
+        const f := @TypeOf(^mut ^i32);
     )")};
 
     const auto check_ambiguous = [&](std::string_view  name,

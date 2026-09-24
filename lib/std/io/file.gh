@@ -1,9 +1,9 @@
 //! The core File abtraction over raw OS primitives
 import std;
 
-using Result = std.Result;
-using os = std.os;
-using io = std.io;
+const Result := std.Result;
+const os := std.os;
+const io := std.io;
 
 pub const OpenFlags := struct {
     pub access: enum : u8 { read, write, read_write } = .read,
@@ -75,7 +75,7 @@ pub const File := struct {
 };
 
 impl io.Reader for File {
-    using Error = io.Error;
+    const Error := io.Error;
     pub const read := fn(&mut self, buf: []mut u8): Result(usize, Error) {
         return match (os.read(self.handle, buf)) {
             .ok => |n| .of(n),
@@ -85,7 +85,7 @@ impl io.Reader for File {
 }
 
 impl io.Writer for File {
-    using Error = io.Error;
+    const Error := io.Error;
     pub const write := fn(&mut self, bytes: []u8): Result(usize, Error) {
         return match (os.write(self.handle, bytes)) {
             .ok => |n| .of(n),
@@ -95,7 +95,7 @@ impl io.Writer for File {
 }
 
 impl io.Seeker for File {
-    using Error = io.Error;
+    const Error := io.Error;
     pub const seek := fn(&mut self, offset: i64, whence: io.Whence): Result(i64, Error) {
         return match (os.lseek(self.handle, offset, @as(i32, whence))) {
             .ok => |p| .of(p),

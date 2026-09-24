@@ -44,7 +44,6 @@ TEST_CASE("a `var` binding cannot hold a `type` value") {
     helpers::resolve_and_check("const a := i32;");
     helpers::resolve_and_check("constexpr a: type = i32;");
     helpers::resolve_and_check("constexpr a := i32;");
-    helpers::resolve_and_check("using a = i32;");
     helpers::resolve_and_check("const S := struct { x: i32 };");
     helpers::resolve_and_check("const f := fn(t: type): i32 { _ = t; return 0; };");
 

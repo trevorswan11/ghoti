@@ -722,13 +722,23 @@ auto const_eval::force_deferred_call(sema::type& maybe_deferred) -> sema::type& 
     PROFILE_FUNCTION();
     const auto deferred{maybe_deferred.get_data().as_opt<sema::types::deferred_call>()};
     if (!deferred) { return maybe_deferred; }
-    const auto resolved{try_resolve_deferred_call(deferred->call)};
+
+    const auto val{eval_call(ast::node_id::make_invalid(), deferred->call)};
+    if (!val) { return maybe_deferred; }
+
+    // A constructor that folds to a type (`fn(w: bool): type { return i64; }`) is pinned to it
+    if (const auto type_opt{val->as_opt<stdx::option<sema::type&>>()}; type_opt && *type_opt) {
+        return sema::denoted_type(**type_opt);
+    }
+
+    // Otherwise only an aggregate result needs to be pinned early
+    const auto resolved{val->get_type()};
     if (!resolved) { return maybe_deferred; }
-    // Only an aggregate result needs to be pinned early
-    switch (resolved->get_kind()) {
+    auto& denoted{sema::denoted_type(*resolved)};
+    switch (denoted.get_kind()) {
     case sema::type_kind::STRUCT:
     case sema::type_kind::UNION:
-    case sema::type_kind::ENUM:   return *resolved;
+    case sema::type_kind::ENUM:   return denoted;
     default:                      return maybe_deferred;
     }
 }

@@ -1,6 +1,6 @@
 import std;
 
-using Test = builtin.Test;
+const Test := builtin.Test;
 
 extern const __ghoti_test_take_skipped: fn(): bool;
 

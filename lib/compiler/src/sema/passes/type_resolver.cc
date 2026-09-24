@@ -5748,7 +5748,7 @@ auto type_resolver::visit(ast::node_id id, const ast::initializer_expr& init) ->
 
     if (object_type_opt->get_data().is<types::deferred_call>()) {
         gir::const_eval evaluator{ctx_, resolving_};
-        object_type_opt.emplace(evaluator.force_deferred_call(*object_type_opt));
+        object_type_opt.emplace(denoted_type(evaluator.force_deferred_call(*object_type_opt)));
     }
 
     type& object_type{*object_type_opt};
@@ -7416,7 +7416,8 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
 
         sym->set_status(symbol_status::RESOLVING);
         TRY_RESOLVE(field.explicit_type);
-        auto* field_type{last_type_.take()};
+        // `f: @TypeOf(g)` / `f: FnAlias` stores the denoted type, not a `type` value
+        auto* field_type{&denoted_type(*last_type_.take())};
 
         if (field_type->get_kind() == type_kind::AUTO) {
             if (!field.default_value) {
@@ -7576,7 +7577,7 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
 
         sym->set_status(symbol_status::RESOLVING);
         TRY_RESOLVE(field.explicit_type);
-        auto& field_type{*last_type_.take()};
+        auto& field_type{denoted_type(*last_type_.take())};
 
         if (field_type.get_kind() == type_kind::AUTO) {
             return last_type_.emplace(ctx_.poison_node(
@@ -8018,7 +8019,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             if (explicit_type_p->get_data().is<types::deferred_call>()) {
                 const auto& dc_call{explicit_type_p->get_data().as<types::deferred_call>().call};
                 gir::const_eval evaluator{ctx_, resolving_};
-                explicit_type_p = &evaluator.force_deferred_call(*explicit_type_p);
+                explicit_type_p = &denoted_type(evaluator.force_deferred_call(*explicit_type_p));
                 register_non_generic_type_ctor_members(*explicit_type_p, dc_call);
             }
             auto& explicit_type{*explicit_type_p};
@@ -8075,7 +8076,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             if (decl_value_type_p->get_data().is<types::deferred_call>()) {
                 const auto& dc_call{decl_value_type_p->get_data().as<types::deferred_call>().call};
                 gir::const_eval evaluator{ctx_, resolving_};
-                decl_value_type_p = &evaluator.force_deferred_call(*decl_value_type_p);
+                decl_value_type_p = &denoted_type(evaluator.force_deferred_call(*decl_value_type_p));
                 if (decl_value_type_p->is_poison()) {
                     last_type_.emplace(*decl_value_type_p);
                     return poison_out();
@@ -10306,7 +10307,7 @@ auto type_resolver::visit(ast::node_id id, const ast::using_stmt& using_stmt) ->
     if (explicit_type_p->get_data().is<types::deferred_call>()) {
         const auto&     dc_call{explicit_type_p->get_data().as<types::deferred_call>().call};
         gir::const_eval evaluator{ctx_, resolving_};
-        explicit_type_p = &evaluator.force_deferred_call(*explicit_type_p);
+        explicit_type_p = &denoted_type(evaluator.force_deferred_call(*explicit_type_p));
         register_non_generic_type_ctor_members(*explicit_type_p, dc_call);
     }
     auto& explicit_type{*explicit_type_p};

@@ -109,7 +109,7 @@ TEST_CASE("a bodyless `fn(...)` type expression names a callable type") {
 
 TEST_CASE("a no-self struct-member `const fn` stored into a `fn`-pointer field is callable") {
     CHECK(helpers::compile_and_run(R"(
-        using Thunk = fn(ctx: ^u8, k: i32): i32;
+        const Thunk := fn(ctx: ^u8, k: i32): i32;
 
         const Erased := struct {
             ctx: ^u8,
@@ -137,7 +137,7 @@ TEST_CASE("a no-self struct-member `const fn` stored into a `fn`-pointer field i
 
 TEST_CASE("a function type carries named parameters") {
     CHECK(helpers::compile_and_run(R"(
-        using BinOp = fn(lhs: i32, rhs: i32): i32;
+        const BinOp := fn(lhs: i32, rhs: i32): i32;
 
         const add := fn(a: i32, b: i32): i32 { return a + b; };
 

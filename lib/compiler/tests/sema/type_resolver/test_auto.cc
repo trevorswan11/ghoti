@@ -476,7 +476,7 @@ TEST_CASE("A generic body-local decl's explicit annotation is re-typed per insta
             const f := fn(value: auto, base: u8): auto {
                 constexpr info := @typeInfo(@TypeOf(value)).int;
                 constexpr bits := @max(info.bits, 8u16);
-                using MinInt = @Int(.{ .signedness = .unsigned, .bits = bits });
+                const MinInt := @Int(.{ .signedness = .unsigned, .bits = bits });
                 var a: MinInt = value;
                 const d: MinInt = a % @intCast(MinInt, base);
                 return d;

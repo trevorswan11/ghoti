@@ -2,7 +2,7 @@ import std;
 
 import "spec.gh" as spec;
 
-pub using Spec = spec.Spec;
+pub const Spec := spec.Spec;
 pub const pad := spec.pad;
 pub const write_fill_n := spec.write_fill_n;
 pub const pad_number := spec.pad_number;
@@ -21,7 +21,7 @@ test {
     import "int.gh";
 }
 
-using Writer = std.io.Writer;
+const Writer := std.io.Writer;
 
 pub const Error := enum { overflow, bad_spec, bad_arg, unsupported, io };
 

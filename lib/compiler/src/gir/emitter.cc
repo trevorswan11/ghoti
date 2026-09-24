@@ -882,8 +882,16 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
     const auto  name{name_ident.name};
     const auto  sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Top-level declaration must have a resolved sema type");
+    if (active_mod().is_storageless_decl(id)) {
+        // A module-level type alias is listed by name; it has no storage of its own
+        if (user_type_stack_.empty()) {
+            if (const auto aliased{const_eval::alias_decl_type(active_mod(), id, decl)}) {
+                gir_module_.add_type(std::string{name}, *aliased);
+            }
+        }
+        return;
+    }
     if (sema_type->get_kind() == sema::type_kind::TYPE) { return; }
-    if (active_mod().is_storageless_decl(id)) { return; }
     // An `interface` decl is a pure compile-time contract with no runtime storage or body.
     if (sema_type->get_kind() == sema::type_kind::INTERFACE) { return; }
     // A deferred `@compileError` declaration only reports at its reference sites

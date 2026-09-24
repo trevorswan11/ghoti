@@ -128,12 +128,12 @@ TEST_CASE("negation brings the minimum signed value into range") {
     )") == 0);
 }
 
-TEST_CASE("`using K = other.CONST` value RHS produces diagnostic, not ICE") {
-    helpers::expect_compile_error(R"(
+TEST_CASE("`const K := X` aliases a value constant") {
+    CHECK(helpers::compile_and_run(R"(
         const X := 42;
-        using K = X;
+        const K := X;
         pub const main := fn(): i32 { return K; };
-    )");
+    )") == 42);
 }
 
 } // namespace ghoti::tests

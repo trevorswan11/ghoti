@@ -141,7 +141,7 @@ TEST_CASE("Indirection in structural type resolution") {
             a: ^A,
             const b := fn(&self, c: A): i32 {
                 const dA := A;
-                using uA = A;
+                const uA := A;
             };
         };)");
 }
@@ -258,7 +258,7 @@ TEST_CASE("Illegal circular module-based access resolution") {
         R"(import "a.gh" as a; pub const B := struct { field: a.A, };)"};
 
     auto [ctx, idx]{helpers::resolve(
-        R"(import "a.gh" as a; using A = a.A;)",
+        R"(import "a.gh" as a; const A := a.A;)",
         helpers::make_vector<mock_file>(mock_file{.path = "a.gh", .source = a_gh},
                                         mock_file{.path = "b.gh", .source = b_gh}))};
     auto& test_module{*UNWRAP(ctx->manager.try_get_file_module("test.gh"))};

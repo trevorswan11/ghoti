@@ -12,8 +12,8 @@ namespace {
 constexpr std::string_view RESULT_PRELUDE = R"(
 const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
 impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
-    using Output = T;
-    using Residual = E;
+    const Output := T;
+    const Residual := E;
     pub const branch := fn(self): builtin.Flow(T, E) {
         return match (self) {
             .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
@@ -22,13 +22,13 @@ impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
     };
 }
 impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
-    using From = E;
+    const From := E;
     pub const from_residual := fn(r: E): @This() { return .{ .err = r }; };
 }
 const Option := fn(T: type): type { return union { some: T, none: void }; };
 impl(T: type) builtin.Unwrappable for Option(T) {
-    using Output = T;
-    using Residual = void;
+    const Output := T;
+    const Residual := void;
     pub const branch := fn(self): builtin.Flow(T, void) {
         return match (self) {
             .some => |v| builtin.Flow(T, void){ .@"continue" = v },
@@ -37,7 +37,7 @@ impl(T: type) builtin.Unwrappable for Option(T) {
     };
 }
 impl(T: type) builtin.Rewrappable for Option(T) {
-    using From = void;
+    const From := void;
     pub const from_residual := fn(_: void): @This() { return .{ .none = {} }; };
 }
 )";

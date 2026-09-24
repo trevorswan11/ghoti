@@ -18,8 +18,8 @@
     @compileError("std.os: unsupported target OS");
 }
 
-pub using Handle = backend.Handle;
-pub using Errno = backend.Errno;
+pub const Handle := backend.Handle;
+pub const Errno := backend.Errno;
 
 pub const open := backend.open;
 pub const read := backend.read;
@@ -44,7 +44,7 @@ pub const SEEK_CUR := backend.SEEK_CUR;
 pub const SEEK_END := backend.SEEK_END;
 
 @cfg (os == .macos or os == .linux) {
-    pub using mode_t = backend.mode_t;
+    pub const mode_t := backend.mode_t;
     pub const O_RDONLY := backend.O_RDONLY;
     pub const O_WRONLY := backend.O_WRONLY;
     pub const O_RDWR := backend.O_RDWR;

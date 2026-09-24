@@ -2,11 +2,11 @@
 import std;
 pub import "errno.gh" as errno;
 
-pub using Handle = ^mut opaque;
-pub using Errno = errno.Errno;
+pub const Handle := ^mut opaque;
+pub const Errno := errno.Errno;
 
-using DWORD = u32;
-using BOOL = i32;
+const DWORD := u32;
+const BOOL := i32;
 
 /// CreateFileW / GetStdHandle failure sentinel
 pub const INVALID_HANDLE_VALUE: Handle = @ptrFromInt(Handle, @bitCast(usize, -1z)); // (HANDLE)(LONG_PTR)-1

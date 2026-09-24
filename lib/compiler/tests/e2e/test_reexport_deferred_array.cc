@@ -21,7 +21,7 @@ constexpr std::string_view RESULT{R"(
 constexpr std::string_view LEAF{R"(
     import "result.gh" as result;
 
-    pub using Errno = i32;
+    pub const Errno := i32;
 
     extern("C", "do_stat") const raw_stat: fn(out: ^mut Stat): i32;
 

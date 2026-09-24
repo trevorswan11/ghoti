@@ -62,7 +62,7 @@ TEST_CASE("E2E: a cross-module `using` alias in an `impl` target's method signat
     constexpr std::string_view file_gh{R"(
         import "result.gh" as result;
         import "err.gh" as error;
-        using Result = result.Result;
+        const Result := result.Result;
 
         pub const File := struct {
             pub handle: i32,
@@ -164,7 +164,7 @@ TEST_CASE("E2E: a static enum method reached cross-module via a `using` alias is
     )"};
     constexpr std::string_view wrap_gh{R"(
         import "err.gh" as error;
-        using Error = error.Error;
+        const Error := error.Error;
         pub const classify := fn(c: i32): Error { return Error.fromCode(c); };
     )"};
 
@@ -244,8 +244,8 @@ TEST_CASE(
     constexpr std::string_view res_gh{R"(
         pub const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
-            using Output = T;
-            using Residual = E;
+            const Output := T;
+            const Residual := E;
             pub const branch := fn(self): builtin.Flow(T, E) {
                 return match (self) {
                     .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
@@ -254,7 +254,7 @@ TEST_CASE(
             };
         }
         impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
-            using From = E;
+            const From := E;
             pub const from_residual := fn(r: E): @This() { return .{ .err = r }; };
         }
     )"};
@@ -279,7 +279,7 @@ TEST_CASE(
         import "res.gh" as res;
         pub const Sink := struct { pub total: usize };
         impl writer.Writer for Sink {
-            using Error = u8;
+            const Error := u8;
             pub const write := fn(&mut self, bytes: []u8): res.Result(usize, Error) {
                 self.total += bytes.len;
                 return .{ .ok = bytes.len };
@@ -309,8 +309,8 @@ TEST_CASE("E2E: one inherited cross-module default method calls another through 
     constexpr std::string_view res_gh{R"(
         pub const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
-            using Output = T;
-            using Residual = E;
+            const Output := T;
+            const Residual := E;
             pub const branch := fn(self): builtin.Flow(T, E) {
                 return match (self) {
                     .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
@@ -319,7 +319,7 @@ TEST_CASE("E2E: one inherited cross-module default method calls another through 
             };
         }
         impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
-            using From = E;
+            const From := E;
             pub const from_residual := fn(r: E): @This() { return .{ .err = r }; };
         }
     )"};
@@ -347,7 +347,7 @@ TEST_CASE("E2E: one inherited cross-module default method calls another through 
         import "res.gh" as res;
         pub const Sink := struct { pub total: usize };
         impl writer.Writer for Sink {
-            using Error = u8;
+            const Error := u8;
             pub const write := fn(&mut self, bytes: []u8): res.Result(usize, Error) {
                 self.total += bytes.len;
                 return .{ .ok = bytes.len };
@@ -377,8 +377,8 @@ TEST_CASE("E2E: a second impl of the same interface still inherits its default m
     constexpr std::string_view res_gh{R"(
         pub const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
-            using Output = T;
-            using Residual = E;
+            const Output := T;
+            const Residual := E;
             pub const branch := fn(self): builtin.Flow(T, E) {
                 return match (self) {
                     .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
@@ -387,7 +387,7 @@ TEST_CASE("E2E: a second impl of the same interface still inherits its default m
             };
         }
         impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
-            using From = E;
+            const From := E;
             pub const from_residual := fn(r: E): @This() { return .{ .err = r }; };
         }
     )"};
@@ -414,7 +414,7 @@ TEST_CASE("E2E: a second impl of the same interface still inherits its default m
         import "res.gh" as res;
         pub const Early := struct { pub data: []mut u8, pub pos: usize = 0 };
         impl reader.Reader for Early {
-            using Error = u8;
+            const Error := u8;
             pub const read := fn(&mut self, buf: []mut u8): res.Result(usize, Error) {
                 const rem := self.data.len - self.pos;
                 const n := if (buf.len < rem) buf.len else rem;
@@ -432,7 +432,7 @@ TEST_CASE("E2E: a second impl of the same interface still inherits its default m
 
             const Late := struct { pub data: []mut u8, pub pos: usize = 0 };
             impl reader.Reader for Late {
-                using Error = u8;
+                const Error := u8;
                 pub const read := fn(&mut self, buf: []mut u8): res.Result(usize, Error) {
                     const rem := self.data.len - self.pos;
                     const n := if (buf.len < rem) buf.len else rem;

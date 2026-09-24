@@ -123,20 +123,21 @@ TEST_CASE("Builtin type introspection") {
 }
 
 TEST_CASE("Builtin this introspection") {
-    auto [ctx, idx]{helpers::resolve_and_check("struct { using A = @This(); };")};
+    auto [ctx, idx]{helpers::resolve_and_check("struct { const A := @This(); };")};
     const auto [sym, data, type]{ctx->get_type_sym_info<syms::node_t>("A", idx + 1)};
     CHECK(type == ctx->get_type(sema::type_kind::STRUCT, idx + 1));
 }
 
 TEST_CASE("Deferred return type from typeOf") {
     auto [ctx,
-          idx]{helpers::resolve_and_check("const a := fn(): type {}; using B = @TypeOf(a());")};
+          idx]{helpers::resolve_and_check("const a := fn(): type {}; const B := @TypeOf(a());")};
 
-    const auto [sym, sym_data, node_data, type]{
-        ctx->get_ast_type_sym_info<syms::node_t, ast::using_stmt>("B", idx)};
+    const auto [sym, sym_data, node_data]{
+        ctx->get_ast_sym_info<syms::node_t, ast::decl_stmt>("B", idx)};
 
-    const auto& call =
-        UNWRAP(ctx->root_mod.ast.get_as_opt<ast::call_expr>(node_data.explicit_type));
+    // The call itself stays deferred; the alias folds it
+    const auto& call = UNWRAP(ctx->root_mod.ast.get_as_opt<ast::call_expr>(*node_data.value));
+    const auto& type{UNWRAP(ctx->root_mod.get_sema_type_opt(*node_data.value))};
     CHECK(type == ctx->get_type(sema::type_kind::TYPE, &call));
     CHECK(&call == &UNWRAP(type.get_data().as_opt<sema::types::deferred_call>()).call);
 }

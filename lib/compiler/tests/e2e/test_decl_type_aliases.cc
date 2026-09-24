@@ -231,6 +231,39 @@ TEST_CASE("E2E: a bare `dyn I` alias is rejected as unsized") {
     )");
 }
 
+TEST_CASE("E2E: a non-generic constructor returning an existing scalar type folds to it") {
+    CHECK(helpers::compile_and_run(R"(
+        const choose := fn(wide: bool): type {
+            if (wide) { return i64; } else { return u8; }
+        };
+        const Wide := choose(true);
+
+        pub const main := fn(): i32 {
+            const Narrow := choose(false);
+            const a: Wide = 30;
+            const b: Narrow = 3;
+            const c: choose(false) = 1;
+            return @intCast(i32, @sizeOf(Wide) + @sizeOf(Narrow)) + @intCast(i32, a) +
+                   @intCast(i32, b) + @intCast(i32, c);
+        };
+    )") == 8 + 1 + 30 + 3 + 1);
+}
+
+TEST_CASE("E2E: struct and union fields typed by a `type` value store the denoted type") {
+    CHECK(helpers::compile_and_run(R"(
+        const inc := fn(a: i32): i32 { return a + 1; };
+        const Callback := fn(a: i32): i32;
+        const Holder := struct { f: @TypeOf(inc), g: Callback };
+        const Either := union { f: Callback, n: i32 };
+
+        pub const main := fn(): i32 {
+            const h := Holder{ .f = inc, .g = inc };
+            const e := Either{ .f = inc };
+            return h.f(1) + h.g(2) + e.f(3);
+        };
+    )") == 2 + 3 + 4);
+}
+
 TEST_CASE("E2E: calling through a `^fn(...)` value loads the function it points at") {
     CHECK(helpers::compile_and_run(R"(
         const inc := fn(a: i32): i32 { return a + 1; };

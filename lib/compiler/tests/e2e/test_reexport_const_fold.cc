@@ -10,7 +10,7 @@ namespace ghoti::tests {
 namespace {
 
 constexpr std::string_view DARWIN{R"(
-    pub using Handle = i32;
+    pub const Handle := i32;
 
     pub const stdout: Handle = 12;
     pub const stderr: Handle = 30;

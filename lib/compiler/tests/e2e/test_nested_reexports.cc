@@ -36,7 +36,7 @@ constexpr std::string_view LEAF{R"(
 // Middle module: re-exports the leaf and also aliases one of its symbols.
 constexpr std::string_view MID{R"(
     pub import "leaf.gh" as leaf;
-    pub using Coord = leaf.Point;
+    pub const Coord := leaf.Point;
 )"};
 
 // Top module: re-exports the middle module.

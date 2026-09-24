@@ -64,12 +64,16 @@ TEST_CASE("Union hollow types") {
     ctx->test_common_decl_collection(1);
 }
 
-TEST_CASE("Public using query") {
-    auto [ctx, idx]{helpers::collect_and_check("pub using I = i32;")};
-    const auto& registry{ctx->analyzer.get_registry()};
-    const auto& int_alias{UNWRAP(registry.get_from_opt(idx, "I"))};
-    CHECK(int_alias.get_kind_opt() == sema::symbol_kind::TYPE);
+TEST_CASE("Public type alias query") {
+    auto [ctx, idx]{helpers::collect_and_check("pub const I := i32;")};
+    const auto& int_alias{UNWRAP(ctx->analyzer.get_registry().get_from_opt(idx, "I"))};
     CHECK(int_alias.is_public(ctx->root_mod));
+
+    // A decl's kind is only known once its value resolves
+    auto [resolved_ctx, resolved_idx]{helpers::resolve_and_check("pub const I := i32;")};
+    const auto& resolved_alias{
+        UNWRAP(resolved_ctx->analyzer.get_registry().get_from_opt(resolved_idx, "I"))};
+    CHECK(resolved_alias.get_kind_opt() == sema::symbol_kind::TYPE);
 }
 
 TEST_CASE("Shadowing member/field declarations") {

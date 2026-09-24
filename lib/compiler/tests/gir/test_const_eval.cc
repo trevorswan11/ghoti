@@ -518,26 +518,23 @@ TEST_CASE("Resolve deferred call returning type") {
                 return i32;
             }
         };
-        using TypeA = choose_type(true);
-        using TypeB = choose_type(false);
+        const TypeA := choose_type(true);
+        const TypeB := choose_type(false);
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
-    const auto [sym_a, _a, node_a, type_a]{
-        ctx->get_ast_type_sym_info<syms::node_t, ast::using_stmt>("TypeA", idx)};
-    CHECK(type_a.get_data().is<sema::types::deferred_call>());
+    // Each call stays deferred on its own node until it is forced
+    const auto [sym_a, _a, node_a]{ctx->get_ast_sym_info<syms::node_t, ast::decl_stmt>("TypeA", idx)};
+    auto& call_a{UNWRAP(ctx->root_mod.get_sema_type_opt(*node_a.value))};
+    CHECK(call_a.get_data().is<sema::types::deferred_call>());
+    CHECK(sema::type_kind_display_name(sema::denoted_type(evaluator.force_deferred_call(call_a))) ==
+          "i64");
 
-    const auto [sym_b, _b, node_b, type_b]{
-        ctx->get_ast_type_sym_info<syms::node_t, ast::using_stmt>("TypeB", idx)};
-    CHECK(type_b.get_data().is<sema::types::deferred_call>());
-
-    evaluator.resolve_all_deferred_types();
-
-    const auto& resolved_a{UNWRAP(ctx->root_mod.get_sema_type_opt(node_a.explicit_type))};
-    CHECK(sema::type_kind_display_name(resolved_a) == "i64");
-
-    const auto& resolved_b{UNWRAP(ctx->root_mod.get_sema_type_opt(node_b.explicit_type))};
-    CHECK(sema::type_kind_display_name(resolved_b) == "i32");
+    const auto [sym_b, _b, node_b]{ctx->get_ast_sym_info<syms::node_t, ast::decl_stmt>("TypeB", idx)};
+    auto& call_b{UNWRAP(ctx->root_mod.get_sema_type_opt(*node_b.value))};
+    CHECK(call_b.get_data().is<sema::types::deferred_call>());
+    CHECK(sema::type_kind_display_name(sema::denoted_type(evaluator.force_deferred_call(call_b))) ==
+          "i32");
 }
 
 TEST_CASE("Division by zero failure handling in constant eval") {
@@ -556,7 +553,7 @@ TEST_CASE("Builtin const eval @This") {
         const Node := struct {
             val: i32,
 
-            using Self = @This();
+            const Self := @This();
             pub const bar := fn(s: &Self): i32 { return 0; };
         };
         const sz := @sizeOf(Node);
@@ -911,8 +908,8 @@ TEST_CASE("`errdefer` in `const_eval`") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
-            using Output = T;
-            using Residual = E;
+            const Output := T;
+            const Residual := E;
             pub const branch := fn(self): builtin.Flow(T, E) {
                 return match (self) {
                     .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
@@ -921,7 +918,7 @@ TEST_CASE("`errdefer` in `const_eval`") {
             };
         }
         impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
-            using From = E;
+            const From := E;
             pub const from_residual := fn(r: E): @This() { return .{ .err = r }; };
         }
 
@@ -956,8 +953,8 @@ TEST_CASE("`errdefer` capture by const ref and const ptr in `const_eval`") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
-            using Output = T;
-            using Residual = E;
+            const Output := T;
+            const Residual := E;
             pub const branch := fn(self): builtin.Flow(T, E) {
                 return match (self) {
                     .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
@@ -966,7 +963,7 @@ TEST_CASE("`errdefer` capture by const ref and const ptr in `const_eval`") {
             };
         }
         impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
-            using From = E;
+            const From := E;
             pub const from_residual := fn(r: E): @This() { return .{ .err = r }; };
         }
 
