@@ -15,8 +15,7 @@ test {
 import "int.gh" as int;
 
 pub constexpr digits2 := int.digits2;
-pub const formatIntRadix := int.formatIntRadix;
-pub const formatInt := int.formatInt;
+pub constexpr digit_to_char := int.digit_to_char;
 
 test {
     import "int.gh";
