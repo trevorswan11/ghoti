@@ -1514,7 +1514,11 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
     builder_.SetInsertPoint(segment_blocks_[fn.get_segments()[0]->get_id()]);
     for (usize arg_idx{0}; const auto& param : fn.get_params()) {
         auto* p_ty{types_.translate(param->type)};
-        if (p_ty->isVoidTy()) { continue; }
+        if (p_ty->isVoidTy()) {
+            // Void params have no LLVM argument but are still referenced like void loads
+            set_local(param->id, nullptr);
+            continue;
+        }
         auto* arg{llvm_fn->getArg(static_cast<u32>(arg_idx++))};
         if (param->type.get_kind() == sema::type_kind::SLICE) {
             // Slices need to be addressable for runtime-indexed element access so spill the
@@ -1801,6 +1805,13 @@ auto llvm_lowering::emit_store(const gir::instruction& inst) -> void {
 auto llvm_lowering::emit_get_element_ptr(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
     ASSERT(inst.operands.size() >= 2, "GEP requires base and at least one index");
+    // A void element has no storage (e.g. the payload of an all-void union), so there is no field
+    if (inst.type && types_.translate(*inst.type)->isVoidTy()) {
+        auto* dummy{llvm::UndefValue::get(types_.get_ptr_ty())};
+        if (inst.result) { set_local(*inst.result, dummy); }
+        return dummy;
+    }
+
     auto* base_ptr{lower_value(inst.operands[0])};
     ASSERT(base_ptr, "GEP base pointer must be non-null");
 

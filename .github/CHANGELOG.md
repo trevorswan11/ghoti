@@ -416,6 +416,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `ghoti test --emit-llvm-ir` no longer tries to lower unreachable compile-time-only functions
 - Remove the leftover `::` operator token
 - Resolve a bug where break values would not be cleared on re-resolutions of monomorphs
+- Unions can now have fully void payloads without crashing
+- Function parameters can now safely load void parameters
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
