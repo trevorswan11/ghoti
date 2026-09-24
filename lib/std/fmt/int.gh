@@ -124,16 +124,16 @@ pub const format := fn(
         .c => blk: {
             constexpr value_info := @typeInfo(@TypeOf(value)).int;
             if constexpr (value_info.signedness == .signed) {
-                if (value < 0) break :blk .{ .err = .bad_arg };
+                if (value < 0) break :blk .fail(.bad_arg);
             }
             if constexpr (value_info.bits > 8) {
-                if (value > 255) break :blk .{ .err = .bad_arg };
+                if (value > 255) break :blk .fail(.bad_arg);
             }
 
             break :blk std.fmt.pad(w, spec, ^.{ @intCast(u8, value) }, .left);
         },
-        .e => .{ .err = .unsupported },
-        .s, .f, .p => .{ .err = .bad_spec },
+        .e => .fail(.unsupported),
+        .s, .f, .p => .fail(.bad_spec),
     };
 };
 

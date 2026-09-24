@@ -16,7 +16,7 @@ pub const Writer := interface {
             const n := self.write(bytes[off..])?;
             off += n;
         }
-        return .{ .ok = {} };
+        return .done;
     };
 
     /// Write a single byte

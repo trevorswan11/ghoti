@@ -5,6 +5,16 @@ pub constexpr Result := fn(T: type, E: type): type {
         ok: T,
         err: E,
 
+        pub constexpr of := fn(val: T): @This() {
+            return .{ .ok = val };
+        };
+
+        pub constexpr fail := fn(e: E): @This() {
+            return .{ .err = e };
+        };
+
+        /// The successful result of a `Result(void, E)`
+        pub constexpr done: @This() = .{ .ok = {} };
         pub constexpr map := fn(&self, func: auto): auto {
             constexpr fn_info := @typeInfo(@TypeOf(func));
             @assert(fn_info == .function, "map requires a function argument");
@@ -30,6 +40,25 @@ pub constexpr Result := fn(T: type, E: type): type {
         };
     };
 };
+
+test "Result constructors build each variant" {
+    const a: Result(i32, bool) = .of(1);
+    @expect(match (a) {
+        .ok => |v| v == 1,
+        .err => false,
+    });
+
+    const b: Result(i32, bool) = .fail(true);
+    @expect(match (b) {
+        .ok => false,
+        .err => |e| e,
+    });
+
+    const c: Result(void, bool) = .done;
+    @expect(c == .ok);
+    const d: Result(void, bool) = .fail(false);
+    @expect(d == .err);
+}
 
 test "Result.map transforms ok variant" {
     const a: Result(i32, bool) = .{ .ok = 1 };

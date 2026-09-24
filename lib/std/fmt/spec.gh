@@ -380,7 +380,7 @@ pub const pad := fn(
     for (0..right_pad) |_| {
         w.write_byte(spec.fill).map_err(to_io_err)?;
     }
-    return .{ .ok = {} };
+    return .done;
 };
 
 test "pad applies default and explicit alignment" {
@@ -404,7 +404,7 @@ pub const write_fill_n := fn(
     for (0..n) |_| {
         w.write_byte(byte).map_err(to_io_err)?;
     }
-    return .{ .ok = {} };
+    return .done;
 };
 
 /// Writes `body` padded per `spec`, where `body[..prefix_len]` is a sign/radix prefix.
@@ -489,7 +489,7 @@ pub const write_literal := fn(
     if (raw.len > start) {
         w.write_all(raw[start..]).map_err(to_io_err)?;
     }
-    return .{ .ok = {} };
+    return .done;
 };
 
 test "write_literal unescapes braces and coalesces runs" {

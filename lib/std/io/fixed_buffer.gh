@@ -18,7 +18,7 @@ impl io.Reader for FixedBufferStream {
 
         @memcpy(out[0..n], self.buf[self.pos..self.pos + n]);
         self.pos += n;
-        return .{ .ok = n };
+        return .of(n);
     };
 }
 
@@ -27,13 +27,13 @@ impl io.Writer for FixedBufferStream {
     pub const write := fn(&mut self, bytes: []u8): Result(usize, Error) {
         const room := self.buf.len - self.pos;
         if (room == 0 and bytes.len > 0) {
-            return .{ .err = .no_space };
+            return .fail(.no_space);
         }
         const n := if (bytes.len < room) bytes.len else room;
 
         @memcpy(self.buf[self.pos..self.pos + n], bytes[0..n]);
         self.pos += n;
-        return .{ .ok = n };
+        return .of(n);
     };
 }
 
@@ -48,10 +48,10 @@ impl io.Seeker for FixedBufferStream {
 
         const target := base + offset;
         if (target < 0 or target > @intCast(i64, self.buf.len)) {
-            return .{ .err = .invalid_input };
+            return .fail(.invalid_input);
         }
         self.pos = @intCast(usize, target);
-        return .{ .ok = target };
+        return .of(target);
     };
 }
 

@@ -20,11 +20,11 @@ pub const File := struct {
     pub const open := fn(path: [:0]u8, flags: OpenFlags): Result(File, io.Error) {
         // These cases cause some UB on both windows and POSIX
         if (flags.exclusive and !flags.create) {
-            return .{ .err = .invalid_input };
+            return .fail(.invalid_input);
         } else if (flags.truncate and flags.access == .read) {
-            return .{ .err = .invalid_input };
+            return .fail(.invalid_input);
         } else if (flags.truncate and flags.append) {
-            return .{ .err = .invalid_input };
+            return .fail(.invalid_input);
         }
 
         @cfg (os == .windows) {
@@ -43,8 +43,8 @@ pub const File := struct {
             // Permissive share mode to mirror posix
             const share: u32 = os.FILE_SHARE_READ | os.FILE_SHARE_WRITE | os.FILE_SHARE_DELETE;
             return match (os.open(path, access, share, disp, os.FILE_ATTRIBUTE_NORMAL)) {
-                .ok => |h| .{ .ok = .{ .handle = h } },
-                .err => |e| .{ .err = .from_os(e) },
+                .ok => |h| .of(.{ .handle = h }),
+                .err => |e| .fail(.from_os(e)),
             };
         } else {
             var oflags: i32 = match (flags.access) {
@@ -59,8 +59,8 @@ pub const File := struct {
             const mode: os.mode_t = if (flags.create) 0o666u16 else 0u16;
             return match (os.open(path, oflags, mode)) {
                 // umask applies
-                .ok => |h| .{ .ok = .{ .handle = h } },
-                .err => |e| .{ .err = .from_os(e) },
+                .ok => |h| .of(.{ .handle = h }),
+                .err => |e| .fail(.from_os(e)),
             };
         }
     };
@@ -68,8 +68,8 @@ pub const File := struct {
     /// Closes the file, propagating an ignorable error on failure
     pub @discardable const close := fn(&self): Result(void, io.Error) {
         return match (os.close(self.handle)) {
-            .ok => .{ .ok = {} },
-            .err => |e| .{ .err = .from_os(e) },
+            .ok => .done,
+            .err => |e| .fail(.from_os(e)),
         };
     };
 };
@@ -78,8 +78,8 @@ impl io.Reader for File {
     using Error = io.Error;
     pub const read := fn(&mut self, buf: []mut u8): Result(usize, Error) {
         return match (os.read(self.handle, buf)) {
-            .ok => |n| .{ .ok = n },
-            .err => |e| .{ .err = .from_os(e) },
+            .ok => |n| .of(n),
+            .err => |e| .fail(.from_os(e)),
         };
     };
 }
@@ -88,8 +88,8 @@ impl io.Writer for File {
     using Error = io.Error;
     pub const write := fn(&mut self, bytes: []u8): Result(usize, Error) {
         return match (os.write(self.handle, bytes)) {
-            .ok => |n| .{ .ok = n },
-            .err => |e| .{ .err = .from_os(e) },
+            .ok => |n| .of(n),
+            .err => |e| .fail(.from_os(e)),
         };
     };
 }
@@ -98,8 +98,8 @@ impl io.Seeker for File {
     using Error = io.Error;
     pub const seek := fn(&mut self, offset: i64, whence: io.Whence): Result(i64, Error) {
         return match (os.lseek(self.handle, offset, @as(i32, whence))) {
-            .ok => |p| .{ .ok = p },
-            .err => |e| .{ .err = .from_os(e) },
+            .ok => |p| .of(p),
+            .err => |e| .fail(.from_os(e)),
         };
     };
 }

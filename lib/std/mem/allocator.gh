@@ -79,10 +79,8 @@ pub const Allocator := struct {
     /// Call `destroy` with the result to free the memory.
     pub const create := fn(self, T: type): std.Result(^mut T, AllocError) {
         return match (self.vtable.alloc(@sizeOf(T), .of(T))) {
-            .some => |raw| .{
-                .ok = @ptrCast(^mut T, raw),
-            },
-            .none => .{ .err = .out_of_memory },
+            .some => |raw| .of(@ptrCast(^mut T, raw)),
+            .none => .fail(.out_of_memory),
         };
     };
 
@@ -106,13 +104,11 @@ pub const Allocator := struct {
         // Guard the byte-count multiply against overflow before it reaches the allocator.
         var size: usize = undefined;
         if (@mulWithOverflow(@sizeOf(T), len, ^mut size)) {
-            return .{ .err = .out_of_memory };
+            return .fail(.out_of_memory);
         }
         return match (self.vtable.alloc(size, .of(T))) {
-            .some => |raw| .{
-                .ok = @sliceFromPtr(@ptrCast(^mut T, raw), len),
-            },
-            .none => .{ .err = .out_of_memory },
+            .some => |raw| .of(@sliceFromPtr(@ptrCast(^mut T, raw), len)),
+            .none => .fail(.out_of_memory),
         };
     };
 

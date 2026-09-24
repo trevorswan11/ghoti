@@ -19,6 +19,6 @@ pub const Reader := interface {
             }
             i += n;
         }
-        return .{ .ok = i };
+        return .of(i);
     };
 };

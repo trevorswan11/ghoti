@@ -345,27 +345,27 @@ pub const Statx := extern struct {
 pub using Stat = Statx;
 
 pub constexpr stdin := fn(): R(Handle) {
-    return .{ .ok = 0 };
+    return .of(0);
 };
 
 pub constexpr stdout := fn(): R(Handle) {
-    return .{ .ok = 1 };
+    return .of(1);
 };
 
 pub constexpr stderr := fn(): R(Handle) {
-    return .{ .ok = 2 };
+    return .of(2);
 };
 
 /// Write the contents of `buf` to the file, returning the number of written bytes
 pub const write := fn(h: Handle, buf: []u8): R(usize) {
     const ret := syscall3(NR_write, @intCast(usize, h), @intFromPtr(buf.ptr), buf.len);
-    return if (failed(ret)) .{ .err = to_errno(ret) } else .{ .ok = @as(usize, ret) };
+    return if (failed(ret)) .fail(to_errno(ret)) else .of(@as(usize, ret));
 };
 
 /// Read the contents of the file into `buf`, returning the number of read bytes
 pub const read := fn(h: Handle, buf: []mut u8): R(usize) {
     const ret := syscall3(NR_read, @intCast(usize, h), @intFromPtr(buf.ptr), buf.len);
-    return if (failed(ret)) .{ .err = to_errno(ret) } else .{ .ok = @as(usize, ret) };
+    return if (failed(ret)) .fail(to_errno(ret)) else .of(@as(usize, ret));
 };
 
 /// Open the file at the provided path with the desired flags and mode.
@@ -377,13 +377,13 @@ pub const open := fn(path: [:0]u8, flags: i32, mode: mode_t): R(Handle) {
         @bitCast(usize, @as(isize, flags)),
         @as(usize, mode),
     );
-    return if (failed(ret)) .{ .err = to_errno(ret) } else .{ .ok = @intCast(Handle, ret) };
+    return if (failed(ret)) .fail(to_errno(ret)) else .of(@intCast(Handle, ret));
 };
 
 /// Close the file associated with the given handle
 pub const close := fn(h: Handle): R(void) {
     const ret := syscall1(NR_close, @intCast(usize, h));
-    return if (failed(ret)) .{ .err = to_errno(ret) } else .{ .ok = {} };
+    return if (failed(ret)) .fail(to_errno(ret)) else .done;
 };
 
 /// Reposition a read/write file to offset `off` where:
@@ -397,7 +397,7 @@ pub const lseek := fn(h: Handle, off: i64, whence: i32): R(i64) {
         @bitCast(usize, off),
         @intCast(usize, whence),
     );
-    return if (failed(ret)) .{ .err = to_errno(ret) } else .{ .ok = @bitCast(i64, ret) };
+    return if (failed(ret)) .fail(to_errno(ret)) else .of(@bitCast(i64, ret));
 };
 
 /// Fill `out` from a `statx` call. `dirfd`/`path`/`flags` select the target:
@@ -412,15 +412,15 @@ const statx_into := fn(dirfd: usize, path: [:0]u8, flags: usize, out: ^mut Statx
         STATX_BASIC_STATS,
         @intFromPtr(out),
     );
-    return if (failed(ret)) .{ .err = to_errno(ret) } else .{ .ok = {} };
+    return if (failed(ret)) .fail(to_errno(ret)) else .done;
 };
 
 /// Metadata for the file or directory at `path` (follows symlinks).
 pub const stat := fn(path: [:0]u8): R(Stat) {
     var s: Statx = undefined;
     return match (statx_into(AT_FDCWD, path, 0uz, ^mut s)) {
-        .ok => .{ .ok = s },
-        .err => |e| .{ .err = e },
+        .ok => .of(s),
+        .err => |e| .fail(e),
     };
 };
 
@@ -429,8 +429,8 @@ pub const fstat := fn(h: Handle): R(Stat) {
     var s: Statx = undefined;
     const empty: [:0]u8 = "";
     return match (statx_into(@intCast(usize, h), empty, AT_EMPTY_PATH, ^mut s)) {
-        .ok => .{ .ok = s },
-        .err => |e| .{ .err = e },
+        .ok => .of(s),
+        .err => |e| .fail(e),
     };
 };
 
@@ -439,7 +439,7 @@ pub const fstat := fn(h: Handle): R(Stat) {
 /// - Fails with `ENOENT` when a parent is missing
 pub const mkdir := fn(path: [:0]u8, mode: mode_t): R(void) {
     const ret := syscall3(NR_mkdirat, AT_FDCWD, @intFromPtr(path.ptr), @as(usize, mode));
-    return if (failed(ret)) .{ .err = to_errno(ret) } else .{ .ok = {} };
+    return if (failed(ret)) .fail(to_errno(ret)) else .done;
 };
 
 /// Reserve and commit `len` bytes of zero-filled, read-write anonymous memory.
@@ -454,13 +454,13 @@ pub const alloc := fn(len: usize): R(^mut u8) {
         @bitCast(usize, -1z),
         0uz,
     );
-    return if (failed(ret)) .{ .err = to_errno(ret) } else .{ .ok = @ptrFromInt(^mut u8, ret) };
+    return if (failed(ret)) .fail(to_errno(ret)) else .of(@ptrFromInt(^mut u8, ret));
 };
 
 /// Release a region previously returned by `alloc`. `len` must match the `alloc` call.
 pub const free := fn(ptr: ^mut u8, len: usize): R(void) {
     const ret := syscall2(NR_munmap, @intFromPtr(ptr), len);
-    return if (failed(ret)) .{ .err = to_errno(ret) } else .{ .ok = {} };
+    return if (failed(ret)) .fail(to_errno(ret)) else .done;
 };
 
 pub const AT_PAGESZ: u64 = 6u64;

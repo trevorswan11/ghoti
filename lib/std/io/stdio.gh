@@ -8,24 +8,24 @@ using File = std.io.File;
 /// The standard output stream, infallible on POSIX
 pub const stdout := fn(): Result(File, Error) {
     return match (std.os.stdout()) {
-        .ok => |h| .{ .ok = .{ .handle = h } },
-        .err => |e| .{ .err = .from_os(e) },
+        .ok => |h| .of(.{ .handle = h }),
+        .err => |e| .fail(.from_os(e)),
     };
 };
 
 /// The standard input stream, infallible on POSIX
 pub const stdin := fn(): Result(File, Error) {
     return match (std.os.stdin()) {
-        .ok => |h| .{ .ok = .{ .handle = h } },
-        .err => |e| .{ .err = .from_os(e) },
+        .ok => |h| .of(.{ .handle = h }),
+        .err => |e| .fail(.from_os(e)),
     };
 };
 
 /// The standard error stream, infallible on POSIX
 pub const stderr := fn(): Result(File, Error) {
     return match (std.os.stderr()) {
-        .ok => |h| .{ .ok = .{ .handle = h } },
-        .err => |e| .{ .err = .from_os(e) },
+        .ok => |h| .of(.{ .handle = h }),
+        .err => |e| .fail(.from_os(e)),
     };
 };
 

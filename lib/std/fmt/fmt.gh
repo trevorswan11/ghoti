@@ -12,7 +12,7 @@ test {
     import "spec.gh";
 }
 
-import "int.gh" as int;
+pub import "int.gh" as int;
 
 pub constexpr digits2 := int.digits2;
 pub constexpr digit_to_char := int.digit_to_char;
