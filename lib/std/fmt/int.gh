@@ -1,4 +1,6 @@
 //! Integer formatting low-level API surface
+//! References: https://codeberg.org/ziglang/zig/src/branch/master/lib/std/Io/Writer.zig#L1608
+//! Zig is licensed under the MIT license
 import std;
 
 /// Converts values in the range [0, 100) to a base 10 string.

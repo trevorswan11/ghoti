@@ -1,8 +1,10 @@
 #include "compiler/codegen/llvm_optimizer.hh"
 
-#include <fmt/format.h>
+#include <algorithm>
 #include <string>
+#include <string_view>
 
+#include <fmt/format.h>
 #include <llvm/Analysis/CGSCCPassManager.h>
 #include <llvm/Analysis/LoopAnalysisManager.h>
 #include <llvm/IR/PassInstrumentation.h>
@@ -15,12 +17,9 @@
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Transforms/IPO/GlobalDCE.h>
 #include <llvm/Transforms/IPO/Internalize.h>
-
-#include <algorithm>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
-#include <string_view>
 
 #include "compiler/codegen/error.hh"
 #include "compiler/codegen/opt_level.hh"
