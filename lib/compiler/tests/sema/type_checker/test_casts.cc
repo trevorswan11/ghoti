@@ -241,11 +241,10 @@ TEST_CASE("Implicit reference type construction from value types is rejected") {
             return take_ref(x);
         };
     )",
-        sema::diagnostic{
-            "Argument 1 of type 'i32' is not assignable to parameter type 'reference' in "
-            "call to 'take_ref'",
-            sema::error::TYPE_MISMATCH,
-            std::pair{7UZ, 28UZ}});
+        sema::diagnostic{"Argument 1 of type 'i32' is not assignable to parameter type '&i32' in "
+                         "call to 'take_ref'",
+                         sema::error::TYPE_MISMATCH,
+                         std::pair{7UZ, 28UZ}});
 }
 
 TEST_CASE("Implicit reference type construction via declaration is rejected") {
@@ -256,7 +255,7 @@ TEST_CASE("Implicit reference type construction via declaration is rejected") {
             var r_var: &i32 = x;
         };
     )",
-        sema::diagnostic{"Type mismatch in store: cannot assign 'i32' to 'reference'",
+        sema::diagnostic{"Type mismatch in store: cannot assign 'i32' to '&i32'",
                          sema::error::TYPE_MISMATCH,
                          std::pair{3UZ, 30UZ}});
 }
@@ -297,8 +296,8 @@ TEST_CASE("Const mismatch in implicit mutable reference produces diagnostic erro
                 take_mut_ref(const_ref);
             };
         )",
-        sema::diagnostic{"Argument 1 of type 'reference' is not assignable to parameter type "
-                         "'reference' in call to 'take_mut_ref'",
+        sema::diagnostic{"Argument 1 of type '&i32' is not assignable to parameter type "
+                         "'&mut i32' in call to 'take_mut_ref'",
                          sema::error::TYPE_MISMATCH,
                          std::pair{6UZ, 29UZ}});
 }

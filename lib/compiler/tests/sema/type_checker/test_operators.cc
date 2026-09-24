@@ -101,7 +101,7 @@ TEST_CASE("Operator type checking") {
             };
         )",
             sema::diagnostic{"Comparison operator cannot be applied to aggregate types "
-                             "'union' and 'union'",
+                             "'U' and 'U'",
                              sema::error::OPERATOR_TYPE_MISMATCH,
                              std::pair{3UZ, 28UZ}});
     }
@@ -115,7 +115,7 @@ TEST_CASE("Operator type checking") {
             };
         )",
             sema::diagnostic{"Comparison operator cannot be applied to aggregate types "
-                             "'struct' and 'struct'",
+                             "'S' and 'S'",
                              sema::error::OPERATOR_TYPE_MISMATCH,
                              std::pair{3UZ, 28UZ}});
     }

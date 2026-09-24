@@ -80,7 +80,7 @@ TEST_CASE("Function call type checking") {
             };
         )",
             sema::diagnostic{"Argument 1 of type 'i32' is not assignable to parameter type "
-                             "'pointer' in call to 'puts'",
+                             "'^u8' in call to 'puts'",
                              sema::error::TYPE_MISMATCH,
                              std::pair{3UZ, 28UZ}});
     }
@@ -127,7 +127,7 @@ TEST_CASE("Function call type checking") {
             };
         )",
             sema::diagnostic{"Argument 1 of type 'i32' is not assignable to parameter type "
-                             "'pointer' in call to 'printf'",
+                             "'^u8' in call to 'printf'",
                              sema::error::TYPE_MISMATCH,
                              std::pair{3UZ, 35UZ}});
     }

@@ -55,13 +55,13 @@ auto type_checker::format_store_mismatch(const type& val_t, const type& dest_t) 
     -> std::string {
     if (const auto reason{cast_rejection_reason(val_t, dest_t, target_ptr_bits_)}) {
         return fmt::format("Type mismatch in store: cannot assign '{}' to '{}' ({})",
-                           type_kind_display_name(val_t),
-                           type_kind_display_name(dest_t),
+                           ctx_.type_display_name(val_t),
+                           ctx_.type_display_name(dest_t),
                            *reason);
     }
     return fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
-                       type_kind_display_name(val_t),
-                       type_kind_display_name(dest_t));
+                       ctx_.type_display_name(val_t),
+                       ctx_.type_display_name(dest_t));
 }
 
 auto type_checker::format_arg_mismatch(usize                          arg_idx,
@@ -75,16 +75,16 @@ auto type_checker::format_arg_mismatch(usize                          arg_idx,
                 "Argument {} of type '{}' is not assignable to parameter type '{}' in call to '{}' "
                 "({})",
                 arg_idx,
-                type_kind_display_name(arg_t),
-                type_kind_display_name(param_t),
+                ctx_.type_display_name(arg_t),
+                ctx_.type_display_name(param_t),
                 *callee,
                 *reason);
         }
         return fmt::format(
             "Argument {} of type '{}' is not assignable to parameter type '{}' in call to '{}'",
             arg_idx,
-            type_kind_display_name(arg_t),
-            type_kind_display_name(param_t),
+            ctx_.type_display_name(arg_t),
+            ctx_.type_display_name(param_t),
             *callee);
     }
     if (reason) {
@@ -92,15 +92,15 @@ auto type_checker::format_arg_mismatch(usize                          arg_idx,
             "Argument {} of type '{}' is not assignable to parameter type '{}' in indirect call "
             "({})",
             arg_idx,
-            type_kind_display_name(arg_t),
-            type_kind_display_name(param_t),
+            ctx_.type_display_name(arg_t),
+            ctx_.type_display_name(param_t),
             *reason);
     }
     return fmt::format(
         "Argument {} of type '{}' is not assignable to parameter type '{}' in indirect call",
         arg_idx,
-        type_kind_display_name(arg_t),
-        type_kind_display_name(param_t));
+        ctx_.type_display_name(arg_t),
+        ctx_.type_display_name(param_t));
 }
 
 auto type_checker::format_return_mismatch(const type& ret_t, const type& expected_t) const
@@ -108,13 +108,13 @@ auto type_checker::format_return_mismatch(const type& ret_t, const type& expecte
     if (const auto reason{cast_rejection_reason(ret_t, expected_t, target_ptr_bits_)}) {
         return fmt::format(
             "Return value of type '{}' is not assignable to function return type '{}' ({})",
-            type_kind_display_name(ret_t),
-            type_kind_display_name(expected_t),
+            ctx_.type_display_name(ret_t),
+            ctx_.type_display_name(expected_t),
             *reason);
     }
     return fmt::format("Return value of type '{}' is not assignable to function return type '{}'",
-                       type_kind_display_name(ret_t),
-                       type_kind_display_name(expected_t));
+                       ctx_.type_display_name(ret_t),
+                       ctx_.type_display_name(expected_t));
 }
 
 namespace {
@@ -139,7 +139,7 @@ auto type_checker::is_value_assignable(const gir::value&             val,
             if (constexpr_int_fits(*folded, dest_t, target_ptr_bits_)) { return true; }
             emit_diagnostic(fmt::format("integer value {} is out of range for type '{}'",
                                         *folded,
-                                        type_kind_display_name(dest_t)),
+                                        ctx_.type_display_name(dest_t)),
                             error::LITERAL_OUT_OF_RANGE,
                             loc);
             return true;
@@ -299,8 +299,8 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                         emit_diagnostic(
                             fmt::format("Operator '{}' cannot be applied to types '{}' and '{}'",
                                         gir::instruction_kind_name(inst.kind),
-                                        type_kind_display_name(*lhs_t),
-                                        type_kind_display_name(*rhs_t)),
+                                        ctx_.type_display_name(*lhs_t),
+                                        ctx_.type_display_name(*rhs_t)),
                             error::OPERATOR_TYPE_MISMATCH,
                             inst.location);
                     }
@@ -333,8 +333,8 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                     emit_diagnostic(
                         fmt::format("Operator '{}' cannot be applied to types '{}' and '{}'",
                                     gir::instruction_kind_name(inst.kind),
-                                    type_kind_display_name(*lhs_t),
-                                    type_kind_display_name(*rhs_t)),
+                                    ctx_.type_display_name(*lhs_t),
+                                    ctx_.type_display_name(*rhs_t)),
                         error::OPERATOR_TYPE_MISMATCH,
                         inst.location);
                 }
@@ -363,8 +363,8 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                     emit_diagnostic(
                         fmt::format("Operator '{}' cannot be applied to types '{}' and '{}'",
                                     gir::instruction_kind_name(inst.kind),
-                                    type_kind_display_name(*lhs_t),
-                                    type_kind_display_name(*rhs_t)),
+                                    ctx_.type_display_name(*lhs_t),
+                                    ctx_.type_display_name(*rhs_t)),
                         error::OPERATOR_TYPE_MISMATCH,
                         inst.location);
                 }
@@ -392,16 +392,16 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                     emit_diagnostic(
                         fmt::format("Comparison operator cannot be applied to aggregate types "
                                     "'{}' and '{}'",
-                                    type_kind_display_name(*lhs_t),
-                                    type_kind_display_name(*rhs_t)),
+                                    ctx_.type_display_name(*lhs_t),
+                                    ctx_.type_display_name(*rhs_t)),
                         error::OPERATOR_TYPE_MISMATCH,
                         inst.location);
                 } else if (!is_assignable(*lhs_t, *rhs_t) && !is_assignable(*rhs_t, *lhs_t)) {
                     emit_diagnostic(
                         fmt::format("Comparison operator cannot be applied to incompatible types "
                                     "'{}' and '{}'",
-                                    type_kind_display_name(*lhs_t),
-                                    type_kind_display_name(*rhs_t)),
+                                    ctx_.type_display_name(*lhs_t),
+                                    ctx_.type_display_name(*rhs_t)),
                         error::OPERATOR_TYPE_MISMATCH,
                         inst.location);
                 }
@@ -431,8 +431,8 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                     emit_diagnostic(
                         fmt::format("Relational operator cannot be applied to non-numeric or "
                                     "incompatible types '{}' and '{}'",
-                                    type_kind_display_name(*lhs_t),
-                                    type_kind_display_name(*rhs_t)),
+                                    ctx_.type_display_name(*lhs_t),
+                                    ctx_.type_display_name(*rhs_t)),
                         error::OPERATOR_TYPE_MISMATCH,
                         inst.location);
                 }
@@ -534,7 +534,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
         } else {
             if (inst.operands.empty() || inst.operands[0].data.is<gir::void_val>()) {
                 emit_diagnostic(fmt::format("Empty return in function expecting return type '{}'",
-                                            type_kind_display_name(expected_ret_t)),
+                                            ctx_.type_display_name(expected_ret_t)),
                                 error::RETURN_TYPE_MISMATCH,
                                 inst.location);
             } else if (inst.operands[0].data.is<gir::undefined_val>()) {
@@ -542,7 +542,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                 if (!ret_t || ret_t->get_kind() != type_kind::NORETURN) {
                     emit_diagnostic(fmt::format("Function expecting return type '{}' does not "
                                                 "return a value on all code paths",
-                                                type_kind_display_name(expected_ret_t)),
+                                                ctx_.type_display_name(expected_ret_t)),
                                     error::RETURN_TYPE_MISMATCH,
                                     inst.location);
                 }
@@ -702,8 +702,8 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                 if (!src_is_ptr || !dest_is_ptr) {
                     emit_diagnostic(fmt::format("Cannot @ptrCast/@alignCast type '{}' to '{}'; "
                                                 "both must be pointer types",
-                                                type_kind_display_name(*src_t),
-                                                type_kind_display_name(*dest_t)),
+                                                ctx_.type_display_name(*src_t),
+                                                ctx_.type_display_name(*dest_t)),
                                     error::TYPE_MISMATCH,
                                     inst.location);
                 } else {
@@ -743,8 +743,8 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                 const bool dest_is_int{is_integer(dest_k)};
                 if (!src_is_int || !dest_is_int) {
                     emit_diagnostic(fmt::format("Cannot @intCast type '{}' to '{}'",
-                                                type_kind_display_name(*src_t),
-                                                type_kind_display_name(*dest_t)),
+                                                ctx_.type_display_name(*src_t),
+                                                ctx_.type_display_name(*dest_t)),
                                     error::TYPE_MISMATCH,
                                     inst.location);
                 }
@@ -769,8 +769,8 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                 const auto dest_k{dest_t->get_kind()};
                 if (!is_integer(src_k) || !is_integer(dest_k)) {
                     emit_diagnostic(fmt::format("Cannot @truncate type '{}' to '{}'",
-                                                type_kind_display_name(*src_t),
-                                                type_kind_display_name(*dest_t)),
+                                                ctx_.type_display_name(*src_t),
+                                                ctx_.type_display_name(*dest_t)),
                                     error::TYPE_MISMATCH,
                                     inst.location);
                 }
@@ -822,15 +822,15 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                     if (const auto reason{
                             cast_rejection_reason(*src_t, *dest_t, target_ptr_bits_)}) {
                         emit_diagnostic(fmt::format("Cannot cast type '{}' to '{}' ({})",
-                                                    type_kind_display_name(*src_t),
-                                                    type_kind_display_name(*dest_t),
+                                                    ctx_.type_display_name(*src_t),
+                                                    ctx_.type_display_name(*dest_t),
                                                     *reason),
                                         error::TYPE_MISMATCH,
                                         inst.location);
                     } else {
                         emit_diagnostic(fmt::format("Cannot cast type '{}' to '{}'",
-                                                    type_kind_display_name(*src_t),
-                                                    type_kind_display_name(*dest_t)),
+                                                    ctx_.type_display_name(*src_t),
+                                                    ctx_.type_display_name(*dest_t)),
                                         error::TYPE_MISMATCH,
                                         inst.location);
                     }
@@ -1014,9 +1014,9 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
                         } else {
                             emit_diagnostic(
                                 fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
-                                            val_t ? type_kind_display_name(*val_t) : "unknown",
-                                            ptr_data ? type_kind_display_name(ptr_data->underlying)
-                                                     : type_kind_display_name(*it->second.type)),
+                                            val_t ? ctx_.type_display_name(*val_t) : "unknown",
+                                            ptr_data ? ctx_.type_display_name(ptr_data->underlying)
+                                                     : ctx_.type_display_name(*it->second.type)),
                                 error::TYPE_MISMATCH,
                                 inst.location);
                         }

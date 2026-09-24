@@ -561,7 +561,7 @@ template <ast::IndexableID ID>
         if (!target.is_poison() && target.get_kind() != type_kind::POINTER) {
             return make_sema_err(fmt::format("'{}' target type must be a pointer; found '{}'",
                                              name,
-                                             type_kind_display_name(target)),
+                                             ctx_.type_display_name(target)),
                                  error::TYPE_MISMATCH,
                                  get_call_arg_location(call.arguments[0]));
         }
@@ -571,7 +571,7 @@ template <ast::IndexableID ID>
                                 : ""};
             return make_sema_err(fmt::format("'{}' operand must be a pointer; found '{}'{}",
                                              name,
-                                             type_kind_display_name(operand),
+                                             ctx_.type_display_name(operand),
                                              hint),
                                  error::TYPE_MISMATCH,
                                  get_call_arg_location(call.arguments[1]));
@@ -619,7 +619,7 @@ template <ast::IndexableID ID>
         if (!is_integer(target.get_kind())) {
             return make_sema_err(
                 fmt::format("`@intCast` target must be an integer type; found '{}'",
-                            type_kind_display_name(target)),
+                            ctx_.type_display_name(target)),
                 error::TYPE_MISMATCH,
                 args_res->target_loc);
         }
@@ -628,7 +628,7 @@ template <ast::IndexableID ID>
         if (!is_integer(src.get_kind()) && src.get_kind() != type_kind::CONSTEXPR_INT) {
             return make_sema_err(
                 fmt::format("`@intCast` operand must be an integer type; found '{}'",
-                            type_kind_display_name(src)),
+                            ctx_.type_display_name(src)),
                 error::TYPE_MISMATCH,
                 get_call_arg_location(*args_res->operand));
         }
@@ -643,7 +643,7 @@ template <ast::IndexableID ID>
         if (!is_integer(target.get_kind())) {
             return make_sema_err(
                 fmt::format("`@truncate` target must be an integer type; found '{}'",
-                            type_kind_display_name(target)),
+                            ctx_.type_display_name(target)),
                 error::TYPE_MISMATCH,
                 args_res->target_loc);
         }
@@ -652,7 +652,7 @@ template <ast::IndexableID ID>
         if (!is_integer(src.get_kind())) {
             return make_sema_err(
                 fmt::format("`@truncate` operand must be an integer type; found '{}'",
-                            type_kind_display_name(src)),
+                            ctx_.type_display_name(src)),
                 error::TYPE_MISMATCH,
                 get_call_arg_location(*args_res->operand));
         }
@@ -663,16 +663,16 @@ template <ast::IndexableID ID>
         if (to_bits == from_bits) {
             return make_sema_err(fmt::format("`@truncate` target type '{}' has the same width as "
                                              "'{}'; use `@bitCast` or `@intCast` instead",
-                                             type_kind_display_name(target),
-                                             type_kind_display_name(src)),
+                                             ctx_.type_display_name(target),
+                                             ctx_.type_display_name(src)),
                                  error::TYPE_MISMATCH,
                                  resolving_.ast.location_of(call.function));
         }
         if (to_bits > from_bits) {
             return make_sema_err(
                 fmt::format("`@truncate` target type '{}' is wider than '{}'; use `@as` instead",
-                            type_kind_display_name(target),
-                            type_kind_display_name(src)),
+                            ctx_.type_display_name(target),
+                            ctx_.type_display_name(src)),
                 error::TYPE_MISMATCH,
                 resolving_.ast.location_of(call.function));
         }
@@ -688,7 +688,7 @@ template <ast::IndexableID ID>
             src.get_kind() != type_kind::POINTER) {
             return make_sema_err(
                 fmt::format("`@boolFromInt` operand must be an integer or pointer; found '{}'",
-                            type_kind_display_name(src)),
+                            ctx_.type_display_name(src)),
                 error::TYPE_MISMATCH,
                 get_call_arg_location(arg));
         }
@@ -703,7 +703,7 @@ template <ast::IndexableID ID>
         if (!is_integer(target.get_kind())) {
             return make_sema_err(
                 fmt::format("`@intFromBool` target must be an integer type; found '{}'",
-                            type_kind_display_name(target)),
+                            ctx_.type_display_name(target)),
                 error::TYPE_MISMATCH,
                 args_res->target_loc);
         }
@@ -712,7 +712,7 @@ template <ast::IndexableID ID>
         if (src.get_kind() != type_kind::BOOL) {
             return make_sema_err(
                 fmt::format("`@intFromBool` operand must be of type 'bool'; found '{}'",
-                            type_kind_display_name(src)),
+                            ctx_.type_display_name(src)),
                 error::TYPE_MISMATCH,
                 get_call_arg_location(*args_res->operand));
         }
@@ -758,7 +758,7 @@ template <ast::IndexableID ID>
         } else {
             return make_sema_err(
                 fmt::format("Expected pointer, reference, slice, or array type; found '{}'",
-                            type_kind_display_name(expr_type)),
+                            ctx_.type_display_name(expr_type)),
                 error::TYPE_MISMATCH,
                 get_call_arg_location(call.arguments[0]));
         }
@@ -777,7 +777,7 @@ template <ast::IndexableID ID>
                                 : ""};
             return make_sema_err(
                 fmt::format("'@intFromPtr' operand must be a pointer; found '{}'{}",
-                            type_kind_display_name(operand),
+                            ctx_.type_display_name(operand),
                             hint),
                 error::TYPE_MISMATCH,
                 get_call_arg_location(call.arguments[0]));
@@ -803,7 +803,7 @@ template <ast::IndexableID ID>
         if (width == 0) {
             return make_sema_err(fmt::format("'{}' operand must be an integer type; found '{}'",
                                              *syntax::get_builtin_opt(builtin_id),
-                                             type_kind_display_name(operand_type)),
+                                             ctx_.type_display_name(operand_type)),
                                  error::TYPE_MISMATCH,
                                  get_call_arg_location(call.arguments[0]));
         }
@@ -871,7 +871,7 @@ template <ast::IndexableID ID>
             return_type = &ctx_.get_pointer(mutability, deferred_data->underlying);
         } else {
             return make_sema_err(fmt::format("Expected an array-yielding expression; found '{}'",
-                                             type_kind_display_name(array_type)),
+                                             ctx_.type_display_name(array_type)),
                                  error::TYPE_MISMATCH,
                                  get_call_arg_location(call.arguments[0]));
         }
@@ -884,7 +884,7 @@ template <ast::IndexableID ID>
             break;
         }
         return make_sema_err(fmt::format("Expected a pointer type; found '{}'",
-                                         type_kind_display_name(requested_output)),
+                                         ctx_.type_display_name(requested_output)),
                              error::TYPE_MISMATCH,
                              get_call_arg_location(call.arguments[0]));
     }
@@ -900,7 +900,7 @@ template <ast::IndexableID ID>
         }
 
         return make_sema_err(fmt::format("Expected a pointer-yielding expression; found '{}'",
-                                         type_kind_display_name(ptr_type)),
+                                         ctx_.type_display_name(ptr_type)),
                              error::TYPE_MISMATCH,
                              get_call_arg_location(call.arguments[0]));
     }
@@ -908,7 +908,7 @@ template <ast::IndexableID ID>
         auto& parent_type{*get_resolved_call_arg_type(call.arguments[0])};
         if (!parent_type.get_data().is<types::struct_t>()) {
             return make_sema_err(fmt::format("'@fieldParentPtr' expects a struct type; found '{}'",
-                                             type_kind_display_name(parent_type)),
+                                             ctx_.type_display_name(parent_type)),
                                  error::TYPE_MISMATCH,
                                  get_call_arg_location(call.arguments[0]));
         }
@@ -935,7 +935,7 @@ template <ast::IndexableID ID>
         if (field_ptr_type.get_kind() != type_kind::POINTER) {
             return make_sema_err(
                 fmt::format("'@fieldParentPtr' expects a field pointer; found '{}'",
-                            type_kind_display_name(field_ptr_type)),
+                            ctx_.type_display_name(field_ptr_type)),
                 error::TYPE_MISMATCH,
                 get_call_arg_location(call.arguments[2]));
         }
@@ -1290,7 +1290,7 @@ template <ast::IndexableID ID>
             return make_sema_err(
                 fmt::format("'{}' expects a slice or array destination; found '{}'",
                             op_name,
-                            type_kind_display_name(dest_t)),
+                            ctx_.type_display_name(dest_t)),
                 error::TYPE_MISMATCH,
                 get_call_arg_location(call.arguments[0]));
         }
@@ -1308,7 +1308,7 @@ template <ast::IndexableID ID>
             if (!is_integer(val_t.get_kind()) && val_t.get_kind() != type_kind::CONSTEXPR_INT) {
                 return make_sema_err(
                     fmt::format("'@memset' fill value must be a byte-valued integer; found '{}'",
-                                type_kind_display_name(val_t)),
+                                ctx_.type_display_name(val_t)),
                     error::TYPE_MISMATCH,
                     get_call_arg_location(call.arguments[1]));
             }
@@ -1318,7 +1318,7 @@ template <ast::IndexableID ID>
             if (!src) {
                 return make_sema_err(fmt::format("'{}' expects a slice or array source; found '{}'",
                                                  op_name,
-                                                 type_kind_display_name(src_t)),
+                                                 ctx_.type_display_name(src_t)),
                                      error::TYPE_MISMATCH,
                                      get_call_arg_location(call.arguments[1]));
             }
@@ -1327,8 +1327,8 @@ template <ast::IndexableID ID>
                     fmt::format("'{}' requires matching element types; the destination holds "
                                 "'{}' but the source holds '{}'",
                                 op_name,
-                                type_kind_display_name(dest->first),
-                                type_kind_display_name(src->first)),
+                                ctx_.type_display_name(dest->first),
+                                ctx_.type_display_name(src->first)),
                     error::TYPE_MISMATCH,
                     get_call_arg_location(call.arguments[1]));
             }
@@ -1404,8 +1404,8 @@ template <ast::IndexableID ID>
                 fmt::format("'{}' expects two operands of the same {} type; found '{}' and '{}'",
                             *syntax::get_builtin_opt(builtin_id),
                             floats_ok ? "numeric" : "integer",
-                            type_kind_display_name(lhs_type),
-                            type_kind_display_name(rhs_type)),
+                            ctx_.type_display_name(lhs_type),
+                            ctx_.type_display_name(rhs_type)),
                 error::OPERATOR_TYPE_MISMATCH,
                 get_call_arg_location(call.arguments[0]));
         }
@@ -1424,8 +1424,8 @@ template <ast::IndexableID ID>
                 fmt::format("'{}' expects two integer operands of the same type; found '{}' and "
                             "'{}'",
                             *syntax::get_builtin_opt(builtin_id),
-                            type_kind_display_name(lhs_type),
-                            type_kind_display_name(rhs_type)),
+                            ctx_.type_display_name(lhs_type),
+                            ctx_.type_display_name(rhs_type)),
                 error::OPERATOR_TYPE_MISMATCH,
                 get_call_arg_location(call.arguments[0]));
         }
@@ -1441,8 +1441,8 @@ template <ast::IndexableID ID>
                 fmt::format("'{}' expects its third argument to be a '&mut {}' result reference; "
                             "found '{}'",
                             *syntax::get_builtin_opt(builtin_id),
-                            type_kind_display_name(lhs_type),
-                            out_type.to_string()),
+                            ctx_.type_display_name(lhs_type),
+                            ctx_.type_display_name(out_type)),
                 error::TYPE_MISMATCH,
                 get_call_arg_location(call.arguments[2]));
         }
@@ -1483,7 +1483,7 @@ template <ast::IndexableID ID>
             return make_sema_err(fmt::format("'{}' expects 'ptr' to be a pointer ('^T' / '^mut "
                                              "T'); found '{}'",
                                              builtin_name,
-                                             type_kind_display_name(ptr_type)),
+                                             ctx_.type_display_name(ptr_type)),
                                  error::TYPE_MISMATCH,
                                  get_call_arg_location(call.arguments[ptr_idx]));
         }
@@ -1495,16 +1495,16 @@ template <ast::IndexableID ID>
                 fmt::format(
                     "'{}' expects 'ptr' to point to a mutable location ('^mut {}'); found '{}'",
                     builtin_name,
-                    type_kind_display_name(t),
-                    ptr_type.to_string()),
+                    ctx_.type_display_name(t),
+                    ctx_.type_display_name(ptr_type)),
                 error::TYPE_MISMATCH,
                 get_call_arg_location(call.arguments[ptr_idx]));
         }
         if (!is_same_unqualified(ptr_data->underlying, t)) {
             return make_sema_err(fmt::format("'{}' expects 'ptr' to point to '{}'; found '{}'",
                                              builtin_name,
-                                             type_kind_display_name(t),
-                                             ptr_type.to_string()),
+                                             ctx_.type_display_name(t),
+                                             ctx_.type_display_name(ptr_type)),
                                  error::TYPE_MISMATCH,
                                  get_call_arg_location(call.arguments[ptr_idx]));
         }
@@ -1517,7 +1517,7 @@ template <ast::IndexableID ID>
                 fmt::format("'{}' operand type '{}' has no native atomic width on this target; "
                             "8/16/32/64 bits are always supported, 128 only on x86_64/aarch64",
                             builtin_name,
-                            type_kind_display_name(t)),
+                            ctx_.type_display_name(t)),
                 error::TYPE_MISMATCH,
                 get_call_arg_location(call.arguments[ptr_idx]));
         }
@@ -1534,8 +1534,8 @@ template <ast::IndexableID ID>
             return diagnostic{fmt::format("'{}' expects '{}' to be '{}'; found '{}'",
                                           builtin_name,
                                           name,
-                                          type_kind_display_name(t),
-                                          type_kind_display_name(arg_type)),
+                                          ctx_.type_display_name(t),
+                                          ctx_.type_display_name(arg_type)),
                               error::TYPE_MISMATCH,
                               get_call_arg_location(call.arguments[arg_idx])};
         };
@@ -1644,8 +1644,8 @@ template <ast::IndexableID ID>
                     fmt::format("'{}' expects its 'out' argument to be a '&mut {}' result "
                                 "reference; found '{}'",
                                 builtin_name,
-                                type_kind_display_name(t),
-                                out_type.to_string()),
+                                ctx_.type_display_name(t),
+                                ctx_.type_display_name(out_type)),
                     error::TYPE_MISMATCH,
                     get_call_arg_location(call.arguments[6]));
             }
@@ -3753,7 +3753,7 @@ auto type_resolver::visit(ast::node_id id, const ast::for_loop_expr& for_expr) -
                     resolving_,
                     id,
                     fmt::format("Iterables may only be arrays or slices; found '{}'",
-                                type_kind_display_name(iterable_type)),
+                                ctx_.type_display_name(iterable_type)),
                     error::TYPE_MISMATCH,
                     resolving_.ast.location_of(iterable)));
             }
@@ -4664,7 +4664,7 @@ auto type_resolver::visit(ast::node_id id, const ast::index_expr& index) -> void
             ctx_.poison_node(resolving_,
                              id,
                              fmt::format("Can only index slices, arrays, and pointers; found '{}'",
-                                         type_kind_display_name(array_type)),
+                                         ctx_.type_display_name(array_type)),
                              error::TYPE_MISMATCH,
                              resolving_.ast.location_of(index.array)));
     }
@@ -5278,7 +5278,7 @@ auto type_resolver::resolve_structural_access(type&                          obj
         return make_sema_err(
             fmt::format(
                 "Can only access inner objects inside of structs, unions, and enums; found '{}'",
-                type_kind_display_name(*target_type)),
+                ctx_.type_display_name(*target_type)),
             error::TYPE_MISMATCH,
             object_location);
     }
@@ -5830,7 +5830,7 @@ auto type_resolver::visit(ast::node_id id, const ast::initializer_expr& init) ->
                              id,
                              fmt::format("Only struct and union types may be used in "
                                          "initializer expressions; found '{}'",
-                                         type_kind_display_name(object_type)),
+                                         ctx_.type_display_name(object_type)),
                              error::TYPE_MISMATCH,
                              resolving_.ast.location_of(id)));
     }
@@ -6437,7 +6437,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                 resolving_,
                 id,
                 fmt::format("Can only match on integers, bytes, and booleans; found '{}'",
-                            type_kind_display_name(*effective_matcher_type)),
+                            ctx_.type_display_name(*effective_matcher_type)),
                 sema::error::TYPE_MISMATCH,
                 resolving_.ast.location_of(match.matcher)));
         default: UNREACHABLE("Builtin types should never take this type kind");
@@ -6478,7 +6478,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                     id,
                     fmt::format("Matching on type '{}' requires a catch all arm with "
                                 "a pattern of '_' or exactly {} patterned arms",
-                                type_kind_display_name(*effective_matcher_type),
+                                ctx_.type_display_name(*effective_matcher_type),
                                 *required_arm_count),
                     sema::error::TYPE_MISMATCH,
                     resolving_.ast.location_of(match.matcher)));
@@ -6491,7 +6491,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                     id,
                     fmt::format(
                         "Matching on type '{}' requires a catch all arm with a pattern of '_'",
-                        type_kind_display_name(*effective_matcher_type)),
+                        ctx_.type_display_name(*effective_matcher_type)),
                     sema::error::TYPE_MISMATCH,
                     resolving_.ast.location_of(match.matcher)));
             }
@@ -6501,7 +6501,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
             resolving_,
             id,
             fmt::format("Can only match on enums, unions, and certain primitive types; found '{}'",
-                        type_kind_display_name(*effective_matcher_type)),
+                        ctx_.type_display_name(*effective_matcher_type)),
             sema::error::TYPE_MISMATCH,
             resolving_.ast.location_of(match.matcher)));
     }
@@ -6924,7 +6924,7 @@ auto type_resolver::visit(ast::node_id id, const ast::dereference_expr& deref) -
             ctx_.poison_node(resolving_,
                              id,
                              fmt::format("Cannot dereference non-pointer expression; found '{}'",
-                                         type_kind_display_name(rhs_type)),
+                                         ctx_.type_display_name(rhs_type)),
                              error::TYPE_MISMATCH,
                              resolving_.ast.location_of(id)));
     }

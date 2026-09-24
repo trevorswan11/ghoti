@@ -408,10 +408,10 @@ TEST_CASE("Illegal range match arms") {
 }
 
 TEST_CASE("Illegal resolved arbitrary matcher type") {
-    const auto expected_diag = [](std::string_view kind, usize col) -> sema::diagnostic {
+    const auto expected_diag = [](std::string_view type_name, usize col) -> sema::diagnostic {
         return {
             fmt::format("Can only match on enums, unions, and certain primitive types; found '{}'",
-                        kind),
+                        type_name),
             sema::error::TYPE_MISMATCH,
             std::pair{0UZ, col},
         };
@@ -422,16 +422,16 @@ TEST_CASE("Illegal resolved arbitrary matcher type") {
                                 sema::diagnostic{"A 'match' on a type requires a catch-all '_' arm",
                                                  sema::error::ILLEGAL_MATCH_PATTERN,
                                                  std::pair{0UZ, 0UZ}});
-    helpers::test_resolver_fail("match (^4) { 3 => 5 };", expected_diag("pointer", 7));
+    helpers::test_resolver_fail("match (^4) { 3 => 5 };", expected_diag("^constexpr_int", 7));
     helpers::test_resolver_fail("var a: fn(): void = undefined; match (&a) { 3 => 5 };",
-                                expected_diag("function", 38));
+                                expected_diag("fn(): void", 38));
     helpers::test_resolver_fail("var a: fn(): void = undefined; match (a) { 3 => 5 };",
-                                expected_diag("function", 38));
+                                expected_diag("fn(): void", 38));
     helpers::resolve_and_check("var x := 4; _ = match (&mut x) { 3 => 5, _ => 0 };");
     helpers::test_resolver_fail(
         "import std; match (std) { 3 => 5 };",
         helpers::make_vector<mock_file>(mock_file{"std.gh", "pub extern var a: i32;", "std"}),
-        expected_diag("module", 19));
+        expected_diag("module std", 19));
 }
 
 } // namespace ghoti::tests

@@ -1945,12 +1945,12 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                             reason
                                 ? fmt::format("Type mismatch in store: cannot assign '{}' to "
                                               "'{}' ({})",
-                                              sema::type_kind_display_name(*scalar.type),
-                                              sema::type_kind_display_name(*sema_type),
+                                              ctx_.type_display_name(*scalar.type),
+                                              ctx_.type_display_name(*sema_type),
                                               *reason)
                                 : fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
-                                              sema::type_kind_display_name(*scalar.type),
-                                              sema::type_kind_display_name(*sema_type)),
+                                              ctx_.type_display_name(*scalar.type),
+                                              ctx_.type_display_name(*sema_type)),
                             sema::error::TYPE_MISMATCH,
                             active_ast().location_of(*decl.value));
                     }
@@ -1991,12 +1991,12 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
             const auto reason{sema::cast_rejection_reason(*val.type, *sema_type, target_ptr_bits_)};
             ctx_.diags.emplace_back(
                 reason ? fmt::format("Type mismatch in store: cannot assign '{}' to '{}' ({})",
-                                     sema::type_kind_display_name(*val.type),
-                                     sema::type_kind_display_name(*sema_type),
+                                     ctx_.type_display_name(*val.type),
+                                     ctx_.type_display_name(*sema_type),
                                      *reason)
                        : fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
-                                     sema::type_kind_display_name(*val.type),
-                                     sema::type_kind_display_name(*sema_type)),
+                                     ctx_.type_display_name(*val.type),
+                                     ctx_.type_display_name(*sema_type)),
                 sema::error::TYPE_MISMATCH,
                 active_ast().location_of(*decl.value));
         }

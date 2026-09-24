@@ -159,7 +159,7 @@ TEST_CASE("Type checker store and assignment validation") {
                 var m: [2]mut ^mut u8 = arr;
             };
         )",
-            sema::diagnostic{"Type mismatch in store: cannot assign 'array' to 'array'",
+            sema::diagnostic{"Type mismatch in store: cannot assign '[2]^u8' to '[2]mut ^mut u8'",
                              sema::error::TYPE_MISMATCH,
                              std::pair{3UZ, 40UZ}});
     }
@@ -172,7 +172,7 @@ TEST_CASE("Type checker store and assignment validation") {
                 var m: [2][]mut u8 = arr;
             };
         )",
-            sema::diagnostic{"Type mismatch in store: cannot assign 'array' to 'array'",
+            sema::diagnostic{"Type mismatch in store: cannot assign '[2][]u8' to '[2][]mut u8'",
                              sema::error::TYPE_MISMATCH,
                              std::pair{3UZ, 37UZ}});
     }
@@ -185,7 +185,7 @@ TEST_CASE("Type checker store and assignment validation") {
                 const s: []mut u8 = arr;
             };
         )",
-            sema::diagnostic{"Type mismatch in store: cannot assign 'slice' to 'slice'",
+            sema::diagnostic{"Type mismatch in store: cannot assign '[]u8' to '[]mut u8'",
                              sema::error::TYPE_MISMATCH,
                              std::pair{3UZ, 16UZ}});
     }
