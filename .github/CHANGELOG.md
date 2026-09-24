@@ -361,6 +361,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 
 ## alpha.2
 
+## Language Features and Fixes
 - Constexpr can now be applied to labels and blocks (expression slots and top level)
     - They must be constant evaluatable and will error if not
 - `@assert` and `@verify` have been hardened such that they can work correctly in constexpr contexts
@@ -386,3 +387,34 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Make int info signed flag represented by an enum with enumerations `signed` and `unsigned`
 - Map `constexpr_int` and `constexpr_float` to their own unique variants in the type info tagged union
 - Remove `TypeKind` artifact from builtin types
+- Calls to functions returning `[N]T` are now typed as arrays (#338)
+    - Previously the result was typed `type` unless the call could be evaluated at compile time. That broke runtime arguments, aliases (`const g := f`), and module-qualified or re-exported calls (`m.f()`)
+- Dereferencing a slice whose length is known at compile time copies it into an array: `*s[i..][0..2]` is a `[2]u8` (#339)
+    - A length is known for constant-bounded ranges (`x[lo..hi]`), `x[lo..]` over a known-length array or slice, chains like `s[i..][0..n]`, and `const` bindings to any of these
+    - `*s` also works as an assignment target
+- Assigning to a constant-bounded slice range copies elements in: `buf[i..][0..2] = digits` (#340)
+    - The source may be an array, a known-length slice, or `.{ ... }`; lengths and element types are checked at compile time and the destination needs `mut` elements
+    - Lowered as a memmove, so overlapping source and destination ranges are safe
+    - Assigning to a slice variable (`s = other`) still re-points the slice
+    - Works in compile time contexts, which also fixes writes like `buf[i..][0] = v` never reaching `buf` at compile time
+- A constant range that runs past a known container length (`a[1..9]` on a `[4]T`) is now a compile error
+- Arrays with `const` elements can be copied into `mut`-element storage (`var m: [3]mut u8 = const_arr;`)
+    - Copies still cannot gain mutability through pointer or slice elements
+- A reference to an array (`&[N]T` / `&mut [N]T`) now implicitly converts to a slice aliasing the array
+- Fix nested arrays (`[N][M]T`, `[][N]T`) whose inner dimension was never resolved
+- Array sizes from another module are now evaluated in the module that declared them
+    - `@sizeOf`, `@alignOf`, `@bitSizeOf`, `@typeInfo`, `@typeName`, and `@implements` on an imported `[N]T` (or a type with one as a field) could silently read the wrong `N`
+- `@typeName` reports the declared name of imported aggregates and of aggregates nested inside compound types (`^Point`, `[]Point`, ...)
+- Fix generics whose body-local declarations were not re-typed per instantiation
+    - e.g. `var a: @TypeOf(value)`, `var a: T`, or a `using` alias built from `@typeInfo(@TypeOf(value))` kept the first instantiation's type
+- Errors inside an imported generic's instantiation are now reported against the imported module, instead of a bogus location in the importer
+- `@TypeOf(x)` inside a compound type annotation (`^@TypeOf(x)`, `[]@TypeOf(x)`, `[N]@TypeOf(x)`) now denotes the type instead of `type`
+- `@Int` / `@Float` / `@Pointer` / `@Reference` / `@Slice` / `@Array` / `@Fn` are recomputed for each generic instantiation
+- Type mismatch diagnostics print full types (`'^u8'`, `'&i32'`, `'[2]u8'`) instead of just the kind (`'pointer'`, `'array'`) (towards #276)
+- Passing a reference where a pointer is expected now errors with "A reference does not implicitly convert to a pointer", plus a hint to use `^` instead of `&` when the value is a `&` expression
+- Fix a crash emitting object files that contain compile-time-only functions (those returning `type`)
+- `ghoti test --emit-llvm-ir` no longer tries to lower unreachable compile-time-only functions
+- Remove the leftover `::` operator token
+
+## Standard Library
+- Add `std.math.min` / `std.math.max` over two or more values
