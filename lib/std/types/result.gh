@@ -19,7 +19,7 @@ pub constexpr Result := fn(T: type, E: type): type {
             constexpr fn_info := @typeInfo(@TypeOf(func));
             @assert(fn_info == .function, "map requires a function argument");
             const NewOk := fn_info.function.return_type;
-            using NewRes = Result(NewOk, E);
+            const NewRes := Result(NewOk, E);
 
             return match (self) {
                 .ok => |happy| NewRes{ .ok = func(happy) },
@@ -31,7 +31,7 @@ pub constexpr Result := fn(T: type, E: type): type {
             constexpr fn_info := @typeInfo(@TypeOf(func));
             @assert(fn_info == .function, "map_err requires a function argument");
             const NewErr := fn_info.function.return_type;
-            using NewRes = Result(T, NewErr);
+            const NewRes := Result(T, NewErr);
 
             return match (self) {
                 .ok => |happy| NewRes{ .ok = happy },

@@ -6723,7 +6723,10 @@ namespace {
                                          const symbol_table_stack* tables = nullptr) -> bool {
     // 1. Explicit sema type denoting a compile-time type
     if (const auto ty{mod.get_sema_type_opt(id)}) {
-        if (ty->get_kind() == type_kind::TYPE) { return true; }
+        // A not-yet-folded `[n]T` value shares the `type` kind but is not a type
+        if (ty->get_kind() == type_kind::TYPE && !ty->get_data().is<types::deferred_array>()) {
+            return true;
+        }
     }
     // 2. Identifier representing a primitive type, keyword type, or type symbol
     if (const auto ident{mod.ast.get_as_opt<ast::identifier_expr>(id)}) {
@@ -6763,6 +6766,41 @@ namespace {
 }
 
 } // namespace
+
+auto type_resolver::decl_value_denotes_type(ast::expr_handle value) const -> bool {
+    if (value.any<ast::struct_expr, ast::union_expr, ast::enum_expr, ast::interface_expr>()) {
+        return true;
+    }
+    if (is_type_denoting_expr(ctx_, resolving_, value, &table_stack_)) { return true; }
+
+    // `Ctor(T)` / `@Int(...)`: a call to anything whose declared result is `type`
+    if (const auto call{resolving_.ast.get_as_opt<ast::call_expr>(value)}) {
+        const auto callee{resolving_.get_sema_type_opt(call->function)};
+        if (!callee) { return false; }
+        // A generic's declared return may be a `T: type` parameter standing in for a value type,
+        // so only a literal `: type` annotation marks a constructor
+        if (const auto generic{ctx_.generic_functions.get_opt(*callee)}) {
+            return generic->fn_expr->explicit_return_type.get_token_type() ==
+                   syntax::token_type_t::TYPE_TYPE;
+        }
+        if (const auto fn{callee->get_data().as_opt<types::function>()}) {
+            // A `[n]T` return is a (not yet folded) array value, not a type
+            return fn->return_type.get_kind() == type_kind::TYPE &&
+                   !fn->return_type.get_data().is<types::deferred_array>();
+        }
+        if (const auto builtin{callee->get_data().as_opt<types::builtin_function>()}) {
+            return builtin->return_type.get_kind() == type_kind::TYPE;
+        }
+        return false;
+    }
+
+    // `mod.Type` / `Outer.Inner`
+    if (const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(value)}) {
+        const auto* sym{dot_member_symbol(*dot)};
+        return sym && sym->has_kind() && sym->get_kind() == symbol_kind::TYPE;
+    }
+    return false;
+}
 
 auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> void {
     PROFILE_FUNCTION();
@@ -7196,6 +7234,22 @@ MAKE_PRIMITIVE_RESOLVER(undefined_expr, UNDEFINED)
 MAKE_PRIMITIVE_RESOLVER(nullptr_expr, NULLPTR)
 MAKE_PRIMITIVE_RESOLVER(unreachable_expr, NORETURN)
 
+auto type_resolver::dot_member_symbol(const ast::dot_expr& dot) const -> const symbol* {
+    const auto obj_type{resolving_.get_sema_type_opt(dot.object)};
+    if (!obj_type) { return nullptr; }
+    const auto& member{resolving_.ast.get_as<ast::identifier_expr>(dot.member)};
+    if (const auto mod_data{obj_type->get_data().as_opt<types::module>()}) {
+        if (!mod_data->imported.root_table_idx) { return nullptr; }
+        const auto sym{
+            ctx_.registry.get_from_opt(*mod_data->imported.root_table_idx, member.name)};
+        return sym ? &*sym : nullptr;
+    }
+    const auto tbl{denoted_type(*obj_type).get_symbol_table_idx_opt()};
+    if (!tbl) { return nullptr; }
+    const auto sym{ctx_.registry.get_from_opt(*tbl, member.name)};
+    return sym ? &*sym : nullptr;
+}
+
 auto type_resolver::using_rhs_value_name(ast::explicit_type_id rhs) const
     -> stdx::option<std::string_view> {
     const auto is_value_sym{[](const sema::symbol& sym) -> bool {
@@ -7212,25 +7266,8 @@ auto type_resolver::using_rhs_value_name(ast::explicit_type_id rhs) const
             return stdx::none;
         },
         [&](const ast::dot_expr& e) -> stdx::option<std::string_view> {
-            const auto obj_type{resolving_.get_sema_type_opt(e.object)};
-            if (!obj_type) { return stdx::none; }
-            if (const auto mod_data{obj_type->get_data().as_opt<types::module>()}) {
-                if (!mod_data->imported.root_table_idx) { return stdx::none; }
-                const auto& member{resolving_.ast.get_as<ast::identifier_expr>(e.member)};
-                if (const auto sym{ctx_.registry.get_from_opt(*mod_data->imported.root_table_idx,
-                                                              member.name)};
-                    sym && is_value_sym(*sym)) {
-                    return member.name;
-                }
-                return stdx::none;
-            }
-            auto&      denoted{denoted_type(*obj_type)};
-            const auto tbl{denoted.get_symbol_table_idx_opt()};
-            if (!tbl) { return stdx::none; }
-            const auto& member{resolving_.ast.get_as<ast::identifier_expr>(e.member)};
-            if (const auto sym{ctx_.registry.get_from_opt(*tbl, member.name)};
-                sym && is_value_sym(*sym)) {
-                return member.name;
+            if (const auto* sym{dot_member_symbol(e)}; sym && is_value_sym(*sym)) {
+                return resolving_.ast.get_as<ast::identifier_expr>(e.member).name;
             }
             return stdx::none;
         },
@@ -8013,7 +8050,19 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
         if (decl.value) {
             resolve(*decl.value);
             if (last_type_->is_poison()) { return poison_out(); }
-            auto& decl_value_type{*last_type_.take()};
+            auto* decl_value_type_p{&*last_type_.take()};
+            // `const X := MakesAType()`: fold the constructor now, exactly like an annotation
+            if (decl_value_type_p->get_data().is<types::deferred_call>()) {
+                const auto& dc_call{decl_value_type_p->get_data().as<types::deferred_call>().call};
+                gir::const_eval evaluator{ctx_, resolving_};
+                decl_value_type_p = &evaluator.force_deferred_call(*decl_value_type_p);
+                if (decl_value_type_p->is_poison()) {
+                    last_type_.emplace(*decl_value_type_p);
+                    return poison_out();
+                }
+                register_non_generic_type_ctor_members(*decl_value_type_p, dc_call);
+            }
+            auto& decl_value_type{*decl_value_type_p};
             auto& normalized_val_type{
                 decl.explicit_type ? decl_value_type : *ctx_.pool.strip_volatile(decl_value_type)};
             if (reresolve_local && !annotation_typed_decl) {
@@ -8111,10 +8160,11 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
 
         const bool literal_type_anno{decl.explicit_type && decl.explicit_type->get_token_type() ==
                                                                syntax::token_type_t::TYPE_TYPE};
-        if (decl.has_modifier(ast::decl_modifiers::VARIABLE) && literal_type_anno) {
+        const bool binds_type{decl.value && decl_value_denotes_type(*decl.value)};
+        if (decl.has_modifier(ast::decl_modifiers::VARIABLE) && (literal_type_anno || binds_type)) {
             ctx_.poison_symbol(sym,
                                "a 'type' value cannot be stored in a mutable ('var') binding; "
-                               "use 'const', 'constexpr', or 'using' instead",
+                               "use 'const' or 'constexpr' instead",
                                error::MUTABLE_TYPE_BINDING,
                                resolving_.ast.location_of(id));
             resolving_.set_sema_type(decl.name, ctx_.get_poison());
@@ -8123,7 +8173,10 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
 
         // `reresolve_local` re-derives this decl's kind fresh even if a stale pass over this same
         // generic instantiation already set it
-        if (!sym.has_kind() || reresolve_local) {
+        if (binds_type && !type_data.is<types::module>()) {
+            // A type alias is a type even when its value is spelled like a callable (`fn(...): T`)
+            sym.set_kind(symbol_kind::TYPE);
+        } else if (!sym.has_kind() || reresolve_local) {
             if (type_data.is<types::builtin_function>() || type_data.is<types::function>()) {
                 sym.set_kind(symbol_kind::CALLABLE);
             } else if (resolved_type == ctx_.get_builtin_resolved_type(type_kind::TYPE)) {
@@ -8134,6 +8187,14 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                 sym.set_kind(symbol_kind::VALUE);
             }
         }
+
+        // Aliases of an existing or constructed type have no storage; aggregate literals keep
+        // their own member emission path
+        const bool aggregate_literal{
+            decl.value &&
+            decl.value->any<ast::struct_expr, ast::union_expr, ast::enum_expr, ast::interface_expr>()};
+        resolving_.storageless_decls.insert_or_assign(
+            id.get_index(), (binds_type && !aggregate_literal) || type_data.is<types::module>());
 
         if (type_data.is<types::function>()) {
             const auto& decl_ident{resolving_.ast.get_as<ast::identifier_expr>(decl.name)};

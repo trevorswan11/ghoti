@@ -2728,6 +2728,17 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
                             return const_value{*sema_type};
                         }
                     }
+                    // An unannotated alias carries the aliased type on its own node, which a
+                    // generic instantiation's body overlay keeps per-instantiation
+                    if (!decl->explicit_type && module_->is_storageless_decl(*node)) {
+                        // A bare `type` (e.g. `info.return_type`) only names the type once folded
+                        if (const auto sema_type{module_->get_sema_type_opt(*node)};
+                            sema_type &&
+                            (sema_type->get_kind() != sema::type_kind::TYPE ||
+                             sema_type->get_data().is<sema::types::meta_type>())) {
+                            return const_value{sema::denoted_type(*sema_type)};
+                        }
+                    }
                     return try_eval(*decl->value);
                 }
             }
@@ -2804,6 +2815,20 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
             (decl->has_modifier(ast::decl_modifiers::CONSTEXPR) ||
              decl->has_modifier(ast::decl_modifiers::CONSTANT))) {
             if (const auto fn_expr{callee_mod->ast.get_as_opt<ast::function_expr>(*decl->value)}) {
+                // Outside any const-evaluated body, a constructor call's own node already holds
+                // this instantiation's aggregate (re-evaluating the body yields the shared template)
+                if (id.is_valid() && call_stack_.size() <= 1 &&
+                    fn_expr->explicit_return_type.get_token_type() ==
+                        syntax::token_type_t::TYPE_TYPE) {
+                    if (const auto built{module_->get_sema_type_opt(id)}) {
+                        const auto kind{built->get_kind()};
+                        if (kind == sema::type_kind::STRUCT || kind == sema::type_kind::UNION ||
+                            kind == sema::type_kind::ENUM) {
+                            return const_value{*built};
+                        }
+                    }
+                }
+
                 std::vector<const_value> args;
                 for (const auto& arg : call.arguments) {
                     if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {

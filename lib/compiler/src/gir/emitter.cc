@@ -883,6 +883,7 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
     const auto  sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Top-level declaration must have a resolved sema type");
     if (sema_type->get_kind() == sema::type_kind::TYPE) { return; }
+    if (active_mod().is_storageless_decl(id)) { return; }
     // An `interface` decl is a pure compile-time contract with no runtime storage or body.
     if (sema_type->get_kind() == sema::type_kind::INTERFACE) { return; }
     // A deferred `@compileError` declaration only reports at its reference sites
@@ -1870,6 +1871,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
     const auto  sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Local declaration must have a resolved sema type");
     if (sema_type->get_kind() == sema::type_kind::TYPE) { return; }
+    if (active_mod().is_storageless_decl(id)) { return; }
     if (decl_is_deferred_compile_error(active_ast(), decl)) { return; }
 
     if (decl.value &&

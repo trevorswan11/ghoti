@@ -117,6 +117,14 @@ struct module {
     // Cond discardable `decl_stmt` node index -> the folded truth of the condition
     ankerl::unordered_dense::map<usize, bool> discardable_conditions;
 
+    // `decl_stmt` node index -> whether it aliases a type or module and so has no runtime storage
+    ankerl::unordered_dense::map<usize, bool> storageless_decls;
+
+    [[nodiscard]] auto is_storageless_decl(ast::node_id id) const noexcept -> bool {
+        const auto it{storageless_decls.find(id.get_index())};
+        return it != storageless_decls.end() && it->second;
+    }
+
     // Every identifier_expr references and uses encountered during symbol collection/resolution
     std::vector<ast::node_id> identifier_positions;
 

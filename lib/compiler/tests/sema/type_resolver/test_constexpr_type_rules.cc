@@ -25,12 +25,20 @@ TEST_CASE("`constexpr` on a parameter typed by an earlier generic type param isn
 TEST_CASE("a `var` binding cannot hold a `type` value") {
     const auto mutable_type_diag = [](usize col) {
         return sema::diagnostic{"a 'type' value cannot be stored in a mutable ('var') binding; "
-                                "use 'const', 'constexpr', or 'using' instead",
+                                "use 'const' or 'constexpr' instead",
                                 sema::error::MUTABLE_TYPE_BINDING,
                                 std::pair{0UZ, col}};
     };
 
     helpers::test_resolver_fail("var a: type = i32;", mutable_type_diag(0UZ));
+    helpers::test_resolver_fail("var a := i32;", mutable_type_diag(0UZ));
+    helpers::test_resolver_fail("var a := ^mut i32;", mutable_type_diag(0UZ));
+    helpers::test_resolver_fail("var a := []u8;", mutable_type_diag(0UZ));
+    helpers::test_resolver_fail("const S := struct { x: i32 }; var a := S;",
+                                mutable_type_diag(30UZ));
+    helpers::test_resolver_fail(
+        "const Box := fn(T: type): type { return struct { v: T }; }; var a := Box(i32);",
+        mutable_type_diag(60UZ));
 
     helpers::resolve_and_check("const a: type = i32;");
     helpers::resolve_and_check("const a := i32;");

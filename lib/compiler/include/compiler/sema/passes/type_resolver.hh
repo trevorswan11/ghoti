@@ -435,6 +435,14 @@ class type_resolver {
     auto visit(ast::node_id, const ast::nullptr_expr&) -> void;
     auto visit(ast::node_id, const ast::unreachable_expr&) -> void;
 
+    // The symbol a resolved `obj.member` names, looked up in a module's root table or in the
+    // (denoted) aggregate's own table
+    [[nodiscard]] auto dot_member_symbol(const ast::dot_expr& dot) const -> const symbol*;
+
+    // Whether a resolved decl value denotes a type (`i32`, `^T`, `Ctor(T)`, `mod.Type`, ...),
+    // making the decl a compile-time type alias rather than a runtime value
+    [[nodiscard]] auto decl_value_denotes_type(ast::expr_handle value) const -> bool;
+
     // If a `using` RHS is a bare-name form (`X`, `mod.X`) that resolves to a value symbol
     // rather than a type, returns that name so the caller can reject the alias.
     [[nodiscard]] auto using_rhs_value_name(ast::explicit_type_id rhs) const
