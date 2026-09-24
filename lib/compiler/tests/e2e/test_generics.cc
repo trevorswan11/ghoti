@@ -510,4 +510,55 @@ TEST_CASE("a generic `fn(T: type, a: []T, b: []T)` call correctly types both sli
     )") == 0);
 }
 
+TEST_CASE("`@TypeOf(x)` nested in a compound type annotation denotes the type, not `type`") {
+    SECTION("pointer, slice, and array annotations in a non-generic body") {
+        CHECK(helpers::compile_and_run(R"(
+            pub const main := fn(): i32 {
+                var v: u8 = 3;
+                const p: ^mut @TypeOf(v) = ^mut v;
+                var arr: [2]mut u8 = .{ 4, 5 };
+                const s: []mut @TypeOf(v) = arr[0..];
+                const b: [2]@TypeOf(v) = .{ 6, 7 };
+                return @as(i32, *p) + @as(i32, s[0]) + @as(i32, b[1]);
+            };
+        )") == 14);
+    }
+
+    SECTION("writes through `^mut @TypeOf(v)` and `&mut @TypeOf(v)` reach the original") {
+        CHECK(helpers::compile_and_run(R"(
+            pub const main := fn(): i32 {
+                var v: i32 = 1;
+                const p: ^mut @TypeOf(v) = ^mut v;
+                *p = *p + 10;
+                const r: &mut @TypeOf(v) = &mut v;
+                r = r + 100;
+                return v;
+            };
+        )") == 111);
+    }
+
+    SECTION("a parameter typed `^@TypeOf(b)` from an earlier parameter") {
+        CHECK(helpers::compile_and_run(R"(
+            const f := fn(b: i32, c: ^@TypeOf(b)): i32 { return b + *c; };
+            pub const main := fn(): i32 {
+                const x: i32 = 40;
+                return f(2, ^x);
+            };
+        )") == 42);
+    }
+
+    SECTION("each generic instantiation sees its own element type") {
+        CHECK(helpers::compile_and_run(R"(
+            const f := fn(T: type, value: T): i32 {
+                var copy: T = value;
+                const p: ^mut @TypeOf(copy) = ^mut copy;
+                var buf: [2]mut @TypeOf(value) = .{ value, value };
+                const s: []mut @TypeOf(value) = buf[0..];
+                return @intCast(*p + s[1]);
+            };
+            pub const main := fn(): i32 { return f(u8, 3) + f(i64, 20); };
+        )") == 46);
+    }
+}
+
 } // namespace ghoti::tests

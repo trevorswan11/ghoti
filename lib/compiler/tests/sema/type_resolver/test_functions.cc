@@ -49,11 +49,9 @@ TEST_CASE("Function declaration and call type resolution") {
 
         check_param_type("b", i32_type);
 
-        const auto& c_meta{ctx->get_type(sema::type_kind::TYPE, i32_type)};
-        const auto& c_ptr{ctx->get_type(sema::type_kind::POINTER, c_meta)};
+        // `^@TypeOf(b)` points at the type `@TypeOf(b)` denotes, not at a `type` value
+        const auto& c_ptr{ctx->get_type(sema::type_kind::POINTER, i32_type)};
         check_param_type("c", c_ptr);
-        const auto& c_meta_data = UNWRAP(c_meta.get_data().as_opt<sema::types::meta_type>());
-        CHECK(c_meta_data.instance == i32_type);
 
         const auto& u8_slice =
             ctx->get_type(sema::type_kind::SLICE, true, ctx->get_int_type(8, false));

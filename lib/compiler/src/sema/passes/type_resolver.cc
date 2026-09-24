@@ -10250,9 +10250,12 @@ auto type_resolver::visit(ast::node_id id, const ast::using_stmt& using_stmt) ->
 }
 
 // Without a modifier or with poison the result should be the same as the node
-auto type_resolver::apply_explicit_modifiers(ast::explicit_type_id id, type& inner_type) -> type& {
+auto type_resolver::apply_explicit_modifiers(ast::explicit_type_id id, type& inner_in) -> type& {
     const auto modifier{id.get_modifier()};
-    if (modifier.is_value() || inner_type.is_poison()) { return inner_type; }
+    if (modifier.is_value() || inner_in.is_poison()) { return inner_in; }
+
+    // `^@TypeOf(x)` points at the type `@TypeOf(x)` denotes, never at a `type` value
+    auto&      inner_type{denoted_type(inner_in)};
     const auto mutability{types::mut::from_type_modifier(modifier)};
 
     // Conditionally update the mutability since the modifier might entail mutability or volatility
@@ -10414,7 +10417,7 @@ auto type_resolver::visit(ast::explicit_type_id id, ast::explicit_type_id nested
 auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_array_type& array) -> void {
     PROFILE_FUNCTION();
     TRY_RESOLVE(array.inner_explicit_type);
-    auto& item_type{*last_type_.take()};
+    auto& item_type{denoted_type(*last_type_.take())};
 
     if (item_type.get_kind() == type_kind::AUTO) {
         return last_type_.emplace(
