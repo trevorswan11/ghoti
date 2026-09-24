@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "helpers/codegen.hh"
+#include "helpers/sema.hh"
 
 namespace ghoti::tests {
 
@@ -160,6 +161,119 @@ TEST_CASE("E2E: `@sizeOf(Ctor(T))` in a generic body folds per instantiation") {
             return size(i64) + size(u8) * 10 + size_cx(i64) * 10 + size_cx(u8) * 100;
         };
     )") == 8 + 10 + 80 + 100);
+}
+
+TEST_CASE("E2E: `&dyn I` / `^dyn I` aliases written as decls") {
+    CHECK(helpers::compile_and_run(R"(
+        const Shape := interface {
+            const area := fn(&self): i32;
+        };
+        const Sq := struct { s: i32 };
+        impl Shape for Sq {
+            pub const area := fn(&self): i32 { return self.s * self.s; };
+        }
+
+        const AnyShape := &dyn Shape;
+        const AnyShapePtr := ^dyn Shape;
+        const total := fn(a: AnyShape, b: AnyShapePtr): i32 { return a.area() + b.area(); };
+
+        pub const main := fn(): i32 {
+            const x := Sq{ .s = 3 };
+            const y := Sq{ .s = 4 };
+            const Local := &dyn Shape;
+            const z: Local = &y;
+            return total(&x, ^y) + z.area() - @intCast(i32, @sizeOf(AnyShape));
+        };
+    )") == 9 + 16 + 16 - 16);
+}
+
+TEST_CASE("E2E: `opaque`, `type`, and `noreturn` aliases") {
+    CHECK(helpers::compile_and_run(R"(
+        const Handle := ^mut opaque;
+        const Type := type;
+        const Never := noreturn;
+
+        const fail := fn(): Never { unreachable; };
+
+        pub const main := fn(): i32 {
+            const h: Handle = nullptr;
+            const T: Type = i32;
+            const v: T = 42;
+            if (h != nullptr) { fail(); }
+            return v;
+        };
+    )") == 42);
+}
+
+TEST_CASE("E2E: pointer and reference aliases over `type`-valued operands") {
+    CHECK(helpers::compile_and_run(R"(
+        const Fp := ^fn(a: i32): i32;
+        const inc := fn(a: i32): i32 { return a + 1; };
+
+        pub const main := fn(): i32 {
+            const x: i32 = 20;
+            const T := @TypeOf(x);
+            const P := ^T;
+            const R := &T;
+            const p: P = ^x;
+            const r: R = &x;
+            const f: Fp = ^inc;
+            return *p + r + (*f)(0) + f(0);
+        };
+    )") == 42);
+}
+
+TEST_CASE("E2E: a bare `dyn I` alias is rejected as unsized") {
+    helpers::expect_compile_error(R"(
+        const Shape := interface { const area := fn(&self): i32; };
+        const Bad := dyn Shape;
+        pub const main := fn(): i32 { return 0; };
+    )");
+}
+
+TEST_CASE("E2E: calling through a `^fn(...)` value loads the function it points at") {
+    CHECK(helpers::compile_and_run(R"(
+        const inc := fn(a: i32): i32 { return a + 1; };
+        const Holder := struct { f: ^fn(a: i32): i32 };
+
+        pub const main := fn(): i32 {
+            const f: ^fn(a: i32): i32 = ^inc;
+            var g: ^fn(a: i32): i32 = ^inc;
+            const h := Holder{ .f = ^inc };
+            return (*f)(0) + f(1) + g(2) + h.f(3);
+        };
+    )") == 1 + 2 + 3 + 4);
+}
+
+TEST_CASE("E2E: module-scope function pointer globals are loaded, assigned, and called") {
+    CHECK(helpers::compile_and_run(R"(
+        const inc := fn(a: i32): i32 { return a + 1; };
+        const dbl := fn(a: i32): i32 { return a * 2; };
+
+        const Fixed: ^fn(a: i32): i32 = ^inc;
+        var by_ptr: ^fn(a: i32): i32 = ^inc;
+        var by_val: fn(a: i32): i32 = inc;
+
+        pub const main := fn(): i32 {
+            const a := Fixed(1) + (*Fixed)(2);
+            const b := by_ptr(3) + by_val(4);
+            by_ptr = ^dbl;
+            by_val = dbl;
+            return a + b + by_ptr(5) + by_val(6);
+        };
+    )") == (2 + 3) + (4 + 5) + 10 + 12);
+}
+
+TEST_CASE("E2E: `&dyn I` / `^dyn I` lay out as two-word fat pointers") {
+    CHECK(helpers::compile_and_run(R"(
+        const Shape := interface { const area := fn(&self): i32; };
+        const Holder := struct { d: &dyn Shape, tag: u8 };
+
+        pub const main := fn(): i32 {
+            return @intCast(i32, @sizeOf(&dyn Shape) + @sizeOf(^mut dyn Shape) +
+                                 @sizeOf(Holder) + @alignOf(Holder));
+        };
+    )") == 16 + 16 + 24 + 8);
 }
 
 } // namespace ghoti::tests

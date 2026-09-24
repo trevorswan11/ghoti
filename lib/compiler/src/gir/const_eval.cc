@@ -450,10 +450,17 @@ auto const_eval::type_size_of(const sema::type& type, usize ptr_size) -> usize {
     case sema::type_kind::CONSTEXPR_FLOAT: return 8; // materializes as f64
     case sema::type_kind::F80:
     case sema::type_kind::F128:            return 16;
+    case sema::type_kind::POINTER:
+    case sema::type_kind::REFERENCE:       {
+        // `&dyn I` / `^dyn I` is a fat `{ data, vtable }` pair, matching its LLVM lowering
+        const auto        p{type.get_data().as_opt<sema::types::pointer>()};
+        const auto        r{type.get_data().as_opt<sema::types::reference>()};
+        const sema::type* referent{p ? &p->underlying : r ? &r->underlying : nullptr};
+        const bool        is_fat{referent && referent->get_kind() == sema::type_kind::DYN};
+        return is_fat ? 2 * ptr_size : ptr_size;
+    }
     case sema::type_kind::ISIZE:
     case sema::type_kind::USIZE:
-    case sema::type_kind::POINTER:
-    case sema::type_kind::REFERENCE:
     case sema::type_kind::FUNCTION:        return ptr_size;
     case sema::type_kind::SLICE:           return 2 * ptr_size;
     case sema::type_kind::ARRAY:
@@ -955,6 +962,12 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
             }
             return stdx::none;
         },
+        [&](const ast::type_expr&) -> stdx::option<const_value> {
+            if (const auto sema_type{module_->get_sema_type_opt(id)}) {
+                return const_value{*sema_type};
+            }
+            return stdx::none;
+        },
         [&](const ast::array_expr& data) { return eval_array(id, data); },
         [&](const ast::index_expr& data) { return eval_index(id, data); },
         [&](const ast::initializer_expr& data) { return eval_initializer(id, data); },
@@ -1039,6 +1052,11 @@ auto const_eval::eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::opt
     }
 
     const auto rhs_val{try_eval(rhs)};
+    // `^f` of a function is `f`'s own code address
+    if (rhs_val && rhs_val->is<std::string>() && rhs_val->get_type() &&
+        rhs_val->get_type()->get_kind() == sema::type_kind::FUNCTION) {
+        return rhs_val;
+    }
     if (rhs_val && rhs_val->is<stdx::option<sema::type&>>()) {
         const auto& t_opt{rhs_val->as<stdx::option<sema::type&>>()};
         if (t_opt) {
@@ -2060,6 +2078,22 @@ auto const_eval::resolve_module_chain(ast::node_id node) -> stdx::option<mod::mo
     return stdx::none;
 }
 
+auto const_eval::alias_decl_type(const mod::module&    mod,
+                                 ast::node_id          node,
+                                 const ast::decl_stmt& decl) -> stdx::option<sema::type&> {
+    if (decl.explicit_type || !mod.is_storageless_decl(node)) { return stdx::none; }
+    const auto sema_type{mod.get_sema_type_opt(node)};
+    if (!sema_type) { return stdx::none; }
+    // A bare `type` (e.g. `info.return_type`) only names the type once folded, and a module alias
+    // is not a type at all
+    if (sema_type->get_kind() == sema::type_kind::MODULE) { return stdx::none; }
+    if (sema_type->get_kind() == sema::type_kind::TYPE &&
+        !sema_type->get_data().is<sema::types::meta_type>()) {
+        return stdx::none;
+    }
+    return sema::denoted_type(*sema_type);
+}
+
 auto const_eval::eval_module_member(mod::module& target_mod, std::string_view member)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
@@ -2081,6 +2115,11 @@ auto const_eval::eval_module_member(mod::module& target_mod, std::string_view me
 
     const auto decl{target_mod.ast.get_as_opt<ast::decl_stmt>(*node)};
     if (!decl || !decl->value) { return stdx::none; }
+
+    // Yield the aliased type so `mod.Alias.MEMBER` can resolve through it
+    if (const auto aliased{alias_decl_type(target_mod, *node, *decl)}) {
+        return const_value{*aliased};
+    }
 
     // A plain cross-module function decays to a value naming its GIR symbol
     if (target_mod.ast.get_as_opt<ast::function_expr>(*decl->value)) {
@@ -2728,16 +2767,8 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
                             return const_value{*sema_type};
                         }
                     }
-                    // An unannotated alias carries the aliased type on its own node, which a
-                    // generic instantiation's body overlay keeps per-instantiation
-                    if (!decl->explicit_type && module_->is_storageless_decl(*node)) {
-                        // A bare `type` (e.g. `info.return_type`) only names the type once folded
-                        if (const auto sema_type{module_->get_sema_type_opt(*node)};
-                            sema_type &&
-                            (sema_type->get_kind() != sema::type_kind::TYPE ||
-                             sema_type->get_data().is<sema::types::meta_type>())) {
-                            return const_value{sema::denoted_type(*sema_type)};
-                        }
+                    if (const auto aliased{alias_decl_type(*module_, *node, *decl)}) {
+                        return const_value{*aliased};
                     }
                     return try_eval(*decl->value);
                 }

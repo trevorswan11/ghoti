@@ -400,10 +400,16 @@ class emitter {
                                                 const ast::assignment_expr& assign,
                                                 syntax::token_type_t        op_type) -> value;
     auto               emit_call(ast::node_id id, const ast::call_expr& call) -> value;
+    // A module-scope `^fn(...)` global, or `var` of function type, named directly as a callee
+    [[nodiscard]] auto callee_is_fn_pointer_global(const ast::identifier_expr& ident,
+                                                   ast::expr_handle            callee) -> bool;
     auto               emit_asm(ast::node_id id, const ast::asm_expr& node) -> value;
     auto               emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> value;
     // Lvalue (address) of a `var`-style global backed by a GIR global.
-    [[nodiscard]] auto global_ref_in(usize table_idx, std::string_view name) -> stdx::option<value>;
+    // `allow_fn_vars` also admits a `var` of function type (only safe for the active module's own
+    // root table, whose symbol nodes live in the active AST)
+    [[nodiscard]] auto global_ref_in(usize table_idx, std::string_view name, bool allow_fn_vars = false)
+        -> stdx::option<value>;
     [[nodiscard]] auto try_global_ref(std::string_view name) -> stdx::option<value>;
     [[nodiscard]] auto try_static_member_ref(const sema::type& owner, std::string_view member)
         -> stdx::option<value>;

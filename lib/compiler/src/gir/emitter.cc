@@ -2135,6 +2135,10 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
                          ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN)};
         },
         [&](const ast::identifier_expr& data) -> value { return emit_ident(id, data); },
+        // A type spelled only as a type (`dyn I`) carries no runtime value
+        [&](const ast::type_expr&) -> value {
+            return value{void_val{}, active_mod().get_sema_type_opt(id)};
+        },
         [&](const ast::function_expr& data) -> value {
             const auto sema_type{active_mod().get_sema_type_opt(id)};
             // A bodyless `fn(...): ret` type expression carries no runtime value.
@@ -2259,20 +2263,27 @@ auto emitter::emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> 
     return value{undefined_val{}, sema_type};
 }
 
-auto emitter::global_ref_in(usize table_idx, std::string_view name) -> stdx::option<value> {
+auto emitter::global_ref_in(usize table_idx, std::string_view name, bool allow_fn_vars)
+    -> stdx::option<value> {
     const auto sym{ctx_.registry.get_from_opt(table_idx, name)};
     if (!sym) { return stdx::none; }
-    if (sym->has_kind() && sym->get_kind() != sema::symbol_kind::VALUE) { return stdx::none; }
+    // A module `var` of function type is storage holding a function pointer, not a callable
+    const bool maybe_fn_var{allow_fn_vars && sym->has_kind() &&
+                            sym->get_kind() == sema::symbol_kind::CALLABLE};
+    if (sym->has_kind() && sym->get_kind() != sema::symbol_kind::VALUE && !maybe_fn_var) {
+        return stdx::none;
+    }
     const auto node{sym->get_data().as_opt<sema::symbols::node_t>()};
     if (!node) { return stdx::none; }
     const auto decl{active_ast().get_as_opt<ast::decl_stmt>(*node)};
     if (!decl || decl->has_modifier(ast::decl_modifiers::EXTERN)) { return stdx::none; }
+    const bool is_var{decl->has_modifier(ast::decl_modifiers::VARIABLE)};
+    if (maybe_fn_var && !is_var) { return stdx::none; }
     const auto raw_ty{active_mod().get_sema_type_opt(*node)};
     if (!raw_ty || raw_ty->get_kind() == sema::type_kind::TYPE ||
-        raw_ty->get_kind() == sema::type_kind::FUNCTION) {
+        (raw_ty->get_kind() == sema::type_kind::FUNCTION && !maybe_fn_var)) {
         return stdx::none;
     }
-    const bool is_var{decl->has_modifier(ast::decl_modifiers::VARIABLE)};
     const bool is_aggregate{raw_ty->get_kind() == sema::type_kind::STRUCT ||
                             raw_ty->get_kind() == sema::type_kind::ARRAY ||
                             raw_ty->get_kind() == sema::type_kind::UNION};
@@ -2288,7 +2299,7 @@ auto emitter::global_ref_in(usize table_idx, std::string_view name) -> stdx::opt
 auto emitter::try_global_ref(std::string_view name) -> stdx::option<value> {
     const auto rt{active_mod().root_table_idx};
     if (!rt) { return stdx::none; }
-    return global_ref_in(*rt, name);
+    return global_ref_in(*rt, name, true);
 }
 
 auto emitter::try_static_member_ref(const sema::type& owner, std::string_view member)
@@ -3772,6 +3783,9 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                    cv && cv->template is<std::string>() && cv->get_type() &&
                    cv->get_type()->get_kind() == sema::type_kind::FUNCTION) {
             callee_name.emplace(cv->template as<std::string>());
+        } else if (callee_is_fn_pointer_global(*ident, call.function)) {
+            // A module-scope function-pointer variable holds its target; load and call through it
+            indirect_callee.emplace(emit_expression(call.function));
         } else {
             callee_name.emplace(std::string{ident->name});
         }
@@ -7332,6 +7346,22 @@ auto emitter::emit_slice_literal_address(const ast::address_of_expr& addr, sema:
     return decayed;
 }
 
+auto emitter::callee_is_fn_pointer_global(const ast::identifier_expr& ident,
+                                          ast::expr_handle            callee) -> bool {
+    const auto callee_ty{active_mod().get_sema_type_opt(callee)};
+    if (!callee_ty) { return false; }
+    if (const auto p{callee_ty->get_data().as_opt<sema::types::pointer>()}) {
+        return p->underlying.get_kind() == sema::type_kind::FUNCTION;
+    }
+    if (callee_ty->get_kind() != sema::type_kind::FUNCTION || !active_mod().root_table_idx) {
+        return false;
+    }
+    const auto sym{ctx_.registry.get_from_opt(*active_mod().root_table_idx, ident.name)};
+    const auto node{sym ? sym->get_data().as_opt<sema::symbols::node_t>() : stdx::none};
+    const auto decl{node ? active_ast().get_as_opt<ast::decl_stmt>(*node) : stdx::none};
+    return decl && decl->has_modifier(ast::decl_modifiers::VARIABLE);
+}
+
 auto emitter::emit_address_of(ast::node_id id, const ast::address_of_expr& addr) -> value {
     PROFILE_FUNCTION();
     const auto sema_type{active_mod().get_sema_type_opt(id)};
@@ -7342,10 +7372,15 @@ auto emitter::emit_address_of(ast::node_id id, const ast::address_of_expr& addr)
     }
 
     // `^r` on a reference aliases the referent, cannot have a pointer to a reference
-    if (const auto rhs_type{active_mod().get_sema_type_opt(*addr.rhs)};
-        rhs_type && rhs_type->get_kind() == sema::type_kind::REFERENCE) {
+    const auto rhs_type{active_mod().get_sema_type_opt(*addr.rhs)};
+    if (rhs_type && rhs_type->get_kind() == sema::type_kind::REFERENCE) {
         const auto ref_val{emit_expression_id_raw(*addr.rhs)};
         return value{ref_val.data, sema_type};
+    }
+
+    // A function value already is its code address, and `^fn(...)` is that function pointer
+    if (rhs_type && rhs_type->get_kind() == sema::type_kind::FUNCTION) {
+        return emit_expression(addr.rhs);
     }
 
     const auto target{emit_lvalue(addr.rhs)};
@@ -7369,6 +7404,8 @@ auto emitter::emit_dereference(ast::node_id id, const ast::dereference_expr& der
 
     const auto ptr_val{emit_expression_id_raw(*deref.rhs)};
     emit_null_pointer_check(ptr_val, id);
+    // `*f` on a `^fn(...)` names the same code address as `f`
+    if (elem_type.get_kind() == sema::type_kind::FUNCTION) { return value{ptr_val.data, sema_type}; }
     const auto loaded{builder_.emit_load(ptr_val, elem_type)};
     return value{loaded, sema_type};
 }

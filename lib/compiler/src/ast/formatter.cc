@@ -1264,6 +1264,8 @@ MAKE_VERBATIM_FORMAT(undefined_expr, "undefined")
 MAKE_VERBATIM_FORMAT(nullptr_expr, "nullptr")
 MAKE_VERBATIM_FORMAT(unreachable_expr, "unreachable")
 
+auto formatter::visit(node_id, const type_expr& node) -> syntax::doc_id { return format(node.type); }
+
 auto formatter::visit(node_id, const struct_expr& node) -> syntax::doc_id {
     return format_struct(node);
 }

@@ -44,6 +44,7 @@ enum class node_kind : u8 {
     STRUCT_EXPRESSION,
     UNION_EXPRESSION,
     INTERFACE_EXPRESSION,
+    TYPE_EXPRESSION,
     WHILE_LOOP_EXPRESSION,
 
     BLOCK_STATEMENT,
@@ -101,6 +102,7 @@ enum class node_kind : u8 {
     X(struct_expr)          \
     X(union_expr)           \
     X(interface_expr)       \
+    X(type_expr)            \
     X(while_loop_expr)
 
 #define FOREACH_AST_STMT(X) \
@@ -212,6 +214,7 @@ NODE_KIND_OF_TRAIT(unreachable_expr, UNREACHABLE_EXPRESSION)
 NODE_KIND_OF_TRAIT(struct_expr, STRUCT_EXPRESSION)
 NODE_KIND_OF_TRAIT(union_expr, UNION_EXPRESSION)
 NODE_KIND_OF_TRAIT(interface_expr, INTERFACE_EXPRESSION)
+NODE_KIND_OF_TRAIT(type_expr, TYPE_EXPRESSION)
 NODE_KIND_OF_TRAIT(while_loop_expr, WHILE_LOOP_EXPRESSION)
 
 NODE_KIND_OF_TRAIT(block_stmt, BLOCK_STATEMENT)

@@ -102,6 +102,7 @@ using expr_handle = handle<node_kind::ARRAY_EXPRESSION,
                            node_kind::STRUCT_EXPRESSION,
                            node_kind::UNION_EXPRESSION,
                            node_kind::INTERFACE_EXPRESSION,
+                           node_kind::TYPE_EXPRESSION,
                            node_kind::WHILE_LOOP_EXPRESSION>;
 
 using identifier_handle        = handle<node_kind::IDENTIFIER_EXPRESSION>;

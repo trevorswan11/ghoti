@@ -99,6 +99,11 @@ auto symbol_collector::collect_symbols(mod::module& module, context& ctx) -> mod
 MAKE_COLLECTOR_NOOPS(COLLECTOR_NOOP_X)
 #undef COLLECTOR_NOOP_X
 
+auto symbol_collector::visit(ast::node_id, const ast::type_expr& node) -> void {
+    PROFILE_FUNCTION();
+    collect(node.type);
+}
+
 auto symbol_collector::visit(ast::node_id, const ast::array_expr& array) -> void {
     PROFILE_FUNCTION();
     const default_counter::guard g{in_expr_scope_};

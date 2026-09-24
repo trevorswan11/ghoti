@@ -1959,4 +1959,13 @@ auto interface_expr::parse(syntax::parser& parser)
         start_token, std::move(assoc_types), std::move(assoc_consts), std::move(methods));
 }
 
+auto type_expr::parse_dyn(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
+    PROFILE_FUNCTION();
+    const auto start_token{parser.get_current_token()};
+    auto       dyn{TRY(explicit_dyn_type::parse(parser))};
+    const auto type{
+        parser.add_type<explicit_dyn_type>(start_token, type_modifier{}, std::move(dyn))};
+    return parser.add_expr<type_expr>(start_token, type);
+}
+
 } // namespace ghoti::ast

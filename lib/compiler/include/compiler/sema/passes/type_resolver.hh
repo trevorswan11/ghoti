@@ -434,6 +434,7 @@ class type_resolver {
     auto visit(ast::node_id, const ast::undefined_expr&) -> void;
     auto visit(ast::node_id, const ast::nullptr_expr&) -> void;
     auto visit(ast::node_id, const ast::unreachable_expr&) -> void;
+    auto visit(ast::node_id, const ast::type_expr&) -> void;
 
     // The symbol a resolved `obj.member` names, looked up in a module's root table or in the
     // (denoted) aggregate's own table
@@ -562,6 +563,8 @@ class type_resolver {
     std::vector<active_block_frame> active_blocks_;
 
     bool in_mutating_context_{false};
+    // Set while resolving the `dyn I` operand of `&`/`^` written in expression position
+    bool dyn_is_referent_{false};
     bool for_generic_instantiation_{false};
     bool in_subscript_index_{false};
     bool in_for_iterable_{false};

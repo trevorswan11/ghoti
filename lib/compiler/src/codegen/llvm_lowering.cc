@@ -1645,7 +1645,15 @@ auto llvm_lowering::lower_value(const gir::value&               val,
         [this, &val, expected_type](const std::string& str) -> llvm::Value* {
             auto ty{expected_type};
             if (!ty && val.type) { ty = val.type; }
-            // A fn-typed string value names a function rather than holding string data
+            // A fn-typed string value names a function rather than holding string data, even when
+            // stored into a `^fn(...)` slot (that pointer is the function's own address)
+            if (val.type && val.type->get_kind() == sema::type_kind::FUNCTION) {
+                ty = val.type;
+            } else if (const auto p{ty ? ty->get_data().as_opt<sema::types::pointer>()
+                                       : stdx::none};
+                       p && p->underlying.get_kind() == sema::type_kind::FUNCTION) {
+                ty = p->underlying;
+            }
             if (ty && ty->get_kind() == sema::type_kind::FUNCTION) {
                 if (auto* fn{resolve_named_function(str)}) { return fn; }
                 // Not yet declared in this translation unit for the linnker to resolve

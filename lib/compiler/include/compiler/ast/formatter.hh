@@ -129,6 +129,7 @@ class formatter {
     auto visit(node_id, const undefined_expr&) -> syntax::doc_id;
     auto visit(node_id, const nullptr_expr&) -> syntax::doc_id;
     auto visit(node_id, const unreachable_expr&) -> syntax::doc_id;
+    auto visit(node_id, const type_expr&) -> syntax::doc_id;
     auto visit(node_id, const struct_expr&) -> syntax::doc_id;
     auto visit(node_id, const union_expr&) -> syntax::doc_id;
     auto visit(node_id, const interface_expr&) -> syntax::doc_id;

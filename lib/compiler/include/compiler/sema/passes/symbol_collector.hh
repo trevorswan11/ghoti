@@ -74,6 +74,7 @@ class symbol_collector {
     auto visit(ast::node_id, const ast::undefined_expr&) -> void;
     auto visit(ast::node_id, const ast::nullptr_expr&) -> void;
     auto visit(ast::node_id, const ast::unreachable_expr&) -> void;
+    auto visit(ast::node_id, const ast::type_expr&) -> void;
     template <ast::IndexableID ID> auto visit(ID, const ast::struct_expr&) -> void;
     template <ast::IndexableID ID> auto visit(ID, const ast::interface_expr&) -> void;
     template <ast::IndexableID ID> auto visit(ID, const ast::union_expr&) -> void;

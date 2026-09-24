@@ -381,6 +381,7 @@ constexpr auto PREFIX_FNS = [] -> auto {
     fns[token_type_t::STRUCT]           = ast::struct_expr::parse;
     fns[token_type_t::UNION]            = ast::union_expr::parse;
     fns[token_type_t::INTERFACE]        = ast::interface_expr::parse;
+    fns[token_type_t::DYN]              = ast::type_expr::parse_dyn;
     fns[token_type_t::EXTERN]           = ast::parse_modified_struct_or_union;
     fns[token_type_t::PACKED]           = ast::parse_modified_struct_or_union;
     fns[token_type_t::ENUM]             = ast::enum_expr::parse;
@@ -397,6 +398,13 @@ constexpr auto PREFIX_FNS = [] -> auto {
     }
 
     for (const auto tt : ALL_PRIMITIVES) { fns[tt] = ast::identifier_expr::parse; }
+    // Type keywords with no primitive spelling still name a type value (`const H := ^mut opaque;`)
+    for (const auto tt : {token_type_t::TYPE_TYPE,
+                          token_type_t::AUTO_TYPE,
+                          token_type_t::OPAQUE_TYPE,
+                          token_type_t::NORETURN}) {
+        fns[tt] = ast::identifier_expr::parse;
+    }
     for (const auto tt : builtins::ALL_TOKEN_TYPES) { fns[tt] = ast::identifier_expr::parse; }
     fns[token_type_t::BUILTIN_CFG_VALUE] = ast::cfg_value_expr::parse;
     fns[token_type_t::CONSTEXPR]         = ast::parse_constexpr_expr;

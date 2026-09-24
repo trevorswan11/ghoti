@@ -6751,10 +6751,11 @@ namespace {
             }
         }
     }
-    // 3. Array type expression like `[]i32` or `[4]i32`
+    // 3. Array type expression like `[]i32` or `[4]i32`, or a type spelled only as one (`dyn I`)
     if (const auto arr{mod.ast.get_as_opt<ast::array_expr>(id)}) {
         if (arr->is_type_expr) { return true; }
     }
+    if (mod.ast.get_as_opt<ast::type_expr>(id)) { return true; }
     // 4. Recursive traversal for composite pointer/reference type expressions (e.g. `^mut ^i32`)
     if (const auto adr{mod.ast.get_as_opt<ast::address_of_expr>(id)}) {
         return is_type_denoting_expr(ctx, mod, adr->rhs, tables);
@@ -6807,6 +6808,7 @@ auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> vo
     {
         const mutating_context_guard g{in_mutating_context_,
                                        ref_addr_of_is_mutable(id) == types::mut::MUTABLE};
+        const mutating_context_guard dyn_g{dyn_is_referent_, ref.rhs.is<ast::type_expr>()};
         TRY_RESOLVE(ref.rhs);
     }
     auto& rhs_type{*last_type_.take()};
@@ -6853,8 +6855,9 @@ auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> vo
                              resolving_.ast.location_of(id)));
     }
 
-    auto& new_type{ctx_.get_reference(ref_addr_of_is_mutable(id), rhs_type)};
-    new_type.resolve<types::reference>(rhs_type);
+    auto& referent{denoted_type(rhs_type)};
+    auto& new_type{ctx_.get_reference(ref_addr_of_is_mutable(id), referent)};
+    new_type.resolve<types::reference>(referent);
 
     resolving_.set_sema_type(id, new_type);
     last_type_.emplace(new_type);
@@ -6895,6 +6898,7 @@ auto type_resolver::visit(ast::node_id id, const ast::address_of_expr& adr_of) -
     {
         const mutating_context_guard g{in_mutating_context_,
                                        ref_addr_of_is_mutable(id) == types::mut::MUTABLE};
+        const mutating_context_guard dyn_g{dyn_is_referent_, adr_of.rhs.is<ast::type_expr>()};
         TRY_RESOLVE(adr_of.rhs);
     }
     auto& rhs_type{*last_type_.take()};
@@ -6930,7 +6934,8 @@ auto type_resolver::visit(ast::node_id id, const ast::address_of_expr& adr_of) -
             resolving_.ast.location_of(id)));
     }
 
-    gsl::not_null<type*> pointee{&rhs_type};
+    // `^@TypeOf(x)` / `^fn(...): T` point at the type the operand denotes, never at a `type` value
+    gsl::not_null<type*> pointee{&denoted_type(rhs_type)};
     if (const auto ref{rhs_type.get_data().as_opt<types::reference>()}) {
         pointee = &ref->underlying;
     }
@@ -7233,6 +7238,12 @@ MAKE_PRIMITIVE_RESOLVER(void_expr, VOID_)
 MAKE_PRIMITIVE_RESOLVER(undefined_expr, UNDEFINED)
 MAKE_PRIMITIVE_RESOLVER(nullptr_expr, NULLPTR)
 MAKE_PRIMITIVE_RESOLVER(unreachable_expr, NORETURN)
+
+auto type_resolver::visit(ast::node_id id, const ast::type_expr& node) -> void {
+    PROFILE_FUNCTION();
+    TRY_RESOLVE(node.type);
+    resolving_.set_sema_type(id, *last_type_);
+}
 
 auto type_resolver::dot_member_symbol(const ast::dot_expr& dot) const -> const symbol* {
     const auto obj_type{resolving_.get_sema_type_opt(dot.object)};
@@ -8050,6 +8061,15 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
         if (decl.value) {
             resolve(*decl.value);
             if (last_type_->is_poison()) { return poison_out(); }
+            if (decl.value->is<ast::identifier_expr>() &&
+                (*decl.value)->get_token_type() == syntax::token_type_t::AUTO_TYPE) {
+                last_type_.emplace(ctx_.poison_node(resolving_,
+                                                    id,
+                                                    "Type aliases cannot be 'auto'",
+                                                    error::ILLEGAL_AUTO_USAGE,
+                                                    resolving_.ast.location_of(*decl.value)));
+                return poison_out();
+            }
             auto* decl_value_type_p{&*last_type_.take()};
             // `const X := MakesAType()`: fold the constructor now, exactly like an annotation
             if (decl_value_type_p->get_data().is<types::deferred_call>()) {
@@ -10535,6 +10555,7 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_array_ty
 
 auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type& dyn) -> void {
     PROFILE_FUNCTION();
+    const bool is_referent{std::exchange(dyn_is_referent_, false)};
     TRY_RESOLVE(dyn.interface_type);
     auto& iface_type{denoted_type(*last_type_.take())};
     if (iface_type.get_kind() != type_kind::INTERFACE) {
@@ -10625,7 +10646,7 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type
 
     // `dyn I` is unsized: legal only as the referent of `&` / `^`.
     auto& final_type{apply_explicit_modifiers(id, dyn_type)};
-    if (final_type.get_kind() == type_kind::DYN) {
+    if (final_type.get_kind() == type_kind::DYN && !is_referent) {
         return last_type_.emplace(ctx_.poison_node(resolving_,
                                                    id,
                                                    "`dyn I` is unsized; use `&dyn I` or `^dyn I`",

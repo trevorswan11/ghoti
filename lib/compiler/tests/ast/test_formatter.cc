@@ -21,6 +21,20 @@ TEST_CASE("formatter round-trips simple declarations") {
     CHECK(format_source("var a := 'a';") == "var a := 'a';\n");
 }
 
+TEST_CASE("formatter round-trips type aliases spelled only as types") {
+    for (const std::string_view src : {
+             "const D := &dyn I;\n",
+             "const P := ^mut dyn I(Out = i32, Err = u8);\n",
+             "const H := ^mut opaque;\n",
+             "const T := type;\n",
+             "const N := noreturn;\n",
+             "const F := ^fn(a: i32) callconv(.win64): i32;\n",
+         }) {
+        CHECK(format_source(src) == src);
+        round_trips(src);
+    }
+}
+
 TEST_CASE("formatter preserves numeric literal base, separators, and suffix verbatim") {
     CHECK(format_source("var a := 0x2Fuz;") == "var a := 0x2Fuz;\n");
     CHECK(format_source("var a := 0b00_11_00_11;") == "var a := 0b00_11_00_11;\n");

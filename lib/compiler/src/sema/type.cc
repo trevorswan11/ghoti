@@ -180,9 +180,16 @@ auto packed_field_bits(const type& t, u32 ptr_bits) noexcept -> stdx::option<u32
     case type_kind::INT:       return int_width(t);
     case type_kind::BOOL:      return 1U;
     case type_kind::ISIZE:
-    case type_kind::USIZE:
+    case type_kind::USIZE:     return ptr_bits;
     case type_kind::POINTER:
-    case type_kind::REFERENCE: return ptr_bits;
+    case type_kind::REFERENCE: {
+        // A `&dyn I` / `^dyn I` fat pointer is two words, so like a slice it has no packed form
+        const auto  p{t.get_data().as_opt<types::pointer>()};
+        const auto  r{t.get_data().as_opt<types::reference>()};
+        const type* referent{p ? &p->underlying : r ? &r->underlying : nullptr};
+        if (referent && referent->get_kind() == type_kind::DYN) { return stdx::none; }
+        return ptr_bits;
+    }
     case type_kind::F16:
     case type_kind::F32:
     case type_kind::F64:

@@ -256,6 +256,12 @@ class const_eval {
     // Resolves a (possibly chained) module operand to the imported module it names
     auto resolve_module_chain(ast::node_id node) -> stdx::option<mod::module&>;
 
+    // The type an unannotated type-alias decl (`const X := T;`) names, read off its own node so a
+    // generic instantiation's body overlay stays per-instantiation
+    [[nodiscard]] static auto alias_decl_type(const mod::module&    mod,
+                                              ast::node_id          node,
+                                              const ast::decl_stmt& decl) -> stdx::option<sema::type&>;
+
     // Evaluates `member`, looked up in `target_mod`'s root scope, as a cross-module constant.
     auto eval_module_member(mod::module& target_mod, std::string_view member)
         -> stdx::option<const_value>;

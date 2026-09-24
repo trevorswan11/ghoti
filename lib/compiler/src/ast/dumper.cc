@@ -683,6 +683,14 @@ auto dumper::visit(node_id, const unreachable_expr&) -> void {
     fmt::println(out_, "UnreachableExpression");
 }
 
+auto dumper::visit(node_id, const type_expr& node) -> void {
+    PROFILE_FUNCTION();
+    fmt::println(out_, "TypeExpression");
+    const indent::guard g{indent_, true};
+    fmt::print(out_, "{}Type: ", indent_.current_branch());
+    dump(node.type);
+}
+
 // Safe to call with invalid ID in type dispatch
 auto dumper::visit(node_id, const struct_expr& node) -> void {
     PROFILE_FUNCTION();
