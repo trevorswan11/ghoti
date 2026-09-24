@@ -444,6 +444,10 @@ class type_resolver {
     // making the decl a compile-time type alias rather than a runtime value
     [[nodiscard]] auto decl_value_denotes_type(ast::expr_handle value) const -> bool;
 
+    // Poisons `value` when it names a type where `expected` wants a value (`const w: S = S;`);
+    // returns whether it did
+    auto reject_type_as_value(ast::expr_handle value, const type& expected) -> bool;
+
     // If a `using` RHS is a bare-name form (`X`, `mod.X`) that resolves to a value symbol
     // rather than a type, returns that name so the caller can reject the alias.
     [[nodiscard]] auto using_rhs_value_name(ast::explicit_type_id rhs) const

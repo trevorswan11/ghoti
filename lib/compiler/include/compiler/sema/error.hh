@@ -126,6 +126,7 @@ enum class error : u8 {
     SLICE_OUT_OF_BOUNDS,
     UNKNOWN_SLICE_LENGTH,
     SLICE_LENGTH_MISMATCH,
+    TYPE_USED_AS_VALUE,
 };
 
 using diagnostic  = diagnostic<error>;

@@ -279,7 +279,12 @@ auto type_resolver::visit(ast::node_id id, const ast::array_expr& array) -> void
     auto& item_type{*item_slot};
     if (item_type.is_resolved() && item_type.get_kind() != type_kind::AUTO) {
         const structural_guard g{implicit_type_stack_, item_type};
-        for (const auto& item : array.items) { resolve(item); }
+        for (const auto& item : array.items) {
+            resolve(item);
+            if (reject_type_as_value(item, item_type)) {
+                return resolving_.set_sema_type(id, *last_type_);
+            }
+        }
     } else {
         for (const auto& item : array.items) { resolve(item); }
     }
@@ -3185,8 +3190,14 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 g.emplace(implicit_type_stack_, *function_type->params[i + param_offset]);
             }
             const auto& arg{call.arguments[expanded.source_index[i]]};
-            any_arg_poison |= arg.visit([this](auto arg_id) -> bool {
+            any_arg_poison |= arg.visit([&](auto arg_id) -> bool {
                 resolve(arg_id);
+                if constexpr (std::same_as<decltype(arg_id), ast::expr_handle>) {
+                    if (i < expected_arity && !last_type_->is_poison() &&
+                        reject_type_as_value(arg_id, *function_type->params[i + param_offset])) {
+                        return true;
+                    }
+                }
                 return last_type_.take()->is_poison();
             });
         }
@@ -4803,6 +4814,9 @@ auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -
         const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(lhs_type)};
         TRY_RESOLVE(assign.rhs);
     }
+    if (reject_type_as_value(assign.rhs, lhs_type)) {
+        return resolving_.set_sema_type(id, *last_type_);
+    }
     auto& rhs_type{*last_type_};
 
     switch (id.get_token_type()) {
@@ -5793,6 +5807,9 @@ auto type_resolver::visit(ast::node_id id, const ast::initializer_expr& init) ->
         for (const auto& entry : init.initializers) {
             const structural_guard g{implicit_type_stack_, arr_data->underlying};
             TRY_RESOLVE(entry.value);
+            if (reject_type_as_value(entry.value, arr_data->underlying)) {
+                return resolving_.set_sema_type(id, *last_type_);
+            }
         }
         resolving_.set_sema_type(id, *array_object);
         return last_type_.emplace(*array_object);
@@ -5861,6 +5878,9 @@ auto type_resolver::visit(ast::node_id id, const ast::initializer_expr& init) ->
         {
             const structural_guard g{implicit_type_stack_, member_type};
             TRY_RESOLVE(value);
+        }
+        if (reject_type_as_value(value, member_type)) {
+            return resolving_.set_sema_type(id, *last_type_);
         }
     }
 
@@ -6728,26 +6748,31 @@ namespace {
             return true;
         }
     }
-    // 2. Identifier representing a primitive type, keyword type, or type symbol
+    // 2. Identifier representing a type symbol, primitive type, or keyword type
     if (const auto ident{mod.ast.get_as_opt<ast::identifier_expr>(id)}) {
+        // A symbol still being resolved has no kind yet
+        const auto is_type_sym{[](const symbol& sym) {
+            return sym.has_kind() && sym.get_kind() == symbol_kind::TYPE;
+        }};
+        // A user binding spelled like a primitive (`@"i32"`) names that binding
+        if (tables) {
+            if (const auto sym{ctx.registry.lookup_with_depth(*tables, ident->name)}) {
+                return is_type_sym(sym->symbol);
+            }
+        }
         if (syntax::token_type::is_int_type_lexeme(ident->name) ||
             syntax::token_type::is_primitive(id.get_token_type()) ||
             id.get_token_type() == syntax::token_type_t::TYPE_TYPE) {
             return true;
         }
-        if (tables) {
-            if (const auto sym{ctx.registry.lookup_with_depth(*tables, ident->name)}) {
-                if (sym->symbol.get_kind() == symbol_kind::TYPE) { return true; }
-            }
-        }
         if (mod.root_table_idx) {
             if (const auto sym{ctx.registry.get_from_opt(*mod.root_table_idx, ident->name)}) {
-                if (sym->get_kind() == symbol_kind::TYPE) { return true; }
+                if (is_type_sym(*sym)) { return true; }
             }
         }
         if (ctx.prelude_index) {
             if (const auto b{ctx.registry.get_from_opt(*ctx.prelude_index, ident->name)}) {
-                if (b->get_kind() == symbol_kind::TYPE) { return true; }
+                if (is_type_sym(*b)) { return true; }
             }
         }
     }
@@ -6801,6 +6826,34 @@ auto type_resolver::decl_value_denotes_type(ast::expr_handle value) const -> boo
         return sym && sym->has_kind() && sym->get_kind() == symbol_kind::TYPE;
     }
     return false;
+}
+
+auto type_resolver::reject_type_as_value(ast::expr_handle value, const type& expected) -> bool {
+    // A `type`, `auto`, or generic slot legitimately takes a type, and a not-yet-folded `[N]T`
+    // slot shares the `type` kind
+    if (!expected.is_resolved() || expected.is_poison() || is_generic_type(expected) ||
+        expected.get_kind() == type_kind::TYPE) {
+        return false;
+    }
+    const auto value_type{resolving_.get_sema_type_opt(value)};
+    if (!value_type || value_type->is_poison()) { return false; }
+    // A bare `type` (or a generic template's placeholder) can't say whether it names a type yet
+    if (value_type->get_kind() == type_kind::TYPE &&
+        !value_type->get_data().is<types::meta_type>() &&
+        !value_type->get_data().is<types::deferred_call>()) {
+        return false;
+    }
+    if (!decl_value_denotes_type(value)) { return false; }
+
+    last_type_.emplace(ctx_.poison_node(
+        resolving_,
+        value,
+        fmt::format("Expected a value of type '{}', but found the type '{}'",
+                    ctx_.type_display_name(expected),
+                    ctx_.type_display_name(denoted_type(*value_type))),
+        error::TYPE_USED_AS_VALUE,
+        resolving_.ast.location_of(value)));
+    return true;
 }
 
 auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> void {
@@ -8062,6 +8115,10 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
         if (decl.value) {
             resolve(*decl.value);
             if (last_type_->is_poison()) { return poison_out(); }
+            if (annotation_typed_decl &&
+                reject_type_as_value(*decl.value, resolving_.get_sema_type(id))) {
+                return poison_out();
+            }
             if (decl.value->is<ast::identifier_expr>() &&
                 (*decl.value)->get_token_type() == syntax::token_type_t::AUTO_TYPE) {
                 last_type_.emplace(ctx_.poison_node(resolving_,
@@ -8875,6 +8932,10 @@ auto type_resolver::visit(ast::node_id id, const ast::return_stmt& return_stmt) 
         }
 
         TRY_RESOLVE(*return_stmt.expression);
+        if (!return_trackers_.empty() && return_trackers_.back().expected_type &&
+            reject_type_as_value(*return_stmt.expression, *return_trackers_.back().expected_type)) {
+            return resolving_.set_sema_type(id, *last_type_);
+        }
         auto& return_expr_type{*last_type_.take()};
 
         // Only these two shapes are checked; the AST can't tell origin from pass-through.
