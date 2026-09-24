@@ -791,6 +791,21 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
             return emit_string_as_slice(cv->as<std::string>(), *slice_type);
         }
     }
+    // A reference would auto-load to its referent below and surface as a confusing `T` mismatch
+    if (dest_type.get_kind() == sema::type_kind::POINTER) {
+        if (const auto src_ty{active_mod().get_sema_type_opt(*expr_id)};
+            src_ty && src_ty->get_kind() == sema::type_kind::REFERENCE) {
+            const auto hint{active_ast().get_as_opt<ast::reference_expr>(*expr_id)
+                                ? " (did you mean `^` instead of `&`?)"
+                                : ""};
+            ctx_.diags.emplace_back(
+                fmt::format("A reference does not implicitly convert to a pointer{}", hint),
+                sema::error::TYPE_MISMATCH,
+                active_ast().location_of(*expr_id));
+            // Same address either way; re-typing keeps later checks from repeating the error
+            return value{emit_expression_id_raw(*expr_id).data, dest_type};
+        }
+    }
     // A reference destination is one of the few positions that must see the raw reference value
     if (dest_type.get_kind() == sema::type_kind::REFERENCE) {
         return emit_expression_id_raw(*expr_id);

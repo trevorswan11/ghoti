@@ -1,6 +1,8 @@
+#include <string_view>
 #include <utility>
 
 #include <catch2/catch_test_macros.hpp>
+#include <stdx/types.hh>
 
 #include "compiler/sema/error.hh"
 #include "helpers/sema.hh"
@@ -186,6 +188,80 @@ TEST_CASE("Type checker store and assignment validation") {
             sema::diagnostic{"Type mismatch in store: cannot assign 'slice' to 'slice'",
                              sema::error::TYPE_MISMATCH,
                              std::pair{3UZ, 16UZ}});
+    }
+    SECTION("A reference where a pointer is expected is rejected with a `^` hint") {
+        const auto expect_ref_to_ptr = [](std::string_view src, usize line, usize col, bool hint) {
+            helpers::test_checker_fail(
+                src,
+                sema::diagnostic{hint ? "A reference does not implicitly convert to a pointer "
+                                        "(did you mean `^` instead of `&`?)"
+                                      : "A reference does not implicitly convert to a pointer",
+                                 sema::error::TYPE_MISMATCH,
+                                 std::pair{line, col}});
+        };
+
+        SECTION("`const` and `var` declarations") {
+            expect_ref_to_ptr(R"(
+            const f := fn(): void {
+                var x: i32 = 0;
+                const p: ^mut i32 = &mut x;
+            };
+        )",
+                              3,
+                              36,
+                              true);
+            expect_ref_to_ptr(R"(
+            const f := fn(): void {
+                var x: i32 = 0;
+                var p: ^i32 = &x;
+            };
+        )",
+                              3,
+                              30,
+                              true);
+        }
+
+        SECTION("Assignment, call argument, and struct field initializer") {
+            expect_ref_to_ptr(R"(
+            const f := fn(p: ^mut i32): void {
+                var x: i32 = 0;
+                var q: ^i32 = p;
+                q = &x;
+            };
+        )",
+                              4,
+                              20,
+                              true);
+            expect_ref_to_ptr(R"(
+            const g := fn(q: ^i32): i32 { return *q; };
+            const f := fn(): i32 {
+                const x: i32 = 0;
+                return g(&x);
+            };
+        )",
+                              4,
+                              25,
+                              true);
+            expect_ref_to_ptr(R"(
+            const S := struct { p: ^i32 };
+            const f := fn(): void {
+                const x: i32 = 0;
+                const s: S = .{ .p = &x };
+            };
+        )",
+                              4,
+                              37,
+                              true);
+        }
+
+        SECTION("A reference-typed value that isn't a `&` expression gets no `^` hint") {
+            expect_ref_to_ptr(R"(
+            const f := fn(x: &i32): ^i32 { return x; };
+        )",
+                              1,
+                              50,
+                              false);
+        }
     }
 }
 
