@@ -3834,10 +3834,17 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         }
         for (const auto& param : fn.parameters) {
             TRY_RESOLVE(param.explicit_type);
-            fn_param_types[p_idx++] = &denoted_type(*last_type_.take());
+            auto& param_type{denoted_type(*last_type_.take())};
+            if (reject_unsized_slot(param.explicit_type, param_type)) {
+                return last_type_.emplace(ctx_.poison_node(resolving_, id));
+            }
+            fn_param_types[p_idx++] = &param_type;
         }
         TRY_RESOLVE(fn.explicit_return_type);
         auto& return_type{denoted_type(*last_type_.take())};
+        if (reject_unsized_slot(fn.explicit_return_type, return_type)) {
+            return last_type_.emplace(ctx_.poison_node(resolving_, id));
+        }
 
         types::key_t fn_key{type_kind::FUNCTION, types::mut::CONSTANT};
         for (const auto* p : fn_param_types) { fn_key.imprint(*p); }
@@ -3941,6 +3948,9 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         }
 
         auto& param_type{denoted_type(*last_type_.take())};
+        if (reject_unsized_slot(param.explicit_type, param_type)) {
+            return last_type_.emplace(ctx_.poison_node(resolving_, id));
+        }
         // A `type`-typed value is always compile-time known, so `constexpr` adds nothing.
         if (param.is_constexpr && param_type.get_kind() == type_kind::TYPE &&
             param.explicit_type.get_token_type() == syntax::token_type_t::TYPE_TYPE) {
@@ -3959,6 +3969,9 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
 
     TRY_RESOLVE(fn.explicit_return_type);
     auto& return_type{*last_type_.take()};
+    if (reject_unsized_slot(fn.explicit_return_type, denoted_type(return_type))) {
+        return last_type_.emplace(ctx_.poison_node(resolving_, id));
+    }
     ASSERT(!fn_type.is_resolved(), "Valued function must not be resolved");
 
     const auto self_offset{fn.self.has_value() ? 1UZ : 0UZ};
@@ -6861,6 +6874,31 @@ auto type_resolver::decl_value_denotes_type(ast::expr_handle value) const -> boo
     return false;
 }
 
+auto type_resolver::reject_unsized_slot(ast::explicit_type_id at, const type& slot_type) -> bool {
+    if (slot_type.get_kind() == type_kind::INTERFACE) {
+        const auto iname{ctx_.type_display_name(slot_type)};
+        ctx_.diags.emplace_back(
+            fmt::format("`{}` is an interface and cannot be stored by value; use `&dyn {}`, "
+                        "`^dyn {}`, or an `impl {}` parameter",
+                        iname,
+                        iname,
+                        iname,
+                        iname),
+            error::INTERFACE_NOT_A_VALUE,
+            resolving_.ast.location_of(at));
+        return true;
+    }
+    if (slot_type.get_kind() == type_kind::DYN) {
+        const auto dname{ctx_.type_display_name(slot_type)};
+        ctx_.diags.emplace_back(
+            fmt::format("`{}` is unsized; use `&{}` or `^{}`", dname, dname, dname),
+            error::ILLEGAL_UNSIZED_TYPE,
+            resolving_.ast.location_of(at));
+        return true;
+    }
+    return false;
+}
+
 auto type_resolver::reject_type_as_value(ast::expr_handle value, const type& expected) -> bool {
     // A `type`, `auto`, or generic slot legitimately takes a type, and a not-yet-folded `[N]T`
     // slot shares the `type` kind
@@ -6894,7 +6932,7 @@ auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> vo
     {
         const mutating_context_guard g{in_mutating_context_,
                                        ref_addr_of_is_mutable(id) == types::mut::MUTABLE};
-        const mutating_context_guard dyn_g{dyn_is_referent_, ref.rhs.is<ast::type_expr>()};
+        const mutating_context_guard dyn_g{dyn_unsized_ok_, ref.rhs.is<ast::type_expr>()};
         TRY_RESOLVE(ref.rhs);
     }
     auto& rhs_type{*last_type_.take()};
@@ -6984,7 +7022,7 @@ auto type_resolver::visit(ast::node_id id, const ast::address_of_expr& adr_of) -
     {
         const mutating_context_guard g{in_mutating_context_,
                                        ref_addr_of_is_mutable(id) == types::mut::MUTABLE};
-        const mutating_context_guard dyn_g{dyn_is_referent_, adr_of.rhs.is<ast::type_expr>()};
+        const mutating_context_guard dyn_g{dyn_unsized_ok_, adr_of.rhs.is<ast::type_expr>()};
         TRY_RESOLVE(adr_of.rhs);
     }
     auto& rhs_type{*last_type_.take()};
@@ -7479,6 +7517,9 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
         TRY_RESOLVE(field.explicit_type);
         // `f: @TypeOf(g)` / `f: FnAlias` stores the denoted type, not a `type` value
         auto* field_type{&denoted_type(*last_type_.take())};
+        if (reject_unsized_slot(field.explicit_type, *field_type)) {
+            return last_type_.emplace(ctx_.poison_node(resolving_, id));
+        }
 
         if (field_type->get_kind() == type_kind::AUTO) {
             if (!field.default_value) {
@@ -7639,6 +7680,9 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
         sym->set_status(symbol_status::RESOLVING);
         TRY_RESOLVE(field.explicit_type);
         auto& field_type{denoted_type(*last_type_.take())};
+        if (reject_unsized_slot(field.explicit_type, field_type)) {
+            return last_type_.emplace(ctx_.poison_node(resolving_, id));
+        }
 
         if (field_type.get_kind() == type_kind::AUTO) {
             return last_type_.emplace(ctx_.poison_node(
@@ -8084,18 +8128,8 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                 register_non_generic_type_ctor_members(*explicit_type_p, dc_call);
             }
             auto& explicit_type{*explicit_type_p};
-            if (explicit_type.get_kind() == type_kind::INTERFACE) {
-                const auto iname{ctx_.type_display_name(explicit_type)};
-                ctx_.poison_symbol(
-                    sym,
-                    fmt::format("`{}` is an interface and cannot be stored by value; use "
-                                "`&dyn {}`, `^dyn {}`, or an `impl {}` parameter",
-                                iname,
-                                iname,
-                                iname,
-                                iname),
-                    error::INTERFACE_NOT_A_VALUE,
-                    resolving_.ast.location_of(*decl.explicit_type));
+            if (reject_unsized_slot(*decl.explicit_type, explicit_type)) {
+                ctx_.poison_symbol(sym);
                 resolving_.set_sema_type(decl.name, ctx_.get_poison());
                 return last_type_.emplace(ctx_.poison_node(resolving_, id));
             }
@@ -8121,7 +8155,11 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
         // Only update the decl value type if it hasn't been set unless this is an instantiation
         // re-typing a body-local decl (whose annotation, if any, was just re-set above)
         if (decl.value) {
-            resolve(*decl.value);
+            {
+                const mutating_context_guard dyn_g{dyn_unsized_ok_,
+                                                   decl.value->is<ast::type_expr>()};
+                resolve(*decl.value);
+            }
             if (last_type_->is_poison()) { return poison_out(); }
             if (annotation_typed_decl &&
                 reject_type_as_value(*decl.value, resolving_.get_sema_type(id))) {
@@ -8313,8 +8351,9 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             ctx_.generic_functions.set_function_name(resolved_type, decl_ident.name);
         }
 
-        // Remember the declared name of a struct/enum/union so `@typeName` can report it
-        if (decl.value && decl.value->any<ast::struct_expr, ast::union_expr, ast::enum_expr>()) {
+        // Remember the declared name of a user aggregate so `@typeName` can report it
+        if (decl.value &&
+            decl.value->any<ast::struct_expr, ast::union_expr, ast::enum_expr, ast::interface_expr>()) {
             if (const auto value_type{resolving_.get_sema_type_opt(*decl.value)};
                 value_type && !value_type->is_poison()) {
                 const auto& decl_ident{resolving_.ast.get_as<ast::identifier_expr>(decl.name)};
@@ -10543,6 +10582,9 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_array_ty
                              error::ILLEGAL_AUTO_USAGE,
                              resolving_.ast.location_of(array.inner_explicit_type)));
     }
+    if (reject_unsized_slot(array.inner_explicit_type, item_type)) {
+        return last_type_.emplace(ctx_.poison_node(resolving_, id));
+    }
 
     // A reference is a borrow, not a storable slot: writing `[N]&T` / `[]&T` is illegal
     if (array.inner_explicit_type.get_modifier().is_ref()) {
@@ -10581,7 +10623,7 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_array_ty
 
 auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type& dyn) -> void {
     PROFILE_FUNCTION();
-    const bool is_referent{std::exchange(dyn_is_referent_, false)};
+    const bool unsized_ok{std::exchange(dyn_unsized_ok_, false)};
     TRY_RESOLVE(dyn.interface_type);
     auto& iface_type{denoted_type(*last_type_.take())};
     if (iface_type.get_kind() != type_kind::INTERFACE) {
@@ -10677,7 +10719,7 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type
 
     // `dyn I` is unsized: legal only as the referent of `&` / `^`.
     auto& final_type{apply_explicit_modifiers(id, dyn_type)};
-    if (final_type.get_kind() == type_kind::DYN && !is_referent) {
+    if (final_type.get_kind() == type_kind::DYN && !unsized_ok) {
         return last_type_.emplace(ctx_.poison_node(resolving_,
                                                    id,
                                                    "`dyn I` is unsized; use `&dyn I` or `^dyn I`",

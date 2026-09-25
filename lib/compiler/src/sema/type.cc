@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <fmt/format.h>
 #include <fmt/ranges.h>
@@ -509,6 +510,18 @@ auto type::to_string(stdx::option<const type_name_map&> names) const -> std::str
         [names](types::enum_t e) {
             return fmt::format("enum : {}", e.underlying.to_string(names));
         },
+        [names](types::dyn_t d) {
+            const auto& iface{d.interface.get_data().as<types::interface_t>()};
+            std::vector<std::string> bound;
+            for (usize i{0}; i < d.assoc_bindings.size(); ++i) {
+                if (!d.assoc_bindings[i]) { continue; }
+                bound.emplace_back(fmt::format(
+                    "{} = {}", iface.assoc_type_names[i], d.assoc_bindings[i]->to_string(names)));
+            }
+            const auto iface_name{d.interface.to_string(names)};
+            if (bound.empty()) { return fmt::format("dyn {}", iface_name); }
+            return fmt::format("dyn {}({})", iface_name, fmt::join(bound, ", "));
+        },
         [this](const auto&) {
             return fmt::format("{}{}", leaf_qualifier(*this), type_kind_display_name(get_kind()));
         });
@@ -630,7 +643,10 @@ auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {
     case type_kind::DYN:       {
         const auto d_a{a.get_data().as_opt<types::dyn_t>()};
         const auto d_b{b.get_data().as_opt<types::dyn_t>()};
-        return d_a && d_b && &d_a->interface == &d_b->interface;
+        if (!d_a || !d_b || &d_a->interface != &d_b->interface) { return false; }
+        return std::ranges::equal(d_a->assoc_bindings, d_b->assoc_bindings, [](type* x, type* y) {
+            return x == y || (x && y && is_same_unqualified(*x, *y));
+        });
     }
     case type_kind::POINTER: {
         const auto p_a{a.get_data().as_opt<types::pointer>()};
