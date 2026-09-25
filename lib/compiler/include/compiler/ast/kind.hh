@@ -44,6 +44,7 @@ enum class node_kind : u8 {
     STRUCT_EXPRESSION,
     UNION_EXPRESSION,
     INTERFACE_EXPRESSION,
+    TYPE_EXPRESSION,
     WHILE_LOOP_EXPRESSION,
 
     BLOCK_STATEMENT,
@@ -59,7 +60,6 @@ enum class node_kind : u8 {
     IMPORT_STATEMENT,
     RETURN_STATEMENT,
     TEST_STATEMENT,
-    USING_STATEMENT,
 
     DISCARDED, // Represented by stdx::monostate
 };
@@ -101,6 +101,7 @@ enum class node_kind : u8 {
     X(struct_expr)          \
     X(union_expr)           \
     X(interface_expr)       \
+    X(type_expr)            \
     X(while_loop_expr)
 
 #define FOREACH_AST_STMT(X) \
@@ -116,8 +117,7 @@ enum class node_kind : u8 {
     X(impl_stmt)            \
     X(import_stmt)          \
     X(return_stmt)          \
-    X(test_stmt)            \
-    X(using_stmt)
+    X(test_stmt)
 
 // DOES NOT INCLUDE DISCARDED
 #define FOREACH_AST_NODE(X) \
@@ -212,6 +212,7 @@ NODE_KIND_OF_TRAIT(unreachable_expr, UNREACHABLE_EXPRESSION)
 NODE_KIND_OF_TRAIT(struct_expr, STRUCT_EXPRESSION)
 NODE_KIND_OF_TRAIT(union_expr, UNION_EXPRESSION)
 NODE_KIND_OF_TRAIT(interface_expr, INTERFACE_EXPRESSION)
+NODE_KIND_OF_TRAIT(type_expr, TYPE_EXPRESSION)
 NODE_KIND_OF_TRAIT(while_loop_expr, WHILE_LOOP_EXPRESSION)
 
 NODE_KIND_OF_TRAIT(block_stmt, BLOCK_STATEMENT)
@@ -227,7 +228,6 @@ NODE_KIND_OF_TRAIT(impl_stmt, IMPL_STATEMENT)
 NODE_KIND_OF_TRAIT(import_stmt, IMPORT_STATEMENT)
 NODE_KIND_OF_TRAIT(return_stmt, RETURN_STATEMENT)
 NODE_KIND_OF_TRAIT(test_stmt, TEST_STATEMENT)
-NODE_KIND_OF_TRAIT(using_stmt, USING_STATEMENT)
 NODE_KIND_OF_TRAIT(discarded, DISCARDED)
 
 #undef KIND_OF_TRAIT

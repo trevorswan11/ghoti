@@ -63,7 +63,6 @@ constexpr keyword_t MOVE{"move", token_type_t::MOVE};
 constexpr keyword_t PACKED{"packed", token_type_t::PACKED};
 constexpr keyword_t NORETURN{"noreturn", token_type_t::NORETURN};
 constexpr keyword_t NULLPTR{"nullptr", token_type_t::NULLPTR};
-constexpr keyword_t USING{"using", token_type_t::USING};
 constexpr keyword_t TEST{"test", token_type_t::TEST};
 constexpr keyword_t IMPL{"impl", token_type_t::IMPL};
 constexpr keyword_t INTERFACE{"interface", token_type_t::INTERFACE};
@@ -132,7 +131,6 @@ constexpr std::array ALL_KEYWORDS{
     keywords::PACKED,
     keywords::NORETURN,
     keywords::NULLPTR,
-    keywords::USING,
     keywords::TEST,
     keywords::UNDEFINED,
     keywords::UNREACHABLE,

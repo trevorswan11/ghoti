@@ -497,6 +497,15 @@ struct interface_expr {
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
+// A type with no expression spelling, written where a value is expected (`const D := &dyn I;`)
+struct type_expr {
+    explicit_type_id type;
+
+    // Starts on `dyn`
+    [[nodiscard]] static auto parse_dyn(syntax::parser& parser)
+        -> stdx::result<expr_handle, syntax::diagnostic>;
+};
+
 struct while_loop_expr {
     expr_handle               condition;
     stdx::option<expr_handle> continuation;

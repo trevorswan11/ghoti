@@ -99,7 +99,7 @@ TEST_CASE("cfg: a @cfgValue constant gates aggregate members") {
         const KEEP := @cfgValue(ptr_bits == 64);
         const S := struct {
             x: i32,
-            @cfg(KEEP) { using Word = u64; const bits := 64; }
+            @cfg(KEEP) { const Word := u64; const bits := 64; }
         };
     )"};
     CHECK(std::ranges::equal(struct_members(src, "S"), std::array{"Word", "bits"}));

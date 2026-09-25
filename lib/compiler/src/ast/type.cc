@@ -325,8 +325,8 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
     if (id) {
         if (!modifier.is_value()) {
             return make_syntax_err(
-                "User-defined types can only be defined with non-modified aliases",
-                syntax::error::ILLEGAL_USING_ALIAS_WITH_MODIFIERS,
+                "A struct, union, enum, or interface literal cannot take a type modifier",
+                syntax::error::ILLEGAL_MODIFIED_TYPE_LITERAL,
                 type_start);
         }
         return *id;

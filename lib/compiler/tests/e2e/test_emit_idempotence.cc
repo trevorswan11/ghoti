@@ -152,7 +152,7 @@ TEST_CASE("`fn(...): type` constructors with const members produce identical GIR
             };
         };
 
-        using P = Pair(i32);
+        const P := Pair(i32);
 
         pub const main := fn(): i32 {
             const p1: P = .{ .first = 10, .second = 20 };

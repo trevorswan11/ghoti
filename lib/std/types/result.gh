@@ -19,7 +19,7 @@ pub constexpr Result := fn(T: type, E: type): type {
             constexpr fn_info := @typeInfo(@TypeOf(func));
             @assert(fn_info == .function, "map requires a function argument");
             const NewOk := fn_info.function.return_type;
-            using NewRes = Result(NewOk, E);
+            const NewRes := Result(NewOk, E);
 
             return match (self) {
                 .ok => |happy| NewRes{ .ok = func(happy) },
@@ -31,7 +31,7 @@ pub constexpr Result := fn(T: type, E: type): type {
             constexpr fn_info := @typeInfo(@TypeOf(func));
             @assert(fn_info == .function, "map_err requires a function argument");
             const NewErr := fn_info.function.return_type;
-            using NewRes = Result(T, NewErr);
+            const NewRes := Result(T, NewErr);
 
             return match (self) {
                 .ok => |happy| NewRes{ .ok = happy },
@@ -95,8 +95,8 @@ test "Result.map_err transforms error variant" {
 }
 
 impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
-    using Output = T;
-    using Residual = E;
+    const Output := T;
+    const Residual := E;
     pub const branch := fn(self): builtin.Flow(T, E) {
         return match (self) {
             .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
@@ -106,7 +106,7 @@ impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
 }
 
 impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
-    using From = E;
+    const From := E;
     pub const from_residual := fn(r: E): @This() {
         return .{ .err = r };
     };

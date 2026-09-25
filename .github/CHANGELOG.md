@@ -418,6 +418,23 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Resolve a bug where break values would not be cleared on re-resolutions of monomorphs
 - Unions can now have fully void payloads without crashing
 - Function parameters can now safely load void parameters
+- **Breaking:** the `using` keyword is removed (#320); declare type aliases with `const` instead (`using A = i32;` becomes `const A := i32;`)
+    - Whether a declaration aliases a type or binds a value is decided by what its right-hand side denotes, so `const P := ^i32;` is a type and `const p := ^x;` is a pointer
+    - `constexpr` may be used in place of `const` for an alias with no change in meaning; aliases never occupy storage
+    - `using` is now an ordinary identifier
+- Local `const` / `constexpr` aliases of a type constructor call (`constexpr NewRes := Result(T, E);`) are compile-time types instead of runtime calls, fixing an LLVM crash (#334)
+    - Module-scope aliases of a module (`const io := std.io;`) and of `void` no longer emit storage
+- `dyn I`, `opaque`, `type`, and `noreturn` are valid in value position (`const Any := &dyn Writer;`, `const Handle := ^mut opaque;`)
+- `^` / `&` over a `type` value (`^@TypeOf(x)`, `^fn(a: i32): i32`) points at the denoted type
+- A type used where a value is expected is now an error (`const p: ^i32 = P;` where `P` is a type)
+    - Covers annotated declarations, assignments, returns, call arguments, and aggregate / array elements
+- A `var` binding whose value is a type (`var T := i32;`) is rejected like `var T: type = i32;`
+- `^` / `&` applied directly to a struct, union, enum, or interface literal is rejected in value position as it already was in type position
+- Fix `@sizeOf(Ctor(T))` in a generic body folding to another instantiation's layout
+- Fix `@sizeOf` / `@alignOf` / packed-field sizing of `&dyn I` / `^dyn I` fat pointers (two words, not one)
+- `^f` of a function and `*p` of a `^fn(...)` are the function pointer itself; calling through a local, field, or module-scope `^fn(...)` / `var fn(...)` no longer crashes
+- Struct and union fields typed by a `type` value (`f: @TypeOf(g)`, `f: FnAlias`) store the denoted type, so function-typed fields are callable
+- Non-generic type constructors that return an existing scalar type (`fn(wide: bool): type { return i64; }`) now fold, so values annotated with them are typed correctly
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

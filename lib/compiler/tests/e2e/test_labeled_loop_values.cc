@@ -127,7 +127,7 @@ TEST_CASE("labeled block values are re-typed per generic instantiation") {
         };
         const magnitude := fn(value: auto): u64 {
             constexpr info := @typeInfo(@TypeOf(value)).int;
-            using Unsigned = @Int(.{ .signedness = .unsigned, .bits = info.bits });
+            const Unsigned := @Int(.{ .signedness = .unsigned, .bits = info.bits });
             const a: Unsigned = blk: {
                 if constexpr (info.signedness == .signed) {
                     const bits := @bitCast(Unsigned, value);

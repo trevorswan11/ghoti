@@ -2,9 +2,9 @@ import std;
 
 import "allocator.gh" as allocator;
 
-pub using AllocatorVTable = allocator.AllocatorVTable;
-pub using Allocator = allocator.Allocator;
-pub using AllocError = allocator.AllocError;
+pub const AllocatorVTable := allocator.AllocatorVTable;
+pub const Allocator := allocator.Allocator;
+pub const AllocError := allocator.AllocError;
 
 /// Stored as a power-of-two.
 pub const Alignment := enum : std.math.Log2Int(usize) {

@@ -390,7 +390,7 @@ TEST_CASE("`&dyn I(Assoc = T)` substitutes the associated type in method signatu
         const Src := interface { Item: type; pub const first := fn(&self): Item; };
         const Box := struct { v: i32 };
         impl Src for Box {
-            using Item = i32;
+            const Item := i32;
             pub const first := fn(&self): Item { return self.v; };
         }
         const takeFirst := fn(s: &dyn Src(Item = i32)): i32 { return s.first(); };

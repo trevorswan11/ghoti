@@ -43,11 +43,23 @@
 (dyn_assoc_binding type: (identifier) @type)
 
 ; Declarations
+; A `const` whose value is spelled as a type is a type alias
+(decl_statement
+  name: (identifier) @type
+  value: [
+    (pointer_type)
+    (reference_type)
+    (array_type)
+    (dyn_type)
+    (struct_expression)
+    (union_expression)
+    (enum_expression)
+    (interface_expression)
+  ])
 (decl_statement name: (identifier) @variable)
 (parameter name: (identifier) @variable.parameter)
 (impl_parameter name: (identifier) @variable.parameter)
 (import_statement alias: (identifier) @type)
-(using_statement alias: (identifier) @type)
 (errdefer_statement capture: (identifier) @variable.parameter)
 
 ; Types used in position
@@ -98,7 +110,6 @@
   "break"
   "import"
   "as"
-  "using"
   "pub"
   "extern"
   "export"

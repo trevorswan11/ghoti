@@ -13,7 +13,7 @@ TEST_CASE("E2E: a generic `union` type constructor is usable as a return type") 
             return union { ok: T, err: E };
         };
 
-        using IntOr = Result(i32, i32);
+        const IntOr := Result(i32, i32);
 
         const parse := fn(ok: bool): IntOr {
             if (ok) { return .{ .ok = 40 }; }
@@ -106,8 +106,8 @@ TEST_CASE("E2E: two structurally distinct instantiations of a generic `struct` c
     CHECK(helpers::compile_and_run(R"(
         const Box := fn(T: type): type { return struct { val: T }; };
 
-        using BoxI = Box(i32);
-        using BoxF = Box(f64);
+        const BoxI := Box(i32);
+        const BoxF := Box(f64);
 
         pub const main := fn(): i32 {
             const a: BoxI = .{ .val = 5 };
@@ -121,8 +121,8 @@ TEST_CASE("E2E: two instantiations of a generic `union` constructor, matched ind
     CHECK(helpers::compile_and_run(R"(
         const Option := fn(T: type): type { return union { some: T, none: void }; };
 
-        using OptI = Option(i32);
-        using OptB = Option(u8);
+        const OptI := Option(i32);
+        const OptB := Option(u8);
 
         pub const main := fn(): i32 {
             const x: OptI = .{ .some = 30 };
@@ -139,8 +139,8 @@ TEST_CASE("E2E: repeated same-argument instantiation shares one type") {
     CHECK(helpers::compile_and_run(R"(
         const Box := fn(T: type): type { return struct { val: T }; };
 
-        using B1 = Box(i32);
-        using B2 = Box(i32);
+        const B1 := Box(i32);
+        const B2 := Box(i32);
 
         const relay := fn(b: B1): B2 { return b; };
 
@@ -155,7 +155,7 @@ TEST_CASE("E2E: repeated same-argument instantiation shares one type") {
 TEST_CASE("E2E: a zero-parameter `fn(): type` that builds a fresh struct") {
     CHECK(helpers::compile_and_run(R"(
         const MakePoint := fn(): type { return struct { x: i32, y: i32 }; };
-        using Point = MakePoint();
+        const Point := MakePoint();
 
         pub const main := fn(): i32 {
             const p: Point = .{ .x = 3, .y = 4 };
@@ -167,7 +167,7 @@ TEST_CASE("E2E: a zero-parameter `fn(): type` that builds a fresh struct") {
 TEST_CASE("E2E: a zero-parameter `fn(): type` that builds a fresh union") {
     CHECK(helpers::compile_and_run(R"(
         const MakeCell := fn(): type { return union { i: i32, f: f32 }; };
-        using Cell = MakeCell();
+        const Cell := MakeCell();
 
         pub const main := fn(): i32 {
             const c: Cell = .{ .i = 99 };
@@ -186,7 +186,7 @@ TEST_CASE("E2E: a `fn(bool): type` that selects between existing named types") {
             return Narrow;
         };
 
-        using Chosen = pick(true);
+        const Chosen := pick(true);
 
         pub const main := fn(): i32 {
             const v: Chosen = .{ .a = 3, .b = 4 };
@@ -201,8 +201,8 @@ TEST_CASE("E2E: @sizeOf / @alignOf resolve a `fn(bool): type` alias selecting a 
             if (wide) { return i64; }
             return i32;
         };
-        using T = choose(true);
-        using U = choose(false);
+        const T := choose(true);
+        const U := choose(false);
 
         pub const main := fn(): i32 {
             return @intCast(i32, @sizeOf(T)) + @intCast(i32, @alignOf(T))
@@ -237,8 +237,8 @@ TEST_CASE("E2E: two instantiations of a generic type constructor do not alias th
             };
         };
 
-        using VI = Vec(i32);
-        using VL = Vec(i64);
+        const VI := Vec(i32);
+        const VL := Vec(i64);
 
         pub const main := fn(): i32 {
             const a := VI.make(3);
@@ -257,7 +257,7 @@ TEST_CASE("E2E: a non-generic `fn(): type` result with member functions") {
                 const doubled := fn(^self): i32 { return self.item + self.item; };
             };
         };
-        using M = Make();
+        const M := Make();
 
         pub const main := fn(): i32 {
             const a := M.of(21);
@@ -277,7 +277,7 @@ TEST_CASE("E2E: type constructor members with `&mut self` and sibling-method cal
                 const twice := fn(^self): T { return self.get() + self.get(); };
             };
         };
-        using BI = Box(i32);
+        const BI := Box(i32);
 
         pub const main := fn(): i32 {
             var b := BI.make(10);
@@ -300,7 +300,7 @@ TEST_CASE("E2E: a cross-module non-generic `fn(): type` with member functions") 
     const auto                 exit_code{helpers::compile_and_run(
         R"(
             import "lib.gh" as lib;
-            using M = lib.Make();
+            const M := lib.Make();
             pub const main := fn(): i32 {
                 const a := M.of(21);
                 return a.doubled();
@@ -323,8 +323,8 @@ TEST_CASE("E2E: a cross-module generic type constructor, two instantiations, met
     const auto                 exit_code{helpers::compile_and_run(
         R"(
             import "vec.gh" as v;
-            using VI = v.Vec(i32);
-            using VL = v.Vec(i64);
+            const VI := v.Vec(i32);
+            const VL := v.Vec(i64);
             pub const main := fn(): i32 {
                 const a := VI.make(3);
                 const b := VL.make(7);
@@ -367,7 +367,7 @@ TEST_CASE("E2E: a type constructor's members read its `constexpr` value paramete
                 };
             };
 
-            using B = Box(i32, 100);
+            const B := Box(i32, 100);
 
             pub const main := fn(): i32 {
                 var b: B = .{ .val = 5 };
@@ -387,7 +387,7 @@ TEST_CASE("E2E: a type constructor's members read its `constexpr` value paramete
                 };
             };
 
-            using W = Wrap(i32, dbl);
+            const W := Wrap(i32, dbl);
 
             pub const main := fn(): i32 {
                 var w: W = .{ .val = 21 };
@@ -405,8 +405,8 @@ TEST_CASE("E2E: a type constructor's members read its `constexpr` value paramete
                 };
             };
 
-            using B10 = Box(i32, 10);
-            using B20 = Box(i32, 20);
+            const B10 := Box(i32, 10);
+            const B20 := Box(i32, 20);
 
             pub const main := fn(): i32 {
                 var a: B10 = .{ .val = 1 };
@@ -552,8 +552,8 @@ TEST_CASE("A generic union's own inline method still works after an explicit qua
         };
 
         impl(T: type) builtin.Unwrappable for Option(T) {
-            using Output = T;
-            using Residual = void;
+            const Output := T;
+            const Residual := void;
             pub const branch := fn(self): builtin.Flow(T, void) {
                 return match (self) {
                     .some => |v| builtin.Flow(T, void){ .@"continue" = v },
@@ -562,7 +562,7 @@ TEST_CASE("A generic union's own inline method still works after an explicit qua
             };
         }
         impl(T: type) builtin.Rewrappable for Option(T) {
-            using From = void;
+            const From := void;
             pub const from_residual := fn(_: void): @This() { return .{ .none = {} }; };
         }
 

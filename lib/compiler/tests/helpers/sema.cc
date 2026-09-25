@@ -249,8 +249,6 @@ auto struct_members(std::string_view input, std::string_view name) -> std::vecto
         for (const auto& member : se->members) {
             if (const auto md{ctx->root_mod.ast.get_as_opt<ast::decl_stmt>(*member)}) {
                 out.emplace_back(ctx->root_mod.ast.get_as<ast::identifier_expr>(md->name).name);
-            } else if (const auto mu{ctx->root_mod.ast.get_as_opt<ast::using_stmt>(*member)}) {
-                out.emplace_back(ctx->root_mod.ast.get_as<ast::identifier_expr>(mu->alias).name);
             }
         }
         return out;

@@ -121,7 +121,7 @@ TEST_CASE("Context-inferred 1-argument casts sema type checking") {
         CHECK(diags.message_contains("`@intCast` operand must be an integer type; found 'bool'"));
     }
 
-    SECTION("Comptime evaluation of 1-arg @intCast") {
+    SECTION("Constexpr evaluation of 1-arg @intCast") {
         helpers::type_check_and_verify(R"(
             constexpr a: u8 = @intCast(200);
             constexpr b: i32 = @intCast(1000);

@@ -4,7 +4,7 @@ pub const AllocError := enum : u8 {
     out_of_memory,
 };
 
-using Alignment = std.mem.Alignment;
+const Alignment := std.mem.Alignment;
 
 pub const AllocatorVTable := interface {
     /// Return a pointer to `len` bytes with specified `alignment`, or return
@@ -87,7 +87,7 @@ pub const Allocator := struct {
     /// `ptr` should be the return value of `create`, or otherwise
     /// have the same address and alignment property.
     pub const destroy := fn(self, ptr: auto): void {
-        using T = @TypeOf(ptr);
+        const T := @TypeOf(ptr);
         const raw := @sliceFromPtr(@ptrCast(^mut u8, ptr), @sizeOf(T));
         return self.vtable.free(raw, .of(T));
     };

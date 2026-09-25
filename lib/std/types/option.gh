@@ -27,8 +27,8 @@ test "Option.unwrap_or returns the default when disengaged" {
 }
 
 impl(T: type) builtin.Unwrappable for Option(T) {
-    using Output = T;
-    using Residual = void;
+    const Output := T;
+    const Residual := void;
     pub const branch := fn(self): builtin.Flow(T, void) {
         return match (self) {
             .some => |v| builtin.Flow(T, void){ .@"continue" = v },
@@ -38,7 +38,7 @@ impl(T: type) builtin.Unwrappable for Option(T) {
 }
 
 impl(T: type) builtin.Rewrappable for Option(T) {
-    using From = void;
+    const From := void;
     pub const from_residual := fn(_: void): @This() {
         return .{ .none = {} };
     };

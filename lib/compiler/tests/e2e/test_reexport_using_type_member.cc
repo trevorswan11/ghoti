@@ -13,12 +13,12 @@ using helpers::mock_file;
 
 constexpr std::string_view ENUM_MOD{R"(
     pub const E := enum : u32 { A = 1u32, B = 2u32, C = 7u32, _ };
-    pub using Alias = E;
+    pub const Alias := E;
 )"};
 
 constexpr std::string_view MID_MOD{R"(
     import "enums.gh" as en;
-    pub using Errno = en.E;
+    pub const Errno := en.E;
 )"};
 
 constexpr std::string_view PKG_MOD{R"(
@@ -67,7 +67,7 @@ TEST_CASE("E2E: a local `using` alias of a module resolves `alias.Type.MEMBER`")
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "pkg.gh" as pkg;
-            using x = pkg.en;
+            const x := pkg.en;
             pub const main := fn(): i32 {
                 const e: x.E = x.E.C;
                 return if (e == x.E.C) @intCast(i32, @as(u32, x.E.B)) + 5 else 1;
@@ -84,7 +84,7 @@ TEST_CASE("E2E: `alias.Enum.MEMBER` folds through a generic-union `match` captur
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "pkg.gh" as pkg;
-            using x = pkg.en;
+            const x := pkg.en;
             constexpr Result := fn(T: type, F: type): type { return union { ok: T, err: F }; };
             const g := fn(): Result(i32, x.E) { return .{ .err = x.E.B }; };
             pub const main := fn(): i32 {
@@ -106,7 +106,7 @@ TEST_CASE("E2E: a `using` alias of a cross-module struct resolves its `constexpr
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "agg.gh" as agg;
-            using C = agg.Cfg;
+            const C := agg.Cfg;
             pub const main := fn(): i32 {
                 return C.twice(20) + @as(i32, C.LIMIT) - 60;
             };
@@ -154,7 +154,7 @@ TEST_CASE("E2E: implicit_access against a cross-module aliased enum in match scr
 TEST_CASE("E2E: a re-exported `pub using` alias of a cross-module struct resolves static methods") {
     constexpr std::string_view MID_AGG{R"(
         import "agg.gh" as a;
-        pub using CfgAlias = a.Cfg;
+        pub const CfgAlias := a.Cfg;
     )"};
     const auto                 exit_code{helpers::compile_and_run(
         R"(
@@ -176,7 +176,7 @@ TEST_CASE("E2E: @This()-relative member accessed through a local using alias") {
             const S := struct {
                 pub constexpr CONST: i32 = 7;
                 pub const get_val := fn(): i32 {
-                    using Self = @This();
+                    const Self := @This();
                     return Self.CONST;
                 };
             };
@@ -190,12 +190,12 @@ TEST_CASE("E2E: @This()-relative member accessed through a local using alias") {
 TEST_CASE("E2E: a cross-module using alias of a union constructs and matches payload") {
     constexpr std::string_view UNION_MOD{R"(
         pub const U := union { a: i32, b: bool };
-        pub using AliasU = U;
+        pub const AliasU := U;
     )"};
     const auto                 exit_code{helpers::compile_and_run(
         R"(
             import "un.gh" as umod;
-            using MyU = umod.AliasU;
+            const MyU := umod.AliasU;
             pub const main := fn(): i32 {
                 const u: MyU = .{ .a = 7 };
                 return match (u) {

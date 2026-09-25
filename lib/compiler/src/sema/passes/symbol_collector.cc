@@ -99,6 +99,11 @@ auto symbol_collector::collect_symbols(mod::module& module, context& ctx) -> mod
 MAKE_COLLECTOR_NOOPS(COLLECTOR_NOOP_X)
 #undef COLLECTOR_NOOP_X
 
+auto symbol_collector::visit(ast::node_id, const ast::type_expr& node) -> void {
+    PROFILE_FUNCTION();
+    collect(node.type);
+}
+
 auto symbol_collector::visit(ast::node_id, const ast::array_expr& array) -> void {
     PROFILE_FUNCTION();
     const default_counter::guard g{in_expr_scope_};
@@ -785,15 +790,6 @@ auto symbol_collector::visit(ast::node_id id, const ast::test_stmt& test) -> voi
                         }})};
     last_type_->set_symbol_table_idx(scope_idx);
     collecting_.set_sema_type(id, *last_type_.take());
-}
-
-auto symbol_collector::visit(ast::node_id id, const ast::using_stmt& using_stmt) -> void {
-    PROFILE_FUNCTION();
-    collect(using_stmt.explicit_type);
-    const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(using_stmt.alias)};
-    collecting_.add_identifier_position(using_stmt.alias);
-    if (!try_declare<symbols::node_t>(ident.name, id)) { return; }
-    ctx_.registry.get_from(table_idx_, ident.name).set_kind(symbol_kind::TYPE);
 }
 
 AST_TYPE_VISITOR_NOOP(symbol_collector, identifier_expr)

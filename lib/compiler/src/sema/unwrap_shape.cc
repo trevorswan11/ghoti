@@ -27,7 +27,7 @@ namespace {
 
 } // namespace
 
-// Looks up an associated type alias (`using Output = ...` or `const Output := ...`)
+// Looks up an associated type alias (`const Output := ...`)
 // in the impl's body scope. If the impl is parameterized (`from_parameterized`), any
 // sentinel types are remapped to concrete type arguments.
 auto find_assoc_type_alias(context& ctx, const impl_record& rec, std::string_view name)
@@ -36,11 +36,7 @@ auto find_assoc_type_alias(context& ctx, const impl_record& rec, std::string_vie
         if (const auto bnode{bsym->get_data().as_opt<symbols::node_t>()}) {
             auto&               mod{rec.enclosing ? *rec.enclosing : ctx.modules.builtin_module()};
             stdx::option<type&> result;
-            if (const auto bu{mod.ast.get_as_opt<ast::using_stmt>(*bnode)}) {
-                if (const auto t{mod.get_sema_type_opt(bu->explicit_type)}) {
-                    if (t->is_resolved() && !t->is_poison()) { result.emplace(denoted_type(*t)); }
-                }
-            } else if (const auto bd{mod.ast.get_as_opt<ast::decl_stmt>(*bnode)}; bd && bd->value) {
+            if (const auto bd{mod.ast.get_as_opt<ast::decl_stmt>(*bnode)}; bd && bd->value) {
                 if (const auto t{mod.get_sema_type_opt(*bd->value)}) {
                     if (t->is_resolved() && !t->is_poison()) { result.emplace(denoted_type(*t)); }
                 }

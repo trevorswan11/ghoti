@@ -176,18 +176,6 @@ struct impl_stmt {
         -> stdx::result<stmt_handle, syntax::diagnostic>;
 };
 
-struct using_stmt {
-    identifier_handle alias;
-    explicit_type_id  explicit_type;
-
-    [[nodiscard]] static constexpr auto is_public(ast::node_id id) noexcept -> bool {
-        return id.get_token_type() == syntax::token_type_t::PUBLIC;
-    }
-
-    [[nodiscard]] static auto parse(syntax::parser& parser)
-        -> stdx::result<stmt_handle, syntax::diagnostic>;
-};
-
 } // namespace ast
 
 } // namespace ghoti

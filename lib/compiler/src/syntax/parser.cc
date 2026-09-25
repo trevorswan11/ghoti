@@ -101,8 +101,6 @@ auto parser::consume(ast::AST& ast, ghoti::arena& arena) -> diagnostics {
         stdx::option<ast::identifier_handle> name;
         if (const auto decl{ast.get_as_opt<ast::decl_stmt>(node)}) {
             name.emplace(decl->name);
-        } else if (const auto alias{ast.get_as_opt<ast::using_stmt>(node)}) {
-            name.emplace(alias->alias);
         } else if (const auto import{ast.get_as_opt<ast::import_stmt>(node)}) {
             if (import->alias) { name.emplace(*import->alias); }
         }
@@ -210,7 +208,6 @@ auto parser::parse_statement(semicolon_behavior behavior)
     if (current_token_is(token_type_t::PUBLIC)) {
         switch (peek_token_.type) {
         case token_type_t::IMPORT: return ast::import_stmt::parse(*this);
-        case token_type_t::USING:  return ast::using_stmt::parse(*this);
         default:                   return ast::decl_stmt::parse(*this);
         }
     } else if (current_token_is(token_type_t::CONSTEXPR)) {
@@ -244,7 +241,6 @@ auto parser::parse_statement(semicolon_behavior behavior)
     case token_type_t::IMPORT:      return ast::import_stmt::parse(*this);
     case token_type_t::RETURN:      return ast::return_stmt::parse(*this, behavior);
     case token_type_t::TEST:        return ast::test_stmt::parse(*this);
-    case token_type_t::USING:       return ast::using_stmt::parse(*this);
     default:                        return ast::expr_stmt::parse(*this, behavior);
     }
 }
@@ -381,6 +377,7 @@ constexpr auto PREFIX_FNS = [] -> auto {
     fns[token_type_t::STRUCT]           = ast::struct_expr::parse;
     fns[token_type_t::UNION]            = ast::union_expr::parse;
     fns[token_type_t::INTERFACE]        = ast::interface_expr::parse;
+    fns[token_type_t::DYN]              = ast::type_expr::parse_dyn;
     fns[token_type_t::EXTERN]           = ast::parse_modified_struct_or_union;
     fns[token_type_t::PACKED]           = ast::parse_modified_struct_or_union;
     fns[token_type_t::ENUM]             = ast::enum_expr::parse;
@@ -397,6 +394,13 @@ constexpr auto PREFIX_FNS = [] -> auto {
     }
 
     for (const auto tt : ALL_PRIMITIVES) { fns[tt] = ast::identifier_expr::parse; }
+    // Type keywords with no primitive spelling still name a type value (`const H := ^mut opaque;`)
+    for (const auto tt : {token_type_t::TYPE_TYPE,
+                          token_type_t::AUTO_TYPE,
+                          token_type_t::OPAQUE_TYPE,
+                          token_type_t::NORETURN}) {
+        fns[tt] = ast::identifier_expr::parse;
+    }
     for (const auto tt : builtins::ALL_TOKEN_TYPES) { fns[tt] = ast::identifier_expr::parse; }
     fns[token_type_t::BUILTIN_CFG_VALUE] = ast::cfg_value_expr::parse;
     fns[token_type_t::CONSTEXPR]         = ast::parse_constexpr_expr;

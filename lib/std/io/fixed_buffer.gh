@@ -1,9 +1,9 @@
 //! In-memory stream for system-agnostic testing
 import std;
 
-using Result = std.Result;
+const Result := std.Result;
 
-using io = std.io;
+const io := std.io;
 
 pub const FixedBufferStream := struct {
     pub buf: []mut u8,
@@ -11,7 +11,7 @@ pub const FixedBufferStream := struct {
 };
 
 impl io.Reader for FixedBufferStream {
-    using Error = io.Error;
+    const Error := io.Error;
     pub const read := fn(&mut self, out: []mut u8): Result(usize, Error) {
         const remaining := self.buf.len - self.pos;
         const n := if (out.len < remaining) out.len else remaining;
@@ -23,7 +23,7 @@ impl io.Reader for FixedBufferStream {
 }
 
 impl io.Writer for FixedBufferStream {
-    using Error = io.Error;
+    const Error := io.Error;
     pub const write := fn(&mut self, bytes: []u8): Result(usize, Error) {
         const room := self.buf.len - self.pos;
         if (room == 0 and bytes.len > 0) {
@@ -38,7 +38,7 @@ impl io.Writer for FixedBufferStream {
 }
 
 impl io.Seeker for FixedBufferStream {
-    using Error = io.Error;
+    const Error := io.Error;
     pub const seek := fn(&mut self, offset: i64, whence: io.Whence): Result(i64, Error) {
         const base: i64 = match (whence) {
             .start => 0,

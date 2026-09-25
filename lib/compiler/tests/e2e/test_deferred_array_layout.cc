@@ -11,8 +11,8 @@ namespace {
 
 constexpr std::string_view SIZED{R"(
     constexpr N := 3;
-    pub using Arr = [N]u32;
-    pub using Str = [N:0]u8;
+    pub const Arr := [N]u32;
+    pub const Str := [N:0]u8;
     pub const S := struct { pub d: [N]u64, pub x: u8, };
     pub constexpr Gen := fn(T: type): type { return [N]T; };
 )"};

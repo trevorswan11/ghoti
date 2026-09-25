@@ -56,6 +56,7 @@ constexpr auto NODE_NAMES{stdx::fixed::enum_map<node_kind, std::string_view>::fr
     name_mapping{node_kind::STRUCT_EXPRESSION, "struct"},
     name_mapping{node_kind::UNION_EXPRESSION, "union"},
     name_mapping{node_kind::INTERFACE_EXPRESSION, "interface"},
+    name_mapping{node_kind::TYPE_EXPRESSION, "type"},
     name_mapping{node_kind::WHILE_LOOP_EXPRESSION, "while loop"},
     name_mapping{node_kind::BLOCK_STATEMENT, "statement"},
     name_mapping{node_kind::BREAK_STATEMENT, "statement"},
@@ -68,8 +69,7 @@ constexpr auto NODE_NAMES{stdx::fixed::enum_map<node_kind, std::string_view>::fr
     name_mapping{node_kind::IMPL_STATEMENT, "statement"},
     name_mapping{node_kind::IMPORT_STATEMENT, "statement"},
     name_mapping{node_kind::RETURN_STATEMENT, "statement"},
-    name_mapping{node_kind::TEST_STATEMENT, "statement"},
-    name_mapping{node_kind::USING_STATEMENT, "statement"})};
+    name_mapping{node_kind::TEST_STATEMENT, "statement"})};
 
 } // namespace
 

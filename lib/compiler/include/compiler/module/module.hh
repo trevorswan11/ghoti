@@ -79,6 +79,12 @@ struct dyn_vtable {
     std::vector<std::string> slots;
 };
 
+// Why a `decl_stmt` has no runtime storage
+enum class storageless_kind : u8 {
+    ALIAS,           // Aliases a type or module
+    CONSTEXPR_VALUE, // Value holds types
+};
+
 struct module {
     std::filesystem::path                            path;
     std::filesystem::path                            parent_path;
@@ -116,6 +122,24 @@ struct module {
 
     // Cond discardable `decl_stmt` node index -> the folded truth of the condition
     ankerl::unordered_dense::map<usize, bool> discardable_conditions;
+
+    // `decl_stmt` node index -> whether (and why) it has no runtime storage
+    ankerl::unordered_dense::map<usize, stdx::option<storageless_kind>> storageless_decls;
+
+    [[nodiscard]] auto get_storageless_kind(ast::node_id id) const noexcept
+        -> stdx::option<storageless_kind> {
+        const auto it{storageless_decls.find(id.get_index())};
+        return it != storageless_decls.end() ? it->second : stdx::none;
+    }
+
+    [[nodiscard]] auto is_storageless_decl(ast::node_id id) const noexcept -> bool {
+        return get_storageless_kind(id).has_value();
+    }
+
+    // Every use of a compile-time-only value decl must fold through const_eval
+    [[nodiscard]] auto is_constexpr_value_decl(ast::node_id id) const noexcept -> bool {
+        return get_storageless_kind(id) == storageless_kind::CONSTEXPR_VALUE;
+    }
 
     // Every identifier_expr references and uses encountered during symbol collection/resolution
     std::vector<ast::node_id> identifier_positions;

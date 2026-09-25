@@ -6,9 +6,9 @@
 import std;
 pub import "errno.gh" as errno;
 
-pub using Handle = i32;
-pub using Errno = errno.Errno;
-pub using mode_t = u16; /// matches the darwin backend so `io/file.gh`'s mode literals coerce
+pub const Handle := i32;
+pub const Errno := errno.Errno;
+pub const mode_t := u16; /// matches the darwin backend so `io/file.gh`'s mode literals coerce
 pub constexpr EWOULDBLOCK := errno.EWOULDBLOCK;
 
 // <asm-generic/fcntl.h>
@@ -342,7 +342,7 @@ pub const Statx := extern struct {
     };
 };
 
-pub using Stat = Statx;
+pub const Stat := Statx;
 
 pub constexpr stdin := fn(): R(Handle) {
     return .of(0);

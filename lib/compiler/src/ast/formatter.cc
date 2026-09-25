@@ -277,9 +277,6 @@ auto formatter::is_function_or_aggregate_node(node_id id) const -> bool {
             return true;
         }
     }
-    if (const auto us{ast_.get_as_opt<using_stmt>(id)}) {
-        if (is_aggregate(us->explicit_type)) { return true; }
-    }
     return false;
 }
 
@@ -1264,6 +1261,10 @@ MAKE_VERBATIM_FORMAT(undefined_expr, "undefined")
 MAKE_VERBATIM_FORMAT(nullptr_expr, "nullptr")
 MAKE_VERBATIM_FORMAT(unreachable_expr, "unreachable")
 
+auto formatter::visit(node_id, const type_expr& node) -> syntax::doc_id {
+    return format(node.type);
+}
+
 auto formatter::visit(node_id, const struct_expr& node) -> syntax::doc_id {
     return format_struct(node);
 }
@@ -1571,17 +1572,6 @@ auto formatter::visit(node_id, const impl_stmt& node) -> syntax::doc_id {
     head.emplace_back(force_broken_body(doc_manager_, std::move(entries)));
 
     return doc_manager_.concat(std::move(head));
-}
-
-auto formatter::visit(node_id id, const using_stmt& node) -> syntax::doc_id {
-    return doc_manager_.concat({
-        using_stmt::is_public(id) ? doc_manager_.text("pub ") : doc_manager_.nil(),
-        doc_manager_.text("using "),
-        format(node.alias),
-        doc_manager_.text(" = "),
-        format(node.explicit_type),
-        doc_manager_.text(";"),
-    });
 }
 
 auto formatter::visit(node_id, stdx::monostate) -> syntax::doc_id { return doc_manager_.text("_"); }

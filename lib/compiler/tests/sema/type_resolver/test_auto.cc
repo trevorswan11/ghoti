@@ -111,10 +111,10 @@ TEST_CASE("Illegal auto usage in structural types") {
 
 TEST_CASE("Illegal auto usage in type aliases and function types") {
     SECTION("Type alias cannot be auto") {
-        helpers::test_resolver_fail("using A = auto;",
+        helpers::test_resolver_fail("const A := auto;",
                                     sema::diagnostic{"Type aliases cannot be 'auto'",
                                                      sema::error::ILLEGAL_AUTO_USAGE,
-                                                     std::pair{0UZ, 10UZ}});
+                                                     std::pair{0UZ, 11UZ}});
     }
 
     SECTION("Function pointer type cannot have auto parameter") {
@@ -476,7 +476,7 @@ TEST_CASE("A generic body-local decl's explicit annotation is re-typed per insta
             const f := fn(value: auto, base: u8): auto {
                 constexpr info := @typeInfo(@TypeOf(value)).int;
                 constexpr bits := @max(info.bits, 8u16);
-                using MinInt = @Int(.{ .signedness = .unsigned, .bits = bits });
+                const MinInt := @Int(.{ .signedness = .unsigned, .bits = bits });
                 var a: MinInt = value;
                 const d: MinInt = a % @intCast(MinInt, base);
                 return d;

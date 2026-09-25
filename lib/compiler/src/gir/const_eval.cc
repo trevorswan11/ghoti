@@ -199,7 +199,7 @@ template <typename T>
     }
 }
 
-// Same as `integer_target_width`, but an untyped comptime int operand resolves as `i32`
+// Same as `integer_target_width`, but an untyped constexpr int operand resolves as `i32`
 [[nodiscard]] auto integer_or_constexpr_width(const sema::type& t, u32 ptr_bits)
     -> stdx::option<u16> {
     if (t.get_kind() == sema::type_kind::CONSTEXPR_INT) { return u16{32}; }
@@ -450,12 +450,19 @@ auto const_eval::type_size_of(const sema::type& type, usize ptr_size) -> usize {
     case sema::type_kind::CONSTEXPR_FLOAT: return 8; // materializes as f64
     case sema::type_kind::F80:
     case sema::type_kind::F128:            return 16;
+    case sema::type_kind::POINTER:
+    case sema::type_kind::REFERENCE:       {
+        // `&dyn I` / `^dyn I` is a fat `{ data, vtable }` pair, matching its LLVM lowering
+        const auto        p{type.get_data().as_opt<sema::types::pointer>()};
+        const auto        r{type.get_data().as_opt<sema::types::reference>()};
+        const sema::type* referent{p ? &p->underlying : r ? &r->underlying : nullptr};
+        const bool        is_fat{referent && referent->get_kind() == sema::type_kind::DYN};
+        return is_fat ? 2 * ptr_size : ptr_size;
+    }
     case sema::type_kind::ISIZE:
     case sema::type_kind::USIZE:
-    case sema::type_kind::POINTER:
-    case sema::type_kind::REFERENCE:
-    case sema::type_kind::FUNCTION:        return ptr_size;
-    case sema::type_kind::SLICE:           return 2 * ptr_size;
+    case sema::type_kind::FUNCTION: return ptr_size;
+    case sema::type_kind::SLICE:    return 2 * ptr_size;
     case sema::type_kind::ARRAY:
         if (const auto arr{type.get_data().as_opt<sema::types::array>()}) {
             const auto elem_size{type_size_of(arr->underlying, ptr_size)};
@@ -715,13 +722,23 @@ auto const_eval::force_deferred_call(sema::type& maybe_deferred) -> sema::type& 
     PROFILE_FUNCTION();
     const auto deferred{maybe_deferred.get_data().as_opt<sema::types::deferred_call>()};
     if (!deferred) { return maybe_deferred; }
-    const auto resolved{try_resolve_deferred_call(deferred->call)};
+
+    const auto val{eval_call(ast::node_id::make_invalid(), deferred->call)};
+    if (!val) { return maybe_deferred; }
+
+    // A constructor that folds to a type (`fn(w: bool): type { return i64; }`) is pinned to it
+    if (const auto type_opt{val->as_opt<stdx::option<sema::type&>>()}; type_opt && *type_opt) {
+        return sema::denoted_type(**type_opt);
+    }
+
+    // Otherwise only an aggregate result needs to be pinned early
+    const auto resolved{val->get_type()};
     if (!resolved) { return maybe_deferred; }
-    // Only an aggregate result needs to be pinned early
-    switch (resolved->get_kind()) {
+    auto& denoted{sema::denoted_type(*resolved)};
+    switch (denoted.get_kind()) {
     case sema::type_kind::STRUCT:
     case sema::type_kind::UNION:
-    case sema::type_kind::ENUM:   return *resolved;
+    case sema::type_kind::ENUM:   return denoted;
     default:                      return maybe_deferred;
     }
 }
@@ -955,6 +972,12 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
             }
             return stdx::none;
         },
+        [&](const ast::type_expr&) -> stdx::option<const_value> {
+            if (const auto sema_type{module_->get_sema_type_opt(id)}) {
+                return const_value{*sema_type};
+            }
+            return stdx::none;
+        },
         [&](const ast::array_expr& data) { return eval_array(id, data); },
         [&](const ast::index_expr& data) { return eval_index(id, data); },
         [&](const ast::initializer_expr& data) { return eval_initializer(id, data); },
@@ -1039,6 +1062,11 @@ auto const_eval::eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::opt
     }
 
     const auto rhs_val{try_eval(rhs)};
+    // `^f` of a function is `f`'s own code address
+    if (rhs_val && rhs_val->is<std::string>() && rhs_val->get_type() &&
+        rhs_val->get_type()->get_kind() == sema::type_kind::FUNCTION) {
+        return rhs_val;
+    }
     if (rhs_val && rhs_val->is<stdx::option<sema::type&>>()) {
         const auto& t_opt{rhs_val->as<stdx::option<sema::type&>>()};
         if (t_opt) {
@@ -2004,17 +2032,6 @@ auto const_eval::resolve_module_chain(ast::node_id node) -> stdx::option<mod::mo
             if (!m_data) { return stdx::none; }
             return m_data->imported;
         }
-        if (const auto snode{sym->get_data().as_opt<sema::symbols::node_t>()}) {
-            if (const auto using_stmt{module_->ast.get_as_opt<ast::using_stmt>(*snode)}) {
-                auto aliased{module_->get_sema_type_opt(using_stmt->explicit_type)};
-                if (!aliased) { aliased = module_->get_sema_type_opt(*snode); }
-                if (aliased) {
-                    if (const auto m_data{aliased->get_data().as_opt<sema::types::module>()}) {
-                        return m_data->imported;
-                    }
-                }
-            }
-        }
         return stdx::none;
     }
 
@@ -2043,21 +2060,28 @@ auto const_eval::resolve_module_chain(ast::node_id node) -> stdx::option<mod::mo
             if (!m_data) { return stdx::none; }
             return m_data->imported;
         }
-        if (const auto snode{sym->get_data().as_opt<sema::symbols::node_t>()}) {
-            if (const auto using_stmt{outer_mod->ast.get_as_opt<ast::using_stmt>(*snode)}) {
-                auto aliased{outer_mod->get_sema_type_opt(using_stmt->explicit_type)};
-                if (!aliased) { aliased = outer_mod->get_sema_type_opt(*snode); }
-                if (aliased) {
-                    if (const auto m_data{aliased->get_data().as_opt<sema::types::module>()}) {
-                        return m_data->imported;
-                    }
-                }
-            }
-        }
         return stdx::none;
     }
 
     return stdx::none;
+}
+
+auto const_eval::alias_decl_type(const mod::module&    mod,
+                                 ast::node_id          node,
+                                 const ast::decl_stmt& decl) -> stdx::option<sema::type&> {
+    if (decl.explicit_type || mod.get_storageless_kind(node) != mod::storageless_kind::ALIAS) {
+        return stdx::none;
+    }
+    const auto sema_type{mod.get_sema_type_opt(node)};
+    if (!sema_type) { return stdx::none; }
+    // A bare `type` (e.g. `info.return_type`) only names the type once folded, and a module alias
+    // is not a type at all
+    if (sema_type->get_kind() == sema::type_kind::MODULE) { return stdx::none; }
+    if (sema_type->get_kind() == sema::type_kind::TYPE &&
+        !sema_type->get_data().is<sema::types::meta_type>()) {
+        return stdx::none;
+    }
+    return sema::denoted_type(*sema_type);
 }
 
 auto const_eval::eval_module_member(mod::module& target_mod, std::string_view member)
@@ -2071,16 +2095,13 @@ auto const_eval::eval_module_member(mod::module& target_mod, std::string_view me
     const auto node{sym->get_data().as_opt<sema::symbols::node_t>()};
     if (!node) { return stdx::none; }
 
-    if (const auto using_stmt{target_mod.ast.get_as_opt<ast::using_stmt>(*node)}) {
-        // Yield the aliased type so `mod::Alias.MEMBER` can resolve through it
-        if (const auto aliased{target_mod.get_sema_type_opt(using_stmt->explicit_type)}) {
-            return const_value{*aliased};
-        }
-        return stdx::none;
-    }
-
     const auto decl{target_mod.ast.get_as_opt<ast::decl_stmt>(*node)};
     if (!decl || !decl->value) { return stdx::none; }
+
+    // Yield the aliased type so `mod.Alias.MEMBER` can resolve through it
+    if (const auto aliased{alias_decl_type(target_mod, *node, *decl)}) {
+        return const_value{*aliased};
+    }
 
     // A plain cross-module function decays to a value naming its GIR symbol
     if (target_mod.ast.get_as_opt<ast::function_expr>(*decl->value)) {
@@ -2407,7 +2428,7 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
             op_type, to_f64(lhs), to_f64(rhs), res_type, bool_type, on_div_zero);
     }
 
-    // A wide (128-bit) operand pulls the whole operation into the 128-bit comptime domain.
+    // A wide (128-bit) operand pulls the whole operation into the 128-bit constexpr domain.
     if ((is_wide_arm(lhs) || is_wide_arm(rhs)) && (is_wide_arm(lhs) || is_narrow_int(lhs)) &&
         (is_wide_arm(rhs) || is_narrow_int(rhs))) {
         const auto res_type{lhs.get_type() ? lhs.get_type() : rhs.get_type()};
@@ -2711,14 +2732,6 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
             return const_value{builtin_sym->get_type()};
         }
         if (const auto node{sym.get_data().as_opt<sema::symbols::node_t>()}) {
-            if (const auto using_stmt{module_->ast.get_as_opt<ast::using_stmt>(*node)}) {
-                if (const auto sema_type{module_->get_sema_type_opt(using_stmt->explicit_type)}) {
-                    return const_value{*sema_type};
-                }
-                if (const auto sema_type{module_->get_sema_type_opt(*node)}) {
-                    return const_value{*sema_type};
-                }
-            }
             if (const auto decl{module_->ast.get_as_opt<ast::decl_stmt>(*node)}) {
                 if (decl->value) {
                     const auto& node_data{module_->ast[*decl->value]};
@@ -2727,6 +2740,9 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
                         if (const auto sema_type{module_->get_sema_type_opt(*decl->value)}) {
                             return const_value{*sema_type};
                         }
+                    }
+                    if (const auto aliased{alias_decl_type(*module_, *node, *decl)}) {
+                        return const_value{*aliased};
                     }
                     return try_eval(*decl->value);
                 }
@@ -2804,6 +2820,20 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
             (decl->has_modifier(ast::decl_modifiers::CONSTEXPR) ||
              decl->has_modifier(ast::decl_modifiers::CONSTANT))) {
             if (const auto fn_expr{callee_mod->ast.get_as_opt<ast::function_expr>(*decl->value)}) {
+                // Outside any const-evaluated body, a constructor call's own node already holds
+                // this instantiation's aggregate
+                if (id.is_valid() && call_stack_.size() <= 1 &&
+                    fn_expr->explicit_return_type.get_token_type() ==
+                        syntax::token_type_t::TYPE_TYPE) {
+                    if (const auto built{module_->get_sema_type_opt(id)}) {
+                        const auto kind{built->get_kind()};
+                        if (kind == sema::type_kind::STRUCT || kind == sema::type_kind::UNION ||
+                            kind == sema::type_kind::ENUM) {
+                            return const_value{*built};
+                        }
+                    }
+                }
+
                 std::vector<const_value> args;
                 for (const auto& arg : call.arguments) {
                     if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {

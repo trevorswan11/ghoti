@@ -279,7 +279,12 @@ auto type_resolver::visit(ast::node_id id, const ast::array_expr& array) -> void
     auto& item_type{*item_slot};
     if (item_type.is_resolved() && item_type.get_kind() != type_kind::AUTO) {
         const structural_guard g{implicit_type_stack_, item_type};
-        for (const auto& item : array.items) { resolve(item); }
+        for (const auto& item : array.items) {
+            resolve(item);
+            if (reject_type_as_value(item, item_type)) {
+                return resolving_.set_sema_type(id, *last_type_);
+            }
+        }
     } else {
         for (const auto& item : array.items) { resolve(item); }
     }
@@ -1847,7 +1852,7 @@ template <ast::IndexableID ID>
                                      get_call_arg_location(call.arguments[0]));
             }
 
-            // A comptime-known-false condition is a compile error at the call site.
+            // A constexpr-known-false condition is a compile error at the call site.
             if (const auto cv{evaluator.try_eval(*cond_expr)}) {
                 bool is_false{false};
                 if (const auto b{cv->as_opt<bool>()}) {
@@ -3185,8 +3190,14 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 g.emplace(implicit_type_stack_, *function_type->params[i + param_offset]);
             }
             const auto& arg{call.arguments[expanded.source_index[i]]};
-            any_arg_poison |= arg.visit([this](auto arg_id) -> bool {
+            any_arg_poison |= arg.visit([&](auto arg_id) -> bool {
                 resolve(arg_id);
+                if constexpr (std::same_as<decltype(arg_id), ast::expr_handle>) {
+                    if (i < expected_arity && !last_type_->is_poison() &&
+                        reject_type_as_value(arg_id, *function_type->params[i + param_offset])) {
+                        return true;
+                    }
+                }
                 return last_type_.take()->is_poison();
             });
         }
@@ -4088,10 +4099,6 @@ namespace {
         if ((!mod || (!mod->is_ptr() && !mod->is_ref())) && !is_agg) { return stdx::none; }
         return target_mod.get_sema_type_opt(*decl->value);
     }
-
-    if (const auto alias{target_mod.ast.get_as_opt<ast::using_stmt>(*node)}) {
-        return target_mod.get_sema_type_opt(alias->explicit_type);
-    }
     return stdx::none;
 }
 
@@ -4635,6 +4642,29 @@ auto type_resolver::resolve_pack_index(ast::node_id id, const ast::index_expr& i
     last_type_.emplace(elem_type);
 }
 
+template <typename Eval>
+auto type_resolver::fold_type_read(const type& object_type, type& read_type, Eval&& eval) -> type& {
+    const auto& read_data{read_type.get_data()};
+    if (read_type.get_kind() != type_kind::TYPE || read_data.is<types::meta_type>() ||
+        read_data.is<types::deferred_call>() || read_data.is<types::deferred_array>()) {
+        return read_type;
+    }
+    const auto* object{&object_type};
+    if (const auto ref{object->get_data().as_opt<types::reference>()}) {
+        object = &ref->underlying;
+    }
+    if (!is_constexpr_aggregate(*object)) { return read_type; }
+
+    gir::const_eval evaluator{ctx_, resolving_};
+    const auto      cv{std::forward<Eval>(eval)(evaluator)};
+    const auto      folded{cv ? cv->template as_opt<stdx::option<type&>>() : stdx::none};
+    if (!folded || !*folded) { return read_type; }
+    auto& instance{**folded};
+    auto  meta{ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, instance}]};
+    meta->template resolve_if<types::meta_type>(instance);
+    return *meta;
+}
+
 auto type_resolver::visit(ast::node_id id, const ast::index_expr& index) -> void {
     PROFILE_FUNCTION();
     if (current_pack_) {
@@ -4723,7 +4753,8 @@ auto type_resolver::visit(ast::node_id id, const ast::index_expr& index) -> void
         last_type_.emplace(single_item_type);
     }
 
-    auto& result_type{*last_type_.take()};
+    auto& result_type{fold_type_read(
+        *target_type, *last_type_.take(), [&](gir::const_eval& ev) { return ev.try_eval(id); })};
     resolving_.set_sema_type(id, result_type);
     last_type_.emplace(result_type);
 }
@@ -4802,6 +4833,9 @@ auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -
     {
         const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(lhs_type)};
         TRY_RESOLVE(assign.rhs);
+    }
+    if (reject_type_as_value(assign.rhs, lhs_type)) {
+        return resolving_.set_sema_type(id, *last_type_);
     }
     auto& rhs_type{*last_type_};
 
@@ -5369,8 +5403,18 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
     // An ordinary `Color := enum {...}` names its `enum_t` directly, never wrapped
     auto& object_type{denoted_type(*last_type_.take())};
 
+    const auto unwrap_ref = [](type& t) -> type& {
+        if (const auto p{t.get_data().as_opt<types::pointer>()}) { return p->underlying; }
+        if (const auto r{t.get_data().as_opt<types::reference>()}) { return r->underlying; }
+        return t;
+    };
+    auto&      unwrapped_obj{unwrap_ref(object_type)};
+    const bool is_array_or_slice{unwrapped_obj.get_kind() == type_kind::ARRAY ||
+                                 unwrapped_obj.get_kind() == type_kind::SLICE ||
+                                 unwrapped_obj.get_data().template is<types::deferred_array>()};
+
     // Desugared to auto and needs to be deferred like the call handler
-    if (is_generic_type(object_type)) {
+    if (!is_array_or_slice && is_generic_type(object_type)) {
         auto& placeholder{*ctx_.pool[{type_kind::AUTO, types::mut::CONSTANT}]};
         resolving_.set_sema_type(dot.member, placeholder);
         resolving_.set_sema_type(id, placeholder);
@@ -5504,13 +5548,7 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
         return last_type_.emplace(member_type);
     }
 
-    const auto unwrap_ref = [](type& t) -> type& {
-        if (const auto p{t.get_data().as_opt<types::pointer>()}) { return p->underlying; }
-        if (const auto r{t.get_data().as_opt<types::reference>()}) { return r->underlying; }
-        return t;
-    };
-
-    if (object_type.get_kind() == type_kind::SLICE ||
+    if (object_type.get_kind() == type_kind::SLICE || object_type.get_kind() == type_kind::ARRAY ||
         unwrap_ref(object_type).get_kind() == type_kind::INTERFACE) {
         auto& member_type{**result};
         resolving_.set_sema_type(dot.member, member_type);
@@ -5575,7 +5613,16 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
     if (!access_ok) { return; }
 
     // The structural resolver returns poisoned types in error conditions which can be bubbled here
-    auto& member_type{*result.value()};
+    auto& member_type{fold_type_read(
+        object_type, *result.value(), [&](gir::const_eval& ev) -> stdx::option<gir::const_value> {
+            const auto object{ev.try_eval(dot.object)};
+            const auto st{object ? object->as_opt<gir::const_struct>() : stdx::none};
+            if (!st) { return stdx::none; }
+            const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(dot.member)};
+            return st->get_field_opt(member_ident.name).transform([](const auto& f) {
+                return gir::const_value{f};
+            });
+        })};
     if constexpr (std::same_as<ID, ast::node_id>) {
         if (!member_type.is_poison()) { record_member_owner(id, object_type, dot.member); }
     }
@@ -5748,7 +5795,7 @@ auto type_resolver::visit(ast::node_id id, const ast::initializer_expr& init) ->
 
     if (object_type_opt->get_data().is<types::deferred_call>()) {
         gir::const_eval evaluator{ctx_, resolving_};
-        object_type_opt.emplace(evaluator.force_deferred_call(*object_type_opt));
+        object_type_opt.emplace(denoted_type(evaluator.force_deferred_call(*object_type_opt)));
     }
 
     type& object_type{*object_type_opt};
@@ -5793,6 +5840,9 @@ auto type_resolver::visit(ast::node_id id, const ast::initializer_expr& init) ->
         for (const auto& entry : init.initializers) {
             const structural_guard g{implicit_type_stack_, arr_data->underlying};
             TRY_RESOLVE(entry.value);
+            if (reject_type_as_value(entry.value, arr_data->underlying)) {
+                return resolving_.set_sema_type(id, *last_type_);
+            }
         }
         resolving_.set_sema_type(id, *array_object);
         return last_type_.emplace(*array_object);
@@ -5861,6 +5911,9 @@ auto type_resolver::visit(ast::node_id id, const ast::initializer_expr& init) ->
         {
             const structural_guard g{implicit_type_stack_, member_type};
             TRY_RESOLVE(value);
+        }
+        if (reject_type_as_value(value, member_type)) {
+            return resolving_.set_sema_type(id, *last_type_);
         }
     }
 
@@ -6723,35 +6776,44 @@ namespace {
                                          const symbol_table_stack* tables = nullptr) -> bool {
     // 1. Explicit sema type denoting a compile-time type
     if (const auto ty{mod.get_sema_type_opt(id)}) {
-        if (ty->get_kind() == type_kind::TYPE) { return true; }
+        // A not-yet-folded `[n]T` value shares the `type` kind but is not a type
+        if (ty->get_kind() == type_kind::TYPE && !ty->get_data().is<types::deferred_array>()) {
+            return true;
+        }
     }
-    // 2. Identifier representing a primitive type, keyword type, or type symbol
+    // 2. Identifier representing a type symbol, primitive type, or keyword type
     if (const auto ident{mod.ast.get_as_opt<ast::identifier_expr>(id)}) {
+        // A symbol still being resolved has no kind yet
+        const auto is_type_sym{[](const symbol& sym) {
+            return sym.has_kind() && sym.get_kind() == symbol_kind::TYPE;
+        }};
+        // A user binding spelled like a primitive (`@"i32"`) names that binding
+        if (tables) {
+            if (const auto sym{ctx.registry.lookup_with_depth(*tables, ident->name)}) {
+                return is_type_sym(sym->symbol);
+            }
+        }
         if (syntax::token_type::is_int_type_lexeme(ident->name) ||
             syntax::token_type::is_primitive(id.get_token_type()) ||
             id.get_token_type() == syntax::token_type_t::TYPE_TYPE) {
             return true;
         }
-        if (tables) {
-            if (const auto sym{ctx.registry.lookup_with_depth(*tables, ident->name)}) {
-                if (sym->symbol.get_kind() == symbol_kind::TYPE) { return true; }
-            }
-        }
         if (mod.root_table_idx) {
             if (const auto sym{ctx.registry.get_from_opt(*mod.root_table_idx, ident->name)}) {
-                if (sym->get_kind() == symbol_kind::TYPE) { return true; }
+                if (is_type_sym(*sym)) { return true; }
             }
         }
         if (ctx.prelude_index) {
             if (const auto b{ctx.registry.get_from_opt(*ctx.prelude_index, ident->name)}) {
-                if (b->get_kind() == symbol_kind::TYPE) { return true; }
+                if (is_type_sym(*b)) { return true; }
             }
         }
     }
-    // 3. Array type expression like `[]i32` or `[4]i32`
+    // 3. Array type expression like `[]i32` or `[4]i32`, or a type spelled only as one (`dyn I`)
     if (const auto arr{mod.ast.get_as_opt<ast::array_expr>(id)}) {
         if (arr->is_type_expr) { return true; }
     }
+    if (mod.ast.get_as_opt<ast::type_expr>(id)) { return true; }
     // 4. Recursive traversal for composite pointer/reference type expressions (e.g. `^mut ^i32`)
     if (const auto adr{mod.ast.get_as_opt<ast::address_of_expr>(id)}) {
         return is_type_denoting_expr(ctx, mod, adr->rhs, tables);
@@ -6764,11 +6826,75 @@ namespace {
 
 } // namespace
 
+auto type_resolver::decl_value_denotes_type(ast::expr_handle value) const -> bool {
+    if (value.any<ast::struct_expr, ast::union_expr, ast::enum_expr, ast::interface_expr>()) {
+        return true;
+    }
+    if (is_type_denoting_expr(ctx_, resolving_, value, &table_stack_)) { return true; }
+
+    // `Ctor(T)` / `@Int(...)`: a call to anything whose declared result is `type`
+    if (const auto call{resolving_.ast.get_as_opt<ast::call_expr>(value)}) {
+        const auto callee{resolving_.get_sema_type_opt(call->function)};
+        if (!callee) { return false; }
+        // A generic's declared return may be a `T: type` parameter standing in for a value type,
+        // so only a literal `: type` annotation marks a constructor
+        if (const auto generic{ctx_.generic_functions.get_opt(*callee)}) {
+            return generic->fn_expr->explicit_return_type.get_token_type() ==
+                   syntax::token_type_t::TYPE_TYPE;
+        }
+        if (const auto fn{callee->get_data().as_opt<types::function>()}) {
+            // A `[n]T` return is a (not yet folded) array value, not a type
+            return fn->return_type.get_kind() == type_kind::TYPE &&
+                   !fn->return_type.get_data().is<types::deferred_array>();
+        }
+        if (const auto builtin{callee->get_data().as_opt<types::builtin_function>()}) {
+            return builtin->return_type.get_kind() == type_kind::TYPE;
+        }
+        return false;
+    }
+
+    // `mod.Type` / `Outer.Inner`
+    if (const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(value)}) {
+        const auto* sym{dot_member_symbol(*dot)};
+        return sym && sym->has_kind() && sym->get_kind() == symbol_kind::TYPE;
+    }
+    return false;
+}
+
+auto type_resolver::reject_type_as_value(ast::expr_handle value, const type& expected) -> bool {
+    // A `type`, `auto`, or generic slot legitimately takes a type, and a not-yet-folded `[N]T`
+    // slot shares the `type` kind
+    if (!expected.is_resolved() || expected.is_poison() || is_generic_type(expected) ||
+        expected.get_kind() == type_kind::TYPE) {
+        return false;
+    }
+    const auto value_type{resolving_.get_sema_type_opt(value)};
+    if (!value_type || value_type->is_poison()) { return false; }
+    // A bare `type` (or a generic template's placeholder) can't say whether it names a type yet
+    if (value_type->get_kind() == type_kind::TYPE &&
+        !value_type->get_data().is<types::meta_type>() &&
+        !value_type->get_data().is<types::deferred_call>()) {
+        return false;
+    }
+    if (!decl_value_denotes_type(value)) { return false; }
+
+    last_type_.emplace(
+        ctx_.poison_node(resolving_,
+                         value,
+                         fmt::format("Expected a value of type '{}', but found the type '{}'",
+                                     ctx_.type_display_name(expected),
+                                     ctx_.type_display_name(denoted_type(*value_type))),
+                         error::TYPE_USED_AS_VALUE,
+                         resolving_.ast.location_of(value)));
+    return true;
+}
+
 auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> void {
     PROFILE_FUNCTION();
     {
         const mutating_context_guard g{in_mutating_context_,
                                        ref_addr_of_is_mutable(id) == types::mut::MUTABLE};
+        const mutating_context_guard dyn_g{dyn_is_referent_, ref.rhs.is<ast::type_expr>()};
         TRY_RESOLVE(ref.rhs);
     }
     auto& rhs_type{*last_type_.take()};
@@ -6815,8 +6941,9 @@ auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> vo
                              resolving_.ast.location_of(id)));
     }
 
-    auto& new_type{ctx_.get_reference(ref_addr_of_is_mutable(id), rhs_type)};
-    new_type.resolve<types::reference>(rhs_type);
+    auto& referent{denoted_type(rhs_type)};
+    auto& new_type{ctx_.get_reference(ref_addr_of_is_mutable(id), referent)};
+    new_type.resolve<types::reference>(referent);
 
     resolving_.set_sema_type(id, new_type);
     last_type_.emplace(new_type);
@@ -6857,6 +6984,7 @@ auto type_resolver::visit(ast::node_id id, const ast::address_of_expr& adr_of) -
     {
         const mutating_context_guard g{in_mutating_context_,
                                        ref_addr_of_is_mutable(id) == types::mut::MUTABLE};
+        const mutating_context_guard dyn_g{dyn_is_referent_, adr_of.rhs.is<ast::type_expr>()};
         TRY_RESOLVE(adr_of.rhs);
     }
     auto& rhs_type{*last_type_.take()};
@@ -6892,7 +7020,8 @@ auto type_resolver::visit(ast::node_id id, const ast::address_of_expr& adr_of) -
             resolving_.ast.location_of(id)));
     }
 
-    gsl::not_null<type*> pointee{&rhs_type};
+    // `^@TypeOf(x)` / `^fn(...): T` point at the type the operand denotes, never at a `type` value
+    gsl::not_null<type*> pointee{&denoted_type(rhs_type)};
     if (const auto ref{rhs_type.get_data().as_opt<types::reference>()}) {
         pointee = &ref->underlying;
     }
@@ -7196,45 +7325,25 @@ MAKE_PRIMITIVE_RESOLVER(undefined_expr, UNDEFINED)
 MAKE_PRIMITIVE_RESOLVER(nullptr_expr, NULLPTR)
 MAKE_PRIMITIVE_RESOLVER(unreachable_expr, NORETURN)
 
-auto type_resolver::using_rhs_value_name(ast::explicit_type_id rhs) const
-    -> stdx::option<std::string_view> {
-    const auto is_value_sym{[](const sema::symbol& sym) -> bool {
-        return sym.has_kind() && sym.get_kind() == symbol_kind::VALUE;
-    }};
+auto type_resolver::visit(ast::node_id id, const ast::type_expr& node) -> void {
+    PROFILE_FUNCTION();
+    TRY_RESOLVE(node.type);
+    resolving_.set_sema_type(id, *last_type_);
+}
 
-    return resolving_.ast[rhs].visit(
-        [&](const ast::identifier_expr& e) -> stdx::option<std::string_view> {
-            if (syntax::token_type::is_int_type_lexeme(e.name)) { return stdx::none; }
-            if (const auto sym{ctx_.registry.lookup(table_stack_, e.name)};
-                sym && is_value_sym(*sym)) {
-                return e.name;
-            }
-            return stdx::none;
-        },
-        [&](const ast::dot_expr& e) -> stdx::option<std::string_view> {
-            const auto obj_type{resolving_.get_sema_type_opt(e.object)};
-            if (!obj_type) { return stdx::none; }
-            if (const auto mod_data{obj_type->get_data().as_opt<types::module>()}) {
-                if (!mod_data->imported.root_table_idx) { return stdx::none; }
-                const auto& member{resolving_.ast.get_as<ast::identifier_expr>(e.member)};
-                if (const auto sym{ctx_.registry.get_from_opt(*mod_data->imported.root_table_idx,
-                                                              member.name)};
-                    sym && is_value_sym(*sym)) {
-                    return member.name;
-                }
-                return stdx::none;
-            }
-            auto&      denoted{denoted_type(*obj_type)};
-            const auto tbl{denoted.get_symbol_table_idx_opt()};
-            if (!tbl) { return stdx::none; }
-            const auto& member{resolving_.ast.get_as<ast::identifier_expr>(e.member)};
-            if (const auto sym{ctx_.registry.get_from_opt(*tbl, member.name)};
-                sym && is_value_sym(*sym)) {
-                return member.name;
-            }
-            return stdx::none;
-        },
-        [](const auto&) -> stdx::option<std::string_view> { return stdx::none; });
+auto type_resolver::dot_member_symbol(const ast::dot_expr& dot) const -> const symbol* {
+    const auto obj_type{resolving_.get_sema_type_opt(dot.object)};
+    if (!obj_type) { return nullptr; }
+    const auto& member{resolving_.ast.get_as<ast::identifier_expr>(dot.member)};
+    if (const auto mod_data{obj_type->get_data().as_opt<types::module>()}) {
+        if (!mod_data->imported.root_table_idx) { return nullptr; }
+        const auto sym{ctx_.registry.get_from_opt(*mod_data->imported.root_table_idx, member.name)};
+        return sym ? &*sym : nullptr;
+    }
+    const auto tbl{denoted_type(*obj_type).get_symbol_table_idx_opt()};
+    if (!tbl) { return nullptr; }
+    const auto sym{ctx_.registry.get_from_opt(*tbl, member.name)};
+    return sym ? &*sym : nullptr;
 }
 
 namespace {
@@ -7368,7 +7477,8 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
 
         sym->set_status(symbol_status::RESOLVING);
         TRY_RESOLVE(field.explicit_type);
-        auto* field_type{last_type_.take()};
+        // `f: @TypeOf(g)` / `f: FnAlias` stores the denoted type, not a `type` value
+        auto* field_type{&denoted_type(*last_type_.take())};
 
         if (field_type->get_kind() == type_kind::AUTO) {
             if (!field.default_value) {
@@ -7528,7 +7638,7 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
 
         sym->set_status(symbol_status::RESOLVING);
         TRY_RESOLVE(field.explicit_type);
-        auto& field_type{*last_type_.take()};
+        auto& field_type{denoted_type(*last_type_.take())};
 
         if (field_type.get_kind() == type_kind::AUTO) {
             return last_type_.emplace(ctx_.poison_node(
@@ -7918,7 +8028,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                ctx_.generic_functions.get_opt(*existing).has_value();
     }()};
     // An explicit annotation is re-resolved too, since it may name a generic parameter
-    // (`var a: T`, `var a: @TypeOf(value)`, a `using` alias built from either)
+    // (`var a: T`, `var a: @TypeOf(value)`, a type alias built from either)
     const bool reresolve_local{
         !value_is_deferred_generic_method && for_generic_instantiation_ && reresolve_floor_ && [&] {
             const auto lt{ctx_.registry.lookup_with_table(table_stack_, ident.name)};
@@ -7970,7 +8080,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             if (explicit_type_p->get_data().is<types::deferred_call>()) {
                 const auto& dc_call{explicit_type_p->get_data().as<types::deferred_call>().call};
                 gir::const_eval evaluator{ctx_, resolving_};
-                explicit_type_p = &evaluator.force_deferred_call(*explicit_type_p);
+                explicit_type_p = &denoted_type(evaluator.force_deferred_call(*explicit_type_p));
                 register_non_generic_type_ctor_members(*explicit_type_p, dc_call);
             }
             auto& explicit_type{*explicit_type_p};
@@ -8013,7 +8123,33 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
         if (decl.value) {
             resolve(*decl.value);
             if (last_type_->is_poison()) { return poison_out(); }
-            auto& decl_value_type{*last_type_.take()};
+            if (annotation_typed_decl &&
+                reject_type_as_value(*decl.value, resolving_.get_sema_type(id))) {
+                return poison_out();
+            }
+            if (decl.value->is<ast::identifier_expr>() &&
+                (*decl.value)->get_token_type() == syntax::token_type_t::AUTO_TYPE) {
+                last_type_.emplace(ctx_.poison_node(resolving_,
+                                                    id,
+                                                    "Type aliases cannot be 'auto'",
+                                                    error::ILLEGAL_AUTO_USAGE,
+                                                    resolving_.ast.location_of(*decl.value)));
+                return poison_out();
+            }
+            auto* decl_value_type_p{&*last_type_.take()};
+            // `const X := MakesAType()`: fold the constructor now, exactly like an annotation
+            if (decl_value_type_p->get_data().is<types::deferred_call>()) {
+                const auto& dc_call{decl_value_type_p->get_data().as<types::deferred_call>().call};
+                gir::const_eval evaluator{ctx_, resolving_};
+                decl_value_type_p =
+                    &denoted_type(evaluator.force_deferred_call(*decl_value_type_p));
+                if (decl_value_type_p->is_poison()) {
+                    last_type_.emplace(*decl_value_type_p);
+                    return poison_out();
+                }
+                register_non_generic_type_ctor_members(*decl_value_type_p, dc_call);
+            }
+            auto& decl_value_type{*decl_value_type_p};
             auto& normalized_val_type{
                 decl.explicit_type ? decl_value_type : *ctx_.pool.strip_volatile(decl_value_type)};
             if (reresolve_local && !annotation_typed_decl) {
@@ -8111,10 +8247,30 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
 
         const bool literal_type_anno{decl.explicit_type && decl.explicit_type->get_token_type() ==
                                                                syntax::token_type_t::TYPE_TYPE};
-        if (decl.has_modifier(ast::decl_modifiers::VARIABLE) && literal_type_anno) {
+        const bool binds_type{decl.value && decl_value_denotes_type(*decl.value)};
+        if (decl.has_modifier(ast::decl_modifiers::VARIABLE) && (literal_type_anno || binds_type)) {
             ctx_.poison_symbol(sym,
                                "a 'type' value cannot be stored in a mutable ('var') binding; "
-                               "use 'const', 'constexpr', or 'using' instead",
+                               "use 'const' or 'constexpr' instead",
+                               error::MUTABLE_TYPE_BINDING,
+                               resolving_.ast.location_of(id));
+            resolving_.set_sema_type(decl.name, ctx_.get_poison());
+            return last_type_.emplace(ctx_.poison_node(resolving_, id));
+        }
+
+        const bool aggregate_literal{
+            decl.value &&
+            decl.value
+                ->any<ast::struct_expr, ast::union_expr, ast::enum_expr, ast::interface_expr>()};
+        const bool constexpr_value{!binds_type && !aggregate_literal &&
+                                   is_constexpr_aggregate(resolved_type)};
+        if (constexpr_value && decl.has_modifier(ast::decl_modifiers::VARIABLE) &&
+            !decl.has_modifier(ast::decl_modifiers::CONSTEXPR)) {
+            ctx_.poison_symbol(sym,
+                               fmt::format("a value of type '{}' holds 'type's and only exists at "
+                                           "compile time, so it cannot be stored in a mutable "
+                                           "('var') binding; use 'const' or 'constexpr' instead",
+                                           ctx_.type_display_name(resolved_type)),
                                error::MUTABLE_TYPE_BINDING,
                                resolving_.ast.location_of(id));
             resolving_.set_sema_type(decl.name, ctx_.get_poison());
@@ -8123,7 +8279,10 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
 
         // `reresolve_local` re-derives this decl's kind fresh even if a stale pass over this same
         // generic instantiation already set it
-        if (!sym.has_kind() || reresolve_local) {
+        if (binds_type && !type_data.is<types::module>()) {
+            // A type alias is a type even when its value is spelled like a callable (`fn(...): T`)
+            sym.set_kind(symbol_kind::TYPE);
+        } else if (!sym.has_kind() || reresolve_local) {
             if (type_data.is<types::builtin_function>() || type_data.is<types::function>()) {
                 sym.set_kind(symbol_kind::CALLABLE);
             } else if (resolved_type == ctx_.get_builtin_resolved_type(type_kind::TYPE)) {
@@ -8134,6 +8293,20 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                 sym.set_kind(symbol_kind::VALUE);
             }
         }
+
+        // Aliases of an existing or constructed type have no storage; aggregate literals keep
+        // their own member emission path
+        using storageless_kind = mod::storageless_kind;
+        const auto storageless{[&] -> stdx::option<storageless_kind> {
+            if ((binds_type && !aggregate_literal) || type_data.is<types::module>()) {
+                return storageless_kind::ALIAS;
+            }
+            if (constexpr_value && !decl.has_modifier(ast::decl_modifiers::VARIABLE)) {
+                return storageless_kind::CONSTEXPR_VALUE;
+            }
+            return stdx::none;
+        }()};
+        resolving_.storageless_decls.insert_or_assign(id.get_index(), storageless);
 
         if (type_data.is<types::function>()) {
             const auto& decl_ident{resolving_.ast.get_as<ast::identifier_expr>(decl.name)};
@@ -8793,6 +8966,10 @@ auto type_resolver::visit(ast::node_id id, const ast::return_stmt& return_stmt) 
         }
 
         TRY_RESOLVE(*return_stmt.expression);
+        if (!return_trackers_.empty() && return_trackers_.back().expected_type &&
+            reject_type_as_value(*return_stmt.expression, *return_trackers_.back().expected_type)) {
+            return resolving_.set_sema_type(id, *last_type_);
+        }
         auto& return_expr_type{*last_type_.take()};
 
         // Only these two shapes are checked; the AST can't tell origin from pass-through.
@@ -9183,7 +9360,8 @@ auto type_resolver::instantiate_impls_for(
                     ok = false;
                     break;
                 }
-                if (arg->get_kind() == type_kind::TYPE) { is_abstract = true; }
+                // Still an unbound param, possibly wrapped (`[]mut T` from a generic signature)
+                if (is_generic_type(*arg, false)) { is_abstract = true; }
                 if (i < type_bounds.size()) { type_bounds[i] = arg; }
             }
         }
@@ -9324,7 +9502,8 @@ auto type_resolver::instantiate_impls_for(
             }
         }
 
-        if (!is_abstract) {
+        // A target holding `type`s only exists at compile time, so its methods have no runtime body
+        if (!is_abstract && !holds_type_values(concrete)) {
             for (const auto& m : stored->methods) {
                 if (m.fn_type && ctx_.generic_functions.get_opt(*m.fn_type)) { continue; }
                 impl_mod.impl_ctor_member_emits.emplace_back<type_ctor_member_emit>({
@@ -9964,10 +10143,7 @@ auto type_resolver::resolve_inherited_default_methods(impl_record&              
         if (!bnode) { continue; }
 
         stdx::option<type&> bound;
-        if (const auto bu{impl_mod.ast.get_as_opt<ast::using_stmt>(*bnode)}) {
-            bound = impl_mod.get_sema_type_opt(bu->explicit_type);
-        } else if (const auto bd{impl_mod.ast.get_as_opt<ast::decl_stmt>(*bnode)};
-                   bd && bd->value) {
+        if (const auto bd{impl_mod.ast.get_as_opt<ast::decl_stmt>(*bnode)}; bd && bd->value) {
             bound = impl_mod.get_sema_type_opt(*bd->value);
         }
         if (!bound || !bound->is_resolved()) { continue; }
@@ -10189,75 +10365,6 @@ auto type_resolver::resolve_dyn_method_signature(const types::dyn_t&       dyn,
     return concrete_fn;
 }
 
-auto type_resolver::visit(ast::node_id id, const ast::using_stmt& using_stmt) -> void {
-    PROFILE_FUNCTION();
-    const auto& ident{resolving_.ast.get_as<ast::identifier_expr>(using_stmt.alias)};
-    // Search the whole stack, not just `table_idx_`, this can be reached out of decl order
-    auto sym{ctx_.registry.lookup(table_stack_, ident.name)};
-    if (!sym) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
-
-    const bool reresolve_local{for_generic_instantiation_ && reresolve_floor_ && [&] {
-        const auto lt{ctx_.registry.lookup_with_table(table_stack_, ident.name)};
-        return lt && lt->table_idx >= *reresolve_floor_;
-    }()};
-
-    if (sym->get_status() == symbol_status::RESOLVED && !reresolve_local) {
-        auto& void_type{ctx_.get_builtin_resolved_type(type_kind::VOID_)};
-        if (!resolving_.has_sema_type(id)) {
-            resolving_.set_sema_type(using_stmt.alias, void_type);
-            resolving_.set_sema_type(id, void_type);
-        }
-        return last_type_.emplace(void_type);
-    }
-
-    const auto poison_out = [&] -> void {
-        resolving_.set_sema_type(using_stmt.alias, *last_type_);
-        resolving_.set_sema_type(id, *last_type_);
-        ctx_.poison_symbol(*sym);
-    };
-
-    // Bind the resolved type to the symbol now that its been collected
-    sym->set_status(symbol_status::RESOLVING);
-    resolve(using_stmt.explicit_type);
-    if (last_type_->is_poison()) { return poison_out(); }
-    auto* explicit_type_p{last_type_.take()};
-    // `using X = MakesAType()`
-    if (explicit_type_p->get_data().is<types::deferred_call>()) {
-        const auto&     dc_call{explicit_type_p->get_data().as<types::deferred_call>().call};
-        gir::const_eval evaluator{ctx_, resolving_};
-        explicit_type_p = &evaluator.force_deferred_call(*explicit_type_p);
-        register_non_generic_type_ctor_members(*explicit_type_p, dc_call);
-    }
-    auto& explicit_type{*explicit_type_p};
-    if (explicit_type.get_kind() == type_kind::AUTO) {
-        last_type_.emplace(ctx_.poison_node(resolving_,
-                                            id,
-                                            "Type aliases cannot be 'auto'",
-                                            error::ILLEGAL_AUTO_USAGE,
-                                            resolving_.ast.location_of(using_stmt.explicit_type)));
-        return poison_out();
-    }
-
-    // `using` aliases a type, catch accidental use of a value on the RHS
-    if (const auto value_name{using_rhs_value_name(using_stmt.explicit_type)}) {
-        last_type_.emplace(ctx_.poison_node(
-            resolving_,
-            id,
-            fmt::format("'using' aliases a type, but '{}' is a value; use 'const' or "
-                        "'constexpr' to alias a value",
-                        *value_name),
-            error::TYPE_MISMATCH,
-            resolving_.ast.location_of(using_stmt.explicit_type)));
-        return poison_out();
-    }
-    resolving_.set_sema_type(id, explicit_type);
-
-    sym->set_status(symbol_status::RESOLVED);
-    resolve(using_stmt.alias);
-    if (last_type_->is_poison()) { return poison_out(); }
-    last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
-}
-
 // Without a modifier or with poison the result should be the same as the node
 auto type_resolver::apply_explicit_modifiers(ast::explicit_type_id id, type& inner_in) -> type& {
     const auto modifier{id.get_modifier()};
@@ -10474,6 +10581,7 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_array_ty
 
 auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type& dyn) -> void {
     PROFILE_FUNCTION();
+    const bool is_referent{std::exchange(dyn_is_referent_, false)};
     TRY_RESOLVE(dyn.interface_type);
     auto& iface_type{denoted_type(*last_type_.take())};
     if (iface_type.get_kind() != type_kind::INTERFACE) {
@@ -10564,7 +10672,7 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type
 
     // `dyn I` is unsized: legal only as the referent of `&` / `^`.
     auto& final_type{apply_explicit_modifiers(id, dyn_type)};
-    if (final_type.get_kind() == type_kind::DYN) {
+    if (final_type.get_kind() == type_kind::DYN && !is_referent) {
         return last_type_.emplace(ctx_.poison_node(resolving_,
                                                    id,
                                                    "`dyn I` is unsized; use `&dyn I` or `^dyn I`",

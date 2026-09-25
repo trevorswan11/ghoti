@@ -683,6 +683,14 @@ auto dumper::visit(node_id, const unreachable_expr&) -> void {
     fmt::println(out_, "UnreachableExpression");
 }
 
+auto dumper::visit(node_id, const type_expr& node) -> void {
+    PROFILE_FUNCTION();
+    fmt::println(out_, "TypeExpression");
+    const indent::guard g{indent_, true};
+    fmt::print(out_, "{}Type: ", indent_.current_branch());
+    dump(node.type);
+}
+
 // Safe to call with invalid ID in type dispatch
 auto dumper::visit(node_id, const struct_expr& node) -> void {
     PROFILE_FUNCTION();
@@ -1173,23 +1181,6 @@ auto dumper::visit(node_id, const test_stmt& test) -> void {
         const indent::guard g{indent_, true};
         fmt::print(out_, "{}Block: ", indent_.current_branch());
         dump(*test.block);
-    }
-}
-
-auto dumper::visit(node_id id, const using_stmt& using_stmt) -> void {
-    PROFILE_FUNCTION();
-    fmt::println(out_, "UsingStatement");
-    {
-        const indent::guard g{indent_, false};
-        fmt::println(out_, "{}Public: {}", indent_.current_branch(), using_stmt::is_public(id));
-        fmt::print(out_, "{}Alias: ", indent_.current_branch());
-        dump(using_stmt.alias);
-    }
-
-    {
-        const indent::guard g{indent_, true};
-        fmt::print(out_, "{}Type: ", indent_.current_branch());
-        dump(using_stmt.explicit_type);
     }
 }
 

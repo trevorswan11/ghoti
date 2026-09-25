@@ -44,7 +44,7 @@ TEST_CASE("@intCast sema type checking") {
                              std::pair{2UZ, 43UZ}});
     }
 
-    SECTION("Comptime value out of range fails evaluation") {
+    SECTION("Constexpr value out of range fails evaluation") {
         helpers::test_checker_fail(
             R"(
             constexpr x: u8 = @intCast(u8, 300);
@@ -54,7 +54,7 @@ TEST_CASE("@intCast sema type checking") {
                              std::pair{1UZ, 43UZ}});
     }
 
-    SECTION("Negative comptime value out of range for unsigned fails evaluation") {
+    SECTION("Negative constexpr value out of range for unsigned fails evaluation") {
         helpers::test_checker_fail(
             R"(
             constexpr x: u32 = @intCast(u32, -5);
@@ -64,7 +64,7 @@ TEST_CASE("@intCast sema type checking") {
                              std::pair{1UZ, 45UZ}});
     }
 
-    SECTION("Fitting comptime value succeeds") {
+    SECTION("Fitting constexpr value succeeds") {
         helpers::type_check_and_verify(R"(
             constexpr x: u8 = @intCast(u8, 200);
             constexpr y: i32 = @intCast(i32, 1000);

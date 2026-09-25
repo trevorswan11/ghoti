@@ -143,10 +143,10 @@ TEST_CASE("analyze can be called twice on the same session for different entry p
     CHECK(refs[0].path == std::filesystem::weakly_canonical(main_path));
 }
 
-TEST_CASE("definition_location_at resolves a using-alias reference to just the alias") {
+TEST_CASE("definition_location_at resolves a type-alias reference to just the alias") {
     mod::overlay_loader         loader;
-    const std::filesystem::path path{"test_references_using_alias.gh"};
-    CHECK(loader.add(path, "using X = i32;\npub const s := @sizeOf(X);\n"));
+    const std::filesystem::path path{"test_references_type_alias.gh"};
+    CHECK(loader.add(path, "const X := i32;\npub const s := @sizeOf(X);\n"));
 
     auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
     const auto module{UNWRAP(session->analyze(path))};
@@ -158,10 +158,10 @@ TEST_CASE("definition_location_at resolves a using-alias reference to just the a
     CHECK(def.span.end.column == 7);
 }
 
-TEST_CASE("definition_location_at resolves a using-alias from its own declaration name") {
+TEST_CASE("definition_location_at resolves a type alias from its own declaration name") {
     mod::overlay_loader         loader;
-    const std::filesystem::path path{"test_references_using_decl.gh"};
-    CHECK(loader.add(path, "using X = i32;\n"));
+    const std::filesystem::path path{"test_references_type_alias_decl.gh"};
+    CHECK(loader.add(path, "const X := i32;\n"));
 
     auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
     const auto module{UNWRAP(session->analyze(path))};

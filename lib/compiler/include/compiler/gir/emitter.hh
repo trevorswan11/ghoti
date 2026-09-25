@@ -111,7 +111,6 @@ class emitter {
 
   private:
     auto emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -> void;
-    auto emit_top_level_using(ast::node_id id, const ast::using_stmt& using_stmt) -> void;
     auto emit_top_level_test(ast::node_id id, const ast::test_stmt& test) -> void;
     // Emits the member functions of an `impl [I for] T { ... }` block under names scoped to the
     // impl's own symbol table, plus any interface default methods the impl inherits.
@@ -158,6 +157,8 @@ class emitter {
     auto emit_stmt(const ast::stmt_handle& stmt) -> void;
     auto emit_block(const ast::block_stmt& block) -> void;
     auto emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> void;
+    // A decl holding `type`s has no storage, but its initializer must still fold
+    auto check_constexpr_value_decl(const ast::decl_stmt& decl) -> void;
     auto emit_return_stmt(ast::node_id id, const ast::return_stmt& ret) -> void;
     auto emit_defer_stmt(ast::node_id id, const ast::defer_stmt& def) -> void;
     auto emit_errdefer_stmt(ast::node_id id, const ast::errdefer_stmt& errdef) -> void;
@@ -245,8 +246,13 @@ class emitter {
     // Produces a value exactly as resolved, including a bare reference-typed value where
     // applicable.
     auto emit_expression_id_raw(ast::node_id id) -> value;
-    auto emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value;
-    auto emit_match(ast::node_id id, const ast::match_expr& match) -> value;
+
+    // Whether `id` reads from a value holding `type`s (`ts`, `ts.len`, `ts[i]`), which only
+    // exists at compile time and so must fold through const_eval
+    [[nodiscard]] auto reads_constexpr_value(ast::node_id id) -> bool;
+    auto               emit_constexpr_value_read(ast::node_id id) -> value;
+    auto               emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value;
+    auto               emit_match(ast::node_id id, const ast::match_expr& match) -> value;
 
     // @mem* decompose the slice args into a data pointer + byte length. A length check is only
     // needed when the operands' lengths were not already proven equal statically.
@@ -400,10 +406,17 @@ class emitter {
                                                 const ast::assignment_expr& assign,
                                                 syntax::token_type_t        op_type) -> value;
     auto               emit_call(ast::node_id id, const ast::call_expr& call) -> value;
+    // A module-scope `^fn(...)` global, or `var` of function type, named directly as a callee
+    [[nodiscard]] auto callee_is_fn_pointer_global(const ast::identifier_expr& ident,
+                                                   ast::expr_handle            callee) -> bool;
     auto               emit_asm(ast::node_id id, const ast::asm_expr& node) -> value;
     auto               emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> value;
     // Lvalue (address) of a `var`-style global backed by a GIR global.
-    [[nodiscard]] auto global_ref_in(usize table_idx, std::string_view name) -> stdx::option<value>;
+    // `allow_fn_vars` also admits a `var` of function type (only safe for the active module's own
+    // root table, whose symbol nodes live in the active AST)
+    [[nodiscard]] auto global_ref_in(usize            table_idx,
+                                     std::string_view name,
+                                     bool             allow_fn_vars = false) -> stdx::option<value>;
     [[nodiscard]] auto try_global_ref(std::string_view name) -> stdx::option<value>;
     [[nodiscard]] auto try_static_member_ref(const sema::type& owner, std::string_view member)
         -> stdx::option<value>;

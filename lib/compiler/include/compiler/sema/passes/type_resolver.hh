@@ -100,6 +100,8 @@ class type_resolver {
         -> void;
     auto fold_concat_operand_len(ast::expr_handle operand, type& operand_type)
         -> stdx::option<usize>;
+    template <typename Eval>
+    auto fold_type_read(const type& object_type, type& read_type, Eval&& eval) -> type&;
     // True when `expr` is a bare identifier declared `constexpr var` (no storage, no address).
     auto names_constexpr_var(ast::expr_handle expr) -> bool;
 
@@ -434,11 +436,19 @@ class type_resolver {
     auto visit(ast::node_id, const ast::undefined_expr&) -> void;
     auto visit(ast::node_id, const ast::nullptr_expr&) -> void;
     auto visit(ast::node_id, const ast::unreachable_expr&) -> void;
+    auto visit(ast::node_id, const ast::type_expr&) -> void;
 
-    // If a `using` RHS is a bare-name form (`X`, `mod.X`) that resolves to a value symbol
-    // rather than a type, returns that name so the caller can reject the alias.
-    [[nodiscard]] auto using_rhs_value_name(ast::explicit_type_id rhs) const
-        -> stdx::option<std::string_view>;
+    // The symbol a resolved `obj.member` names, looked up in a module's root table or in the
+    // (denoted) aggregate's own table
+    [[nodiscard]] auto dot_member_symbol(const ast::dot_expr& dot) const -> const symbol*;
+
+    // Whether a resolved decl value denotes a type (`i32`, `^T`, `Ctor(T)`, `mod.Type`, ...),
+    // making the decl a compile-time type alias rather than a runtime value
+    [[nodiscard]] auto decl_value_denotes_type(ast::expr_handle value) const -> bool;
+
+    // Poisons `value` when it names a type where `expected` wants a value (`const w: S = S;`);
+    // returns whether it did
+    auto reject_type_as_value(ast::expr_handle value, const type& expected) -> bool;
 
     template <ast::IndexableID ID> auto visit(ID, const ast::struct_expr&) -> void;
     template <ast::IndexableID ID> auto visit(ID, const ast::union_expr&) -> void;
@@ -482,7 +492,6 @@ class type_resolver {
     auto visit(ast::node_id, const ast::import_stmt&) -> void;
     auto visit(ast::node_id, const ast::return_stmt&) -> void;
     auto visit(ast::node_id, const ast::test_stmt&) -> void;
-    auto visit(ast::node_id, const ast::using_stmt&) -> void;
     auto visit(ast::node_id, ast::discarded) noexcept -> void {}
 
     // Creates a potentially new type with the id-stored modifiers
@@ -554,6 +563,8 @@ class type_resolver {
     std::vector<active_block_frame> active_blocks_;
 
     bool in_mutating_context_{false};
+    // Set while resolving the `dyn I` operand of `&`/`^` written in expression position
+    bool dyn_is_referent_{false};
     bool for_generic_instantiation_{false};
     bool in_subscript_index_{false};
     bool in_for_iterable_{false};

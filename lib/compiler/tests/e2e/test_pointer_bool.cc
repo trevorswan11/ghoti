@@ -224,7 +224,7 @@ TEST_CASE("@assert and @verify with non-bool non-pointer integers are rejected")
     )");
 }
 
-TEST_CASE("@assert and @verify with comptime nullptr are rejected at compile time") {
+TEST_CASE("@assert and @verify with constexpr nullptr are rejected at compile time") {
     helpers::expect_compile_error(R"(
         pub const main := fn(): i32 {
             @assert(nullptr);

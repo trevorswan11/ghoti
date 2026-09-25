@@ -304,11 +304,11 @@ ExpressionStatement
     └─ Arguments:
         ├─ IdentifierExpression: i32 (primitive)
         └─ IdentifierExpression: a
-UsingStatement
-├─ Public: false
-├─ Alias: IdentifierExpression: T
-└─ Type: ExplicitType (modifier: VALUE)
-    └─ IdentifierExpression: i32 (primitive)
+DeclStatement
+├─ Name: IdentifierExpression: T
+├─ Modifiers: CONSTANT
+├─ Type: (inferred)
+└─ Value: IdentifierExpression: i32 (primitive)
 ExpressionStatement
 └─ Expr: CallExpression
     ├─ Callee: IdentifierExpression: a
@@ -547,12 +547,13 @@ ExpressionStatement
     └─ Body: BlockStatement
         └─ ContinueStatement
             └─ Label: IdentifierExpression: a
-UsingStatement
-├─ Public: true
-├─ Alias: IdentifierExpression: a
-└─ Type: ExplicitType (modifier: PTR)
-    └─ ExplicitType (modifier: PTR)
-        └─ IdentifierExpression: i32
+DeclStatement
+├─ Name: IdentifierExpression: a
+├─ Modifiers: CONSTANT|PUBLIC
+├─ Type: (inferred)
+└─ Value: AddressOfExpression (CARET)
+    └─ Operand: AddressOfExpression (CARET)
+        └─ Operand: IdentifierExpression: i32 (primitive)
 ExpressionStatement
 └─ Expr: FunctionExpression
     ├─ Self: self (modifier: VALUE)

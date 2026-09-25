@@ -29,7 +29,7 @@ TEST_CASE("Emitter top-level globals and type declarations") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const MAX_COUNT: i32 = 100;
         var current_count: i32 = 42;
-        using Count = i32;
+        const Count := i32;
     )")};
 
     gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};

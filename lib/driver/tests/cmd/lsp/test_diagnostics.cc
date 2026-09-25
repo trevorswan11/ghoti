@@ -49,8 +49,8 @@ TEST_CASE("a shared session that analyzes two impls of one interface keeps inher
     CHECK(loader.add(std::filesystem::path{"reader.gh"}, R"(
         pub const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
-            using Output = T;
-            using Residual = E;
+            const Output := T;
+            const Residual := E;
             pub const branch := fn(self): builtin.Flow(T, E) {
                 return match (self) {
                     .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
@@ -59,7 +59,7 @@ TEST_CASE("a shared session that analyzes two impls of one interface keeps inher
             };
         }
         impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
-            using From = E;
+            const From := E;
             pub const from_residual := fn(r: E): @This() { return .{ .err = r }; };
         }
         pub const Reader := interface {
@@ -81,7 +81,7 @@ TEST_CASE("a shared session that analyzes two impls of one interface keeps inher
         import "reader.gh" as reader;
         pub const {0} := struct {{ pub data: []mut u8, pub pos: usize = 0 }};
         impl reader.Reader for {0} {{
-            using Error = u8;
+            const Error := u8;
             pub const read := fn(&mut self, buf: []mut u8): reader.Result(usize, Error) {{
                 const rem := self.data.len - self.pos;
                 const n := if (buf.len < rem) buf.len else rem;

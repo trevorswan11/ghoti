@@ -89,16 +89,19 @@ TEST_CASE("Out of order union") {
                                                  std::pair{0UZ, 60UZ}});
 }
 
-TEST_CASE("Illegal type aliasing/definition") {
-    const auto expected_diag = [] -> syntax::diagnostic {
-        return {"User-defined types can only be defined with non-modified aliases",
-                syntax::error::ILLEGAL_USING_ALIAS_WITH_MODIFIERS,
-                std::pair{0UZ, 10UZ}};
+TEST_CASE("Illegal modified type literal") {
+    const auto expected_diag = [](usize col) -> syntax::diagnostic {
+        return {"A struct, union, enum, or interface literal cannot take a type modifier",
+                syntax::error::ILLEGAL_MODIFIED_TYPE_LITERAL,
+                std::pair{0UZ, col}};
     };
 
-    helpers::test_parser_fail("using U = &union { a: i32 };", expected_diag());
-    helpers::test_parser_fail("using S = ^struct { pub var foo := bar; };", expected_diag());
-    helpers::test_parser_fail("using E = ^enum { a };", expected_diag());
+    helpers::test_parser_fail("const U := &union { a: i32 };", expected_diag(11UZ));
+    helpers::test_parser_fail("const S := ^struct { pub var foo := bar; };", expected_diag(11UZ));
+    helpers::test_parser_fail("const E := ^enum { a };", expected_diag(11UZ));
+    helpers::test_parser_fail("const I := &mut interface { const f := fn(&self): i32; };",
+                              expected_diag(11UZ));
+    helpers::test_parser_fail("var s: ^struct { a: i32 } = undefined;", expected_diag(7UZ));
 }
 
 } // namespace ghoti::tests

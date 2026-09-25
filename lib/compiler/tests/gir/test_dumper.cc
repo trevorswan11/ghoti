@@ -148,7 +148,7 @@ TEST_CASE("GIR dumper formatting") {
 }
 
 constexpr std::string_view golden_input{R"(
-    using Real = f64;
+    const Real := f64;
     const MAX_SIZE := 100uz;
 
     const Point := struct {

@@ -74,6 +74,7 @@ class dumper {
     auto visit(node_id, const undefined_expr&) -> void;
     auto visit(node_id, const nullptr_expr&) -> void;
     auto visit(node_id, const unreachable_expr&) -> void;
+    auto visit(node_id, const type_expr&) -> void;
     auto visit(node_id, const struct_expr&) -> void;
     auto visit(node_id, const union_expr&) -> void;
     auto visit(node_id, const interface_expr&) -> void;
@@ -92,7 +93,6 @@ class dumper {
     auto visit(node_id, const import_stmt&) -> void;
     auto visit(node_id, const return_stmt&) -> void;
     auto visit(node_id, const test_stmt&) -> void;
-    auto visit(node_id, const using_stmt&) -> void;
     auto visit(node_id, stdx::monostate) -> void { fmt::println(out_, "<discarded>"); }
 
     auto visit(explicit_type_id, const identifier_expr&) -> void;

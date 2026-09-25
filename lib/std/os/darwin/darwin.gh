@@ -2,8 +2,8 @@
 import std;
 pub import "errno.gh" as errno;
 
-pub using Handle = i32;
-pub using Errno = errno.Errno;
+pub const Handle := i32;
+pub const Errno := errno.Errno;
 pub constexpr EWOULDBLOCK := errno.EWOULDBLOCK;
 
 // <sys/fcntl.h> and its transitive includes
@@ -23,16 +23,16 @@ pub const SEEK_SET: i32 = 0; // Set file offset to offset
 pub const SEEK_CUR: i32 = 1; // Set file offset to current plus offset
 pub const SEEK_END: i32 = 2; // Set file offset to EOF plus offset
 
-pub using mode_t = u16;
-pub using dev_t = i32; /// Device number
-pub using nlink_t = u16; /// Link count
-pub using ino64_t = u64;
-pub using uid_t = u32;
-pub using gid_t = u32;
-pub using time_t = i64;
-pub using off_t = i64; /// File offset / size
-pub using blkcnt_t = i64;
-pub using blksize_t = i32;
+pub const mode_t := u16;
+pub const dev_t := i32; /// Device number
+pub const nlink_t := u16; /// Link count
+pub const ino64_t := u64;
+pub const uid_t := u32;
+pub const gid_t := u32;
+pub const time_t := i64;
+pub const off_t := i64; /// File offset / size
+pub const blkcnt_t := i64;
+pub const blksize_t := i32;
 
 const S_IFMT: mode_t = 0o170000u16; /// file-type mask within `st_mode`
 const S_IFDIR: mode_t = 0o040000u16; /// directory

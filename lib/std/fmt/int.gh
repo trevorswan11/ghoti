@@ -44,7 +44,7 @@ pub const format_radix := fn(
 
     // The type must have the same size as `base` or be wider in order for the division to work
     constexpr min_int_bits := @max(value_info.bits, 8u16);
-    using MinInt = @Int(.{ .signedness = .unsigned, .bits = min_int_bits });
+    const MinInt := @Int(.{ .signedness = .unsigned, .bits = min_int_bits });
 
     // The worst case in terms of space needed is base 2, plus 1 for the sign and 2 for the alt prefix
     var buf: [1 + 2 + @max(value_info.bits, 1u16)]mut u8 = undefined;
@@ -52,7 +52,7 @@ pub const format_radix := fn(
     var is_negative := false;
     var a: MinInt = blk: {
         if constexpr (value_info.signedness == .signed) {
-            using SameUnsigned = @Int(.{ .signedness = .unsigned, .bits = value_info.bits });
+            const SameUnsigned := @Int(.{ .signedness = .unsigned, .bits = value_info.bits });
             const bits := @bitCast(SameUnsigned, value);
             is_negative = value < 0;
             break :blk if (is_negative) 0 -% bits else bits;

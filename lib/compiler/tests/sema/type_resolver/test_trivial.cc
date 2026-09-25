@@ -51,7 +51,7 @@ TEST_CASE("Nested type resolution") {
 
 TEST_CASE("Type alias resolution") {
     auto [ctx, idx]{helpers::resolve_and_check(
-        "using a = ^bool; var b: a = undefined; var c: &a = undefined;")};
+        "const a := ^bool; var b: a = undefined; var c: &a = undefined;")};
     const auto& bool_ref =
         ctx->get_type(sema::type_kind::POINTER, ctx->get_type(sema::type_kind::BOOL));
 
@@ -63,30 +63,14 @@ TEST_CASE("Type alias resolution") {
     CHECK(c_type == ctx->get_type(sema::type_kind::REFERENCE, bool_ref));
 }
 
-TEST_CASE("`using` rejects a value RHS with a pointer to `const`/`constexpr`") {
-    SECTION("same-module value constant") {
-        helpers::test_resolver_fail(
-            "const BASE := 42; using K = BASE;",
-            sema::diagnostic{"'using' aliases a type, but 'BASE' is a value; use 'const' or "
-                             "'constexpr' to alias a value",
-                             sema::error::TYPE_MISMATCH,
-                             std::pair{0UZ, 28UZ}});
-    }
+TEST_CASE("`using` can name an ordinary binding") {
+    helpers::resolve_and_check("const using := 3; const x: i32 = using;");
+}
 
-    SECTION("cross-module value constant") {
-        helpers::test_resolver_fail(
-            R"(import "leaf.gh" as leaf; pub using K = leaf.K;)",
-            {helpers::mock_file{"leaf.gh", "pub const K: i32 = 42;", "leaf"}},
-            sema::diagnostic{"'using' aliases a type, but 'K' is a value; use 'const' or "
-                             "'constexpr' to alias a value",
-                             sema::error::TYPE_MISMATCH,
-                             std::pair{0UZ, 40UZ}});
-    }
-
-    SECTION("a type RHS is still accepted") {
-        helpers::resolve_and_check("const S := struct { x: i32 }; using T = S;");
-        helpers::resolve_and_check("using Byte = u8;");
-    }
+TEST_CASE("A `const` alias names a value or a type by what its right-hand side denotes") {
+    helpers::resolve_and_check("const BASE := 42; const K := BASE; const x: i32 = K;");
+    helpers::resolve_and_check("const S := struct { x: i32 }; const T := S; var t: T = undefined;");
+    helpers::resolve_and_check("const Byte := u8; const b: Byte = 7;");
 }
 
 TEST_CASE("Unary expression resolution") {
@@ -112,7 +96,7 @@ TEST_CASE("Undeclared identifier usage") {
     };
 
     helpers::test_resolver_fail("const a := b;", expected_diag(11));
-    helpers::test_resolver_fail("using a = ^b;", expected_diag(10));
+    helpers::test_resolver_fail("const a := ^b;", expected_diag(12));
 }
 
 TEST_CASE("Value-less extern") { helpers::resolve_and_check("extern var errno: i32;"); }
@@ -144,8 +128,8 @@ TEST_CASE("Defer body jump rejection") {
         R"(
 const R := union { ok: i32, err: i32 };
 impl builtin.Unwrappable for R {
-    using Output = i32;
-    using Residual = i32;
+    const Output := i32;
+    const Residual := i32;
     pub const branch := fn(self): builtin.Flow(i32, i32) {
         return match (self) {
             .ok => |v| builtin.Flow(i32, i32){ .@"continue" = v },
@@ -154,7 +138,7 @@ impl builtin.Unwrappable for R {
     };
 }
 impl builtin.Rewrappable for R {
-    using From = i32;
+    const From := i32;
     pub const from_residual := fn(r: i32): @This() { return .{ .err = r }; };
 }
 const f := fn(): R {
@@ -232,10 +216,10 @@ TEST_CASE("Duplicate top-level symbols resolve without crashing") {
                          std::pair{0UZ, 28UZ}});
 
     helpers::test_resolver_fail(
-        "using X = i32; using X = i64;",
+        "const X := i32; const X := i64;",
         sema::diagnostic{"Redeclaration of symbol 'X'; previous declaration here: 1:7",
                          sema::error::IDENTIFIER_REDECLARATION,
-                         std::pair{0UZ, 21UZ}});
+                         std::pair{0UZ, 22UZ}});
 }
 
 TEST_CASE("Dereferenced assignment using non-pointer fails") {
