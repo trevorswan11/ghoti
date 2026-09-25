@@ -205,6 +205,9 @@ pub const FnInfo := struct {
     pub variadic: bool,
     pub has_self: bool,
     pub @"callconv": CallConv,
+    /// `true` for a `{ctx, code}` callable (`fn(...)`), `false` for a thin code pointer
+    /// (`extern fn(...)` or a function's own type)
+    pub erased: bool = true,
 };
 
 /// The keystone reflection value: `@typeInfo(T)` returns one of these.

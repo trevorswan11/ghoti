@@ -143,6 +143,14 @@ struct context {
     // The same signature as `fn`, toggled between erased and thin
     [[nodiscard]] auto with_erasure(type& fn, bool erased) -> type&;
 
+    // `@Fn`'s result: `get_function` for a plain signature, else a thin method-shaped type
+    [[nodiscard]] auto get_function_like(gsl::span<type*>        params,
+                                         type&                   return_type,
+                                         bool                    has_self,
+                                         bool                    is_variadic,
+                                         ast::calling_convention conv,
+                                         bool                    erased) -> type&;
+
     // Calls resolve_if on the resulting type
     [[nodiscard]] auto get_array(types::mut::mutability_modifiers mutability,
                                  bool                             null_terminated,

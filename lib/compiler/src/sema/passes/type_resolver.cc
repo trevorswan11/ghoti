@@ -1192,6 +1192,7 @@ template <ast::IndexableID ID>
             TRY_DESC_FIELD(variadic_v, bool, "variadic");
             TRY_DESC_FIELD(has_self_v, bool, "has_self");
             TRY_DESC_FIELD(callconv_v, gir::const_enum, "callconv");
+            const bool erased{read_desc_field<bool>(*desc, "erased").value_or(true)};
 
             const auto conv{ast::calling_convention_from_name(callconv_v->name)};
             if (!conv) {
@@ -1199,6 +1200,16 @@ template <ast::IndexableID ID>
                     fmt::format("'@Fn': unknown calling convention '{}'", callconv_v->name),
                     error::TYPE_MISMATCH,
                     get_call_arg_location(call.arguments[0]));
+            }
+            if (erased && *has_self_v) {
+                return make_sema_err("'@Fn': a method-shaped (`has_self`) type is never erased; "
+                                     "set `.erased = false`",
+                                     error::TYPE_MISMATCH,
+                                     get_call_arg_location(call.arguments[0]));
+            }
+            if (erased && *conv != ast::calling_convention::C) {
+                return make_sema_err(
+                    callconv_requires_extern(get_call_arg_location(call.arguments[0])));
             }
 
             auto param_types{ctx_.pool.get_many_unsafe(params_arr->elements.size())};
@@ -1213,13 +1224,8 @@ template <ast::IndexableID ID>
                 param_types[i] = pt->get();
             }
 
-            types::key_t fn_key{type_kind::FUNCTION, types::mut::CONSTANT};
-            for (const auto* p : param_types) { fn_key.imprint(*p); }
-            fn_key.imprint(*ret_v);
-            fn_key.imprint(*conv);
-            auto& built{*ctx_.pool[fn_key]};
-            built.resolve_if<types::function>(param_types, *ret_v, *has_self_v, *variadic_v, *conv);
-            return_type = wrap_type(built);
+            return_type = wrap_type(ctx_.get_function_like(
+                param_types, *ret_v, *has_self_v, *variadic_v, *conv, erased));
             break;
         }
         default: ASSERT(false, "unreachable");
@@ -2708,7 +2714,8 @@ auto register_type_ctor_members(context&         ctx,
     }
     case type_kind::FUNCTION: {
         const auto& fn{data.as<types::function>()};
-        return fmt::format("fn_{}__{}",
+        return fmt::format("{}_{}__{}",
+                           fn.erased ? "fn" : "xfn",
                            fmt::join(fn.params | std::views::transform([&](const auto* p) {
                                          return mangle_arg_type(reg, *p);
                                      }),

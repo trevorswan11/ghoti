@@ -1897,6 +1897,7 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
         s.fields.emplace("return_type", type_value(fn.return_type));
         s.fields.emplace("variadic", const_value{fn.is_variadic, bool_type});
         s.fields.emplace("has_self", const_value{fn.has_self, bool_type});
+        s.fields.emplace("erased", const_value{fn.erased, bool_type});
         s.fields.emplace("callconv",
                          const_value{const_enum{std::string{ast::calling_convention_name(fn.conv)},
                                                 static_cast<i64>(fn.conv)},
@@ -3262,6 +3263,10 @@ auto const_eval::eval_builtin(ast::node_id          id,
             }
             const auto conv{ast::calling_convention_from_name(callconv_v->name)};
             if (!conv) { return stdx::none; }
+            const bool erased{desc_field<bool>(*desc, "erased").value_or(true)};
+            if (erased && (*has_self_v || *conv != ast::calling_convention::C)) {
+                return stdx::none;
+            }
 
             auto param_types{ctx_.pool.get_many_unsafe(params_arr->elements.size())};
             for (usize i{0}; i < params_arr->elements.size(); ++i) {
@@ -3270,14 +3275,8 @@ auto const_eval::eval_builtin(ast::node_id          id,
                 param_types[i] = &**pt;
             }
 
-            sema::types::key_t fn_key{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT};
-            for (const auto* p : param_types) { fn_key.imprint(*p); }
-            fn_key.imprint(*ret_v);
-            fn_key.imprint(*conv);
-            auto& built{*ctx_.pool[fn_key]};
-            built.resolve_if<sema::types::function>(
-                param_types, *ret_v, *has_self_v, *variadic_v, *conv);
-            return const_value{built};
+            return const_value{ctx_.get_function_like(
+                param_types, *ret_v, *has_self_v, *variadic_v, *conv, erased)};
         }
         default: return stdx::none;
         }

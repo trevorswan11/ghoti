@@ -73,6 +73,23 @@ auto context::get_function(gsl::span<type*>        params,
     return fn;
 }
 
+auto context::get_function_like(gsl::span<type*>        params,
+                                type&                   return_type,
+                                bool                    has_self,
+                                bool                    is_variadic,
+                                ast::calling_convention conv,
+                                bool                    erased) -> type& {
+    if (!has_self) { return get_function(params, return_type, is_variadic, conv, erased); }
+
+    types::key_t key{type_kind::FUNCTION, types::mut::CONSTANT};
+    for (const auto* p : params) { key.imprint(*p); }
+    key.imprint(return_type);
+    key.imprint(conv);
+    auto& fn{*pool[key]};
+    fn.resolve_if<types::function>(params, return_type, true, is_variadic, conv);
+    return fn;
+}
+
 auto context::with_erasure(type& fn, bool erased) -> type& {
     const auto data{fn.get_data().as_opt<types::function>()};
     if (!data || data->erased == erased || data->has_self) { return fn; }
@@ -290,7 +307,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
 constexpr std::string_view BUILTIN_MODULE_SOURCE{
 #include "builtin.gh.inc"
 };
-// recompile.
+// recompile
 
 constexpr std::string_view BUILTIN_NAMESPACE{"builtin"};
 
