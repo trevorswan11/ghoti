@@ -10,6 +10,7 @@
 #include <ankerl/unordered_dense.h>
 #include <fmt/format.h>
 #include <fmt/ostream.h>
+#include <fmt/ranges.h>
 #include <nlohmann/json.hpp>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
@@ -110,6 +111,44 @@ auto doc_comment_for(const mod::module_manager& manager,
         }
     }
     return stdx::none;
+}
+
+// The declared parameter names of the callable `id` refers to (or declares)
+auto callable_param_names_for(const mod::module_manager& manager,
+                              const mod::module&         entry,
+                              ast::node_id               id)
+    -> stdx::option<const std::vector<std::string_view>&> {
+    if (const auto def{entry.get_identifier_definition(id)}) {
+        for (const auto& [path, mod] : manager) {
+            if (path == def->path) { return mod->get_callable_param_names(def->span.start); }
+        }
+        return entry.get_callable_param_names(def->span.start);
+    }
+    return entry.get_callable_param_names(entry.ast.location_of(id));
+}
+
+// `fn(a: i32, b: i32): i32`, naming each parameter when the declaration wrote the names down
+auto render_hover_type(const sema::type&                                  type,
+                       stdx::option<const std::vector<std::string_view>&> names) -> std::string {
+    const sema::type* target{&type};
+    std::string_view  prefix;
+    if (const auto p{type.get_data().as_opt<sema::types::pointer>()}) {
+        prefix = "^";
+        target = &p->underlying;
+    }
+    if (const auto cl{target->get_data().as_opt<sema::types::closure_t>()}) {
+        target = &cl->signature;
+    }
+    const auto fn{target->get_data().as_opt<sema::types::function>()};
+    if (!fn || !names || names->size() != fn->params.size()) { return type.to_string(); }
+
+    std::vector<std::string> params;
+    for (usize i{0}; i < fn->params.size(); ++i) {
+        params.emplace_back(fmt::format("{}: {}", (*names)[i], fn->params[i]->to_string()));
+    }
+    if (fn->is_variadic) { params.emplace_back("..."); }
+    return fmt::format(
+        "{}fn({}): {}", prefix, fmt::join(params, ", "), fn->return_type.to_string());
 }
 
 } // namespace
@@ -282,8 +321,10 @@ auto lsp_server::handle_hover(const nlohmann::json& message, lsp::document_store
     if (!type) { return write_null_id(message); }
 
     const auto doc{doc_comment_for(store.manager(), entry_module, *id, type)};
+    const auto rendered{
+        render_hover_type(*type, callable_param_names_for(store.manager(), entry_module, *id))};
 
-    std::string signature{type->to_string()};
+    std::string signature{rendered};
     if (const auto ident{entry_module.ast.get_as_opt<ast::identifier_expr>(*id)};
         ident && !ident->name.empty()) {
         signature = fmt::format("{}: {}", ident->name, signature);
@@ -292,7 +333,7 @@ auto lsp_server::handle_hover(const nlohmann::json& message, lsp::document_store
     nlohmann::json hover;
     hover["contents"]["kind"] = doc ? "markdown" : "plaintext";
     hover["contents"]["value"] =
-        doc ? fmt::format("```ghoti\n{}\n```\n\n---\n\n{}", signature, *doc) : type->to_string();
+        doc ? fmt::format("```ghoti\n{}\n```\n\n---\n\n{}", signature, *doc) : rendered;
 
     lsp::write_message(std::cout, make_response(message.at("id"), std::move(hover)));
 }

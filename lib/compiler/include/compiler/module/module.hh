@@ -389,6 +389,21 @@ struct module {
         }
     }
 
+    auto set_callable_param_names(const source_location&        declared_at,
+                                  std::vector<std::string_view> names) -> void {
+        sema_side_tables.callable_param_names.insert_or_assign(
+            sema::side_tables::pack_location(declared_at), std::move(names));
+    }
+
+    // Parameter names of the callable whose name is declared at `declared_at`
+    [[nodiscard]] auto get_callable_param_names(const source_location& declared_at) const
+        -> stdx::option<const std::vector<std::string_view>&> {
+        const auto& names{sema_side_tables.callable_param_names};
+        const auto  it{names.find(sema::side_tables::pack_location(declared_at))};
+        if (it == names.end()) { return stdx::none; }
+        return it->second;
+    }
+
     // Given a relative path, returns its absolute rep from the module's perspective
     [[nodiscard]] auto make_path_absolute(const std::filesystem::path& p) -> std::filesystem::path {
         if (p.is_relative()) { return parent_path / p; }

@@ -3117,12 +3117,11 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                         return last_type_.emplace(ctx_.poison_node(resolving_, id));
                     }
                     const auto* arg_ty{concrete_arg_types[i]};
-                    auto        msg{std::string{
-                        arg_ty && arg_ty->get_kind() == type_kind::CLOSURE
-                                   ? "a constexpr closure argument must capture only "
-                                     "compile-time constants"
-                                   : "argument to a constexpr parameter must be a "
-                                     "compile-time constant"}};
+                    auto        msg{std::string{arg_ty && arg_ty->get_kind() == type_kind::CLOSURE
+                                                    ? "a constexpr closure argument must capture only "
+                                                      "compile-time constants"
+                                                    : "argument to a constexpr parameter must be a "
+                                                      "compile-time constant"}};
                     if (!cx_params[i].is_constexpr_written) {
                         msg += "; the parameter is implicitly constexpr because this constexpr "
                                "function reads it in a compile-time position";
@@ -3845,7 +3844,8 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     }
 
     if (fn.is_type_expr && !fn.self && !fn.is_extern && fn.has_explicit_conv) {
-        return last_type_.emplace(ctx_.poison_node(resolving_, id, callconv_requires_extern(resolving_.ast.location_of(id))));
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_, id, callconv_requires_extern(resolving_.ast.location_of(id))));
     }
 
     if (fn.is_type_expr) {
@@ -3992,6 +3992,9 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         }
         param_types[param_idx++] = &param_type;
         resolving_.set_sema_type(param.name, param_type);
+        if (param.name.is<ast::identifier_expr>()) {
+            record_callable_param_names(param.name, callable_param_names_of(param.explicit_type));
+        }
         if (param.name.is<ast::identifier_expr>()) {
             resolve_symbol_info(param.name, symbol_kind::VALUE);
         }
@@ -6911,6 +6914,62 @@ auto type_resolver::decl_value_denotes_type(ast::expr_handle value) const -> boo
     return false;
 }
 
+auto type_resolver::callable_param_names_of(const ast::function_expr& fn) const
+    -> std::vector<std::string_view> {
+    std::vector<std::string_view> names;
+    if (fn.self) {
+        names.emplace_back(resolving_.ast.get_as<ast::identifier_expr>(fn.self->name).name);
+    }
+    for (const auto& param : fn.parameters) {
+        names.emplace_back(param.name.is<ast::identifier_expr>()
+                               ? resolving_.ast.get_as<ast::identifier_expr>(param.name).name
+                               : std::string_view{"_"});
+    }
+    return names;
+}
+
+auto type_resolver::callable_param_names_of(ast::explicit_type_id type, u32 alias_depth) const
+    -> stdx::option<std::vector<std::string_view>> {
+    if (!type.is_valid()) { return stdx::none; }
+    if (const auto fn_type{resolving_.ast.get_as_opt<ast::explicit_function_type>(type)}) {
+        std::vector<std::string_view> names;
+        for (const auto name : fn_type->parameter_names) {
+            names.emplace_back(resolving_.ast.get_as<ast::identifier_expr>(name).name);
+        }
+        return names;
+    }
+
+    // `f: Callback` borrows the names written on `const Callback := fn(...): R;`
+    if (const auto alias{resolving_.ast.get_as_opt<ast::identifier_expr>(type)}) {
+        return local_callable_param_names(alias->name, alias_depth);
+    }
+    return stdx::none;
+}
+
+auto type_resolver::local_callable_param_names(std::string_view name, u32 alias_depth) const
+    -> stdx::option<std::vector<std::string_view>> {
+    // `const @"i32": i32 = ...` names itself; bound any alias chain
+    constexpr u32 MAX_ALIAS_DEPTH{8};
+    if (alias_depth >= MAX_ALIAS_DEPTH) { return stdx::none; }
+    // A bare name only ever resolves within this module or the prelude
+    const auto found{ctx_.registry.lookup_with_table(table_stack_, name)};
+    if (!found || found->table_idx == ctx_.prelude_index) { return stdx::none; }
+    const auto node{found->symbol.get_data().as_opt<symbols::node_t>()};
+    if (!node) { return stdx::none; }
+    const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
+    if (!decl || resolving_.ast.get_as<ast::identifier_expr>(decl->name).name != name) {
+        return stdx::none;
+    }
+    return decl_callable_param_names(*decl, alias_depth + 1);
+}
+
+auto type_resolver::record_callable_param_names(ast::node_id name_node,
+                                                stdx::option<std::vector<std::string_view>> names)
+    -> void {
+    if (!names) { return; }
+    resolving_.set_callable_param_names(resolving_.ast.location_of(name_node), std::move(*names));
+}
+
 auto type_resolver::thin_if_constexpr(const ast::function_expr::parameter& param, type& param_type)
     -> type& {
     if (!param.is_constexpr || !param.explicit_type.is_valid()) { return param_type; }
@@ -7574,6 +7633,7 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
 
         sym->set_status(symbol_status::RESOLVING);
         TRY_RESOLVE(field.explicit_type);
+        record_callable_param_names(field.name, callable_param_names_of(field.explicit_type));
         // `f: @TypeOf(g)` / `f: FnAlias` stores the denoted type, not a `type` value
         auto* field_type{&denoted_type(*last_type_.take())};
         if (reject_unsized_slot(field.explicit_type, *field_type)) {
@@ -7742,6 +7802,7 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
 
         sym->set_status(symbol_status::RESOLVING);
         TRY_RESOLVE(field.explicit_type);
+        record_callable_param_names(field.name, callable_param_names_of(field.explicit_type));
         auto& field_type{denoted_type(*last_type_.take())};
         if (reject_unsized_slot(field.explicit_type, field_type)) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
@@ -8121,7 +8182,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
     ASSERT(symbol_opt, "Somehow the declaration was lost in the symbol table");
     const constexpr_evaluation_scope cx_scope{ctx_,
                                               decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
-    auto& sym{*symbol_opt};
+    auto&                            sym{*symbol_opt};
 
     // Ensure malformed symbols don't crash the compiler
     if (const auto owner{sym.get_data().as_opt<symbols::node_t>()};
@@ -8429,7 +8490,8 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
 
         // Remember the declared name of a user aggregate so `@typeName` can report it
         if (decl.value &&
-            decl.value->any<ast::struct_expr, ast::union_expr, ast::enum_expr, ast::interface_expr>()) {
+            decl.value
+                ->any<ast::struct_expr, ast::union_expr, ast::enum_expr, ast::interface_expr>()) {
             if (const auto value_type{resolving_.get_sema_type_opt(*decl.value)};
                 value_type && !value_type->is_poison()) {
                 const auto& decl_ident{resolving_.ast.get_as<ast::identifier_expr>(decl.name)};
@@ -8443,8 +8505,28 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
     } else {
         resolving_.set_sema_type_if(decl.name, resolved_type);
     }
+    record_callable_param_names(decl.name, decl_callable_param_names(decl));
     sym.set_status(symbol_status::RESOLVED);
     last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
+}
+
+auto type_resolver::decl_callable_param_names(const ast::decl_stmt& decl, u32 alias_depth) const
+    -> stdx::option<std::vector<std::string_view>> {
+    if (decl.explicit_type) { return callable_param_names_of(*decl.explicit_type, alias_depth); }
+    if (!decl.value) { return stdx::none; }
+    if (const auto fn{resolving_.ast.get_as_opt<ast::function_expr>(*decl.value)}) {
+        return callable_param_names_of(*fn);
+    }
+    // `const Op := dyn Fn(n: i32): i32;`
+    if (const auto type_value{resolving_.ast.get_as_opt<ast::type_expr>(*decl.value)}) {
+        return callable_param_names_of(type_value->type, alias_depth);
+    }
+    // `const g := f;` keeps `f`'s names
+    if (const auto target{resolving_.ast.get_as_opt<ast::identifier_expr>(*decl.value)};
+        target && target->name != resolving_.ast.get_as<ast::identifier_expr>(decl.name).name) {
+        return local_callable_param_names(target->name, alias_depth);
+    }
+    return stdx::none;
 }
 
 auto type_resolver::check_deferred_body_jumps(ast::stmt_handle body) -> void {
@@ -10615,7 +10697,8 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_function
     auto param_types{ctx_.pool.get_many_unsafe(fn.parameter_types.size())};
 
     if (!fn.is_extern && fn.has_explicit_conv) {
-        return last_type_.emplace(ctx_.poison_node(resolving_, id, callconv_requires_extern(resolving_.ast.location_of(id))));
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_, id, callconv_requires_extern(resolving_.ast.location_of(id))));
     }
 
     for (usize i{0}; const auto& param : fn.parameter_types) {
@@ -11088,9 +11171,8 @@ auto type_resolver::instantiate_generic(type&                             callee
         type* decl_p_type{arg_type}; // erased type data corresponding to nominal signature type
         type* body_p_type{arg_type}; // contextual type meaning in the function body
         if (inst_resolver.last_type_ && !inst_resolver.last_type_->is_poison()) {
-            auto& resolved_param_type{
-                inst_resolver.thin_if_constexpr(param,
-                                                denoted_type(*inst_resolver.last_type_.take()))};
+            auto& resolved_param_type{inst_resolver.thin_if_constexpr(
+                param, denoted_type(*inst_resolver.last_type_.take()))};
             // `&auto` / `^auto` (from `impl I` sugar) has no concrete shape yet
             const auto strips_to_auto{[](auto&& self, const type& t) -> bool {
                 if (t.get_kind() == type_kind::AUTO) { return true; }
