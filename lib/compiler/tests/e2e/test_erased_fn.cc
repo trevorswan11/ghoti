@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/format.h>
 
 #include "compiler/sema/error.hh"
 
@@ -66,6 +67,33 @@ TEST_CASE("an erased `fn(...)` is returned and called later") {
             return a(20) + b(1);
         };
     )") == 40 + 2);
+}
+
+TEST_CASE("returning a capturing closure as an erased `fn(...)` is rejected") {
+    for (const auto* kw : {"fn", "move fn"}) {
+        CAPTURE(kw);
+        CHECK(helpers::raised(fmt::format(R"(
+        const IntFn := fn(n: i32): i32;
+        const make := fn(base: i32): IntFn {{
+            return {}(n: i32): i32 {{ return n + base; }};
+        }};
+    )",
+                                          kw),
+                              sema::error::ILLEGAL_CLOSURE_ESCAPE));
+    }
+}
+
+TEST_CASE("a capturing closure is still returned by its own type through `auto`") {
+    CHECK(helpers::compile_and_run(R"(
+        const make := fn(base: i32): auto {
+            return move fn(n: i32): i32 { return n + base; };
+        };
+        pub const main := fn(): i32 {
+            const add_ten := make(10);
+            const erased: fn(n: i32): i32 = add_ten;
+            return add_ten(1) + erased(2);
+        };
+    )") == 11 + 12);
 }
 
 TEST_CASE("a `^fn(...)` is nullable and compares against `nullptr`") {

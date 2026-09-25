@@ -9094,6 +9094,22 @@ auto type_resolver::visit(ast::node_id id, const ast::return_stmt& return_stmt) 
                     resolving_.ast.location_of(*return_stmt.expression)));
             }
         }
+
+        // An erased callable borrows its closure's environment from this frame
+        const auto returns_erased{!return_trackers_.empty() &&
+                                  return_trackers_.back().expected_type &&
+                                  is_fat_callable(*return_trackers_.back().expected_type)};
+        if (const auto cl{return_expr_type.get_data().as_opt<types::closure_t>()};
+            cl && !cl->captures.empty() && returns_erased) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                "A capturing closure erased into `fn(...)` borrows its environment from this "
+                "function and cannot be returned; return it by its own type with an `auto` "
+                "return instead",
+                error::ILLEGAL_CLOSURE_ESCAPE,
+                resolving_.ast.location_of(*return_stmt.expression)));
+        }
         resolving_.set_sema_type(id, return_expr_type);
         if (!return_trackers_.empty()) { return_trackers_.back().add_return(return_expr_type); }
     } else {
