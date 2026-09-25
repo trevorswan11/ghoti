@@ -43,7 +43,7 @@ TEST_CASE("@verify routes its message to the panic handler, which can observe it
     )") != 0);
 }
 
-TEST_CASE("a comptime-true @assert / @verify emits no check") {
+TEST_CASE("a constexpr-true @assert / @verify emits no check") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             @assert(1 == 1);

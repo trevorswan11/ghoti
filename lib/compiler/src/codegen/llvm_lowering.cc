@@ -64,7 +64,7 @@ namespace {
     return k == sema::type_kind::CONSTEXPR_INT || k == sema::type_kind::CONSTEXPR_FLOAT;
 }
 
-[[nodiscard]] auto is_comptime_only_signature(const sema::types::function& fn_data) noexcept
+[[nodiscard]] auto is_constexpr_only_signature(const sema::types::function& fn_data) noexcept
     -> bool {
     return fn_data.return_type.get_kind() == sema::type_kind::TYPE;
 }
@@ -1498,7 +1498,7 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
     }
     const auto fn_data{target_t->get_data().as_opt<sema::types::function>()};
     if (fn.get_linkage() == gir::linkage::EXTERN || fn.get_segments().empty() ||
-        (fn_data && is_comptime_only_signature(*fn_data))) {
+        (fn_data && is_constexpr_only_signature(*fn_data))) {
         return llvm_fn;
     }
     clear_locals();

@@ -100,6 +100,8 @@ class type_resolver {
         -> void;
     auto fold_concat_operand_len(ast::expr_handle operand, type& operand_type)
         -> stdx::option<usize>;
+    template <typename Eval>
+    auto fold_type_read(const type& object_type, type& read_type, Eval&& eval) -> type&;
     // True when `expr` is a bare identifier declared `constexpr var` (no storage, no address).
     auto names_constexpr_var(ast::expr_handle expr) -> bool;
 

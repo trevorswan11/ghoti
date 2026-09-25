@@ -190,7 +190,7 @@ constexpr auto LEGAL_MODIFIERS{
     const auto mut_bits{modifiers & (decl_modifiers::VARIABLE | decl_modifiers::CONSTANT |
                                      decl_modifiers::CONSTEXPR)};
     const auto mut_count{std::popcount(std::to_underlying(mut_bits))};
-    // `constexpr var` is the one legal pair: a mutable comptime local.
+    // `constexpr var` is the one legal pair: a mutable constexpr local.
     const auto is_constexpr_var{mut_bits == (decl_modifiers::VARIABLE | decl_modifiers::CONSTEXPR)};
     if (mut_count != 1 && !is_constexpr_var) {
         return fmt::format("Exactly one mutability modifier may be used; found {}", mut_count);

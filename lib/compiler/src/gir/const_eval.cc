@@ -199,7 +199,7 @@ template <typename T>
     }
 }
 
-// Same as `integer_target_width`, but an untyped comptime int operand resolves as `i32`
+// Same as `integer_target_width`, but an untyped constexpr int operand resolves as `i32`
 [[nodiscard]] auto integer_or_constexpr_width(const sema::type& t, u32 ptr_bits)
     -> stdx::option<u16> {
     if (t.get_kind() == sema::type_kind::CONSTEXPR_INT) { return u16{32}; }
@@ -461,8 +461,8 @@ auto const_eval::type_size_of(const sema::type& type, usize ptr_size) -> usize {
     }
     case sema::type_kind::ISIZE:
     case sema::type_kind::USIZE:
-    case sema::type_kind::FUNCTION:        return ptr_size;
-    case sema::type_kind::SLICE:           return 2 * ptr_size;
+    case sema::type_kind::FUNCTION: return ptr_size;
+    case sema::type_kind::SLICE:    return 2 * ptr_size;
     case sema::type_kind::ARRAY:
         if (const auto arr{type.get_data().as_opt<sema::types::array>()}) {
             const auto elem_size{type_size_of(arr->underlying, ptr_size)};
@@ -2069,7 +2069,9 @@ auto const_eval::resolve_module_chain(ast::node_id node) -> stdx::option<mod::mo
 auto const_eval::alias_decl_type(const mod::module&    mod,
                                  ast::node_id          node,
                                  const ast::decl_stmt& decl) -> stdx::option<sema::type&> {
-    if (decl.explicit_type || !mod.is_storageless_decl(node)) { return stdx::none; }
+    if (decl.explicit_type || mod.get_storageless_kind(node) != mod::storageless_kind::ALIAS) {
+        return stdx::none;
+    }
     const auto sema_type{mod.get_sema_type_opt(node)};
     if (!sema_type) { return stdx::none; }
     // A bare `type` (e.g. `info.return_type`) only names the type once folded, and a module alias
@@ -2426,7 +2428,7 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
             op_type, to_f64(lhs), to_f64(rhs), res_type, bool_type, on_div_zero);
     }
 
-    // A wide (128-bit) operand pulls the whole operation into the 128-bit comptime domain.
+    // A wide (128-bit) operand pulls the whole operation into the 128-bit constexpr domain.
     if ((is_wide_arm(lhs) || is_wide_arm(rhs)) && (is_wide_arm(lhs) || is_narrow_int(lhs)) &&
         (is_wide_arm(rhs) || is_narrow_int(rhs))) {
         const auto res_type{lhs.get_type() ? lhs.get_type() : rhs.get_type()};
@@ -2819,7 +2821,7 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
              decl->has_modifier(ast::decl_modifiers::CONSTANT))) {
             if (const auto fn_expr{callee_mod->ast.get_as_opt<ast::function_expr>(*decl->value)}) {
                 // Outside any const-evaluated body, a constructor call's own node already holds
-                // this instantiation's aggregate (re-evaluating the body yields the shared template)
+                // this instantiation's aggregate
                 if (id.is_valid() && call_stack_.size() <= 1 &&
                     fn_expr->explicit_return_type.get_token_type() ==
                         syntax::token_type_t::TYPE_TYPE) {

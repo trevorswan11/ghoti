@@ -132,7 +132,7 @@ TEST_CASE("constexpr closure: distinct captured values monomorphize apart") {
     )") == 10 + 100 + 11 + 102);
 }
 
-TEST_CASE("constexpr closure: invoked at comptime and runtime in the body") {
+TEST_CASE("constexpr closure: invoked at constexpr and runtime in the body") {
     CHECK(helpers::compile_and_run(R"(
         const use := fn(constexpr f: fn(n: i32): i32, v: i32): i32 {
             if constexpr (f(1) == 5) { return f(v) + 100; }

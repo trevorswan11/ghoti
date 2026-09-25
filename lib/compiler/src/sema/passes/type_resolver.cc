@@ -1852,7 +1852,7 @@ template <ast::IndexableID ID>
                                      get_call_arg_location(call.arguments[0]));
             }
 
-            // A comptime-known-false condition is a compile error at the call site.
+            // A constexpr-known-false condition is a compile error at the call site.
             if (const auto cv{evaluator.try_eval(*cond_expr)}) {
                 bool is_false{false};
                 if (const auto b{cv->as_opt<bool>()}) {
@@ -4642,6 +4642,29 @@ auto type_resolver::resolve_pack_index(ast::node_id id, const ast::index_expr& i
     last_type_.emplace(elem_type);
 }
 
+template <typename Eval>
+auto type_resolver::fold_type_read(const type& object_type, type& read_type, Eval&& eval) -> type& {
+    const auto& read_data{read_type.get_data()};
+    if (read_type.get_kind() != type_kind::TYPE || read_data.is<types::meta_type>() ||
+        read_data.is<types::deferred_call>() || read_data.is<types::deferred_array>()) {
+        return read_type;
+    }
+    const auto* object{&object_type};
+    if (const auto ref{object->get_data().as_opt<types::reference>()}) {
+        object = &ref->underlying;
+    }
+    if (!is_constexpr_aggregate(*object)) { return read_type; }
+
+    gir::const_eval evaluator{ctx_, resolving_};
+    const auto      cv{std::forward<Eval>(eval)(evaluator)};
+    const auto      folded{cv ? cv->template as_opt<stdx::option<type&>>() : stdx::none};
+    if (!folded || !*folded) { return read_type; }
+    auto& instance{**folded};
+    auto  meta{ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, instance}]};
+    meta->template resolve_if<types::meta_type>(instance);
+    return *meta;
+}
+
 auto type_resolver::visit(ast::node_id id, const ast::index_expr& index) -> void {
     PROFILE_FUNCTION();
     if (current_pack_) {
@@ -4730,7 +4753,8 @@ auto type_resolver::visit(ast::node_id id, const ast::index_expr& index) -> void
         last_type_.emplace(single_item_type);
     }
 
-    auto& result_type{*last_type_.take()};
+    auto& result_type{fold_type_read(
+        *target_type, *last_type_.take(), [&](gir::const_eval& ev) { return ev.try_eval(id); })};
     resolving_.set_sema_type(id, result_type);
     last_type_.emplace(result_type);
 }
@@ -5379,8 +5403,18 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
     // An ordinary `Color := enum {...}` names its `enum_t` directly, never wrapped
     auto& object_type{denoted_type(*last_type_.take())};
 
+    const auto unwrap_ref = [](type& t) -> type& {
+        if (const auto p{t.get_data().as_opt<types::pointer>()}) { return p->underlying; }
+        if (const auto r{t.get_data().as_opt<types::reference>()}) { return r->underlying; }
+        return t;
+    };
+    auto&      unwrapped_obj{unwrap_ref(object_type)};
+    const bool is_array_or_slice{unwrapped_obj.get_kind() == type_kind::ARRAY ||
+                                 unwrapped_obj.get_kind() == type_kind::SLICE ||
+                                 unwrapped_obj.get_data().template is<types::deferred_array>()};
+
     // Desugared to auto and needs to be deferred like the call handler
-    if (is_generic_type(object_type)) {
+    if (!is_array_or_slice && is_generic_type(object_type)) {
         auto& placeholder{*ctx_.pool[{type_kind::AUTO, types::mut::CONSTANT}]};
         resolving_.set_sema_type(dot.member, placeholder);
         resolving_.set_sema_type(id, placeholder);
@@ -5514,13 +5548,7 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
         return last_type_.emplace(member_type);
     }
 
-    const auto unwrap_ref = [](type& t) -> type& {
-        if (const auto p{t.get_data().as_opt<types::pointer>()}) { return p->underlying; }
-        if (const auto r{t.get_data().as_opt<types::reference>()}) { return r->underlying; }
-        return t;
-    };
-
-    if (object_type.get_kind() == type_kind::SLICE ||
+    if (object_type.get_kind() == type_kind::SLICE || object_type.get_kind() == type_kind::ARRAY ||
         unwrap_ref(object_type).get_kind() == type_kind::INTERFACE) {
         auto& member_type{**result};
         resolving_.set_sema_type(dot.member, member_type);
@@ -5585,7 +5613,16 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
     if (!access_ok) { return; }
 
     // The structural resolver returns poisoned types in error conditions which can be bubbled here
-    auto& member_type{*result.value()};
+    auto& member_type{fold_type_read(
+        object_type, *result.value(), [&](gir::const_eval& ev) -> stdx::option<gir::const_value> {
+            const auto object{ev.try_eval(dot.object)};
+            const auto st{object ? object->as_opt<gir::const_struct>() : stdx::none};
+            if (!st) { return stdx::none; }
+            const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(dot.member)};
+            return st->get_field_opt(member_ident.name).transform([](const auto& f) {
+                return gir::const_value{f};
+            });
+        })};
     if constexpr (std::same_as<ID, ast::node_id>) {
         if (!member_type.is_poison()) { record_member_owner(id, object_type, dot.member); }
     }
@@ -6841,14 +6878,14 @@ auto type_resolver::reject_type_as_value(ast::expr_handle value, const type& exp
     }
     if (!decl_value_denotes_type(value)) { return false; }
 
-    last_type_.emplace(ctx_.poison_node(
-        resolving_,
-        value,
-        fmt::format("Expected a value of type '{}', but found the type '{}'",
-                    ctx_.type_display_name(expected),
-                    ctx_.type_display_name(denoted_type(*value_type))),
-        error::TYPE_USED_AS_VALUE,
-        resolving_.ast.location_of(value)));
+    last_type_.emplace(
+        ctx_.poison_node(resolving_,
+                         value,
+                         fmt::format("Expected a value of type '{}', but found the type '{}'",
+                                     ctx_.type_display_name(expected),
+                                     ctx_.type_display_name(denoted_type(*value_type))),
+                         error::TYPE_USED_AS_VALUE,
+                         resolving_.ast.location_of(value)));
     return true;
 }
 
@@ -7300,8 +7337,7 @@ auto type_resolver::dot_member_symbol(const ast::dot_expr& dot) const -> const s
     const auto& member{resolving_.ast.get_as<ast::identifier_expr>(dot.member)};
     if (const auto mod_data{obj_type->get_data().as_opt<types::module>()}) {
         if (!mod_data->imported.root_table_idx) { return nullptr; }
-        const auto sym{
-            ctx_.registry.get_from_opt(*mod_data->imported.root_table_idx, member.name)};
+        const auto sym{ctx_.registry.get_from_opt(*mod_data->imported.root_table_idx, member.name)};
         return sym ? &*sym : nullptr;
     }
     const auto tbl{denoted_type(*obj_type).get_symbol_table_idx_opt()};
@@ -8105,7 +8141,8 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             if (decl_value_type_p->get_data().is<types::deferred_call>()) {
                 const auto& dc_call{decl_value_type_p->get_data().as<types::deferred_call>().call};
                 gir::const_eval evaluator{ctx_, resolving_};
-                decl_value_type_p = &denoted_type(evaluator.force_deferred_call(*decl_value_type_p));
+                decl_value_type_p =
+                    &denoted_type(evaluator.force_deferred_call(*decl_value_type_p));
                 if (decl_value_type_p->is_poison()) {
                     last_type_.emplace(*decl_value_type_p);
                     return poison_out();
@@ -8221,6 +8258,25 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
 
+        const bool aggregate_literal{
+            decl.value &&
+            decl.value
+                ->any<ast::struct_expr, ast::union_expr, ast::enum_expr, ast::interface_expr>()};
+        const bool constexpr_value{!binds_type && !aggregate_literal &&
+                                   is_constexpr_aggregate(resolved_type)};
+        if (constexpr_value && decl.has_modifier(ast::decl_modifiers::VARIABLE) &&
+            !decl.has_modifier(ast::decl_modifiers::CONSTEXPR)) {
+            ctx_.poison_symbol(sym,
+                               fmt::format("a value of type '{}' holds 'type's and only exists at "
+                                           "compile time, so it cannot be stored in a mutable "
+                                           "('var') binding; use 'const' or 'constexpr' instead",
+                                           ctx_.type_display_name(resolved_type)),
+                               error::MUTABLE_TYPE_BINDING,
+                               resolving_.ast.location_of(id));
+            resolving_.set_sema_type(decl.name, ctx_.get_poison());
+            return last_type_.emplace(ctx_.poison_node(resolving_, id));
+        }
+
         // `reresolve_local` re-derives this decl's kind fresh even if a stale pass over this same
         // generic instantiation already set it
         if (binds_type && !type_data.is<types::module>()) {
@@ -8240,11 +8296,17 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
 
         // Aliases of an existing or constructed type have no storage; aggregate literals keep
         // their own member emission path
-        const bool aggregate_literal{
-            decl.value &&
-            decl.value->any<ast::struct_expr, ast::union_expr, ast::enum_expr, ast::interface_expr>()};
-        resolving_.storageless_decls.insert_or_assign(
-            id.get_index(), (binds_type && !aggregate_literal) || type_data.is<types::module>());
+        using storageless_kind = mod::storageless_kind;
+        const auto storageless{[&] -> stdx::option<storageless_kind> {
+            if ((binds_type && !aggregate_literal) || type_data.is<types::module>()) {
+                return storageless_kind::ALIAS;
+            }
+            if (constexpr_value && !decl.has_modifier(ast::decl_modifiers::VARIABLE)) {
+                return storageless_kind::CONSTEXPR_VALUE;
+            }
+            return stdx::none;
+        }()};
+        resolving_.storageless_decls.insert_or_assign(id.get_index(), storageless);
 
         if (type_data.is<types::function>()) {
             const auto& decl_ident{resolving_.ast.get_as<ast::identifier_expr>(decl.name)};

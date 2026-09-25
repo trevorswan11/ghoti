@@ -881,6 +881,7 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
     const auto  name{name_ident.name};
     const auto  sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Top-level declaration must have a resolved sema type");
+    if (active_mod().is_constexpr_value_decl(id)) { return check_constexpr_value_decl(decl); }
     if (active_mod().is_storageless_decl(id)) {
         // A module-level type alias is listed by name; it has no storage of its own
         if (user_type_stack_.empty()) {
@@ -1862,6 +1863,17 @@ auto emitter::emit_block(const ast::block_stmt& block) -> void {
     }
 }
 
+auto emitter::check_constexpr_value_decl(const ast::decl_stmt& decl) -> void {
+    if (!decl.value) { return; }
+    const gir::const_eval::constexpr_context_guard g{const_eval_, true};
+    const auto                                     diags_before{ctx_.diags.size()};
+    if (const_eval_.try_eval(*decl.value) || ctx_.diags.size() != diags_before) { return; }
+    ctx_.diags.emplace_back("a value holding 'type's only exists at compile time, so its "
+                            "initializer must be known at compile time",
+                            sema::error::COMPILE_TIME_ONLY_VALUE,
+                            active_ast().location_of(*decl.value));
+}
+
 auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> void {
     PROFILE_FUNCTION();
     const auto& name_ident{active_ast().get_as<ast::identifier_expr>(decl.name)};
@@ -1869,6 +1881,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
     const auto  sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Local declaration must have a resolved sema type");
     if (sema_type->get_kind() == sema::type_kind::TYPE) { return; }
+    if (active_mod().is_constexpr_value_decl(id)) { return check_constexpr_value_decl(decl); }
     if (active_mod().is_storageless_decl(id)) { return; }
     if (decl_is_deferred_compile_error(active_ast(), decl)) { return; }
 
@@ -2069,10 +2082,69 @@ auto emitter::emit_expression_id(ast::node_id id) -> value {
     return val;
 }
 
+auto emitter::reads_constexpr_value(ast::node_id id) -> bool {
+    const auto source{[&] -> stdx::option<ast::node_id> {
+        if (active_ast().get_as_opt<ast::identifier_expr>(id)) { return id; }
+        if (const auto dot{active_ast().get_as_opt<ast::dot_expr>(id)}) {
+            // `S.member` on a type holding `type` fields reads a static member, not the type
+            if (dot_object_is_type_namespace(*dot)) { return stdx::none; }
+            return ast::node_id{dot->object};
+        }
+        if (const auto index{active_ast().get_as_opt<ast::index_expr>(id)}) {
+            return ast::node_id{index->array};
+        }
+        return stdx::none;
+    }()};
+    if (!source) { return false; }
+
+    // A bare `type` (`T`, `i32`) already folds wherever it is read
+    const auto source_type{active_mod().get_sema_type_opt(*source)};
+    return source_type && sema::is_constexpr_aggregate(*source_type);
+}
+
+auto emitter::emit_constexpr_value_read(ast::node_id id) -> value {
+    const auto sema_type{active_mod().get_sema_type_opt(id)};
+    const auto diags_before{ctx_.diags.size()};
+    if (const auto cv{const_eval_.try_eval(id)}) {
+        // A folded `type` (`ts[0]`) or scalar (`ts.len`) has a real value, but an aggregate that
+        // still holds `type`s has no runtime representation at all
+        const auto cv_type{cv->get_type()};
+        const bool is_aggregate{cv->is<const_array>() || cv->is<const_struct>() ||
+                                cv->is<const_union>()};
+        // A folded integer (`ts.len`) takes the read's resolved type, exactly as a literal does,
+        // since that may be `constexpr_int` rather than the `usize` the fold produced
+        if (const auto iv{cv->as_int_opt()};
+            iv && sema_type &&
+            (sema::is_integer(sema_type->get_kind()) ||
+             sema_type->get_kind() == sema::type_kind::CONSTEXPR_INT)) {
+            if (sema::is_unsigned_integer(*sema_type)) {
+                return value{static_cast<u64>(*iv), sema_type};
+            }
+            return value{static_cast<i64>(*iv), sema_type};
+        }
+        if (!is_aggregate || !cv_type || !sema::holds_type_values(*cv_type)) {
+            return materialize_const(*cv);
+        }
+        ctx_.diags.emplace_back(
+            fmt::format("a value of type '{}' holds 'type's and only exists at compile time, so "
+                        "it cannot be used at runtime",
+                        ctx_.type_display_name(*cv_type)),
+            sema::error::COMPILE_TIME_ONLY_VALUE,
+            active_ast().location_of(id));
+    } else if (ctx_.diags.size() == diags_before) {
+        ctx_.diags.emplace_back("a value holding 'type's only exists at compile time, so every "
+                                "read from it (including its index) must be known at compile time",
+                                sema::error::COMPILE_TIME_ONLY_VALUE,
+                                active_ast().location_of(id));
+    }
+    return value{undefined_val{}, sema_type};
+}
+
 auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
     PROFILE_FUNCTION();
     ASSERT(id.is_valid(), "Valid node ID expected in emit_expression_id");
     builder_.set_location(active_ast().location_of(id));
+    if (reads_constexpr_value(id)) { return emit_constexpr_value_read(id); }
 
     return active_ast()[id].visit(
         [&](const auto&) -> value {
@@ -2358,8 +2430,7 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
     const auto kind_opt{map_binary_op(op_type)};
     const auto sema_type{active_mod().get_sema_type_opt(id)};
 
-    // An operator with no live-instruction mapping (e.g. `++`) only ever exists at comptime; a
-    // fold is the only way to emit it. Operators that do have a mapping keep their existing path.
+    // An operator with no live-instruction mapping (e.g. `++`) only ever exists at compile time
     if (!kind_opt) {
         if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
         ctx_.diags.emplace_back("Operands of '++' must be known at compile time here; a local "
@@ -2371,9 +2442,7 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
     ASSERT(kind_opt, "Binary operator must be mapped to instruction kind");
     ASSERT(sema_type, "Binary expression must have a resolved sema type");
 
-    // A fully compile-time-known shift folds here, before real codegen reaches
-    // `emit_checked_binary`. Needed since an operand's*sema type can be narrower than the value's
-    // actual comptime-only dest
+    // An operand'ssema type can be narrower than the value's actual constexpr-only dest
     if (*kind_opt == instruction_kind::SHL || *kind_opt == instruction_kind::SHR) {
         if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
     }
@@ -3519,7 +3588,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         case syntax::token_type_t::BUILTIN_VERIFY: {
             const bool is_verify{fn_token == syntax::token_type_t::BUILTIN_VERIFY};
 
-            // A comptime-known-true condition needs no check
+            // A compile-time-known-true condition needs no check
             if (!call.arguments.empty()) {
                 if (const auto ch{call.arguments[0].as_opt<ast::expr_handle>()}) {
                     if (const auto cv{const_eval_.try_eval(*ch)}) {
@@ -5921,6 +5990,13 @@ auto emitter::lvalue_of_binding(std::string_view name) -> value {
 auto emitter::emit_lvalue(ast::node_id id) -> value {
     PROFILE_FUNCTION();
     ASSERT(id.is_valid(), "Valid node ID expected in emit_lvalue");
+    if (reads_constexpr_value(id)) {
+        // Only a folded scalar (`ts.len`) has a runtime value to take the address of
+        const auto val{emit_constexpr_value_read(id)};
+        const auto sema_type{active_mod().get_sema_type_opt(id)};
+        if (!sema_type || sema::holds_type_values(*sema_type)) { return val; }
+        return spill_to_temporary(val, *sema_type, true);
+    }
 
     return active_ast()[id].visit(
         [&](const auto&) -> value {
@@ -7403,7 +7479,9 @@ auto emitter::emit_dereference(ast::node_id id, const ast::dereference_expr& der
     const auto ptr_val{emit_expression_id_raw(*deref.rhs)};
     emit_null_pointer_check(ptr_val, id);
     // `*f` on a `^fn(...)` names the same code address as `f`
-    if (elem_type.get_kind() == sema::type_kind::FUNCTION) { return value{ptr_val.data, sema_type}; }
+    if (elem_type.get_kind() == sema::type_kind::FUNCTION) {
+        return value{ptr_val.data, sema_type};
+    }
     const auto loaded{builder_.emit_load(ptr_val, elem_type)};
     return value{loaded, sema_type};
 }

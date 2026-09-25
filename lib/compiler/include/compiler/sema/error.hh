@@ -127,6 +127,7 @@ enum class error : u8 {
     UNKNOWN_SLICE_LENGTH,
     SLICE_LENGTH_MISMATCH,
     TYPE_USED_AS_VALUE,
+    COMPILE_TIME_ONLY_VALUE,
 };
 
 using diagnostic  = diagnostic<error>;

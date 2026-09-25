@@ -524,13 +524,15 @@ TEST_CASE("Resolve deferred call returning type") {
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
     // Each call stays deferred on its own node until it is forced
-    const auto [sym_a, _a, node_a]{ctx->get_ast_sym_info<syms::node_t, ast::decl_stmt>("TypeA", idx)};
+    const auto [sym_a, _a, node_a]{
+        ctx->get_ast_sym_info<syms::node_t, ast::decl_stmt>("TypeA", idx)};
     auto& call_a{UNWRAP(ctx->root_mod.get_sema_type_opt(*node_a.value))};
     CHECK(call_a.get_data().is<sema::types::deferred_call>());
     CHECK(sema::type_kind_display_name(sema::denoted_type(evaluator.force_deferred_call(call_a))) ==
           "i64");
 
-    const auto [sym_b, _b, node_b]{ctx->get_ast_sym_info<syms::node_t, ast::decl_stmt>("TypeB", idx)};
+    const auto [sym_b, _b, node_b]{
+        ctx->get_ast_sym_info<syms::node_t, ast::decl_stmt>("TypeB", idx)};
     auto& call_b{UNWRAP(ctx->root_mod.get_sema_type_opt(*node_b.value))};
     CHECK(call_b.get_data().is<sema::types::deferred_call>());
     CHECK(sema::type_kind_display_name(sema::denoted_type(evaluator.force_deferred_call(call_b))) ==

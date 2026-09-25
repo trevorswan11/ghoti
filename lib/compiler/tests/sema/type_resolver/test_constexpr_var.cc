@@ -7,7 +7,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("`constexpr var` is a legal mutable comptime local") {
+TEST_CASE("`constexpr var` is a legal mutable constexpr local") {
     helpers::resolve_and_check("constexpr var n := 0;");
     helpers::resolve_and_check("constexpr var n: i32 = 0;");
 }

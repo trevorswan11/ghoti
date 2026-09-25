@@ -16,7 +16,6 @@
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/ast/statement.hh"
-#include "compiler/ast/type.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/symbol_scoping.hh"
 #include "compiler/module/module.hh"
@@ -117,9 +116,9 @@ class const_eval {
     [[nodiscard]] static auto type_size_of(const sema::type& type, usize ptr_size) -> usize;
     // The type an unannotated type-alias decl (`const X := T;`) names, read off its own node so a
     // generic instantiation's body overlay stays per-instantiation
-    [[nodiscard]] static auto alias_decl_type(const mod::module&    mod,
-                                              ast::node_id          node,
-                                              const ast::decl_stmt& decl) -> stdx::option<sema::type&>;
+    [[nodiscard]] static auto
+    alias_decl_type(const mod::module& mod, ast::node_id node, const ast::decl_stmt& decl)
+        -> stdx::option<sema::type&>;
 
     [[nodiscard]] auto coerce_dyn(const const_value& val, sema::type& dest_type)
         -> stdx::option<const_value>;

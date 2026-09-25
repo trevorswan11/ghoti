@@ -213,9 +213,9 @@ TEST_CASE("Illegal resolved union matcher type") {
 
         helpers::test_resolver_fail("const U := union { a: i32 }; match (U) { .a => 5, .a => 4 };",
                                     expected_diag(": a", 29UZ));
-        helpers::test_resolver_fail(
-            "const U := union { a: i32, b: i64 }; match (U) { .a => 5, .a => 4, .b => 3, .b => 2 };",
-            expected_diag("s: a, b", 37UZ));
+        helpers::test_resolver_fail("const U := union { a: i32, b: i64 }; match (U) { .a => 5, .a "
+                                    "=> 4, .b => 3, .b => 2 };",
+                                    expected_diag("s: a, b", 37UZ));
     }
 
     SECTION("Missing fields") {

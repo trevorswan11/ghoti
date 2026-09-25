@@ -18,17 +18,17 @@ const use := fn(x: i32): void {
 )");
 }
 
-TEST_CASE("a comptime-known-false @assert is a compile error") {
+TEST_CASE("a constexpr-known-false @assert is a compile error") {
     CHECK(helpers::raised("const use := fn(): void { @assert(1 == 2); };",
                           sema::error::STATIC_ASSERTION_FAILED));
 }
 
-TEST_CASE("a comptime-known-false @verify is a compile error") {
+TEST_CASE("a constexpr-known-false @verify is a compile error") {
     CHECK(helpers::raised("const use := fn(): void { @verify(false, \"nope\"); };",
                           sema::error::STATIC_ASSERTION_FAILED));
 }
 
-TEST_CASE("a comptime-known-true @assert / @verify raises nothing") {
+TEST_CASE("a constexpr-known-true @assert / @verify raises nothing") {
     CHECK(helpers::resolver_error_codes(
               "const use := fn(): void { @assert(1 == 1); @verify(2 > 1); };")
               .empty());

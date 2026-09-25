@@ -98,7 +98,7 @@ TEST_CASE("GIR constexpr if branching") {
     REQUIRE(gir_mod.get_functions().size() == 1);
     const auto& fn{UNWRAP(gir_mod.get_functions()[0])};
 
-    // Comptime folding should emit only active branch, no cond_goto
+    // Constexpr folding should emit only active branch, no cond_goto
     REQUIRE(fn.get_segments().size() == 1);
     const auto& seg{UNWRAP(fn.get_segments()[0])};
     REQUIRE(seg.has_terminator());

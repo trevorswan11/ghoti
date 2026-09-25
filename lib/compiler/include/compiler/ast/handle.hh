@@ -151,7 +151,7 @@ using import_payload_handle =
     handle<node_kind::STRING_EXPRESSION, node_kind::IDENTIFIER_EXPRESSION>;
 
 using member_handle = handle<node_kind::DECL_STATEMENT, node_kind::IMPORT_STATEMENT>;
-using member_list = std::vector<member_handle>;
+using member_list   = std::vector<member_handle>;
 
 using labeled_node_handle = handle<node_kind::DO_WHILE_LOOP_EXPRESSION,
                                    node_kind::FOR_LOOP_EXPRESSION,

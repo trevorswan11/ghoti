@@ -157,7 +157,7 @@ TEST_CASE("cfg: @compileError in a pruned arm does nothing") {
     CHECK(run_cfg(src).codes.empty());
 }
 
-TEST_CASE("cfg: @compileError needs a comptime-known message") {
+TEST_CASE("cfg: @compileError needs a constexpr-known message") {
     constexpr std::string_view src{R"(
         @cfg(ptr_bits >= 8) { @compileError(some_runtime_value); }
         else                { const unused := 1; }

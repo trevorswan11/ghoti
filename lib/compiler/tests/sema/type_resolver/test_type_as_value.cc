@@ -1,4 +1,3 @@
-#include <string>
 #include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
@@ -49,7 +48,8 @@ TEST_CASE("A type is rejected as an aggregate or array element value") {
 }
 
 TEST_CASE("Type-accepting slots and ordinary values are unaffected") {
-    helpers::resolve_and_check("const f := fn(T: type): usize { return @sizeOf(T); }; const n := f(i32);");
+    helpers::resolve_and_check(
+        "const f := fn(T: type): usize { return @sizeOf(T); }; const n := f(i32);");
     helpers::resolve_and_check("const x: type = i32;");
     helpers::resolve_and_check("const T := i32; const x: T = 3; const U := T;");
     helpers::resolve_and_check(

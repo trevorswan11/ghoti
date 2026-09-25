@@ -18,6 +18,7 @@
 #include <stdx/types.hh>
 
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/primitive.hh"
 #include "compiler/module/module.hh"
 #include "support/int128.hh"
 #include "support/string_utils.hh"
@@ -194,7 +195,7 @@ auto packed_field_bits(const type& t, u32 ptr_bits) noexcept -> stdx::option<u32
     case type_kind::F32:
     case type_kind::F64:
     case type_kind::F80:
-    case type_kind::F128:      return float_bits(t.get_kind());
+    case type_kind::F128: return float_bits(t.get_kind());
     case type_kind::ENUM:
         if (const auto e{t.get_data().as_opt<types::enum_t>()}) {
             return packed_field_bits(e->underlying, ptr_bits);
@@ -471,6 +472,25 @@ auto type::to_string(stdx::option<const type_name_map&> names) const -> std::str
                                container_qualifier(*this),
                                arr.underlying.to_string(names));
         },
+        [this, names](const types::deferred_array& arr) {
+            std::string dim;
+            if (arr.array.dimension) {
+                if (const auto lit{arr.enclosing.ast.get_as_opt<ast::int_literal_expr>(
+                        *arr.array.dimension)}) {
+                    dim = fmt::to_string(lit->value);
+                } else if (const auto id{arr.enclosing.ast.get_as_opt<ast::identifier_expr>(
+                               *arr.array.dimension)}) {
+                    dim = std::string{id->name};
+                } else {
+                    dim = "_";
+                }
+            }
+            return fmt::format("[{}{}]{}{}",
+                               dim,
+                               arr.array.null_terminated ? ":0" : "",
+                               container_qualifier(*this),
+                               arr.underlying.to_string(names));
+        },
         [names](types::function fn) {
             auto params_str{
                 fmt::to_string(fmt::join(fn.params | std::views::transform([names](type* param) {
@@ -523,6 +543,32 @@ auto type_pool::strip_modifiers(const type& old_type, types::mutability_modifier
         new_type->set_symbol_table_idx(*idx);
     }
     return new_type;
+}
+
+auto holds_type_values(const type& t) noexcept -> bool {
+    const auto& data{t.get_data()};
+    // A not-yet-folded `[N]T` or type-constructor call shares the `type` kind without being one
+    if (const auto deferred{data.as_opt<types::deferred_array>()}) {
+        return holds_type_values(deferred->underlying);
+    }
+    if (t.get_kind() == type_kind::TYPE) { return !data.is<types::deferred_call>(); }
+    if (const auto arr{data.as_opt<types::array>()}) { return holds_type_values(arr->underlying); }
+    if (const auto slice{data.as_opt<types::slice>()}) {
+        return holds_type_values(slice->underlying);
+    }
+    const auto any_field{[](gsl::span<type*> fields) {
+        return std::ranges::any_of(fields, [](const type* f) { return holds_type_values(*f); });
+    }};
+    if (const auto st{data.as_opt<types::struct_t>()}) { return any_field(st->fields); }
+    if (const auto ut{data.as_opt<types::union_t>()}) { return any_field(ut->fields); }
+    return false;
+}
+
+auto is_constexpr_aggregate(const type& t) noexcept -> bool {
+    if (t.get_kind() == type_kind::TYPE && !t.get_data().is<types::deferred_array>()) {
+        return false;
+    }
+    return holds_type_values(t);
 }
 
 auto is_generic_type(const type& t, bool unmodified) noexcept -> bool {

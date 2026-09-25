@@ -35,7 +35,7 @@ using syntax::token_type_t;
 // A human-readable name for a `cfgval::value`'s alternative, for diagnostics.
 [[nodiscard]] auto value_type_name(const cfgval::value& value) -> std::string_view {
     return value.visit([](bool) -> std::string_view { return "bool"; },
-                       [](i64) -> std::string_view { return "comptime int"; },
+                       [](i64) -> std::string_view { return "constexpr int"; },
                        [](cfgval::member) -> std::string_view { return "enum member"; },
                        [](cfgval::text) -> std::string_view { return "[:0]u8"; },
                        [](cfgval::diverges) -> std::string_view { return "noreturn"; });
