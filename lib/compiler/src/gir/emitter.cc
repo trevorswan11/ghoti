@@ -940,6 +940,8 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
 
 auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -> void {
     PROFILE_FUNCTION();
+    const sema::constexpr_evaluation_scope cx_scope{
+        ctx_, decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
     const auto& name_ident{active_ast().get_as<ast::identifier_expr>(decl.name)};
     const auto  name{name_ident.name};
     const auto  sema_type{active_mod().get_sema_type_opt(id)};
@@ -1939,6 +1941,8 @@ auto emitter::check_constexpr_value_decl(const ast::decl_stmt& decl) -> void {
 
 auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> void {
     PROFILE_FUNCTION();
+    const sema::constexpr_evaluation_scope cx_scope{
+        ctx_, decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
     const auto& name_ident{active_ast().get_as<ast::identifier_expr>(decl.name)};
     const auto  name{name_ident.name};
     const auto  sema_type{active_mod().get_sema_type_opt(id)};
@@ -4370,6 +4374,12 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
                             : (emit_stmt(arm), value{void_val{}, sema_type});
     }};
 
+    // Emitted code only ever runs outside of compile-time evaluation
+    if (if_expr.is_evaluation_context_branch()) {
+        if (if_expr.alternate) { return emit_single_arm(*if_expr.alternate); }
+        return value{void_val{}, sema_type};
+    }
+
     const bool in_cx_loop{
         std::ranges::any_of(loop_stack_, [](const auto& l) { return l.is_constexpr; })};
     // The type resolver already folded this `if constexpr`
@@ -4385,13 +4395,13 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
     if (if_expr.constexpr_condition) {
         const gir::const_eval::constexpr_context_guard g{const_eval_, true};
         const auto                                     diags_before{ctx_.diags.size()};
-        const auto cond_cv{const_eval_.try_eval(if_expr.condition)};
+        const auto cond_cv{const_eval_.try_eval(*if_expr.condition)};
         if (!cond_cv) {
             if (ctx_.diags.size() == diags_before) {
                 ctx_.diags.emplace_back(
                     "Constexpr if condition could not be evaluated at compile time",
                     sema::error::CONSTEXPR_EVALUATION_FAILED,
-                    active_ast().location_of(if_expr.condition));
+                    active_ast().location_of(*if_expr.condition));
             }
             return value{undefined_val{}, sema_type};
         }
@@ -4400,7 +4410,7 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
         if (!eval) {
             ctx_.diags.emplace_back("Constexpr if condition must evaluate to a boolean",
                                     sema::error::TYPE_MISMATCH,
-                                    active_ast().location_of(if_expr.condition));
+                                    active_ast().location_of(*if_expr.condition));
             return value{undefined_val{}, sema_type};
         }
 
@@ -4421,7 +4431,7 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
 
     stdx::option<local_id> res_slot;
     if (yields_value) { res_slot.emplace(builder_.emit_alloca(*sema_type)); }
-    const auto cond_val{coerce_condition(emit_expression(if_expr.condition))};
+    const auto cond_val{coerce_condition(emit_expression(*if_expr.condition))};
 
     auto&                  consequence_seg{fn.add_segment()};
     stdx::option<segment&> alternate_seg_ptr;

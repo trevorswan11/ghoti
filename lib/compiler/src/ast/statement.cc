@@ -34,7 +34,8 @@ auto block_stmt::parse(syntax::parser& parser, bool is_constexpr)
         TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
     }
 
-    statements_t statements;
+    statements_t                             statements;
+    const syntax::parser::compile_time_scope cx_scope{parser, is_constexpr};
     while (!parser.peek_token_is(syntax::token_type_t::RBRACE) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
         parser.advance();
@@ -306,6 +307,11 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
 
     stdx::option<expr_handle> decl_value;
     if (value_initialized) {
+        const bool is_constexpr_decl{modifiers_has(modifiers, decl_modifiers::CONSTEXPR)};
+        if (is_constexpr_decl && parser.current_token_is(syntax::token_type_t::FUNCTION)) {
+            parser.arm_constexpr_param_inference();
+        }
+        const syntax::parser::compile_time_scope cx_scope{parser, is_constexpr_decl};
         decl_value.emplace(TRY(parser.parse_expression()));
 
         // If there is a value, then there cannot be an extern due to a contradiction
@@ -596,7 +602,7 @@ namespace {
                                    parser.get_current_token());
         }
 
-        params.emplace_back(name, *param_type, is_constexpr);
+        params.emplace_back(name, *param_type, is_constexpr, false, is_constexpr);
         if (!parser.peek_token_is(tt::RPAREN)) {
             TRY(parser.expect_peek(tt::COMMA));
             force_break = parser.peek_token_is(tt::RPAREN); // trailing comma before `)`

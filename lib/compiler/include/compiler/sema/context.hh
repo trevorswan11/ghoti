@@ -60,6 +60,9 @@ struct context {
     // For the generic instantiation currently being resolved or emitted
     std::vector<constexpr_frame> constexpr_binding_frames;
 
+    // Nonzero while resolving a `constexpr { ... }` body, whose folds are compile-time evaluation
+    usize constexpr_evaluation_depth{0};
+
     // Declared names for user struct/enum/union types, for `@typeName`
     type_name_map& user_type_names;
 
@@ -100,6 +103,7 @@ struct context {
           prelude_index{other.prelude_index}, target_opts{other.target_opts},
           user_main_name{other.user_main_name}, runtime_safety{other.runtime_safety},
           constexpr_binding_frames{other.constexpr_binding_frames},
+          constexpr_evaluation_depth{other.constexpr_evaluation_depth},
           user_type_names{other.user_type_names}, embed_cache{other.embed_cache},
           env_epoch{other.env_epoch} {}
 
@@ -199,6 +203,28 @@ struct context {
     // Reads embedded file into embed_cache and returns reference to contents if successful
     [[nodiscard]] auto read_embed_file(const std::filesystem::path& path)
         -> stdx::option<const std::string&>;
+};
+
+// Marks everything folded while it lives as compile-time evaluation (a `constexpr` block, label,
+// or declaration initializer), as opposed to an opportunistic fold of runtime code
+class constexpr_evaluation_scope {
+  public:
+    constexpr_evaluation_scope(context& ctx, bool enabled) noexcept
+        : depth_{ctx.constexpr_evaluation_depth}, enabled_{enabled} {
+        if (enabled_) { ++depth_; }
+    }
+    ~constexpr_evaluation_scope() noexcept {
+        if (enabled_) { --depth_; }
+    }
+
+    constexpr_evaluation_scope(const constexpr_evaluation_scope&)                    = delete;
+    auto operator=(const constexpr_evaluation_scope&) -> constexpr_evaluation_scope& = delete;
+    constexpr_evaluation_scope(constexpr_evaluation_scope&&)                         = delete;
+    auto operator=(constexpr_evaluation_scope&&) -> constexpr_evaluation_scope&      = delete;
+
+  private:
+    usize& depth_;
+    bool   enabled_;
 };
 
 } // namespace ghoti::sema

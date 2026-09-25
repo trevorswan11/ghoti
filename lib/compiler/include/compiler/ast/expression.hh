@@ -181,6 +181,7 @@ struct function_expr {
         explicit_type_id         explicit_type;
         bool                     is_constexpr{false};
         bool                     is_pack{false}; // `rest...` / `rest: impl I...`
+        bool is_constexpr_written{false}; // `is_constexpr` may also be inferred (see #337)
     };
 
     // The parameter's `auto` type must infer to a type that implements every interface in
@@ -217,6 +218,10 @@ struct function_expr {
 };
 
 // Consumes a leading `move` modifier before delegating to function_expr::parse
+// An identifier used as an expression; records compile-time reads for `constexpr` inference
+[[nodiscard]] auto parse_identifier_reference(syntax::parser& parser)
+    -> stdx::result<expr_handle, syntax::diagnostic>;
+
 [[nodiscard]] auto parse_move_function_expr(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic>;
 
@@ -238,9 +243,14 @@ struct identifier_expr {
 
 struct if_expr {
     bool                      constexpr_condition;
-    expr_handle               condition;
+    stdx::option<expr_handle> condition; // absent only for `if constexpr { ... }`
     stmt_handle               consequence;
     stdx::option<stmt_handle> alternate;
+
+    // `if constexpr a else b`: `a` under compile-time evaluation, `b` at runtime
+    [[nodiscard]] auto is_evaluation_context_branch() const noexcept -> bool {
+        return constexpr_condition && !condition;
+    }
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;

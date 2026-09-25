@@ -301,7 +301,7 @@ auto dumper::visit(node_id, const function_expr& function) -> void {
                            fmt::println(out_,
                                         "{}Param{}{}:",
                                         indent_.current_branch(),
-                                        parameter.is_constexpr ? " (constexpr)" : "",
+                                        parameter.is_constexpr_written ? " (constexpr)" : "",
                                         parameter.is_pack ? " (pack)" : "");
                            {
                                const bool          no_type{!parameter.explicit_type.is_valid()};
@@ -392,10 +392,10 @@ auto dumper::visit(node_id, const if_expr& if_expr) -> void {
             out_, "{}Constexpr: {}", indent_.current_branch(), if_expr.constexpr_condition);
     }
 
-    {
+    if (if_expr.condition) {
         const indent::guard g{indent_, false};
         fmt::print(out_, "{}Condition: ", indent_.current_branch());
-        dump(if_expr.condition);
+        dump(*if_expr.condition);
     }
 
     const auto has_alternate{if_expr.alternate.has_value()};
@@ -1104,7 +1104,7 @@ auto dumper::visit(node_id, const impl_stmt& node) -> void {
             fmt::println(out_,
                          "{}Param{}:",
                          indent_.current_branch(),
-                         parameter.is_constexpr ? " (constexpr)" : "");
+                         parameter.is_constexpr_written ? " (constexpr)" : "");
             {
                 const indent::guard g_name{indent_, false};
                 fmt::print(out_, "{}Name: ", indent_.current_branch());

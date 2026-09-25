@@ -450,6 +450,9 @@ class type_resolver {
     // returns whether it did
     auto reject_type_as_value(ast::expr_handle value, const type& expected) -> bool;
 
+    // Resolves both arms of a runtime (or evaluation-context) `if` and types the whole expression
+    auto resolve_if_arms(ast::node_id id, const ast::if_expr& if_expr) -> void;
+
     // A `constexpr f: fn(...)` binds at compile time, so it keeps the thin function type
     auto thin_if_constexpr(const ast::function_expr::parameter& param, type& param_type) -> type&;
 

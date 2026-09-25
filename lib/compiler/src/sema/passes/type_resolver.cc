@@ -3117,11 +3117,16 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                         return last_type_.emplace(ctx_.poison_node(resolving_, id));
                     }
                     const auto* arg_ty{concrete_arg_types[i]};
-                    const auto  msg{arg_ty && arg_ty->get_kind() == type_kind::CLOSURE
-                                        ? "a constexpr closure argument must capture only "
-                                          "compile-time constants"
-                                        : "argument to a constexpr parameter must be a "
-                                          "compile-time constant"};
+                    auto        msg{std::string{
+                        arg_ty && arg_ty->get_kind() == type_kind::CLOSURE
+                                   ? "a constexpr closure argument must capture only "
+                                     "compile-time constants"
+                                   : "argument to a constexpr parameter must be a "
+                                     "compile-time constant"}};
+                    if (!cx_params[i].is_constexpr_written) {
+                        msg += "; the parameter is implicitly constexpr because this constexpr "
+                               "function reads it in a compile-time position";
+                    }
                     return last_type_.emplace(
                         ctx_.poison_node(resolving_,
                                          id,
@@ -3977,7 +3982,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
         // A `type`-typed value is always compile-time known, so `constexpr` adds nothing.
-        if (param.is_constexpr && param_type.get_kind() == type_kind::TYPE &&
+        if (param.is_constexpr_written && param_type.get_kind() == type_kind::TYPE &&
             param.explicit_type.get_token_type() == syntax::token_type_t::TYPE_TYPE) {
             ctx_.diags.emplace_back(
                 "'constexpr' is redundant on a parameter of type 'type'; type values are "
@@ -4576,7 +4581,9 @@ auto type_resolver::visit(ast::node_id id, const ast::identifier_expr& ident) ->
 
 auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void {
     PROFILE_FUNCTION();
-    TRY_RESOLVE(if_expr.condition);
+    // `if constexpr { a } else { b }`: both arms are live, each in its own evaluation context
+    if (if_expr.is_evaluation_context_branch()) { return resolve_if_arms(id, if_expr); }
+    TRY_RESOLVE(*if_expr.condition);
 
     // The template pass has no real impl-param values; leave an `if constexpr` unresolved here so
     // config-specific dead arms never poison. `resolve_param_impl_bodies` folds it per instance.
@@ -4593,7 +4600,7 @@ auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void 
                                               make_simulated_frame()};
         gir::const_eval                                evaluator{ctx_, resolving_};
         const gir::const_eval::constexpr_context_guard g{evaluator, true};
-        if (const auto cond_cv{evaluator.try_eval(if_expr.condition)}) {
+        if (const auto cond_cv{evaluator.try_eval(*if_expr.condition)}) {
             if (const auto folded{cond_cv->as_opt<bool>()}) {
                 const auto arm_value_type{[&](ast::stmt_handle arm) -> type& {
                     if (const auto es{resolving_.ast.get_as_opt<ast::expr_stmt>(arm)}) {
@@ -4627,6 +4634,10 @@ auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void 
         }
     }
 
+    resolve_if_arms(id, if_expr);
+}
+
+auto type_resolver::resolve_if_arms(ast::node_id id, const ast::if_expr& if_expr) -> void {
     const mutating_context_guard branch_g{in_expr_branch_, true};
     TRY_RESOLVE(if_expr.consequence);
 
@@ -5968,7 +5979,8 @@ auto type_resolver::visit(ast::node_id id, const ast::label_expr& label) -> void
             ? *table_opt
             : (label_type.has_symbol_table_idx() ? label_type.get_symbol_table_idx() : usize{0})};
     resolving_.set_symbol_table(id, table_idx);
-    const scope s{table_stack_, table_idx, table_idx_};
+    const scope                      s{table_stack_, table_idx, table_idx_};
+    const constexpr_evaluation_scope cx_scope{ctx_, label.is_constexpr(resolving_.ast)};
 
     // The label symbol is shared across generic instantiations, so drop yields from a prior pass
     if (label.name) {
@@ -8023,6 +8035,7 @@ auto type_resolver::visit(ast::node_id id, const ast::block_stmt& block) -> void
 
     // A block that is an `if`/`match` branch never yields a value
     in_expr_branch_ = false;
+    const constexpr_evaluation_scope cx_scope{ctx_, block.is_constexpr};
 
     // Just an abridged loop handler
     const active_block_guard guard{active_blocks_, block};
@@ -8106,6 +8119,8 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
     const auto& ident{resolving_.ast.get_as<ast::identifier_expr>(*decl.name)};
     auto        symbol_opt{ctx_.registry.lookup(table_stack_, ident.name)};
     ASSERT(symbol_opt, "Somehow the declaration was lost in the symbol table");
+    const constexpr_evaluation_scope cx_scope{ctx_,
+                                              decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
     auto& sym{*symbol_opt};
 
     // Ensure malformed symbols don't crash the compiler

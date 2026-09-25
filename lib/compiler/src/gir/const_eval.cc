@@ -230,7 +230,7 @@ auto const_eval::try_eval(ast::node_id id) -> stdx::option<const_value> {
     if (const auto sema_ty{module_->get_sema_type_opt(id)}) {
         if (sema_ty->is_volatile()) { return stdx::none; }
     }
-    const memo_key key{id.get_index(), ctx_.env_epoch};
+    const memo_key key{id.get_index(), ctx_.env_epoch, in_evaluation_context()};
     const bool     is_outermost{call_stack_.empty()};
     if (is_outermost) {
         current_signal_ = eval_signal{};
@@ -1132,7 +1132,7 @@ auto const_eval::eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::opt
                     // link-time symbol name; a local one has none, only the folded value.
                     std::vector<const_value> pointee;
                     if (decl->value) {
-                        if (auto val{try_eval(*decl->value)}; val && !val->is_poison()) {
+                        if (auto val{eval_decl_value(*decl)}; val && !val->is_poison()) {
                             pointee.emplace_back(std::move(*val));
                         }
                     }
@@ -1178,7 +1178,7 @@ auto const_eval::eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::opt
                         const_eval inner_eval{ctx_, target_mod};
                         inner_eval.set_symbol_scoping(symbol_scoping_);
                         inner_eval.set_constexpr_context(is_constexpr_context());
-                        if (auto val{inner_eval.try_eval(*decl->value)}; val && !val->is_poison()) {
+                        if (auto val{inner_eval.eval_decl_value(*decl)}; val && !val->is_poison()) {
                             pointee.emplace_back(std::move(*val));
                         }
                     }
@@ -1744,11 +1744,11 @@ auto const_eval::eval_type_member(sema::type& denoted_in, std::string_view membe
     }
 
     auto result{[&] -> stdx::option<const_value> {
-        if (&owner_mod == module_.get()) { return try_eval(*mdecl->value); }
+        if (&owner_mod == module_.get()) { return eval_decl_value(*mdecl); }
         const_eval owner_eval{ctx_, owner_mod};
         owner_eval.set_symbol_scoping(symbol_scoping_);
         owner_eval.set_constexpr_context(is_constexpr_context());
-        return owner_eval.try_eval(*mdecl->value);
+        return owner_eval.eval_decl_value(*mdecl);
     }()};
 
     if (result && prefix) {
@@ -2119,7 +2119,7 @@ auto const_eval::eval_module_member(mod::module& target_mod, std::string_view me
     const_eval inner_eval{ctx_, target_mod};
     inner_eval.set_symbol_scoping(symbol_scoping_);
     inner_eval.set_constexpr_context(is_constexpr_context());
-    return inner_eval.try_eval(*decl->value);
+    return inner_eval.eval_decl_value(*decl);
 }
 
 auto const_eval::eval_match(ast::node_id id, const ast::match_expr& match)
@@ -2675,7 +2675,7 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
                         (mdecl->has_modifier(ast::decl_modifiers::CONSTANT) ||
                          mdecl->has_modifier(ast::decl_modifiers::CONSTEXPR)) &&
                         !module_->ast.get_as_opt<ast::function_expr>(*mdecl->value)) {
-                        return try_eval(*mdecl->value);
+                        return eval_decl_value(*mdecl);
                     }
                 }
             }
@@ -2723,7 +2723,7 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
                         (decl->has_modifier(ast::decl_modifiers::CONSTEXPR) ||
                          decl->has_modifier(ast::decl_modifiers::CONSTANT)) &&
                         !decl->has_modifier(ast::decl_modifiers::VARIABLE)) {
-                        return try_eval(*decl->value);
+                        return eval_decl_value(*decl);
                     }
                 }
             }
@@ -2748,7 +2748,7 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
                     if (const auto aliased{alias_decl_type(*module_, *node, *decl)}) {
                         return const_value{*aliased};
                     }
-                    return try_eval(*decl->value);
+                    return eval_decl_value(*decl);
                 }
             }
         }
@@ -2766,7 +2766,7 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
             }
             if (decl->has_modifier(ast::decl_modifiers::CONSTEXPR) ||
                 decl->has_modifier(ast::decl_modifiers::CONSTANT)) {
-                if (decl->value) { return try_eval(*decl->value); }
+                if (decl->value) { return eval_decl_value(*decl); }
             }
         }
     }
@@ -2783,14 +2783,9 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
     // A `constexpr` callable (closure or function) parameter invoked inside a monomorphized body.
     if (const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(call.function)}) {
         if (const auto bc{lookup_bound_callable(ident->name)}) {
-            std::vector<const_value> args;
-            for (const auto& arg : call.arguments) {
-                if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
-                    const auto av{try_eval(*expr_h)};
-                    if (!av) { return stdx::none; }
-                    args.emplace_back(*av);
-                }
-            }
+            auto args_opt{eval_call_args(call)};
+            if (!args_opt) { return stdx::none; }
+            auto&       args{*args_opt};
             auto* const prev{module_.get()};
             set_module(*bc->module);
             auto res{eval_constexpr_fn(id, *bc->fn_expr, args, bc->captures)};
@@ -2838,14 +2833,9 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                     }
                 }
 
-                std::vector<const_value> args;
-                for (const auto& arg : call.arguments) {
-                    if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
-                        const auto arg_val{try_eval(*expr_h)};
-                        if (!arg_val) { return stdx::none; }
-                        args.emplace_back(*arg_val);
-                    }
-                }
+                auto args_opt{eval_call_args(call)};
+                if (!args_opt) { return stdx::none; }
+                auto& args{*args_opt};
 
                 auto* const prev{module_.get()};
                 if (callee_mod != prev) { set_module(*callee_mod); }
@@ -3847,19 +3837,47 @@ auto const_eval::lookup_bound_callable(std::string_view name) -> stdx::option<bo
     return stdx::none;
 }
 
+auto const_eval::eval_decl_value(const ast::decl_stmt& decl) -> stdx::option<const_value> {
+    ASSERT(decl.value, "Only a declaration with an initializer has a value to fold");
+    const sema::constexpr_evaluation_scope scope{
+        ctx_, decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
+    return try_eval(*decl.value);
+}
+
+auto const_eval::eval_call_args(const ast::call_expr& call)
+    -> stdx::option<std::vector<const_value>> {
+    std::vector<const_value> args;
+    for (usize i{0}; i < call.arguments.size(); ++i) {
+        const auto expr_h{call.arguments[i].as_opt<ast::expr_handle>()};
+        if (!expr_h) { continue; }
+        const auto val{try_eval(*expr_h)};
+        if (!val) { return stdx::none; }
+
+        const bool is_expansion{i < call.pack_expansions.size() && call.pack_expansions[i]};
+        if (!is_expansion) {
+            args.emplace_back(*val);
+            continue;
+        }
+        const auto pack{val->as_opt<const_array>()};
+        if (!pack) { return stdx::none; }
+        args.insert(args.end(), pack->elements.begin(), pack->elements.end());
+    }
+    return args;
+}
+
 auto const_eval::eval_constexpr_fn(ast::node_id                      call_id,
                                    const ast::function_expr&         fn_expr,
                                    std::vector<const_value>&         args,
                                    stdx::option<const const_struct&> captures)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
-    // We have no notion of `rest.len`/`rest[k]`/`for constexpr (rest)` (all emitter/resolver work)
-    if (!fn_expr.parameters.empty() && fn_expr.parameters.back().is_pack) { return stdx::none; }
-
+    // A trailing `rest...` pack binds as a constant array of every remaining argument, so
+    // `rest.len`, `rest[k]`, `for constexpr (rest)`, and `rest...` forwarding all fold
+    const bool  has_pack{!fn_expr.parameters.empty() && fn_expr.parameters.back().is_pack};
     const bool  has_self{fn_expr.self.has_value()};
-    const usize expected_args{fn_expr.parameters.size() + (has_self ? 1UZ : 0UZ)};
-    VERIFY(expected_args == args.size(),
-           "Constexpr function args count must match parameters count");
+    const usize fixed_args{fn_expr.parameters.size() - (has_pack ? 1UZ : 0UZ) +
+                           (has_self ? 1UZ : 0UZ)};
+    if (has_pack ? args.size() < fixed_args : args.size() != fixed_args) { return stdx::none; }
 
     if (recursion_depth_ >= max_recursion_depth_) {
         const auto loc{call_id.is_valid() ? module_->ast.location_of(call_id)
@@ -3877,6 +3895,15 @@ auto const_eval::eval_constexpr_fn(ast::node_id                      call_id,
         frame.bindings.emplace(self_ident.name, args[arg_idx++]);
     }
     for (const auto& param : fn_expr.parameters) {
+        if (param.is_pack) {
+            const_array pack;
+            pack.elements.assign(args.begin() + static_cast<isize>(arg_idx), args.end());
+            if (param.name.is<ast::identifier_expr>()) {
+                const auto& ident{module_->ast.get_as<ast::identifier_expr>(param.name)};
+                frame.bindings.emplace(ident.name, const_value{std::move(pack)});
+            }
+            break;
+        }
         if (param.name.is<ast::identifier_expr>()) {
             const auto& ident{module_->ast.get_as<ast::identifier_expr>(param.name)};
             frame.bindings.emplace(ident.name, args[arg_idx++]);
@@ -4050,6 +4077,7 @@ auto const_eval::eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_v
 auto const_eval::eval_block(ast::node_id, const ast::block_stmt& block)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
+    const constexpr_context_guard cx_g{*this, constexpr_context_ || block.is_constexpr};
     call_stack_.emplace_back();
     stdx::option<const_value> result;
     for (usize idx{0}; idx < block.statements.size(); ++idx) {
@@ -4100,8 +4128,10 @@ auto const_eval::eval_label(ast::node_id, const ast::label_expr& label)
     stdx::option<std::string_view> label_name;
     if (label.name) { label_name = module_->ast.get_as<ast::identifier_expr>(*label.name).name; }
 
-    const auto                body_id{*label.body};
-    stdx::option<const_value> body_res;
+    const auto                    body_id{*label.body};
+    const constexpr_context_guard cx_g{*this,
+                                       constexpr_context_ || label.is_constexpr(module_->ast)};
+    stdx::option<const_value>     body_res;
     if (label.body.is<ast::block_stmt>()) {
         body_res = eval_block(body_id, module_->ast.get_as<ast::block_stmt>(body_id));
     } else {
@@ -4138,7 +4168,7 @@ auto const_eval::eval_label(ast::node_id, const ast::label_expr& label)
 auto const_eval::eval_decl(ast::node_id, const ast::decl_stmt& decl) -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     if (decl.value) {
-        if (const auto val{try_eval(*decl.value)}) {
+        if (const auto val{eval_decl_value(decl)}) {
             const auto& ident{module_->ast.get_as<ast::identifier_expr>(decl.name)};
             if (!call_stack_.empty()) {
                 call_stack_.back().bindings.insert_or_assign(ident.name, *val);
@@ -4153,9 +4183,16 @@ auto const_eval::eval_decl(ast::node_id, const ast::decl_stmt& decl) -> stdx::op
     return stdx::none;
 }
 
+auto const_eval::eval_if_condition(const ast::if_expr& if_expr) -> stdx::option<const_value> {
+    if (if_expr.condition) { return try_eval(*if_expr.condition); }
+    // An opportunistic fold of runtime code follows the runtime `else` branch
+    return const_value{in_evaluation_context(),
+                       ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+}
+
 auto const_eval::eval_if(ast::node_id, const ast::if_expr& if_expr) -> stdx::option<const_value> {
     PROFILE_FUNCTION();
-    const auto cond{try_eval(if_expr.condition)};
+    const auto cond{eval_if_condition(if_expr)};
     if (!cond || !cond->is<bool>()) {
         cond_unknown_ = true;
         return stdx::none;
@@ -4553,7 +4590,7 @@ auto const_eval::simulate_decl(const ast::decl_stmt& decl) -> void {
     if (!decl.has_modifier(ast::decl_modifiers::CONSTEXPR)) { return; }
     const auto& ident = module_->ast.get_as<ast::identifier_expr>(decl.name);
     if (decl.value) {
-        const auto val = try_eval(*decl.value);
+        const auto val = eval_decl_value(decl);
         if (val) {
             if (!call_stack_.empty()) {
                 call_stack_.back().bindings.insert_or_assign(ident.name, *val);
@@ -4703,7 +4740,7 @@ auto const_eval::simulate_assignment(ast::node_id                id,
 }
 
 auto const_eval::simulate_if(const ast::if_expr& if_expr) -> void {
-    const auto cond = try_eval(if_expr.condition);
+    const auto cond{eval_if_condition(if_expr)};
     if (!cond || !cond->is<bool>()) {
         cond_unknown_ = true;
         return;

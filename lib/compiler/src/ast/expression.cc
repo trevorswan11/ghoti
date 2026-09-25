@@ -300,6 +300,15 @@ auto call_expr::parse(syntax::parser& parser, expr_handle function)
     const auto            start_token{parser.get_current_token()};
     std::vector<argument> arguments;
     std::vector<bool>     pack_expansions;
+    const auto            type_only_scope{[&] -> stdx::option<counter<u32>::guard> {
+        switch (function->get_token_type()) {
+        case syntax::token_type_t::BUILTIN_TYPE_OF:
+        case syntax::token_type_t::BUILTIN_SIZE_OF:
+        case syntax::token_type_t::BUILTIN_ALIGN_OF:
+        case syntax::token_type_t::BUILTIN_BIT_SIZE_OF: return parser.enter_type_only_operand();
+        default:                                         return stdx::none;
+        }
+    }()};
     // Guaranteed to roll back if there is an error
     const auto parse_expr_unsuccessful = [&] -> bool {
         // Try an expression first to prevent ambiguity between reference operators
@@ -344,6 +353,17 @@ auto call_expr::parse(syntax::parser& parser, expr_handle function)
         start_token, function, std::move(arguments), force_break, std::move(pack_expansions));
 }
 
+namespace {
+
+// An expression in a position that `enabled` makes compile-time (a `constexpr` header)
+auto parse_compile_time_expression(syntax::parser& parser, bool enabled)
+    -> stdx::result<expr_handle, syntax::diagnostic> {
+    const syntax::parser::compile_time_scope cx_scope{parser, enabled};
+    return parser.parse_expression();
+}
+
+} // namespace
+
 auto do_while_loop_expr::parse(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
@@ -369,7 +389,7 @@ auto do_while_loop_expr::parse(syntax::parser& parser)
     parser.advance();
 
     // There's no continuation or non break clause so this is easy :)
-    const auto condition{TRY(parser.parse_expression())};
+    const auto condition{TRY(parse_compile_time_expression(parser, is_constexpr))};
     TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
     return parser.add_expr<do_while_loop_expr>(start_token, block, condition, is_constexpr);
 }
@@ -693,8 +713,9 @@ auto for_loop_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, s
                                start_token);
     }
 
-    std::vector<expr_handle> iterables;
-    bool                     iterables_force_break{false};
+    std::vector<expr_handle>                 iterables;
+    bool                                     iterables_force_break{false};
+    const syntax::parser::compile_time_scope cx_scope{parser, is_constexpr};
     while (!parser.peek_token_is(syntax::token_type_t::RPAREN) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
         parser.advance();
@@ -788,6 +809,27 @@ auto try_parse_variadic_fn(syntax::parser& parser) -> stdx::result<bool, syntax:
     return is_variadic;
 }
 
+namespace {
+
+// A `constexpr` function's param read by a compile-time position binds at compile time (#337)
+auto infer_constexpr_params(syntax::parser&                              parser,
+                            const syntax::parser::constexpr_param_frame& frame,
+                            std::vector<function_expr::parameter>&       parameters) -> void {
+    if (!frame.infer) { return; }
+    for (auto& param : parameters) {
+        if (param.is_pack || !param.name.is<identifier_expr>()) { continue; }
+        // A `T: type` param is already compile-time known
+        if (param.explicit_type.is_valid() &&
+            param.explicit_type.get_token_type() == syntax::token_type_t::TYPE_TYPE) {
+            continue;
+        }
+        const auto name{parser.get_ast().get_as<identifier_expr>(param.name).name};
+        if (std::ranges::contains(frame.compile_time_names, name)) { param.is_constexpr = true; }
+    }
+}
+
+} // namespace
+
 auto parse_move_function_expr(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
@@ -834,7 +876,8 @@ auto parse_naked_function_expr(syntax::parser& parser)
 auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked, bool is_extern)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
-    const auto start_token{parser.get_current_token()};
+    const auto                          start_token{parser.get_current_token()};
+    const syntax::parser::function_scope fn_scope{parser};
     TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
 
     // Parse the definition now that we're at the fn token
@@ -946,7 +989,7 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked, b
                 }
             }
 
-            parameters.emplace_back(name, param_explicit_type, is_constexpr, is_pack);
+            parameters.emplace_back(name, param_explicit_type, is_constexpr, is_pack, is_constexpr);
             if (!parser.peek_token_is(syntax::token_type_t::RPAREN)) {
                 TRY(parser.expect_peek(syntax::token_type_t::COMMA));
                 // A comma immediately before `)` is a trailing comma: keep one param per line.
@@ -1003,6 +1046,7 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked, b
 
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
     const block_handle body{TRY(block_stmt::parse(parser))};
+    infer_constexpr_params(parser, fn_scope.frame(), parameters);
     return parser.add_expr<function_expr>(start_token,
                                           self,
                                           std::move(parameters),
@@ -1025,6 +1069,13 @@ auto grouped_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, sy
     TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
     parser.mark_parenthesized(*inner);
     return inner;
+}
+
+auto parse_identifier_reference(syntax::parser& parser)
+    -> stdx::result<expr_handle, syntax::diagnostic> {
+    const auto ident{TRY(identifier_expr::parse(parser))};
+    parser.note_identifier_reference(parser.get_ast().get_as<identifier_expr>(ident).name);
+    return ident;
 }
 
 auto identifier_expr::parse(syntax::parser& parser)
@@ -1059,17 +1110,22 @@ auto if_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax:
         parser.advance();
     }
 
-    // Conditions have to be surrounded by parentheses
-    TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
-    parser.advance();
-    if (parser.current_token_is(syntax::token_type_t::RPAREN)) {
-        return make_syntax_err("If expressions must have a condition",
-                               syntax::error::IF_MISSING_CONDITION,
-                               start_token);
-    }
+    // `if constexpr a else b` has no condition: it branches on the evaluation context itself
+    stdx::option<expr_handle> condition;
+    if (!(constexpr_condition && !parser.peek_token_is(syntax::token_type_t::LPAREN))) {
+        // Conditions have to be surrounded by parentheses
+        TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
+        parser.advance();
+        if (parser.current_token_is(syntax::token_type_t::RPAREN)) {
+            return make_syntax_err("If expressions must have a condition",
+                                   syntax::error::IF_MISSING_CONDITION,
+                                   start_token);
+        }
 
-    const auto condition{TRY(parser.parse_expression())};
-    TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
+        const syntax::parser::compile_time_scope cx_scope{parser, constexpr_condition};
+        condition.emplace(TRY(parser.parse_expression()));
+        TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
+    }
 
     // The consequence and alternate are trivially handled by restricted statement parsers
     parser.advance();
@@ -1356,7 +1412,8 @@ auto parse_constexpr_expr(syntax::parser& parser) -> stdx::result<expr_handle, s
         const identifier_handle ident{TRY(identifier_expr::parse(parser))};
         TRY(parser.expect_peek(syntax::token_type_t::COLON));
         parser.advance();
-        const auto raw_stmt{TRY(parser.parse_statement())};
+        const syntax::parser::compile_time_scope cx_scope{parser, true};
+        const auto                               raw_stmt{TRY(parser.parse_statement())};
         const auto body{TRY(label_expr::deconstruct_body(parser, raw_stmt))};
         if (!body.is<block_stmt>()) {
             return make_syntax_err("Constexpr labels may only be applied to blocks",
@@ -1449,7 +1506,7 @@ auto match_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
                                start_token);
     }
 
-    const auto matcher{TRY(parser.parse_expression())};
+    const auto matcher{TRY(parse_compile_time_expression(parser, is_constexpr))};
     TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
 
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
@@ -1854,7 +1911,7 @@ auto while_loop_expr::parse(syntax::parser& parser)
                                start_token);
     }
 
-    const auto condition{TRY(parser.parse_expression())};
+    const auto condition{TRY(parse_compile_time_expression(parser, is_constexpr))};
     TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
 
     // Continuation expression is optional and is handled as in zig
