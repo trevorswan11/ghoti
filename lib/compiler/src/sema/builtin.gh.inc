@@ -70,7 +70,7 @@ pub const SourceLocation := struct {
 pub const Test := struct {
     pub name: []u8,
     pub loc: SourceLocation,
-    pub func: fn(): bool,
+    pub func: extern fn(): bool,
 };
 
 /// Control flow tagged union for single-match nominal unwrapping (`?` and `!`).

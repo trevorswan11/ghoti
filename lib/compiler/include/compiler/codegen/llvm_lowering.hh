@@ -76,6 +76,10 @@ class llvm_lowering {
     // Emits one private constant `[N x ptr]` global per `(I, T)` `&dyn I` coercion in the module.
     auto lower_dyn_vtables(const gir::module& gir_mod) -> void;
     auto const_to_llvm(const gir::const_value& cv, llvm::Type* ty) -> llvm::Constant*;
+    // `{fn, trampoline}` when a thin function constant initializes an erased `fn(...)` slot
+    auto const_callable(std::string_view          fn_symbol,
+                        stdx::option<sema::type&> fn_type,
+                        llvm::Type*               ty) -> llvm::Constant*;
 
     // Populates `reserved_symbols_` with every explicit `extern`/`export` link name in the module
     auto ensure_reserved_symbols() -> void;
@@ -99,6 +103,14 @@ class llvm_lowering {
     auto emit_const(const gir::instruction& inst) -> llvm::Value*;
 
     auto emit_call(const gir::instruction& inst) -> llvm::Value*;
+    auto emit_make_callable(const gir::instruction& inst) -> llvm::Value*;
+
+    // `code(ctx, args...)` for an erased `fn(...)`: the thin signature with a leading `ctx: ptr`
+    auto erased_code_type(const sema::types::function& fn) -> llvm::FunctionType*;
+    // One shared `(ctx, args...)` adapter per thin signature that calls `ctx` as the function
+    auto get_or_create_fn_trampoline(const sema::types::function& fn) -> llvm::Function*;
+    // Loads a by-address aggregate argument (struct, slice, closure, callable) into a value
+    auto load_aggregate_arg(const gir::value& op, llvm::Value* arg_val) -> llvm::Value*;
     auto emit_builtin_call(const gir::instruction& inst) -> llvm::Value*;
     auto emit_inline_asm(const gir::instruction& inst) -> llvm::Value*;
 
@@ -158,6 +170,7 @@ class llvm_lowering {
     ankerl::unordered_dense::map<gir::segment_id, llvm::BasicBlock*>   segment_blocks_;
     ankerl::unordered_dense::map<std::string_view, llvm::GlobalValue*> globals_;
     ankerl::unordered_dense::set<std::string>                          reserved_symbols_;
+    ankerl::unordered_dense::map<llvm::FunctionType*, llvm::Function*> fn_trampolines_;
     bool                             reserved_symbols_built_{false};
     bool                             is_executable_{false};
     bool                             memcpy_used_{false};

@@ -40,10 +40,13 @@ auto type_translator::translate(const sema::type& type) -> llvm::Type* {
         if (referent && referent->get_kind() == sema::type_kind::DYN) {
             return translate_dyn_fat_ptr();
         }
+        if (sema::is_fat_callable(type)) { return translate_dyn_fat_ptr(); }
         return get_ptr_ty();
     }
     case sema::type_kind::FUNCTION:
-    case sema::type_kind::NULLPTR:  return get_ptr_ty();
+        if (sema::is_erased_fn(type)) { return translate_dyn_fat_ptr(); }
+        return get_ptr_ty();
+    case sema::type_kind::NULLPTR: return get_ptr_ty();
     case sema::type_kind::SLICE:    return translate_slice(type.get_data().as<sema::types::slice>());
     case sema::type_kind::ARRAY:    return translate_array(type.get_data().as<sema::types::array>());
     case sema::type_kind::STRUCT:

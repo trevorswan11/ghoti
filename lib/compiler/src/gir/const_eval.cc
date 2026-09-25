@@ -456,12 +456,13 @@ auto const_eval::type_size_of(const sema::type& type, usize ptr_size) -> usize {
         const auto        p{type.get_data().as_opt<sema::types::pointer>()};
         const auto        r{type.get_data().as_opt<sema::types::reference>()};
         const sema::type* referent{p ? &p->underlying : r ? &r->underlying : nullptr};
-        const bool        is_fat{referent && referent->get_kind() == sema::type_kind::DYN};
+        const bool        is_fat{(referent && referent->get_kind() == sema::type_kind::DYN) ||
+                          sema::is_fat_callable(type)};
         return is_fat ? 2 * ptr_size : ptr_size;
     }
+    case sema::type_kind::FUNCTION: return sema::is_erased_fn(type) ? 2 * ptr_size : ptr_size;
     case sema::type_kind::ISIZE:
-    case sema::type_kind::USIZE:
-    case sema::type_kind::FUNCTION: return ptr_size;
+    case sema::type_kind::USIZE:    return ptr_size;
     case sema::type_kind::SLICE:    return 2 * ptr_size;
     case sema::type_kind::ARRAY:
         if (const auto arr{type.get_data().as_opt<sema::types::array>()}) {
@@ -662,9 +663,11 @@ auto const_eval::force_deferred_function_params(sema::type& maybe_fn) -> void {
     const auto has_self{fn_data->has_self};
     const auto is_variadic{fn_data->is_variadic};
     const auto conv{fn_data->conv};
+    const auto erased{fn_data->erased};
     force_deferred_array_elements(params);
     auto& return_type{force_deferred_array(fn_data->return_type)};
-    maybe_fn.resolve<sema::types::function>(params, return_type, has_self, is_variadic, conv);
+    maybe_fn.resolve<sema::types::function>(
+        params, return_type, has_self, is_variadic, conv, erased);
 }
 
 auto const_eval::resolve_deferred_array(const sema::types::deferred_array& deferred)

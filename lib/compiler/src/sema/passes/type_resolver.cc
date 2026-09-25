@@ -3986,8 +3986,8 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     }
 
     TRY_RESOLVE(fn.explicit_return_type);
-    auto& return_type{*last_type_.take()};
-    if (reject_unsized_slot(fn.explicit_return_type, denoted_type(return_type))) {
+    auto& return_type{denoted_type(*last_type_.take())};
+    if (reject_unsized_slot(fn.explicit_return_type, return_type)) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id));
     }
     ASSERT(!fn_type.is_resolved(), "Valued function must not be resolved");
@@ -7442,6 +7442,7 @@ namespace {
 
 struct cabi_offenders {
     bool has_dyn{false};
+    bool has_erased_fn{false};
     bool has_ref{false};
     bool has_nonabi_scalar{false};
 };
@@ -7470,6 +7471,7 @@ struct cabi_offenders {
         [acc](types::slice sl) { return scan_cabi_offenders(sl.underlying, acc); },
         [acc](types::array ar) { return scan_cabi_offenders(ar.underlying, acc); },
         [&acc](types::function fn) {
+            if (fn.erased) { acc.has_erased_fn = true; }
             for (const auto* param : fn.params) { acc = scan_cabi_offenders(*param, acc); }
             return scan_cabi_offenders(fn.return_type, acc);
         },
@@ -7483,6 +7485,18 @@ struct cabi_offenders {
     return diagnostic{
         fmt::format("extern {} field '{}' cannot involve `dyn` in any form; a `&dyn` / `^dyn` fat "
                     "pointer has no C ABI representation",
+                    kind,
+                    name),
+        error::ILLEGAL_REFERENCE_FIELD,
+        location};
+}
+
+[[nodiscard]] auto cabi_erased_fn_field(std::string_view       kind,
+                                        std::string_view       name,
+                                        const source_location& location) -> diagnostic {
+    return diagnostic{
+        fmt::format("extern {} field '{}' holds an erased `fn(...)` callable, which has no C ABI "
+                    "representation; use a thin `extern fn(...)` instead",
                     kind,
                     name),
         error::ILLEGAL_REFERENCE_FIELD,
@@ -7609,6 +7623,10 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
                 return last_type_.emplace(
                     ctx_.poison_node(resolving_, id, cabi_dyn_field("struct", ident.name, loc)));
             }
+            if (bad.has_erased_fn) {
+                return last_type_.emplace(ctx_.poison_node(
+                    resolving_, id, cabi_erased_fn_field("struct", ident.name, loc)));
+            }
             if (bad.has_ref) {
                 return last_type_.emplace(ctx_.poison_node(
                     resolving_, id, extern_reference_field("struct", ident.name, loc)));
@@ -7731,6 +7749,10 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
             if (bad.has_dyn) {
                 return last_type_.emplace(
                     ctx_.poison_node(resolving_, id, cabi_dyn_field("union", ident.name, loc)));
+            }
+            if (bad.has_erased_fn) {
+                return last_type_.emplace(ctx_.poison_node(
+                    resolving_, id, cabi_erased_fn_field("union", ident.name, loc)));
             }
             if (bad.has_ref) {
                 return last_type_.emplace(ctx_.poison_node(
@@ -11049,13 +11071,15 @@ auto type_resolver::instantiate_generic(type&                             callee
                 }
             }
 
-            // A closure argument is never structurally a plain `fn(...)` value
+            // An erased `fn(...)` holds the closure as-is; a thin `constexpr` slot binds its type
             if (resolved_param_type.get_kind() == type_kind::FUNCTION &&
                 arg_type->get_kind() == type_kind::CLOSURE) {
                 const auto cl{arg_type->get_data().as_opt<types::closure_t>()};
                 if (cl && is_same_fn_signature(resolved_param_type, cl->signature)) {
-                    decl_p_type = arg_type;
-                    body_p_type = arg_type;
+                    if (!is_erased_fn(resolved_param_type)) {
+                        decl_p_type = arg_type;
+                        body_p_type = arg_type;
+                    }
                 } else {
                     const auto& expected{resolved_param_type.get_data().as<types::function>()};
                     ctx_.diags.emplace_back(

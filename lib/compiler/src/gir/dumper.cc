@@ -78,6 +78,13 @@ auto format_instruction(const instruction& inst) -> std::string {
                            "<missing_dst>");
     case instruction_kind::ALLOCA:
         return fmt::format("{}{} {}", prefix, instruction_kind_name(inst.kind), type_str);
+    case instruction_kind::MAKE_CALLABLE:
+        return fmt::format("{}{} {} {}, @{}",
+                           prefix,
+                           instruction_kind_name(inst.kind),
+                           type_str,
+                           !inst.operands.empty() ? format_value(inst.operands[0]) : "<missing>",
+                           inst.callee_name.value_or("<trampoline>"));
     case instruction_kind::GLOBAL_ADDR:
         return fmt::format("{}{} @{}",
                            prefix,

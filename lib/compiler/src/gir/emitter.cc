@@ -667,6 +667,65 @@ auto emitter::emit_dyn_coercion(ast::expr_handle src, sema::type& fat_type) -> v
     return value{builder_.emit_load(value{slot, dyn_mut}, fat_type), fat_type};
 }
 
+auto emitter::concrete_callable_type(sema::type& fat_type, sema::type& src_type) -> sema::type& {
+    if (!sema::is_generic_type(fat_type, false)) { return fat_type; }
+
+    // The resolver already matched the call shapes, so the source's own signature is concrete
+    sema::type* signature{&src_type};
+    if (const auto cl{src_type.get_data().as_opt<sema::types::closure_t>()}) {
+        signature = &cl->signature;
+    } else if (const auto p{src_type.get_data().as_opt<sema::types::pointer>()}) {
+        signature = &p->underlying;
+    }
+    auto& erased{ctx_.with_erasure(*signature, true)};
+    if (const auto p{fat_type.get_data().as_opt<sema::types::pointer>()}) {
+        return ctx_.get_pointer(fat_type.get_key().get_mut(), erased);
+    }
+    return erased;
+}
+
+auto emitter::emit_callable_coercion(ast::expr_handle src, sema::type& declared_type)
+    -> stdx::option<value> {
+    PROFILE_FUNCTION();
+    const auto src_ty{active_mod().get_sema_type_opt(*src)};
+    if (!src_ty) { return stdx::none; }
+    auto& fat_type{concrete_callable_type(declared_type, *src_ty)};
+    auto& ptr_ty{ctx_.get_pointer(sema::types::mut::CONSTANT,
+                                  ctx_.get_builtin_resolved_type(sema::type_kind::OPAQUE))};
+
+    if (src_ty->get_kind() == sema::type_kind::NULLPTR) { return value{zero_val{}, fat_type}; }
+    if (sema::is_fat_callable(*src_ty)) {
+        auto fat{emit_expression(src)};
+        // A `const f: fn(...) = g;` folds to `g` itself, which still needs its pair built
+        if (fat.is<std::string>()) {
+            const auto fat_ptr{fat_type.get_data().as_opt<sema::types::pointer>()};
+            auto&      thin{ctx_.with_erasure(fat_ptr ? fat_ptr->underlying : fat_type, false)};
+            return value{builder_.emit_make_callable(value{fat.data, thin}, stdx::none, fat_type),
+                         fat_type};
+        }
+        fat.type.emplace(fat_type);
+        return fat;
+    }
+
+    // A closure's own body already takes its environment first, so it is the code directly
+    if (src_ty->get_kind() == sema::type_kind::CLOSURE) {
+        const auto env{builder_.emit_address_of(emit_lvalue(src), ptr_ty)};
+        const auto code{fmt::format("closure{}", src_ty->get_symbol_table_idx())};
+        return value{builder_.emit_make_callable(value{env, ptr_ty}, code, fat_type), fat_type};
+    }
+
+    const auto is_thin_fn{[](const sema::type& t) {
+        const auto fn{t.get_data().as_opt<sema::types::function>()};
+        return fn && !fn->erased;
+    }};
+    const auto ptr_src{src_ty->get_data().as_opt<sema::types::pointer>()};
+    if (is_thin_fn(*src_ty) || (ptr_src && is_thin_fn(ptr_src->underlying))) {
+        return value{builder_.emit_make_callable(emit_expression(src), stdx::none, fat_type),
+                     fat_type};
+    }
+    return stdx::none;
+}
+
 auto emitter::folded_int(const value& v) noexcept -> stdx::option<i128> {
     if (const auto x{v.as_opt<i64>()}) { return static_cast<i128>(*x); }
     if (const auto x{v.as_opt<i128>()}) { return *x; }
@@ -717,6 +776,10 @@ auto emitter::coerce_constexpr_int(value v, sema::type& target, ast::node_id at)
 
 auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type) -> value {
     PROFILE_FUNCTION();
+    if (sema::is_fat_callable(dest_type)) {
+        if (auto callable{emit_callable_coercion(expr_id, dest_type)}) { return *callable; }
+    }
+
     // Build the fat pointer for `&T` / `^T` -> `&dyn I` / `^dyn I`
     const auto dest_dyn{[&] -> stdx::option<const sema::type&> {
         if (const auto p{dest_type.get_data().as_opt<sema::types::pointer>()}) {
@@ -2274,7 +2337,7 @@ auto emitter::emit_array(ast::node_id id, const ast::array_expr& arr) -> value {
     for (u64 i{0}; const auto& item : arr.items) {
         const auto elem_ptr{builder_.emit_get_element_ptr(
             value{array_slot, *sema_type}, {value{i++, usize_type}}, elem_type)};
-        const auto val{emit_expression(item)};
+        const auto val{emit_coerced_expr(item, elem_type)};
         builder_.emit_store(value{elem_ptr, elem_type}, val).is_initializer = true;
     }
 
@@ -7477,7 +7540,7 @@ auto emitter::emit_dereference(ast::node_id id, const ast::dereference_expr& der
     }
 
     const auto ptr_val{emit_expression_id_raw(*deref.rhs)};
-    emit_null_pointer_check(ptr_val, id);
+    if (!rhs_type || !sema::is_fat_callable(*rhs_type)) { emit_null_pointer_check(ptr_val, id); }
     // `*f` on a `^fn(...)` names the same code address as `f`
     if (elem_type.get_kind() == sema::type_kind::FUNCTION) {
         return value{ptr_val.data, sema_type};

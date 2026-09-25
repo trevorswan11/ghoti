@@ -57,6 +57,8 @@ class builder {
     auto emit_store(value dest, value val) -> instruction&;
     // Produces a temporary holding the address of a module-level / static-member global.
     auto emit_global_addr(std::string name, sema::type& type, bool is_const = false) -> local_id;
+    auto emit_make_callable(value ctx, stdx::option<std::string> code_fn, sema::type& erased_fn)
+        -> local_id;
     auto emit_get_element_ptr(value base, std::vector<value> indices, sema::type& result_type)
         -> local_id;
     auto emit_address_of(value target, sema::type& result_type) -> local_id;
