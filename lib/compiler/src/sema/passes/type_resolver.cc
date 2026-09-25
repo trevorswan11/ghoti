@@ -10630,8 +10630,13 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type
                 error::DYN_UNBOUND_ASSOC,
                 resolving_.ast.location_of(id)));
         }
-        TRY_RESOLVE(*iface.ast_assoc_types[i].default_type);
-        bindings[i] = &denoted_type(*last_type_.take());
+        // The default's node lives in the interface's module, which already resolved it
+        const auto default_type{
+            iface.enclosing.get_sema_type_opt(*iface.ast_assoc_types[i].default_type)};
+        if (!default_type || default_type->is_poison()) {
+            return last_type_.emplace(ctx_.poison_node(resolving_, id));
+        }
+        bindings[i] = &denoted_type(*default_type);
     }
 
     // `dyn`-safety: a method must take `self` by `&`/`^` and must not mention `@This()` directly
