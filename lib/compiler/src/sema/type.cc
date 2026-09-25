@@ -511,7 +511,7 @@ auto type::to_string(stdx::option<const type_name_map&> names) const -> std::str
             return fmt::format("enum : {}", e.underlying.to_string(names));
         },
         [names](types::dyn_t d) {
-            const auto& iface{d.interface.get_data().as<types::interface_t>()};
+            const auto&              iface{d.interface.get_data().as<types::interface_t>()};
             std::vector<std::string> bound;
             for (usize i{0}; i < d.assoc_bindings.size(); ++i) {
                 if (!d.assoc_bindings[i]) { continue; }
@@ -772,8 +772,9 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
         case type_kind::UNION:
         case type_kind::ENUM:
         case type_kind::TYPE:
-        case type_kind::CLOSURE:  return is_same_unqualified(src, dest);
-        case type_kind::FUNCTION: return is_fn_assignable(src, dest);
+        case type_kind::CLOSURE: return is_same_unqualified(src, dest);
+        case type_kind::FUNCTION:
+            return is_fn_assignable(src, dest);
             // ^S to ^T must be const correct
         case type_kind::POINTER: {
             const auto p_src{src.get_data().as_opt<types::pointer>()};

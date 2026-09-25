@@ -977,10 +977,10 @@ auto formatter::visit(node_id id, const if_expr& node) -> syntax::doc_id {
         return doc_manager_.concat({
             doc_manager_.text("if "),
             n.constexpr_condition ? doc_manager_.text("constexpr ") : doc_manager_.nil(),
-            n.condition ? doc_manager_.concat({doc_manager_.text("("),
-                                               format(*n.condition),
-                                               doc_manager_.text(") ")})
-                        : doc_manager_.nil(),
+            n.condition
+                ? doc_manager_.concat(
+                      {doc_manager_.text("("), format(*n.condition), doc_manager_.text(") ")})
+                : doc_manager_.nil(),
             n.alternate ? format(n.consequence) : tail_clause(n.consequence),
         });
     }};
@@ -1551,11 +1551,11 @@ auto formatter::visit(node_id, const impl_stmt& node) -> syntax::doc_id {
         std::vector<syntax::doc_id> params;
         params.reserve(node.impl_params.size());
         for (const auto& param : node.impl_params) {
-            params.emplace_back(
-                doc_manager_.concat({doc_manager_.text(param.is_constexpr_written ? "constexpr " : ""),
-                                     format(param.name),
-                                     doc_manager_.text(": "),
-                                     format(param.explicit_type)}));
+            params.emplace_back(doc_manager_.concat(
+                {doc_manager_.text(param.is_constexpr_written ? "constexpr " : ""),
+                 format(param.name),
+                 doc_manager_.text(": "),
+                 format(param.explicit_type)}));
         }
         head.emplace_back(doc_manager_.delimited(
             "(", ")", std::move(params), false, false, node.impl_params_force_break));

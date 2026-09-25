@@ -54,7 +54,7 @@ auto context::get_reference(types::mut::mutability_modifiers mutability, type& u
     return type;
 }
 
-constexpr u64 ERASED_FN_MARKER{0x45'52'41'53'45'44}; // distinguishes `fn` from `extern fn` keys
+constexpr u64 ERASED_FN_MARKER{0x455241534544}; // distinguishes `fn` from `extern fn` keys
 
 auto context::get_function(gsl::span<type*>        params,
                            type&                   return_type,

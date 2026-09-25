@@ -1216,7 +1216,9 @@ auto dumper::visit(explicit_type_id, const explicit_function_type& function) -> 
     fmt::println(out_,
                  "{}{}FunctionExpression",
                  indent_.current_branch(),
-                 function.is_dyn_fn ? "DynFn " : function.is_extern ? "Extern " : "");
+                 function.is_dyn_fn   ? "DynFn "
+                 : function.is_extern ? "Extern "
+                                      : "");
     if (!function.parameter_types.empty()) {
         const indent::guard g{indent_, false};
         fmt::println(out_, "{}Parameters:", indent_.current_branch());

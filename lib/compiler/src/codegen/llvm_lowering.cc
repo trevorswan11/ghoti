@@ -2324,8 +2324,7 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
     return call_inst;
 }
 
-auto llvm_lowering::load_aggregate_arg(const gir::value& op, llvm::Value* arg_val)
-    -> llvm::Value* {
+auto llvm_lowering::load_aggregate_arg(const gir::value& op, llvm::Value* arg_val) -> llvm::Value* {
     if (!op.type || !arg_val->getType()->isPointerTy()) { return arg_val; }
     const auto kind{op.type->get_kind()};
     const bool by_value_aggregate{

@@ -247,8 +247,8 @@ class parser {
         MAKE_PINNED(compile_time_scope);
 
       private:
-        parser&         parser_;
-        stdx::opt_size  frame_;
+        parser&        parser_;
+        stdx::opt_size frame_;
     };
 
     // The next function literal belongs to a `constexpr` declaration

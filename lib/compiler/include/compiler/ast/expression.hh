@@ -181,7 +181,7 @@ struct function_expr {
         explicit_type_id         explicit_type;
         bool                     is_constexpr{false};
         bool                     is_pack{false}; // `rest...` / `rest: impl I...`
-        bool is_constexpr_written{false}; // `is_constexpr` may also be inferred (see #337)
+        bool is_constexpr_written{false};        // `is_constexpr` may also be inferred (see #337)
     };
 
     // The parameter's `auto` type must infer to a type that implements every interface in
@@ -210,10 +210,8 @@ struct function_expr {
         -> stdx::result<expr_handle, syntax::diagnostic> {
         return parse(parser, false, false);
     }
-    [[nodiscard]] static auto parse(syntax::parser& parser,
-                                    bool            is_move,
-                                    bool            is_naked,
-                                    bool            is_extern = false)
+    [[nodiscard]] static auto
+    parse(syntax::parser& parser, bool is_move, bool is_naked, bool is_extern = false)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 

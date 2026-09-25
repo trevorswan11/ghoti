@@ -518,7 +518,8 @@ TEST_CASE("formatter round trip: functions and types") {
     round_trips("const pick := fn(): extern fn(n: i32): i32 { return inc; };");
     round_trips("_ = pick()(1);");
     round_trips("const where := fn(): i32 { return if constexpr 1 else 2; };");
-    round_trips("constexpr f := fn(a: i32, b: i32): i32 { return if constexpr (a < b) a else b; };");
+    round_trips(
+        "constexpr f := fn(a: i32, b: i32): i32 { return if constexpr (a < b) a else b; };");
     round_trips("var cb: ^dyn Fn(): void = undefined;");
     round_trips("var w: &dyn Fn(Out = i32) = undefined;");
     round_trips("pub const min := fn(a: auto, b: auto): auto { return if (a < b) a else b; };");

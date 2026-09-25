@@ -239,10 +239,10 @@ class const_eval {
     auto eval_decl_value(const ast::decl_stmt& decl) -> stdx::option<const_value>;
     // Evaluates a call's arguments, splicing each `rest...` expansion's elements into place
     auto eval_call_args(const ast::call_expr& call) -> stdx::option<std::vector<const_value>>;
-    auto               eval_constexpr_fn(ast::node_id                      call_id,
-                                         const ast::function_expr&         fn_expr,
-                                         std::vector<const_value>&         args,
-                                         stdx::option<const const_struct&> captures = stdx::none)
+    auto eval_constexpr_fn(ast::node_id                      call_id,
+                           const ast::function_expr&         fn_expr,
+                           std::vector<const_value>&         args,
+                           stdx::option<const const_struct&> captures = stdx::none)
         -> stdx::option<const_value>;
 
     auto lookup_bound_callable(std::string_view name) -> stdx::option<bound_callable>;

@@ -306,7 +306,7 @@ auto call_expr::parse(syntax::parser& parser, expr_handle function)
         case syntax::token_type_t::BUILTIN_SIZE_OF:
         case syntax::token_type_t::BUILTIN_ALIGN_OF:
         case syntax::token_type_t::BUILTIN_BIT_SIZE_OF: return parser.enter_type_only_operand();
-        default:                                         return stdx::none;
+        default:                                        return stdx::none;
         }
     }()};
     // Guaranteed to roll back if there is an error
@@ -876,7 +876,7 @@ auto parse_naked_function_expr(syntax::parser& parser)
 auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked, bool is_extern)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
-    const auto                          start_token{parser.get_current_token()};
+    const auto                           start_token{parser.get_current_token()};
     const syntax::parser::function_scope fn_scope{parser};
     TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
 

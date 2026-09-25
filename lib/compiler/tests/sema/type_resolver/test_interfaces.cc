@@ -235,8 +235,8 @@ TEST_CASE("an interface cannot be a field, parameter, return, or element type by
                             "const g := fn(): W { return undefined; };",
                             "const g := fn(ws: []W): void { _ = ws; };"}) {
         CAPTURE(use);
-        CHECK(helpers::raised(fmt::format("{}\n{}", iface, use),
-                              sema::error::INTERFACE_NOT_A_VALUE));
+        CHECK(
+            helpers::raised(fmt::format("{}\n{}", iface, use), sema::error::INTERFACE_NOT_A_VALUE));
     }
 }
 

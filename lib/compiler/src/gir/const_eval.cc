@@ -3839,8 +3839,8 @@ auto const_eval::lookup_bound_callable(std::string_view name) -> stdx::option<bo
 
 auto const_eval::eval_decl_value(const ast::decl_stmt& decl) -> stdx::option<const_value> {
     ASSERT(decl.value, "Only a declaration with an initializer has a value to fold");
-    const sema::constexpr_evaluation_scope scope{
-        ctx_, decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
+    const sema::constexpr_evaluation_scope scope{ctx_,
+                                                 decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
     return try_eval(*decl.value);
 }
 
