@@ -432,9 +432,45 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `^` / `&` applied directly to a struct, union, enum, or interface literal is rejected in value position as it already was in type position
 - Fix `@sizeOf(Ctor(T))` in a generic body folding to another instantiation's layout
 - Fix `@sizeOf` / `@alignOf` / packed-field sizing of `&dyn I` / `^dyn I` fat pointers (two words, not one)
-- `^f` of a function and `*p` of a `^fn(...)` are the function pointer itself; calling through a local, field, or module-scope `^fn(...)` / `var fn(...)` no longer crashes
+- `^f` of a function converts to a `^fn(...)`, and `*p` of a `^fn(...)` is the callable itself; calling through a local, field, or module-scope `^fn(...)` / `var fn(...)` no longer crashes
 - Struct and union fields typed by a `type` value (`f: @TypeOf(g)`, `f: FnAlias`) store the denoted type, so function-typed fields are callable
 - Non-generic type constructors that return an existing scalar type (`fn(wide: bool): type { return i64; }`) now fold, so values annotated with them are typed correctly
+- **Breaking:** a bare `fn(...)` type is an erased callable: a two-word `{ctx, code}` value that holds either a plain function or a capturing closure
+    - Usable as a local, parameter, return type, aggregate field, or array element; `var f: fn(n: i32): i32 = add;` and `f = some_closure;` both work
+    - A capturing closure passed to a `fn(...)` parameter is erased instead of monomorphizing the callee per closure; use an `auto` parameter for the zero-cost, specialized form
+    - Returning a capturing closure through a `fn(...)` return type is an error (even with `move fn`), since the closure's captures live in the returning frame; return it by its own type with an `auto` return instead
+    - `&fn(...)` is accepted and means the same as `fn(...)`; `^fn(...)` is the same two words but nullable and compares against `nullptr`; `&mut fn` / `^mut fn` are rejected
+    - An erased `fn(...)` cannot be an `extern struct` / `extern union` field, and a C-variadic function never converts to one
+- `extern fn(...)` is the thin, C-ABI function pointer that a bare `fn(...)` used to be
+    - `callconv(...)` on a function type now requires `extern fn`
+    - `extern` / `export` declarations (`extern("kernel32") const f: fn(...): R;`) and `constexpr` function parameters keep the thin type automatically
+    - `builtin.Test.func` is now `extern fn(): bool`
+- `dyn Fn(name: T): R` is accepted as another spelling of `fn(name: T): R`, including behind `&` / `^`; a user-defined `interface Fn` still works with `dyn Fn` / `dyn Fn(Out = T)`
+- A function literal's return type may be a function type written directly before its body: `fn(): fn(n: i32): i32 { ... }`
+- A call's result can be called directly: `make()(1)`, `make_maker()()(40)`
+- `builtin.FnInfo` gains `erased: bool = true`; `@typeInfo(T).function.erased` tells an erased `fn(...)` from a thin function type, and `@Fn` builds the same type the spelled-out `fn(...)` / `extern fn(...)` would
+    - `@Fn` rejects an erased descriptor that has `has_self` or a calling convention other than `.c`
+- `if constexpr a else b` without a condition runs `a` when evaluated at compile time and `b` at runtime (#336)
+    - Compile-time evaluation means `constexpr { }` blocks and labels, `constexpr` declaration initializers, and other compile-time folds; both branches are type checked
+    - `if constexpr (cond) ...` with a parenthesized condition is unchanged
+- Functions with a parameter pack (`rest...`) can be called at compile time: `rest.len`, `rest[k]`, `for constexpr (rest)`, and `f(rest...)` forwarding all fold (#336)
+- In a `constexpr`-declared function, a parameter read by a compile-time construct (`if` / `match` / `for` / `while constexpr` headers, `constexpr` blocks, local `constexpr` initializers) is implicitly `constexpr` (#337)
+    - Operands of `@TypeOf` / `@sizeOf` / `@alignOf` / `@bitSizeOf` and `T: type` parameters don't count
+    - Passing a runtime value to such a parameter reports the usual call-site error with a note explaining why the parameter is `constexpr`
+- A bare `dyn I` can be aliased without indirection (`const Bound := dyn io.Writer(Error = io.Error);`) and used as `&Bound` / `^Bound` (#328)
+- An interface or bare `dyn I` used by value as a field, parameter, return type, local, or array element is now rejected with a hint to use `&dyn I` / `^dyn I`
+    - Previously only locals were checked
+- Fix a defaulted associated type on an interface from another module resolving to garbage through `&dyn I`, which also crashed the LSP (#317)
+- `&dyn I(Out = i32)` and `&dyn I(Out = u8)` are now distinct types instead of silently interchangeable
+- Diagnostics print interface names and full `dyn` types (`dyn Sink(Out = i32)`) instead of `interface` / `dyn`
+- A function-type alias used as a return type (`fn(): Callback`) now returns a callable value
+- A generic instantiated with both a thin and an erased function type argument now produces distinct instantiations
+- Function types rebuilt while substituting unwrap shapes no longer drop their calling convention
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
+
+## Tooling
+- LSP hover names a callable's parameters: `fn(lhs: i32, rhs: i32): i32` instead of `fn(i32, i32): i32` (#305)
+    - Covers function declarations, `fn`-typed parameters and fields, `dyn Fn` aliases, and aliases like `f: Callback`, `f: mod.Callback`, or `const g := mod.f;`, including across modules
+- The tree-sitter grammar and Zed extension understand `extern fn(...)`, `dyn Fn(...)`, and the condition-less `if constexpr`, and highlight the `Fn` in `dyn Fn` as a builtin type
