@@ -831,7 +831,7 @@ auto parse_naked_function_expr(syntax::parser& parser)
     return *conv;
 }
 
-auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
+auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked, bool is_extern)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
@@ -962,9 +962,17 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
         TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
     }
 
+    const bool has_explicit_conv{parser.peek_token_is(syntax::token_type_t::CALLCONV)};
     const auto conv{TRY(try_parse_callconv(parser))};
     TRY(parser.expect_peek(syntax::token_type_t::COLON));
     const auto return_type{TRY(explicit_type::parse(parser))};
+
+    if (is_extern && parser.peek_token_is(syntax::token_type_t::LBRACE)) {
+        return make_syntax_err("`extern fn(...)` names a function pointer type and cannot have a "
+                               "body",
+                               syntax::error::EXPLICIT_FN_TYPE_HAS_BODY,
+                               start_token);
+    }
 
     // No body: `fn(params): ret` is a function*type value
     if (!parser.peek_token_is(syntax::token_type_t::LBRACE)) {
@@ -987,7 +995,9 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
                                               true,
                                               params_force_break,
                                               conv,
-                                              std::move(impl_bounds));
+                                              std::move(impl_bounds),
+                                              has_explicit_conv,
+                                              is_extern);
     }
 
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
@@ -1003,7 +1013,8 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked)
                                           false,
                                           params_force_break,
                                           conv,
-                                          std::move(impl_bounds));
+                                          std::move(impl_bounds),
+                                          has_explicit_conv);
 }
 
 auto grouped_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
@@ -1780,8 +1791,14 @@ auto union_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
 auto parse_modified_struct_or_union(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     const auto start_token{parser.get_current_token()};
-    bool       is_extern{false};
-    bool       is_packed{false};
+    if (parser.current_token_is(syntax::token_type_t::EXTERN) &&
+        parser.peek_token_is(syntax::token_type_t::FUNCTION)) {
+        parser.advance();
+        return function_expr::parse(parser, false, false, true);
+    }
+
+    bool is_extern{false};
+    bool is_packed{false};
 
     while (true) {
         const auto current_tt{parser.get_current_token().type};

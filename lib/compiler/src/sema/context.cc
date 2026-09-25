@@ -54,6 +54,31 @@ auto context::get_reference(types::mut::mutability_modifiers mutability, type& u
     return type;
 }
 
+constexpr u64 ERASED_FN_MARKER{0x45'52'41'53'45'44}; // distinguishes `fn` from `extern fn` keys
+
+auto context::get_function(gsl::span<type*>        params,
+                           type&                   return_type,
+                           bool                    is_variadic,
+                           ast::calling_convention conv,
+                           bool                    erased) -> type& {
+    types::key_t key{type_kind::FUNCTION, types::mut::CONSTANT};
+    for (const auto* p : params) { key.imprint(*p); }
+    key.imprint(return_type);
+    if (is_variadic) { key.imprint(is_variadic); }
+    key.imprint(conv);
+    if (erased) { key.imprint(ERASED_FN_MARKER); }
+
+    auto& fn{*pool[key]};
+    fn.resolve_if<types::function>(params, return_type, false, is_variadic, conv, erased);
+    return fn;
+}
+
+auto context::with_erasure(type& fn, bool erased) -> type& {
+    const auto data{fn.get_data().as_opt<types::function>()};
+    if (!data || data->erased == erased || data->has_self) { return fn; }
+    return get_function(data->params, data->return_type, data->is_variadic, data->conv, erased);
+}
+
 auto context::get_array(types::mut::mutability_modifiers mutability,
                         bool                             null_terminated,
                         usize                            size,

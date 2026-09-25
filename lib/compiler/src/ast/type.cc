@@ -80,6 +80,7 @@ auto explicit_function_type::parse(syntax::parser& parser, bool allow_trailing_b
         TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
     }
 
+    const bool has_explicit_conv{parser.peek_token_is(syntax::token_type_t::CALLCONV)};
     const auto conv{TRY(try_parse_callconv(parser))};
 
     // There must be a return type but there cannot be a block
@@ -96,7 +97,8 @@ auto explicit_function_type::parse(syntax::parser& parser, bool allow_trailing_b
                                   .variadic             = variadic,
                                   .params_force_break   = params_force_break,
                                   .explicit_return_type = return_type,
-                                  .conv                 = conv};
+                                  .conv                 = conv,
+                                  .has_explicit_conv    = has_explicit_conv};
 }
 
 auto explicit_dyn_type::parse(syntax::parser& parser, bool allow_trailing_brace)
@@ -281,11 +283,25 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
 
     // The inner type is limited to functions and user-defined types
     const auto type_start{parser.get_current_token()};
-    if (parser.peek_token_is(syntax::token_type_t::FUNCTION)) {
+    const bool is_extern_fn{[&] {
+        if (!parser.peek_token_is(syntax::token_type_t::EXTERN)) { return false; }
+        syntax::parser::transaction lookahead{parser};
         parser.advance();
-        const auto fn_type{TRY(explicit_function_type::parse(parser, allow_trailing_brace))};
-        if (!(modifier.is_value() || modifier.is_ptr())) {
-            return make_syntax_err("Functions types may only be values or pointers",
+        if (!parser.peek_token_is(syntax::token_type_t::FUNCTION)) { return false; }
+        lookahead.commit();
+        return true;
+    }()};
+    if (is_extern_fn || parser.peek_token_is(syntax::token_type_t::FUNCTION)) {
+        parser.advance();
+        auto fn_type{TRY(explicit_function_type::parse(parser, allow_trailing_brace))};
+        fn_type.is_extern = is_extern_fn;
+        if (modifier.is_mutable_ref() || modifier.is_mutable_ptr()) {
+            return make_syntax_err("A function type is immutable; use `&fn`/`^fn` without `mut`",
+                                   syntax::error::ILLEGAL_FUNCTION_TYPE_MODIFIER,
+                                   type_start);
+        }
+        if (!(modifier.is_value() || modifier.is_ptr() || modifier.is_ref())) {
+            return make_syntax_err("Functions types may only be values, references, or pointers",
                                    syntax::error::ILLEGAL_FUNCTION_TYPE_MODIFIER,
                                    type_start);
         }

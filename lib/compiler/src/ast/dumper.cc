@@ -334,6 +334,11 @@ auto dumper::visit(node_id, const function_expr& function) -> void {
         fmt::println(out_, "{}Naked: {}", indent_.current_branch(), function.is_naked);
     }
 
+    if (function.is_extern) {
+        const indent::guard g{indent_, false};
+        fmt::println(out_, "{}Extern: true", indent_.current_branch());
+    }
+
     {
         const indent::guard g{indent_, false};
         fmt::println(out_,
@@ -1208,7 +1213,10 @@ MAKE_EXPLICIT_TYPE_DUMP(call_expr)
 
 auto dumper::visit(explicit_type_id, const explicit_function_type& function) -> void {
     PROFILE_FUNCTION();
-    fmt::println(out_, "{}FunctionExpression", indent_.current_branch());
+    fmt::println(out_,
+                 "{}{}FunctionExpression",
+                 indent_.current_branch(),
+                 function.is_extern ? "Extern " : "");
     if (!function.parameter_types.empty()) {
         const indent::guard g{indent_, false};
         fmt::println(out_, "{}Parameters:", indent_.current_branch());

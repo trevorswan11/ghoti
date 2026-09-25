@@ -105,6 +105,13 @@ auto type_resolver::resolve_types(mod::module& module, context& ctx) -> mod::mod
 
 namespace {
 
+[[nodiscard]] auto callconv_requires_extern(const source_location& location) -> diagnostic {
+    return diagnostic{"`callconv(...)` only applies to a thin `extern fn(...)` type; an erased "
+                      "`fn(...)` callable has no C calling convention",
+                      error::CALLCONV_REQUIRES_EXTERN_FN,
+                      location};
+}
+
 // When `value` is exactly `@compileError("literal")`, returns the message
 [[nodiscard]] auto sole_compile_error_message(const ast::AST& ast, ast::expr_handle value)
     -> stdx::option<std::string_view> {
@@ -3825,6 +3832,10 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
                              resolving_.ast.location_of(id)));
     }
 
+    if (fn.is_type_expr && !fn.self && !fn.is_extern && fn.has_explicit_conv) {
+        return last_type_.emplace(ctx_.poison_node(resolving_, id, callconv_requires_extern(resolving_.ast.location_of(id))));
+    }
+
     if (fn.is_type_expr) {
         const auto true_param_count{fn.parameters.size() + (fn.self ? 1UZ : 0UZ)};
         auto       fn_param_types{ctx_.pool.get_many_unsafe(true_param_count)};
@@ -3846,13 +3857,20 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
 
-        types::key_t fn_key{type_kind::FUNCTION, types::mut::CONSTANT};
-        for (const auto* p : fn_param_types) { fn_key.imprint(*p); }
-        fn_key.imprint(return_type);
-        fn_key.imprint(fn.conv);
-        auto& fn_type{*ctx_.pool[fn_key]};
-        fn_type.resolve_if<types::function>(
-            fn_param_types, return_type, fn.self.has_value(), fn.variadic, fn.conv);
+        auto& fn_type{[&] -> type& {
+            if (!fn.self) {
+                return ctx_.get_function(
+                    fn_param_types, return_type, fn.variadic, fn.conv, !fn.is_extern);
+            }
+            types::key_t fn_key{type_kind::FUNCTION, types::mut::CONSTANT};
+            for (const auto* p : fn_param_types) { fn_key.imprint(*p); }
+            fn_key.imprint(return_type);
+            fn_key.imprint(fn.conv);
+            auto& self_fn{*ctx_.pool[fn_key]};
+            self_fn.resolve_if<types::function>(
+                fn_param_types, return_type, true, fn.variadic, fn.conv);
+            return self_fn;
+        }()};
 
         auto& meta{*ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, fn_type}]};
         meta.resolve_if<types::meta_type>(fn_type);
@@ -3947,7 +3965,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
             TRY_RESOLVE(param.explicit_type);
         }
 
-        auto& param_type{denoted_type(*last_type_.take())};
+        auto& param_type{thin_if_constexpr(param, denoted_type(*last_type_.take()))};
         if (reject_unsized_slot(param.explicit_type, param_type)) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
@@ -6874,6 +6892,14 @@ auto type_resolver::decl_value_denotes_type(ast::expr_handle value) const -> boo
     return false;
 }
 
+auto type_resolver::thin_if_constexpr(const ast::function_expr::parameter& param, type& param_type)
+    -> type& {
+    if (!param.is_constexpr || !param.explicit_type.is_valid()) { return param_type; }
+    auto& thin{ctx_.with_erasure(param_type, false)};
+    if (&thin != &param_type) { resolving_.set_sema_type(param.explicit_type, thin); }
+    return thin;
+}
+
 auto type_resolver::reject_unsized_slot(ast::explicit_type_id at, const type& slot_type) -> bool {
     if (slot_type.get_kind() == type_kind::INTERFACE) {
         const auto iname{ctx_.type_display_name(slot_type)};
@@ -8126,6 +8152,12 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                 gir::const_eval evaluator{ctx_, resolving_};
                 explicit_type_p = &denoted_type(evaluator.force_deferred_call(*explicit_type_p));
                 register_non_generic_type_ctor_members(*explicit_type_p, dc_call);
+            }
+            // A C-ABI symbol has no erased callables, so its `fn(...)` is the thin pointer
+            if (decl.has_modifier(ast::decl_modifiers::EXTERN) ||
+                decl.has_modifier(ast::decl_modifiers::EXPORT)) {
+                explicit_type_p = &ctx_.with_erasure(*explicit_type_p, false);
+                resolving_.set_sema_type(*decl.explicit_type, *explicit_type_p);
             }
             auto& explicit_type{*explicit_type_p};
             if (reject_unsized_slot(*decl.explicit_type, explicit_type)) {
@@ -10522,8 +10554,10 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_function
     PROFILE_FUNCTION();
     auto param_types{ctx_.pool.get_many_unsafe(fn.parameter_types.size())};
 
-    // Make a unique function type by imprinting every associated type
-    types::key_t fn_key{type_kind::FUNCTION, types::mut::CONSTANT};
+    if (!fn.is_extern && fn.has_explicit_conv) {
+        return last_type_.emplace(ctx_.poison_node(resolving_, id, callconv_requires_extern(resolving_.ast.location_of(id))));
+    }
+
     for (usize i{0}; const auto& param : fn.parameter_types) {
         TRY_RESOLVE(param);
         auto& param_type{*last_type_.take()};
@@ -10535,7 +10569,6 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_function
                                  error::ILLEGAL_AUTO_USAGE,
                                  resolving_.ast.location_of(param)));
         }
-        fn_key.imprint(param_type);
         param_types[i++] = &param_type;
     }
 
@@ -10549,14 +10582,12 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_function
                              error::ILLEGAL_AUTO_USAGE,
                              resolving_.ast.location_of(fn.explicit_return_type)));
     }
-    fn_key.imprint(return_type);
-    if (fn.variadic) { fn_key.imprint(fn.variadic); }
-    fn_key.imprint(fn.conv);
+    auto& resolved_fn{
+        ctx_.get_function(param_types, return_type, fn.variadic, fn.conv, !fn.is_extern)};
 
-    auto& resolved_fn{*ctx_.pool[fn_key]};
-    resolved_fn.resolve_if<types::function>(param_types, return_type, false, fn.variadic, fn.conv);
-
-    auto& final_type{apply_explicit_modifiers(id, resolved_fn)};
+    // `&fn(...)` borrows the same non-null callable value that a bare `fn(...)` already is
+    auto& final_type{id.get_modifier().is_ref() ? resolved_fn
+                                                : apply_explicit_modifiers(id, resolved_fn)};
     resolving_.set_sema_type(id, final_type);
     last_type_.emplace(final_type);
 }
@@ -10997,7 +11028,9 @@ auto type_resolver::instantiate_generic(type&                             callee
         type* decl_p_type{arg_type}; // erased type data corresponding to nominal signature type
         type* body_p_type{arg_type}; // contextual type meaning in the function body
         if (inst_resolver.last_type_ && !inst_resolver.last_type_->is_poison()) {
-            auto& resolved_param_type{denoted_type(*inst_resolver.last_type_.take())};
+            auto& resolved_param_type{
+                inst_resolver.thin_if_constexpr(param,
+                                                denoted_type(*inst_resolver.last_type_.take()))};
             // `&auto` / `^auto` (from `impl I` sugar) has no concrete shape yet
             const auto strips_to_auto{[](auto&& self, const type& t) -> bool {
                 if (t.get_kind() == type_kind::AUTO) { return true; }
@@ -11020,7 +11053,7 @@ auto type_resolver::instantiate_generic(type&                             callee
             if (resolved_param_type.get_kind() == type_kind::FUNCTION &&
                 arg_type->get_kind() == type_kind::CLOSURE) {
                 const auto cl{arg_type->get_data().as_opt<types::closure_t>()};
-                if (cl && is_same_unqualified(resolved_param_type, cl->signature)) {
+                if (cl && is_same_fn_signature(resolved_param_type, cl->signature)) {
                     decl_p_type = arg_type;
                     body_p_type = arg_type;
                 } else {

@@ -56,6 +56,7 @@ class formatter {
     }
 
     [[nodiscard]] auto with_modifier(explicit_type_id id, syntax::doc_id base) -> syntax::doc_id;
+    [[nodiscard]] auto format_callconv(calling_convention conv, bool is_explicit) -> syntax::doc_id;
     [[nodiscard]] auto blank_line_between(node_id before, node_id after) const -> bool;
     [[nodiscard]] auto is_function_or_aggregate_node(node_id id) const -> bool;
 

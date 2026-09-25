@@ -450,6 +450,9 @@ class type_resolver {
     // returns whether it did
     auto reject_type_as_value(ast::expr_handle value, const type& expected) -> bool;
 
+    // A `constexpr f: fn(...)` binds at compile time, so it keeps the thin function type
+    auto thin_if_constexpr(const ast::function_expr::parameter& param, type& param_type) -> type&;
+
     // Reports an interface or bare `dyn I` used as a by-value slot type; returns whether it did
     auto reject_unsized_slot(ast::explicit_type_id at, const type& slot_type) -> bool;
 

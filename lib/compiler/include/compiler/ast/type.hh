@@ -31,6 +31,8 @@ struct explicit_function_type {
     bool                           params_force_break{false}; // trailing comma before `)`
     explicit_type_id               explicit_return_type;
     calling_convention             conv{calling_convention::C};
+    bool                           has_explicit_conv{false};
+    bool                           is_extern{false}; // thin C-ABI code pointer, never erased
 
     // allow_trailing_brace lets an aggregate literal's own '{' follow without misreading it
     [[nodiscard]] static auto parse(syntax::parser& parser, bool allow_trailing_brace = false)

@@ -201,13 +201,18 @@ struct function_expr {
     bool                         params_force_break{false};
     calling_convention           conv{calling_convention::C};
     std::vector<impl_bound>      impl_bounds{};
+    bool                         has_explicit_conv{false};
+    bool                         is_extern{false}; // `extern fn(...): R` bodyless type value
 
     // Parse the function as a value. Meant for the parser LUT
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic> {
         return parse(parser, false, false);
     }
-    [[nodiscard]] static auto parse(syntax::parser& parser, bool is_move, bool is_naked)
+    [[nodiscard]] static auto parse(syntax::parser& parser,
+                                    bool            is_move,
+                                    bool            is_naked,
+                                    bool            is_extern = false)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 

@@ -509,6 +509,10 @@ TEST_CASE("formatter round trip: functions and types") {
     round_trips("var f_ptr: ^fn(x: &a, y: ^mut B, ...): &[0x2uz][N]^E = undefined;");
     round_trips("fn(^mut this, a: A, b: ^B, ): i32 { c; };");
     round_trips("fn(self): i32 {};");
+    round_trips("var cb: extern fn(a: i32) callconv(.c): i32 = undefined;");
+    round_trips("var cb: ^extern fn(a: i32): i32 = undefined;");
+    round_trips("var cb: &fn(a: i32): i32 = undefined;");
+    round_trips("const Cb := extern fn(a: i32) callconv(.win64): i32;");
     round_trips("pub const min := fn(a: auto, b: auto): auto { return if (a < b) a else b; };");
     round_trips("const T := i32; pub const a := ^^i32;");
     round_trips("var a: std.ArrayList(u8) = undefined; var a: List(i32) = undefined; var a: []i32 "

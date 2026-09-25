@@ -128,6 +128,7 @@ enum class error : u8 {
     SLICE_LENGTH_MISMATCH,
     TYPE_USED_AS_VALUE,
     COMPILE_TIME_ONLY_VALUE,
+    CALLCONV_REQUIRES_EXTERN_FN,
 };
 
 using diagnostic  = diagnostic<error>;

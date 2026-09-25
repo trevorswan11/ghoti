@@ -151,13 +151,31 @@ TEST_CASE("Function explicit type resolution") {
     auto [ctx, idx]{helpers::resolve_and_check("var foo: fn(p: ^i32, n: u32): bool = undefined;")};
     const auto [sym, data, type]{ctx->get_type_sym_info<syms::node_t>("foo", idx)};
 
-    const auto& expected_type =
-        ctx->get_type(sema::type_kind::FUNCTION,
-                      ctx->get_type(sema::type_kind::POINTER, ctx->get_int_type(32, true)),
-                      ctx->get_int_type(32, false),
-                      ctx->get_type(sema::type_kind::BOOL),
-                      ast::calling_convention::C);
-    CHECK(type == expected_type);
+    const auto& fn{UNWRAP(type.get_data().as_opt<sema::types::function>())};
+    CHECK(fn.erased);
+    REQUIRE(fn.params.size() == 2);
+    CHECK(*fn.params[0] == ctx->get_type(sema::type_kind::POINTER, ctx->get_int_type(32, true)));
+    CHECK(*fn.params[1] == ctx->get_int_type(32, false));
+    CHECK(fn.return_type == ctx->get_type(sema::type_kind::BOOL));
+    CHECK(fn.conv == ast::calling_convention::C);
+}
+
+TEST_CASE("`extern fn`, `extern` decls, and `constexpr` params keep the thin function type") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        var a: extern fn(n: i32): i32 = undefined;
+        var b: fn(n: i32): i32 = undefined;
+        var c: &fn(n: i32): i32 = undefined;
+        extern const d: fn(n: i32): i32;
+        const use := fn(constexpr f: fn(n: i32): i32, v: i32): i32 { return f(v); };
+    )")};
+    const auto erased_of = [&](std::string_view name) {
+        const auto [sym, data, type]{ctx->get_type_sym_info<syms::node_t>(name, idx)};
+        return UNWRAP(type.get_data().as_opt<sema::types::function>()).erased;
+    };
+    CHECK_FALSE(erased_of("a"));
+    CHECK(erased_of("b"));
+    CHECK(erased_of("c"));
+    CHECK_FALSE(erased_of("d"));
 }
 
 TEST_CASE("Function with syntactically ambiguous arguments") {

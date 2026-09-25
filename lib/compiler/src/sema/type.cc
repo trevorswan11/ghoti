@@ -678,17 +678,32 @@ auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {
         const auto f_a{a.get_data().as_opt<types::function>()};
         const auto f_b{b.get_data().as_opt<types::function>()};
         if (!f_a || !f_b) { return a == b; }
-        if (f_a->conv != f_b->conv || f_a->is_variadic != f_b->is_variadic ||
-            f_a->params.size() != f_b->params.size()) {
-            return false;
-        }
-        for (const auto& [param_a, param_b] : std::views::zip(f_a->params, f_b->params)) {
-            if (!is_same_unqualified(*param_a, *param_b)) { return false; }
-        }
-        return is_same_unqualified(f_a->return_type, f_b->return_type);
+        return f_a->erased == f_b->erased && is_same_fn_signature(a, b);
     }
     default: return is_numeric(kind);
     }
+}
+
+auto is_same_fn_signature(const type& a, const type& b) noexcept -> bool {
+    const auto f_a{a.get_data().as_opt<types::function>()};
+    const auto f_b{b.get_data().as_opt<types::function>()};
+    if (!f_a || !f_b) { return a == b; }
+    if (f_a->conv != f_b->conv || f_a->is_variadic != f_b->is_variadic ||
+        f_a->params.size() != f_b->params.size()) {
+        return false;
+    }
+    for (const auto& [param_a, param_b] : std::views::zip(f_a->params, f_b->params)) {
+        if (!is_same_unqualified(*param_a, *param_b)) { return false; }
+    }
+    return is_same_unqualified(f_a->return_type, f_b->return_type);
+}
+
+auto is_fn_assignable(const type& src, const type& dest) noexcept -> bool {
+    const auto f_src{src.get_data().as_opt<types::function>()};
+    const auto f_dest{dest.get_data().as_opt<types::function>()};
+    if (!f_src || !f_dest) { return false; }
+    if (f_src->erased && !f_dest->erased) { return false; }
+    return is_same_fn_signature(src, dest);
 }
 
 auto slice_copy_destination(const mod::module& m, ast::node_id lhs)
@@ -740,9 +755,8 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
         case type_kind::UNION:
         case type_kind::ENUM:
         case type_kind::TYPE:
-        case type_kind::FUNCTION:
-        case type_kind::CLOSURE:
-            return is_same_unqualified(src, dest);
+        case type_kind::CLOSURE:  return is_same_unqualified(src, dest);
+        case type_kind::FUNCTION: return is_fn_assignable(src, dest);
             // ^S to ^T must be const correct
         case type_kind::POINTER: {
             const auto p_src{src.get_data().as_opt<types::pointer>()};
@@ -755,6 +769,9 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
             // `^T` -> `^dyn I`: the concrete `T`'s conformance is enforced at coercion lowering.
             if (p_dest->underlying.get_kind() == type_kind::DYN) {
                 return is_aggregate(p_src->underlying.get_kind());
+            }
+            if (p_dest->underlying.get_kind() == type_kind::FUNCTION) {
+                return is_fn_assignable(p_src->underlying, p_dest->underlying);
             }
             return is_same_unqualified(p_src->underlying, p_dest->underlying);
         }
@@ -815,7 +832,7 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
     if (src_kind == type_kind::FUNCTION && dest_kind == type_kind::POINTER) {
         if (const auto p_dest{dest.get_data().as_opt<types::pointer>()}) {
             if (p_dest->underlying.get_kind() == type_kind::FUNCTION) {
-                return is_same_unqualified(src, p_dest->underlying);
+                return is_fn_assignable(src, p_dest->underlying);
             }
         }
     }

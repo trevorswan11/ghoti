@@ -133,6 +133,16 @@ struct context {
     [[nodiscard]] auto get_reference(types::mut::mutability_modifiers mutability, type& underlying)
         -> type&;
 
+    // A structural (selfless) function type as spelled by `fn(...): R` / `extern fn(...): R`
+    [[nodiscard]] auto get_function(gsl::span<type*>        params,
+                                    type&                   return_type,
+                                    bool                    is_variadic,
+                                    ast::calling_convention conv,
+                                    bool                    erased) -> type&;
+
+    // The same signature as `fn`, toggled between erased and thin
+    [[nodiscard]] auto with_erasure(type& fn, bool erased) -> type&;
+
     // Calls resolve_if on the resulting type
     [[nodiscard]] auto get_array(types::mut::mutability_modifiers mutability,
                                  bool                             null_terminated,
