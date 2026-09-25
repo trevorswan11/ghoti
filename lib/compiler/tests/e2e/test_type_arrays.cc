@@ -102,4 +102,48 @@ TEST_CASE("E2E: a `constexpr var` array of `type`s can be rewritten at compile t
     )") == 9);
 }
 
+TEST_CASE("E2E: a generic signature's placeholder target never emits parameterized impl bodies") {
+    // `empty`'s own `Res([]mut T, Oops)` instantiates `Res` over the still-unbound `T`
+    CHECK(helpers::compile_and_run(R"(
+        const Res := fn(T: type, E: type): type {
+            return union { ok: T, err: E };
+        };
+
+        impl(T: type, E: type) builtin.Unwrappable for Res(T, E) {
+            const Output := T;
+            const Residual := E;
+            pub const branch := fn(self): builtin.Flow(T, E) {
+                return match (self) {
+                    .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
+                    .err => |e| builtin.Flow(T, E){ .@"break" = e },
+                };
+            };
+        }
+
+        impl(T: type, E: type) builtin.Rewrappable for Res(T, E) {
+            const From := E;
+            pub const from_residual := fn(r: E): @This() {
+                return .{ .err = r };
+            };
+        }
+
+        const Oops := enum { bad };
+
+        const empty := fn(T: type): Res([]mut T, Oops) {
+            return .{ .err = .bad };
+        };
+
+        const pick := fn(): Res(i32, Oops) { return .{ .ok = 2 }; };
+        const add := fn(): Res(i32, Oops) {
+            const v := pick()?;
+            return .{ .ok = v + 1 };
+        };
+
+        pub const main := fn(): i32 {
+            const miss: i32 = match (empty(u8)) { .ok => 100, .err => 0 };
+            return miss + match (add()) { .ok => |v| v, .err => 50 };
+        };
+    )") == 3);
+}
+
 } // namespace ghoti::tests

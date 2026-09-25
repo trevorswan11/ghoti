@@ -9360,7 +9360,8 @@ auto type_resolver::instantiate_impls_for(
                     ok = false;
                     break;
                 }
-                if (arg->get_kind() == type_kind::TYPE) { is_abstract = true; }
+                // Still an unbound param, possibly wrapped (`[]mut T` from a generic signature)
+                if (is_generic_type(*arg, false)) { is_abstract = true; }
                 if (i < type_bounds.size()) { type_bounds[i] = arg; }
             }
         }
@@ -9501,7 +9502,8 @@ auto type_resolver::instantiate_impls_for(
             }
         }
 
-        if (!is_abstract) {
+        // A target holding `type`s only exists at compile time, so its methods have no runtime body
+        if (!is_abstract && !holds_type_values(concrete)) {
             for (const auto& m : stored->methods) {
                 if (m.fn_type && ctx_.generic_functions.get_opt(*m.fn_type)) { continue; }
                 impl_mod.impl_ctor_member_emits.emplace_back<type_ctor_member_emit>({
