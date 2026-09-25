@@ -965,7 +965,8 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked, b
     const bool has_explicit_conv{parser.peek_token_is(syntax::token_type_t::CALLCONV)};
     const auto conv{TRY(try_parse_callconv(parser))};
     TRY(parser.expect_peek(syntax::token_type_t::COLON));
-    const auto return_type{TRY(explicit_type::parse(parser))};
+    // A `fn(...): R` return type leaves the following `{` for this literal's own body
+    const auto return_type{TRY(explicit_type::parse(parser, true))};
 
     if (is_extern && parser.peek_token_is(syntax::token_type_t::LBRACE)) {
         return make_syntax_err("`extern fn(...)` names a function pointer type and cannot have a "

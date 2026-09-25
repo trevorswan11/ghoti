@@ -128,7 +128,7 @@ auto explicit_function_type::parse(syntax::parser& parser, bool allow_trailing_b
 
     // There must be a return type but there cannot be a block
     TRY(parser.expect_peek(syntax::token_type_t::COLON));
-    const auto return_type{TRY(explicit_type::parse(parser))};
+    const auto return_type{TRY(explicit_type::parse(parser, allow_trailing_brace))};
     if (!allow_trailing_brace && parser.peek_token_is(syntax::token_type_t::LBRACE)) {
         return make_syntax_err("Function types may not have a body",
                                syntax::error::EXPLICIT_FN_TYPE_HAS_BODY,

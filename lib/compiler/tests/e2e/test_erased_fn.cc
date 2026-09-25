@@ -196,4 +196,33 @@ TEST_CASE("a user interface named `Fn` still works beside the `dyn Fn(...)` suga
     )") == 3 + 9);
 }
 
+TEST_CASE("a function literal spells a `fn(...)` return type directly before its body") {
+    CHECK(helpers::compile_and_run(R"(
+        const inc := fn(n: i32): i32 { return n + 1; };
+        const pick := fn(twice: bool): fn(n: i32): i32 {
+            if (twice) { return fn(n: i32): i32 { return n * 2; }; }
+            return inc;
+        };
+        const pick_thin := fn(): extern fn(n: i32): i32 { return inc; };
+        const pick_sugar := fn(): dyn Fn(n: i32): i32 { return inc; };
+        pub const main := fn(): i32 {
+            const a := pick(true);
+            return a(10) + pick_thin()(1) + pick_sugar()(2);
+        };
+    )") == 20 + 2 + 3);
+}
+
+TEST_CASE("a call result is called directly, chained through returned callables") {
+    CHECK(helpers::compile_and_run(R"(
+        const Step := fn(n: i32): i32;
+        const add_one := fn(n: i32): i32 { return n + 1; };
+        const pick := fn(): Step { return add_one; };
+        const Maker := fn(): Step;
+        const make_maker := fn(): Maker { return pick; };
+        pub const main := fn(): i32 {
+            return pick()(1) + make_maker()()(40);
+        };
+    )") == 2 + 41);
+}
+
 } // namespace ghoti::tests
