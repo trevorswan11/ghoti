@@ -1962,7 +1962,11 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
     // non-aggregate can skip storage below except a `constexpr var` since it has no storage
     const auto is_structural{sema::is_structural(sema_type->get_kind())};
     if (is_const && decl.value && (!is_structural || is_constexpr_var)) {
-        if (const auto fn_expr{active_ast().get_as_opt<ast::function_expr>(*decl.value)}) {
+        // A `fn(...)`-annotated literal is a callable value built below, not a named function
+        const auto fn_expr{sema::is_fat_callable(*sema_type)
+                               ? stdx::none
+                               : active_ast().get_as_opt<ast::function_expr>(*decl.value)};
+        if (fn_expr) {
             // A generic local function has no single concrete signature to emit directly
             if (ctx_.generic_functions.get_opt(*sema_type)) { return; }
             const auto anon_name{emit_named_local_function(name, **decl.value, *fn_expr)};

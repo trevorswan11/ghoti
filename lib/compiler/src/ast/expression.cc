@@ -1988,6 +1988,11 @@ auto interface_expr::parse(syntax::parser& parser)
 auto type_expr::parse_dyn(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
+    if (auto fn_type{TRY(try_parse_dyn_fn(parser))}) {
+        const auto type{parser.add_type<explicit_function_type>(
+            start_token, type_modifier{}, std::move(*fn_type))};
+        return parser.add_expr<type_expr>(start_token, type);
+    }
     auto       dyn{TRY(explicit_dyn_type::parse(parser))};
     const auto type{
         parser.add_type<explicit_dyn_type>(start_token, type_modifier{}, std::move(dyn))};

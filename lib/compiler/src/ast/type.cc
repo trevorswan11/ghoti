@@ -19,6 +19,49 @@
 
 namespace ghoti::ast {
 
+auto try_parse_dyn_fn(syntax::parser& parser, bool allow_trailing_brace)
+    -> stdx::result<stdx::option<explicit_function_type>, syntax::diagnostic> {
+    const bool is_fn_sugar{[&] {
+        const syntax::parser::transaction lookahead{parser};
+        if (!parser.peek_token_is(syntax::token_type_t::IDENT) ||
+            parser.get_peek_token().slice != "Fn") {
+            return false;
+        }
+        parser.advance();
+        if (!parser.peek_token_is(syntax::token_type_t::LPAREN)) { return false; }
+        parser.advance();
+        if (parser.peek_token_is(syntax::token_type_t::RPAREN)) {
+            parser.advance();
+            return parser.peek_token_is(syntax::token_type_t::COLON) ||
+                   parser.peek_token_is(syntax::token_type_t::CALLCONV);
+        }
+        if (!parser.peek_token_is(syntax::token_type_t::IDENT)) { return false; }
+        parser.advance();
+        return parser.peek_token_is(syntax::token_type_t::COLON);
+    }()};
+    if (!is_fn_sugar) { return stdx::option<explicit_function_type>{}; }
+
+    parser.advance(); // current == Fn
+    auto fn_type{TRY(explicit_function_type::parse(parser, allow_trailing_brace))};
+    fn_type.is_dyn_fn = true;
+    return stdx::option<explicit_function_type>{std::move(fn_type)};
+}
+
+auto check_function_type_modifier(type_modifier modifier, const syntax::token_t& at)
+    -> stdx::result<void, syntax::diagnostic> {
+    if (modifier.is_mutable_ref() || modifier.is_mutable_ptr()) {
+        return make_syntax_err("A function type is immutable; use `&fn`/`^fn` without `mut`",
+                               syntax::error::ILLEGAL_FUNCTION_TYPE_MODIFIER,
+                               at);
+    }
+    if (!(modifier.is_value() || modifier.is_ptr() || modifier.is_ref())) {
+        return make_syntax_err("Functions types may only be values, references, or pointers",
+                               syntax::error::ILLEGAL_FUNCTION_TYPE_MODIFIER,
+                               at);
+    }
+    return {};
+}
+
 auto explicit_function_type::parse(syntax::parser& parser, bool allow_trailing_brace)
     -> stdx::result<explicit_function_type, syntax::diagnostic> {
     PROFILE_FUNCTION();
@@ -192,6 +235,11 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
     // `dyn I` is an unsized interface object; the modifier (`&` / `^`) wraps it as a fat pointer.
     if (parser.peek_token_is(syntax::token_type_t::DYN)) {
         parser.advance(); // current == dyn
+        if (auto fn_type{TRY(try_parse_dyn_fn(parser, allow_trailing_brace))}) {
+            TRY(check_function_type_modifier(modifier, modifier_token));
+            return parser.add_type<explicit_function_type>(
+                modifier_token, modifier, std::move(*fn_type));
+        }
         auto dyn{TRY(explicit_dyn_type::parse(parser, allow_trailing_brace))};
         return parser.add_type<explicit_dyn_type>(modifier_token, modifier, std::move(dyn));
     }
@@ -295,17 +343,7 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
         parser.advance();
         auto fn_type{TRY(explicit_function_type::parse(parser, allow_trailing_brace))};
         fn_type.is_extern = is_extern_fn;
-        if (modifier.is_mutable_ref() || modifier.is_mutable_ptr()) {
-            return make_syntax_err("A function type is immutable; use `&fn`/`^fn` without `mut`",
-                                   syntax::error::ILLEGAL_FUNCTION_TYPE_MODIFIER,
-                                   type_start);
-        }
-        if (!(modifier.is_value() || modifier.is_ptr() || modifier.is_ref())) {
-            return make_syntax_err("Functions types may only be values, references, or pointers",
-                                   syntax::error::ILLEGAL_FUNCTION_TYPE_MODIFIER,
-                                   type_start);
-        }
-
+        TRY(check_function_type_modifier(modifier, type_start));
         return parser.add_type<explicit_function_type>(modifier_token, modifier, fn_type);
     }
 

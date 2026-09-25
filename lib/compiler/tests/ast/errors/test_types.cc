@@ -19,7 +19,8 @@ TEST_CASE("Function type restrictions") {
 
     const auto illegal{GENERATE("var a: &mut fn(): void;"sv,
                                 "var a: ^mut fn(): void;"sv,
-                                "var a: &mut extern fn(): void;"sv)};
+                                "var a: &mut extern fn(): void;"sv,
+                                "var a: &mut dyn Fn(): void;"sv)};
     helpers::test_parser_fail(illegal, expected_diag());
 }
 

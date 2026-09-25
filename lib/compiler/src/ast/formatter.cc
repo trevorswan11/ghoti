@@ -1620,10 +1620,11 @@ auto formatter::visit(explicit_type_id id, const explicit_function_type& node) -
 
     const auto callconv_doc{format_callconv(node.conv, node.has_explicit_conv)};
 
+    const auto keyword{node.is_dyn_fn ? "dyn Fn" : node.is_extern ? "extern fn" : "fn"};
     return with_modifier(
         id,
         doc_manager_.concat({
-            doc_manager_.text(node.is_extern ? "extern fn" : "fn"),
+            doc_manager_.text(keyword),
             doc_manager_.delimited(
                 "(", ")", std::move(params), false, false, node.params_force_break),
             callconv_doc,

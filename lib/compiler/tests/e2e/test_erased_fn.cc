@@ -149,4 +149,51 @@ TEST_CASE("an erased `fn(...)` cannot be an `extern struct` field") {
     helpers::resolve_and_check("const S := extern struct { cb: extern fn(n: i32): i32 };");
 }
 
+TEST_CASE("a function literal bound to a `fn(...)`-typed const is a callable value") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            var k: i32 = 5;
+            const plain: fn(n: i32): i32 = fn(n: i32): i32 { return n * 2; };
+            const near: fn(n: i32): i32 = fn(n: i32): i32 { return n + k; };
+            return plain(10) + near(1);
+        };
+    )") == 20 + 6);
+}
+
+TEST_CASE("`dyn Fn(...)` is sugar for the erased `fn(...)` under every indirection") {
+    CHECK(helpers::compile_and_run(R"(
+        const Op := dyn Fn(n: i32): i32;
+        const apply := fn(f: &dyn Fn(n: i32): i32, v: i32): i32 { return f(v); };
+        const maybe := fn(f: ^dyn Fn(): i32): i32 {
+            if (f == nullptr) { return 0; }
+            return f();
+        };
+        pub const main := fn(): i32 {
+            var k: i32 = 5;
+            const op: Op = fn(n: i32): i32 { return n + k; };
+            const seven := fn(): i32 { return 7; };
+            const same: fn(n: i32): i32 = op;
+            return apply(op, 1) + maybe(seven) + maybe(nullptr) + same(0);
+        };
+    )") == 6 + 7 + 0 + 5);
+}
+
+TEST_CASE("a user interface named `Fn` still works beside the `dyn Fn(...)` sugar") {
+    CHECK(helpers::compile_and_run(R"(
+        const Fn := interface { Out: type; pub const get := fn(&self): Out; };
+        const Box := struct { v: i32 };
+        impl Fn for Box {
+            const Out := i32;
+            pub const get := fn(&self): i32 { return self.v; };
+        }
+        const read := fn(x: &dyn Fn(Out = i32)): i32 { return x.get(); };
+        const call := fn(f: dyn Fn(): i32): i32 { return f(); };
+        const nine := fn(): i32 { return 9; };
+        pub const main := fn(): i32 {
+            const b := Box{ .v = 3 };
+            return read(&b) + call(nine);
+        };
+    )") == 3 + 9);
+}
+
 } // namespace ghoti::tests
