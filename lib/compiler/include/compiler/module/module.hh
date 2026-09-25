@@ -389,19 +389,23 @@ struct module {
         }
     }
 
-    auto set_callable_param_names(const source_location&        declared_at,
-                                  std::vector<std::string_view> names) -> void {
-        sema_side_tables.callable_param_names.insert_or_assign(
-            sema::side_tables::pack_location(declared_at), std::move(names));
+    template <ast::IndexableID ID>
+    auto set_identifier_declaration(ID id, sema::declaration_ref declaration) -> void {
+        if constexpr (ast::IndexableNodeID<ID>) {
+            sema_side_tables.identifier_declarations[id].emplace(declaration);
+        } else {
+            sema_side_tables.explicit_type_declarations[id].emplace(declaration);
+        }
     }
 
-    // Parameter names of the callable whose name is declared at `declared_at`
-    [[nodiscard]] auto get_callable_param_names(const source_location& declared_at) const
-        -> stdx::option<const std::vector<std::string_view>&> {
-        const auto& names{sema_side_tables.callable_param_names};
-        const auto  it{names.find(sema::side_tables::pack_location(declared_at))};
-        if (it == names.end()) { return stdx::none; }
-        return it->second;
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto get_identifier_declaration(ID id) const
+        -> stdx::option<sema::declaration_ref> {
+        if constexpr (ast::IndexableNodeID<ID>) {
+            return sema_side_tables.identifier_declarations[id];
+        } else {
+            return sema_side_tables.explicit_type_declarations[id];
+        }
     }
 
     // Given a relative path, returns its absolute rep from the module's perspective

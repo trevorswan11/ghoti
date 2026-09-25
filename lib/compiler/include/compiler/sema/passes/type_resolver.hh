@@ -450,21 +450,12 @@ class type_resolver {
     // returns whether it did
     auto reject_type_as_value(ast::expr_handle value, const type& expected) -> bool;
 
-    // Parameter names written by a `fn(...)` type annotation, or by the alias it names
-    [[nodiscard]] auto callable_param_names_of(ast::explicit_type_id type,
-                                               u32                   alias_depth = 0) const
-        -> stdx::option<std::vector<std::string_view>>;
-    [[nodiscard]] auto callable_param_names_of(const ast::function_expr& fn) const
-        -> std::vector<std::string_view>;
-    [[nodiscard]] auto decl_callable_param_names(const ast::decl_stmt& decl,
-                                                 u32                   alias_depth = 0) const
-        -> stdx::option<std::vector<std::string_view>>;
-    // Names from the in-scope, same-module declaration of `name` (an alias or a function)
-    [[nodiscard]] auto local_callable_param_names(std::string_view name, u32 alias_depth) const
-        -> stdx::option<std::vector<std::string_view>>;
-    // Remembers `names` for the callable declared by `name_node`, for LSP hover
-    auto record_callable_param_names(ast::node_id                                name_node,
-                                     stdx::option<std::vector<std::string_view>> names) -> void;
+    // Records which declaration `id` names, for LSP features like hover
+    template <ast::IndexableID ID>
+    auto record_declaration(ID id, const mod::module& owner, const symbol& sym) -> void;
+    // Same, for a bare name found in `table_idx` of the current scope chain
+    template <ast::IndexableID ID>
+    auto record_scoped_declaration(ID id, usize table_idx, const symbol& sym) -> void;
 
     // Resolves both arms of a runtime (or evaluation-context) `if` and types the whole expression
     auto resolve_if_arms(ast::node_id id, const ast::if_expr& if_expr) -> void;

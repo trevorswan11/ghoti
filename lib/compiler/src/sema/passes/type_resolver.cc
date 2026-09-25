@@ -3992,8 +3992,11 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         }
         param_types[param_idx++] = &param_type;
         resolving_.set_sema_type(param.name, param_type);
-        if (param.name.is<ast::identifier_expr>()) {
-            record_callable_param_names(param.name, callable_param_names_of(param.explicit_type));
+        if (param.name.is<ast::identifier_expr>() && param.explicit_type.is_valid()) {
+            resolving_.set_identifier_declaration(
+                param.name,
+                declaration_ref{
+                    .owner = &resolving_, .decl = stdx::none, .annotation = param.explicit_type});
         }
         if (param.name.is<ast::identifier_expr>()) {
             resolve_symbol_info(param.name, symbol_kind::VALUE);
@@ -4529,6 +4532,9 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
     // Record where this reference resolves to, for LSP go-to-definition
     resolving_.set_identifier_definition(
         id, {resolving_.path, lookup->symbol.get_symbol_span(resolving_)});
+    if (const auto declared_in{ctx_.registry.lookup_with_table(table_stack_, name)}) {
+        record_scoped_declaration(id, declared_in->table_idx, lookup->symbol);
+    }
     if constexpr (std::same_as<ID, ast::node_id>) { resolving_.add_identifier_position(id); }
 
     // Belongs to an enclosing function's stack frame rather than the module/prelude scope
@@ -5561,6 +5567,8 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
         resolving_.set_identifier_definition(dot.member,
                                              {inner_mod.path, sym->get_symbol_span(inner_mod)});
         resolving_.add_identifier_position(dot.member);
+        record_declaration(ast::node_id{dot.member}, inner_mod, *sym);
+        if constexpr (ast::IndexableExplicitTypeID<ID>) { record_declaration(id, inner_mod, *sym); }
 
         if constexpr (std::same_as<ID, ast::node_id>) {
             record_symbol_owner(id, *inner_mod.root_table_idx, inner_mod, *sym);
@@ -5622,6 +5630,10 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
             resolving_.set_identifier_definition(
                 dot.member, {enclosing.path, proxy->symbol.get_symbol_span(enclosing)});
             resolving_.add_identifier_position(dot.member);
+            record_declaration(ast::node_id{dot.member}, enclosing, proxy->symbol);
+            if constexpr (ast::IndexableExplicitTypeID<ID>) {
+                record_declaration(id, enclosing, proxy->symbol);
+            }
         }
 
         if (&enclosing == &resolving_) { return true; }
@@ -6914,60 +6926,40 @@ auto type_resolver::decl_value_denotes_type(ast::expr_handle value) const -> boo
     return false;
 }
 
-auto type_resolver::callable_param_names_of(const ast::function_expr& fn) const
-    -> std::vector<std::string_view> {
-    std::vector<std::string_view> names;
-    if (fn.self) {
-        names.emplace_back(resolving_.ast.get_as<ast::identifier_expr>(fn.self->name).name);
+template <ast::IndexableID ID>
+auto type_resolver::record_scoped_declaration(ID id, usize table_idx, const symbol& sym) -> void {
+    // A bare name is declared in this module, or in the prelude's own module
+    if (!ctx_.prelude_index || table_idx != *ctx_.prelude_index) {
+        return record_declaration(id, resolving_, sym);
     }
-    for (const auto& param : fn.parameters) {
-        names.emplace_back(param.name.is<ast::identifier_expr>()
-                               ? resolving_.ast.get_as<ast::identifier_expr>(param.name).name
-                               : std::string_view{"_"});
+    if (ctx_.modules.has_builtin_module()) {
+        record_declaration(id, ctx_.modules.builtin_module(), sym);
     }
-    return names;
 }
 
-auto type_resolver::callable_param_names_of(ast::explicit_type_id type, u32 alias_depth) const
-    -> stdx::option<std::vector<std::string_view>> {
-    if (!type.is_valid()) { return stdx::none; }
-    if (const auto fn_type{resolving_.ast.get_as_opt<ast::explicit_function_type>(type)}) {
-        std::vector<std::string_view> names;
-        for (const auto name : fn_type->parameter_names) {
-            names.emplace_back(resolving_.ast.get_as<ast::identifier_expr>(name).name);
-        }
-        return names;
-    }
-
-    // `f: Callback` borrows the names written on `const Callback := fn(...): R;`
-    if (const auto alias{resolving_.ast.get_as_opt<ast::identifier_expr>(type)}) {
-        return local_callable_param_names(alias->name, alias_depth);
-    }
-    return stdx::none;
-}
-
-auto type_resolver::local_callable_param_names(std::string_view name, u32 alias_depth) const
-    -> stdx::option<std::vector<std::string_view>> {
-    // `const @"i32": i32 = ...` names itself; bound any alias chain
-    constexpr u32 MAX_ALIAS_DEPTH{8};
-    if (alias_depth >= MAX_ALIAS_DEPTH) { return stdx::none; }
-    // A bare name only ever resolves within this module or the prelude
-    const auto found{ctx_.registry.lookup_with_table(table_stack_, name)};
-    if (!found || found->table_idx == ctx_.prelude_index) { return stdx::none; }
-    const auto node{found->symbol.get_data().as_opt<symbols::node_t>()};
-    if (!node) { return stdx::none; }
-    const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
-    if (!decl || resolving_.ast.get_as<ast::identifier_expr>(decl->name).name != name) {
-        return stdx::none;
-    }
-    return decl_callable_param_names(*decl, alias_depth + 1);
-}
-
-auto type_resolver::record_callable_param_names(ast::node_id name_node,
-                                                stdx::option<std::vector<std::string_view>> names)
-    -> void {
-    if (!names) { return; }
-    resolving_.set_callable_param_names(resolving_.ast.location_of(name_node), std::move(*names));
+template <ast::IndexableID ID>
+auto type_resolver::record_declaration(ID id, const mod::module& owner, const symbol& sym) -> void {
+    const auto ref{sym.get_data().visit(
+        [&](const symbols::node_t& node) -> stdx::option<declaration_ref> {
+            if (!owner.ast.get_as_opt<ast::decl_stmt>(node)) { return stdx::none; }
+            return declaration_ref{
+                .owner = &owner, .decl = ast::node_id{node}, .annotation = stdx::none};
+        },
+        [&](const symbols::parameter& param) -> stdx::option<declaration_ref> {
+            if (!param.explicit_type.is_valid()) { return stdx::none; }
+            return declaration_ref{
+                .owner = &owner, .decl = stdx::none, .annotation = param.explicit_type};
+        },
+        [&](const symbols::struct_field& field) -> stdx::option<declaration_ref> {
+            return declaration_ref{
+                .owner = &owner, .decl = stdx::none, .annotation = field.explicit_type};
+        },
+        [&](const symbols::union_field& field) -> stdx::option<declaration_ref> {
+            return declaration_ref{
+                .owner = &owner, .decl = stdx::none, .annotation = field.explicit_type};
+        },
+        [](const auto&) -> stdx::option<declaration_ref> { return stdx::none; })};
+    if (ref) { resolving_.set_identifier_declaration(id, *ref); }
 }
 
 auto type_resolver::thin_if_constexpr(const ast::function_expr::parameter& param, type& param_type)
@@ -7633,7 +7625,10 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
 
         sym->set_status(symbol_status::RESOLVING);
         TRY_RESOLVE(field.explicit_type);
-        record_callable_param_names(field.name, callable_param_names_of(field.explicit_type));
+        resolving_.set_identifier_declaration(field.name,
+                                              declaration_ref{.owner      = &resolving_,
+                                                              .decl       = stdx::none,
+                                                              .annotation = field.explicit_type});
         // `f: @TypeOf(g)` / `f: FnAlias` stores the denoted type, not a `type` value
         auto* field_type{&denoted_type(*last_type_.take())};
         if (reject_unsized_slot(field.explicit_type, *field_type)) {
@@ -7802,7 +7797,10 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
 
         sym->set_status(symbol_status::RESOLVING);
         TRY_RESOLVE(field.explicit_type);
-        record_callable_param_names(field.name, callable_param_names_of(field.explicit_type));
+        resolving_.set_identifier_declaration(field.name,
+                                              declaration_ref{.owner      = &resolving_,
+                                                              .decl       = stdx::none,
+                                                              .annotation = field.explicit_type});
         auto& field_type{denoted_type(*last_type_.take())};
         if (reject_unsized_slot(field.explicit_type, field_type)) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
@@ -8505,28 +8503,10 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
     } else {
         resolving_.set_sema_type_if(decl.name, resolved_type);
     }
-    record_callable_param_names(decl.name, decl_callable_param_names(decl));
+    resolving_.set_identifier_declaration(
+        decl.name, declaration_ref{.owner = &resolving_, .decl = id, .annotation = stdx::none});
     sym.set_status(symbol_status::RESOLVED);
     last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
-}
-
-auto type_resolver::decl_callable_param_names(const ast::decl_stmt& decl, u32 alias_depth) const
-    -> stdx::option<std::vector<std::string_view>> {
-    if (decl.explicit_type) { return callable_param_names_of(*decl.explicit_type, alias_depth); }
-    if (!decl.value) { return stdx::none; }
-    if (const auto fn{resolving_.ast.get_as_opt<ast::function_expr>(*decl.value)}) {
-        return callable_param_names_of(*fn);
-    }
-    // `const Op := dyn Fn(n: i32): i32;`
-    if (const auto type_value{resolving_.ast.get_as_opt<ast::type_expr>(*decl.value)}) {
-        return callable_param_names_of(type_value->type, alias_depth);
-    }
-    // `const g := f;` keeps `f`'s names
-    if (const auto target{resolving_.ast.get_as_opt<ast::identifier_expr>(*decl.value)};
-        target && target->name != resolving_.ast.get_as<ast::identifier_expr>(decl.name).name) {
-        return local_callable_param_names(target->name, alias_depth);
-    }
-    return stdx::none;
 }
 
 auto type_resolver::check_deferred_body_jumps(ast::stmt_handle body) -> void {
@@ -10635,14 +10615,21 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::identifier_expr& 
         return last_type_.emplace(resolved);
     }
 
-    auto symbol_opt{ctx_.registry.lookup(table_stack_, ident.name)};
+    const auto            found{ctx_.registry.lookup_with_table(table_stack_, ident.name)};
+    stdx::option<symbol&> symbol_opt;
+    usize                 symbol_table{0};
+    if (found) {
+        symbol_opt.emplace(found->symbol);
+        symbol_table = found->table_idx;
+    }
     bool overrode_shadow{false};
     if (symbol_opt &&
         (!symbol_opt->has_kind() || symbol_opt->get_kind() != sema::symbol_kind::TYPE)) {
         for (const auto idx : table_stack_ | std::views::reverse) {
             if (const auto sym{ctx_.registry.get(idx).get_opt(ident.name)};
                 sym && sym->has_kind() && sym->get_kind() == sema::symbol_kind::TYPE) {
-                symbol_opt      = *sym;
+                symbol_opt.emplace(*sym);
+                symbol_table    = idx;
                 overrode_shadow = true;
                 break;
             }
@@ -10657,6 +10644,8 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::identifier_expr& 
                              resolving_.ast.location_of(id)));
     }
     auto& sym{*symbol_opt};
+    resolving_.set_identifier_definition(id, {resolving_.path, sym.get_symbol_span(resolving_)});
+    record_scoped_declaration(id, symbol_table, sym);
 
     // `resolve_ident` re-looks-up the name from scratch, which would just rediscover the
     // shadowing symbol we already routed around above; resolve the override directly instead.

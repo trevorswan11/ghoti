@@ -1,5 +1,6 @@
 #pragma once
 
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -62,6 +63,7 @@ template <typename ID, typename Data> struct data_pool : public data_pool_base<I
 template <typename Data> struct data_pool<node_id, Data> : public data_pool_base<node_id, Data> {
     std::vector<node_id> roots;
     std::vector<u8>      paren_depths;
+    std::vector<node_id> ids; // every node's id in creation order, since ids carry a tag token
 
     // `end_token` is the last token consumed while parsing this node
     constexpr auto emplace_back(ghoti::arena&          arena,
@@ -86,6 +88,8 @@ template <typename Data> struct data_pool<node_id, Data> : public data_pool_base
 
     constexpr auto clear() noexcept -> void {
         roots.clear();
+        paren_depths.clear();
+        ids.clear();
         data_pool_base<node_id, Data>::clear();
     }
 };
@@ -119,7 +123,7 @@ class AST {
         constexpr auto kind{node_kind_of<Data>::value()};
         const auto     index{
             nodes_.emplace_back(get_arena(), start_token, end_token, std::forward<Data>(data))};
-        return node_id{kind, start_token.type, index};
+        return nodes_.ids.emplace_back(kind, start_token.type, index);
     }
 
     // For infix nodes whose operator starts after the node's true span start
@@ -131,7 +135,7 @@ class AST {
         constexpr auto kind{node_kind_of<Data>::value()};
         const auto     index{
             nodes_.emplace_back(get_arena(), span_start, end_token, std::forward<Data>(data))};
-        return node_id{kind, tag_token.type, index};
+        return nodes_.ids.emplace_back(kind, tag_token.type, index);
     }
 
     template <ExplicitTypeData Data>
@@ -211,6 +215,26 @@ class AST {
 
     [[nodiscard]] constexpr auto get_roots(this auto&& self) noexcept -> auto& {
         return self.nodes_.roots;
+    }
+
+    // Every node in the tree, children before the parents that hold them
+    [[nodiscard]] constexpr auto all_nodes() const noexcept -> const std::vector<node_id>& {
+        return nodes_.ids;
+    }
+
+    // Every node holding `Data`, in creation order
+    template <NodeData Data> [[nodiscard]] constexpr auto nodes_of() const noexcept {
+        return nodes_.ids | std::views::filter([](node_id id) { return id.template is<Data>(); });
+    }
+
+    // The top-level declaration `name := ...` (or `name: T = ...`), if any
+    [[nodiscard]] auto find_top_level_decl(std::string_view name) const
+        -> stdx::option<const decl_stmt&> {
+        for (const auto root : nodes_.roots) {
+            const auto decl{get_as_opt<decl_stmt>(root)};
+            if (decl && get_as<identifier_expr>(decl->name).name == name) { return *decl; }
+        }
+        return stdx::none;
     }
 
     // Attaches a `///` doc comment, keyed by the span of the declared name it documents.

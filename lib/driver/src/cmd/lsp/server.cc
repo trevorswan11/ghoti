@@ -19,6 +19,7 @@
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/module/module.hh"
+#include "compiler/sema/declaration.hh"
 #include "compiler/sema/type.hh"
 #include "driver/clap/error.hh"
 #include "driver/cmd/lsp/code_actions.hh"
@@ -114,22 +115,16 @@ auto doc_comment_for(const mod::module_manager& manager,
 }
 
 // The declared parameter names of the callable `id` refers to (or declares)
-auto callable_param_names_for(const mod::module_manager& manager,
-                              const mod::module&         entry,
-                              ast::node_id               id)
-    -> stdx::option<const std::vector<std::string_view>&> {
-    if (const auto def{entry.get_identifier_definition(id)}) {
-        for (const auto& [path, mod] : manager) {
-            if (path == def->path) { return mod->get_callable_param_names(def->span.start); }
-        }
-        return entry.get_callable_param_names(def->span.start);
-    }
-    return entry.get_callable_param_names(entry.ast.location_of(id));
+auto callable_param_names_for(const mod::module& entry, ast::node_id id)
+    -> stdx::option<std::vector<std::string_view>> {
+    const auto declaration{entry.get_identifier_declaration(id)};
+    if (!declaration) { return stdx::none; }
+    return sema::callable_param_names(*declaration);
 }
 
 // `fn(a: i32, b: i32): i32`, naming each parameter when the declaration wrote the names down
 auto render_hover_type(const sema::type&                                  type,
-                       stdx::option<const std::vector<std::string_view>&> names) -> std::string {
+                       const stdx::option<std::vector<std::string_view>>& names) -> std::string {
     const sema::type* target{&type};
     std::string_view  prefix;
     if (const auto p{type.get_data().as_opt<sema::types::pointer>()}) {
@@ -321,8 +316,7 @@ auto lsp_server::handle_hover(const nlohmann::json& message, lsp::document_store
     if (!type) { return write_null_id(message); }
 
     const auto doc{doc_comment_for(store.manager(), entry_module, *id, type)};
-    const auto rendered{
-        render_hover_type(*type, callable_param_names_for(store.manager(), entry_module, *id))};
+    const auto rendered{render_hover_type(*type, callable_param_names_for(entry_module, *id))};
 
     std::string signature{rendered};
     if (const auto ident{entry_module.ast.get_as_opt<ast::identifier_expr>(*id)};

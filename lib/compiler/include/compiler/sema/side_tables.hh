@@ -5,7 +5,6 @@
 #include <string_view>
 #include <vector>
 
-#include <ankerl/unordered_dense.h>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
@@ -15,7 +14,17 @@
 #include "compiler/ast/traits.hh"
 #include "support/diagnostic.hh"
 
+namespace ghoti::mod { struct module; } // namespace ghoti::mod
+
 namespace ghoti::sema {
+
+// Where a name was declared, in the declaring module's own AST: a `const`/`var` declaration, or
+// the type annotation of a parameter or aggregate field
+struct declaration_ref {
+    const mod::module*                  owner;
+    stdx::option<ast::node_id>          decl;
+    stdx::option<ast::explicit_type_id> annotation;
+};
 
 namespace detail {
 
@@ -75,13 +84,10 @@ struct side_tables {
     // Symbol table index that declares the symbol referenced by an identifier node
     detail::side_table<ast::node_id, stdx::opt_size> identifier_symbol_tables;
 
-    // A callable declaration's name location (see `pack_location`) to its parameter names, for
-    // LSP hover: types are pooled by signature so names can't live on `types::function`
-    ankerl::unordered_dense::map<u64, std::vector<std::string_view>> callable_param_names;
-
-    [[nodiscard]] static constexpr auto pack_location(const source_location& loc) noexcept -> u64 {
-        return (static_cast<u64>(loc.line) << 32U) | static_cast<u64>(loc.column);
-    }
+    // The declaration an identifier (a use, or a declared name itself) resolves to
+    detail::side_table<ast::node_id, stdx::option<declaration_ref>> identifier_declarations;
+    detail::side_table<ast::explicit_type_id, stdx::option<declaration_ref>>
+        explicit_type_declarations;
 
     // Allocates `size` slots in all backing vectors
     constexpr auto resize(const ast::AST::data_pool_sizes& sizes) -> void {
@@ -94,6 +100,8 @@ struct side_tables {
         identifier_definitions.values.resize(sizes.nodes_size);
         explicit_type_definitions.values.resize(sizes.types_size);
         identifier_symbol_tables.values.resize(sizes.nodes_size);
+        identifier_declarations.values.resize(sizes.nodes_size);
+        explicit_type_declarations.values.resize(sizes.types_size);
     }
 };
 
