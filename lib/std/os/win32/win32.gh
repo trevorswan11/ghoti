@@ -178,7 +178,7 @@ pub const write := fn(h: Handle, buf: []u8): R(usize) {
     var put: u32 = 0u32;
     const to_write := @intCast(u32, if (buf.len > DWORD_MAX) DWORD_MAX else buf.len);
     const ok := WriteFile(h, buf.ptr, to_write, ^mut put, nullptr);
-    return if (ok == 0i32) .fail(@as(Errno, GetLastError())) else .of(@as(usize, put));
+    return if (ok == 0i32) .fail(@fromBackingInt(Errno, GetLastError())) else .of(@as(usize, put));
 };
 
 /// Read the contents of the file into `buf`, returning the number of read bytes
@@ -188,10 +188,10 @@ pub const read := fn(h: Handle, buf: []mut u8): R(usize) {
     const ok := ReadFile(h, buf.ptr, to_read, ^mut got, nullptr);
     if (ok == 0i32) {
         const e := GetLastError();
-        if (e == @as(u32, Errno.ERROR_BROKEN_PIPE) or e == @as(u32, Errno.ERROR_HANDLE_EOF)) {
+        if (e == @backingInt(Errno.ERROR_BROKEN_PIPE) or e == @backingInt(Errno.ERROR_HANDLE_EOF)) {
             return .of(0uz);
         };
-        return .fail(@as(Errno, e));
+        return .fail(@fromBackingInt(Errno, e));
     };
     return .of(@as(usize, got));
 };
@@ -207,7 +207,7 @@ const to_wide := fn(utf8: [:0]u8, out: ^mut [WIDE_MAX]u16): R(i32) {
         @ptrCast(^mut u16, out),
         @intCast(i32, WIDE_MAX),
     );
-    return if (n == 0i32) .fail(@as(Errno, GetLastError())) else .of(n);
+    return if (n == 0i32) .fail(@fromBackingInt(Errno, GetLastError())) else .of(n);
 };
 
 /// Open the file at the provided path with the provided, access, share, disposition, and flags.
@@ -227,12 +227,12 @@ pub const open := fn(path: [:0]u8, access: u32, share: u32, disposition: u32, fl
 
     // CREATE_ALWAYS / OPEN_ALWAYS succeed on an existing file but leave
     // GetLastError() == ERROR_ALREADY_EXISTS
-    return if (h == INVALID_HANDLE_VALUE) .fail(@as(Errno, GetLastError())) else .of(h);
+    return if (h == INVALID_HANDLE_VALUE) .fail(@fromBackingInt(Errno, GetLastError())) else .of(h);
 };
 
 /// Close the file associated with the given handle
 pub const close := fn(h: Handle): R(void) {
-    return if (CloseHandle(h) == 0i32) .fail(@as(Errno, GetLastError())) else .done;
+    return if (CloseHandle(h) == 0i32) .fail(@fromBackingInt(Errno, GetLastError())) else .done;
 };
 
 /// Moves the file pointer of the specified file.
@@ -242,14 +242,14 @@ pub const close := fn(h: Handle): R(void) {
 pub const lseek := fn(h: Handle, off: i64, whence: i32): R(i64) {
     var new_pos: i64 = 0i64;
     const ok := SetFilePointerEx(h, off, ^mut new_pos, @intCast(u32, whence));
-    return if (ok == 0i32) .fail(@as(Errno, GetLastError())) else .of(new_pos);
+    return if (ok == 0i32) .fail(@fromBackingInt(Errno, GetLastError())) else .of(new_pos);
 };
 
 /// Metadata for an already-open file or directory handle
 pub const fstat := fn(h: Handle): R(Stat) {
     var s: Stat = undefined;
     const ok := GetFileInformationByHandle(h, ^mut s);
-    return if (ok == 0i32) .fail(@as(Errno, GetLastError())) else .of(s);
+    return if (ok == 0i32) .fail(@fromBackingInt(Errno, GetLastError())) else .of(s);
 };
 
 /// Metadata for the file or directory at `path`
@@ -272,27 +272,27 @@ pub const mkdir := fn(path: [:0]u8): R(void) {
     var wbuf: [WIDE_MAX]u16 = undefined;
     _ = to_wide(path, ^mut wbuf)?;
     const ok := CreateDirectoryW(@ptrCast(^u16, ^mut wbuf), nullptr);
-    return if (ok == 0i32) .fail(@as(Errno, GetLastError())) else .done;
+    return if (ok == 0i32) .fail(@fromBackingInt(Errno, GetLastError())) else .done;
 };
 
 /// Reserve and commit `len` bytes of zero-filled, read-write memory.
 /// The result is page-aligned; `len` is rounded up to a page by the OS.
 pub const alloc := fn(len: usize): R(^mut u8) {
     const p := VirtualAlloc(nullptr, len, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    return if (!p) .fail(@as(Errno, GetLastError())) else .of(@ptrCast(^mut u8, p));
+    return if (!p) .fail(@fromBackingInt(Errno, GetLastError())) else .of(@ptrCast(^mut u8, p));
 };
 
 /// Release a region previously returned by `alloc`
 pub const free := fn(ptr: ^mut u8, _: usize): R(void) {
     // `MEM_RELEASE` frees the whole original reservation and requires the size argument to be zero
     const ok := VirtualFree(@ptrCast(^mut opaque, ptr), 0uz, MEM_RELEASE);
-    return if (ok == 0i32) .fail(@as(Errno, GetLastError())) else .done;
+    return if (ok == 0i32) .fail(@fromBackingInt(Errno, GetLastError())) else .done;
 };
 
 const std_handle := fn(which: u32): R(Handle) {
     const h := GetStdHandle(which);
     if (h == INVALID_HANDLE_VALUE) {
-        return .fail(@as(Errno, GetLastError()));
+        return .fail(@fromBackingInt(Errno, GetLastError()));
     };
 
     // NULL means "this process has no such stream" (e.g. a GUI subsystem).

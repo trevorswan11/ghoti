@@ -502,7 +502,8 @@ template <ast::IndexableID ID>
                                   builtin_id == token_type_t::BUILTIN_INT_CAST ||
                                   builtin_id == token_type_t::BUILTIN_BIT_CAST ||
                                   builtin_id == token_type_t::BUILTIN_TRUNCATE ||
-                                  builtin_id == token_type_t::BUILTIN_INT_FROM_BOOL};
+                                  builtin_id == token_type_t::BUILTIN_INT_FROM_BOOL ||
+                                  builtin_id == token_type_t::BUILTIN_FROM_BACKING_INT};
     const auto& params{builtin.params};
     if (is_expect_or_require || is_assert_or_verify || is_inferrable_cast) {
         if (call.arguments.empty() || call.arguments.size() > 2) {
@@ -619,6 +620,20 @@ template <ast::IndexableID ID>
                                  error::TYPE_MISMATCH,
                                  resolving_.ast.location_of(call.function));
         }
+        const bool src_int{is_integer(src.get_kind()) ||
+                           src.get_kind() == type_kind::CONSTEXPR_INT};
+        if (target.get_kind() == type_kind::ENUM && src_int) {
+            return make_sema_err(
+                "`@as` cannot convert an integer to an enum; use `@fromBackingInt` instead",
+                error::TYPE_MISMATCH,
+                resolving_.ast.location_of(call.function));
+        }
+        if (src.get_kind() == type_kind::ENUM && is_integer(target.get_kind())) {
+            return make_sema_err(
+                "`@as` cannot convert an enum to an integer; use `@backingInt` instead",
+                error::TYPE_MISMATCH,
+                resolving_.ast.location_of(call.function));
+        }
 
         return_type = &target;
         break;
@@ -727,6 +742,52 @@ template <ast::IndexableID ID>
                             ctx_.type_display_name(src)),
                 error::TYPE_MISMATCH,
                 get_call_arg_location(*args_res->operand));
+        }
+        return_type = &target;
+        break;
+    }
+    case token_type_t::BUILTIN_BACKING_INT: {
+        const auto& arg{call.arguments[0]};
+        auto&       src{*get_resolved_call_arg_type(arg)};
+        if (src.is_poison()) { break; }
+        const auto backing{ctx_.backing_int_type(src, target_ptr_bits())};
+        if (!backing) {
+            return make_sema_err(fmt::format("`@backingInt` operand must be an enum, a packed "
+                                             "struct or union, or a tagged union; found '{}'",
+                                             ctx_.type_display_name(src)),
+                                 error::TYPE_MISMATCH,
+                                 get_call_arg_location(arg));
+        }
+        return_type = &*backing;
+        break;
+    }
+    case token_type_t::BUILTIN_FROM_BACKING_INT: {
+        const auto args_res{extract_cast_args("@fromBackingInt")};
+        if (!args_res) { return make_sema_err(args_res.error()); }
+        if (!args_res->target || args_res->target->is_poison()) { break; }
+        type&      target{*args_res->target};
+        const auto un{target.get_data().as_opt<types::union_t>()};
+        const auto backing{ctx_.backing_int_type(target, target_ptr_bits())};
+        if (!backing || (un && !un->is_bit_packed())) {
+            return make_sema_err(fmt::format("`@fromBackingInt` target must be an enum or a packed "
+                                             "struct or union; found '{}'",
+                                             ctx_.type_display_name(target)),
+                                 error::TYPE_MISMATCH,
+                                 args_res->target_loc);
+        }
+        auto& src{*get_resolved_call_arg_type(*args_res->operand)};
+        if (src.is_poison()) { break; }
+        const bool fits{src.get_kind() == type_kind::CONSTEXPR_INT ||
+                        (is_integer(src.get_kind()) && is_assignable(src, *backing))};
+        if (!fits) {
+            return make_sema_err(fmt::format("`@fromBackingInt` operand must be an integer "
+                                             "assignable to '{}', the backing integer of '{}'; "
+                                             "found '{}'",
+                                             ctx_.type_display_name(*backing),
+                                             ctx_.type_display_name(target),
+                                             ctx_.type_display_name(src)),
+                                 error::TYPE_MISMATCH,
+                                 get_call_arg_location(*args_res->operand));
         }
         return_type = &target;
         break;

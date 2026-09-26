@@ -28,7 +28,7 @@ TEST_CASE("`@tagName` dispatches at runtime for a non-constant enum value") {
 TEST_CASE("`@tagName` runtime dispatch honors explicit, non-positional discriminants") {
     CHECK(helpers::compile_and_run(R"(
         const Level := enum { low = 10, mid = 20, high = 30 };
-        const to_level := fn(v: i32): Level { return @as(Level, v); };
+        const to_level := fn(v: i32): Level { return @fromBackingInt(Level, v); };
         const name_of := fn(l: Level): []u8 { return @tagName(l); };
         pub const main := fn(): i32 {
             const s := name_of(to_level(30));
@@ -41,7 +41,7 @@ TEST_CASE(
     "`@tagName` of a non-exhaustive enum falls back to \"_\" for a value with no listed variant") {
     CHECK(helpers::compile_and_run(R"(
         const Status := enum { ok = 1, fail = 2, _ };
-        const make := fn(v: i32): Status { return @as(Status, v); };
+        const make := fn(v: i32): Status { return @fromBackingInt(Status, v); };
         pub const main := fn(): i32 {
             const s := @tagName(make(99));   // 99 matches no listed variant
             return @intCast(i32, s.len) + @as(i32, s[0]);
@@ -52,7 +52,7 @@ TEST_CASE(
 TEST_CASE("`@tagName` of a non-exhaustive enum reports a variant's real name when it matches") {
     CHECK(helpers::compile_and_run(R"(
         const Status := enum { ok = 1, fail = 2, _ };
-        const make := fn(v: i32): Status { return @as(Status, v); };
+        const make := fn(v: i32): Status { return @fromBackingInt(Status, v); };
         pub const main := fn(): i32 {
             const s := @tagName(make(2));
             return @intCast(i32, s.len) + @as(i32, s[0]);

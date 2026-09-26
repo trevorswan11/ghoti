@@ -474,6 +474,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Saturating operators `+| -| *| <<|` and compound forms `+|= -|= *|= <<|=` clamp to the operand type's range instead of wrapping or trapping (#321)
     - `<<|` saturates for any shift amount, including one at or past the bit width
     - Fold at compile time; between two untyped integer constants they fold like the plain operator
+- `@backingInt(x)` returns the integer backing an enum, a `packed struct` / `packed union`, or a tagged union's active tag; `@fromBackingInt(T, n)` (or `@fromBackingInt(n)` with an inferred `T`) converts back for enums and packed aggregates (#327)
+    - Converting an unlisted value to an exhaustive enum panics under runtime safety
+- **Breaking:** `@as` no longer converts between enums and integers; use `@backingInt` / `@fromBackingInt` (#327)
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

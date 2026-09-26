@@ -3757,8 +3757,19 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const u64 int_val{*src_bool ? 1ULL : 0ULL};
         return const_value{int_val, target};
     }
+    case syntax::token_type_t::BUILTIN_BACKING_INT: {
+        // Only an enum folds; packed aggregates and tagged unions are read by the emitter
+        const auto op_h{call.arguments[0].as_opt<ast::expr_handle>()};
+        if (!op_h) { return stdx::none; }
+        const auto operand{try_eval(*op_h)};
+        if (!operand || !operand->is<const_enum>()) { return stdx::none; }
+        auto target{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
+        if (!target) { return stdx::none; }
+        return make_scalar_const(operand->as<const_enum>().value, target);
+    }
     case syntax::token_type_t::BUILTIN_AS:
-    case syntax::token_type_t::BUILTIN_BIT_CAST: {
+    case syntax::token_type_t::BUILTIN_BIT_CAST:
+    case syntax::token_type_t::BUILTIN_FROM_BACKING_INT: {
         // Fold the numeric/pointer subset; leave floats, enums and aggregates to the emitter.
         const auto op_arg_idx{call.arguments.size() == 1 ? 0UZ : 1UZ};
         if (call.arguments.size() < (op_arg_idx + 1)) { return stdx::none; }

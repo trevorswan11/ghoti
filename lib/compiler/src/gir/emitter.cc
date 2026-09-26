@@ -3359,6 +3359,42 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             }
             break;
         }
+        case syntax::token_type_t::BUILTIN_BACKING_INT: {
+            const auto op_expr{call.arguments[0].as_opt<ast::expr_handle>()};
+            if (!op_expr) { break; }
+            if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
+
+            // A tagged union's backing integer is its `i32` tag, read in place
+            const auto src_ty{active_mod().get_sema_type_opt(*op_expr)};
+            const auto src_union{src_ty ? src_ty->get_data().as_opt<sema::types::union_t>()
+                                        : stdx::none};
+            if (src_union && !src_union->is_bit_packed()) {
+                auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+                const auto tag_ptr{builder_.emit_get_element_ptr(
+                    emit_lvalue(*op_expr),
+                    {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}},
+                    ret_type)};
+                return value{builder_.emit_load(value{tag_ptr, ret_type}, ret_type), ret_type};
+            }
+
+            // Enums and bit-packed aggregates already are their backing integer in memory
+            const auto operand{emit_expression(*op_expr)};
+            return value{builder_.emit_cast(instruction_kind::BIT_CAST, operand, ret_type),
+                         ret_type};
+        }
+        case syntax::token_type_t::BUILTIN_FROM_BACKING_INT: {
+            const auto op_expr{call.arguments.back().as_opt<ast::expr_handle>()};
+            if (!op_expr) { break; }
+            if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
+
+            auto backing{ctx_.backing_int_type(ret_type, target_ptr_bits_)};
+            if (!backing) { break; }
+            const auto operand{emit_coerced_expr(*op_expr, *backing)};
+            value      result{builder_.emit_cast(instruction_kind::BIT_CAST, operand, ret_type),
+                         ret_type};
+            emit_enum_cast_guard(id, result, operand, *op_expr);
+            return result;
+        }
         case syntax::token_type_t::BUILTIN_BOOL_FROM_INT: {
             if (!call.arguments.empty()) {
                 if (const auto op_expr{call.arguments[0].as_opt<ast::expr_handle>()}) {

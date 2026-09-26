@@ -21,7 +21,13 @@ templ InternalsBuiltinsPage() {
 	<p>Casts away top-level <code>volatile</code>-ness of the expression, preserving all other aspects of the type.</p>
 	<h3>{ "@as" }</h3>
 	<pre><code class="language-ghoti">{ `@as(T: type, expression: auto): T` }</code></pre>
-	<p>Coerces the value of <code>expression</code> into a value of type <code>T</code>.</p>
+	<p>Coerces the value of <code>expression</code> into a value of type <code>T</code>. Conversions that have a dedicated builtin are rejected: use <code>{ "@boolFromInt" }</code> / <code>{ "@intFromBool" }</code> for <code>bool</code> and <code>{ "@backingInt" }</code> / <code>{ "@fromBackingInt" }</code> for enums.</p>
+	<h3>{ "@backingInt" }</h3>
+	<pre><code class="language-ghoti">{ `@backingInt(expression: auto): BackingInt(@TypeOf(expression))` }</code></pre>
+	<p>Returns the integer a value is stored as: an enum's underlying type (<code>{ "enum : u8 { ... }" }</code> gives a <code>u8</code>), the <code>uN</code> holding every bit of a <code>packed struct</code> or <code>packed union</code>, or the <code>i32</code> index of a tagged union's active field. Folds at compile time for a compile-time-known enum value.</p>
+	<h3>{ "@fromBackingInt" }</h3>
+	<pre><code class="language-ghoti">{ `@fromBackingInt(T: type, expression: BackingInt(T)): T` }</code></pre>
+	<p>The inverse of <code>{ "@backingInt" }</code> for an enum, <code>packed struct</code>, or <code>packed union</code> <code>T</code>, which can be omitted when inferable from context (<code>{ "const c: Color = @fromBackingInt(n);" }</code>). <code>expression</code> must be implicitly convertible to <code>T</code>'s backing integer. Under runtime safety, a value that names no variant of an exhaustive enum panics; a non-exhaustive enum (<code>_</code>) accepts every value. A tagged union can't be built this way because its payload would be undefined.</p>
 	<h3>{ "@dynCast" }</h3>
 	<pre><code class="language-ghoti">{ `@dynCast(T: type, expression: auto): T` }</code></pre>
 	<p><strong>Unsafe.</strong> Recovers a concrete pointer or reference from a <code>&amp;dyn I</code> / <code>^dyn I</code> fat pointer: <code>T</code> must be a pointer/reference type and <code>expression</code> a <code>&amp;dyn</code> / <code>^dyn</code>. It reinterprets the erased <code>data</code> pointer with <strong>no runtime type check</strong>. If <code>expression</code> does not actually point at the underlying type of <code>T</code>, behavior is undefined. The caller acknowledges the risk.</p>

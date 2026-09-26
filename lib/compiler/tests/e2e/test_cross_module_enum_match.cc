@@ -11,7 +11,7 @@ namespace {
 
 constexpr std::string_view MOD_A{R"(
     pub const MyErr := enum { A = 1, B = 2, _ };
-    pub const make := fn(v: i32): MyErr { return @as(MyErr, v); };
+    pub const make := fn(v: i32): MyErr { return @fromBackingInt(MyErr, v); };
 )"};
 
 } // namespace
@@ -46,7 +46,7 @@ TEST_CASE("E2E: `==` against a cross-module enum's `Type.Variant` honors explici
 TEST_CASE("E2E: an exhaustive cross-module enum match doesn't trap on a legitimately-matched arm") {
     constexpr std::string_view mod{R"(
         pub const Status := enum { ok = 10, fail = 20 };
-        pub const make := fn(v: i32): Status { return @as(Status, v); };
+        pub const make := fn(v: i32): Status { return @fromBackingInt(Status, v); };
     )"};
     const auto                 exit_code{helpers::compile_and_run(
         R"(

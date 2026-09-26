@@ -22,7 +22,7 @@ TEST_CASE("`@Enum` constructs an enum type from an `EnumInfo` descriptor") {
                 .exhaustive = true,
             });
             var v: T = T.b;
-            return @as(i32, v);
+            return @backingInt(v);
         };
     )") == 20);
 }
@@ -333,7 +333,7 @@ TEST_CASE("`@Struct`/`@Union`/`@Enum` infer an implicit `.{...}` descriptor's ty
             var s: S = .{ .x = 1 };
             var u: U = .{ .x = 2 };
             var e: E = E.a;
-            return s.x + u.x + @as(i32, e);
+            return s.x + u.x + @backingInt(e);
         };
     )") == 8);
 }

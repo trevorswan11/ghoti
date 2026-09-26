@@ -401,13 +401,17 @@ auto cast_rejection_reason(const type&                        from,
     }
 
     // Enum <-> Integer
-    if ((from_kind == type_kind::ENUM && is_integer(to_kind)) ||
-        (is_integer(from_kind) && to_kind == type_kind::ENUM)) {
-        return fmt::format(
-            "conversion between enum '{}' and integer '{}' requires an explicit cast; use @as for "
-            "an explicit conversion",
-            from.to_string(names),
-            to.to_string(names));
+    if (from_kind == type_kind::ENUM && is_integer(to_kind)) {
+        return fmt::format("conversion from enum '{}' to integer '{}' requires an explicit cast; "
+                           "use @backingInt for an explicit conversion",
+                           from.to_string(names),
+                           to.to_string(names));
+    }
+    if (is_integer(from_kind) && to_kind == type_kind::ENUM) {
+        return fmt::format("conversion from integer '{}' to enum '{}' requires an explicit cast; "
+                           "use @fromBackingInt for an explicit conversion",
+                           from.to_string(names),
+                           to.to_string(names));
     }
 
     // Float <-> Integer
