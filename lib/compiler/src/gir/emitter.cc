@@ -318,7 +318,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
     usize       pi{0};
     if (has_self) {
         ASSERT(self_type, "Self parameter must have a resolved sema type");
-        full_param_types[pi++] = &*self_type;
+        full_param_types[pi++] = self_type.get();
     }
     for (const auto& param_type : req.arg_types) { full_param_types[pi++] = param_type; }
 
@@ -375,7 +375,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
     stdx::option<type_guard> enclosing_guard;
     if (const auto gi{ctx_.generic_functions.get_opt(*req.generic_fn_type)};
         gi && gi->enclosing_type) {
-        enclosing_guard.emplace(user_type_stack_, &*gi->enclosing_type);
+        enclosing_guard.emplace(user_type_stack_, gi->enclosing_type.get());
         const_eval_.set_enclosing_type(gi->enclosing_type);
     }
     {
@@ -739,10 +739,10 @@ auto emitter::coerce_constexpr_int(value v, sema::type& target, ast::node_id at)
     if (folded && !sema::constexpr_int_fits(*folded, target, target_ptr_bits_)) {
         ctx_.diags.emplace_back(v.type && v.type->get_kind() == sema::type_kind::CONSTEXPR_INT
                                     ? fmt::format("integer literal is out of range for type '{}'",
-                                                  sema::type_kind_display_name(target))
+                                                  ctx_.type_display_name(target))
                                     : fmt::format("integer value {} is out of range for type '{}'",
                                                   *folded,
-                                                  sema::type_kind_display_name(target)),
+                                                  ctx_.type_display_name(target)),
                                 sema::error::LITERAL_OUT_OF_RANGE,
                                 active_ast().location_of(at));
     }
@@ -1086,7 +1086,7 @@ auto emitter::emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -
 
     stdx::option<const sema::impl_record&> rec;
     for (const auto* r : ctx_.impls.records()) {
-        if (r->enclosing && &*r->enclosing == &active_mod() &&
+        if (r->enclosing && r->enclosing == &active_mod() &&
             r->site.get_index() == id.get_index() && r->site.get_kind() == id.get_kind()) {
             rec.emplace(r);
             break;
@@ -2024,7 +2024,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                     if (decl.explicit_type && scalar.type &&
                         !sema::is_assignable(*scalar.type, *sema_type)) {
                         const auto reason{sema::cast_rejection_reason(
-                            *scalar.type, *sema_type, target_ptr_bits_)};
+                            *scalar.type, *sema_type, target_ptr_bits_, ctx_.user_type_names)};
                         ctx_.diags.emplace_back(
                             reason
                                 ? fmt::format("Type mismatch in store: cannot assign '{}' to "
@@ -2072,7 +2072,8 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         // A non-foldable `const` binds directly to its initializer's value, bypassing the
         // store-typecheck a `var` alloca would get; re-check the annotated type here.
         if (decl.explicit_type && val.type && !sema::is_assignable(*val.type, *sema_type)) {
-            const auto reason{sema::cast_rejection_reason(*val.type, *sema_type, target_ptr_bits_)};
+            const auto reason{sema::cast_rejection_reason(
+                *val.type, *sema_type, target_ptr_bits_, ctx_.user_type_names)};
             ctx_.diags.emplace_back(
                 reason ? fmt::format("Type mismatch in store: cannot assign '{}' to '{}' ({})",
                                      ctx_.type_display_name(*val.type),
@@ -2543,10 +2544,14 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
 
     const auto lhs{emit_expression(binary.lhs)};
     const auto rhs{emit_expression(binary.rhs)};
-    return value{
-        emit_checked_binary(
-            *kind_opt, lhs, rhs, *sema_type, id, syntax::token_type::is_wrapping_op(op_type)),
-        sema_type};
+    return value{emit_checked_binary(*kind_opt,
+                                     lhs,
+                                     rhs,
+                                     *sema_type,
+                                     id,
+                                     syntax::token_type::is_wrapping_op(op_type),
+                                     syntax::token_type::is_saturating_op(op_type)),
+                 sema_type};
 }
 
 auto emitter::emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value {
@@ -2865,7 +2870,8 @@ auto emitter::emit_packed_field_assign(ast::node_id                id,
                                               rhs,
                                               field_type,
                                               id,
-                                              syntax::token_type::is_wrapping_op(base_tok)),
+                                              syntax::token_type::is_wrapping_op(base_tok),
+                                              syntax::token_type::is_saturating_op(base_tok)),
                           field_type};
     }
 
@@ -3125,6 +3131,10 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
     case syntax::token_type_t::XOR_ASSIGN:
     case syntax::token_type_t::SHL_ASSIGN:
     case syntax::token_type_t::SHL_PERCENT_ASSIGN:
+    case syntax::token_type_t::PLUS_PIPE_ASSIGN:
+    case syntax::token_type_t::MINUS_PIPE_ASSIGN:
+    case syntax::token_type_t::STAR_PIPE_ASSIGN:
+    case syntax::token_type_t::SHL_PIPE_ASSIGN:
     case syntax::token_type_t::SHR_ASSIGN:           {
         auto base_tok{op_type};
         if (const auto b{syntax::token_type::get_compound_base_op(op_type)}) { base_tok = *b; }
@@ -3132,13 +3142,15 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
         auto&      target_type{*lhs_lval.type};
         const auto loaded{builder_.emit_load(lhs_lval, target_type)};
         const auto rhs{emit_coerced_expr(assign.rhs, target_type)};
-        const auto res_val{value{emit_checked_binary(base_kind,
-                                                     value{loaded, target_type},
-                                                     rhs,
-                                                     target_type,
-                                                     id,
-                                                     syntax::token_type::is_wrapping_op(base_tok)),
-                                 target_type}};
+        const auto res_val{
+            value{emit_checked_binary(base_kind,
+                                      value{loaded, target_type},
+                                      rhs,
+                                      target_type,
+                                      id,
+                                      syntax::token_type::is_wrapping_op(base_tok),
+                                      syntax::token_type::is_saturating_op(base_tok)),
+                  target_type}};
         builder_.emit_store(lhs_lval, res_val);
         return res_val;
     }
@@ -3217,7 +3229,7 @@ auto emitter::resolve_static_field_ref(const ast::call_expr& call)
     const auto name{folded_name->as_opt<std::string>()};
     if (!name) { return stdx::none; }
 
-    return std::pair{gsl::not_null{&**owner_opt}, std::string{*name}};
+    return std::pair{gsl::not_null{owner_opt->get()}, std::string{*name}};
 }
 
 auto emitter::try_emit_static_field_builtin_addr(const ast::call_expr& call)
@@ -3318,7 +3330,9 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         case syntax::token_type_t::BUILTIN_INT_FROM_BOOL:
         case syntax::token_type_t::BUILTIN_BIT_CAST:
         case syntax::token_type_t::BUILTIN_PTR_CAST:
-        case syntax::token_type_t::BUILTIN_ALIGN_CAST:    {
+        case syntax::token_type_t::BUILTIN_ALIGN_CAST:
+        case syntax::token_type_t::BUILTIN_INT_FROM_FLOAT:
+        case syntax::token_type_t::BUILTIN_FLOAT_FROM_INT: {
             const bool is_one_arg{call.arguments.size() == 1};
             if (is_one_arg || call.arguments.size() >= 2) {
                 const auto op_arg_idx{is_one_arg ? 0UZ : 1UZ};
@@ -3339,13 +3353,58 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                                fn_token == syntax::token_type_t::BUILTIN_ALIGN_CAST) {
                         cast_kind = instruction_kind::PTR_CAST;
                     }
-                    const auto dest{builder_.emit_cast(cast_kind, operand, ret_type)};
+                    // A compile-time operand folds, so an out-of-range float is a compile error
+                    if (fn_token == syntax::token_type_t::BUILTIN_INT_FROM_FLOAT ||
+                        fn_token == syntax::token_type_t::BUILTIN_FLOAT_FROM_INT) {
+                        if (const auto cv{const_eval_.try_eval(id)}) {
+                            return materialize_const(*cv);
+                        }
+                    }
+                    const bool checked{runtime_safety_ &&
+                                       fn_token == syntax::token_type_t::BUILTIN_INT_FROM_FLOAT};
+                    const auto dest{builder_.emit_cast(cast_kind, operand, ret_type, checked)};
                     value      result{dest, ret_type};
                     emit_enum_cast_guard(id, result, operand, *op_expr);
                     return result;
                 }
             }
             break;
+        }
+        case syntax::token_type_t::BUILTIN_BACKING_INT: {
+            const auto op_expr{call.arguments[0].as_opt<ast::expr_handle>()};
+            if (!op_expr) { break; }
+            if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
+
+            // A tagged union's backing integer is its `i32` tag, read in place
+            const auto src_ty{active_mod().get_sema_type_opt(*op_expr)};
+            const auto src_union{src_ty ? src_ty->get_data().as_opt<sema::types::union_t>()
+                                        : stdx::none};
+            if (src_union && !src_union->is_bit_packed()) {
+                auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+                const auto tag_ptr{builder_.emit_get_element_ptr(
+                    emit_lvalue(*op_expr),
+                    {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}},
+                    ret_type)};
+                return value{builder_.emit_load(value{tag_ptr, ret_type}, ret_type), ret_type};
+            }
+
+            // Enums and bit-packed aggregates already are their backing integer in memory
+            const auto operand{emit_expression(*op_expr)};
+            return value{builder_.emit_cast(instruction_kind::BIT_CAST, operand, ret_type),
+                         ret_type};
+        }
+        case syntax::token_type_t::BUILTIN_FROM_BACKING_INT: {
+            const auto op_expr{call.arguments.back().as_opt<ast::expr_handle>()};
+            if (!op_expr) { break; }
+            if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
+
+            auto backing{ctx_.backing_int_type(ret_type, target_ptr_bits_)};
+            if (!backing) { break; }
+            const auto operand{emit_coerced_expr(*op_expr, *backing)};
+            value      result{builder_.emit_cast(instruction_kind::BIT_CAST, operand, ret_type),
+                         ret_type};
+            emit_enum_cast_guard(id, result, operand, *op_expr);
+            return result;
         }
         case syntax::token_type_t::BUILTIN_BOOL_FROM_INT: {
             if (!call.arguments.empty()) {
@@ -4989,7 +5048,7 @@ auto emitter::emit_for(ast::node_id                   id,
             const bool open_upper{!range->rhs};
             const auto end_val{open_upper ? value{u64{0}, usize_type}
                                           : emit_expression(*range->rhs)};
-            auto*      elem_type{start_val.type ? &*start_val.type : &ctx_.get_int(32, true)};
+            auto*      elem_type{start_val.type ? start_val.type.get() : &ctx_.get_int(32, true)};
 
             const auto slot{builder_.emit_alloca(*elem_type, cap_name.value_or(""))};
             builder_.emit_store(slot, start_val);
@@ -5737,7 +5796,7 @@ auto emitter::emit_int_cast_guard(value operand, const sema::type& dest_type, as
                 ctx_.diags.emplace_back(
                     fmt::format("Integer value {} is out of range for target type '{}' in @intCast",
                                 *known,
-                                sema::type_kind_display_name(dest_type)),
+                                ctx_.type_display_name(dest_type)),
                     sema::error::CONSTEXPR_EVALUATION_FAILED,
                     active_ast().location_of(site));
             }
@@ -5748,7 +5807,7 @@ auto emitter::emit_int_cast_guard(value operand, const sema::type& dest_type, as
             ctx_.diags.emplace_back(
                 fmt::format("Integer value {} is out of range for target type '{}' in @intCast",
                             *folded,
-                            sema::type_kind_display_name(dest_type)),
+                            ctx_.type_display_name(dest_type)),
                 sema::error::CONSTEXPR_EVALUATION_FAILED,
                 active_ast().location_of(site));
         }
@@ -5960,16 +6019,18 @@ auto emitter::emit_checked_binary(instruction_kind kind,
                                   value            rhs,
                                   sema::type&      result_type,
                                   ast::node_id,
-                                  bool wrapping) -> local_id {
+                                  bool wrapping,
+                                  bool saturating) -> local_id {
     // Only integer arithmetic can trap, and only signed +/-/* can overflow.
     const auto k{result_type.get_kind()};
-    const bool checkable{!wrapping && runtime_safety_ && sema::is_integer(k) &&
+    const bool checkable{!wrapping && !saturating && runtime_safety_ && sema::is_integer(k) &&
                          (((kind == instruction_kind::ADD || kind == instruction_kind::SUB ||
                             kind == instruction_kind::MUL) &&
                            sema::is_signed_integer(result_type)) ||
                           kind == instruction_kind::DIV || kind == instruction_kind::MOD ||
                           kind == instruction_kind::SHL || kind == instruction_kind::SHR)};
-    return builder_.emit_binary(kind, std::move(lhs), std::move(rhs), result_type, checkable);
+    return builder_.emit_binary(
+        kind, std::move(lhs), std::move(rhs), result_type, checkable, saturating);
 }
 
 auto emitter::emit_checked_unary(instruction_kind kind,

@@ -26,7 +26,7 @@ TEST_CASE("Operator type checking") {
                 const x := a + b;
             };
         )",
-            sema::diagnostic{"Operator 'add' cannot be applied to types 'bool' and 'bool'",
+            sema::diagnostic{"Operator '+' cannot be applied to types 'bool' and 'bool'",
                              sema::error::OPERATOR_TYPE_MISMATCH,
                              std::pair{2UZ, 31UZ}});
     }
@@ -38,7 +38,7 @@ TEST_CASE("Operator type checking") {
                 const x := a + b;
             };
         )",
-            sema::diagnostic{"Operator 'add' cannot be applied to types 'i32' and 'f32'",
+            sema::diagnostic{"Operator '+' cannot be applied to types 'i32' and 'f32'",
                              sema::error::OPERATOR_TYPE_MISMATCH,
                              std::pair{2UZ, 31UZ}});
     }
@@ -63,7 +63,7 @@ TEST_CASE("Operator type checking") {
                 const x := !a;
             };
         )",
-            sema::diagnostic{"Logical negation '!' requires a boolean operand",
+            sema::diagnostic{"Logical negation '!' requires a boolean operand; found 'i32'",
                              sema::error::OPERATOR_TYPE_MISMATCH,
                              std::pair{2UZ, 28UZ}});
     }
@@ -75,9 +75,10 @@ TEST_CASE("Operator type checking") {
                 const x := -a;
             };
         )",
-            sema::diagnostic{"Unary negation '-' requires a signed integer or float operand",
-                             sema::error::OPERATOR_TYPE_MISMATCH,
-                             std::pair{2UZ, 28UZ}});
+            sema::diagnostic{
+                "Unary negation '-' requires a signed integer or float operand; found 'u32'",
+                sema::error::OPERATOR_TYPE_MISMATCH,
+                std::pair{2UZ, 28UZ}});
     }
 
     SECTION("Bitwise negation on float fails") {
@@ -87,7 +88,7 @@ TEST_CASE("Operator type checking") {
                 const x := ~a;
             };
         )",
-            sema::diagnostic{"Bitwise negation '~' requires an integer operand",
+            sema::diagnostic{"Bitwise negation '~' requires an integer operand; found 'f32'",
                              sema::error::OPERATOR_TYPE_MISMATCH,
                              std::pair{2UZ, 28UZ}});
     }

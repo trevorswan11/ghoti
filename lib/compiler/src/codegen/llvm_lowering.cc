@@ -34,6 +34,7 @@
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
@@ -1158,6 +1159,74 @@ auto llvm_lowering::emit_checked_arith(const gir::instruction& inst,
     }
 }
 
+auto llvm_lowering::emit_float_to_int_guard(const gir::instruction& inst,
+                                            llvm::Value*            val,
+                                            llvm::Type*             int_ty,
+                                            bool                    is_signed) -> void {
+    // Truncation fits iff MIN - 1 < val < MAX + 1. The upper bound is a power of two (exact or
+    // infinite); the lower one rounds down, which admits no extra float. NaN fails both checks.
+    const unsigned width{int_ty->getIntegerBitWidth()};
+    const auto&    semantics{val->getType()->getFltSemantics()};
+    const auto     to_float = [&](const llvm::APInt& bound, llvm::APFloat::roundingMode mode) {
+        llvm::APFloat f{semantics};
+        DISCARD(f.convertFromAPInt(bound, true, mode));
+        return llvm::ConstantFP::get(val->getType(), f);
+    };
+
+    const auto min{is_signed ? llvm::APInt::getSignedMinValue(width).sext(width + 2)
+                             : llvm::APInt{width + 2, 0}};
+    auto*      lo{to_float(min - 1, llvm::APFloat::rmTowardNegative)};
+    auto*      hi{to_float(llvm::APInt::getOneBitSet(width + 2, is_signed ? width - 1 : width),
+                      llvm::APFloat::rmNearestTiesToEven)};
+
+    auto* in_range{
+        builder_.CreateAnd(builder_.CreateFCmpOGT(val, lo), builder_.CreateFCmpOLT(val, hi))};
+    emit_arith_guard(
+        builder_.CreateNot(in_range), "float value out of range for integer cast", inst);
+}
+
+auto llvm_lowering::emit_saturating_arith(const gir::instruction& inst,
+                                          llvm::Value*            lhs,
+                                          llvm::Value*            rhs,
+                                          bool                    is_signed) -> llvm::Value* {
+    PROFILE_FUNCTION();
+    auto* int_ty{llvm::cast<llvm::IntegerType>(lhs->getType())};
+    switch (inst.kind) {
+    case gir::instruction_kind::ADD:
+        return builder_.CreateBinaryIntrinsic(
+            is_signed ? llvm::Intrinsic::sadd_sat : llvm::Intrinsic::uadd_sat, lhs, rhs);
+    case gir::instruction_kind::SUB:
+        return builder_.CreateBinaryIntrinsic(
+            is_signed ? llvm::Intrinsic::ssub_sat : llvm::Intrinsic::usub_sat, lhs, rhs);
+    case gir::instruction_kind::MUL: {
+        // There's no plain `mul.sat`, but a fixed-point multiply with scale 0 is exactly that
+        const auto id{is_signed ? llvm::Intrinsic::smul_fix_sat : llvm::Intrinsic::umul_fix_sat};
+        auto*      fn{llvm::Intrinsic::getOrInsertDeclaration(llvm_module_.get(), id, {int_ty})};
+        return builder_.CreateCall(fn, {lhs, rhs, builder_.getInt32(0)}, "mulsat");
+    }
+    case gir::instruction_kind::SHL: {
+        // `shl.sat` is poison once the amount reaches the width, where any non-zero lhs saturates
+        const unsigned width{int_ty->getBitWidth()};
+        auto*          zero{llvm::ConstantInt::get(int_ty, 0)};
+        auto*          in_range{builder_.CreateICmpULT(rhs, llvm::ConstantInt::get(int_ty, width))};
+        auto*          amount{builder_.CreateSelect(in_range, rhs, zero)};
+        auto*          shifted{builder_.CreateBinaryIntrinsic(
+            is_signed ? llvm::Intrinsic::sshl_sat : llvm::Intrinsic::ushl_sat, lhs, amount)};
+
+        llvm::Value* limit{llvm::ConstantInt::get(int_ty, llvm::APInt::getMaxValue(width))};
+        if (is_signed) {
+            limit = builder_.CreateSelect(
+                builder_.CreateICmpSLT(lhs, zero),
+                llvm::ConstantInt::get(int_ty, llvm::APInt::getSignedMinValue(width)),
+                llvm::ConstantInt::get(int_ty, llvm::APInt::getSignedMaxValue(width)));
+        }
+        auto* saturated{builder_.CreateSelect(builder_.CreateICmpEQ(lhs, zero), zero, limit)};
+        return builder_.CreateSelect(in_range, shifted, saturated, "shlsat");
+    }
+    default: UNREACHABLE("Only + - * << have saturating forms");
+    }
+}
+
 auto llvm_lowering::const_callable(std::string_view          fn_symbol,
                                    stdx::option<sema::type&> fn_type,
                                    llvm::Type*               ty) -> llvm::Constant* {
@@ -1812,7 +1881,7 @@ auto llvm_lowering::emit_store(const gir::instruction& inst) -> void {
     const auto is_volatile{inst.is_volatile()};
     if (inst.operands.size() >= 2) {
         auto* dest_ptr{lower_value(inst.operands[0])};
-        auto* val{lower_value(inst.operands[1], inst.type ? &*inst.type : nullptr)};
+        auto* val{lower_value(inst.operands[1], inst.type ? inst.type.get() : nullptr)};
         if (!dest_ptr || !dest_ptr->getType()->isPointerTy() || !val ||
             val->getType()->isVoidTy()) {
             return;
@@ -1820,7 +1889,7 @@ auto llvm_lowering::emit_store(const gir::instruction& inst) -> void {
         builder_.CreateStore(val, dest_ptr, is_volatile);
     } else if (inst.result && !inst.operands.empty()) {
         auto* dest_ptr{lower_value(gir::value{*inst.result})};
-        auto* val{lower_value(inst.operands[0], inst.type ? &*inst.type : nullptr)};
+        auto* val{lower_value(inst.operands[0], inst.type ? inst.type.get() : nullptr)};
         if (!dest_ptr || !dest_ptr->getType()->isPointerTy() || !val ||
             val->getType()->isVoidTy()) {
             return;
@@ -2012,6 +2081,7 @@ auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {
         }
     }
 
+    if (inst.is_saturating && !is_flt) { return emit_saturating_arith(inst, lhs, rhs, is_sgn); }
     if (inst.is_checked && !is_flt) {
         if (auto* checked{emit_checked_arith(inst, lhs, rhs, is_sgn)}) { return checked; }
     }
@@ -2172,6 +2242,7 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
         }
         if (src_is_flt && !dst_is_flt) {
             const bool dst_is_sgn{sema::is_signed_integer(*inst.type)};
+            if (inst.is_checked) { emit_float_to_int_guard(inst, val, target_ty, dst_is_sgn); }
             return dst_is_sgn ? builder_.CreateFPToSI(val, target_ty, "fptosi")
                               : builder_.CreateFPToUI(val, target_ty, "fptoui");
         }
@@ -2191,7 +2262,7 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
 auto llvm_lowering::emit_const(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
     ASSERT(!inst.operands.empty(), "Const instruction requires an operand");
-    auto* val{lower_value(inst.operands[0], inst.type ? &*inst.type : nullptr)};
+    auto* val{lower_value(inst.operands[0], inst.type ? inst.type.get() : nullptr)};
     if (inst.result) { set_local(*inst.result, val); }
     return val;
 }

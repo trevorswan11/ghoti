@@ -276,7 +276,7 @@ auto type_resolver::visit(ast::node_id id, const ast::array_expr& array) -> void
 
     // Resolve the element type first so each item can be typed against it
     resolve(array.item_explicit_type);
-    auto* item_slot{&*last_type_.take()};
+    auto* item_slot{last_type_.take()};
     // Fold sized element types so the items and the array's element slot see the concrete `[M]T`
     // rather than `type`
     if (item_slot->get_data().is<types::deferred_array>()) {
@@ -502,7 +502,10 @@ template <ast::IndexableID ID>
                                   builtin_id == token_type_t::BUILTIN_INT_CAST ||
                                   builtin_id == token_type_t::BUILTIN_BIT_CAST ||
                                   builtin_id == token_type_t::BUILTIN_TRUNCATE ||
-                                  builtin_id == token_type_t::BUILTIN_INT_FROM_BOOL};
+                                  builtin_id == token_type_t::BUILTIN_INT_FROM_BOOL ||
+                                  builtin_id == token_type_t::BUILTIN_FROM_BACKING_INT ||
+                                  builtin_id == token_type_t::BUILTIN_INT_FROM_FLOAT ||
+                                  builtin_id == token_type_t::BUILTIN_FLOAT_FROM_INT};
     const auto& params{builtin.params};
     if (is_expect_or_require || is_assert_or_verify || is_inferrable_cast) {
         if (call.arguments.empty() || call.arguments.size() > 2) {
@@ -619,6 +622,37 @@ template <ast::IndexableID ID>
                                  error::TYPE_MISMATCH,
                                  resolving_.ast.location_of(call.function));
         }
+        const bool src_int{is_integer(src.get_kind()) ||
+                           src.get_kind() == type_kind::CONSTEXPR_INT};
+        if (target.get_kind() == type_kind::ENUM && src_int) {
+            return make_sema_err(
+                "`@as` cannot convert an integer to an enum; use `@fromBackingInt` instead",
+                error::TYPE_MISMATCH,
+                resolving_.ast.location_of(call.function));
+        }
+        if (src.get_kind() == type_kind::ENUM && is_integer(target.get_kind())) {
+            return make_sema_err(
+                "`@as` cannot convert an enum to an integer; use `@backingInt` instead",
+                error::TYPE_MISMATCH,
+                resolving_.ast.location_of(call.function));
+        }
+        if (is_integer(target.get_kind()) &&
+            (is_float(src.get_kind()) || src.get_kind() == type_kind::CONSTEXPR_FLOAT)) {
+            return make_sema_err(
+                "`@as` cannot convert a float to an integer; use `@intFromFloat` instead",
+                error::TYPE_MISMATCH,
+                resolving_.ast.location_of(call.function));
+        }
+        if (is_float(target.get_kind()) && is_integer(src.get_kind()) &&
+            !is_implicit_widenable(src, target)) {
+            return make_sema_err(
+                fmt::format("`@as` cannot convert '{}' to '{}' exactly; use `@floatFromInt` "
+                            "instead",
+                            ctx_.type_display_name(src),
+                            ctx_.type_display_name(target)),
+                error::TYPE_MISMATCH,
+                resolving_.ast.location_of(call.function));
+        }
 
         return_type = &target;
         break;
@@ -724,6 +758,99 @@ template <ast::IndexableID ID>
         if (src.get_kind() != type_kind::BOOL) {
             return make_sema_err(
                 fmt::format("`@intFromBool` operand must be of type 'bool'; found '{}'",
+                            ctx_.type_display_name(src)),
+                error::TYPE_MISMATCH,
+                get_call_arg_location(*args_res->operand));
+        }
+        return_type = &target;
+        break;
+    }
+    case token_type_t::BUILTIN_BACKING_INT: {
+        const auto& arg{call.arguments[0]};
+        auto&       src{*get_resolved_call_arg_type(arg)};
+        if (src.is_poison()) { break; }
+        const auto backing{ctx_.backing_int_type(src, target_ptr_bits())};
+        if (!backing) {
+            return make_sema_err(fmt::format("`@backingInt` operand must be an enum, a packed "
+                                             "struct or union, or a tagged union; found '{}'",
+                                             ctx_.type_display_name(src)),
+                                 error::TYPE_MISMATCH,
+                                 get_call_arg_location(arg));
+        }
+        return_type = backing.get();
+        break;
+    }
+    case token_type_t::BUILTIN_FROM_BACKING_INT: {
+        const auto args_res{extract_cast_args("@fromBackingInt")};
+        if (!args_res) { return make_sema_err(args_res.error()); }
+        if (!args_res->target || args_res->target->is_poison()) { break; }
+        type&      target{*args_res->target};
+        const auto un{target.get_data().as_opt<types::union_t>()};
+        const auto backing{ctx_.backing_int_type(target, target_ptr_bits())};
+        if (!backing || (un && !un->is_bit_packed())) {
+            return make_sema_err(fmt::format("`@fromBackingInt` target must be an enum or a packed "
+                                             "struct or union; found '{}'",
+                                             ctx_.type_display_name(target)),
+                                 error::TYPE_MISMATCH,
+                                 args_res->target_loc);
+        }
+        auto& src{*get_resolved_call_arg_type(*args_res->operand)};
+        if (src.is_poison()) { break; }
+        const bool fits{src.get_kind() == type_kind::CONSTEXPR_INT ||
+                        (is_integer(src.get_kind()) && is_assignable(src, *backing))};
+        if (!fits) {
+            return make_sema_err(fmt::format("`@fromBackingInt` operand must be an integer "
+                                             "assignable to '{}', the backing integer of '{}'; "
+                                             "found '{}'",
+                                             ctx_.type_display_name(*backing),
+                                             ctx_.type_display_name(target),
+                                             ctx_.type_display_name(src)),
+                                 error::TYPE_MISMATCH,
+                                 get_call_arg_location(*args_res->operand));
+        }
+        return_type = &target;
+        break;
+    }
+    case token_type_t::BUILTIN_INT_FROM_FLOAT: {
+        const auto args_res{extract_cast_args("@intFromFloat")};
+        if (!args_res) { return make_sema_err(args_res.error()); }
+        if (!args_res->target || args_res->target->is_poison()) { break; }
+        auto& target{*args_res->target};
+        if (!is_integer(target.get_kind())) {
+            return make_sema_err(
+                fmt::format("`@intFromFloat` target must be an integer type; found '{}'",
+                            ctx_.type_display_name(target)),
+                error::TYPE_MISMATCH,
+                args_res->target_loc);
+        }
+        auto& src{*get_resolved_call_arg_type(*args_res->operand)};
+        if (src.is_poison()) { break; }
+        if (!is_float(src.get_kind()) && src.get_kind() != type_kind::CONSTEXPR_FLOAT) {
+            return make_sema_err(fmt::format("`@intFromFloat` operand must be a float; found '{}'",
+                                             ctx_.type_display_name(src)),
+                                 error::TYPE_MISMATCH,
+                                 get_call_arg_location(*args_res->operand));
+        }
+        return_type = &target;
+        break;
+    }
+    case token_type_t::BUILTIN_FLOAT_FROM_INT: {
+        const auto args_res{extract_cast_args("@floatFromInt")};
+        if (!args_res) { return make_sema_err(args_res.error()); }
+        if (!args_res->target || args_res->target->is_poison()) { break; }
+        auto& target{*args_res->target};
+        if (!is_float(target.get_kind())) {
+            return make_sema_err(
+                fmt::format("`@floatFromInt` target must be a float type; found '{}'",
+                            ctx_.type_display_name(target)),
+                error::TYPE_MISMATCH,
+                args_res->target_loc);
+        }
+        auto& src{*get_resolved_call_arg_type(*args_res->operand)};
+        if (src.is_poison()) { break; }
+        if (!is_integer(src.get_kind()) && src.get_kind() != type_kind::CONSTEXPR_INT) {
+            return make_sema_err(
+                fmt::format("`@floatFromInt` operand must be an integer; found '{}'",
                             ctx_.type_display_name(src)),
                 error::TYPE_MISMATCH,
                 get_call_arg_location(*args_res->operand));
@@ -3292,7 +3419,10 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 args_result = resolve_call_args(
                     gsl::span<const ast::call_expr::argument>{call.arguments}.subspan(1));
             }
-        } else if (call.function->get_token_type() == token_type_t::BUILTIN_TYPE_OF) {
+        } else if (call.function->get_token_type() == token_type_t::BUILTIN_TYPE_OF ||
+                   call.function->get_token_type() == token_type_t::BUILTIN_INT_FROM_FLOAT ||
+                   call.function->get_token_type() == token_type_t::BUILTIN_FLOAT_FROM_INT) {
+            // The result type must not flow into a literal operand of the other numeric kind
             const structural_guard shield{implicit_type_stack_, nullptr};
             args_result = resolve_call_args(call.arguments);
         } else {
@@ -3310,11 +3440,13 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
             return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(result.error())));
         }
     } else {
-        return last_type_.emplace(ctx_.poison_node(resolving_,
-                                                   id,
-                                                   "Expression is not callable",
-                                                   error::NON_CALLABLE_EXPRESSION,
-                                                   resolving_.ast.location_of(call.function)));
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             fmt::format("Expression of type '{}' is not callable",
+                                         ctx_.type_display_name(callee_type)),
+                             error::NON_CALLABLE_EXPRESSION,
+                             resolving_.ast.location_of(call.function)));
     }
 }
 
@@ -4902,6 +5034,10 @@ auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -
     case syntax::token_type_t::MINUS_PERCENT_ASSIGN:
     case syntax::token_type_t::STAR_PERCENT_ASSIGN:
     case syntax::token_type_t::SHL_PERCENT_ASSIGN:
+    case syntax::token_type_t::PLUS_PIPE_ASSIGN:
+    case syntax::token_type_t::MINUS_PIPE_ASSIGN:
+    case syntax::token_type_t::STAR_PIPE_ASSIGN:
+    case syntax::token_type_t::SHL_PIPE_ASSIGN:
         if (!lhs_type.is_poison() && !rhs_type.is_poison() &&
             (!wrapping_operand_ok(lhs_type) || !wrapping_operand_ok(rhs_type))) {
             return last_type_.emplace(ctx_.poison_node(
@@ -5064,7 +5200,11 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
     case syntax::token_type_t::PLUS_PERCENT:
     case syntax::token_type_t::MINUS_PERCENT:
     case syntax::token_type_t::STAR_PERCENT:
-    case syntax::token_type_t::SHL_PERCENT:   {
+    case syntax::token_type_t::SHL_PERCENT:
+    case syntax::token_type_t::PLUS_PIPE:
+    case syntax::token_type_t::MINUS_PIPE:
+    case syntax::token_type_t::STAR_PIPE:
+    case syntax::token_type_t::SHL_PIPE:      {
         if (!lhs_type->is_poison() && !rhs_type.is_poison() &&
             (!wrapping_operand_ok(*lhs_type) || !wrapping_operand_ok(rhs_type))) {
             return last_type_.emplace(ctx_.poison_node(
@@ -5265,10 +5405,9 @@ auto type_resolver::resolve_impl_method_access(const type&      target,
     return stdx::none;
 }
 
-auto type_resolver::resolve_structural_access(type&                          object_type,
-                                              ast::identifier_handle         member,
-                                              source_location                object_location,
-                                              stdx::option<std::string_view> object_name)
+auto type_resolver::resolve_structural_access(type&                  object_type,
+                                              ast::identifier_handle member,
+                                              source_location        object_location)
     -> stdx::result<gsl::not_null<type*>, diagnostic> {
     auto* target_type{&object_type};
     if (const auto ptr_data{target_type->get_data().as_opt<types::pointer>()}) {
@@ -5333,10 +5472,11 @@ auto type_resolver::resolve_structural_access(type&                          obj
     if (closure_type) {
         const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(member)};
         if (member_ident.name == "thunk") { return &closure_type->impl_signature; }
-        return make_sema_err(
-            fmt::format("Type 'closure' has no field named '{}'", member_ident.name),
-            error::UNDECLARED_IDENTIFIER,
-            resolving_.ast.location_of(member));
+        return make_sema_err(fmt::format("Type '{}' has no field named '{}'",
+                                         ctx_.type_display_name(*target_type),
+                                         member_ident.name),
+                             error::UNDECLARED_IDENTIFIER,
+                             resolving_.ast.location_of(member));
     }
 
     if (slice_type || array_type) {
@@ -5348,17 +5488,11 @@ auto type_resolver::resolve_structural_access(type&                          obj
         if (member_ident.name == "len") {
             return &ctx_.get_builtin_resolved_type(type_kind::USIZE);
         }
-        const auto type_kind_name{slice_type ? "slice" : "array"};
-        return make_sema_err(
-            object_name
-                .transform([&](std::string_view name) -> std::string {
-                    return fmt::format(
-                        "Type '{}' has no field named '{}'", name, member_ident.name);
-                })
-                .value_or(fmt::format(
-                    "Type '{}' has no field named '{}'", type_kind_name, member_ident.name)),
-            error::UNDECLARED_IDENTIFIER,
-            resolving_.ast.location_of(member));
+        return make_sema_err(fmt::format("Type '{}' has no field named '{}'",
+                                         ctx_.type_display_name(*target_type),
+                                         member_ident.name),
+                             error::UNDECLARED_IDENTIFIER,
+                             resolving_.ast.location_of(member));
     }
 
     if (!enum_type && !struct_type && !union_type) {
@@ -5388,15 +5522,11 @@ auto type_resolver::resolve_structural_access(type&                          obj
                 *target_type, member_ident.name, resolving_.ast.location_of(member))}) {
             return std::move(*ext);
         }
-        return make_sema_err(
-            object_name
-                .transform([&](std::string_view name) -> std::string {
-                    return fmt::format(
-                        "Type '{}' has no field named '{}'", name, member_ident.name);
-                })
-                .value_or(fmt::format("Type has no field named '{}'", member_ident.name)),
-            error::UNDECLARED_IDENTIFIER,
-            resolving_.ast.location_of(member));
+        return make_sema_err(fmt::format("Type '{}' has no field named '{}'",
+                                         ctx_.type_display_name(*target_type),
+                                         member_ident.name),
+                             error::UNDECLARED_IDENTIFIER,
+                             resolving_.ast.location_of(member));
     }
 
     auto& [member_symbol, member_idx] = *symbol_proxy;
@@ -5582,10 +5712,8 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
 
     pending_impl_method_owner_.reset();
     pending_param_impl_target_.reset();
-    auto result{resolve_structural_access(object_type,
-                                          dot.member,
-                                          resolving_.ast.location_of(dot.object),
-                                          get_rightmost_name(dot.object))};
+    auto result{
+        resolve_structural_access(object_type, dot.member, resolving_.ast.location_of(dot.object))};
     if (!result) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(result).error()));
     }
@@ -6920,7 +7048,7 @@ auto type_resolver::decl_value_denotes_type(ast::expr_handle value) const -> boo
 
     // `mod.Type` / `Outer.Inner`
     if (const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(value)}) {
-        const auto* sym{dot_member_symbol(*dot)};
+        const auto sym{dot_member_symbol(*dot)};
         return sym && sym->has_kind() && sym->get_kind() == symbol_kind::TYPE;
     }
     return false;
@@ -7327,7 +7455,7 @@ auto type_resolver::visit(ast::node_id id, const ast::unwrap_expr& unwrap) -> vo
     const bool  widenable{is_implicit_widenable(res_ty, from_ty)};
     if (!same && !assignable && !widenable) {
         const auto  ptr_bits{codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
-        const auto  reason{cast_rejection_reason(res_ty, from_ty, ptr_bits)};
+        const auto  reason{cast_rejection_reason(res_ty, from_ty, ptr_bits, ctx_.user_type_names)};
         std::string reason_suffix;
         if (reason) { reason_suffix = fmt::format(" ({})", *reason); }
         return last_type_.emplace(ctx_.poison_node(
@@ -7473,19 +7601,20 @@ auto type_resolver::visit(ast::node_id id, const ast::type_expr& node) -> void {
     resolving_.set_sema_type(id, *last_type_);
 }
 
-auto type_resolver::dot_member_symbol(const ast::dot_expr& dot) const -> const symbol* {
+auto type_resolver::dot_member_symbol(const ast::dot_expr& dot) const
+    -> stdx::option<const symbol&> {
     const auto obj_type{resolving_.get_sema_type_opt(dot.object)};
-    if (!obj_type) { return nullptr; }
+    if (!obj_type) { return stdx::none; }
     const auto& member{resolving_.ast.get_as<ast::identifier_expr>(dot.member)};
     if (const auto mod_data{obj_type->get_data().as_opt<types::module>()}) {
-        if (!mod_data->imported.root_table_idx) { return nullptr; }
+        if (!mod_data->imported.root_table_idx) { return stdx::none; }
         const auto sym{ctx_.registry.get_from_opt(*mod_data->imported.root_table_idx, member.name)};
-        return sym ? &*sym : nullptr;
+        return sym;
     }
     const auto tbl{denoted_type(*obj_type).get_symbol_table_idx_opt()};
-    if (!tbl) { return nullptr; }
+    if (!tbl) { return stdx::none; }
     const auto sym{ctx_.registry.get_from_opt(*tbl, member.name)};
-    return sym ? &*sym : nullptr;
+    return sym;
 }
 
 namespace {
@@ -8317,7 +8446,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                                                     resolving_.ast.location_of(*decl.value)));
                 return poison_out();
             }
-            auto* decl_value_type_p{&*last_type_.take()};
+            auto* decl_value_type_p{last_type_.take()};
             // `const X := MakesAType()`: fold the constructor now, exactly like an annotation
             if (decl_value_type_p->get_data().is<types::deferred_call>()) {
                 const auto& dc_call{decl_value_type_p->get_data().as<types::deferred_call>().call};

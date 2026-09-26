@@ -132,6 +132,10 @@ struct context {
                                types::mut::mutability_modifiers mutability = types::mut::CONSTANT)
         -> type&;
 
+    // The integer `@backingInt`/`@fromBackingInt` convert through: an enum's underlying type, a
+    // bit-packed struct/union's `uN`, or a tagged union's `i32` tag. None for any other type.
+    [[nodiscard]] auto backing_int_type(const type& t, u32 ptr_bits) -> stdx::option<type&>;
+
     // Calls resolve_if on the resulting type
     [[nodiscard]] auto get_pointer(types::mut::mutability_modifiers mutability, type& underlying)
         -> type&;

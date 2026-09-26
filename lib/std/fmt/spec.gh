@@ -140,7 +140,7 @@ pub const Spec := struct {
             if constexpr (!Kind.is_valid(fmt[i])) {
                 @compileError("fmt: bad spec: unrecognized type char");
             }
-            self.kind = .of(@as(Kind, fmt[i]));
+            self.kind = .of(@fromBackingInt(fmt[i]));
             i += 1;
         }
 

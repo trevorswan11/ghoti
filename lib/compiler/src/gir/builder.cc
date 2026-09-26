@@ -207,16 +207,18 @@ auto builder::emit_make_callable(value                     ctx,
 }
 
 auto builder::emit_binary(
-    instruction_kind kind, value lhs, value rhs, sema::type& type, bool checked) -> local_id {
+    instruction_kind kind, value lhs, value rhs, sema::type& type, bool checked, bool saturating)
+    -> local_id {
     PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit binary instruction without an active function");
     const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
     emit_instruction({
-        .kind       = kind,
-        .type       = type,
-        .result     = dest,
-        .operands   = {std::move(lhs), std::move(rhs)},
-        .is_checked = checked,
+        .kind          = kind,
+        .type          = type,
+        .result        = dest,
+        .operands      = {std::move(lhs), std::move(rhs)},
+        .is_checked    = checked,
+        .is_saturating = saturating,
     });
     return dest;
 }
@@ -236,15 +238,17 @@ auto builder::emit_unary(instruction_kind kind, value operand, sema::type& type,
     return dest;
 }
 
-auto builder::emit_cast(instruction_kind kind, value operand, sema::type& target_type) -> local_id {
+auto builder::emit_cast(instruction_kind kind, value operand, sema::type& target_type, bool checked)
+    -> local_id {
     PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit cast instruction without an active function");
     const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
     emit_instruction({
-        .kind     = kind,
-        .type     = target_type,
-        .result   = dest,
-        .operands = {std::move(operand)},
+        .kind       = kind,
+        .type       = target_type,
+        .result     = dest,
+        .operands   = {std::move(operand)},
+        .is_checked = checked,
     });
     return dest;
 }

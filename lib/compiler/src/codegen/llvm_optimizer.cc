@@ -87,7 +87,12 @@ auto llvm_optimizer::optimize(llvm::Module& module, const optimizer_options& opt
 
     // Set up pass builder
     llvm::PipelineTuningOptions pto;
-    llvm::PassBuilder           pb{options.target_machine, pto, stdx::none, pic ? &*pic : nullptr};
+    llvm::PassBuilder           pb{
+        options.target_machine,
+        pto,
+        stdx::none,
+        pic.transform([](auto& p) { return &p; }).value_or(nullptr),
+    };
 
     // Register all the basic analyses with the managers
     pb.registerModuleAnalyses(mam);

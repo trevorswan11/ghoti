@@ -450,11 +450,11 @@ TEST_CASE("Declared function arity mismatch") {
 }
 
 TEST_CASE("Non-callable expression") {
-    auto [ctx,
-          idx]{helpers::test_resolver_fail("const bar := 5; const foo := bar();",
-                                           sema::diagnostic{"Expression is not callable",
-                                                            sema::error::NON_CALLABLE_EXPRESSION,
-                                                            std::pair{0UZ, 29UZ}})};
+    auto [ctx, idx]{helpers::test_resolver_fail(
+        "const bar := 5; const foo := bar();",
+        sema::diagnostic{"Expression of type 'constexpr_int' is not callable",
+                         sema::error::NON_CALLABLE_EXPRESSION,
+                         std::pair{0UZ, 29UZ}})};
     ctx->check_poisoned<syms::node_t>("foo", idx);
 }
 

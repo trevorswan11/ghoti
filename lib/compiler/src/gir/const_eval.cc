@@ -161,6 +161,49 @@ template <typename T>
     }
 }
 
+// The plain base op a saturating token clamps the result of
+[[nodiscard]] constexpr auto saturating_base_op(syntax::token_type_t tok) noexcept
+    -> stdx::option<syntax::token_type_t> {
+    switch (tok) {
+    case syntax::token_type_t::PLUS_PIPE:  return syntax::token_type_t::PLUS;
+    case syntax::token_type_t::MINUS_PIPE: return syntax::token_type_t::MINUS;
+    case syntax::token_type_t::STAR_PIPE:  return syntax::token_type_t::STAR;
+    case syntax::token_type_t::SHL_PIPE:   return syntax::token_type_t::SHL;
+    default:                               return stdx::none;
+    }
+}
+
+// The exact result of `l op r` clamped to a `bits`-wide integer's range, for `bits` below 128
+[[nodiscard]] auto
+saturate_exact(syntax::token_type_t plain_op, i128 l, i128 r, u16 bits, bool is_signed) -> i128 {
+    const i128 hi{is_signed ? (i128{1} << (bits - 1)) - 1 : (i128{1} << bits) - 1};
+    const i128 lo{is_signed ? -(i128{1} << (bits - 1)) : i128{0}};
+    const auto clamp            = [&](i128 v) { return std::clamp(v, lo, hi); };
+    const auto saturated_toward = [&](bool negative) { return negative ? lo : hi; };
+
+    switch (plain_op) {
+    case syntax::token_type_t::PLUS:  return clamp(l + r);
+    case syntax::token_type_t::MINUS: return clamp(l - r);
+    case syntax::token_type_t::STAR:  {
+        if (l == 0 || r == 0) { return 0; }
+        // |l| * |r| stays in range iff |l| <= limit / |r|, checked without overflowing 128 bits
+        const bool negative{(l < 0) != (r < 0)};
+        const i128 limit{negative ? -lo : hi};
+        const auto magnitude = [](i128 v) { return v < 0 ? -v : v; };
+        if (magnitude(l) > limit / magnitude(r)) { return saturated_toward(negative); }
+        return l * r;
+    }
+    case syntax::token_type_t::SHL: {
+        if (l == 0) { return 0; }
+        if (r < 0 || r >= bits) { return saturated_toward(l < 0); }
+        const auto amount{static_cast<int>(r)};
+        if (l > 0 ? l > (hi >> amount) : l < (lo >> amount)) { return saturated_toward(l < 0); }
+        return l * (i128{1} << amount);
+    }
+    default: UNREACHABLE("Only + - * << have saturating forms");
+    }
+}
+
 // Truncates `folded`'s integer value to `bits` (two's-complement), rebuilding it at `res_type`
 [[nodiscard]] auto wrap_to_width(const const_value&        folded,
                                  u16                       bits,
@@ -605,7 +648,7 @@ auto const_eval::force_deferred_layout(sema::type& type) -> stdx::option<sema::t
         if (field == nullptr) { continue; }
         const auto concrete{force_deferred_layout(*field)};
         if (!concrete) { return stdx::none; }
-        field = &*concrete;
+        field = concrete.get();
     }
     return forced;
 }
@@ -2401,6 +2444,25 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
         return folded;
     }
 
+    // Saturating ops clamp the exact result to the first concrete integer operand's range; with
+    // only width-less `constexpr_int` operands there is no range, so they fold as the plain op
+    if (const auto plain_op{saturating_base_op(op_type)}) {
+        const auto ptr_bits{codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
+        stdx::option<sema::type&> res_type;
+        for (const auto* v : {&lhs, &rhs}) {
+            if (!res_type && v->get_type() && integer_target_width(*v->get_type(), ptr_bits)) {
+                res_type = v->get_type();
+            }
+        }
+        if (!res_type) { return fold_binary_values(*plain_op, lhs, rhs, id); }
+
+        const auto [bits, is_signed]{*integer_target_width(*res_type, ptr_bits)};
+        const auto l{lhs.as_int_opt()};
+        const auto r{rhs.as_int_opt()};
+        if (!l || !r || bits >= 128) { return stdx::none; }
+        return make_scalar_const(saturate_exact(*plain_op, *l, *r, bits, is_signed), res_type);
+    }
+
     if (op_type == syntax::token_type_t::PLUS_PLUS) { return fold_concat(lhs, rhs, id); }
 
     auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
@@ -3262,7 +3324,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
             for (usize i{0}; i < params_arr->elements.size(); ++i) {
                 const auto pt{params_arr->elements[i].as_opt<stdx::option<sema::type&>>()};
                 if (!pt || !*pt) { return stdx::none; }
-                param_types[i] = &**pt;
+                param_types[i] = pt->get();
             }
 
             return const_value{ctx_.get_function_like(
@@ -3636,7 +3698,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
             ctx_.diags.emplace_back(
                 fmt::format("Integer value {} is out of range for target type '{}' in @intCast",
                             *src_int,
-                            sema::type_kind_display_name(*target)),
+                            ctx_.type_display_name(*target)),
                 sema::error::CONSTEXPR_EVALUATION_FAILED,
                 module_->ast.location_of(*op_h));
             return const_value::make_poison();
@@ -3695,8 +3757,65 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const u64 int_val{*src_bool ? 1ULL : 0ULL};
         return const_value{int_val, target};
     }
+    case syntax::token_type_t::BUILTIN_FLOAT_FROM_INT:
+    case syntax::token_type_t::BUILTIN_INT_FROM_FLOAT: {
+        const auto op_h{call.arguments.back().as_opt<ast::expr_handle>()};
+        if (!op_h) { return stdx::none; }
+        const auto operand{try_eval(*op_h)};
+        auto       target{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
+        if (!operand || !target) { return stdx::none; }
+
+        if (builtin_type == syntax::token_type_t::BUILTIN_FLOAT_FROM_INT) {
+            // `f80`/`f128` can't be represented exactly at compile time
+            if (target->get_kind() == sema::type_kind::F80 ||
+                target->get_kind() == sema::type_kind::F128) {
+                return stdx::none;
+            }
+            if (const auto u{operand->as_opt<u64>()}) {
+                return const_value{static_cast<f64>(*u), target};
+            }
+            const auto i{operand->as_opt<i64>()};
+            if (!i) { return stdx::none; }
+            return const_value{static_cast<f64>(*i), target};
+        }
+
+        const auto f{operand->as_opt<f64>()};
+        if (!f) { return stdx::none; }
+        const auto truncated{std::trunc(*f)};
+        const auto ptr_bits{codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
+        // Past 64 bits the value is left to the (range-checked) runtime conversion
+        stdx::option<i128> folded;
+        if (truncated >= -0x1p63 && truncated < 0x1p63) {
+            folded = i128{static_cast<i64>(truncated)};
+        } else if (truncated >= 0.0 && truncated < 0x1p64) {
+            folded = i128{static_cast<u64>(truncated)};
+        }
+        if (!folded || !sema::constexpr_int_fits(*folded, *target, ptr_bits)) {
+            const auto width{integer_target_width(*target, ptr_bits)};
+            if (std::isfinite(*f) && !folded && width && width->first > 64) { return stdx::none; }
+            ctx_.diags.emplace_back(
+                fmt::format("Float value {} is out of range for target type '{}' in @intFromFloat",
+                            *f,
+                            ctx_.type_display_name(*target)),
+                sema::error::CONSTEXPR_EVALUATION_FAILED,
+                module_->ast.location_of(*op_h));
+            return const_value::make_poison();
+        }
+        return make_scalar_const(*folded, target);
+    }
+    case syntax::token_type_t::BUILTIN_BACKING_INT: {
+        // Only an enum folds; packed aggregates and tagged unions are read by the emitter
+        const auto op_h{call.arguments[0].as_opt<ast::expr_handle>()};
+        if (!op_h) { return stdx::none; }
+        const auto operand{try_eval(*op_h)};
+        if (!operand || !operand->is<const_enum>()) { return stdx::none; }
+        auto target{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
+        if (!target) { return stdx::none; }
+        return make_scalar_const(operand->as<const_enum>().value, target);
+    }
     case syntax::token_type_t::BUILTIN_AS:
-    case syntax::token_type_t::BUILTIN_BIT_CAST: {
+    case syntax::token_type_t::BUILTIN_BIT_CAST:
+    case syntax::token_type_t::BUILTIN_FROM_BACKING_INT: {
         // Fold the numeric/pointer subset; leave floats, enums and aggregates to the emitter.
         const auto op_arg_idx{call.arguments.size() == 1 ? 0UZ : 1UZ};
         if (call.arguments.size() < (op_arg_idx + 1)) { return stdx::none; }

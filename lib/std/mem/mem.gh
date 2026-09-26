@@ -19,7 +19,7 @@ pub const Alignment := enum : std.math.Log2Int(usize) {
 
     pub constexpr from_byte_units := fn(n: usize): Alignment {
         @assert(std.math.is_power_of_two(n));
-        return @as(Alignment, @ctz(n));
+        return @fromBackingInt(@intCast(std.math.Log2Int(usize), @ctz(n)));
     };
 
     pub constexpr of := fn(T: type): Alignment {

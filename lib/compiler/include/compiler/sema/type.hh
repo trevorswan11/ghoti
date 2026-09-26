@@ -127,8 +127,6 @@ class type;
 }
 
 [[nodiscard]] auto is_implicit_widenable(const type& from, const type& to) noexcept -> bool;
-[[nodiscard]] auto cast_rejection_reason(const type& from, const type& to, u32 ptr_bits)
-    -> stdx::option<std::string>;
 
 [[nodiscard]] constexpr auto is_value_type(type_kind kind) noexcept -> bool {
     switch (kind) {
@@ -174,6 +172,13 @@ class type;
 
 // Declared names of user struct/enum/union types, keyed by their type
 using type_name_map = ankerl::unordered_dense::map<const type*, std::string_view>;
+
+// Why an implicit `from` -> `to` conversion is rejected, naming user types through `names`
+[[nodiscard]] auto cast_rejection_reason(const type&                        from,
+                                         const type&                        to,
+                                         u32                                ptr_bits,
+                                         stdx::option<const type_name_map&> names = stdx::none)
+    -> stdx::option<std::string>;
 
 [[nodiscard]] auto is_same_unqualified(const type& a, const type& b) noexcept -> bool;
 [[nodiscard]] auto is_assignable(const type& src, const type& dest) noexcept -> bool;

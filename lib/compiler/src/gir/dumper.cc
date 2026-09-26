@@ -148,10 +148,12 @@ auto format_instruction(const instruction& inst) -> std::string {
     }
 
     // Binary / unary / comparison / cast operations
+    const auto sat{inst.is_saturating ? ".sat" : ""};
     if (!type_str.empty() && !inst.operands.empty()) {
-        return fmt::format("{}{} {} {}",
+        return fmt::format("{}{}{} {} {}",
                            prefix,
                            instruction_kind_name(inst.kind),
+                           sat,
                            type_str,
                            fmt::join(inst.operands | std::views::transform(format_value), ", "));
     }

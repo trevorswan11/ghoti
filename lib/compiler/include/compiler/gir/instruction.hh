@@ -241,6 +241,7 @@ struct instruction {
     bool                          is_const{false};
     bool                          is_initializer{false};
     bool                          is_checked{false};
+    bool                          is_saturating{false}; // `+| -| *| <<|` clamp instead of wrap
     bool                          explicit_volatile{false};
 
     stdx::option<u8> atomic_op{stdx::none};         // `@atomicRmw`'s op

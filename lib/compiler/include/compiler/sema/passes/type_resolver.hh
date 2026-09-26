@@ -375,11 +375,9 @@ class type_resolver {
     auto visit(ast::node_id, const ast::binary_expr&) -> void;
 
     // Attempts to access the given member in the provided structural type
-    [[nodiscard]] auto
-    resolve_structural_access(type&                          object_type,
-                              ast::identifier_handle         member,
-                              source_location                object_location,
-                              stdx::option<std::string_view> object_name = stdx::none)
+    [[nodiscard]] auto resolve_structural_access(type&                  object_type,
+                                                 ast::identifier_handle member,
+                                                 source_location        object_location)
         -> stdx::result<gsl::not_null<type*>, diagnostic>;
 
     // Retrieve's the rightmost identifier name from the accessor
@@ -440,7 +438,8 @@ class type_resolver {
 
     // The symbol a resolved `obj.member` names, looked up in a module's root table or in the
     // (denoted) aggregate's own table
-    [[nodiscard]] auto dot_member_symbol(const ast::dot_expr& dot) const -> const symbol*;
+    [[nodiscard]] auto dot_member_symbol(const ast::dot_expr& dot) const
+        -> stdx::option<const symbol&>;
 
     // Whether a resolved decl value denotes a type (`i32`, `^T`, `Ctor(T)`, `mod.Type`, ...),
     // making the decl a compile-time type alias rather than a runtime value

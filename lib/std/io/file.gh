@@ -97,7 +97,7 @@ impl io.Writer for File {
 impl io.Seeker for File {
     const Error := io.Error;
     pub const seek := fn(&mut self, offset: i64, whence: io.Whence): Result(i64, Error) {
-        return match (os.lseek(self.handle, offset, @as(i32, whence))) {
+        return match (os.lseek(self.handle, offset, @backingInt(whence))) {
             .ok => |p| .of(p),
             .err => |e| .fail(.from_os(e)),
         };

@@ -25,6 +25,27 @@
 
 namespace ghoti::sema {
 
+namespace {
+
+// The source spelling of a binary GIR operator, for diagnostics
+[[nodiscard]] auto binary_operator_symbol(gir::instruction_kind kind) noexcept -> std::string_view {
+    switch (kind) {
+    case gir::instruction_kind::ADD: return "+";
+    case gir::instruction_kind::SUB: return "-";
+    case gir::instruction_kind::MUL: return "*";
+    case gir::instruction_kind::DIV: return "/";
+    case gir::instruction_kind::MOD: return "%";
+    case gir::instruction_kind::AND: return "&";
+    case gir::instruction_kind::OR:  return "|";
+    case gir::instruction_kind::XOR: return "^";
+    case gir::instruction_kind::SHL: return "<<";
+    case gir::instruction_kind::SHR: return ">>";
+    default:                         return gir::instruction_kind_name(kind);
+    }
+}
+
+} // namespace
+
 type_checker::type_checker(gir::module& gir_mod, context& ctx) noexcept
     : gir_mod_{gir_mod}, ctx_{ctx},
       target_ptr_bits_{codegen::target_facts::resolve(ctx.target_opts.triple_str).ptr_bits} {}
@@ -40,7 +61,7 @@ auto type_checker::check_types(gir::module& gir_mod, mod::module& ast_mod, conte
         const auto diags_before{ctx.diags.size()};
         checker.check_function(*fn);
         const auto source_mod{fn->get_source_module()};
-        if (source_mod && &*source_mod != &ast_mod && ctx.diags.size() > diags_before) {
+        if (source_mod && source_mod != &ast_mod && ctx.diags.size() > diags_before) {
             source_mod->absorb_sema_diagnostics(ctx.diags.split_off(diags_before));
             attributed_foreign = true;
         }
@@ -53,7 +74,8 @@ auto type_checker::check_types(gir::module& gir_mod, mod::module& ast_mod, conte
 
 auto type_checker::format_store_mismatch(const type& val_t, const type& dest_t) const
     -> std::string {
-    if (const auto reason{cast_rejection_reason(val_t, dest_t, target_ptr_bits_)}) {
+    if (const auto reason{
+            cast_rejection_reason(val_t, dest_t, target_ptr_bits_, ctx_.user_type_names)}) {
         return fmt::format("Type mismatch in store: cannot assign '{}' to '{}' ({})",
                            ctx_.type_display_name(val_t),
                            ctx_.type_display_name(dest_t),
@@ -68,7 +90,8 @@ auto type_checker::format_arg_mismatch(usize                          arg_idx,
                                        const type&                    arg_t,
                                        const type&                    param_t,
                                        stdx::option<std::string_view> callee) const -> std::string {
-    const auto reason{cast_rejection_reason(arg_t, param_t, target_ptr_bits_)};
+    const auto reason{
+        cast_rejection_reason(arg_t, param_t, target_ptr_bits_, ctx_.user_type_names)};
     if (callee) {
         if (reason) {
             return fmt::format(
@@ -105,7 +128,8 @@ auto type_checker::format_arg_mismatch(usize                          arg_idx,
 
 auto type_checker::format_return_mismatch(const type& ret_t, const type& expected_t) const
     -> std::string {
-    if (const auto reason{cast_rejection_reason(ret_t, expected_t, target_ptr_bits_)}) {
+    if (const auto reason{
+            cast_rejection_reason(ret_t, expected_t, target_ptr_bits_, ctx_.user_type_names)}) {
         return fmt::format(
             "Return value of type '{}' is not assignable to function return type '{}' ({})",
             ctx_.type_display_name(ret_t),
@@ -298,7 +322,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                     if (!ptr_arith) {
                         emit_diagnostic(
                             fmt::format("Operator '{}' cannot be applied to types '{}' and '{}'",
-                                        gir::instruction_kind_name(inst.kind),
+                                        binary_operator_symbol(inst.kind),
                                         ctx_.type_display_name(*lhs_t),
                                         ctx_.type_display_name(*rhs_t)),
                             error::OPERATOR_TYPE_MISMATCH,
@@ -332,7 +356,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                 if (!both_bool && !both_same_int) {
                     emit_diagnostic(
                         fmt::format("Operator '{}' cannot be applied to types '{}' and '{}'",
-                                    gir::instruction_kind_name(inst.kind),
+                                    binary_operator_symbol(inst.kind),
                                     ctx_.type_display_name(*lhs_t),
                                     ctx_.type_display_name(*rhs_t)),
                         error::OPERATOR_TYPE_MISMATCH,
@@ -362,7 +386,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                     !is_same_unqualified(*lhs_t, *rhs_t)) {
                     emit_diagnostic(
                         fmt::format("Operator '{}' cannot be applied to types '{}' and '{}'",
-                                    gir::instruction_kind_name(inst.kind),
+                                    binary_operator_symbol(inst.kind),
                                     ctx_.type_display_name(*lhs_t),
                                     ctx_.type_display_name(*rhs_t)),
                         error::OPERATOR_TYPE_MISMATCH,
@@ -454,7 +478,9 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             const auto op_t{get_operand_type(inst.operands[0])};
             if (op_t && !op_t->is_poison()) {
                 if (!is_signed_integer(*op_t) && !is_float(op_t->get_kind())) {
-                    emit_diagnostic("Unary negation '-' requires a signed integer or float operand",
+                    emit_diagnostic(fmt::format("Unary negation '-' requires a signed integer or "
+                                                "float operand; found '{}'",
+                                                ctx_.type_display_name(*op_t)),
                                     error::OPERATOR_TYPE_MISMATCH,
                                     inst.location);
                 }
@@ -476,9 +502,11 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             const auto op_t{get_operand_type(inst.operands[0])};
             if (op_t && !op_t->is_poison()) {
                 if (op_t->get_kind() != type_kind::BOOL) {
-                    emit_diagnostic("Logical negation '!' requires a boolean operand",
-                                    error::OPERATOR_TYPE_MISMATCH,
-                                    inst.location);
+                    emit_diagnostic(
+                        fmt::format("Logical negation '!' requires a boolean operand; found '{}'",
+                                    ctx_.type_display_name(*op_t)),
+                        error::OPERATOR_TYPE_MISMATCH,
+                        inst.location);
                 }
             }
         }
@@ -498,9 +526,11 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             const auto op_t{get_operand_type(inst.operands[0])};
             if (op_t && !op_t->is_poison()) {
                 if (!is_integer(op_t->get_kind())) {
-                    emit_diagnostic("Bitwise negation '~' requires an integer operand",
-                                    error::OPERATOR_TYPE_MISMATCH,
-                                    inst.location);
+                    emit_diagnostic(
+                        fmt::format("Bitwise negation '~' requires an integer operand; found '{}'",
+                                    ctx_.type_display_name(*op_t)),
+                        error::OPERATOR_TYPE_MISMATCH,
+                        inst.location);
                 }
             }
         }
@@ -819,8 +849,8 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                 }
 
                 if (!allowed) {
-                    if (const auto reason{
-                            cast_rejection_reason(*src_t, *dest_t, target_ptr_bits_)}) {
+                    if (const auto reason{cast_rejection_reason(
+                            *src_t, *dest_t, target_ptr_bits_, ctx_.user_type_names)}) {
                         emit_diagnostic(fmt::format("Cannot cast type '{}' to '{}' ({})",
                                                     ctx_.type_display_name(*src_t),
                                                     ctx_.type_display_name(*dest_t),
@@ -852,9 +882,11 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
         if (!inst.operands.empty()) {
             const auto cond_t{get_operand_type(inst.operands[0])};
             if (cond_t && !cond_t->is_poison() && cond_t->get_kind() != type_kind::BOOL) {
-                emit_diagnostic("Conditional branch condition must be of type 'bool'",
-                                error::TYPE_MISMATCH,
-                                inst.location);
+                emit_diagnostic(
+                    fmt::format("Conditional branch condition must be of type 'bool'; found '{}'",
+                                ctx_.type_display_name(*cond_t)),
+                    error::TYPE_MISMATCH,
+                    inst.location);
             }
         }
         break;
@@ -971,7 +1003,7 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
                 if (val_t &&
                     !is_value_assignable(
                         inst.operands[0], *val_t, *it->second.type, inst.location) &&
-                    !packed_backing_store(it->second.type, &*val_t)) {
+                    !packed_backing_store(it->second.type, val_t.get())) {
                     emit_diagnostic(format_store_mismatch(*val_t, *it->second.type),
                                     error::TYPE_MISMATCH,
                                     inst.location);
@@ -1067,7 +1099,7 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
 
             if (val_t &&
                 !is_value_assignable(inst.operands[0], *val_t, *it->second.type, inst.location) &&
-                !packed_backing_store(it->second.type, &*val_t)) {
+                !packed_backing_store(it->second.type, val_t.get())) {
                 emit_diagnostic(format_store_mismatch(*val_t, *it->second.type),
                                 error::TYPE_MISMATCH,
                                 inst.location);

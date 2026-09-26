@@ -467,6 +467,19 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - A function-type alias used as a return type (`fn(): Callback`) now returns a callable value
 - A generic instantiated with both a thin and an erased function type argument now produces distinct instantiations
 - Function types rebuilt while substituting unwrap shapes no longer drop their calling convention
+- Diagnostics show full types everywhere instead of bare kinds like `array` / `slice` / `enum` (#341)
+    - `Type '[3]i32' has no field named 'x'` (previously the variable's name or `array`), `Expression of type 'S' is not callable`
+    - Unary `-` / `!` / `~` and non-`bool` conditions report the operand type they found
+    - Binary operator errors use the source spelling (`'+'`, `'<<'`) instead of internal names (`'add'`, `'shl'`)
+- Saturating operators `+| -| *| <<|` and compound forms `+|= -|= *|= <<|=` clamp to the operand type's range instead of wrapping or trapping (#321)
+    - `<<|` saturates for any shift amount, including one at or past the bit width
+    - Fold at compile time; between two untyped integer constants they fold like the plain operator
+- `@backingInt(x)` returns the integer backing an enum, a `packed struct` / `packed union`, or a tagged union's active tag; `@fromBackingInt(T, n)` (or `@fromBackingInt(n)` with an inferred `T`) converts back for enums and packed aggregates (#327)
+    - Converting an unlisted value to an exhaustive enum panics under runtime safety
+- **Breaking:** `@as` no longer converts between enums and integers; use `@backingInt` / `@fromBackingInt` (#327)
+- `@intFromFloat(T, x)` truncates a float toward zero and `@floatFromInt(T, x)` rounds an integer to the nearest float; both infer `T` from context when omitted (#324)
+    - An out-of-range compile-time `@intFromFloat` is a compile error; at runtime an out-of-range or NaN operand panics under runtime safety
+- **Breaking:** `@as` no longer converts floats to integers, or integers to floats that can't represent every value exactly (`@as(f64, i32_val)` still works); use `@intFromFloat` / `@floatFromInt` (#324)
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

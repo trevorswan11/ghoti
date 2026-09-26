@@ -10,7 +10,7 @@ impl std.mem.AllocatorVTable for PageAllocator {
         alignment: std.mem.Alignment,
     ): std.Option(^mut u8) {
         @assert(
-            @as(usize, alignment) <= std.os.page_size(),
+            1uz << @as(usize, @backingInt(alignment)) <= std.os.page_size(),
             "PageAllocator: alignment above the page size is not supported",
         );
         return match (std.os.alloc(len)) {

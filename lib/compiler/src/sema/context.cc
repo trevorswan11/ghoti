@@ -206,6 +206,10 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::TRUNCATE, params(t_type, t_auto), t_auto);
     inject_function(bis::BOOL_FROM_INT, params(t_auto), t_bool);
     inject_function(bis::INT_FROM_BOOL, params(t_type, t_bool), t_auto);
+    inject_function(bis::BACKING_INT, params(t_auto), t_auto);
+    inject_function(bis::FROM_BACKING_INT, params(t_type, t_auto), t_auto);
+    inject_function(bis::INT_FROM_FLOAT, params(t_type, t_auto), t_auto);
+    inject_function(bis::FLOAT_FROM_INT, params(t_type, t_auto), t_auto);
 
     inject_function(bis::INT_FROM_PTR, params(t_auto), t_usize);
     inject_function(bis::PTR_FROM_INT, params(t_type, t_usize), t_auto);
@@ -368,6 +372,26 @@ auto context::get_builtin_type(std::string_view name) -> type& {
     auto& builtin_mod{modules.builtin_module()};
     auto& builtin_sym{registry.get(*builtin_mod.root_table_idx).get(name)};
     return builtin_mod.get_sema_type(builtin_sym.get_data().as<symbols::node_t>());
+}
+
+auto context::backing_int_type(const type& t, u32 ptr_bits) -> stdx::option<type&> {
+    const auto& data{t.get_data()};
+    if (const auto en{data.as_opt<types::enum_t>()}) { return en->underlying; }
+    if (const auto st{data.as_opt<types::struct_t>()}; st && st->is_bit_packed()) {
+        if (const auto bits{packed_backing_bits(*st, ptr_bits)}) {
+            return get_int(static_cast<u16>(*bits), false);
+        }
+    }
+    if (const auto un{data.as_opt<types::union_t>()}) {
+        if (un->is_bit_packed()) {
+            if (const auto bits{packed_union_backing_bits(*un, ptr_bits)}) {
+                return get_int(static_cast<u16>(*bits), false);
+            }
+        } else if (!un->is_untagged && !un->is_c_abi) {
+            return get_int(32, true);
+        }
+    }
+    return stdx::none;
 }
 
 auto context::type_display_name(const type& t) const -> std::string {

@@ -17,7 +17,7 @@ TEST_CASE("@min / @max on runtime integers and floats") {
         pub const main := fn(): i32 {
             var a: f64 = 3.5;
             var b: f64 = 41.5;
-            return @as(i32, @min(a, b)) + @as(i32, @max(a, b));
+            return @intFromFloat(i32, @min(a, b)) + @intFromFloat(i32, @max(a, b));
         };
     )") == 44);
 }

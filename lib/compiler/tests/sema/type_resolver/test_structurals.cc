@@ -182,15 +182,15 @@ TEST_CASE("Access through non-user-type types") {
 }
 
 TEST_CASE("Implicitly accessing unknown user-type fields/members") {
-    const auto expected_diag = [] -> sema::diagnostic {
-        return {"Type has no field named 'z'",
+    const auto expected_diag = [](std::string_view type_name) -> sema::diagnostic {
+        return {fmt::format("Type '{}' has no field named 'z'", type_name),
                 sema::error::UNDECLARED_IDENTIFIER,
                 std::pair{0UZ, 49UZ}};
     };
 
-    test_access_fail("var a: other.BarE = .z;", expected_diag());
-    test_access_fail("var a: other.BarU = .z;", expected_diag());
-    test_access_fail("var a: other.BarS = .z;", expected_diag());
+    test_access_fail("var a: other.BarE = .z;", expected_diag("BarE"));
+    test_access_fail("var a: other.BarU = .z;", expected_diag("BarU"));
+    test_access_fail("var a: other.BarS = .z;", expected_diag("BarS"));
 }
 
 TEST_CASE("Dot-accessing unknown user-type fields/members") {
@@ -203,6 +203,17 @@ TEST_CASE("Dot-accessing unknown user-type fields/members") {
     test_access_fail("var a := other.BarE.z;", expected_diag("BarE"));
     test_access_fail("var a := other.BarU.z;", expected_diag("BarU"));
     test_access_fail("var a := other.BarS.z;", expected_diag("BarS"));
+}
+
+TEST_CASE("Unknown array/slice members name the full type") {
+    helpers::test_resolver_fail("const a: [3]i32 = .{ 1, 2, 3 }; const b := a.nope;",
+                                sema::diagnostic{"Type '[3]i32' has no field named 'nope'",
+                                                 sema::error::UNDECLARED_IDENTIFIER,
+                                                 std::pair{0UZ, 45UZ}});
+    helpers::test_resolver_fail("var s: []u8 = undefined; const b := s.nope;",
+                                sema::diagnostic{"Type '[]u8' has no field named 'nope'",
+                                                 sema::error::UNDECLARED_IDENTIFIER,
+                                                 std::pair{0UZ, 38UZ}});
 }
 
 TEST_CASE("Unknown member lookup in module") {
