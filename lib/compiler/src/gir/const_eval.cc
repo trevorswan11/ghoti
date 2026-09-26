@@ -1911,8 +1911,7 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
     }
     case sema::type_kind::ISIZE:
     case sema::type_kind::USIZE: {
-        const auto   ptr_bits{static_cast<u16>(
-            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? 64 : 32)};
+        const auto   ptr_bits{static_cast<u16>(target_pointer_bits())};
         const_struct s;
         s.fields.emplace("bits", const_value{u64{ptr_bits}, ctx_.get_int(16, false)});
         const bool is_signed{sema::is_signed_integer(denoted)};
@@ -2042,8 +2041,7 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
                     : const_value{nullptr_val{}, opaque_ptr_type});
             fields.elements.emplace_back(const_value{std::move(fs), field_type});
         }
-        const auto ptr_bits{static_cast<u32>(
-            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? 64 : 32)};
+        const auto ptr_bits{target_pointer_bits()};
         auto&      field_slice_type{ctx_.get_slice(sema::types::mut::CONSTANT, false, field_type)};
         const_struct s;
         s.fields.emplace("fields", const_value{std::move(fields), field_slice_type});
@@ -2471,7 +2469,7 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
         if (res_type->get_kind() == sema::type_kind::ISIZE ||
             res_type->get_kind() == sema::type_kind::USIZE) {
             const auto ptr_bits{
-                codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
+                target_pointer_bits()};
             return wrap_to_width(*folded,
                                  static_cast<u16>(ptr_bits),
                                  res_type->get_kind() == sema::type_kind::ISIZE,
@@ -2484,7 +2482,7 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
     // Saturating ops clamp the exact result to the first concrete integer operand's range; with
     // only width-less `constexpr_int` operands there is no range, so they fold as the plain op
     if (const auto plain_op{saturating_base_op(op_type)}) {
-        const auto ptr_bits{codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
+        const auto ptr_bits{target_pointer_bits()};
         stdx::option<sema::type&> res_type;
         for (const auto* v : {&lhs, &rhs}) {
             if (!res_type && v->get_type() && integer_target_width(*v->get_type(), ptr_bits)) {
@@ -2732,7 +2730,7 @@ auto const_eval::eval_unary(ast::node_id id, const ast::unary_expr& unary)
         }
         if (res_type && res_type->get_kind() == sema::type_kind::ISIZE) {
             const auto ptr_bits{
-                codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
+                target_pointer_bits()};
             return wrap_to_width(*negated, static_cast<u16>(ptr_bits), true, res_type);
         }
         return negated; // `constexpr_int`: no wrap, plain negate stands.
@@ -3144,6 +3142,28 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
     return stdx::none;
 }
 
+auto const_eval::target_pointer_bits() const -> u32 {
+    return codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits;
+}
+
+auto const_eval::target_pointer_bytes() const -> usize { return target_pointer_bits() / 8; }
+
+auto const_eval::cast_operand(const ast::call_expr& call) -> stdx::option<ast::expr_handle> {
+    if (call.arguments.empty()) { return stdx::none; }
+    const auto op_arg_idx{call.arguments.size() == 1 ? 0UZ : 1UZ};
+    const auto op_h{call.arguments[op_arg_idx].as_opt<ast::expr_handle>()};
+    if (!op_h) { return stdx::none; }
+    return *op_h;
+}
+
+auto const_eval::builtin_result_type(ast::node_id id, const ast::call_expr& call) const
+    -> stdx::option<sema::type&> {
+    if (id.is_valid()) {
+        if (auto target{module_->get_sema_type_opt(id)}) { return target; }
+    }
+    return module_->get_sema_type_opt(call.function);
+}
+
 auto const_eval::eval_builtin(ast::node_id          id,
                               const ast::call_expr& call,
                               syntax::token_type_t  builtin_type) -> stdx::option<const_value> {
@@ -3200,8 +3220,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!target_type) { return stdx::none; }
 
         const auto ptr_size{
-            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? usize{8}
-                                                                                      : usize{4}};
+            target_pointer_bytes()};
         const auto sz{type_size_of(*target_type, ptr_size)};
         return const_value{static_cast<u64>(sz), usize_type};
     }
@@ -3211,8 +3230,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!target_type) { return stdx::none; }
 
         const auto ptr_size{
-            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? usize{8}
-                                                                                      : usize{4}};
+            target_pointer_bytes()};
         const auto al{type_align_of(*target_type, ptr_size)};
         return const_value{static_cast<u64>(al), usize_type};
     }
@@ -3222,8 +3240,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!target_type) { return stdx::none; }
 
         const auto ptr_size{
-            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? usize{8}
-                                                                                      : usize{4}};
+            target_pointer_bytes()};
         const auto ptr_bits{static_cast<u32>(ptr_size) * 8};
 
         const auto kind{target_type->get_kind()};
@@ -3394,7 +3411,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!arg) { return stdx::none; }
         if (!arg->is<u64>() && !arg->is<i64>()) { return stdx::none; }
         const auto v{arg->is<u64>() ? arg->as<u64>() : static_cast<u64>(arg->as<i64>())};
-        const auto ptr_bits{codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
+        const auto ptr_bits{target_pointer_bits()};
         const auto arg_ty{arg->get_type()};
         const auto bits_opt{arg_ty ? integer_or_constexpr_width(*arg_ty, ptr_bits) : stdx::none};
         if (!bits_opt) { return stdx::none; }
@@ -3412,7 +3429,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!arg) { return stdx::none; }
         if (!arg->is<u64>() && !arg->is<i64>()) { return stdx::none; }
         const auto v{arg->is<u64>() ? arg->as<u64>() : static_cast<u64>(arg->as<i64>())};
-        const auto ptr_bits{codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
+        const auto ptr_bits{target_pointer_bits()};
         const auto arg_ty{arg->get_type()};
         const auto bits_opt{arg_ty ? integer_or_constexpr_width(*arg_ty, ptr_bits) : stdx::none};
         if (!bits_opt) { return stdx::none; }
@@ -3693,8 +3710,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!operand) { return stdx::none; }
         const auto bits{operand->as_int_opt()};
         if (!bits) { return stdx::none; }
-        auto target{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
-        if (!target) { target = module_->get_sema_type_opt(call.function); }
+        auto target{builtin_result_type(id, call)};
         return const_value{static_cast<u64>(static_cast<u128>(*bits)), target};
     }
     case syntax::token_type_t::BUILTIN_INT_FROM_PTR: {
@@ -3721,19 +3737,15 @@ auto const_eval::eval_builtin(ast::node_id          id,
         return operand;
     }
     case syntax::token_type_t::BUILTIN_INT_CAST: {
-        const auto op_arg_idx{call.arguments.size() == 1 ? 0UZ : 1UZ};
-        if (call.arguments.size() < (op_arg_idx + 1)) { return stdx::none; }
-        const auto op_h{call.arguments[op_arg_idx].as_opt<ast::expr_handle>()};
+        const auto op_h{cast_operand(call)};
         if (!op_h) { return stdx::none; }
         const auto operand{try_eval(*op_h)};
         if (!operand) { return stdx::none; }
         const auto src_int{operand->as_int_opt()};
         if (!src_int) { return stdx::none; }
-        auto target{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
-        if (!target) { target = module_->get_sema_type_opt(call.function); }
+        auto target{builtin_result_type(id, call)};
         if (!target) { return stdx::none; }
-        const auto ptr_bits{static_cast<u32>(
-            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? 64 : 32)};
+        const auto ptr_bits{target_pointer_bits()};
         if (!sema::constexpr_int_fits(*src_int, *target, ptr_bits)) {
             ctx_.diags.emplace_back(
                 fmt::format("Integer value {} is out of range for target type '{}' in @intCast",
@@ -3749,19 +3761,15 @@ auto const_eval::eval_builtin(ast::node_id          id,
         return stdx::none;
     }
     case syntax::token_type_t::BUILTIN_TRUNCATE: {
-        const auto op_arg_idx{call.arguments.size() == 1 ? 0UZ : 1UZ};
-        if (call.arguments.size() < (op_arg_idx + 1)) { return stdx::none; }
-        const auto op_h{call.arguments[op_arg_idx].as_opt<ast::expr_handle>()};
+        const auto op_h{cast_operand(call)};
         if (!op_h) { return stdx::none; }
         const auto operand{try_eval(*op_h)};
         if (!operand) { return stdx::none; }
         const auto src_int{operand->as_int_opt()};
         if (!src_int) { return stdx::none; }
-        auto target{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
-        if (!target) { target = module_->get_sema_type_opt(call.function); }
+        auto target{builtin_result_type(id, call)};
         if (!target) { return stdx::none; }
-        const auto ptr_bits{static_cast<u32>(
-            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? 64 : 32)};
+        const auto ptr_bits{target_pointer_bits()};
         if (const auto w{integer_target_width(*target, ptr_bits)}) {
             return wrap_to_width(*operand, w->first, w->second, target);
         }
@@ -3783,16 +3791,13 @@ auto const_eval::eval_builtin(ast::node_id          id,
         return stdx::none;
     }
     case syntax::token_type_t::BUILTIN_INT_FROM_BOOL: {
-        const auto op_arg_idx{call.arguments.size() == 1 ? 0UZ : 1UZ};
-        if (call.arguments.size() < (op_arg_idx + 1)) { return stdx::none; }
-        const auto op_h{call.arguments[op_arg_idx].as_opt<ast::expr_handle>()};
+        const auto op_h{cast_operand(call)};
         if (!op_h) { return stdx::none; }
         const auto operand{try_eval(*op_h)};
         if (!operand) { return stdx::none; }
         const auto src_bool{operand->as_opt<bool>()};
         if (!src_bool) { return stdx::none; }
-        auto target{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
-        if (!target) { target = module_->get_sema_type_opt(call.function); }
+        auto target{builtin_result_type(id, call)};
         if (!target) { return stdx::none; }
         const u64 int_val{*src_bool ? 1ULL : 0ULL};
         return const_value{int_val, target};
@@ -3822,7 +3827,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto f{operand->as_opt<f64>()};
         if (!f) { return stdx::none; }
         const auto truncated{std::trunc(*f)};
-        const auto ptr_bits{codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
+        const auto ptr_bits{target_pointer_bits()};
         // Past 64 bits the value is left to the (range-checked) runtime conversion
         stdx::option<i128> folded;
         if (truncated >= -0x1p63 && truncated < 0x1p63) {
@@ -3857,19 +3862,15 @@ auto const_eval::eval_builtin(ast::node_id          id,
     case syntax::token_type_t::BUILTIN_BIT_CAST:
     case syntax::token_type_t::BUILTIN_FROM_BACKING_INT: {
         // Fold the numeric/pointer subset; leave floats, enums and aggregates to the emitter.
-        const auto op_arg_idx{call.arguments.size() == 1 ? 0UZ : 1UZ};
-        if (call.arguments.size() < (op_arg_idx + 1)) { return stdx::none; }
-        const auto op_h{call.arguments[op_arg_idx].as_opt<ast::expr_handle>()};
+        const auto op_h{cast_operand(call)};
         if (!op_h) { return stdx::none; }
         const auto operand{try_eval(*op_h)};
         if (!operand) { return stdx::none; }
         const auto src_int{operand->as_int_opt()};
         if (!src_int) { return stdx::none; }
-        auto target{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
-        if (!target) { target = module_->get_sema_type_opt(call.function); }
+        auto target{builtin_result_type(id, call)};
         if (!target) { return stdx::none; }
-        const auto ptr_bits{static_cast<u32>(
-            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? 64 : 32)};
+        const auto ptr_bits{target_pointer_bits()};
         // Unlike `@bitCast`/`@truncate`, `@as` rejects narrowing a CONCRETE  integer operand
         if (builtin_type == syntax::token_type_t::BUILTIN_AS &&
             sema::is_integer(target->get_kind()) &&

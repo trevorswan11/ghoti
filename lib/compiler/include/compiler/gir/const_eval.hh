@@ -237,6 +237,15 @@ class const_eval {
     [[nodiscard]] auto target_enum_value(std::string_view enum_name, std::string_view member)
         -> const_value;
 
+    [[nodiscard]] auto target_pointer_bits() const -> u32;
+    [[nodiscard]] auto target_pointer_bytes() const -> usize;
+    // The value operand of a cast-style builtin: `@cast(T, x)` or `@cast(x)`
+    [[nodiscard]] static auto cast_operand(const ast::call_expr& call)
+        -> stdx::option<ast::expr_handle>;
+    // A builtin call's resolved type, falling back to the type recorded on its callee
+    [[nodiscard]] auto builtin_result_type(ast::node_id id, const ast::call_expr& call) const
+        -> stdx::option<sema::type&>;
+
     // `@typeInfo(T)`: builds the `builtin::TypeInfo` tagged union for `denoted` (already
     // unwrapped past any `TYPE`/`deferred_call` wrapper) by switching on its `type_kind`.
     [[nodiscard]] auto eval_type_info(sema::type& denoted) -> const_value;
