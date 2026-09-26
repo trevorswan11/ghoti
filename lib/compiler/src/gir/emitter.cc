@@ -251,8 +251,9 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
 
     for (const auto name : pending_builtin_runtime_) { ensure_builtin_runtime(name); }
 
-    // A foreign module's errors still have to stop this module's compilation
-    if (attributed_foreign_diags_) {
+    // Any emission error (including a foreign module's) stops this module before type checking,
+    // which would otherwise pile follow-on errors onto the poisoned values
+    if (attributed_foreign_diags_ || !ctx_.diags.empty()) {
         ast_module_.error_out(ctx_.diags.split_off(0), mod::module_state::POISONED_TYPE_RESOLVED);
     }
 
@@ -5623,23 +5624,8 @@ auto emitter::emit_null_pointer_check(value ptr, ast::node_id site) -> void {
 
 auto emitter::enum_discriminants(const sema::types::enum_t& en) -> std::vector<i64> {
     std::vector<i64> discriminants;
-    discriminants.reserve(en.ast_enumerations.size());
-
-    // A variant's initializer node is only valid against the enum's defining module's AST arena,
-    // which may differ from whichever module `const_eval_` is currently scoped to
-    auto&      enclosing_mod{en.enclosing};
-    const_eval enclosing_eval{ctx_, enclosing_mod};
-    enclosing_eval.set_symbol_scoping(symbol_scoping_);
-
-    for (usize idx{0}; idx < en.ast_enumerations.size(); ++idx) {
-        const auto& enumeration{en.ast_enumerations[idx]};
-        i64         disc{static_cast<i64>(idx)};
-        if (enumeration.value) {
-            if (const auto ev{enclosing_eval.try_eval(*enumeration.value)}) {
-                disc = static_cast<i64>(ev->as_int_opt().value_or(disc));
-            }
-        }
-        discriminants.emplace_back(disc);
+    for (const auto value : const_eval_.enum_member_values(en)) {
+        discriminants.emplace_back(static_cast<i64>(value));
     }
     return discriminants;
 }

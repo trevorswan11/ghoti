@@ -362,6 +362,12 @@ auto analyzer::validate_main_entry(const mod::module& root_module) const
                              error::TYPE_MISMATCH,
                              main_sym.get_symbol_location(root_module));
     }
+    if (const auto decl{root_module.ast.get_as_opt<ast::decl_stmt>(*node_sym)};
+        decl && decl->has_modifier(ast::decl_modifiers::EXTERN)) {
+        return make_sema_err("'main' must be defined in this module, not declared 'extern'",
+                             error::TYPE_MISMATCH,
+                             main_sym.get_symbol_location(root_module));
+    }
 
     const auto sema_type_opt{root_module.get_sema_type_opt(*node_sym)};
     if (!sema_type_opt) {

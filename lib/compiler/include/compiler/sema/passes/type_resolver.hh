@@ -117,6 +117,25 @@ class type_resolver {
                                std::string_view ctor_mangled) -> void;
     auto check_deferred_body_jumps(ast::stmt_handle body) -> void;
 
+    // Resolves `block`'s statements in order, stopping at (and reporting) the first poisoned one
+    struct enum_value_tracker {
+        const type&                                  underlying;
+        stdx::option<i128>                           next{i128{0}};
+        std::vector<std::pair<i128, std::string_view>> seen{};
+    };
+    // Checks an enum member's (explicit or implied) value fits and is unique
+    [[nodiscard]] auto check_enum_value(enum_value_tracker&            values,
+                                        ast::identifier_handle         name,
+                                        stdx::option<ast::expr_handle> value)
+        -> stdx::option<diagnostic>;
+    [[nodiscard]] auto names_a_value(const symbol& sym, usize table_idx) -> bool;
+    [[nodiscard]] auto check_array_dimension(ast::expr_handle dimension, const type& item_type)
+        -> stdx::option<diagnostic>;
+    [[nodiscard]] static auto has_fixed_bit_layout(const type& t) noexcept -> bool;
+    [[nodiscard]] auto resolve_block_statements(const ast::block_stmt& block) -> bool;
+    [[nodiscard]] auto is_declared_later_in_active_block(ast::node_id decl) const -> bool;
+    [[nodiscard]] auto is_runtime_local_decl(ast::node_id decl) const -> bool;
+
     // Folds a `[n]T` whose dimension is still deferred into its concrete array type
     [[nodiscard]] auto concrete_array_type(type& maybe_deferred) -> type&;
 

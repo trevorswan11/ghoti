@@ -1875,24 +1875,58 @@ auto llvm_lowering::emit_load(const gir::instruction& inst) -> llvm::Value* {
 
 auto llvm_lowering::emit_store(const gir::instruction& inst) -> void {
     PROFILE_FUNCTION();
-    const auto is_volatile{inst.is_volatile()};
-    if (inst.operands.size() >= 2) {
-        auto* dest_ptr{lower_value(inst.operands[0])};
-        auto* val{lower_value(inst.operands[1], inst.type ? inst.type.get() : nullptr)};
-        if (!dest_ptr || !dest_ptr->getType()->isPointerTy() || !val ||
-            val->getType()->isVoidTy()) {
-            return;
-        }
-        builder_.CreateStore(val, dest_ptr, is_volatile);
-    } else if (inst.result && !inst.operands.empty()) {
-        auto* dest_ptr{lower_value(gir::value{*inst.result})};
-        auto* val{lower_value(inst.operands[0], inst.type ? inst.type.get() : nullptr)};
-        if (!dest_ptr || !dest_ptr->getType()->isPointerTy() || !val ||
-            val->getType()->isVoidTy()) {
-            return;
-        }
-        builder_.CreateStore(val, dest_ptr, is_volatile);
+    // Either `store val, dest` or a result slot initialized from its single operand
+    const bool has_explicit_dest{inst.operands.size() >= 2};
+    if (!has_explicit_dest && (!inst.result || inst.operands.empty())) { return; }
+
+    auto* dest_ptr{has_explicit_dest ? lower_value(inst.operands[0])
+                                     : lower_value(gir::value{*inst.result})};
+    auto* val{lower_value(inst.operands[has_explicit_dest ? 1 : 0],
+                          inst.type ? inst.type.get() : nullptr)};
+    if (!dest_ptr || !dest_ptr->getType()->isPointerTy() || !val || val->getType()->isVoidTy()) {
+        return;
     }
+    store_value(val, dest_ptr, inst.is_volatile());
+}
+
+// Instruction selection expands a first-class aggregate store into one store per element, so a
+// large one is copied out of memory instead
+auto llvm_lowering::store_value(llvm::Value* val, llvm::Value* dest_ptr, bool is_volatile)
+    -> void {
+    constexpr u64 max_inline_aggregate_bytes{256};
+    auto*         ty{val->getType()};
+    if (!is_volatile && ty->isAggregateType()) {
+        const auto size{llvm_module_->getDataLayout().getTypeAllocSize(ty).getFixedValue()};
+        if (size > max_inline_aggregate_bytes) {
+            if (auto* src{aggregate_source_address(val)}) {
+                builder_.CreateMemCpy(dest_ptr, llvm::MaybeAlign(), src, llvm::MaybeAlign(), size);
+                memcpy_used_ = true;
+                return;
+            }
+        }
+    }
+    builder_.CreateStore(val, dest_ptr, is_volatile);
+}
+
+// Where an aggregate's bytes can be copied from: a constant is spilled to a private global, and a
+// load issued immediately before (nothing has written its source since) reuses its address
+auto llvm_lowering::aggregate_source_address(llvm::Value* val) -> llvm::Value* {
+    if (auto* constant{llvm::dyn_cast<llvm::Constant>(val)}) {
+        auto* global{new llvm::GlobalVariable{*llvm_module_,
+                                              constant->getType(),
+                                              true,
+                                              llvm::GlobalValue::PrivateLinkage,
+                                              constant,
+                                              ".agg.init"}};
+        global->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+        return global;
+    }
+    auto* load{llvm::dyn_cast<llvm::LoadInst>(val)};
+    auto* block{builder_.GetInsertBlock()};
+    if (!load || load->isVolatile() || !block || block->empty() || &block->back() != load) {
+        return nullptr;
+    }
+    return load->getPointerOperand();
 }
 
 auto llvm_lowering::emit_get_element_ptr(const gir::instruction& inst) -> llvm::Value* {

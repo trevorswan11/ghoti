@@ -106,6 +106,11 @@ class const_eval {
     // Forces a single possibly-deferred array type to its concrete resolved form
     [[nodiscard]] auto force_deferred_array(sema::type& maybe_deferred) -> sema::type&;
 
+    // Every member's discriminant in declaration order (an unvalued member is its predecessor + 1)
+    [[nodiscard]] auto enum_member_values(const sema::types::enum_t& en) -> std::vector<i128>;
+    [[nodiscard]] auto enum_member_value(const sema::types::enum_t& en, std::string_view member)
+        -> stdx::option<i128>;
+
     // As above, and also through pointer, reference, slice, and function signature types
     [[nodiscard]] auto force_deferred_type(sema::type& maybe_deferred) -> sema::type&;
 

@@ -204,6 +204,11 @@ template <typename T>
     }
     if (module.ast.get_as_opt<ast::identifier_expr>(expr)) { return true; }
     if (const auto dot{module.ast.get_as_opt<ast::dot_expr>(expr)}) {
+        // `@This().member` reaches a static member through the enclosing type itself
+        if (const auto call{module.ast.get_as_opt<ast::call_expr>(dot->object)};
+            call && call->function->get_token_type() == syntax::token_type_t::BUILTIN_THIS) {
+            return true;
+        }
         if (const auto obj_t{module.get_sema_type_opt(dot->object)}) {
             if (obj_t->get_kind() == type_kind::POINTER ||
                 obj_t->get_kind() == type_kind::REFERENCE) {
@@ -224,6 +229,10 @@ template <typename T>
         return is_lvalue_expression(module, idx->array);
     }
     if (module.ast.get_as_opt<ast::dereference_expr>(expr)) { return true; }
+    // `@field(x, "name")` names the field itself, so it is as assignable as `x.name`
+    if (const auto call{module.ast.get_as_opt<ast::call_expr>(expr)}) {
+        return call->function->get_token_type() == syntax::token_type_t::BUILTIN_FIELD;
+    }
     return false;
 }
 
@@ -594,9 +603,26 @@ template <ast::IndexableID ID>
     case token_type_t::BUILTIN_BIT_CAST: {
         const auto args_res{extract_cast_args("@bitCast")};
         if (!args_res) { return make_sema_err(args_res.error()); }
-        if (args_res->target && !args_res->target->is_poison()) {
-            return_type = args_res->target.get();
+        if (!args_res->target || args_res->target->is_poison()) { break; }
+        auto& target{*args_res->target};
+        auto& src{*get_resolved_call_arg_type(*args_res->operand)};
+        if (has_fixed_bit_layout(src) && has_fixed_bit_layout(target)) {
+            const usize ptr_size{target_ptr_bits() / 8};
+            const auto  src_size{gir::const_eval::type_size_of(src, ptr_size)};
+            const auto  target_size{gir::const_eval::type_size_of(target, ptr_size)};
+            if (src_size != target_size) {
+                return make_sema_err(
+                    fmt::format("`@bitCast` requires equally sized types; '{}' is {} byte(s) but "
+                                "'{}' is {} byte(s)",
+                                ctx_.type_display_name(src),
+                                src_size,
+                                ctx_.type_display_name(target),
+                                target_size),
+                    error::TYPE_MISMATCH,
+                    resolving_.ast.location_of(call.function));
+            }
         }
+        return_type = &target;
         break;
     }
     case token_type_t::BUILTIN_AS: {
@@ -3488,12 +3514,10 @@ auto type_resolver::visit(ast::node_id id, const ast::do_while_loop_expr& do_whi
     {
         const scope                  s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
         const auto&                  block{resolving_.ast.get_as<ast::block_stmt>(do_while.block)};
-        const active_block_guard     guard{active_blocks_, block};
         const mutating_context_guard cx_loop_g{in_constexpr_loop_,
                                                do_while.is_constexpr || in_constexpr_loop_};
-        for (usize idx{0}; idx < block.statements.size(); ++idx) {
-            active_blocks_.back().current_stmt_idx = idx;
-            TRY_RESOLVE(block.statements[idx]);
+        if (resolve_block_statements(block)) {
+            return resolving_.set_sema_type(id, *last_type_);
         }
     }
 
@@ -3513,6 +3537,46 @@ auto type_resolver::resolve_members(gsl::span<type*>                    buf,
         buf[i++] = &member_type;
     }
     return buf;
+}
+
+auto type_resolver::check_enum_value(enum_value_tracker&            values,
+                                     ast::identifier_handle         name,
+                                     stdx::option<ast::expr_handle> value)
+    -> stdx::option<diagnostic> {
+    if (!is_integer(values.underlying.get_kind())) { return stdx::none; }
+
+    stdx::option<i128> current;
+    if (value) {
+        gir::const_eval evaluator{ctx_, resolving_};
+        if (const auto folded{evaluator.try_eval(*value)}) { current = folded->as_int_opt(); }
+    } else {
+        current = values.next;
+    }
+    // A value that does not fold here is left for the emitter to report
+    values.next = current ? stdx::option<i128>{*current + 1} : stdx::none;
+    if (!current) { return stdx::none; }
+
+    const auto& member{resolving_.ast.get_as<ast::identifier_expr>(name).name};
+    const auto  loc{resolving_.ast.location_of(value ? ast::node_id{*value} : ast::node_id{name})};
+    if (!constexpr_int_fits(*current, values.underlying, target_ptr_bits())) {
+        return diagnostic{fmt::format("Enum member '{}' has a value that does not fit its "
+                                      "underlying type '{}'",
+                                      member,
+                                      ctx_.type_display_name(values.underlying)),
+                          error::TYPE_MISMATCH,
+                          loc};
+    }
+    const auto duplicate{
+        std::ranges::find(values.seen, *current, &std::pair<i128, std::string_view>::first)};
+    if (duplicate != values.seen.end()) {
+        return diagnostic{fmt::format("Enum members '{}' and '{}' share the same value",
+                                      duplicate->second,
+                                      member),
+                          error::TYPE_MISMATCH,
+                          loc};
+    }
+    values.seen.emplace_back(*current, member);
+    return stdx::none;
 }
 
 template <ast::IndexableID ID>
@@ -3538,8 +3602,15 @@ auto type_resolver::visit(ID id, const ast::enum_expr& enum_expr) -> void {
                               ? denoted_type(resolving_.get_sema_type(*enum_expr.underlying))
                               : ctx_.get_int(32, true)};
 
+    enum_value_tracker values{underlying_type};
     for (const auto& [name, value] : enum_expr.enumerations) {
-        if (value) { TRY_RESOLVE(*value); }
+        if (value) {
+            const structural_guard value_g{implicit_type_stack_, underlying_type};
+            TRY_RESOLVE(*value);
+        }
+        if (auto diag{check_enum_value(values, name, value)}) {
+            return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(*diag)));
+        }
 
         // The value's type doesn't contribute to the actual enumeration type
         const auto& ident{resolving_.ast.get_as<ast::identifier_expr>(name)};
@@ -3959,10 +4030,8 @@ auto type_resolver::visit(ast::node_id id, const ast::for_loop_expr& for_expr) -
             }
         }
         const auto&              block{resolving_.ast.get_as<ast::block_stmt>(for_expr.block)};
-        const active_block_guard guard{active_blocks_, block};
-        for (usize idx{0}; idx < block.statements.size(); ++idx) {
-            active_blocks_.back().current_stmt_idx = idx;
-            TRY_RESOLVE(block.statements[idx]);
+        if (resolve_block_statements(block)) {
+            return resolving_.set_sema_type(id, *last_type_);
         }
     }
 
@@ -4223,10 +4292,8 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     });
 
     const auto&              block{resolving_.ast.get_as<ast::block_stmt>(fn.body)};
-    const active_block_guard guard{active_blocks_, block};
-    for (usize idx{0}; idx < block.statements.size(); ++idx) {
-        active_blocks_.back().current_stmt_idx = idx;
-        TRY_RESOLVE(block.statements[idx]);
+    if (resolve_block_statements(block)) {
+        return resolving_.set_sema_type(id, *last_type_);
     }
 
     auto tracker{std::move(return_trackers_.back())};
@@ -4349,8 +4416,10 @@ auto type_resolver::infer_capture_mode(capture_usage usage,
     if (force_move) { return types::capture_mode::VALUE; }
     if (usage == capture_usage::MUTATED) { return types::capture_mode::MUT_REF; }
 
+    // A captured local function may have no storage of its own to reference
     const auto kind{captured_type.get_kind()};
-    const auto by_value{is_numeric(kind) || kind == type_kind::BOOL || kind == type_kind::POINTER};
+    const auto by_value{is_numeric(kind) || kind == type_kind::BOOL || kind == type_kind::POINTER ||
+                        kind == type_kind::FUNCTION || kind == type_kind::CLOSURE};
     return by_value ? types::capture_mode::VALUE : types::capture_mode::REF;
 }
 
@@ -4399,6 +4468,24 @@ auto type_resolver::attach_closure_type(ast::node_id fn_id, type& fn_type, bool 
     return *closure_type;
 }
 
+// A concrete runtime type whose byte size is known without any further folding
+auto type_resolver::has_fixed_bit_layout(const type& t) noexcept -> bool {
+    if (t.is_poison() || is_generic_type(t)) { return false; }
+    switch (t.get_kind()) {
+    case type_kind::INT:
+    case type_kind::ISIZE:
+    case type_kind::USIZE:
+    case type_kind::BOOL:
+    case type_kind::F16:
+    case type_kind::F32:
+    case type_kind::F64:
+    case type_kind::F80:
+    case type_kind::F128:
+    case type_kind::POINTER: return true;
+    default:                 return false;
+    }
+}
+
 auto type_resolver::target_has_x86_fp80() const -> bool {
     const auto arch{codegen::target_facts::resolve(ctx_.target_opts.triple_str).arch};
     return arch == "x86_64" || arch == "x86";
@@ -4424,6 +4511,34 @@ auto type_resolver::target_supports_callconv(ast::calling_convention conv) const
     case ast::calling_convention::AAPCS:        return arch == "arm" || arch == "thumb";
     default:                                    return true;
     }
+}
+
+auto type_resolver::resolve_block_statements(const ast::block_stmt& block) -> bool {
+    const active_block_guard guard{active_blocks_, block};
+    for (usize idx{0}; idx < block.statements.size(); ++idx) {
+        active_blocks_.back().current_stmt_idx = idx;
+        resolve(block.statements[idx]);
+        if (last_type_->is_poison()) { return true; }
+    }
+    return false;
+}
+
+auto type_resolver::is_declared_later_in_active_block(ast::node_id decl) const -> bool {
+    for (const auto& frame : active_blocks_) {
+        if (!frame.block) { continue; }
+        const auto& statements{frame.block->statements};
+        for (usize idx{frame.current_stmt_idx + 1}; idx < statements.size(); ++idx) {
+            if (statements[idx].get_index() == decl.get_index()) { return true; }
+        }
+    }
+    return false;
+}
+
+auto type_resolver::is_runtime_local_decl(ast::node_id decl) const -> bool {
+    const auto stmt{resolving_.ast.get_as_opt<ast::decl_stmt>(decl)};
+    if (!stmt || !stmt->value) { return stmt.has_value(); }
+    if (resolving_.ast.get_as_opt<ast::function_expr>(**stmt->value)) { return false; }
+    return !decl_value_denotes_type(*stmt->value);
 }
 
 template <ast::IndexableID ID> auto type_resolver::resolve_symbol(ID id, symbol& sym) -> void {
@@ -4472,6 +4587,16 @@ template <ast::IndexableID ID> auto type_resolver::resolve_symbol(ID id, symbol&
                             "supported; declare '{}' earlier",
                             sym.get_name(),
                             sym.get_name()),
+                error::ILLEGAL_FIELD_ORDER_DEPENDENCY,
+                resolving_.ast.location_of(id)));
+        }
+        // Locals initialize in statement order, so a later one has no value yet
+        if (is_declared_later_in_active_block(*node) && is_runtime_local_decl(*node)) {
+            sym.set_status(symbol_status::UNRESOLVED);
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("'{}' is used before its declaration", sym.get_name()),
                 error::ILLEGAL_FIELD_ORDER_DEPENDENCY,
                 resolving_.ast.location_of(id)));
         }
@@ -4979,12 +5104,10 @@ auto type_resolver::visit(ast::node_id id, const ast::infinite_loop_expr& loop) 
 
     // Just an abridged normal loop handler
     const auto&                  block{resolving_.ast.get_as<ast::block_stmt>(loop.block)};
-    const active_block_guard     guard{active_blocks_, block};
     const mutating_context_guard cx_loop_g{in_constexpr_loop_,
                                            loop.is_constexpr || in_constexpr_loop_};
-    for (usize idx{0}; idx < block.statements.size(); ++idx) {
-        active_blocks_.back().current_stmt_idx = idx;
-        TRY_RESOLVE(block.statements[idx]);
+    if (resolve_block_statements(block)) {
+        return resolving_.set_sema_type(id, *last_type_);
     }
     last_type_.emplace(loop_type);
 }
@@ -5041,6 +5164,15 @@ auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -
     auto& lhs_type{*last_type_.take()};
     if (const auto dest{slice_copy_destination(resolving_, assign.lhs)}) {
         return resolve_slice_copy(id, assign, *dest);
+    }
+    if (!is_lvalue_expression(resolving_, assign.lhs)) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             "Cannot assign to a temporary value; the left side must be a "
+                             "variable, field, element, or dereference",
+                             error::TYPE_MISMATCH,
+                             resolving_.ast.location_of(assign.lhs)));
     }
     {
         const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(lhs_type)};
@@ -5900,6 +6032,20 @@ auto type_resolver::visit(ast::node_id id, const ast::range_expr& range) -> void
                 lhs_type = &rhs_type;
             }
         }
+    }
+
+    const auto is_integral_bound{[](const type& t) {
+        return is_integer(t.get_kind()) || t.get_kind() == type_kind::CONSTEXPR_INT;
+    }};
+    const auto bound_types_ok{is_integral_bound(*lhs_type) &&
+                              (!range.rhs || !resolving_.has_sema_type(*range.rhs) ||
+                               is_integral_bound(resolving_.get_sema_type(*range.rhs)))};
+    if (!lhs_type->is_poison() && !bound_types_ok) {
+        return last_type_.emplace(ctx_.poison_node(resolving_,
+                                                   id,
+                                                   "Range bounds must be integers",
+                                                   error::TYPE_MISMATCH,
+                                                   resolving_.ast.location_of(id)));
     }
 
     // A range over unsuffixed literal bounds (`0..5`) iterates concrete integers, not
@@ -8250,12 +8396,10 @@ auto type_resolver::visit(ast::node_id id, const ast::while_loop_expr& while_loo
     {
         const scope              s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
         const auto&              block{resolving_.ast.get_as<ast::block_stmt>(while_loop.block)};
-        const active_block_guard guard{active_blocks_, block};
         const mutating_context_guard cx_loop_g{in_constexpr_loop_,
                                                while_loop.is_constexpr || in_constexpr_loop_};
-        for (usize idx{0}; idx < block.statements.size(); ++idx) {
-            active_blocks_.back().current_stmt_idx = idx;
-            TRY_RESOLVE(block.statements[idx]);
+        if (resolve_block_statements(block)) {
+            return resolving_.set_sema_type(id, *last_type_);
         }
     }
 
@@ -8276,10 +8420,8 @@ auto type_resolver::visit(ast::node_id id, const ast::block_stmt& block) -> void
     const constexpr_evaluation_scope cx_scope{ctx_, block.is_constexpr};
 
     // Just an abridged loop handler
-    const active_block_guard guard{active_blocks_, block};
-    for (usize idx{0}; idx < block.statements.size(); ++idx) {
-        active_blocks_.back().current_stmt_idx = idx;
-        TRY_RESOLVE(block.statements[idx]);
+    if (resolve_block_statements(block)) {
+        return resolving_.set_sema_type(id, *last_type_);
     }
     resolving_.set_sema_type(
         id, block_type.is_poison() ? ctx_.get_builtin_resolved_type(type_kind::VOID_) : block_type);
@@ -9407,10 +9549,8 @@ auto type_resolver::visit(ast::node_id id, const ast::test_stmt& test) -> void {
     }
 
     const auto&              block{resolving_.ast.get_as<ast::block_stmt>(test.block)};
-    const active_block_guard guard{active_blocks_, block};
-    for (usize idx{0}; idx < block.statements.size(); ++idx) {
-        active_blocks_.back().current_stmt_idx = idx;
-        TRY_RESOLVE(block.statements[idx]);
+    if (resolve_block_statements(block)) {
+        return resolving_.set_sema_type(id, *last_type_);
     }
     last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
 }
@@ -10175,7 +10315,22 @@ auto type_resolver::visit(ast::node_id id, const ast::impl_stmt& impl) -> void {
 
     const auto rec{ctx_.impls.find_by_site(id, resolving_)};
 
-    if (impl.interface_type) { TRY_RESOLVE(*impl.interface_type); }
+    if (impl.interface_type) {
+        TRY_RESOLVE(*impl.interface_type);
+        auto& iface_type{denoted_type(*last_type_)};
+        // A not-yet-folded type-constructor result is checked once it resolves
+        const auto iface_kind{iface_type.get_kind()};
+        if (iface_kind != type_kind::INTERFACE && iface_kind != type_kind::TYPE &&
+            !iface_type.is_poison()) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("`impl X for T` requires X to be an interface; found `{}`",
+                            ctx_.type_display_name(iface_type)),
+                error::TYPE_MISMATCH,
+                resolving_.ast.location_of(*impl.interface_type)));
+        }
+    }
     TRY_RESOLVE(impl.target_type);
     auto& target{denoted_type(*last_type_)};
 
@@ -10783,6 +10938,22 @@ auto type_resolver::apply_explicit_modifiers(ast::explicit_type_id id, type& inn
     UNREACHABLE("A new type modifier was likely added yet unaccounted for");
 }
 
+// A `var`, or a `const` that folds to something other than a type, cannot annotate a type
+auto type_resolver::names_a_value(const symbol& sym, usize table_idx) -> bool {
+    // Prelude symbols' nodes index the builtin module's AST, not this one
+    if (ctx_.prelude_index && table_idx == *ctx_.prelude_index) { return false; }
+    const auto node{sym.get_data().as_opt<symbols::node_t>()};
+    if (!node) { return false; }
+    const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
+    if (!decl) { return false; }
+    if (decl->has_modifier(ast::decl_modifiers::VARIABLE)) { return true; }
+    if (!decl->value) { return false; }
+
+    gir::const_eval evaluator{ctx_, resolving_};
+    const auto      folded{evaluator.try_eval(*decl->value)};
+    return folded && !folded->is_poison() && !folded->is<stdx::option<sema::type&>>();
+}
+
 auto type_resolver::visit(ast::explicit_type_id id, const ast::identifier_expr& ident) -> void {
     PROFILE_FUNCTION();
 
@@ -10841,6 +11012,15 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::identifier_expr& 
         } else {
             forwarded_type ? last_type_.emplace(*forwarded_type) : resolve_ident(id, ident);
         }
+    }
+
+    if (!last_type_->is_poison() && names_a_value(sym, symbol_table)) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             fmt::format("'{}' is a value, not a type", ident.name),
+                             error::TYPE_MISMATCH,
+                             resolving_.ast.location_of(id)));
     }
 
     auto& resolved{apply_explicit_modifiers(id, *last_type_.take())};
@@ -10911,6 +11091,41 @@ auto type_resolver::visit(ast::explicit_type_id id, ast::explicit_type_id nested
     last_type_.emplace(resolved);
 }
 
+// A dimension that already folds must be a non-negative count of an addressable number of bytes
+auto type_resolver::check_array_dimension(ast::expr_handle dimension, const type& item_type)
+    -> stdx::option<diagnostic> {
+    const auto dim_type{resolving_.get_sema_type_opt(dimension)};
+    if (dim_type && !is_integer(dim_type->get_kind()) &&
+        dim_type->get_kind() != type_kind::CONSTEXPR_INT && !is_generic_type(*dim_type)) {
+        return diagnostic{fmt::format("Array length must be an integer; found '{}'",
+                                      ctx_.type_display_name(*dim_type)),
+                          error::TYPE_MISMATCH,
+                          resolving_.ast.location_of(dimension)};
+    }
+
+    gir::const_eval evaluator{ctx_, resolving_};
+    const auto      folded{evaluator.try_eval(dimension)};
+    const auto      len{folded ? folded->as_int_opt() : stdx::none};
+    if (!len) { return stdx::none; }
+    if (*len < 0) {
+        return diagnostic{"Array length cannot be negative",
+                          error::TYPE_MISMATCH,
+                          resolving_.ast.location_of(dimension)};
+    }
+
+    // Past 2^48 bytes no target can address the array, and sizes start overflowing
+    constexpr i128 max_array_bytes{i128{1} << 48};
+    const auto     elem_size{has_fixed_bit_layout(item_type)
+                                 ? gir::const_eval::type_size_of(item_type, target_ptr_bits() / 8)
+                                 : usize{1}};
+    if (*len > max_array_bytes || *len * static_cast<i128>(elem_size) > max_array_bytes) {
+        return diagnostic{"Array type is too large",
+                          error::TYPE_MISMATCH,
+                          resolving_.ast.location_of(dimension)};
+    }
+    return stdx::none;
+}
+
 auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_array_type& array) -> void {
     PROFILE_FUNCTION();
     TRY_RESOLVE(array.inner_explicit_type);
@@ -10949,6 +11164,9 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_array_ty
         }
 
         TRY_RESOLVE(*array.dimension);
+        if (auto diag{check_array_dimension(*array.dimension, item_type)}) {
+            return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(*diag)));
+        }
         // Keyed on the element type too, so a generic's `[n]T` doesn't keep the first
         // instantiation's `T`
         last_type_.emplace(ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, &array, &item_type}]);
@@ -11085,6 +11303,18 @@ auto type_resolver::instantiate_generic(type&                             callee
     -> stdx::option<generic_instantiation_entry> {
     mod::module& fn_mod{*fn_info.module};
     const auto&  fn_expr{*fn_info.fn_expr};
+    if (ctx_.generic_instantiation_depth >= context::max_generic_instantiation_depth) {
+        ctx_.diags.emplace_back(
+            fmt::format("Instantiating '{}' recursed more than {} levels deep; a generic that "
+                        "instantiates itself with ever-new arguments never terminates",
+                        fn_info.name.value_or("<generic function>"),
+                        context::max_generic_instantiation_depth),
+            error::CONSTEXPR_RECURSION_LIMIT_EXCEEDED,
+            fn_mod.ast.location_of(fn_info.node_id));
+        return stdx::none;
+    }
+    ++ctx_.generic_instantiation_depth;
+    const auto depth_restore{gsl::finally([&] { --ctx_.generic_instantiation_depth; })};
     const auto   fn_type{fn_info.fn_type};
     const auto   fn_table_idx{fn_type->get_symbol_table_idx()};
 

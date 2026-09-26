@@ -382,6 +382,8 @@ fn addArtifacts(b: *std.Build, config: struct {
             },
         },
     });
+    // Deeply nested (or recursively instantiated) source recurses deeply through every pass
+    ghoti.stack_size = 64 * 1024 * 1024;
     if (config.auto_install) b.installArtifact(ghoti);
     if (config.cdb_steps) |cdb_steps| cdb_steps.append(&ghoti.step);
 

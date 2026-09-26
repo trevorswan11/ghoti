@@ -120,7 +120,8 @@ TEST_CASE("GIR constexpr if error handling") {
         gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
         const auto   gir_mod{emitter.emit()};
 
-        auto& diags{ctx->analyzer.get_ctx().diags};
+        // Emission errors poison the module, which takes ownership of them
+        const auto& diags{UNWRAP(ctx->root_mod.diagnostics.as_opt<sema::diagnostics>())};
         REQUIRE_FALSE(diags.empty());
         CHECK(diags[0].get_error() == sema::error::CONSTEXPR_EVALUATION_FAILED);
     }
@@ -138,7 +139,8 @@ TEST_CASE("GIR constexpr if error handling") {
         gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
         const auto   gir_mod{emitter.emit()};
 
-        auto& diags{ctx->analyzer.get_ctx().diags};
+        // Emission errors poison the module, which takes ownership of them
+        const auto& diags{UNWRAP(ctx->root_mod.diagnostics.as_opt<sema::diagnostics>())};
         REQUIRE_FALSE(diags.empty());
         CHECK(diags[0].get_error() == sema::error::TYPE_MISMATCH);
     }

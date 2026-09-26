@@ -362,10 +362,9 @@ test "win32: fstat on an open handle sees the file size" {
         OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL,
     );
-    defer _ = close(h);
-
     @require(hr == .ok);
     const h := match (hr) { .ok => |x| x, .err => nullptr };
+    defer _ = close(h);
     @expect(match (fstat(h)) { .ok => |s| s.size() > 0u64, .err => false });
 }
 

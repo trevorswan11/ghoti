@@ -55,10 +55,16 @@ auto test_builtin_resolve(const syntax::builtin_t& builtin,
 namespace bis = syntax::builtins;
 
 TEST_CASE("Builtin 'safe' casts") {
-    const auto bi{GENERATE(bis::BIT_CAST, bis::AS, bis::INT_CAST)};
+    const auto bi{GENERATE(bis::AS, bis::INT_CAST)};
     test_builtin_resolve(bi, "i32, 23UZ", [](helpers::sema_test_context& ctx) -> sema::type& {
         return ctx.get_int_type(32, true);
     });
+
+    // A bit cast reinterprets bytes, so its operand must be exactly as wide as its target
+    test_builtin_resolve(
+        bis::BIT_CAST, "i32, 23u32", [](helpers::sema_test_context& ctx) -> sema::type& {
+            return ctx.get_int_type(32, true);
+        });
 }
 
 TEST_CASE("Builtin pointer casts require pointer target and operand types") {

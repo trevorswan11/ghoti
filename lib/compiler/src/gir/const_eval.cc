@@ -78,24 +78,48 @@ template <typename T>
     }
 }
 
+// A constant shift must move by a non-negative amount below its operand's bit width
+template <typename T>
+[[nodiscard]] auto invalid_shift_reason(T amount, stdx::option<sema::type&> operand_type)
+    -> stdx::option<std::string> {
+    if constexpr (Signed<T>) {
+        if (amount < T{0}) {
+            return std::string{"Negative shift amount in compile-time constant expression"};
+        }
+    }
+    // `constexpr_int` folds modulo 2^128, where shifting out all 128 bits is still meaningful
+    u64  width{128};
+    bool full_shift_ok{true};
+    if (operand_type && operand_type->get_kind() == sema::type_kind::INT) {
+        width         = sema::int_width(*operand_type);
+        full_shift_ok = false;
+    }
+    if (static_cast<u128>(amount) > u128{width} ||
+        (!full_shift_ok && static_cast<u128>(amount) == u128{width})) {
+        return fmt::format("Shift amount is not less than the {}-bit width of the shifted value",
+                           width);
+    }
+    return stdx::none;
+}
+
 template <typename T>
 [[nodiscard]] auto fold_binary_arithmetic(syntax::token_type_t      op_type,
                                           T                         l,
                                           T                         r,
                                           stdx::option<sema::type&> res_type,
                                           sema::type&               bool_type,
-                                          auto&& on_div_zero) -> stdx::option<const_value> {
+                                          auto&& on_error) -> stdx::option<const_value> {
     switch (op_type) {
     case syntax::token_type_t::PLUS:  return make_scalar_const(l + r, res_type);
     case syntax::token_type_t::MINUS: return make_scalar_const(l - r, res_type);
     case syntax::token_type_t::STAR:  return make_scalar_const(l * r, res_type);
     case syntax::token_type_t::SLASH:
-        if (r == 0) { return on_div_zero("Division by zero in compile-time constant expression"); }
+        if (r == 0) { return on_error("Division by zero in compile-time constant expression"); }
         return make_scalar_const(l / r, res_type);
     case syntax::token_type_t::PERCENT:
         if constexpr (Integral<T>) {
             if (r == 0) {
-                return on_div_zero("Modulo by zero in compile-time constant expression");
+                return on_error("Modulo by zero in compile-time constant expression");
             }
             return make_scalar_const(l % r, res_type);
         } else {
@@ -112,27 +136,25 @@ template <typename T>
         return stdx::none;
     case syntax::token_type_t::SHL:
         if constexpr (Integral<T>) {
+            if (const auto reason{invalid_shift_reason(r, res_type)}) { return on_error(*reason); }
             // `l`/`r` fold at whatever narrow width happens to hold both operands
+            const auto shift{static_cast<u64>(r)};
+            if (shift >= 128) { return make_scalar_const(T{0}, res_type); }
             if constexpr (Signed<T>) {
-                const auto shift{r < T{0} ? u64{0} : static_cast<u64>(r)};
-                return shift < 128 ? make_scalar_const(static_cast<i128>(l) << shift, res_type)
-                                   : make_scalar_const(i128{0}, res_type);
+                return make_scalar_const(static_cast<i128>(l) << shift, res_type);
             } else {
-                const auto shift{static_cast<u64>(r)};
-                return shift < 128 ? make_scalar_const(static_cast<u128>(l) << shift, res_type)
-                                   : make_scalar_const(u128{0}, res_type);
+                return make_scalar_const(static_cast<u128>(l) << shift, res_type);
             }
         }
         return stdx::none;
     case syntax::token_type_t::SHR:
         if constexpr (Integral<T>) {
-            // Shifting out every bit: unsigned settles at 0, signed at the sign fill.
-            if constexpr (Signed<T>) {
-                if (r < T{0} || static_cast<u64>(r) >= sizeof(T) * 8) {
+            if (const auto reason{invalid_shift_reason(r, res_type)}) { return on_error(*reason); }
+            // The fold domain can be narrower than the operand's declared width
+            if (static_cast<u64>(r) >= sizeof(T) * 8) {
+                if constexpr (Signed<T>) {
                     return make_scalar_const(l < T{0} ? T{-1} : T{0}, res_type);
-                }
-            } else {
-                if (static_cast<u64>(r) >= sizeof(T) * 8) {
+                } else {
                     return make_scalar_const(T{0}, res_type);
                 }
             }
@@ -1565,22 +1587,14 @@ auto const_eval::eval_dot(ast::node_id, const ast::dot_expr& dot) -> stdx::optio
                 if (const auto node{sym->get_data().as_opt<sema::symbols::node_t>()}) {
                     if (const auto decl{module_->ast.get_as_opt<ast::decl_stmt>(*node)};
                         decl && decl->value) {
-                        if (const auto en_expr{
-                                module_->ast.get_as_opt<ast::enum_expr>(*decl->value)}) {
-                            for (usize idx{0}; idx < en_expr->enumerations.size(); ++idx) {
-                                const auto& e{en_expr->enumerations[idx]};
-                                const auto& vname{
-                                    module_->ast.get_as<ast::identifier_expr>(e.name).name};
-                                if (vname == member_name) {
-                                    i64 val{static_cast<i64>(idx)};
-                                    if (e.value) {
-                                        if (const auto ev{try_eval(*e.value)}) {
-                                            val = static_cast<i64>(ev->as_int_opt().value_or(val));
-                                        }
-                                    }
-                                    return const_value{const_enum{std::string{member_name}, val},
-                                                       module_->get_sema_type_opt(*decl->value)};
-                                }
+                        const auto enum_type{module_->get_sema_type_opt(*decl->value)};
+                        const auto en{enum_type ? enum_type->get_data().as_opt<sema::types::enum_t>()
+                                                : stdx::none};
+                        if (module_->ast.get_as_opt<ast::enum_expr>(*decl->value) && en) {
+                            if (const auto val{enum_member_value(*en, member_name)}) {
+                                return const_value{
+                                    const_enum{std::string{member_name}, static_cast<i64>(*val)},
+                                    enum_type};
                             }
                         }
                     }
@@ -1704,23 +1718,8 @@ auto const_eval::eval_type_member(sema::type& denoted_in, std::string_view membe
     // An enum variant reached through anything other than a bare identifier object:
     // look it up the same way `eval_implicit_access` does against a known enum type.
     if (const auto en{type.get_data().as_opt<sema::types::enum_t>()}) {
-        for (usize idx{0}; idx < en->ast_enumerations.size(); ++idx) {
-            const auto& e{en->ast_enumerations[idx]};
-            const auto& vname{en->enclosing.ast.get_as<ast::identifier_expr>(e.name).name};
-            if (vname != member) { continue; }
-            auto val{static_cast<i64>(idx)};
-            if (e.value) {
-                // The initializer node lives in the enum's defining module's AST arena, not
-                // necessarily the module currently being const-evaluated.
-                auto&      enclosing_mod{en->enclosing};
-                const_eval enclosing_eval{ctx_, enclosing_mod};
-                enclosing_eval.set_symbol_scoping(symbol_scoping_);
-                enclosing_eval.set_constexpr_context(is_constexpr_context());
-                if (const auto ev{enclosing_eval.try_eval(*e.value)}) {
-                    val = static_cast<i64>(ev->as_int_opt().value_or(val));
-                }
-            }
-            return const_value{const_enum{std::string{member}, val}, type};
+        if (const auto val{enum_member_value(*en, member)}) {
+            return const_value{const_enum{std::string{member}, static_cast<i64>(*val)}, type};
         }
     }
 
@@ -1807,6 +1806,39 @@ auto const_eval::eval_type_member(sema::type& denoted_in, std::string_view membe
     return result;
 }
 
+auto const_eval::enum_member_values(const sema::types::enum_t& en) -> std::vector<i128> {
+    // A member's initializer lives in the enum's defining module, not necessarily this one
+    const_eval enclosing_eval{ctx_, en.enclosing};
+    enclosing_eval.set_symbol_scoping(symbol_scoping_);
+    enclosing_eval.set_constexpr_context(is_constexpr_context());
+
+    // Like C and Zig, an unvalued member continues from its predecessor
+    std::vector<i128> values;
+    values.reserve(en.ast_enumerations.size());
+    i128 next{0};
+    for (const auto& e : en.ast_enumerations) {
+        i128 value{next};
+        if (e.value) {
+            if (const auto folded{enclosing_eval.try_eval(*e.value)}) {
+                value = folded->as_int_opt().value_or(next);
+            }
+        }
+        values.emplace_back(value);
+        next = value + 1;
+    }
+    return values;
+}
+
+auto const_eval::enum_member_value(const sema::types::enum_t& en, std::string_view member)
+    -> stdx::option<i128> {
+    for (usize idx{0}; idx < en.ast_enumerations.size(); ++idx) {
+        const auto& name{
+            en.enclosing.ast.get_as<ast::identifier_expr>(en.ast_enumerations[idx].name).name};
+        if (name == member) { return enum_member_values(en)[idx]; }
+    }
+    return stdx::none;
+}
+
 auto const_eval::target_enum_value(std::string_view enum_name, std::string_view member)
     -> const_value {
     PROFILE_FUNCTION();
@@ -1816,14 +1848,7 @@ auto const_eval::target_enum_value(std::string_view enum_name, std::string_view 
     // The discriminant must equal what `.<member>` produces against this enum type
     i64 ordinal{en ? static_cast<i64>(en->ast_enumerations.size()) : 0};
     if (en) {
-        for (usize i{0}; i < en->ast_enumerations.size(); ++i) {
-            const auto& vname{
-                en->enclosing.ast.get_as<ast::identifier_expr>(en->ast_enumerations[i].name).name};
-            if (vname == member) {
-                ordinal = static_cast<i64>(i);
-                break;
-            }
-        }
+        if (const auto val{enum_member_value(*en, member)}) { ordinal = static_cast<i64>(*val); }
     }
     return const_value{const_enum{std::string{member}, ordinal}, enum_type};
 }
@@ -1951,19 +1976,11 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
         const auto& en{denoted.get_data().as<sema::types::enum_t>()};
         auto&       field_type{ctx_.get_builtin_type("EnumFieldInfo")};
         const_array fields;
+        const auto  values{enum_member_values(en)};
         for (usize idx{0}; idx < en.ast_enumerations.size(); ++idx) {
             const auto& e{en.ast_enumerations[idx]};
             const auto& vname{en.enclosing.ast.get_as<ast::identifier_expr>(e.name).name};
-            auto        val{static_cast<i128>(idx)};
-            if (e.value) {
-                auto&      enclosing_mod{en.enclosing};
-                const_eval enclosing_eval{ctx_, enclosing_mod};
-                enclosing_eval.set_symbol_scoping(symbol_scoping_);
-                enclosing_eval.set_constexpr_context(is_constexpr_context());
-                if (const auto ev{enclosing_eval.try_eval(*e.value)}) {
-                    val = ev->as_int_opt().value_or(val);
-                }
-            }
+            const auto  val{values[idx]};
             const_struct fs;
             fs.fields.emplace("name", const_value::make_string(ctx_, std::string{vname}));
             fs.fields.emplace(
@@ -2467,7 +2484,7 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
 
     auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
 
-    const auto on_div_zero = [&](std::string_view msg) -> const_value {
+    const auto on_fold_error = [&](std::string_view msg) -> const_value {
         ctx_.diags.emplace_back(std::string{msg},
                                 sema::error::CONSTEXPR_EVALUATION_FAILED,
                                 module_->ast.location_of(id));
@@ -2491,7 +2508,7 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
             return stdx::none;
         }
         return fold_binary_arithmetic(
-            op_type, to_f64(lhs), to_f64(rhs), res_type, bool_type, on_div_zero);
+            op_type, to_f64(lhs), to_f64(rhs), res_type, bool_type, on_fold_error);
     }
 
     // A wide (128-bit) operand pulls the whole operation into the 128-bit constexpr domain.
@@ -2507,14 +2524,14 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
                                           rhs.as_uint_opt().value_or(0),
                                           res_type,
                                           bool_type,
-                                          on_div_zero);
+                                          on_fold_error);
         }
         return fold_binary_arithmetic(op_type,
                                       lhs.as_int_opt().value_or(0),
                                       rhs.as_int_opt().value_or(0),
                                       res_type,
                                       bool_type,
-                                      on_div_zero);
+                                      on_fold_error);
     }
 
     const auto is_unsigned{(lhs.is<u64>() || rhs.is<u64>()) && !lhs.is<i64>()};
@@ -2522,14 +2539,14 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
         const auto l{lhs.is<u64>() ? lhs.as<u64>() : static_cast<u64>(lhs.as<i64>())};
         const auto r{rhs.is<u64>() ? rhs.as<u64>() : static_cast<u64>(rhs.as<i64>())};
         const auto res_type{lhs.get_type() ? lhs.get_type() : rhs.get_type()};
-        return fold_binary_arithmetic(op_type, l, r, res_type, bool_type, on_div_zero);
+        return fold_binary_arithmetic(op_type, l, r, res_type, bool_type, on_fold_error);
     }
 
     if ((lhs.is<i64>() || lhs.is<u64>()) && (rhs.is<i64>() || rhs.is<u64>())) {
         const auto l{lhs.is<i64>() ? lhs.as<i64>() : static_cast<i64>(lhs.as<u64>())};
         const auto r{rhs.is<i64>() ? rhs.as<i64>() : static_cast<i64>(rhs.as<u64>())};
         const auto res_type{lhs.get_type() ? lhs.get_type() : rhs.get_type()};
-        return fold_binary_arithmetic(op_type, l, r, res_type, bool_type, on_div_zero);
+        return fold_binary_arithmetic(op_type, l, r, res_type, bool_type, on_fold_error);
     }
 
     if (lhs.is<bool>() && rhs.is<bool>()) {
@@ -3850,19 +3867,11 @@ auto const_eval::eval_builtin(ast::node_id          id,
         }
         if (const auto en{target->get_data().as_opt<sema::types::enum_t>()}) {
             std::string name;
+            const auto  values{enum_member_values(*en)};
             for (usize idx{0}; idx < en->ast_enumerations.size(); ++idx) {
                 const auto& e{en->ast_enumerations[idx]};
                 const auto& vname{en->enclosing.ast.get_as<ast::identifier_expr>(e.name).name};
-                auto        val{static_cast<i64>(idx)};
-                if (e.value) {
-                    auto&      enclosing_mod{en->enclosing};
-                    const_eval enclosing_eval{ctx_, enclosing_mod};
-                    enclosing_eval.set_symbol_scoping(symbol_scoping_);
-                    enclosing_eval.set_constexpr_context(is_constexpr_context());
-                    if (const auto ev{enclosing_eval.try_eval(*e.value)}) {
-                        val = static_cast<i64>(ev->as_int_opt().value_or(val));
-                    }
-                }
+                const auto  val{static_cast<i64>(values[idx])};
                 if (val == static_cast<i64>(*src_int)) {
                     name = std::string{vname};
                     break;

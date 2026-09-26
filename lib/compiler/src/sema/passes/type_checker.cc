@@ -321,6 +321,17 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                          (inst.kind == gir::instruction_kind::ADD && rhs_ptr_lhs_int))};
                     if (!ptr_arith) {
                         report_operator_mismatch(inst, *lhs_t, *rhs_t);
+                    } else {
+                        const auto& ptr_t{lhs_ptr_rhs_int ? *lhs_t : *rhs_t};
+                        const auto& pointee{ptr_t.get_data().as<types::pointer>().underlying};
+                        if (!is_value_type(pointee.get_kind())) {
+                            emit_diagnostic(
+                                fmt::format("Pointer arithmetic requires a pointee of known size; "
+                                            "'{}' has none",
+                                            ctx_.type_display_name(ptr_t)),
+                                error::OPERATOR_TYPE_MISMATCH,
+                                inst.location);
+                        }
                     }
                 }
             }
