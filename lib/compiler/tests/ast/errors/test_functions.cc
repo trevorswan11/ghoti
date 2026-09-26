@@ -23,7 +23,15 @@ TEST_CASE("Function missing return type") {
                                                  std::pair{0UZ, 30UZ}});
 
     helpers::test_parser_fail("fn(^mut this, a: A, b: ^B, ): ",
-                              syntax::diagnostic{syntax::error::MISSING_EXPLICIT_TYPE, 0, 28});
+                              syntax::diagnostic{"Expected a type, found the end of input", syntax::error::MISSING_EXPLICIT_TYPE, 0, 28});
+}
+
+TEST_CASE("An inferred-type parameter reports a diagnostic instead of crashing") {
+    helpers::test_parser_fail("fn(x := 1): i32;",
+                              syntax::diagnostic{"Function parameters must be explicitly typed",
+                                                 syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE,
+                                                 0,
+                                                 8});
 }
 
 TEST_CASE("Function parameter missing type") {
@@ -35,7 +43,7 @@ TEST_CASE("Function parameter missing type") {
 
 TEST_CASE("Out-of-place self parameter") {
     helpers::test_parser_fail("fn(a: A, &self): i32;",
-                              syntax::diagnostic{syntax::error::ILLEGAL_IDENTIFIER, 0, 9});
+                              syntax::diagnostic{"Expected an identifier, found '&'", syntax::error::ILLEGAL_IDENTIFIER, 0, 9});
 
     helpers::test_parser_fail(
         "fn(a: A, self): i32;",
@@ -100,7 +108,7 @@ TEST_CASE("Illegal type function types") {
 
 TEST_CASE("Non-terminated parameter list") {
     helpers::test_parser_fail("fn(a: A, : i32;",
-                              syntax::diagnostic{syntax::error::ILLEGAL_IDENTIFIER, 0, 9});
+                              syntax::diagnostic{"Expected an identifier, found ':'", syntax::error::ILLEGAL_IDENTIFIER, 0, 9});
 }
 
 TEST_CASE("'move' must be followed directly by 'fn'") {

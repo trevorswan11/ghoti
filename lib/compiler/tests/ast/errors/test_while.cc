@@ -32,10 +32,7 @@ TEST_CASE("Missing while condition") {
     helpers::test_parser_fail("while () {a;};",
                               syntax::diagnostic{"While loops must have a corresponding condition",
                                                  syntax::error::WHILE_MISSING_CONDITION,
-                                                 std::pair{0UZ, 0UZ}},
-                              syntax::diagnostic{"No prefix parse function for RBRACE(}) found",
-                                                 syntax::error::MISSING_PREFIX_PARSER,
-                                                 std::pair{0UZ, 12UZ}});
+                                                 std::pair{0UZ, 0UZ}});
 }
 
 TEST_CASE("Unclosed while body") {

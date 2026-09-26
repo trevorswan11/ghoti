@@ -321,7 +321,8 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
                     modifier_token, modifier, parser.get_node<call_expr>(*parsed));
             }
 
-            return make_syntax_err(syntax::error::ILLEGAL_EXPLICIT_TYPE,
+            return make_syntax_err("Expected a type",
+                                   syntax::error::ILLEGAL_EXPLICIT_TYPE,
                                    parser.get_location_of(*parsed));
         }
 
@@ -351,7 +352,8 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
     // The user-defined types can be handled by parsing any expression and verifying it
     parser.advance();
     if (parser.current_token_is(syntax::token_type_t::END)) {
-        return make_syntax_err(syntax::error::MISSING_EXPLICIT_TYPE, type_start);
+        return make_syntax_err(
+            "Expected a type, found the end of input", syntax::error::MISSING_EXPLICIT_TYPE, type_start);
     }
 
     // Parse at TYPE precedence so a following `= <init>` is not  absorbed into an assignment
@@ -386,7 +388,7 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
         }
         return *id;
     }
-    return make_syntax_err(syntax::error::ILLEGAL_EXPLICIT_TYPE, type_start);
+    return make_syntax_err("Expected a type", syntax::error::ILLEGAL_EXPLICIT_TYPE, type_start);
 }
 
 namespace {

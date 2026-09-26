@@ -273,6 +273,9 @@ class parser {
         return counter<u32>::guard{test_block_depth_};
     }
 
+    // Rewinds to a failed top-level statement and skips it as one bracket-balanced unit
+    auto skip_failed_statement(const checkpoint& stmt_start) -> void;
+
     // Bounds recursive-descent depth so deep nesting reports a diagnostic, not a stack overflow.
     [[nodiscard]] auto enter_nesting() -> stdx::result<counter<u32>::guard, diagnostic>;
 

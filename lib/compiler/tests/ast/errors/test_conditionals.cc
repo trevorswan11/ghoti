@@ -105,10 +105,10 @@ TEST_CASE("Catch-all cannot be part of a multi-value match arm") {
 
 TEST_CASE("Illegal match arm capture modifier on a discarded capture") {
     helpers::test_parser_fail("match (a) { b => |&mut _| c, };",
-                              syntax::diagnostic{syntax::error::ILLEGAL_IDENTIFIER, 0, 23});
+                              syntax::diagnostic{"Expected an identifier, found '_'", syntax::error::ILLEGAL_IDENTIFIER, 0, 23});
 
     helpers::test_parser_fail("match (a) { b => |^ _| c, };",
-                              syntax::diagnostic{syntax::error::ILLEGAL_IDENTIFIER, 0, 20});
+                              syntax::diagnostic{"Expected an identifier, found '_'", syntax::error::ILLEGAL_IDENTIFIER, 0, 20});
 }
 
 } // namespace ghoti::tests

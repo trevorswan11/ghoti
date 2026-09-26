@@ -11,38 +11,26 @@ TEST_CASE("Non-terminated iterables") {
     helpers::test_parser_fail("for (0..4 |i| { a; } else return b;",
                               syntax::diagnostic{"Expected token RBRACE, found IDENT",
                                                  syntax::error::UNEXPECTED_TOKEN,
-                                                 std::pair{0UZ, 16UZ}},
-                              syntax::diagnostic{"No prefix parse function for RBRACE(}) found",
-                                                 syntax::error::MISSING_PREFIX_PARSER,
-                                                 std::pair{0UZ, 19UZ}});
+                                                 std::pair{0UZ, 16UZ}});
 }
 
 TEST_CASE("Missing iterables") {
     helpers::test_parser_fail("for () |i| { a; } else return b;",
                               syntax::diagnostic{"For loops must contain at least one iterable",
                                                  syntax::error::FOR_MISSING_ITERABLES,
-                                                 std::pair{0UZ, 0UZ}},
-                              syntax::diagnostic{"No prefix parse function for RBRACE(}) found",
-                                                 syntax::error::MISSING_PREFIX_PARSER,
-                                                 std::pair{0UZ, 16UZ}});
+                                                 std::pair{0UZ, 0UZ}});
 
     helpers::test_parser_fail(
         "for |i| { a; } else return b;",
         syntax::diagnostic{
-            "Expected token LPAREN, found BW_OR", syntax::error::UNEXPECTED_TOKEN, 0, 4},
-        syntax::diagnostic{"No prefix parse function for RBRACE(}) found",
-                           syntax::error::MISSING_PREFIX_PARSER,
-                           std::pair{0UZ, 13UZ}});
+            "Expected token LPAREN, found BW_OR", syntax::error::UNEXPECTED_TOKEN, 0, 4});
 }
 
 TEST_CASE("Non-terminated captures") {
     helpers::test_parser_fail(
         "for (0..4) |i { a; } else return b;",
         syntax::diagnostic{
-            "Expected token COMMA, found LBRACE", syntax::error::UNEXPECTED_TOKEN, 0, 14},
-        syntax::diagnostic{"No prefix parse function for RBRACE(}) found",
-                           syntax::error::MISSING_PREFIX_PARSER,
-                           std::pair{0UZ, 19UZ}});
+            "Expected token COMMA, found LBRACE", syntax::error::UNEXPECTED_TOKEN, 0, 14});
 }
 
 TEST_CASE("Missing captures") {
@@ -51,18 +39,12 @@ TEST_CASE("Missing captures") {
         syntax::diagnostic{"For loops must contain the same number of captures iterables, "
                            "which can be discarded with an underscore",
                            syntax::error::FOR_ITERABLE_CAPTURE_MISMATCH,
-                           std::pair{0UZ, 0UZ}},
-        syntax::diagnostic{"No prefix parse function for RBRACE(}) found",
-                           syntax::error::MISSING_PREFIX_PARSER,
-                           std::pair{0UZ, 16UZ}});
+                           std::pair{0UZ, 0UZ}});
 }
 
 TEST_CASE("Illegal capture") {
     helpers::test_parser_fail("for (0..4) |2| { a; } else return b;",
-                              syntax::diagnostic{syntax::error::ILLEGAL_IDENTIFIER, 0, 12},
-                              syntax::diagnostic{"No prefix parse function for RBRACE(}) found",
-                                                 syntax::error::MISSING_PREFIX_PARSER,
-                                                 std::pair{0UZ, 20UZ}});
+                              syntax::diagnostic{"Expected an identifier, found '2'", syntax::error::ILLEGAL_IDENTIFIER, 0, 12});
 }
 
 TEST_CASE("Iterable-capture mismatch") {

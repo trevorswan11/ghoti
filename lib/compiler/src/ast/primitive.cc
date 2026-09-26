@@ -159,7 +159,9 @@ auto int_literal_expr::parse(syntax::parser& parser)
         if (slice[1] == '\\') {
             const auto decoded{syntax::decode_escape(slice[2])};
             if (!decoded) {
-                return make_syntax_err(syntax::error::UNKNOWN_CHARACTER_ESCAPE, start_token);
+                return make_syntax_err("Invalid escape sequence in character literal",
+                                       syntax::error::UNKNOWN_CHARACTER_ESCAPE,
+                                       start_token);
             }
             value = static_cast<u8>(*decoded);
         }

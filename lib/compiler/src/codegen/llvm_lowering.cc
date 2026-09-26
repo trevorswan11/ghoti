@@ -2304,8 +2304,9 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
         if (auto* callee_fn{resolve_named_function(*inst.callee_name)}) {
             std::vector<llvm::Value*> args;
             args.reserve(inst.operands.size());
+            auto* callee_fn_ty{callee_fn->getFunctionType()};
             for (const auto& op : inst.operands) {
-                if (op.type && op.type->get_kind() == sema::type_kind::TYPE) { continue; }
+                if (op.type && sema::is_type_parameter_slot(*op.type)) { continue; }
                 auto* arg_val{lower_value(op)};
                 if (!arg_val || arg_val->getType()->isVoidTy()) { continue; }
                 if (op.type && op.type->get_kind() == sema::type_kind::ARRAY &&
@@ -2333,6 +2334,9 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
                     }
                 } else {
                     arg_val = load_aggregate_arg(op, arg_val);
+                }
+                if (args.size() >= callee_fn_ty->getNumParams() && callee_fn_ty->isVarArg()) {
+                    arg_val = promote_c_variadic_arg(arg_val, op.type);
                 }
                 args.emplace_back(arg_val);
             }
@@ -2375,10 +2379,14 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
     }
     for (const auto& operand : inst.operands | std::views::drop(1)) {
         // Match the direct-callee branch above
-        if (operand.type && operand.type->get_kind() == sema::type_kind::TYPE) { continue; }
+        if (operand.type && sema::is_type_parameter_slot(*operand.type)) { continue; }
         auto* arg_val{lower_value(operand)};
         if (!arg_val || arg_val->getType()->isVoidTy()) { continue; }
-        args.emplace_back(load_aggregate_arg(operand, arg_val));
+        arg_val = load_aggregate_arg(operand, arg_val);
+        if (args.size() >= fn_ty->getNumParams() && fn_ty->isVarArg()) {
+            arg_val = promote_c_variadic_arg(arg_val, operand.type);
+        }
+        args.emplace_back(arg_val);
     }
 
     const bool is_void{!inst.type || inst.type->get_kind() == sema::type_kind::VOID_ ||
@@ -2390,6 +2398,45 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
                                         : to_llvm_callconv(ind_fn_data->conv));
     if (inst.result && !is_void) { set_local(*inst.result, call_inst); }
     return call_inst;
+}
+
+// LLVM's generic `va_arg` expansion steps Win64's 8-byte slots by the type's own size, so walk
+// them by hand the way clang does; larger or odd-sized values are passed by reference
+auto llvm_lowering::emit_va_arg(llvm::Value* list, llvm::Type* ty) -> llvm::Value* {
+    const llvm::Triple triple{llvm_module_->getTargetTriple()};
+    if (!triple.isOSWindows() || triple.getArch() != llvm::Triple::x86_64) {
+        return builder_.CreateVAArg(list, ty, "vaarg");
+    }
+
+    constexpr u64 win64_slot_size{8};
+    const auto&   layout{llvm_module_->getDataLayout()};
+    const auto    size{layout.getTypeAllocSize(ty).getFixedValue()};
+    const bool    by_reference{size > win64_slot_size || !llvm::isPowerOf2_64(size)};
+
+    auto* ptr_ty{types_.get_ptr_ty()};
+    auto* slot{builder_.CreateLoad(ptr_ty, list, "va.slot")};
+    auto* next{builder_.CreateConstInBoundsGEP1_64(
+        builder_.getInt8Ty(), slot, win64_slot_size, "va.next")};
+    builder_.CreateStore(next, list);
+    auto* value_addr{by_reference ? builder_.CreateLoad(ptr_ty, slot, "va.indirect") : slot};
+    return builder_.CreateLoad(ty, value_addr, "vaarg");
+}
+
+// C's default argument promotions: a variadic slot never carries a sub-`int` integer or a `float`
+auto llvm_lowering::promote_c_variadic_arg(llvm::Value* arg_val, stdx::option<sema::type&> type)
+    -> llvm::Value* {
+    auto* arg_ty{arg_val->getType()};
+    if (arg_ty->isIntegerTy() && arg_ty->getIntegerBitWidth() < 32) {
+        bool is_signed{false};
+        if (type) {
+            if (const auto int_info{sema::as_integer(*type)}) { is_signed = int_info->is_signed; }
+        }
+        return builder_.CreateIntCast(arg_val, builder_.getInt32Ty(), is_signed, "vararg.promote");
+    }
+    if (arg_ty->isHalfTy() || arg_ty->isBFloatTy() || arg_ty->isFloatTy()) {
+        return builder_.CreateFPExt(arg_val, builder_.getDoubleTy(), "vararg.promote");
+    }
+    return arg_val;
 }
 
 auto llvm_lowering::load_aggregate_arg(const gir::value& op, llvm::Value* arg_val) -> llvm::Value* {
@@ -2716,9 +2763,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
         case syntax::token_type_t::BUILTIN_C_VA_ARG: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* list{lower_value(inst.operands[0])}; list && inst.type) {
-                if (auto* ty{types_.translate(*inst.type)}) {
-                    return builder_.CreateVAArg(list, ty, "vaarg");
-                }
+                if (auto* ty{types_.translate(*inst.type)}) { return emit_va_arg(list, ty); }
             }
             return nullptr;
         }

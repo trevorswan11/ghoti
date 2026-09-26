@@ -312,18 +312,17 @@ auto call_expr::parse(syntax::parser& parser, expr_handle function)
         }
     }()};
 
-    // Guaranteed to roll back if there is an error
-    const auto parse_expr_unsuccessful = [&] -> bool {
+    // Guaranteed to roll back if there is an error, which it hands back for reporting
+    const auto try_parse_expr_argument = [&] -> stdx::option<syntax::diagnostic> {
         // Try an expression first to prevent ambiguity between reference operators
         syntax::parser::transaction transaction{parser};
         parser.advance();
-        if (auto expr{parser.parse_expression()}) {
-            transaction.commit();
-            arguments.emplace_back(*expr);
-            pack_expansions.emplace_back(false);
-            return false;
-        }
-        return true;
+        auto expr{parser.parse_expression()};
+        if (!expr) { return std::move(expr.error()); }
+        transaction.commit();
+        arguments.emplace_back(*expr);
+        pack_expansions.emplace_back(false);
+        return stdx::none;
     };
 
     bool force_break{false};
@@ -336,8 +335,11 @@ auto call_expr::parse(syntax::parser& parser, expr_handle function)
         }
 
         // Advance cannot be called here since explicit type relies on peek, not current
-        if (parse_expr_unsuccessful()) {
-            arguments.emplace_back(TRY(explicit_type::parse(parser)));
+        if (auto expr_error{try_parse_expr_argument()}) {
+            // Neither parse fits: the expression's error pinpoints the mistake far more often
+            auto type_arg{explicit_type::parse(parser)};
+            if (!type_arg) { return stdx::err{std::move(*expr_error)}; }
+            arguments.emplace_back(*type_arg);
             pack_expansions.emplace_back(false);
         } else if (parser.peek_token_is(syntax::token_type_t::ELLIPSIS)) {
             // `f(pre, rest..., post)`: the argument just parsed is a pack expansion.
@@ -961,7 +963,12 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked, b
                 const auto [param_type, initialized]{TRY(explicit_type::parse_opt_init(parser))};
 
                 // There are no default values for parameters, and they must be explicitly typed
-                if (initialized || !param_type) {
+                if (!param_type) {
+                    return make_syntax_err("Function parameters must be explicitly typed",
+                                           syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE,
+                                           parser.get_current_token());
+                }
+                if (initialized) {
                     return make_syntax_err("Function parameters may not have default values",
                                            syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE,
                                            parser.get_location_of(*param_type));
@@ -1087,7 +1094,9 @@ auto identifier_expr::parse(syntax::parser& parser)
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
     if (!start_token.is_valid_ident()) {
-        return make_syntax_err(syntax::error::ILLEGAL_IDENTIFIER, start_token);
+        return make_syntax_err(fmt::format("Expected an identifier, found '{}'", start_token.slice),
+                               syntax::error::ILLEGAL_IDENTIFIER,
+                               start_token);
     }
 
     if (start_token.is_raw_identifier()) {

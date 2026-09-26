@@ -2557,6 +2557,10 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
 auto emitter::emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value {
     PROFILE_FUNCTION();
     const auto op_type{id.get_token_type()};
+    if (op_type == syntax::token_type_t::PLUS) {
+        if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+        return emit_expression(unary.rhs);
+    }
     const auto kind_opt{map_unary_op(op_type)};
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(kind_opt, "Unary operator must be mapped to instruction kind");
@@ -3811,6 +3815,10 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             }
             return value{void_val{}, ret_type};
         }
+        case syntax::token_type_t::BUILTIN_C_VA_START:
+        case syntax::token_type_t::BUILTIN_C_VA_COPY:
+        case syntax::token_type_t::BUILTIN_C_VA_END:
+        case syntax::token_type_t::BUILTIN_C_VA_ARG:   return emit_c_va_builtin(call, fn_token, ret_type);
         case syntax::token_type_t::BUILTIN_ADD_WITH_OVERFLOW:
         case syntax::token_type_t::BUILTIN_SUB_WITH_OVERFLOW:
         case syntax::token_type_t::BUILTIN_MUL_WITH_OVERFLOW:
@@ -4535,6 +4543,58 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
     return value{void_val{}, sema_type};
 }
 
+auto emitter::constexpr_unroll_limit_reached(usize            iterations,
+                                             std::string_view loop_kind,
+                                             ast::node_id     id) -> bool {
+    if (iterations < ctx_.eval_unroll_limit) { return false; }
+    ctx_.diags.emplace_back(
+        fmt::format("{} exceeded its unroll limit of {}; raise it with `@setEvalUnrollLimit`",
+                    loop_kind,
+                    ctx_.eval_unroll_limit),
+        sema::error::CONSTEXPR_LOOP_LIMIT,
+        active_ast().location_of(id));
+    return true;
+}
+
+auto emitter::fold_constexpr_loop_condition(ast::expr_handle condition, std::string_view loop_kind)
+    -> stdx::option<bool> {
+    const gir::const_eval::constexpr_context_guard g{const_eval_, true};
+    const auto                                     diags_before{ctx_.diags.size()};
+    const auto cond_val{const_eval_.try_eval(condition)};
+    stdx::option<bool> cond;
+    if (cond_val) {
+        if (const auto folded{cond_val->as_opt<bool>()}) { cond = *folded; }
+    }
+    if (!cond && ctx_.diags.size() == diags_before) {
+        ctx_.diags.emplace_back(
+            fmt::format("{}'s condition must fold to a compile-time-known `bool`", loop_kind),
+            sema::error::CONSTEXPR_WHILE_NONFOLDABLE_COND,
+            active_ast().location_of(condition));
+    }
+    return cond;
+}
+
+auto emitter::emit_constexpr_loop_body(const ast::block_stmt& block) -> constexpr_body_exit {
+    {
+        const loop_context_guard g_loop{loop_stack_,
+                                        loop_context{
+                                            .label           = stdx::none,
+                                            .break_target    = segment_id{0},
+                                            .continue_target = segment_id{0},
+                                            .result_slot     = stdx::none,
+                                            .scope_depth     = scopes_.size(),
+                                            .is_constexpr    = true,
+                                        }};
+        emit_block(block);
+    }
+    if (const auto cur_seg{builder_.get_segment()}; cur_seg && cur_seg->has_terminator()) {
+        return constexpr_body_exit::BREAK;
+    }
+    if (std::exchange(constexpr_loop_break_, false)) { return constexpr_body_exit::BREAK; }
+    if (std::exchange(constexpr_loop_continue_, false)) { return constexpr_body_exit::CONTINUE; }
+    return constexpr_body_exit::NEXT;
+}
+
 auto emitter::emit_constexpr_while(ast::node_id id, const ast::while_loop_expr& while_loop)
     -> value {
     PROFILE_FUNCTION();
@@ -4546,54 +4606,10 @@ auto emitter::emit_constexpr_while(ast::node_id id, const ast::while_loop_expr& 
         // Each pass re-binds the loop's `constexpr var`(s) to their just-updated value; a stale
         // memoized fold of the condition (or anything the body reads) must not survive across it.
         const_eval_.clear_memo();
-        const gir::const_eval::constexpr_context_guard g{const_eval_, true};
-        const auto                                     diags_before{ctx_.diags.size()};
-        const auto cond_val{const_eval_.try_eval(while_loop.condition)};
-        const auto cond{cond_val ? cond_val->as_opt<bool>() : stdx::none};
-        if (!cond) {
-            if (ctx_.diags.size() == diags_before) {
-                ctx_.diags.emplace_back(
-                    "`while constexpr`'s condition must fold to a compile-time-known `bool`",
-                    sema::error::CONSTEXPR_WHILE_NONFOLDABLE_COND,
-                    active_ast().location_of(while_loop.condition));
-            }
-            break;
-        }
-        if (!*cond) { break; }
-        if (iterations >= ctx_.eval_unroll_limit) {
-            ctx_.diags.emplace_back(
-                fmt::format("`while constexpr` exceeded its unroll limit of {}; raise it with "
-                            "`@setEvalUnrollLimit`",
-                            ctx_.eval_unroll_limit),
-                sema::error::CONSTEXPR_LOOP_LIMIT,
-                active_ast().location_of(id));
-            break;
-        }
-        ++iterations;
-        {
-            const loop_context_guard g_loop{loop_stack_,
-                                            loop_context{
-                                                .label           = stdx::none,
-                                                .break_target    = segment_id{0},
-                                                .continue_target = segment_id{0},
-                                                .result_slot     = stdx::none,
-                                                .scope_depth     = scopes_.size(),
-                                                .is_constexpr    = true,
-                                            }};
-            emit_block(block);
-        }
-        if (const auto cur_seg{builder_.get_segment()}; cur_seg && cur_seg->has_terminator()) {
-            break;
-        }
-        if (constexpr_loop_break_) {
-            constexpr_loop_break_ = false;
-            break;
-        }
-        if (constexpr_loop_continue_) {
-            constexpr_loop_continue_ = false;
-            if (while_loop.continuation) { emit_expression(*while_loop.continuation); }
-            continue;
-        }
+        const auto cond{fold_constexpr_loop_condition(while_loop.condition, "`while constexpr`")};
+        if (!cond || !*cond) { break; }
+        if (constexpr_unroll_limit_reached(iterations++, "`while constexpr`", id)) { break; }
+        if (emit_constexpr_loop_body(block) == constexpr_body_exit::BREAK) { break; }
         if (while_loop.continuation) { emit_expression(*while_loop.continuation); }
     }
     return value{void_val{}, void_type};
@@ -4692,55 +4708,14 @@ auto emitter::emit_constexpr_do_while(ast::node_id id, const ast::do_while_loop_
 
     usize iterations{0};
     while (true) {
-        if (iterations >= ctx_.eval_unroll_limit) {
-            ctx_.diags.emplace_back(
-                fmt::format(
-                    "`do ... while constexpr` exceeded its unroll limit of {}; raise it with "
-                    "`@setEvalUnrollLimit`",
-                    ctx_.eval_unroll_limit),
-                sema::error::CONSTEXPR_LOOP_LIMIT,
-                active_ast().location_of(id));
-            break;
-        }
-        ++iterations;
+        if (constexpr_unroll_limit_reached(iterations++, "`do ... while constexpr`", id)) { break; }
         const_eval_.clear_memo();
 
-        {
-            const loop_context_guard g_loop{loop_stack_,
-                                            loop_context{
-                                                .label           = stdx::none,
-                                                .break_target    = segment_id{0},
-                                                .continue_target = segment_id{0},
-                                                .result_slot     = stdx::none,
-                                                .scope_depth     = scopes_.size(),
-                                                .is_constexpr    = true,
-                                            }};
-            emit_block(block);
-        }
-        if (const auto cur_seg{builder_.get_segment()}; cur_seg && cur_seg->has_terminator()) {
-            break;
-        }
-        if (constexpr_loop_break_) {
-            constexpr_loop_break_ = false;
-            break;
-        }
-        if (constexpr_loop_continue_) { constexpr_loop_continue_ = false; }
+        if (emit_constexpr_loop_body(block) == constexpr_body_exit::BREAK) { break; }
 
         const_eval_.clear_memo();
-        const gir::const_eval::constexpr_context_guard g{const_eval_, true};
-        const auto                                     diags_before{ctx_.diags.size()};
-        const auto cond_val{const_eval_.try_eval(do_while.condition)};
-        const auto cond{cond_val ? cond_val->as_opt<bool>() : stdx::none};
-        if (!cond) {
-            if (ctx_.diags.size() == diags_before) {
-                ctx_.diags.emplace_back(
-                    "`do ... while constexpr`'s condition must fold to a compile-time-known `bool`",
-                    sema::error::CONSTEXPR_WHILE_NONFOLDABLE_COND,
-                    active_ast().location_of(do_while.condition));
-            }
-            break;
-        }
-        if (!*cond) { break; }
+        const auto cond{fold_constexpr_loop_condition(do_while.condition, "`do ... while constexpr`")};
+        if (!cond || !*cond) { break; }
     }
     return value{void_val{}, void_type};
 }
@@ -4808,41 +4783,10 @@ auto emitter::emit_constexpr_infinite_loop(ast::node_id id, const ast::infinite_
 
     usize iterations{0};
     while (true) {
-        if (iterations >= ctx_.eval_unroll_limit) {
-            ctx_.diags.emplace_back(
-                fmt::format("`loop constexpr` exceeded its unroll limit of {}; raise it with "
-                            "`@setEvalUnrollLimit`",
-                            ctx_.eval_unroll_limit),
-                sema::error::CONSTEXPR_LOOP_LIMIT,
-                active_ast().location_of(id));
-            break;
-        }
-        ++iterations;
+        if (constexpr_unroll_limit_reached(iterations++, "`loop constexpr`", id)) { break; }
 
         const_eval_.clear_memo();
-        {
-            const loop_context_guard g_loop{loop_stack_,
-                                            loop_context{
-                                                .label           = stdx::none,
-                                                .break_target    = segment_id{0},
-                                                .continue_target = segment_id{0},
-                                                .result_slot     = stdx::none,
-                                                .scope_depth     = scopes_.size(),
-                                                .is_constexpr    = true,
-                                            }};
-            emit_block(block);
-        }
-        if (const auto cur_seg{builder_.get_segment()}; cur_seg && cur_seg->has_terminator()) {
-            break;
-        }
-        if (constexpr_loop_break_) {
-            constexpr_loop_break_ = false;
-            break;
-        }
-        if (constexpr_loop_continue_) {
-            constexpr_loop_continue_ = false;
-            continue;
-        }
+        if (emit_constexpr_loop_body(block) == constexpr_body_exit::BREAK) { break; }
     }
     return value{void_val{}, void_type};
 }
@@ -4980,29 +4924,7 @@ auto emitter::emit_constexpr_for(ast::node_id id, const ast::for_loop_expr& for_
             cx_frame.insert_or_assign(*companion_name, (*cx_args)[i++]);
         }
         const constexpr_frame_guard cfg{ctx_.constexpr_binding_frames, std::move(cx_frame)};
-        {
-            const loop_context_guard g_loop{loop_stack_,
-                                            loop_context{
-                                                .label           = stdx::none,
-                                                .break_target    = segment_id{0},
-                                                .continue_target = segment_id{0},
-                                                .result_slot     = stdx::none,
-                                                .scope_depth     = scopes_.size(),
-                                                .is_constexpr    = true,
-                                            }};
-            emit_block(block);
-        }
-        if (const auto cur_seg{builder_.get_segment()}; cur_seg && cur_seg->has_terminator()) {
-            break;
-        }
-        if (constexpr_loop_break_) {
-            constexpr_loop_break_ = false;
-            break;
-        }
-        if (constexpr_loop_continue_) {
-            constexpr_loop_continue_ = false;
-            continue;
-        }
+        if (emit_constexpr_loop_body(block) == constexpr_body_exit::BREAK) { break; }
     }
 
     return value{void_val{}, void_type};
@@ -6758,6 +6680,45 @@ auto emitter::emit_union_active_field_guard(value            union_addr,
     emit_panic_call(fmt::format("accessed inactive union field '{}'", field_name), site);
 
     builder_.set_segment(active_seg);
+}
+
+auto emitter::emit_c_va_builtin(const ast::call_expr& call,
+                                syntax::token_type_t builtin,
+                                sema::type&          ret_type) -> value {
+    PROFILE_FUNCTION();
+    if (builtin == syntax::token_type_t::BUILTIN_C_VA_START && !current_function_is_c_variadic()) {
+        ctx_.diags.emplace_back("'@cVaStart' can only be used inside a C-variadic `fn(..., ...)`",
+                                sema::error::TYPE_MISMATCH,
+                                active_ast().location_of(call.function));
+        return value{void_val{}, ret_type};
+    }
+
+    // `@cVaArg`'s trailing type argument only shapes the result type
+    const usize list_arg_count{builtin == syntax::token_type_t::BUILTIN_C_VA_COPY ? 2UZ : 1UZ};
+    std::vector<value> args;
+    args.reserve(list_arg_count);
+    for (usize i{0}; i < list_arg_count; ++i) {
+        args.emplace_back(emit_expression(*call.arguments[i].as_opt<ast::expr_handle>()));
+    }
+    const auto name{*syntax::get_builtin_opt(builtin)};
+    if (const auto res{builder_.emit_builtin_call(name, std::move(args), ret_type)}) {
+        return value{*res, ret_type};
+    }
+    return value{void_val{}, ret_type};
+}
+
+auto emitter::current_function_is_c_variadic() -> bool {
+    const auto fn{builder_.get_function()};
+    if (!fn) { return false; }
+    const auto* fn_type{&fn->get_type()};
+    if (const auto ref{fn_type->get_data().as_opt<sema::types::reference>()}) {
+        fn_type = &ref->underlying;
+    }
+    if (const auto ptr{fn_type->get_data().as_opt<sema::types::pointer>()}) {
+        fn_type = &ptr->underlying;
+    }
+    const auto sig{fn_type->get_data().as_opt<sema::types::function>()};
+    return sig && sig->is_variadic;
 }
 
 auto emitter::emit_mem_intrinsic(ast::node_id         id,

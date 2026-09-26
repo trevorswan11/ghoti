@@ -165,30 +165,52 @@ auto parser::consume(ast::AST& ast, ghoti::arena& arena) -> diagnostics {
         if (skip(current_token_.type)) { while (skip(advance().type)); } // NOLINT
         if (current_token_is(token_type_t::END)) { break; }
 
-        const auto stmt_start_line{current_token_.line};
-        auto       stmt{parse_statement()};
+        const auto       stmt_start_line{current_token_.line};
+        const checkpoint stmt_start{*this};
+        auto             stmt{parse_statement()};
         if (stmt) {
             ast.add_root(**stmt);
             attach_docs(**stmt, stmt_start_line);
         } else {
             diagnostics.emplace_back(std::move(stmt.error()));
-
-            // Errors should advance up to next logical end to prevent useless errors
-            const auto stop_condition = [](token_type_t tt) -> bool {
-                switch (tt) {
-                case token_type_t::RBRACE:
-                case token_type_t::SEMICOLON:
-                case token_type_t::END:       return true;
-                default:                      return false;
-                }
-            };
-            while (!stop_condition(advance().type)); // NOLINT
+            skip_failed_statement(stmt_start);
         }
         advance();
     }
 
     pending_docs_.clear();
     return diagnostics;
+}
+
+auto parser::skip_failed_statement(const checkpoint& stmt_start) -> void {
+    rollback(stmt_start);
+    const auto begins_statement{[](const token_t& token) {
+        return token.is_member_token() || token.type == token_type_t::TEST ||
+               token.type == token_type_t::IMPL || token.type == token_type_t::END;
+    }};
+
+    usize depth{0};
+    while (!current_token_is(token_type_t::END)) {
+        switch (current_token_.type) {
+        case token_type_t::LBRACE:
+        case token_type_t::LPAREN:
+        case token_type_t::LBRACKET: ++depth; break;
+        case token_type_t::RPAREN:
+        case token_type_t::RBRACKET:
+            if (depth > 0) { --depth; }
+            break;
+        case token_type_t::RBRACE:
+            if (depth > 0) { --depth; }
+            // A brace-terminated statement (`test`, `impl`) has no trailing semicolon
+            if (depth == 0 && begins_statement(peek_token_)) { return; }
+            break;
+        case token_type_t::SEMICOLON:
+            if (depth == 0) { return; }
+            break;
+        default: break;
+        }
+        advance();
+    }
 }
 
 auto parser::attach_member_doc(ast::identifier_handle name, usize floor_line) -> void {
@@ -307,7 +329,8 @@ auto parser::parse_expression(bind_precedence precedence)
     -> stdx::result<ast::expr_handle, diagnostic> {
     PROFILE_FUNCTION();
     if (current_token_is(token_type_t::END)) {
-        return make_syntax_err(error::END_OF_TOKEN_STREAM, current_token_);
+        return make_syntax_err(
+            "Expected an expression, found the end of input", error::END_OF_TOKEN_STREAM, current_token_);
     }
 
     const auto nesting{TRY(enter_nesting())};

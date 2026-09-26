@@ -261,6 +261,11 @@ class emitter {
     auto               emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value;
     auto               emit_match(ast::node_id id, const ast::match_expr& match) -> value;
 
+    auto emit_c_va_builtin(const ast::call_expr& call,
+                           syntax::token_type_t builtin,
+                           sema::type&          ret_type) -> value;
+    [[nodiscard]] auto current_function_is_c_variadic() -> bool;
+
     // @mem* decompose the slice args into a data pointer + byte length. A length check is only
     // needed when the operands' lengths were not already proven equal statically.
     auto emit_mem_intrinsic(ast::node_id         id,
@@ -300,6 +305,15 @@ class emitter {
                     stdx::option<sema::type&>      result_type = stdx::none) -> value;
     // Repeatedly folds the condition and replays the body via `emit_block` for as long as it
     // holds `true`; no runtime loop, no `body_type_diff`
+    enum class constexpr_body_exit : u8 { NEXT, CONTINUE, BREAK };
+    // Emits one unrolled iteration of a constexpr loop body, consuming its break/continue flags
+    auto emit_constexpr_loop_body(const ast::block_stmt& block) -> constexpr_body_exit;
+    [[nodiscard]] auto constexpr_unroll_limit_reached(usize            iterations,
+                                                      std::string_view loop_kind,
+                                                      ast::node_id     id) -> bool;
+    [[nodiscard]] auto fold_constexpr_loop_condition(ast::expr_handle condition,
+                                                     std::string_view loop_kind)
+        -> stdx::option<bool>;
     auto emit_constexpr_while(ast::node_id id, const ast::while_loop_expr& while_loop) -> value;
     auto emit_do_while(ast::node_id                   id,
                        const ast::do_while_loop_expr& do_while,

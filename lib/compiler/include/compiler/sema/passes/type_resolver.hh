@@ -117,6 +117,9 @@ class type_resolver {
                                std::string_view ctor_mangled) -> void;
     auto check_deferred_body_jumps(ast::stmt_handle body) -> void;
 
+    // Folds a `[n]T` whose dimension is still deferred into its concrete array type
+    [[nodiscard]] auto concrete_array_type(type& maybe_deferred) -> type&;
+
   private:
     using scope = symbol_table_stack::scope;
     using named_test_map_t =

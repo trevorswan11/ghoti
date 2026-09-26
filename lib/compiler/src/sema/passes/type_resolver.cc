@@ -279,10 +279,7 @@ auto type_resolver::visit(ast::node_id id, const ast::array_expr& array) -> void
     auto* item_slot{last_type_.take()};
     // Fold sized element types so the items and the array's element slot see the concrete `[M]T`
     // rather than `type`
-    if (item_slot->get_data().is<types::deferred_array>()) {
-        gir::const_eval evaluator{ctx_, resolving_};
-        item_slot = &evaluator.force_deferred_array(*item_slot);
-    }
+    item_slot = &concrete_array_type(*item_slot);
     auto& item_type{*item_slot};
     if (item_type.is_resolved() && item_type.get_kind() != type_kind::AUTO) {
         const structural_guard g{implicit_type_stack_, item_type};
@@ -1803,13 +1800,28 @@ template <ast::IndexableID ID>
     }
     case token_type_t::BUILTIN_C_VA_START:
     case token_type_t::BUILTIN_C_VA_COPY:
-    case token_type_t::BUILTIN_C_VA_END:   {
-        ASSERT(builtin.return_type.get_kind() == type_kind::VOID_);
-        return_type = &builtin.return_type;
-        break;
-    }
-    case token_type_t::BUILTIN_C_VA_ARG: {
-        return_type = get_resolved_call_arg_type(call.arguments[1]);
+    case token_type_t::BUILTIN_C_VA_END:
+    case token_type_t::BUILTIN_C_VA_ARG:   {
+        // Every va builtin addresses caller-provided `va_list` storage through a pointer
+        const auto list_arg_count{builtin_id == token_type_t::BUILTIN_C_VA_COPY ? 2UZ : 1UZ};
+        const auto builtin_name{*syntax::get_builtin_opt(builtin_id)};
+        for (usize i{0}; i < list_arg_count; ++i) {
+            const auto& list_type{*get_resolved_call_arg_type(call.arguments[i])};
+            if (list_type.get_kind() != type_kind::POINTER || list_type.is_constant()) {
+                return make_sema_err(
+                    fmt::format("'{}' expects a `^mut` pointer to `va_list` storage; found '{}'",
+                                builtin_name,
+                                ctx_.type_display_name(list_type)),
+                    error::TYPE_MISMATCH,
+                    get_call_arg_location(call.arguments[i]));
+            }
+        }
+        if (builtin_id == token_type_t::BUILTIN_C_VA_ARG) {
+            return_type = &denoted_type(*get_resolved_call_arg_type(call.arguments[1]));
+        } else {
+            ASSERT(builtin.return_type.get_kind() == type_kind::VOID_);
+            return_type = &builtin.return_type;
+        }
         break;
     }
     case token_type_t::BUILTIN_PANIC: {
@@ -2501,10 +2513,7 @@ auto type_resolver::known_length(ast::node_id expr) -> stdx::option<u64> {
         if (const auto ref{target->get_data().as_opt<types::reference>()}) {
             target = &ref->underlying;
         }
-        if (target->get_data().is<types::deferred_array>()) {
-            gir::const_eval evaluator{ctx_, resolving_};
-            target = &evaluator.force_deferred_array(*target);
-        }
+        target = &concrete_array_type(*target);
         if (const auto arr{target->get_data().as_opt<types::array>()}) { return arr->len; }
     }
 
@@ -3066,7 +3075,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
 
                 auto result_arg_type =
                     arg.visit([this, param_type](auto arg_id) -> stdx::option<type&> {
-                        if (param_type->get_kind() == type_kind::TYPE) {
+                        if (is_type_parameter_slot(*param_type)) {
                             if (const auto ident{
                                     resolving_.ast.get_as_opt<ast::identifier_expr>(arg_id)}) {
                                 if (auto sym{ctx_.registry.lookup_with_table(table_stack_,
@@ -3097,7 +3106,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                         auto* arg_type{last_type_.take()};
                         if (arg_type->is_poison()) { return stdx::none; }
                         // `@TypeOf(x)` in a `type` argument position denotes the type it wraps.
-                        if (param_type->get_kind() == type_kind::TYPE) {
+                        if (is_type_parameter_slot(*param_type)) {
                             auto& denoted{denoted_type(*arg_type)};
                             if (denoted.get_kind() != type_kind::TYPE) { return denoted; }
                             if constexpr (std::convertible_to<decltype(arg_id), ast::node_id>) {
@@ -3114,8 +3123,9 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                             return denoted;
                         }
                         // A `constexpr_*` literal argument materializes before it binds a
-                        // generic `T` / `auto` parameter, keeping instantiations concrete.
-                        return &constexpr_numeric_view(*arg_type);
+                        // generic `T` / `auto` parameter, and a `[n]T` local's still-deferred
+                        // array type folds, keeping instantiations concrete.
+                        return &constexpr_numeric_view(concrete_array_type(*arg_type));
                     });
                 // A poisoned argument yields `none`; record it and move on
                 if (!result_arg_type) {
@@ -3124,6 +3134,21 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                     continue;
                 }
                 auto* resolved_type{result_arg_type.take()};
+                // A value slot erases at runtime, so it cannot carry a compile-time-only type
+                const auto arg_expr{
+                    call.arguments[expanded.source_index[i]].template as_opt<ast::expr_handle>()};
+                if (param_type->get_kind() == type_kind::AUTO && arg_expr &&
+                    decl_value_denotes_type(*arg_expr)) {
+                    return last_type_.emplace(ctx_.poison_node(
+                        resolving_,
+                        id,
+                        fmt::format("Argument {} is the type '{}', but its parameter is an `auto` "
+                                    "value; declare the parameter as `T: type` to accept a type",
+                                    i,
+                                    ctx_.type_display_name(*resolved_type)),
+                        error::TYPE_MISMATCH,
+                        get_call_arg_location(call.arguments[expanded.source_index[i]])));
+                }
                 if (bound_idx && concrete_arg_types[*bound_idx] &&
                     !sema::is_assignable(*resolved_type, *param_type)) {
                     return last_type_.emplace(ctx_.poison_node(
@@ -3363,10 +3388,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
         }
 
         auto* return_type{&function_type->return_type};
-        if (returns_deferred_array) {
-            gir::const_eval evaluator{ctx_, resolving_};
-            return_type = &evaluator.force_deferred_array(*return_type);
-        }
+        if (returns_deferred_array) { return_type = &concrete_array_type(*return_type); }
 
         // Only arity is checked since the type checker will handle the rest
         resolving_.set_sema_type(id, *return_type);
@@ -5098,10 +5120,7 @@ auto type_resolver::resolve_slice_copy(ast::node_id                id,
     if (const auto ref{src_type->get_data().as_opt<types::reference>()}) {
         src_type = &ref->underlying;
     }
-    if (src_type->get_data().is<types::deferred_array>()) {
-        gir::const_eval evaluator{ctx_, resolving_};
-        src_type = &evaluator.force_deferred_array(*src_type);
-    }
+    src_type = &concrete_array_type(*src_type);
 
     stdx::option<u64>         src_len;
     stdx::option<const type&> src_elem;
@@ -5421,10 +5440,7 @@ auto type_resolver::resolve_structural_access(type&                  object_type
         target_type = &fn_data->return_type;
     }
 
-    if (target_type->get_data().is<types::deferred_array>()) {
-        gir::const_eval evaluator{ctx_, resolving_};
-        target_type = &evaluator.force_deferred_array(*target_type);
-    }
+    target_type = &concrete_array_type(*target_type);
 
     auto&      object_data{target_type->get_data()};
     const auto enum_type{object_data.as_opt<types::enum_t>()};
@@ -5834,6 +5850,17 @@ auto type_resolver::visit(ast::node_id id, const ast::range_expr& range) -> void
     PROFILE_FUNCTION();
     auto& usize_type{ctx_.get_builtin_resolved_type(type_kind::USIZE)};
 
+    // A range is not a first-class value; match patterns resolve their endpoints directly
+    if (range.lhs && range.rhs && !in_subscript_index_ && !in_for_iterable_) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            "A range is only valid inside a subscript (`x[lo..hi]`), as a `for` iterable, or as a "
+            "`match` arm pattern",
+            error::ILLEGAL_OPEN_RANGE,
+            resolving_.ast.location_of(id)));
+    }
+
     // An omitted endpoint is filled from context: the indexed operand inside `[]`, or a sibling
     // iterable of a `for` loop. It is meaningless anywhere else.
     if ((!range.lhs || !range.rhs) && !in_subscript_index_ && !in_for_iterable_) {
@@ -6004,10 +6031,7 @@ auto type_resolver::visit(ast::node_id id, const ast::initializer_expr& init) ->
 
     // `RowAlias{ a, b, c }` / `.{ a, b }` in an array-typed context
     type* array_object{&object_type};
-    if (object_data.is<types::deferred_array>()) {
-        gir::const_eval evaluator{ctx_, resolving_};
-        array_object = &evaluator.force_deferred_array(object_type);
-    }
+    if (object_data.is<types::deferred_array>()) { array_object = &concrete_array_type(object_type); }
     if (const auto arr_data{array_object->get_data().as_opt<types::array>()}) {
         for (const auto& entry : init.initializers) {
             if (entry.member) {
@@ -7344,6 +7368,21 @@ auto type_resolver::visit(ast::node_id id, const ast::unary_expr& node) -> void 
     TRY_RESOLVE(node.rhs);
     if (id.get_token_type() == syntax::token_type_t::BANG) {
         last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::BOOL));
+    } else if (id.get_token_type() == syntax::token_type_t::PLUS) {
+        // Unary '+' is an identity that no GIR instruction checks, so validate it here
+        auto&      operand_type{*last_type_};
+        const auto kind{operand_type.get_kind()};
+        const bool ok{is_numeric(kind) || kind == type_kind::CONSTEXPR_INT ||
+                      kind == type_kind::CONSTEXPR_FLOAT};
+        if (!operand_type.is_poison() && !ok) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("unary '+' expects a numeric operand; found '{}'",
+                            ctx_.type_display_name(operand_type)),
+                error::OPERATOR_TYPE_MISMATCH,
+                resolving_.ast.location_of(id)));
+        }
     } else if (id.get_token_type() == syntax::token_type_t::MINUS_PERCENT) {
         // Mirrors plain unary '-': signed integers only with overflow safety
         auto&      operand_type{*last_type_};
@@ -7540,9 +7579,12 @@ auto type_resolver::visit(ast::node_id id, const ast::int_literal_expr& expr) ->
     } else {
         // An unsuffixed integer literal is `constexpr_int` and coerces freely
         resolved = &ctx_.get_builtin_resolved_type(type_kind::CONSTEXPR_INT);
-        if (const auto implicit_type{implicit_type_stack_.peek()};
-            implicit_type &&
-            (is_integer(implicit_type->get_kind()) || is_float(implicit_type->get_kind()))) {
+        const auto implicit_type{implicit_type_stack_.peek()};
+        if (implicit_type && implicit_type->get_kind() == type_kind::CONSTEXPR_FLOAT) {
+            // Folding must see a float value, not an integer that merely coerces
+            resolved = &ctx_.get_builtin_resolved_type(type_kind::CONSTEXPR_FLOAT);
+        } else if (implicit_type && (is_integer(implicit_type->get_kind()) ||
+                                     is_float(implicit_type->get_kind()))) {
             // Adopt the concrete context only when the literal's magnitude fits it
             const auto ptr_bits{
                 codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
@@ -11030,6 +11072,12 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type
     last_type_.emplace(final_type);
 }
 
+auto type_resolver::concrete_array_type(type& maybe_deferred) -> type& {
+    if (!maybe_deferred.get_data().is<types::deferred_array>()) { return maybe_deferred; }
+    gir::const_eval evaluator{ctx_, resolving_};
+    return evaluator.force_deferred_array(maybe_deferred);
+}
+
 auto type_resolver::instantiate_generic(type&                             callee_type,
                                         const generic_function_info&      fn_info,
                                         gsl::span<type*>                  concrete_args,
@@ -11298,7 +11346,8 @@ auto type_resolver::instantiate_generic(type&                             callee
         type* body_p_type{arg_type}; // contextual type meaning in the function body
         if (inst_resolver.last_type_ && !inst_resolver.last_type_->is_poison()) {
             auto& resolved_param_type{inst_resolver.thin_if_constexpr(
-                param, denoted_type(*inst_resolver.last_type_.take()))};
+                param,
+                inst_resolver.concrete_array_type(denoted_type(*inst_resolver.last_type_.take())))};
             // `&auto` / `^auto` (from `impl I` sugar) has no concrete shape yet
             const auto strips_to_auto{[](auto&& self, const type& t) -> bool {
                 if (t.get_kind() == type_kind::AUTO) { return true; }
@@ -11374,7 +11423,8 @@ auto type_resolver::instantiate_generic(type&                             callee
     if (inst_resolver.last_type_->is_poison()) { return stdx::none; }
     // `denoted_type` unwraps a `@TypeOf(param)` return annotation to the type it names, so it
     // isn't mistaken for a `fn(...): type` type constructor.
-    auto&      return_type{denoted_type(*inst_resolver.last_type_.take())};
+    auto&      return_type{
+        inst_resolver.concrete_array_type(denoted_type(*inst_resolver.last_type_.take()))};
     const auto is_auto_return{return_type.get_kind() == type_kind::AUTO};
     inst_resolver.return_trackers_.emplace_back(return_tracker{
         .return_types   = {},

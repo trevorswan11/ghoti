@@ -630,6 +630,10 @@ auto is_generic_type(const type& t, bool unmodified) noexcept -> bool {
     return false;
 }
 
+auto is_type_parameter_slot(const type& t) noexcept -> bool {
+    return t.get_kind() == type_kind::TYPE && !t.get_data().is<types::deferred_array>();
+}
+
 auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {
     if (a == b) { return true; }
     if (a.get_kind() != b.get_kind()) { return false; }

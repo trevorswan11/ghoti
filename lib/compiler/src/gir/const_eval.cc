@@ -2661,6 +2661,7 @@ auto const_eval::eval_unary(ast::node_id id, const ast::unary_expr& unary)
     if (!val) { return stdx::none; }
 
     const auto op_type{id.get_token_type()};
+    if (op_type == syntax::token_type_t::PLUS) { return val; }
     if (op_type == syntax::token_type_t::MINUS) {
         if (val->is<i64>()) {
             return make_scalar_const(-static_cast<i128>(val->as<i64>()), val->get_type());

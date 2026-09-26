@@ -203,6 +203,9 @@ using type_name_map = ankerl::unordered_dense::map<const type*, std::string_view
 // True when `t` still contains an unbound generic parameter rather than a fully concrete type.
 [[nodiscard]] auto is_generic_type(const type& t, bool unmodified = true) noexcept -> bool;
 
+// A `type`-kinded slot that takes a type argument, as opposed to a still-deferred `[n]T`
+[[nodiscard]] auto is_type_parameter_slot(const type& t) noexcept -> bool;
+
 // True when a value of `t` holds a `type`, so it only exists at compile time and has no runtime
 // representation
 [[nodiscard]] auto holds_type_values(const type& t) noexcept -> bool;

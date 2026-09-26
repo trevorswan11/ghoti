@@ -300,4 +300,17 @@ TEST_CASE("`using` is an ordinary identifier") {
             "Expected token SEMICOLON, found IDENT", syntax::error::UNEXPECTED_TOKEN, 0, 6});
 }
 
+TEST_CASE("A failed top-level statement is skipped as a unit without cascading errors") {
+    helpers::test_parser_fail(R"(const f := fn(x: i32, y): i32 { return 0; };
+const g := 1 +;)",
+                              syntax::diagnostic{"Expected token COLON, found RPAREN",
+                                                 syntax::error::UNEXPECTED_TOKEN,
+                                                 0,
+                                                 23},
+                              syntax::diagnostic{"No prefix parse function for SEMICOLON(;) found",
+                                                 syntax::error::MISSING_PREFIX_PARSER,
+                                                 1,
+                                                 14});
+}
+
 } // namespace ghoti::tests
