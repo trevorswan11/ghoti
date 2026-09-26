@@ -332,8 +332,10 @@ auto is_implicit_widenable(const type& from, const type& to) noexcept -> bool {
     return true; // uW widens to any wider iV or uV
 }
 
-auto cast_rejection_reason(const type& from, const type& to, u32 ptr_bits)
-    -> stdx::option<std::string> {
+auto cast_rejection_reason(const type&                        from,
+                           const type&                        to,
+                           u32                                ptr_bits,
+                           stdx::option<const type_name_map&> names) -> stdx::option<std::string> {
     if (is_same_unqualified(from, to) || is_implicit_widenable(from, to)) { return stdx::none; }
 
     const auto from_kind{from.get_kind()};
@@ -359,29 +361,29 @@ auto cast_rejection_reason(const type& from, const type& to, u32 ptr_bits)
             return fmt::format(
                 "narrowing conversion from '{}' to '{}' may truncate high bits; use @intCast for a "
                 "checked conversion or @truncate to discard high bits",
-                type_kind_display_name(from),
-                type_kind_display_name(to));
+                from.to_string(names),
+                to.to_string(names));
         }
         if (from_bits == to_bits && from_signed != to_signed) {
             return fmt::format(
                 "conversion from '{}' to '{}' changes signedness and may change the represented "
                 "value; use @intCast for a checked conversion or @bitCast to reinterpret the bits",
-                type_kind_display_name(from),
-                type_kind_display_name(to));
+                from.to_string(names),
+                to.to_string(names));
         }
         if (from_bits > to_bits && from_signed != to_signed) {
             return fmt::format(
                 "conversion from '{}' to '{}' narrows width and changes signedness; use @intCast "
                 "for a checked conversion or @truncate to discard high bits",
-                type_kind_display_name(from),
-                type_kind_display_name(to));
+                from.to_string(names),
+                to.to_string(names));
         }
         if (from_bits < to_bits && from_signed && !to_signed) {
             return fmt::format(
                 "conversion from signed '{}' to unsigned '{}' cannot represent negative values; "
                 "use @intCast for a checked conversion",
-                type_kind_display_name(from),
-                type_kind_display_name(to));
+                from.to_string(names),
+                to.to_string(names));
         }
         return stdx::none;
     }
@@ -392,8 +394,8 @@ auto cast_rejection_reason(const type& from, const type& to, u32 ptr_bits)
             return fmt::format(
                 "narrowing conversion from '{}' to '{}' may lose precision; use @as for an "
                 "explicit conversion",
-                type_kind_display_name(from),
-                type_kind_display_name(to));
+                from.to_string(names),
+                to.to_string(names));
         }
         return stdx::none;
     }
@@ -404,8 +406,8 @@ auto cast_rejection_reason(const type& from, const type& to, u32 ptr_bits)
         return fmt::format(
             "conversion between enum '{}' and integer '{}' requires an explicit cast; use @as for "
             "an explicit conversion",
-            type_kind_display_name(from),
-            type_kind_display_name(to));
+            from.to_string(names),
+            to.to_string(names));
     }
 
     // Float <-> Integer
@@ -413,14 +415,14 @@ auto cast_rejection_reason(const type& from, const type& to, u32 ptr_bits)
         return fmt::format(
             "conversion from '{}' to '{}' truncates fractional part; use @as for an explicit "
             "conversion",
-            type_kind_display_name(from),
-            type_kind_display_name(to));
+            from.to_string(names),
+            to.to_string(names));
     }
     if (is_integer(from_kind) && is_float(to_kind)) {
         return fmt::format(
             "conversion from '{}' to '{}' may lose precision; use @as for an explicit conversion",
-            type_kind_display_name(from),
-            type_kind_display_name(to));
+            from.to_string(names),
+            to.to_string(names));
     }
 
     // Bool <-> Integer / Pointer
@@ -428,13 +430,13 @@ auto cast_rejection_reason(const type& from, const type& to, u32 ptr_bits)
         return fmt::format(
             "conversion from '{}' to 'bool' tests non-zero; use @boolFromInt for an explicit "
             "conversion",
-            type_kind_display_name(from));
+            from.to_string(names));
     }
     if (from_kind == type_kind::BOOL && is_integer(to_kind)) {
         return fmt::format(
             "conversion from 'bool' to '{}' maps false/true to 0/1; use @intFromBool for an "
             "explicit conversion",
-            type_kind_display_name(to));
+            to.to_string(names));
     }
 
     return stdx::none;

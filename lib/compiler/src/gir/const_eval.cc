@@ -3636,7 +3636,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
             ctx_.diags.emplace_back(
                 fmt::format("Integer value {} is out of range for target type '{}' in @intCast",
                             *src_int,
-                            sema::type_kind_display_name(*target)),
+                            ctx_.type_display_name(*target)),
                 sema::error::CONSTEXPR_EVALUATION_FAILED,
                 module_->ast.location_of(*op_h));
             return const_value::make_poison();

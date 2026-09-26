@@ -3310,11 +3310,13 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
             return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(result.error())));
         }
     } else {
-        return last_type_.emplace(ctx_.poison_node(resolving_,
-                                                   id,
-                                                   "Expression is not callable",
-                                                   error::NON_CALLABLE_EXPRESSION,
-                                                   resolving_.ast.location_of(call.function)));
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             fmt::format("Expression of type '{}' is not callable",
+                                         ctx_.type_display_name(callee_type)),
+                             error::NON_CALLABLE_EXPRESSION,
+                             resolving_.ast.location_of(call.function)));
     }
 }
 
@@ -5265,10 +5267,9 @@ auto type_resolver::resolve_impl_method_access(const type&      target,
     return stdx::none;
 }
 
-auto type_resolver::resolve_structural_access(type&                          object_type,
-                                              ast::identifier_handle         member,
-                                              source_location                object_location,
-                                              stdx::option<std::string_view> object_name)
+auto type_resolver::resolve_structural_access(type&                  object_type,
+                                              ast::identifier_handle member,
+                                              source_location        object_location)
     -> stdx::result<gsl::not_null<type*>, diagnostic> {
     auto* target_type{&object_type};
     if (const auto ptr_data{target_type->get_data().as_opt<types::pointer>()}) {
@@ -5333,10 +5334,11 @@ auto type_resolver::resolve_structural_access(type&                          obj
     if (closure_type) {
         const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(member)};
         if (member_ident.name == "thunk") { return &closure_type->impl_signature; }
-        return make_sema_err(
-            fmt::format("Type 'closure' has no field named '{}'", member_ident.name),
-            error::UNDECLARED_IDENTIFIER,
-            resolving_.ast.location_of(member));
+        return make_sema_err(fmt::format("Type '{}' has no field named '{}'",
+                                         ctx_.type_display_name(*target_type),
+                                         member_ident.name),
+                             error::UNDECLARED_IDENTIFIER,
+                             resolving_.ast.location_of(member));
     }
 
     if (slice_type || array_type) {
@@ -5348,17 +5350,11 @@ auto type_resolver::resolve_structural_access(type&                          obj
         if (member_ident.name == "len") {
             return &ctx_.get_builtin_resolved_type(type_kind::USIZE);
         }
-        const auto type_kind_name{slice_type ? "slice" : "array"};
-        return make_sema_err(
-            object_name
-                .transform([&](std::string_view name) -> std::string {
-                    return fmt::format(
-                        "Type '{}' has no field named '{}'", name, member_ident.name);
-                })
-                .value_or(fmt::format(
-                    "Type '{}' has no field named '{}'", type_kind_name, member_ident.name)),
-            error::UNDECLARED_IDENTIFIER,
-            resolving_.ast.location_of(member));
+        return make_sema_err(fmt::format("Type '{}' has no field named '{}'",
+                                         ctx_.type_display_name(*target_type),
+                                         member_ident.name),
+                             error::UNDECLARED_IDENTIFIER,
+                             resolving_.ast.location_of(member));
     }
 
     if (!enum_type && !struct_type && !union_type) {
@@ -5388,15 +5384,11 @@ auto type_resolver::resolve_structural_access(type&                          obj
                 *target_type, member_ident.name, resolving_.ast.location_of(member))}) {
             return std::move(*ext);
         }
-        return make_sema_err(
-            object_name
-                .transform([&](std::string_view name) -> std::string {
-                    return fmt::format(
-                        "Type '{}' has no field named '{}'", name, member_ident.name);
-                })
-                .value_or(fmt::format("Type has no field named '{}'", member_ident.name)),
-            error::UNDECLARED_IDENTIFIER,
-            resolving_.ast.location_of(member));
+        return make_sema_err(fmt::format("Type '{}' has no field named '{}'",
+                                         ctx_.type_display_name(*target_type),
+                                         member_ident.name),
+                             error::UNDECLARED_IDENTIFIER,
+                             resolving_.ast.location_of(member));
     }
 
     auto& [member_symbol, member_idx] = *symbol_proxy;
@@ -5582,10 +5574,8 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
 
     pending_impl_method_owner_.reset();
     pending_param_impl_target_.reset();
-    auto result{resolve_structural_access(object_type,
-                                          dot.member,
-                                          resolving_.ast.location_of(dot.object),
-                                          get_rightmost_name(dot.object))};
+    auto result{
+        resolve_structural_access(object_type, dot.member, resolving_.ast.location_of(dot.object))};
     if (!result) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(result).error()));
     }
@@ -7327,7 +7317,7 @@ auto type_resolver::visit(ast::node_id id, const ast::unwrap_expr& unwrap) -> vo
     const bool  widenable{is_implicit_widenable(res_ty, from_ty)};
     if (!same && !assignable && !widenable) {
         const auto  ptr_bits{codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
-        const auto  reason{cast_rejection_reason(res_ty, from_ty, ptr_bits)};
+        const auto  reason{cast_rejection_reason(res_ty, from_ty, ptr_bits, ctx_.user_type_names)};
         std::string reason_suffix;
         if (reason) { reason_suffix = fmt::format(" ({})", *reason); }
         return last_type_.emplace(ctx_.poison_node(

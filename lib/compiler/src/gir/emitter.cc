@@ -739,10 +739,10 @@ auto emitter::coerce_constexpr_int(value v, sema::type& target, ast::node_id at)
     if (folded && !sema::constexpr_int_fits(*folded, target, target_ptr_bits_)) {
         ctx_.diags.emplace_back(v.type && v.type->get_kind() == sema::type_kind::CONSTEXPR_INT
                                     ? fmt::format("integer literal is out of range for type '{}'",
-                                                  sema::type_kind_display_name(target))
+                                                  ctx_.type_display_name(target))
                                     : fmt::format("integer value {} is out of range for type '{}'",
                                                   *folded,
-                                                  sema::type_kind_display_name(target)),
+                                                  ctx_.type_display_name(target)),
                                 sema::error::LITERAL_OUT_OF_RANGE,
                                 active_ast().location_of(at));
     }
@@ -2024,7 +2024,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                     if (decl.explicit_type && scalar.type &&
                         !sema::is_assignable(*scalar.type, *sema_type)) {
                         const auto reason{sema::cast_rejection_reason(
-                            *scalar.type, *sema_type, target_ptr_bits_)};
+                            *scalar.type, *sema_type, target_ptr_bits_, ctx_.user_type_names)};
                         ctx_.diags.emplace_back(
                             reason
                                 ? fmt::format("Type mismatch in store: cannot assign '{}' to "
@@ -2072,7 +2072,8 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         // A non-foldable `const` binds directly to its initializer's value, bypassing the
         // store-typecheck a `var` alloca would get; re-check the annotated type here.
         if (decl.explicit_type && val.type && !sema::is_assignable(*val.type, *sema_type)) {
-            const auto reason{sema::cast_rejection_reason(*val.type, *sema_type, target_ptr_bits_)};
+            const auto reason{sema::cast_rejection_reason(
+                *val.type, *sema_type, target_ptr_bits_, ctx_.user_type_names)};
             ctx_.diags.emplace_back(
                 reason ? fmt::format("Type mismatch in store: cannot assign '{}' to '{}' ({})",
                                      ctx_.type_display_name(*val.type),
@@ -5737,7 +5738,7 @@ auto emitter::emit_int_cast_guard(value operand, const sema::type& dest_type, as
                 ctx_.diags.emplace_back(
                     fmt::format("Integer value {} is out of range for target type '{}' in @intCast",
                                 *known,
-                                sema::type_kind_display_name(dest_type)),
+                                ctx_.type_display_name(dest_type)),
                     sema::error::CONSTEXPR_EVALUATION_FAILED,
                     active_ast().location_of(site));
             }
@@ -5748,7 +5749,7 @@ auto emitter::emit_int_cast_guard(value operand, const sema::type& dest_type, as
             ctx_.diags.emplace_back(
                 fmt::format("Integer value {} is out of range for target type '{}' in @intCast",
                             *folded,
-                            sema::type_kind_display_name(dest_type)),
+                            ctx_.type_display_name(dest_type)),
                 sema::error::CONSTEXPR_EVALUATION_FAILED,
                 active_ast().location_of(site));
         }

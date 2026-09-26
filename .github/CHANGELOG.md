@@ -467,6 +467,10 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - A function-type alias used as a return type (`fn(): Callback`) now returns a callable value
 - A generic instantiated with both a thin and an erased function type argument now produces distinct instantiations
 - Function types rebuilt while substituting unwrap shapes no longer drop their calling convention
+- Diagnostics show full types everywhere instead of bare kinds like `array` / `slice` / `enum` (#341)
+    - `Type '[3]i32' has no field named 'x'` (previously the variable's name or `array`), `Expression of type 'S' is not callable`
+    - Unary `-` / `!` / `~` and non-`bool` conditions report the operand type they found
+    - Binary operator errors use the source spelling (`'+'`, `'<<'`) instead of internal names (`'add'`, `'shl'`)
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
