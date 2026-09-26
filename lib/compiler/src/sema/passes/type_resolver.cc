@@ -4904,6 +4904,10 @@ auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -
     case syntax::token_type_t::MINUS_PERCENT_ASSIGN:
     case syntax::token_type_t::STAR_PERCENT_ASSIGN:
     case syntax::token_type_t::SHL_PERCENT_ASSIGN:
+    case syntax::token_type_t::PLUS_PIPE_ASSIGN:
+    case syntax::token_type_t::MINUS_PIPE_ASSIGN:
+    case syntax::token_type_t::STAR_PIPE_ASSIGN:
+    case syntax::token_type_t::SHL_PIPE_ASSIGN:
         if (!lhs_type.is_poison() && !rhs_type.is_poison() &&
             (!wrapping_operand_ok(lhs_type) || !wrapping_operand_ok(rhs_type))) {
             return last_type_.emplace(ctx_.poison_node(
@@ -5066,7 +5070,11 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
     case syntax::token_type_t::PLUS_PERCENT:
     case syntax::token_type_t::MINUS_PERCENT:
     case syntax::token_type_t::STAR_PERCENT:
-    case syntax::token_type_t::SHL_PERCENT:   {
+    case syntax::token_type_t::SHL_PERCENT:
+    case syntax::token_type_t::PLUS_PIPE:
+    case syntax::token_type_t::MINUS_PIPE:
+    case syntax::token_type_t::STAR_PIPE:
+    case syntax::token_type_t::SHL_PIPE:      {
         if (!lhs_type->is_poison() && !rhs_type.is_poison() &&
             (!wrapping_operand_ok(*lhs_type) || !wrapping_operand_ok(rhs_type))) {
             return last_type_.emplace(ctx_.poison_node(

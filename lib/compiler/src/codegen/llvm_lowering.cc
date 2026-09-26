@@ -1158,6 +1158,48 @@ auto llvm_lowering::emit_checked_arith(const gir::instruction& inst,
     }
 }
 
+auto llvm_lowering::emit_saturating_arith(const gir::instruction& inst,
+                                          llvm::Value*            lhs,
+                                          llvm::Value*            rhs,
+                                          bool                    is_signed) -> llvm::Value* {
+    PROFILE_FUNCTION();
+    auto* int_ty{llvm::cast<llvm::IntegerType>(lhs->getType())};
+    switch (inst.kind) {
+    case gir::instruction_kind::ADD:
+        return builder_.CreateBinaryIntrinsic(
+            is_signed ? llvm::Intrinsic::sadd_sat : llvm::Intrinsic::uadd_sat, lhs, rhs);
+    case gir::instruction_kind::SUB:
+        return builder_.CreateBinaryIntrinsic(
+            is_signed ? llvm::Intrinsic::ssub_sat : llvm::Intrinsic::usub_sat, lhs, rhs);
+    case gir::instruction_kind::MUL: {
+        // There's no plain `mul.sat`, but a fixed-point multiply with scale 0 is exactly that
+        const auto id{is_signed ? llvm::Intrinsic::smul_fix_sat : llvm::Intrinsic::umul_fix_sat};
+        auto*      fn{llvm::Intrinsic::getOrInsertDeclaration(llvm_module_.get(), id, {int_ty})};
+        return builder_.CreateCall(fn, {lhs, rhs, builder_.getInt32(0)}, "mulsat");
+    }
+    case gir::instruction_kind::SHL: {
+        // `shl.sat` is poison once the amount reaches the width, where any non-zero lhs saturates
+        const unsigned width{int_ty->getBitWidth()};
+        auto*          zero{llvm::ConstantInt::get(int_ty, 0)};
+        auto*          in_range{builder_.CreateICmpULT(rhs, llvm::ConstantInt::get(int_ty, width))};
+        auto*          amount{builder_.CreateSelect(in_range, rhs, zero)};
+        auto*          shifted{builder_.CreateBinaryIntrinsic(
+            is_signed ? llvm::Intrinsic::sshl_sat : llvm::Intrinsic::ushl_sat, lhs, amount)};
+
+        llvm::Value* limit{llvm::ConstantInt::get(int_ty, llvm::APInt::getMaxValue(width))};
+        if (is_signed) {
+            limit = builder_.CreateSelect(
+                builder_.CreateICmpSLT(lhs, zero),
+                llvm::ConstantInt::get(int_ty, llvm::APInt::getSignedMinValue(width)),
+                llvm::ConstantInt::get(int_ty, llvm::APInt::getSignedMaxValue(width)));
+        }
+        auto* saturated{builder_.CreateSelect(builder_.CreateICmpEQ(lhs, zero), zero, limit)};
+        return builder_.CreateSelect(in_range, shifted, saturated, "shlsat");
+    }
+    default: UNREACHABLE("Only + - * << have saturating forms");
+    }
+}
+
 auto llvm_lowering::const_callable(std::string_view          fn_symbol,
                                    stdx::option<sema::type&> fn_type,
                                    llvm::Type*               ty) -> llvm::Constant* {
@@ -2012,6 +2054,7 @@ auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {
         }
     }
 
+    if (inst.is_saturating && !is_flt) { return emit_saturating_arith(inst, lhs, rhs, is_sgn); }
     if (inst.is_checked && !is_flt) {
         if (auto* checked{emit_checked_arith(inst, lhs, rhs, is_sgn)}) { return checked; }
     }

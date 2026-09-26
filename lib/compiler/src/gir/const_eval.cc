@@ -161,6 +161,49 @@ template <typename T>
     }
 }
 
+// The plain base op a saturating token clamps the result of
+[[nodiscard]] constexpr auto saturating_base_op(syntax::token_type_t tok) noexcept
+    -> stdx::option<syntax::token_type_t> {
+    switch (tok) {
+    case syntax::token_type_t::PLUS_PIPE:  return syntax::token_type_t::PLUS;
+    case syntax::token_type_t::MINUS_PIPE: return syntax::token_type_t::MINUS;
+    case syntax::token_type_t::STAR_PIPE:  return syntax::token_type_t::STAR;
+    case syntax::token_type_t::SHL_PIPE:   return syntax::token_type_t::SHL;
+    default:                               return stdx::none;
+    }
+}
+
+// The exact result of `l op r` clamped to a `bits`-wide integer's range, for `bits` below 128
+[[nodiscard]] auto
+saturate_exact(syntax::token_type_t plain_op, i128 l, i128 r, u16 bits, bool is_signed) -> i128 {
+    const i128 hi{is_signed ? (i128{1} << (bits - 1)) - 1 : (i128{1} << bits) - 1};
+    const i128 lo{is_signed ? -(i128{1} << (bits - 1)) : i128{0}};
+    const auto clamp            = [&](i128 v) { return std::clamp(v, lo, hi); };
+    const auto saturated_toward = [&](bool negative) { return negative ? lo : hi; };
+
+    switch (plain_op) {
+    case syntax::token_type_t::PLUS:  return clamp(l + r);
+    case syntax::token_type_t::MINUS: return clamp(l - r);
+    case syntax::token_type_t::STAR:  {
+        if (l == 0 || r == 0) { return 0; }
+        // |l| * |r| stays in range iff |l| <= limit / |r|, checked without overflowing 128 bits
+        const bool negative{(l < 0) != (r < 0)};
+        const i128 limit{negative ? -lo : hi};
+        const auto magnitude = [](i128 v) { return v < 0 ? -v : v; };
+        if (magnitude(l) > limit / magnitude(r)) { return saturated_toward(negative); }
+        return l * r;
+    }
+    case syntax::token_type_t::SHL: {
+        if (l == 0) { return 0; }
+        if (r < 0 || r >= bits) { return saturated_toward(l < 0); }
+        const auto amount{static_cast<int>(r)};
+        if (l > 0 ? l > (hi >> amount) : l < (lo >> amount)) { return saturated_toward(l < 0); }
+        return l * (i128{1} << amount);
+    }
+    default: UNREACHABLE("Only + - * << have saturating forms");
+    }
+}
+
 // Truncates `folded`'s integer value to `bits` (two's-complement), rebuilding it at `res_type`
 [[nodiscard]] auto wrap_to_width(const const_value&        folded,
                                  u16                       bits,
@@ -2399,6 +2442,25 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
         }
         // `constexpr_int` (or anything else non-scalar-width): no wrap, plain-op result stands.
         return folded;
+    }
+
+    // Saturating ops clamp the exact result to the first concrete integer operand's range; with
+    // only width-less `constexpr_int` operands there is no range, so they fold as the plain op
+    if (const auto plain_op{saturating_base_op(op_type)}) {
+        const auto ptr_bits{codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
+        stdx::option<sema::type&> res_type;
+        for (const auto* v : {&lhs, &rhs}) {
+            if (!res_type && v->get_type() && integer_target_width(*v->get_type(), ptr_bits)) {
+                res_type = v->get_type();
+            }
+        }
+        if (!res_type) { return fold_binary_values(*plain_op, lhs, rhs, id); }
+
+        const auto [bits, is_signed]{*integer_target_width(*res_type, ptr_bits)};
+        const auto l{lhs.as_int_opt()};
+        const auto r{rhs.as_int_opt()};
+        if (!l || !r || bits >= 128) { return stdx::none; }
+        return make_scalar_const(saturate_exact(*plain_op, *l, *r, bits, is_signed), res_type);
     }
 
     if (op_type == syntax::token_type_t::PLUS_PLUS) { return fold_concat(lhs, rhs, id); }

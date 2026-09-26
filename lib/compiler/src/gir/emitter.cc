@@ -2544,10 +2544,14 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
 
     const auto lhs{emit_expression(binary.lhs)};
     const auto rhs{emit_expression(binary.rhs)};
-    return value{
-        emit_checked_binary(
-            *kind_opt, lhs, rhs, *sema_type, id, syntax::token_type::is_wrapping_op(op_type)),
-        sema_type};
+    return value{emit_checked_binary(*kind_opt,
+                                     lhs,
+                                     rhs,
+                                     *sema_type,
+                                     id,
+                                     syntax::token_type::is_wrapping_op(op_type),
+                                     syntax::token_type::is_saturating_op(op_type)),
+                 sema_type};
 }
 
 auto emitter::emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value {
@@ -2866,7 +2870,8 @@ auto emitter::emit_packed_field_assign(ast::node_id                id,
                                               rhs,
                                               field_type,
                                               id,
-                                              syntax::token_type::is_wrapping_op(base_tok)),
+                                              syntax::token_type::is_wrapping_op(base_tok),
+                                              syntax::token_type::is_saturating_op(base_tok)),
                           field_type};
     }
 
@@ -3126,6 +3131,10 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
     case syntax::token_type_t::XOR_ASSIGN:
     case syntax::token_type_t::SHL_ASSIGN:
     case syntax::token_type_t::SHL_PERCENT_ASSIGN:
+    case syntax::token_type_t::PLUS_PIPE_ASSIGN:
+    case syntax::token_type_t::MINUS_PIPE_ASSIGN:
+    case syntax::token_type_t::STAR_PIPE_ASSIGN:
+    case syntax::token_type_t::SHL_PIPE_ASSIGN:
     case syntax::token_type_t::SHR_ASSIGN:           {
         auto base_tok{op_type};
         if (const auto b{syntax::token_type::get_compound_base_op(op_type)}) { base_tok = *b; }
@@ -3133,13 +3142,15 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
         auto&      target_type{*lhs_lval.type};
         const auto loaded{builder_.emit_load(lhs_lval, target_type)};
         const auto rhs{emit_coerced_expr(assign.rhs, target_type)};
-        const auto res_val{value{emit_checked_binary(base_kind,
-                                                     value{loaded, target_type},
-                                                     rhs,
-                                                     target_type,
-                                                     id,
-                                                     syntax::token_type::is_wrapping_op(base_tok)),
-                                 target_type}};
+        const auto res_val{
+            value{emit_checked_binary(base_kind,
+                                      value{loaded, target_type},
+                                      rhs,
+                                      target_type,
+                                      id,
+                                      syntax::token_type::is_wrapping_op(base_tok),
+                                      syntax::token_type::is_saturating_op(base_tok)),
+                  target_type}};
         builder_.emit_store(lhs_lval, res_val);
         return res_val;
     }
@@ -5961,16 +5972,18 @@ auto emitter::emit_checked_binary(instruction_kind kind,
                                   value            rhs,
                                   sema::type&      result_type,
                                   ast::node_id,
-                                  bool wrapping) -> local_id {
+                                  bool wrapping,
+                                  bool saturating) -> local_id {
     // Only integer arithmetic can trap, and only signed +/-/* can overflow.
     const auto k{result_type.get_kind()};
-    const bool checkable{!wrapping && runtime_safety_ && sema::is_integer(k) &&
+    const bool checkable{!wrapping && !saturating && runtime_safety_ && sema::is_integer(k) &&
                          (((kind == instruction_kind::ADD || kind == instruction_kind::SUB ||
                             kind == instruction_kind::MUL) &&
                            sema::is_signed_integer(result_type)) ||
                           kind == instruction_kind::DIV || kind == instruction_kind::MOD ||
                           kind == instruction_kind::SHL || kind == instruction_kind::SHR)};
-    return builder_.emit_binary(kind, std::move(lhs), std::move(rhs), result_type, checkable);
+    return builder_.emit_binary(
+        kind, std::move(lhs), std::move(rhs), result_type, checkable, saturating);
 }
 
 auto emitter::emit_checked_unary(instruction_kind kind,

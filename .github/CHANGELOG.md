@@ -471,6 +471,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `Type '[3]i32' has no field named 'x'` (previously the variable's name or `array`), `Expression of type 'S' is not callable`
     - Unary `-` / `!` / `~` and non-`bool` conditions report the operand type they found
     - Binary operator errors use the source spelling (`'+'`, `'<<'`) instead of internal names (`'add'`, `'shl'`)
+- Saturating operators `+| -| *| <<|` and compound forms `+|= -|= *|= <<|=` clamp to the operand type's range instead of wrapping or trapping (#321)
+    - `<<|` saturates for any shift amount, including one at or past the bit width
+    - Fold at compile time; between two untyped integer constants they fold like the plain operator
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

@@ -152,7 +152,7 @@ templ InternalsBuiltinsPage() {
 	<p>Integer-only. A zero divisor in a compile-time constant expression is an error.</p>
 	<h3>{ "@addWithOverflow / @subWithOverflow / @mulWithOverflow / @shlWithOverflow" }</h3>
 	<pre><code class="language-ghoti">{ `@addWithOverflow(a: T, b: T, result: &mut T): bool` }</code></pre>
-	<p>Integer-only. Writes the wrapped result through <code>result</code> and returns whether the operation overflowed. For the same wrapped value without the overflow flag, use the wrapping operators <code>+% -% *% &lt;&lt;%</code> (see the <a href="/doc/syntax/types">types</a> page). Unlike the plain operators, they never trap under <code>--runtime-safety</code>.</p>
+	<p>Integer-only. Writes the wrapped result through <code>result</code> and returns whether the operation overflowed. For the same wrapped value without the overflow flag, use the wrapping operators <code>+% -% *% &lt;&lt;%</code> (see the <a href="/doc/syntax/types">types</a> page). Unlike the plain operators, they never trap under <code>--runtime-safety</code>. To clamp to the type's range on overflow instead, use the saturating operators <code>+| -| *| &lt;&lt;|</code>.</p>
 	<h2>Atomics</h2>
 	<p>
 		The order and (for <code>{ "@atomicRmw" }</code>) op arguments below are <code>{ "MemoryOrder" }</code> / <code>{ "AtomicRmwOp" }</code> members, both compiler-provided enums that must be referenced through the <code>{ "builtin" }</code> module; e.g. <code>{ "builtin::MemoryOrder.seq_cst" }</code>, <code>{ "builtin::AtomicRmwOp.add" }</code> &mdash; and given as a compile-time constant; a runtime value is a compile error.

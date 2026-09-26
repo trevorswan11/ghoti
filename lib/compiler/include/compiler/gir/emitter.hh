@@ -190,13 +190,15 @@ class emitter {
     auto materialize_string_slice(std::string_view text, sema::type& slice_type) -> value;
 
     auto emit_null_pointer_check(value ptr, ast::node_id site) -> void;
-    // `wrapping` forces the overflow guard off unconditionally, for `+% -% *% <<%` / `-%x`
+    // `wrapping` forces the overflow guard off unconditionally, for `+% -% *% <<%` / `-%x`;
+    // `saturating` clamps to the result range instead (`+| -| *| <<|`), which also never traps
     auto emit_checked_binary(instruction_kind kind,
                              value            lhs,
                              value            rhs,
                              sema::type&      result_type,
                              ast::node_id     site,
-                             bool             wrapping = false) -> local_id;
+                             bool             wrapping   = false,
+                             bool             saturating = false) -> local_id;
     auto emit_checked_unary(instruction_kind kind,
                             value            operand,
                             sema::type&      result_type,
@@ -442,10 +444,13 @@ class emitter {
         switch (tok) {
         case syntax::token_type_t::PLUS:          return instruction_kind::ADD;
         case syntax::token_type_t::PLUS_PERCENT:  return instruction_kind::ADD;
+        case syntax::token_type_t::PLUS_PIPE:     return instruction_kind::ADD;
         case syntax::token_type_t::MINUS:         return instruction_kind::SUB;
         case syntax::token_type_t::MINUS_PERCENT: return instruction_kind::SUB;
+        case syntax::token_type_t::MINUS_PIPE:    return instruction_kind::SUB;
         case syntax::token_type_t::STAR:          return instruction_kind::MUL;
         case syntax::token_type_t::STAR_PERCENT:  return instruction_kind::MUL;
+        case syntax::token_type_t::STAR_PIPE:     return instruction_kind::MUL;
         case syntax::token_type_t::SLASH:         return instruction_kind::DIV;
         case syntax::token_type_t::PERCENT:       return instruction_kind::MOD;
         case syntax::token_type_t::BW_AND:        return instruction_kind::AND;
@@ -453,6 +458,7 @@ class emitter {
         case syntax::token_type_t::CARET:         return instruction_kind::XOR;
         case syntax::token_type_t::SHL:           return instruction_kind::SHL;
         case syntax::token_type_t::SHL_PERCENT:   return instruction_kind::SHL;
+        case syntax::token_type_t::SHL_PIPE:      return instruction_kind::SHL;
         case syntax::token_type_t::SHR:           return instruction_kind::SHR;
         case syntax::token_type_t::EQ:            return instruction_kind::EQ;
         case syntax::token_type_t::NEQ:           return instruction_kind::NE;

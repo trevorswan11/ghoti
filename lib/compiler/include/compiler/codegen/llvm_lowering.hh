@@ -156,6 +156,10 @@ class llvm_lowering {
                             llvm::Value*            lhs,
                             llvm::Value*            rhs,
                             bool                    is_signed) -> llvm::Value*;
+    auto emit_saturating_arith(const gir::instruction& inst,
+                               llvm::Value*            lhs,
+                               llvm::Value*            rhs,
+                               bool                    is_signed) -> llvm::Value*;
 
     [[nodiscard]] constexpr auto mem_fallbacks_used() const noexcept -> bool {
         return memcpy_used_ || memmove_used_ || memset_used_;

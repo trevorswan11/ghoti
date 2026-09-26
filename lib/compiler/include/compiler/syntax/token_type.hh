@@ -52,6 +52,12 @@ enum class token_type_t : u8 {
     STAR_PERCENT,
     SHL_PERCENT,
 
+    // Saturating (clamp-to-range) arithmetic
+    PLUS_PIPE,
+    MINUS_PIPE,
+    STAR_PIPE,
+    SHL_PIPE,
+
     PLUS_ASSIGN,
     MINUS_ASSIGN,
     STAR_ASSIGN,
@@ -68,6 +74,11 @@ enum class token_type_t : u8 {
     MINUS_PERCENT_ASSIGN,
     STAR_PERCENT_ASSIGN,
     SHL_PERCENT_ASSIGN,
+
+    PLUS_PIPE_ASSIGN,
+    MINUS_PIPE_ASSIGN,
+    STAR_PIPE_ASSIGN,
+    SHL_PIPE_ASSIGN,
 
     LT,
     LT_EQ,
@@ -321,6 +332,10 @@ namespace token_type {
     case syntax::token_type_t::MINUS_PERCENT_ASSIGN: return syntax::token_type_t::MINUS_PERCENT;
     case syntax::token_type_t::STAR_PERCENT_ASSIGN:  return syntax::token_type_t::STAR_PERCENT;
     case syntax::token_type_t::SHL_PERCENT_ASSIGN:   return syntax::token_type_t::SHL_PERCENT;
+    case syntax::token_type_t::PLUS_PIPE_ASSIGN:     return syntax::token_type_t::PLUS_PIPE;
+    case syntax::token_type_t::MINUS_PIPE_ASSIGN:    return syntax::token_type_t::MINUS_PIPE;
+    case syntax::token_type_t::STAR_PIPE_ASSIGN:     return syntax::token_type_t::STAR_PIPE;
+    case syntax::token_type_t::SHL_PIPE_ASSIGN:      return syntax::token_type_t::SHL_PIPE;
     default:                                         return stdx::none;
     }
 }
@@ -332,6 +347,16 @@ namespace token_type {
     case syntax::token_type_t::STAR_PERCENT:
     case syntax::token_type_t::SHL_PERCENT:   return true;
     default:                                  return false;
+    }
+}
+
+[[nodiscard]] constexpr auto is_saturating_op(syntax::token_type_t tok) noexcept -> bool {
+    switch (tok) {
+    case syntax::token_type_t::PLUS_PIPE:
+    case syntax::token_type_t::MINUS_PIPE:
+    case syntax::token_type_t::STAR_PIPE:
+    case syntax::token_type_t::SHL_PIPE:   return true;
+    default:                               return false;
     }
 }
 
