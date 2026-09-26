@@ -6943,20 +6943,32 @@ auto type_resolver::record_declaration(ID id, const mod::module& owner, const sy
         [&](const symbols::node_t& node) -> stdx::option<declaration_ref> {
             if (!owner.ast.get_as_opt<ast::decl_stmt>(node)) { return stdx::none; }
             return declaration_ref{
-                .owner = &owner, .decl = ast::node_id{node}, .annotation = stdx::none};
+                .owner      = owner,
+                .decl       = ast::node_id{node},
+                .annotation = stdx::none,
+            };
         },
         [&](const symbols::parameter& param) -> stdx::option<declaration_ref> {
             if (!param.explicit_type.is_valid()) { return stdx::none; }
             return declaration_ref{
-                .owner = &owner, .decl = stdx::none, .annotation = param.explicit_type};
+                .owner      = owner,
+                .decl       = stdx::none,
+                .annotation = param.explicit_type,
+            };
         },
         [&](const symbols::struct_field& field) -> stdx::option<declaration_ref> {
             return declaration_ref{
-                .owner = &owner, .decl = stdx::none, .annotation = field.explicit_type};
+                .owner      = owner,
+                .decl       = stdx::none,
+                .annotation = field.explicit_type,
+            };
         },
         [&](const symbols::union_field& field) -> stdx::option<declaration_ref> {
             return declaration_ref{
-                .owner = &owner, .decl = stdx::none, .annotation = field.explicit_type};
+                .owner      = owner,
+                .decl       = stdx::none,
+                .annotation = field.explicit_type,
+            };
         },
         [](const auto&) -> stdx::option<declaration_ref> { return stdx::none; })};
     if (ref) { resolving_.set_identifier_declaration(id, *ref); }
@@ -6974,11 +6986,8 @@ auto type_resolver::reject_unsized_slot(ast::explicit_type_id at, const type& sl
     if (slot_type.get_kind() == type_kind::INTERFACE) {
         const auto iname{ctx_.type_display_name(slot_type)};
         ctx_.diags.emplace_back(
-            fmt::format("`{}` is an interface and cannot be stored by value; use `&dyn {}`, "
-                        "`^dyn {}`, or an `impl {}` parameter",
-                        iname,
-                        iname,
-                        iname,
+            fmt::format("`{0}` is an interface and cannot be stored by value; use `&dyn {0}`, "
+                        "`^dyn {0}`, or an `impl {0}` parameter",
                         iname),
             error::INTERFACE_NOT_A_VALUE,
             resolving_.ast.location_of(at));
@@ -6986,10 +6995,9 @@ auto type_resolver::reject_unsized_slot(ast::explicit_type_id at, const type& sl
     }
     if (slot_type.get_kind() == type_kind::DYN) {
         const auto dname{ctx_.type_display_name(slot_type)};
-        ctx_.diags.emplace_back(
-            fmt::format("`{}` is unsized; use `&{}` or `^{}`", dname, dname, dname),
-            error::ILLEGAL_UNSIZED_TYPE,
-            resolving_.ast.location_of(at));
+        ctx_.diags.emplace_back(fmt::format("`{0}` is unsized; use `&{0}` or `^{0}`", dname),
+                                error::ILLEGAL_UNSIZED_TYPE,
+                                resolving_.ast.location_of(at));
         return true;
     }
     return false;

@@ -12,6 +12,7 @@
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/arena.hh"
 #include "compiler/ast/ast.hh"
@@ -67,6 +68,53 @@ class parser {
         parser&    parser_;
         checkpoint checkpoint_;
         bool       committed_{false};
+    };
+
+    // Per function literal: the names its compile-time positions read, for implicit `constexpr`
+    // params in a `constexpr`-declared function (a nested literal gets its own frame)
+    struct constexpr_param_frame {
+        bool                          infer{false};
+        u32                           compile_time_depth{0};
+        std::vector<std::string_view> compile_time_names;
+    };
+
+    class function_scope {
+      public:
+        explicit function_scope(parser& p) : parser_{p} {
+            p.constexpr_param_frames_.emplace_back(
+                constexpr_param_frame{.infer = std::exchange(p.infer_next_fn_params_, false),
+                                      .compile_time_depth = 0,
+                                      .compile_time_names = {}});
+        }
+        ~function_scope() { parser_.constexpr_param_frames_.pop_back(); }
+        MAKE_PINNED(function_scope);
+
+        [[nodiscard]] auto frame() const noexcept -> const constexpr_param_frame& {
+            return parser_.constexpr_param_frames_.back();
+        }
+
+      private:
+        parser& parser_;
+    };
+
+    // Marks a position evaluated at compile time: an `if`/`match`/`for`/`while constexpr` header,
+    // a `constexpr` block or label, or a `constexpr` declaration's initializer
+    class compile_time_scope {
+      public:
+        compile_time_scope(parser& p, bool enabled) noexcept : parser_{p} {
+            if (enabled && !p.constexpr_param_frames_.empty()) {
+                frame_ = p.constexpr_param_frames_.size() - 1;
+                ++p.constexpr_param_frames_[*frame_].compile_time_depth;
+            }
+        }
+        ~compile_time_scope() {
+            if (frame_) { --parser_.constexpr_param_frames_[*frame_].compile_time_depth; }
+        }
+        MAKE_PINNED(compile_time_scope);
+
+      private:
+        parser&        parser_;
+        stdx::opt_size frame_;
     };
 
   public:
@@ -204,53 +252,6 @@ class parser {
         return out;
     }
 
-    // Per function literal: the names its compile-time positions read, for implicit `constexpr`
-    // params in a `constexpr`-declared function (a nested literal gets its own frame)
-    struct constexpr_param_frame {
-        bool                          infer{false};
-        u32                           compile_time_depth{0};
-        std::vector<std::string_view> compile_time_names;
-    };
-
-    class function_scope {
-      public:
-        explicit function_scope(parser& p) : parser_{p} {
-            p.constexpr_param_frames_.emplace_back(
-                constexpr_param_frame{.infer = std::exchange(p.infer_next_fn_params_, false),
-                                      .compile_time_depth = 0,
-                                      .compile_time_names = {}});
-        }
-        ~function_scope() { parser_.constexpr_param_frames_.pop_back(); }
-        MAKE_PINNED(function_scope);
-
-        [[nodiscard]] auto frame() const noexcept -> const constexpr_param_frame& {
-            return parser_.constexpr_param_frames_.back();
-        }
-
-      private:
-        parser& parser_;
-    };
-
-    // Marks a position evaluated at compile time: an `if`/`match`/`for`/`while constexpr` header,
-    // a `constexpr` block or label, or a `constexpr` declaration's initializer
-    class compile_time_scope {
-      public:
-        compile_time_scope(parser& p, bool enabled) noexcept : parser_{p} {
-            if (enabled && !p.constexpr_param_frames_.empty()) {
-                frame_ = p.constexpr_param_frames_.size() - 1;
-                ++p.constexpr_param_frames_[*frame_].compile_time_depth;
-            }
-        }
-        ~compile_time_scope() {
-            if (frame_) { --parser_.constexpr_param_frames_[*frame_].compile_time_depth; }
-        }
-        MAKE_PINNED(compile_time_scope);
-
-      private:
-        parser&        parser_;
-        stdx::opt_size frame_;
-    };
-
     // The next function literal belongs to a `constexpr` declaration
     auto arm_constexpr_param_inference() noexcept -> void { infer_next_fn_params_ = true; }
 
@@ -313,14 +314,14 @@ class parser {
 
     stdx::option<std::vector<ast::explicit_type_id>> pending_impl_bound_;
     depth_counter                                    test_block_depth_;
+    depth_counter                                    type_only_depth_;
 
     std::vector<constexpr_param_frame> constexpr_param_frames_;
-    bool                               infer_next_fn_params_{false};
-    depth_counter                      type_only_depth_;
 
     std::vector<pending_doc> pending_docs_;
     std::vector<pending_doc> pending_module_docs_;
     bool                     module_doc_locked_{false};
+    bool                     infer_next_fn_params_{false};
 };
 
 } // namespace ghoti::syntax

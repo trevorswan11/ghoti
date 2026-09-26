@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <ankerl/unordered_dense.h>
 #include <fmt/format.h>

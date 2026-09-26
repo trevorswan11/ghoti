@@ -5,6 +5,7 @@
 #include <string_view>
 #include <vector>
 
+#include <gsl/span>
 #include <stdx/assert.hh>
 #include <stdx/iterator.hh>
 #include <stdx/option.hh>
@@ -218,7 +219,7 @@ class AST {
     }
 
     // Every node in the tree, children before the parents that hold them
-    [[nodiscard]] constexpr auto all_nodes() const noexcept -> const std::vector<node_id>& {
+    [[nodiscard]] constexpr auto all_nodes() const noexcept -> gsl::span<const node_id> {
         return nodes_.ids;
     }
 

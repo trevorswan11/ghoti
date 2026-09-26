@@ -180,8 +180,8 @@ struct function_expr {
         discardable_ident_handle name;
         explicit_type_id         explicit_type;
         bool                     is_constexpr{false};
-        bool                     is_pack{false}; // `rest...` / `rest: impl I...`
-        bool is_constexpr_written{false};        // `is_constexpr` may also be inferred (see #337)
+        bool                     is_pack{false};              // `rest...` / `rest: impl I...`
+        bool                     is_constexpr_written{false}; // `is_constexpr` may also be inferred
     };
 
     // The parameter's `auto` type must infer to a type that implements every interface in
@@ -201,9 +201,9 @@ struct function_expr {
     bool                         is_type_expr{false};
     bool                         params_force_break{false};
     calling_convention           conv{calling_convention::C};
-    std::vector<impl_bound>      impl_bounds{};
     bool                         has_explicit_conv{false};
     bool                         is_extern{false}; // `extern fn(...): R` bodyless type value
+    std::vector<impl_bound>      impl_bounds{};
 
     // Parse the function as a value. Meant for the parser LUT
     [[nodiscard]] static auto parse(syntax::parser& parser)

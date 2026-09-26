@@ -10,11 +10,13 @@
 #include <utility>
 
 #include <gsl/pointers>
+#include <gsl/span>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/passes/symbol_collector.hh"

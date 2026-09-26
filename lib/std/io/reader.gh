@@ -1,7 +1,7 @@
 import std;
 
 pub const Reader := interface {
-    Error: type;
+    Error: type = std.io.Error;
 
     /// Read `buf.len` into the provided byte buffer
     pub const read := fn(&mut self, buf: []mut u8): std.Result(usize, Error);

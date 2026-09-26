@@ -445,7 +445,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `callconv(...)` on a function type now requires `extern fn`
     - `extern` / `export` declarations (`extern("kernel32") const f: fn(...): R;`) and `constexpr` function parameters keep the thin type automatically
     - `builtin.Test.func` is now `extern fn(): bool`
-- `dyn Fn(name: T): R` is accepted as another spelling of `fn(name: T): R`, including behind `&` / `^`; a user-defined `interface Fn` still works with `dyn Fn` / `dyn Fn(Out = T)`
+- `dyn Fn(name: T): R` is accepted as another spelling of `fn(name: T): R`, including behind `&` / `^`
+    - A user-defined `interface Fn` still works with `dyn Fn` / `dyn Fn(Out = T)`
 - A function literal's return type may be a function type written directly before its body: `fn(): fn(n: i32): i32 { ... }`
 - A call's result can be called directly: `make()(1)`, `make_maker()()(40)`
 - `builtin.FnInfo` gains `erased: bool = true`; `@typeInfo(T).function.erased` tells an erased `fn(...)` from a thin function type, and `@Fn` builds the same type the spelled-out `fn(...)` / `extern fn(...)` would
@@ -469,8 +470,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
+    - Both can be evaluated at compile time: `constexpr { @assert(std.math.max(1, 2) == 2); }`
+- `std.io.Reader`, `std.io.Writer`, and `std.io.Seeker` default their `Error` to `std.io.Error`, so `&mut dyn std.io.Writer` no longer needs `(Error = std.io.Error)`
 
 ## Tooling
 - LSP hover names a callable's parameters: `fn(lhs: i32, rhs: i32): i32` instead of `fn(i32, i32): i32` (#305)
     - Covers function declarations, `fn`-typed parameters and fields, `dyn Fn` aliases, and aliases like `f: Callback`, `f: mod.Callback`, or `const g := mod.f;`, including across modules
-- The tree-sitter grammar and Zed extension understand `extern fn(...)`, `dyn Fn(...)`, and the condition-less `if constexpr`, and highlight the `Fn` in `dyn Fn` as a builtin type

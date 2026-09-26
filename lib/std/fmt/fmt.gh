@@ -29,7 +29,7 @@ pub const Format := interface {
     const format := fn(
         &self,
         spec: Spec,
-        w: &mut dyn Writer(Error = std.io.Error),
+        w: &mut dyn Writer,
     ): std.Result(void, Error);
 };
 
@@ -40,7 +40,7 @@ pub const format := fn(w: &mut impl Writer, constexpr fmt: []u8, args...): std.R
         spec.validate(fmt, args.len);
     }
 
-    var dyn_w: &mut dyn Writer(Error = std.io.Error) = w;
+    var dyn_w: &mut dyn Writer = w;
     constexpr var cursor: usize = 0;
 
     for constexpr (args, 0..) |arg, i| {}

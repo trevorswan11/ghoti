@@ -21,7 +21,7 @@ namespace ghoti::sema {
 // Where a name was declared, in the declaring module's own AST: a `const`/`var` declaration, or
 // the type annotation of a parameter or aggregate field
 struct declaration_ref {
-    const mod::module*                  owner;
+    stdx::option<const mod::module&>    owner;
     stdx::option<ast::node_id>          decl;
     stdx::option<ast::explicit_type_id> annotation;
 };

@@ -1,7 +1,7 @@
 import std;
 
 pub const Writer := interface {
-    Error: type;
+    Error: type = std.io.Error;
 
     /// Write the contents of `bytes`, returning the total number of bytes written
     pub const write := fn(&mut self, bytes: []u8): std.Result(usize, Error);

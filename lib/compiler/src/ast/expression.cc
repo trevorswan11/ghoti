@@ -1,5 +1,6 @@
 #include "compiler/ast/expression.hh"
 
+#include <algorithm>
 #include <concepts>
 #include <string>
 #include <string_view>
@@ -25,6 +26,7 @@
 #include "compiler/syntax/precedence.hh"
 #include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
+#include "support/counter.hh"
 
 namespace ghoti::ast {
 
@@ -309,6 +311,7 @@ auto call_expr::parse(syntax::parser& parser, expr_handle function)
         default:                                        return stdx::none;
         }
     }()};
+
     // Guaranteed to roll back if there is an error
     const auto parse_expr_unsuccessful = [&] -> bool {
         // Try an expression first to prevent ambiguity between reference operators
@@ -1039,9 +1042,9 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked, b
                                               true,
                                               params_force_break,
                                               conv,
-                                              std::move(impl_bounds),
                                               has_explicit_conv,
-                                              is_extern);
+                                              is_extern,
+                                              std::move(impl_bounds));
     }
 
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
@@ -1058,8 +1061,9 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked, b
                                           false,
                                           params_force_break,
                                           conv,
-                                          std::move(impl_bounds),
-                                          has_explicit_conv);
+                                          has_explicit_conv,
+                                          false,
+                                          std::move(impl_bounds));
 }
 
 auto grouped_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {

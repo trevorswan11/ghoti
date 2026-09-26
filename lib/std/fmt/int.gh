@@ -33,7 +33,7 @@ test "digit_to_char" {
 /// Formats an integer in an explicit radix and case.
 /// Only the padding, sign, and alt fields of `spec` are used, `spec.kind` is ignored
 pub const format_radix := fn(
-    w: &mut dyn std.io.Writer(Error = std.io.Error),
+    w: &mut dyn std.io.Writer,
     value: auto,
     base: u8,
     case: std.fmt.Case,
@@ -113,7 +113,7 @@ pub const format_radix := fn(
 
 /// Formats an integer according to `spec.kind`, defaulting to base 10
 pub const format := fn(
-    w: &mut dyn std.io.Writer(Error = std.io.Error),
+    w: &mut dyn std.io.Writer,
     value: auto,
     spec: std.fmt.Spec,
 ): std.Result(void, std.fmt.Error) {

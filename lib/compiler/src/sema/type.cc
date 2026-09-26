@@ -19,6 +19,8 @@
 #include <stdx/types.hh>
 
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/handle.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/ast/primitive.hh"
 #include "compiler/module/module.hh"
 #include "support/int128.hh"

@@ -9,12 +9,15 @@
 
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
+#include <gsl/span>
 #include <stdx/arena.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/arena.hh"
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/traits.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/const_value.hh"
@@ -216,11 +219,7 @@ class constexpr_evaluation_scope {
     ~constexpr_evaluation_scope() noexcept {
         if (enabled_) { --depth_; }
     }
-
-    constexpr_evaluation_scope(const constexpr_evaluation_scope&)                    = delete;
-    auto operator=(const constexpr_evaluation_scope&) -> constexpr_evaluation_scope& = delete;
-    constexpr_evaluation_scope(constexpr_evaluation_scope&&)                         = delete;
-    auto operator=(constexpr_evaluation_scope&&) -> constexpr_evaluation_scope&      = delete;
+    MAKE_PINNED(constexpr_evaluation_scope);
 
   private:
     usize& depth_;

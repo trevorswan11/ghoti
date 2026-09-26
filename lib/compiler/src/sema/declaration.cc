@@ -7,9 +7,12 @@
 #include <stdx/types.hh>
 
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/handle.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/ast/type.hh"
 #include "compiler/module/module.hh"
+#include "compiler/sema/side_tables.hh"
 
 namespace ghoti::sema {
 
@@ -77,6 +80,7 @@ auto names_of(const declaration_ref& declaration, u32 depth) -> stdx::option<nam
     if (const auto fn{owner.ast.get_as_opt<ast::function_expr>(*decl->value)}) {
         return names_of_literal(owner, *fn);
     }
+
     // `const Op := dyn Fn(n: i32): i32;`
     if (const auto type_value{owner.ast.get_as_opt<ast::type_expr>(*decl->value)}) {
         return names_of_annotation(owner, type_value->type, depth);
