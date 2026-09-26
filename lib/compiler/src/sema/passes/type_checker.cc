@@ -74,16 +74,7 @@ auto type_checker::check_types(gir::module& gir_mod, mod::module& ast_mod, conte
 
 auto type_checker::format_store_mismatch(const type& val_t, const type& dest_t) const
     -> std::string {
-    if (const auto reason{
-            cast_rejection_reason(val_t, dest_t, target_ptr_bits_, ctx_.user_type_names)}) {
-        return fmt::format("Type mismatch in store: cannot assign '{}' to '{}' ({})",
-                           ctx_.type_display_name(val_t),
-                           ctx_.type_display_name(dest_t),
-                           *reason);
-    }
-    return fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
-                       ctx_.type_display_name(val_t),
-                       ctx_.type_display_name(dest_t));
+    return ctx_.store_mismatch_message(val_t, dest_t, target_ptr_bits_);
 }
 
 auto type_checker::format_arg_mismatch(usize                          arg_idx,

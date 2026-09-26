@@ -3193,6 +3193,10 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                         error::TYPE_MISMATCH,
                         get_call_arg_location(call.arguments[expanded.source_index[i]])));
                 }
+                // A slot bound to a concrete value type (`x: T` with `T = u8`) can't take a type
+                if (arg_expr && reject_type_as_value(*arg_expr, *param_type)) {
+                    return last_type_.emplace(ctx_.poison_node(resolving_, id));
+                }
                 if (bound_idx && concrete_arg_types[*bound_idx] &&
                     !sema::is_assignable(*resolved_type, *param_type)) {
                     return last_type_.emplace(ctx_.poison_node(
@@ -4326,13 +4330,15 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         .expected_type  = is_auto_return ? stdx::none : stdx::option<type&>{return_type},
     });
 
-    const auto&              block{resolving_.ast.get_as<ast::block_stmt>(fn.body)};
-    if (resolve_block_statements(block)) {
+    const auto& block{resolving_.ast.get_as<ast::block_stmt>(fn.body)};
+    const bool  body_failed{resolve_block_statements(block)};
+    auto        tracker{std::move(return_trackers_.back())};
+    return_trackers_.pop_back();
+    if (body_failed) {
+        // A template's explicit signature stands alone; each instantiation re-resolves the body
+        if (building_param_template_ && !is_auto_return) { return last_type_.emplace(fn_type); }
         return resolving_.set_sema_type(id, *last_type_);
     }
-
-    auto tracker{std::move(return_trackers_.back())};
-    return_trackers_.pop_back();
 
     // A compile-time-only result never reaches the runtime check for a missing `return`
     const auto ret_kind{return_type.get_kind()};
@@ -7418,6 +7424,38 @@ auto type_resolver::reject_unsized_slot(ast::explicit_type_id at, const type& sl
     return false;
 }
 
+auto type_resolver::reject_unassignable_global_initializer(ast::expr_handle value,
+                                                          const type&      declared) -> bool {
+    const auto value_type{resolving_.get_sema_type_opt(value)};
+    if (!value_type || value_type->is_poison() || !declared.is_resolved() || declared.is_poison()) {
+        return false;
+    }
+    // Placeholders and untyped literals settle against the annotation later
+    // Array initializers are copied and coerced element-wise when the global is folded
+    const auto is_array_like{[](const type& t) {
+        return t.get_data().is<types::array>() || t.get_data().is<types::deferred_array>();
+    }};
+    if (is_array_like(*value_type) || is_array_like(declared)) { return false; }
+    if (const auto slice{value_type->get_data().as_opt<types::slice>()};
+        slice && is_constexpr_numeric(slice->underlying.get_kind())) {
+        return false;
+    }
+    // An untyped numeric literal is range-checked against a numeric annotation when emitted
+    const bool literal_into_numeric{is_constexpr_numeric(value_type->get_kind()) &&
+                                    (is_integer(declared.get_kind()) || is_float(declared.get_kind()))};
+    if (is_generic_type(*value_type, false) || is_generic_type(declared, false) ||
+        literal_into_numeric ||
+        is_assignable(*value_type, declared)) {
+        return false;
+    }
+    last_type_.emplace(ctx_.poison_node(resolving_,
+                                        value,
+                                        ctx_.store_mismatch_message(*value_type, declared, target_ptr_bits()),
+                                        error::TYPE_MISMATCH,
+                                        resolving_.ast.location_of(value)));
+    return true;
+}
+
 auto type_resolver::reject_type_as_value(ast::expr_handle value, const type& expected) -> bool {
     // A `type`, `auto`, or generic slot legitimately takes a type, and a not-yet-folded `[N]T`
     // slot shares the `type` kind
@@ -8767,6 +8805,11 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             if (last_type_->is_poison()) { return poison_out(); }
             if (annotation_typed_decl &&
                 reject_type_as_value(*decl.value, resolving_.get_sema_type(id))) {
+                return poison_out();
+            }
+            // Outside a function body nothing stores the initializer, so nothing else checks it
+            if (annotation_typed_decl && return_trackers_.empty() &&
+                reject_unassignable_global_initializer(*decl.value, resolving_.get_sema_type(id))) {
                 return poison_out();
             }
             if (decl.value->is<ast::identifier_expr>() &&
@@ -10402,6 +10445,13 @@ auto type_resolver::resolve_param_impl_bodies(
     snap.diff_into(ctx_, impl_mod, out);
 }
 
+auto type_resolver::member_function_is_poisoned(ast::member_handle member) const -> bool {
+    const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(member)};
+    if (!decl || !decl->value || !decl->value->is<ast::function_expr>()) { return false; }
+    const auto fn_type{resolving_.get_sema_type_opt(*decl->value)};
+    return !fn_type || fn_type->is_poison();
+}
+
 auto type_resolver::build_param_impl_template(const ast::impl_stmt& impl, ast::node_id site)
     -> void {
     PROFILE_FUNCTION();
@@ -10460,12 +10510,29 @@ auto type_resolver::build_param_impl_template(const ast::impl_stmt& impl, ast::n
         abstract_target.emplace(t);
         guard.emplace(user_type_stack_, t);
     }
-    for (const auto& member : impl.members) { resolve(*member); }
+    // A method left poisoned here is skipped by every instantiation, so its diags are real
+    std::vector<std::pair<usize, usize>> poisoned_member_diags;
+    for (const auto& member : impl.members) {
+        const auto member_diags_begin{ctx_.diags.size()};
+        resolve(*member);
+        if (member_function_is_poisoned(member)) {
+            poisoned_member_diags.emplace_back(member_diags_begin - diags_before,
+                                               ctx_.diags.size() - diags_before);
+        }
+    }
 
-    // ...except a name that resolves nowhere, which no instantiation's arguments can fix
+    // ...as is a name that resolves nowhere, which no instantiation's arguments can fix
     const auto discarded{ctx_.diags.split_off(diags_before)};
-    for (const auto& diag : static_cast<gsl::span<const diagnostic>>(discarded)) {
-        if (diag.get_error() == error::UNDECLARED_IDENTIFIER) { ctx_.diags.push_back(diag); }
+    const auto kept_for_poisoned_member{[&](usize idx) {
+        return std::ranges::any_of(poisoned_member_diags, [idx](const auto& range) {
+            return idx >= range.first && idx < range.second;
+        });
+    }};
+    for (usize idx{0}; const auto& diag : static_cast<gsl::span<const diagnostic>>(discarded)) {
+        if (diag.get_error() == error::UNDECLARED_IDENTIFIER || kept_for_poisoned_member(idx)) {
+            ctx_.diags.push_back(diag);
+        }
+        idx += 1;
     }
     resolving_.if_constexpr_results = snap_ifs;
     resolving_.match_arm_results    = snap_matches;
@@ -11145,11 +11212,7 @@ auto type_resolver::operand_nature(ast::expr_handle expr) const -> operand_natur
 auto type_resolver::call_arg_denotes_type(const ast::call_expr::argument& arg) const -> bool {
     if (arg.is<ast::explicit_type_id>()) { return true; }
     const auto expr{arg.as_opt<ast::expr_handle>()};
-    if (!expr) { return false; }
-    if (decl_value_denotes_type(*expr)) { return true; }
-    // A bound `T: type` parameter folds to the type it was instantiated with
-    const auto folded{probe_fold(*expr)};
-    return folded && folded->is<stdx::option<sema::type&>>();
+    return expr && operand_nature(*expr) == operand_nature_t::TYPE;
 }
 
 auto type_resolver::names_a_value(const symbol& sym, usize table_idx) -> bool {

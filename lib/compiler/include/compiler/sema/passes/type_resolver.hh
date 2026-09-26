@@ -78,6 +78,8 @@ class type_resolver {
     // Resolves a parameterized impl once against opaque sentinels + dummy `constexpr` values to
     // record its abstract target + method signatures on the shared `impl_registry`
     auto build_param_impl_template(const ast::impl_stmt& impl, ast::node_id site) -> void;
+    // A member `fn` whose type could not be resolved, which no instantiation re-resolves
+    [[nodiscard]] auto member_function_is_poisoned(ast::member_handle member) const -> bool;
     // Re-resolves a parameterized impl's method bodies for one monomorphization, binding its
     // impl params to concrete types / folded `constexpr` values, and diffs the result into `out`.
     auto
@@ -479,6 +481,8 @@ class type_resolver {
 
     // Poisons `value` when it names a type where `expected` wants a value (`const w: S = S;`);
     // returns whether it did
+    // A module-scope `const x: T = v` whose `v` cannot become a `T`
+    auto reject_unassignable_global_initializer(ast::expr_handle value, const type& declared) -> bool;
     auto reject_type_as_value(ast::expr_handle value, const type& expected) -> bool;
 
     // Records which declaration `id` names, for LSP features like hover

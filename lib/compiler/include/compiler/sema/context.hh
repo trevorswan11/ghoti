@@ -206,6 +206,9 @@ struct context {
     [[nodiscard]] auto get_builtin_type(std::string_view name) -> type&;
 
     [[nodiscard]] auto type_display_name(const type& t) const -> std::string;
+    // "Type mismatch in store: cannot assign 'from' to 'to'", with the rejection reason if any
+    [[nodiscard]] auto store_mismatch_message(const type& from, const type& to, u32 ptr_bits) const
+        -> std::string;
 
     // The bound value of a `constexpr` parameter named `name`, searching innermost frame first
     [[nodiscard]] auto lookup_constexpr_binding(std::string_view name) const

@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <string>
+#include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -257,6 +259,54 @@ TEST_CASE("large aggregates pass and return by value through direct and indirect
             return @as(i32, read(b)) + @as(i32, via(read, b)) + @as(i32, copy[3]);
         };
     )") == 22);
+}
+
+TEST_CASE("a type passed to a generic parameter bound to a value type is rejected") {
+    CHECK(helpers::raised(R"(
+        const dup := fn(T: type, val: T): T { return val + val; };
+        pub const main := fn(): i32 { const b := dup(u8, u8); return 0; };
+    )", sema::error::TYPE_USED_AS_VALUE));
+}
+
+TEST_CASE("errors inside a parameterized impl method are reported once per site") {
+    constexpr auto prefix{R"(
+        const P := fn(A: type): type { return struct { a: A }; };
+        const I := interface { pub const l := fn(&self): i32; };
+        impl(A: type) I for P(A) { pub const l := fn(&self): i32 { )"};
+    constexpr auto suffix{R"( }; }
+        pub const main := fn(): i32 {
+            var p: P(i32) = .{ .a = 1 };
+            var q: P(u8) = .{ .a = 2 };
+            return p.l() + q.l();
+        };
+    )"};
+    const auto with_body{[&](std::string_view body) {
+        return std::string{prefix} + std::string{body} + suffix;
+    }};
+    const auto range_diags{helpers::resolve_diags(with_body("return 0..1;"))};
+    CHECK(std::ranges::count(range_diags.codes, sema::error::ILLEGAL_OPEN_RANGE) == 1);
+    const auto undeclared{helpers::resolve_diags(with_body("return nope;"))};
+    CHECK(std::ranges::count(undeclared.codes, sema::error::UNDECLARED_IDENTIFIER) == 1);
+    CHECK(helpers::raised(with_body("return @intCast(i32, u8);"), sema::error::TYPE_USED_AS_VALUE));
+    CHECK(helpers::raised(with_body("const r := self.a[..]; return 0;"),
+                          sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("a parameterized impl method body types against its concrete instantiation") {
+    CHECK(helpers::compile_and_run(R"(
+        const P := fn(A: type): type { return struct { a: A }; };
+        const I := interface { pub const l := fn(&self): i32; };
+        impl(A: type) I for P(A) {
+            pub const l := fn(&self): i32 { return @intCast(i32, self.a[1]) + @intCast(i32, self.a.len); };
+        }
+        pub const main := fn(): i32 { var p: P([]u8) = .{ .a = "hey" }; return p.l(); };
+    )") == 104);
+}
+
+TEST_CASE("a module-scope initializer must match its annotation") {
+    CHECK(helpers::raised("const g: i32 = true;", sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised("const f: i32 = fn(): i32 { return 0; };", sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised("const S := struct { const X: bool = 3; };", sema::error::TYPE_MISMATCH));
 }
 
 } // namespace ghoti::tests

@@ -1931,18 +1931,8 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                     // checking
                     if (decl.explicit_type && scalar.type &&
                         !sema::is_assignable(*scalar.type, *sema_type)) {
-                        const auto reason{sema::cast_rejection_reason(
-                            *scalar.type, *sema_type, target_ptr_bits_, ctx_.user_type_names)};
                         ctx_.diags.emplace_back(
-                            reason
-                                ? fmt::format("Type mismatch in store: cannot assign '{}' to "
-                                              "'{}' ({})",
-                                              ctx_.type_display_name(*scalar.type),
-                                              ctx_.type_display_name(*sema_type),
-                                              *reason)
-                                : fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
-                                              ctx_.type_display_name(*scalar.type),
-                                              ctx_.type_display_name(*sema_type)),
+                            ctx_.store_mismatch_message(*scalar.type, *sema_type, target_ptr_bits_),
                             sema::error::TYPE_MISMATCH,
                             active_ast().location_of(*decl.value));
                     }
@@ -1980,18 +1970,9 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         // A non-foldable `const` binds directly to its initializer's value, bypassing the
         // store-typecheck a `var` alloca would get; re-check the annotated type here.
         if (decl.explicit_type && val.type && !sema::is_assignable(*val.type, *sema_type)) {
-            const auto reason{sema::cast_rejection_reason(
-                *val.type, *sema_type, target_ptr_bits_, ctx_.user_type_names)};
-            ctx_.diags.emplace_back(
-                reason ? fmt::format("Type mismatch in store: cannot assign '{}' to '{}' ({})",
-                                     ctx_.type_display_name(*val.type),
-                                     ctx_.type_display_name(*sema_type),
-                                     *reason)
-                       : fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
-                                     ctx_.type_display_name(*val.type),
-                                     ctx_.type_display_name(*sema_type)),
-                sema::error::TYPE_MISMATCH,
-                active_ast().location_of(*decl.value));
+            ctx_.diags.emplace_back(ctx_.store_mismatch_message(*val.type, *sema_type, target_ptr_bits_),
+                                    sema::error::TYPE_MISMATCH,
+                                    active_ast().location_of(*decl.value));
         }
 
         if (const auto lid{val.as_opt<local_id>()}) {

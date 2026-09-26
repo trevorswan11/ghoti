@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -155,6 +156,16 @@ template <stdx::ScopedEnum E> class diagnostic {
                level_ == other.level_;
     }
 
+    // A key equal for exactly the diagnostics `operator==` considers equal
+    [[nodiscard]] auto identity() const -> std::string {
+        return fmt::format("{}|{}|{}|{}|{}",
+                           message_.value_or(""),
+                           loc_ ? fmt::format("{}:{}", loc_->line, loc_->column) : "",
+                           magic_enum::enum_integer(error_),
+                           level_ ? static_cast<int>(*level_) : -1,
+                           message_.has_value());
+    }
+
     MAKE_GETTER(message, const stdx::option<std::string>&)
     MAKE_GETTER(error, E)
     [[nodiscard]] auto to_formattable() const noexcept -> detail::formattable_diagnostic {
@@ -217,6 +228,12 @@ template <Diagnostic D> class diagnostic_list {
         }
         diagnostics_.erase(diagnostics_.begin() + static_cast<idiff>(from), diagnostics_.end());
         return rest;
+    }
+
+    // Drops later exact repeats, as when several instantiations report the same body error
+    auto remove_duplicates() -> void {
+        std::unordered_set<std::string> seen;
+        std::erase_if(diagnostics_, [&seen](const D& d) { return !seen.insert(d.identity()).second; });
     }
 
     operator gsl::span<const D>() const { return diagnostics_; }

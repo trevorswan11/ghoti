@@ -394,6 +394,17 @@ auto context::backing_int_type(const type& t, u32 ptr_bits) -> stdx::option<type
     return stdx::none;
 }
 
+auto context::store_mismatch_message(const type& from, const type& to, u32 ptr_bits) const
+    -> std::string {
+    auto message{fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
+                             type_display_name(from),
+                             type_display_name(to))};
+    if (const auto reason{cast_rejection_reason(from, to, ptr_bits, user_type_names)}) {
+        message += fmt::format(" ({})", *reason);
+    }
+    return message;
+}
+
 auto context::type_display_name(const type& t) const -> std::string {
     gsl::not_null<const type*> denoted{&t};
     if (denoted->get_kind() == type_kind::TYPE) {
