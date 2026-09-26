@@ -57,6 +57,27 @@ TEST_CASE("read_message returns none and logs on invalid JSON") {
     CHECK(errors.view().contains("parse"));
 }
 
+TEST_CASE("read_framed_message distinguishes a recoverable JSON error from a broken frame") {
+    const std::string  bad_body{"{nope"};
+    const std::string  good_body{R"({"jsonrpc":"2.0","method":"exit"})"};
+    std::istringstream in{fmt::format("Content-Length: {}\r\n\r\n{}Content-Length: {}\r\n\r\n{}",
+                                      bad_body.size(),
+                                      bad_body,
+                                      good_body.size(),
+                                      good_body)};
+    std::ostringstream errors;
+    CHECK(UNWRAP_ERR(lsp::read_framed_message(in, errors)) == lsp::read_failure::INVALID_JSON);
+    CHECK(UNWRAP(lsp::read_framed_message(in, errors)).at("method") == "exit");
+    CHECK(UNWRAP_ERR(lsp::read_framed_message(in, errors)) == lsp::read_failure::END_OF_STREAM);
+}
+
+TEST_CASE("read_framed_message rejects an absurd Content-Length without allocating it") {
+    std::istringstream in{"Content-Length: 99999999999\r\n\r\n{}"};
+    std::ostringstream errors;
+    CHECK(UNWRAP_ERR(lsp::read_framed_message(in, errors)) == lsp::read_failure::MALFORMED_FRAME);
+    CHECK(errors.view().contains("exceeds"));
+}
+
 TEST_CASE("write_message frames the body with a matching byte-exact Content-Length") {
     std::ostringstream   out;
     const nlohmann::json message{{"jsonrpc", "2.0"}, {"method", "exit"}};

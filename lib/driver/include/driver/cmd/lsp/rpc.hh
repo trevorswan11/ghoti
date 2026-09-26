@@ -6,10 +6,22 @@
 
 #include <nlohmann/json.hpp>
 #include <stdx/option.hh>
+#include <stdx/result.hh>
+#include <stdx/types.hh>
 
 namespace ghoti::lsp {
 
-// Reads one Content-Length framed JSON-RPC message; none on clean EOF or a malformed frame
+enum class read_failure : u8 {
+    END_OF_STREAM,   // clean EOF between messages
+    MALFORMED_FRAME, // unusable header or truncated body: the stream cannot be resynchronized
+    INVALID_JSON,    // a well-framed body that is not JSON: the next message is still readable
+};
+
+// Reads one Content-Length framed JSON-RPC message
+[[nodiscard]] auto read_framed_message(std::istream& in, std::ostream& error_stream)
+    -> stdx::result<nlohmann::json, read_failure>;
+
+// `read_framed_message`, collapsing every failure to none
 [[nodiscard]] auto read_message(std::istream& in, std::ostream& error_stream)
     -> stdx::option<nlohmann::json>;
 

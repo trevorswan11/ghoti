@@ -43,7 +43,10 @@ namespace ghoti::cmd {
 
 namespace {
 
+constexpr i32 PARSE_ERROR{-32'700};
+constexpr i32 INVALID_REQUEST{-32'600};
 constexpr i32 METHOD_NOT_FOUND{-32'601};
+constexpr i32 INTERNAL_ERROR{-32'603};
 
 auto make_response(const nlohmann::json& id, nlohmann::json result) -> nlohmann::json {
     return {
@@ -155,11 +158,23 @@ auto lsp_server::execute() -> stdx::result<void, clap::error> {
 #endif
 
     lsp::document_store store{error_stream_, throttle_interval_};
-    while (auto message{lsp::read_message(std::cin, error_stream_)}) {
+    while (true) {
+        auto message{lsp::read_framed_message(std::cin, error_stream_)};
+        if (!message) {
+            // A body that isn't JSON leaves the stream framed, so the client can keep going
+            if (message.error() != lsp::read_failure::INVALID_JSON) { break; }
+            lsp::write_message(std::cout, make_error_response(nullptr, PARSE_ERROR, "parse error"));
+            continue;
+        }
         try {
             if (!handle_message(*message, store)) { break; }
         } catch (const std::exception& ex) {
             fmt::println(error_stream_, "lsp: error handling message: {}", ex.what());
+            if (message->is_object() && message->contains("id")) {
+                lsp::write_message(
+                    std::cout,
+                    make_error_response((*message)["id"], INTERNAL_ERROR, "internal error"));
+            }
         }
     }
 
@@ -169,7 +184,17 @@ auto lsp_server::execute() -> stdx::result<void, clap::error> {
 }
 
 auto lsp_server::handle_message(const nlohmann::json& message, lsp::document_store& store) -> bool {
-    const auto method{message.value("method", std::string{})};
+    // Anything but a request/notification object is an invalid request
+    if (!message.is_object() || !message.contains("method") || !message["method"].is_string()) {
+        // Assigned, since brace-initializing a json wraps it in an array
+        const nlohmann::json id = message.is_object() && message.contains("id")
+                                      ? message["id"]
+                                      : nlohmann::json(nullptr);
+        lsp::write_message(std::cout,
+                           make_error_response(id, INVALID_REQUEST, "invalid request"));
+        return true;
+    }
+    const auto method{message["method"].get<std::string>()};
     if (method == "initialize") {
         handle_initialize(message);
     } else if (method == "shutdown") {

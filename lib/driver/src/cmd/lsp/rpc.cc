@@ -9,12 +9,14 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 #include <fmt/format.h>
 #include <fmt/ostream.h>
 #include <nlohmann/json.hpp>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
+#include <stdx/result.hh>
 #include <stdx/string.hh>
 #include <stdx/types.hh>
 
@@ -40,36 +42,52 @@ auto try_parse_content_length(std::string_view line) -> stdx::option<usize> {
 
 } // namespace
 
-auto read_message(std::istream& in, std::ostream& error_stream) -> stdx::option<nlohmann::json> {
+auto read_framed_message(std::istream& in, std::ostream& error_stream)
+    -> stdx::result<nlohmann::json, read_failure> {
     PROFILE_FUNCTION();
+    // Far beyond any real document; rejecting it avoids allocating whatever a bad header claims
+    constexpr usize max_message_bytes{usize{256} * 1024 * 1024};
+
     stdx::option<usize> content_length;
     std::string         line;
-
+    bool                saw_header{false};
     while (std::getline(in, line)) {
         string_utils::strip_trailing_cr(line);
         if (line.empty()) { break; }
+        saw_header = true;
         if (auto length{try_parse_content_length(line)}) { content_length = length; }
     }
 
     // A clean pipe close between messages surfaces as EOF with nothing parsed yet
     if (!content_length) {
-        if (!in.eof()) { fmt::println(error_stream, "lsp: message missing Content-Length header"); }
-        return stdx::none;
+        if (in.eof() && !saw_header) { return stdx::err{read_failure::END_OF_STREAM}; }
+        fmt::println(error_stream, "lsp: message missing a valid Content-Length header");
+        return stdx::err{read_failure::MALFORMED_FRAME};
+    }
+    if (*content_length > max_message_bytes) {
+        fmt::println(error_stream, "lsp: Content-Length {} exceeds the limit", *content_length);
+        return stdx::err{read_failure::MALFORMED_FRAME};
     }
 
     std::string body(*content_length, '\0');
     in.read(body.data(), static_cast<std::streamsize>(body.size()));
     if (static_cast<usize>(in.gcount()) != *content_length) {
         fmt::println(error_stream, "lsp: message body shorter than Content-Length");
-        return stdx::none;
+        return stdx::err{read_failure::MALFORMED_FRAME};
     }
 
     auto parsed = nlohmann::json::parse(body, nullptr, false);
     if (parsed.is_discarded()) {
         fmt::println(error_stream, "lsp: failed to parse message body as JSON");
-        return stdx::none;
+        return stdx::err{read_failure::INVALID_JSON};
     }
     return parsed;
+}
+
+auto read_message(std::istream& in, std::ostream& error_stream) -> stdx::option<nlohmann::json> {
+    auto message{read_framed_message(in, error_stream)};
+    if (!message) { return stdx::none; }
+    return std::move(*message);
 }
 
 auto write_message(std::ostream& out, const nlohmann::json& message) -> void {
