@@ -284,7 +284,7 @@ const failed := fn(ret: usize): bool {
 
 /// Negate a failed raw return into its `Errno`.
 const to_errno := fn(ret: usize): Errno {
-    return @fromBackingInt(Errno, @intCast(i32, -@bitCast(isize, ret)));
+    return @fromBackingInt(@intCast(i32, -@bitCast(isize, ret)));
 };
 
 constexpr R := fn(T: type): type {

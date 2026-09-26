@@ -648,7 +648,7 @@ auto const_eval::force_deferred_layout(sema::type& type) -> stdx::option<sema::t
         if (field == nullptr) { continue; }
         const auto concrete{force_deferred_layout(*field)};
         if (!concrete) { return stdx::none; }
-        field = &*concrete;
+        field = concrete.get();
     }
     return forced;
 }
@@ -3324,7 +3324,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
             for (usize i{0}; i < params_arr->elements.size(); ++i) {
                 const auto pt{params_arr->elements[i].as_opt<stdx::option<sema::type&>>()};
                 if (!pt || !*pt) { return stdx::none; }
-                param_types[i] = &**pt;
+                param_types[i] = pt->get();
             }
 
             return const_value{ctx_.get_function_like(

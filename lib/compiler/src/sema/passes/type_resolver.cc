@@ -276,7 +276,7 @@ auto type_resolver::visit(ast::node_id id, const ast::array_expr& array) -> void
 
     // Resolve the element type first so each item can be typed against it
     resolve(array.item_explicit_type);
-    auto* item_slot{&*last_type_.take()};
+    auto* item_slot{last_type_.take()};
     // Fold sized element types so the items and the array's element slot see the concrete `[M]T`
     // rather than `type`
     if (item_slot->get_data().is<types::deferred_array>()) {
@@ -777,7 +777,7 @@ template <ast::IndexableID ID>
                                  error::TYPE_MISMATCH,
                                  get_call_arg_location(arg));
         }
-        return_type = &*backing;
+        return_type = backing.get();
         break;
     }
     case token_type_t::BUILTIN_FROM_BACKING_INT: {
@@ -7048,7 +7048,7 @@ auto type_resolver::decl_value_denotes_type(ast::expr_handle value) const -> boo
 
     // `mod.Type` / `Outer.Inner`
     if (const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(value)}) {
-        const auto* sym{dot_member_symbol(*dot)};
+        const auto sym{dot_member_symbol(*dot)};
         return sym && sym->has_kind() && sym->get_kind() == symbol_kind::TYPE;
     }
     return false;
@@ -7601,19 +7601,20 @@ auto type_resolver::visit(ast::node_id id, const ast::type_expr& node) -> void {
     resolving_.set_sema_type(id, *last_type_);
 }
 
-auto type_resolver::dot_member_symbol(const ast::dot_expr& dot) const -> const symbol* {
+auto type_resolver::dot_member_symbol(const ast::dot_expr& dot) const
+    -> stdx::option<const symbol&> {
     const auto obj_type{resolving_.get_sema_type_opt(dot.object)};
-    if (!obj_type) { return nullptr; }
+    if (!obj_type) { return stdx::none; }
     const auto& member{resolving_.ast.get_as<ast::identifier_expr>(dot.member)};
     if (const auto mod_data{obj_type->get_data().as_opt<types::module>()}) {
-        if (!mod_data->imported.root_table_idx) { return nullptr; }
+        if (!mod_data->imported.root_table_idx) { return stdx::none; }
         const auto sym{ctx_.registry.get_from_opt(*mod_data->imported.root_table_idx, member.name)};
-        return sym ? &*sym : nullptr;
+        return sym;
     }
     const auto tbl{denoted_type(*obj_type).get_symbol_table_idx_opt()};
-    if (!tbl) { return nullptr; }
+    if (!tbl) { return stdx::none; }
     const auto sym{ctx_.registry.get_from_opt(*tbl, member.name)};
-    return sym ? &*sym : nullptr;
+    return sym;
 }
 
 namespace {
@@ -8445,7 +8446,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                                                     resolving_.ast.location_of(*decl.value)));
                 return poison_out();
             }
-            auto* decl_value_type_p{&*last_type_.take()};
+            auto* decl_value_type_p{last_type_.take()};
             // `const X := MakesAType()`: fold the constructor now, exactly like an annotation
             if (decl_value_type_p->get_data().is<types::deferred_call>()) {
                 const auto& dc_call{decl_value_type_p->get_data().as<types::deferred_call>().call};

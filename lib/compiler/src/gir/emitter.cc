@@ -318,7 +318,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
     usize       pi{0};
     if (has_self) {
         ASSERT(self_type, "Self parameter must have a resolved sema type");
-        full_param_types[pi++] = &*self_type;
+        full_param_types[pi++] = self_type.get();
     }
     for (const auto& param_type : req.arg_types) { full_param_types[pi++] = param_type; }
 
@@ -375,7 +375,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
     stdx::option<type_guard> enclosing_guard;
     if (const auto gi{ctx_.generic_functions.get_opt(*req.generic_fn_type)};
         gi && gi->enclosing_type) {
-        enclosing_guard.emplace(user_type_stack_, &*gi->enclosing_type);
+        enclosing_guard.emplace(user_type_stack_, gi->enclosing_type.get());
         const_eval_.set_enclosing_type(gi->enclosing_type);
     }
     {
@@ -1086,7 +1086,7 @@ auto emitter::emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -
 
     stdx::option<const sema::impl_record&> rec;
     for (const auto* r : ctx_.impls.records()) {
-        if (r->enclosing && &*r->enclosing == &active_mod() &&
+        if (r->enclosing && r->enclosing == &active_mod() &&
             r->site.get_index() == id.get_index() && r->site.get_kind() == id.get_kind()) {
             rec.emplace(r);
             break;
@@ -3229,7 +3229,7 @@ auto emitter::resolve_static_field_ref(const ast::call_expr& call)
     const auto name{folded_name->as_opt<std::string>()};
     if (!name) { return stdx::none; }
 
-    return std::pair{gsl::not_null{&**owner_opt}, std::string{*name}};
+    return std::pair{gsl::not_null{owner_opt->get()}, std::string{*name}};
 }
 
 auto emitter::try_emit_static_field_builtin_addr(const ast::call_expr& call)
@@ -5048,7 +5048,7 @@ auto emitter::emit_for(ast::node_id                   id,
             const bool open_upper{!range->rhs};
             const auto end_val{open_upper ? value{u64{0}, usize_type}
                                           : emit_expression(*range->rhs)};
-            auto*      elem_type{start_val.type ? &*start_val.type : &ctx_.get_int(32, true)};
+            auto*      elem_type{start_val.type ? start_val.type.get() : &ctx_.get_int(32, true)};
 
             const auto slot{builder_.emit_alloca(*elem_type, cap_name.value_or(""))};
             builder_.emit_store(slot, start_val);

@@ -134,25 +134,25 @@ pub constexpr stderr := fn(): R(Handle) {
 /// Write the contents of `buf` to the file, returning the number of written bytes
 pub const write := fn(h: Handle, buf: []u8): R(usize) {
     const r := sys_write(h, buf.ptr, buf.len);
-    return if (r < 0) .fail(@fromBackingInt(Errno, *sys_errno_loc())) else .of(@intCast(usize, r));
+    return if (r < 0) .fail(@fromBackingInt(*sys_errno_loc())) else .of(@intCast(usize, r));
 };
 
 /// Read the contents of the file into `buf`, returning the number of read bytes
 pub const read := fn(h: Handle, buf: []mut u8): R(usize) {
     const r := sys_read(h, buf.ptr, buf.len);
-    return if (r < 0) .fail(@fromBackingInt(Errno, *sys_errno_loc())) else .of(@intCast(usize, r));
+    return if (r < 0) .fail(@fromBackingInt(*sys_errno_loc())) else .of(@intCast(usize, r));
 };
 
 /// Open the file at the provided path with the desired flag and mode
 pub const open := fn(path: [:0]u8, flags: i32, mode: mode_t): R(Handle) {
     const fd := sys_open(path.ptr, flags, @as(i32, mode));
-    return if (fd < 0) .fail(@fromBackingInt(Errno, *sys_errno_loc())) else .of(fd);
+    return if (fd < 0) .fail(@fromBackingInt(*sys_errno_loc())) else .of(fd);
 };
 
 /// Close the file associated with the given handle
 pub const close := fn(h: Handle): R(void) {
     const r := sys_close(h);
-    return if (r < 0) .fail(@fromBackingInt(Errno, *sys_errno_loc())) else .done;
+    return if (r < 0) .fail(@fromBackingInt(*sys_errno_loc())) else .done;
 };
 
 /// Reposition a read/write file to offset `off` where:
@@ -161,40 +161,40 @@ pub const close := fn(h: Handle): R(void) {
 /// - If `whence` is `SEEK_END`, the offset is set to the size of the file plus offset bytes.
 pub const lseek := fn(h: Handle, off: i64, whence: i32): R(i64) {
     const r := sys_lseek(h, off, whence);
-    return if (r < 0) .fail(@fromBackingInt(Errno, *sys_errno_loc())) else .of(r);
+    return if (r < 0) .fail(@fromBackingInt(*sys_errno_loc())) else .of(r);
 };
 
 // Get the `Stat` for an already open file
 pub const fstat := fn(file: Handle): R(Stat) {
     var s: Stat = undefined;
     const r := sys_fstat(file, ^mut s);
-    return if (r < 0) .fail(@fromBackingInt(Errno, *sys_errno_loc())) else .of(s);
+    return if (r < 0) .fail(@fromBackingInt(*sys_errno_loc())) else .of(s);
 };
 
 // Get the `Stat` for a file at the provided `path`
 pub const stat := fn(path: [:0]u8): R(Stat) {
     var s: Stat = undefined;
     const r := sys_stat(path.ptr, ^mut s);
-    return if (r < 0) .fail(@fromBackingInt(Errno, *sys_errno_loc())) else .of(s);
+    return if (r < 0) .fail(@fromBackingInt(*sys_errno_loc())) else .of(s);
 };
 
 /// Create a directory at the provided path
 pub const mkdir := fn(path: [:0]u8, mode: mode_t): R(void) {
     const r := sys_mkdir(path.ptr, mode);
-    return if (r < 0) .fail(@fromBackingInt(Errno, *sys_errno_loc())) else .done;
+    return if (r < 0) .fail(@fromBackingInt(*sys_errno_loc())) else .done;
 };
 
 /// Reserve and commit `len` bytes of zero-filled, read-write anonymous memory.
 /// The result is page-aligned; `len` is rounded up to a page by the kernel.
 pub const alloc := fn(len: usize): R(^mut u8) {
     const p := sys_mmap(nullptr, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1i32, 0i64);
-    return if (p == MAP_FAILED) .fail(@fromBackingInt(Errno, *sys_errno_loc())) else .of(@ptrCast(^mut u8, p));
+    return if (p == MAP_FAILED) .fail(@fromBackingInt(*sys_errno_loc())) else .of(@ptrCast(^mut u8, p));
 };
 
 /// Release a region previously returned by `alloc`. `len` must match the `alloc` call.
 pub const free := fn(ptr: ^mut u8, len: usize): R(void) {
     const r := sys_munmap(@ptrCast(^mut opaque, ptr), len);
-    return if (r < 0) .fail(@fromBackingInt(Errno, *sys_errno_loc())) else .done;
+    return if (r < 0) .fail(@fromBackingInt(*sys_errno_loc())) else .done;
 };
 
 var cached_page_size: std.Option(usize) = .{ .none = {} };

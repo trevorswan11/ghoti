@@ -7,7 +7,6 @@
 #include <ranges>
 #include <string>
 #include <string_view>
-#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -35,6 +34,7 @@
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
@@ -1169,7 +1169,7 @@ auto llvm_lowering::emit_float_to_int_guard(const gir::instruction& inst,
     const auto&    semantics{val->getType()->getFltSemantics()};
     const auto     to_float = [&](const llvm::APInt& bound, llvm::APFloat::roundingMode mode) {
         llvm::APFloat f{semantics};
-        std::ignore = f.convertFromAPInt(bound, true, mode);
+        DISCARD(f.convertFromAPInt(bound, true, mode));
         return llvm::ConstantFP::get(val->getType(), f);
     };
 
@@ -1881,7 +1881,7 @@ auto llvm_lowering::emit_store(const gir::instruction& inst) -> void {
     const auto is_volatile{inst.is_volatile()};
     if (inst.operands.size() >= 2) {
         auto* dest_ptr{lower_value(inst.operands[0])};
-        auto* val{lower_value(inst.operands[1], inst.type ? &*inst.type : nullptr)};
+        auto* val{lower_value(inst.operands[1], inst.type ? inst.type.get() : nullptr)};
         if (!dest_ptr || !dest_ptr->getType()->isPointerTy() || !val ||
             val->getType()->isVoidTy()) {
             return;
@@ -1889,7 +1889,7 @@ auto llvm_lowering::emit_store(const gir::instruction& inst) -> void {
         builder_.CreateStore(val, dest_ptr, is_volatile);
     } else if (inst.result && !inst.operands.empty()) {
         auto* dest_ptr{lower_value(gir::value{*inst.result})};
-        auto* val{lower_value(inst.operands[0], inst.type ? &*inst.type : nullptr)};
+        auto* val{lower_value(inst.operands[0], inst.type ? inst.type.get() : nullptr)};
         if (!dest_ptr || !dest_ptr->getType()->isPointerTy() || !val ||
             val->getType()->isVoidTy()) {
             return;
@@ -2262,7 +2262,7 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
 auto llvm_lowering::emit_const(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
     ASSERT(!inst.operands.empty(), "Const instruction requires an operand");
-    auto* val{lower_value(inst.operands[0], inst.type ? &*inst.type : nullptr)};
+    auto* val{lower_value(inst.operands[0], inst.type ? inst.type.get() : nullptr)};
     if (inst.result) { set_local(*inst.result, val); }
     return val;
 }

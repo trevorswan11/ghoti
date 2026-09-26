@@ -61,7 +61,7 @@ auto type_checker::check_types(gir::module& gir_mod, mod::module& ast_mod, conte
         const auto diags_before{ctx.diags.size()};
         checker.check_function(*fn);
         const auto source_mod{fn->get_source_module()};
-        if (source_mod && &*source_mod != &ast_mod && ctx.diags.size() > diags_before) {
+        if (source_mod && source_mod != &ast_mod && ctx.diags.size() > diags_before) {
             source_mod->absorb_sema_diagnostics(ctx.diags.split_off(diags_before));
             attributed_foreign = true;
         }
@@ -1003,7 +1003,7 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
                 if (val_t &&
                     !is_value_assignable(
                         inst.operands[0], *val_t, *it->second.type, inst.location) &&
-                    !packed_backing_store(it->second.type, &*val_t)) {
+                    !packed_backing_store(it->second.type, val_t.get())) {
                     emit_diagnostic(format_store_mismatch(*val_t, *it->second.type),
                                     error::TYPE_MISMATCH,
                                     inst.location);
@@ -1099,7 +1099,7 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
 
             if (val_t &&
                 !is_value_assignable(inst.operands[0], *val_t, *it->second.type, inst.location) &&
-                !packed_backing_store(it->second.type, &*val_t)) {
+                !packed_backing_store(it->second.type, val_t.get())) {
                 emit_diagnostic(format_store_mismatch(*val_t, *it->second.type),
                                 error::TYPE_MISMATCH,
                                 inst.location);
