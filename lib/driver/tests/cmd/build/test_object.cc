@@ -328,6 +328,26 @@ TEST_CASE("build_obj command execution") {
     }
 }
 
+TEST_CASE("build_obj follows an import written as an absolute path") {
+    codegen::llvm_scope scope;
+    tempfile            helper{"test_abs_import_helper.gh"};
+    tempfile            src_file{"test_abs_import_main.gh"};
+    tempfile            obj_file{"test_abs_import_out.o"};
+    {
+        std::ofstream helper_out{helper.path};
+        fmt::print(helper_out, "pub const seven := fn(): i64 {{ return 7; }};\n");
+        // A generic string keeps Windows separators from being read as escapes
+        std::ofstream src_out{src_file.path};
+        fmt::print(src_out,
+                   "import \"{}\" as h;\npub const get := fn(): i64 {{ return h.seven(); }};\n",
+                   std::filesystem::absolute(helper.path).generic_string());
+    }
+
+    cmd::build_obj cmd{{.input_path = src_file, .output_path = obj_file}};
+    REQUIRE(cmd.execute());
+    CHECK(std::filesystem::exists(obj_file));
+}
+
 TEST_CASE("build_obj creates a missing output directory") {
     codegen::llvm_scope scope;
     tempfile            src_file{"test_nested_out_src.gh"};

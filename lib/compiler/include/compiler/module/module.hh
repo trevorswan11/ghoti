@@ -449,7 +449,7 @@ class module_manager {
 
     // Attempts to load the path from the loader and parse its contents.
     //
-    // Asserts that the path is relative and its parent is absolute
+    // A relative `path` resolves against `parent_path`, which must be absolute or empty
     [[nodiscard]] auto try_get_file_module(const std::filesystem::path& path,
                                            const std::filesystem::path& parent_path = {})
         -> stdx::result<gsl::not_null<module*>, diagnostic>;

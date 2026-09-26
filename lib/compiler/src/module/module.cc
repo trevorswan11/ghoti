@@ -72,12 +72,9 @@ auto module_manager::try_get_file_module(const std::filesystem::path& path,
     PROFILE_FUNCTION();
     ASSERT((parent_path.empty() || parent_path.is_absolute()) &&
            "Parent path must be absolute or empty");
-    if (!path.is_relative()) {
-        return make_mod_err(fmt::format("Requested file '{}' is absolute", path.string()),
-                            error::MODULE_PATH_NOT_RELATIVE);
-    };
-
-    const auto normalized{loader_.normalize(parent_path.empty() ? path : parent_path / path)};
+    // An absolute path names its file directly; a relative one is resolved from the importer
+    const auto requested{parent_path.empty() || path.is_absolute() ? path : parent_path / path};
+    const auto normalized{loader_.normalize(requested)};
     if (!normalized) { return make_mod_err(normalized.error()); }
     return try_get(*normalized);
 }

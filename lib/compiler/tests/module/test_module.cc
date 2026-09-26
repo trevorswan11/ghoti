@@ -1,3 +1,4 @@
+#include <filesystem>
 #include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
@@ -11,22 +12,26 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("Fetching non-relative file modules") {
+TEST_CASE("Fetching absolute file modules") {
     mod::memory_loader  loader;
     mod::module_manager manager{loader};
 
 #if GHOTI_WINDOWS
-    const std::string_view file{"C:/fake/foo.gh"};
+    const std::filesystem::path root{"C:/fake"};
+    const std::filesystem::path elsewhere{"D:/other"};
 #else
-    const std::string_view file{"/fake/foo.gh"};
+    const std::filesystem::path root{"/fake"};
+    const std::filesystem::path elsewhere{"/other"};
 #endif
-    const auto actual{UNWRAP_ERR(manager.try_get_file_module(file))};
+    loader.add(root / "lib" / "foo.gh", "pub const x := 1;");
 
-    const mod::diagnostic expected{
-        fmt::format("Requested file '{}' is absolute", file),
-        mod::error::MODULE_PATH_NOT_RELATIVE,
-    };
-    CHECK(actual == expected);
+    // An absolute import ignores its importer's directory and dedupes with the relative spelling
+    const auto absolute{UNWRAP(manager.try_get_file_module(root / "lib" / "foo.gh", elsewhere))};
+    const auto relative{UNWRAP(manager.try_get_file_module("lib/foo.gh", root))};
+    CHECK(absolute.get() == relative.get());
+
+    const auto missing{UNWRAP_ERR(manager.try_get_file_module(root / "missing.gh", elsewhere))};
+    CHECK(missing.get_error() == mod::error::PATH_DOES_NOT_EXIST);
 }
 
 TEST_CASE("Fetching missing library modules") {
