@@ -77,10 +77,10 @@ struct options {
 
     // Writes the GIR / LLVM IR / assembly dumps requested via
     // --emit-gir / --emit-llvm-ir / --emit-asm, if any.
-    [[nodiscard]] auto emit_debug_artifacts(sema::analyzer& analyzer,
-                                            gir::module&    gir_mod,
-                                            std::ostream&   error_stream,
-                                            bool            for_test_executable = false) const
+    [[nodiscard]] auto emit_debug_artifacts(sema::analyzer&      analyzer,
+                                            gir::module&         gir_mod,
+                                            std::ostream&        error_stream,
+                                            sema::build_artifact artifact) const
         -> stdx::result<void, clap::error>;
 
     // Points `output_path` at a fresh absolute temp executable path tagged with `tag`

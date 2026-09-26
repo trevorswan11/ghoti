@@ -16,7 +16,8 @@ auto build_lib::execute() -> stdx::result<void, clap::error> {
     auto [module, gir_mod]{TRY(compilation.analyze())};
     auto& analyzer{compilation.get_analyzer()};
 
-    TRY(opts_.emit_debug_artifacts(analyzer, gir_mod, error_stream_));
+    TRY(opts_.emit_debug_artifacts(
+        analyzer, gir_mod, error_stream_, sema::build_artifact::LIBRARY));
 
     stdx::result<void, codegen::diagnostic> emit_res;
     if (opts_.dynamic) {

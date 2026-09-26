@@ -43,6 +43,9 @@ struct target_options;
 
 namespace sema {
 
+// What a build produces, which decides how its GIR is pruned and lowered
+enum class build_artifact : u8 { OBJECT, EXECUTABLE, TEST_EXECUTABLE, LIBRARY };
+
 // The manager for all steps of semantic analysis.
 class analyzer {
   public:
@@ -109,27 +112,18 @@ class analyzer {
                                     const codegen::optimizer_options& options)
         -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic>;
 
-    // Lowers `gir_module` and returns the resulting module's textual LLVM IR.
+    // Textual LLVM IR / native assembly of `gir_module` exactly as `artifact`'s real build emits it
     [[nodiscard]] auto emit_llvm_ir_text(gir::module&                      gir_module,
-                                         const codegen::optimizer_options& options)
+                                         const codegen::target_options&    target_opts,
+                                         const codegen::optimizer_options& opt_options,
+                                         build_artifact                    artifact)
         -> stdx::result<std::string, codegen::diagnostic>;
-
-    // Same as `emit_llvm_ir_text`, but first prunes to the reachable test surface first
-    [[nodiscard]] auto emit_llvm_ir_text_test_executable(gir::module& gir_module,
-                                                         const codegen::optimizer_options& options)
-        -> stdx::result<std::string, codegen::diagnostic>;
-
-    // Lowers `gir_module` for `target_opts` and returns the resulting native assembly as text.
     [[nodiscard]] auto emit_asm_text(gir::module&                      gir_module,
                                      const codegen::target_options&    target_opts,
-                                     const codegen::optimizer_options& opt_options)
+                                     const codegen::optimizer_options& opt_options,
+                                     build_artifact                    artifact)
         -> stdx::result<std::string, codegen::diagnostic>;
 
-    // Same as `emit_asm_text`, but prunes to the reachable test surface first
-    [[nodiscard]] auto emit_asm_text_test_executable(gir::module&                      gir_module,
-                                                     const codegen::target_options&    target_opts,
-                                                     const codegen::optimizer_options& opt_options)
-        -> stdx::result<std::string, codegen::diagnostic>;
     [[nodiscard]] auto emit_llvm_ir_executable(gir::module&                      gir_module,
                                                llvm::LLVMContext&                context,
                                                const codegen::optimizer_options& options,
@@ -209,7 +203,20 @@ class analyzer {
         -> stdx::result<void, codegen::diagnostic>;
 
   private:
-    auto optimize_llvm(llvm::Module& module, const codegen::optimizer_options& options)
+    // Prunes, lowers, verifies, and optimizes `gir_module` the way `artifact`'s build requires
+    [[nodiscard]] auto lower_artifact(gir::module&                      gir_module,
+                                      llvm::LLVMContext&                context,
+                                      const codegen::optimizer_options& options,
+                                      build_artifact                    artifact)
+        -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic>;
+
+    [[nodiscard]] auto link_artifact(gir::module&                         gir_module,
+                                     llvm::LLVMContext&                   context,
+                                     const codegen::target_options&       target_opts,
+                                     const codegen::optimizer_options&    opt_options,
+                                     const std::filesystem::path&         output_path,
+                                     const codegen::extra_linker_options& linker_opts,
+                                     build_artifact                       artifact)
         -> stdx::result<void, codegen::diagnostic>;
 
   private:
