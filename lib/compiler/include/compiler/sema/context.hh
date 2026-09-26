@@ -9,12 +9,15 @@
 
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
+#include <gsl/span>
 #include <stdx/arena.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/arena.hh"
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/traits.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/const_value.hh"
@@ -60,6 +63,9 @@ struct context {
     // For the generic instantiation currently being resolved or emitted
     std::vector<constexpr_frame> constexpr_binding_frames;
 
+    // Nonzero while resolving a `constexpr { ... }` body, whose folds are compile-time evaluation
+    usize constexpr_evaluation_depth{0};
+
     // Declared names for user struct/enum/union types, for `@typeName`
     type_name_map& user_type_names;
 
@@ -100,6 +106,7 @@ struct context {
           prelude_index{other.prelude_index}, target_opts{other.target_opts},
           user_main_name{other.user_main_name}, runtime_safety{other.runtime_safety},
           constexpr_binding_frames{other.constexpr_binding_frames},
+          constexpr_evaluation_depth{other.constexpr_evaluation_depth},
           user_type_names{other.user_type_names}, embed_cache{other.embed_cache},
           env_epoch{other.env_epoch} {}
 
@@ -132,6 +139,24 @@ struct context {
     // Calls resolve_if on the resulting type
     [[nodiscard]] auto get_reference(types::mut::mutability_modifiers mutability, type& underlying)
         -> type&;
+
+    // A structural (selfless) function type as spelled by `fn(...): R` / `extern fn(...): R`
+    [[nodiscard]] auto get_function(gsl::span<type*>        params,
+                                    type&                   return_type,
+                                    bool                    is_variadic,
+                                    ast::calling_convention conv,
+                                    bool                    erased) -> type&;
+
+    // The same signature as `fn`, toggled between erased and thin
+    [[nodiscard]] auto with_erasure(type& fn, bool erased) -> type&;
+
+    // `@Fn`'s result: `get_function` for a plain signature, else a thin method-shaped type
+    [[nodiscard]] auto get_function_like(gsl::span<type*>        params,
+                                         type&                   return_type,
+                                         bool                    has_self,
+                                         bool                    is_variadic,
+                                         ast::calling_convention conv,
+                                         bool                    erased) -> type&;
 
     // Calls resolve_if on the resulting type
     [[nodiscard]] auto get_array(types::mut::mutability_modifiers mutability,
@@ -181,6 +206,24 @@ struct context {
     // Reads embedded file into embed_cache and returns reference to contents if successful
     [[nodiscard]] auto read_embed_file(const std::filesystem::path& path)
         -> stdx::option<const std::string&>;
+};
+
+// Marks everything folded while it lives as compile-time evaluation (a `constexpr` block, label,
+// or declaration initializer), as opposed to an opportunistic fold of runtime code
+class constexpr_evaluation_scope {
+  public:
+    constexpr_evaluation_scope(context& ctx, bool enabled) noexcept
+        : depth_{ctx.constexpr_evaluation_depth}, enabled_{enabled} {
+        if (enabled_) { ++depth_; }
+    }
+    ~constexpr_evaluation_scope() noexcept {
+        if (enabled_) { --depth_; }
+    }
+    MAKE_PINNED(constexpr_evaluation_scope);
+
+  private:
+    usize& depth_;
+    bool   enabled_;
 };
 
 } // namespace ghoti::sema

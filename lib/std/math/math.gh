@@ -142,8 +142,6 @@ test "min_int" {
     @expect(min_int(i128) == -170141183460469231731687303715884105728);
 }
 
-// TODO(tcs): Add a way to see if we're in a constexpr context to make min and max constexpr friendly
-
 /// Returns the maximum of at least two values which are implicitly convertible
 pub constexpr max := fn(a: auto, b: auto, c...): auto {
     var largest := if (a > b) a else b;
@@ -158,9 +156,11 @@ test "max" {
     @expect(max(-4, -123) == -4);
     @expect(max(-4, -123, 45) == 45);
     @expect(max(-4, -123, 45, 78, 90, -23) == 90);
-    // constexpr {
-    //     @assert(max(1, 2) == 2);
-    // }
+    constexpr {
+        @assert(max(1, 2) == 2);
+        @assert(max(-4, -123, 45) == 45);
+        @assert(max(-4, -123, 45, 78, 90, -23) == 90);
+    }
 }
 
 /// Returns the minimum of at least two values which are implicitly convertible
@@ -177,7 +177,9 @@ test "min" {
     @expect(min(-4, -123) == -123);
     @expect(min(-4, -123, 45) == -123);
     @expect(min(-4, -1, 45, 78, 90, -23) == -23);
-    // constexpr {
-    //     @assert(min(1, 2) == 1);
-    // }
+    constexpr {
+        @assert(min(1, 2) == 1);
+        @assert(min(-4, -123, 45) == -123);
+        @assert(min(-4, -1, 45, 78, 90, -23) == -23);
+    }
 }

@@ -7,7 +7,7 @@ pub const Whence := enum {
 };
 
 pub const Seeker := interface {
-    Error: type;
+    Error: type = std.io.Error;
 
     /// Seeks to `offset` by `whence`
     pub const seek := fn(&mut self, offset: i64, whence: Whence): std.Result(i64, Error);

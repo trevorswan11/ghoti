@@ -389,6 +389,25 @@ struct module {
         }
     }
 
+    template <ast::IndexableID ID>
+    auto set_identifier_declaration(ID id, sema::declaration_ref declaration) -> void {
+        if constexpr (ast::IndexableNodeID<ID>) {
+            sema_side_tables.identifier_declarations[id].emplace(declaration);
+        } else {
+            sema_side_tables.explicit_type_declarations[id].emplace(declaration);
+        }
+    }
+
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto get_identifier_declaration(ID id) const
+        -> stdx::option<sema::declaration_ref> {
+        if constexpr (ast::IndexableNodeID<ID>) {
+            return sema_side_tables.identifier_declarations[id];
+        } else {
+            return sema_side_tables.explicit_type_declarations[id];
+        }
+    }
+
     // Given a relative path, returns its absolute rep from the module's perspective
     [[nodiscard]] auto make_path_absolute(const std::filesystem::path& p) -> std::filesystem::path {
         if (p.is_relative()) { return parent_path / p; }

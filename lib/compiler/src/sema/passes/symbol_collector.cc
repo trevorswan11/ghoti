@@ -260,7 +260,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::function_expr& fn) -> v
 auto symbol_collector::visit(ast::node_id, const ast::if_expr& if_expr) -> void {
     PROFILE_FUNCTION();
     const default_counter::guard g{in_expr_scope_};
-    collect(if_expr.condition);
+    if (if_expr.condition) { collect(*if_expr.condition); }
     collect(if_expr.consequence);
     if (if_expr.alternate) { collect(*if_expr.alternate); }
 }

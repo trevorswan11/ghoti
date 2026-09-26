@@ -353,7 +353,7 @@ const to_io_err := fn(_: std.io.Error): std.fmt.Error {
 };
 
 pub const pad := fn(
-    w: &mut dyn std.io.Writer(Error = std.io.Error),
+    w: &mut dyn std.io.Writer,
     spec: Spec,
     body: []u8,
     default_align: Align,
@@ -397,7 +397,7 @@ test "pad applies default and explicit alignment" {
 
 /// Write N bytes of value `byte` to the writer
 pub const write_fill_n := fn(
-    w: &mut dyn std.io.Writer(Error = std.io.Error),
+    w: &mut dyn std.io.Writer,
     byte: u8,
     n: usize,
 ): std.Result(void, std.fmt.Error) {
@@ -410,7 +410,7 @@ pub const write_fill_n := fn(
 /// Writes `body` padded per `spec`, where `body[..prefix_len]` is a sign/radix prefix.
 /// The zero flag overrides fill/align and places '0's between the prefix and the digits
 pub const pad_number := fn(
-    w: &mut dyn std.io.Writer(Error = std.io.Error),
+    w: &mut dyn std.io.Writer,
     spec: Spec,
     body: []u8,
     prefix_len: usize,
@@ -468,7 +468,7 @@ test "pad_number places zeros after the prefix and defers to pad otherwise" {
 
 /// Writes a literal/escaped curly brace sequence to the writer
 pub const write_literal := fn(
-    w: &mut dyn std.io.Writer(Error = std.io.Error),
+    w: &mut dyn std.io.Writer,
     raw: []u8,
 ): std.Result(void, std.fmt.Error) {
     var start: usize = 0;

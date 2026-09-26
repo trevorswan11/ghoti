@@ -10,11 +10,13 @@
 #include <utility>
 
 #include <gsl/pointers>
+#include <gsl/span>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/passes/symbol_collector.hh"
@@ -52,6 +54,48 @@ auto context::get_reference(types::mut::mutability_modifiers mutability, type& u
     auto& type{*pool[{type_kind::REFERENCE, mutability, underlying}]};
     type.resolve_if<types::reference>(underlying);
     return type;
+}
+
+constexpr u64 ERASED_FN_MARKER{0x455241534544}; // distinguishes `fn` from `extern fn` keys
+
+auto context::get_function(gsl::span<type*>        params,
+                           type&                   return_type,
+                           bool                    is_variadic,
+                           ast::calling_convention conv,
+                           bool                    erased) -> type& {
+    types::key_t key{type_kind::FUNCTION, types::mut::CONSTANT};
+    for (const auto* p : params) { key.imprint(*p); }
+    key.imprint(return_type);
+    if (is_variadic) { key.imprint(is_variadic); }
+    key.imprint(conv);
+    if (erased) { key.imprint(ERASED_FN_MARKER); }
+
+    auto& fn{*pool[key]};
+    fn.resolve_if<types::function>(params, return_type, false, is_variadic, conv, erased);
+    return fn;
+}
+
+auto context::get_function_like(gsl::span<type*>        params,
+                                type&                   return_type,
+                                bool                    has_self,
+                                bool                    is_variadic,
+                                ast::calling_convention conv,
+                                bool                    erased) -> type& {
+    if (!has_self) { return get_function(params, return_type, is_variadic, conv, erased); }
+
+    types::key_t key{type_kind::FUNCTION, types::mut::CONSTANT};
+    for (const auto* p : params) { key.imprint(*p); }
+    key.imprint(return_type);
+    key.imprint(conv);
+    auto& fn{*pool[key]};
+    fn.resolve_if<types::function>(params, return_type, true, is_variadic, conv);
+    return fn;
+}
+
+auto context::with_erasure(type& fn, bool erased) -> type& {
+    const auto data{fn.get_data().as_opt<types::function>()};
+    if (!data || data->erased == erased || data->has_self) { return fn; }
+    return get_function(data->params, data->return_type, data->is_variadic, data->conv, erased);
 }
 
 auto context::get_array(types::mut::mutability_modifiers mutability,

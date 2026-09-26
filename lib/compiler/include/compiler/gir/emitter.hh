@@ -238,6 +238,11 @@ class emitter {
     auto emit_string_as_slice(const std::string& bytes, sema::type& slice_type) -> value;
     // Builds a `&dyn I` / `^dyn I` fat pointer `{ data, vtable }` from `src` (a `&T` / `^T`)
     auto emit_dyn_coercion(ast::expr_handle src, sema::type& fat_type) -> value;
+    // Wraps a thin function or a closure into the `{ctx, code}` pair of a `fn(...)`/`^fn(...)`
+    auto emit_callable_coercion(ast::expr_handle src, sema::type& declared_type)
+        -> stdx::option<value>;
+    // A generic `fn(x: T): T` destination takes its concrete erased shape from the source
+    auto concrete_callable_type(sema::type& fat_type, sema::type& src_type) -> sema::type&;
     // Lowers `expr[lo..{=}hi]` on an array or slice to a bounds-checked `{ptr, len}` subslice.
     auto emit_slice_range(ast::node_id id, const ast::index_expr& index) -> value;
     auto emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type) -> value;

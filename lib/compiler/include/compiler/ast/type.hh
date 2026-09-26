@@ -6,10 +6,12 @@
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/syntax/error.hh"
+#include "compiler/syntax/token.hh"
 
 namespace ghoti {
 
@@ -31,11 +33,23 @@ struct explicit_function_type {
     bool                           params_force_break{false}; // trailing comma before `)`
     explicit_type_id               explicit_return_type;
     calling_convention             conv{calling_convention::C};
+    bool                           has_explicit_conv{false};
+    bool                           is_extern{false}; // thin C-ABI code pointer, never erased
+    bool                           is_dyn_fn{false}; // spelled `dyn Fn(...)`, sugar for `fn(...)`
 
     // allow_trailing_brace lets an aggregate literal's own '{' follow without misreading it
     [[nodiscard]] static auto parse(syntax::parser& parser, bool allow_trailing_brace = false)
         -> stdx::result<explicit_function_type, syntax::diagnostic>;
 };
+
+// With `current == dyn`, parses `dyn Fn(name: T, ...): R` as an erased function type. Only a
+// parameter list shaped like a function type qualifies, so a user `interface Fn` still resolves.
+[[nodiscard]] auto try_parse_dyn_fn(syntax::parser& parser, bool allow_trailing_brace = false)
+    -> stdx::result<stdx::option<explicit_function_type>, syntax::diagnostic>;
+
+// A function type's own `&`/`^` modifier rules, shared by `fn`, `extern fn`, and `dyn Fn`
+[[nodiscard]] auto check_function_type_modifier(type_modifier modifier, const syntax::token_t& at)
+    -> stdx::result<void, syntax::diagnostic>;
 
 struct explicit_dyn_type {
     struct assoc_binding {

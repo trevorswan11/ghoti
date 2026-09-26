@@ -20,9 +20,10 @@ TEST_CASE("every node has an end_location_of that is not before its start locati
                                     "const y := struct { a: i32 };\n",
                             arena)};
 
-    for (const auto root : ast) {
-        const auto& start{ast.location_of(root)};
-        const auto& end{ast.end_location_of(root)};
+    REQUIRE(ast.all_nodes().size() > ast.get_roots().size());
+    for (const auto id : ast.all_nodes()) {
+        const auto& start{ast.location_of(id)};
+        const auto& end{ast.end_location_of(id)};
         CHECK((end.line > start.line || (end.line == start.line && end.column >= start.column)));
     }
 }

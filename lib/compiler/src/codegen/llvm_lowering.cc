@@ -1158,6 +1158,20 @@ auto llvm_lowering::emit_checked_arith(const gir::instruction& inst,
     }
 }
 
+auto llvm_lowering::const_callable(std::string_view          fn_symbol,
+                                   stdx::option<sema::type&> fn_type,
+                                   llvm::Type*               ty) -> llvm::Constant* {
+    auto* st{llvm::dyn_cast<llvm::StructType>(ty)};
+    if (!st || st->getNumElements() != 2 || !st->getElementType(1)->isPointerTy()) {
+        return nullptr;
+    }
+    const auto fn{fn_type ? fn_type->get_data().as_opt<sema::types::function>() : stdx::none};
+    if (!fn || fn->erased) { return nullptr; }
+    auto* code_ptr{resolve_named_function(fn_symbol)};
+    if (!code_ptr) { return nullptr; }
+    return llvm::ConstantStruct::get(st, {code_ptr, get_or_create_fn_trampoline(*fn)});
+}
+
 auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) -> llvm::Constant* {
     PROFILE_FUNCTION();
     if (!ty) { return nullptr; }
@@ -1171,6 +1185,7 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
         return llvm::ConstantInt::get(ty, static_cast<u64>(e->value), true);
     }
     if (const auto s{cv.as_opt<std::string>()}) {
+        if (auto* callable{const_callable(*s, cv.get_type(), ty)}) { return callable; }
         if (auto* st{llvm::dyn_cast<llvm::StructType>(ty)}) {
             if (st->getNumElements() == 2 && st->getElementType(0)->isPointerTy() &&
                 st->getElementType(1)->isIntegerTy()) {
@@ -1378,7 +1393,10 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
         auto* len{llvm::ConstantInt::get(types_.get_usize_ty(), bytes.size())};
         init = llvm::ConstantStruct::get(llvm::cast<llvm::StructType>(g_type), {data_gv, len});
     } else if (g.init_value) {
-        auto* init_v{lower_value(*g.init_value, &g.type)};
+        if (const auto fn_symbol{g.init_value->as_opt<std::string>()}) {
+            init = const_callable(*fn_symbol, g.init_value->type, g_type);
+        }
+        auto* init_v{init ? nullptr : lower_value(*g.init_value, &g.type)};
         if (init_v && llvm::isa<llvm::Constant>(init_v)) {
             init = llvm::cast<llvm::Constant>(init_v);
         }
@@ -1735,6 +1753,7 @@ auto llvm_lowering::lower_instruction(const gir::instruction& inst) -> void {
     case gir::instruction_kind::PTR_CAST:
     case gir::instruction_kind::INT_FROM_PTR:
     case gir::instruction_kind::PTR_FROM_INT:    result_val = emit_cast(inst); break;
+    case gir::instruction_kind::MAKE_CALLABLE:   result_val = emit_make_callable(inst); break;
     case gir::instruction_kind::CALL:            result_val = emit_call(inst); break;
     case gir::instruction_kind::BUILTIN_CALL:    result_val = emit_builtin_call(inst); break;
     case gir::instruction_kind::INLINE_ASM:      result_val = emit_inline_asm(inst); break;
@@ -2061,6 +2080,16 @@ auto llvm_lowering::emit_comparison(const gir::instruction& inst) -> llvm::Value
     auto*      rhs{lower_value(inst.operands[1], peer_ty)};
     ASSERT(lhs && rhs, "Comparison operands must lower to non-null LLVM values");
 
+    // A `^fn(...)` is null exactly when its code half is
+    const auto callable_code{[&](llvm::Value* v) -> llvm::Value* {
+        const bool fat{(op0_ty && sema::is_fat_callable(*op0_ty)) ||
+                       (op1_ty && sema::is_fat_callable(*op1_ty))};
+        if (!fat || !v->getType()->isStructTy()) { return v; }
+        return builder_.CreateExtractValue(v, {1U}, "callable.code");
+    }};
+    lhs = callable_code(lhs);
+    rhs = callable_code(rhs);
+
     const bool is_flt{is_float_type(inst, lhs)};
     const bool is_sgn{is_signed_type(inst)};
 
@@ -2234,14 +2263,8 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
                             {static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX)});
                         arg_val = slice_val;
                     }
-                } else if (op.type &&
-                           (op.type->get_kind() == sema::type_kind::STRUCT ||
-                            op.type->get_kind() == sema::type_kind::UNION ||
-                            op.type->get_kind() == sema::type_kind::SLICE ||
-                            op.type->get_kind() == sema::type_kind::CLOSURE) &&
-                           arg_val->getType()->isPointerTy()) {
-                    auto* llvm_struct_ty{types_.translate(*op.type)};
-                    arg_val = builder_.CreateLoad(llvm_struct_ty, arg_val, "struct_arg");
+                } else {
+                    arg_val = load_aggregate_arg(op, arg_val);
                 }
                 args.emplace_back(arg_val);
             }
@@ -2267,25 +2290,27 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
     }
     const auto ind_fn_data{ind_target->get_data().as_opt<sema::types::function>()};
     ASSERT(ind_fn_data, "Indirect callee must have function type");
-    auto* fn_ty{types_.translate_function_type(*ind_fn_data)};
+    // A folded `const f: fn(...) = g;` reaches here as `g` itself: call it directly
+    const bool is_erased{ind_fn_data->erased && !llvm::isa<llvm::Function>(callee_val)};
+    auto*      fn_ty{is_erased ? erased_code_type(*ind_fn_data)
+                               : types_.translate_function_type(*ind_fn_data)};
 
     std::vector<llvm::Value*> args;
-    args.reserve(inst.operands.size() - 1);
+    args.reserve(inst.operands.size());
+    if (is_erased) {
+        auto* fat_ty{types_.translate(*inst.operands[0].type)};
+        if (callee_val->getType()->isPointerTy()) {
+            callee_val = builder_.CreateLoad(fat_ty, callee_val, "callable");
+        }
+        args.emplace_back(builder_.CreateExtractValue(callee_val, {0U}, "callable.ctx"));
+        callee_val = builder_.CreateExtractValue(callee_val, {1U}, "callable.code");
+    }
     for (const auto& operand : inst.operands | std::views::drop(1)) {
         // Match the direct-callee branch above
         if (operand.type && operand.type->get_kind() == sema::type_kind::TYPE) { continue; }
         auto* arg_val{lower_value(operand)};
         if (!arg_val || arg_val->getType()->isVoidTy()) { continue; }
-        if (operand.type &&
-            (operand.type->get_kind() == sema::type_kind::STRUCT ||
-             operand.type->get_kind() == sema::type_kind::UNION ||
-             operand.type->get_kind() == sema::type_kind::SLICE ||
-             operand.type->get_kind() == sema::type_kind::CLOSURE) &&
-            arg_val->getType()->isPointerTy()) {
-            auto* llvm_struct_ty{types_.translate(*operand.type)};
-            arg_val = builder_.CreateLoad(llvm_struct_ty, arg_val, "struct_arg");
-        }
-        args.emplace_back(arg_val);
+        args.emplace_back(load_aggregate_arg(operand, arg_val));
     }
 
     const bool is_void{!inst.type || inst.type->get_kind() == sema::type_kind::VOID_ ||
@@ -2293,9 +2318,75 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
     auto*      call_inst{builder_.CreateCall(fn_ty, callee_val, args, is_void ? "" : "calltmp")};
     // An indirect call's target may have a non-default calling convention now that it's part of
     // `types::function`'s own identity
-    call_inst->setCallingConv(to_llvm_callconv(ind_fn_data->conv));
+    call_inst->setCallingConv(is_erased ? llvm::CallingConv::C
+                                        : to_llvm_callconv(ind_fn_data->conv));
     if (inst.result && !is_void) { set_local(*inst.result, call_inst); }
     return call_inst;
+}
+
+auto llvm_lowering::load_aggregate_arg(const gir::value& op, llvm::Value* arg_val) -> llvm::Value* {
+    if (!op.type || !arg_val->getType()->isPointerTy()) { return arg_val; }
+    const auto kind{op.type->get_kind()};
+    const bool by_value_aggregate{
+        kind == sema::type_kind::STRUCT || kind == sema::type_kind::UNION ||
+        kind == sema::type_kind::SLICE || kind == sema::type_kind::CLOSURE ||
+        sema::is_fat_callable(*op.type)};
+    if (!by_value_aggregate) { return arg_val; }
+    return builder_.CreateLoad(types_.translate(*op.type), arg_val, "struct_arg");
+}
+
+auto llvm_lowering::erased_code_type(const sema::types::function& fn) -> llvm::FunctionType* {
+    auto*                    thin_ty{types_.translate_function_type(fn)};
+    std::vector<llvm::Type*> params{types_.get_ptr_ty()};
+    params.insert(params.end(), thin_ty->param_begin(), thin_ty->param_end());
+    return llvm::FunctionType::get(thin_ty->getReturnType(), params, false);
+}
+
+auto llvm_lowering::get_or_create_fn_trampoline(const sema::types::function& fn)
+    -> llvm::Function* {
+    auto* thin_ty{types_.translate_function_type(fn)};
+    if (const auto it{fn_trampolines_.find(thin_ty)}; it != fn_trampolines_.end()) {
+        return it->second;
+    }
+
+    auto* trampoline{llvm::Function::Create(erased_code_type(fn),
+                                            llvm::GlobalValue::InternalLinkage,
+                                            private_symbol_name("fn_trampoline"),
+                                            llvm_module_.get())};
+    fn_trampolines_.emplace(thin_ty, trampoline);
+
+    const llvm::IRBuilderBase::InsertPointGuard guard{builder_};
+    builder_.SetInsertPoint(llvm::BasicBlock::Create(context_, "entry", trampoline));
+    std::vector<llvm::Value*> forwarded;
+    for (auto& arg : trampoline->args() | std::views::drop(1)) { forwarded.emplace_back(&arg); }
+    auto* call{builder_.CreateCall(thin_ty, trampoline->getArg(0), forwarded)};
+    call->setCallingConv(to_llvm_callconv(fn.conv));
+    call->setTailCall();
+    if (thin_ty->getReturnType()->isVoidTy()) {
+        builder_.CreateRetVoid();
+    } else {
+        builder_.CreateRet(call);
+    }
+    return trampoline;
+}
+
+auto llvm_lowering::emit_make_callable(const gir::instruction& inst) -> llvm::Value* {
+    PROFILE_FUNCTION();
+    ASSERT(inst.type && !inst.operands.empty(), "make_callable requires a type and a context");
+    const auto fn{sema::fat_callable_fn(*inst.type)};
+    ASSERT(fn, "make_callable must produce an erased fn");
+
+    auto*        fat_ty{types_.translate(*inst.type)};
+    auto*        ctx{lower_value(inst.operands[0])};
+    llvm::Value* code{inst.callee_name ? resolve_named_function(*inst.callee_name)
+                                       : get_or_create_fn_trampoline(*fn)};
+    ASSERT(ctx && code, "make_callable operands must lower");
+
+    llvm::Value* fat{llvm::PoisonValue::get(fat_ty)};
+    fat = builder_.CreateInsertValue(fat, ctx, {0U});
+    fat = builder_.CreateInsertValue(fat, code, {1U}, "callable");
+    if (inst.result) { set_local(*inst.result, fat); }
+    return fat;
 }
 
 auto llvm_lowering::fixup_bit_count_result(llvm::Value* res, stdx::option<sema::type&> target)

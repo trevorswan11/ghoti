@@ -68,6 +68,9 @@ enum class instruction_kind : u8 {
     INT_FROM_PTR,
     PTR_FROM_INT,
 
+    // `{ctx, code}` for an erased `fn(...)`; `callee_name` is the code, else a thin-fn trampoline
+    MAKE_CALLABLE,
+
     // Calls
     CALL,
     BUILTIN_CALL,

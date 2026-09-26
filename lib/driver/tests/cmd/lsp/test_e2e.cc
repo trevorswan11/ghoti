@@ -197,6 +197,95 @@ pub const main := fn(): i32 {
     CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
 }
 
+TEST_CASE("ghoti lsp hover names a callable's parameters") {
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
+    REQUIRE(proc.is_running());
+
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"id", 1},
+                           {"method", "initialize"},
+                           {
+                               "params",
+                               {
+                                   {"processId", nullptr},
+                                   {"capabilities", nlohmann::json::object()},
+                               },
+                           },
+                       });
+    CHECK(lsp::read_message(proc.stdout_stream(), std::cerr));
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"method", "initialized"},
+                           {"params", nlohmann::json::object()},
+                       });
+
+    constexpr std::string_view uri{"file:///test_e2e_param_names.gh"};
+    constexpr std::string_view text{
+        R"(const add := fn(lhs: i32, rhs: i32): i32 { return lhs + rhs; };
+const Callback := fn(code: i32): bool;
+const Handler := struct { on_event: Callback, raw: fn(value: i32): void };
+const run := fn(cb: fn(n: i32): i32, h: Handler): i32 {
+    const ok := h.on_event(cb(1));
+    h.raw(add(2, 3));
+    return if (ok) 1 else 0;
+};
+pub const main := fn(): i32 { return 0; };
+)"};
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"method", "textDocument/didOpen"},
+                           {
+                               "params",
+                               {
+                                   {
+                                       "textDocument",
+                                       {
+                                           {"uri", uri},
+                                           {"languageId", "ghoti"},
+                                           {"version", 1},
+                                           {"text", text},
+                                       },
+                                   },
+                               },
+                           },
+                       });
+    CHECK(lsp::read_message(proc.stdout_stream(), std::cerr));
+
+    const auto hover_at = [&](i32 id, i32 line, i32 character) -> std::string {
+        lsp::write_message(proc.stdin_stream(),
+                           {
+                               {"jsonrpc", "2.0"},
+                               {"id", id},
+                               {"method", "textDocument/hover"},
+                               {"params",
+                                {{"textDocument", {{"uri", uri}}},
+                                 {"position", {{"line", line}, {"character", character}}}}},
+                           });
+        return UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr))
+            .at("result")
+            .at("contents")
+            .at("value")
+            .get<std::string>();
+    };
+
+    // A function literal, an erased `fn`-typed param, a field typed through an alias, and a
+    // field typed by an inline `fn(...)` all keep the names their declarations wrote
+    CHECK(hover_at(2, 5, 10) == "fn(lhs: i32, rhs: i32): i32");
+    CHECK(hover_at(3, 4, 27) == "fn(n: i32): i32");
+    CHECK(hover_at(4, 4, 18) == "fn(code: i32): bool");
+    CHECK(hover_at(5, 5, 6) == "fn(value: i32): void");
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 9}, {"method", "shutdown"}});
+    CHECK(lsp::read_message(proc.stdout_stream(), std::cerr));
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+    CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
+}
+
 TEST_CASE("ghoti lsp offers a missing-semicolon quick fix over a real child process") {
     piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
     REQUIRE(proc.is_running());

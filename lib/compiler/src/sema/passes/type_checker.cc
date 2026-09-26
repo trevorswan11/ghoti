@@ -913,6 +913,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
         break;
     }
     case gir::instruction_kind::DEREF:
+    case gir::instruction_kind::MAKE_CALLABLE:
     case gir::instruction_kind::INT_FROM_PTR:
     case gir::instruction_kind::PTR_FROM_INT:
     case gir::instruction_kind::BIT_CAST:

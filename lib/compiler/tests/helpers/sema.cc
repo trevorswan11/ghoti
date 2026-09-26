@@ -192,68 +192,63 @@ auto run_cfg(std::string_view input) -> cfg_outcome {
 auto selected(std::string_view input, std::string_view name) -> bool {
     auto [ctx, idx]{helpers::collect(input)};
 
-    bool found_decl{false};
-    for (const auto root : ctx->root_mod.ast) {
-        if (ctx->root_mod.ast.get_as_opt<ast::cfg_stmt>(root)) { return false; }
-        if (const auto decl{ctx->root_mod.ast.get_as_opt<ast::decl_stmt>(root)}) {
-            const auto& decl_name{ctx->root_mod.ast.get_as<ast::identifier_expr>(decl->name).name};
-            if (decl_name == name) { found_decl = true; }
-        }
+    const auto& ast{ctx->root_mod.ast};
+    // An unexpanded `@cfg` group means selection never ran
+    if (std::ranges::any_of(ast, [&](ast::node_id root) { return root.is<ast::cfg_stmt>(); })) {
+        return false;
     }
-    return found_decl;
+    return ast.find_top_level_decl(name).has_value();
 }
+
+namespace {
+
+// The value of the top-level `name := ...` when it is a `Data` literal
+template <typename Data>
+auto top_level_value(const ast::AST& ast, std::string_view name) -> stdx::option<const Data&> {
+    const auto decl{ast.find_top_level_decl(name)};
+    if (!decl || !decl->value) { return stdx::none; }
+    return ast.get_as_opt<Data>(*decl->value);
+}
+
+template <typename Range, typename Proj>
+auto names_of(const ast::AST& ast, const Range& items, Proj proj) -> std::vector<std::string> {
+    std::vector<std::string> out;
+    for (const auto& item : items) {
+        out.emplace_back(ast.get_as<ast::identifier_expr>(proj(item)).name);
+    }
+    return out;
+}
+
+} // namespace
 
 auto struct_fields(std::string_view input, std::string_view name) -> std::vector<std::string> {
     auto [ctx, idx]{helpers::collect(input)};
-    for (const auto root : ctx->root_mod.ast) {
-        const auto decl{ctx->root_mod.ast.get_as_opt<ast::decl_stmt>(root)};
-        if (!decl || !decl->value) { continue; }
-        if (ctx->root_mod.ast.get_as<ast::identifier_expr>(decl->name).name != name) { continue; }
-        const auto se{ctx->root_mod.ast.get_as_opt<ast::struct_expr>(*decl->value)};
-        if (!se) { break; }
-        std::vector<std::string> out;
-        for (const auto& field : se->fields) {
-            out.emplace_back(ctx->root_mod.ast.get_as<ast::identifier_expr>(field.name).name);
-        }
-        return out;
-    }
-    return {};
+    const auto& ast{ctx->root_mod.ast};
+    const auto  se{top_level_value<ast::struct_expr>(ast, name)};
+    if (!se) { return {}; }
+    return names_of(ast, se->fields, [](const auto& field) { return field.name; });
 }
 
 auto enum_variants(std::string_view input, std::string_view name) -> std::vector<std::string> {
     auto [ctx, idx]{helpers::collect(input)};
-    for (const auto root : ctx->root_mod.ast) {
-        const auto decl{ctx->root_mod.ast.get_as_opt<ast::decl_stmt>(root)};
-        if (!decl || !decl->value) { continue; }
-        if (ctx->root_mod.ast.get_as<ast::identifier_expr>(decl->name).name != name) { continue; }
-        const auto ee{ctx->root_mod.ast.get_as_opt<ast::enum_expr>(*decl->value)};
-        if (!ee) { break; }
-        std::vector<std::string> out;
-        for (const auto& variant : ee->enumerations) {
-            out.emplace_back(ctx->root_mod.ast.get_as<ast::identifier_expr>(variant.name).name);
-        }
-        return out;
-    }
-    return {};
+    const auto& ast{ctx->root_mod.ast};
+    const auto  ee{top_level_value<ast::enum_expr>(ast, name)};
+    if (!ee) { return {}; }
+    return names_of(ast, ee->enumerations, [](const auto& variant) { return variant.name; });
 }
 
 auto struct_members(std::string_view input, std::string_view name) -> std::vector<std::string> {
     auto [ctx, idx]{helpers::collect(input)};
-    for (const auto root : ctx->root_mod.ast) {
-        const auto decl{ctx->root_mod.ast.get_as_opt<ast::decl_stmt>(root)};
-        if (!decl || !decl->value) { continue; }
-        if (ctx->root_mod.ast.get_as<ast::identifier_expr>(decl->name).name != name) { continue; }
-        const auto se{ctx->root_mod.ast.get_as_opt<ast::struct_expr>(*decl->value)};
-        if (!se) { break; }
-        std::vector<std::string> out;
-        for (const auto& member : se->members) {
-            if (const auto md{ctx->root_mod.ast.get_as_opt<ast::decl_stmt>(*member)}) {
-                out.emplace_back(ctx->root_mod.ast.get_as<ast::identifier_expr>(md->name).name);
-            }
+    const auto& ast{ctx->root_mod.ast};
+    const auto  se{top_level_value<ast::struct_expr>(ast, name)};
+    if (!se) { return {}; }
+    std::vector<std::string> out;
+    for (const auto& member : se->members) {
+        if (const auto md{ast.get_as_opt<ast::decl_stmt>(*member)}) {
+            out.emplace_back(ast.get_as<ast::identifier_expr>(md->name).name);
         }
-        return out;
     }
-    return {};
+    return out;
 }
 
 auto resolver_error_codes(std::string_view src) -> std::vector<sema::error> {

@@ -143,9 +143,12 @@ auto remap_type(context& ctx, type& t, const type& from, type& to) -> type& {
             key.imprint(new_ret);
             key.imprint(static_cast<u64>(fn.has_self));
             key.imprint(static_cast<u64>(fn.is_variadic));
+            key.imprint(fn.conv);
+            key.imprint(static_cast<u64>(fn.erased));
             if (t.has_symbol_table_idx()) { key.imprint(t.get_symbol_table_idx()); }
             auto& nt{*ctx.pool[key]};
-            nt.resolve_if<types::function>(new_params, new_ret, fn.has_self, fn.is_variadic);
+            nt.resolve_if<types::function>(
+                new_params, new_ret, fn.has_self, fn.is_variadic, fn.conv, fn.erased);
             if (t.has_symbol_table_idx()) { nt.set_symbol_table_idx(t.get_symbol_table_idx()); }
 
             if (&nt != &t) {

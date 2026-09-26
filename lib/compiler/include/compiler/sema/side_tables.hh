@@ -14,7 +14,17 @@
 #include "compiler/ast/traits.hh"
 #include "support/diagnostic.hh"
 
+namespace ghoti::mod { struct module; } // namespace ghoti::mod
+
 namespace ghoti::sema {
+
+// Where a name was declared, in the declaring module's own AST: a `const`/`var` declaration, or
+// the type annotation of a parameter or aggregate field
+struct declaration_ref {
+    stdx::option<const mod::module&>    owner;
+    stdx::option<ast::node_id>          decl;
+    stdx::option<ast::explicit_type_id> annotation;
+};
 
 namespace detail {
 
@@ -74,6 +84,11 @@ struct side_tables {
     // Symbol table index that declares the symbol referenced by an identifier node
     detail::side_table<ast::node_id, stdx::opt_size> identifier_symbol_tables;
 
+    // The declaration an identifier (a use, or a declared name itself) resolves to
+    detail::side_table<ast::node_id, stdx::option<declaration_ref>> identifier_declarations;
+    detail::side_table<ast::explicit_type_id, stdx::option<declaration_ref>>
+        explicit_type_declarations;
+
     // Allocates `size` slots in all backing vectors
     constexpr auto resize(const ast::AST::data_pool_sizes& sizes) -> void {
         node_types.values.resize(sizes.nodes_size);
@@ -85,6 +100,8 @@ struct side_tables {
         identifier_definitions.values.resize(sizes.nodes_size);
         explicit_type_definitions.values.resize(sizes.types_size);
         identifier_symbol_tables.values.resize(sizes.nodes_size);
+        identifier_declarations.values.resize(sizes.nodes_size);
+        explicit_type_declarations.values.resize(sizes.types_size);
     }
 };
 

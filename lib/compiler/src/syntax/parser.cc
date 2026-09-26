@@ -345,7 +345,7 @@ namespace {
 constexpr auto PREFIX_FNS = [] -> auto {
     stdx::fixed::enum_map<token_type_t, parser::prefix_fn> fns;
 
-    fns[token_type_t::IDENT]            = ast::identifier_expr::parse;
+    fns[token_type_t::IDENT]            = ast::parse_identifier_reference;
     fns[token_type_t::U8]               = ast::int_literal_expr::parse;
     fns[token_type_t::REAL]             = ast::float_literal_expr::parse;
     fns[token_type_t::BANG]             = ast::unary_expr::parse;

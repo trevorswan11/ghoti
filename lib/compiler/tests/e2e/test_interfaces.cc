@@ -366,6 +366,62 @@ TEST_CASE("`&dyn I` dispatches across a module boundary") {
                   "sh"}}) == 42);
 }
 
+TEST_CASE("`&dyn I` fills a defaulted associated type declared in another module") {
+    CHECK(helpers::compile_and_run(
+              R"(
+            import "sink.gh" as sk;
+            const S := struct { total: i32 };
+            impl sk.Outer.Sink for S {
+                pub const put := fn(&mut self, v: i32): i32 {
+                    self.total += v;
+                    return self.total;
+                };
+            }
+            const feed := fn(s: &mut dyn sk.Outer.Sink): i32 { return s.put(3); };
+            pub const main := fn(): i32 {
+                var s: S = .{ .total = 1 };
+                return feed(&mut s);
+            };
+        )",
+              {helpers::mock_file{"sink.gh",
+                                  R"(pub const Outer := struct {
+                         pub const Sink := interface {
+                             Out: type = i32;
+                             pub const put := fn(&mut self, v: i32): Out;
+                         };
+                     };)",
+                                  "sink"}}) == 4);
+}
+
+TEST_CASE("an aliased bare `dyn I` dispatches through `&` and `^`, across modules") {
+    CHECK(helpers::compile_and_run(
+              R"(
+            import "sink.gh" as sk;
+            const S := struct { total: i32 };
+            impl sk.Sink for S {
+                const Out := i32;
+                pub const put := fn(&mut self, v: i32): i32 {
+                    self.total += v;
+                    return self.total;
+                };
+            }
+            const by_ref := fn(s: &mut sk.Bound): i32 { return s.put(3); };
+            const by_ptr := fn(s: ^mut sk.Bound): i32 { return s.put(3); };
+            pub const main := fn(): i32 {
+                var s: S = .{ .total = 1 };
+                const a := by_ref(&mut s);
+                return a + by_ptr(^mut s);
+            };
+        )",
+              {helpers::mock_file{"sink.gh",
+                                  R"(pub const Sink := interface {
+                         Out: type;
+                         pub const put := fn(&mut self, v: i32): Out;
+                     };
+                     pub const Bound := dyn Sink(Out = i32);)",
+                                  "sink"}}) == 11);
+}
+
 TEST_CASE("`[]^dyn I` iterates a heterogeneous collection through the vtable") {
     CHECK(helpers::compile_and_run(R"(
         const N := interface { pub const v := fn(&self): i32; };

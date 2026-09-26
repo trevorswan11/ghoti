@@ -450,6 +450,22 @@ class type_resolver {
     // returns whether it did
     auto reject_type_as_value(ast::expr_handle value, const type& expected) -> bool;
 
+    // Records which declaration `id` names, for LSP features like hover
+    template <ast::IndexableID ID>
+    auto record_declaration(ID id, const mod::module& owner, const symbol& sym) -> void;
+    // Same, for a bare name found in `table_idx` of the current scope chain
+    template <ast::IndexableID ID>
+    auto record_scoped_declaration(ID id, usize table_idx, const symbol& sym) -> void;
+
+    // Resolves both arms of a runtime (or evaluation-context) `if` and types the whole expression
+    auto resolve_if_arms(ast::node_id id, const ast::if_expr& if_expr) -> void;
+
+    // A `constexpr f: fn(...)` binds at compile time, so it keeps the thin function type
+    auto thin_if_constexpr(const ast::function_expr::parameter& param, type& param_type) -> type&;
+
+    // Reports an interface or bare `dyn I` used as a by-value slot type; returns whether it did
+    auto reject_unsized_slot(ast::explicit_type_id at, const type& slot_type) -> bool;
+
     template <ast::IndexableID ID> auto visit(ID, const ast::struct_expr&) -> void;
     template <ast::IndexableID ID> auto visit(ID, const ast::union_expr&) -> void;
     template <ast::IndexableID ID> auto visit(ID, const ast::interface_expr&) -> void;
@@ -563,8 +579,8 @@ class type_resolver {
     std::vector<active_block_frame> active_blocks_;
 
     bool in_mutating_context_{false};
-    // Set while resolving the `dyn I` operand of `&`/`^` written in expression position
-    bool dyn_is_referent_{false};
+    // Set while resolving a `dyn I` that may stay unsized: a `&`/`^` operand or an alias value
+    bool dyn_unsized_ok_{false};
     bool for_generic_instantiation_{false};
     bool in_subscript_index_{false};
     bool in_for_iterable_{false};

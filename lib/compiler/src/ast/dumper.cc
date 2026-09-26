@@ -301,7 +301,7 @@ auto dumper::visit(node_id, const function_expr& function) -> void {
                            fmt::println(out_,
                                         "{}Param{}{}:",
                                         indent_.current_branch(),
-                                        parameter.is_constexpr ? " (constexpr)" : "",
+                                        parameter.is_constexpr_written ? " (constexpr)" : "",
                                         parameter.is_pack ? " (pack)" : "");
                            {
                                const bool          no_type{!parameter.explicit_type.is_valid()};
@@ -332,6 +332,11 @@ auto dumper::visit(node_id, const function_expr& function) -> void {
     {
         const indent::guard g{indent_, false};
         fmt::println(out_, "{}Naked: {}", indent_.current_branch(), function.is_naked);
+    }
+
+    if (function.is_extern) {
+        const indent::guard g{indent_, false};
+        fmt::println(out_, "{}Extern: true", indent_.current_branch());
     }
 
     {
@@ -387,10 +392,10 @@ auto dumper::visit(node_id, const if_expr& if_expr) -> void {
             out_, "{}Constexpr: {}", indent_.current_branch(), if_expr.constexpr_condition);
     }
 
-    {
+    if (if_expr.condition) {
         const indent::guard g{indent_, false};
         fmt::print(out_, "{}Condition: ", indent_.current_branch());
-        dump(if_expr.condition);
+        dump(*if_expr.condition);
     }
 
     const auto has_alternate{if_expr.alternate.has_value()};
@@ -1099,7 +1104,7 @@ auto dumper::visit(node_id, const impl_stmt& node) -> void {
             fmt::println(out_,
                          "{}Param{}:",
                          indent_.current_branch(),
-                         parameter.is_constexpr ? " (constexpr)" : "");
+                         parameter.is_constexpr_written ? " (constexpr)" : "");
             {
                 const indent::guard g_name{indent_, false};
                 fmt::print(out_, "{}Name: ", indent_.current_branch());
@@ -1208,7 +1213,12 @@ MAKE_EXPLICIT_TYPE_DUMP(call_expr)
 
 auto dumper::visit(explicit_type_id, const explicit_function_type& function) -> void {
     PROFILE_FUNCTION();
-    fmt::println(out_, "{}FunctionExpression", indent_.current_branch());
+    fmt::println(out_,
+                 "{}{}FunctionExpression",
+                 indent_.current_branch(),
+                 function.is_dyn_fn   ? "DynFn "
+                 : function.is_extern ? "Extern "
+                                      : "");
     if (!function.parameter_types.empty()) {
         const indent::guard g{indent_, false};
         fmt::println(out_, "{}Parameters:", indent_.current_branch());

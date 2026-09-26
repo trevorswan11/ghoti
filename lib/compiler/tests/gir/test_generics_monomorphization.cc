@@ -179,8 +179,9 @@ TEST_CASE("Functions taking function pointer types do not trigger monomorphizati
         if (name == "main") {
             has_main = true;
             const auto dump_text{helpers::dump_gir(UNWRAP(fn))};
-            CHECK(dump_text.contains("call @a(\"b\")"));
-            CHECK(dump_text.contains("call @a(\"c\")"));
+            // Each thin function is wrapped into the erased `^fn` pair before the single `a`
+            CHECK(dump_text.contains("make_callable ^fn(): void \"b\""));
+            CHECK(dump_text.contains("make_callable ^fn(): void \"c\""));
         } else if (name == "a") {
             has_a = true;
             CHECK(fn->get_params().size() == 1);

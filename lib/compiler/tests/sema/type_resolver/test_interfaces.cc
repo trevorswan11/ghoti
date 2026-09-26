@@ -2,7 +2,9 @@
 #include <string_view>
 #include <vector>
 
+#include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/format.h>
 #include <stdx/types.hh>
 
 #include "compiler/sema/error.hh"
@@ -224,6 +226,19 @@ TEST_CASE("an interface cannot be stored by value") {
         var w: W = undefined;
 )",
                           sema::error::INTERFACE_NOT_A_VALUE));
+}
+
+TEST_CASE("an interface cannot be a field, parameter, return, or element type by value") {
+    const auto* iface{"const W := interface { pub const f := fn(&self): void; };"};
+    for (const auto* use : {"const S := struct { w: W };",
+                            "const U := union { w: W, n: i32 };",
+                            "const g := fn(w: W): void { _ = w; };",
+                            "const g := fn(): W { return undefined; };",
+                            "const g := fn(ws: []W): void { _ = ws; };"}) {
+        CAPTURE(use);
+        CHECK(
+            helpers::raised(fmt::format("{}\n{}", iface, use), sema::error::INTERFACE_NOT_A_VALUE));
+    }
 }
 
 TEST_CASE("an inherent impl method is callable on an instance") {
@@ -449,6 +464,32 @@ TEST_CASE("a `[]dyn I` slice element is rejected as unsized") {
                           sema::error::ILLEGAL_UNSIZED_TYPE));
 }
 
+TEST_CASE("a bare `dyn I` may be aliased and then indirected") {
+    helpers::resolve_and_check(R"(
+        const W := interface { Out: type; pub const wr := fn(&mut self): Out; };
+        const Bound := dyn W(Out = i32);
+        const a := fn(x: &mut Bound): i32 { return x.wr(); };
+        const b := fn(x: ^mut Bound): i32 { return x.wr(); };
+        const c := fn(x: &Bound): void { _ = x; };
+)");
+}
+
+TEST_CASE("an aliased bare `dyn I` is still unsized by value") {
+    const auto* prelude{R"(
+        const W := interface { pub const wr := fn(&self): i32; };
+        const Bound := dyn W;
+)"};
+    for (const auto* use : {"const S := struct { w: Bound };",
+                            "const g := fn(w: Bound): void { _ = w; };",
+                            "const g := fn(w: &Bound): Bound { return undefined; };",
+                            "const g := fn(): void { var w: Bound = undefined; _ = w; };",
+                            "const g := fn(ws: []Bound): void { _ = ws; };"}) {
+        CAPTURE(use);
+        CHECK(helpers::raised(fmt::format("{}\n{}", prelude, use),
+                              sema::error::ILLEGAL_UNSIZED_TYPE));
+    }
+}
+
 TEST_CASE("`dyn` on a non-interface is a type error") {
     CHECK(helpers::raised(R"(
         const S := struct { x: i32 };
@@ -528,6 +569,14 @@ TEST_CASE("`&dyn A` is not assignable to `&dyn B`") {
         const A := interface { pub const a := fn(&self): i32; };
         const B := interface { pub const b := fn(&self): i32; };
         const use := fn(x: &dyn A): void { var y: &dyn B = x; _ = y; };
+)",
+                         sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("`&dyn I` with different associated-type bindings are distinct types") {
+    CHECK(checker_raised(R"(
+        const I := interface { Out: type; pub const get := fn(&self): Out; };
+        const use := fn(x: &dyn I(Out = i32)): void { var y: &dyn I(Out = u8) = x; _ = y; };
 )",
                          sema::error::TYPE_MISMATCH));
 }

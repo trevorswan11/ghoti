@@ -246,6 +246,11 @@ auto formatter::format() -> void {
     solver.render(out_);
 }
 
+auto formatter::format_callconv(calling_convention conv, bool is_explicit) -> syntax::doc_id {
+    if (!is_explicit && conv == calling_convention::C) { return doc_manager_.nil(); }
+    return doc_manager_.owned(fmt::format(" callconv(.{})", calling_convention_name(conv)));
+}
+
 auto formatter::with_modifier(explicit_type_id id, syntax::doc_id base) -> syntax::doc_id {
     const auto prefix{modifier_prefix(id.get_modifier())};
     if (prefix.empty()) { return base; }
@@ -921,7 +926,7 @@ auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
             continue;
         }
         params.emplace_back(doc_manager_.concat(
-            {doc_manager_.text(param.is_constexpr ? "constexpr " : ""),
+            {doc_manager_.text(param.is_constexpr_written ? "constexpr " : ""),
              format(param.name),
              doc_manager_.text(": "),
              bound == doc_manager_.nil() ? format(param.explicit_type)
@@ -930,14 +935,11 @@ auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
     }
     if (node.variadic) { params.emplace_back(doc_manager_.text("...")); }
 
-    const auto callconv_doc{node.conv == calling_convention::C
-                                ? doc_manager_.nil()
-                                : doc_manager_.owned(fmt::format(
-                                      " callconv(.{})", calling_convention_name(node.conv)))};
+    const auto callconv_doc{format_callconv(node.conv, node.has_explicit_conv)};
 
     if (node.is_type_expr) {
         return doc_manager_.concat({
-            doc_manager_.text("fn"),
+            doc_manager_.text(node.is_extern ? "extern fn" : "fn"),
             doc_manager_.delimited(
                 "(", ")", std::move(params), false, true, node.params_force_break),
             callconv_doc,
@@ -975,9 +977,10 @@ auto formatter::visit(node_id id, const if_expr& node) -> syntax::doc_id {
         return doc_manager_.concat({
             doc_manager_.text("if "),
             n.constexpr_condition ? doc_manager_.text("constexpr ") : doc_manager_.nil(),
-            doc_manager_.text("("),
-            format(n.condition),
-            doc_manager_.text(") "),
+            n.condition
+                ? doc_manager_.concat(
+                      {doc_manager_.text("("), format(*n.condition), doc_manager_.text(") ")})
+                : doc_manager_.nil(),
             n.alternate ? format(n.consequence) : tail_clause(n.consequence),
         });
     }};
@@ -1548,11 +1551,11 @@ auto formatter::visit(node_id, const impl_stmt& node) -> syntax::doc_id {
         std::vector<syntax::doc_id> params;
         params.reserve(node.impl_params.size());
         for (const auto& param : node.impl_params) {
-            params.emplace_back(
-                doc_manager_.concat({doc_manager_.text(param.is_constexpr ? "constexpr " : ""),
-                                     format(param.name),
-                                     doc_manager_.text(": "),
-                                     format(param.explicit_type)}));
+            params.emplace_back(doc_manager_.concat(
+                {doc_manager_.text(param.is_constexpr_written ? "constexpr " : ""),
+                 format(param.name),
+                 doc_manager_.text(": "),
+                 format(param.explicit_type)}));
         }
         head.emplace_back(doc_manager_.delimited(
             "(", ")", std::move(params), false, false, node.impl_params_force_break));
@@ -1616,15 +1619,13 @@ auto formatter::visit(explicit_type_id id, const explicit_function_type& node) -
     }
     if (node.variadic) { params.emplace_back(doc_manager_.text("...")); }
 
-    const auto callconv_doc{node.conv == calling_convention::C
-                                ? doc_manager_.nil()
-                                : doc_manager_.owned(fmt::format(
-                                      " callconv(.{})", calling_convention_name(node.conv)))};
+    const auto callconv_doc{format_callconv(node.conv, node.has_explicit_conv)};
 
+    const auto keyword{node.is_dyn_fn ? "dyn Fn" : node.is_extern ? "extern fn" : "fn"};
     return with_modifier(
         id,
         doc_manager_.concat({
-            doc_manager_.text("fn"),
+            doc_manager_.text(keyword),
             doc_manager_.delimited(
                 "(", ")", std::move(params), false, false, node.params_force_break),
             callconv_doc,

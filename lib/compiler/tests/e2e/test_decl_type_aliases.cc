@@ -1,7 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "helpers/codegen.hh"
-#include "helpers/sema.hh"
 
 namespace ghoti::tests {
 
@@ -223,12 +222,18 @@ TEST_CASE("E2E: pointer and reference aliases over `type`-valued operands") {
     )") == 42);
 }
 
-TEST_CASE("E2E: a bare `dyn I` alias is rejected as unsized") {
-    helpers::expect_compile_error(R"(
-        const Shape := interface { const area := fn(&self): i32; };
-        const Bad := dyn Shape;
-        pub const main := fn(): i32 { return 0; };
-    )");
+TEST_CASE("E2E: a bare `dyn I` alias is indirected at its use sites") {
+    CHECK(helpers::compile_and_run(R"(
+        const Shape := interface { pub const area := fn(&self): i32; };
+        const AnyShape := dyn Shape;
+        const Sq := struct { s: i32 };
+        impl Shape for Sq { pub const area := fn(&self): i32 { return self.s * self.s; }; }
+        const measure := fn(x: &AnyShape): i32 { return x.area(); };
+        pub const main := fn(): i32 {
+            const q: Sq = .{ .s = 6 };
+            return measure(&q) + 6;
+        };
+    )") == 42);
 }
 
 TEST_CASE("E2E: a non-generic constructor returning an existing scalar type folds to it") {

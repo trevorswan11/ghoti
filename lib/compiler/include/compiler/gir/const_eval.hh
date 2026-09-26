@@ -132,6 +132,12 @@ class const_eval {
         return recursion_depth_ > 0 || constexpr_context_;
     }
 
+    // Whether a compile-time context asked for this evaluation, as opposed to an opportunistic
+    // fold of runtime code; selects the arm of a condition-less `if constexpr`
+    [[nodiscard]] auto in_evaluation_context() const noexcept -> bool {
+        return constexpr_context_ || ctx_.constexpr_evaluation_depth > 0;
+    }
+
     auto set_constexpr_context(bool enabled) noexcept -> void { constexpr_context_ = enabled; }
 
   private:
@@ -157,13 +163,17 @@ class const_eval {
     struct memo_key {
         usize node_index{};
         u64   epoch{};
+        bool  evaluation_context{};
 
         [[nodiscard]] auto operator==(const memo_key& other) const noexcept -> bool = default;
     };
 
     struct memo_key_hash {
         [[nodiscard]] static constexpr auto operator()(const memo_key& k) noexcept -> u64 {
-            return stdx::hasher{k.node_index}.combine(k.epoch).finalize();
+            return stdx::hasher{k.node_index}
+                .combine(k.epoch)
+                .combine(k.evaluation_context)
+                .finalize();
         }
     };
 
@@ -223,10 +233,16 @@ class const_eval {
     // `@typeInfo(T)`: builds the `builtin::TypeInfo` tagged union for `denoted` (already
     // unwrapped past any `TYPE`/`deferred_call` wrapper) by switching on its `type_kind`.
     [[nodiscard]] auto eval_type_info(sema::type& denoted) -> const_value;
-    auto               eval_constexpr_fn(ast::node_id                      call_id,
-                                         const ast::function_expr&         fn_expr,
-                                         std::vector<const_value>&         args,
-                                         stdx::option<const const_struct&> captures = stdx::none)
+    // An `if`'s folded condition; `if constexpr { ... }` is true only in a constexpr context
+    auto eval_if_condition(const ast::if_expr& if_expr) -> stdx::option<const_value>;
+    // Folds a declaration's initializer; a `constexpr` one is always compile-time evaluation
+    auto eval_decl_value(const ast::decl_stmt& decl) -> stdx::option<const_value>;
+    // Evaluates a call's arguments, splicing each `rest...` expansion's elements into place
+    auto eval_call_args(const ast::call_expr& call) -> stdx::option<std::vector<const_value>>;
+    auto eval_constexpr_fn(ast::node_id                      call_id,
+                           const ast::function_expr&         fn_expr,
+                           std::vector<const_value>&         args,
+                           stdx::option<const const_struct&> captures = stdx::none)
         -> stdx::option<const_value>;
 
     auto lookup_bound_callable(std::string_view name) -> stdx::option<bound_callable>;

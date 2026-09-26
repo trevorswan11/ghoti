@@ -190,6 +190,22 @@ auto builder::emit_global_addr(std::string name, sema::type& type, bool is_const
     return dest;
 }
 
+auto builder::emit_make_callable(value                     ctx,
+                                 stdx::option<std::string> code_fn,
+                                 sema::type&               erased_fn) -> local_id {
+    PROFILE_FUNCTION();
+    ASSERT(function_, "Cannot emit make_callable instruction without an active function");
+    const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
+    emit_instruction({
+        .kind        = instruction_kind::MAKE_CALLABLE,
+        .type        = erased_fn,
+        .result      = dest,
+        .operands    = {std::move(ctx)},
+        .callee_name = std::move(code_fn),
+    });
+    return dest;
+}
+
 auto builder::emit_binary(
     instruction_kind kind, value lhs, value rhs, sema::type& type, bool checked) -> local_id {
     PROFILE_FUNCTION();

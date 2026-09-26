@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <fmt/format.h>
 #include <fmt/ranges.h>
@@ -18,6 +19,8 @@
 #include <stdx/types.hh>
 
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/handle.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/ast/primitive.hh"
 #include "compiler/module/module.hh"
 #include "support/int128.hh"
@@ -509,6 +512,18 @@ auto type::to_string(stdx::option<const type_name_map&> names) const -> std::str
         [names](types::enum_t e) {
             return fmt::format("enum : {}", e.underlying.to_string(names));
         },
+        [names](types::dyn_t d) {
+            const auto&              iface{d.interface.get_data().as<types::interface_t>()};
+            std::vector<std::string> bound;
+            for (usize i{0}; i < d.assoc_bindings.size(); ++i) {
+                if (!d.assoc_bindings[i]) { continue; }
+                bound.emplace_back(fmt::format(
+                    "{} = {}", iface.assoc_type_names[i], d.assoc_bindings[i]->to_string(names)));
+            }
+            const auto iface_name{d.interface.to_string(names)};
+            if (bound.empty()) { return fmt::format("dyn {}", iface_name); }
+            return fmt::format("dyn {}({})", iface_name, fmt::join(bound, ", "));
+        },
         [this](const auto&) {
             return fmt::format("{}{}", leaf_qualifier(*this), type_kind_display_name(get_kind()));
         });
@@ -595,8 +610,8 @@ auto is_generic_type(const type& t, bool unmodified) noexcept -> bool {
     }
 
     if (kind == type_kind::FUNCTION) {
-        // A raw fn-typed slot may bind either a plain function or a capturing closure at any call
-        if (unmodified) { return true; }
+        // A thin slot may still bind a closure's own type through a `constexpr` param
+        if (unmodified && !is_erased_fn(t)) { return true; }
         if (const auto fn{data.as_opt<types::function>()}) {
             if (is_generic_type(fn->return_type, false)) { return true; }
             for (const auto* p : fn->params) {
@@ -630,7 +645,10 @@ auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {
     case type_kind::DYN:       {
         const auto d_a{a.get_data().as_opt<types::dyn_t>()};
         const auto d_b{b.get_data().as_opt<types::dyn_t>()};
-        return d_a && d_b && &d_a->interface == &d_b->interface;
+        if (!d_a || !d_b || &d_a->interface != &d_b->interface) { return false; }
+        return std::ranges::equal(d_a->assoc_bindings, d_b->assoc_bindings, [](type* x, type* y) {
+            return x == y || (x && y && is_same_unqualified(*x, *y));
+        });
     }
     case type_kind::POINTER: {
         const auto p_a{a.get_data().as_opt<types::pointer>()};
@@ -662,18 +680,50 @@ auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {
         const auto f_a{a.get_data().as_opt<types::function>()};
         const auto f_b{b.get_data().as_opt<types::function>()};
         if (!f_a || !f_b) { return a == b; }
-        if (f_a->conv != f_b->conv || f_a->is_variadic != f_b->is_variadic ||
-            f_a->params.size() != f_b->params.size()) {
-            return false;
-        }
-        for (const auto& [param_a, param_b] : std::views::zip(f_a->params, f_b->params)) {
-            if (!is_same_unqualified(*param_a, *param_b)) { return false; }
-        }
-        return is_same_unqualified(f_a->return_type, f_b->return_type);
+        return f_a->erased == f_b->erased && is_same_fn_signature(a, b);
     }
     default: return is_numeric(kind);
     }
 }
+
+auto is_same_fn_signature(const type& a, const type& b) noexcept -> bool {
+    const auto f_a{a.get_data().as_opt<types::function>()};
+    const auto f_b{b.get_data().as_opt<types::function>()};
+    if (!f_a || !f_b) { return a == b; }
+    if (f_a->conv != f_b->conv || f_a->is_variadic != f_b->is_variadic ||
+        f_a->params.size() != f_b->params.size()) {
+        return false;
+    }
+    for (const auto& [param_a, param_b] : std::views::zip(f_a->params, f_b->params)) {
+        if (!is_same_unqualified(*param_a, *param_b)) { return false; }
+    }
+    return is_same_unqualified(f_a->return_type, f_b->return_type);
+}
+
+auto is_fn_assignable(const type& src, const type& dest) noexcept -> bool {
+    const auto f_src{src.get_data().as_opt<types::function>()};
+    const auto f_dest{dest.get_data().as_opt<types::function>()};
+    if (!f_src || !f_dest) { return false; }
+    if (f_src->erased && !f_dest->erased) { return false; }
+    // A trampoline cannot forward C varargs
+    if (f_dest->erased && f_src->is_variadic) { return false; }
+    return is_same_fn_signature(src, dest);
+}
+
+auto is_erased_fn(const type& t) noexcept -> bool {
+    const auto fn{t.get_data().as_opt<types::function>()};
+    return fn && fn->erased;
+}
+
+auto fat_callable_fn(const type& t) noexcept -> stdx::option<const types::function&> {
+    const type* target{&t};
+    if (const auto p{t.get_data().as_opt<types::pointer>()}) { target = &p->underlying; }
+    const auto fn{target->get_data().as_opt<types::function>()};
+    if (!fn || !fn->erased) { return stdx::none; }
+    return *fn;
+}
+
+auto is_fat_callable(const type& t) noexcept -> bool { return fat_callable_fn(t).has_value(); }
 
 auto slice_copy_destination(const mod::module& m, ast::node_id lhs)
     -> stdx::option<ast::expr_handle> {
@@ -724,9 +774,9 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
         case type_kind::UNION:
         case type_kind::ENUM:
         case type_kind::TYPE:
+        case type_kind::CLOSURE: return is_same_unqualified(src, dest);
         case type_kind::FUNCTION:
-        case type_kind::CLOSURE:
-            return is_same_unqualified(src, dest);
+            return is_fn_assignable(src, dest);
             // ^S to ^T must be const correct
         case type_kind::POINTER: {
             const auto p_src{src.get_data().as_opt<types::pointer>()};
@@ -739,6 +789,9 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
             // `^T` -> `^dyn I`: the concrete `T`'s conformance is enforced at coercion lowering.
             if (p_dest->underlying.get_kind() == type_kind::DYN) {
                 return is_aggregate(p_src->underlying.get_kind());
+            }
+            if (p_dest->underlying.get_kind() == type_kind::FUNCTION) {
+                return is_fn_assignable(p_src->underlying, p_dest->underlying);
             }
             return is_same_unqualified(p_src->underlying, p_dest->underlying);
         }
@@ -795,11 +848,18 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
                ref_elem_decays_to_ptr(a_src->underlying, s_dest->underlying);
     }
 
+    // A closure erases into a `fn(...)` / `^fn(...)` of the same call shape
+    if (src_kind == type_kind::CLOSURE && is_fat_callable(dest)) {
+        const auto cl{src.get_data().as_opt<types::closure_t>()};
+        const auto p_dest{dest.get_data().as_opt<types::pointer>()};
+        return cl && is_same_fn_signature(cl->signature, p_dest ? p_dest->underlying : dest);
+    }
+
     // Function to Function Pointer coercion: fn(...) -> ^fn(...) / ^mut fn(...)
     if (src_kind == type_kind::FUNCTION && dest_kind == type_kind::POINTER) {
         if (const auto p_dest{dest.get_data().as_opt<types::pointer>()}) {
             if (p_dest->underlying.get_kind() == type_kind::FUNCTION) {
-                return is_same_unqualified(src, p_dest->underlying);
+                return is_fn_assignable(src, p_dest->underlying);
             }
         }
     }

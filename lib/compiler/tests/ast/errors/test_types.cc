@@ -12,13 +12,24 @@ namespace ghoti::tests {
 TEST_CASE("Function type restrictions") {
     using namespace std::string_view_literals;
     const auto expected_diag = [] -> syntax::diagnostic {
-        return {"Functions types may only be values or pointers",
+        return {"A function type is immutable; use `&fn`/`^fn` without `mut`",
                 syntax::error::ILLEGAL_FUNCTION_TYPE_MODIFIER,
                 std::pair{0UZ, 7UZ}};
     };
 
-    const auto illegal{GENERATE("var a: &fn(): void;"sv, "var a: &mut fn(): void;"sv)};
+    const auto illegal{GENERATE("var a: &mut fn(): void;"sv,
+                                "var a: ^mut fn(): void;"sv,
+                                "var a: &mut extern fn(): void;"sv,
+                                "var a: &mut dyn Fn(): void;"sv)};
     helpers::test_parser_fail(illegal, expected_diag());
+}
+
+TEST_CASE("An `extern fn` type literal cannot carry a body") {
+    helpers::test_parser_fail(
+        "const f := extern fn(): void { };",
+        syntax::diagnostic{"`extern fn(...)` names a function pointer type and cannot have a body",
+                           syntax::error::EXPLICIT_FN_TYPE_HAS_BODY,
+                           std::pair{0UZ, 18UZ}});
 }
 
 TEST_CASE("Bodied function type") {

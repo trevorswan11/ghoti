@@ -178,6 +178,18 @@ using type_name_map = ankerl::unordered_dense::map<const type*, std::string_view
 [[nodiscard]] auto is_same_unqualified(const type& a, const type& b) noexcept -> bool;
 [[nodiscard]] auto is_assignable(const type& src, const type& dest) noexcept -> bool;
 
+// Same params/return/variadic/conv, ignoring whether either side is an erased callable
+[[nodiscard]] auto is_same_fn_signature(const type& a, const type& b) noexcept -> bool;
+
+// A thin function flows into an erased `fn(...)` slot, never the reverse
+[[nodiscard]] auto is_fn_assignable(const type& src, const type& dest) noexcept -> bool;
+
+// A bare `fn(...)` value: the `{ctx, code}` pair rather than a thin code pointer
+[[nodiscard]] auto is_erased_fn(const type& t) noexcept -> bool;
+
+// `fn(...)` or `^fn(...)`: both lower to the same two-word `{ctx, code}` pair
+[[nodiscard]] auto is_fat_callable(const type& t) noexcept -> bool;
+
 // The slice written through when an assignment copies elements into one (`s[lo..hi] = src` or
 // `*s = src`), rather than storing to a single place
 [[nodiscard]] auto slice_copy_destination(const mod::module& m, ast::node_id lhs)
@@ -290,6 +302,7 @@ struct function {
     bool                    has_self;
     bool                    is_variadic{false};
     ast::calling_convention conv{ast::calling_convention::C};
+    bool                    erased{false}; // a `{ctx, code}` callable rather than a thin code ptr
 };
 
 // Carries no storage and is never a value type; it only describes a contract
@@ -716,6 +729,9 @@ template <typename Type> [[nodiscard]] auto denoted_type(Type& t) noexcept -> Ty
     }
     return t;
 }
+
+// The erased function behind a `fn(...)` or `^fn(...)`
+[[nodiscard]] auto fat_callable_fn(const type& t) noexcept -> stdx::option<const types::function&>;
 
 } // namespace ghoti::sema
 
