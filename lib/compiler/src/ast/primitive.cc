@@ -157,16 +157,11 @@ auto int_literal_expr::parse(syntax::parser& parser)
     if (start_token.type == syntax::token_type_t::U8) {
         u8 value{static_cast<u8>(slice[1])};
         if (slice[1] == '\\') {
-            switch (slice[2]) {
-            case 'n':  value = '\n'; break;
-            case 'r':  value = '\r'; break;
-            case 't':  value = '\t'; break;
-            case '\\': value = '\\'; break;
-            case '\'': value = '\''; break;
-            case '"':  value = '"'; break;
-            case '0':  value = '\0'; break;
-            default:   return make_syntax_err(syntax::error::UNKNOWN_CHARACTER_ESCAPE, start_token);
+            const auto decoded{syntax::decode_escape(slice[2])};
+            if (!decoded) {
+                return make_syntax_err(syntax::error::UNKNOWN_CHARACTER_ESCAPE, start_token);
             }
+            value = static_cast<u8>(*decoded);
         }
         return parser.add_expr<int_literal_expr>(start_token,
                                                  int_literal_expr{

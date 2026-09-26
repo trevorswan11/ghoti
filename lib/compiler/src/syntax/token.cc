@@ -24,16 +24,8 @@ auto decode_escapes(std::string_view inner) -> std::string {
             continue;
         }
         ++it;
-        switch (*it) {
-        case 'n':  decoded.push_back('\n'); break;
-        case 'r':  decoded.push_back('\r'); break;
-        case 't':  decoded.push_back('\t'); break;
-        case '\\': decoded.push_back('\\'); break;
-        case '\'': decoded.push_back('\''); break;
-        case '"':  decoded.push_back('"'); break;
-        case '0':  decoded.push_back('\0'); break;
-        default:   decoded.push_back(*it); break;
-        }
+        // The lexer rejects unknown escapes, so the fallback only guards direct construction
+        decoded.push_back(decode_escape(*it).value_or(*it));
     }
     return decoded;
 }

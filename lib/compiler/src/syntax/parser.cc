@@ -31,6 +31,53 @@
 
 namespace ghoti::syntax {
 
+namespace {
+
+// The slice's shape reliably tells which lexer failure produced an ILLEGAL token.
+[[nodiscard]] auto describe_illegal_token(const token_t& token) -> stdx::option<diagnostic> {
+    if (token.type != token_type_t::ILLEGAL || token.slice.empty()) { return stdx::none; }
+    const auto slice{token.slice};
+    const auto closed_by_quote{
+        [&](usize opener_len) { return slice.size() > opener_len && slice.ends_with('"'); }};
+
+    switch (slice.front()) {
+    case '"':
+        if (closed_by_quote(1)) {
+            return diagnostic{
+                "Invalid escape sequence in string literal", error::UNKNOWN_CHARACTER_ESCAPE, token};
+        }
+        return diagnostic{"Unterminated string literal", error::UNTERMINATED_STRING, token};
+    case '\'':
+        return diagnostic{
+            "Invalid or unterminated character literal", error::INVALID_CHARACTER_LITERAL, token};
+    case '@':
+        if (slice.size() > 1 && slice[1] != '"') {
+            return diagnostic{
+                fmt::format("Unknown builtin '{}'", slice), error::UNKNOWN_BUILTIN, token};
+        }
+        if (!slice.starts_with("@\"")) { break; }
+        if (closed_by_quote(2)) {
+            return diagnostic{
+                "Invalid escape sequence in raw identifier", error::UNKNOWN_CHARACTER_ESCAPE, token};
+        }
+        return diagnostic{"Unterminated raw identifier", error::UNTERMINATED_RAW_IDENTIFIER, token};
+    default:
+        if (std::isdigit(static_cast<u8>(slice.front()))) {
+            return diagnostic{"Invalid numeric literal", error::INVALID_NUMBER_LITERAL, token};
+        }
+        break;
+    }
+
+    // A stray byte (NUL, `#`, `$`, invalid UTF-8) must not be echoed raw into the terminal
+    const auto byte{static_cast<u8>(slice.front())};
+    const auto shown{std::isprint(byte) ? fmt::format("{}", static_cast<char>(byte))
+                                        : fmt::format("\\x{:02X}", byte)};
+    return diagnostic{
+        fmt::format("Unexpected character '{}'", shown), error::UNEXPECTED_CHARACTER, token};
+}
+
+} // namespace
+
 auto parser::reset(std::string_view input) noexcept -> void {
     ast_.reset();
     input_ = input;
@@ -163,6 +210,15 @@ auto parser::attach_member_doc(ast::identifier_handle name, usize floor_line) ->
     ast_->attach_doc({ast_->location_of(name), ast_->end_location_of(name)}, join_docs(owned));
 }
 
+auto parser::enter_nesting() -> stdx::result<depth_guard, diagnostic> {
+    depth_guard guard{nesting_depth_};
+    if (nesting_depth_ > MAX_NESTING_DEPTH) {
+        return make_syntax_err(
+            "Code nested too deeply", error::EXPRESSION_NESTED_TOO_DEEPLY, current_token_);
+    }
+    return guard;
+}
+
 auto parser::expect_peek(token_type_t expected) -> stdx::result<void, diagnostic> {
     if (peek_token_is(expected)) {
         advance();
@@ -178,6 +234,7 @@ auto parser::expect_semicolon() -> stdx::result<void, diagnostic> {
 }
 
 auto parser::peek_error(token_type_t expected) -> diagnostic {
+    if (auto lexer_failure{describe_illegal_token(peek_token_)}) { return *lexer_failure; }
     return diagnostic{fmt::format("Expected token {}, found {}",
                                   magic_enum::enum_name(expected),
                                   magic_enum::enum_name(peek_token_.type)),
@@ -203,8 +260,9 @@ auto parser::get_peek_precedence() const noexcept
 
 auto parser::parse_statement(semicolon_behavior behavior)
     -> stdx::result<ast::stmt_handle, diagnostic> {
-    // Not all decls are public so the condition needs to be rechecked
     PROFILE_FUNCTION();
+    const auto nesting{TRY(enter_nesting())};
+    // Not all decls are public so the condition needs to be rechecked
     if (current_token_is(token_type_t::PUBLIC)) {
         switch (peek_token_.type) {
         case token_type_t::IMPORT: return ast::import_stmt::parse(*this);
@@ -252,38 +310,12 @@ auto parser::parse_expression(bind_precedence precedence)
         return make_syntax_err(error::END_OF_TOKEN_STREAM, current_token_);
     }
 
-    const depth_guard guard{expr_depth_};
-    if (expr_depth_ > MAX_EXPRESSION_DEPTH) {
-        return make_syntax_err(
-            "Expression nested too deeply", error::EXPRESSION_NESTED_TOO_DEEPLY, current_token_);
-    }
+    const auto nesting{TRY(enter_nesting())};
 
     const auto prefix{get_prefix_fn_opt(current_token_.type)};
     if (!prefix) {
-        // The slice's leading char reliably tells which lexer failure produced ILLEGAL.
-        if (current_token_is(token_type_t::ILLEGAL) && !current_token_.slice.empty()) {
-            switch (current_token_.slice.front()) {
-            case '"':
-                return make_syntax_err(
-                    "Unterminated string literal", error::UNTERMINATED_STRING, current_token_);
-            case '\'':
-                return make_syntax_err("Invalid or unterminated character literal",
-                                       error::INVALID_CHARACTER_LITERAL,
-                                       current_token_);
-            case '@':
-                if (current_token_.slice.starts_with("@\"")) {
-                    return make_syntax_err("Unterminated raw identifier",
-                                           error::UNTERMINATED_RAW_IDENTIFIER,
-                                           current_token_);
-                }
-                break;
-            default:
-                if (std::isdigit(static_cast<u8>(current_token_.slice.front()))) {
-                    return make_syntax_err(
-                        "Invalid numeric literal", error::INVALID_NUMBER_LITERAL, current_token_);
-                }
-                break;
-            }
+        if (auto lexer_failure{describe_illegal_token(current_token_)}) {
+            return stdx::err{std::move(*lexer_failure)};
         }
         return make_syntax_err(fmt::format("No prefix parse function for {}({}) found",
                                            magic_enum::enum_name(current_token_.type),

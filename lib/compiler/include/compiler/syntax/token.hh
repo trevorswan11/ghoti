@@ -3,6 +3,7 @@
 #include <string>
 #include <string_view>
 
+#include <stdx/option.hh>
 #include <stdx/types.hh>
 
 #include "compiler/syntax/token_type.hh"
@@ -11,6 +12,20 @@
 namespace ghoti {
 
 namespace syntax {
+
+// The byte a `\c` escape sequence denotes, or `none` when ghoti does not recognize `c`.
+[[nodiscard]] constexpr auto decode_escape(char code) noexcept -> stdx::option<char> {
+    switch (code) {
+    case 'n':  return '\n';
+    case 'r':  return '\r';
+    case 't':  return '\t';
+    case '\\': return '\\';
+    case '\'': return '\'';
+    case '"':  return '"';
+    case '0':  return '\0';
+    default:   return stdx::none;
+    }
+}
 
 struct token_t {
     token_type_t     type{};

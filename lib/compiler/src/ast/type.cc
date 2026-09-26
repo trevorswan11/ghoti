@@ -192,8 +192,9 @@ auto explicit_dyn_type::parse(syntax::parser& parser, bool allow_trailing_brace)
 
 auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
     -> stdx::result<explicit_type_id, syntax::diagnostic> {
-    // Always check for a modifier and advance past it if present
     PROFILE_FUNCTION();
+    const auto nesting{TRY(parser.enter_nesting())};
+    // Always check for a modifier and advance past it if present
     const auto    modifier_token{parser.get_peek_token()};
     type_modifier modifier{modifier_token};
     if (modifier_token.type == syntax::token_type_t::MUT) {

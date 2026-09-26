@@ -42,6 +42,32 @@ TEST_CASE("Lexing illegal characters") {
     for (auto it{l.begin()}; it != l.end(); ++it) { CHECK(it->type == token_type_t::ILLEGAL); }
 }
 
+TEST_CASE("A leading UTF-8 byte order mark is skipped") {
+    test_lexer("\xEF\xBB\xBF" "const x",
+               {
+                   {token_type_t::CONSTANT, "const"},
+                   {token_type_t::IDENT, "x"},
+               });
+}
+
+TEST_CASE("An embedded NUL byte is illegal instead of ending the input early") {
+    using namespace std::string_view_literals;
+    test_lexer("a\0b"sv,
+               {
+                   {token_type_t::IDENT, "a"},
+                   {token_type_t::ILLEGAL, "\0"sv},
+                   {token_type_t::IDENT, "b"},
+               });
+}
+
+TEST_CASE("Unrecognized escapes make string and raw identifier literals illegal") {
+    test_lexer(R"("\q" @"\q")",
+               {
+                   {token_type_t::ILLEGAL, R"("\q")"},
+                   {token_type_t::ILLEGAL, R"(@"\q")"},
+               });
+}
+
 TEST_CASE("Lexing symbols") {
     test_lexer("=+(){}[],;: !?-/*<>_",
                {
@@ -156,8 +182,7 @@ TEST_CASE("Lexing numbers") {
                    {token_type_t::REAL, "1e20"},
                    {token_type_t::REAL, "1.e-3"},
                    {token_type_t::REAL, "2.3901E4f32"},
-                   {token_type_t::INT_10, "1"},
-                   {token_type_t::IDENT, "e"},
+                   {token_type_t::ILLEGAL, "1e"},
                    {token_type_t::DOT, "."},
                });
 }

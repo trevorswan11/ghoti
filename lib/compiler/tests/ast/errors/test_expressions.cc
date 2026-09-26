@@ -66,12 +66,25 @@ TEST_CASE("Non-terminated infix") {
                                                  std::pair{0UZ, 2UZ}});
 }
 
-TEST_CASE("Expression nested too deeply") {
+TEST_CASE("Code nested too deeply") {
+    // The enclosing expression statement consumes one nesting level of its own
     const auto nested{std::string(513, '(')};
     helpers::test_parser_fail(nested + "1" + std::string(513, ')') + ";",
-                              syntax::diagnostic{"Expression nested too deeply",
+                              syntax::diagnostic{"Code nested too deeply",
+                                                 syntax::error::EXPRESSION_NESTED_TOO_DEEPLY,
+                                                 std::pair{0UZ, 511UZ}});
+
+    helpers::test_parser_fail(std::string(600, '{'),
+                              syntax::diagnostic{"Code nested too deeply",
                                                  syntax::error::EXPRESSION_NESTED_TOO_DEEPLY,
                                                  std::pair{0UZ, 512UZ}});
+
+    std::string deep_array_type{"const T := "};
+    for (usize i{0}; i < 600; ++i) { deep_array_type += "[]"; }
+    helpers::test_parser_fail(deep_array_type + "u8;",
+                              syntax::diagnostic{"Code nested too deeply",
+                                                 syntax::error::EXPRESSION_NESTED_TOO_DEEPLY,
+                                                 std::pair{0UZ, 1032UZ}});
 }
 
 TEST_CASE("Illegal tokens report a specific diagnostic instead of a generic prefix-parser one") {
@@ -88,6 +101,25 @@ TEST_CASE("Illegal tokens report a specific diagnostic instead of a generic pref
     helpers::test_parser_fail("'';",
                               syntax::diagnostic{"Invalid or unterminated character literal",
                                                  syntax::error::INVALID_CHARACTER_LITERAL,
+                                                 std::pair{0UZ, 0UZ}});
+    helpers::test_parser_fail(R"("bad \q escape";)",
+                              syntax::diagnostic{"Invalid escape sequence in string literal",
+                                                 syntax::error::UNKNOWN_CHARACTER_ESCAPE,
+                                                 std::pair{0UZ, 0UZ}});
+
+    helpers::test_parser_fail("0b102;",
+                              syntax::diagnostic{"Invalid numeric literal",
+                                                 syntax::error::INVALID_NUMBER_LITERAL,
+                                                 std::pair{0UZ, 0UZ}});
+
+    helpers::test_parser_fail("#;",
+                              syntax::diagnostic{"Unexpected character '#'",
+                                                 syntax::error::UNEXPECTED_CHARACTER,
+                                                 std::pair{0UZ, 0UZ}});
+
+    helpers::test_parser_fail("@notABuiltin(1);",
+                              syntax::diagnostic{"Unknown builtin '@notABuiltin'",
+                                                 syntax::error::UNKNOWN_BUILTIN,
                                                  std::pair{0UZ, 0UZ}});
 }
 
