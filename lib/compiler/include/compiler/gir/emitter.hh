@@ -261,6 +261,12 @@ class emitter {
     auto               emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value;
     auto               emit_match(ast::node_id id, const ast::match_expr& match) -> value;
 
+    [[nodiscard]] auto fold_compile_time_only(ast::node_id id, std::string_view what, sema::type& type)
+        -> value;
+    auto bind_declared_params(gir::function&            fn,
+                              const ast::function_expr& fn_expr,
+                              const mod::module&        owner) -> void;
+    auto emit_implicit_return(sema::type& return_type) -> void;
     auto emit_c_va_builtin(const ast::call_expr& call,
                            syntax::token_type_t builtin,
                            sema::type&          ret_type) -> value;

@@ -281,6 +281,12 @@ struct union_t {
         if (idx < fields.size()) { return *fields[idx]; }
         return *members[idx - fields.size()];
     }
+
+    // Null while the member at `idx` is itself still being resolved (e.g. a recursive method)
+    [[nodiscard]] auto type_ptr_at(usize idx) const noexcept -> type* {
+        ASSERT(idx < fields.size() + members.size(), "Index exceeds union's types");
+        return idx < fields.size() ? fields[idx] : members[idx - fields.size()];
+    }
 };
 
 struct struct_t {
@@ -301,6 +307,12 @@ struct struct_t {
         ASSERT(idx < fields.size() + members.size(), "Index exceeds struct's types");
         if (idx < fields.size()) { return *fields[idx]; }
         return *members[idx - fields.size()];
+    }
+
+    // Null while the member at `idx` is itself still being resolved (e.g. a recursive method)
+    [[nodiscard]] auto type_ptr_at(usize idx) const noexcept -> type* {
+        ASSERT(idx < fields.size() + members.size(), "Index exceeds struct's types");
+        return idx < fields.size() ? fields[idx] : members[idx - fields.size()];
     }
 };
 
@@ -729,6 +741,10 @@ class type_pool {
 };
 
 // Unwraps meta_type to obtain the denoted underlying instance type
+// The signature behind a function value typed directly, by reference, or by pointer
+[[nodiscard]] auto signature_of(const type& fn_value_type) noexcept
+    -> stdx::option<const types::function&>;
+
 template <typename Type> [[nodiscard]] auto denoted_type(Type& t) noexcept -> Type& {
     if (t.get_kind() == type_kind::TYPE) {
         if (const auto meta{t.get_data().template as_opt<types::meta_type>()}) {

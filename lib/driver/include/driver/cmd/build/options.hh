@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -36,7 +37,7 @@ struct raw_options {
     std::string              target;
     std::string              cpu{"generic"};
     std::string              features;
-    std::string              opt_level_str;
+    std::optional<std::string> opt_level_str; // unset unless `-O` was given (even as `-O ""`)
     std::vector<std::string> module_raw_args;
     std::vector<std::string> extra_objects;
     std::vector<std::string> library_paths;
@@ -104,6 +105,7 @@ class compilation {
 
   private:
     [[nodiscard]] auto validate_input_path() -> stdx::result<void, clap::error>;
+    [[nodiscard]] auto ensure_output_directory() -> stdx::result<void, clap::error>;
     [[nodiscard]] auto setup_module_manager() -> stdx::result<void, clap::error>;
 
   private:

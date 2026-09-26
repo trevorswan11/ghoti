@@ -112,6 +112,7 @@ class llvm_lowering {
     // Loads a by-address aggregate argument (struct, slice, closure, callable) into a value
     auto               store_value(llvm::Value* val, llvm::Value* dest_ptr, bool is_volatile) -> void;
     [[nodiscard]] auto aggregate_source_address(llvm::Value* val) -> llvm::Value*;
+    [[nodiscard]] auto emit_pointer_offset(const gir::instruction& inst) -> llvm::Value*;
     [[nodiscard]] auto emit_va_arg(llvm::Value* list, llvm::Type* ty) -> llvm::Value*;
     [[nodiscard]] auto promote_c_variadic_arg(llvm::Value* arg_val, stdx::option<sema::type&> type)
         -> llvm::Value*;
@@ -138,6 +139,8 @@ class llvm_lowering {
     // The `__chkstk` / `___chkstk_ms` symbol name the x86 backend probes with on this
     // target, or `none` when no synthesized stack probe is needed
     [[nodiscard]] auto windows_stack_probe_symbol() const -> stdx::option<std::string_view>;
+    auto declare_functions(const gir::module& gir_mod) -> void;
+    auto lower_definitions(const gir::module& gir_mod) -> void;
     auto create_c_entry_function() -> llvm::Function*;
     auto finalize_runtime_support() -> void;
     auto maybe_emit_mingw_main_stub() -> void;

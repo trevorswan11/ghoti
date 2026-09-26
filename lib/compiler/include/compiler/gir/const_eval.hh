@@ -107,6 +107,8 @@ class const_eval {
     [[nodiscard]] auto force_deferred_array(sema::type& maybe_deferred) -> sema::type&;
 
     // Every member's discriminant in declaration order (an unvalued member is its predecessor + 1)
+    [[nodiscard]] static auto is_sentinel_terminated(stdx::option<sema::type&> type) noexcept
+        -> bool;
     [[nodiscard]] auto enum_member_values(const sema::types::enum_t& en) -> std::vector<i128>;
     [[nodiscard]] auto enum_member_value(const sema::types::enum_t& en, std::string_view member)
         -> stdx::option<i128>;

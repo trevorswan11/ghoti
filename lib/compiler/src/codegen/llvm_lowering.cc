@@ -200,19 +200,6 @@ enum class atomic_rmw_op_t : u8 { // Mirrors builtin.gh.inc
     }
 }
 
-// A function value may be typed through a reference or pointer to its signature
-[[nodiscard]] auto function_signature_of(const gir::function& fn)
-    -> stdx::option<const sema::types::function&> {
-    const auto* target_t{&fn.get_type()};
-    if (const auto ref{target_t->get_data().as_opt<sema::types::reference>()}) {
-        target_t = &ref->underlying;
-    }
-    if (const auto ptr{target_t->get_data().as_opt<sema::types::pointer>()}) {
-        target_t = &ptr->underlying;
-    }
-    return target_t->get_data().as_opt<sema::types::function>();
-}
-
 } // namespace
 
 llvm_lowering::llvm_lowering(llvm::LLVMContext& context, std::string_view module_name) noexcept
@@ -227,13 +214,13 @@ auto llvm_lowering::to_ir_string(const llvm::Module& mod) -> std::string {
     return out;
 }
 
-auto llvm_lowering::lower(const gir::module& gir_mod) -> stdx::box<llvm::Module> {
-    PROFILE_FUNCTION();
-    gir_module_.emplace(gir_mod);
-    {
-        PROFILE_SCOPE("llvm_lowering: declare functions");
-        for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
-    }
+// Every function is declared up front so bodies and vtables can reference any of them
+auto llvm_lowering::declare_functions(const gir::module& gir_mod) -> void {
+    PROFILE_SCOPE("llvm_lowering: declare functions");
+    for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
+}
+
+auto llvm_lowering::lower_definitions(const gir::module& gir_mod) -> void {
     {
         PROFILE_SCOPE("llvm_lowering: lower vtables");
         lower_dyn_vtables(gir_mod);
@@ -246,6 +233,13 @@ auto llvm_lowering::lower(const gir::module& gir_mod) -> stdx::box<llvm::Module>
         PROFILE_SCOPE("llvm_lowering: lower functions");
         for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
     }
+}
+
+auto llvm_lowering::lower(const gir::module& gir_mod) -> stdx::box<llvm::Module> {
+    PROFILE_FUNCTION();
+    gir_module_.emplace(gir_mod);
+    declare_functions(gir_mod);
+    lower_definitions(gir_mod);
     finalize_runtime_support();
     return std::move(llvm_module_);
 }
@@ -318,22 +312,8 @@ auto llvm_lowering::lower_executable(const gir::module& gir_mod, std::string_vie
     is_executable_  = true;
     user_main_name_ = user_main_name;
     gir_module_.emplace(gir_mod);
-    {
-        PROFILE_SCOPE("llvm_lowering: declare functions");
-        for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
-    }
-    {
-        PROFILE_SCOPE("llvm_lowering: lower vtables");
-        lower_dyn_vtables(gir_mod);
-    }
-    {
-        PROFILE_SCOPE("llvm_lowering: lower globals");
-        for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
-    }
-    {
-        PROFILE_SCOPE("llvm_lowering: lower functions");
-        for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
-    }
+    declare_functions(gir_mod);
+    lower_definitions(gir_mod);
     emit_main_entry_wrapper(user_main_name_);
     finalize_runtime_support();
     return std::move(llvm_module_);
@@ -856,11 +836,9 @@ auto llvm_lowering::lower_test_executable(const gir::module&             gir_mod
         user_runner_name.transform([](auto sv) { return std::string{sv}; }).value_or(std::string{});
     is_executable_ = true;
     gir_module_.emplace(gir_mod);
-    for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
+    declare_functions(gir_mod);
     define_test_take_skipped();
-    lower_dyn_vtables(gir_mod);
-    for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
-    for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
+    lower_definitions(gir_mod);
     emit_test_entry_wrapper(gir_mod, recover_args);
     finalize_runtime_support();
     return std::move(llvm_module_);
@@ -1428,7 +1406,9 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
     if (auto* existing{llvm_module_->getGlobalVariable(g.name)}) { return existing; }
     ensure_reserved_symbols();
 
-    auto*      g_type{types_.translate(g.type)};
+    auto* g_type{types_.translate(g.type)};
+    // A `void` global has no storage to emit
+    if (g_type->isVoidTy() || g_type->isFunctionTy()) { return nullptr; }
     const bool is_const{g.is_constant};
     auto       g_linkage{(g.linkage == gir::linkage::INTERNAL) ? llvm::GlobalValue::InternalLinkage
                                                                : llvm::GlobalValue::ExternalLinkage};
@@ -1517,7 +1497,7 @@ auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function*
     }
     ensure_reserved_symbols();
 
-    const auto fn_data{function_signature_of(fn)};
+    const auto fn_data{sema::signature_of(fn.get_type())};
     ASSERT(fn_data, "Function must have function sema type");
     auto* fn_ty{types_.translate_function_type(*fn_data)};
 
@@ -1580,7 +1560,7 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
     PROFILE_FUNCTION();
     auto* llvm_fn{declare_function(fn)};
     if (!llvm_fn) { return llvm_fn; }
-    const auto fn_data{function_signature_of(fn)};
+    const auto fn_data{sema::signature_of(fn.get_type())};
     if (fn.get_linkage() == gir::linkage::EXTERN || fn.get_segments().empty() ||
         (fn_data && is_constexpr_only_signature(*fn_data))) {
         return llvm_fn;
@@ -2085,11 +2065,32 @@ auto llvm_lowering::emit_global_addr(const gir::instruction& inst) -> llvm::Valu
     return gv;
 }
 
+// `ptr + n` / `ptr - n` step by whole pointees, like C
+auto llvm_lowering::emit_pointer_offset(const gir::instruction& inst) -> llvm::Value* {
+    const auto& pointee{inst.operands[0].type->get_data().as<sema::types::pointer>().underlying};
+    auto*       base{lower_value(inst.operands[0])};
+    auto*       offset{lower_value(inst.operands[1])};
+    ASSERT(base && offset, "Pointer arithmetic operands must lower to non-null LLVM values");
+
+    auto*      index_ty{llvm_module_->getDataLayout().getIntPtrType(context_)};
+    const auto offset_int{inst.operands[1].type ? sema::as_integer(*inst.operands[1].type)
+                                                : stdx::option<sema::types::integer>{}};
+    const bool is_signed_offset{!offset_int || offset_int->is_signed};
+    offset = builder_.CreateIntCast(offset, index_ty, is_signed_offset, "ptr.offset");
+    if (inst.kind == gir::instruction_kind::SUB) { offset = builder_.CreateNeg(offset); }
+    return builder_.CreateGEP(types_.translate(pointee), base, offset, "ptr.step");
+}
+
 auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
     ASSERT(inst.operands.size() >= 2, "Binary instruction requires at least 2 operands");
     const auto op0_ty{inst.operands[0].type};
     const auto op1_ty{inst.operands[1].type};
+    const bool is_offset_op{inst.kind == gir::instruction_kind::ADD ||
+                            inst.kind == gir::instruction_kind::SUB};
+    if (is_offset_op && op0_ty && op0_ty->get_kind() == sema::type_kind::POINTER) {
+        return emit_pointer_offset(inst);
+    }
     const auto peer_ty{concrete_peer_type(op0_ty, op1_ty)};
     auto*      lhs{lower_value(inst.operands[0], peer_ty)};
     auto*      rhs{lower_value(inst.operands[1], peer_ty)};
@@ -2387,14 +2388,7 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
     ASSERT(!inst.operands.empty(), "Indirect call requires callee operand");
     auto* callee_val{lower_value(inst.operands[0])};
     ASSERT(inst.operands[0].type, "Indirect callee must have function type");
-    auto ind_target{inst.operands[0].type};
-    if (const auto ref{ind_target->get_data().as_opt<sema::types::reference>()}) {
-        ind_target.emplace(ref->underlying);
-    }
-    if (const auto ptr{ind_target->get_data().as_opt<sema::types::pointer>()}) {
-        ind_target.emplace(ptr->underlying);
-    }
-    const auto ind_fn_data{ind_target->get_data().as_opt<sema::types::function>()};
+    const auto ind_fn_data{sema::signature_of(*inst.operands[0].type)};
     ASSERT(ind_fn_data, "Indirect callee must have function type");
     // A folded `const f: fn(...) = g;` reaches here as `g` itself: call it directly
     const bool is_erased{ind_fn_data->erased && !llvm::isa<llvm::Function>(callee_val)};

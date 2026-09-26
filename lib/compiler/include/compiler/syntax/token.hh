@@ -27,6 +27,9 @@ namespace syntax {
     }
 }
 
+// Whether `bytes` is well-formed UTF-8 (no overlongs, surrogates, or code points past U+10FFFF)
+[[nodiscard]] auto is_valid_utf8(std::string_view bytes) noexcept -> bool;
+
 struct token_t {
     token_type_t     type{};
     std::string_view slice;

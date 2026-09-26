@@ -16,14 +16,14 @@ TEST_CASE("Missing do-while condition") {
 
 TEST_CASE("Unclosed do-while body") {
     helpers::test_parser_fail("do { while (true);",
-                              syntax::diagnostic{"Expected token LBRACE, found SEMICOLON",
+                              syntax::diagnostic{"Expected '{', found ';'",
                                                  syntax::error::UNEXPECTED_TOKEN,
                                                  std::pair{0UZ, 17UZ}});
 }
 
 TEST_CASE("Unclosed do-while condition") {
     helpers::test_parser_fail("do {a; } while (true;",
-                              syntax::diagnostic{"Expected token RPAREN, found SEMICOLON",
+                              syntax::diagnostic{"Expected ')', found ';'",
                                                  syntax::error::UNEXPECTED_TOKEN,
                                                  std::pair{0UZ, 20UZ}});
 }
@@ -37,14 +37,14 @@ TEST_CASE("Missing while condition") {
 
 TEST_CASE("Unclosed while body") {
     helpers::test_parser_fail("while (true) {;",
-                              syntax::diagnostic{"No prefix parse function for SEMICOLON(;) found",
+                              syntax::diagnostic{"Expected an expression, found ';'",
                                                  syntax::error::MISSING_PREFIX_PARSER,
                                                  std::pair{0UZ, 14UZ}});
 }
 
 TEST_CASE("Unclosed while condition") {
     helpers::test_parser_fail("while (true {};",
-                              syntax::diagnostic{"Expected token RPAREN, found SEMICOLON",
+                              syntax::diagnostic{"Expected ')', found ';'",
                                                  syntax::error::UNEXPECTED_TOKEN,
                                                  std::pair{0UZ, 14UZ}});
 }
@@ -57,7 +57,7 @@ TEST_CASE("Malformed while continuation") {
                            std::pair{0UZ, 11UZ}});
 
     helpers::test_parser_fail("while (true) : (i += 1 {};",
-                              syntax::diagnostic{"Expected token RPAREN, found SEMICOLON",
+                              syntax::diagnostic{"Expected ')', found ';'",
                                                  syntax::error::UNEXPECTED_TOKEN,
                                                  std::pair{0UZ, 25UZ}});
 }
@@ -67,7 +67,7 @@ TEST_CASE("Illegal while-else clause") {
                               syntax::diagnostic{syntax::error::ILLEGAL_LOOP_NON_BREAK, 0, 32});
 
     helpers::test_parser_fail("while (true) : (i += 1) {} else;",
-                              syntax::diagnostic{"No prefix parse function for SEMICOLON(;) found",
+                              syntax::diagnostic{"Expected an expression, found ';'",
                                                  syntax::error::MISSING_PREFIX_PARSER,
                                                  std::pair{0UZ, 31UZ}});
 }

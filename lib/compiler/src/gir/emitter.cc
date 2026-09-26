@@ -493,13 +493,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
         const auto saved_scope_prefix{std::exchange(typing_scope_prefix_, req.mangled_name)};
         emit_block(fn_mod.ast.get_as<ast::block_stmt>(fn_expr.body));
         typing_scope_prefix_ = saved_scope_prefix;
-        if (const auto cur_seg{builder_.get_segment()}; cur_seg && !cur_seg->has_terminator()) {
-            if (req.return_type->get_kind() == sema::type_kind::VOID_) {
-                builder_.emit_return();
-            } else {
-                builder_.emit_return(value{undefined_val{}, *req.return_type});
-            }
-        }
+        emit_implicit_return(*req.return_type);
     }
 
     const_eval_.set_enclosing_type(stdx::none);
@@ -1221,15 +1215,10 @@ auto emitter::emit_impl_default_method(std::string_view          gir_name,
     emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
     emitting_impl_default_scope_.reset();
 
-    if (const auto cur_seg{builder_.get_segment()}) {
-        if (!cur_seg->has_terminator()) {
-            if (const auto fd{sema_type->get_data().as_opt<sema::types::function>()};
-                fd && fd->return_type.get_kind() != sema::type_kind::VOID_) {
-                builder_.emit_return(value{undefined_val{}, fd->return_type});
-            } else {
-                builder_.emit_return();
-            }
-        }
+    if (const auto fd{sema_type->get_data().as_opt<sema::types::function>()}) {
+        emit_implicit_return(fd->return_type);
+    } else {
+        emit_implicit_return(ctx_.get_builtin_resolved_type(sema::type_kind::VOID_));
     }
 }
 
@@ -1317,26 +1306,7 @@ auto emitter::emit_function(ast::node_id                   id,
                                         });
     }
 
-    for (const auto& param : fn_expr.parameters) {
-        std::string_view p_name{};
-        if (param.name.is<ast::identifier_expr>()) {
-            p_name = active_ast().get_as<ast::identifier_expr>(param.name).name;
-        }
-        const auto p_type{active_mod().get_sema_type_opt(param.name)};
-        ASSERT(p_type, "Function parameter must have a resolved sema type");
-
-        auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
-        const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-        if (!p_name.empty()) {
-            scopes_.back().bindings.emplace(p_name,
-                                            local_binding{
-                                                .id        = p_slot.id,
-                                                .type      = *p_type,
-                                                .is_alloca = p_spilled,
-                                                .const_val = stdx::none,
-                                            });
-        }
-    }
+    bind_declared_params(fn, fn_expr, active_mod());
 
     emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
     if (const auto cur_seg{builder_.get_segment()}) {
@@ -1345,27 +1315,68 @@ auto emitter::emit_function(ast::node_id                   id,
                 // A naked body owns its own control flow; never synthesise a return.
                 builder_.emit_unreachable();
             } else {
-                stdx::option<const sema::types::function&> fn_data;
-                auto                                       target_t{sema_type};
-                if (target_t) {
-                    if (const auto ref{target_t->get_data().as_opt<sema::types::reference>()}) {
-                        target_t.emplace(ref->underlying);
-                    }
-                    if (const auto ptr{target_t->get_data().as_opt<sema::types::pointer>()}) {
-                        target_t.emplace(ptr->underlying);
-                    }
-                    fn_data = target_t->get_data().as_opt<sema::types::function>();
-                }
-                if (fn_data && fn_data->return_type.get_kind() == sema::type_kind::VOID_) {
-                    builder_.emit_return();
-                } else if (fn_data) {
-                    builder_.emit_return(value{undefined_val{}, fn_data->return_type});
+                const auto fn_data{sema_type ? sema::signature_of(*sema_type)
+                                             : stdx::option<const sema::types::function&>{}};
+                if (fn_data) {
+                    emit_implicit_return(fn_data->return_type);
                 } else {
                     builder_.emit_return();
                 }
             }
         }
     }
+}
+
+auto emitter::bind_declared_params(gir::function&            fn,
+                                   const ast::function_expr& fn_expr,
+                                   const mod::module&        owner) -> void {
+    for (const auto& param : fn_expr.parameters) {
+        std::string_view p_name{};
+        if (param.name.is<ast::identifier_expr>()) {
+            p_name = owner.ast.get_as<ast::identifier_expr>(param.name).name;
+        }
+        const auto p_type{owner.get_sema_type_opt(param.name)};
+        ASSERT(p_type, "Function parameter must have a resolved sema type");
+
+        // A slice parameter is spilled to a slot so it can be sub-sliced and re-bound
+        auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
+        const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
+        if (p_name.empty()) { continue; }
+        scopes_.back().bindings.emplace(p_name,
+                                        local_binding{
+                                            .id        = p_slot.id,
+                                            .type      = *p_type,
+                                            .is_alloca = p_spilled,
+                                            .const_val = stdx::none,
+                                        });
+    }
+}
+
+// A body that falls off its end still needs a terminator; a non-void one yields `undefined`
+auto emitter::emit_implicit_return(sema::type& return_type) -> void {
+    const auto cur_seg{builder_.get_segment()};
+    if (!cur_seg || cur_seg->has_terminator()) { return; }
+    if (return_type.get_kind() == sema::type_kind::VOID_) {
+        builder_.emit_return();
+    } else {
+        builder_.emit_return(value{undefined_val{}, return_type});
+    }
+}
+
+// An expression with no runtime representation must fold; one that cannot is a user error
+auto emitter::fold_compile_time_only(ast::node_id id, std::string_view what, sema::type& type)
+    -> value {
+    const auto diags_before{ctx_.diags.size()};
+    if (const auto cv{const_eval_.try_eval(id)}; cv && !cv->is_poison()) {
+        return type.get_kind() == sema::type_kind::TYPE ? cv->to_gir_value()
+                                                        : materialize_const(*cv);
+    }
+    if (ctx_.diags.size() == diags_before) {
+        ctx_.diags.emplace_back(std::string{what},
+                                sema::error::CONSTEXPR_EVALUATION_FAILED,
+                                active_ast().location_of(id));
+    }
+    return value{undefined_val{}, type};
 }
 
 auto emitter::emit_anonymous_function(ast::node_id id, const ast::function_expr& fn_expr)
@@ -1386,39 +1397,12 @@ auto emitter::emit_anonymous_function(ast::node_id id, const ast::function_expr&
 
     {
         const scope_guard g{scopes_};
-        for (const auto& param : fn_expr.parameters) {
-            std::string_view p_name{};
-            if (param.name.is<ast::identifier_expr>()) {
-                p_name = active_ast().get_as<ast::identifier_expr>(param.name).name;
-            }
-            const auto p_type{active_mod().get_sema_type_opt(param.name)};
-            ASSERT(p_type, "Anonymous function parameter must have a resolved sema type");
-
-            auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
-            const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-            if (!p_name.empty()) {
-                scopes_.back().bindings.emplace(p_name,
-                                                local_binding{
-                                                    .id        = p_slot.id,
-                                                    .type      = *p_type,
-                                                    .is_alloca = p_spilled,
-                                                    .const_val = stdx::none,
-                                                });
-            }
-        }
+        bind_declared_params(fn, fn_expr, active_mod());
 
         emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
-        if (const auto cur_seg{builder_.get_segment()}) {
-            if (!cur_seg->has_terminator()) {
-                const auto fn_data{fn_type.get_data().as_opt<sema::types::function>()};
-                ASSERT(fn_data, "Function type must contain function type data");
-                if (fn_data->return_type.get_kind() == sema::type_kind::VOID_) {
-                    builder_.emit_return();
-                } else {
-                    builder_.emit_return(value{undefined_val{}, fn_data->return_type});
-                }
-            }
-        }
+        const auto fn_data{fn_type.get_data().as_opt<sema::types::function>()};
+        ASSERT(fn_data, "Function type must contain function type data");
+        emit_implicit_return(fn_data->return_type);
     }
 
     if (prev_fn && prev_seg) { builder_.set_insert_point(*prev_fn, *prev_seg); }
@@ -1459,39 +1443,12 @@ auto emitter::emit_named_local_function(std::string_view          name,
                                             .is_const  = true,
                                         });
 
-        for (const auto& param : fn_expr.parameters) {
-            std::string_view p_name{};
-            if (param.name.is<ast::identifier_expr>()) {
-                p_name = active_ast().get_as<ast::identifier_expr>(param.name).name;
-            }
-            const auto p_type{active_mod().get_sema_type_opt(param.name)};
-            ASSERT(p_type, "Local function parameter must have a resolved sema type");
-
-            auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
-            const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-            if (!p_name.empty()) {
-                scopes_.back().bindings.emplace(p_name,
-                                                local_binding{
-                                                    .id        = p_slot.id,
-                                                    .type      = *p_type,
-                                                    .is_alloca = p_spilled,
-                                                    .const_val = stdx::none,
-                                                });
-            }
-        }
+        bind_declared_params(fn, fn_expr, active_mod());
 
         emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
-        if (const auto cur_seg{builder_.get_segment()}) {
-            if (!cur_seg->has_terminator()) {
-                const auto fn_data{fn_type.get_data().as_opt<sema::types::function>()};
-                ASSERT(fn_data, "Function type must contain function type data");
-                if (fn_data->return_type.get_kind() == sema::type_kind::VOID_) {
-                    builder_.emit_return();
-                } else {
-                    builder_.emit_return(value{undefined_val{}, fn_data->return_type});
-                }
-            }
-        }
+        const auto fn_data{fn_type.get_data().as_opt<sema::types::function>()};
+        ASSERT(fn_data, "Function type must contain function type data");
+        emit_implicit_return(fn_data->return_type);
     }
 
     if (prev_fn && prev_seg) { builder_.set_insert_point(*prev_fn, *prev_seg); }
@@ -1541,25 +1498,7 @@ auto emitter::emit_closure_function(const ast::function_expr&     fn_expr,
                                             .const_val = stdx::none,
                                         });
 
-        for (const auto& param : fn_expr.parameters) {
-            std::string_view p_name{};
-            if (param.name.is<ast::identifier_expr>()) {
-                p_name = active_ast().get_as<ast::identifier_expr>(param.name).name;
-            }
-            const auto p_type{active_mod().get_sema_type_opt(param.name)};
-            ASSERT(p_type, "Closure parameter must have a resolved sema type");
-            auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
-            const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-            if (!p_name.empty()) {
-                scopes_.back().bindings.emplace(p_name,
-                                                local_binding{
-                                                    .id        = p_slot.id,
-                                                    .type      = *p_type,
-                                                    .is_alloca = p_spilled,
-                                                    .const_val = stdx::none,
-                                                });
-            }
-        }
+        bind_declared_params(fn, fn_expr, active_mod());
 
         // Load every capture once, up front, from `self`
         auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
@@ -1583,15 +1522,7 @@ auto emitter::emit_closure_function(const ast::function_expr&     fn_expr,
         }
 
         emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
-        if (const auto cur_seg{builder_.get_segment()}) {
-            if (!cur_seg->has_terminator()) {
-                if (impl_sig_data->return_type.get_kind() == sema::type_kind::VOID_) {
-                    builder_.emit_return();
-                } else {
-                    builder_.emit_return(value{undefined_val{}, impl_sig_data->return_type});
-                }
-            }
-        }
+        emit_implicit_return(impl_sig_data->return_type);
     }
 
     if (prev_fn && prev_seg) { builder_.set_insert_point(*prev_fn, *prev_seg); }
@@ -1675,34 +1606,10 @@ auto emitter::emit_constexpr_closure(const const_closure& cl) -> std::string {
         }
         const constexpr_frame_guard cxg{ctx_.constexpr_binding_frames, std::move(cx_frame)};
 
-        for (const auto& param : fn_expr.parameters) {
-            std::string_view p_name{};
-            if (param.name.is<ast::identifier_expr>()) {
-                p_name = def_mod.ast.get_as<ast::identifier_expr>(param.name).name;
-            }
-            const auto p_type{def_mod.get_sema_type_opt(param.name)};
-            ASSERT(p_type, "closure parameter must have a resolved sema type");
-            auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
-            const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-            if (!p_name.empty()) {
-                scopes_.back().bindings.emplace(p_name,
-                                                local_binding{
-                                                    .id        = p_slot.id,
-                                                    .type      = *p_type,
-                                                    .is_alloca = p_spilled,
-                                                    .const_val = stdx::none,
-                                                });
-            }
-        }
+        bind_declared_params(fn, fn_expr, def_mod);
 
         emit_block(def_mod.ast.get_as<ast::block_stmt>(fn_expr.body));
-        if (const auto cur_seg{builder_.get_segment()}; cur_seg && !cur_seg->has_terminator()) {
-            if (sig_data->return_type.get_kind() == sema::type_kind::VOID_) {
-                builder_.emit_return();
-            } else {
-                builder_.emit_return(value{undefined_val{}, sig_data->return_type});
-            }
-        }
+        emit_implicit_return(sig_data->return_type);
     }
 
     active_module_ = prev_module;
@@ -2515,7 +2422,7 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
     ASSERT(kind_opt, "Binary operator must be mapped to instruction kind");
     ASSERT(sema_type, "Binary expression must have a resolved sema type");
 
-    // An operand'ssema type can be narrower than the value's actual constexpr-only dest
+    // An operand's sema type can be narrower than the value's actual constexpr-only dest
     if (*kind_opt == instruction_kind::SHL || *kind_opt == instruction_kind::SHR) {
         if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
     }
@@ -2535,16 +2442,32 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
         // comparing two of them must fully const-fold rather than reach codegen.
         const auto lhs_ty{active_mod().get_sema_type_opt(binary.lhs)};
         const auto rhs_ty{active_mod().get_sema_type_opt(binary.rhs)};
+        // Inside an instantiation a bound `T` is typed as the concrete type, so fold to check
+        const auto folds_to_type{[&](ast::expr_handle operand) {
+            const auto diags_before{ctx_.diags.size()};
+            const auto cv{const_eval_.try_eval(operand)};
+            if (ctx_.diags.size() > diags_before) {
+                DISCARD(ctx_.diags.split_off(diags_before));
+                return false;
+            }
+            return cv && cv->is<stdx::option<sema::type&>>();
+        }};
         if ((lhs_ty && lhs_ty->get_kind() == sema::type_kind::TYPE) ||
-            (rhs_ty && rhs_ty->get_kind() == sema::type_kind::TYPE)) {
-            const auto cv{const_eval_.try_eval(id)};
-            VERIFY(cv, "Comparison of type values must be constant-evaluable");
-            return materialize_const(*cv);
+            (rhs_ty && rhs_ty->get_kind() == sema::type_kind::TYPE) || folds_to_type(binary.lhs) ||
+            folds_to_type(binary.rhs)) {
+            return fold_compile_time_only(
+                id, "a comparison between types must be known at compile time", *sema_type);
         }
     }
 
-    const auto lhs{emit_expression(binary.lhs)};
-    const auto rhs{emit_expression(binary.rhs)};
+    auto lhs{emit_expression(binary.lhs)};
+    auto rhs{emit_expression(binary.rhs)};
+    // Pointer arithmetic lowers as `ptr + n`; addition commutes, so normalize `n + ptr`
+    const auto is_pointer{
+        [](const value& v) { return v.type && v.type->get_kind() == sema::type_kind::POINTER; }};
+    if (*kind_opt == instruction_kind::ADD && is_pointer(rhs) && !is_pointer(lhs)) {
+        std::swap(lhs, rhs);
+    }
     return value{emit_checked_binary(*kind_opt,
                                      lhs,
                                      rhs,
@@ -3925,18 +3848,16 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
 
     // `fn(...): type` is a compile-time type constructor with no runtime body
     if (ret_type.get_kind() == sema::type_kind::TYPE) {
-        const auto cv{const_eval_.try_eval(id)};
-        VERIFY(cv, "Call to a type-constructor function must be constant-evaluable");
-        return cv->to_gir_value();
+        return fold_compile_time_only(
+            id, "a call to a `fn(...): type` constructor must be known at compile time", ret_type);
     }
 
     if (ret_type.get_kind() == sema::type_kind::CONSTEXPR_INT ||
         ret_type.get_kind() == sema::type_kind::CONSTEXPR_FLOAT) {
-        const auto cv{const_eval_.try_eval(id)};
-        VERIFY(cv,
-               "Call to a function returning 'constexpr_int'/'constexpr_float' must be "
-               "constant-evaluable");
-        return cv->to_gir_value();
+        return fold_compile_time_only(id,
+                                      "a call returning 'constexpr_int' or 'constexpr_float' "
+                                      "must be known at compile time",
+                                      ret_type);
     }
 
     stdx::option<std::string> callee_name;
@@ -6696,14 +6617,7 @@ auto emitter::emit_c_va_builtin(const ast::call_expr& call,
 auto emitter::current_function_is_c_variadic() -> bool {
     const auto fn{builder_.get_function()};
     if (!fn) { return false; }
-    const auto* fn_type{&fn->get_type()};
-    if (const auto ref{fn_type->get_data().as_opt<sema::types::reference>()}) {
-        fn_type = &ref->underlying;
-    }
-    if (const auto ptr{fn_type->get_data().as_opt<sema::types::pointer>()}) {
-        fn_type = &ptr->underlying;
-    }
-    const auto sig{fn_type->get_data().as_opt<sema::types::function>()};
+    const auto sig{sema::signature_of(fn->get_type())};
     return sig && sig->is_variadic;
 }
 

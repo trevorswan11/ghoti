@@ -116,6 +116,8 @@ class type_resolver {
                                const ast::function_expr&                                 base_fn,
                                std::string_view ctor_mangled) -> void;
     auto check_deferred_body_jumps(ast::stmt_handle body) -> void;
+    // Runs `check_deferred_body_jumps`, reporting whether it found a jump
+    [[nodiscard]] auto deferred_body_jumps(ast::stmt_handle body) -> bool;
 
     // Resolves `block`'s statements in order, stopping at (and reporting) the first poisoned one
     struct enum_value_tracker {
@@ -128,6 +130,14 @@ class type_resolver {
                                         ast::identifier_handle         name,
                                         stdx::option<ast::expr_handle> value)
         -> stdx::option<diagnostic>;
+    [[nodiscard]] auto probe_fold(ast::expr_handle expr) const -> stdx::option<gir::const_value>;
+    enum class operand_nature_t : u8 { TYPE, VALUE, UNKNOWN };
+    // Whether an operand names a type, holds a value, or cannot tell before instantiation
+    [[nodiscard]] auto operand_nature(ast::expr_handle expr) const -> operand_nature_t;
+    [[nodiscard]] auto call_arg_denotes_type(const ast::call_expr::argument& arg) const -> bool;
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto untyped_aggregate_literal(ID id, std::string_view kind) -> type&;
+    [[nodiscard]] auto declares_generic_params(const ast::function_expr& fn_expr) const -> bool;
     [[nodiscard]] auto names_a_value(const symbol& sym, usize table_idx) -> bool;
     [[nodiscard]] auto check_array_dimension(ast::expr_handle dimension, const type& item_type)
         -> stdx::option<diagnostic>;
@@ -605,6 +615,7 @@ class type_resolver {
     bool for_generic_instantiation_{false};
     bool in_subscript_index_{false};
     bool in_for_iterable_{false};
+    bool resolving_callee_{false};
     bool in_expr_branch_{false};
     // Skips `if`/`match constexpr` folding and the throwaway `Ctor(<dummy>)` cache insert
     bool building_param_template_{false};

@@ -3,6 +3,7 @@
 #include <ios>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -325,6 +326,24 @@ TEST_CASE("build_obj command execution") {
         CHECK_FALSE(asm_text.empty());
         CHECK(asm_text.contains("add"));
     }
+}
+
+TEST_CASE("build_obj creates a missing output directory") {
+    codegen::llvm_scope scope;
+    tempfile            src_file{"test_nested_out_src.gh"};
+    {
+        std::ofstream out{src_file.path};
+        fmt::print(out, "pub const one := fn(): i32 {{ return 1; }};\n");
+    }
+
+    const auto out_dir{std::filesystem::path{tempfile::make_temp_path("ghoti_nested_out")}};
+    const auto obj_path{out_dir / "deeper" / "out.o"};
+    cmd::build_obj cmd{{.input_path = src_file, .output_path = obj_path}};
+    REQUIRE(cmd.execute());
+    CHECK(std::filesystem::exists(obj_path));
+
+    std::error_code ec;
+    std::filesystem::remove_all(out_dir, ec);
 }
 
 } // namespace ghoti::tests

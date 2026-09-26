@@ -280,6 +280,11 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                             error::ILLEGAL_OPAQUE_TYPE,
                             inst.location);
         }
+        if (inst.type && inst.type->get_kind() == type_kind::NORETURN) {
+            emit_diagnostic("Cannot declare a variable of type 'noreturn'; it has no values",
+                            error::TYPE_MISMATCH,
+                            inst.location);
+        }
         if (inst.result && inst.type) {
             locals_.insert_or_assign(*inst.result,
                                      local_info{

@@ -28,14 +28,14 @@ TEST_CASE("Non-comma separated arguments") {
     helpers::test_parser_fail(
         "func(1 2)",
         syntax::diagnostic{
-            "Expected token COMMA, found INT_10", syntax::error::UNEXPECTED_TOKEN, 0, 7});
+            "Expected ',', found an integer literal", syntax::error::UNEXPECTED_TOKEN, 0, 7});
 }
 
 TEST_CASE("Non-terminated identifier") {
     helpers::test_parser_fail(
         "foobar",
         syntax::diagnostic{
-            "Expected token SEMICOLON, found END", syntax::error::UNEXPECTED_TOKEN, 0, 6});
+            "Expected ';', found the end of input", syntax::error::UNEXPECTED_TOKEN, 0, 6});
 }
 
 TEST_CASE("No index") {
@@ -49,14 +49,14 @@ TEST_CASE("No index") {
 TEST_CASE("Illegal infix node") {
     helpers::test_parser_fail(
         "a and import std;",
-        syntax::diagnostic{"No prefix parse function for IMPORT(import) found",
+        syntax::diagnostic{"Expected an expression, found 'import'",
                            syntax::error::MISSING_PREFIX_PARSER,
                            std::pair{0UZ, 6UZ}});
 }
 
 TEST_CASE("Non-terminated infix") {
     helpers::test_parser_fail("a and;",
-                              syntax::diagnostic{"No prefix parse function for SEMICOLON(;) found",
+                              syntax::diagnostic{"Expected an expression, found ';'",
                                                  syntax::error::MISSING_PREFIX_PARSER,
                                                  std::pair{0UZ, 5UZ}});
 
@@ -85,6 +85,36 @@ TEST_CASE("Code nested too deeply") {
                               syntax::diagnostic{"Code nested too deeply",
                                                  syntax::error::EXPRESSION_NESTED_TOO_DEEPLY,
                                                  std::pair{0UZ, 1032UZ}});
+}
+
+TEST_CASE("An overly long operator chain reports a diagnostic instead of overflowing later passes") {
+    std::string chain{"a"};
+    for (usize i{0}; i < 5000; ++i) { chain += "+a"; }
+    helpers::test_parser_fail(chain + ";",
+                              syntax::diagnostic{"Expression chains too many operators; split it "
+                                                 "into intermediate values",
+                                                 syntax::error::EXPRESSION_NESTED_TOO_DEEPLY,
+                                                 std::pair{0UZ, 8193UZ}});
+}
+
+TEST_CASE("Literal and comment edge cases report targeted diagnostics") {
+    helpers::test_parser_fail("\"\xFF\xFE\";",
+                              syntax::diagnostic{"String literal is not valid UTF-8",
+                                                 syntax::error::INVALID_UTF8,
+                                                 std::pair{0UZ, 0UZ}});
+    helpers::test_parser_fail("/* comment */",
+                              syntax::diagnostic{"Block comments are not supported; use `//` line "
+                                                 "comments",
+                                                 syntax::error::MISSING_PREFIX_PARSER,
+                                                 std::pair{0UZ, 0UZ}});
+    helpers::test_parser_fail("1e-999999;",
+                              syntax::diagnostic{"Float literal is too small to represent",
+                                                 syntax::error::DOUBLE_OVERFLOW,
+                                                 std::pair{0UZ, 0UZ}});
+    helpers::test_parser_fail(std::string(1, '1') + "." + std::string(3000, '1') + "e99999;",
+                              syntax::diagnostic{"Overflow of literal",
+                                                 syntax::error::DOUBLE_OVERFLOW,
+                                                 std::pair{0UZ, 0UZ}});
 }
 
 TEST_CASE("Illegal tokens report a specific diagnostic instead of a generic prefix-parser one") {
@@ -125,31 +155,31 @@ TEST_CASE("Illegal tokens report a specific diagnostic instead of a generic pref
 
 TEST_CASE("Unclosed implicit initializer") {
     helpers::test_parser_fail(".{",
-                              syntax::diagnostic{"Expected token RBRACE, found END",
+                              syntax::diagnostic{"Expected '}', found the end of input",
                                                  syntax::error::UNEXPECTED_TOKEN,
                                                  std::pair{0UZ, 2UZ}});
 
     helpers::test_parser_fail(".{ .a = 2",
-                              syntax::diagnostic{"Expected token COMMA, found END",
+                              syntax::diagnostic{"Expected ',', found the end of input",
                                                  syntax::error::UNEXPECTED_TOKEN,
                                                  std::pair{0UZ, 9UZ}});
 }
 
 TEST_CASE("Unclosed explicit initializer") {
     helpers::test_parser_fail("T{",
-                              syntax::diagnostic{"Expected token RBRACE, found END",
+                              syntax::diagnostic{"Expected '}', found the end of input",
                                                  syntax::error::UNEXPECTED_TOKEN,
                                                  std::pair{0UZ, 2UZ}});
 
     helpers::test_parser_fail("T{ .a = 2",
-                              syntax::diagnostic{"Expected token COMMA, found END",
+                              syntax::diagnostic{"Expected ',', found the end of input",
                                                  syntax::error::UNEXPECTED_TOKEN,
                                                  std::pair{0UZ, 9UZ}});
 }
 
 TEST_CASE("Malformed initializer key-value") {
     helpers::test_parser_fail("T{ .a = };",
-                              syntax::diagnostic{"No prefix parse function for RBRACE(}) found",
+                              syntax::diagnostic{"Expected an expression, found '}'",
                                                  syntax::error::MISSING_PREFIX_PARSER,
                                                  std::pair{0UZ, 8UZ}});
 }
@@ -192,7 +222,7 @@ TEST_CASE("Prefix without operand") {
                                                  std::pair{0UZ, 0UZ}});
 
     helpers::test_parser_fail("!;",
-                              syntax::diagnostic{"No prefix parse function for SEMICOLON(;) found",
+                              syntax::diagnostic{"Expected an expression, found ';'",
                                                  syntax::error::MISSING_PREFIX_PARSER,
                                                  std::pair{0UZ, 1UZ}});
 }
@@ -201,14 +231,14 @@ TEST_CASE("Missing inner member of dot expression") {
     helpers::test_parser_fail(
         "A. ;",
         syntax::diagnostic{
-            "Expected token IDENT, found SEMICOLON", syntax::error::UNEXPECTED_TOKEN, 0, 3});
+            "Expected an identifier, found ';'", syntax::error::UNEXPECTED_TOKEN, 0, 3});
 }
 
 TEST_CASE("Illegal inner member of dot expression") {
     helpers::test_parser_fail(
         "A.2;",
         syntax::diagnostic{
-            "Expected token IDENT, found INT_10", syntax::error::UNEXPECTED_TOKEN, 0, 2});
+            "Expected an identifier, found an integer literal", syntax::error::UNEXPECTED_TOKEN, 0, 2});
 }
 
 } // namespace ghoti::tests

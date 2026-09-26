@@ -97,6 +97,7 @@ enum class error : u8 {
     CONSTEXPR_LOOP_LABELED,
     UNEXPECTED_CHARACTER,
     UNKNOWN_BUILTIN,
+    INVALID_UTF8,
 };
 
 using diagnostic  = diagnostic<error>;

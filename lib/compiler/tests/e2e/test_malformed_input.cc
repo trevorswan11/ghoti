@@ -144,4 +144,103 @@ TEST_CASE("a very long constant string literal compiles") {
     CHECK(helpers::compile_and_run(src) == 100'000 % 256);
 }
 
+TEST_CASE("pointer arithmetic steps by whole pointees in either operand order") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            const a: [3]i32 = .{ 1, 2, 3 };
+            const p: ^i32 = @ptrFromArray(a);
+            var n: usize = 2;
+            const q := n + p;
+            return *(p + 2) + *(1 + p) + *(q - 1);
+        };
+    )") == 7);
+}
+
+TEST_CASE("type operands only take part in type identity comparisons") {
+    CHECK(helpers::raised("const f := fn(): bool { return u8 < 5; };",
+                          sema::error::TYPE_USED_AS_VALUE));
+    CHECK(helpers::compile_and_run(R"(
+        const pick := fn(T: type): i32 { if (T == u8) { return 1; } return 2; };
+        pub const main := fn(): i32 { return pick(u8) + pick(i32); };
+    )") == 3);
+}
+
+TEST_CASE("a builtin must be called") {
+    CHECK(helpers::raised("const f := fn(): void { const g := @sizeOf; _ = g; };",
+                          sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("casts need a type target and a value operand") {
+    CHECK(helpers::raised("const f := fn(): i32 { return @intCast(i32, ); };",
+                          sema::error::TYPE_USED_AS_VALUE));
+    CHECK(helpers::raised("const f := fn(x: u8): i32 { return @intCast(5, x); };",
+                          sema::error::TYPE_MISMATCH));
+    CHECK(helpers::compile_and_run(R"(
+        const widen := fn(T: type, x: u8): T { return @as(T, x); };
+        pub const main := fn(): i32 { return widen(i32, 4); };
+    )") == 4);
+}
+
+TEST_CASE("a function declared to return a value cannot return nothing") {
+    CHECK(helpers::raised("const f := fn(): usize { return; };", sema::error::RETURN_TYPE_MISMATCH));
+    CHECK(helpers::raised("const f := fn(): constexpr_int { const x := 1; _ = x; };",
+                          sema::error::RETURN_TYPE_MISMATCH));
+}
+
+TEST_CASE("an anonymous aggregate cannot be used mid-expression") {
+    CHECK(helpers::raised("const C := struct { id: i32 }.len;", sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("a generic function cannot be exported") {
+    CHECK(helpers::raised("export const f := fn(x: auto): i32 { return 0; };",
+                          sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("a constant index past a known length is rejected, but a sentinel slot is readable") {
+    CHECK(helpers::raised("const f := fn(): i32 { const a: [2]i32 = .{ 1, 2 }; return a[5]; };",
+                          sema::error::SLICE_OUT_OF_BOUNDS));
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            const s := "abc";
+            return @intCast(i32, s[3]) + 9;
+        };
+    )") == 9);
+}
+
+TEST_CASE("errors inside a parameterized impl's methods are reported") {
+    helpers::expect_compile_error(R"(
+        const Box := fn(T: type): type { return struct { val: T }; };
+        impl(T: type) Box(T) {
+            pub const get := fn(&self): Nope { return self.val; };
+        }
+        pub const main := fn(): i32 {
+            const b: Box(i32) = .{ .val = 3 };
+            return b.get();
+        };
+    )");
+}
+
+TEST_CASE("a method can call itself through its owning type") {
+    CHECK(helpers::compile_and_run(R"(
+        const S := struct {
+            const fact := fn(n: i32): i32 { if (n <= 1) { return 1; } return n * S.fact(n - 1); };
+        };
+        pub const main := fn(): i32 { return S.fact(5); };
+    )") == 120);
+}
+
+TEST_CASE("an unused void-typed global has no storage to emit") {
+    CHECK(helpers::compile_and_run(R"(
+        const choose := fn(x: auto): auto { return; };
+        const r := choose(99);
+        pub const main := fn(): i32 { return 0; };
+    )") == 0);
+}
+
+TEST_CASE("a variable of type noreturn is rejected") {
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 { var v: noreturn = undefined; _ = v; return 0; };
+    )");
+}
+
 } // namespace ghoti::tests

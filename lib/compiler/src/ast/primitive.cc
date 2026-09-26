@@ -10,11 +10,11 @@
 #include <utility>
 
 #include <stdx/assert.hh>
-#include <stdx/fixed/vector.hh>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
+#include <stdx/string.hh>
 #include <stdx/type_traits.hh>
 #include <stdx/types.hh>
 
@@ -22,7 +22,6 @@
 #include "compiler/syntax/error.hh"
 #include "compiler/syntax/parser.hh"
 #include "compiler/syntax/token_type.hh"
-#include "stdx/string.hh"
 #include "support/int128.hh"
 #include "support/string_utils.hh"
 
@@ -232,17 +231,24 @@ auto float_literal_expr::parse(syntax::parser& parser)
         mantissa = stdx::string::substr(slice, 0, pos);
     }
 
-    using namespace stdx::size_literals;
-    static thread_local stdx::fixed::vector<char, 1_KiB> buffer;
-    buffer.clear();
+    std::string digits;
+    digits.reserve(mantissa.size());
     for (const char c : mantissa) {
-        if (c != '_') { buffer.emplace_back(c); }
+        if (c != '_') { digits.push_back(c); }
     }
 
     f64                          value{};
-    const std::from_chars_result result{std::from_chars(buffer.begin(), buffer.end(), value)};
-    if (result.ec != std::errc{} || result.ptr != buffer.end()) {
-        return make_syntax_err("Overflow of literal", syntax::error::DOUBLE_OVERFLOW, start_token);
+    const auto*                  digits_end{digits.data() + digits.size()};
+    const std::from_chars_result result{std::from_chars(digits.data(), digits_end, value)};
+    if (result.ec != std::errc{} || result.ptr != digits_end) {
+        // `from_chars` reports both directions as out of range; a negative exponent underflowed
+        const auto exponent{digits.find_first_of("eE")};
+        const bool underflow{exponent != std::string::npos && exponent + 1 < digits.size() &&
+                             digits[exponent + 1] == '-'};
+        return make_syntax_err(underflow ? "Float literal is too small to represent"
+                                         : "Overflow of literal",
+                               syntax::error::DOUBLE_OVERFLOW,
+                               start_token);
     }
 
     return parser.add_expr<float_literal_expr>(

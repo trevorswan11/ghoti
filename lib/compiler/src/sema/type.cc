@@ -630,6 +630,15 @@ auto is_generic_type(const type& t, bool unmodified) noexcept -> bool {
     return false;
 }
 
+auto signature_of(const type& fn_value_type) noexcept -> stdx::option<const types::function&> {
+    const type* target{&fn_value_type};
+    if (const auto ref{target->get_data().as_opt<types::reference>()}) {
+        target = &ref->underlying;
+    }
+    if (const auto ptr{target->get_data().as_opt<types::pointer>()}) { target = &ptr->underlying; }
+    return target->get_data().as_opt<types::function>();
+}
+
 auto is_type_parameter_slot(const type& t) noexcept -> bool {
     return t.get_kind() == type_kind::TYPE && !t.get_data().is<types::deferred_array>();
 }

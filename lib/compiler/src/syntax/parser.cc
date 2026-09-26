@@ -1,13 +1,12 @@
 #include "compiler/syntax/parser.hh"
 
 #include <cctype>
-#include <fmt/ranges.h>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include <fmt/format.h>
-#include <magic_enum/magic_enum.hpp>
+#include <fmt/ranges.h>
 #include <stdx/enum.hh>
 #include <stdx/fixed/enum_map.hh>
 #include <stdx/option.hh>
@@ -43,6 +42,10 @@ namespace {
     switch (slice.front()) {
     case '"':
         if (closed_by_quote(1)) {
+            if (!is_valid_utf8(slice)) {
+                return diagnostic{
+                    "String literal is not valid UTF-8", error::INVALID_UTF8, token};
+            }
             return diagnostic{
                 "Invalid escape sequence in string literal", error::UNKNOWN_CHARACTER_ESCAPE, token};
         }
@@ -61,6 +64,12 @@ namespace {
                 "Invalid escape sequence in raw identifier", error::UNKNOWN_CHARACTER_ESCAPE, token};
         }
         return diagnostic{"Unterminated raw identifier", error::UNTERMINATED_RAW_IDENTIFIER, token};
+    case '\\':
+        if (slice.starts_with("\\\\")) {
+            return diagnostic{
+                "Multiline string literal is not valid UTF-8", error::INVALID_UTF8, token};
+        }
+        break;
     default:
         if (std::isdigit(static_cast<u8>(slice.front()))) {
             return diagnostic{"Invalid numeric literal", error::INVALID_NUMBER_LITERAL, token};
@@ -257,9 +266,9 @@ auto parser::expect_semicolon() -> stdx::result<void, diagnostic> {
 
 auto parser::peek_error(token_type_t expected) -> diagnostic {
     if (auto lexer_failure{describe_illegal_token(peek_token_)}) { return *lexer_failure; }
-    return diagnostic{fmt::format("Expected token {}, found {}",
-                                  magic_enum::enum_name(expected),
-                                  magic_enum::enum_name(peek_token_.type)),
+    return diagnostic{fmt::format("Expected {}, found {}",
+                                  token_type::describe(expected),
+                                  token_type::describe(peek_token_.type)),
                       error::UNEXPECTED_TOKEN,
                       peek_token_};
 }
@@ -340,17 +349,29 @@ auto parser::parse_expression(bind_precedence precedence)
         if (auto lexer_failure{describe_illegal_token(current_token_)}) {
             return stdx::err{std::move(*lexer_failure)};
         }
-        return make_syntax_err(fmt::format("No prefix parse function for {}({}) found",
-                                           magic_enum::enum_name(current_token_.type),
-                                           current_token_.slice),
+        if (current_token_is(token_type_t::SLASH) && peek_token_is(token_type_t::STAR)) {
+            return make_syntax_err("Block comments are not supported; use `//` line comments",
+                                   error::MISSING_PREFIX_PARSER,
+                                   current_token_);
+        }
+        return make_syntax_err(fmt::format("Expected an expression, found {}",
+                                           token_type::describe(current_token_.type)),
                                error::MISSING_PREFIX_PARSER,
                                current_token_);
     }
     auto lhs_expression{TRY((*prefix)(*this))};
 
+    // Each chained operator deepens the (left-leaning) tree the later passes recurse through
+    usize chain_length{0};
     while (!peek_token_is(token_type_t::SEMICOLON) && precedence < get_peek_precedence().first) {
         const auto infix{get_poll_infix_fn_opt(peek_token_.type)};
         if (!infix) { break; }
+        if (++chain_length > MAX_OPERATOR_CHAIN) {
+            return make_syntax_err(
+                "Expression chains too many operators; split it into intermediate values",
+                error::EXPRESSION_NESTED_TOO_DEEPLY,
+                peek_token_);
+        }
         advance();
         lhs_expression = TRY((*infix)(*this, lhs_expression));
     }

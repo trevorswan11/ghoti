@@ -35,7 +35,7 @@ TEST_CASE("Empty enum with decl") {
 
 TEST_CASE("Out of order enum") {
     helpers::test_parser_fail("enum : i64 { A = 2 const b := fn(&self, a: A): C { c; }; B = 2 };",
-                              syntax::diagnostic{"Expected token SEMICOLON, found RBRACE",
+                              syntax::diagnostic{"Expected ';', found '}'",
                                                  syntax::error::UNEXPECTED_TOKEN,
                                                  std::pair{0UZ, 63UZ}});
 }
@@ -48,7 +48,7 @@ TEST_CASE("Illegal struct members") {
                            std::pair{0UZ, 9UZ}});
 
     helpers::test_parser_fail("struct { defer {}; };",
-                              syntax::diagnostic{"Expected token IDENT, found DEFER",
+                              syntax::diagnostic{"Expected an identifier, found 'defer'",
                                                  syntax::error::UNEXPECTED_TOKEN,
                                                  std::pair{0UZ, 9UZ}});
 }
@@ -57,7 +57,7 @@ TEST_CASE("Illegal union field name") {
     helpers::test_parser_fail(
         "union { 2: i32 };",
         syntax::diagnostic{
-            "Expected token IDENT, found INT_10", syntax::error::UNEXPECTED_TOKEN, 0, 8});
+            "Expected an identifier, found an integer literal", syntax::error::UNEXPECTED_TOKEN, 0, 8});
 }
 
 TEST_CASE("Illegal union field type") {
@@ -81,7 +81,7 @@ TEST_CASE("Empty union with decl") {
 
 TEST_CASE("Out of order union") {
     helpers::test_parser_fail("union { a: i32, const b := fn(&self, a: A): C { c; }; b: i32, };",
-                              syntax::diagnostic{"Expected token SEMICOLON, found COMMA",
+                              syntax::diagnostic{"Expected ';', found ','",
                                                  syntax::error::UNEXPECTED_TOKEN,
                                                  std::pair{0UZ, 60UZ}});
 }

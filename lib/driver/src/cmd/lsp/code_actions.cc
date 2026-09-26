@@ -1,25 +1,31 @@
 #include "driver/cmd/lsp/code_actions.hh"
 
+#include <algorithm>
 #include <array>
 #include <string>
 #include <string_view>
 #include <utility>
 
 #include <nlohmann/json.hpp>
+#include <stdx/option.hh>
 #include <stdx/string.hh>
 
 namespace ghoti::lsp {
 
 namespace {
 
-constexpr std::array<std::pair<std::string_view, std::string_view>, 6> INSERTABLE_TOKENS{{
-    {"SEMICOLON", ";"},
-    {"RBRACE", "}"},
-    {"RPAREN", ")"},
-    {"RBRACKET", "]"},
-    {"COLON", ":"},
-    {"COMMA", ","},
-}};
+// Tokens a missing-token diagnostic can be fixed by inserting verbatim
+constexpr std::array<std::string_view, 6> INSERTABLE_TOKENS{";", "}", ")", "]", ":", ","};
+
+// A missing-token diagnostic reads "Expected '<spelling>', found ..."
+[[nodiscard]] auto expected_spelling(std::string_view message) -> stdx::option<std::string_view> {
+    constexpr std::string_view prefix{"Expected '"};
+    if (!message.starts_with(prefix)) { return stdx::none; }
+    const auto rest{stdx::string::substr(message, prefix.size())};
+    const auto close{rest.find("',")};
+    if (close == std::string_view::npos) { return stdx::none; }
+    return stdx::string::substr(rest, 0, close);
+}
 
 auto quick_fix(std::string_view      title,
                const std::string&    uri,
@@ -51,8 +57,6 @@ auto quick_fix(std::string_view      title,
 } // namespace
 
 auto code_actions(const std::string& uri, const nlohmann::json& diagnostics) -> nlohmann::json {
-    constexpr std::string_view expected_token_prefix{"Expected token "};
-
     auto out = nlohmann::json::array();
 
     for (const auto& diag : diagnostics) {
@@ -60,17 +64,10 @@ auto code_actions(const std::string& uri, const nlohmann::json& diagnostics) -> 
         const auto  message{diag.value("message", std::string{})};
         const auto& start{diag.at("range").at("start")};
 
-        if (code == "UNEXPECTED_TOKEN" && message.starts_with(expected_token_prefix)) {
-            // Message shape: "Expected token <NAME>, found <NAME>"
-            const std::string_view after_prefix{message.data() + expected_token_prefix.size(),
-                                                message.size() - expected_token_prefix.size()};
-            const auto expected_name{stdx::string::substr(after_prefix, 0, after_prefix.find(','))};
-            for (const auto& [name, spelling] : INSERTABLE_TOKENS) {
-                if (expected_name != name) { continue; }
-                out.push_back(quick_fix(
-                    "Insert missing '" + std::string{spelling} + "'", uri, start, spelling, diag));
-                break;
-            }
+        const auto spelling{code == "UNEXPECTED_TOKEN" ? expected_spelling(message) : stdx::none};
+        if (spelling && std::ranges::contains(INSERTABLE_TOKENS, *spelling)) {
+            out.push_back(quick_fix(
+                "Insert missing '" + std::string{*spelling} + "'", uri, start, *spelling, diag));
         } else if (code == "ILLEGAL_DECL_MODIFIERS" &&
                    message == "Exactly one mutability modifier may be used; found 0") {
             out.push_back(quick_fix("Add 'const' modifier", uri, start, "const ", diag));

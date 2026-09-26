@@ -15,10 +15,10 @@ TEST_CASE("Function missing return type") {
     helpers::test_parser_fail(
         "fn(^mut this, a: A, b: ^B, );",
         syntax::diagnostic{
-            "Expected token COLON, found SEMICOLON", syntax::error::UNEXPECTED_TOKEN, 0, 28});
+            "Expected ':', found ';'", syntax::error::UNEXPECTED_TOKEN, 0, 28});
 
     helpers::test_parser_fail("fn(^mut this, a: A, b: ^B, ): ;",
-                              syntax::diagnostic{"No prefix parse function for SEMICOLON(;) found",
+                              syntax::diagnostic{"Expected an expression, found ';'",
                                                  syntax::error::MISSING_PREFIX_PARSER,
                                                  std::pair{0UZ, 30UZ}});
 
@@ -38,7 +38,7 @@ TEST_CASE("Function parameter missing type") {
     helpers::test_parser_fail(
         "fn(^mut this, a): i32;",
         syntax::diagnostic{
-            "Expected token COLON, found RPAREN", syntax::error::UNEXPECTED_TOKEN, 0, 15});
+            "Expected ':', found ')'", syntax::error::UNEXPECTED_TOKEN, 0, 15});
 }
 
 TEST_CASE("Out-of-place self parameter") {
@@ -48,7 +48,7 @@ TEST_CASE("Out-of-place self parameter") {
     helpers::test_parser_fail(
         "fn(a: A, self): i32;",
         syntax::diagnostic{
-            "Expected token COLON, found RPAREN", syntax::error::UNEXPECTED_TOKEN, 0, 13});
+            "Expected ':', found ')'", syntax::error::UNEXPECTED_TOKEN, 0, 13});
 }
 
 TEST_CASE("Illegal self parameter modifier") {
@@ -67,7 +67,7 @@ TEST_CASE("Out-of-place variadic parameter") {
     helpers::test_parser_fail(
         "fn(a: A, ..., b: B): i32;",
         syntax::diagnostic{
-            "Expected token RPAREN, found IDENT", syntax::error::UNEXPECTED_TOKEN, 0, 14});
+            "Expected ')', found an identifier", syntax::error::UNEXPECTED_TOKEN, 0, 14});
 }
 
 TEST_CASE("Default function parameter") {

@@ -436,8 +436,9 @@ auto lexer::read_string() noexcept -> token_t {
     }
     read_character();
 
-    return {token_type_t::STRING,
-            stdx::string::substr(input_, start, pos_ - start),
+    const auto lexeme{stdx::string::substr(input_, start, pos_ - start)};
+    return {is_valid_utf8(lexeme) ? token_type_t::STRING : token_type_t::ILLEGAL,
+            lexeme,
             start_line,
             start_col};
 }
@@ -529,9 +530,17 @@ auto lexer::read_multiline_string() noexcept -> token_t {
         read_character(2);
     }
 
+    const auto content{stdx::string::substr(input_, start, end_pos - start)};
+    if (!is_valid_utf8(content)) {
+        // Keep the opening `\\` marker so the parser can tell which literal was malformed
+        return {token_type_t::ILLEGAL,
+                stdx::string::substr(input_, start - 2, end_pos - start + 2),
+                start_line,
+                start_col - 2};
+    }
     return {
         token_type_t::MULTILINE_STRING,
-        stdx::string::substr(input_, start, end_pos - start),
+        content,
         start_line,
         start_col,
     };

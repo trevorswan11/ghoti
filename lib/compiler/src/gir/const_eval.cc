@@ -1407,6 +1407,11 @@ auto const_eval::eval_index(ast::node_id id, const ast::index_expr& index_expr)
     const auto idx{static_cast<usize>(*idx_opt)};
 
     if (const auto arr{target_val->as_opt<const_array>()}) {
+        if (idx == arr->elements.size() && is_sentinel_terminated(target_val->get_type())) {
+            const auto elem_type{target_val->get_type()->get_data().as_opt<sema::types::array>()};
+            return const_value{u64{0}, elem_type ? stdx::option<sema::type&>{elem_type->underlying}
+                                                 : stdx::none};
+        }
         if (idx >= arr->elements.size()) {
             ctx_.diags.emplace_back(
                 fmt::format("Array index out of bounds: index is {}, but size is {}",
@@ -1420,6 +1425,10 @@ auto const_eval::eval_index(ast::node_id id, const ast::index_expr& index_expr)
     }
 
     if (const auto str{target_val->as_opt<std::string>()}) {
+        // A sentinel-terminated string can read its terminating zero at index `len`
+        if (idx == str->size() && is_sentinel_terminated(target_val->get_type())) {
+            return const_value{u64{0}, ctx_.get_int(8, false)};
+        }
         if (idx >= str->size()) {
             ctx_.diags.emplace_back(
                 fmt::format(
@@ -1432,6 +1441,17 @@ auto const_eval::eval_index(ast::node_id id, const ast::index_expr& index_expr)
     }
 
     return stdx::none;
+}
+
+auto const_eval::is_sentinel_terminated(stdx::option<sema::type&> type) noexcept -> bool {
+    if (!type) { return false; }
+    if (const auto arr{type->get_data().as_opt<sema::types::array>()}) {
+        return arr->null_terminated;
+    }
+    if (const auto sl{type->get_data().as_opt<sema::types::slice>()}) {
+        return sl->null_terminated;
+    }
+    return false;
 }
 
 auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& init)
@@ -2534,7 +2554,9 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
                                       on_fold_error);
     }
 
-    const auto is_unsigned{(lhs.is<u64>() || rhs.is<u64>()) && !lhs.is<i64>()};
+    // The narrow integer arms below reinterpret one operand through the other's signedness
+    const auto is_unsigned{is_narrow_int(lhs) && is_narrow_int(rhs) &&
+                           (lhs.is<u64>() || rhs.is<u64>()) && !lhs.is<i64>()};
     if (is_unsigned) {
         const auto l{lhs.is<u64>() ? lhs.as<u64>() : static_cast<u64>(lhs.as<i64>())};
         const auto r{rhs.is<u64>() ? rhs.as<u64>() : static_cast<u64>(rhs.as<i64>())};

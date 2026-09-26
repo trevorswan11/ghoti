@@ -41,13 +41,18 @@ auto options::process_raw(const raw_options&   raw,
         .time_passes   = raw.time_passes,
     };
 
-    if (!raw.opt_level_str.empty()) {
-        if (auto level{codegen::parse_opt_level(raw.opt_level_str)}) {
+    if (raw.opt_level_str && raw.release) {
+        clap::warn_error(error_stream,
+                         fmt::format("--release is overridden by the explicit -O {}",
+                                     *raw.opt_level_str));
+    }
+    if (raw.opt_level_str) {
+        if (auto level{codegen::parse_opt_level(*raw.opt_level_str)}) {
             opt_opts.level = *level;
         } else {
             return clap::fatal_error(
                 error_stream,
-                fmt::format("invalid optimization level '{}'", raw.opt_level_str),
+                fmt::format("invalid optimization level '{}'", *raw.opt_level_str),
                 clap::error::INVALID_OPTIMIZATION);
         }
     } else if (raw.release) {
@@ -148,6 +153,7 @@ compilation::compilation(options& opts, std::ostream& error_stream)
 
 auto compilation::analyze(bool for_test_executable) -> stdx::result<analyzed_module, clap::error> {
     TRY(validate_input_path());
+    TRY(ensure_output_directory());
     TRY(setup_module_manager());
 
     auto gir_mod_res{analyzer_.analyze(opts_.input_path, for_test_executable)};
@@ -194,6 +200,27 @@ auto compilation::validate_input_path() -> stdx::result<void, clap::error> {
 
     if (auto rel{path_utils::make_relative(opts_.input_path)}) {
         opts_.input_path = std::move(*rel);
+    }
+    return {};
+}
+
+auto compilation::ensure_output_directory() -> stdx::result<void, clap::error> {
+    const auto parent{opts_.output_path.parent_path()};
+    if (parent.empty()) { return {}; }
+    std::error_code ec;
+    if (std::filesystem::is_directory(parent, ec)) { return {}; }
+    if (std::filesystem::exists(parent, ec)) {
+        return clap::fatal_error(
+            error_stream_,
+            fmt::format("output location '{}' is not a directory", parent.string()),
+            clap::error::IO_ERROR);
+    }
+    if (!std::filesystem::create_directories(parent, ec) || ec) {
+        return clap::fatal_error(error_stream_,
+                                 fmt::format("could not create output directory '{}': {}",
+                                             parent.string(),
+                                             ec.message()),
+                                 clap::error::IO_ERROR);
     }
     return {};
 }

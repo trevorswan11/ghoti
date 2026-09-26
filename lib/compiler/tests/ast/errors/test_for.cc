@@ -9,7 +9,7 @@ namespace ghoti::tests {
 
 TEST_CASE("Non-terminated iterables") {
     helpers::test_parser_fail("for (0..4 |i| { a; } else return b;",
-                              syntax::diagnostic{"Expected token RBRACE, found IDENT",
+                              syntax::diagnostic{"Expected '}', found an identifier",
                                                  syntax::error::UNEXPECTED_TOKEN,
                                                  std::pair{0UZ, 16UZ}});
 }
@@ -23,14 +23,14 @@ TEST_CASE("Missing iterables") {
     helpers::test_parser_fail(
         "for |i| { a; } else return b;",
         syntax::diagnostic{
-            "Expected token LPAREN, found BW_OR", syntax::error::UNEXPECTED_TOKEN, 0, 4});
+            "Expected '(', found '|'", syntax::error::UNEXPECTED_TOKEN, 0, 4});
 }
 
 TEST_CASE("Non-terminated captures") {
     helpers::test_parser_fail(
         "for (0..4) |i { a; } else return b;",
         syntax::diagnostic{
-            "Expected token COMMA, found LBRACE", syntax::error::UNEXPECTED_TOKEN, 0, 14});
+            "Expected ',', found '{'", syntax::error::UNEXPECTED_TOKEN, 0, 14});
 }
 
 TEST_CASE("Missing captures") {
