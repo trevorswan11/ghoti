@@ -45,6 +45,29 @@ TEST_CASE("test command execution") {
         REQUIRE(cmd.execute());
     }
 
+    SECTION("A user-defined `main` does not hijack the test runner entry point") {
+        codegen::llvm_scope scope;
+        tempfile            src_file{"test_driver_user_main.gh"};
+
+        {
+            std::ofstream out{src_file.path};
+            fmt::print(out, R"(
+                pub const main := fn(): i32 {{
+                    return 3;
+                }};
+
+                test "passes" {{
+                    @expect(main() == 3);
+                }}
+            )");
+        }
+
+        cmd::test_cmd cmd{{
+            .input_path = src_file,
+        }};
+        REQUIRE(cmd.execute());
+    }
+
     SECTION("Source file with no test blocks compiles, runs, and exits cleanly") {
         codegen::llvm_scope scope;
         tempfile            src_file{"test_driver_no_tests.gh"};

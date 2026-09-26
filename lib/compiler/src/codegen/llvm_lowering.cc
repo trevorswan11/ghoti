@@ -200,6 +200,19 @@ enum class atomic_rmw_op_t : u8 { // Mirrors builtin.gh.inc
     }
 }
 
+// A function value may be typed through a reference or pointer to its signature
+[[nodiscard]] auto function_signature_of(const gir::function& fn)
+    -> stdx::option<const sema::types::function&> {
+    const auto* target_t{&fn.get_type()};
+    if (const auto ref{target_t->get_data().as_opt<sema::types::reference>()}) {
+        target_t = &ref->underlying;
+    }
+    if (const auto ptr{target_t->get_data().as_opt<sema::types::pointer>()}) {
+        target_t = &ptr->underlying;
+    }
+    return target_t->get_data().as_opt<sema::types::function>();
+}
+
 } // namespace
 
 llvm_lowering::llvm_lowering(llvm::LLVMContext& context, std::string_view module_name) noexcept
@@ -233,9 +246,47 @@ auto llvm_lowering::lower(const gir::module& gir_mod) -> stdx::box<llvm::Module>
         PROFILE_SCOPE("llvm_lowering: lower functions");
         for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
     }
+    finalize_runtime_support();
+    return std::move(llvm_module_);
+}
+
+auto llvm_lowering::create_c_entry_function() -> llvm::Function* {
+    auto* main_fn_ty{llvm::FunctionType::get(
+        types_.get_int32_ty(), {types_.get_int32_ty(), types_.get_ptr_ty()}, false)};
+    auto* main_fn{llvm::Function::Create(
+        main_fn_ty, llvm::Function::ExternalLinkage, "main", llvm_module_.get())};
+    main_fn->addFnAttr(llvm::Attribute::NoBuiltin);
+    main_fn->addFnAttr("no-builtins");
+    main_fn->addFnAttr("no-stack-arg-probe", "true");
+
+    // Linux executables get a freestanding `_start` (no crt/libc) that calls into `main`
+    if (llvm::Triple{llvm_module_->getTargetTriple()}.isOSLinux()) {
+        const auto saved_insert_point{builder_.saveIP()};
+        emit_freestanding_start(main_fn);
+        builder_.restoreIP(saved_insert_point);
+    }
+    return main_fn;
+}
+
+auto llvm_lowering::finalize_runtime_support() -> void {
+    maybe_emit_mingw_main_stub();
     maybe_emit_windows_stack_probe();
     maybe_emit_mem_intrinsic_fallbacks();
-    return std::move(llvm_module_);
+}
+
+// MinGW codegen injects a `__main` (static-ctor hook) call into any function named `main`
+auto llvm_lowering::maybe_emit_mingw_main_stub() -> void {
+    const llvm::Triple triple{llvm_module_->getTargetTriple()};
+    if (!triple.isWindowsGNUEnvironment() || llvm_module_->getFunction("__main")) { return; }
+    const auto* main_fn{llvm_module_->getFunction("main")};
+    if (!main_fn || main_fn->isDeclaration()) { return; }
+
+    auto* stub_ty{llvm::FunctionType::get(llvm::Type::getVoidTy(context_), false)};
+    auto* stub{
+        llvm::Function::Create(stub_ty, llvm::Function::ExternalLinkage, "__main", llvm_module_.get())};
+    llvm::IRBuilder<> stub_builder{llvm::BasicBlock::Create(context_, "entry", stub)};
+    stub_builder.CreateRetVoid();
+    llvm::appendToUsed(*llvm_module_, {stub});
 }
 
 auto llvm_lowering::lower_dyn_vtables(const gir::module& gir_mod) -> void {
@@ -284,8 +335,7 @@ auto llvm_lowering::lower_executable(const gir::module& gir_mod, std::string_vie
         for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
     }
     emit_main_entry_wrapper(user_main_name_);
-    maybe_emit_windows_stack_probe();
-    maybe_emit_mem_intrinsic_fallbacks();
+    finalize_runtime_support();
     return std::move(llvm_module_);
 }
 
@@ -295,25 +345,7 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
     if (!user_fn) { user_fn = llvm_module_->getFunction(user_main_name); }
     ASSERT(user_fn, "User main function not found in LLVM module");
 
-    auto* main_fn_ty{llvm::FunctionType::get(
-        types_.get_int32_ty(), {types_.get_int32_ty(), types_.get_ptr_ty()}, false)};
-    auto* main_fn{llvm::Function::Create(
-        main_fn_ty, llvm::Function::ExternalLinkage, "main", llvm_module_.get())};
-    main_fn->addFnAttr(llvm::Attribute::NoBuiltin);
-    main_fn->addFnAttr("no-builtins");
-    main_fn->addFnAttr("no-stack-arg-probe", "true");
-
-    const llvm::Triple triple{llvm_module_->getTargetTriple()};
-    if (triple.isWindowsGNUEnvironment() && !llvm_module_->getFunction("__main")) {
-        auto*             void_ty{llvm::Type::getVoidTy(context_)};
-        auto*             dummy_main_ty{llvm::FunctionType::get(void_ty, false)};
-        auto*             dummy_main{llvm::Function::Create(
-            dummy_main_ty, llvm::Function::ExternalLinkage, "__main", llvm_module_.get())};
-        auto*             dummy_bb{llvm::BasicBlock::Create(context_, "entry", dummy_main)};
-        llvm::IRBuilder<> dummy_builder{dummy_bb};
-        dummy_builder.CreateRetVoid();
-        llvm::appendToUsed(*llvm_module_, {dummy_main});
-    }
+    auto* main_fn{create_c_entry_function()};
 
     auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", main_fn)};
     builder_.SetInsertPoint(entry_bb);
@@ -336,7 +368,6 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
         builder_.CreateRet(ret_i32);
     }
 
-    if (triple.isOSLinux()) { emit_freestanding_start(main_fn); }
     return main_fn;
 }
 
@@ -831,33 +862,14 @@ auto llvm_lowering::lower_test_executable(const gir::module&             gir_mod
     for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
     for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
     emit_test_entry_wrapper(gir_mod, recover_args);
-    maybe_emit_windows_stack_probe();
-    maybe_emit_mem_intrinsic_fallbacks();
+    finalize_runtime_support();
     return std::move(llvm_module_);
 }
 
 auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod, bool recover_args)
     -> llvm::Function* {
     PROFILE_FUNCTION();
-    auto* main_fn_ty{llvm::FunctionType::get(
-        types_.get_int32_ty(), {types_.get_int32_ty(), types_.get_ptr_ty()}, false)};
-    auto* main_fn{llvm::Function::Create(
-        main_fn_ty, llvm::Function::ExternalLinkage, "main", llvm_module_.get())};
-    main_fn->addFnAttr(llvm::Attribute::NoBuiltin);
-    main_fn->addFnAttr("no-builtins");
-    main_fn->addFnAttr("no-stack-arg-probe", "true");
-
-    const llvm::Triple triple{llvm_module_->getTargetTriple()};
-    if (triple.isWindowsGNUEnvironment() && !llvm_module_->getFunction("__main")) {
-        auto*             void_ty{llvm::Type::getVoidTy(context_)};
-        auto*             dummy_main_ty{llvm::FunctionType::get(void_ty, false)};
-        auto*             dummy_main{llvm::Function::Create(
-            dummy_main_ty, llvm::Function::ExternalLinkage, "__main", llvm_module_.get())};
-        auto*             dummy_bb{llvm::BasicBlock::Create(context_, "entry", dummy_main)};
-        llvm::IRBuilder<> dummy_builder{dummy_bb};
-        dummy_builder.CreateRetVoid();
-        llvm::appendToUsed(*llvm_module_, {dummy_main});
-    }
+    auto* main_fn{create_c_entry_function()};
 
     auto* slice_ty{types_.translate_slice_type()};
     // Mirrors `builtin.SourceLocation { file: []u8, line: u32, column: u32 }`
@@ -947,8 +959,6 @@ auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod, bool rec
         builder_.CreateRet(builder_.getInt32(0));
     }
 
-    // Same freestanding-entry story as a normal executable (see emit_main_entry_wrapper).
-    if (triple.isOSLinux()) { emit_freestanding_start(main_fn); }
 
     return main_fn;
 }
@@ -1481,6 +1491,8 @@ auto llvm_lowering::ensure_reserved_symbols() -> void {
     PROFILE_FUNCTION();
     if (reserved_symbols_built_) { return; }
     reserved_symbols_built_ = true;
+    // The synthesized C entry point owns `main` in any linked executable
+    if (is_executable_) { reserved_symbols_.emplace("main"); }
     if (!gir_module_) { return; }
     for (const auto* f : gir_module_->get_functions()) {
         if (!f->get_link_name().empty()) { reserved_symbols_.emplace(f->get_link_name()); }
@@ -1505,15 +1517,7 @@ auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function*
     }
     ensure_reserved_symbols();
 
-    const auto* target_t{&fn.get_type()};
-    if (const auto ref{target_t->get_data().as_opt<sema::types::reference>()}) {
-        target_t = &ref->underlying;
-    }
-    if (const auto ptr{target_t->get_data().as_opt<sema::types::pointer>()}) {
-        target_t = &ptr->underlying;
-    }
-
-    const auto fn_data{target_t->get_data().as_opt<sema::types::function>()};
+    const auto fn_data{function_signature_of(fn)};
     ASSERT(fn_data, "Function must have function sema type");
     auto* fn_ty{types_.translate_function_type(*fn_data)};
 
@@ -1576,14 +1580,7 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
     PROFILE_FUNCTION();
     auto* llvm_fn{declare_function(fn)};
     if (!llvm_fn) { return llvm_fn; }
-    const auto* target_t{&fn.get_type()};
-    if (const auto ref{target_t->get_data().as_opt<sema::types::reference>()}) {
-        target_t = &ref->underlying;
-    }
-    if (const auto ptr{target_t->get_data().as_opt<sema::types::pointer>()}) {
-        target_t = &ptr->underlying;
-    }
-    const auto fn_data{target_t->get_data().as_opt<sema::types::function>()};
+    const auto fn_data{function_signature_of(fn)};
     if (fn.get_linkage() == gir::linkage::EXTERN || fn.get_segments().empty() ||
         (fn_data && is_constexpr_only_signature(*fn_data))) {
         return llvm_fn;

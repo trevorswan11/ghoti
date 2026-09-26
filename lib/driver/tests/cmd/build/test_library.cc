@@ -114,6 +114,38 @@ TEST_CASE("build_lib command execution") {
         CHECK(std::filesystem::file_size(lib_file) > 0);
     }
 
+    SECTION("Host-target dynamic library with a `main` symbol links with no CRT entry point") {
+        codegen::llvm_scope scope;
+        tempfile            src_file{"test_host_dylib_source.gh"};
+        tempfile            lib_file{"test_host_dylib_output.dll"};
+
+        {
+            std::ofstream out{src_file.path};
+            fmt::print(out, R"(
+                pub const main := fn(): i32 {{
+                    return 3;
+                }};
+            )");
+        }
+
+        cmd::build_lib cmd{{
+            .input_path  = src_file,
+            .output_path = lib_file,
+            .dynamic     = true,
+        }};
+        REQUIRE(cmd.execute());
+        CHECK(std::filesystem::exists(lib_file));
+    }
+
+    SECTION("Directory input path reports FILE_NOT_FOUND instead of failing silently") {
+        codegen::llvm_scope scope;
+        cmd::build_lib      cmd{{
+                 .input_path  = std::filesystem::temp_directory_path(),
+                 .output_path = "out.a",
+        }};
+        CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::FILE_NOT_FOUND);
+    }
+
     SECTION("Building static library and linking into executable") {
         codegen::llvm_scope scope;
         tempfile            lib_src{"math_lib.gh"};
