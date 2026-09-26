@@ -243,4 +243,20 @@ TEST_CASE("a variable of type noreturn is rejected") {
     )");
 }
 
+TEST_CASE("large aggregates pass and return by value through direct and indirect calls") {
+    CHECK(helpers::compile_and_run(R"(
+        const Big := struct { data: [100000]mut u8 };
+        const make := fn(v: u8): Big { var b: Big = undefined; b.data[7] = v; return b; };
+        const read := fn(b: Big): u8 { return b.data[7]; };
+        const via := fn(f: fn(b: Big): u8, b: Big): u8 { return f(b); };
+        pub const main := fn(): i32 {
+            const b := make(9);
+            var arr: [100000]mut u8 = undefined;
+            arr[3] = 4;
+            const copy := arr;
+            return @as(i32, read(b)) + @as(i32, via(read, b)) + @as(i32, copy[3]);
+        };
+    )") == 22);
+}
+
 } // namespace ghoti::tests

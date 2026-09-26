@@ -110,8 +110,6 @@ class llvm_lowering {
     // One shared `(ctx, args...)` adapter per thin signature that calls `ctx` as the function
     auto get_or_create_fn_trampoline(const sema::types::function& fn) -> llvm::Function*;
     // Loads a by-address aggregate argument (struct, slice, closure, callable) into a value
-    auto               store_value(llvm::Value* val, llvm::Value* dest_ptr, bool is_volatile) -> void;
-    [[nodiscard]] auto aggregate_source_address(llvm::Value* val) -> llvm::Value*;
     [[nodiscard]] auto emit_pointer_offset(const gir::instruction& inst) -> llvm::Value*;
     [[nodiscard]] auto emit_va_arg(llvm::Value* list, llvm::Type* ty) -> llvm::Value*;
     [[nodiscard]] auto promote_c_variadic_arg(llvm::Value* arg_val, stdx::option<sema::type&> type)
