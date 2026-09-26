@@ -156,6 +156,10 @@ class llvm_lowering {
                             llvm::Value*            lhs,
                             llvm::Value*            rhs,
                             bool                    is_signed) -> llvm::Value*;
+    auto emit_float_to_int_guard(const gir::instruction& inst,
+                                 llvm::Value*            val,
+                                 llvm::Type*             int_ty,
+                                 bool                    is_signed) -> void;
     auto emit_saturating_arith(const gir::instruction& inst,
                                llvm::Value*            lhs,
                                llvm::Value*            rhs,

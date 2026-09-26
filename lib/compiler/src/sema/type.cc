@@ -417,14 +417,15 @@ auto cast_rejection_reason(const type&                        from,
     // Float <-> Integer
     if (is_float(from_kind) && is_integer(to_kind)) {
         return fmt::format(
-            "conversion from '{}' to '{}' truncates fractional part; use @as for an explicit "
-            "conversion",
+            "conversion from '{}' to '{}' truncates fractional part; use @intFromFloat for an "
+            "explicit conversion",
             from.to_string(names),
             to.to_string(names));
     }
     if (is_integer(from_kind) && is_float(to_kind)) {
         return fmt::format(
-            "conversion from '{}' to '{}' may lose precision; use @as for an explicit conversion",
+            "conversion from '{}' to '{}' may lose precision; use @floatFromInt for an explicit "
+            "conversion",
             from.to_string(names),
             to.to_string(names));
     }

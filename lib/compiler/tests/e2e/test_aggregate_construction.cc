@@ -283,7 +283,7 @@ TEST_CASE("`@Struct` widens an unsuffixed float `default_value` to a narrower fi
                 .backing_bits = 0,
             });
             var v: T = .{ .x = 2f32 };
-            return @as(i32, v.x + v.y);
+            return @intFromFloat(i32, v.x + v.y);
         };
     )") == 3);
 }

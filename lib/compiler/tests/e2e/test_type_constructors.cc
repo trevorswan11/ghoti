@@ -112,7 +112,7 @@ TEST_CASE("E2E: two structurally distinct instantiations of a generic `struct` c
         pub const main := fn(): i32 {
             const a: BoxI = .{ .val = 5 };
             const b: BoxF = .{ .val = 2.5 };
-            return a.val + @as(i32, b.val);
+            return a.val + @intFromFloat(i32, b.val);
         };
     )") == 7);
 }

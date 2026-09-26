@@ -152,7 +152,7 @@ TEST_CASE("Explicit numeric casting via @as") {
             const widen_i64 := @as(i64, s_i32);
 
             const float_val: f64 = 9.99;
-            const int_from_float := @as(i32, float_val);
+            const int_from_float := @intFromFloat(i32, float_val);
             const float_from_int := @as(f64, int_from_float);
         };
     )");

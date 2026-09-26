@@ -238,15 +238,17 @@ auto builder::emit_unary(instruction_kind kind, value operand, sema::type& type,
     return dest;
 }
 
-auto builder::emit_cast(instruction_kind kind, value operand, sema::type& target_type) -> local_id {
+auto builder::emit_cast(instruction_kind kind, value operand, sema::type& target_type, bool checked)
+    -> local_id {
     PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit cast instruction without an active function");
     const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
     emit_instruction({
-        .kind     = kind,
-        .type     = target_type,
-        .result   = dest,
-        .operands = {std::move(operand)},
+        .kind       = kind,
+        .type       = target_type,
+        .result     = dest,
+        .operands   = {std::move(operand)},
+        .is_checked = checked,
     });
     return dest;
 }

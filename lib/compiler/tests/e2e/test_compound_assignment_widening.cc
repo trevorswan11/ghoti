@@ -11,7 +11,7 @@ TEST_CASE("`+=` implicitly widens a narrower float RHS to the LHS's type") {
             const x: f32 = 12.0;
             accumulator += x;
             accumulator += 0.34f32;
-            return @as(i32, accumulator * 100.0) - 1200;
+            return @intFromFloat(i32, accumulator * 100.0) - 1200;
         };
     )") == 34);
 }

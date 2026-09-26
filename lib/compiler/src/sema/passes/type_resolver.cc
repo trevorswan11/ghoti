@@ -503,7 +503,9 @@ template <ast::IndexableID ID>
                                   builtin_id == token_type_t::BUILTIN_BIT_CAST ||
                                   builtin_id == token_type_t::BUILTIN_TRUNCATE ||
                                   builtin_id == token_type_t::BUILTIN_INT_FROM_BOOL ||
-                                  builtin_id == token_type_t::BUILTIN_FROM_BACKING_INT};
+                                  builtin_id == token_type_t::BUILTIN_FROM_BACKING_INT ||
+                                  builtin_id == token_type_t::BUILTIN_INT_FROM_FLOAT ||
+                                  builtin_id == token_type_t::BUILTIN_FLOAT_FROM_INT};
     const auto& params{builtin.params};
     if (is_expect_or_require || is_assert_or_verify || is_inferrable_cast) {
         if (call.arguments.empty() || call.arguments.size() > 2) {
@@ -631,6 +633,23 @@ template <ast::IndexableID ID>
         if (src.get_kind() == type_kind::ENUM && is_integer(target.get_kind())) {
             return make_sema_err(
                 "`@as` cannot convert an enum to an integer; use `@backingInt` instead",
+                error::TYPE_MISMATCH,
+                resolving_.ast.location_of(call.function));
+        }
+        if (is_integer(target.get_kind()) &&
+            (is_float(src.get_kind()) || src.get_kind() == type_kind::CONSTEXPR_FLOAT)) {
+            return make_sema_err(
+                "`@as` cannot convert a float to an integer; use `@intFromFloat` instead",
+                error::TYPE_MISMATCH,
+                resolving_.ast.location_of(call.function));
+        }
+        if (is_float(target.get_kind()) && is_integer(src.get_kind()) &&
+            !is_implicit_widenable(src, target)) {
+            return make_sema_err(
+                fmt::format("`@as` cannot convert '{}' to '{}' exactly; use `@floatFromInt` "
+                            "instead",
+                            ctx_.type_display_name(src),
+                            ctx_.type_display_name(target)),
                 error::TYPE_MISMATCH,
                 resolving_.ast.location_of(call.function));
         }
@@ -788,6 +807,53 @@ template <ast::IndexableID ID>
                                              ctx_.type_display_name(src)),
                                  error::TYPE_MISMATCH,
                                  get_call_arg_location(*args_res->operand));
+        }
+        return_type = &target;
+        break;
+    }
+    case token_type_t::BUILTIN_INT_FROM_FLOAT: {
+        const auto args_res{extract_cast_args("@intFromFloat")};
+        if (!args_res) { return make_sema_err(args_res.error()); }
+        if (!args_res->target || args_res->target->is_poison()) { break; }
+        auto& target{*args_res->target};
+        if (!is_integer(target.get_kind())) {
+            return make_sema_err(
+                fmt::format("`@intFromFloat` target must be an integer type; found '{}'",
+                            ctx_.type_display_name(target)),
+                error::TYPE_MISMATCH,
+                args_res->target_loc);
+        }
+        auto& src{*get_resolved_call_arg_type(*args_res->operand)};
+        if (src.is_poison()) { break; }
+        if (!is_float(src.get_kind()) && src.get_kind() != type_kind::CONSTEXPR_FLOAT) {
+            return make_sema_err(fmt::format("`@intFromFloat` operand must be a float; found '{}'",
+                                             ctx_.type_display_name(src)),
+                                 error::TYPE_MISMATCH,
+                                 get_call_arg_location(*args_res->operand));
+        }
+        return_type = &target;
+        break;
+    }
+    case token_type_t::BUILTIN_FLOAT_FROM_INT: {
+        const auto args_res{extract_cast_args("@floatFromInt")};
+        if (!args_res) { return make_sema_err(args_res.error()); }
+        if (!args_res->target || args_res->target->is_poison()) { break; }
+        auto& target{*args_res->target};
+        if (!is_float(target.get_kind())) {
+            return make_sema_err(
+                fmt::format("`@floatFromInt` target must be a float type; found '{}'",
+                            ctx_.type_display_name(target)),
+                error::TYPE_MISMATCH,
+                args_res->target_loc);
+        }
+        auto& src{*get_resolved_call_arg_type(*args_res->operand)};
+        if (src.is_poison()) { break; }
+        if (!is_integer(src.get_kind()) && src.get_kind() != type_kind::CONSTEXPR_INT) {
+            return make_sema_err(
+                fmt::format("`@floatFromInt` operand must be an integer; found '{}'",
+                            ctx_.type_display_name(src)),
+                error::TYPE_MISMATCH,
+                get_call_arg_location(*args_res->operand));
         }
         return_type = &target;
         break;
@@ -3353,7 +3419,10 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 args_result = resolve_call_args(
                     gsl::span<const ast::call_expr::argument>{call.arguments}.subspan(1));
             }
-        } else if (call.function->get_token_type() == token_type_t::BUILTIN_TYPE_OF) {
+        } else if (call.function->get_token_type() == token_type_t::BUILTIN_TYPE_OF ||
+                   call.function->get_token_type() == token_type_t::BUILTIN_INT_FROM_FLOAT ||
+                   call.function->get_token_type() == token_type_t::BUILTIN_FLOAT_FROM_INT) {
+            // The result type must not flow into a literal operand of the other numeric kind
             const structural_guard shield{implicit_type_stack_, nullptr};
             args_result = resolve_call_args(call.arguments);
         } else {

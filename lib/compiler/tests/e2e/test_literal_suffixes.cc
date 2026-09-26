@@ -50,7 +50,7 @@ TEST_CASE("float literal width suffixes are accepted") {
             const a := 1.5f32;
             const b := 2.5f64;
             const c: f64 = 3.0;
-            if (@as(i32, a + @as(f32, b) + @as(f32, c)) != 7) { return 1; }
+            if (@intFromFloat(i32, a + @as(f32, b) + @as(f32, c)) != 7) { return 1; }
             return 0;
         };
     )") == 0);

@@ -3330,7 +3330,9 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         case syntax::token_type_t::BUILTIN_INT_FROM_BOOL:
         case syntax::token_type_t::BUILTIN_BIT_CAST:
         case syntax::token_type_t::BUILTIN_PTR_CAST:
-        case syntax::token_type_t::BUILTIN_ALIGN_CAST:    {
+        case syntax::token_type_t::BUILTIN_ALIGN_CAST:
+        case syntax::token_type_t::BUILTIN_INT_FROM_FLOAT:
+        case syntax::token_type_t::BUILTIN_FLOAT_FROM_INT: {
             const bool is_one_arg{call.arguments.size() == 1};
             if (is_one_arg || call.arguments.size() >= 2) {
                 const auto op_arg_idx{is_one_arg ? 0UZ : 1UZ};
@@ -3351,7 +3353,16 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                                fn_token == syntax::token_type_t::BUILTIN_ALIGN_CAST) {
                         cast_kind = instruction_kind::PTR_CAST;
                     }
-                    const auto dest{builder_.emit_cast(cast_kind, operand, ret_type)};
+                    // A compile-time operand folds, so an out-of-range float is a compile error
+                    if (fn_token == syntax::token_type_t::BUILTIN_INT_FROM_FLOAT ||
+                        fn_token == syntax::token_type_t::BUILTIN_FLOAT_FROM_INT) {
+                        if (const auto cv{const_eval_.try_eval(id)}) {
+                            return materialize_const(*cv);
+                        }
+                    }
+                    const bool checked{runtime_safety_ &&
+                                       fn_token == syntax::token_type_t::BUILTIN_INT_FROM_FLOAT};
+                    const auto dest{builder_.emit_cast(cast_kind, operand, ret_type, checked)};
                     value      result{dest, ret_type};
                     emit_enum_cast_guard(id, result, operand, *op_expr);
                     return result;

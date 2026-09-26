@@ -61,7 +61,7 @@ TEST_CASE("f80 is accepted on the x86-64 host") {
             var a: f80 = 10.0f80;
             var b: f80 = 4.0f80;
             const c: f80 = a - b;                 // 6.0
-            return @as(i32, @as(f64, c)) - 6;     // 0
+            return @intFromFloat(i32, @as(f64, c)) - 6; // 0
         };
     )") == 0);
 }

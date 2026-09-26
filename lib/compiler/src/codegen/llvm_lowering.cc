@@ -7,6 +7,7 @@
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -1158,6 +1159,32 @@ auto llvm_lowering::emit_checked_arith(const gir::instruction& inst,
     }
 }
 
+auto llvm_lowering::emit_float_to_int_guard(const gir::instruction& inst,
+                                            llvm::Value*            val,
+                                            llvm::Type*             int_ty,
+                                            bool                    is_signed) -> void {
+    // Truncation fits iff MIN - 1 < val < MAX + 1. The upper bound is a power of two (exact or
+    // infinite); the lower one rounds down, which admits no extra float. NaN fails both checks.
+    const unsigned width{int_ty->getIntegerBitWidth()};
+    const auto&    semantics{val->getType()->getFltSemantics()};
+    const auto     to_float = [&](const llvm::APInt& bound, llvm::APFloat::roundingMode mode) {
+        llvm::APFloat f{semantics};
+        std::ignore = f.convertFromAPInt(bound, true, mode);
+        return llvm::ConstantFP::get(val->getType(), f);
+    };
+
+    const auto min{is_signed ? llvm::APInt::getSignedMinValue(width).sext(width + 2)
+                             : llvm::APInt{width + 2, 0}};
+    auto*      lo{to_float(min - 1, llvm::APFloat::rmTowardNegative)};
+    auto*      hi{to_float(llvm::APInt::getOneBitSet(width + 2, is_signed ? width - 1 : width),
+                      llvm::APFloat::rmNearestTiesToEven)};
+
+    auto* in_range{
+        builder_.CreateAnd(builder_.CreateFCmpOGT(val, lo), builder_.CreateFCmpOLT(val, hi))};
+    emit_arith_guard(
+        builder_.CreateNot(in_range), "float value out of range for integer cast", inst);
+}
+
 auto llvm_lowering::emit_saturating_arith(const gir::instruction& inst,
                                           llvm::Value*            lhs,
                                           llvm::Value*            rhs,
@@ -2215,6 +2242,7 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
         }
         if (src_is_flt && !dst_is_flt) {
             const bool dst_is_sgn{sema::is_signed_integer(*inst.type)};
+            if (inst.is_checked) { emit_float_to_int_guard(inst, val, target_ty, dst_is_sgn); }
             return dst_is_sgn ? builder_.CreateFPToSI(val, target_ty, "fptosi")
                               : builder_.CreateFPToUI(val, target_ty, "fptoui");
         }

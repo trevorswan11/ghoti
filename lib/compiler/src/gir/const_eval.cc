@@ -3757,6 +3757,52 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const u64 int_val{*src_bool ? 1ULL : 0ULL};
         return const_value{int_val, target};
     }
+    case syntax::token_type_t::BUILTIN_FLOAT_FROM_INT:
+    case syntax::token_type_t::BUILTIN_INT_FROM_FLOAT: {
+        const auto op_h{call.arguments.back().as_opt<ast::expr_handle>()};
+        if (!op_h) { return stdx::none; }
+        const auto operand{try_eval(*op_h)};
+        auto       target{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
+        if (!operand || !target) { return stdx::none; }
+
+        if (builtin_type == syntax::token_type_t::BUILTIN_FLOAT_FROM_INT) {
+            // `f80`/`f128` can't be represented exactly at compile time
+            if (target->get_kind() == sema::type_kind::F80 ||
+                target->get_kind() == sema::type_kind::F128) {
+                return stdx::none;
+            }
+            if (const auto u{operand->as_opt<u64>()}) {
+                return const_value{static_cast<f64>(*u), target};
+            }
+            const auto i{operand->as_opt<i64>()};
+            if (!i) { return stdx::none; }
+            return const_value{static_cast<f64>(*i), target};
+        }
+
+        const auto f{operand->as_opt<f64>()};
+        if (!f) { return stdx::none; }
+        const auto truncated{std::trunc(*f)};
+        const auto ptr_bits{codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
+        // Past 64 bits the value is left to the (range-checked) runtime conversion
+        stdx::option<i128> folded;
+        if (truncated >= -0x1p63 && truncated < 0x1p63) {
+            folded = i128{static_cast<i64>(truncated)};
+        } else if (truncated >= 0.0 && truncated < 0x1p64) {
+            folded = i128{static_cast<u64>(truncated)};
+        }
+        if (!folded || !sema::constexpr_int_fits(*folded, *target, ptr_bits)) {
+            const auto width{integer_target_width(*target, ptr_bits)};
+            if (std::isfinite(*f) && !folded && width && width->first > 64) { return stdx::none; }
+            ctx_.diags.emplace_back(
+                fmt::format("Float value {} is out of range for target type '{}' in @intFromFloat",
+                            *f,
+                            ctx_.type_display_name(*target)),
+                sema::error::CONSTEXPR_EVALUATION_FAILED,
+                module_->ast.location_of(*op_h));
+            return const_value::make_poison();
+        }
+        return make_scalar_const(*folded, target);
+    }
     case syntax::token_type_t::BUILTIN_BACKING_INT: {
         // Only an enum folds; packed aggregates and tagged unions are read by the emitter
         const auto op_h{call.arguments[0].as_opt<ast::expr_handle>()};

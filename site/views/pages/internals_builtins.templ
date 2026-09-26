@@ -21,7 +21,13 @@ templ InternalsBuiltinsPage() {
 	<p>Casts away top-level <code>volatile</code>-ness of the expression, preserving all other aspects of the type.</p>
 	<h3>{ "@as" }</h3>
 	<pre><code class="language-ghoti">{ `@as(T: type, expression: auto): T` }</code></pre>
-	<p>Coerces the value of <code>expression</code> into a value of type <code>T</code>. Conversions that have a dedicated builtin are rejected: use <code>{ "@boolFromInt" }</code> / <code>{ "@intFromBool" }</code> for <code>bool</code> and <code>{ "@backingInt" }</code> / <code>{ "@fromBackingInt" }</code> for enums.</p>
+	<p>Coerces the value of <code>expression</code> into a value of type <code>T</code>. Conversions that have a dedicated builtin are rejected: use <code>{ "@boolFromInt" }</code> / <code>{ "@intFromBool" }</code> for <code>bool</code>, <code>{ "@backingInt" }</code> / <code>{ "@fromBackingInt" }</code> for enums, and <code>{ "@intFromFloat" }</code> / <code>{ "@floatFromInt" }</code> for float &harr; integer conversions that could lose information. An integer whose every value the float represents exactly (e.g. <code>i32</code> to <code>f64</code>) still converts with <code>{ "@as" }</code>, or implicitly.</p>
+	<h3>{ "@intFromFloat" }</h3>
+	<pre><code class="language-ghoti">{ `@intFromFloat(T: type, expression: auto): T` }</code></pre>
+	<p>Converts a float to the integer type <code>T</code>, truncating toward zero. <code>T</code> can be omitted when inferable from context. A compile-time-known operand that doesn't fit <code>T</code> is a compile error; at runtime, under runtime safety, an out-of-range or NaN operand panics.</p>
+	<h3>{ "@floatFromInt" }</h3>
+	<pre><code class="language-ghoti">{ `@floatFromInt(T: type, expression: auto): T` }</code></pre>
+	<p>Converts an integer to the float type <code>T</code>, rounding to the nearest representable value when it isn't exact (e.g. <code>16777217</code> becomes <code>16777216.0</code> as an <code>f32</code>). <code>T</code> can be omitted when inferable from context.</p>
 	<h3>{ "@backingInt" }</h3>
 	<pre><code class="language-ghoti">{ `@backingInt(expression: auto): BackingInt(@TypeOf(expression))` }</code></pre>
 	<p>Returns the integer a value is stored as: an enum's underlying type (<code>{ "enum : u8 { ... }" }</code> gives a <code>u8</code>), the <code>uN</code> holding every bit of a <code>packed struct</code> or <code>packed union</code>, or the <code>i32</code> index of a tagged union's active field. Folds at compile time for a compile-time-known enum value.</p>

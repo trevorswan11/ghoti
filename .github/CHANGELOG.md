@@ -477,6 +477,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `@backingInt(x)` returns the integer backing an enum, a `packed struct` / `packed union`, or a tagged union's active tag; `@fromBackingInt(T, n)` (or `@fromBackingInt(n)` with an inferred `T`) converts back for enums and packed aggregates (#327)
     - Converting an unlisted value to an exhaustive enum panics under runtime safety
 - **Breaking:** `@as` no longer converts between enums and integers; use `@backingInt` / `@fromBackingInt` (#327)
+- `@intFromFloat(T, x)` truncates a float toward zero and `@floatFromInt(T, x)` rounds an integer to the nearest float; both infer `T` from context when omitted (#324)
+    - An out-of-range compile-time `@intFromFloat` is a compile error; at runtime an out-of-range or NaN operand panics under runtime safety
+- **Breaking:** `@as` no longer converts floats to integers, or integers to floats that can't represent every value exactly (`@as(f64, i32_val)` still works); use `@intFromFloat` / `@floatFromInt` (#324)
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

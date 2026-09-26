@@ -26,6 +26,8 @@ constexpr builtin_t BOOL_FROM_INT{"@boolFromInt", token_type_t::BUILTIN_BOOL_FRO
 constexpr builtin_t INT_FROM_BOOL{"@intFromBool", token_type_t::BUILTIN_INT_FROM_BOOL};
 constexpr builtin_t BACKING_INT{"@backingInt", token_type_t::BUILTIN_BACKING_INT};
 constexpr builtin_t FROM_BACKING_INT{"@fromBackingInt", token_type_t::BUILTIN_FROM_BACKING_INT};
+constexpr builtin_t INT_FROM_FLOAT{"@intFromFloat", token_type_t::BUILTIN_INT_FROM_FLOAT};
+constexpr builtin_t FLOAT_FROM_INT{"@floatFromInt", token_type_t::BUILTIN_FLOAT_FROM_INT};
 constexpr builtin_t DYN_CAST{"@dynCast", token_type_t::BUILTIN_DYN_CAST};
 
 constexpr builtin_t INT_FROM_PTR{"@intFromPtr", token_type_t::BUILTIN_INT_FROM_PTR};
@@ -152,6 +154,8 @@ constexpr std::array ALL_BUILTINS{
     builtins::INT_FROM_BOOL,
     builtins::BACKING_INT,
     builtins::FROM_BACKING_INT,
+    builtins::INT_FROM_FLOAT,
+    builtins::FLOAT_FROM_INT,
     builtins::INT_FROM_PTR,
     builtins::PTR_FROM_INT,
     builtins::PTR_FROM_ARRAY,
