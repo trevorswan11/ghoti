@@ -13,30 +13,28 @@ fn compute_point(p: struct) -> i32
     %4 = call @clamp__i32_i32_i32(%3, 0, 50)
     %5 = alloca i32
     store 0, %5
-    %6 = alloca block
     goto seg 1
   seg 1:
-    %7 = load %5
-    %8 = lt bool %7, 3
-    cond_goto %8 seg 2, seg 3
+    %6 = load %5
+    %7 = lt bool %6, 3
+    cond_goto %7 seg 2, seg 3
   seg 2:
-    %9 = load %0
-    %10 = add i32 %9, %4
-    store %10, %0
-    %11 = load %5
-    %12 = add i32 %11, 1
-    store %12, %5
+    %8 = load %0
+    %9 = add i32 %8, %4
+    store %9, %0
+    %10 = load %5
+    %11 = add i32 %10, 1
+    store %11, %5
     goto seg 1
   seg 3:
-    %13 = load %6
-    %14 = load %0
-    %15 = get_element_ptr i32 %1, 1
-    %16 = load %15
-    %17 = add i32 %14, %16
-    %18 = load %0
-    %19 = add i32 %18, 1
-    store %19, %0
-    ret i32 %17
+    %12 = load %0
+    %13 = get_element_ptr i32 %1, 1
+    %14 = load %13
+    %15 = add i32 %12, %14
+    %16 = load %0
+    %17 = add i32 %16, 1
+    store %17, %0
+    ret i32 %15
 
 fn match_color(c: enum : i32) -> i32
   seg 0:

@@ -112,6 +112,8 @@ class emitter {
   private:
     // The `undefined` literal or anything aliasing it
     [[nodiscard]] auto is_undefined_value(ast::node_id expr) -> bool;
+    // Whether a control-flow expression of `type` produces a value to store (not a scope/label)
+    [[nodiscard]] static auto yields_runtime_value(stdx::option<sema::type&> type) -> bool;
     auto emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -> void;
     auto emit_top_level_test(ast::node_id id, const ast::test_stmt& test) -> void;
     // Emits the member functions of an `impl [I for] T { ... }` block under names scoped to the

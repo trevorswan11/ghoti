@@ -196,6 +196,10 @@ class const_eval {
         stdx::option<const_value>      value{};
     };
 
+    // What a loop does after its body ran: iterate again, stop (unlabeled `break`), or exit with
+    // `current_signal_` (a labeled jump, a `return`, or unknown control flow)
+    enum class loop_step : u8 { NEXT, STOP, EXIT };
+
   private:
     [[nodiscard]] auto resolve_deferred_array(const sema::types::deferred_array& deferred)
         -> stdx::option<sema::type&>;
@@ -264,10 +268,18 @@ class const_eval {
     auto lookup_bound_callable(std::string_view name) -> stdx::option<bound_callable>;
 
     auto eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_value>;
+    // A loop's `else` branch, whose expression (if it is one) is the loop's value
+    auto eval_non_break(const ast::stmt_handle& stmt) -> stdx::option<const_value>;
     auto eval_decl(ast::node_id id, const ast::decl_stmt& decl) -> stdx::option<const_value>;
     auto eval_block(ast::node_id id, const ast::block_stmt& block) -> stdx::option<const_value>;
     auto eval_label(ast::node_id id, const ast::label_expr& label) -> stdx::option<const_value>;
     auto eval_if(ast::node_id id, const ast::if_expr& if_expr) -> stdx::option<const_value>;
+    // Counts one iteration, flagging unknown control flow once the unroll limit is reached
+    auto exceeded_unroll_limit(usize& iterations) -> bool;
+    // A loop condition folded to `bool`; `none` (and unknown control flow) otherwise
+    auto eval_loop_condition(ast::expr_handle condition) -> stdx::option<bool>;
+    // Consumes an unlabeled `break` / `continue` aimed at the current loop
+    auto consume_loop_signal(stdx::option<std::string_view> own_label) -> loop_step;
     auto eval_while(ast::node_id id, const ast::while_loop_expr& loop) -> stdx::option<const_value>;
     auto eval_do_while(ast::node_id id, const ast::do_while_loop_expr& loop)
         -> stdx::option<const_value>;
@@ -325,6 +337,7 @@ class const_eval {
     auto simulate_infinite_loop(const ast::infinite_loop_expr& loop) -> void;
     auto simulate_for(const ast::for_loop_expr& loop) -> void;
     auto simulate_block(const ast::block_stmt& block) -> void;
+    auto simulate_label(const ast::label_expr& label) -> void;
 
   private:
     // Names of mutable `constexpr var` bindings currently in scope during simulation.
@@ -341,6 +354,8 @@ class const_eval {
 
     // Set by `eval_if`/`eval_while`/`eval_do_while`/`eval_for` when a construct's own
     // condition/iterable can't be folded.
+    // A label's name, handed to the loop it directly wraps so it can consume jumps aimed at it
+    stdx::option<std::string_view> pending_loop_label_;
     bool                      cond_unknown_{false};
     bool                      constexpr_context_{false};
     eval_signal               current_signal_{};

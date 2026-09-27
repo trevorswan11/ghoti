@@ -933,6 +933,10 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
     return val;
 }
 
+auto emitter::yields_runtime_value(stdx::option<sema::type&> type) -> bool {
+    return type && sema::is_value_type(type->get_kind());
+}
+
 auto emitter::is_undefined_value(ast::node_id expr) -> bool {
     const auto t{active_mod().get_sema_type_opt(expr)};
     return t && t->get_kind() == sema::type_kind::UNDEFINED;
@@ -4348,7 +4352,7 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
             if (expr_type->get_kind() != sema::type_kind::VOID_) { sema_type = expr_type; }
         }
     }
-    const bool yields_value{if_expr.alternate && sema_type && is_value_type(sema_type->get_kind())};
+    const bool yields_value{if_expr.alternate && yields_runtime_value(sema_type)};
 
     const auto emit_single_arm{[&](ast::stmt_handle arm) -> value {
         return yields_value ? emit_stmt_as_value(arm)
@@ -4537,7 +4541,7 @@ auto emitter::emit_while(ast::node_id                   id,
     PROFILE_FUNCTION();
     if (while_loop.is_constexpr) { return emit_constexpr_while(id, while_loop); }
     const auto sema_type{result_type ? result_type : active_mod().get_sema_type_opt(id)};
-    const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
+    const bool yields_value{yields_runtime_value(sema_type)};
 
     auto fn_opt{builder_.get_function()};
     ASSERT(fn_opt, "While loop must be within an active function");
@@ -4642,7 +4646,7 @@ auto emitter::emit_do_while(ast::node_id                   id,
     PROFILE_FUNCTION();
     if (do_while.is_constexpr) { return emit_constexpr_do_while(id, do_while); }
     const auto sema_type{result_type ? result_type : active_mod().get_sema_type_opt(id)};
-    const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
+    const bool yields_value{yields_runtime_value(sema_type)};
 
     auto fn_opt{builder_.get_function()};
     ASSERT(fn_opt, "Do-while loop must be within an active function");
@@ -4713,7 +4717,7 @@ auto emitter::emit_infinite_loop(ast::node_id                   id,
     PROFILE_FUNCTION();
     if (loop.is_constexpr) { return emit_constexpr_infinite_loop(id, loop); }
     const auto sema_type{result_type ? result_type : active_mod().get_sema_type_opt(id)};
-    const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
+    const bool yields_value{yields_runtime_value(sema_type)};
 
     auto fn_opt{builder_.get_function()};
     ASSERT(fn_opt, "Infinite loop must be within an active function");
@@ -4852,7 +4856,7 @@ auto emitter::emit_for(ast::node_id                   id,
     PROFILE_FUNCTION();
     if (for_loop.is_constexpr) { return emit_constexpr_for(id, for_loop); }
     const auto sema_type{result_type ? result_type : active_mod().get_sema_type_opt(id)};
-    const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
+    const bool yields_value{yields_runtime_value(sema_type)};
 
     auto fn_opt{builder_.get_function()};
     ASSERT(fn_opt, "For loop must be within an active function");
@@ -5130,7 +5134,7 @@ auto emitter::emit_for(ast::node_id                   id,
 auto emitter::emit_label(ast::node_id id, const ast::label_expr& label) -> value {
     PROFILE_FUNCTION();
     const auto sema_type{active_mod().get_sema_type_opt(id)};
-    const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
+    const bool yields_value{yields_runtime_value(sema_type)};
 
     if (label.is_constexpr(active_ast())) {
         const auto cv{const_eval_.try_eval(id)};
@@ -6299,7 +6303,7 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
     PROFILE_FUNCTION();
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Match expression must have a resolved sema type");
-    const bool yields_value{sema_type->get_kind() != sema::type_kind::VOID_};
+    const bool yields_value{yields_runtime_value(sema_type)};
 
     // The resolver already selected an arm (`match` on a compile-time type, or `match constexpr`).
     stdx::opt_size forced_arm;

@@ -4226,6 +4226,16 @@ auto const_eval::eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_v
         });
 }
 
+auto const_eval::eval_non_break(const ast::stmt_handle& stmt) -> stdx::option<const_value> {
+    // `else <expr>` is the loop's value, unlike an expression statement inside a block
+    if (const auto expr{module_->ast.get_as_opt<ast::expr_stmt>(*stmt)}) {
+        auto val{try_eval(expr->expression)};
+        if (!val) { cond_unknown_ = true; }
+        return val;
+    }
+    return eval_stmt(stmt);
+}
+
 auto const_eval::eval_block(ast::node_id, const ast::block_stmt& block)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
@@ -4287,7 +4297,8 @@ auto const_eval::eval_label(ast::node_id, const ast::label_expr& label)
     if (label.body.is<ast::block_stmt>()) {
         body_res = eval_block(body_id, module_->ast.get_as<ast::block_stmt>(body_id));
     } else {
-        body_res = try_eval(body_id);
+        pending_loop_label_ = label_name;
+        body_res            = try_eval(body_id);
     }
 
     if (current_signal_.kind == eval_signal_kind::BREAK) {
@@ -4365,42 +4376,54 @@ auto const_eval::eval_if(ast::node_id, const ast::if_expr& if_expr) -> stdx::opt
     return stdx::none;
 }
 
+auto const_eval::exceeded_unroll_limit(usize& iterations) -> bool {
+    if (iterations >= ctx_.eval_unroll_limit) {
+        cond_unknown_ = true;
+        return true;
+    }
+    ++iterations;
+    return false;
+}
+
+auto const_eval::eval_loop_condition(ast::expr_handle condition) -> stdx::option<bool> {
+    const auto cond{try_eval(condition)};
+    if (!cond || !cond->is<bool>()) {
+        cond_unknown_ = true;
+        return stdx::none;
+    }
+    return cond->as<bool>();
+}
+
+auto const_eval::consume_loop_signal(stdx::option<std::string_view> own_label) -> loop_step {
+    const auto kind{current_signal_.kind};
+    if (kind == eval_signal_kind::BREAK || kind == eval_signal_kind::CONTINUE) {
+        // A labeled `break` carries its value out to the label, which consumes it
+        const bool continues_this_loop{kind == eval_signal_kind::CONTINUE &&
+                                       current_signal_.target_label == own_label};
+        if (current_signal_.target_label && !continues_this_loop) { return loop_step::EXIT; }
+        current_signal_ = eval_signal{};
+        return kind == eval_signal_kind::BREAK ? loop_step::STOP : loop_step::NEXT;
+    }
+    return kind || cond_unknown_ ? loop_step::EXIT : loop_step::NEXT;
+}
+
 auto const_eval::eval_while(ast::node_id, const ast::while_loop_expr& loop)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
+    const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
     usize iterations{0};
-    while (true) {
-        if (iterations >= ctx_.eval_unroll_limit) {
-            cond_unknown_ = true;
-            return stdx::none;
-        }
-        ++iterations;
-        const auto cond{try_eval(loop.condition)};
-        if (!cond || !cond->is<bool>()) {
-            cond_unknown_ = true;
-            return stdx::none;
-        }
-        if (!cond->as<bool>()) { break; }
+    while (!exceeded_unroll_limit(iterations)) {
+        const auto cond{eval_loop_condition(loop.condition)};
+        if (!cond) { return stdx::none; }
+        // Running out of iterations (not a `break`) is what reaches the `else` branch
+        if (!*cond) { return loop.non_break ? eval_non_break(*loop.non_break) : stdx::none; }
 
-        const auto body_res{eval_stmt(loop.block)};
-        if (current_signal_.kind == eval_signal_kind::BREAK) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                break;
-            }
-            return current_signal_.value;
+        DISCARD(eval_stmt(loop.block));
+        switch (consume_loop_signal(own_label)) {
+        case loop_step::STOP: return stdx::none;
+        case loop_step::EXIT: return current_signal_.value;
+        case loop_step::NEXT: break;
         }
-        if (current_signal_.kind == eval_signal_kind::CONTINUE) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                if (loop.continuation) { DISCARD(try_eval(*loop.continuation)); }
-                continue;
-            }
-            return current_signal_.value;
-        }
-        if (current_signal_.kind) { return current_signal_.value; }
-        if (cond_unknown_) { return stdx::none; }
-
         if (loop.continuation) { DISCARD(try_eval(*loop.continuation)); }
     }
     return stdx::none;
@@ -4409,37 +4432,17 @@ auto const_eval::eval_while(ast::node_id, const ast::while_loop_expr& loop)
 auto const_eval::eval_do_while(ast::node_id, const ast::do_while_loop_expr& loop)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
+    const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
     usize iterations{0};
-    while (true) {
-        if (iterations >= ctx_.eval_unroll_limit) {
-            cond_unknown_ = true;
-            return stdx::none;
+    while (!exceeded_unroll_limit(iterations)) {
+        DISCARD(eval_stmt(loop.block));
+        switch (consume_loop_signal(own_label)) {
+        case loop_step::STOP: return stdx::none;
+        case loop_step::EXIT: return current_signal_.value;
+        case loop_step::NEXT: break;
         }
-        ++iterations;
-        const auto body_res{eval_stmt(loop.block)};
-        if (current_signal_.kind == eval_signal_kind::BREAK) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                break;
-            }
-            return current_signal_.value;
-        }
-        if (current_signal_.kind == eval_signal_kind::CONTINUE) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                continue;
-            }
-            return current_signal_.value;
-        }
-        if (current_signal_.kind) { return current_signal_.value; }
-        if (cond_unknown_) { return stdx::none; }
-
-        const auto cond{try_eval(loop.condition)};
-        if (!cond || !cond->is<bool>()) {
-            cond_unknown_ = true;
-            return stdx::none;
-        }
-        if (!cond->as<bool>()) { break; }
+        const auto cond{eval_loop_condition(loop.condition)};
+        if (!cond || !*cond) { return stdx::none; }
     }
     return stdx::none;
 }
@@ -4447,31 +4450,15 @@ auto const_eval::eval_do_while(ast::node_id, const ast::do_while_loop_expr& loop
 auto const_eval::eval_infinite_loop(ast::node_id, const ast::infinite_loop_expr& loop)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
+    const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
     usize iterations{0};
-    while (true) {
-        if (iterations >= ctx_.eval_unroll_limit) {
-            cond_unknown_ = true;
-            return stdx::none;
+    while (!exceeded_unroll_limit(iterations)) {
+        DISCARD(eval_stmt(loop.block));
+        switch (consume_loop_signal(own_label)) {
+        case loop_step::STOP: return stdx::none;
+        case loop_step::EXIT: return current_signal_.value;
+        case loop_step::NEXT: break;
         }
-        ++iterations;
-        const auto body_res{eval_stmt(loop.block)};
-        if (current_signal_.kind == eval_signal_kind::BREAK) {
-            if (!current_signal_.target_label.has_value()) {
-                const auto val{current_signal_.value};
-                current_signal_ = eval_signal{};
-                return val;
-            }
-            return current_signal_.value;
-        }
-        if (current_signal_.kind == eval_signal_kind::CONTINUE) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                continue;
-            }
-            return current_signal_.value;
-        }
-        if (current_signal_.kind) { return current_signal_.value; }
-        if (cond_unknown_) { return stdx::none; }
     }
     return stdx::none;
 }
@@ -4479,6 +4466,7 @@ auto const_eval::eval_infinite_loop(ast::node_id, const ast::infinite_loop_expr&
 auto const_eval::eval_for(ast::node_id, const ast::for_loop_expr& loop)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
+    const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
     VERIFY(loop.iterables.size() == loop.captures.size(),
            "For loop iterables and captures must match in count");
     // Every early exit below means the set of values to iterate couldn't be determined, which
@@ -4562,26 +4550,16 @@ auto const_eval::eval_for(ast::node_id, const ast::for_loop_expr& loop)
             }
         }
 
-        const auto body_res{eval_stmt(loop.block)};
-        if (current_signal_.kind == eval_signal_kind::BREAK) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                break;
-            }
-            return current_signal_.value;
+        DISCARD(eval_stmt(loop.block));
+        switch (consume_loop_signal(own_label)) {
+        // A `break` leaves the loop without running its `else` branch
+        case loop_step::STOP: return stdx::none;
+        case loop_step::EXIT: return current_signal_.value;
+        case loop_step::NEXT: break;
         }
-        if (current_signal_.kind == eval_signal_kind::CONTINUE) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                continue;
-            }
-            return current_signal_.value;
-        }
-        if (current_signal_.kind) { return current_signal_.value; }
-        if (cond_unknown_) { return stdx::none; }
     }
 
-    if (loop.non_break) { return eval_stmt(*loop.non_break); }
+    if (loop.non_break) { return eval_non_break(*loop.non_break); }
 
     return stdx::none;
 }
@@ -4732,9 +4710,20 @@ auto const_eval::simulate_expr(ast::node_id id) -> void {
     } else if (const auto for_loop = module_->ast.get_as_opt<ast::for_loop_expr>(id)) {
         simulate_for(*for_loop);
     } else if (const auto label = module_->ast.get_as_opt<ast::label_expr>(id)) {
-        simulate_expr(*label->body);
+        simulate_label(*label);
     } else if (module_->ast[id].is<ast::call_expr>()) {
         DISCARD(try_eval(id));
+    }
+}
+
+auto const_eval::simulate_label(const ast::label_expr& label) -> void {
+    stdx::option<std::string_view> name;
+    if (label.name) { name = module_->ast.get_as<ast::identifier_expr>(*label.name).name; }
+    if (!label.body.is<ast::block_stmt>()) { pending_loop_label_ = name; }
+    simulate_expr(*label.body);
+    // A `break` out of this label ends here instead of unwinding further
+    if (current_signal_.kind == eval_signal_kind::BREAK && current_signal_.target_label == name) {
+        current_signal_ = eval_signal{};
     }
 }
 
@@ -4906,82 +4895,38 @@ auto const_eval::simulate_if(const ast::if_expr& if_expr) -> void {
 }
 
 auto const_eval::simulate_while(const ast::while_loop_expr& loop) -> void {
+    const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
     usize iterations{0};
-    while (true) {
-        if (iterations >= ctx_.eval_unroll_limit) {
-            cond_unknown_ = true;
+    while (!exceeded_unroll_limit(iterations)) {
+        const auto cond{eval_loop_condition(loop.condition)};
+        if (!cond) { return; }
+        if (!*cond) {
+            if (loop.non_break) { simulate_stmt(*loop.non_break); }
             return;
         }
-        ++iterations;
-        const auto cond = try_eval(loop.condition);
-        if (!cond || !cond->is<bool>()) {
-            cond_unknown_ = true;
-            return;
-        }
-        if (!cond->as<bool>()) { break; }
 
         simulate_stmt(loop.block);
-        if (current_signal_.kind == eval_signal_kind::BREAK) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                break;
-            }
-            return;
-        }
-        if (current_signal_.kind == eval_signal_kind::CONTINUE) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                if (loop.continuation) { simulate_expr(*loop.continuation); }
-                continue;
-            }
-            return;
-        }
-        if (current_signal_.kind || cond_unknown_) { return; }
-
+        if (consume_loop_signal(own_label) != loop_step::NEXT) { return; }
         if (loop.continuation) {
             simulate_expr(*loop.continuation);
             if (cond_unknown_) { return; }
         }
     }
-    if (loop.non_break && !current_signal_.kind) { simulate_stmt(*loop.non_break); }
 }
 
 auto const_eval::simulate_do_while(const ast::do_while_loop_expr& loop) -> void {
+    const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
     usize iterations{0};
-    while (true) {
-        if (iterations >= ctx_.eval_unroll_limit) {
-            cond_unknown_ = true;
-            return;
-        }
-        ++iterations;
+    while (!exceeded_unroll_limit(iterations)) {
         simulate_stmt(loop.block);
-        if (current_signal_.kind == eval_signal_kind::BREAK) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                break;
-            }
-            return;
-        }
-        if (current_signal_.kind == eval_signal_kind::CONTINUE) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-            } else {
-                return;
-            }
-        } else if (current_signal_.kind || cond_unknown_) {
-            return;
-        }
-
-        const auto cond = try_eval(loop.condition);
-        if (!cond || !cond->is<bool>()) {
-            cond_unknown_ = true;
-            return;
-        }
-        if (!cond->as<bool>()) { break; }
+        if (consume_loop_signal(own_label) != loop_step::NEXT) { return; }
+        const auto cond{eval_loop_condition(loop.condition)};
+        if (!cond || !*cond) { return; }
     }
 }
 
 auto const_eval::simulate_for(const ast::for_loop_expr& loop) -> void {
+    const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
     if (loop.iterables.size() != loop.captures.size() || loop.iterables.empty()) {
         cond_unknown_ = true;
         return;
@@ -5072,52 +5017,19 @@ auto const_eval::simulate_for(const ast::for_loop_expr& loop) -> void {
         }
 
         simulate_stmt(loop.block);
-        if (current_signal_.kind == eval_signal_kind::BREAK) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                break;
-            }
-            return;
-        }
-        if (current_signal_.kind == eval_signal_kind::CONTINUE) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                continue;
-            }
-            return;
-        }
-        if (current_signal_.kind || cond_unknown_) { return; }
+        // A `break` leaves the loop without running its `else` branch
+        if (consume_loop_signal(own_label) != loop_step::NEXT) { return; }
     }
 
-    if (loop.non_break && !current_signal_.kind) { simulate_stmt(*loop.non_break); }
+    if (loop.non_break) { simulate_stmt(*loop.non_break); }
 }
 
 auto const_eval::simulate_infinite_loop(const ast::infinite_loop_expr& loop) -> void {
+    const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
     usize iterations{0};
-    while (true) {
-        if (iterations >= ctx_.eval_unroll_limit) {
-            cond_unknown_ = true;
-            return;
-        }
-        ++iterations;
+    while (!exceeded_unroll_limit(iterations)) {
         simulate_stmt(loop.block);
-        if (current_signal_.kind == eval_signal_kind::BREAK) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                break;
-            }
-            return;
-        }
-        if (current_signal_.kind == eval_signal_kind::CONTINUE) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                continue;
-            } else {
-                return;
-            }
-        } else if (current_signal_.kind || cond_unknown_) {
-            return;
-        }
+        if (consume_loop_signal(own_label) != loop_step::NEXT) { return; }
     }
 }
 

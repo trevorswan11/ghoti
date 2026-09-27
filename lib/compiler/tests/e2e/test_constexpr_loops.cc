@@ -1,3 +1,5 @@
+#include <string>
+
 #include <catch2/catch_test_macros.hpp>
 
 #include "helpers/codegen.hh"
@@ -268,6 +270,81 @@ TEST_CASE("`for constexpr` allows compile-time `continue` and `break`") {
             return sum;
         };
     )") == 0 + 1 + 3);
+}
+
+TEST_CASE("a loop's `else` branch runs only when the loop finishes, at runtime and compile time") {
+    constexpr auto loops{R"(
+        const w := fn(n: i32, stop: i32): i32 {
+            var c: i32 = 0;
+            var i: i32 = 0;
+            while (i < n) : (i += 1) { if (i == stop) { break; } c += 1; } else { c += 50; }
+            return c;
+        };
+        const f := fn(n: usize, stop: usize): i32 {
+            var c: i32 = 0;
+            for (0..n) |i| { if (i == stop) { break; } c += 1; } else { c += 50; }
+            return c;
+        };
+        const lw := fn(n: i32): i32 {
+            var i: i32 = 0;
+            return blk: while (i < n) : (i += 1) { if (i == 7) { break :blk 99; } } else 40;
+        };
+        const lf := fn(n: usize): i32 {
+            return blk: for (0..n) |i| { if (i == 7) { break :blk 99; } } else 40;
+        };
+        const total := fn(): i32 {
+            return w(4, 99) + w(4, 2) + f(4, 99) + f(4, 2) + lw(3) + lw(9) + lf(3) + lf(9);
+        };
+    )"};
+    constexpr i32 expected{54 + 2 + 54 + 2 + 40 + 99 + 40 + 99};
+    CHECK(helpers::compile_and_run(std::string{loops} +
+                                   "pub const main := fn(): i32 { return total() - 300; };") ==
+          expected - 300);
+    CHECK(helpers::compile_and_run(
+              std::string{loops} +
+              "pub const main := fn(): i32 { constexpr v := total(); return v - 300; };") ==
+          expected - 300);
+}
+
+TEST_CASE("`continue` and labeled jumps fold like their runtime counterparts") {
+    constexpr auto jumps{R"(
+        const d := fn(): i32 {
+            var i: i32 = 0;
+            var s: i32 = 0;
+            do { i += 1; if (i == 2) { continue; } s += i; } while (i < 5);
+            return s;
+        };
+        const x := fn(): i32 {
+            var s: i32 = 0;
+            outer: for (0..3) |i| { for (0..3) |j| { if (j == 1) { continue :outer; } s += 1; } }
+            return s;
+        };
+        const y := fn(): i32 {
+            var s: i32 = 0;
+            outer: while (s < 100) {
+                var j: i32 = 0;
+                while (j < 5) : (j += 1) { if (j == 2) { break :outer; } s += 1; }
+            }
+            return s;
+        };
+    )"};
+    CHECK(helpers::compile_and_run(std::string{jumps} +
+                                   "pub const main := fn(): i32 { return d() + x() + y(); };") ==
+          18);
+    CHECK(helpers::compile_and_run(
+              std::string{jumps} +
+              "pub const main := fn(): i32 { constexpr v := d() + x() + y(); return v; };") == 18);
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            constexpr {
+                var t: i32 = 0;
+                blk: { t = 1; break :blk; }
+                t += 10;
+                @assert(t == 11);
+            }
+            return 0;
+        };
+    )") == 0);
 }
 
 } // namespace ghoti::tests
