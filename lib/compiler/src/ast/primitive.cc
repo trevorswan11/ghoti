@@ -21,6 +21,7 @@
 #include "compiler/ast/handle.hh"
 #include "compiler/syntax/error.hh"
 #include "compiler/syntax/parser.hh"
+#include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/int128.hh"
 #include "support/string_utils.hh"

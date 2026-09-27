@@ -24,6 +24,7 @@
 #include "compiler/codegen/linker.hh"
 #include "compiler/codegen/llvm_lowering.hh"
 #include "compiler/codegen/llvm_optimizer.hh"
+#include "compiler/codegen/mem_intrinsics.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/emitter.hh"
@@ -152,6 +153,8 @@ auto prune_to_test_reachable(gir::module& gir_module) -> void {
     if (options.level != codegen::opt_level::O0 || options.debug_logging || options.time_passes) {
         codegen::llvm_optimizer optimizer{llvm_mod.getContext()};
         TRY(optimizer.optimize(llvm_mod, options));
+        // Optimization may turn loops into `mem*` calls lowering never saw
+        codegen::define_mem_intrinsic_fallbacks(llvm_mod);
     }
     return {};
 }

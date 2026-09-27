@@ -109,6 +109,14 @@ class emitter {
     using constexpr_frame_guard = ghoti::scope_guard<std::vector<sema::constexpr_frame>>;
     using type_guard            = ghoti::scope_guard<std::vector<sema::type*>>;
 
+    // Repeatedly folds the condition and replays the body via `emit_block` for as long as it
+    // holds `true`; no runtime loop, no `body_type_diff`
+    enum class constexpr_body_exit : u8 {
+        NEXT,
+        CONTINUE,
+        BREAK,
+    };
+
   private:
     // The `undefined` literal or anything aliasing it
     [[nodiscard]] auto is_undefined_value(ast::node_id expr) -> bool;
@@ -313,13 +321,7 @@ class emitter {
                     stdx::option<std::string_view> label       = stdx::none,
                     stdx::option<local_id>         res_slot    = stdx::none,
                     stdx::option<sema::type&>      result_type = stdx::none) -> value;
-    // Repeatedly folds the condition and replays the body via `emit_block` for as long as it
-    // holds `true`; no runtime loop, no `body_type_diff`
-    enum class constexpr_body_exit : u8 {
-        NEXT,
-        CONTINUE,
-        BREAK,
-    };
+
     // Emits one unrolled iteration of a constexpr loop body, consuming its break/continue flags
     auto emit_constexpr_loop_body(const ast::block_stmt& block) -> constexpr_body_exit;
     [[nodiscard]] auto constexpr_unroll_limit_reached(usize            iterations,

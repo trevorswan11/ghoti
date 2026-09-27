@@ -196,12 +196,11 @@ class const_eval {
         stdx::option<const_value>      value{};
     };
 
-    // What a loop does after its body ran: iterate again, stop (unlabeled `break`), or exit with
-    // `current_signal_` (a labeled jump, a `return`, or unknown control flow)
+    // What a loop does after its body ran
     enum class loop_step : u8 {
-        NEXT,
-        STOP,
-        EXIT,
+        NEXT, // iterate again
+        STOP, // stop (unlabeled `break`)
+        EXIT, // exit with `current_signal_`
     };
 
   private:
@@ -356,8 +355,6 @@ class const_eval {
     std::vector<call_frame>                        call_stack_;
     default_counter                                recursion_depth_;
 
-    // Set by `eval_if`/`eval_while`/`eval_do_while`/`eval_for` when a construct's own
-    // condition/iterable can't be folded.
     // A label's name, handed to the loop it directly wraps so it can consume jumps aimed at it
     stdx::option<std::string_view> pending_loop_label_;
     bool                           cond_unknown_{false};

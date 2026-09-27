@@ -21,11 +21,13 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Value.h>
 #include <llvm/Support/Alignment.h>
 #include <llvm/Support/AtomicOrdering.h>
 #include <llvm/Support/Casting.h>
+#include <llvm/Support/MathExtras.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/TargetParser/Triple.h>
 #include <llvm/Transforms/Utils/ModuleUtils.h>
@@ -39,6 +41,7 @@
 #include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/codegen/aggregate_abi.hh"
+#include "compiler/codegen/mem_intrinsics.hh"
 #include "compiler/codegen/type_translator.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/function.hh"
@@ -264,10 +267,12 @@ auto llvm_lowering::create_c_entry_function() -> llvm::Function* {
 }
 
 auto llvm_lowering::finalize_runtime_support() -> void {
-    if (lower_large_aggregates(*llvm_module_)) { memcpy_used_ = true; }
+    lower_large_aggregates(*llvm_module_);
     maybe_emit_mingw_main_stub();
     maybe_emit_windows_stack_probe();
-    maybe_emit_mem_intrinsic_fallbacks();
+    define_mem_intrinsic_fallbacks(*llvm_module_);
+    // ghoti never unwinds; without this, ARM EHABI references libgcc's `__aeabi_unwind_cpp_pr*`
+    for (auto& fn : *llvm_module_) { fn.addFnAttr(llvm::Attribute::NoUnwind); }
 }
 
 // MinGW codegen injects a `__main` (static-ctor hook) call into any function named `main`
@@ -506,110 +511,8 @@ auto llvm_lowering::maybe_emit_windows_stack_probe() -> void {
     builder_.CreateUnreachable();
 }
 
-auto llvm_lowering::maybe_emit_mem_intrinsic_fallbacks() -> void {
-    if (!mem_fallbacks_used()) { return; }
-
-    // COFF/ELF dedupe weak defs via a COMDAT
-    const llvm::Triple triple{llvm_module_->getTargetTriple()};
-    // MachO has no COMDATs but folds weak symbols on its own
-    const bool want_comdat{!triple.isOSBinFormatMachO()};
-
-    auto* i8_ty{llvm::Type::getInt8Ty(context_)};
-    auto* i32_ty{llvm::Type::getInt32Ty(context_)};
-    auto* i64_ty{llvm::Type::getInt64Ty(context_)};
-    auto* ptr{types_.get_ptr_ty()};
-    auto* zero64{llvm::ConstantInt::get(i64_ty, 0)};
-    auto* one64{llvm::ConstantInt::get(i64_ty, 1)};
-
-    const auto new_fn{[&](std::string_view name, bool set) -> llvm::Function* {
-        if (llvm_module_->getFunction(name)) { return nullptr; }
-        auto* second{set ? static_cast<llvm::Type*>(i32_ty) : static_cast<llvm::Type*>(ptr)};
-        auto* fn_ty{llvm::FunctionType::get(ptr, {ptr, second, i64_ty}, false)};
-        auto* fn{llvm::Function::Create(
-            fn_ty, llvm::GlobalValue::WeakAnyLinkage, name, llvm_module_.get())};
-        if (want_comdat) { fn->setComdat(llvm_module_->getOrInsertComdat(std::string{name})); }
-        fn->addFnAttr(llvm::Attribute::NoInline);
-        fn->addFnAttr(llvm::Attribute::NoUnwind);
-        fn->addFnAttr(llvm::Attribute::NoBuiltin);
-        // `optnone` stops loop-idiom recognition from turning the byte loop back into a
-        // `llvm.mem*` intrinsic, which lowers to this same (recursive) libcall.
-        fn->addFnAttr(llvm::Attribute::OptimizeNone);
-        return fn;
-    }};
-
-    // Emits, from the current insert point, a `dst[k] = <byte>` loop (`k` runs 0..n, or n..0
-    // when `backward`) that branches to `after` when done.
-    const auto byte_loop{[&](gsl::not_null<llvm::Function*>   fn,
-                             gsl::not_null<llvm::Value*>      dst,
-                             gsl::not_null<llvm::Value*>      mid,
-                             gsl::not_null<llvm::Value*>      n,
-                             bool                             set,
-                             bool                             backward,
-                             gsl::not_null<llvm::BasicBlock*> after) {
-        auto* iv{builder_.CreateAlloca(i64_ty, nullptr, "i")};
-        builder_.CreateStore(backward ? n.get() : static_cast<llvm::Value*>(zero64), iv);
-        auto* head{llvm::BasicBlock::Create(context_, "head", fn)};
-        auto* body{llvm::BasicBlock::Create(context_, "body", fn)};
-        builder_.CreateBr(head);
-
-        builder_.SetInsertPoint(head);
-        auto* i{builder_.CreateLoad(i64_ty, iv, "i.cur")};
-        auto* cont{backward ? builder_.CreateICmpNE(i, zero64) : builder_.CreateICmpULT(i, n)};
-        builder_.CreateCondBr(cont, body, after);
-
-        builder_.SetInsertPoint(body);
-        auto* idx{backward ? builder_.CreateSub(i, one64) : i};
-        auto* dp{builder_.CreateGEP(i8_ty, dst, idx, "dp")};
-        if (set) {
-            builder_.CreateStore(builder_.CreateTrunc(mid, i8_ty), dp);
-        } else {
-            auto* sp{builder_.CreateGEP(i8_ty, mid, idx, "sp")};
-            builder_.CreateStore(builder_.CreateLoad(i8_ty, sp, "b"), dp);
-        }
-        builder_.CreateStore(backward ? idx : builder_.CreateAdd(i, one64), iv);
-        builder_.CreateBr(head);
-    }};
-
-    // A simple non-overlapping memory intrinsic
-    const auto simple{[&](std::string_view name, bool set, bool backward) {
-        auto* fn{new_fn(name, set)};
-        if (!fn) { return; }
-        auto  arg{fn->arg_begin()};
-        auto* dst{arg++};
-        auto* mid{arg++};
-        auto* n{arg};
-        auto* done{llvm::BasicBlock::Create(context_, "done", fn)};
-        builder_.SetInsertPoint(done);
-        builder_.CreateRet(dst);
-        builder_.SetInsertPoint(llvm::BasicBlock::Create(context_, "entry", fn, done));
-        byte_loop(fn, dst, mid, n, set, backward, done);
-    }};
-
-    if (memcpy_used_) { simple("memcpy", false, false); }
-    if (memset_used_) { simple("memset", true, false); }
-    if (memmove_used_) {
-        if (auto* fn{new_fn("memmove", false)}) {
-            auto  arg{fn->arg_begin()};
-            auto* dst{arg++};
-            auto* src{arg++};
-            auto* n{arg};
-            auto* done{llvm::BasicBlock::Create(context_, "done", fn)};
-            builder_.SetInsertPoint(done);
-            builder_.CreateRet(dst);
-
-            auto* fwd{llvm::BasicBlock::Create(context_, "fwd", fn, done)};
-            auto* bwd{llvm::BasicBlock::Create(context_, "bwd", fn, done)};
-            builder_.SetInsertPoint(llvm::BasicBlock::Create(context_, "entry", fn, fwd));
-            auto* di{builder_.CreatePtrToInt(dst, i64_ty)};
-            auto* si{builder_.CreatePtrToInt(src, i64_ty)};
-            builder_.CreateCondBr(builder_.CreateICmpULT(di, si), fwd, bwd);
-
-            builder_.SetInsertPoint(fwd);
-            byte_loop(fn, dst, src, n, false, false, done);
-            builder_.SetInsertPoint(bwd);
-            byte_loop(fn, dst, src, n, false, true, done);
-        }
-    }
+auto llvm_lowering::usize_const(u64 value) -> llvm::ConstantInt* {
+    return llvm::ConstantInt::get(types_.get_usize_ty(), value);
 }
 
 auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_args) -> llvm::Value* {
@@ -629,7 +532,7 @@ auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_arg
             auto* outer_len{builder_.CreateStructGEP(
                 slice_ty, outer_slice, static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX), "outer.len")};
             builder_.CreateStore(llvm::ConstantPointerNull::get(types_.get_ptr_ty()), outer_data);
-            builder_.CreateStore(builder_.getInt64(0), outer_len);
+            builder_.CreateStore(usize_const(0), outer_len);
             outer_val = builder_.CreateLoad(slice_ty, outer_slice, "outer.val");
         } else {
             // Recover argv via raw Win32 APIs (no CRT): split into wide args, convert to UTF-8.
@@ -662,12 +565,13 @@ auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_arg
             auto* cmdline{builder_.CreateCall(get_cmdline_fn, {}, "cmdline")};
             auto* wargv{builder_.CreateCall(cmdline_to_argv_fn, {cmdline, nargs_slot}, "wargv")};
             auto* nargs_i32{builder_.CreateLoad(types_.get_int32_ty(), nargs_slot, "nargs.val")};
-            auto* raw_argc_i64{builder_.CreateSExt(nargs_i32, types_.get_int64_ty(), "argc.i64")};
+            auto* raw_argc_i64{
+                builder_.CreateSExtOrTrunc(nargs_i32, types_.get_usize_ty(), "argc.i64")};
 
-            auto* max_args_v{builder_.getInt64(max_args)};
+            auto* max_args_v{usize_const(max_args)};
             auto* slice_array{builder_.CreateAlloca(slice_ty, max_args_v, "args.array")};
             auto* arg_bufs{builder_.CreateAlloca(
-                types_.get_int8_ty(), builder_.getInt64(max_args * max_arg_bytes), "arg.bufs")};
+                types_.get_int8_ty(), usize_const(max_args * max_arg_bytes), "arg.bufs")};
             auto* argc_i64{builder_.CreateSelect(builder_.CreateICmpSLT(raw_argc_i64, max_args_v),
                                                  raw_argc_i64,
                                                  max_args_v,
@@ -678,12 +582,12 @@ auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_arg
             auto* loop_inc{llvm::BasicBlock::Create(context_, "wargs.inc", entry_fn)};
             auto* loop_end{llvm::BasicBlock::Create(context_, "wargs.end", entry_fn)};
 
-            auto* i_var{builder_.CreateAlloca(types_.get_int64_ty(), nullptr, "wi")};
-            builder_.CreateStore(builder_.getInt64(0), i_var);
+            auto* i_var{builder_.CreateAlloca(types_.get_usize_ty(), nullptr, "wi")};
+            builder_.CreateStore(usize_const(0), i_var);
             builder_.CreateBr(loop_cond);
 
             builder_.SetInsertPoint(loop_cond);
-            auto* cur_i{builder_.CreateLoad(types_.get_int64_ty(), i_var, "wcur.i")};
+            auto* cur_i{builder_.CreateLoad(types_.get_usize_ty(), i_var, "wcur.i")};
             auto* cmp{builder_.CreateICmpSLT(cur_i, argc_i64, "wcmp")};
             builder_.CreateCondBr(cmp, loop_body, loop_end);
 
@@ -691,7 +595,7 @@ auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_arg
             auto* wargv_elem_ptr{
                 builder_.CreateGEP(types_.get_ptr_ty(), wargv, {cur_i}, "wargv.elem.ptr")};
             auto* wstr_ptr{builder_.CreateLoad(types_.get_ptr_ty(), wargv_elem_ptr, "wstr.ptr")};
-            auto* buf_off{builder_.CreateMul(cur_i, builder_.getInt64(max_arg_bytes), "buf.off")};
+            auto* buf_off{builder_.CreateMul(cur_i, usize_const(max_arg_bytes), "buf.off")};
             auto* buf_ptr{builder_.CreateGEP(types_.get_int8_ty(), arg_bufs, {buf_off}, "buf.ptr")};
 
             // Subtract one to exclude the converted null terminator, matching strlen-style.
@@ -708,8 +612,8 @@ auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_arg
                                              llvm::ConstantPointerNull::get(types_.get_ptr_ty())},
                                     "converted.len")};
             auto* converted_i64{
-                builder_.CreateSExt(converted, types_.get_int64_ty(), "converted.i64")};
-            auto* final_len{builder_.CreateSub(converted_i64, builder_.getInt64(1), "final.len")};
+                builder_.CreateSExtOrTrunc(converted, types_.get_usize_ty(), "converted.i64")};
+            auto* final_len{builder_.CreateSub(converted_i64, usize_const(1), "final.len")};
 
             auto* dest_slice_ptr{
                 builder_.CreateGEP(slice_ty, slice_array, {cur_i}, "wdest.slice.ptr")};
@@ -728,7 +632,7 @@ auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_arg
             builder_.CreateBr(loop_inc);
 
             builder_.SetInsertPoint(loop_inc);
-            auto* inc_i{builder_.CreateAdd(cur_i, builder_.getInt64(1), "winc.i")};
+            auto* inc_i{builder_.CreateAdd(cur_i, usize_const(1), "winc.i")};
             builder_.CreateStore(inc_i, i_var);
             builder_.CreateBr(loop_cond);
 
@@ -751,10 +655,10 @@ auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_arg
     auto* argv{entry_fn->getArg(1)};
     argv->setName("argv");
 
-    auto* raw_argc_i64{builder_.CreateSExt(argc, types_.get_int64_ty(), "argc.i64")};
+    auto* raw_argc_i64{builder_.CreateSExtOrTrunc(argc, types_.get_usize_ty(), "argc.i64")};
 
     // Fixed 128-slot buffer of {ptr, len} pairs; small enough to avoid stack probing.
-    auto* max_args{builder_.getInt64(128)};
+    auto* max_args{usize_const(128)};
     auto* slice_array{builder_.CreateAlloca(slice_ty, max_args, "args.array")};
     auto* argc_i64{builder_.CreateSelect(
         builder_.CreateICmpSLT(raw_argc_i64, max_args), raw_argc_i64, max_args, "argc.bounded")};
@@ -764,13 +668,13 @@ auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_arg
     auto* loop_inc{llvm::BasicBlock::Create(context_, "loop.inc", entry_fn)};
     auto* loop_end{llvm::BasicBlock::Create(context_, "loop.end", entry_fn)};
 
-    auto* i_var{builder_.CreateAlloca(types_.get_int64_ty(), nullptr, "i")};
-    builder_.CreateStore(builder_.getInt64(0), i_var);
+    auto* i_var{builder_.CreateAlloca(types_.get_usize_ty(), nullptr, "i")};
+    builder_.CreateStore(usize_const(0), i_var);
     builder_.CreateBr(loop_cond);
 
     // Loop condition: i < argc_i64
     builder_.SetInsertPoint(loop_cond);
-    auto* cur_i{builder_.CreateLoad(types_.get_int64_ty(), i_var, "cur.i")};
+    auto* cur_i{builder_.CreateLoad(types_.get_usize_ty(), i_var, "cur.i")};
     auto* cmp{builder_.CreateICmpSLT(cur_i, argc_i64, "cmp")};
     builder_.CreateCondBr(cmp, loop_body, loop_end);
 
@@ -784,24 +688,24 @@ auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_arg
     auto* str_len_body{llvm::BasicBlock::Create(context_, "strlen.body", entry_fn)};
     auto* str_len_end{llvm::BasicBlock::Create(context_, "strlen.end", entry_fn)};
 
-    auto* len_var{builder_.CreateAlloca(types_.get_int64_ty(), nullptr, "str.len")};
-    builder_.CreateStore(builder_.getInt64(0), len_var);
+    auto* len_var{builder_.CreateAlloca(types_.get_usize_ty(), nullptr, "str.len")};
+    builder_.CreateStore(usize_const(0), len_var);
     builder_.CreateBr(str_len_cond);
 
     builder_.SetInsertPoint(str_len_cond);
-    auto* cur_len{builder_.CreateLoad(types_.get_int64_ty(), len_var, "cur.len")};
+    auto* cur_len{builder_.CreateLoad(types_.get_usize_ty(), len_var, "cur.len")};
     auto* char_ptr{builder_.CreateGEP(types_.get_int8_ty(), str_ptr, {cur_len}, "char.ptr")};
     auto* char_val{builder_.CreateLoad(types_.get_int8_ty(), char_ptr, "char.val")};
     auto* is_not_null{builder_.CreateICmpNE(char_val, builder_.getInt8(0), "not.null")};
     builder_.CreateCondBr(is_not_null, str_len_body, str_len_end);
 
     builder_.SetInsertPoint(str_len_body);
-    auto* next_len{builder_.CreateAdd(cur_len, builder_.getInt64(1), "next.len")};
+    auto* next_len{builder_.CreateAdd(cur_len, usize_const(1), "next.len")};
     builder_.CreateStore(next_len, len_var);
     builder_.CreateBr(str_len_cond);
 
     builder_.SetInsertPoint(str_len_end);
-    auto* final_len{builder_.CreateLoad(types_.get_int64_ty(), len_var, "final.len")};
+    auto* final_len{builder_.CreateLoad(types_.get_usize_ty(), len_var, "final.len")};
 
     // Store { str_ptr, final_len } into slice_array[cur_i]
     auto* dest_slice_ptr{builder_.CreateGEP(slice_ty, slice_array, {cur_i}, "dest.slice.ptr")};
@@ -815,7 +719,7 @@ auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_arg
 
     // Loop increment: i++
     builder_.SetInsertPoint(loop_inc);
-    auto* inc_i{builder_.CreateAdd(cur_i, builder_.getInt64(1), "inc.i")};
+    auto* inc_i{builder_.CreateAdd(cur_i, usize_const(1), "inc.i")};
     builder_.CreateStore(inc_i, i_var);
     builder_.CreateBr(loop_cond);
 
@@ -1030,7 +934,7 @@ auto llvm_lowering::emit_context_handler_call(const gir::instruction& inst,
                 slice = builder_.CreateInsertValue(
                     slice, gstr, {static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX)});
                 slice = builder_.CreateInsertValue(slice,
-                                                   builder_.getInt64(str->size()),
+                                                   usize_const(str->size()),
                                                    {static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX)});
                 return slice;
             }
@@ -1079,7 +983,7 @@ auto llvm_lowering::emit_lowered_panic(std::string_view message, const gir::inst
         slice =
             builder_.CreateInsertValue(slice, gstr, {static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX)});
         slice = builder_.CreateInsertValue(
-            slice, builder_.getInt64(text.size()), {static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX)});
+            slice, usize_const(text.size()), {static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX)});
         return slice;
     }};
 
@@ -2346,7 +2250,7 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
                             slice_val, ptr_val, {static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX)});
                         slice_val = builder_.CreateInsertValue(
                             slice_val,
-                            builder_.getInt64(static_cast<u64>(arr_data->len)),
+                            usize_const(static_cast<u64>(arr_data->len)),
                             {static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX)});
                         arg_val = slice_val;
                     }
@@ -2628,7 +2532,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
                     file_slice, gstr, {static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX)});
                 file_slice =
                     builder_.CreateInsertValue(file_slice,
-                                               builder_.getInt64(path->size()),
+                                               usize_const(path->size()),
                                                {static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX)});
             }
 
@@ -2663,7 +2567,6 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             auto* len{lower_value(inst.operands[2])};
             if (dest && src && len) {
                 builder_.CreateMemCpy(dest, llvm::MaybeAlign(), src, llvm::MaybeAlign(), len);
-                memcpy_used_ = true;
             }
             return nullptr;
         }
@@ -2672,10 +2575,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             auto* dest{lower_value(inst.operands[0])};
             auto* val{lower_value(inst.operands[1])};
             auto* len{lower_value(inst.operands[2])};
-            if (dest && val && len) {
-                builder_.CreateMemSet(dest, val, len, llvm::MaybeAlign());
-                memset_used_ = true;
-            }
+            if (dest && val && len) { builder_.CreateMemSet(dest, val, len, llvm::MaybeAlign()); }
             return nullptr;
         }
         case syntax::token_type_t::BUILTIN_MEMMOVE: {
@@ -2685,7 +2585,6 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             auto* len{lower_value(inst.operands[2])};
             if (dest && src && len) {
                 builder_.CreateMemMove(dest, llvm::MaybeAlign(), src, llvm::MaybeAlign(), len);
-                memmove_used_ = true;
             }
             return nullptr;
         }
@@ -2814,8 +2713,8 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             const auto  offset{layout.getStructLayout(llvm::cast<llvm::StructType>(struct_ty))
                                   ->getElementOffset(static_cast<u32>(field_idx))};
 
-            auto* field_int{builder_.CreatePtrToInt(field_ptr, types_.get_int64_ty(), "fpp.i")};
-            auto* parent_int{builder_.CreateSub(field_int, builder_.getInt64(offset), "fpp.base")};
+            auto* field_int{builder_.CreatePtrToInt(field_ptr, types_.get_usize_ty(), "fpp.i")};
+            auto* parent_int{builder_.CreateSub(field_int, usize_const(offset), "fpp.base")};
             return builder_.CreateIntToPtr(parent_int, types_.get_ptr_ty(), "fpp.p");
         }
 

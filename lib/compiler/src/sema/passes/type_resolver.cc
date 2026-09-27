@@ -5966,16 +5966,16 @@ auto type_resolver::resolve_structural_access(type&                  object_type
     }
 
     if (enum_type) { return ctx_.pool.strip_volatile(enum_type->type_at(member_idx, object_type)); }
-    type* member_type{struct_type  ? struct_type->type_ptr_at(member_idx)
-                      : union_type ? union_type->type_ptr_at(member_idx)
-                                   : nullptr};
+    auto member_type{struct_type  ? struct_type->type_at_opt(member_idx)
+                      : union_type ? union_type->type_at_opt(member_idx)
+                                   : stdx::none};
     ASSERT(struct_type || union_type, "Error handling failed to catch invalid type");
     // A member reached from inside its own (still resolving) body goes through its symbol
     if (!member_type) {
         resolve_symbol(member, member_symbol);
         return last_type_.take();
     }
-    return member_type;
+    return member_type.get();
 }
 
 auto type_resolver::get_rightmost_name(ast::expr_handle handle) const noexcept

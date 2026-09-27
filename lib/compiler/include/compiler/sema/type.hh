@@ -283,7 +283,7 @@ struct union_t {
     }
 
     // Null while the member at `idx` is itself still being resolved (e.g. a recursive method)
-    [[nodiscard]] auto type_ptr_at(usize idx) const noexcept -> type* {
+    [[nodiscard]] auto type_at_opt(usize idx) const noexcept -> stdx::option<type&> {
         ASSERT(idx < fields.size() + members.size(), "Index exceeds union's types");
         return idx < fields.size() ? fields[idx] : members[idx - fields.size()];
     }
@@ -310,7 +310,7 @@ struct struct_t {
     }
 
     // Null while the member at `idx` is itself still being resolved (e.g. a recursive method)
-    [[nodiscard]] auto type_ptr_at(usize idx) const noexcept -> type* {
+    [[nodiscard]] auto type_at_opt(usize idx) const noexcept -> stdx::option<type&> {
         ASSERT(idx < fields.size() + members.size(), "Index exceeds struct's types");
         return idx < fields.size() ? fields[idx] : members[idx - fields.size()];
     }

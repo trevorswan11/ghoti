@@ -145,15 +145,14 @@ class llvm_lowering {
     // Synthesizes a weak, runtime-free stack-probe routine when targeting x86-64 Windows
     auto maybe_emit_windows_stack_probe() -> void;
 
-    // Provide `@memcpy`/`@memset`/`@memmove` overrides to llvm intrinsics w/o libc
-    auto maybe_emit_mem_intrinsic_fallbacks() -> void;
-
     auto get_or_create_test_failed_flag() -> llvm::GlobalVariable*;
     auto get_or_create_test_skipped_flag() -> llvm::GlobalVariable*;
     auto define_test_take_skipped() -> void;
 
     // Calls a weak `builtin` context handler `handler(msg, loc: SourceLocation)`
     // A pointer or wide integer condition as an `i1` (non-null / non-zero)
+    // A constant of the target's `usize` width (slice lengths, byte offsets)
+    auto usize_const(u64 value) -> llvm::ConstantInt*;
     auto lower_truthiness(llvm::Value* value) -> llvm::Value*;
     // Branches to a fresh `<prefix>.fail` block (left as the insert point) when `cond` is false,
     // returning the `<prefix>.cont` block
@@ -179,10 +178,6 @@ class llvm_lowering {
                                llvm::Value*            rhs,
                                bool                    is_signed) -> llvm::Value*;
 
-    [[nodiscard]] constexpr auto mem_fallbacks_used() const noexcept -> bool {
-        return memcpy_used_ || memmove_used_ || memset_used_;
-    }
-
   private:
     llvm::LLVMContext&                                                 context_;
     stdx::box<llvm::Module>                                            llvm_module_;
@@ -195,9 +190,6 @@ class llvm_lowering {
     ankerl::unordered_dense::map<llvm::FunctionType*, llvm::Function*> fn_trampolines_;
     bool                             reserved_symbols_built_{false};
     bool                             is_executable_{false};
-    bool                             memcpy_used_{false};
-    bool                             memmove_used_{false};
-    bool                             memset_used_{false};
     stdx::option<const gir::module&> gir_module_;
     std::string                      user_main_name_{"main"};
 };

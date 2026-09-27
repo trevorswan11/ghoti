@@ -5,6 +5,7 @@
 #include <utility>
 #include <vector>
 
+#include <stdx/option.hh>
 #include <stdx/types.hh>
 #include <stdx/variant.hh>
 

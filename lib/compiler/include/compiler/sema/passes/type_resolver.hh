@@ -36,6 +36,7 @@
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "support/diagnostic.hh"
+#include "support/int128.hh"
 #include "support/scope_guard.hh"
 
 namespace ghoti::sema {
@@ -58,6 +59,19 @@ class type_resolver {
             unknowns.clear();
             seen.clear();
         }
+    };
+
+    // Resolves `block`'s statements in order, stopping at (and reporting) the first poisoned one
+    struct enum_value_tracker {
+        const type&                                    underlying;
+        stdx::option<i128>                             next{i128{0}};
+        std::vector<std::pair<i128, std::string_view>> seen{};
+    };
+
+    enum class operand_nature_t : u8 {
+        TYPE,
+        VALUE,
+        UNKNOWN,
     };
 
   public:
@@ -121,23 +135,13 @@ class type_resolver {
     // Runs `check_deferred_body_jumps`, reporting whether it found a jump
     [[nodiscard]] auto deferred_body_jumps(ast::stmt_handle body) -> bool;
 
-    // Resolves `block`'s statements in order, stopping at (and reporting) the first poisoned one
-    struct enum_value_tracker {
-        const type&                                    underlying;
-        stdx::option<i128>                             next{i128{0}};
-        std::vector<std::pair<i128, std::string_view>> seen{};
-    };
     // Checks an enum member's (explicit or implied) value fits and is unique
     [[nodiscard]] auto check_enum_value(enum_value_tracker&            values,
                                         ast::identifier_handle         name,
                                         stdx::option<ast::expr_handle> value)
         -> stdx::option<diagnostic>;
     [[nodiscard]] auto probe_fold(ast::expr_handle expr) const -> stdx::option<gir::const_value>;
-    enum class operand_nature_t : u8 {
-        TYPE,
-        VALUE,
-        UNKNOWN,
-    };
+
     // Whether an operand names a type, holds a value, or cannot tell before instantiation
     [[nodiscard]] auto operand_nature(ast::expr_handle expr) const -> operand_nature_t;
     [[nodiscard]] auto call_arg_denotes_type(const ast::call_expr::argument& arg) const -> bool;

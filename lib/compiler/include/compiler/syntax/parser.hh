@@ -282,6 +282,8 @@ class parser {
   private:
     static constexpr u32 MAX_NESTING_DEPTH{512};
     static constexpr u32 MAX_OPERATOR_CHAIN{4'096};
+
+  private:
     using depth_counter = counter<u32>;
     using depth_guard   = depth_counter::guard;
 
