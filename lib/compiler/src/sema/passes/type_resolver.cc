@@ -327,7 +327,16 @@ auto type_resolver::visit(ast::node_id id, const ast::asm_expr& node) -> void {
     for (const auto& op : node.inputs) { resolve(op.constraint); }
     for (const auto& clobber : node.clobbers) { resolve(clobber); }
     for (const auto& op : node.inputs) {
-        if (op.value) { TRY_RESOLVE(*op.value); }
+        if (!op.value) { continue; }
+        TRY_RESOLVE(*op.value);
+        if (operand_nature(*op.value) == operand_nature_t::TYPE) {
+            return last_type_.emplace(
+                ctx_.poison_node(resolving_,
+                                 id,
+                                 "An asm input operand must be a value, not a type",
+                                 error::ILLEGAL_INLINE_ASM,
+                                 resolving_.ast.location_of(*op.value)));
+        }
     }
 
     // Each operand constraint must be exactly one well-formed LLVM constraint of its direction
@@ -5271,6 +5280,14 @@ auto type_resolver::visit(ast::node_id id, const ast::index_expr& index) -> void
         TRY_RESOLVE(index.index);
     }
     auto& access_type{*last_type_.take()};
+    if (!index.index.is<ast::range_expr>() &&
+        operand_nature(index.index) == operand_nature_t::TYPE) {
+        return last_type_.emplace(ctx_.poison_node(resolving_,
+                                                   id,
+                                                   "An index must be a value, not a type",
+                                                   error::TYPE_USED_AS_VALUE,
+                                                   resolving_.ast.location_of(index.index)));
+    }
 
     // A constant range over a container of known length is bounds-checked statically
     if (const auto range{resolving_.ast.get_as_opt<ast::range_expr>(index.index)};

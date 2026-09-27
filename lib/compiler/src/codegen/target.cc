@@ -1,12 +1,18 @@
 #include "compiler/codegen/target.hh"
 
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
+#include <vector>
 
 #include <fmt/format.h>
 #include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/DiagnosticHandler.h>
+#include <llvm/IR/DiagnosticInfo.h>
+#include <llvm/IR/DiagnosticPrinter.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
@@ -65,6 +71,56 @@ auto to_llvm_code_model(code_model model) noexcept -> llvm::CodeModel::Model {
     case code_model::LARGE:  return llvm::CodeModel::Large;
     }
 }
+
+// Collects backend errors (e.g. a malformed inline-asm template) for the lifetime of the guard;
+// LLVM's default handler would print them and exit the process
+class emission_diagnostics {
+  public:
+    explicit emission_diagnostics(llvm::LLVMContext& context)
+        : context_{context}, previous_{context.getDiagnosticHandler()} {
+        context_.setDiagnosticHandler(std::make_unique<collector>(errors_));
+    }
+    ~emission_diagnostics() { context_.setDiagnosticHandler(std::move(previous_)); }
+    emission_diagnostics(const emission_diagnostics&)                    = delete;
+    auto operator=(const emission_diagnostics&) -> emission_diagnostics& = delete;
+
+    [[nodiscard]] auto first_error() const -> stdx::option<std::string> {
+        if (errors_.empty()) { return stdx::none; }
+        return errors_.front();
+    }
+
+  private:
+    // The lowering packs an `asm` block's line/column into its `srcloc` cookie
+    [[nodiscard]] static auto with_asm_location(const llvm::DiagnosticInfo& info,
+                                                std::string message) -> std::string {
+        const auto* src_mgr{llvm::dyn_cast<llvm::DiagnosticInfoSrcMgr>(&info)};
+        if (!src_mgr || src_mgr->getLocCookie() == 0) { return message; }
+        const auto cookie{src_mgr->getLocCookie()};
+        return fmt::format("{}:{}:{}: in inline assembly: {}",
+                           src_mgr->getModuleName(),
+                           (cookie >> 32U) + 1,
+                           (cookie & 0xFFFFFFFFU) + 1,
+                           message);
+    }
+
+    struct collector final : llvm::DiagnosticHandler {
+        explicit collector(std::vector<std::string>& errors) : errors_{errors} {}
+        auto handleDiagnostics(const llvm::DiagnosticInfo& info) -> bool override {
+            if (info.getSeverity() != llvm::DS_Error) { return true; }
+            std::string                       message;
+            llvm::raw_string_ostream          os{message};
+            llvm::DiagnosticPrinterRawOStream printer{os};
+            info.print(printer);
+            errors_.emplace_back(with_asm_location(info, std::move(message)));
+            return true;
+        }
+        std::vector<std::string>& errors_;
+    };
+
+    llvm::LLVMContext&                       context_;
+    std::unique_ptr<llvm::DiagnosticHandler> previous_;
+    std::vector<std::string>                 errors_;
+};
 
 } // namespace
 
@@ -293,10 +349,14 @@ auto emit_object_file(llvm::Module&                module,
                                 error::OBJECT_EMISSION_FAILED);
     }
 
+    const emission_diagnostics diagnostics{module.getContext()};
     {
         PROFILE_SCOPE("LLVM Machine Code Emission");
         pass_manager.run(module);
         dest.flush();
+    }
+    if (const auto message{diagnostics.first_error()}) {
+        return make_codegen_err(*message, error::OBJECT_EMISSION_FAILED);
     }
     return {};
 }
@@ -321,8 +381,12 @@ auto emit_asm_string(llvm::Module& module, llvm::TargetMachine& target_machine)
                                     error::ASM_EMISSION_FAILED);
         }
 
+        const emission_diagnostics diagnostics{module.getContext()};
         PROFILE_SCOPE("LLVM Assembly Emission");
         pass_manager.run(module);
+        if (const auto message{diagnostics.first_error()}) {
+            return make_codegen_err(*message, error::ASM_EMISSION_FAILED);
+        }
     }
     return buffer;
 }

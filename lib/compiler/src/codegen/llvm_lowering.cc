@@ -3038,6 +3038,14 @@ auto llvm_lowering::emit_inline_asm(const gir::instruction& inst) -> llvm::Value
 
     auto* call{builder_.CreateCall(fn_ty, inline_asm, args)};
     call->addFnAttr(llvm::Attribute::NoUnwind);
+    // Assembler errors report this cookie back, so they can name the `asm` block's location
+    if (inst.location) {
+        const auto cookie{(static_cast<u64>(inst.location->line) << 32U) |
+                          static_cast<u32>(inst.location->column)};
+        call->setMetadata(
+            "srcloc",
+            llvm::MDNode::get(context_, llvm::ConstantAsMetadata::get(builder_.getInt64(cookie))));
+    }
     if (info.is_noreturn) { call->setDoesNotReturn(); }
 
     // Store each bound output back through its target address.

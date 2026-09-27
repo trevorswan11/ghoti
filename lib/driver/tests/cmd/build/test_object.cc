@@ -348,6 +348,25 @@ TEST_CASE("build_obj follows an import written as an absolute path") {
     CHECK(std::filesystem::exists(obj_file));
 }
 
+TEST_CASE("build_obj reports an assembler error in inline asm instead of exiting") {
+    codegen::llvm_scope scope;
+    tempfile            src_file{"test_bad_asm_src.gh"};
+    tempfile            obj_file{"test_bad_asm_out.o"};
+    {
+        std::ofstream out{src_file.path};
+        fmt::print(out, R"(
+            pub const f := fn(): void {{
+                asm {{ template: "definitely_not_an_instruction", options: (volatile) }};
+            }};
+        )");
+    }
+
+    codegen::target_options target_opts{.triple_str = "x86_64-unknown-linux-gnu"};
+    cmd::build_obj          cmd{
+                 {.input_path = src_file, .output_path = obj_file, .target_opts = target_opts}};
+    CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::COMPILATION_FAILED);
+}
+
 TEST_CASE("build_obj creates a missing output directory") {
     codegen::llvm_scope scope;
     tempfile            src_file{"test_nested_out_src.gh"};

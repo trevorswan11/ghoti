@@ -517,4 +517,16 @@ TEST_CASE("a repeated self-reference reports once instead of crashing") {
     )");
 }
 
+TEST_CASE("a type cannot be an index or an asm input") {
+    CHECK(helpers::raised(
+        "pub const main := fn(): i32 { const a: [3]i32 = .{1, 2, 3}; return a[i32]; };",
+        sema::error::TYPE_USED_AS_VALUE));
+    CHECK(helpers::raised(R"(
+        pub const f := fn(): void {
+            asm { template: "syscall", inputs: ("{rax}" = i64), options: (volatile) };
+        };
+    )",
+                          sema::error::ILLEGAL_INLINE_ASM));
+}
+
 } // namespace ghoti::tests
