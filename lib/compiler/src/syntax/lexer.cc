@@ -272,8 +272,12 @@ auto lexer::read_number() noexcept -> token_t {
     while (true) {
         const auto c{current_byte_};
 
-        // Exponent handling defaults to floats for simplicity
-        if (base == numeric_base::DECIMAL && !passed_exponent && (c == 'e' || c == 'E')) {
+        // Exponent handling defaults to floats for simplicity; hex floats use a binary `p` exponent
+        const bool exponent_marker{base == numeric_base::HEXADECIMAL ? (c == 'p' || c == 'P')
+                                                                     : (c == 'e' || c == 'E')};
+        const bool has_mantissa{base == numeric_base::DECIMAL ||
+                                (base == numeric_base::HEXADECIMAL && last_was_digit)};
+        if (has_mantissa && !passed_exponent && exponent_marker) {
             auto p{peek_pos_};
             if (p >= input_.size()) { break; }
 
@@ -306,10 +310,22 @@ auto lexer::read_number() noexcept -> token_t {
             continue;
         }
 
-        // Underscore can only be in between digits
+        // A hex fraction needs digits on both sides of the '.', leaving `0x1..2` and `0x1.len`
+        // alone
+        if (base == numeric_base::HEXADECIMAL && c == '.' && last_was_digit && !passed_decimal &&
+            !passed_exponent && peek_pos_ < input_.size() &&
+            digit_in_base(input_[peek_pos_], numeric_base::HEXADECIMAL)) {
+            passed_decimal = true;
+            last_was_digit = false;
+            read_character();
+            continue;
+        }
+
+        // Underscore can only be in between digits; exponent digits are always decimal
+        const auto digit_base{passed_exponent ? numeric_base::DECIMAL : base};
         if (c == '_' && last_was_digit) {
             read_character();
-            if (!digit_in_base(current_byte_, base)) {
+            if (!digit_in_base(current_byte_, digit_base)) {
                 return {token_type_t::ILLEGAL,
                         stdx::string::substr(input_, start, pos_ - start),
                         start_line,
@@ -320,7 +336,7 @@ auto lexer::read_number() noexcept -> token_t {
         }
 
         // Normal digit
-        if (digit_in_base(c, base)) {
+        if (digit_in_base(c, digit_base)) {
             last_was_digit = true;
             read_character();
             continue;
@@ -377,17 +393,16 @@ auto lexer::read_number() noexcept -> token_t {
             token_type_t::ILLEGAL, stdx::string::substr(input_, start, 1), start_line, start_col};
     }
 
-    // A trailing bare '.' or a fractional non-decimal literal is malformed.
-    if (input_[pos_ - 1] == '.' || (passed_decimal && base != numeric_base::DECIMAL)) {
+    // A trailing bare '.' or a fractional binary/octal literal is malformed.
+    const bool float_base{base == numeric_base::DECIMAL || base == numeric_base::HEXADECIMAL};
+    if (input_[pos_ - 1] == '.' || (passed_decimal && !float_base)) {
         return {token_type_t::ILLEGAL, lexeme, start_line, start_col};
     }
 
     const bool has_float_suffix{!suffix.empty() &&
                                 (suffix.front() == 'f' || suffix.front() == 'F')};
     if (passed_decimal || passed_exponent || has_float_suffix) {
-        if (base != numeric_base::DECIMAL) {
-            return {token_type_t::ILLEGAL, lexeme, start_line, start_col};
-        }
+        if (!float_base) { return {token_type_t::ILLEGAL, lexeme, start_line, start_col}; }
         return {token_type_t::REAL, lexeme, start_line, start_col};
     }
 

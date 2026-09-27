@@ -211,10 +211,16 @@ auto float_literal_expr::parse(syntax::parser& parser)
     const auto start_token{parser.get_current_token()};
     const auto slice{start_token.slice};
 
+    // Hex digits include `f`, so a hex literal's suffix can only follow its `p` exponent
+    const bool hex{slice.size() > 1 && (slice[1] == 'x' || slice[1] == 'X')};
+    const auto suffix_search{hex ? slice.find_first_of("pP") : 0};
+
     // Trailing `f<width>` suffix, if any.
     std::string_view mantissa{slice};
     u8               width{0};
-    if (const auto pos{slice.find_last_of("fF")}; pos != std::string_view::npos) {
+    if (const auto pos{slice.find_last_of("fF")}; pos != std::string_view::npos &&
+                                                  suffix_search != std::string_view::npos &&
+                                                  pos > suffix_search) {
         const auto ws{stdx::string::substr(slice, pos + 1)};
         if (ws.empty() || !all_digits(ws)) {
             return make_syntax_err(
@@ -234,16 +240,17 @@ auto float_literal_expr::parse(syntax::parser& parser)
 
     std::string digits;
     digits.reserve(mantissa.size());
-    for (const char c : mantissa) {
+    for (const char c : hex ? stdx::string::substr(mantissa, 2) : mantissa) {
         if (c != '_') { digits.push_back(c); }
     }
 
     f64                          value{};
     const auto*                  digits_end{digits.data() + digits.size()};
-    const std::from_chars_result result{std::from_chars(digits.data(), digits_end, value)};
+    const auto                   format{hex ? std::chars_format::hex : std::chars_format::general};
+    const std::from_chars_result result{std::from_chars(digits.data(), digits_end, value, format)};
     if (result.ec != std::errc{} || result.ptr != digits_end) {
         // `from_chars` reports both directions as out of range; a negative exponent underflowed
-        const auto exponent{digits.find_first_of("eE")};
+        const auto exponent{digits.find_first_of(hex ? "pP" : "eE")};
         const bool underflow{exponent != std::string::npos && exponent + 1 < digits.size() &&
                              digits[exponent + 1] == '-'};
         return make_syntax_err(underflow ? "Float literal is too small to represent"

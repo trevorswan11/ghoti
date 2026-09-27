@@ -204,6 +204,33 @@ TEST_CASE("Lexing illegal floats") {
                });
 }
 
+TEST_CASE("Lexing hex floats") {
+    test_lexer(
+        "0x1.8p3 0X1P-4 0xA.Bp+2f32 0x1.f 0xF_F.8_0p1_0 0x1p3a 0xp3 0x1.p3 0x1..2 0x1.len 0b1.1",
+        {
+            {token_type_t::REAL, "0x1.8p3"},
+            {token_type_t::REAL, "0X1P-4"},
+            {token_type_t::REAL, "0xA.Bp+2f32"},
+            {token_type_t::REAL, "0x1.f"},
+            {token_type_t::REAL, "0xF_F.8_0p1_0"},
+            {token_type_t::ILLEGAL, "0x1p3a"},
+            {token_type_t::ILLEGAL, "0x"},
+            {token_type_t::IDENT, "p3"},
+            {token_type_t::INT_16, "0x1"},
+            {token_type_t::DOT, "."},
+            {token_type_t::IDENT, "p3"},
+            {token_type_t::INT_16, "0x1"},
+            {token_type_t::DOT_DOT, ".."},
+            {token_type_t::INT_10, "2"},
+            {token_type_t::INT_16, "0x1"},
+            {token_type_t::DOT, "."},
+            {token_type_t::IDENT, "len"},
+            {token_type_t::INT_2, "0b1"},
+            {token_type_t::DOT, "."},
+            {token_type_t::INT_10, "1"},
+        });
+}
+
 TEST_CASE("Lexing signed int variants") {
     test_lexer("0b1010 0o17 0O17 42 0x2A 0X2A 0b 0x 0o",
                {

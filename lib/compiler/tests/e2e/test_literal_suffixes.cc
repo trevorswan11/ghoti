@@ -56,4 +56,20 @@ TEST_CASE("float literal width suffixes are accepted") {
     )") == 0);
 }
 
+TEST_CASE("hex float literals denote exact binary values") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            if (0x1.8p3 != 12.0) { return 1; }
+            if (0x1p-2 != 0.25) { return 2; }
+            if (0xA.8 != 10.5) { return 3; }
+            if (0x1.fp1f32 != 3.875f32) { return 4; }
+            if (0xF_F.8p0 != 255.5) { return 5; }
+            const tiny: f64 = 0x1p-1074;
+            if (tiny == 0.0) { return 6; }
+            if (0x1.fffffffffffffp1023 != 1.7976931348623157e308) { return 7; }
+            return 0;
+        };
+    )") == 0);
+}
+
 } // namespace ghoti::tests
