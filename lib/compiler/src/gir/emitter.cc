@@ -726,6 +726,17 @@ auto emitter::folded_int(const value& v) noexcept -> stdx::option<i128> {
     return stdx::none;
 }
 
+auto emitter::check_constexpr_float_fits(const value& v, const sema::type& target, ast::node_id at)
+    -> void {
+    const auto f{v.as_opt<f64>()};
+    if (!f || sema::constexpr_float_fits(*f, target)) { return; }
+    ctx_.diags.emplace_back(fmt::format("float value {} is out of range for type '{}'",
+                                        *f,
+                                        ctx_.type_display_name(target)),
+                            sema::error::LITERAL_OUT_OF_RANGE,
+                            active_ast().location_of(at));
+}
+
 auto emitter::coerce_constexpr_int(value v, sema::type& target, ast::node_id at) -> value {
     const auto folded{folded_int(v)};
     if (folded && !sema::constexpr_int_fits(*folded, target, target_ptr_bits_)) {
@@ -877,13 +888,12 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
         if (sema::is_float(dest_type.get_kind()) &&
             val.type->get_kind() == sema::type_kind::CONSTEXPR_INT) {
             // int literal -> float context: convert the payload to floating point.
-            if (const auto iv{val.as_opt<i64>()}) { return value{static_cast<f64>(*iv), concrete}; }
-            if (const auto uv{val.as_opt<u64>()}) { return value{static_cast<f64>(*uv), concrete}; }
-            if (const auto iv{val.as_opt<i128>()}) {
-                return value{static_cast<f64>(*iv), concrete};
-            }
-            if (const auto uv{val.as_opt<u128>()}) {
-                return value{static_cast<f64>(*uv), concrete};
+            if (const auto folded{folded_int(val)}) {
+                const auto  as_float{val.as_opt<u128>() ? static_cast<f64>(*val.as_opt<u128>())
+                                                        : static_cast<f64>(*folded)};
+                const value converted{as_float, concrete};
+                check_constexpr_float_fits(converted, concrete, *expr_id);
+                return converted;
             }
         }
         // Reject a compile-time integer that does not fit its concrete integer target.
@@ -891,6 +901,7 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
             sema::is_integer(dest_type.get_kind())) {
             return coerce_constexpr_int(val, concrete, *expr_id);
         }
+        check_constexpr_float_fits(val, concrete, *expr_id);
         return value{val.data, concrete};
     }
 
@@ -1057,6 +1068,7 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                     sema::is_integer(sema_type->get_kind())) {
                     v = coerce_constexpr_int(v, *sema_type, *decl.value);
                 }
+                if (decl.explicit_type) { check_constexpr_float_fits(v, *sema_type, *decl.value); }
                 init_val.emplace(v);
             }
         } else {
@@ -1920,9 +1932,10 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                                 sema::is_implicit_widenable(*scalar.type, *sema_type))) {
                         // An integer constant widening into a float-typed binding needs an
                         // actual numeric conversion
-                        if (const auto iv{cv->as_int_opt()}) {
-                            scalar = value{static_cast<f64>(*iv), *sema_type};
-                        }
+                        if (const auto f{cv->int_as_f64_opt()}) { scalar = value{*f, *sema_type}; }
+                    }
+                    if (decl.explicit_type) {
+                        check_constexpr_float_fits(scalar, *sema_type, *decl.value);
                     }
 
                     // Prevent foldable `const`/`constexpr var` initializer from bypassing type
@@ -2115,9 +2128,11 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
             auto&      t{sema_type ? *sema_type : ctx_.get_int(32, true)};
             // An unsuffixed integer literal in a float context is a float constant.
             if (sema::is_float(t.get_kind()) || t.get_kind() == sema::type_kind::CONSTEXPR_FLOAT) {
-                return value{static_cast<f64>(static_cast<i128>(data.value)), t};
+                return value{static_cast<f64>(data.value), t};
             }
-            if (sema::is_unsigned_integer(t)) {
+            // Past `i128` max only an unsigned payload keeps the literal's value
+            if (sema::is_unsigned_integer(t) ||
+                data.value > static_cast<u128>(std::numeric_limits<i128>::max())) {
                 const u128 v{data.value};
                 if (v <= static_cast<u128>(std::numeric_limits<u64>::max())) {
                     return value{static_cast<u64>(v), t};
@@ -3274,6 +3289,9 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                     } else if (fn_token == syntax::token_type_t::BUILTIN_PTR_CAST ||
                                fn_token == syntax::token_type_t::BUILTIN_ALIGN_CAST) {
                         cast_kind = instruction_kind::PTR_CAST;
+                    }
+                    if (fn_token == syntax::token_type_t::BUILTIN_AS) {
+                        check_constexpr_float_fits(operand, ret_type, *op_expr);
                     }
                     // A compile-time operand folds, so an out-of-range float is a compile error
                     if (fn_token == syntax::token_type_t::BUILTIN_INT_FROM_FLOAT ||

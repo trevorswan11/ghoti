@@ -5967,8 +5967,8 @@ auto type_resolver::resolve_structural_access(type&                  object_type
 
     if (enum_type) { return ctx_.pool.strip_volatile(enum_type->type_at(member_idx, object_type)); }
     auto member_type{struct_type  ? struct_type->type_at_opt(member_idx)
-                      : union_type ? union_type->type_at_opt(member_idx)
-                                   : stdx::none};
+                     : union_type ? union_type->type_at_opt(member_idx)
+                                  : stdx::none};
     ASSERT(struct_type || union_type, "Error handling failed to catch invalid type");
     // A member reached from inside its own (still resolving) body goes through its symbol
     if (!member_type) {
@@ -8146,6 +8146,9 @@ auto type_resolver::visit(ast::node_id id, const ast::int_literal_expr& expr) ->
             }
         }
     }
+    if (!constexpr_float_fits(static_cast<f64>(expr.value), *resolved)) {
+        return last_type_.emplace(float_literal_overflow(id, *resolved));
+    }
     last_type_.emplace(*resolved);
     resolving_.set_sema_type(id, *last_type_);
 }
@@ -8179,8 +8182,20 @@ auto type_resolver::visit(ast::node_id id, const ast::float_literal_expr& expr) 
             resolved = ctx_.pool.strip_volatile(*implicit_type).get();
         }
     }
+    if (!constexpr_float_fits(expr.value, *resolved)) {
+        return last_type_.emplace(float_literal_overflow(id, *resolved));
+    }
     last_type_.emplace(*resolved);
     resolving_.set_sema_type(id, *last_type_);
+}
+
+auto type_resolver::float_literal_overflow(ast::node_id id, const type& target) -> type& {
+    return ctx_.poison_node(
+        resolving_,
+        id,
+        fmt::format("literal is out of range for type '{}'", ctx_.type_display_name(target)),
+        error::LITERAL_OUT_OF_RANGE,
+        resolving_.ast.location_of(id));
 }
 
 MAKE_PRIMITIVE_RESOLVER(bool_expr, BOOL)

@@ -72,4 +72,37 @@ TEST_CASE("hex float literals denote exact binary values") {
     )") == 0);
 }
 
+TEST_CASE("float literals at the edge of their type's range stay finite") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            // Both round down to the type's max rather than up to infinity
+            const h: f16 = 65519.0;
+            const f: f32 = 3.4028235e38;
+            if (h != 65504.0) { return 1; }
+            if (f / f != 1.0) { return 2; }
+            const n: f16 = -65519;
+            if (n != -65504.0) { return 3; }
+            return 0;
+        };
+    )") == 0);
+}
+
+TEST_CASE("integer literals past i128 max keep their unsigned value") {
+    CHECK(helpers::compile_and_run(R"(
+        const BIG := 340282366920938463463374607431768211455;
+        pub const main := fn(): i32 {
+            if (BIG < 0) { return 1; }
+            if (340282366920938463463374607431768211455 < 0) { return 2; }
+            const as_u: u128 = BIG;
+            if (as_u != 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF) { return 3; }
+            if (BIG / 2 != 170141183460469231731687303715884105727) { return 4; }
+            const as_f: f64 = BIG;
+            if (as_f < 3e38) { return 5; }
+            const lit_f: f64 = 340282366920938463463374607431768211455;
+            if (lit_f < 3e38) { return 6; }
+            return 0;
+        };
+    )") == 0);
+}
+
 } // namespace ghoti::tests

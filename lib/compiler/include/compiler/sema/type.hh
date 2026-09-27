@@ -633,6 +633,10 @@ static_assert(stdx::TriviallyDestructible<type>);
 [[nodiscard]] auto constexpr_int_fits(i128 value, const type& target, u32 ptr_bits) noexcept
     -> bool;
 
+// Whether the compile-time float `value` stays finite once rounded to `target`; a value that is
+// already infinite or NaN, or a target that is not a concrete float, always fits
+[[nodiscard]] auto constexpr_float_fits(f64 value, const type& target) noexcept -> bool;
+
 // Bit width of `t` when used as a field of a bit-packed `packed struct`/`packed union`, or
 // none when `t` is not packed-eligible. `ptr_bits` sizes pointer-like fields.
 [[nodiscard]] auto packed_field_bits(const type& t, u32 ptr_bits) noexcept -> stdx::option<u32>;

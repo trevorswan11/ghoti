@@ -993,9 +993,11 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
                 if (t.get_kind() == sema::type_kind::F80 || t.get_kind() == sema::type_kind::F128) {
                     return stdx::none;
                 }
-                return make_scalar_const(static_cast<f64>(static_cast<i128>(data.value)), t);
+                return make_scalar_const(static_cast<f64>(data.value), t);
             }
-            if (sema::is_unsigned_integer(t)) {
+            // Past `i128` max only an unsigned payload keeps the literal's value
+            if (sema::is_unsigned_integer(t) ||
+                data.value > static_cast<u128>(std::numeric_limits<i128>::max())) {
                 return make_scalar_const(static_cast<u128>(data.value), t);
             }
             return make_scalar_const(static_cast<i128>(data.value), t);
@@ -2514,8 +2516,7 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
     if (lhs.is<f64>() || rhs.is<f64>()) {
         const auto to_f64 = [](const const_value& v) -> f64 {
             if (v.is<f64>()) { return v.as<f64>(); }
-            if (const auto u{v.as_uint_opt()}) { return static_cast<f64>(*u); }
-            return static_cast<f64>(v.as_int_opt().value_or(0));
+            return v.int_as_f64_opt().value_or(0);
         };
         const auto res_type{lhs.get_type() ? lhs.get_type() : rhs.get_type()};
         // `f80`/`f128` results cannot be represented exactly at compile time; refuse to fold (D3).
@@ -3810,12 +3811,17 @@ auto const_eval::eval_builtin(ast::node_id          id,
                 target->get_kind() == sema::type_kind::F128) {
                 return stdx::none;
             }
-            if (const auto u{operand->as_opt<u64>()}) {
-                return const_value{static_cast<f64>(*u), target};
+            const auto f{operand->int_as_f64_opt()};
+            if (!f) { return stdx::none; }
+            if (!sema::constexpr_float_fits(*f, *target)) {
+                ctx_.diags.emplace_back(fmt::format("float value {} is out of range for type '{}'",
+                                                    *f,
+                                                    ctx_.type_display_name(*target)),
+                                        sema::error::LITERAL_OUT_OF_RANGE,
+                                        module_->ast.location_of(*op_h));
+                return const_value::make_poison();
             }
-            const auto i{operand->as_opt<i64>()};
-            if (!i) { return stdx::none; }
-            return const_value{static_cast<f64>(*i), target};
+            return const_value{*f, target};
         }
 
         const auto f{operand->as_opt<f64>()};

@@ -138,6 +138,13 @@ class const_value {
         return stdx::none;
     }
 
+    // An integer payload as the nearest `f64`, reading unsigned payloads as unsigned
+    [[nodiscard]] constexpr auto int_as_f64_opt() const noexcept -> stdx::option<f64> {
+        if (const auto u{as_uint_opt()}) { return static_cast<f64>(*u); }
+        if (const auto i{as_int_opt()}) { return static_cast<f64>(*i); }
+        return stdx::none;
+    }
+
     [[nodiscard]] constexpr auto as_uint_opt() const noexcept -> stdx::option<u128> {
         if (is<u64>()) { return as<u64>(); }
         if (is<u128>()) { return as<u128>(); }

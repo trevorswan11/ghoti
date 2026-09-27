@@ -1,6 +1,7 @@
 #include "compiler/sema/type.hh"
 
 #include <algorithm>
+#include <cmath>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -146,6 +147,17 @@ auto int_width(const type& t) noexcept -> u16 {
 auto is_i32(const type& t) noexcept -> bool {
     const auto info{as_integer(t)};
     return info && info->bits == 32 && info->is_signed;
+}
+
+auto constexpr_float_fits(f64 value, const type& target) noexcept -> bool {
+    // Halfway between the type's max and the next power of two rounds (to even) up to infinity
+    f64 overflow_at{0};
+    switch (target.get_kind()) {
+    case type_kind::F16: overflow_at = 0x1.ffep15; break;
+    case type_kind::F32: overflow_at = 0x1.ffffffp127; break;
+    default:             return true;
+    }
+    return !std::isfinite(value) || std::abs(value) < overflow_at;
 }
 
 auto constexpr_int_fits(i128 value, const type& target, u32 ptr_bits) noexcept -> bool {

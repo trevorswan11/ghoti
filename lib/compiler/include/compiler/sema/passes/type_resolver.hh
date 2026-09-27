@@ -610,6 +610,8 @@ class type_resolver {
     }
 
     [[nodiscard]] auto target_has_x86_fp80() const -> bool;
+    // Poisons a numeric literal that rounds to infinity in its float type
+    auto               float_literal_overflow(ast::node_id id, const type& target) -> type&;
     [[nodiscard]] auto target_ptr_bits() const -> u32;
     [[nodiscard]] auto target_has_128bit_atomics() const -> bool;
     // `.c` is always portable; the other `callconv(...)` choices are only meaningful for the ISA

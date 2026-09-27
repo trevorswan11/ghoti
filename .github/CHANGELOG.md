@@ -485,6 +485,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `@TypeOf(undefined)` names its type, which only a `const` binding may have; `var` bindings, parameters, return types, fields, and array elements of that type are rejected
 - **Breaking:** `@typeName(T).len` no longer counts the trailing null terminator, matching string literals
 - Hexadecimal float literals: `0x1.8p3`, `0x1p-4`, `0xA.8`; the `p` exponent is a decimal power of two, and a width suffix (`0x1.8p3f32`) may follow it
+- A compile-time float that would round to infinity in its type (`const x: f32 = 1e300;`, `const h: f16 = 70000;`, `@as(f32, BIG)`, `@floatFromInt(f16, 100000)`) is now a `LITERAL_OUT_OF_RANGE` error instead of silently becoming `inf`
+- Fixed: an untyped integer literal above `i128` max (up to `u128` max) was treated as negative, so `340282366920938463463374607431768211455 < 0` was true and converting it to a float gave a negative value
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

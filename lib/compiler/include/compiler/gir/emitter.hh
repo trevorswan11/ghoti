@@ -434,6 +434,9 @@ class emitter {
     // The i64/u64/i128/u128 payload of a compile-time integer `value`, as a 128-bit signed
     // int; none when `v` has no integer payload.
     [[nodiscard]] static auto folded_int(const value& v) noexcept -> stdx::option<i128>;
+    // Diagnoses a compile-time float that rounds to infinity in `target`
+    auto check_constexpr_float_fits(const value& v, const sema::type& target, ast::node_id at)
+        -> void;
     // Emits a `LITERAL_OUT_OF_RANGE` diagnostic at `at` if the `constexpr_int` `v` does not
     // fit `target` (a concrete integer type). Returns `v` retyped to `target`.
     [[nodiscard]] auto coerce_constexpr_int(value v, sema::type& target, ast::node_id at) -> value;
