@@ -398,10 +398,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
         std::vector<std::string> pack_hidden_names; // stable storage for synthesized param names
         pack_hidden_names.reserve(req.arg_types.size());
         for (const auto& param : fn_expr.parameters) {
-            std::string_view p_name{};
-            if (param.name.is<ast::identifier_expr>()) {
-                p_name = fn_mod.ast.get_as<ast::identifier_expr>(param.name).name;
-            }
+            const auto p_name{ast::parameter_name(fn_mod.ast, param)};
 
             // A pack's elements each get a real, individually-named hidden parameter; `rest`
             // itself binds to nothing (`current_pack_` is how `rest.len`/`rest[k]` resolve).
@@ -1203,10 +1200,7 @@ auto emitter::emit_impl_default_method(std::string_view          gir_name,
                                         });
     }
     for (const auto& param : fn_expr.parameters) {
-        std::string_view p_name{};
-        if (param.name.is<ast::identifier_expr>()) {
-            p_name = active_ast().get_as<ast::identifier_expr>(param.name).name;
-        }
+        const auto p_name{ast::parameter_name(active_ast(), param)};
         const auto p_type{active_mod().get_sema_type_opt(param.name)};
         if (!p_type) { continue; }
         auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
@@ -1340,10 +1334,7 @@ auto emitter::bind_declared_params(gir::function&            fn,
                                    const ast::function_expr& fn_expr,
                                    const mod::module&        owner) -> void {
     for (const auto& param : fn_expr.parameters) {
-        std::string_view p_name{};
-        if (param.name.is<ast::identifier_expr>()) {
-            p_name = owner.ast.get_as<ast::identifier_expr>(param.name).name;
-        }
+        const auto p_name{ast::parameter_name(owner.ast, param)};
         const auto p_type{owner.get_sema_type_opt(param.name)};
         ASSERT(p_type, "Function parameter must have a resolved sema type");
 
@@ -5987,7 +5978,15 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                     return spill_to_temporary(emit_ident(id, ident), *sema_type, true);
                 }
             }
-            ASSERT(binding, "LValue identifier must be bound in scope");
+            if (!binding) {
+                // e.g. a `const` whose own initializer is still being folded
+                ctx_.diags.emplace_back(
+                    fmt::format("'{}' has no storage to assign to or take the address of here",
+                                ident.name),
+                    sema::error::ASSIGNMENT_TO_CONST,
+                    active_ast().location_of(id));
+                return value{undefined_val{}, active_mod().get_sema_type_opt(id)};
+            }
             return lvalue_of_binding(ident.name);
         },
         [&](const ast::call_expr& call) -> value {

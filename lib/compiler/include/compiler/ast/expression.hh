@@ -530,4 +530,8 @@ struct while_loop_expr {
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
+// A parameter's declared name, or empty for a discarded `_`
+[[nodiscard]] auto parameter_name(const AST& ast, const function_expr::parameter& param)
+    -> std::string_view;
+
 } // namespace ghoti::ast

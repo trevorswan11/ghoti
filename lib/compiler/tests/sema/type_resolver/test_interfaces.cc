@@ -253,7 +253,7 @@ TEST_CASE("an inherent impl method is callable on an instance") {
 
 TEST_CASE("an inherent impl member may not shadow a native member or another impl member") {
     CHECK(helpers::raised(R"(
-        const P := struct { x: i32, const m := fn(&self): i32 { return x; }; };
+        const P := struct { x: i32, const m := fn(&self): i32 { return self.x; }; };
         impl P { pub const m := fn(&self): i32 { return 0; }; }
 )",
                           sema::error::DUPLICATE_MEMBER));

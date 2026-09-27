@@ -2070,4 +2070,9 @@ auto type_expr::parse_dyn(syntax::parser& parser) -> stdx::result<expr_handle, s
     return parser.add_expr<type_expr>(start_token, type);
 }
 
+auto parameter_name(const AST& ast, const function_expr::parameter& param) -> std::string_view {
+    if (!param.name.is<identifier_expr>()) { return {}; }
+    return ast.get_as<identifier_expr>(param.name).name;
+}
+
 } // namespace ghoti::ast

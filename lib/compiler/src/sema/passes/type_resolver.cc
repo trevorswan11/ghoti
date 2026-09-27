@@ -2957,7 +2957,9 @@ template <ast::IndexableID ID>
 auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
     // The call can only yield a non-poison type if the function is valid
     {
-        const mutating_context_guard callee_g{resolving_callee_, true};
+        // Only a bare `@builtin(...)` callee is a call of that builtin, not `@builtin.x(...)`
+        const mutating_context_guard callee_g{resolving_callee_,
+                                              call.function.is<ast::identifier_expr>()};
         resolve(call.function);
     }
     auto& callee_type{*last_type_.take()};
@@ -3155,10 +3157,13 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                                     }
                                     if (auto node{sym->symbol.get_data()
                                                       .template as_opt<symbols::node_t>()}) {
+                                        // Only a declaration naming a type; a value
+                                        // falls through and is rejected below
                                         if (resolving_.has_sema_type(*node)) {
                                             auto& decl_ty{resolving_.get_sema_type(*node)};
                                             auto& denoted{denoted_type(decl_ty)};
-                                            if (denoted.get_kind() != type_kind::TYPE) {
+                                            if (decl_ty.get_kind() == type_kind::TYPE &&
+                                                denoted.get_kind() != type_kind::TYPE) {
                                                 return denoted;
                                             }
                                         }
@@ -3217,6 +3222,22 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 // A slot bound to a concrete value type (`x: T` with `T = u8`) can't take a type
                 if (arg_expr && reject_type_as_value(*arg_expr, *param_type)) {
                     return last_type_.emplace(ctx_.poison_node(resolving_, id));
+                }
+                // ...and a `T: type` slot can't take a value
+                const bool declared_type_param{
+                    i < fn_params.size() && fn_params[i].explicit_type.get_token_type() ==
+                                                syntax::token_type_t::TYPE_TYPE};
+                if (arg_expr && declared_type_param &&
+                    operand_nature(*arg_expr) == operand_nature_t::VALUE) {
+                    return last_type_.emplace(ctx_.poison_node(
+                        resolving_,
+                        id,
+                        fmt::format("Argument {} is a value of type '{}', but its parameter "
+                                    "expects a type",
+                                    i,
+                                    ctx_.type_display_name(*resolved_type)),
+                        error::TYPE_MISMATCH,
+                        get_call_arg_location(call.arguments[expanded.source_index[i]])));
                 }
                 if (bound_idx && concrete_arg_types[*bound_idx] &&
                     !sema::is_assignable(*resolved_type, *param_type)) {
@@ -3554,6 +3575,8 @@ auto type_resolver::visit(ast::node_id id, const ast::do_while_loop_expr& do_whi
 
     // The loop itself holds the block index, not the block
     auto& loop_type{resolving_.get_sema_type(id)};
+    // Poisoned by an earlier error (e.g. a prior unrolling); its scope is gone
+    if (!loop_type.has_symbol_table_idx()) { return last_type_.emplace(ctx_.get_poison()); }
     {
         const scope                  s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
         const auto&                  block{resolving_.ast.get_as<ast::block_stmt>(do_while.block)};
@@ -3772,6 +3795,8 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
     check_constexpr_loop_jumps(for_expr.block);
 
     auto&           loop_type{resolving_.get_sema_type(id)};
+    // Poisoned by an earlier error (e.g. a prior unrolling); its scope is gone
+    if (!loop_type.has_symbol_table_idx()) { return last_type_.emplace(ctx_.get_poison()); }
     const scope     s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
     gir::const_eval evaluator{ctx_, resolving_};
     const gir::const_eval::constexpr_context_guard g{evaluator, true};
@@ -4019,6 +4044,8 @@ auto type_resolver::visit(ast::node_id id, const ast::for_loop_expr& for_expr) -
 
     // The loop itself holds the block index which houses captures, not the block
     auto& loop_type{resolving_.get_sema_type(id)};
+    // Poisoned by an earlier error (e.g. a prior unrolling); its scope is gone
+    if (!loop_type.has_symbol_table_idx()) { return last_type_.emplace(ctx_.get_poison()); }
     {
         const scope s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
 
@@ -4114,6 +4141,16 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
                                                    "type` value expression",
                                                    error::MALFORMED_PACK_USE,
                                                    resolving_.ast.location_of(id)));
+    }
+
+    // Interface requirements resolve elsewhere; anywhere else a method must have a body
+    if (fn.is_type_expr && fn.self) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            "A method needs a body; only interface methods may omit it",
+            error::FUNCTION_DECLARATION_MISSING_BODY,
+            resolving_.ast.location_of(id)));
     }
 
     if (!target_supports_callconv(fn.conv)) {
@@ -4887,6 +4924,23 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
                              resolving_.ast.location_of(id)));
     }
 
+    // Inside a method a sibling field is only reachable through an instance
+    if constexpr (std::same_as<ID, ast::node_id>) {
+        const auto& data{lookup->symbol.get_data()};
+        const bool is_field{data.template is<symbols::struct_field>() ||
+                            data.template is<symbols::union_field>()};
+        if (is_field && !return_trackers_.empty()) {
+            return last_type_.emplace(
+                ctx_.poison_node(resolving_,
+                                 id,
+                                 fmt::format("'{0}' is a field; access it through an instance, "
+                                             "e.g. `self.{0}`",
+                                             name),
+                                 error::UNDECLARED_IDENTIFIER,
+                                 resolving_.ast.location_of(id)));
+        }
+    }
+
     // Record where this reference resolves to, for LSP go-to-definition
     resolving_.set_identifier_definition(
         id, {resolving_.path, lookup->symbol.get_symbol_span(resolving_)});
@@ -5211,6 +5265,8 @@ auto type_resolver::visit(ast::node_id id, const ast::infinite_loop_expr& loop) 
     PROFILE_FUNCTION();
     if (loop.is_constexpr) { check_constexpr_loop_jumps(loop.block); }
     auto&       loop_type{resolving_.get_sema_type(id)};
+    // Poisoned by an earlier error (e.g. a prior unrolling); its scope is gone
+    if (!loop_type.has_symbol_table_idx()) { return last_type_.emplace(ctx_.get_poison()); }
     const scope s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
 
     // Just an abridged normal loop handler
@@ -5793,7 +5849,7 @@ auto type_resolver::resolve_structural_access(type&                  object_type
         return make_sema_err(
             fmt::format(
                 "Can only access inner objects inside of structs, unions, and enums; found '{}'",
-                ctx_.type_display_name(*target_type)),
+                ctx_.type_display_name(object_type)),
             error::TYPE_MISMATCH,
             object_location);
     }
@@ -5897,8 +5953,10 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
                                  unwrapped_obj.get_kind() == type_kind::SLICE ||
                                  unwrapped_obj.get_data().template is<types::deferred_array>()};
 
-    // Desugared to auto and needs to be deferred like the call handler
-    if (!is_array_or_slice && is_generic_type(object_type)) {
+    // Desugared to auto and needs to be deferred like the call handler; the `type` keyword
+    // itself is no placeholder and has no members
+    const bool names_type_keyword{(*dot.object).get_token_type() == syntax::token_type_t::TYPE_TYPE};
+    if (!is_array_or_slice && !names_type_keyword && is_generic_type(object_type, false)) {
         auto& placeholder{*ctx_.pool[{type_kind::AUTO, types::mut::CONSTANT}]};
         resolving_.set_sema_type(dot.member, placeholder);
         resolving_.set_sema_type(id, placeholder);
@@ -8603,6 +8661,8 @@ auto type_resolver::visit(ast::node_id id, const ast::while_loop_expr& while_loo
     if (while_loop.continuation) { TRY_RESOLVE(*while_loop.continuation); }
     // The loop itself holds the block index which houses captures, not the block
     auto& loop_type{resolving_.get_sema_type(id)};
+    // Poisoned by an earlier error (e.g. a prior unrolling); its scope is gone
+    if (!loop_type.has_symbol_table_idx()) { return last_type_.emplace(ctx_.get_poison()); }
     {
         const scope              s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
         const auto&              block{resolving_.ast.get_as<ast::block_stmt>(while_loop.block)};
@@ -8623,6 +8683,8 @@ auto type_resolver::visit(ast::node_id id, const ast::while_loop_expr& while_loo
 auto type_resolver::visit(ast::node_id id, const ast::block_stmt& block) -> void {
     PROFILE_FUNCTION();
     auto&       block_type{resolving_.get_sema_type(id)};
+    // Poisoned by an earlier error (e.g. a prior unrolling); its scope is gone
+    if (!block_type.has_symbol_table_idx()) { return last_type_.emplace(ctx_.get_poison()); }
     const scope s{table_stack_, block_type.get_symbol_table_idx(), table_idx_};
 
     // A block that is an `if`/`match` branch never yields a value
@@ -8984,6 +9046,17 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
         const bool literal_type_anno{decl.explicit_type && decl.explicit_type->get_token_type() ==
                                                                syntax::token_type_t::TYPE_TYPE};
         const bool binds_type{decl.value && decl_value_denotes_type(*decl.value)};
+        if (literal_type_anno && decl.value && !binds_type &&
+            operand_nature(*decl.value) == operand_nature_t::VALUE) {
+            ctx_.poison_symbol(
+                sym,
+                fmt::format("A 'type' binding needs a type, but was given a value of type '{}'",
+                            ctx_.type_display_name(resolving_.get_sema_type(*decl.value))),
+                error::TYPE_MISMATCH,
+                resolving_.ast.location_of(*decl.value));
+            resolving_.set_sema_type(decl.name, ctx_.get_poison());
+            return last_type_.emplace(ctx_.poison_node(resolving_, id));
+        }
         if (decl.has_modifier(ast::decl_modifiers::VARIABLE) && (literal_type_anno || binds_type)) {
             ctx_.poison_symbol(sym,
                                "a 'type' value cannot be stored in a mutable ('var') binding; "
@@ -9808,6 +9881,8 @@ auto type_resolver::visit(ast::node_id id, const ast::return_stmt& return_stmt) 
 auto type_resolver::visit(ast::node_id id, const ast::test_stmt& test) -> void {
     PROFILE_FUNCTION();
     auto&       test_type{resolving_.get_sema_type(id)};
+    // Poisoned by an earlier error (e.g. a prior unrolling); its scope is gone
+    if (!test_type.has_symbol_table_idx()) { return last_type_.emplace(ctx_.get_poison()); }
     const scope s{table_stack_, test_type.get_symbol_table_idx(), table_idx_};
 
     // Duplicate test blocks are a big no-no if named
@@ -11209,6 +11284,28 @@ auto type_resolver::apply_explicit_modifiers(ast::explicit_type_id id, type& inn
     auto&      inner_type{denoted_type(inner_in)};
     const auto mutability{types::mut::from_type_modifier(modifier)};
 
+    // Only a `dyn` view of an interface has a layout to point at; `&@This()` inside an interface
+    // names the implementing type instead
+    const auto names_this{[&] {
+        const auto call{resolving_.ast.get_as_opt<ast::call_expr>(id)};
+        return call && call->function->get_token_type() == syntax::token_type_t::BUILTIN_THIS;
+    }};
+    if ((modifier.is_ptr() || modifier.is_ref()) && inner_type.get_kind() == type_kind::INTERFACE &&
+        !names_this()) {
+        const auto iname{ctx_.type_display_name(inner_type)};
+        const auto sigil{fmt::format("{}{}",
+                                     modifier.is_ptr() ? "^" : "&",
+                                     mutability == types::mut::MUTABLE ? "mut " : "")};
+        return ctx_.poison_node(
+            resolving_,
+            id,
+            fmt::format("`{0}{1}` names an interface, not a type with a layout; use `{0}dyn {1}`",
+                        sigil,
+                        iname),
+            error::INTERFACE_NOT_A_VALUE,
+            resolving_.ast.location_of(id));
+    }
+
     // Conditionally update the mutability since the modifier might entail mutability or volatility
     auto new_key{inner_type.get_key()};
     if (mutability) { new_key.set_mut(*mutability); }
@@ -11295,6 +11392,16 @@ auto type_resolver::names_a_value(const symbol& sym, usize table_idx) -> bool {
 
 auto type_resolver::visit(ast::explicit_type_id id, const ast::identifier_expr& ident) -> void {
     PROFILE_FUNCTION();
+
+    // A builtin names an operation, never a type
+    if (syntax::get_builtin_opt(id.get_token_type())) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             fmt::format("Builtin '{}' is not a type", ident.name),
+                             error::TYPE_MISMATCH,
+                             resolving_.ast.location_of(id)));
+    }
 
     // `iN` / `uN` resolve straight to a pooled integer type, no symbol lookup.
     if (syntax::token_type::is_int_type_lexeme(ident.name)) {
@@ -11957,9 +12064,9 @@ auto type_resolver::instantiate_generic(type&                             callee
                 }
             }
             fn_mod.set_sema_type(param.explicit_type, resolved_param_type);
-            if (resolved_param_type.get_kind() == type_kind::TYPE) {
-                const auto& p_name{fn_mod.ast.get_as<ast::identifier_expr>(param.name).name};
-                const auto  val{gir::const_value{denoted_type(*body_p_type)}};
+            const auto p_name{ast::parameter_name(fn_mod.ast, param)};
+            if (resolved_param_type.get_kind() == type_kind::TYPE && !p_name.empty()) {
+                const auto val{gir::const_value{denoted_type(*body_p_type)}};
                 type_param_frame.insert_or_assign(p_name, val);
                 if (!ctx_.constexpr_binding_frames.empty()) {
                     ctx_.constexpr_binding_frames.back().insert_or_assign(p_name, val);
@@ -12072,10 +12179,8 @@ auto type_resolver::instantiate_generic(type&                             callee
             if (param.is_constexpr) { continue; }
             const auto pty{fn_mod.get_sema_type_opt(param.explicit_type)};
             if (pty && pty->get_kind() != type_kind::TYPE) {
-                std::string_view pn{"_"};
-                if (param.name.is<ast::identifier_expr>()) {
-                    pn = fn_mod.ast.get_as<ast::identifier_expr>(param.name).name;
-                }
+                std::string_view pn{ast::parameter_name(fn_mod.ast, param)};
+                if (pn.empty()) { pn = "_"; }
                 ctx_.diags.emplace_back(
                     fmt::format(
                         "a `fn(...): type` constructor cannot take a plain value parameter; "

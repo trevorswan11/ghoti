@@ -358,4 +358,67 @@ TEST_CASE("a loop body error inside a generic reports cleanly on every instantia
     )", sema::error::UNDECLARED_IDENTIFIER));
 }
 
+TEST_CASE("misused names and types report diagnostics instead of crashing") {
+    // A bare sibling field inside a method
+    CHECK(helpers::raised(R"(
+        const S := struct { n: i32, pub const set := fn(&mut self): void { n = 3; }; };
+    )", sema::error::UNDECLARED_IDENTIFIER));
+    // A member of an uncalled builtin
+    CHECK(helpers::raised(
+        "pub const main := fn(): i32 { const x: usize = 3; return @intCast.foo(i32, x); };",
+        sema::error::TYPE_MISMATCH));
+    // A reference to a bare interface
+    CHECK(helpers::raised(R"(
+        const W := interface { pub const wr := fn(&self): i32; };
+        const use := fn(w: &W): i32 { return w.wr(); };
+    )", sema::error::INTERFACE_NOT_A_VALUE));
+    // Members of `type` itself and of a function
+    CHECK(helpers::raised("pub const main := fn(): i32 { return type.a; };",
+                          sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised("pub const main := fn(): void { const q := fn(): void {}.p; };",
+                          sema::error::TYPE_MISMATCH));
+    // A value bound to a `type` annotation or passed to a `T: type` parameter
+    CHECK(helpers::raised("const p: type = 5;", sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised(R"(
+        const Box := fn(T: type): type { return struct { val: T }; };
+        pub const main := fn(): i32 { var q: i32 = 1; const b: Box(q) = .{ .val = 9 }; return 0; };
+    )", sema::error::TYPE_MISMATCH));
+    // A builtin in type position
+    CHECK(helpers::raised("const make := fn(b: i32): @compileError { return 1; };",
+                          sema::error::TYPE_MISMATCH));
+    // A bodyless method outside an interface
+    CHECK(helpers::raised(R"(
+        const W := interface { pub const wr := fn(&self): i32; };
+        const F := struct { fd: i32 };
+        impl W for F { pub const wr := fn(&self): i32; }
+    )", sema::error::FUNCTION_DECLARATION_MISSING_BODY));
+    // An import alias clashing with a parameter
+    helpers::expect_compile_error(R"(
+        const Ident := fn(T: type): type { import T; };
+        pub const main := fn(): i32 { if (Ident(u8) == u8) { return 42; } return 0; };
+    )");
+    // A constant written to while its own initializer is folding
+    helpers::expect_compile_error(
+        "const pick := fn(x: i32): i32 { b = 0; return 1; }; const b := pick(1);");
+    // Scoped nodes under an initializer's type or a runtime loop inside `for constexpr`
+    helpers::expect_compile_error(
+        "pub const main := fn(): i32 { const x := match (1) { 1 => 1, _ => 2, }{ }; return 0; };");
+    helpers::expect_compile_error(
+        "const use := fn(): void { for constexpr (0..3) |vv| { for (0..v) |j| { _ = j; } } };");
+}
+
+TEST_CASE("scoped expressions work as member-access objects and initializer types") {
+    CHECK(helpers::compile_and_run(R"(
+        const S := struct { a: i32, pub const g := fn(&self): i32 { return self.a; }; };
+        const Box := fn(_: type): type { return struct { val: i32 }; };
+        pub const main := fn(): i32 {
+            const v := (blk: { break :blk S{ .a = 3 }; }).a;
+            const w := (match (1) { 1 => S{ .a = 4 }, _ => S{ .a = 5 }, }).a;
+            const x := (blk: { break :blk S; }){ .a = 7 };
+            var b: Box(i32) = .{ .val = 1 };
+            return v + w + x.a + S{ .a = 6 }.g() + b.val;
+        };
+    )") == 21);
+}
+
 } // namespace ghoti::tests
