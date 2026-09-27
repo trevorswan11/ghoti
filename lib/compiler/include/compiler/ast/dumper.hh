@@ -121,6 +121,26 @@ class dumper {
         });
     }
 
+    // The `@cfg` field groups, members, and `@cfg` member groups closing a struct or union
+    template <typename Node> void dump_aggregate_tail(const Node& node) {
+        const auto has_cfg{!node.cfg_groups.empty()};
+        const auto has_members{!node.members.empty()};
+        const auto has_member_cfg{!node.member_cfg_groups.empty()};
+        if (has_cfg) {
+            const indent::guard g{indent_, !has_members && !has_member_cfg};
+            dump_cfg_groups(node.cfg_groups);
+        }
+        if (has_members) {
+            const indent::guard g{indent_, !has_member_cfg};
+            fmt::println(out_, "{}Members:", indent_.current_branch());
+            dump_node_list(node.members);
+        }
+        if (has_member_cfg) {
+            const indent::guard g{indent_, true};
+            dump_cfg_groups(node.member_cfg_groups);
+        }
+    }
+
     // Compact dump of an aggregate's `@cfg` groups; Only enough for AST comparison.
     template <typename Group> void dump_cfg_groups(const std::vector<Group>& groups) {
         fmt::println(out_, "{}CfgGroups:", indent_.current_branch());

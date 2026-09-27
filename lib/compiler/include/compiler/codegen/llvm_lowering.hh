@@ -153,6 +153,11 @@ class llvm_lowering {
     auto define_test_take_skipped() -> void;
 
     // Calls a weak `builtin` context handler `handler(msg, loc: SourceLocation)`
+    // A pointer or wide integer condition as an `i1` (non-null / non-zero)
+    auto lower_truthiness(llvm::Value* value) -> llvm::Value*;
+    // Branches to a fresh `<prefix>.fail` block (left as the insert point) when `cond` is false,
+    // returning the `<prefix>.cont` block
+    auto branch_to_failure(llvm::Value* cond, std::string_view prefix) -> llvm::BasicBlock*;
     auto emit_context_handler_call(const gir::instruction& inst,
                                    std::string_view        handler_name,
                                    usize                   msg_idx,

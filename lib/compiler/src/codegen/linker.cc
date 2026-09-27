@@ -70,6 +70,21 @@ constexpr auto exe_permissions{
     return cached_sdkroot;
 }
 
+// Extra objects, then one `<dir_flag><dir>` per library search path
+auto add_extra_inputs(std::vector<std::string>&   args,
+                      const extra_linker_options& linker_opts,
+                      std::string_view            dir_flag) -> void {
+    for (const auto& obj : linker_opts.objects) { args.emplace_back(obj.string()); }
+    for (const auto& dir : linker_opts.library_paths) {
+        args.emplace_back(fmt::format("{}{}", dir_flag, dir.string()));
+    }
+}
+
+auto add_unix_libraries(std::vector<std::string>& args, const extra_linker_options& linker_opts)
+    -> void {
+    for (const auto& lib : linker_opts.libraries) { args.emplace_back(fmt::format("-l{}", lib)); }
+}
+
 auto add_darwin_args(std::vector<std::string>&   args,
                      const llvm::Triple&         triple,
                      const std::string&          obj_path_str,
@@ -102,10 +117,7 @@ auto add_darwin_args(std::vector<std::string>&   args,
     args.emplace_back(sdk_version);
     args.emplace_back(obj_path_str);
 
-    for (const auto& obj : linker_opts.objects) { args.emplace_back(obj.string()); }
-    for (const auto& dir : linker_opts.library_paths) {
-        args.emplace_back(fmt::format("-L{}", dir.string()));
-    }
+    add_extra_inputs(args, linker_opts, "-L");
 
     args.emplace_back("-o");
     args.emplace_back(out_path_str);
@@ -116,7 +128,7 @@ auto add_darwin_args(std::vector<std::string>&   args,
         args.emplace_back(*sdkroot);
         args.emplace_back("-lSystem");
     }
-    for (const auto& lib : linker_opts.libraries) { args.emplace_back(fmt::format("-l{}", lib)); }
+    add_unix_libraries(args, linker_opts);
 }
 
 // Directories that may hold the Win32 import libraries (`kernel32.lib`, `shell32.lib`, ...).
@@ -195,15 +207,12 @@ auto add_mingw_args(std::vector<std::string>&   args,
     args.emplace_back("-m");
     args.emplace_back(emulation);
     args.emplace_back(obj_path_str);
-    for (const auto& obj : linker_opts.objects) { args.emplace_back(obj.string()); }
-    for (const auto& dir : linker_opts.library_paths) {
-        args.emplace_back(fmt::format("-L{}", dir.string()));
-    }
+    add_extra_inputs(args, linker_opts, "-L");
     // Auto-detected Win32 import-lib directories, so `-l` names resolve with no manual `-L`.
     for (const auto& dir : windows_import_lib_dirs(triple)) {
         args.emplace_back(fmt::format("-L{}", dir));
     }
-    for (const auto& lib : linker_opts.libraries) { args.emplace_back(fmt::format("-l{}", lib)); }
+    add_unix_libraries(args, linker_opts);
     // The entry wrapper's own Win32 API calls need their import libs listed explicitly.
     if (linker_opts.needs_windows_argv_apis) {
         args.emplace_back("-lkernel32");
@@ -233,10 +242,7 @@ auto add_msvc_args(std::vector<std::string>&   args,
     args.emplace_back("lld-link");
     if (is_dylib) { args.emplace_back("/dll"); }
     args.emplace_back(obj_path_str);
-    for (const auto& obj : linker_opts.objects) { args.emplace_back(obj.string()); }
-    for (const auto& dir : linker_opts.library_paths) {
-        args.emplace_back(fmt::format("/libpath:{}", dir.string()));
-    }
+    add_extra_inputs(args, linker_opts, "/libpath:");
     // Auto-detected Win32 import-lib directories, so `.lib` names resolve with no manual `-L`.
     for (const auto& dir : windows_import_lib_dirs(triple)) {
         args.emplace_back(fmt::format("/libpath:{}", dir));
@@ -271,11 +277,8 @@ auto add_wasm_args(std::vector<std::string>&   args,
         args.emplace_back("-shared");
     }
     args.emplace_back(obj_path_str);
-    for (const auto& obj : linker_opts.objects) { args.emplace_back(obj.string()); }
-    for (const auto& dir : linker_opts.library_paths) {
-        args.emplace_back(fmt::format("-L{}", dir.string()));
-    }
-    for (const auto& lib : linker_opts.libraries) { args.emplace_back(fmt::format("-l{}", lib)); }
+    add_extra_inputs(args, linker_opts, "-L");
+    add_unix_libraries(args, linker_opts);
     args.emplace_back("--gc-sections");
     args.emplace_back("-o");
     args.emplace_back(out_path_str);
@@ -295,11 +298,8 @@ auto add_elf_args(std::vector<std::string>&   args,
     args.emplace_back("ld.lld");
     if (is_dylib) { args.emplace_back("-shared"); }
     args.emplace_back(obj_path_str);
-    for (const auto& obj : linker_opts.objects) { args.emplace_back(obj.string()); }
-    for (const auto& dir : linker_opts.library_paths) {
-        args.emplace_back(fmt::format("-L{}", dir.string()));
-    }
-    for (const auto& lib : linker_opts.libraries) { args.emplace_back(fmt::format("-l{}", lib)); }
+    add_extra_inputs(args, linker_opts, "-L");
+    add_unix_libraries(args, linker_opts);
     args.emplace_back("--gc-sections");
     args.emplace_back("-o");
     args.emplace_back(out_path_str);

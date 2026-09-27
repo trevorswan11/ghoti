@@ -342,29 +342,15 @@ auto formatter::format_members(std::vector<syntax::doc_id>&                     
     }
 }
 
-auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
+template <typename Node, typename FieldItem, typename FieldEndLine>
+auto formatter::format_field_aggregate(const Node&      node,
+                                       std::string_view keyword_and_space,
+                                       FieldItem&&      field_item,
+                                       FieldEndLine&&   field_end_line) -> syntax::doc_id {
     std::vector<syntax::doc_id> head;
     if (node.is_extern) { head.emplace_back(doc_manager_.text("extern ")); }
     if (node.is_packed) { head.emplace_back(doc_manager_.text("packed ")); }
-    head.emplace_back(doc_manager_.text("struct "));
-
-    const auto field_item{[&](const struct_expr::field& field) -> syntax::doc_id {
-        std::vector<syntax::doc_id> parts;
-        if (field.is_public()) { parts.emplace_back(doc_manager_.text("pub ")); }
-        parts.emplace_back(format(field.name));
-        parts.emplace_back(doc_manager_.text(": "));
-        if (field.explicit_alignment) {
-            parts.emplace_back(doc_manager_.concat({doc_manager_.text("@alignas("),
-                                                    format(*field.explicit_alignment),
-                                                    doc_manager_.text(") ")}));
-        }
-        parts.emplace_back(format(field.explicit_type));
-        if (field.default_value) {
-            parts.emplace_back(doc_manager_.text(" = "));
-            parts.emplace_back(format(*field.default_value));
-        }
-        return doc_manager_.concat(std::move(parts));
-    }};
+    head.emplace_back(doc_manager_.text(keyword_and_space));
 
     std::vector<syntax::doc_id> entries;
     const auto                  flush_cfg_groups{[&](usize position) -> void {
@@ -379,18 +365,12 @@ auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
     flush_cfg_groups(0);
     for (usize i{0}; i < node.fields.size(); ++i) {
         const auto& field{node.fields[i]};
-        const auto& start_loc{ast_.location_of(field.name)};
-        auto        leading{consume_leading_comments(start_loc.line, !entries.empty())};
+        auto leading{consume_leading_comments(ast_.location_of(field.name).line, !entries.empty())};
 
-        const auto end_line{field.default_value
-                                ? ast_.end_location_of(*field.default_value).line
-                                : (field.explicit_alignment
-                                       ? ast_.end_location_of(*field.explicit_alignment).line
-                                       : ast_.end_location_of(field.explicit_type).line)};
         const auto more_follows{i + 1 < node.fields.size() || !node.members.empty() ||
                                 !node.cfg_groups.empty()};
         auto       field_doc{field_item(field)};
-        auto       trailing{consume_trailing_comment(end_line)};
+        auto       trailing{consume_trailing_comment(field_end_line(field))};
         if (more_follows || trailing != doc_manager_.nil()) {
             field_doc = doc_manager_.concat({field_doc, doc_manager_.text(",")});
         } else {
@@ -416,69 +396,54 @@ auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
     return doc_manager_.concat(std::move(head));
 }
 
-auto formatter::format_union(const union_expr& node) -> syntax::doc_id {
-    std::vector<syntax::doc_id> head;
-    if (node.is_extern) { head.emplace_back(doc_manager_.text("extern ")); }
-    if (node.is_packed) { head.emplace_back(doc_manager_.text("packed ")); }
-    head.emplace_back(doc_manager_.text("union "));
+auto formatter::format_aligned_field_type(stdx::option<expr_handle> alignment,
+                                          explicit_type_id          type) -> syntax::doc_id {
+    if (!alignment) { return format(type); }
+    return doc_manager_.concat({doc_manager_.text("@alignas("),
+                                format(*alignment),
+                                doc_manager_.text(") "),
+                                format(type)});
+}
 
-    const auto field_item{[&](const union_expr::field& field) -> syntax::doc_id {
-        std::vector<syntax::doc_id> parts;
-        parts.emplace_back(format(field.name));
-        parts.emplace_back(doc_manager_.text(": "));
-        if (field.explicit_alignment) {
-            parts.emplace_back(doc_manager_.concat({doc_manager_.text("@alignas("),
-                                                    format(*field.explicit_alignment),
-                                                    doc_manager_.text(") ")}));
-        }
-        parts.emplace_back(format(field.explicit_type));
-        return doc_manager_.concat(std::move(parts));
-    }};
-
-    std::vector<syntax::doc_id> entries;
-    const auto                  flush_cfg_groups{[&](usize position) -> void {
-        for (const auto& group : node.cfg_groups) {
-            if (group.position == position) {
-                entries.emplace_back(format_aggregate_cfg_group(group, field_item));
+auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
+    return format_field_aggregate(
+        node,
+        "struct ",
+        [&](const struct_expr::field& field) -> syntax::doc_id {
+            std::vector<syntax::doc_id> parts;
+            if (field.is_public()) { parts.emplace_back(doc_manager_.text("pub ")); }
+            parts.emplace_back(format(field.name));
+            parts.emplace_back(doc_manager_.text(": "));
+            parts.emplace_back(
+                format_aligned_field_type(field.explicit_alignment, field.explicit_type));
+            if (field.default_value) {
+                parts.emplace_back(doc_manager_.text(" = "));
+                parts.emplace_back(format(*field.default_value));
             }
-        }
-    }};
+            return doc_manager_.concat(std::move(parts));
+        },
+        [&](const struct_expr::field& field) -> usize {
+            if (field.default_value) { return ast_.end_location_of(*field.default_value).line; }
+            if (field.explicit_alignment) {
+                return ast_.end_location_of(*field.explicit_alignment).line;
+            }
+            return ast_.end_location_of(field.explicit_type).line;
+        });
+}
 
-    bool force_break{node.fields_force_break || !node.members.empty() || !node.cfg_groups.empty()};
-
-    flush_cfg_groups(0);
-    for (usize i{0}; i < node.fields.size(); ++i) {
-        const auto& [name, explicit_type, explicit_alignment]{node.fields[i]};
-        const auto& start_loc{ast_.location_of(name)};
-        auto        leading{consume_leading_comments(start_loc.line, !entries.empty())};
-
-        const auto end_line{ast_.end_location_of(explicit_type).line};
-        const auto more_follows{i + 1 < node.fields.size() || !node.members.empty() ||
-                                !node.cfg_groups.empty()};
-        auto       field_doc{field_item(node.fields[i])};
-        auto       trailing{consume_trailing_comment(end_line)};
-        if (more_follows || trailing != doc_manager_.nil()) {
-            field_doc = doc_manager_.concat({field_doc, doc_manager_.text(",")});
-        } else {
-            field_doc = doc_manager_.concat(
-                {field_doc, doc_manager_.if_break(doc_manager_.text(","), doc_manager_.nil())});
-        }
-        if (trailing != doc_manager_.nil()) {
-            field_doc   = doc_manager_.concat({field_doc, trailing});
-            force_break = true;
-        }
-        if (leading != doc_manager_.nil()) {
-            field_doc   = doc_manager_.concat({leading, field_doc});
-            force_break = true;
-        }
-        entries.emplace_back(field_doc);
-        flush_cfg_groups(i + 1);
-    }
-    const auto field_count{entries.size()};
-    format_members(entries, node.members, node.member_cfg_groups);
-
-    head.emplace_back(aggregate_body(std::move(entries), field_count, force_break));
-    return doc_manager_.concat(std::move(head));
+auto formatter::format_union(const union_expr& node) -> syntax::doc_id {
+    return format_field_aggregate(
+        node,
+        "union ",
+        [&](const union_expr::field& field) -> syntax::doc_id {
+            return doc_manager_.concat(
+                {format(field.name),
+                 doc_manager_.text(": "),
+                 format_aligned_field_type(field.explicit_alignment, field.explicit_type)});
+        },
+        [&](const union_expr::field& field) -> usize {
+            return ast_.end_location_of(field.explicit_type).line;
+        });
 }
 
 auto formatter::format_enum(const enum_expr& node) -> syntax::doc_id {

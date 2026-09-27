@@ -988,6 +988,28 @@ auto llvm_lowering::define_test_take_skipped() -> void {
     b.CreateRet(was_skipped);
 }
 
+auto llvm_lowering::lower_truthiness(llvm::Value* value) -> llvm::Value* {
+    auto* type{value->getType()};
+    if (type->isPointerTy()) {
+        return builder_.CreateICmpNE(
+            value, llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(type)), "tobool");
+    }
+    if (type->isIntegerTy() && type->getIntegerBitWidth() != 1) {
+        return builder_.CreateICmpNE(value, llvm::Constant::getNullValue(type), "tobool");
+    }
+    return value;
+}
+
+auto llvm_lowering::branch_to_failure(llvm::Value* cond, std::string_view prefix)
+    -> llvm::BasicBlock* {
+    auto* cur_fn{builder_.GetInsertBlock()->getParent()};
+    auto* fail_bb{llvm::BasicBlock::Create(context_, fmt::format("{}.fail", prefix), cur_fn)};
+    auto* cont_bb{llvm::BasicBlock::Create(context_, fmt::format("{}.cont", prefix), cur_fn)};
+    builder_.CreateCondBr(cond, cont_bb, fail_bb);
+    builder_.SetInsertPoint(fail_bb);
+    return cont_bb;
+}
+
 auto llvm_lowering::emit_context_handler_call(const gir::instruction& inst,
                                               std::string_view        handler_name,
                                               usize                   msg_idx,
@@ -2538,25 +2560,9 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (inst.operands.empty()) { return builder_.getInt1(true); }
             auto* cond_val{lower_value(inst.operands[0])};
             if (!cond_val) { return builder_.getInt1(true); }
-            if (cond_val->getType()->isPointerTy()) {
-                cond_val =
-                    builder_.CreateICmpNE(cond_val,
-                                          llvm::ConstantPointerNull::get(
-                                              llvm::cast<llvm::PointerType>(cond_val->getType())),
-                                          "tobool");
-            } else if (cond_val->getType()->isIntegerTy() &&
-                       cond_val->getType()->getIntegerBitWidth() != 1) {
-                cond_val = builder_.CreateICmpNE(
-                    cond_val, llvm::Constant::getNullValue(cond_val->getType()), "tobool");
-            }
+            cond_val = lower_truthiness(cond_val);
 
-            auto* cur_fn{builder_.GetInsertBlock()->getParent()};
-            auto* fail_bb{llvm::BasicBlock::Create(context_, "expect.fail", cur_fn)};
-            auto* cont_bb{llvm::BasicBlock::Create(context_, "expect.cont", cur_fn)};
-
-            builder_.CreateCondBr(cond_val, cont_bb, fail_bb);
-
-            builder_.SetInsertPoint(fail_bb);
+            auto* cont_bb{branch_to_failure(cond_val, "expect")};
             auto* failed_flag{get_or_create_test_failed_flag()};
             builder_.CreateStore(builder_.getInt1(true), failed_flag);
             emit_context_handler_call(inst, "expect_handler", 4UZ, 1UZ);
@@ -2570,25 +2576,9 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (inst.operands.empty()) { return nullptr; }
             auto* cond_val{lower_value(inst.operands[0])};
             if (!cond_val) { return nullptr; }
-            if (cond_val->getType()->isPointerTy()) {
-                cond_val =
-                    builder_.CreateICmpNE(cond_val,
-                                          llvm::ConstantPointerNull::get(
-                                              llvm::cast<llvm::PointerType>(cond_val->getType())),
-                                          "tobool");
-            } else if (cond_val->getType()->isIntegerTy() &&
-                       cond_val->getType()->getIntegerBitWidth() != 1) {
-                cond_val = builder_.CreateICmpNE(
-                    cond_val, llvm::Constant::getNullValue(cond_val->getType()), "tobool");
-            }
+            cond_val = lower_truthiness(cond_val);
 
-            auto* cur_fn{builder_.GetInsertBlock()->getParent()};
-            auto* fail_bb{llvm::BasicBlock::Create(context_, "require.fail", cur_fn)};
-            auto* cont_bb{llvm::BasicBlock::Create(context_, "require.cont", cur_fn)};
-
-            builder_.CreateCondBr(cond_val, cont_bb, fail_bb);
-
-            builder_.SetInsertPoint(fail_bb);
+            auto* cont_bb{branch_to_failure(cond_val, "require")};
             auto* failed_flag{get_or_create_test_failed_flag()};
             builder_.CreateStore(builder_.getInt1(true), failed_flag);
             emit_context_handler_call(inst, "require_handler", 4UZ, 1UZ);
@@ -2603,26 +2593,9 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (inst.operands.empty()) { return nullptr; }
             auto* cond_val{lower_value(inst.operands[0])};
             if (!cond_val) { return nullptr; }
-            if (cond_val->getType()->isPointerTy()) {
-                cond_val =
-                    builder_.CreateICmpNE(cond_val,
-                                          llvm::ConstantPointerNull::get(
-                                              llvm::cast<llvm::PointerType>(cond_val->getType())),
-                                          "tobool");
-            } else if (cond_val->getType()->isIntegerTy() &&
-                       cond_val->getType()->getIntegerBitWidth() != 1) {
-                cond_val = builder_.CreateICmpNE(
-                    cond_val, llvm::Constant::getNullValue(cond_val->getType()), "tobool");
-            }
+            cond_val = lower_truthiness(cond_val);
 
-            auto* cur_fn{builder_.GetInsertBlock()->getParent()};
-            auto* fail_bb{llvm::BasicBlock::Create(
-                context_, is_verify ? "verify.fail" : "assert.fail", cur_fn)};
-            auto* cont_bb{llvm::BasicBlock::Create(
-                context_, is_verify ? "verify.cont" : "assert.cont", cur_fn)};
-            builder_.CreateCondBr(cond_val, cont_bb, fail_bb);
-
-            builder_.SetInsertPoint(fail_bb);
+            auto* cont_bb{branch_to_failure(cond_val, is_verify ? "verify" : "assert")};
             if (is_verify) {
                 std::string_view msg{"verification failed"};
                 if (inst.operands.size() > 4) {
