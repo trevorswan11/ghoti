@@ -3,6 +3,7 @@
 #include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/format.h>
 
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
@@ -184,7 +185,8 @@ TEST_CASE("casts need a type target and a value operand") {
 }
 
 TEST_CASE("a function declared to return a value cannot return nothing") {
-    CHECK(helpers::raised("const f := fn(): usize { return; };", sema::error::RETURN_TYPE_MISMATCH));
+    CHECK(
+        helpers::raised("const f := fn(): usize { return; };", sema::error::RETURN_TYPE_MISMATCH));
     CHECK(helpers::raised("const f := fn(): constexpr_int { const x := 1; _ = x; };",
                           sema::error::RETURN_TYPE_MISMATCH));
 }
@@ -265,7 +267,8 @@ TEST_CASE("a type passed to a generic parameter bound to a value type is rejecte
     CHECK(helpers::raised(R"(
         const dup := fn(T: type, val: T): T { return val + val; };
         pub const main := fn(): i32 { const b := dup(u8, u8); return 0; };
-    )", sema::error::TYPE_USED_AS_VALUE));
+    )",
+                          sema::error::TYPE_USED_AS_VALUE));
 }
 
 TEST_CASE("errors inside a parameterized impl method are reported once per site") {
@@ -280,16 +283,15 @@ TEST_CASE("errors inside a parameterized impl method are reported once per site"
             return p.l() + q.l();
         };
     )"};
-    const auto with_body{[&](std::string_view body) {
-        return std::string{prefix} + std::string{body} + suffix;
-    }};
+    const auto     with_body{
+        [&](std::string_view body) { return std::string{prefix} + std::string{body} + suffix; }};
     const auto range_diags{helpers::resolve_diags(with_body("return 0..1;"))};
     CHECK(std::ranges::count(range_diags.codes, sema::error::ILLEGAL_OPEN_RANGE) == 1);
     const auto undeclared{helpers::resolve_diags(with_body("return nope;"))};
     CHECK(std::ranges::count(undeclared.codes, sema::error::UNDECLARED_IDENTIFIER) == 1);
     CHECK(helpers::raised(with_body("return @intCast(i32, u8);"), sema::error::TYPE_USED_AS_VALUE));
-    CHECK(helpers::raised(with_body("const r := self.a[..]; return 0;"),
-                          sema::error::TYPE_MISMATCH));
+    CHECK(
+        helpers::raised(with_body("const r := self.a[..]; return 0;"), sema::error::TYPE_MISMATCH));
 }
 
 TEST_CASE("a parameterized impl method body types against its concrete instantiation") {
@@ -329,7 +331,7 @@ TEST_CASE("`@tagName` requires an enum or tagged union value") {
         const E := enum { a, b };
         const R := extern union { a: i32 };
     )"};
-    const auto with_operand{[&](std::string_view operand) {
+    const auto     with_operand{[&](std::string_view operand) {
         return std::string{decls} + "const f := fn(e: E, pe: ^E): void { _ = @tagName(" +
                std::string{operand} + "); };";
     }};
@@ -355,14 +357,16 @@ TEST_CASE("a loop body error inside a generic reports cleanly on every instantia
             }
             return acc;
         };
-    )", sema::error::UNDECLARED_IDENTIFIER));
+    )",
+                          sema::error::UNDECLARED_IDENTIFIER));
 }
 
 TEST_CASE("misused names and types report diagnostics instead of crashing") {
     // A bare sibling field inside a method
     CHECK(helpers::raised(R"(
         const S := struct { n: i32, pub const set := fn(&mut self): void { n = 3; }; };
-    )", sema::error::UNDECLARED_IDENTIFIER));
+    )",
+                          sema::error::UNDECLARED_IDENTIFIER));
     // A member of an uncalled builtin
     CHECK(helpers::raised(
         "pub const main := fn(): i32 { const x: usize = 3; return @intCast.foo(i32, x); };",
@@ -371,7 +375,8 @@ TEST_CASE("misused names and types report diagnostics instead of crashing") {
     CHECK(helpers::raised(R"(
         const W := interface { pub const wr := fn(&self): i32; };
         const use := fn(w: &W): i32 { return w.wr(); };
-    )", sema::error::INTERFACE_NOT_A_VALUE));
+    )",
+                          sema::error::INTERFACE_NOT_A_VALUE));
     // Members of `type` itself and of a function
     CHECK(helpers::raised("pub const main := fn(): i32 { return type.a; };",
                           sema::error::TYPE_MISMATCH));
@@ -382,7 +387,8 @@ TEST_CASE("misused names and types report diagnostics instead of crashing") {
     CHECK(helpers::raised(R"(
         const Box := fn(T: type): type { return struct { val: T }; };
         pub const main := fn(): i32 { var q: i32 = 1; const b: Box(q) = .{ .val = 9 }; return 0; };
-    )", sema::error::TYPE_MISMATCH));
+    )",
+                          sema::error::TYPE_MISMATCH));
     // A builtin in type position
     CHECK(helpers::raised("const make := fn(b: i32): @compileError { return 1; };",
                           sema::error::TYPE_MISMATCH));
@@ -391,7 +397,8 @@ TEST_CASE("misused names and types report diagnostics instead of crashing") {
         const W := interface { pub const wr := fn(&self): i32; };
         const F := struct { fd: i32 };
         impl W for F { pub const wr := fn(&self): i32; }
-    )", sema::error::FUNCTION_DECLARATION_MISSING_BODY));
+    )",
+                          sema::error::FUNCTION_DECLARATION_MISSING_BODY));
     // An import alias clashing with a parameter
     helpers::expect_compile_error(R"(
         const Ident := fn(T: type): type { import T; };
@@ -419,6 +426,95 @@ TEST_CASE("scoped expressions work as member-access objects and initializer type
             return v + w + x.a + S{ .a = 6 }.g() + b.val;
         };
     )") == 21);
+}
+
+TEST_CASE("bit reinterpretation needs a defined bit layout") {
+    CHECK(helpers::raised(R"(
+        const Pair := struct { a: u3, b: u5 };
+        pub const main := fn(): i32 {
+            const p: Pair = .{ .a = 5, .b = 5 };
+            return @as(i32, @bitCast(u8, p));
+        };
+    )",
+                          sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised(R"(
+        const Pair := packed struct { a: u3, b: u5 };
+        pub const main := fn(): i32 {
+            const p: Pair = .{ .a = 5, .b = 5 };
+            return @as(i32, @bitCast(u16, p));
+        };
+    )",
+                          sema::error::TYPE_MISMATCH));
+    CHECK(helpers::compile_and_run(R"(
+        const Pair := packed struct { a: u3, b: u5 };
+        pub const main := fn(): i32 {
+            const p: Pair = .{ .a = 5, .b = 5 };
+            return @as(i32, @bitCast(u8, p));
+        };
+    )") == 45);
+}
+
+TEST_CASE("a packed field write is type-checked like any store") {
+    helpers::expect_compile_error(R"(
+        const Flags := packed struct { on: bool, n: u7 };
+        pub const main := fn(): i32 {
+            var f: Flags = .{ .on = true, .n = 3 };
+            f.on = if (f.n == 3) { return 4; };
+            return 0;
+        };
+    )");
+}
+
+TEST_CASE("an uncalled builtin cannot be a type argument") {
+    CHECK(helpers::raised(R"(
+        const Box := fn(T: type): type { return struct { v: T }; };
+        const B := Box(@sizeOf);
+    )",
+                          sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("a type constructor must return its type") {
+    CHECK(helpers::raised(R"(
+        const Vec := fn(T: type): type { struct { item: T }; };
+        pub const main := fn(): i32 { const a: Vec(i32) = undefined; return 0; };
+    )",
+                          sema::error::RETURN_TYPE_MISMATCH));
+}
+
+TEST_CASE("scalar match patterns must fit the matched type") {
+    const auto with_pattern{[](std::string_view matched, std::string_view pattern) {
+        return fmt::format("pub const main := fn(): i32 {{ var n: {} = undefined; "
+                           "return match (n) {{ {} => 1, _ => 0, }}; }};",
+                           matched,
+                           pattern);
+    }};
+    CHECK(helpers::raised(with_pattern("i32", "0.8"), sema::error::ILLEGAL_MATCH_PATTERN));
+    CHECK(helpers::raised(with_pattern("i32", "true"), sema::error::ILLEGAL_MATCH_PATTERN));
+    CHECK(helpers::raised(with_pattern("i32", "\"x\""), sema::error::ILLEGAL_MATCH_PATTERN));
+    CHECK(helpers::raised(with_pattern("bool", "3"), sema::error::ILLEGAL_MATCH_PATTERN));
+    CHECK(helpers::raised(with_pattern("u8", "300"), sema::error::ILLEGAL_MATCH_PATTERN));
+    CHECK(helpers::raised(with_pattern("u8", "0..300"), sema::error::ILLEGAL_MATCH_PATTERN));
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            var n: u8 = 3;
+            const k: u8 = 3;
+            return match (n) { 0, 2, 4..8 => 1, k => 7, 255 => 2, _ => 0, };
+        };
+    )") == 7);
+}
+
+TEST_CASE("a repeated self-reference reports once instead of crashing") {
+    CHECK(helpers::raised(
+        "const f := fn(rest...): void {}; const use := fn(): void { const g := f(g, g); };",
+        sema::error::CYCLIC_DEPENDENCY));
+    helpers::expect_compile_error(R"(
+        const VTable := struct { step: fn(n: i32): i32 };
+        const Widget := struct {
+            const table := VTable{ .step = inc };
+            const inc := fn(n: i32): i32 { const vt := ^Widget.table; return vt.step(n); };
+        };
+        pub const main := fn(): i32 { return Widget.inc(1); };
+    )");
 }
 
 } // namespace ghoti::tests

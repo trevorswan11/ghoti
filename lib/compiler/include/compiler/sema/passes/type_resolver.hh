@@ -123,8 +123,8 @@ class type_resolver {
 
     // Resolves `block`'s statements in order, stopping at (and reporting) the first poisoned one
     struct enum_value_tracker {
-        const type&                                  underlying;
-        stdx::option<i128>                           next{i128{0}};
+        const type&                                    underlying;
+        stdx::option<i128>                             next{i128{0}};
         std::vector<std::pair<i128, std::string_view>> seen{};
     };
     // Checks an enum member's (explicit or implied) value fits and is unique
@@ -133,7 +133,11 @@ class type_resolver {
                                         stdx::option<ast::expr_handle> value)
         -> stdx::option<diagnostic>;
     [[nodiscard]] auto probe_fold(ast::expr_handle expr) const -> stdx::option<gir::const_value>;
-    enum class operand_nature_t : u8 { TYPE, VALUE, UNKNOWN };
+    enum class operand_nature_t : u8 {
+        TYPE,
+        VALUE,
+        UNKNOWN,
+    };
     // Whether an operand names a type, holds a value, or cannot tell before instantiation
     [[nodiscard]] auto operand_nature(ast::expr_handle expr) const -> operand_nature_t;
     [[nodiscard]] auto call_arg_denotes_type(const ast::call_expr::argument& arg) const -> bool;
@@ -143,9 +147,11 @@ class type_resolver {
     [[nodiscard]] auto names_a_value(const symbol& sym, usize table_idx) -> bool;
     [[nodiscard]] auto check_array_dimension(ast::expr_handle dimension, const type& item_type)
         -> stdx::option<diagnostic>;
+    // The bit width `@bitCast` reinterprets, or none for a type with no defined bit layout
+    [[nodiscard]] auto        bit_cast_width(const type& t) const -> stdx::option<u64>;
     [[nodiscard]] static auto has_fixed_bit_layout(const type& t) noexcept -> bool;
     // Reports a loop/block/test body failure without discarding the node's own scope type
-    auto fail_scoped_body() -> void;
+    auto               fail_scoped_body() -> void;
     [[nodiscard]] auto resolve_block_statements(const ast::block_stmt& block) -> bool;
     [[nodiscard]] auto is_declared_later_in_active_block(ast::node_id decl) const -> bool;
     [[nodiscard]] auto is_runtime_local_decl(ast::node_id decl) const -> bool;
@@ -484,7 +490,8 @@ class type_resolver {
     // Poisons `value` when it names a type where `expected` wants a value (`const w: S = S;`);
     // returns whether it did
     // A module-scope `const x: T = v` whose `v` cannot become a `T`
-    auto reject_unassignable_global_initializer(ast::expr_handle value, const type& declared) -> bool;
+    auto reject_unassignable_global_initializer(ast::expr_handle value, const type& declared)
+        -> bool;
     auto reject_type_as_value(ast::expr_handle value, const type& expected) -> bool;
 
     // Records which declaration `id` names, for LSP features like hover

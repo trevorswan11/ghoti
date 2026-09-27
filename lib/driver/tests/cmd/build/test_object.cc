@@ -356,8 +356,8 @@ TEST_CASE("build_obj creates a missing output directory") {
         fmt::print(out, "pub const one := fn(): i32 {{ return 1; }};\n");
     }
 
-    const auto out_dir{std::filesystem::path{tempfile::make_temp_path("ghoti_nested_out")}};
-    const auto obj_path{out_dir / "deeper" / "out.o"};
+    const auto     out_dir{std::filesystem::path{tempfile::make_temp_path("ghoti_nested_out")}};
+    const auto     obj_path{out_dir / "deeper" / "out.o"};
     cmd::build_obj cmd{{.input_path = src_file, .output_path = obj_path}};
     REQUIRE(cmd.execute());
     CHECK(std::filesystem::exists(obj_path));

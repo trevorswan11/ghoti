@@ -233,7 +233,8 @@ template <Diagnostic D> class diagnostic_list {
     // Drops later exact repeats, as when several instantiations report the same body error
     auto remove_duplicates() -> void {
         std::unordered_set<std::string> seen;
-        std::erase_if(diagnostics_, [&seen](const D& d) { return !seen.insert(d.identity()).second; });
+        std::erase_if(diagnostics_,
+                      [&seen](const D& d) { return !seen.insert(d.identity()).second; });
     }
 
     operator gsl::span<const D>() const { return diagnostics_; }

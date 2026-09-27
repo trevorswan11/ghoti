@@ -43,7 +43,8 @@ TEST_CASE("Lexing illegal characters") {
 }
 
 TEST_CASE("A leading UTF-8 byte order mark is skipped") {
-    test_lexer("\xEF\xBB\xBF" "const x",
+    test_lexer("\xEF\xBB\xBF"
+               "const x",
                {
                    {token_type_t::CONSTANT, "const"},
                    {token_type_t::IDENT, "x"},

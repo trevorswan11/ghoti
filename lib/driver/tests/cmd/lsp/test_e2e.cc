@@ -108,8 +108,7 @@ TEST_CASE("ghoti lsp answers malformed messages with JSON-RPC errors and keeps s
     REQUIRE(proc.is_running());
 
     constexpr std::string_view bad_body{"{not json"};
-    proc.stdin_stream() << fmt::format(
-        "Content-Length: {}\r\n\r\n{}", bad_body.size(), bad_body);
+    proc.stdin_stream() << fmt::format("Content-Length: {}\r\n\r\n{}", bad_body.size(), bad_body);
     proc.stdin_stream().flush();
     const auto parse_error = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
     CHECK(parse_error.at("error").at("code") == -32'700);

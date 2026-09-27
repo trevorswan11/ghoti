@@ -43,11 +43,11 @@ namespace {
     case '"':
         if (closed_by_quote(1)) {
             if (!is_valid_utf8(slice)) {
-                return diagnostic{
-                    "String literal is not valid UTF-8", error::INVALID_UTF8, token};
+                return diagnostic{"String literal is not valid UTF-8", error::INVALID_UTF8, token};
             }
-            return diagnostic{
-                "Invalid escape sequence in string literal", error::UNKNOWN_CHARACTER_ESCAPE, token};
+            return diagnostic{"Invalid escape sequence in string literal",
+                              error::UNKNOWN_CHARACTER_ESCAPE,
+                              token};
         }
         return diagnostic{"Unterminated string literal", error::UNTERMINATED_STRING, token};
     case '\'':
@@ -60,8 +60,9 @@ namespace {
         }
         if (!slice.starts_with("@\"")) { break; }
         if (closed_by_quote(2)) {
-            return diagnostic{
-                "Invalid escape sequence in raw identifier", error::UNKNOWN_CHARACTER_ESCAPE, token};
+            return diagnostic{"Invalid escape sequence in raw identifier",
+                              error::UNKNOWN_CHARACTER_ESCAPE,
+                              token};
         }
         return diagnostic{"Unterminated raw identifier", error::UNTERMINATED_RAW_IDENTIFIER, token};
     case '\\':
@@ -338,8 +339,9 @@ auto parser::parse_expression(bind_precedence precedence)
     -> stdx::result<ast::expr_handle, diagnostic> {
     PROFILE_FUNCTION();
     if (current_token_is(token_type_t::END)) {
-        return make_syntax_err(
-            "Expected an expression, found the end of input", error::END_OF_TOKEN_STREAM, current_token_);
+        return make_syntax_err("Expected an expression, found the end of input",
+                               error::END_OF_TOKEN_STREAM,
+                               current_token_);
     }
 
     const auto nesting{TRY(enter_nesting())};

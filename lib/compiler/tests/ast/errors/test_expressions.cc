@@ -47,11 +47,10 @@ TEST_CASE("No index") {
 }
 
 TEST_CASE("Illegal infix node") {
-    helpers::test_parser_fail(
-        "a and import std;",
-        syntax::diagnostic{"Expected an expression, found 'import'",
-                           syntax::error::MISSING_PREFIX_PARSER,
-                           std::pair{0UZ, 6UZ}});
+    helpers::test_parser_fail("a and import std;",
+                              syntax::diagnostic{"Expected an expression, found 'import'",
+                                                 syntax::error::MISSING_PREFIX_PARSER,
+                                                 std::pair{0UZ, 6UZ}});
 }
 
 TEST_CASE("Non-terminated infix") {
@@ -84,17 +83,18 @@ TEST_CASE("Code nested too deeply") {
     helpers::test_parser_fail(deep_array_type + "u8;",
                               syntax::diagnostic{"Code nested too deeply",
                                                  syntax::error::EXPRESSION_NESTED_TOO_DEEPLY,
-                                                 std::pair{0UZ, 1032UZ}});
+                                                 std::pair{0UZ, 1'032UZ}});
 }
 
-TEST_CASE("An overly long operator chain reports a diagnostic instead of overflowing later passes") {
+TEST_CASE(
+    "An overly long operator chain reports a diagnostic instead of overflowing later passes") {
     std::string chain{"a"};
-    for (usize i{0}; i < 5000; ++i) { chain += "+a"; }
+    for (usize i{0}; i < 5'000; ++i) { chain += "+a"; }
     helpers::test_parser_fail(chain + ";",
                               syntax::diagnostic{"Expression chains too many operators; split it "
                                                  "into intermediate values",
                                                  syntax::error::EXPRESSION_NESTED_TOO_DEEPLY,
-                                                 std::pair{0UZ, 8193UZ}});
+                                                 std::pair{0UZ, 8'193UZ}});
 }
 
 TEST_CASE("Literal and comment edge cases report targeted diagnostics") {
@@ -111,7 +111,7 @@ TEST_CASE("Literal and comment edge cases report targeted diagnostics") {
                               syntax::diagnostic{"Float literal is too small to represent",
                                                  syntax::error::DOUBLE_OVERFLOW,
                                                  std::pair{0UZ, 0UZ}});
-    helpers::test_parser_fail(std::string(1, '1') + "." + std::string(3000, '1') + "e99999;",
+    helpers::test_parser_fail(std::string(1, '1') + "." + std::string(3'000, '1') + "e99999;",
                               syntax::diagnostic{"Overflow of literal",
                                                  syntax::error::DOUBLE_OVERFLOW,
                                                  std::pair{0UZ, 0UZ}});
@@ -235,10 +235,11 @@ TEST_CASE("Missing inner member of dot expression") {
 }
 
 TEST_CASE("Illegal inner member of dot expression") {
-    helpers::test_parser_fail(
-        "A.2;",
-        syntax::diagnostic{
-            "Expected an identifier, found an integer literal", syntax::error::UNEXPECTED_TOKEN, 0, 2});
+    helpers::test_parser_fail("A.2;",
+                              syntax::diagnostic{"Expected an identifier, found an integer literal",
+                                                 syntax::error::UNEXPECTED_TOKEN,
+                                                 0,
+                                                 2});
 }
 
 } // namespace ghoti::tests

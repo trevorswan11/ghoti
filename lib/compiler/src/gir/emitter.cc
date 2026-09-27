@@ -865,9 +865,7 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
         return emit_expression_id_raw(*expr_id);
     }
     // `undefined` carries no type of its own; adopt the destination's so codegen can size it.
-    if (is_undefined_value(*expr_id)) {
-        return value{undefined_val{}, dest_type};
-    }
+    if (is_undefined_value(*expr_id)) { return value{undefined_val{}, dest_type}; }
 
     const auto val{emit_expression(expr_id)};
 
@@ -1970,9 +1968,10 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         // A non-foldable `const` binds directly to its initializer's value, bypassing the
         // store-typecheck a `var` alloca would get; re-check the annotated type here.
         if (decl.explicit_type && val.type && !sema::is_assignable(*val.type, *sema_type)) {
-            ctx_.diags.emplace_back(ctx_.store_mismatch_message(*val.type, *sema_type, target_ptr_bits_),
-                                    sema::error::TYPE_MISMATCH,
-                                    active_ast().location_of(*decl.value));
+            ctx_.diags.emplace_back(
+                ctx_.store_mismatch_message(*val.type, *sema_type, target_ptr_bits_),
+                sema::error::TYPE_MISMATCH,
+                active_ast().location_of(*decl.value));
         }
 
         if (const auto lid{val.as_opt<local_id>()}) {
@@ -2771,6 +2770,14 @@ auto emitter::emit_packed_field_assign(ast::node_id                id,
     value new_field{};
     if (op_type == syntax::token_type_t::ASSIGN) {
         new_field = emit_coerced_expr(assign.rhs, field_type);
+        // A packed write is bit arithmetic on the backing integer, so no typed store checks it
+        if (new_field.type && !sema::is_assignable(*new_field.type, field_type)) {
+            ctx_.diags.emplace_back(
+                ctx_.store_mismatch_message(*new_field.type, field_type, target_ptr_bits_),
+                sema::error::TYPE_MISMATCH,
+                active_ast().location_of(assign.rhs));
+            return new_field;
+        }
     } else {
         auto&       backing_ty{ctx_.get_int(static_cast<u16>(layout.n), false)};
         const value backing{emit_expression(dot.object).data, backing_ty};
@@ -3729,7 +3736,8 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         case syntax::token_type_t::BUILTIN_C_VA_START:
         case syntax::token_type_t::BUILTIN_C_VA_COPY:
         case syntax::token_type_t::BUILTIN_C_VA_END:
-        case syntax::token_type_t::BUILTIN_C_VA_ARG:   return emit_c_va_builtin(call, fn_token, ret_type);
+        case syntax::token_type_t::BUILTIN_C_VA_ARG:
+            return emit_c_va_builtin(call, fn_token, ret_type);
         case syntax::token_type_t::BUILTIN_ADD_WITH_OVERFLOW:
         case syntax::token_type_t::BUILTIN_SUB_WITH_OVERFLOW:
         case syntax::token_type_t::BUILTIN_MUL_WITH_OVERFLOW:
@@ -4469,8 +4477,8 @@ auto emitter::fold_constexpr_loop_condition(ast::expr_handle condition, std::str
     -> stdx::option<bool> {
     const gir::const_eval::constexpr_context_guard g{const_eval_, true};
     const auto                                     diags_before{ctx_.diags.size()};
-    const auto cond_val{const_eval_.try_eval(condition)};
-    stdx::option<bool> cond;
+    const auto                                     cond_val{const_eval_.try_eval(condition)};
+    stdx::option<bool>                             cond;
     if (cond_val) {
         if (const auto folded{cond_val->as_opt<bool>()}) { cond = *folded; }
     }
@@ -4623,7 +4631,8 @@ auto emitter::emit_constexpr_do_while(ast::node_id id, const ast::do_while_loop_
         if (emit_constexpr_loop_body(block) == constexpr_body_exit::BREAK) { break; }
 
         const_eval_.clear_memo();
-        const auto cond{fold_constexpr_loop_condition(do_while.condition, "`do ... while constexpr`")};
+        const auto cond{
+            fold_constexpr_loop_condition(do_while.condition, "`do ... while constexpr`")};
         if (!cond || !*cond) { break; }
     }
     return value{void_val{}, void_type};
@@ -6585,8 +6594,8 @@ auto emitter::emit_union_active_field_guard(value            union_addr,
 }
 
 auto emitter::emit_c_va_builtin(const ast::call_expr& call,
-                                syntax::token_type_t builtin,
-                                sema::type&          ret_type) -> value {
+                                syntax::token_type_t  builtin,
+                                sema::type&           ret_type) -> value {
     PROFILE_FUNCTION();
     if (builtin == syntax::token_type_t::BUILTIN_C_VA_START && !current_function_is_c_variadic()) {
         ctx_.diags.emplace_back("'@cVaStart' can only be used inside a C-variadic `fn(..., ...)`",

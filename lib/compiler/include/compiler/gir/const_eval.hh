@@ -198,7 +198,11 @@ class const_eval {
 
     // What a loop does after its body ran: iterate again, stop (unlabeled `break`), or exit with
     // `current_signal_` (a labeled jump, a `return`, or unknown control flow)
-    enum class loop_step : u8 { NEXT, STOP, EXIT };
+    enum class loop_step : u8 {
+        NEXT,
+        STOP,
+        EXIT,
+    };
 
   private:
     [[nodiscard]] auto resolve_deferred_array(const sema::types::deferred_array& deferred)
@@ -356,10 +360,10 @@ class const_eval {
     // condition/iterable can't be folded.
     // A label's name, handed to the loop it directly wraps so it can consume jumps aimed at it
     stdx::option<std::string_view> pending_loop_label_;
-    bool                      cond_unknown_{false};
-    bool                      constexpr_context_{false};
-    eval_signal               current_signal_{};
-    stdx::option<const_value> current_error_val_{};
+    bool                           cond_unknown_{false};
+    bool                           constexpr_context_{false};
+    eval_signal                    current_signal_{};
+    stdx::option<const_value>      current_error_val_{};
 
     ankerl::unordered_dense::map<memo_key, const_value, memo_key_hash> memo_cache_;
     ankerl::unordered_dense::map<std::string, const_value>             global_cx_vars_;

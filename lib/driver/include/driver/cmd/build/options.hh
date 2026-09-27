@@ -12,9 +12,9 @@
 #include <stdx/result.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/codegen/error.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
-#include "compiler/codegen/error.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/module/file_loader.hh"
 #include "compiler/module/module.hh"
@@ -32,22 +32,22 @@ struct module_binding {
 
 // Raw options populated directly by CLI parser
 struct raw_options {
-    std::string              input;
-    std::string              output;
-    std::string              target;
-    std::string              cpu{"generic"};
-    std::string              features;
+    std::string                input;
+    std::string                output;
+    std::string                target;
+    std::string                cpu{"generic"};
+    std::string                features;
     std::optional<std::string> opt_level_str; // unset unless `-O` was given (even as `-O ""`)
-    std::vector<std::string> module_raw_args;
-    std::vector<std::string> extra_objects;
-    std::vector<std::string> library_paths;
-    std::vector<std::string> libraries;
-    std::vector<std::string> forwarded_args;
-    bool                     release{false};
-    bool                     debug_passes{false};
-    bool                     time_passes{false};
-    bool                     dynamic{false};
-    bool                     unsafe{false};
+    std::vector<std::string>   module_raw_args;
+    std::vector<std::string>   extra_objects;
+    std::vector<std::string>   library_paths;
+    std::vector<std::string>   libraries;
+    std::vector<std::string>   forwarded_args;
+    bool                       release{false};
+    bool                       debug_passes{false};
+    bool                       time_passes{false};
+    bool                       dynamic{false};
+    bool                       unsafe{false};
 
     std::string emit_gir_path;
     std::string emit_llvm_ir_path;
@@ -122,8 +122,7 @@ class compilation {
 // Runs a just-built executable and maps its exit status onto the driver's result.
 [[nodiscard]] auto run_built_executable(const options& opts,
                                         std::ostream&  error_stream,
-                                        bool           cleanup_output)
-    -> stdx::result<void, clap::error>;
+                                        bool cleanup_output) -> stdx::result<void, clap::error>;
 
 // Helper to register standard build options into CLI subcommands
 auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_view> output_desc)

@@ -296,7 +296,7 @@ TEST_CASE("a loop's `else` branch runs only when the loop finishes, at runtime a
             return w(4, 99) + w(4, 2) + f(4, 99) + f(4, 2) + lw(3) + lw(9) + lf(3) + lf(9);
         };
     )"};
-    constexpr i32 expected{54 + 2 + 54 + 2 + 40 + 99 + 40 + 99};
+    constexpr i32  expected{54 + 2 + 54 + 2 + 40 + 99 + 40 + 99};
     CHECK(helpers::compile_and_run(std::string{loops} +
                                    "pub const main := fn(): i32 { return total() - 300; };") ==
           expected - 300);

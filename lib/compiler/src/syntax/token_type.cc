@@ -67,19 +67,23 @@ auto misc_from_char(char c) noexcept -> stdx::option<token_type_t> {
 
 auto describe(token_type_t tt) -> std::string {
     switch (tt) {
-    case token_type_t::END:              return "the end of input";
-    case token_type_t::IDENT:            return "an identifier";
+    case token_type_t::END:                return "the end of input";
+    case token_type_t::IDENT:              return "an identifier";
     case token_type_t::INT_2:
     case token_type_t::INT_8:
     case token_type_t::INT_10:
-    case token_type_t::INT_16:           return "an integer literal";
-    case token_type_t::REAL:             return "a float literal";
+    case token_type_t::INT_16:             return "an integer literal";
+    case token_type_t::REAL:               return "a float literal";
     case token_type_t::STRING:
-    case token_type_t::MULTILINE_STRING: return "a string literal";
-    case token_type_t::U8:               return "a character literal";
-    case token_type_t::INT_TYPE:         return "an integer type";
-    case token_type_t::ILLEGAL:          return "an invalid token";
-    default:                             break;
+    case token_type_t::MULTILINE_STRING:   return "a string literal";
+    case token_type_t::U8:                 return "a character literal";
+    case token_type_t::INT_TYPE:           return "an integer type";
+    case token_type_t::ILLEGAL:            return "an invalid token";
+    case token_type_t::UNDERSCORE:         return "'_'";
+    case token_type_t::SINGLE_QUOTE:       return "'\''";
+    case token_type_t::DOC_COMMENT:        return "a doc comment";
+    case token_type_t::MODULE_DOC_COMMENT: return "a module doc comment";
+    default:                               break;
     }
 
     for (const char c : std::string_view{",:;(){}[]"}) {

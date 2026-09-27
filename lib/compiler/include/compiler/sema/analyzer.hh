@@ -44,7 +44,12 @@ struct target_options;
 namespace sema {
 
 // What a build produces, which decides how its GIR is pruned and lowered
-enum class build_artifact : u8 { OBJECT, EXECUTABLE, TEST_EXECUTABLE, LIBRARY };
+enum class build_artifact : u8 {
+    OBJECT,
+    EXECUTABLE,
+    TEST_EXECUTABLE,
+    LIBRARY,
+};
 
 // The manager for all steps of semantic analysis.
 class analyzer {

@@ -118,9 +118,7 @@ template <typename T>
         return make_scalar_const(l / r, res_type);
     case syntax::token_type_t::PERCENT:
         if constexpr (Integral<T>) {
-            if (r == 0) {
-                return on_error("Modulo by zero in compile-time constant expression");
-            }
+            if (r == 0) { return on_error("Modulo by zero in compile-time constant expression"); }
             return make_scalar_const(l % r, res_type);
         } else {
             return stdx::none;
@@ -1409,8 +1407,8 @@ auto const_eval::eval_index(ast::node_id id, const ast::index_expr& index_expr)
     if (const auto arr{target_val->as_opt<const_array>()}) {
         if (idx == arr->elements.size() && is_sentinel_terminated(target_val->get_type())) {
             const auto elem_type{target_val->get_type()->get_data().as_opt<sema::types::array>()};
-            return const_value{u64{0}, elem_type ? stdx::option<sema::type&>{elem_type->underlying}
-                                                 : stdx::none};
+            return const_value{
+                u64{0}, elem_type ? stdx::option<sema::type&>{elem_type->underlying} : stdx::none};
         }
         if (idx >= arr->elements.size()) {
             ctx_.diags.emplace_back(
@@ -1608,8 +1606,9 @@ auto const_eval::eval_dot(ast::node_id, const ast::dot_expr& dot) -> stdx::optio
                     if (const auto decl{module_->ast.get_as_opt<ast::decl_stmt>(*node)};
                         decl && decl->value) {
                         const auto enum_type{module_->get_sema_type_opt(*decl->value)};
-                        const auto en{enum_type ? enum_type->get_data().as_opt<sema::types::enum_t>()
-                                                : stdx::none};
+                        const auto en{enum_type
+                                          ? enum_type->get_data().as_opt<sema::types::enum_t>()
+                                          : stdx::none};
                         if (module_->ast.get_as_opt<ast::enum_expr>(*decl->value) && en) {
                             if (const auto val{enum_member_value(*en, member_name)}) {
                                 return const_value{
@@ -1997,9 +1996,9 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
         const_array fields;
         const auto  values{enum_member_values(en)};
         for (usize idx{0}; idx < en.ast_enumerations.size(); ++idx) {
-            const auto& e{en.ast_enumerations[idx]};
-            const auto& vname{en.enclosing.ast.get_as<ast::identifier_expr>(e.name).name};
-            const auto  val{values[idx]};
+            const auto&  e{en.ast_enumerations[idx]};
+            const auto&  vname{en.enclosing.ast.get_as<ast::identifier_expr>(e.name).name};
+            const auto   val{values[idx]};
             const_struct fs;
             fs.fields.emplace("name", const_value::make_string(ctx_, std::string{vname}));
             fs.fields.emplace(
@@ -2468,8 +2467,7 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
         }
         if (res_type->get_kind() == sema::type_kind::ISIZE ||
             res_type->get_kind() == sema::type_kind::USIZE) {
-            const auto ptr_bits{
-                target_pointer_bits()};
+            const auto ptr_bits{target_pointer_bits()};
             return wrap_to_width(*folded,
                                  static_cast<u16>(ptr_bits),
                                  res_type->get_kind() == sema::type_kind::ISIZE,
@@ -2482,7 +2480,7 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
     // Saturating ops clamp the exact result to the first concrete integer operand's range; with
     // only width-less `constexpr_int` operands there is no range, so they fold as the plain op
     if (const auto plain_op{saturating_base_op(op_type)}) {
-        const auto ptr_bits{target_pointer_bits()};
+        const auto                ptr_bits{target_pointer_bits()};
         stdx::option<sema::type&> res_type;
         for (const auto* v : {&lhs, &rhs}) {
             if (!res_type && v->get_type() && integer_target_width(*v->get_type(), ptr_bits)) {
@@ -2729,8 +2727,7 @@ auto const_eval::eval_unary(ast::node_id id, const ast::unary_expr& unary)
             return wrap_to_width(*negated, sema::int_width(*res_type), true, res_type);
         }
         if (res_type && res_type->get_kind() == sema::type_kind::ISIZE) {
-            const auto ptr_bits{
-                target_pointer_bits()};
+            const auto ptr_bits{target_pointer_bits()};
             return wrap_to_width(*negated, static_cast<u16>(ptr_bits), true, res_type);
         }
         return negated; // `constexpr_int`: no wrap, plain negate stands.
@@ -3219,8 +3216,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto target_type{eval_layout_argument(call.arguments.front())};
         if (!target_type) { return stdx::none; }
 
-        const auto ptr_size{
-            target_pointer_bytes()};
+        const auto ptr_size{target_pointer_bytes()};
         const auto sz{type_size_of(*target_type, ptr_size)};
         return const_value{static_cast<u64>(sz), usize_type};
     }
@@ -3229,8 +3225,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto target_type{eval_layout_argument(call.arguments.front())};
         if (!target_type) { return stdx::none; }
 
-        const auto ptr_size{
-            target_pointer_bytes()};
+        const auto ptr_size{target_pointer_bytes()};
         const auto al{type_align_of(*target_type, ptr_size)};
         return const_value{static_cast<u64>(al), usize_type};
     }
@@ -3239,8 +3234,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto target_type{eval_layout_argument(call.arguments.front())};
         if (!target_type) { return stdx::none; }
 
-        const auto ptr_size{
-            target_pointer_bytes()};
+        const auto ptr_size{target_pointer_bytes()};
         const auto ptr_bits{static_cast<u32>(ptr_size) * 8};
 
         const auto kind{target_type->get_kind()};
@@ -4411,7 +4405,7 @@ auto const_eval::eval_while(ast::node_id, const ast::while_loop_expr& loop)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
-    usize iterations{0};
+    usize      iterations{0};
     while (!exceeded_unroll_limit(iterations)) {
         const auto cond{eval_loop_condition(loop.condition)};
         if (!cond) { return stdx::none; }
@@ -4433,7 +4427,7 @@ auto const_eval::eval_do_while(ast::node_id, const ast::do_while_loop_expr& loop
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
-    usize iterations{0};
+    usize      iterations{0};
     while (!exceeded_unroll_limit(iterations)) {
         DISCARD(eval_stmt(loop.block));
         switch (consume_loop_signal(own_label)) {
@@ -4451,7 +4445,7 @@ auto const_eval::eval_infinite_loop(ast::node_id, const ast::infinite_loop_expr&
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
-    usize iterations{0};
+    usize      iterations{0};
     while (!exceeded_unroll_limit(iterations)) {
         DISCARD(eval_stmt(loop.block));
         switch (consume_loop_signal(own_label)) {
@@ -4896,7 +4890,7 @@ auto const_eval::simulate_if(const ast::if_expr& if_expr) -> void {
 
 auto const_eval::simulate_while(const ast::while_loop_expr& loop) -> void {
     const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
-    usize iterations{0};
+    usize      iterations{0};
     while (!exceeded_unroll_limit(iterations)) {
         const auto cond{eval_loop_condition(loop.condition)};
         if (!cond) { return; }
@@ -4916,7 +4910,7 @@ auto const_eval::simulate_while(const ast::while_loop_expr& loop) -> void {
 
 auto const_eval::simulate_do_while(const ast::do_while_loop_expr& loop) -> void {
     const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
-    usize iterations{0};
+    usize      iterations{0};
     while (!exceeded_unroll_limit(iterations)) {
         simulate_stmt(loop.block);
         if (consume_loop_signal(own_label) != loop_step::NEXT) { return; }
@@ -5026,7 +5020,7 @@ auto const_eval::simulate_for(const ast::for_loop_expr& loop) -> void {
 
 auto const_eval::simulate_infinite_loop(const ast::infinite_loop_expr& loop) -> void {
     const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
-    usize iterations{0};
+    usize      iterations{0};
     while (!exceeded_unroll_limit(iterations)) {
         simulate_stmt(loop.block);
         if (consume_loop_signal(own_label) != loop_step::NEXT) { return; }

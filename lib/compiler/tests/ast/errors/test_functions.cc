@@ -14,8 +14,7 @@ namespace ghoti::tests {
 TEST_CASE("Function missing return type") {
     helpers::test_parser_fail(
         "fn(^mut this, a: A, b: ^B, );",
-        syntax::diagnostic{
-            "Expected ':', found ';'", syntax::error::UNEXPECTED_TOKEN, 0, 28});
+        syntax::diagnostic{"Expected ':', found ';'", syntax::error::UNEXPECTED_TOKEN, 0, 28});
 
     helpers::test_parser_fail("fn(^mut this, a: A, b: ^B, ): ;",
                               syntax::diagnostic{"Expected an expression, found ';'",
@@ -23,7 +22,10 @@ TEST_CASE("Function missing return type") {
                                                  std::pair{0UZ, 30UZ}});
 
     helpers::test_parser_fail("fn(^mut this, a: A, b: ^B, ): ",
-                              syntax::diagnostic{"Expected a type, found the end of input", syntax::error::MISSING_EXPLICIT_TYPE, 0, 28});
+                              syntax::diagnostic{"Expected a type, found the end of input",
+                                                 syntax::error::MISSING_EXPLICIT_TYPE,
+                                                 0,
+                                                 28});
 }
 
 TEST_CASE("An inferred-type parameter reports a diagnostic instead of crashing") {
@@ -37,18 +39,18 @@ TEST_CASE("An inferred-type parameter reports a diagnostic instead of crashing")
 TEST_CASE("Function parameter missing type") {
     helpers::test_parser_fail(
         "fn(^mut this, a): i32;",
-        syntax::diagnostic{
-            "Expected ':', found ')'", syntax::error::UNEXPECTED_TOKEN, 0, 15});
+        syntax::diagnostic{"Expected ':', found ')'", syntax::error::UNEXPECTED_TOKEN, 0, 15});
 }
 
 TEST_CASE("Out-of-place self parameter") {
-    helpers::test_parser_fail("fn(a: A, &self): i32;",
-                              syntax::diagnostic{"Expected an identifier, found '&'", syntax::error::ILLEGAL_IDENTIFIER, 0, 9});
+    helpers::test_parser_fail(
+        "fn(a: A, &self): i32;",
+        syntax::diagnostic{
+            "Expected an identifier, found '&'", syntax::error::ILLEGAL_IDENTIFIER, 0, 9});
 
     helpers::test_parser_fail(
         "fn(a: A, self): i32;",
-        syntax::diagnostic{
-            "Expected ':', found ')'", syntax::error::UNEXPECTED_TOKEN, 0, 13});
+        syntax::diagnostic{"Expected ':', found ')'", syntax::error::UNEXPECTED_TOKEN, 0, 13});
 }
 
 TEST_CASE("Illegal self parameter modifier") {
@@ -107,8 +109,10 @@ TEST_CASE("Illegal type function types") {
 }
 
 TEST_CASE("Non-terminated parameter list") {
-    helpers::test_parser_fail("fn(a: A, : i32;",
-                              syntax::diagnostic{"Expected an identifier, found ':'", syntax::error::ILLEGAL_IDENTIFIER, 0, 9});
+    helpers::test_parser_fail(
+        "fn(a: A, : i32;",
+        syntax::diagnostic{
+            "Expected an identifier, found ':'", syntax::error::ILLEGAL_IDENTIFIER, 0, 9});
 }
 
 TEST_CASE("'move' must be followed directly by 'fn'") {

@@ -82,7 +82,6 @@ constexpr std::array supported_archs{
     "loongarch64",
 };
 
-
 auto prune_to_test_reachable(gir::module& gir_module) -> void {
     std::vector<std::string_view> roots;
     for (const auto* fn : gir_module.get_test_functions()) { roots.emplace_back(fn->get_name()); }
@@ -122,8 +121,7 @@ auto prune_to_test_reachable(gir::module& gir_module) -> void {
 
 // Libraries named by `extern("lib", ...)` declarations join the ones given on the command line
 [[nodiscard]] auto merged_libraries(const codegen::extra_linker_options& linker_opts,
-                                    const gir::module&                   gir_module)
-    -> std::vector<std::string> {
+                                    const gir::module& gir_module) -> std::vector<std::string> {
     std::vector<std::string> merged{linker_opts.libraries.begin(), linker_opts.libraries.end()};
     for (auto& lib : gir_module.get_required_libraries()) { merged.emplace_back(std::move(lib)); }
     return merged;
@@ -463,7 +461,6 @@ auto analyzer::validate_test_entry(const mod::module& root_module) const
     return {};
 }
 
-
 auto analyzer::emit_object(gir::module&                      gir_module,
                            const codegen::target_options&    target_opts,
                            const codegen::optimizer_options& opt_options,
@@ -601,8 +598,8 @@ auto analyzer::emit_dynamic_library(gir::module&                         gir_mod
     auto       llvm_mod{TRY(lower_artifact(gir_module, context, opts, build_artifact::LIBRARY))};
     const auto temp_obj_path{make_tmp_obj(output_path)};
     TRY(codegen::emit_object_file(*llvm_mod, *target_machine, temp_obj_path));
-    auto       libraries{merged_libraries(linker_opts, gir_module)};
-    auto       effective_linker_opts{linker_opts};
+    auto libraries{merged_libraries(linker_opts, gir_module)};
+    auto effective_linker_opts{linker_opts};
     effective_linker_opts.libraries = libraries;
     return codegen::link_dynamic_library(
         temp_obj_path, output_path, target_opts, effective_linker_opts);
@@ -614,8 +611,7 @@ auto analyzer::link_artifact(gir::module&                         gir_module,
                              const codegen::optimizer_options&    opt_options,
                              const std::filesystem::path&         output_path,
                              const codegen::extra_linker_options& linker_opts,
-                             build_artifact                       artifact)
-    -> stdx::result<void, codegen::diagnostic> {
+                             build_artifact artifact) -> stdx::result<void, codegen::diagnostic> {
     auto       target_machine{TRY(codegen::create_target_machine(target_opts))};
     const auto opts{with_target_machine(opt_options, target_opts, *target_machine)};
     auto       llvm_mod{TRY(lower_artifact(gir_module, context, opts, artifact))};
@@ -623,8 +619,8 @@ auto analyzer::link_artifact(gir::module&                         gir_module,
     TRY(codegen::emit_object_file(*llvm_mod, *target_machine, temp_obj_path));
 
     // Only link kernel32/shell32 when the entry wrapper actually needs them to recover argv
-    auto       libraries{merged_libraries(linker_opts, gir_module)};
-    auto       effective_linker_opts{linker_opts};
+    auto libraries{merged_libraries(linker_opts, gir_module)};
+    auto effective_linker_opts{linker_opts};
     effective_linker_opts.libraries = libraries;
     effective_linker_opts.needs_windows_argv_apis =
         llvm_mod->getFunction("GetCommandLineW") != nullptr;

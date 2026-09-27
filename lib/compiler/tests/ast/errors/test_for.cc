@@ -22,15 +22,13 @@ TEST_CASE("Missing iterables") {
 
     helpers::test_parser_fail(
         "for |i| { a; } else return b;",
-        syntax::diagnostic{
-            "Expected '(', found '|'", syntax::error::UNEXPECTED_TOKEN, 0, 4});
+        syntax::diagnostic{"Expected '(', found '|'", syntax::error::UNEXPECTED_TOKEN, 0, 4});
 }
 
 TEST_CASE("Non-terminated captures") {
     helpers::test_parser_fail(
         "for (0..4) |i { a; } else return b;",
-        syntax::diagnostic{
-            "Expected ',', found '{'", syntax::error::UNEXPECTED_TOKEN, 0, 14});
+        syntax::diagnostic{"Expected ',', found '{'", syntax::error::UNEXPECTED_TOKEN, 0, 14});
 }
 
 TEST_CASE("Missing captures") {
@@ -43,8 +41,10 @@ TEST_CASE("Missing captures") {
 }
 
 TEST_CASE("Illegal capture") {
-    helpers::test_parser_fail("for (0..4) |2| { a; } else return b;",
-                              syntax::diagnostic{"Expected an identifier, found '2'", syntax::error::ILLEGAL_IDENTIFIER, 0, 12});
+    helpers::test_parser_fail(
+        "for (0..4) |2| { a; } else return b;",
+        syntax::diagnostic{
+            "Expected an identifier, found '2'", syntax::error::ILLEGAL_IDENTIFIER, 0, 12});
 }
 
 TEST_CASE("Iterable-capture mismatch") {

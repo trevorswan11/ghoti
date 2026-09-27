@@ -82,7 +82,8 @@ TEST_CASE("`undefined` has no runtime representation outside a `const` binding")
     CHECK(helpers::raised(R"(
         const A := [2]@TypeOf(undefined);
         pub const main := fn(): i32 { var a: A = undefined; return 0; };
-    )", sema::error::COMPILE_TIME_ONLY_VALUE));
+    )",
+                          sema::error::COMPILE_TIME_ONLY_VALUE));
 }
 
 } // namespace ghoti::tests

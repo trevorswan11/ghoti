@@ -265,15 +265,15 @@ class emitter {
     auto               emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value;
     auto               emit_match(ast::node_id id, const ast::match_expr& match) -> value;
 
-    [[nodiscard]] auto fold_compile_time_only(ast::node_id id, std::string_view what, sema::type& type)
-        -> value;
+    [[nodiscard]] auto
+         fold_compile_time_only(ast::node_id id, std::string_view what, sema::type& type) -> value;
     auto bind_declared_params(gir::function&            fn,
                               const ast::function_expr& fn_expr,
                               const mod::module&        owner) -> void;
     auto emit_implicit_return(sema::type& return_type) -> void;
     auto emit_c_va_builtin(const ast::call_expr& call,
-                           syntax::token_type_t builtin,
-                           sema::type&          ret_type) -> value;
+                           syntax::token_type_t  builtin,
+                           sema::type&           ret_type) -> value;
     [[nodiscard]] auto current_function_is_c_variadic() -> bool;
 
     // @mem* decompose the slice args into a data pointer + byte length. A length check is only
@@ -315,7 +315,11 @@ class emitter {
                     stdx::option<sema::type&>      result_type = stdx::none) -> value;
     // Repeatedly folds the condition and replays the body via `emit_block` for as long as it
     // holds `true`; no runtime loop, no `body_type_diff`
-    enum class constexpr_body_exit : u8 { NEXT, CONTINUE, BREAK };
+    enum class constexpr_body_exit : u8 {
+        NEXT,
+        CONTINUE,
+        BREAK,
+    };
     // Emits one unrolled iteration of a constexpr loop body, consuming its break/continue flags
     auto emit_constexpr_loop_body(const ast::block_stmt& block) -> constexpr_body_exit;
     [[nodiscard]] auto constexpr_unroll_limit_reached(usize            iterations,

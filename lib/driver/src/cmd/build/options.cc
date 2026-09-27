@@ -42,9 +42,9 @@ auto options::process_raw(const raw_options&   raw,
     };
 
     if (raw.opt_level_str && raw.release) {
-        clap::warn_error(error_stream,
-                         fmt::format("--release is overridden by the explicit -O {}",
-                                     *raw.opt_level_str));
+        clap::warn_error(
+            error_stream,
+            fmt::format("--release is overridden by the explicit -O {}", *raw.opt_level_str));
     }
     if (raw.opt_level_str) {
         if (auto level{codegen::parse_opt_level(*raw.opt_level_str)}) {
@@ -332,10 +332,10 @@ auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_v
         ->type_name("FILE");
 }
 
-auto options::emit_debug_artifacts(sema::analyzer&       analyzer,
-                                   gir::module&           gir_mod,
-                                   std::ostream&          error_stream,
-                                   sema::build_artifact   artifact) const
+auto options::emit_debug_artifacts(sema::analyzer&      analyzer,
+                                   gir::module&         gir_mod,
+                                   std::ostream&        error_stream,
+                                   sema::build_artifact artifact) const
     -> stdx::result<void, clap::error> {
     const auto write_file{[&](const std::filesystem::path& path,
                               std::string_view             contents,

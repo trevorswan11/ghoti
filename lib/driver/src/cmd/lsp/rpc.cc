@@ -46,7 +46,7 @@ auto read_framed_message(std::istream& in, std::ostream& error_stream)
     -> stdx::result<nlohmann::json, read_failure> {
     PROFILE_FUNCTION();
     // Far beyond any real document; rejecting it avoids allocating whatever a bad header claims
-    constexpr usize max_message_bytes{usize{256} * 1024 * 1024};
+    constexpr usize max_message_bytes{usize{256} * 1'024 * 1'024};
 
     stdx::option<usize> content_length;
     std::string         line;

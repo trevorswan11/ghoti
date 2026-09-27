@@ -63,9 +63,9 @@ TEST_CASE("code_actions offers both const and var as missing-mutability-modifier
 
 TEST_CASE("code_actions offers quick fixes for other unambiguous missing tokens") {
     for (const auto* spelling : {"}", ")", "]", ":", ","}) {
-        const nlohmann::json diagnostics{point_diagnostic(
-            "UNEXPECTED_TOKEN",
-            std::string{"Expected '"} + spelling + "', found the end of input")};
+        const nlohmann::json diagnostics{
+            point_diagnostic("UNEXPECTED_TOKEN",
+                             std::string{"Expected '"} + spelling + "', found the end of input")};
 
         const auto actions = lsp::code_actions("file:///test.gh", diagnostics);
         REQUIRE(actions.size() == 1);

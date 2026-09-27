@@ -277,9 +277,9 @@ auto llvm_lowering::maybe_emit_mingw_main_stub() -> void {
     const auto* main_fn{llvm_module_->getFunction("main")};
     if (!main_fn || main_fn->isDeclaration()) { return; }
 
-    auto* stub_ty{llvm::FunctionType::get(llvm::Type::getVoidTy(context_), false)};
-    auto* stub{
-        llvm::Function::Create(stub_ty, llvm::Function::ExternalLinkage, "__main", llvm_module_.get())};
+    auto*             stub_ty{llvm::FunctionType::get(llvm::Type::getVoidTy(context_), false)};
+    auto*             stub{llvm::Function::Create(
+        stub_ty, llvm::Function::ExternalLinkage, "__main", llvm_module_.get())};
     llvm::IRBuilder<> stub_builder{llvm::BasicBlock::Create(context_, "entry", stub)};
     stub_builder.CreateRetVoid();
     llvm::appendToUsed(*llvm_module_, {stub});
@@ -938,7 +938,6 @@ auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod, bool rec
     } else {
         builder_.CreateRet(builder_.getInt32(0));
     }
-
 
     return main_fn;
 }

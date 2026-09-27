@@ -21,7 +21,8 @@ namespace ghoti::codegen {
 
 namespace {
 
-// Past this, a by-value aggregate costs more than a pointer to it (and eventually cannot be selected)
+// Past this, a by-value aggregate costs more than a pointer to it (and eventually cannot be
+// selected)
 constexpr u64 max_direct_aggregate_bytes{256};
 
 class aggregate_lowering {
@@ -96,7 +97,8 @@ class aggregate_lowering {
     [[nodiscard]] static auto memory_unchanged_between(const llvm::Instruction* from,
                                                        const llvm::Instruction* to) -> bool {
         if (from->getParent() != to->getParent()) { return false; }
-        for (const auto* inst{from->getNextNode()}; inst && inst != to; inst = inst->getNextNode()) {
+        for (const auto* inst{from->getNextNode()}; inst && inst != to;
+             inst = inst->getNextNode()) {
             if (inst->mayWriteToMemory()) { return false; }
         }
         return true;
@@ -121,7 +123,8 @@ class aggregate_lowering {
         }
     }
 
-    [[nodiscard]] static auto entry_alloca(llvm::Function& fn, llvm::Type* ty) -> llvm::AllocaInst* {
+    [[nodiscard]] static auto entry_alloca(llvm::Function& fn, llvm::Type* ty)
+        -> llvm::AllocaInst* {
         llvm::IRBuilder<> builder{&*fn.getEntryBlock().getFirstInsertionPt()};
         return builder.CreateAlloca(ty, nullptr, "agg.tmp");
     }
@@ -207,7 +210,8 @@ class aggregate_lowering {
     }
 
     // Copies a by-value argument into its caller-owned pointer slot
-    auto materialize_argument(llvm::Value* arg, llvm::Value* slot, llvm::Type* ty, llvm::CallInst& call)
+    auto
+    materialize_argument(llvm::Value* arg, llvm::Value* slot, llvm::Type* ty, llvm::CallInst& call)
         -> void {
         // Snapshot a loaded argument where it was read, so later argument evaluation cannot race it
         if (auto* load{llvm::dyn_cast<llvm::LoadInst>(arg)}; load && !load->isVolatile()) {
@@ -243,7 +247,8 @@ class aggregate_lowering {
             for (auto& inst : llvm::instructions(fn)) {
                 auto* call{llvm::dyn_cast<llvm::CallInst>(&inst)};
                 if (!call) { continue; }
-                if (const auto* callee{call->getCalledFunction()}; callee && callee->isIntrinsic()) {
+                if (const auto* callee{call->getCalledFunction()};
+                    callee && callee->isIntrinsic()) {
                     continue;
                 }
                 if (shape_of(call->getFunctionType())) { calls.push_back(call); }
@@ -276,7 +281,7 @@ class aggregate_lowering {
             }
 
             llvm::IRBuilder<> builder{call};
-            auto*             lowered{builder.CreateCall(shape.lowered, call->getCalledOperand(), args)};
+            auto* lowered{builder.CreateCall(shape.lowered, call->getCalledOperand(), args)};
             lowered->setCallingConv(call->getCallingConv());
             lowered->setAttributes(llvm::AttributeList::get(
                 context_, call->getAttributes().getFnAttrs(), llvm::AttributeSet{}, {}));
@@ -300,7 +305,8 @@ class aggregate_lowering {
         for (auto& fn : module_) {
             for (auto& inst : llvm::instructions(fn)) {
                 auto* store{llvm::dyn_cast<llvm::StoreInst>(&inst)};
-                if (store && !store->isVolatile() && is_large(store->getValueOperand()->getType())) {
+                if (store && !store->isVolatile() &&
+                    is_large(store->getValueOperand()->getType())) {
                     stores.push_back(store);
                 }
             }

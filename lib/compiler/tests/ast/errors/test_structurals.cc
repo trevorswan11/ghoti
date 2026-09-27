@@ -19,10 +19,12 @@ TEST_CASE("Empty enum") {
 }
 
 TEST_CASE("Illegal underlying type") {
-    helpers::test_parser_fail("enum : 4 {A};",
-                              syntax::diagnostic{"Expected a type", syntax::error::ILLEGAL_EXPLICIT_TYPE, 0, 5});
-    helpers::test_parser_fail(R"(enum : "e" {A};)",
-                              syntax::diagnostic{"Expected a type", syntax::error::ILLEGAL_EXPLICIT_TYPE, 0, 5});
+    helpers::test_parser_fail(
+        "enum : 4 {A};",
+        syntax::diagnostic{"Expected a type", syntax::error::ILLEGAL_EXPLICIT_TYPE, 0, 5});
+    helpers::test_parser_fail(
+        R"(enum : "e" {A};)",
+        syntax::diagnostic{"Expected a type", syntax::error::ILLEGAL_EXPLICIT_TYPE, 0, 5});
 }
 
 TEST_CASE("Empty enum with decl") {
@@ -54,15 +56,17 @@ TEST_CASE("Illegal struct members") {
 }
 
 TEST_CASE("Illegal union field name") {
-    helpers::test_parser_fail(
-        "union { 2: i32 };",
-        syntax::diagnostic{
-            "Expected an identifier, found an integer literal", syntax::error::UNEXPECTED_TOKEN, 0, 8});
+    helpers::test_parser_fail("union { 2: i32 };",
+                              syntax::diagnostic{"Expected an identifier, found an integer literal",
+                                                 syntax::error::UNEXPECTED_TOKEN,
+                                                 0,
+                                                 8});
 }
 
 TEST_CASE("Illegal union field type") {
-    helpers::test_parser_fail("union { a: 2 };",
-                              syntax::diagnostic{"Expected a type", syntax::error::ILLEGAL_EXPLICIT_TYPE, 0, 9});
+    helpers::test_parser_fail(
+        "union { a: 2 };",
+        syntax::diagnostic{"Expected a type", syntax::error::ILLEGAL_EXPLICIT_TYPE, 0, 9});
 }
 
 TEST_CASE("Empty union") {

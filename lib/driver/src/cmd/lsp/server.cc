@@ -187,11 +187,9 @@ auto lsp_server::handle_message(const nlohmann::json& message, lsp::document_sto
     // Anything but a request/notification object is an invalid request
     if (!message.is_object() || !message.contains("method") || !message["method"].is_string()) {
         // Assigned, since brace-initializing a json wraps it in an array
-        const nlohmann::json id = message.is_object() && message.contains("id")
-                                      ? message["id"]
-                                      : nlohmann::json(nullptr);
-        lsp::write_message(std::cout,
-                           make_error_response(id, INVALID_REQUEST, "invalid request"));
+        const nlohmann::json id =
+            message.is_object() && message.contains("id") ? message["id"] : nlohmann::json(nullptr);
+        lsp::write_message(std::cout, make_error_response(id, INVALID_REQUEST, "invalid request"));
         return true;
     }
     const auto method{message["method"].get<std::string>()};

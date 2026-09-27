@@ -62,8 +62,8 @@ auto is_valid_utf8(std::string_view bytes) noexcept -> bool {
             code_point = (code_point << 6U) | (cont & 0x3FU);
         }
         constexpr std::array<u32, 4> min_for_length{0, 0x80, 0x800, 0x10000};
-        const bool overlong{code_point < min_for_length[extra]};
-        const bool surrogate{code_point >= 0xD800 && code_point <= 0xDFFF};
+        const bool                   overlong{code_point < min_for_length[extra]};
+        const bool                   surrogate{code_point >= 0xD800 && code_point <= 0xDFFF};
         if (overlong || surrogate || code_point > 0x10FFFF) { return false; }
         i += extra + 1;
     }

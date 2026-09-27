@@ -93,8 +93,8 @@ class lexer {
     auto               read_ident(bool builtin) noexcept -> std::string_view;
     auto               read_number() noexcept -> token_t;
     // Consumes an escape sequence's introducer and code, reporting whether ghoti recognizes it
-    auto               read_escape() noexcept -> bool;
-    auto               read_string() noexcept -> token_t;
+    auto read_escape() noexcept -> bool;
+    auto read_string() noexcept -> token_t;
 
     // Reads a raw identifier `@"..."`, assuming `current_byte_` is looking at the leading `@`.
     auto read_raw_identifier() noexcept -> token_t;

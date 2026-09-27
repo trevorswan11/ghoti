@@ -137,11 +137,11 @@ class llvm_lowering {
     // The `__chkstk` / `___chkstk_ms` symbol name the x86 backend probes with on this
     // target, or `none` when no synthesized stack probe is needed
     [[nodiscard]] auto windows_stack_probe_symbol() const -> stdx::option<std::string_view>;
-    auto declare_functions(const gir::module& gir_mod) -> void;
-    auto lower_definitions(const gir::module& gir_mod) -> void;
-    auto create_c_entry_function() -> llvm::Function*;
-    auto finalize_runtime_support() -> void;
-    auto maybe_emit_mingw_main_stub() -> void;
+    auto               declare_functions(const gir::module& gir_mod) -> void;
+    auto               lower_definitions(const gir::module& gir_mod) -> void;
+    auto               create_c_entry_function() -> llvm::Function*;
+    auto               finalize_runtime_support() -> void;
+    auto               maybe_emit_mingw_main_stub() -> void;
     // Synthesizes a weak, runtime-free stack-probe routine when targeting x86-64 Windows
     auto maybe_emit_windows_stack_probe() -> void;
 

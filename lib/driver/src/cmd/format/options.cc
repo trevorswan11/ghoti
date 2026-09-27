@@ -104,9 +104,10 @@ auto options::process_raw(const raw_options& raw, std::ostream& error_stream)
     }
 
     if (raw.max_width < 20) {
-        return clap::fatal_error(error_stream,
-                                 fmt::format("--max-width must be at least 20; got {}", raw.max_width),
-                                 clap::error::CONFLICTING_OPTIONS);
+        return clap::fatal_error(
+            error_stream,
+            fmt::format("--max-width must be at least 20; got {}", raw.max_width),
+            clap::error::CONFLICTING_OPTIONS);
     }
     if (raw.indent_spaces < 1 || raw.indent_spaces > 16) {
         return clap::fatal_error(

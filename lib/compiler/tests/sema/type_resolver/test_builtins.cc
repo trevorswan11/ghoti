@@ -139,8 +139,8 @@ TEST_CASE("Builtin this introspection") {
 }
 
 TEST_CASE("Deferred return type from typeOf") {
-    auto [ctx,
-          idx]{helpers::resolve_and_check("const a := fn(): type {}; const B := @TypeOf(a());")};
+    auto [ctx, idx]{helpers::resolve_and_check(
+        "const a := fn(): type { return u8; }; const B := @TypeOf(a());")};
 
     const auto [sym, sym_data, node_data]{
         ctx->get_ast_sym_info<syms::node_t, ast::decl_stmt>("B", idx)};

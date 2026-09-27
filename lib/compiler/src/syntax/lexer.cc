@@ -222,8 +222,7 @@ auto lexer::read_operator() const noexcept -> stdx::option<token_t> {
     const auto matched_text{stdx::string::substr(input_, pos_, max_len)};
 
     // A word-operator must be a whole word to allow e.g. origin to work
-    if (!matched_text.empty() &&
-        (is_alpha(matched_text.front()) || matched_text.front() == '_') &&
+    if (!matched_text.empty() && (is_alpha(matched_text.front()) || matched_text.front() == '_') &&
         pos_ + max_len < input_.size()) {
         const auto next{input_[pos_ + max_len]};
         if (is_alnum(next) || next == '_') { return stdx::none; }
@@ -353,8 +352,7 @@ auto lexer::read_number() noexcept -> token_t {
         case 'f':
         case 'F':
             while (pos_ < input_.size() &&
-                   (is_alpha(current_byte_) ||
-                    (pos_ > suffix_start && is_digit(current_byte_)))) {
+                   (is_alpha(current_byte_) || (pos_ > suffix_start && is_digit(current_byte_)))) {
                 read_character();
             }
             break;
@@ -365,9 +363,7 @@ auto lexer::read_number() noexcept -> token_t {
 
     // Glued trailing characters (`0b102`, `1e`, `12abc`) make the whole literal malformed
     if (!at_end() && (is_alnum(current_byte_) || current_byte_ == '_')) {
-        while (!at_end() && (is_alnum(current_byte_) || current_byte_ == '_')) {
-            read_character();
-        }
+        while (!at_end() && (is_alnum(current_byte_) || current_byte_ == '_')) { read_character(); }
         return {token_type_t::ILLEGAL,
                 stdx::string::substr(input_, start, pos_ - start),
                 start_line,
@@ -450,8 +446,7 @@ auto lexer::read_raw_identifier() noexcept -> token_t {
     read_character(2); // consume '@' and the opening '"'
 
     auto escapes_valid{true};
-    while (current_byte_ != '"' && !at_end() && current_byte_ != '\n' &&
-           current_byte_ != '\r') {
+    while (current_byte_ != '"' && !at_end() && current_byte_ != '\n' && current_byte_ != '\r') {
         if (current_byte_ == '\\' && !read_escape()) { escapes_valid = false; }
         read_character();
     }
@@ -488,9 +483,7 @@ auto lexer::read_multiline_string() noexcept -> token_t {
 
     while (true) {
         // Consume characters until newline or EOF
-        while (current_byte_ != '\n' && current_byte_ != '\r' && !at_end()) {
-            read_character();
-        }
+        while (current_byte_ != '\n' && current_byte_ != '\r' && !at_end()) { read_character(); }
 
         // Peek positions
         usize peek_pos{peek_pos_};
