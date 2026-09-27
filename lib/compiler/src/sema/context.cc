@@ -396,11 +396,13 @@ auto context::backing_int_type(const type& t, u32 ptr_bits) -> stdx::option<type
 
 auto context::store_mismatch_message(const type& from, const type& to, u32 ptr_bits) const
     -> std::string {
-    auto message{fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
-                             type_display_name(from),
-                             type_display_name(to))};
+    const auto from_name{type_display_name(from)};
+    const auto to_name{type_display_name(to)};
+    auto message{fmt::format("Type mismatch in store: cannot assign '{}' to '{}'", from_name, to_name)};
     if (const auto reason{cast_rejection_reason(from, to, ptr_bits, user_type_names)}) {
         message += fmt::format(" ({})", *reason);
+    } else if (from_name == to_name) {
+        message += " (they are distinct types that share a name)";
     }
     return message;
 }

@@ -1121,7 +1121,28 @@ template <ast::IndexableID ID>
         return_type = &ctx_.get_pointer(mutability, parent_type);
         break;
     }
-    case token_type_t::BUILTIN_TAG_NAME:
+    case token_type_t::BUILTIN_TAG_NAME: {
+        if (call_arg_denotes_type(call.arguments[0])) {
+            return make_sema_err("'@tagName' expects an enum or tagged union value, but was given a "
+                                 "type",
+                                 error::TYPE_USED_AS_VALUE,
+                                 get_call_arg_location(call.arguments[0]));
+        }
+        const auto& operand{*get_resolved_call_arg_type(call.arguments[0])};
+        const auto  tagged_union{operand.get_data().as_opt<types::union_t>()};
+        const bool  has_tag{operand.get_kind() == type_kind::ENUM ||
+                           (tagged_union && !tagged_union->is_untagged)};
+        if (!has_tag && !operand.is_poison() && !is_generic_type(operand)) {
+            return make_sema_err(
+                fmt::format("'@tagName' expects an enum or tagged union value; found '{}'",
+                            ctx_.type_display_name(operand)),
+                error::TYPE_MISMATCH,
+                get_call_arg_location(call.arguments[0]));
+        }
+        ASSERT(builtin.return_type.get_kind() == type_kind::SLICE);
+        return_type = &builtin.return_type;
+        break;
+    }
     case token_type_t::BUILTIN_TARGET_TRIPLE: {
         ASSERT(builtin.return_type.get_kind() == type_kind::SLICE);
         return_type = &builtin.return_type;
@@ -3539,7 +3560,7 @@ auto type_resolver::visit(ast::node_id id, const ast::do_while_loop_expr& do_whi
         const mutating_context_guard cx_loop_g{in_constexpr_loop_,
                                                do_while.is_constexpr || in_constexpr_loop_};
         if (resolve_block_statements(block)) {
-            return resolving_.set_sema_type(id, *last_type_);
+            return fail_scoped_body();
         }
     }
 
@@ -4070,7 +4091,7 @@ auto type_resolver::visit(ast::node_id id, const ast::for_loop_expr& for_expr) -
         }
         const auto&              block{resolving_.ast.get_as<ast::block_stmt>(for_expr.block)};
         if (resolve_block_statements(block)) {
-            return resolving_.set_sema_type(id, *last_type_);
+            return fail_scoped_body();
         }
     }
 
@@ -4565,6 +4586,10 @@ auto type_resolver::target_supports_callconv(ast::calling_convention conv) const
     case ast::calling_convention::AAPCS:        return arch == "arm" || arch == "thumb";
     default:                                    return true;
     }
+}
+
+auto type_resolver::fail_scoped_body() -> void {
+    last_type_.emplace(ctx_.get_poison());
 }
 
 auto type_resolver::resolve_block_statements(const ast::block_stmt& block) -> bool {
@@ -5193,7 +5218,7 @@ auto type_resolver::visit(ast::node_id id, const ast::infinite_loop_expr& loop) 
     const mutating_context_guard cx_loop_g{in_constexpr_loop_,
                                            loop.is_constexpr || in_constexpr_loop_};
     if (resolve_block_statements(block)) {
-        return resolving_.set_sema_type(id, *last_type_);
+        return fail_scoped_body();
     }
     last_type_.emplace(loop_type);
 }
@@ -8584,7 +8609,7 @@ auto type_resolver::visit(ast::node_id id, const ast::while_loop_expr& while_loo
         const mutating_context_guard cx_loop_g{in_constexpr_loop_,
                                                while_loop.is_constexpr || in_constexpr_loop_};
         if (resolve_block_statements(block)) {
-            return resolving_.set_sema_type(id, *last_type_);
+            return fail_scoped_body();
         }
     }
 
@@ -8606,7 +8631,7 @@ auto type_resolver::visit(ast::node_id id, const ast::block_stmt& block) -> void
 
     // Just an abridged loop handler
     if (resolve_block_statements(block)) {
-        return resolving_.set_sema_type(id, *last_type_);
+        return fail_scoped_body();
     }
     resolving_.set_sema_type(
         id, block_type.is_poison() ? ctx_.get_builtin_resolved_type(type_kind::VOID_) : block_type);
@@ -9805,7 +9830,7 @@ auto type_resolver::visit(ast::node_id id, const ast::test_stmt& test) -> void {
 
     const auto&              block{resolving_.ast.get_as<ast::block_stmt>(test.block)};
     if (resolve_block_statements(block)) {
-        return resolving_.set_sema_type(id, *last_type_);
+        return fail_scoped_body();
     }
     last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
 }

@@ -123,9 +123,13 @@ TEST_CASE("Builtin type introspection") {
         return ctx.get_type(sema::type_kind::TYPE, ctx.get_int_type(32, true));
     });
 
-    test_builtin_resolve(bis::TAG_NAME, "123", [](helpers::sema_test_context& ctx) -> sema::type& {
-        return ctx.get_type(sema::type_kind::SLICE, true, ctx.get_int_type(8, false));
-    });
+    test_builtin_resolve(
+        bis::TAG_NAME,
+        "E.a",
+        [](helpers::sema_test_context& ctx) -> sema::type& {
+            return ctx.get_type(sema::type_kind::SLICE, true, ctx.get_int_type(8, false));
+        },
+        "const E := enum { a };");
 }
 
 TEST_CASE("Builtin this introspection") {

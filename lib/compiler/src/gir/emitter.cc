@@ -2171,10 +2171,16 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
                          ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN)};
         },
         [&](const ast::identifier_expr& data) -> value { return emit_ident(id, data); },
-        // A type spelled only as a type (`dyn I`) carries no runtime value
+        // A type spelled only as a type (`dyn I`, `struct { ... }`) carries no runtime value
         [&](const ast::type_expr&) -> value {
             return value{void_val{}, active_mod().get_sema_type_opt(id)};
         },
+        [&](const auto& data) -> value
+            requires(std::same_as<std::remove_cvref_t<decltype(data)>, ast::struct_expr> ||
+                     std::same_as<std::remove_cvref_t<decltype(data)>, ast::union_expr> ||
+                     std::same_as<std::remove_cvref_t<decltype(data)>, ast::enum_expr> ||
+                     std::same_as<std::remove_cvref_t<decltype(data)>, ast::interface_expr>)
+        { return value{void_val{}, active_mod().get_sema_type_opt(id)}; },
         [&](const ast::function_expr& data) -> value {
             const auto sema_type{active_mod().get_sema_type_opt(id)};
             // A bodyless `fn(...): ret` type expression carries no runtime value.

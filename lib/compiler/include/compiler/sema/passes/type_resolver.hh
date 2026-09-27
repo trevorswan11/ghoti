@@ -144,6 +144,8 @@ class type_resolver {
     [[nodiscard]] auto check_array_dimension(ast::expr_handle dimension, const type& item_type)
         -> stdx::option<diagnostic>;
     [[nodiscard]] static auto has_fixed_bit_layout(const type& t) noexcept -> bool;
+    // Reports a loop/block/test body failure without discarding the node's own scope type
+    auto fail_scoped_body() -> void;
     [[nodiscard]] auto resolve_block_statements(const ast::block_stmt& block) -> bool;
     [[nodiscard]] auto is_declared_later_in_active_block(ast::node_id decl) const -> bool;
     [[nodiscard]] auto is_runtime_local_decl(ast::node_id decl) const -> bool;

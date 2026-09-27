@@ -309,4 +309,53 @@ TEST_CASE("a module-scope initializer must match its annotation") {
     CHECK(helpers::raised("const S := struct { const X: bool = 3; };", sema::error::TYPE_MISMATCH));
 }
 
+TEST_CASE("an inline aggregate type in value position has no runtime value") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main := fn(): i32 {
+            _ = struct {};
+            enum { a };
+            const T := blk: { break :blk union { a: i32 }; };
+            return 7;
+        };
+    )") == 7);
+    helpers::expect_compile_error(R"(
+        const f := fn(): void { _ = if (true) struct {} else struct {}; };
+    )");
+}
+
+TEST_CASE("`@tagName` requires an enum or tagged union value") {
+    constexpr auto decls{R"(
+        const S := struct { x: i32 };
+        const E := enum { a, b };
+        const R := extern union { a: i32 };
+    )"};
+    const auto with_operand{[&](std::string_view operand) {
+        return std::string{decls} + "const f := fn(e: E, pe: ^E): void { _ = @tagName(" +
+               std::string{operand} + "); };";
+    }};
+    CHECK(helpers::raised(with_operand("u8"), sema::error::TYPE_USED_AS_VALUE));
+    CHECK(helpers::raised(with_operand("5"), sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised(with_operand("S{ .x = 1 }"), sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised(with_operand("pe"), sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised(with_operand("R{ .a = 1 }"), sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("a loop body error inside a generic reports cleanly on every instantiation") {
+    CHECK(helpers::raised(R"(
+        constexpr eql := fn(T: type, a: []T, b: []T): bool {
+            for (a, b) |x, y| { if (x != missing) { return false; } }
+            return true;
+        };
+        constexpr starts := fn(T: type, h: []T, n: []T): bool { return eql(T, h[0..n.len], n); };
+        const D := struct { count_x: f32, count_y: u32 };
+        pub const main := fn(): i32 {
+            var acc: i32 = 0;
+            for constexpr (@typeInfo(D).@"struct".fields) |field| {
+                if constexpr (starts(u8, field.name, "count_")) { acc += 1; }
+            }
+            return acc;
+        };
+    )", sema::error::UNDECLARED_IDENTIFIER));
+}
+
 } // namespace ghoti::tests
