@@ -46,7 +46,7 @@ constexpr std::array ALL_FORMATS{float_format::HALF,
 }
 
 // Raw bits keep failure messages cheap; formatting extreme values as decimal is not
-[[nodiscard]] auto hex_bits(float128 value) -> std::string {
+[[nodiscard]] auto hex_bits(f128 value) -> std::string {
     return fmt::format("{:016x}{:016x}", value.bits().high, value.bits().low);
 }
 
@@ -55,7 +55,7 @@ constexpr std::array ALL_FORMATS{float_format::HALF,
     return llvm::APInt{width, words};
 }
 
-[[nodiscard]] auto to_apfloat(float128 value, float_format format) -> llvm::APFloat {
+[[nodiscard]] auto to_apfloat(f128 value, float_format format) -> llvm::APFloat {
     return llvm::APFloat{semantics_of(format),
                          to_apint(value.encode(format), format_info(format).storage_bits)};
 }
@@ -69,8 +69,7 @@ constexpr std::array ALL_FORMATS{float_format::HALF,
 }
 
 // Bit-exact agreement, treating every NaN as equal
-[[nodiscard]] auto agrees(const llvm::APFloat& expected, float128 actual, float_format format)
-    -> bool {
+[[nodiscard]] auto agrees(const llvm::APFloat& expected, f128 actual, float_format format) -> bool {
     if (expected.isNaN()) { return actual.round_to(format).is_nan(); }
     return expected.bitcastToAPInt() ==
            to_apint(actual.encode(format), format_info(format).storage_bits);
@@ -79,7 +78,7 @@ constexpr std::array ALL_FORMATS{float_format::HALF,
 class value_source {
   public:
     // Random significand bits at a random exponent reaching just past the format's range
-    auto next(float_format format) -> float128 {
+    auto next(float_format format) -> f128 {
         const auto                         info{format_info(format)};
         std::uniform_int_distribution<i32> exponent{info.min_exponent - 120, info.max_exponent + 1};
         const auto                         text{fmt::format("{}0x{:016x}{:016x}p{}",
@@ -87,7 +86,7 @@ class value_source {
                                     bits_(engine_),
                                     bits_(engine_),
                                     exponent(engine_) - 127)};
-        return float128::parse(text, format).value;
+        return f128::parse(text, format).value;
     }
 
     auto next_int() -> i128 {
@@ -118,11 +117,11 @@ class value_source {
 
 using apfloat_op  = llvm::APFloat::opStatus (llvm::APFloat::*)(const llvm::APFloat&,
                                                               llvm::APFloat::roundingMode);
-using float128_op = float128 (*)(float128, float128, float_format);
+using float128_op = f128 (*)(f128, f128, float_format);
 
 } // namespace
 
-TEST_CASE("float128 arithmetic matches APFloat in every format") {
+TEST_CASE("f128 arithmetic matches APFloat in every format") {
     constexpr auto                                          RNE{llvm::APFloat::rmNearestTiesToEven};
     const std::array<std::pair<apfloat_op, float128_op>, 4> ops{{
         {&llvm::APFloat::add, &add},
@@ -152,7 +151,7 @@ TEST_CASE("float128 arithmetic matches APFloat in every format") {
     }
 }
 
-TEST_CASE("float128 narrowing and widening match APFloat") {
+TEST_CASE("f128 narrowing and widening match APFloat") {
     value_source source;
     for (i32 i{0}; i < 5'000; ++i) {
         const auto wide{source.next(float_format::QUAD)};
@@ -166,13 +165,13 @@ TEST_CASE("float128 narrowing and widening match APFloat") {
 
             // Decoding a narrow encoding back is exact
             const auto narrow{wide.round_to(format)};
-            const auto decoded{float128::decode(narrow.encode(format), format)};
+            const auto decoded{f128::decode(narrow.encode(format), format)};
             CHECK((decoded.is_nan() ? narrow.is_nan() : decoded.bits() == narrow.bits()));
         }
     }
 }
 
-TEST_CASE("float128 parses decimal and hex text like APFloat") {
+TEST_CASE("f128 parses decimal and hex text like APFloat") {
     value_source source;
     for (i32 i{0}; i < 1'500; ++i) {
         for (const bool hex : {false, true}) {
@@ -180,7 +179,7 @@ TEST_CASE("float128 parses decimal and hex text like APFloat") {
             for (const auto format : ALL_FORMATS) {
                 INFO(fmt::format("{} {}", format_name(format), text));
                 const auto expected{apfloat_from_text(text, format)};
-                const auto parsed{float128::parse(text, format)};
+                const auto parsed{f128::parse(text, format)};
                 REQUIRE(parsed.status != float_parse_status::MALFORMED);
                 CHECK(agrees(expected, parsed.value, format));
             }
@@ -188,7 +187,7 @@ TEST_CASE("float128 parses decimal and hex text like APFloat") {
     }
 }
 
-TEST_CASE("float128 shortest text reads back in every format") {
+TEST_CASE("f128 shortest text reads back in every format") {
     value_source source;
     for (const auto format : ALL_FORMATS) {
         for (i32 i{0}; i < 300; ++i) {
@@ -196,7 +195,7 @@ TEST_CASE("float128 shortest text reads back in every format") {
             const auto text{value.to_string(format)};
             INFO(fmt::format("{} {}", format_name(format), text));
             if (value.is_nan() || value.is_infinite()) { continue; }
-            const auto parsed{float128::parse(text, format).value};
+            const auto parsed{f128::parse(text, format).value};
             CHECK(parsed.bits() == value.bits());
 
             // APFloat reads the same text to the same value
@@ -205,7 +204,7 @@ TEST_CASE("float128 shortest text reads back in every format") {
     }
 }
 
-TEST_CASE("float128 integer conversions match APFloat") {
+TEST_CASE("f128 integer conversions match APFloat") {
     value_source source;
     for (i32 i{0}; i < 5'000; ++i) {
         const auto               integer{source.next_int()};
@@ -216,7 +215,7 @@ TEST_CASE("float128 integer conversions match APFloat") {
             llvm::APFloat expected{semantics_of(format)};
             DISCARD(expected.convertFromAPInt(
                 llvm::APInt{128, words}, true, llvm::APFloat::rmNearestTiesToEven));
-            CHECK(agrees(expected, float128::from_int(integer, format), format));
+            CHECK(agrees(expected, f128::from_int(integer, format), format));
         }
 
         const auto   value{source.next(float_format::QUAD)};

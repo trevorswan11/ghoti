@@ -273,29 +273,29 @@ struct unpacked {
 }
 
 // The quad holding exactly `significand * 2^exponent`, which the caller guarantees is representable
-[[nodiscard]] auto exact_quad(bool negative, u128 significand, i64 exponent) -> float128 {
+[[nodiscard]] auto exact_quad(bool negative, u128 significand, i64 exponent) -> f128 {
     const u128 sign{negative ? QUAD_SIGN_BIT : u128{}};
-    if (significand == 0) { return float128::from_bits(sign); }
+    if (significand == 0) { return f128::from_bits(sign); }
     const auto width{significant_bits(significand)};
     const auto top_exponent{exponent + width - 1};
     if (top_exponent >= QUAD_MIN_EXPONENT) {
         const auto biased{static_cast<u64>(top_exponent + QUAD_BIAS)};
         const auto fraction{(significand << (QUAD_FRACTION_BITS + 1 - width)) & QUAD_FRACTION_MASK};
-        return float128::from_bits(sign | (u128{biased} << QUAD_FRACTION_BITS) | fraction);
+        return f128::from_bits(sign | (u128{biased} << QUAD_FRACTION_BITS) | fraction);
     }
-    return float128::from_bits(
-        sign | (significand << static_cast<u32>(exponent - QUAD_SUBNORMAL_EXPONENT)));
+    return f128::from_bits(sign |
+                           (significand << static_cast<u32>(exponent - QUAD_SUBNORMAL_EXPONENT)));
 }
 
 // Rounds `significand * 2^exponent` (plus a nonzero tail below it when `sticky`) into `format`
 [[nodiscard]] auto
 round_exact(bool negative, big_uint significand, i64 exponent, bool sticky, float_format format)
-    -> float128 {
-    if (significand.is_zero()) { return float128::zero(negative); }
+    -> f128 {
+    if (significand.is_zero()) { return f128::zero(negative); }
     const auto info{format_info(format)};
     const auto length{static_cast<i64>(significand.bit_length())};
     const auto top_exponent{exponent + length - 1};
-    if (top_exponent > info.max_exponent) { return float128::infinity(negative); }
+    if (top_exponent > info.max_exponent) { return f128::infinity(negative); }
 
     // Below the normal range the format keeps fewer significand bits
     i64 kept_bits{info.precision};
@@ -321,12 +321,12 @@ round_exact(bool negative, big_uint significand, i64 exponent, bool sticky, floa
         ++exponent;
     }
     if (rounded != 0 && exponent + significant_bits(rounded) - 1 > info.max_exponent) {
-        return float128::infinity(negative);
+        return f128::infinity(negative);
     }
     return exact_quad(negative, rounded, exponent);
 }
 
-[[nodiscard]] auto round_exact(unpacked value, float_format format) -> float128 {
+[[nodiscard]] auto round_exact(unpacked value, float_format format) -> f128 {
     return round_exact(value.negative, big_uint{value.significand}, value.exponent, false, format);
 }
 
@@ -337,7 +337,7 @@ round_exact(bool negative, big_uint significand, i64 exponent, bool sticky, floa
                              bool         rhs_negative,
                              big_uint     rhs,
                              i64          rhs_exponent,
-                             float_format format) -> float128 {
+                             float_format format) -> f128 {
     const auto common_exponent{std::min(lhs_exponent, rhs_exponent)};
     lhs.shift_left(static_cast<u64>(lhs_exponent - common_exponent));
     rhs.shift_left(static_cast<u64>(rhs_exponent - common_exponent));
@@ -346,7 +346,7 @@ round_exact(bool negative, big_uint significand, i64 exponent, bool sticky, floa
         return round_exact(lhs_negative, std::move(lhs), common_exponent, false, format);
     }
     const auto order{lhs <=> rhs};
-    if (order == std::strong_ordering::equal) { return float128::zero(); }
+    if (order == std::strong_ordering::equal) { return f128::zero(); }
     if (order == std::strong_ordering::greater) {
         lhs.subtract(rhs);
         return round_exact(lhs_negative, std::move(lhs), common_exponent, false, format);
@@ -419,7 +419,7 @@ struct scanned_number {
     return number;
 }
 
-[[nodiscard]] auto status_of(float128 value) noexcept -> float_parse_status {
+[[nodiscard]] auto status_of(f128 value) noexcept -> float_parse_status {
     if (value.is_infinite()) { return float_parse_status::TOO_LARGE; }
     if (value.is_zero()) { return float_parse_status::TOO_SMALL; }
     return float_parse_status::OK;
@@ -428,13 +428,13 @@ struct scanned_number {
 [[nodiscard]] auto parse_hex(std::string_view text, bool negative, float_format format)
     -> float_parse_result {
     const auto number{scan_number(text, true)};
-    if (!number) { return {float128::zero(), float_parse_status::MALFORMED}; }
+    if (!number) { return {f128::zero(), float_parse_status::MALFORMED}; }
 
     big_uint significand;
     for (const auto digits : {number->whole_digits, number->fraction_digits}) {
         for (const char c : digits) { significand.multiply_add_small(16, hex_digit_value(c)); }
     }
-    if (significand.is_zero()) { return {float128::zero(negative), float_parse_status::OK}; }
+    if (significand.is_zero()) { return {f128::zero(negative), float_parse_status::OK}; }
     const auto exponent{number->exponent - (4 * static_cast<i64>(number->fraction_digits.size()))};
     const auto value{round_exact(negative, std::move(significand), exponent, false, format)};
     return {value, status_of(value)};
@@ -443,7 +443,7 @@ struct scanned_number {
 [[nodiscard]] auto parse_decimal(std::string_view text, bool negative, float_format format)
     -> float_parse_result {
     const auto number{scan_number(text, false)};
-    if (!number) { return {float128::zero(), float_parse_status::MALFORMED}; }
+    if (!number) { return {f128::zero(), float_parse_status::MALFORMED}; }
 
     big_uint significand;
     i64      significant_digits{0};
@@ -453,16 +453,16 @@ struct scanned_number {
             if (!significand.is_zero()) { ++significant_digits; }
         }
     }
-    if (significand.is_zero()) { return {float128::zero(negative), float_parse_status::OK}; }
+    if (significand.is_zero()) { return {f128::zero(negative), float_parse_status::OK}; }
 
     // Outside these bounds every format overflows or rounds to zero, so skip the exact math
     const auto exponent{number->exponent - static_cast<i64>(number->fraction_digits.size())};
     const auto scientific_exponent{significant_digits - 1 + exponent};
     if (scientific_exponent > 4'933) {
-        return {float128::infinity(negative), float_parse_status::TOO_LARGE};
+        return {f128::infinity(negative), float_parse_status::TOO_LARGE};
     }
     if (scientific_exponent < -4'967) {
-        return {float128::zero(negative), float_parse_status::TOO_SMALL};
+        return {f128::zero(negative), float_parse_status::TOO_SMALL};
     }
 
     if (exponent >= 0) {
@@ -652,28 +652,28 @@ auto format_info(float_format format) noexcept -> float_format_info {
     return {113, -16'382, 16'383, 128};
 }
 
-auto float128::from_bits(u128 bits) noexcept -> float128 {
-    float128 value;
+auto f128::from_bits(u128 bits) noexcept -> f128 {
+    f128 value;
     value.bits_ = bits;
     return value;
 }
 
-auto float128::from_f64(f64 value) -> float128 {
+auto f128::from_f64(f64 value) -> f128 {
     return decode(u128{std::bit_cast<u64>(value)}, float_format::DOUBLE);
 }
 
-auto float128::from_int(i128 value, float_format format) -> float128 {
+auto f128::from_int(i128 value, float_format format) -> f128 {
     const bool negative{value < 0};
     auto       magnitude{static_cast<u128>(value)};
     if (negative) { magnitude = ~magnitude + 1; }
     return round_exact(negative, big_uint{magnitude}, 0, false, format);
 }
 
-auto float128::from_uint(u128 value, float_format format) -> float128 {
+auto f128::from_uint(u128 value, float_format format) -> f128 {
     return round_exact(false, big_uint{value}, 0, false, format);
 }
 
-auto float128::decode(u128 bits, float_format format) -> float128 {
+auto f128::decode(u128 bits, float_format format) -> f128 {
     const auto info{format_info(format)};
     const bool explicit_integer_bit{format == float_format::X87};
     const auto field_bits{explicit_integer_bit ? info.precision : info.precision - 1};
@@ -695,21 +695,21 @@ auto float128::decode(u128 bits, float_format format) -> float128 {
     return round_exact(negative, big_uint{significand}, exponent, false, float_format::QUAD);
 }
 
-auto float128::infinity(bool negative) noexcept -> float128 {
+auto f128::infinity(bool negative) noexcept -> f128 {
     return from_bits((negative ? QUAD_SIGN_BIT : u128{}) |
                      (u128{QUAD_EXPONENT_MASK} << QUAD_FRACTION_BITS));
 }
 
-auto float128::quiet_nan() noexcept -> float128 {
+auto f128::quiet_nan() noexcept -> f128 {
     return from_bits((u128{QUAD_EXPONENT_MASK} << QUAD_FRACTION_BITS) |
                      (u128{1} << (QUAD_FRACTION_BITS - 1)));
 }
 
-auto float128::zero(bool negative) noexcept -> float128 {
+auto f128::zero(bool negative) noexcept -> f128 {
     return from_bits(negative ? QUAD_SIGN_BIT : u128{});
 }
 
-auto float128::parse(std::string_view text, float_format format) -> float_parse_result {
+auto f128::parse(std::string_view text, float_format format) -> float_parse_result {
     bool negative{false};
     if (!text.empty() && (text.front() == '+' || text.front() == '-')) {
         negative = text.front() == '-';
@@ -721,7 +721,7 @@ auto float128::parse(std::string_view text, float_format format) -> float_parse_
     return parse_decimal(text, negative, format);
 }
 
-auto float128::encode(float_format format) const -> u128 {
+auto f128::encode(float_format format) const -> u128 {
     const auto info{format_info(format)};
     const bool explicit_integer_bit{format == float_format::X87};
     const auto field_bits{explicit_integer_bit ? info.precision : info.precision - 1};
@@ -747,16 +747,14 @@ auto float128::encode(float_format format) const -> u128 {
     return sign | (biased << field_bits) | field;
 }
 
-auto float128::round_to(float_format format) const -> float128 {
+auto f128::round_to(float_format format) const -> f128 {
     if (format == float_format::QUAD || !is_finite() || is_zero()) { return *this; }
     return round_exact(unpack(bits_), format);
 }
 
-auto float128::to_f64() const -> f64 {
-    return std::bit_cast<f64>(encode(float_format::DOUBLE).low);
-}
+auto f128::to_f64() const -> f64 { return std::bit_cast<f64>(encode(float_format::DOUBLE).low); }
 
-auto float128::trunc() const -> float128 {
+auto f128::trunc() const -> f128 {
     if (!is_finite() || is_zero()) { return *this; }
     const auto value{unpack(bits_)};
     if (value.exponent >= 0) { return *this; }
@@ -766,7 +764,7 @@ auto float128::trunc() const -> float128 {
     return exact_quad(value.negative, value.significand >> static_cast<u32>(-value.exponent), 0);
 }
 
-auto float128::to_int() const -> stdx::option<i128> {
+auto f128::to_int() const -> stdx::option<i128> {
     const auto magnitude{abs().to_uint()};
     if (!magnitude) { return stdx::none; }
     const u128 min_magnitude{u128{1} << 127};
@@ -778,7 +776,7 @@ auto float128::to_int() const -> stdx::option<i128> {
     return static_cast<i128>(*magnitude);
 }
 
-auto float128::to_uint() const -> stdx::option<u128> {
+auto f128::to_uint() const -> stdx::option<u128> {
     const auto truncated{trunc()};
     if (!truncated.is_finite()) { return stdx::none; }
     if (truncated.is_zero()) { return u128{}; }
@@ -789,7 +787,7 @@ auto float128::to_uint() const -> stdx::option<u128> {
     return value.significand << static_cast<u32>(value.exponent);
 }
 
-auto float128::to_string(float_format format) const -> std::string {
+auto f128::to_string(float_format format) const -> std::string {
     const auto rounded{round_to(format)};
     if (rounded.is_nan()) { return "nan"; }
     if (rounded.is_infinite()) { return rounded.is_negative() ? "-inf" : "inf"; }
@@ -807,36 +805,36 @@ auto float128::to_string(float_format format) const -> std::string {
     return layout_decimal(rounded.is_negative(), exact);
 }
 
-auto float128::is_nan() const noexcept -> bool {
+auto f128::is_nan() const noexcept -> bool {
     return biased_exponent(bits_) == QUAD_EXPONENT_MASK && (bits_ & QUAD_FRACTION_MASK) != 0;
 }
 
-auto float128::is_infinite() const noexcept -> bool {
+auto f128::is_infinite() const noexcept -> bool {
     return biased_exponent(bits_) == QUAD_EXPONENT_MASK && (bits_ & QUAD_FRACTION_MASK) == 0;
 }
 
-auto float128::is_finite() const noexcept -> bool {
+auto f128::is_finite() const noexcept -> bool {
     return biased_exponent(bits_) != QUAD_EXPONENT_MASK;
 }
 
-auto float128::is_zero() const noexcept -> bool { return (bits_ & ~QUAD_SIGN_BIT) == 0; }
+auto f128::is_zero() const noexcept -> bool { return (bits_ & ~QUAD_SIGN_BIT) == 0; }
 
-auto float128::is_negative() const noexcept -> bool { return (bits_ & QUAD_SIGN_BIT) != 0; }
+auto f128::is_negative() const noexcept -> bool { return (bits_ & QUAD_SIGN_BIT) != 0; }
 
-auto float128::operator-() const noexcept -> float128 { return from_bits(bits_ ^ QUAD_SIGN_BIT); }
+auto f128::operator-() const noexcept -> f128 { return from_bits(bits_ ^ QUAD_SIGN_BIT); }
 
-auto float128::abs() const noexcept -> float128 { return from_bits(bits_ & ~QUAD_SIGN_BIT); }
+auto f128::abs() const noexcept -> f128 { return from_bits(bits_ & ~QUAD_SIGN_BIT); }
 
-auto add(float128 lhs, float128 rhs, float_format format) -> float128 {
-    if (lhs.is_nan() || rhs.is_nan()) { return float128::quiet_nan(); }
+auto add(f128 lhs, f128 rhs, float_format format) -> f128 {
+    if (lhs.is_nan() || rhs.is_nan()) { return f128::quiet_nan(); }
     if (lhs.is_infinite() || rhs.is_infinite()) {
         if (lhs.is_infinite() && rhs.is_infinite() && lhs.is_negative() != rhs.is_negative()) {
-            return float128::quiet_nan();
+            return f128::quiet_nan();
         }
         return lhs.is_infinite() ? lhs : rhs;
     }
     if (lhs.is_zero() && rhs.is_zero()) {
-        return float128::zero(lhs.is_negative() && rhs.is_negative());
+        return f128::zero(lhs.is_negative() && rhs.is_negative());
     }
     const auto l{unpack(lhs.bits())};
     const auto r{unpack(rhs.bits())};
@@ -849,18 +847,16 @@ auto add(float128 lhs, float128 rhs, float_format format) -> float128 {
                      format);
 }
 
-auto subtract(float128 lhs, float128 rhs, float_format format) -> float128 {
-    return add(lhs, -rhs, format);
-}
+auto subtract(f128 lhs, f128 rhs, float_format format) -> f128 { return add(lhs, -rhs, format); }
 
-auto multiply(float128 lhs, float128 rhs, float_format format) -> float128 {
+auto multiply(f128 lhs, f128 rhs, float_format format) -> f128 {
     const bool negative{lhs.is_negative() != rhs.is_negative()};
-    if (lhs.is_nan() || rhs.is_nan()) { return float128::quiet_nan(); }
+    if (lhs.is_nan() || rhs.is_nan()) { return f128::quiet_nan(); }
     if (lhs.is_infinite() || rhs.is_infinite()) {
-        if (lhs.is_zero() || rhs.is_zero()) { return float128::quiet_nan(); }
-        return float128::infinity(negative);
+        if (lhs.is_zero() || rhs.is_zero()) { return f128::quiet_nan(); }
+        return f128::infinity(negative);
     }
-    if (lhs.is_zero() || rhs.is_zero()) { return float128::zero(negative); }
+    if (lhs.is_zero() || rhs.is_zero()) { return f128::zero(negative); }
     const auto l{unpack(lhs.bits())};
     const auto r{unpack(rhs.bits())};
     return round_exact(negative,
@@ -870,17 +866,15 @@ auto multiply(float128 lhs, float128 rhs, float_format format) -> float128 {
                        format);
 }
 
-auto divide(float128 lhs, float128 rhs, float_format format) -> float128 {
+auto divide(f128 lhs, f128 rhs, float_format format) -> f128 {
     const bool negative{lhs.is_negative() != rhs.is_negative()};
-    if (lhs.is_nan() || rhs.is_nan()) { return float128::quiet_nan(); }
+    if (lhs.is_nan() || rhs.is_nan()) { return f128::quiet_nan(); }
     if (lhs.is_infinite()) {
-        return rhs.is_infinite() ? float128::quiet_nan() : float128::infinity(negative);
+        return rhs.is_infinite() ? f128::quiet_nan() : f128::infinity(negative);
     }
-    if (rhs.is_infinite()) { return float128::zero(negative); }
-    if (rhs.is_zero()) {
-        return lhs.is_zero() ? float128::quiet_nan() : float128::infinity(negative);
-    }
-    if (lhs.is_zero()) { return float128::zero(negative); }
+    if (rhs.is_infinite()) { return f128::zero(negative); }
+    if (rhs.is_zero()) { return lhs.is_zero() ? f128::quiet_nan() : f128::infinity(negative); }
+    if (lhs.is_zero()) { return f128::zero(negative); }
 
     const auto     l{unpack(lhs.bits())};
     const auto     r{unpack(rhs.bits())};
@@ -899,15 +893,15 @@ auto divide(float128 lhs, float128 rhs, float_format format) -> float128 {
                        format);
 }
 
-auto fused_multiply_add(float128 a, float128 b, float128 c, float_format format) -> float128 {
-    if (a.is_nan() || b.is_nan() || c.is_nan()) { return float128::quiet_nan(); }
+auto fused_multiply_add(f128 a, f128 b, f128 c, float_format format) -> f128 {
+    if (a.is_nan() || b.is_nan() || c.is_nan()) { return f128::quiet_nan(); }
     const bool product_negative{a.is_negative() != b.is_negative()};
     if (a.is_infinite() || b.is_infinite()) {
-        if (a.is_zero() || b.is_zero()) { return float128::quiet_nan(); }
-        return add(float128::infinity(product_negative), c, format);
+        if (a.is_zero() || b.is_zero()) { return f128::quiet_nan(); }
+        return add(f128::infinity(product_negative), c, format);
     }
     if (c.is_infinite()) { return c; }
-    if (a.is_zero() || b.is_zero()) { return add(float128::zero(product_negative), c, format); }
+    if (a.is_zero() || b.is_zero()) { return add(f128::zero(product_negative), c, format); }
 
     const auto x{unpack(a.bits())};
     const auto y{unpack(b.bits())};
@@ -926,13 +920,13 @@ auto fused_multiply_add(float128 a, float128 b, float128 c, float_format format)
                      format);
 }
 
-auto float128::operator==(const float128& other) const noexcept -> bool {
+auto f128::operator==(const f128& other) const noexcept -> bool {
     if (is_nan() || other.is_nan()) { return false; }
     if (is_zero() && other.is_zero()) { return true; }
     return bits_ == other.bits_;
 }
 
-auto float128::operator<=>(const float128& other) const noexcept -> std::partial_ordering {
+auto f128::operator<=>(const f128& other) const noexcept -> std::partial_ordering {
     if (is_nan() || other.is_nan()) { return std::partial_ordering::unordered; }
     if (is_zero() && other.is_zero()) { return std::partial_ordering::equivalent; }
     if (is_negative() != other.is_negative()) {
