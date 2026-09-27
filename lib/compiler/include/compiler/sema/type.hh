@@ -26,6 +26,7 @@
 #include "compiler/ast/id.hh"
 #include "compiler/ast/type.hh"
 #include "compiler/module/module.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 
 namespace ghoti::sema {
@@ -633,9 +634,15 @@ static_assert(stdx::TriviallyDestructible<type>);
 [[nodiscard]] auto constexpr_int_fits(i128 value, const type& target, u32 ptr_bits) noexcept
     -> bool;
 
+// The format a compile-time float of type `t` is held in; `constexpr_float` keeps full `f128`
+[[nodiscard]] auto float_format_of(const type& t) noexcept -> stdx::option<float_format>;
+
+// `value` rounded into `t`'s format, unchanged when `t` is not a float type
+[[nodiscard]] auto fit_float(f128 value, const type& t) -> f128;
+
 // Whether the compile-time float `value` stays finite once rounded to `target`; a value that is
 // already infinite or NaN, or a target that is not a concrete float, always fits
-[[nodiscard]] auto constexpr_float_fits(f64 value, const type& target) noexcept -> bool;
+[[nodiscard]] auto constexpr_float_fits(f128 value, const type& target) -> bool;
 
 // Bit width of `t` when used as a field of a bit-packed `packed struct`/`packed union`, or
 // none when `t` is not packed-eligible. `ptr_bits` sizes pointer-like fields.

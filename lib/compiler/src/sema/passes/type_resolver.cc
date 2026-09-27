@@ -1647,9 +1647,23 @@ template <ast::IndexableID ID>
         break;
     }
     // These return @TypeOf(expression) which is trivial
-    case token_type_t::BUILTIN_MUL_ADD:
-    case token_type_t::BUILTIN_ABS:     {
+    case token_type_t::BUILTIN_ABS: {
         return_type = get_resolved_call_arg_type(call.arguments[0]);
+        break;
+    }
+    case token_type_t::BUILTIN_MUL_ADD: {
+        return_type = get_resolved_call_arg_type(call.arguments[0]);
+        // Every operand is a `T`, the first argument
+        for (usize i{1}; return_type && i < call.arguments.size(); ++i) {
+            const auto operand_type{get_resolved_call_arg_type(call.arguments[i])};
+            if (operand_type && !is_assignable(*operand_type, *return_type)) {
+                return make_sema_err(fmt::format("'@mulAdd' operands must be '{}'; found '{}'",
+                                                 ctx_.type_display_name(*return_type),
+                                                 ctx_.type_display_name(*operand_type)),
+                                     error::OPERATOR_TYPE_MISMATCH,
+                                     get_call_arg_location(call.arguments[i]));
+            }
+        }
         break;
     }
     case token_type_t::BUILTIN_MIN:
@@ -2335,10 +2349,10 @@ auto type_resolver::synthesize_const_expr(const gir::const_value& val)
         resolving_.sync_side_tables_for_new_node();
         return ast::expr_handle{id};
     }
-    if (const auto f{val.as_opt<f64>()}) {
+    if (const auto f{val.as_opt<f128>()}) {
         const syntax::token_t tok{syntax::token_type_t::REAL, "0"};
         const auto            id{resolving_.ast.add_node(
-            tok, tok, ast::float_literal_expr{.value = *f, .spelling = "0"})};
+            tok, tok, ast::float_literal_expr{.value = *f, .spelling = "0", .mantissa = {}})};
         resolving_.sync_side_tables_for_new_node();
         return ast::expr_handle{id};
     }
@@ -8146,8 +8160,11 @@ auto type_resolver::visit(ast::node_id id, const ast::int_literal_expr& expr) ->
             }
         }
     }
-    if (!constexpr_float_fits(static_cast<f64>(expr.value), *resolved)) {
-        return last_type_.emplace(float_literal_overflow(id, *resolved));
+    if (const auto format{float_format_of(*resolved)}) {
+        if (const auto problem{float_literal_range_problem(
+                f128::from_uint(expr.value), f128::from_uint(expr.value, *format), *resolved)}) {
+            return last_type_.emplace(float_literal_out_of_range(id, *problem));
+        }
     }
     last_type_.emplace(*resolved);
     resolving_.set_sema_type(id, *last_type_);
@@ -8182,20 +8199,34 @@ auto type_resolver::visit(ast::node_id id, const ast::float_literal_expr& expr) 
             resolved = ctx_.pool.strip_volatile(*implicit_type).get();
         }
     }
-    if (!constexpr_float_fits(expr.value, *resolved)) {
-        return last_type_.emplace(float_literal_overflow(id, *resolved));
+    if (const auto format{float_format_of(*resolved)}) {
+        if (const auto problem{
+                float_literal_range_problem(expr.value, expr.value_in(*format), *resolved)}) {
+            return last_type_.emplace(float_literal_out_of_range(id, *problem));
+        }
     }
     last_type_.emplace(*resolved);
     resolving_.set_sema_type(id, *last_type_);
 }
 
-auto type_resolver::float_literal_overflow(ast::node_id id, const type& target) -> type& {
-    return ctx_.poison_node(
-        resolving_,
-        id,
-        fmt::format("literal is out of range for type '{}'", ctx_.type_display_name(target)),
-        error::LITERAL_OUT_OF_RANGE,
-        resolving_.ast.location_of(id));
+auto type_resolver::float_literal_range_problem(f128 exact, f128 rounded, const type& target)
+    -> stdx::option<std::string> {
+    if (exact.is_finite() && rounded.is_infinite()) {
+        return fmt::format("literal is out of range for type '{}'", ctx_.type_display_name(target));
+    }
+    if (!exact.is_zero() && rounded.is_zero()) {
+        return fmt::format("literal is too small for type '{}' and would round to zero",
+                           ctx_.type_display_name(target));
+    }
+    return stdx::none;
+}
+
+auto type_resolver::float_literal_out_of_range(ast::node_id id, std::string message) -> type& {
+    return ctx_.poison_node(resolving_,
+                            id,
+                            std::move(message),
+                            error::LITERAL_OUT_OF_RANGE,
+                            resolving_.ast.location_of(id));
 }
 
 MAKE_PRIMITIVE_RESOLVER(bool_expr, BOOL)

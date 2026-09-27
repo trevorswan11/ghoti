@@ -177,7 +177,7 @@ struct value {
                                  u64,
                                  i128,
                                  u128,
-                                 f64,
+                                 f128,
                                  bool,
                                  std::string,
                                  stdx::option<sema::type&>,
@@ -190,8 +190,13 @@ struct value {
     stdx::option<sema::type&> type{stdx::none};
 
     constexpr value() noexcept = default;
-    constexpr value(data_t val, stdx::option<sema::type&> t = stdx::none) noexcept
-        : data{std::move(val)}, type{t} {}
+    // A float payload is rounded into its type's format
+    constexpr value(data_t val, stdx::option<sema::type&> t = stdx::none)
+        : data{std::move(val)}, type{t} {
+        if !consteval {
+            if (auto f{data.as_opt<f128>()}; f && type) { *f = sema::fit_float(*f, *type); }
+        }
+    }
 
     template <typename T> [[nodiscard]] constexpr auto is() const noexcept -> bool {
         return data.is<T>();

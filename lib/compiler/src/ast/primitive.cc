@@ -3,10 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <charconv>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <utility>
 
 #include <stdx/assert.hh>
@@ -54,6 +52,15 @@ namespace {
         value = value * radix + d;
     }
     return value;
+}
+
+[[nodiscard]] auto without_separators(std::string_view digits) -> std::string {
+    std::string cleaned;
+    cleaned.reserve(digits.size());
+    for (const char c : digits) {
+        if (c != '_') { cleaned.push_back(c); }
+    }
+    return cleaned;
 }
 
 [[nodiscard]] auto all_digits(std::string_view s) noexcept -> bool {
@@ -238,29 +245,26 @@ auto float_literal_expr::parse(syntax::parser& parser)
         mantissa = stdx::string::substr(slice, 0, pos);
     }
 
-    std::string digits;
-    digits.reserve(mantissa.size());
-    for (const char c : hex ? stdx::string::substr(mantissa, 2) : mantissa) {
-        if (c != '_') { digits.push_back(c); }
-    }
-
-    f64                          value{};
-    const auto*                  digits_end{digits.data() + digits.size()};
-    const auto                   format{hex ? std::chars_format::hex : std::chars_format::general};
-    const std::from_chars_result result{std::from_chars(digits.data(), digits_end, value, format)};
-    if (result.ec != std::errc{} || result.ptr != digits_end) {
-        // `from_chars` reports both directions as out of range; a negative exponent underflowed
-        const auto exponent{digits.find_first_of(hex ? "pP" : "eE")};
-        const bool underflow{exponent != std::string::npos && exponent + 1 < digits.size() &&
-                             digits[exponent + 1] == '-'};
-        return make_syntax_err(underflow ? "Float literal is too small to represent"
-                                         : "Overflow of literal",
-                               syntax::error::DOUBLE_OVERFLOW,
-                               start_token);
+    const auto parsed{f128::parse(without_separators(mantissa))};
+    switch (parsed.status) {
+    case float_parse_status::OK: break;
+    case float_parse_status::TOO_SMALL:
+        return make_syntax_err(
+            "Float literal is too small to represent", syntax::error::DOUBLE_OVERFLOW, start_token);
+    case float_parse_status::TOO_LARGE:
+    case float_parse_status::MALFORMED:
+        return make_syntax_err("Overflow of literal", syntax::error::DOUBLE_OVERFLOW, start_token);
     }
 
     return parser.add_expr<float_literal_expr>(
-        start_token, float_literal_expr{.value = value, .width = width, .spelling = slice});
+        start_token,
+        float_literal_expr{
+            .value = parsed.value, .width = width, .spelling = slice, .mantissa = mantissa});
+}
+
+auto float_literal_expr::value_in(float_format format) const -> f128 {
+    if (mantissa.empty() || format == float_format::QUAD) { return value.round_to(format); }
+    return f128::parse(without_separators(mantissa), format).value;
 }
 
 auto bool_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {

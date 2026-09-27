@@ -487,6 +487,19 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Hexadecimal float literals: `0x1.8p3`, `0x1p-4`, `0xA.8`; the `p` exponent is a decimal power of two, and a width suffix (`0x1.8p3f32`) may follow it
 - A compile-time float that would round to infinity in its type (`const x: f32 = 1e300;`, `const h: f16 = 70000;`, `@as(f32, BIG)`, `@floatFromInt(f16, 100000)`) is now a `LITERAL_OUT_OF_RANGE` error instead of silently becoming `inf`
 - Fixed: an untyped integer literal above `i128` max (up to `u128` max) was treated as negative, so `340282366920938463463374607431768211455 < 0` was true and converting it to a float gave a negative value
+- Compile-time floats are exact IEEE binary128 values computed in software, never a host `double`
+    - A typed operation rounds once in its type's format, so a folded `f16`/`f32`/`f64` result matches runtime bit for bit
+    - `f80` and `f128` constants now fold at compile time with full precision (`const q: f128 = 1.0 / 3.0;`)
+    - A typed literal is read straight from its digits into its type, never rounded twice
+    - Untyped float constants carry `f128` range (about 1.19e4932) until they meet a type
+    - A nonzero literal that would round to zero in its type (`const x: f32 = 1e-50;`) is a `LITERAL_OUT_OF_RANGE` error
+    - `@intFromFloat` folds across the whole 128-bit range
+- Signed integer overflow in a compile-time expression with a concrete type (`i32` max `+ 1`, `-i32_min`, `min / -1`, including `i128`) is an error, matching the runtime overflow panic; unsigned results and shifts wrap to the type's width like runtime
+- Fixed: 64-bit compile-time integer arithmetic could overflow inside the compiler (`111334094107016374 * 242`) or wrap modulo 2^64 (`9223372036854775808 * 4` folded to 0); it now folds exactly
+- Fixed: a runtime `@mulAdd` crashed the compiler; its operands are now coerced to and checked against `T`
+- Fixed: comparing floats of different widths (`f32 < f64`), or an untyped integer result with a float (`@abs(3) < x`), crashed code generation
+- Fixed: a typed module constant built from an untyped constant (`const a: f32 = big;`, `const b: u8 = two_hundred;`) folded as the untyped type, crashing `@bitCast` and friends; an integer constant bound to a float global (`const f: f32 = five;`) crashed too
+- Fixed: nested untyped constant arithmetic next to a typed float (`((c * c) + c) * f32_value`) was rejected
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

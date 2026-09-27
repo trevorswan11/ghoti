@@ -728,13 +728,46 @@ auto emitter::folded_int(const value& v) noexcept -> stdx::option<i128> {
 
 auto emitter::check_constexpr_float_fits(const value& v, const sema::type& target, ast::node_id at)
     -> void {
-    const auto f{v.as_opt<f64>()};
+    // An integer headed for a float type is checked by its exact value
+    stdx::option<f128> f;
+    if (const auto as_float{v.as_opt<f128>()}) {
+        f = *as_float;
+    } else if (const auto as_unsigned{v.as_opt<u128>()}) {
+        f = f128::from_uint(*as_unsigned);
+    } else if (const auto as_signed{folded_int(v)}) {
+        f = f128::from_int(*as_signed);
+    }
     if (!f || sema::constexpr_float_fits(*f, target)) { return; }
     ctx_.diags.emplace_back(fmt::format("float value {} is out of range for type '{}'",
                                         *f,
                                         ctx_.type_display_name(target)),
                             sema::error::LITERAL_OUT_OF_RANGE,
                             active_ast().location_of(at));
+}
+
+auto emitter::is_concrete_float(const value& v) noexcept -> bool {
+    return v.type && sema::is_float(v.type->get_kind());
+}
+
+auto emitter::is_untyped_number(const value& v) noexcept -> bool {
+    return v.type && sema::is_constexpr_numeric(v.type->get_kind());
+}
+
+auto emitter::is_foreign_constant(const value& v, const sema::type& t) noexcept -> bool {
+    const bool is_constant_number{v.is<f128>() || v.is<i64>() || v.is<u64>() || v.is<i128>() ||
+                                  v.is<u128>()};
+    return is_constant_number && (!v.type || !sema::is_same_unqualified(*v.type, t));
+}
+
+auto emitter::untyped_number_as_float(const value& v, sema::type& target, ast::node_id at)
+    -> value {
+    check_constexpr_float_fits(v, target, at);
+    if (v.is<f128>()) { return value{v.data, target}; }
+    if (const auto as_unsigned{v.as_opt<u128>()}) {
+        return value{f128::from_uint(*as_unsigned), target};
+    }
+    if (const auto as_signed{folded_int(v)}) { return value{f128::from_int(*as_signed), target}; }
+    return v;
 }
 
 auto emitter::coerce_constexpr_int(value v, sema::type& target, ast::node_id at) -> value {
@@ -889,11 +922,10 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
             val.type->get_kind() == sema::type_kind::CONSTEXPR_INT) {
             // int literal -> float context: convert the payload to floating point.
             if (const auto folded{folded_int(val)}) {
-                const auto  as_float{val.as_opt<u128>() ? static_cast<f64>(*val.as_opt<u128>())
-                                                        : static_cast<f64>(*folded)};
-                const value converted{as_float, concrete};
-                check_constexpr_float_fits(converted, concrete, *expr_id);
-                return converted;
+                const auto exact{val.as_opt<u128>() ? f128::from_uint(*val.as_opt<u128>())
+                                                    : f128::from_int(*folded)};
+                check_constexpr_float_fits(value{exact}, concrete, *expr_id);
+                return value{exact, concrete};
             }
         }
         // Reject a compile-time integer that does not fit its concrete integer target.
@@ -1068,7 +1100,14 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                     sema::is_integer(sema_type->get_kind())) {
                     v = coerce_constexpr_int(v, *sema_type, *decl.value);
                 }
-                if (decl.explicit_type) { check_constexpr_float_fits(v, *sema_type, *decl.value); }
+                if (decl.explicit_type && sema::is_float(sema_type->get_kind())) {
+                    // An integer constant bound to a float global needs a real conversion
+                    if (const auto as_float{cv->int_as_float_opt()}; as_float && !v.is<f128>()) {
+                        v = value{*as_float};
+                    }
+                    check_constexpr_float_fits(v, *sema_type, *decl.value);
+                    if (v.is<f128>()) { v = value{v.data, *sema_type}; }
+                }
                 init_val.emplace(v);
             }
         } else {
@@ -1932,7 +1971,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                                 sema::is_implicit_widenable(*scalar.type, *sema_type))) {
                         // An integer constant widening into a float-typed binding needs an
                         // actual numeric conversion
-                        if (const auto f{cv->int_as_f64_opt()}) { scalar = value{*f, *sema_type}; }
+                        if (const auto f{cv->int_as_float_opt()}) { scalar = value{*f}; }
                     }
                     if (decl.explicit_type) {
                         check_constexpr_float_fits(scalar, *sema_type, *decl.value);
@@ -1947,6 +1986,9 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                             sema::error::TYPE_MISMATCH,
                             active_ast().location_of(*decl.value));
                     }
+                    if (decl.explicit_type && scalar.is<f128>()) {
+                        scalar = value{scalar.data, *sema_type};
+                    }
 
                     bound = scalar;
                 }
@@ -1960,7 +2002,8 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                                                     .is_constexpr_var = is_constexpr_var,
                                                 });
                 if (is_constexpr) {
-                    ctx_.constexpr_binding_frames.back().insert_or_assign(name, *cv);
+                    ctx_.constexpr_binding_frames.back().insert_or_assign(
+                        name, decl.explicit_type ? with_declared_type(*cv, *sema_type) : *cv);
                 }
                 return;
             }
@@ -2128,7 +2171,9 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
             auto&      t{sema_type ? *sema_type : ctx_.get_int(32, true)};
             // An unsuffixed integer literal in a float context is a float constant.
             if (sema::is_float(t.get_kind()) || t.get_kind() == sema::type_kind::CONSTEXPR_FLOAT) {
-                return value{static_cast<f64>(data.value), t};
+                return value{f128::from_uint(data.value,
+                                             sema::float_format_of(t).value_or(float_format::QUAD)),
+                             t};
             }
             // Past `i128` max only an unsigned payload keeps the literal's value
             if (sema::is_unsigned_integer(t) ||
@@ -2148,9 +2193,8 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
         },
         [&](const ast::float_literal_expr& data) -> value {
             const auto sema_type{active_mod().get_sema_type_opt(id)};
-            return value{data.value,
-                         sema_type ? *sema_type
-                                   : ctx_.get_builtin_resolved_type(sema::type_kind::F64)};
+            auto& t{sema_type ? *sema_type : ctx_.get_builtin_resolved_type(sema::type_kind::F64)};
+            return value{data.value_in(sema::float_format_of(t).value_or(float_format::QUAD)), t};
         },
         [&](ast::bool_expr) -> value {
             return value{id.get_token_type() == syntax::token_type_t::BOOLEAN_TRUE,
@@ -2423,8 +2467,11 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
     ASSERT(kind_opt, "Binary operator must be mapped to instruction kind");
     ASSERT(sema_type, "Binary expression must have a resolved sema type");
 
-    // An operand's sema type can be narrower than the value's actual constexpr-only dest
-    if (*kind_opt == instruction_kind::SHL || *kind_opt == instruction_kind::SHR) {
+    // An operand's sema type can be narrower than the value's actual constexpr-only dest, and an
+    // untyped result would otherwise materialize at a fixed width (`f64`/`i32`) before meeting its
+    // real type
+    if (*kind_opt == instruction_kind::SHL || *kind_opt == instruction_kind::SHR ||
+        sema::is_constexpr_numeric(sema_type->get_kind())) {
         if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
     }
 
@@ -2463,6 +2510,20 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
 
     auto lhs{emit_expression(binary.lhs)};
     auto rhs{emit_expression(binary.rhs)};
+    // Float arithmetic converts a constant operand of another type to the result's float type;
+    // a comparison converts an untyped constant to the float it meets (`@abs(3) < x`)
+    if (sema::is_float(sema_type->get_kind())) {
+        if (is_foreign_constant(lhs, *sema_type)) {
+            lhs = untyped_number_as_float(lhs, *sema_type, binary.lhs);
+        }
+        if (is_foreign_constant(rhs, *sema_type)) {
+            rhs = untyped_number_as_float(rhs, *sema_type, binary.rhs);
+        }
+    } else if (is_concrete_float(lhs) && is_untyped_number(rhs)) {
+        rhs = untyped_number_as_float(rhs, *lhs.type, binary.rhs);
+    } else if (is_concrete_float(rhs) && is_untyped_number(lhs)) {
+        lhs = untyped_number_as_float(lhs, *rhs.type, binary.lhs);
+    }
     // Pointer arithmetic lowers as `ptr + n`; addition commutes, so normalize `n + ptr`
     const auto is_pointer{
         [](const value& v) { return v.type && v.type->get_kind() == sema::type_kind::POINTER; }};
@@ -3743,6 +3804,22 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             for (const auto& arg : call.arguments) {
                 if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
                     args.emplace_back(emit_expression(*expr_h));
+                }
+            }
+            const auto name{*syntax::get_builtin_opt(fn_token)};
+            if (const auto res{builder_.emit_builtin_call(name, std::move(args), ret_type)}) {
+                return value{*res, ret_type};
+            }
+            return value{void_val{}, ret_type};
+        }
+        case syntax::token_type_t::BUILTIN_MUL_ADD: {
+            if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+
+            // `@mulAdd(T, a, b, c)`: each operand is a `T`
+            std::vector<value> args;
+            for (usize i{1}; i < call.arguments.size(); ++i) {
+                if (const auto expr_h{call.arguments[i].as_opt<ast::expr_handle>()}) {
+                    args.emplace_back(emit_coerced_expr(*expr_h, ret_type));
                 }
             }
             const auto name{*syntax::get_builtin_opt(fn_token)};
@@ -6366,7 +6443,7 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
         if (const auto cv{const_eval_.try_eval(id)}) {
             if (const auto i{cv->as_int_opt()}) { return value{static_cast<i64>(*i), sema_type}; }
             if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
-            if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
+            if (const auto f{cv->as_opt<f128>()}) { return value{*f, sema_type}; }
         }
     }
 
@@ -6906,7 +6983,7 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
     if (const auto cv{const_eval_.try_eval(id)}) {
         if (const auto i{cv->as_int_opt()}) { return value{static_cast<i64>(*i), sema_type}; }
         if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
-        if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
+        if (const auto f{cv->as_opt<f128>()}) { return value{*f, sema_type}; }
     }
 
     const auto struct_slot{builder_.emit_alloca(*sema_type)};
@@ -7152,7 +7229,7 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
         if (const auto cv{const_eval_.try_eval(id)}) {
             if (const auto i{cv->as_int_opt()}) { return value{static_cast<i64>(*i), sema_type}; }
             if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
-            if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
+            if (const auto f{cv->as_opt<f128>()}) { return value{*f, sema_type}; }
             if (const auto cv_type{cv->get_type()};
                 cv_type && cv_type->get_kind() == sema::type_kind::FUNCTION) {
                 if (const auto sym_name{cv->as_opt<std::string>()}) {
@@ -7285,7 +7362,7 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
     if (const auto cv{const_eval_.try_eval(id)}) {
         if (const auto i{cv->as_int_opt()}) { return value{static_cast<i64>(*i), sema_type}; }
         if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
-        if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
+        if (const auto f{cv->as_opt<f128>()}) { return value{*f, sema_type}; }
         if (cv->is<const_struct>() || cv->is<const_array>() || cv->is<const_union>() ||
             cv->is<const_addr>() || cv->is<const_dyn_fat_ptr>() || cv->is<std::string>()) {
             return materialize_const(*cv);

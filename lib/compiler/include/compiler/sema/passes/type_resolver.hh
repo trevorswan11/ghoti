@@ -610,8 +610,10 @@ class type_resolver {
     }
 
     [[nodiscard]] auto target_has_x86_fp80() const -> bool;
-    // Poisons a numeric literal that rounds to infinity in its float type
-    auto               float_literal_overflow(ast::node_id id, const type& target) -> type&;
+    // Why a literal can't be held in the float type `target`, if it can't
+    [[nodiscard]] auto float_literal_range_problem(f128 exact, f128 rounded, const type& target)
+        -> stdx::option<std::string>;
+    auto               float_literal_out_of_range(ast::node_id id, std::string message) -> type&;
     [[nodiscard]] auto target_ptr_bits() const -> u32;
     [[nodiscard]] auto target_has_128bit_atomics() const -> bool;
     // `.c` is always portable; the other `callconv(...)` choices are only meaningful for the ISA

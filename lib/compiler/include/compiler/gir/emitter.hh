@@ -434,6 +434,14 @@ class emitter {
     // The i64/u64/i128/u128 payload of a compile-time integer `value`, as a 128-bit signed
     // int; none when `v` has no integer payload.
     [[nodiscard]] static auto folded_int(const value& v) noexcept -> stdx::option<i128>;
+    [[nodiscard]] static auto is_concrete_float(const value& v) noexcept -> bool;
+    [[nodiscard]] static auto is_untyped_number(const value& v) noexcept -> bool;
+    // A compile-time number whose type isn't `t`
+    [[nodiscard]] static auto is_foreign_constant(const value& v, const sema::type& t) noexcept
+        -> bool;
+    // A `constexpr_int`/`constexpr_float` value converted to the float type `target`
+    [[nodiscard]] auto untyped_number_as_float(const value& v, sema::type& target, ast::node_id at)
+        -> value;
     // Diagnoses a compile-time float that rounds to infinity in `target`
     auto check_constexpr_float_fits(const value& v, const sema::type& target, ast::node_id at)
         -> void;

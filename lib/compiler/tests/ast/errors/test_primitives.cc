@@ -54,9 +54,9 @@ TEST_CASE("Floating point overflow") {
                               overflow_error(syntax::error::DOUBLE_OVERFLOW));
     helpers::test_parser_fail("1023.234612e234000;",
                               overflow_error(syntax::error::DOUBLE_OVERFLOW));
-    helpers::test_parser_fail("0x1p2000;", overflow_error(syntax::error::DOUBLE_OVERFLOW));
+    helpers::test_parser_fail("0x1p20000;", overflow_error(syntax::error::DOUBLE_OVERFLOW));
     helpers::test_parser_fail(
-        "0x1p-2000;",
+        "0x1p-20000;",
         syntax::diagnostic{
             "Float literal is too small to represent", syntax::error::DOUBLE_OVERFLOW, 0, 0});
 }

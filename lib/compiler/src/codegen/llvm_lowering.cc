@@ -12,6 +12,8 @@
 
 #include <fmt/format.h>
 #include <gsl/pointers>
+#include <llvm/ADT/APFloat.h>
+#include <llvm/ADT/APInt.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/CallingConv.h>
 #include <llvm/IR/Constants.h>
@@ -136,6 +138,18 @@ namespace {
     if (bits == 0) { return llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ty)); }
     auto* int_ty{llvm::Type::getInt64Ty(ty->getContext())};
     return llvm::ConstantExpr::getIntToPtr(wide_int_constant(bits, int_ty), ty);
+}
+
+// The float constant of `ty` (or its elements) nearest to `value`
+[[nodiscard]] auto float_constant(f128 value, llvm::Type* ty) -> llvm::Constant* {
+    auto* scalar_ty{ty->getScalarType()};
+    VERIFY(scalar_ty->isFloatingPointTy(), "A float payload must lower to a float type");
+    const std::array<u64, 2> words{value.bits().low, value.bits().high};
+    llvm::APFloat            converted{llvm::APFloat::IEEEquad(), llvm::APInt{128, words}};
+    bool                     loses_info{false};
+    DISCARD(converted.convert(
+        scalar_ty->getFltSemantics(), llvm::APFloat::rmNearestTiesToEven, &loses_info));
+    return llvm::ConstantFP::get(ty, converted);
 }
 
 [[nodiscard]] auto to_llvm_callconv(ast::calling_convention conv) noexcept
@@ -1163,7 +1177,7 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
     if (const auto u{cv.as_opt<u64>()}) { return int_or_ptr_constant(*u, ty); }
     if (const auto w{cv.as_opt<i128>()}) { return int_or_ptr_constant(static_cast<u128>(*w), ty); }
     if (const auto w{cv.as_opt<u128>()}) { return int_or_ptr_constant(*w, ty); }
-    if (const auto f{cv.as_opt<f64>()}) { return llvm::ConstantFP::get(ty, *f); }
+    if (const auto f{cv.as_opt<f128>()}) { return float_constant(*f, ty); }
     if (const auto b{cv.as_opt<bool>()}) { return llvm::ConstantInt::getBool(context_, *b); }
     if (const auto e{cv.as_opt<gir::const_enum>()}) {
         return llvm::ConstantInt::get(ty, static_cast<u64>(e->value), true);
@@ -1280,10 +1294,14 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
                 u64         v{static_cast<u64>(*iv)};
                 const usize copy_len{std::min<usize>(sizeof(v), max_size)};
                 std::memcpy(bytes.data(), &v, copy_len);
-            } else if (const auto fv{p.as_opt<f64>()}) {
-                f64         v{*fv};
-                const usize copy_len{std::min<usize>(sizeof(v), max_size)};
-                std::memcpy(bytes.data(), &v, copy_len);
+            } else if (const auto fv{p.as_opt<f128>()}) {
+                const auto payload_type{p.get_type()};
+                const auto format{payload_type ? sema::float_format_of(*payload_type) : stdx::none};
+                const auto encoded{fv->encode(format.value_or(float_format::DOUBLE))};
+                const auto width{format_info(format.value_or(float_format::DOUBLE)).storage_bits};
+                const std::array<u64, 2> words{encoded.low, encoded.high};
+                const usize              copy_len{std::min<usize>(width / 8, max_size)};
+                std::memcpy(bytes.data(), words.data(), copy_len);
             } else if (const auto bv{p.as_opt<bool>()}) {
                 bytes[0] = *bv ? 1 : 0;
             }
@@ -1626,11 +1644,11 @@ auto llvm_lowering::lower_value(const gir::value&               val,
                                    : types_.get_int64_ty()};
             return int_or_ptr_constant(w, ty);
         },
-        [this, &val, expected_type](f64 f) -> llvm::Value* {
+        [this, &val, expected_type](f128 f) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
                      : val.type    ? types_.translate(*val.type)
                                    : types_.get_double_ty()};
-            return llvm::ConstantFP::get(ty, f);
+            return float_constant(f, ty);
         },
         [this](bool b) -> llvm::Value* { return llvm::ConstantInt::getBool(context_, b); },
         [this, &val, expected_type](const std::string& str) -> llvm::Value* {
@@ -2093,6 +2111,16 @@ auto llvm_lowering::emit_comparison(const gir::instruction& inst) -> llvm::Value
                                  : builder_.CreateZExt(rhs, lhs_int, "cmpext");
                 }
             }
+        }
+    }
+
+    // Every narrower float format is exactly representable in a wider one
+    if (is_flt && lhs->getType() != rhs->getType() && lhs->getType()->isFloatingPointTy() &&
+        rhs->getType()->isFloatingPointTy()) {
+        if (lhs->getType()->getPrimitiveSizeInBits() < rhs->getType()->getPrimitiveSizeInBits()) {
+            lhs = builder_.CreateFPExt(lhs, rhs->getType(), "cmpext");
+        } else {
+            rhs = builder_.CreateFPExt(rhs, lhs->getType(), "cmpext");
         }
     }
 

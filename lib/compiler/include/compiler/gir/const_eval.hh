@@ -88,6 +88,14 @@ class const_eval {
                                           const const_value&   rhs,
                                           ast::node_id         id) -> stdx::option<const_value>;
 
+    // Folds two integers exactly: a concrete signed type rejects overflow unless `wrapping`, and
+    // unsigned results (and shifts) wrap to the type's width as they do at runtime
+    [[nodiscard]] auto fold_integer_binary(syntax::token_type_t op_type,
+                                           const const_value&   lhs,
+                                           const const_value&   rhs,
+                                           ast::node_id         id,
+                                           bool wrapping = false) -> stdx::option<const_value>;
+
     [[nodiscard]] auto arm_pattern_matches(const ast::match_pattern_handle& pattern,
                                            const const_value&               target) -> bool {
         return match_pattern(pattern, target);

@@ -38,7 +38,7 @@ TEST_CASE("Primitive literal constant eval") {
     const auto [sym_c, _c, decl_c, type_c]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("c", idx)};
     const auto val_c{UNWRAP(evaluator.try_eval(*decl_c.value))};
-    CHECK(UNWRAP(val_c.as_opt<f64>()) == 3.14);
+    CHECK(UNWRAP(val_c.as_opt<f128>()).to_f64() == 3.14);
 }
 
 TEST_CASE("Integer arithmetic and bitwise folding constant eval") {

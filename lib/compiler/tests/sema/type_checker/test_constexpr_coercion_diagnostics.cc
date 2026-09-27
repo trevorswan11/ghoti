@@ -203,7 +203,8 @@ TEST_CASE("compile-time floats that round to infinity in their type are rejected
                 const bad: f16 = BIG;
             };
         )",
-            sema::diagnostic{"float value 3.402823669209385e+38 is out of range for type 'f16'",
+            sema::diagnostic{"float value 3.402823669209384634633746074317682e+38 is out of range "
+                             "for type 'f16'",
                              sema::error::LITERAL_OUT_OF_RANGE,
                              std::pair{3UZ, 33UZ}});
     }

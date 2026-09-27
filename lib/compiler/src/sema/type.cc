@@ -1,7 +1,6 @@
 #include "compiler/sema/type.hh"
 
 #include <algorithm>
-#include <cmath>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -149,15 +148,25 @@ auto is_i32(const type& t) noexcept -> bool {
     return info && info->bits == 32 && info->is_signed;
 }
 
-auto constexpr_float_fits(f64 value, const type& target) noexcept -> bool {
-    // Halfway between the type's max and the next power of two rounds (to even) up to infinity
-    f64 overflow_at{0};
-    switch (target.get_kind()) {
-    case type_kind::F16: overflow_at = 0x1.ffep15; break;
-    case type_kind::F32: overflow_at = 0x1.ffffffp127; break;
-    default:             return true;
+auto float_format_of(const type& t) noexcept -> stdx::option<float_format> {
+    switch (t.get_kind()) {
+    case type_kind::F16:             return float_format::HALF;
+    case type_kind::F32:             return float_format::SINGLE;
+    case type_kind::F64:             return float_format::DOUBLE;
+    case type_kind::F80:             return float_format::X87;
+    case type_kind::F128:
+    case type_kind::CONSTEXPR_FLOAT: return float_format::QUAD;
+    default:                         return stdx::none;
     }
-    return !std::isfinite(value) || std::abs(value) < overflow_at;
+}
+
+auto fit_float(f128 value, const type& t) -> f128 {
+    const auto format{float_format_of(t)};
+    return format ? value.round_to(*format) : value;
+}
+
+auto constexpr_float_fits(f128 value, const type& target) -> bool {
+    return !value.is_finite() || fit_float(value, target).is_finite();
 }
 
 auto constexpr_int_fits(i128 value, const type& target, u32 ptr_bits) noexcept -> bool {

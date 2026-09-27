@@ -35,7 +35,7 @@ TEST_CASE("LLVM lowering integer and float constants") {
     CHECK(c_i32->getType()->isIntegerTy(32));
     CHECK(llvm::cast<llvm::ConstantInt>(c_i32)->getSExtValue() == 42);
 
-    auto* c_f64{lowering.lower_value(gir::value{3.14, &f64_t})};
+    auto* c_f64{lowering.lower_value(gir::value{f128::from_f64(3.14), &f64_t})};
     REQUIRE(c_f64 != nullptr);
     CHECK(c_f64->getType()->isDoubleTy());
 
