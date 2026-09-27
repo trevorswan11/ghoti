@@ -6154,6 +6154,23 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
 
     pending_impl_method_owner_.reset();
     pending_param_impl_target_.reset();
+
+    // `Type.field` names no value; a struct field needs an instance (union `U.tag` is a tag)
+    if (object_type.get_data().is<types::struct_t>() &&
+        operand_nature(dot.object) == operand_nature_t::TYPE) {
+        const auto& member_name{resolving_.ast.get_as<ast::identifier_expr>(dot.member).name};
+        if (find_aggregate_field(object_type, member_name)) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("'{}' is a field of '{}'; access it through an instance",
+                            member_name,
+                            ctx_.type_display_name(object_type)),
+                error::TYPE_USED_AS_VALUE,
+                resolving_.ast.location_of(dot.member)));
+        }
+    }
+
     auto result{
         resolve_structural_access(object_type, dot.member, resolving_.ast.location_of(dot.object))};
     if (!result) {

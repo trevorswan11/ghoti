@@ -529,4 +529,15 @@ TEST_CASE("a type cannot be an index or an asm input") {
                           sema::error::ILLEGAL_INLINE_ASM));
 }
 
+TEST_CASE("a struct field is only reachable through an instance") {
+    CHECK(helpers::raised(
+        "const C := struct { value: i32 }; pub const main := fn(): i32 { return C.value; };",
+        sema::error::TYPE_USED_AS_VALUE));
+    CHECK(helpers::raised(R"(
+        const C := struct { value: i32 };
+        pub const main := fn(): i32 { const c := C; return c.value; };
+    )",
+                          sema::error::TYPE_USED_AS_VALUE));
+}
+
 } // namespace ghoti::tests
