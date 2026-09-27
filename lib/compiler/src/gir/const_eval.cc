@@ -3564,7 +3564,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         // Match the resolver: a fixed-length, null-terminated byte array (like a string literal).
         auto  name{ctx_.type_display_name(force_deferred_type(*target_type))};
         auto& t_u8{ctx_.get_int(8, false)};
-        auto& arr_type{ctx_.get_array(sema::types::mut::CONSTANT, true, name.size() + 1, t_u8)};
+        auto& arr_type{ctx_.get_array(sema::types::mut::CONSTANT, true, name.size(), t_u8)};
         return const_value{std::move(name), arr_type};
     }
     case syntax::token_type_t::BUILTIN_TYPE_INFO: {

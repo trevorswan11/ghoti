@@ -480,6 +480,10 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `@intFromFloat(T, x)` truncates a float toward zero and `@floatFromInt(T, x)` rounds an integer to the nearest float; both infer `T` from context when omitted (#324)
     - An out-of-range compile-time `@intFromFloat` is a compile error; at runtime an out-of-range or NaN operand panics under runtime safety
 - **Breaking:** `@as` no longer converts floats to integers, or integers to floats that can't represent every value exactly (`@as(f64, i32_val)` still works); use `@intFromFloat` / `@floatFromInt` (#324)
+- `import` accepts an absolute path (`import "/abs/path/lib.gh" as lib;`), resolving to the same module as any relative spelling of that file
+- `undefined` can be aliased with a `const` binding (`const U := undefined;`); every use of the alias behaves like the literal
+    - `@TypeOf(undefined)` names its type, which only a `const` binding may have; `var` bindings, parameters, return types, fields, and array elements of that type are rejected
+- **Breaking:** `@typeName(T).len` no longer counts the trailing null terminator, matching string literals
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

@@ -499,6 +499,10 @@ class type_resolver {
     auto thin_if_constexpr(const ast::function_expr::parameter& param, type& param_type) -> type&;
 
     // Reports an interface or bare `dyn I` used as a by-value slot type; returns whether it did
+    // `reject_unsized_slot`, plus the compile-time-only `@TypeOf(undefined)`
+    auto reject_non_runtime_slot(ast::explicit_type_id at, const type& slot_type) -> bool;
+    // `@TypeOf(undefined)` itself, or an array of it at any depth
+    [[nodiscard]] static auto holds_undefined_by_value(const type& t) -> bool;
     auto reject_unsized_slot(ast::explicit_type_id at, const type& slot_type) -> bool;
 
     template <ast::IndexableID ID> auto visit(ID, const ast::struct_expr&) -> void;

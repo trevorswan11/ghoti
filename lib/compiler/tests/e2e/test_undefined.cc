@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "helpers/codegen.hh"
+#include "helpers/sema.hh"
 
 namespace ghoti::tests {
 
@@ -36,6 +37,52 @@ TEST_CASE("`= undefined` works for an array local written through mutable elemen
             return buf[0] + buf[1] + buf[2];
         };
     )") == 42);
+}
+
+TEST_CASE("a `const` alias of `undefined` initializes like the literal") {
+    CHECK(helpers::compile_and_run(R"(
+        const U := undefined;
+        const S := struct { a: i32, b: i32 };
+        pub const main := fn(): i32 {
+            const L := undefined;
+            var x: i32 = U;
+            x = 3;
+            var s: S = L;
+            s.a = 5;
+            var arr: [3]mut i32 = .{ 1, U, 3 };
+            arr[1] = 2;
+            x = U;
+            x = 3;
+            return x + s.a + arr[0] + arr[1] + arr[2];
+        };
+    )") == 14);
+}
+
+TEST_CASE("`@TypeOf(undefined)` names the type of `undefined` and its aliases") {
+    CHECK(helpers::compile_and_run(R"(
+        const U: @TypeOf(undefined) = undefined;
+        pub const main := fn(): i32 {
+            if constexpr (@TypeOf(U) == @TypeOf(undefined)) { return 1; }
+            return 2;
+        };
+    )") == 1);
+}
+
+TEST_CASE("`undefined` has no runtime representation outside a `const` binding") {
+    CHECK(helpers::raised("pub const main := fn(): i32 { var u := undefined; return 0; };",
+                          sema::error::COMPILE_TIME_ONLY_VALUE));
+    CHECK(helpers::raised("var g: @TypeOf(undefined) = undefined;",
+                          sema::error::COMPILE_TIME_ONLY_VALUE));
+    CHECK(helpers::raised("const f := fn(x: @TypeOf(undefined)): void {};",
+                          sema::error::COMPILE_TIME_ONLY_VALUE));
+    CHECK(helpers::raised("const g := fn(): @TypeOf(undefined) { return undefined; };",
+                          sema::error::COMPILE_TIME_ONLY_VALUE));
+    CHECK(helpers::raised("const S := struct { u: @TypeOf(undefined) };",
+                          sema::error::COMPILE_TIME_ONLY_VALUE));
+    CHECK(helpers::raised(R"(
+        const A := [2]@TypeOf(undefined);
+        pub const main := fn(): i32 { var a: A = undefined; return 0; };
+    )", sema::error::COMPILE_TIME_ONLY_VALUE));
 }
 
 } // namespace ghoti::tests

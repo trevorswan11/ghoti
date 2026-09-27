@@ -1142,7 +1142,7 @@ template <ast::IndexableID ID>
         auto&           named{evaluator.force_deferred_type(denoted_type(arg_type))};
         const auto      name{ctx_.type_display_name(named)};
         return_type =
-            &ctx_.get_array(types::mut::CONSTANT, true, name.size() + 1, ctx_.get_int(8, false));
+            &ctx_.get_array(types::mut::CONSTANT, true, name.size(), ctx_.get_int(8, false));
         break;
     }
     case token_type_t::BUILTIN_TYPE_INFO: {
@@ -4120,14 +4120,14 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         for (const auto& param : fn.parameters) {
             TRY_RESOLVE(param.explicit_type);
             auto& param_type{denoted_type(*last_type_.take())};
-            if (reject_unsized_slot(param.explicit_type, param_type)) {
+            if (reject_non_runtime_slot(param.explicit_type, param_type)) {
                 return last_type_.emplace(ctx_.poison_node(resolving_, id));
             }
             fn_param_types[p_idx++] = &param_type;
         }
         TRY_RESOLVE(fn.explicit_return_type);
         auto& return_type{denoted_type(*last_type_.take())};
-        if (reject_unsized_slot(fn.explicit_return_type, return_type)) {
+        if (reject_non_runtime_slot(fn.explicit_return_type, return_type)) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
 
@@ -4240,7 +4240,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         }
 
         auto& param_type{thin_if_constexpr(param, denoted_type(*last_type_.take()))};
-        if (reject_unsized_slot(param.explicit_type, param_type)) {
+        if (reject_non_runtime_slot(param.explicit_type, param_type)) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
         // A `type`-typed value is always compile-time known, so `constexpr` adds nothing.
@@ -4267,7 +4267,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
 
     TRY_RESOLVE(fn.explicit_return_type);
     auto& return_type{denoted_type(*last_type_.take())};
-    if (reject_unsized_slot(fn.explicit_return_type, return_type)) {
+    if (reject_non_runtime_slot(fn.explicit_return_type, return_type)) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id));
     }
     ASSERT(!fn_type.is_resolved(), "Valued function must not be resolved");
@@ -7403,6 +7403,30 @@ auto type_resolver::thin_if_constexpr(const ast::function_expr::parameter& param
     return thin;
 }
 
+auto type_resolver::holds_undefined_by_value(const type& t) -> bool {
+    if (t.get_kind() == type_kind::UNDEFINED) { return true; }
+    if (const auto arr{t.get_data().as_opt<types::array>()}) {
+        return holds_undefined_by_value(arr->underlying);
+    }
+    if (const auto deferred{t.get_data().as_opt<types::deferred_array>()}) {
+        return holds_undefined_by_value(deferred->underlying);
+    }
+    return false;
+}
+
+auto type_resolver::reject_non_runtime_slot(ast::explicit_type_id at, const type& slot_type)
+    -> bool {
+    if (reject_unsized_slot(at, slot_type)) { return true; }
+    if (holds_undefined_by_value(slot_type)) {
+        ctx_.diags.emplace_back("'@TypeOf(undefined)' only exists at compile time; only a 'const' "
+                                "binding can have this type",
+                                error::COMPILE_TIME_ONLY_VALUE,
+                                resolving_.ast.location_of(at));
+        return true;
+    }
+    return false;
+}
+
 auto type_resolver::reject_unsized_slot(ast::explicit_type_id at, const type& slot_type) -> bool {
     if (slot_type.get_kind() == type_kind::INTERFACE) {
         const auto iname{ctx_.type_display_name(slot_type)};
@@ -8113,7 +8137,7 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
                                                               .annotation = field.explicit_type});
         // `f: @TypeOf(g)` / `f: FnAlias` stores the denoted type, not a `type` value
         auto* field_type{&denoted_type(*last_type_.take())};
-        if (reject_unsized_slot(field.explicit_type, *field_type)) {
+        if (reject_non_runtime_slot(field.explicit_type, *field_type)) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
 
@@ -8286,7 +8310,7 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
                                                               .decl       = stdx::none,
                                                               .annotation = field.explicit_type});
         auto& field_type{denoted_type(*last_type_.take())};
-        if (reject_unsized_slot(field.explicit_type, field_type)) {
+        if (reject_non_runtime_slot(field.explicit_type, field_type)) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
 
@@ -8770,7 +8794,9 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                 resolving_.set_sema_type(*decl.explicit_type, *explicit_type_p);
             }
             auto& explicit_type{*explicit_type_p};
-            if (reject_unsized_slot(*decl.explicit_type, explicit_type)) {
+            const bool aliases_undefined{explicit_type.get_kind() == type_kind::UNDEFINED};
+            if (aliases_undefined ? reject_unsized_slot(*decl.explicit_type, explicit_type)
+                                  : reject_non_runtime_slot(*decl.explicit_type, explicit_type)) {
                 ctx_.poison_symbol(sym);
                 resolving_.set_sema_type(decl.name, ctx_.get_poison());
                 return last_type_.emplace(ctx_.poison_node(resolving_, id));
@@ -8943,6 +8969,18 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
 
+        // `const U := undefined` aliases the literal; there is no runtime value to store
+        const bool binds_undefined{resolved_type.get_kind() == type_kind::UNDEFINED};
+        if (binds_undefined && decl.has_modifier(ast::decl_modifiers::VARIABLE)) {
+            ctx_.poison_symbol(sym,
+                               "'undefined' only exists at compile time, so it cannot be stored in "
+                               "a mutable ('var') binding; use 'const' to alias it",
+                               error::COMPILE_TIME_ONLY_VALUE,
+                               resolving_.ast.location_of(id));
+            resolving_.set_sema_type(decl.name, ctx_.get_poison());
+            return last_type_.emplace(ctx_.poison_node(resolving_, id));
+        }
+
         const bool aggregate_literal{
             decl.value &&
             decl.value
@@ -8986,7 +9024,8 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             if ((binds_type && !aggregate_literal) || type_data.is<types::module>()) {
                 return storageless_kind::ALIAS;
             }
-            if (constexpr_value && !decl.has_modifier(ast::decl_modifiers::VARIABLE)) {
+            if ((constexpr_value || binds_undefined) &&
+                !decl.has_modifier(ast::decl_modifiers::VARIABLE)) {
                 return storageless_kind::CONSTEXPR_VALUE;
             }
             return stdx::none;
@@ -11414,7 +11453,7 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_array_ty
                              error::ILLEGAL_AUTO_USAGE,
                              resolving_.ast.location_of(array.inner_explicit_type)));
     }
-    if (reject_unsized_slot(array.inner_explicit_type, item_type)) {
+    if (reject_non_runtime_slot(array.inner_explicit_type, item_type)) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id));
     }
 

@@ -110,6 +110,8 @@ class emitter {
     using type_guard            = ghoti::scope_guard<std::vector<sema::type*>>;
 
   private:
+    // The `undefined` literal or anything aliasing it
+    [[nodiscard]] auto is_undefined_value(ast::node_id expr) -> bool;
     auto emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -> void;
     auto emit_top_level_test(ast::node_id id, const ast::test_stmt& test) -> void;
     // Emits the member functions of an `impl [I for] T { ... }` block under names scoped to the

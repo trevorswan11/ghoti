@@ -868,7 +868,7 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
         return emit_expression_id_raw(*expr_id);
     }
     // `undefined` carries no type of its own; adopt the destination's so codegen can size it.
-    if (active_ast().get_as_opt<ast::undefined_expr>(*expr_id)) {
+    if (is_undefined_value(*expr_id)) {
         return value{undefined_val{}, dest_type};
     }
 
@@ -931,6 +931,11 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
     }
 
     return val;
+}
+
+auto emitter::is_undefined_value(ast::node_id expr) -> bool {
+    const auto t{active_mod().get_sema_type_opt(expr)};
+    return t && t->get_kind() == sema::type_kind::UNDEFINED;
 }
 
 auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -> void {
@@ -1023,7 +1028,7 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
 
     stdx::option<value>       init_val;
     stdx::option<const_value> const_init;
-    if (decl.value && !active_ast().get_as_opt<ast::undefined_expr>(*decl.value)) {
+    if (decl.value && !is_undefined_value(*decl.value)) {
         const gir::const_eval::constexpr_context_guard g{const_eval_, true};
         const auto                                     diags_before{ctx_.diags.size()};
         if (auto cv{const_eval_.try_eval(*decl.value)}) {
@@ -1999,7 +2004,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
 
     const auto slot{builder_.emit_alloca(*sema_type, name, is_const)};
     // A fresh alloca is already uninitialized, so `= undefined` needs no store.
-    if (decl.value && !active_ast().get_as_opt<ast::undefined_expr>(*decl.value)) {
+    if (decl.value && !is_undefined_value(*decl.value)) {
         const value val{emit_coerced_expr(*decl.value, *sema_type)};
         builder_.emit_store(value{slot, *sema_type}, val).is_initializer = true;
     }
