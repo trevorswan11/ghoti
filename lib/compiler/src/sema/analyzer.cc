@@ -195,6 +195,7 @@ auto analyzer::analyze(const std::filesystem::path& entry_path, bool for_test_ex
 
     collect_symbols(*module);
     resolve_types(*module);
+    modules_.print_all_warnings(error_stream_);
 
     if (module->is_poisoned()) {
         modules_.print_all_diagnostics(error_stream_);

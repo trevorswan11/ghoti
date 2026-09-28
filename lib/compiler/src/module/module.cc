@@ -109,6 +109,17 @@ auto module_manager::add_library_module(std::string_view name, const std::filesy
     return {};
 }
 
+auto module::print_warnings(std::ostream& os) const -> void {
+    for (const auto& warning : warnings) {
+        format_module_diagnostic(os, warning.to_formattable(), *this, warnings.get_terminal_status())
+            << "\n";
+    }
+}
+
+auto module_manager::print_all_warnings(std::ostream& os) const -> void {
+    for (const auto& [path, mod] : modules_) { mod->print_warnings(os); }
+}
+
 auto module_manager::print_all_diagnostics(std::ostream& os) const -> void {
     for (const auto& [path, mod] : modules_) {
         if (mod->is_poisoned() || mod->is_errored()) { mod->print_diagnostics(os); }

@@ -367,6 +367,11 @@ class type_resolver {
     auto check_attribute_conflicts(const attribute_refs&      items,
                                    const resolved_attributes& resolved) -> void;
     [[nodiscard]] auto fold_attribute_bool(const ast::attribute& item) -> stdx::option<bool>;
+    // `deprecated` takes at most a string literal message
+    auto check_deprecation_message(const ast::attribute& item) -> void;
+    // Warns (or errors, per `--deprecated`) when `id` names a `@[deprecated]` declaration or field
+    template <ast::IndexableID ID>
+    auto report_deprecated_use(ID id, const mod::module& owner, const symbol& sym) -> void;
     // A positive power-of-two byte alignment, reporting anything else
     [[nodiscard]] auto fold_alignment(ast::expr_handle arg) -> stdx::option<u64>;
     // Fields accept only field attributes; returns the field's folded `align`, if any
@@ -692,6 +697,9 @@ class type_resolver {
     stdx::opt_size            reresolve_floor_{};
     stdx::opt_size            pending_impl_method_owner_;
     stdx::option<std::string> pending_param_impl_target_;
+
+    // Nonzero while resolving a `@[deprecated]` item, whose own uses of deprecated names stay quiet
+    u32 deprecated_scope_depth_{0};
 
     // Set by `instantiate_generic` to that inst's mangled name for the duration of body resolution
     std::string typing_scope_prefix_{};

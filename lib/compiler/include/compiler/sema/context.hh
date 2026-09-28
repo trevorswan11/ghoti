@@ -41,6 +41,13 @@ struct active_block_frame {
 
 using constexpr_frame = ankerl::unordered_dense::map<std::string_view, gir::const_value>;
 
+// What a use of a `@[deprecated]` name reports
+enum class deprecation_policy : u8 {
+    WARN,
+    DENY,
+    ALLOW,
+};
+
 // A contextual wrapper around sematic steps
 //
 // Owns its own diagnostic list
@@ -59,6 +66,10 @@ struct context {
     codegen::target_options target_opts;
     std::string             user_main_name{"main"};
     bool                    runtime_safety{true};
+    deprecation_policy      deprecated_policy{deprecation_policy::WARN};
+
+    // `path:line:column` of every deprecated use already reported, so re-resolution stays quiet
+    ankerl::unordered_dense::set<std::string> reported_deprecations;
 
     // For the generic instantiation currently being resolved or emitted
     std::vector<constexpr_frame> constexpr_binding_frames;
@@ -109,6 +120,7 @@ struct context {
           diags{other.diags.create_new()}, error_stream{other.error_stream},
           prelude_index{other.prelude_index}, target_opts{other.target_opts},
           user_main_name{other.user_main_name}, runtime_safety{other.runtime_safety},
+          deprecated_policy{other.deprecated_policy},
           constexpr_binding_frames{other.constexpr_binding_frames},
           constexpr_evaluation_depth{other.constexpr_evaluation_depth},
           user_type_names{other.user_type_names}, embed_cache{other.embed_cache},

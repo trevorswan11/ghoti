@@ -36,6 +36,25 @@
 
 namespace ghoti::cmd::build {
 
+namespace {
+
+[[nodiscard]] auto parse_deprecation_policy(std::string_view name) -> sema::deprecation_policy {
+    if (name == "error") { return sema::deprecation_policy::DENY; }
+    if (name == "ignore") { return sema::deprecation_policy::ALLOW; }
+    return sema::deprecation_policy::WARN;
+}
+
+} // namespace
+
+auto add_deprecated_option(CLI::App* subcmd, raw_options& opts) -> void {
+    subcmd
+        ->add_option("--deprecated",
+                     opts.deprecated,
+                     "How a use of a @[deprecated] declaration is reported (warn, error, ignore)")
+        ->check(CLI::IsMember({"warn", "error", "ignore"}))
+        ->default_val(opts.deprecated);
+}
+
 auto options::process_raw(const raw_options&   raw,
                           codegen::output_type type,
                           std::ostream&        error_stream) -> stdx::result<options, clap::error> {
@@ -127,6 +146,7 @@ auto options::process_raw(const raw_options&   raw,
         .forwarded_args    = raw.forwarded_args,
         .dynamic           = raw.dynamic,
         .runtime_safety    = !raw.unsafe,
+        .deprecated_policy = parse_deprecation_policy(raw.deprecated),
         .output_explicit   = !raw.output.empty(),
         .emit_gir_path     = std::move(emit_gir_path),
         .emit_llvm_ir_path = std::move(emit_llvm_ir_path),
@@ -150,6 +170,7 @@ auto options::make_output_path_absolute() -> void {
 compilation::compilation(options& opts, std::ostream& error_stream)
     : opts_{opts}, error_stream_{error_stream}, manager_{loader_},
       analyzer_{manager_, error_stream_, true, opts_.target_opts, false, opts_.runtime_safety} {
+    analyzer_.set_deprecation_policy(opts_.deprecated_policy);
     // Spawned children resolve a bare relative name via PATH, so pin the output path first
     opts_.make_output_path_absolute();
 }
@@ -329,6 +350,7 @@ auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_v
         ->default_val(opts.time_passes);
     subcmd->add_flag("--unsafe", opts.unsafe, "Disable all runtime safety checks")
         ->default_val(opts.unsafe);
+    add_deprecated_option(subcmd, opts);
     subcmd
         ->add_option("--emit-gir", opts.emit_gir_path, "Write the GIR dump to the given file path")
         ->type_name("FILE");

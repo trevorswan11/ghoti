@@ -380,6 +380,10 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `@[inline(if (@sizeOf(T) <= 16) .always else .hint)] const swap := fn(T: type, ...)`
     - `struct { @[align(@alignOf(T) * 4)] value: T }` inside a `fn(T: type): type`
 - `@[discardable]` on an interface method applies to calls through `dyn` and `impl` receivers and to the implementing methods
+- `@[deprecated]` / `@[deprecated("message")]` on declarations, fields, and interface methods: naming one reports a warning, the compiler's first
+    - Uses inside a deprecated item (including a deprecated generic's instantiations) stay quiet
+    - `--deprecated=warn|error|ignore` on `build-*`, `run`, and `test` controls the report; `warn` is the default and never fails the build
+    - The LSP publishes it as a warning tagged `Deprecated` (rendered struck through) and hover shows the message
 - Constexpr can now be applied to labels and blocks (expression slots and top level)
     - They must be constant evaluatable and will error if not
 - `@assert` and `@verify` have been hardened such that they can work correctly in constexpr contexts

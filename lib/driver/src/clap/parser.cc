@@ -181,6 +181,7 @@ auto parser::setup_run_subcmd() -> gsl::not_null<CLI::App*> {
         ->default_val(run_opts_.release);
     sub->add_flag("--unsafe", run_opts_.unsafe, "Disable all runtime safety checks")
         ->default_val(run_opts_.unsafe);
+    cmd::build::add_deprecated_option(sub, run_opts_);
     return sub;
 }
 

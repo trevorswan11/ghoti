@@ -197,6 +197,10 @@ struct module {
 
     // Prints the modules diagnostics to the stream, doing nothing if an error state is not present
     auto print_diagnostics(std::ostream& os) const -> void;
+    auto print_warnings(std::ostream& os) const -> void;
+
+    // Reported alongside `diagnostics` but never errors the module out
+    sema::diagnostics warnings;
 
     // Errored modules cannot be used in any future compilation step
     [[nodiscard]] auto is_errored() const noexcept -> bool {
@@ -477,6 +481,7 @@ class module_manager {
 
     // Prints every poisoned/errored module's diagnostics
     auto print_all_diagnostics(std::ostream& os = std::cerr) const -> void;
+    auto print_all_warnings(std::ostream& os = std::cerr) const -> void;
 
     // True if any module ever loaded through this manager is poisoned or errored
     [[nodiscard]] auto any_errored() const noexcept -> bool;

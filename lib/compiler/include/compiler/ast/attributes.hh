@@ -34,6 +34,7 @@ enum class attribute_kind : u8 {
     INLINE,
     NAKED,
     ALIGN,
+    DEPRECATED,
 };
 
 // Mirrors `builtin.Inline`

@@ -7636,6 +7636,7 @@ auto type_resolver::record_declaration(ID id, const mod::module& owner, const sy
         },
         [](const auto&) -> stdx::option<declaration_ref> { return stdx::none; })};
     if (ref) { resolving_.set_identifier_declaration(id, *ref); }
+    report_deprecated_use(id, owner, sym);
 }
 
 auto type_resolver::thin_if_constexpr(const ast::function_expr::parameter& param, type& param_type)
@@ -8989,6 +8990,12 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
     const auto& ident{resolving_.ast.get_as<ast::identifier_expr>(*decl.name)};
     auto        symbol_opt{ctx_.registry.lookup(table_stack_, ident.name)};
     ASSERT(symbol_opt, "Somehow the declaration was lost in the symbol table");
+    const bool is_deprecated{decl.attributes &&
+                             decl.attributes->find(ast::attribute_kind::DEPRECATED)};
+    if (is_deprecated) { ++deprecated_scope_depth_; }
+    const auto deprecated_scope_restore{gsl::finally([&] {
+        if (is_deprecated) { --deprecated_scope_depth_; }
+    })};
     const constexpr_evaluation_scope cx_scope{ctx_,
                                               decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
     auto&                            sym{*symbol_opt};
@@ -9801,6 +9808,63 @@ auto type_resolver::fold_attribute_bool(const ast::attribute& item) -> stdx::opt
     return stdx::none;
 }
 
+auto type_resolver::check_deprecation_message(const ast::attribute& item) -> void {
+    if (item.args.empty() || resolving_.ast.get_as_opt<ast::string_expr>(item.args.front())) {
+        return;
+    }
+    ctx_.diags.emplace_back("Attribute 'deprecated' takes a string literal message",
+                            error::ILLEGAL_ATTRIBUTE,
+                            resolving_.ast.location_of(item.args.front()));
+}
+
+namespace {
+
+// The `deprecated` entry of whatever `sym` declares, with the module whose AST holds it
+[[nodiscard]] auto deprecation_of(const mod::module& owner, const symbol& sym)
+    -> stdx::option<const ast::attribute&> {
+    const auto find{[](const stdx::option<ast::attribute_list>& attributes)
+                        -> stdx::option<const ast::attribute&> {
+        return attributes ? attributes->find(ast::attribute_kind::DEPRECATED) : stdx::none;
+    }};
+    return sym.get_data().visit(
+        [&](const symbols::node_t& node) -> stdx::option<const ast::attribute&> {
+            const auto decl{owner.ast.get_as_opt<ast::decl_stmt>(node)};
+            return decl ? find(decl->attributes) : stdx::none;
+        },
+        [&](const symbols::struct_field& field) { return find(field.attributes); },
+        [&](const symbols::union_field& field) { return find(field.attributes); },
+        [](const auto&) -> stdx::option<const ast::attribute&> { return stdx::none; });
+}
+
+} // namespace
+
+template <ast::IndexableID ID>
+auto type_resolver::report_deprecated_use(ID id, const mod::module& owner, const symbol& sym)
+    -> void {
+    if (deprecated_scope_depth_ > 0 || ctx_.deprecated_policy == deprecation_policy::ALLOW) {
+        return;
+    }
+    const auto deprecation{deprecation_of(owner, sym)};
+    if (!deprecation) { return; }
+
+    const auto& loc{resolving_.ast.location_of(id)};
+    const auto  site{fmt::format("{}:{}:{}", resolving_.path.string(), loc.line, loc.column)};
+    if (!ctx_.reported_deprecations.insert(site).second) { return; }
+
+    std::string message{fmt::format("'{}' is deprecated", sym.get_name())};
+    if (!deprecation->args.empty()) {
+        message += fmt::format(
+            ": {}", owner.ast.get_as<ast::string_expr>(deprecation->args.front()).value);
+    }
+    if (ctx_.deprecated_policy == deprecation_policy::DENY) {
+        ctx_.diags.emplace_back(std::move(message), error::DEPRECATED_USE, loc);
+        return;
+    }
+    diagnostic warning{std::move(message), error::DEPRECATED_USE, loc};
+    warning.set_level(diagnostic_level::WARNING);
+    resolving_.warnings.push_back(warning);
+}
+
 auto type_resolver::fold_alignment(ast::expr_handle arg) -> stdx::option<u64> {
     resolve(arg);
     gir::const_eval evaluator{ctx_, resolving_};
@@ -9831,6 +9895,8 @@ auto type_resolver::resolve_field_attributes(const stdx::option<ast::attribute_l
         }
         if (item.kind == ast::attribute_kind::ALIGN) {
             alignment = fold_alignment(item.args.front());
+        } else if (item.kind == ast::attribute_kind::DEPRECATED) {
+            check_deprecation_message(item);
         }
     }
     return alignment;
@@ -9909,6 +9975,7 @@ auto type_resolver::resolve_attributes(const attribute_refs& items,
         case ast::attribute_kind::ALIGN:
             resolved.alignment = fold_alignment(item->args.front());
             break;
+        case ast::attribute_kind::DEPRECATED: check_deprecation_message(*item); break;
         }
     }
 
@@ -12181,6 +12248,19 @@ auto type_resolver::concrete_array_type(type& maybe_deferred) -> type& {
     return evaluator.force_deferred_array(maybe_deferred);
 }
 
+namespace {
+
+// A generic whose declaration is `@[deprecated]`, so its monomorphs' bodies stay quiet too
+[[nodiscard]] auto declares_deprecated_fn(const mod::module& owner, ast::node_id node) -> bool {
+    auto decl{owner.ast.get_as_opt<ast::decl_stmt>(node)};
+    if (const auto fn{owner.ast.get_as_opt<ast::function_expr>(node)}; fn && fn->declaring_decl) {
+        decl = owner.ast.get_as_opt<ast::decl_stmt>(*fn->declaring_decl);
+    }
+    return decl && decl->attributes && decl->attributes->find(ast::attribute_kind::DEPRECATED);
+}
+
+} // namespace
+
 auto type_resolver::instantiate_generic(type&                             callee_type,
                                         const generic_function_info&      fn_info,
                                         gsl::span<type*>                  concrete_args,
@@ -12438,6 +12518,7 @@ auto type_resolver::instantiate_generic(type&                             callee
     // Re-type body-local decls this instantiation reaches even if a prior monomorphization of the
     // same generic already resolved them
     inst_resolver.reresolve_floor_.emplace(fn_table_idx);
+    inst_resolver.deprecated_scope_depth_ = deprecated_scope_depth_ + (declares_deprecated_fn(fn_mod, fn_info.node_id) ? 1U : 0U);
 
     // This freestanding resolver has no enclosing-type context, so @This() needs it restored.
     stdx::option<structural_guard> this_type_guard;

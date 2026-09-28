@@ -559,6 +559,8 @@ TEST_CASE("formatter round trip: attribute lists") {
     round_trips("const U := union { @[align(16)] a: i32, b: u8 };");
     round_trips("@[align(64)] var buffer: [4]u8 = undefined;");
     round_trips("const I := interface { @[discardable] pub const close := fn(&self): i32; };");
+    round_trips("@[deprecated(\"use y\")] const x := 1;");
+    round_trips("const S := struct { @[deprecated] a: u8, b: u8 };");
     // A doc comment stays above the list.
     round_trips("/// Logs.\n@[discardable] const log := fn(msg: i32): i32 { return msg; };");
 }

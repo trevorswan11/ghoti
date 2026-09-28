@@ -48,6 +48,7 @@ struct raw_options {
     bool                      time_passes{false};
     bool                      dynamic{false};
     bool                      unsafe{false};
+    std::string               deprecated{"warn"};
 
     std::string emit_gir_path;
     std::string emit_llvm_ir_path;
@@ -66,6 +67,7 @@ struct options {
     std::vector<std::string>           forwarded_args{};
     bool                               dynamic{false};
     bool                               runtime_safety{true};
+    sema::deprecation_policy           deprecated_policy{sema::deprecation_policy::WARN};
     bool output_explicit{false}; // `ghoti test` only: true when `-o/--output` was given
 
     stdx::option<std::filesystem::path> emit_gir_path{};
@@ -128,6 +130,8 @@ class compilation {
                                         bool cleanup_output) -> stdx::result<void, clap::error>;
 
 // Helper to register standard build options into CLI subcommands
+// `--deprecated=warn|error|ignore`, shared by every subcommand that runs sema
+auto add_deprecated_option(CLI::App* subcmd, raw_options& opts) -> void;
 auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_view> output_desc)
     -> void;
 

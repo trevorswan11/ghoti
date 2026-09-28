@@ -55,6 +55,12 @@ constexpr std::array ALL_ATTRIBUTES{
                    .max_args = 1,
                    .targets  = attribute_target::DECL | attribute_target::FN |
                               attribute_target::FIELD},
+    attribute_spec{.name     = "deprecated",
+                   .kind     = attribute_kind::DEPRECATED,
+                   .min_args = 0,
+                   .max_args = 1,
+                   .targets  = attribute_target::DECL | attribute_target::FN_DECL |
+                              attribute_target::FIELD},
 };
 
 [[nodiscard]] auto parse_attribute_args(syntax::parser& parser)
