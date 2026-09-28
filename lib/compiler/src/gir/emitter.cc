@@ -343,7 +343,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
 
     auto& fn{add_gir_function(
         req.mangled_name, fn_type, false, false, fn_expr.variadic, gir::linkage::INTERNAL)};
-    apply_fn_attributes(fn, fn_mod, fn_literal_node(fn_mod, req.fn_node_id));
+    apply_fn_attributes(fn, fn_mod, fn_mod.fn_literal_node(req.fn_node_id));
     auto& entry{fn.add_segment()};
     builder_.set_insert_point(fn, entry);
 

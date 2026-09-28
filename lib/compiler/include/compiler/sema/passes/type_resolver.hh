@@ -354,11 +354,11 @@ class type_resolver {
 
     using attribute_refs = std::vector<gsl::not_null<const ast::attribute*>>;
 
-    // Validates `items` against what they annotate and records the folded result for `owner`
-    auto resolve_attributes(ast::node_id          owner,
-                            const attribute_refs& items,
-                            ast::attribute_target site,
-                            bool                  returns_void) -> void;
+    // Validates `items` against what they annotate and folds them
+    [[nodiscard]] auto resolve_attributes(const attribute_refs& items,
+                                          ast::attribute_target site,
+                                          bool                  returns_void)
+        -> resolved_attributes;
     auto resolve_decl_attributes(ast::node_id          id,
                                  const ast::decl_stmt& decl,
                                  const type::data_t&   type_data) -> void;
@@ -377,7 +377,23 @@ class type_resolver {
         -> stdx::option<std::string>;
 
     // Whether the outermost callee of `call` resolves to a `@[discardable]` declaration
-    [[nodiscard]] auto callee_is_discardable(const ast::call_expr& call) const -> bool;
+    [[nodiscard]] auto callee_is_discardable(ast::node_id call_id, const ast::call_expr& call) const
+        -> bool;
+    // A method on an `impl` block for `target`, or the interface member it implements
+    [[nodiscard]] auto impl_method_discardable(const type&      target,
+                                               std::string_view name,
+                                               ast::node_id     call_id) const -> bool;
+    [[nodiscard]] auto interface_member_discardable(const type&      interface_type,
+                                                    std::string_view name,
+                                                    ast::node_id     call_id) const
+        -> stdx::option<bool>;
+    // Whether `discardable` in `attributes` holds, reading a conditional one's folded verdict from
+    // the call's own instantiation when it targets a generic
+    [[nodiscard]] auto discardable_holds(const mod::module&                       home,
+                                         ast::node_id                             owner,
+                                         const stdx::option<ast::attribute_list>& attributes,
+                                         ast::node_id                             call_id) const
+        -> stdx::option<bool>;
     // Errors on a non-`void` call result dropped in statement position
     auto check_unused_result(ast::node_id stmt_id, const ast::expr_stmt& stmt) -> void;
 

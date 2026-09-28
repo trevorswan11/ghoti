@@ -173,14 +173,6 @@ class emitter {
         return resolved ? resolved->alignment : stdx::none;
     }
 
-    // A decl's function literal initializer, or `node` itself when it already is the literal
-    [[nodiscard]] static auto fn_literal_node(const mod::module& owner, ast::node_id node)
-        -> ast::node_id {
-        if (const auto decl{owner.ast.get_as_opt<ast::decl_stmt>(node)}; decl && decl->value) {
-            return *decl->value;
-        }
-        return node;
-    }
     auto emit_closure_env(const sema::types::closure_t& cl, sema::type& closure_type) -> value;
 
     // Emits as a plain non-capturing fn with its captures baked in as constants

@@ -376,6 +376,10 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `@[align(n)]` also raises the alignment of globals, static members, locals, and functions; `n` must be a compile-time power of two
 - Fixed: an explicitly aligned struct field was accepted but ignored; it now moves the field to its aligned offset and raises the struct's alignment and size, in `@sizeOf`/`@alignOf` and in generated code
     - `align` on a union field is now an error instead of being silently ignored
+- Attribute arguments are evaluated per instantiation: a function's attributes see its `type` and `constexpr` parameters, and attributes inside generic bodies and type constructors see the instantiation's bindings
+    - `@[inline(if (@sizeOf(T) <= 16) .always else .hint)] const swap := fn(T: type, ...)`
+    - `struct { @[align(@alignOf(T) * 4)] value: T }` inside a `fn(T: type): type`
+- `@[discardable]` on an interface method applies to calls through `dyn` and `impl` receivers and to the implementing methods
 - Constexpr can now be applied to labels and blocks (expression slots and top level)
     - They must be constant evaluatable and will error if not
 - `@assert` and `@verify` have been hardened such that they can work correctly in constexpr contexts

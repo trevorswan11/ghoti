@@ -859,6 +859,7 @@ auto dumper::visit(node_id, const interface_expr& node) -> void {
                          indent_.current_branch(),
                          fn.is_type_expr ? "required" : "default",
                          m.is_public() ? "pub" : "sealed");
+            dump_attributes(m.attributes);
             {
                 const indent::guard g_name{indent_, false};
                 fmt::print(out_, "{}Name: ", indent_.current_branch());

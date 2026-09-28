@@ -568,9 +568,12 @@ auto formatter::format_interface(const interface_expr& node) -> syntax::doc_id {
         add_member(
             ast_.location_of(m.name).line, ast_.end_location_of(*m.signature).line, i == 0, [&] {
                 std::vector<syntax::doc_id> parts;
-                if (m.is_public()) { parts.emplace_back(doc_manager_.text("pub ")); }
-                parts.emplace_back(doc_manager_.text("const "));
-                parts.emplace_back(format(m.name));
+                parts.emplace_back(with_attributes(
+                    m.attributes,
+                    doc_manager_.concat({m.is_public() ? doc_manager_.text("pub ")
+                                                       : doc_manager_.nil(),
+                                         doc_manager_.text("const "),
+                                         format(m.name)})));
                 parts.emplace_back(doc_manager_.text(" := "));
                 parts.emplace_back(format(*m.signature));
                 parts.emplace_back(doc_manager_.text(";"));

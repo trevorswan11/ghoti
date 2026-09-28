@@ -501,8 +501,9 @@ struct interface_expr {
 
     // Bodyless signature is a requirement; one with a body is a default method.
     struct method {
-        identifier_handle name; // Publicity hides in here
-        function_handle   signature;
+        identifier_handle            name; // Publicity hides in here
+        function_handle              signature;
+        stdx::option<attribute_list> attributes{};
 
         [[nodiscard]] constexpr auto is_public() const noexcept -> bool {
             return name->get_token_type() == syntax::token_type_t::PUBLIC;

@@ -68,8 +68,8 @@ struct attribute_spec {
     -> stdx::option<const attribute_spec&>;
 [[nodiscard]] auto attribute_spec_of(attribute_kind kind) noexcept -> const attribute_spec&;
 
-// Describes a function definition rather than a name, so on a declaration initialized by a
-// function literal it reaches through to that literal
+// Applies to a function definition, so on a declaration initialized by a function literal it
+// reaches through to that literal (and sees the literal's parameters)
 [[nodiscard]] auto routes_to_fn_literal(attribute_kind kind) noexcept -> bool;
 
 // One `name` or `name(args...)` entry of an `@[...]` list

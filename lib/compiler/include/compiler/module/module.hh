@@ -123,11 +123,17 @@ struct module {
     // Attributed `decl_stmt` / `function_expr` node index -> its folded `@[...]` list
     ankerl::unordered_dense::map<usize, sema::resolved_attributes> node_attributes;
 
+    // Overlay-aware, so a monomorph's emit sees the attributes its own instantiation folded
     [[nodiscard]] auto attributes_of(ast::node_id id) const noexcept
-        -> stdx::option<const sema::resolved_attributes&> {
-        const auto it{node_attributes.find(id.get_index())};
-        if (it == node_attributes.end()) { return stdx::none; }
-        return it->second;
+        -> stdx::option<const sema::resolved_attributes&>;
+    auto set_node_attributes(ast::node_id id, const sema::resolved_attributes& resolved) -> void;
+
+    // A declaration's function literal initializer, or `node` itself when it already is one
+    [[nodiscard]] auto fn_literal_node(ast::node_id node) const -> ast::node_id {
+        if (const auto decl{ast.get_as_opt<ast::decl_stmt>(node)}; decl && decl->value) {
+            return *decl->value;
+        }
+        return node;
     }
 
     // `decl_stmt` node index -> whether (and why) it has no runtime storage

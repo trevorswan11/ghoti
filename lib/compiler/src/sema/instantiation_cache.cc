@@ -86,6 +86,23 @@ auto body_typing_snapshot::diff_into(context&                            ctx,
         }
     }
 
+    // Every attribute list this resolution folded, even one matching an earlier instantiation's
+    if (write_log) {
+        for (const auto idx : write_log->attribute_idxs) {
+            if (const auto resolved{m.node_attributes.find(idx)};
+                resolved != m.node_attributes.end()) {
+                out.attributes.emplace_back(idx, resolved->second);
+            }
+        }
+    } else {
+        for (const auto& [idx, resolved] : m.node_attributes) {
+            const auto prev{attributes.find(idx)};
+            if (prev == attributes.end() || prev->second != resolved) {
+                out.attributes.emplace_back(idx, resolved);
+            }
+        }
+    }
+
     for (const auto& [idx, br] : m.if_constexpr_results) {
         const auto prev{ifs.find(idx)};
         if (prev == ifs.end() || prev->second != br) { out.if_branches.emplace_back(idx, br); }
@@ -106,6 +123,7 @@ auto body_typing_snapshot::restore_to(mod::module& m) const -> void {
     m.if_constexpr_results                         = ifs;
     m.match_arm_results                            = matches;
     m.sema_side_tables.generic_call_targets.values = calls;
+    m.node_attributes                              = attributes;
 }
 
 } // namespace ghoti::sema

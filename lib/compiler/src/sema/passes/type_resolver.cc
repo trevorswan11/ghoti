@@ -4228,7 +4228,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
                              resolving_.ast.location_of(id)));
     }
 
-    resolve_fn_literal_attributes(id, fn);
+    if (!declares_generic_params(fn)) { resolve_fn_literal_attributes(id, fn); }
 
     if (!target_supports_callconv(fn.conv)) {
         return last_type_.emplace(
@@ -8775,7 +8775,17 @@ auto type_resolver::visit(ID id, const ast::interface_expr& iface) -> void {
                 const auto& fn{resolving_.ast.get_as<ast::function_expr>(*m.signature)};
                 if (fn.is_type_expr != want_required) { continue; }
 
-                method_sigs[out]   = &resolve_required_method_type(fn, iface_type);
+                method_sigs[out] = &resolve_required_method_type(fn, iface_type);
+                if (m.attributes) {
+                    attribute_refs items;
+                    for (const auto& item : m.attributes->items) { items.emplace_back(&item); }
+                    const auto fn_data{method_sigs[out]->get_data().as_opt<types::function>()};
+                    const bool returns_void{fn_data &&
+                                            fn_data->return_type.get_kind() == type_kind::VOID_};
+                    resolving_.set_node_attributes(
+                        *m.signature,
+                        resolve_attributes(items, ast::attribute_target::FN_DECL, returns_void));
+                }
                 method_src[out]    = src;
                 method_names[out]  = resolving_.ast.get_as<ast::identifier_expr>(*m.name).name;
                 method_is_pub[out] = m.is_public();
@@ -8970,19 +8980,6 @@ namespace {
         }
     }
     return stdx::none;
-}
-
-// A bare `discardable` needs no folding; a conditional one reads its folded verdict
-[[nodiscard]] auto declares_discardable(const mod::module&                         home,
-                                        ast::node_id                               owner,
-                                        const stdx::option<ast::attribute_list>&   attributes)
-    -> bool {
-    if (!attributes) { return false; }
-    const auto item{attributes->find(ast::attribute_kind::DISCARDABLE)};
-    if (!item) { return false; }
-    if (item->args.empty()) { return true; }
-    const auto resolved{home.attributes_of(owner)};
-    return resolved && resolved->discardable;
 }
 
 } // namespace
@@ -9874,10 +9871,9 @@ auto type_resolver::check_attribute_conflicts(const attribute_refs&      items,
                             resolving_.ast.location_of((*inline_item)->name));
 }
 
-auto type_resolver::resolve_attributes(ast::node_id          owner,
-                                       const attribute_refs& items,
+auto type_resolver::resolve_attributes(const attribute_refs& items,
                                        ast::attribute_target site,
-                                       bool                  returns_void) -> void {
+                                       bool                  returns_void) -> resolved_attributes {
     resolved_attributes resolved;
     for (const auto item : items) {
         const auto& spec{ast::attribute_spec_of(item->kind)};
@@ -9918,7 +9914,7 @@ auto type_resolver::resolve_attributes(ast::node_id          owner,
 
     check_attribute_conflicts(items, resolved);
     if (resolved.naked && !resolved.inlining) { resolved.inlining = ast::inline_mode::NEVER; }
-    resolving_.node_attributes.insert_or_assign(owner.get_index(), resolved);
+    return resolved;
 }
 
 auto type_resolver::resolve_decl_attributes(ast::node_id          id,
@@ -9935,10 +9931,11 @@ auto type_resolver::resolve_decl_attributes(ast::node_id          id,
     }
 
     const auto return_kind{callable_return_kind(type_data)};
-    resolve_attributes(id,
-                       own,
-                       return_kind ? ast::attribute_target::FN_DECL : ast::attribute_target::DECL,
-                       return_kind == type_kind::VOID_);
+    resolving_.set_node_attributes(
+        id,
+        resolve_attributes(own,
+                           return_kind ? ast::attribute_target::FN_DECL : ast::attribute_target::DECL,
+                           return_kind == type_kind::VOID_));
 
     const auto align_item{decl.attributes->find(ast::attribute_kind::ALIGN)};
     if (align_item && !initializes_fn_literal && decl.has_modifier(ast::decl_modifiers::CONSTEXPR)) {
@@ -9951,7 +9948,8 @@ auto type_resolver::resolve_decl_attributes(ast::node_id          id,
 
 auto type_resolver::resolve_fn_literal_attributes(ast::node_id id, const ast::function_expr& fn)
     -> void {
-    if (resolving_.attributes_of(id)) { return; }
+    // Inside a monomorph every visit refolds, since the arguments may depend on its parameters
+    if (!for_generic_instantiation_ && resolving_.attributes_of(id)) { return; }
 
     attribute_refs items;
     if (fn.attributes) {
@@ -9979,10 +9977,86 @@ auto type_resolver::resolve_fn_literal_attributes(ast::node_id id, const ast::fu
 
     const bool returns_void{fn.explicit_return_type.get_token_type() ==
                             syntax::token_type_t::VOID_TYPE};
-    resolve_attributes(id, items, ast::attribute_target::FN, returns_void);
+    resolving_.set_node_attributes(id,
+                                   resolve_attributes(items, ast::attribute_target::FN, returns_void));
 }
 
-auto type_resolver::callee_is_discardable(const ast::call_expr& call) const -> bool {
+auto type_resolver::discardable_holds(const mod::module&                       home,
+                                      ast::node_id                             owner,
+                                      const stdx::option<ast::attribute_list>& attributes,
+                                      ast::node_id                             call_id) const
+    -> stdx::option<bool> {
+    if (!attributes) { return stdx::none; }
+    const auto item{attributes->find(ast::attribute_kind::DISCARDABLE)};
+    if (!item) { return stdx::none; }
+    if (item->args.empty()) { return true; }
+
+    if (const auto target{resolving_.get_generic_call_target_opt(call_id)}) {
+        if (const auto diff{ctx_.instantiation_cache.get_body_type_diff(*target)}) {
+            if (const auto resolved{diff->find_attributes(owner.get_index())}) {
+                return resolved->discardable;
+            }
+        }
+    }
+    const auto resolved{home.attributes_of(owner)};
+    return resolved && resolved->discardable;
+}
+
+auto type_resolver::interface_member_discardable(const type&      interface_type,
+                                                 std::string_view name,
+                                                 ast::node_id     call_id) const
+    -> stdx::option<bool> {
+    const auto iface{interface_type.get_data().as_opt<types::interface_t>()};
+    if (!iface) { return stdx::none; }
+    for (const auto& method : iface->ast_methods) {
+        if (iface->enclosing.ast.get_as<ast::identifier_expr>(*method.name).name != name) {
+            continue;
+        }
+        return discardable_holds(iface->enclosing, *method.signature, method.attributes, call_id);
+    }
+    return stdx::none;
+}
+
+auto type_resolver::impl_method_discardable(const type&      target,
+                                            std::string_view name,
+                                            ast::node_id     call_id) const -> bool {
+    const auto same_target{[&](const impl_record& r) {
+        return r.target_type && r.target_type->has_symbol_table_idx() &&
+               r.target_type->get_symbol_table_idx() == target.get_symbol_table_idx();
+    }};
+    for (const auto* record : ctx_.impls.records()) {
+        if (!same_target(*record)) { continue; }
+        const auto method{record->find_method(name)};
+        if (!method) { continue; }
+
+        const auto defining{method->defining_mod ? method->defining_mod : record->enclosing};
+        if (defining && !method->inherited) {
+            if (const auto decl{defining->ast.get_as_opt<ast::decl_stmt>(method->decl)}) {
+                const auto owner{defining->fn_literal_node(method->decl)};
+                const auto literal{defining->ast.get_as_opt<ast::function_expr>(owner)};
+                if (const auto holds{
+                        discardable_holds(*defining, owner, decl->attributes, call_id)}) {
+                    return *holds;
+                }
+                if (literal) {
+                    if (const auto holds{
+                            discardable_holds(*defining, owner, literal->attributes, call_id)}) {
+                        return *holds;
+                    }
+                }
+            }
+        }
+        if (record->interface_type) {
+            return interface_member_discardable(*record->interface_type, name, call_id)
+                .value_or(false);
+        }
+        return false;
+    }
+    return false;
+}
+
+auto type_resolver::callee_is_discardable(ast::node_id call_id, const ast::call_expr& call) const
+    -> bool {
     stdx::option<const mod::module&> home{resolving_};
     ast::node_id                     fn_node{*call.function};
 
@@ -10018,7 +10092,12 @@ auto type_resolver::callee_is_discardable(const ast::call_expr& call) const -> b
                     return *curr;
                 };
                 const auto& target{unwrap_ref(*outer_type)};
-                const auto  enclosing{target.get_data().visit(
+                const auto& member_name{home->ast.get_as<ast::identifier_expr>(dot->member).name};
+                if (const auto dyn{target.get_data().as_opt<types::dyn_t>()}) {
+                    return interface_member_discardable(dyn->interface, member_name, call_id)
+                        .value_or(false);
+                }
+                const auto enclosing{target.get_data().visit(
                     [](const types::struct_t& s) -> stdx::option<const mod::module&> {
                         return s.enclosing;
                     },
@@ -10030,8 +10109,8 @@ auto type_resolver::callee_is_discardable(const ast::call_expr& call) const -> b
                     },
                     [](const auto&) -> stdx::option<const mod::module&> { return stdx::none; })};
                 if (!enclosing || !target.has_symbol_table_idx()) { return false; }
-                const auto& inner_ident{home->ast.get_as<ast::identifier_expr>(dot->member)};
-                sym  = ctx_.registry.get_from_opt(target.get_symbol_table_idx(), inner_ident.name);
+                sym = ctx_.registry.get_from_opt(target.get_symbol_table_idx(), member_name);
+                if (!sym) { return impl_method_discardable(target, member_name, call_id); }
                 home = enclosing;
             }
         } else {
@@ -10043,11 +10122,16 @@ auto type_resolver::callee_is_discardable(const ast::call_expr& call) const -> b
         if (!node) { return false; }
         const auto decl{home->ast.get_as_opt<ast::decl_stmt>(*node)};
         if (!decl) { return false; }
-        if (declares_discardable(*home, *node, decl->attributes)) { return true; }
-        if (decl->value) {
-            if (const auto fn{home->ast.get_as_opt<ast::function_expr>(*decl->value)}) {
-                return declares_discardable(*home, *decl->value, fn->attributes);
-            }
+        const auto fn_literal{decl->value
+                                  ? home->ast.get_as_opt<ast::function_expr>(*decl->value)
+                                  : stdx::none};
+        // A literal's list and its declaration's both fold onto the literal
+        const auto owner{fn_literal ? ast::node_id{*decl->value} : ast::node_id{*node}};
+        if (const auto holds{discardable_holds(*home, owner, decl->attributes, call_id)}) {
+            return *holds;
+        }
+        if (fn_literal) {
+            return discardable_holds(*home, owner, fn_literal->attributes, call_id).value_or(false);
         }
 
         // Follow a direct `const g := f` / `const g := m.f` re-export to the real declaration.
@@ -10081,7 +10165,7 @@ auto type_resolver::check_unused_result(ast::node_id stmt_id, const ast::expr_st
             fn_ty && fn_ty->get_data().is<types::builtin_function>()) {
             return;
         }
-        if (callee_is_discardable(*call)) { return; }
+        if (callee_is_discardable(*stmt.expression, *call)) { return; }
     }
 
     ctx_.diags.emplace_back(
@@ -12452,6 +12536,7 @@ auto type_resolver::instantiate_generic(type&                             callee
                                                  std::move(type_param_frame)};
     inst_resolver.resolve(fn_expr.explicit_return_type);
     if (inst_resolver.last_type_->is_poison()) { return stdx::none; }
+    inst_resolver.resolve_fn_literal_attributes(fn_mod.fn_literal_node(fn_info.node_id), fn_expr);
     // `denoted_type` unwraps a `@TypeOf(param)` return annotation to the type it names, so it
     // isn't mistaken for a `fn(...): type` type constructor.
     auto& return_type{

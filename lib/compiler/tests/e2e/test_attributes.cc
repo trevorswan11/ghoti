@@ -25,6 +25,18 @@ TEST_CASE("An over-aligned struct field keeps its value and offset at runtime") 
     )") == 7 + 4 + 7 + 6);
 }
 
+TEST_CASE("A local's alignment in a generic body folds per instantiation") {
+    CHECK(helpers::compile_and_run(R"(
+        const misaligned := fn(T: type): i32 {
+            @[align(if (@sizeOf(T) > 4) 64 else 32)]
+            var buf: [4]u8 = undefined;
+            const addr: usize = @intFromPtr(^buf);
+            return if (addr % (if (@sizeOf(T) > 4) 64 else 32) == 0) 0 else 1;
+        };
+        pub const main := fn(): i32 { return misaligned(i32) + misaligned(i64) * 2; };
+    )") == 0);
+}
+
 TEST_CASE("@[inline(.always)] functions still compute the right result") {
     CHECK(helpers::compile_and_run(R"(
         @[inline(.always)] const twice := fn(x: i32): i32 { return x * 2; };

@@ -19,6 +19,7 @@
 
 #include "compiler/gir/const_value.hh"
 #include "compiler/sema/generic.hh"
+#include "compiler/sema/side_tables.hh"
 
 namespace ghoti::mod { enum class if_branch : u8; } // namespace ghoti::mod
 
@@ -48,10 +49,19 @@ struct body_type_diff {
     std::vector<std::pair<usize, mod::if_branch>>            if_branches;
     std::vector<std::pair<usize, usize>>                     match_arms;
     std::vector<std::pair<usize, stdx::option<std::string>>> call_targets;
+    std::vector<std::pair<usize, resolved_attributes>>       attributes;
 
     [[nodiscard]] auto empty() const noexcept -> bool {
         return node_types.empty() && explicit_types.empty() && if_branches.empty() &&
-               match_arms.empty() && call_targets.empty();
+               match_arms.empty() && call_targets.empty() && attributes.empty();
+    }
+
+    [[nodiscard]] auto find_attributes(usize idx) const noexcept
+        -> stdx::option<const resolved_attributes&> {
+        for (const auto& [node_idx, resolved] : attributes | std::views::reverse) {
+            if (node_idx == idx) { return resolved; }
+        }
+        return stdx::none;
     }
 
     // An outer `none` means the idx doesn't exist, inner means node has no sema type
@@ -215,6 +225,7 @@ class generic_instantiation_cache {
 struct body_write_log {
     std::vector<usize> node_idxs;
     std::vector<usize> explicit_idxs;
+    std::vector<usize> attribute_idxs;
 };
 
 // Snapshots a module's typing side tables so a scoped body resolution can be diffed back out as a
@@ -223,7 +234,8 @@ struct body_typing_snapshot {
     explicit body_typing_snapshot(const mod::module& m)
         : nodes{m.sema_side_tables.node_types.values},
           types{m.sema_side_tables.explicit_types.values}, ifs{m.if_constexpr_results},
-          matches{m.match_arm_results}, calls{m.sema_side_tables.generic_call_targets.values} {}
+          matches{m.match_arm_results}, calls{m.sema_side_tables.generic_call_targets.values},
+          attributes{m.node_attributes} {}
 
     // Folds every still-deferred `[n]T` under the active `constexpr` frame, then records each
     // side-table entry the resolution changed into `out`.
@@ -240,6 +252,7 @@ struct body_typing_snapshot {
     ankerl::unordered_dense::map<usize, mod::if_branch> ifs;
     ankerl::unordered_dense::map<usize, usize>          matches;
     std::vector<stdx::option<std::string>>              calls;
+    ankerl::unordered_dense::map<usize, resolved_attributes> attributes;
 };
 
 } // namespace ghoti::sema

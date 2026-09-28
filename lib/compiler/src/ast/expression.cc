@@ -2012,10 +2012,23 @@ auto interface_expr::parse(syntax::parser& parser)
     std::vector<method>      methods;
 
     while (!parser.peek_token_is(tt::RBRACE) && !parser.peek_token_is(tt::END)) {
+        stdx::option<attribute_list> attributes;
+        if (parser.peek_token_is(tt::AT_LBRACKET)) {
+            parser.advance();
+            attributes.emplace(TRY(parse_attribute_list(parser)));
+        }
+
         bool is_pub{false};
         if (parser.peek_token_is(tt::PUBLIC)) {
             parser.advance();
             is_pub = true;
+        }
+
+        const auto is_method{parser.peek_token_is(tt::CONSTANT)};
+        if (attributes && !is_method) {
+            return make_syntax_err("Attributes may only be applied to interface methods",
+                                   syntax::error::MISPLACED_ATTRIBUTES,
+                                   parser.get_peek_token());
         }
 
         if (parser.peek_token_is(tt::CONSTANT)) {
@@ -2028,7 +2041,11 @@ auto interface_expr::parse(syntax::parser& parser)
                 TRY(parser.expect_peek(tt::FUNCTION));
                 const auto signature{TRY(function_expr::parse(parser))};
                 if (is_pub) { name->set_token_type(tt::PUBLIC); }
-                methods.emplace_back(method{name, signature});
+                methods.emplace_back(method{name, signature, std::move(attributes)});
+            } else if (attributes) {
+                return make_syntax_err("Attributes may only be applied to interface methods",
+                                       syntax::error::MISPLACED_ATTRIBUTES,
+                                       parser.get_current_token());
             } else if (parser.peek_token_is(tt::COLON)) {
                 if (is_pub) {
                     return make_syntax_err("Associated `const`s may not be marked `pub`",

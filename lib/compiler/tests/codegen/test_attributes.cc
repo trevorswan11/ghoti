@@ -1,5 +1,8 @@
 #include <algorithm>
 #include <string_view>
+#include <vector>
+
+#include <fmt/format.h>
 
 #include <catch2/catch_test_macros.hpp>
 #include <llvm/IR/Attributes.h>
@@ -223,6 +226,83 @@ TEST_CASE("The removed `@alignas` builtin no longer parses") {
     ghoti::arena   arena;
     ast::AST       ast;
     CHECK_FALSE(p.consume(ast, arena).empty());
+}
+
+TEST_CASE("Codegen: a generic function's attributes fold per instantiation") {
+    llvm::LLVMContext context;
+
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        @[align(if (@sizeOf(T) > 4) 64 else 16)]
+        const first := fn(T: type, a: T, b: T): T { return a; };
+        pub const main := fn(args: [][:0]u8): i32 {
+            const small := first(i32, 1, 2);
+            const big := first(i64, 3, 4);
+            return small + @intCast(i32, big);
+        };
+    )")};
+
+    auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
+    CHECK_FALSE(llvm::verifyModule(*llvm_mod));
+
+    std::vector<u64> alignments;
+    for (const auto& fn : *llvm_mod) {
+        if (fn.getName().starts_with("first") && !fn.isDeclaration()) {
+            alignments.emplace_back(fn.getAlign().valueOrOne().value());
+        }
+    }
+    std::ranges::sort(alignments);
+    CHECK(alignments == std::vector<u64>{16, 64});
+}
+
+TEST_CASE("A generic function's conditional discardable folds per instantiation") {
+    constexpr std::string_view generic{R"(
+        @[discardable(@sizeOf(T) == 1)]
+        const echo := fn(T: type, x: T): T { return x; };
+    )"};
+    helpers::resolve_and_check(fmt::format(
+        "{}\npub const main := fn(): i32 {{ echo(u8, 1); return 0; }};", generic));
+    CHECK(has_error(fmt::format("{}\npub const main := fn(): i32 {{ echo(i32, 1); return 0; }};",
+                                generic),
+                    sema::error::UNUSED_RESULT));
+}
+
+TEST_CASE("A constexpr parameter reaches the function's attribute arguments") {
+    llvm::LLVMContext context;
+
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        @[align(if (n > 2) 64 else 32)]
+        const scaled := fn(constexpr n: i32, x: i32): i32 { return x * n; };
+        pub const main := fn(args: [][:0]u8): i32 { return scaled(2, 1) + scaled(3, 1); };
+    )")};
+
+    auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
+    CHECK_FALSE(llvm::verifyModule(*llvm_mod));
+    std::vector<u64> alignments;
+    for (const auto& fn : *llvm_mod) {
+        if (fn.getName().starts_with("scaled") && !fn.isDeclaration()) {
+            alignments.emplace_back(fn.getAlign().valueOrOne().value());
+        }
+    }
+    std::ranges::sort(alignments);
+    CHECK(alignments == std::vector<u64>{32, 64});
+}
+
+TEST_CASE("A type constructor's field attributes fold per instantiation") {
+    helpers::resolve_and_check(R"(
+        const Boxed := fn(T: type): type {
+            return struct { tag: u8, @[align(@alignOf(T) * 4)] value: T };
+        };
+        constexpr {
+            @assert(@alignOf(Boxed(i32)) == 16);
+            @assert(@alignOf(Boxed(u8)) == 4);
+            @assert(@sizeOf(Boxed(i32)) == 32);
+        }
+    )");
+}
+
+TEST_CASE("An attribute argument must be known at compile time") {
+    CHECK(has_error("@[align(n)] const f := fn(n: usize): i32 { return 0; };",
+                    sema::error::ILLEGAL_ATTRIBUTE));
 }
 
 TEST_CASE("The removed `naked fn` prefix no longer parses") {

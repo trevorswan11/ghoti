@@ -2,6 +2,7 @@
 #include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/format.h>
 #include <gsl/span>
 
 #include "compiler/sema/error.hh"
@@ -106,6 +107,65 @@ TEST_CASE("A @[discardable] callee may be dropped with no diagnostic") {
                 return 0;
             };
         )");
+    }
+}
+
+TEST_CASE("@[discardable] on an interface member covers its implementations") {
+    constexpr std::string_view shapes{R"(
+        const Closer := interface {
+            @[discardable] pub const close := fn(&self): i32;
+            pub const size := fn(&self): i32;
+        };
+        const File := struct { fd: i32 };
+        impl Closer for File {
+            pub const close := fn(&self): i32 { return self.fd; };
+            pub const size := fn(&self): i32 { return 0; };
+        }
+    )"};
+    const auto with_main{[&](std::string_view body) {
+        return fmt::format("{}\npub const main := fn(): i32 {{ {} return 0; }};", shapes, body);
+    }};
+
+    SECTION("through a dyn receiver") {
+        auto [ctx, idx]{helpers::resolve(with_main(R"(
+            const f: File = .{ .fd = 1 };
+            const c: &dyn Closer = &f;
+            c.close();
+        )"))};
+        helpers::check_errors<sema::diagnostics>(ctx->root_mod);
+    }
+    SECTION("on the concrete implementation") {
+        auto [ctx, idx]{helpers::resolve(with_main(R"(
+            const f: File = .{ .fd = 1 };
+            f.close();
+        )"))};
+        helpers::check_errors<sema::diagnostics>(ctx->root_mod);
+    }
+    SECTION("through an impl-bound parameter") {
+        auto [ctx, idx]{helpers::resolve(fmt::format(R"({}
+            const shut := fn(c: impl Closer): void {{ c.close(); }};
+            pub const main := fn(): i32 {{
+                const f: File = .{{ .fd = 1 }};
+                shut(&f);
+                return 0;
+            }};
+        )",
+                                                     shapes))};
+        helpers::check_errors<sema::diagnostics>(ctx->root_mod);
+    }
+    SECTION("a member without the attribute stays must-use") {
+        CHECK(has_error(with_main(R"(
+            const f: File = .{ .fd = 1 };
+            const c: &dyn Closer = &f;
+            c.size();
+        )"),
+                        sema::error::UNUSED_RESULT));
+    }
+    SECTION("a function-only attribute is rejected on an interface member") {
+        CHECK(has_error(R"(
+            const I := interface { @[inline(.always)] const f := fn(&self): i32; };
+        )",
+                        sema::error::ILLEGAL_ATTRIBUTE));
     }
 }
 

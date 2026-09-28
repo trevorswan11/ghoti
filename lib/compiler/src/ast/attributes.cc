@@ -131,9 +131,7 @@ auto attribute_spec_of(attribute_kind kind) noexcept -> const attribute_spec& {
 }
 
 auto routes_to_fn_literal(attribute_kind kind) noexcept -> bool {
-    const auto targets{attribute_spec_of(kind).targets};
-    return static_cast<bool>(targets & attribute_target::FN) &&
-           !static_cast<bool>(targets & attribute_target::FN_DECL);
+    return static_cast<bool>(attribute_spec_of(kind).targets & attribute_target::FN);
 }
 
 auto attribute_arg(const stdx::option<attribute_list>& attributes, attribute_kind kind) noexcept
