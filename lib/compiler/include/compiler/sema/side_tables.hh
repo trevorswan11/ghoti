@@ -55,6 +55,11 @@ struct capture_info {
     capture_usage    usage;
 };
 
+// The folded result of an `@[...]` list on a declaration or function literal
+struct resolved_attributes {
+    bool discardable{false};
+};
+
 // Empty for any function_expr that captures nothing
 using capture_list = std::vector<capture_info>;
 

@@ -57,7 +57,7 @@ TEST_CASE("Consuming a call result satisfies the must-use check") {
     }
 }
 
-TEST_CASE("A @discardable callee may be dropped with no diagnostic") {
+TEST_CASE("A @[discardable] callee may be dropped with no diagnostic") {
     const auto ok{[](std::string_view body) {
         auto [ctx, idx]{helpers::resolve(body)};
         helpers::check_errors<sema::diagnostics>(ctx->root_mod);
@@ -65,21 +65,40 @@ TEST_CASE("A @discardable callee may be dropped with no diagnostic") {
 
     SECTION("direct call") {
         ok(R"(
-            @discardable const log := fn(n: i32): i32 { return n; };
+            @[discardable] const log := fn(n: i32): i32 { return n; };
+            pub const main := fn(): i32 { log(3); return 0; };
+        )");
+    }
+    SECTION("attribute list on its own line") {
+        ok(R"(
+            @[discardable,]
+            const log := fn(n: i32): i32 { return n; };
             pub const main := fn(): i32 { log(3); return 0; };
         )");
     }
     SECTION("through a direct alias") {
         ok(R"(
-            @discardable const log := fn(n: i32): i32 { return n; };
+            @[discardable] const log := fn(n: i32): i32 { return n; };
             const note := log;
             pub const main := fn(): i32 { note(3); return 0; };
+        )");
+    }
+    SECTION("on the function literal itself") {
+        ok(R"(
+            const log := @[discardable] fn(n: i32): i32 { return n; };
+            pub const main := fn(): i32 { log(3); return 0; };
+        )");
+    }
+    SECTION("on an extern function declaration") {
+        ok(R"(
+            @[discardable] extern const abs: extern fn(n: i32): i32;
+            pub const main := fn(): i32 { abs(3); return 0; };
         )");
     }
     SECTION("method call on struct") {
         ok(R"(
             const S := struct {
-                pub @discardable const close := fn(&self): i32 { return 0; };
+                @[discardable] pub const close := fn(&self): i32 { return 0; };
             };
             pub const main := fn(): i32 {
                 const s: S = .{};
@@ -90,17 +109,19 @@ TEST_CASE("A @discardable callee may be dropped with no diagnostic") {
     }
 }
 
-TEST_CASE("@discardable is rejected where it cannot apply") {
+TEST_CASE("@[discardable] is rejected where it cannot apply") {
     SECTION("on a non-function declaration") {
-        CHECK(has_error("@discardable const X: i32 = 3;", sema::error::ILLEGAL_DISCARDABLE));
+        CHECK(has_error("@[discardable] const X: i32 = 3;", sema::error::ILLEGAL_ATTRIBUTE));
     }
     SECTION("on a function that returns void") {
-        CHECK(
-            has_error("@discardable const f := fn(): void {};", sema::error::ILLEGAL_DISCARDABLE));
+        CHECK(has_error("@[discardable] const f := fn(): void {};", sema::error::ILLEGAL_ATTRIBUTE));
+    }
+    SECTION("on a void function literal") {
+        CHECK(has_error("const f := @[discardable] fn(): void {};", sema::error::ILLEGAL_ATTRIBUTE));
     }
 }
 
-TEST_CASE("@discardable(<constexpr bool>) gates the discard behavior on the condition") {
+TEST_CASE("@[discardable(<constexpr bool>)] gates the discard behavior on the condition") {
     const auto ok{[](std::string_view body) {
         auto [ctx, idx]{helpers::resolve(body)};
         helpers::check_errors<sema::diagnostics>(ctx->root_mod);
@@ -109,21 +130,28 @@ TEST_CASE("@discardable(<constexpr bool>) gates the discard behavior on the cond
     SECTION("a true condition allows the drop") {
         ok(R"(
             constexpr ON := true;
-            @discardable(ON) const log := fn(n: i32): i32 { return n; };
+            @[discardable(ON)] const log := fn(n: i32): i32 { return n; };
             pub const main := fn(): i32 { log(3); return 0; };
         )");
     }
     SECTION("a false condition keeps the must-use error") {
         CHECK(has_error(R"(
             constexpr OFF := false;
-            @discardable(OFF) const log := fn(n: i32): i32 { return n; };
+            @[discardable(OFF)] const log := fn(n: i32): i32 { return n; };
+            pub const main := fn(): i32 { log(3); return 0; };
+        )",
+                        sema::error::UNUSED_RESULT));
+    }
+    SECTION("a false condition on a function literal keeps the must-use error") {
+        CHECK(has_error(R"(
+            const log := @[discardable(false)] fn(n: i32): i32 { return n; };
             pub const main := fn(): i32 { log(3); return 0; };
         )",
                         sema::error::UNUSED_RESULT));
     }
     SECTION("a non-boolean condition is an error") {
-        CHECK(has_error("@discardable(1 + 1) const f := fn(): i32 { return 0; };",
-                        sema::error::ILLEGAL_DISCARDABLE));
+        CHECK(has_error("@[discardable(1 + 1)] const f := fn(): i32 { return 0; };",
+                        sema::error::ILLEGAL_ATTRIBUTE));
     }
 }
 

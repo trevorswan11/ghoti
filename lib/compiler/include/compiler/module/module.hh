@@ -120,8 +120,15 @@ struct module {
     auto record_node_write(usize idx) noexcept -> void;
     auto record_explicit_write(usize idx) noexcept -> void;
 
-    // Cond discardable `decl_stmt` node index -> the folded truth of the condition
-    ankerl::unordered_dense::map<usize, bool> discardable_conditions;
+    // Attributed `decl_stmt` / `function_expr` node index -> its folded `@[...]` list
+    ankerl::unordered_dense::map<usize, sema::resolved_attributes> node_attributes;
+
+    [[nodiscard]] auto attributes_of(ast::node_id id) const noexcept
+        -> stdx::option<const sema::resolved_attributes&> {
+        const auto it{node_attributes.find(id.get_index())};
+        if (it == node_attributes.end()) { return stdx::none; }
+        return it->second;
+    }
 
     // `decl_stmt` node index -> whether (and why) it has no runtime storage
     ankerl::unordered_dense::map<usize, stdx::option<storageless_kind>> storageless_decls;

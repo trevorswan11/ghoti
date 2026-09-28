@@ -352,7 +352,14 @@ class type_resolver {
     [[nodiscard]] auto get_call_arg_location(const ast::call_expr::argument& arg)
         -> source_location;
 
-    // Whether the outermost callee of `call` resolves to a `@discardable` declaration
+    // Validates `list` against what it annotates and records the folded result for `owner`
+    auto resolve_attributes(ast::node_id               owner,
+                            const ast::attribute_list& list,
+                            ast::attribute_target      site,
+                            bool                       returns_void) -> void;
+    [[nodiscard]] auto fold_attribute_bool(const ast::attribute& item) -> stdx::option<bool>;
+
+    // Whether the outermost callee of `call` resolves to a `@[discardable]` declaration
     [[nodiscard]] auto callee_is_discardable(const ast::call_expr& call) const -> bool;
     // Errors on a non-`void` call result dropped in statement position
     auto check_unused_result(ast::node_id stmt_id, const ast::expr_stmt& stmt) -> void;

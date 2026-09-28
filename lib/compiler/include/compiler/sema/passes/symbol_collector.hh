@@ -40,6 +40,13 @@ class symbol_collector {
   private:
     using scope = symbol_table_stack::scope;
 
+    auto collect_attribute_args(const stdx::option<ast::attribute_list>& attributes) -> void {
+        if (!attributes) { return; }
+        for (const auto& item : attributes->items) {
+            for (const auto arg : item.args) { collect(arg); }
+        }
+    }
+
   private:
     auto                                visit(ast::node_id, const ast::array_expr&) -> void;
     auto                                visit(ast::node_id, const ast::asm_expr&) -> void;

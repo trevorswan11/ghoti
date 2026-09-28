@@ -73,6 +73,12 @@ auto lexer::advance() noexcept -> token_t {
         token.type  = *maybe_misc_token_type;
     } else if (current_byte_ == '@') {
         if (peek_pos_ < input_.size() && input_[peek_pos_] == '"') { return read_raw_identifier(); }
+        if (peek_pos_ < input_.size() && input_[peek_pos_] == '[') {
+            token.slice = stdx::string::substr(input_, pos_, 2);
+            token.type  = token_type_t::AT_LBRACKET;
+            read_character(2);
+            return token;
+        }
         token.slice = read_ident(true);
         token.type  = lu_builtin(token.slice);
         return token;

@@ -859,6 +859,31 @@ auto parse_naked_function_expr(syntax::parser& parser)
     return function_expr::parse(parser, false, true);
 }
 
+auto parse_attributed_function_expr(syntax::parser& parser)
+    -> stdx::result<expr_handle, syntax::diagnostic> {
+    using tt = syntax::token_type_t;
+    auto attributes{TRY(parse_attribute_list(parser))};
+    const auto& next{parser.get_peek_token()};
+    if (next.type != tt::FUNCTION && next.type != tt::MOVE && next.type != tt::NAKED) {
+        return make_syntax_err("An attribute list in expression position must precede a function "
+                               "literal",
+                               syntax::error::MISPLACED_ATTRIBUTES,
+                               next);
+    }
+    parser.advance();
+    const auto parse_fn{*syntax::parser::get_prefix_fn_opt(parser.get_current_token().type)};
+    const auto fn{TRY(parse_fn(parser))};
+
+    auto& fn_node{parser.get_ast().get_as_mut<function_expr>(*fn)};
+    if (fn_node.is_type_expr) {
+        return make_syntax_err("Attributes apply to function definitions, not function types",
+                               syntax::error::MISPLACED_ATTRIBUTES,
+                               parser.get_location_of(*fn));
+    }
+    fn_node.attributes.emplace(std::move(attributes));
+    return fn;
+}
+
 // Optional `callconv(.ident)` between the parameter list and the return-type colon.
 [[nodiscard]] auto try_parse_callconv(syntax::parser& parser)
     -> stdx::result<calling_convention, syntax::diagnostic> {

@@ -204,6 +204,7 @@ struct function_expr {
     bool                         has_explicit_conv{false};
     bool                         is_extern{false}; // `extern fn(...): R` bodyless type value
     std::vector<impl_bound>      impl_bounds{};
+    stdx::option<attribute_list> attributes{};
 
     // Parse the function as a value. Meant for the parser LUT
     [[nodiscard]] static auto parse(syntax::parser& parser)
@@ -225,6 +226,10 @@ struct function_expr {
 
 // Consumes a leading `naked` modifier before delegating to function_expr::parse
 [[nodiscard]] auto parse_naked_function_expr(syntax::parser& parser)
+    -> stdx::result<expr_handle, syntax::diagnostic>;
+
+// `@[...] fn(...) {...}`: an attribute list applied to a function literal in expression position
+[[nodiscard]] auto parse_attributed_function_expr(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic>;
 
 struct grouped_expr {

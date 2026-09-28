@@ -115,6 +115,22 @@ class dumper {
         }
     }
 
+    auto dump_attributes(const stdx::option<attribute_list>& attributes) -> void {
+        if (!attributes) { return; }
+        const indent::guard g{indent_, false};
+        fmt::println(out_, "{}Attributes:", indent_.current_branch());
+        dump_container(attributes->items, [this](const attribute& item) -> void {
+            fmt::println(out_,
+                         "{}Attribute: {}",
+                         indent_.current_branch(),
+                         attribute_spec_of(item.kind).name);
+            if (item.args.empty()) { return; }
+            const indent::guard g_args{indent_, true};
+            fmt::println(out_, "{}Args:", indent_.current_branch());
+            dump_node_list(item.args);
+        });
+    }
+
     template <typename T> auto dump_node_list(const T& list) -> void {
         dump_container(list, [this](const auto& node_handle) -> void {
             fmt::print(out_, "{}", indent_.current_branch());

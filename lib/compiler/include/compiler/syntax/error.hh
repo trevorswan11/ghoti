@@ -98,6 +98,10 @@ enum class error : u8 {
     UNEXPECTED_CHARACTER,
     UNKNOWN_BUILTIN,
     INVALID_UTF8,
+    UNKNOWN_ATTRIBUTE,
+    ATTRIBUTE_ARITY,
+    DUPLICATE_ATTRIBUTE,
+    MISPLACED_ATTRIBUTES,
 };
 
 using diagnostic  = diagnostic<error>;

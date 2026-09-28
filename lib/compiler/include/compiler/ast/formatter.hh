@@ -108,6 +108,11 @@ class formatter {
     }
 
     [[nodiscard]] auto decl_prefix(const decl_stmt& node) -> syntax::doc_id;
+    [[nodiscard]] auto attribute_list_doc(const attribute_list& list) -> syntax::doc_id;
+
+    // Keeps `@[...]` beside `head` when both fit on one line, otherwise puts it on its own line
+    [[nodiscard]] auto with_attributes(const stdx::option<attribute_list>& attributes,
+                                       syntax::doc_id                      head) -> syntax::doc_id;
     [[nodiscard]] auto tail_clause(node_id stmt) -> syntax::doc_id;
 
     auto visit(node_id, const array_expr&) -> syntax::doc_id;

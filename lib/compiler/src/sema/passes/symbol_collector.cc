@@ -256,6 +256,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::function_expr& fn) -> v
         }
     }
     collect(fn.explicit_return_type);
+    collect_attribute_args(fn.attributes);
 
     if (!fn.is_type_expr) {
         const auto& block{collecting_.ast.get_as<ast::block_stmt>(fn.body)};
@@ -570,7 +571,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::decl_stmt& decl) -> voi
         }
     }
 
-    if (decl.discardable_condition) { collect(*decl.discardable_condition); }
+    collect_attribute_args(decl.attributes);
     if (!try_declare<symbols::node_t>(name, id)) { return; };
     if (!decl.value) { return; }
 

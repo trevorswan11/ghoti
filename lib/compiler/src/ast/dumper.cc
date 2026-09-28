@@ -286,6 +286,7 @@ auto dumper::visit(node_id, const for_loop_expr& for_loop) -> void {
 auto dumper::visit(node_id, const function_expr& function) -> void {
     PROFILE_FUNCTION();
     fmt::println(out_, "FunctionExpression");
+    dump_attributes(function.attributes);
     if (function.self) {
         const indent::guard g{indent_, false};
         fmt::print(out_, "{}", indent_.current_branch());
@@ -992,11 +993,7 @@ auto dumper::visit(node_id, const decl_stmt& decl) -> void {
         dump(*decl.link_name);
     }
 
-    if (decl.discardable_condition) {
-        const indent::guard g{indent_, false};
-        fmt::print(out_, "{}Discardable Condition: ", indent_.current_branch());
-        dump(*decl.discardable_condition);
-    }
+    dump_attributes(decl.attributes);
 
     const auto has_value{decl.value.has_value()};
     {

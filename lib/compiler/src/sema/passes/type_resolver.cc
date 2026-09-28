@@ -4227,6 +4227,12 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
                              resolving_.ast.location_of(id)));
     }
 
+    if (fn.attributes && !resolving_.attributes_of(id)) {
+        const bool returns_void{fn.explicit_return_type.get_token_type() ==
+                                syntax::token_type_t::VOID_TYPE};
+        resolve_attributes(id, *fn.attributes, ast::attribute_target::FN, returns_void);
+    }
+
     if (!target_supports_callconv(fn.conv)) {
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
@@ -8962,6 +8968,35 @@ auto type_resolver::declares_generic_params(const ast::function_expr& fn_expr) c
     });
 }
 
+namespace {
+
+// The return kind of a callable declaration's type; `AUTO` when a builtin's return is unknown
+[[nodiscard]] auto callable_return_kind(const type::data_t& data) -> stdx::option<type_kind> {
+    if (data.is<types::builtin_function>()) { return type_kind::AUTO; }
+    if (const auto fn{data.as_opt<types::function>()}) { return fn->return_type.get_kind(); }
+    if (const auto closure{data.as_opt<types::closure_t>()}) {
+        if (const auto sig{closure->signature.get_data().as_opt<types::function>()}) {
+            return sig->return_type.get_kind();
+        }
+    }
+    return stdx::none;
+}
+
+// A bare `discardable` needs no folding; a conditional one reads its folded verdict
+[[nodiscard]] auto declares_discardable(const mod::module&                         home,
+                                        ast::node_id                               owner,
+                                        const stdx::option<ast::attribute_list>&   attributes)
+    -> bool {
+    if (!attributes) { return false; }
+    const auto item{attributes->find(ast::attribute_kind::DISCARDABLE)};
+    if (!item) { return false; }
+    if (item->args.empty()) { return true; }
+    const auto resolved{home.attributes_of(owner)};
+    return resolved && resolved->discardable;
+}
+
+} // namespace
+
 auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
     PROFILE_FUNCTION();
     const auto& ident{resolving_.ast.get_as<ast::identifier_expr>(*decl.name)};
@@ -9181,52 +9216,13 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             }
         }
 
-        [&] {
-            if (!decl.has_modifier(ast::decl_modifiers::DISCARDABLE)) { return; }
-            if (type_data.is<types::builtin_function>()) { return; }
-            if (const auto fn_d{type_data.as_opt<types::function>()}) {
-                if (fn_d->return_type.get_kind() == type_kind::VOID_) {
-                    ctx_.diags.emplace_back(
-                        "'@discardable' has no effect on a function that returns 'void'",
-                        error::ILLEGAL_DISCARDABLE,
-                        resolving_.ast.location_of(id));
-                }
-                return;
-            }
-
-            if (const auto closure_d{type_data.as_opt<types::closure_t>()}) {
-                const auto sig_data{
-                    closure_d->signature.get_data().as_opt<sema::types::function>()};
-                if (!sig_data) {
-                    ctx_.diags.emplace_back("closure signature was somehow not a function",
-                                            error::TYPE_MISMATCH,
-                                            resolving_.ast.location_of(id));
-                } else if (sig_data->return_type.get_kind() == type_kind::VOID_) {
-                    ctx_.diags.emplace_back(
-                        "'@discardable' has no effect on a closure that returns 'void'",
-                        error::ILLEGAL_DISCARDABLE,
-                        resolving_.ast.location_of(id));
-                }
-                return;
-            }
-
-            ctx_.diags.emplace_back("'@discardable' may only be applied to functions",
-                                    error::ILLEGAL_DISCARDABLE,
-                                    resolving_.ast.location_of(id));
-        }();
-
-        // `@discardable(<cond>)`: fold `<cond>` and record whether the attribute is active
-        if (decl.discardable_condition) {
-            gir::const_eval evaluator{ctx_, resolving_};
-            const auto      cv{evaluator.try_eval(*decl.discardable_condition)};
-            if (const auto folded{cv ? cv->as_opt<bool>() : stdx::none}) {
-                resolving_.discardable_conditions.insert_or_assign(id.get_index(), *folded);
-            } else {
-                ctx_.diags.emplace_back(
-                    "'@discardable(...)' requires a compile-time boolean condition",
-                    error::ILLEGAL_DISCARDABLE,
-                    resolving_.ast.location_of(*decl.discardable_condition));
-            }
+        if (decl.attributes) {
+            const auto return_kind{callable_return_kind(type_data)};
+            resolve_attributes(id,
+                               *decl.attributes,
+                               return_kind ? ast::attribute_target::FN_DECL
+                                           : ast::attribute_target::DECL,
+                               return_kind == type_kind::VOID_);
         }
 
         const bool literal_type_anno{decl.explicit_type && decl.explicit_type->get_token_type() ==
@@ -9811,6 +9807,51 @@ auto type_resolver::visit(ast::node_id id, const ast::discard_stmt& discard) -> 
     last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
 }
 
+auto type_resolver::fold_attribute_bool(const ast::attribute& item) -> stdx::option<bool> {
+    if (item.args.empty()) { return true; }
+    gir::const_eval evaluator{ctx_, resolving_};
+    const auto      cv{evaluator.try_eval(item.args.front())};
+    if (const auto folded{cv ? cv->as_opt<bool>() : stdx::none}) { return *folded; }
+    ctx_.diags.emplace_back(fmt::format("Attribute '{}' requires a compile-time 'bool' argument",
+                                        ast::attribute_spec_of(item.kind).name),
+                            error::ILLEGAL_ATTRIBUTE,
+                            resolving_.ast.location_of(item.args.front()));
+    return stdx::none;
+}
+
+auto type_resolver::resolve_attributes(ast::node_id               owner,
+                                       const ast::attribute_list& list,
+                                       ast::attribute_target      site,
+                                       bool                       returns_void) -> void {
+    resolved_attributes resolved;
+    for (const auto& item : list.items) {
+        const auto& spec{ast::attribute_spec_of(item.kind)};
+        if (!static_cast<bool>(spec.targets & site)) {
+            ctx_.diags.emplace_back(
+                fmt::format("Attribute '{}' cannot be applied to {}",
+                            spec.name,
+                            site == ast::attribute_target::DECL ? "a non-function declaration"
+                                                                : "this item"),
+                error::ILLEGAL_ATTRIBUTE,
+                resolving_.ast.location_of(item.name));
+            continue;
+        }
+
+        switch (item.kind) {
+        case ast::attribute_kind::DISCARDABLE:
+            if (returns_void) {
+                ctx_.diags.emplace_back(
+                    "Attribute 'discardable' has no effect on a function that returns 'void'",
+                    error::ILLEGAL_ATTRIBUTE,
+                    resolving_.ast.location_of(item.name));
+            }
+            resolved.discardable = fold_attribute_bool(item).value_or(false);
+            break;
+        }
+    }
+    resolving_.node_attributes.insert_or_assign(owner.get_index(), resolved);
+}
+
 auto type_resolver::callee_is_discardable(const ast::call_expr& call) const -> bool {
     stdx::option<const mod::module&> home{resolving_};
     ast::node_id                     fn_node{*call.function};
@@ -9872,10 +9913,11 @@ auto type_resolver::callee_is_discardable(const ast::call_expr& call) const -> b
         if (!node) { return false; }
         const auto decl{home->ast.get_as_opt<ast::decl_stmt>(*node)};
         if (!decl) { return false; }
-        if (decl->has_modifier(ast::decl_modifiers::DISCARDABLE)) {
-            if (!decl->discardable_condition) { return true; }
-            const auto it{home->discardable_conditions.find(node->get_index())};
-            return it != home->discardable_conditions.end() && it->second;
+        if (declares_discardable(*home, *node, decl->attributes)) { return true; }
+        if (decl->value) {
+            if (const auto fn{home->ast.get_as_opt<ast::function_expr>(*decl->value)}) {
+                return declares_discardable(*home, *decl->value, fn->attributes);
+            }
         }
 
         // Follow a direct `const g := f` / `const g := m.f` re-export to the real declaration.
@@ -9914,7 +9956,7 @@ auto type_resolver::check_unused_result(ast::node_id stmt_id, const ast::expr_st
 
     ctx_.diags.emplace_back(
         "result of this call is unused; bind it, pass it on, `_ =` it, or mark the callee "
-        "'@discardable'",
+        "'@[discardable]'",
         error::UNUSED_RESULT,
         resolving_.ast.location_of(stmt_id));
 }

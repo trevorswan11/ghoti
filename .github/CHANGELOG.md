@@ -362,6 +362,11 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 ## alpha.2
 
 ## Language Features and Fixes
+- **Breaking:** the `@discardable` declaration modifier is replaced by an attribute list; write `@[discardable]` (or `@[discardable(cond)]`) before the declaration, ahead of `pub`
+- Attribute lists `@[a, b(args)]` annotate declarations and function literals (`const f := @[discardable] fn(): i32 { ... };`)
+    - Arguments are compile-time expressions; unknown, repeated, or misplaced attributes are errors
+    - `ghoti fmt` keeps a list beside a declaration head that fits and puts it on its own line otherwise, or when the list ends in a trailing comma (`@[discardable,]`)
+    - `@[discardable]` also applies to `extern` function declarations and to function literals
 - Constexpr can now be applied to labels and blocks (expression slots and top level)
     - They must be constant evaluatable and will error if not
 - `@assert` and `@verify` have been hardened such that they can work correctly in constexpr contexts
