@@ -2,6 +2,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
+#include <magic_enum/magic_enum.hpp>
 
 #include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
@@ -45,6 +46,14 @@ TEST_CASE("Promotion of multiline literals with indented continuation markers") 
     test_ml_string("Hello,\n    \\\\World!", "Hello,\nWorld!");
     test_ml_string("Hello,\n\t\\\\World!", "Hello,\nWorld!");
     test_ml_string("First\n  \\\\    Still indented", "First\n    Still indented");
+}
+
+TEST_CASE("every token kind has a readable diagnostic description") {
+    for (const auto tt : magic_enum::enum_values<syntax::token_type_t>()) {
+        const auto described{syntax::token_type::describe(tt)};
+        INFO(magic_enum::enum_name(tt));
+        CHECK(described != magic_enum::enum_name(tt));
+    }
 }
 
 } // namespace ghoti::tests

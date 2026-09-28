@@ -94,4 +94,120 @@ TEST_CASE("constexpr-fits coercion diagnostics in type checker (D3)") {
     }
 }
 
+TEST_CASE("compile-time floats that round to infinity in their type are rejected") {
+    SECTION("a literal that rounds to infinity in f32") {
+        helpers::test_checker_fail(
+            R"(
+            const f := fn(): void {
+                const bad: f32 = 1e39;
+            };
+        )",
+            sema::diagnostic{"literal is out of range for type 'f32'",
+                             sema::error::LITERAL_OUT_OF_RANGE,
+                             std::pair{2UZ, 33UZ}});
+    }
+
+    SECTION("an integer literal past f16's range") {
+        helpers::test_checker_fail(
+            R"(
+            const f := fn(): void {
+                const bad: f16 = 65520;
+            };
+        )",
+            sema::diagnostic{"literal is out of range for type 'f16'",
+                             sema::error::LITERAL_OUT_OF_RANGE,
+                             std::pair{2UZ, 33UZ}});
+    }
+
+    SECTION("a suffixed literal past its own width") {
+        helpers::test_checker_fail(
+            R"(
+            const f := fn(): void {
+                const bad := 1e39f32;
+            };
+        )",
+            sema::diagnostic{"literal is out of range for type 'f32'",
+                             sema::error::LITERAL_OUT_OF_RANGE,
+                             std::pair{2UZ, 29UZ}});
+    }
+
+    SECTION("a literal argument past a parameter's range") {
+        helpers::test_checker_fail(
+            R"(
+            const g := fn(x: f16): f16 { return x; };
+            const f := fn(): void {
+                _ = g(70000.0);
+            };
+        )",
+            sema::diagnostic{"literal is out of range for type 'f16'",
+                             sema::error::LITERAL_OUT_OF_RANGE,
+                             std::pair{3UZ, 22UZ}});
+    }
+
+    SECTION("a named constant past a float binding's range") {
+        helpers::test_checker_fail(
+            R"(
+            constexpr BIG := 1e300;
+            const f := fn(): void {
+                const bad: f32 = BIG;
+            };
+        )",
+            sema::diagnostic{"float value 1e+300 is out of range for type 'f32'",
+                             sema::error::LITERAL_OUT_OF_RANGE,
+                             std::pair{3UZ, 33UZ}});
+    }
+
+    SECTION("a folded expression past a float binding's range") {
+        helpers::test_checker_fail(
+            R"(
+            constexpr BIG := 1e300;
+            const f := fn(): void {
+                const bad: f16 = BIG * 2.0;
+            };
+        )",
+            sema::diagnostic{"float value 2e+300 is out of range for type 'f16'",
+                             sema::error::LITERAL_OUT_OF_RANGE,
+                             std::pair{3UZ, 33UZ}});
+    }
+
+    SECTION("an @as operand past the target's range") {
+        helpers::test_checker_fail(
+            R"(
+            constexpr BIG := 1e300;
+            const f := fn(): void {
+                const bad := @as(f32, BIG);
+            };
+        )",
+            sema::diagnostic{"float value 1e+300 is out of range for type 'f32'",
+                             sema::error::LITERAL_OUT_OF_RANGE,
+                             std::pair{3UZ, 38UZ}});
+    }
+
+    SECTION("a folded @floatFromInt past the target's range") {
+        helpers::test_checker_fail(
+            R"(
+            const f := fn(): void {
+                const bad := @floatFromInt(f16, 100000);
+            };
+        )",
+            sema::diagnostic{"float value 100000 is out of range for type 'f16'",
+                             sema::error::LITERAL_OUT_OF_RANGE,
+                             std::pair{2UZ, 48UZ}});
+    }
+
+    SECTION("an integer constant past a float binding's range") {
+        helpers::test_checker_fail(
+            R"(
+            constexpr BIG := 340282366920938463463374607431768211455;
+            const f := fn(): void {
+                const bad: f16 = BIG;
+            };
+        )",
+            sema::diagnostic{"float value 3.402823669209384634633746074317682e+38 is out of range "
+                             "for type 'f16'",
+                             sema::error::LITERAL_OUT_OF_RANGE,
+                             std::pair{3UZ, 33UZ}});
+    }
+}
+
 } // namespace ghoti::tests

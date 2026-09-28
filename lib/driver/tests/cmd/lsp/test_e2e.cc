@@ -12,6 +12,7 @@
 
 #include "driver/cmd/lsp/document_store.hh"
 #include "driver/cmd/lsp/rpc.hh"
+#include "driver/cmd/lsp/server.hh"
 #include "support/path_utils.hh"
 #include "support/subprocess.hh"
 #include "support/tempfile.hh"
@@ -99,6 +100,30 @@ TEST_CASE("ghoti lsp answers initialize/didOpen/hover/shutdown over a real child
                        {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "shutdown"}});
     const auto shutdown_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
     CHECK(shutdown_resp.at("result").is_null());
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+    CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
+}
+
+TEST_CASE("ghoti lsp answers malformed messages with JSON-RPC errors and keeps serving") {
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
+    REQUIRE(proc.is_running());
+
+    constexpr std::string_view bad_body{"{not json"};
+    proc.stdin_stream() << fmt::format("Content-Length: {}\r\n\r\n{}", bad_body.size(), bad_body);
+    proc.stdin_stream().flush();
+    const auto parse_error = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(parse_error.at("error").at("code") == cmd::PARSE_ERROR);
+    CHECK(parse_error.at("id").is_null());
+
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"id", 4}});
+    const auto invalid_request = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(invalid_request.at("error").at("code") == cmd::INVALID_REQUEST);
+    CHECK(invalid_request.at("id") == 4);
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 5}, {"method", "shutdown"}});
+    const auto shutdown_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(shutdown_resp.at("id") == 5);
     lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
     CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
 }

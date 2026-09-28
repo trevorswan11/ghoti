@@ -55,10 +55,16 @@ auto test_builtin_resolve(const syntax::builtin_t& builtin,
 namespace bis = syntax::builtins;
 
 TEST_CASE("Builtin 'safe' casts") {
-    const auto bi{GENERATE(bis::BIT_CAST, bis::AS, bis::INT_CAST)};
+    const auto bi{GENERATE(bis::AS, bis::INT_CAST)};
     test_builtin_resolve(bi, "i32, 23UZ", [](helpers::sema_test_context& ctx) -> sema::type& {
         return ctx.get_int_type(32, true);
     });
+
+    // A bit cast reinterprets bytes, so its operand must be exactly as wide as its target
+    test_builtin_resolve(
+        bis::BIT_CAST, "i32, 23u32", [](helpers::sema_test_context& ctx) -> sema::type& {
+            return ctx.get_int_type(32, true);
+        });
 }
 
 TEST_CASE("Builtin pointer casts require pointer target and operand types") {
@@ -117,9 +123,13 @@ TEST_CASE("Builtin type introspection") {
         return ctx.get_type(sema::type_kind::TYPE, ctx.get_int_type(32, true));
     });
 
-    test_builtin_resolve(bis::TAG_NAME, "123", [](helpers::sema_test_context& ctx) -> sema::type& {
-        return ctx.get_type(sema::type_kind::SLICE, true, ctx.get_int_type(8, false));
-    });
+    test_builtin_resolve(
+        bis::TAG_NAME,
+        "E.a",
+        [](helpers::sema_test_context& ctx) -> sema::type& {
+            return ctx.get_type(sema::type_kind::SLICE, true, ctx.get_int_type(8, false));
+        },
+        "const E := enum { a };");
 }
 
 TEST_CASE("Builtin this introspection") {
@@ -129,8 +139,8 @@ TEST_CASE("Builtin this introspection") {
 }
 
 TEST_CASE("Deferred return type from typeOf") {
-    auto [ctx,
-          idx]{helpers::resolve_and_check("const a := fn(): type {}; const B := @TypeOf(a());")};
+    auto [ctx, idx]{helpers::resolve_and_check(
+        "const a := fn(): type { return u8; }; const B := @TypeOf(a());")};
 
     const auto [sym, sym_data, node_data]{
         ctx->get_ast_sym_info<syms::node_t, ast::decl_stmt>("B", idx)};

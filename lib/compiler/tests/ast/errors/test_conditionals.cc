@@ -32,8 +32,7 @@ TEST_CASE("Match without condition") {
 
     helpers::test_parser_fail(
         "match { b => c, };",
-        syntax::diagnostic{
-            "Expected token LPAREN, found LBRACE", syntax::error::UNEXPECTED_TOKEN, 0, 6});
+        syntax::diagnostic{"Expected '(', found '{'", syntax::error::UNEXPECTED_TOKEN, 0, 6});
 }
 
 TEST_CASE("Armless match expression") {
@@ -46,8 +45,7 @@ TEST_CASE("Armless match expression") {
 TEST_CASE("Malformed arm pattern") {
     helpers::test_parser_fail(
         "match {  => c, };",
-        syntax::diagnostic{
-            "Expected token LPAREN, found LBRACE", syntax::error::UNEXPECTED_TOKEN, 0, 6});
+        syntax::diagnostic{"Expected '(', found '{'", syntax::error::UNEXPECTED_TOKEN, 0, 6});
 
     helpers::test_parser_fail(
         "match (a) { for (0..3) |i| { var a: i32 = undefined; } => |b| c };",
@@ -65,7 +63,7 @@ TEST_CASE("Arm missing fat arrow") {
     helpers::test_parser_fail(
         "match (a) { b c, };",
         syntax::diagnostic{
-            "Expected token FAT_ARROW, found IDENT", syntax::error::UNEXPECTED_TOKEN, 0, 14});
+            "Expected '=>', found an identifier", syntax::error::UNEXPECTED_TOKEN, 0, 14});
 }
 
 TEST_CASE("Arm separated by semicolon instead of comma") {
@@ -104,11 +102,15 @@ TEST_CASE("Catch-all cannot be part of a multi-value match arm") {
 }
 
 TEST_CASE("Illegal match arm capture modifier on a discarded capture") {
-    helpers::test_parser_fail("match (a) { b => |&mut _| c, };",
-                              syntax::diagnostic{syntax::error::ILLEGAL_IDENTIFIER, 0, 23});
+    helpers::test_parser_fail(
+        "match (a) { b => |&mut _| c, };",
+        syntax::diagnostic{
+            "Expected an identifier, found '_'", syntax::error::ILLEGAL_IDENTIFIER, 0, 23});
 
-    helpers::test_parser_fail("match (a) { b => |^ _| c, };",
-                              syntax::diagnostic{syntax::error::ILLEGAL_IDENTIFIER, 0, 20});
+    helpers::test_parser_fail(
+        "match (a) { b => |^ _| c, };",
+        syntax::diagnostic{
+            "Expected an identifier, found '_'", syntax::error::ILLEGAL_IDENTIFIER, 0, 20});
 }
 
 } // namespace ghoti::tests

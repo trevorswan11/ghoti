@@ -12,6 +12,8 @@
 
 #include <fmt/format.h>
 #include <gsl/pointers>
+#include <llvm/ADT/APFloat.h>
+#include <llvm/ADT/APInt.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/CallingConv.h>
 #include <llvm/IR/Constants.h>
@@ -21,11 +23,13 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Value.h>
 #include <llvm/Support/Alignment.h>
 #include <llvm/Support/AtomicOrdering.h>
 #include <llvm/Support/Casting.h>
+#include <llvm/Support/MathExtras.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/TargetParser/Triple.h>
 #include <llvm/Transforms/Utils/ModuleUtils.h>
@@ -38,6 +42,8 @@
 
 #include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
+#include "compiler/codegen/aggregate_abi.hh"
+#include "compiler/codegen/mem_intrinsics.hh"
 #include "compiler/codegen/type_translator.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/function.hh"
@@ -49,6 +55,7 @@
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/diagnostic.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 
 namespace ghoti::codegen {
@@ -134,6 +141,18 @@ namespace {
     return llvm::ConstantExpr::getIntToPtr(wide_int_constant(bits, int_ty), ty);
 }
 
+// The float constant of `ty` (or its elements) nearest to `value`
+[[nodiscard]] auto float_constant(f128 value, llvm::Type* ty) -> llvm::Constant* {
+    auto* scalar_ty{ty->getScalarType()};
+    VERIFY(scalar_ty->isFloatingPointTy(), "A float payload must lower to a float type");
+    const std::array<u64, 2> words{value.bits().low, value.bits().high};
+    llvm::APFloat            converted{llvm::APFloat::IEEEquad(), llvm::APInt{128, words}};
+    bool                     loses_info{false};
+    DISCARD(converted.convert(
+        scalar_ty->getFltSemantics(), llvm::APFloat::rmNearestTiesToEven, &loses_info));
+    return llvm::ConstantFP::get(ty, converted);
+}
+
 [[nodiscard]] auto to_llvm_callconv(ast::calling_convention conv) noexcept
     -> llvm::CallingConv::ID {
     switch (conv) {
@@ -214,13 +233,13 @@ auto llvm_lowering::to_ir_string(const llvm::Module& mod) -> std::string {
     return out;
 }
 
-auto llvm_lowering::lower(const gir::module& gir_mod) -> stdx::box<llvm::Module> {
-    PROFILE_FUNCTION();
-    gir_module_.emplace(gir_mod);
-    {
-        PROFILE_SCOPE("llvm_lowering: declare functions");
-        for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
-    }
+// Every function is declared up front so bodies and vtables can reference any of them
+auto llvm_lowering::declare_functions(const gir::module& gir_mod) -> void {
+    PROFILE_SCOPE("llvm_lowering: declare functions");
+    for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
+}
+
+auto llvm_lowering::lower_definitions(const gir::module& gir_mod) -> void {
     {
         PROFILE_SCOPE("llvm_lowering: lower vtables");
         lower_dyn_vtables(gir_mod);
@@ -233,9 +252,57 @@ auto llvm_lowering::lower(const gir::module& gir_mod) -> stdx::box<llvm::Module>
         PROFILE_SCOPE("llvm_lowering: lower functions");
         for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
     }
-    maybe_emit_windows_stack_probe();
-    maybe_emit_mem_intrinsic_fallbacks();
+}
+
+auto llvm_lowering::lower(const gir::module& gir_mod) -> stdx::box<llvm::Module> {
+    PROFILE_FUNCTION();
+    gir_module_.emplace(gir_mod);
+    declare_functions(gir_mod);
+    lower_definitions(gir_mod);
+    finalize_runtime_support();
     return std::move(llvm_module_);
+}
+
+auto llvm_lowering::create_c_entry_function() -> llvm::Function* {
+    auto* main_fn_ty{llvm::FunctionType::get(
+        types_.get_int32_ty(), {types_.get_int32_ty(), types_.get_ptr_ty()}, false)};
+    auto* main_fn{llvm::Function::Create(
+        main_fn_ty, llvm::Function::ExternalLinkage, "main", llvm_module_.get())};
+    main_fn->addFnAttr(llvm::Attribute::NoBuiltin);
+    main_fn->addFnAttr("no-builtins");
+    main_fn->addFnAttr("no-stack-arg-probe", "true");
+
+    // Linux executables get a freestanding `_start` (no crt/libc) that calls into `main`
+    if (llvm::Triple{llvm_module_->getTargetTriple()}.isOSLinux()) {
+        const auto saved_insert_point{builder_.saveIP()};
+        emit_freestanding_start(main_fn);
+        builder_.restoreIP(saved_insert_point);
+    }
+    return main_fn;
+}
+
+auto llvm_lowering::finalize_runtime_support() -> void {
+    lower_large_aggregates(*llvm_module_);
+    maybe_emit_mingw_main_stub();
+    maybe_emit_windows_stack_probe();
+    define_mem_intrinsic_fallbacks(*llvm_module_);
+    // ghoti never unwinds; without this, ARM EHABI references libgcc's `__aeabi_unwind_cpp_pr*`
+    for (auto& fn : *llvm_module_) { fn.addFnAttr(llvm::Attribute::NoUnwind); }
+}
+
+// MinGW codegen injects a `__main` (static-ctor hook) call into any function named `main`
+auto llvm_lowering::maybe_emit_mingw_main_stub() -> void {
+    const llvm::Triple triple{llvm_module_->getTargetTriple()};
+    if (!triple.isWindowsGNUEnvironment() || llvm_module_->getFunction("__main")) { return; }
+    const auto* main_fn{llvm_module_->getFunction("main")};
+    if (!main_fn || main_fn->isDeclaration()) { return; }
+
+    auto*             stub_ty{llvm::FunctionType::get(llvm::Type::getVoidTy(context_), false)};
+    auto*             stub{llvm::Function::Create(
+        stub_ty, llvm::Function::ExternalLinkage, "__main", llvm_module_.get())};
+    llvm::IRBuilder<> stub_builder{llvm::BasicBlock::Create(context_, "entry", stub)};
+    stub_builder.CreateRetVoid();
+    llvm::appendToUsed(*llvm_module_, {stub});
 }
 
 auto llvm_lowering::lower_dyn_vtables(const gir::module& gir_mod) -> void {
@@ -267,25 +334,10 @@ auto llvm_lowering::lower_executable(const gir::module& gir_mod, std::string_vie
     is_executable_  = true;
     user_main_name_ = user_main_name;
     gir_module_.emplace(gir_mod);
-    {
-        PROFILE_SCOPE("llvm_lowering: declare functions");
-        for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
-    }
-    {
-        PROFILE_SCOPE("llvm_lowering: lower vtables");
-        lower_dyn_vtables(gir_mod);
-    }
-    {
-        PROFILE_SCOPE("llvm_lowering: lower globals");
-        for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
-    }
-    {
-        PROFILE_SCOPE("llvm_lowering: lower functions");
-        for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
-    }
+    declare_functions(gir_mod);
+    lower_definitions(gir_mod);
     emit_main_entry_wrapper(user_main_name_);
-    maybe_emit_windows_stack_probe();
-    maybe_emit_mem_intrinsic_fallbacks();
+    finalize_runtime_support();
     return std::move(llvm_module_);
 }
 
@@ -295,25 +347,7 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
     if (!user_fn) { user_fn = llvm_module_->getFunction(user_main_name); }
     ASSERT(user_fn, "User main function not found in LLVM module");
 
-    auto* main_fn_ty{llvm::FunctionType::get(
-        types_.get_int32_ty(), {types_.get_int32_ty(), types_.get_ptr_ty()}, false)};
-    auto* main_fn{llvm::Function::Create(
-        main_fn_ty, llvm::Function::ExternalLinkage, "main", llvm_module_.get())};
-    main_fn->addFnAttr(llvm::Attribute::NoBuiltin);
-    main_fn->addFnAttr("no-builtins");
-    main_fn->addFnAttr("no-stack-arg-probe", "true");
-
-    const llvm::Triple triple{llvm_module_->getTargetTriple()};
-    if (triple.isWindowsGNUEnvironment() && !llvm_module_->getFunction("__main")) {
-        auto*             void_ty{llvm::Type::getVoidTy(context_)};
-        auto*             dummy_main_ty{llvm::FunctionType::get(void_ty, false)};
-        auto*             dummy_main{llvm::Function::Create(
-            dummy_main_ty, llvm::Function::ExternalLinkage, "__main", llvm_module_.get())};
-        auto*             dummy_bb{llvm::BasicBlock::Create(context_, "entry", dummy_main)};
-        llvm::IRBuilder<> dummy_builder{dummy_bb};
-        dummy_builder.CreateRetVoid();
-        llvm::appendToUsed(*llvm_module_, {dummy_main});
-    }
+    auto* main_fn{create_c_entry_function()};
 
     auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", main_fn)};
     builder_.SetInsertPoint(entry_bb);
@@ -336,7 +370,6 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
         builder_.CreateRet(ret_i32);
     }
 
-    if (triple.isOSLinux()) { emit_freestanding_start(main_fn); }
     return main_fn;
 }
 
@@ -493,110 +526,8 @@ auto llvm_lowering::maybe_emit_windows_stack_probe() -> void {
     builder_.CreateUnreachable();
 }
 
-auto llvm_lowering::maybe_emit_mem_intrinsic_fallbacks() -> void {
-    if (!mem_fallbacks_used()) { return; }
-
-    // COFF/ELF dedupe weak defs via a COMDAT
-    const llvm::Triple triple{llvm_module_->getTargetTriple()};
-    // MachO has no COMDATs but folds weak symbols on its own
-    const bool want_comdat{!triple.isOSBinFormatMachO()};
-
-    auto* i8_ty{llvm::Type::getInt8Ty(context_)};
-    auto* i32_ty{llvm::Type::getInt32Ty(context_)};
-    auto* i64_ty{llvm::Type::getInt64Ty(context_)};
-    auto* ptr{types_.get_ptr_ty()};
-    auto* zero64{llvm::ConstantInt::get(i64_ty, 0)};
-    auto* one64{llvm::ConstantInt::get(i64_ty, 1)};
-
-    const auto new_fn{[&](std::string_view name, bool set) -> llvm::Function* {
-        if (llvm_module_->getFunction(name)) { return nullptr; }
-        auto* second{set ? static_cast<llvm::Type*>(i32_ty) : static_cast<llvm::Type*>(ptr)};
-        auto* fn_ty{llvm::FunctionType::get(ptr, {ptr, second, i64_ty}, false)};
-        auto* fn{llvm::Function::Create(
-            fn_ty, llvm::GlobalValue::WeakAnyLinkage, name, llvm_module_.get())};
-        if (want_comdat) { fn->setComdat(llvm_module_->getOrInsertComdat(std::string{name})); }
-        fn->addFnAttr(llvm::Attribute::NoInline);
-        fn->addFnAttr(llvm::Attribute::NoUnwind);
-        fn->addFnAttr(llvm::Attribute::NoBuiltin);
-        // `optnone` stops loop-idiom recognition from turning the byte loop back into a
-        // `llvm.mem*` intrinsic, which lowers to this same (recursive) libcall.
-        fn->addFnAttr(llvm::Attribute::OptimizeNone);
-        return fn;
-    }};
-
-    // Emits, from the current insert point, a `dst[k] = <byte>` loop (`k` runs 0..n, or n..0
-    // when `backward`) that branches to `after` when done.
-    const auto byte_loop{[&](gsl::not_null<llvm::Function*>   fn,
-                             gsl::not_null<llvm::Value*>      dst,
-                             gsl::not_null<llvm::Value*>      mid,
-                             gsl::not_null<llvm::Value*>      n,
-                             bool                             set,
-                             bool                             backward,
-                             gsl::not_null<llvm::BasicBlock*> after) {
-        auto* iv{builder_.CreateAlloca(i64_ty, nullptr, "i")};
-        builder_.CreateStore(backward ? n.get() : static_cast<llvm::Value*>(zero64), iv);
-        auto* head{llvm::BasicBlock::Create(context_, "head", fn)};
-        auto* body{llvm::BasicBlock::Create(context_, "body", fn)};
-        builder_.CreateBr(head);
-
-        builder_.SetInsertPoint(head);
-        auto* i{builder_.CreateLoad(i64_ty, iv, "i.cur")};
-        auto* cont{backward ? builder_.CreateICmpNE(i, zero64) : builder_.CreateICmpULT(i, n)};
-        builder_.CreateCondBr(cont, body, after);
-
-        builder_.SetInsertPoint(body);
-        auto* idx{backward ? builder_.CreateSub(i, one64) : i};
-        auto* dp{builder_.CreateGEP(i8_ty, dst, idx, "dp")};
-        if (set) {
-            builder_.CreateStore(builder_.CreateTrunc(mid, i8_ty), dp);
-        } else {
-            auto* sp{builder_.CreateGEP(i8_ty, mid, idx, "sp")};
-            builder_.CreateStore(builder_.CreateLoad(i8_ty, sp, "b"), dp);
-        }
-        builder_.CreateStore(backward ? idx : builder_.CreateAdd(i, one64), iv);
-        builder_.CreateBr(head);
-    }};
-
-    // A simple non-overlapping memory intrinsic
-    const auto simple{[&](std::string_view name, bool set, bool backward) {
-        auto* fn{new_fn(name, set)};
-        if (!fn) { return; }
-        auto  arg{fn->arg_begin()};
-        auto* dst{arg++};
-        auto* mid{arg++};
-        auto* n{arg};
-        auto* done{llvm::BasicBlock::Create(context_, "done", fn)};
-        builder_.SetInsertPoint(done);
-        builder_.CreateRet(dst);
-        builder_.SetInsertPoint(llvm::BasicBlock::Create(context_, "entry", fn, done));
-        byte_loop(fn, dst, mid, n, set, backward, done);
-    }};
-
-    if (memcpy_used_) { simple("memcpy", false, false); }
-    if (memset_used_) { simple("memset", true, false); }
-    if (memmove_used_) {
-        if (auto* fn{new_fn("memmove", false)}) {
-            auto  arg{fn->arg_begin()};
-            auto* dst{arg++};
-            auto* src{arg++};
-            auto* n{arg};
-            auto* done{llvm::BasicBlock::Create(context_, "done", fn)};
-            builder_.SetInsertPoint(done);
-            builder_.CreateRet(dst);
-
-            auto* fwd{llvm::BasicBlock::Create(context_, "fwd", fn, done)};
-            auto* bwd{llvm::BasicBlock::Create(context_, "bwd", fn, done)};
-            builder_.SetInsertPoint(llvm::BasicBlock::Create(context_, "entry", fn, fwd));
-            auto* di{builder_.CreatePtrToInt(dst, i64_ty)};
-            auto* si{builder_.CreatePtrToInt(src, i64_ty)};
-            builder_.CreateCondBr(builder_.CreateICmpULT(di, si), fwd, bwd);
-
-            builder_.SetInsertPoint(fwd);
-            byte_loop(fn, dst, src, n, false, false, done);
-            builder_.SetInsertPoint(bwd);
-            byte_loop(fn, dst, src, n, false, true, done);
-        }
-    }
+auto llvm_lowering::usize_const(u64 value) -> llvm::ConstantInt* {
+    return llvm::ConstantInt::get(types_.get_usize_ty(), value);
 }
 
 auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_args) -> llvm::Value* {
@@ -616,7 +547,7 @@ auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_arg
             auto* outer_len{builder_.CreateStructGEP(
                 slice_ty, outer_slice, static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX), "outer.len")};
             builder_.CreateStore(llvm::ConstantPointerNull::get(types_.get_ptr_ty()), outer_data);
-            builder_.CreateStore(builder_.getInt64(0), outer_len);
+            builder_.CreateStore(usize_const(0), outer_len);
             outer_val = builder_.CreateLoad(slice_ty, outer_slice, "outer.val");
         } else {
             // Recover argv via raw Win32 APIs (no CRT): split into wide args, convert to UTF-8.
@@ -649,12 +580,13 @@ auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_arg
             auto* cmdline{builder_.CreateCall(get_cmdline_fn, {}, "cmdline")};
             auto* wargv{builder_.CreateCall(cmdline_to_argv_fn, {cmdline, nargs_slot}, "wargv")};
             auto* nargs_i32{builder_.CreateLoad(types_.get_int32_ty(), nargs_slot, "nargs.val")};
-            auto* raw_argc_i64{builder_.CreateSExt(nargs_i32, types_.get_int64_ty(), "argc.i64")};
+            auto* raw_argc_i64{
+                builder_.CreateSExtOrTrunc(nargs_i32, types_.get_usize_ty(), "argc.i64")};
 
-            auto* max_args_v{builder_.getInt64(max_args)};
+            auto* max_args_v{usize_const(max_args)};
             auto* slice_array{builder_.CreateAlloca(slice_ty, max_args_v, "args.array")};
             auto* arg_bufs{builder_.CreateAlloca(
-                types_.get_int8_ty(), builder_.getInt64(max_args * max_arg_bytes), "arg.bufs")};
+                types_.get_int8_ty(), usize_const(max_args * max_arg_bytes), "arg.bufs")};
             auto* argc_i64{builder_.CreateSelect(builder_.CreateICmpSLT(raw_argc_i64, max_args_v),
                                                  raw_argc_i64,
                                                  max_args_v,
@@ -665,12 +597,12 @@ auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_arg
             auto* loop_inc{llvm::BasicBlock::Create(context_, "wargs.inc", entry_fn)};
             auto* loop_end{llvm::BasicBlock::Create(context_, "wargs.end", entry_fn)};
 
-            auto* i_var{builder_.CreateAlloca(types_.get_int64_ty(), nullptr, "wi")};
-            builder_.CreateStore(builder_.getInt64(0), i_var);
+            auto* i_var{builder_.CreateAlloca(types_.get_usize_ty(), nullptr, "wi")};
+            builder_.CreateStore(usize_const(0), i_var);
             builder_.CreateBr(loop_cond);
 
             builder_.SetInsertPoint(loop_cond);
-            auto* cur_i{builder_.CreateLoad(types_.get_int64_ty(), i_var, "wcur.i")};
+            auto* cur_i{builder_.CreateLoad(types_.get_usize_ty(), i_var, "wcur.i")};
             auto* cmp{builder_.CreateICmpSLT(cur_i, argc_i64, "wcmp")};
             builder_.CreateCondBr(cmp, loop_body, loop_end);
 
@@ -678,7 +610,7 @@ auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_arg
             auto* wargv_elem_ptr{
                 builder_.CreateGEP(types_.get_ptr_ty(), wargv, {cur_i}, "wargv.elem.ptr")};
             auto* wstr_ptr{builder_.CreateLoad(types_.get_ptr_ty(), wargv_elem_ptr, "wstr.ptr")};
-            auto* buf_off{builder_.CreateMul(cur_i, builder_.getInt64(max_arg_bytes), "buf.off")};
+            auto* buf_off{builder_.CreateMul(cur_i, usize_const(max_arg_bytes), "buf.off")};
             auto* buf_ptr{builder_.CreateGEP(types_.get_int8_ty(), arg_bufs, {buf_off}, "buf.ptr")};
 
             // Subtract one to exclude the converted null terminator, matching strlen-style.
@@ -695,8 +627,8 @@ auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_arg
                                              llvm::ConstantPointerNull::get(types_.get_ptr_ty())},
                                     "converted.len")};
             auto* converted_i64{
-                builder_.CreateSExt(converted, types_.get_int64_ty(), "converted.i64")};
-            auto* final_len{builder_.CreateSub(converted_i64, builder_.getInt64(1), "final.len")};
+                builder_.CreateSExtOrTrunc(converted, types_.get_usize_ty(), "converted.i64")};
+            auto* final_len{builder_.CreateSub(converted_i64, usize_const(1), "final.len")};
 
             auto* dest_slice_ptr{
                 builder_.CreateGEP(slice_ty, slice_array, {cur_i}, "wdest.slice.ptr")};
@@ -715,7 +647,7 @@ auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_arg
             builder_.CreateBr(loop_inc);
 
             builder_.SetInsertPoint(loop_inc);
-            auto* inc_i{builder_.CreateAdd(cur_i, builder_.getInt64(1), "winc.i")};
+            auto* inc_i{builder_.CreateAdd(cur_i, usize_const(1), "winc.i")};
             builder_.CreateStore(inc_i, i_var);
             builder_.CreateBr(loop_cond);
 
@@ -738,10 +670,10 @@ auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_arg
     auto* argv{entry_fn->getArg(1)};
     argv->setName("argv");
 
-    auto* raw_argc_i64{builder_.CreateSExt(argc, types_.get_int64_ty(), "argc.i64")};
+    auto* raw_argc_i64{builder_.CreateSExtOrTrunc(argc, types_.get_usize_ty(), "argc.i64")};
 
     // Fixed 128-slot buffer of {ptr, len} pairs; small enough to avoid stack probing.
-    auto* max_args{builder_.getInt64(128)};
+    auto* max_args{usize_const(128)};
     auto* slice_array{builder_.CreateAlloca(slice_ty, max_args, "args.array")};
     auto* argc_i64{builder_.CreateSelect(
         builder_.CreateICmpSLT(raw_argc_i64, max_args), raw_argc_i64, max_args, "argc.bounded")};
@@ -751,13 +683,13 @@ auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_arg
     auto* loop_inc{llvm::BasicBlock::Create(context_, "loop.inc", entry_fn)};
     auto* loop_end{llvm::BasicBlock::Create(context_, "loop.end", entry_fn)};
 
-    auto* i_var{builder_.CreateAlloca(types_.get_int64_ty(), nullptr, "i")};
-    builder_.CreateStore(builder_.getInt64(0), i_var);
+    auto* i_var{builder_.CreateAlloca(types_.get_usize_ty(), nullptr, "i")};
+    builder_.CreateStore(usize_const(0), i_var);
     builder_.CreateBr(loop_cond);
 
     // Loop condition: i < argc_i64
     builder_.SetInsertPoint(loop_cond);
-    auto* cur_i{builder_.CreateLoad(types_.get_int64_ty(), i_var, "cur.i")};
+    auto* cur_i{builder_.CreateLoad(types_.get_usize_ty(), i_var, "cur.i")};
     auto* cmp{builder_.CreateICmpSLT(cur_i, argc_i64, "cmp")};
     builder_.CreateCondBr(cmp, loop_body, loop_end);
 
@@ -771,24 +703,24 @@ auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_arg
     auto* str_len_body{llvm::BasicBlock::Create(context_, "strlen.body", entry_fn)};
     auto* str_len_end{llvm::BasicBlock::Create(context_, "strlen.end", entry_fn)};
 
-    auto* len_var{builder_.CreateAlloca(types_.get_int64_ty(), nullptr, "str.len")};
-    builder_.CreateStore(builder_.getInt64(0), len_var);
+    auto* len_var{builder_.CreateAlloca(types_.get_usize_ty(), nullptr, "str.len")};
+    builder_.CreateStore(usize_const(0), len_var);
     builder_.CreateBr(str_len_cond);
 
     builder_.SetInsertPoint(str_len_cond);
-    auto* cur_len{builder_.CreateLoad(types_.get_int64_ty(), len_var, "cur.len")};
+    auto* cur_len{builder_.CreateLoad(types_.get_usize_ty(), len_var, "cur.len")};
     auto* char_ptr{builder_.CreateGEP(types_.get_int8_ty(), str_ptr, {cur_len}, "char.ptr")};
     auto* char_val{builder_.CreateLoad(types_.get_int8_ty(), char_ptr, "char.val")};
     auto* is_not_null{builder_.CreateICmpNE(char_val, builder_.getInt8(0), "not.null")};
     builder_.CreateCondBr(is_not_null, str_len_body, str_len_end);
 
     builder_.SetInsertPoint(str_len_body);
-    auto* next_len{builder_.CreateAdd(cur_len, builder_.getInt64(1), "next.len")};
+    auto* next_len{builder_.CreateAdd(cur_len, usize_const(1), "next.len")};
     builder_.CreateStore(next_len, len_var);
     builder_.CreateBr(str_len_cond);
 
     builder_.SetInsertPoint(str_len_end);
-    auto* final_len{builder_.CreateLoad(types_.get_int64_ty(), len_var, "final.len")};
+    auto* final_len{builder_.CreateLoad(types_.get_usize_ty(), len_var, "final.len")};
 
     // Store { str_ptr, final_len } into slice_array[cur_i]
     auto* dest_slice_ptr{builder_.CreateGEP(slice_ty, slice_array, {cur_i}, "dest.slice.ptr")};
@@ -802,7 +734,7 @@ auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_arg
 
     // Loop increment: i++
     builder_.SetInsertPoint(loop_inc);
-    auto* inc_i{builder_.CreateAdd(cur_i, builder_.getInt64(1), "inc.i")};
+    auto* inc_i{builder_.CreateAdd(cur_i, usize_const(1), "inc.i")};
     builder_.CreateStore(inc_i, i_var);
     builder_.CreateBr(loop_cond);
 
@@ -825,39 +757,18 @@ auto llvm_lowering::lower_test_executable(const gir::module&             gir_mod
         user_runner_name.transform([](auto sv) { return std::string{sv}; }).value_or(std::string{});
     is_executable_ = true;
     gir_module_.emplace(gir_mod);
-    for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
+    declare_functions(gir_mod);
     define_test_take_skipped();
-    lower_dyn_vtables(gir_mod);
-    for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
-    for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
+    lower_definitions(gir_mod);
     emit_test_entry_wrapper(gir_mod, recover_args);
-    maybe_emit_windows_stack_probe();
-    maybe_emit_mem_intrinsic_fallbacks();
+    finalize_runtime_support();
     return std::move(llvm_module_);
 }
 
 auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod, bool recover_args)
     -> llvm::Function* {
     PROFILE_FUNCTION();
-    auto* main_fn_ty{llvm::FunctionType::get(
-        types_.get_int32_ty(), {types_.get_int32_ty(), types_.get_ptr_ty()}, false)};
-    auto* main_fn{llvm::Function::Create(
-        main_fn_ty, llvm::Function::ExternalLinkage, "main", llvm_module_.get())};
-    main_fn->addFnAttr(llvm::Attribute::NoBuiltin);
-    main_fn->addFnAttr("no-builtins");
-    main_fn->addFnAttr("no-stack-arg-probe", "true");
-
-    const llvm::Triple triple{llvm_module_->getTargetTriple()};
-    if (triple.isWindowsGNUEnvironment() && !llvm_module_->getFunction("__main")) {
-        auto*             void_ty{llvm::Type::getVoidTy(context_)};
-        auto*             dummy_main_ty{llvm::FunctionType::get(void_ty, false)};
-        auto*             dummy_main{llvm::Function::Create(
-            dummy_main_ty, llvm::Function::ExternalLinkage, "__main", llvm_module_.get())};
-        auto*             dummy_bb{llvm::BasicBlock::Create(context_, "entry", dummy_main)};
-        llvm::IRBuilder<> dummy_builder{dummy_bb};
-        dummy_builder.CreateRetVoid();
-        llvm::appendToUsed(*llvm_module_, {dummy_main});
-    }
+    auto* main_fn{create_c_entry_function()};
 
     auto* slice_ty{types_.translate_slice_type()};
     // Mirrors `builtin.SourceLocation { file: []u8, line: u32, column: u32 }`
@@ -947,9 +858,6 @@ auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod, bool rec
         builder_.CreateRet(builder_.getInt32(0));
     }
 
-    // Same freestanding-entry story as a normal executable (see emit_main_entry_wrapper).
-    if (triple.isOSLinux()) { emit_freestanding_start(main_fn); }
-
     return main_fn;
 }
 
@@ -998,6 +906,28 @@ auto llvm_lowering::define_test_take_skipped() -> void {
     b.CreateRet(was_skipped);
 }
 
+auto llvm_lowering::lower_truthiness(llvm::Value* value) -> llvm::Value* {
+    auto* type{value->getType()};
+    if (type->isPointerTy()) {
+        return builder_.CreateICmpNE(
+            value, llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(type)), "tobool");
+    }
+    if (type->isIntegerTy() && type->getIntegerBitWidth() != 1) {
+        return builder_.CreateICmpNE(value, llvm::Constant::getNullValue(type), "tobool");
+    }
+    return value;
+}
+
+auto llvm_lowering::branch_to_failure(llvm::Value* cond, std::string_view prefix)
+    -> llvm::BasicBlock* {
+    auto* cur_fn{builder_.GetInsertBlock()->getParent()};
+    auto* fail_bb{llvm::BasicBlock::Create(context_, fmt::format("{}.fail", prefix), cur_fn)};
+    auto* cont_bb{llvm::BasicBlock::Create(context_, fmt::format("{}.cont", prefix), cur_fn)};
+    builder_.CreateCondBr(cond, cont_bb, fail_bb);
+    builder_.SetInsertPoint(fail_bb);
+    return cont_bb;
+}
+
 auto llvm_lowering::emit_context_handler_call(const gir::instruction& inst,
                                               std::string_view        handler_name,
                                               usize                   msg_idx,
@@ -1019,7 +949,7 @@ auto llvm_lowering::emit_context_handler_call(const gir::instruction& inst,
                 slice = builder_.CreateInsertValue(
                     slice, gstr, {static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX)});
                 slice = builder_.CreateInsertValue(slice,
-                                                   builder_.getInt64(str->size()),
+                                                   usize_const(str->size()),
                                                    {static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX)});
                 return slice;
             }
@@ -1068,7 +998,7 @@ auto llvm_lowering::emit_lowered_panic(std::string_view message, const gir::inst
         slice =
             builder_.CreateInsertValue(slice, gstr, {static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX)});
         slice = builder_.CreateInsertValue(
-            slice, builder_.getInt64(text.size()), {static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX)});
+            slice, usize_const(text.size()), {static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX)});
         return slice;
     }};
 
@@ -1248,7 +1178,7 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
     if (const auto u{cv.as_opt<u64>()}) { return int_or_ptr_constant(*u, ty); }
     if (const auto w{cv.as_opt<i128>()}) { return int_or_ptr_constant(static_cast<u128>(*w), ty); }
     if (const auto w{cv.as_opt<u128>()}) { return int_or_ptr_constant(*w, ty); }
-    if (const auto f{cv.as_opt<f64>()}) { return llvm::ConstantFP::get(ty, *f); }
+    if (const auto f{cv.as_opt<f128>()}) { return float_constant(*f, ty); }
     if (const auto b{cv.as_opt<bool>()}) { return llvm::ConstantInt::getBool(context_, *b); }
     if (const auto e{cv.as_opt<gir::const_enum>()}) {
         return llvm::ConstantInt::get(ty, static_cast<u64>(e->value), true);
@@ -1365,10 +1295,14 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
                 u64         v{static_cast<u64>(*iv)};
                 const usize copy_len{std::min<usize>(sizeof(v), max_size)};
                 std::memcpy(bytes.data(), &v, copy_len);
-            } else if (const auto fv{p.as_opt<f64>()}) {
-                f64         v{*fv};
-                const usize copy_len{std::min<usize>(sizeof(v), max_size)};
-                std::memcpy(bytes.data(), &v, copy_len);
+            } else if (const auto fv{p.as_opt<f128>()}) {
+                const auto payload_type{p.get_type()};
+                const auto format{payload_type ? sema::float_format_of(*payload_type) : stdx::none};
+                const auto encoded{fv->encode(format.value_or(float_format::DOUBLE))};
+                const auto width{format_info(format.value_or(float_format::DOUBLE)).storage_bits};
+                const std::array<u64, 2> words{encoded.low, encoded.high};
+                const usize              copy_len{std::min<usize>(width / 8, max_size)};
+                std::memcpy(bytes.data(), words.data(), copy_len);
             } else if (const auto bv{p.as_opt<bool>()}) {
                 bytes[0] = *bv ? 1 : 0;
             }
@@ -1418,7 +1352,9 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
     if (auto* existing{llvm_module_->getGlobalVariable(g.name)}) { return existing; }
     ensure_reserved_symbols();
 
-    auto*      g_type{types_.translate(g.type)};
+    auto* g_type{types_.translate(g.type)};
+    // A `void` global has no storage to emit
+    if (g_type->isVoidTy() || g_type->isFunctionTy()) { return nullptr; }
     const bool is_const{g.is_constant};
     auto       g_linkage{(g.linkage == gir::linkage::INTERNAL) ? llvm::GlobalValue::InternalLinkage
                                                                : llvm::GlobalValue::ExternalLinkage};
@@ -1481,6 +1417,8 @@ auto llvm_lowering::ensure_reserved_symbols() -> void {
     PROFILE_FUNCTION();
     if (reserved_symbols_built_) { return; }
     reserved_symbols_built_ = true;
+    // The synthesized C entry point owns `main` in any linked executable
+    if (is_executable_) { reserved_symbols_.emplace("main"); }
     if (!gir_module_) { return; }
     for (const auto* f : gir_module_->get_functions()) {
         if (!f->get_link_name().empty()) { reserved_symbols_.emplace(f->get_link_name()); }
@@ -1505,15 +1443,7 @@ auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function*
     }
     ensure_reserved_symbols();
 
-    const auto* target_t{&fn.get_type()};
-    if (const auto ref{target_t->get_data().as_opt<sema::types::reference>()}) {
-        target_t = &ref->underlying;
-    }
-    if (const auto ptr{target_t->get_data().as_opt<sema::types::pointer>()}) {
-        target_t = &ptr->underlying;
-    }
-
-    const auto fn_data{target_t->get_data().as_opt<sema::types::function>()};
+    const auto fn_data{sema::signature_of(fn.get_type())};
     ASSERT(fn_data, "Function must have function sema type");
     auto* fn_ty{types_.translate_function_type(*fn_data)};
 
@@ -1576,14 +1506,7 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
     PROFILE_FUNCTION();
     auto* llvm_fn{declare_function(fn)};
     if (!llvm_fn) { return llvm_fn; }
-    const auto* target_t{&fn.get_type()};
-    if (const auto ref{target_t->get_data().as_opt<sema::types::reference>()}) {
-        target_t = &ref->underlying;
-    }
-    if (const auto ptr{target_t->get_data().as_opt<sema::types::pointer>()}) {
-        target_t = &ptr->underlying;
-    }
-    const auto fn_data{target_t->get_data().as_opt<sema::types::function>()};
+    const auto fn_data{sema::signature_of(fn.get_type())};
     if (fn.get_linkage() == gir::linkage::EXTERN || fn.get_segments().empty() ||
         (fn_data && is_constexpr_only_signature(*fn_data))) {
         return llvm_fn;
@@ -1722,11 +1645,11 @@ auto llvm_lowering::lower_value(const gir::value&               val,
                                    : types_.get_int64_ty()};
             return int_or_ptr_constant(w, ty);
         },
-        [this, &val, expected_type](f64 f) -> llvm::Value* {
+        [this, &val, expected_type](f128 f) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
                      : val.type    ? types_.translate(*val.type)
                                    : types_.get_double_ty()};
-            return llvm::ConstantFP::get(ty, f);
+            return float_constant(f, ty);
         },
         [this](bool b) -> llvm::Value* { return llvm::ConstantInt::getBool(context_, b); },
         [this, &val, expected_type](const std::string& str) -> llvm::Value* {
@@ -1878,24 +1801,18 @@ auto llvm_lowering::emit_load(const gir::instruction& inst) -> llvm::Value* {
 
 auto llvm_lowering::emit_store(const gir::instruction& inst) -> void {
     PROFILE_FUNCTION();
-    const auto is_volatile{inst.is_volatile()};
-    if (inst.operands.size() >= 2) {
-        auto* dest_ptr{lower_value(inst.operands[0])};
-        auto* val{lower_value(inst.operands[1], inst.type ? inst.type.get() : nullptr)};
-        if (!dest_ptr || !dest_ptr->getType()->isPointerTy() || !val ||
-            val->getType()->isVoidTy()) {
-            return;
-        }
-        builder_.CreateStore(val, dest_ptr, is_volatile);
-    } else if (inst.result && !inst.operands.empty()) {
-        auto* dest_ptr{lower_value(gir::value{*inst.result})};
-        auto* val{lower_value(inst.operands[0], inst.type ? inst.type.get() : nullptr)};
-        if (!dest_ptr || !dest_ptr->getType()->isPointerTy() || !val ||
-            val->getType()->isVoidTy()) {
-            return;
-        }
-        builder_.CreateStore(val, dest_ptr, is_volatile);
+    // Either `store val, dest` or a result slot initialized from its single operand
+    const bool has_explicit_dest{inst.operands.size() >= 2};
+    if (!has_explicit_dest && (!inst.result || inst.operands.empty())) { return; }
+
+    auto* dest_ptr{has_explicit_dest ? lower_value(inst.operands[0])
+                                     : lower_value(gir::value{*inst.result})};
+    auto* val{lower_value(inst.operands[has_explicit_dest ? 1 : 0],
+                          inst.type ? inst.type.get() : nullptr)};
+    if (!dest_ptr || !dest_ptr->getType()->isPointerTy() || !val || val->getType()->isVoidTy()) {
+        return;
     }
+    builder_.CreateStore(val, dest_ptr, inst.is_volatile());
 }
 
 auto llvm_lowering::emit_get_element_ptr(const gir::instruction& inst) -> llvm::Value* {
@@ -2054,11 +1971,32 @@ auto llvm_lowering::emit_global_addr(const gir::instruction& inst) -> llvm::Valu
     return gv;
 }
 
+// `ptr + n` / `ptr - n` step by whole pointees, like C
+auto llvm_lowering::emit_pointer_offset(const gir::instruction& inst) -> llvm::Value* {
+    const auto& pointee{inst.operands[0].type->get_data().as<sema::types::pointer>().underlying};
+    auto*       base{lower_value(inst.operands[0])};
+    auto*       offset{lower_value(inst.operands[1])};
+    ASSERT(base && offset, "Pointer arithmetic operands must lower to non-null LLVM values");
+
+    auto*      index_ty{llvm_module_->getDataLayout().getIntPtrType(context_)};
+    const auto offset_int{inst.operands[1].type ? sema::as_integer(*inst.operands[1].type)
+                                                : stdx::option<sema::types::integer>{}};
+    const bool is_signed_offset{!offset_int || offset_int->is_signed};
+    offset = builder_.CreateIntCast(offset, index_ty, is_signed_offset, "ptr.offset");
+    if (inst.kind == gir::instruction_kind::SUB) { offset = builder_.CreateNeg(offset); }
+    return builder_.CreateGEP(types_.translate(pointee), base, offset, "ptr.step");
+}
+
 auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
     ASSERT(inst.operands.size() >= 2, "Binary instruction requires at least 2 operands");
     const auto op0_ty{inst.operands[0].type};
     const auto op1_ty{inst.operands[1].type};
+    const bool is_offset_op{inst.kind == gir::instruction_kind::ADD ||
+                            inst.kind == gir::instruction_kind::SUB};
+    if (is_offset_op && op0_ty && op0_ty->get_kind() == sema::type_kind::POINTER) {
+        return emit_pointer_offset(inst);
+    }
     const auto peer_ty{concrete_peer_type(op0_ty, op1_ty)};
     auto*      lhs{lower_value(inst.operands[0], peer_ty)};
     auto*      rhs{lower_value(inst.operands[1], peer_ty)};
@@ -2174,6 +2112,16 @@ auto llvm_lowering::emit_comparison(const gir::instruction& inst) -> llvm::Value
                                  : builder_.CreateZExt(rhs, lhs_int, "cmpext");
                 }
             }
+        }
+    }
+
+    // Every narrower float format is exactly representable in a wider one
+    if (is_flt && lhs->getType() != rhs->getType() && lhs->getType()->isFloatingPointTy() &&
+        rhs->getType()->isFloatingPointTy()) {
+        if (lhs->getType()->getPrimitiveSizeInBits() < rhs->getType()->getPrimitiveSizeInBits()) {
+            lhs = builder_.CreateFPExt(lhs, rhs->getType(), "cmpext");
+        } else {
+            rhs = builder_.CreateFPExt(rhs, lhs->getType(), "cmpext");
         }
     }
 
@@ -2307,8 +2255,9 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
         if (auto* callee_fn{resolve_named_function(*inst.callee_name)}) {
             std::vector<llvm::Value*> args;
             args.reserve(inst.operands.size());
+            auto* callee_fn_ty{callee_fn->getFunctionType()};
             for (const auto& op : inst.operands) {
-                if (op.type && op.type->get_kind() == sema::type_kind::TYPE) { continue; }
+                if (op.type && sema::is_type_parameter_slot(*op.type)) { continue; }
                 auto* arg_val{lower_value(op)};
                 if (!arg_val || arg_val->getType()->isVoidTy()) { continue; }
                 if (op.type && op.type->get_kind() == sema::type_kind::ARRAY &&
@@ -2330,12 +2279,15 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
                             slice_val, ptr_val, {static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX)});
                         slice_val = builder_.CreateInsertValue(
                             slice_val,
-                            builder_.getInt64(static_cast<u64>(arr_data->len)),
+                            usize_const(static_cast<u64>(arr_data->len)),
                             {static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX)});
                         arg_val = slice_val;
                     }
                 } else {
                     arg_val = load_aggregate_arg(op, arg_val);
+                }
+                if (args.size() >= callee_fn_ty->getNumParams() && callee_fn_ty->isVarArg()) {
+                    arg_val = promote_c_variadic_arg(arg_val, op.type);
                 }
                 args.emplace_back(arg_val);
             }
@@ -2352,14 +2304,7 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
     ASSERT(!inst.operands.empty(), "Indirect call requires callee operand");
     auto* callee_val{lower_value(inst.operands[0])};
     ASSERT(inst.operands[0].type, "Indirect callee must have function type");
-    auto ind_target{inst.operands[0].type};
-    if (const auto ref{ind_target->get_data().as_opt<sema::types::reference>()}) {
-        ind_target.emplace(ref->underlying);
-    }
-    if (const auto ptr{ind_target->get_data().as_opt<sema::types::pointer>()}) {
-        ind_target.emplace(ptr->underlying);
-    }
-    const auto ind_fn_data{ind_target->get_data().as_opt<sema::types::function>()};
+    const auto ind_fn_data{sema::signature_of(*inst.operands[0].type)};
     ASSERT(ind_fn_data, "Indirect callee must have function type");
     // A folded `const f: fn(...) = g;` reaches here as `g` itself: call it directly
     const bool is_erased{ind_fn_data->erased && !llvm::isa<llvm::Function>(callee_val)};
@@ -2378,10 +2323,14 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
     }
     for (const auto& operand : inst.operands | std::views::drop(1)) {
         // Match the direct-callee branch above
-        if (operand.type && operand.type->get_kind() == sema::type_kind::TYPE) { continue; }
+        if (operand.type && sema::is_type_parameter_slot(*operand.type)) { continue; }
         auto* arg_val{lower_value(operand)};
         if (!arg_val || arg_val->getType()->isVoidTy()) { continue; }
-        args.emplace_back(load_aggregate_arg(operand, arg_val));
+        arg_val = load_aggregate_arg(operand, arg_val);
+        if (args.size() >= fn_ty->getNumParams() && fn_ty->isVarArg()) {
+            arg_val = promote_c_variadic_arg(arg_val, operand.type);
+        }
+        args.emplace_back(arg_val);
     }
 
     const bool is_void{!inst.type || inst.type->get_kind() == sema::type_kind::VOID_ ||
@@ -2393,6 +2342,45 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
                                         : to_llvm_callconv(ind_fn_data->conv));
     if (inst.result && !is_void) { set_local(*inst.result, call_inst); }
     return call_inst;
+}
+
+// LLVM's generic `va_arg` expansion steps Win64's 8-byte slots by the type's own size, so walk
+// them by hand the way clang does; larger or odd-sized values are passed by reference
+auto llvm_lowering::emit_va_arg(llvm::Value* list, llvm::Type* ty) -> llvm::Value* {
+    const llvm::Triple triple{llvm_module_->getTargetTriple()};
+    if (!triple.isOSWindows() || triple.getArch() != llvm::Triple::x86_64) {
+        return builder_.CreateVAArg(list, ty, "vaarg");
+    }
+
+    constexpr u64 win64_slot_size{8};
+    const auto&   layout{llvm_module_->getDataLayout()};
+    const auto    size{layout.getTypeAllocSize(ty).getFixedValue()};
+    const bool    by_reference{size > win64_slot_size || !llvm::isPowerOf2_64(size)};
+
+    auto* ptr_ty{types_.get_ptr_ty()};
+    auto* slot{builder_.CreateLoad(ptr_ty, list, "va.slot")};
+    auto* next{builder_.CreateConstInBoundsGEP1_64(
+        builder_.getInt8Ty(), slot, win64_slot_size, "va.next")};
+    builder_.CreateStore(next, list);
+    auto* value_addr{by_reference ? builder_.CreateLoad(ptr_ty, slot, "va.indirect") : slot};
+    return builder_.CreateLoad(ty, value_addr, "vaarg");
+}
+
+// C's default argument promotions: a variadic slot never carries a sub-`int` integer or a `float`
+auto llvm_lowering::promote_c_variadic_arg(llvm::Value* arg_val, stdx::option<sema::type&> type)
+    -> llvm::Value* {
+    auto* arg_ty{arg_val->getType()};
+    if (arg_ty->isIntegerTy() && arg_ty->getIntegerBitWidth() < 32) {
+        bool is_signed{false};
+        if (type) {
+            if (const auto int_info{sema::as_integer(*type)}) { is_signed = int_info->is_signed; }
+        }
+        return builder_.CreateIntCast(arg_val, builder_.getInt32Ty(), is_signed, "vararg.promote");
+    }
+    if (arg_ty->isHalfTy() || arg_ty->isBFloatTy() || arg_ty->isFloatTy()) {
+        return builder_.CreateFPExt(arg_val, builder_.getDoubleTy(), "vararg.promote");
+    }
+    return arg_val;
 }
 
 auto llvm_lowering::load_aggregate_arg(const gir::value& op, llvm::Value* arg_val) -> llvm::Value* {
@@ -2504,25 +2492,9 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (inst.operands.empty()) { return builder_.getInt1(true); }
             auto* cond_val{lower_value(inst.operands[0])};
             if (!cond_val) { return builder_.getInt1(true); }
-            if (cond_val->getType()->isPointerTy()) {
-                cond_val =
-                    builder_.CreateICmpNE(cond_val,
-                                          llvm::ConstantPointerNull::get(
-                                              llvm::cast<llvm::PointerType>(cond_val->getType())),
-                                          "tobool");
-            } else if (cond_val->getType()->isIntegerTy() &&
-                       cond_val->getType()->getIntegerBitWidth() != 1) {
-                cond_val = builder_.CreateICmpNE(
-                    cond_val, llvm::Constant::getNullValue(cond_val->getType()), "tobool");
-            }
+            cond_val = lower_truthiness(cond_val);
 
-            auto* cur_fn{builder_.GetInsertBlock()->getParent()};
-            auto* fail_bb{llvm::BasicBlock::Create(context_, "expect.fail", cur_fn)};
-            auto* cont_bb{llvm::BasicBlock::Create(context_, "expect.cont", cur_fn)};
-
-            builder_.CreateCondBr(cond_val, cont_bb, fail_bb);
-
-            builder_.SetInsertPoint(fail_bb);
+            auto* cont_bb{branch_to_failure(cond_val, "expect")};
             auto* failed_flag{get_or_create_test_failed_flag()};
             builder_.CreateStore(builder_.getInt1(true), failed_flag);
             emit_context_handler_call(inst, "expect_handler", 4UZ, 1UZ);
@@ -2536,25 +2508,9 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (inst.operands.empty()) { return nullptr; }
             auto* cond_val{lower_value(inst.operands[0])};
             if (!cond_val) { return nullptr; }
-            if (cond_val->getType()->isPointerTy()) {
-                cond_val =
-                    builder_.CreateICmpNE(cond_val,
-                                          llvm::ConstantPointerNull::get(
-                                              llvm::cast<llvm::PointerType>(cond_val->getType())),
-                                          "tobool");
-            } else if (cond_val->getType()->isIntegerTy() &&
-                       cond_val->getType()->getIntegerBitWidth() != 1) {
-                cond_val = builder_.CreateICmpNE(
-                    cond_val, llvm::Constant::getNullValue(cond_val->getType()), "tobool");
-            }
+            cond_val = lower_truthiness(cond_val);
 
-            auto* cur_fn{builder_.GetInsertBlock()->getParent()};
-            auto* fail_bb{llvm::BasicBlock::Create(context_, "require.fail", cur_fn)};
-            auto* cont_bb{llvm::BasicBlock::Create(context_, "require.cont", cur_fn)};
-
-            builder_.CreateCondBr(cond_val, cont_bb, fail_bb);
-
-            builder_.SetInsertPoint(fail_bb);
+            auto* cont_bb{branch_to_failure(cond_val, "require")};
             auto* failed_flag{get_or_create_test_failed_flag()};
             builder_.CreateStore(builder_.getInt1(true), failed_flag);
             emit_context_handler_call(inst, "require_handler", 4UZ, 1UZ);
@@ -2569,26 +2525,9 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (inst.operands.empty()) { return nullptr; }
             auto* cond_val{lower_value(inst.operands[0])};
             if (!cond_val) { return nullptr; }
-            if (cond_val->getType()->isPointerTy()) {
-                cond_val =
-                    builder_.CreateICmpNE(cond_val,
-                                          llvm::ConstantPointerNull::get(
-                                              llvm::cast<llvm::PointerType>(cond_val->getType())),
-                                          "tobool");
-            } else if (cond_val->getType()->isIntegerTy() &&
-                       cond_val->getType()->getIntegerBitWidth() != 1) {
-                cond_val = builder_.CreateICmpNE(
-                    cond_val, llvm::Constant::getNullValue(cond_val->getType()), "tobool");
-            }
+            cond_val = lower_truthiness(cond_val);
 
-            auto* cur_fn{builder_.GetInsertBlock()->getParent()};
-            auto* fail_bb{llvm::BasicBlock::Create(
-                context_, is_verify ? "verify.fail" : "assert.fail", cur_fn)};
-            auto* cont_bb{llvm::BasicBlock::Create(
-                context_, is_verify ? "verify.cont" : "assert.cont", cur_fn)};
-            builder_.CreateCondBr(cond_val, cont_bb, fail_bb);
-
-            builder_.SetInsertPoint(fail_bb);
+            auto* cont_bb{branch_to_failure(cond_val, is_verify ? "verify" : "assert")};
             if (is_verify) {
                 std::string_view msg{"verification failed"};
                 if (inst.operands.size() > 4) {
@@ -2622,7 +2561,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
                     file_slice, gstr, {static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX)});
                 file_slice =
                     builder_.CreateInsertValue(file_slice,
-                                               builder_.getInt64(path->size()),
+                                               usize_const(path->size()),
                                                {static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX)});
             }
 
@@ -2657,7 +2596,6 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             auto* len{lower_value(inst.operands[2])};
             if (dest && src && len) {
                 builder_.CreateMemCpy(dest, llvm::MaybeAlign(), src, llvm::MaybeAlign(), len);
-                memcpy_used_ = true;
             }
             return nullptr;
         }
@@ -2666,10 +2604,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             auto* dest{lower_value(inst.operands[0])};
             auto* val{lower_value(inst.operands[1])};
             auto* len{lower_value(inst.operands[2])};
-            if (dest && val && len) {
-                builder_.CreateMemSet(dest, val, len, llvm::MaybeAlign());
-                memset_used_ = true;
-            }
+            if (dest && val && len) { builder_.CreateMemSet(dest, val, len, llvm::MaybeAlign()); }
             return nullptr;
         }
         case syntax::token_type_t::BUILTIN_MEMMOVE: {
@@ -2679,7 +2614,6 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             auto* len{lower_value(inst.operands[2])};
             if (dest && src && len) {
                 builder_.CreateMemMove(dest, llvm::MaybeAlign(), src, llvm::MaybeAlign(), len);
-                memmove_used_ = true;
             }
             return nullptr;
         }
@@ -2719,9 +2653,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
         case syntax::token_type_t::BUILTIN_C_VA_ARG: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* list{lower_value(inst.operands[0])}; list && inst.type) {
-                if (auto* ty{types_.translate(*inst.type)}) {
-                    return builder_.CreateVAArg(list, ty, "vaarg");
-                }
+                if (auto* ty{types_.translate(*inst.type)}) { return emit_va_arg(list, ty); }
             }
             return nullptr;
         }
@@ -2810,8 +2742,8 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             const auto  offset{layout.getStructLayout(llvm::cast<llvm::StructType>(struct_ty))
                                   ->getElementOffset(static_cast<u32>(field_idx))};
 
-            auto* field_int{builder_.CreatePtrToInt(field_ptr, types_.get_int64_ty(), "fpp.i")};
-            auto* parent_int{builder_.CreateSub(field_int, builder_.getInt64(offset), "fpp.base")};
+            auto* field_int{builder_.CreatePtrToInt(field_ptr, types_.get_usize_ty(), "fpp.i")};
+            auto* parent_int{builder_.CreateSub(field_int, usize_const(offset), "fpp.base")};
             return builder_.CreateIntToPtr(parent_int, types_.get_ptr_ty(), "fpp.p");
         }
 
@@ -3034,6 +2966,14 @@ auto llvm_lowering::emit_inline_asm(const gir::instruction& inst) -> llvm::Value
 
     auto* call{builder_.CreateCall(fn_ty, inline_asm, args)};
     call->addFnAttr(llvm::Attribute::NoUnwind);
+    // Assembler errors report this cookie back, so they can name the `asm` block's location
+    if (inst.location) {
+        const auto cookie{(static_cast<u64>(inst.location->line) << 32U) |
+                          static_cast<u32>(inst.location->column)};
+        call->setMetadata(
+            "srcloc",
+            llvm::MDNode::get(context_, llvm::ConstantAsMetadata::get(builder_.getInt64(cookie))));
+    }
     if (info.is_noreturn) { call->setDoesNotReturn(); }
 
     // Store each bound output back through its target address.

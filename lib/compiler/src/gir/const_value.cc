@@ -1,7 +1,6 @@
 #include "compiler/gir/const_value.hh"
 
 #include <algorithm>
-#include <bit>
 #include <cctype>
 #include <string>
 #include <string_view>
@@ -18,6 +17,7 @@
 #include "compiler/gir/instruction.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/type.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 
 namespace ghoti::gir {
@@ -88,7 +88,12 @@ auto const_value::hash() const noexcept -> u64 {
 
     stdx::hasher h{static_cast<u64>(data_.index()) + 2};
     data_.visit([&](const std::string& s) { h.combine<std::string_view>(s); },
-                [&](f64 v) { h.combine(std::bit_cast<u64>(v)); },
+                [&](f128 v) {
+                    // `-0 == +0`, so both zeros hash alike
+                    const auto bits{v.is_zero() ? u128{} : v.bits()};
+                    h.combine(bits.low);
+                    h.combine(bits.high);
+                },
                 [&](bool v) { h.combine(v ? 1U : 0U); },
                 [&](const stdx::option<sema::type&>& t) {
                     h.combine(t ? reinterpret_cast<u64>(t.get()) : 0U);
@@ -133,7 +138,10 @@ auto const_value::mangle() const -> std::string {
         [](u64 v) { return fmt::to_string(v); },
         [](i128 v) { return fmt::to_string(v); },
         [](u128 v) { return fmt::to_string(v); },
-        [](f64 v) { return fmt::format("{}", v); },
+        [this](f128 v) {
+            const auto format{type_ ? sema::float_format_of(*type_) : stdx::none};
+            return v.to_string(format.value_or(float_format::QUAD));
+        },
         [](bool v) -> std::string { return v ? "true" : "false"; },
         [](const std::string& v) {
             std::string out;
@@ -179,6 +187,18 @@ auto const_value::mangle() const -> std::string {
             return fmt::format("dyn.{}.{}", d.data_symbol, d.vtable_symbol);
         },
         [](const auto&) -> std::string { return "v"; });
+}
+
+auto with_declared_type(const_value value, sema::type& declared) -> const_value {
+    const bool is_number{value.is<i64>() || value.is<u64>() || value.is<i128>() ||
+                         value.is<u128>() || value.is<f128>()};
+    if (!is_number || !sema::is_numeric(declared.get_kind())) { return value; }
+    const auto format{sema::float_format_of(declared)};
+    if (format && !value.is<f128>()) {
+        return const_value{*value.int_as_float_opt(*format), declared};
+    }
+    value.set_type(declared);
+    return value;
 }
 
 } // namespace ghoti::gir

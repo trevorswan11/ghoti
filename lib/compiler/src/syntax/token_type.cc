@@ -2,8 +2,11 @@
 
 #include <algorithm>
 #include <cctype>
+#include <string>
 #include <string_view>
 
+#include <fmt/format.h>
+#include <magic_enum/magic_enum.hpp>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
 #include <stdx/string.hh>
@@ -11,6 +14,7 @@
 
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/keywords.hh"
+#include "compiler/syntax/operators.hh"
 
 namespace ghoti::syntax {
 
@@ -59,6 +63,36 @@ auto misc_from_char(char c) noexcept -> stdx::option<token_type_t> {
     case ']': return token_type_t::RBRACKET;
     default:  return stdx::none;
     }
+}
+
+auto describe(token_type_t tt) -> std::string {
+    switch (tt) {
+    case token_type_t::END:                return "the end of input";
+    case token_type_t::IDENT:              return "an identifier";
+    case token_type_t::INT_2:
+    case token_type_t::INT_8:
+    case token_type_t::INT_10:
+    case token_type_t::INT_16:             return "an integer literal";
+    case token_type_t::REAL:               return "a float literal";
+    case token_type_t::STRING:
+    case token_type_t::MULTILINE_STRING:   return "a string literal";
+    case token_type_t::U8:                 return "a character literal";
+    case token_type_t::INT_TYPE:           return "an integer type";
+    case token_type_t::ILLEGAL:            return "an invalid token";
+    case token_type_t::UNDERSCORE:         return "'_'";
+    case token_type_t::SINGLE_QUOTE:       return "'\''";
+    case token_type_t::DOC_COMMENT:        return "a doc comment";
+    case token_type_t::MODULE_DOC_COMMENT: return "a module doc comment";
+    default:                               break;
+    }
+
+    for (const char c : std::string_view{",:;(){}[]"}) {
+        if (misc_from_char(c) == tt) { return fmt::format("'{}'", c); }
+    }
+    if (const auto spelling{get_operator_opt(tt)}) { return fmt::format("'{}'", *spelling); }
+    if (const auto spelling{get_keyword_opt(tt)}) { return fmt::format("'{}'", *spelling); }
+    if (const auto spelling{get_builtin_opt(tt)}) { return fmt::format("'{}'", *spelling); }
+    return std::string{magic_enum::enum_name(tt)};
 }
 
 auto is_primitive(token_type_t type) noexcept -> bool {

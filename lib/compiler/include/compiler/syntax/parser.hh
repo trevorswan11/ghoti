@@ -273,9 +273,17 @@ class parser {
         return counter<u32>::guard{test_block_depth_};
     }
 
-  private:
+    // Rewinds to a failed top-level statement and skips it as one bracket-balanced unit
+    auto skip_failed_statement(const checkpoint& stmt_start) -> void;
+
     // Bounds recursive-descent depth so deep nesting reports a diagnostic, not a stack overflow.
-    static constexpr u32 MAX_EXPRESSION_DEPTH{512};
+    [[nodiscard]] auto enter_nesting() -> stdx::result<counter<u32>::guard, diagnostic>;
+
+  private:
+    static constexpr u32 MAX_NESTING_DEPTH{512};
+    static constexpr u32 MAX_OPERATOR_CHAIN{4'096};
+
+  private:
     using depth_counter = counter<u32>;
     using depth_guard   = depth_counter::guard;
 
@@ -310,7 +318,7 @@ class parser {
     token_t                 current_token_;
     token_t                 peek_token_;
     stdx::option<ast::AST&> ast_;
-    depth_counter           expr_depth_;
+    depth_counter           nesting_depth_;
 
     stdx::option<std::vector<ast::explicit_type_id>> pending_impl_bound_;
     depth_counter                                    test_block_depth_;

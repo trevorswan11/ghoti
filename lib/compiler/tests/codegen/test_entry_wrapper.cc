@@ -1,4 +1,3 @@
-#include <filesystem>
 #include <string>
 #include <string_view>
 
@@ -26,6 +25,7 @@
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
 #include "support/bin_utils.hh"
+#include "support/path_utils.hh"
 #include "support/tempfile.hh"
 #include "support/test.hh"
 
@@ -182,7 +182,7 @@ TEST_CASE("Windows entry wrapper with an args parameter emits valid, verifiable 
     tempfile                out_file{"test_windows_args_obj"};
     codegen::target_options target_opts{.triple_str = "x86_64-w64-windows-gnu"};
     CHECK(helpers::emit_object(*ctx, context, out_file, target_opts));
-    CHECK(std::filesystem::exists(out_file));
+    CHECK(path_utils::exists(out_file));
 }
 
 TEST_CASE("Parameterless main function lowering") {
@@ -251,7 +251,7 @@ TEST_CASE("Linux executables get a freestanding _start that calls main and exits
     codegen::target_options exe_target{.triple_str = std::string{tc.triple}};
     tempfile                exe_file{"test_start_exe"};
     REQUIRE(helpers::emit_executable(*ctx, context, exe_file, exe_target));
-    CHECK(std::filesystem::exists(exe_file));
+    CHECK(path_utils::exists(exe_file));
     CHECK(bin_utils::check_elf_header(exe_file));
 }
 

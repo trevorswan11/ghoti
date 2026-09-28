@@ -147,6 +147,13 @@ TEST_CASE("build-obj subcommand parser") {
             CHECK(opts.opt_opts.time_passes);
         }
 
+        SECTION("An explicitly empty optimization level is an error, not the default") {
+            mock_argv          args{"ghoti", "build-obj", "-O", "", "main.gh"};
+            std::ostringstream error_ss;
+            clap::parser       parser{args.argc(), args.argv(), error_ss, false};
+            CHECK(UNWRAP_ERR(parser.parse()) == clap::error::INVALID_OPTIMIZATION);
+        }
+
         SECTION("Invalid optimization level returns error") {
             mock_argv          args{"ghoti", "build-obj", "-Oinvalid", "main.gh"};
             std::ostringstream error_ss;
@@ -332,6 +339,23 @@ TEST_CASE("test subcommand parser") {
         CHECK(opts.output_path == "built_test.exe");
         CHECK(opts.output_explicit);
     }
+}
+
+TEST_CASE("lsp rejects negative throttle and file-cap values") {
+    for (const auto* flag : {"--throttle-ms", "--workspace-file-cap"}) {
+        mock_argv          args{"ghoti", "lsp", flag, "-1"};
+        std::ostringstream error_ss;
+        clap::parser       parser{args.argc(), args.argv(), error_ss, false};
+        CHECK_FALSE(parser.parse());
+    }
+}
+
+TEST_CASE("fmt with a missing path fails instead of falling back to stdin") {
+    mock_argv          args{"ghoti", "fmt", "definitely_missing_file_4242.gh"};
+    std::ostringstream error_ss;
+    clap::parser       parser{args.argc(), args.argv(), error_ss, false};
+    CHECK(UNWRAP_ERR(parser.parse()) == clap::error::FILE_NOT_FOUND);
+    CHECK_FALSE(error_ss.view().empty());
 }
 
 } // namespace ghoti::tests

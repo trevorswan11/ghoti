@@ -12,6 +12,7 @@
 #include "driver/cmd/build/executable.hh"
 #include "driver/cmd/build/options.hh"
 #include "support/bin_utils.hh"
+#include "support/path_utils.hh"
 #include "support/tempfile.hh"
 #include "support/test.hh"
 
@@ -52,7 +53,7 @@ TEST_CASE("build_exe command execution") {
             .opt_opts    = opt_opts,
         }};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(exe_file));
+        CHECK(path_utils::exists(exe_file));
         CHECK(std::filesystem::file_size(exe_file) > 0);
     }
 
@@ -82,7 +83,7 @@ TEST_CASE("build_exe command execution") {
             .opt_opts    = opt_opts,
         }};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(exe_file));
+        CHECK(path_utils::exists(exe_file));
         CHECK(std::filesystem::file_size(exe_file) > 0);
     }
 
@@ -110,7 +111,7 @@ TEST_CASE("build_exe command execution") {
                 },
         }};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(exe_file));
+        CHECK(path_utils::exists(exe_file));
         CHECK(std::filesystem::file_size(exe_file) > 0);
     }
 
@@ -141,7 +142,7 @@ TEST_CASE("build_exe command execution") {
             .opt_opts    = opt_opts,
         }};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(exe_file));
+        CHECK(path_utils::exists(exe_file));
         CHECK(std::filesystem::file_size(exe_file) > 0);
         CHECK(bin_utils::check_elf_header(exe_file));
     }

@@ -1,8 +1,9 @@
 #include "compiler/gir/const_eval.hh"
 
 #include <algorithm>
+#include <array>
 #include <bit>
-#include <cmath>
+#include <concepts>
 #include <filesystem>
 #include <limits>
 #include <ranges>
@@ -44,6 +45,7 @@
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 #include "support/scope_guard.hh"
 
@@ -55,7 +57,7 @@ namespace {
 // arm that holds them, so the common (<=64-bit) case is unchanged for every consumer.
 template <typename T>
 [[nodiscard]] auto make_scalar_const(T v, stdx::option<sema::type&> t) -> const_value {
-    if constexpr (std::is_floating_point_v<T>) {
+    if constexpr (std::same_as<T, f128>) {
         return const_value{v, t};
     } else if constexpr (Signed<T>) {
         const auto w{static_cast<i128>(v)};
@@ -78,25 +80,48 @@ template <typename T>
     }
 }
 
+// A constant shift must move by a non-negative amount below its operand's bit width
+template <typename T>
+[[nodiscard]] auto invalid_shift_reason(T amount, stdx::option<sema::type&> operand_type)
+    -> stdx::option<std::string> {
+    if constexpr (Signed<T>) {
+        if (amount < T{0}) {
+            return std::string{"Negative shift amount in compile-time constant expression"};
+        }
+    }
+
+    // `constexpr_int` folds modulo 2^128, where shifting out all 128 bits is still meaningful
+    u64  width{128};
+    bool full_shift_ok{true};
+    if (operand_type && operand_type->get_kind() == sema::type_kind::INT) {
+        width         = sema::int_width(*operand_type);
+        full_shift_ok = false;
+    }
+    if (static_cast<u128>(amount) > u128{width} ||
+        (!full_shift_ok && static_cast<u128>(amount) == u128{width})) {
+        return fmt::format("Shift amount is not less than the {}-bit width of the shifted value",
+                           width);
+    }
+    return stdx::none;
+}
+
 template <typename T>
 [[nodiscard]] auto fold_binary_arithmetic(syntax::token_type_t      op_type,
                                           T                         l,
                                           T                         r,
                                           stdx::option<sema::type&> res_type,
                                           sema::type&               bool_type,
-                                          auto&& on_div_zero) -> stdx::option<const_value> {
+                                          auto&& on_error) -> stdx::option<const_value> {
     switch (op_type) {
     case syntax::token_type_t::PLUS:  return make_scalar_const(l + r, res_type);
     case syntax::token_type_t::MINUS: return make_scalar_const(l - r, res_type);
     case syntax::token_type_t::STAR:  return make_scalar_const(l * r, res_type);
     case syntax::token_type_t::SLASH:
-        if (r == 0) { return on_div_zero("Division by zero in compile-time constant expression"); }
+        if (r == 0) { return on_error("Division by zero in compile-time constant expression"); }
         return make_scalar_const(l / r, res_type);
     case syntax::token_type_t::PERCENT:
         if constexpr (Integral<T>) {
-            if (r == 0) {
-                return on_div_zero("Modulo by zero in compile-time constant expression");
-            }
+            if (r == 0) { return on_error("Modulo by zero in compile-time constant expression"); }
             return make_scalar_const(l % r, res_type);
         } else {
             return stdx::none;
@@ -112,27 +137,25 @@ template <typename T>
         return stdx::none;
     case syntax::token_type_t::SHL:
         if constexpr (Integral<T>) {
+            if (const auto reason{invalid_shift_reason(r, res_type)}) { return on_error(*reason); }
             // `l`/`r` fold at whatever narrow width happens to hold both operands
+            const auto shift{static_cast<u64>(r)};
+            if (shift >= 128) { return make_scalar_const(T{0}, res_type); }
             if constexpr (Signed<T>) {
-                const auto shift{r < T{0} ? u64{0} : static_cast<u64>(r)};
-                return shift < 128 ? make_scalar_const(static_cast<i128>(l) << shift, res_type)
-                                   : make_scalar_const(i128{0}, res_type);
+                return make_scalar_const(static_cast<i128>(l) << shift, res_type);
             } else {
-                const auto shift{static_cast<u64>(r)};
-                return shift < 128 ? make_scalar_const(static_cast<u128>(l) << shift, res_type)
-                                   : make_scalar_const(u128{0}, res_type);
+                return make_scalar_const(static_cast<u128>(l) << shift, res_type);
             }
         }
         return stdx::none;
     case syntax::token_type_t::SHR:
         if constexpr (Integral<T>) {
-            // Shifting out every bit: unsigned settles at 0, signed at the sign fill.
-            if constexpr (Signed<T>) {
-                if (r < T{0} || static_cast<u64>(r) >= sizeof(T) * 8) {
+            if (const auto reason{invalid_shift_reason(r, res_type)}) { return on_error(*reason); }
+            // The fold domain can be narrower than the operand's declared width
+            if (static_cast<u64>(r) >= sizeof(T) * 8) {
+                if constexpr (Signed<T>) {
                     return make_scalar_const(l < T{0} ? T{-1} : T{0}, res_type);
-                }
-            } else {
-                if (static_cast<u64>(r) >= sizeof(T) * 8) {
+                } else {
                     return make_scalar_const(T{0}, res_type);
                 }
             }
@@ -147,6 +170,44 @@ template <typename T>
     case syntax::token_type_t::GT_EQ: return const_value{l >= r, bool_type};
     default:                          return stdx::none;
     }
+}
+
+// Folds a float operation, rounding once into `res_type`'s format
+[[nodiscard]] auto fold_float_binary(syntax::token_type_t      op_type,
+                                     f128                      l,
+                                     f128                      r,
+                                     stdx::option<sema::type&> res_type,
+                                     sema::type&               bool_type,
+                                     auto&& on_error) -> stdx::option<const_value> {
+    const auto format{res_type ? sema::float_format_of(*res_type).value_or(float_format::QUAD)
+                               : float_format::QUAD};
+    switch (op_type) {
+    case syntax::token_type_t::PLUS:  return const_value{add(l, r, format), res_type};
+    case syntax::token_type_t::MINUS: return const_value{subtract(l, r, format), res_type};
+    case syntax::token_type_t::STAR:  return const_value{multiply(l, r, format), res_type};
+    case syntax::token_type_t::SLASH:
+        if (r.is_zero()) {
+            return on_error("Division by zero in compile-time constant expression");
+        }
+        return const_value{divide(l, r, format), res_type};
+    case syntax::token_type_t::EQ:    return const_value{l == r, bool_type};
+    case syntax::token_type_t::NEQ:   return const_value{!(l == r), bool_type};
+    case syntax::token_type_t::LT:    return const_value{l < r, bool_type};
+    case syntax::token_type_t::LT_EQ: return const_value{l <= r, bool_type};
+    case syntax::token_type_t::GT:    return const_value{l > r, bool_type};
+    case syntax::token_type_t::GT_EQ: return const_value{l >= r, bool_type};
+    default:                          return stdx::none;
+    }
+}
+
+// A concrete float operand decides the result format over a `constexpr_float` one
+[[nodiscard]] auto float_result_type(const const_value& lhs, const const_value& rhs)
+    -> stdx::option<sema::type&> {
+    for (const auto* operand : {&lhs, &rhs}) {
+        const auto t{operand->get_type()};
+        if (t && sema::is_float(t->get_kind())) { return t; }
+    }
+    return lhs.get_type() ? lhs.get_type() : rhs.get_type();
 }
 
 // The plain base op a wrapping token folds through
@@ -228,6 +289,58 @@ saturate_exact(syntax::token_type_t plain_op, i128 l, i128 r, u16 bits, bool is_
                                  res_type);
     }
     return make_scalar_const(static_cast<i128>(masked), res_type);
+}
+
+// `l op r` for signed 128-bit operands, or none when the exact result doesn't fit
+[[nodiscard]] auto checked_signed_arith(syntax::token_type_t op, i128 l, i128 r)
+    -> stdx::option<i128> {
+    constexpr auto max{std::numeric_limits<i128>::max()};
+    constexpr auto min{std::numeric_limits<i128>::min()};
+    switch (op) {
+    case syntax::token_type_t::PLUS:
+        if ((r > 0 && l > max - r) || (r < 0 && l < min - r)) { return stdx::none; }
+        return l + r;
+    case syntax::token_type_t::MINUS:
+        if ((r < 0 && l > max + r) || (r > 0 && l < min + r)) { return stdx::none; }
+        return l - r;
+    case syntax::token_type_t::STAR: {
+        if (l == 0 || r == 0) { return i128{0}; }
+        if ((l == -1 && r == min) || (r == -1 && l == min)) { return stdx::none; }
+        const auto product{l * r};
+        if (product / r != l) { return stdx::none; }
+        return product;
+    }
+    case syntax::token_type_t::SLASH:
+    case syntax::token_type_t::PERCENT:
+        if (l == min && r == -1) { return stdx::none; }
+        return op == syntax::token_type_t::SLASH ? l / r : l % r;
+    default: UNREACHABLE("Only + - * / % are overflow-checked");
+    }
+}
+
+[[nodiscard]] constexpr auto is_overflow_checked_op(syntax::token_type_t op) noexcept -> bool {
+    switch (op) {
+    case syntax::token_type_t::PLUS:
+    case syntax::token_type_t::MINUS:
+    case syntax::token_type_t::STAR:
+    case syntax::token_type_t::SLASH:
+    case syntax::token_type_t::PERCENT: return true;
+    default:                            return false;
+    }
+}
+
+// A concrete integer operand decides the result type over a `constexpr_int` one
+[[nodiscard]] auto integer_result_type(const const_value& lhs, const const_value& rhs)
+    -> stdx::option<sema::type&> {
+    for (const auto* operand : {&lhs, &rhs}) {
+        const auto t{operand->get_type()};
+        if (t && sema::is_integer(t->get_kind())) { return t; }
+    }
+    return lhs.get_type() ? lhs.get_type() : rhs.get_type();
+}
+
+[[nodiscard]] auto is_integer_arm(const const_value& v) noexcept -> bool {
+    return v.is<i64>() || v.is<u64>() || v.is<i128>() || v.is<u128>();
 }
 
 // `{bit width, is signed}` for a concrete integer target (`iN`/`uN`/`isize`/`usize`),
@@ -970,27 +1083,21 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
             auto&      t{sema_type ? *sema_type : ctx_.get_int(32, true)};
             // An unsuffixed integer literal used in a float context folds to a float value.
             if (sema::is_float(t.get_kind()) || t.get_kind() == sema::type_kind::CONSTEXPR_FLOAT) {
-                if (t.get_kind() == sema::type_kind::F80 || t.get_kind() == sema::type_kind::F128) {
-                    return stdx::none;
-                }
-                return make_scalar_const(static_cast<f64>(static_cast<i128>(data.value)), t);
+                const auto format{sema::float_format_of(t).value_or(float_format::QUAD)};
+                return make_scalar_const(f128::from_uint(data.value, format), t);
             }
-            if (sema::is_unsigned_integer(t)) {
+            // Past `i128` max only an unsigned payload keeps the literal's value
+            if (sema::is_unsigned_integer(t) ||
+                data.value > static_cast<u128>(std::numeric_limits<i128>::max())) {
                 return make_scalar_const(static_cast<u128>(data.value), t);
             }
             return make_scalar_const(static_cast<i128>(data.value), t);
         },
         [&](const ast::float_literal_expr& data) -> stdx::option<const_value> {
-            // `f80`/`f128` cannot be represented exactly at compile time; refuse to fold
-            if (data.width == 80 || data.width == 128) { return stdx::none; }
             const auto sema_type{module_->get_sema_type_opt(id)};
-            if (sema_type && (sema_type->get_kind() == sema::type_kind::F80 ||
-                              sema_type->get_kind() == sema::type_kind::F128)) {
-                return stdx::none;
-            }
-            return const_value{data.value,
-                               sema_type ? *sema_type
-                                         : ctx_.get_builtin_resolved_type(sema::type_kind::F64)};
+            auto& t{sema_type ? *sema_type : ctx_.get_builtin_resolved_type(sema::type_kind::F64)};
+            const auto format{sema::float_format_of(t).value_or(float_format::QUAD)};
+            return const_value{data.value_in(format), t};
         },
         [&](ast::bool_expr) {
             return const_value{id.get_token_type() == syntax::token_type_t::BOOLEAN_TRUE,
@@ -1385,6 +1492,11 @@ auto const_eval::eval_index(ast::node_id id, const ast::index_expr& index_expr)
     const auto idx{static_cast<usize>(*idx_opt)};
 
     if (const auto arr{target_val->as_opt<const_array>()}) {
+        if (idx == arr->elements.size() && is_sentinel_terminated(target_val->get_type())) {
+            const auto elem_type{target_val->get_type()->get_data().as_opt<sema::types::array>()};
+            return const_value{
+                u64{0}, elem_type ? stdx::option<sema::type&>{elem_type->underlying} : stdx::none};
+        }
         if (idx >= arr->elements.size()) {
             ctx_.diags.emplace_back(
                 fmt::format("Array index out of bounds: index is {}, but size is {}",
@@ -1398,6 +1510,10 @@ auto const_eval::eval_index(ast::node_id id, const ast::index_expr& index_expr)
     }
 
     if (const auto str{target_val->as_opt<std::string>()}) {
+        // A sentinel-terminated string can read its terminating zero at index `len`
+        if (idx == str->size() && is_sentinel_terminated(target_val->get_type())) {
+            return const_value{u64{0}, ctx_.get_int(8, false)};
+        }
         if (idx >= str->size()) {
             ctx_.diags.emplace_back(
                 fmt::format(
@@ -1410,6 +1526,17 @@ auto const_eval::eval_index(ast::node_id id, const ast::index_expr& index_expr)
     }
 
     return stdx::none;
+}
+
+auto const_eval::is_sentinel_terminated(stdx::option<sema::type&> type) noexcept -> bool {
+    if (!type) { return false; }
+    if (const auto arr{type->get_data().as_opt<sema::types::array>()}) {
+        return arr->null_terminated;
+    }
+    if (const auto sl{type->get_data().as_opt<sema::types::slice>()}) {
+        return sl->null_terminated;
+    }
+    return false;
 }
 
 auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& init)
@@ -1565,22 +1692,15 @@ auto const_eval::eval_dot(ast::node_id, const ast::dot_expr& dot) -> stdx::optio
                 if (const auto node{sym->get_data().as_opt<sema::symbols::node_t>()}) {
                     if (const auto decl{module_->ast.get_as_opt<ast::decl_stmt>(*node)};
                         decl && decl->value) {
-                        if (const auto en_expr{
-                                module_->ast.get_as_opt<ast::enum_expr>(*decl->value)}) {
-                            for (usize idx{0}; idx < en_expr->enumerations.size(); ++idx) {
-                                const auto& e{en_expr->enumerations[idx]};
-                                const auto& vname{
-                                    module_->ast.get_as<ast::identifier_expr>(e.name).name};
-                                if (vname == member_name) {
-                                    i64 val{static_cast<i64>(idx)};
-                                    if (e.value) {
-                                        if (const auto ev{try_eval(*e.value)}) {
-                                            val = static_cast<i64>(ev->as_int_opt().value_or(val));
-                                        }
-                                    }
-                                    return const_value{const_enum{std::string{member_name}, val},
-                                                       module_->get_sema_type_opt(*decl->value)};
-                                }
+                        const auto enum_type{module_->get_sema_type_opt(*decl->value)};
+                        const auto en{enum_type
+                                          ? enum_type->get_data().as_opt<sema::types::enum_t>()
+                                          : stdx::none};
+                        if (module_->ast.get_as_opt<ast::enum_expr>(*decl->value) && en) {
+                            if (const auto val{enum_member_value(*en, member_name)}) {
+                                return const_value{
+                                    const_enum{std::string{member_name}, static_cast<i64>(*val)},
+                                    enum_type};
                             }
                         }
                     }
@@ -1704,23 +1824,8 @@ auto const_eval::eval_type_member(sema::type& denoted_in, std::string_view membe
     // An enum variant reached through anything other than a bare identifier object:
     // look it up the same way `eval_implicit_access` does against a known enum type.
     if (const auto en{type.get_data().as_opt<sema::types::enum_t>()}) {
-        for (usize idx{0}; idx < en->ast_enumerations.size(); ++idx) {
-            const auto& e{en->ast_enumerations[idx]};
-            const auto& vname{en->enclosing.ast.get_as<ast::identifier_expr>(e.name).name};
-            if (vname != member) { continue; }
-            auto val{static_cast<i64>(idx)};
-            if (e.value) {
-                // The initializer node lives in the enum's defining module's AST arena, not
-                // necessarily the module currently being const-evaluated.
-                auto&      enclosing_mod{en->enclosing};
-                const_eval enclosing_eval{ctx_, enclosing_mod};
-                enclosing_eval.set_symbol_scoping(symbol_scoping_);
-                enclosing_eval.set_constexpr_context(is_constexpr_context());
-                if (const auto ev{enclosing_eval.try_eval(*e.value)}) {
-                    val = static_cast<i64>(ev->as_int_opt().value_or(val));
-                }
-            }
-            return const_value{const_enum{std::string{member}, val}, type};
+        if (const auto val{enum_member_value(*en, member)}) {
+            return const_value{const_enum{std::string{member}, static_cast<i64>(*val)}, type};
         }
     }
 
@@ -1807,6 +1912,39 @@ auto const_eval::eval_type_member(sema::type& denoted_in, std::string_view membe
     return result;
 }
 
+auto const_eval::enum_member_values(const sema::types::enum_t& en) -> std::vector<i128> {
+    // A member's initializer lives in the enum's defining module, not necessarily this one
+    const_eval enclosing_eval{ctx_, en.enclosing};
+    enclosing_eval.set_symbol_scoping(symbol_scoping_);
+    enclosing_eval.set_constexpr_context(is_constexpr_context());
+
+    // Like C and Zig, an unvalued member continues from its predecessor
+    std::vector<i128> values;
+    values.reserve(en.ast_enumerations.size());
+    i128 next{0};
+    for (const auto& e : en.ast_enumerations) {
+        i128 value{next};
+        if (e.value) {
+            if (const auto folded{enclosing_eval.try_eval(*e.value)}) {
+                value = folded->as_int_opt().value_or(next);
+            }
+        }
+        values.emplace_back(value);
+        next = value + 1;
+    }
+    return values;
+}
+
+auto const_eval::enum_member_value(const sema::types::enum_t& en, std::string_view member)
+    -> stdx::option<i128> {
+    for (usize idx{0}; idx < en.ast_enumerations.size(); ++idx) {
+        const auto& name{
+            en.enclosing.ast.get_as<ast::identifier_expr>(en.ast_enumerations[idx].name).name};
+        if (name == member) { return enum_member_values(en)[idx]; }
+    }
+    return stdx::none;
+}
+
 auto const_eval::target_enum_value(std::string_view enum_name, std::string_view member)
     -> const_value {
     PROFILE_FUNCTION();
@@ -1816,14 +1954,7 @@ auto const_eval::target_enum_value(std::string_view enum_name, std::string_view 
     // The discriminant must equal what `.<member>` produces against this enum type
     i64 ordinal{en ? static_cast<i64>(en->ast_enumerations.size()) : 0};
     if (en) {
-        for (usize i{0}; i < en->ast_enumerations.size(); ++i) {
-            const auto& vname{
-                en->enclosing.ast.get_as<ast::identifier_expr>(en->ast_enumerations[i].name).name};
-            if (vname == member) {
-                ordinal = static_cast<i64>(i);
-                break;
-            }
-        }
+        if (const auto val{enum_member_value(*en, member)}) { ordinal = static_cast<i64>(*val); }
     }
     return const_value{const_enum{std::string{member}, ordinal}, enum_type};
 }
@@ -1866,8 +1997,7 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
     }
     case sema::type_kind::ISIZE:
     case sema::type_kind::USIZE: {
-        const auto   ptr_bits{static_cast<u16>(
-            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? 64 : 32)};
+        const auto   ptr_bits{static_cast<u16>(target_pointer_bits())};
         const_struct s;
         s.fields.emplace("bits", const_value{u64{ptr_bits}, ctx_.get_int(16, false)});
         const bool is_signed{sema::is_signed_integer(denoted)};
@@ -1951,19 +2081,11 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
         const auto& en{denoted.get_data().as<sema::types::enum_t>()};
         auto&       field_type{ctx_.get_builtin_type("EnumFieldInfo")};
         const_array fields;
+        const auto  values{enum_member_values(en)};
         for (usize idx{0}; idx < en.ast_enumerations.size(); ++idx) {
-            const auto& e{en.ast_enumerations[idx]};
-            const auto& vname{en.enclosing.ast.get_as<ast::identifier_expr>(e.name).name};
-            auto        val{static_cast<i128>(idx)};
-            if (e.value) {
-                auto&      enclosing_mod{en.enclosing};
-                const_eval enclosing_eval{ctx_, enclosing_mod};
-                enclosing_eval.set_symbol_scoping(symbol_scoping_);
-                enclosing_eval.set_constexpr_context(is_constexpr_context());
-                if (const auto ev{enclosing_eval.try_eval(*e.value)}) {
-                    val = ev->as_int_opt().value_or(val);
-                }
-            }
+            const auto&  e{en.ast_enumerations[idx]};
+            const auto&  vname{en.enclosing.ast.get_as<ast::identifier_expr>(e.name).name};
+            const auto   val{values[idx]};
             const_struct fs;
             fs.fields.emplace("name", const_value::make_string(ctx_, std::string{vname}));
             fs.fields.emplace(
@@ -2005,8 +2127,7 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
                     : const_value{nullptr_val{}, opaque_ptr_type});
             fields.elements.emplace_back(const_value{std::move(fs), field_type});
         }
-        const auto ptr_bits{static_cast<u32>(
-            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? 64 : 32)};
+        const auto ptr_bits{target_pointer_bits()};
         auto&      field_slice_type{ctx_.get_slice(sema::types::mut::CONSTANT, false, field_type)};
         const_struct s;
         s.fields.emplace("fields", const_value{std::move(fields), field_slice_type});
@@ -2413,6 +2534,66 @@ auto const_eval::fold_concat(const const_value& lhs, const const_value& rhs, ast
     return const_value{std::move(result), module_->get_sema_type_opt(id)};
 }
 
+auto const_eval::fold_integer_binary(syntax::token_type_t op_type,
+                                     const const_value&   lhs,
+                                     const const_value&   rhs,
+                                     ast::node_id         id,
+                                     bool                 wrapping) -> stdx::option<const_value> {
+    auto&      bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    const auto on_fold_error = [&](std::string_view msg) -> const_value {
+        ctx_.diags.emplace_back(std::string{msg},
+                                sema::error::CONSTEXPR_EVALUATION_FAILED,
+                                module_->ast.location_of(id));
+        return const_value::make_poison();
+    };
+
+    const auto ptr_bits{target_pointer_bits()};
+    // A shift keeps its left operand's type; other operators take the concrete operand's
+    const bool is_shift{op_type == syntax::token_type_t::SHL ||
+                        op_type == syntax::token_type_t::SHR};
+    const auto res_type{is_shift && lhs.get_type() ? lhs.get_type()
+                                                   : integer_result_type(lhs, rhs)};
+    const auto width{res_type ? integer_target_width(*res_type, ptr_bits) : stdx::none};
+    // Two's-complement views across the whole 128-bit domain
+    const auto l{*lhs.as_int_opt()};
+    const auto r{*rhs.as_int_opt()};
+    const bool unsigned_arm{lhs.is<u64>() || lhs.is<u128>() || rhs.is<u64>() || rhs.is<u128>()};
+    const bool unsigned_op{width ? !width->second
+                                 : unsigned_arm && !lhs.is<i64>() && !lhs.is<i128>()};
+
+    if (width && width->second && !wrapping && is_overflow_checked_op(op_type)) {
+        const bool divides{op_type == syntax::token_type_t::SLASH ||
+                           op_type == syntax::token_type_t::PERCENT};
+        if (divides && r == 0) {
+            return on_fold_error(op_type == syntax::token_type_t::SLASH
+                                     ? "Division by zero in compile-time constant expression"
+                                     : "Modulo by zero in compile-time constant expression");
+        }
+        const auto exact{checked_signed_arith(op_type, l, r)};
+        if (!exact || !sema::constexpr_int_fits(*exact, *res_type, ptr_bits)) {
+            return on_fold_error(fmt::format("Signed integer overflow in compile-time constant "
+                                             "expression: the result does not fit '{}'",
+                                             ctx_.type_display_name(*res_type)));
+        }
+        return make_scalar_const(*exact, res_type);
+    }
+
+    auto folded{unsigned_op
+                    ? fold_binary_arithmetic(op_type,
+                                             static_cast<u128>(l),
+                                             static_cast<u128>(r),
+                                             res_type,
+                                             bool_type,
+                                             on_fold_error)
+                    : fold_binary_arithmetic(op_type, l, r, res_type, bool_type, on_fold_error)};
+    // Unsigned results and every shift drop the bits past the type's width, like runtime
+    const bool wraps_to_width{unsigned_op || op_type == syntax::token_type_t::SHL};
+    if (folded && width && wraps_to_width && folded->as_int_opt()) {
+        return wrap_to_width(*folded, width->first, width->second, res_type);
+    }
+    return folded;
+}
+
 auto const_eval::fold_binary_values(syntax::token_type_t op_type,
                                     const const_value&   lhs,
                                     const const_value&   rhs,
@@ -2423,7 +2604,9 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
     // (two's-complement wrap). A width-less `constexpr_int` result has nothing to wrap to, so it
     // folds exactly as the plain operator would.
     if (const auto plain_op{wrapping_base_op(op_type)}) {
-        const auto folded{fold_binary_values(*plain_op, lhs, rhs, id)};
+        const auto folded{is_integer_arm(lhs) && is_integer_arm(rhs)
+                              ? fold_integer_binary(*plain_op, lhs, rhs, id, true)
+                              : fold_binary_values(*plain_op, lhs, rhs, id)};
         if (!folded || folded->is_poison()) { return folded; }
         const auto res_type{folded->get_type()};
         if (!res_type) { return folded; }
@@ -2433,8 +2616,7 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
         }
         if (res_type->get_kind() == sema::type_kind::ISIZE ||
             res_type->get_kind() == sema::type_kind::USIZE) {
-            const auto ptr_bits{
-                codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
+            const auto ptr_bits{target_pointer_bits()};
             return wrap_to_width(*folded,
                                  static_cast<u16>(ptr_bits),
                                  res_type->get_kind() == sema::type_kind::ISIZE,
@@ -2447,7 +2629,7 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
     // Saturating ops clamp the exact result to the first concrete integer operand's range; with
     // only width-less `constexpr_int` operands there is no range, so they fold as the plain op
     if (const auto plain_op{saturating_base_op(op_type)}) {
-        const auto ptr_bits{codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
+        const auto                ptr_bits{target_pointer_bits()};
         stdx::option<sema::type&> res_type;
         for (const auto* v : {&lhs, &rhs}) {
             if (!res_type && v->get_type() && integer_target_width(*v->get_type(), ptr_bits)) {
@@ -2467,69 +2649,29 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
 
     auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
 
-    const auto on_div_zero = [&](std::string_view msg) -> const_value {
+    const auto on_fold_error = [&](std::string_view msg) -> const_value {
         ctx_.diags.emplace_back(std::string{msg},
                                 sema::error::CONSTEXPR_EVALUATION_FAILED,
                                 module_->ast.location_of(id));
         return const_value::make_poison();
     };
 
-    const auto is_wide_arm    = [](const const_value& v) { return v.is<i128>() || v.is<u128>(); };
-    const auto is_narrow_int  = [](const const_value& v) { return v.is<i64>() || v.is<u64>(); };
-    const auto is_signed_wide = [](const const_value& v) { return v.is<i64>() || v.is<i128>(); };
-
-    if (lhs.is<f64>() || rhs.is<f64>()) {
-        const auto to_f64 = [](const const_value& v) -> f64 {
-            if (v.is<f64>()) { return v.as<f64>(); }
-            if (const auto u{v.as_uint_opt()}) { return static_cast<f64>(*u); }
-            return static_cast<f64>(v.as_int_opt().value_or(0));
+    if (lhs.is<f128>() || rhs.is<f128>()) {
+        const auto res_type{float_result_type(lhs, rhs)};
+        const auto format{res_type ? sema::float_format_of(*res_type).value_or(float_format::QUAD)
+                                   : float_format::QUAD};
+        const auto to_float = [format](const const_value& v) -> stdx::option<f128> {
+            if (const auto f{v.as_opt<f128>()}) { return *f; }
+            return v.int_as_float_opt(format);
         };
-        const auto res_type{lhs.get_type() ? lhs.get_type() : rhs.get_type()};
-        // `f80`/`f128` results cannot be represented exactly at compile time; refuse to fold (D3).
-        if (res_type && (res_type->get_kind() == sema::type_kind::F80 ||
-                         res_type->get_kind() == sema::type_kind::F128)) {
-            return stdx::none;
-        }
-        return fold_binary_arithmetic(
-            op_type, to_f64(lhs), to_f64(rhs), res_type, bool_type, on_div_zero);
+        const auto l{to_float(lhs)};
+        const auto r{to_float(rhs)};
+        if (!l || !r) { return stdx::none; }
+        return fold_float_binary(op_type, *l, *r, res_type, bool_type, on_fold_error);
     }
 
-    // A wide (128-bit) operand pulls the whole operation into the 128-bit constexpr domain.
-    if ((is_wide_arm(lhs) || is_wide_arm(rhs)) && (is_wide_arm(lhs) || is_narrow_int(lhs)) &&
-        (is_wide_arm(rhs) || is_narrow_int(rhs))) {
-        const auto res_type{lhs.get_type() ? lhs.get_type() : rhs.get_type()};
-        const bool unsigned_op{
-            (lhs.is<u64>() || lhs.is<u128>() || rhs.is<u64>() || rhs.is<u128>()) &&
-            !is_signed_wide(lhs)};
-        if (unsigned_op) {
-            return fold_binary_arithmetic(op_type,
-                                          lhs.as_uint_opt().value_or(0),
-                                          rhs.as_uint_opt().value_or(0),
-                                          res_type,
-                                          bool_type,
-                                          on_div_zero);
-        }
-        return fold_binary_arithmetic(op_type,
-                                      lhs.as_int_opt().value_or(0),
-                                      rhs.as_int_opt().value_or(0),
-                                      res_type,
-                                      bool_type,
-                                      on_div_zero);
-    }
-
-    const auto is_unsigned{(lhs.is<u64>() || rhs.is<u64>()) && !lhs.is<i64>()};
-    if (is_unsigned) {
-        const auto l{lhs.is<u64>() ? lhs.as<u64>() : static_cast<u64>(lhs.as<i64>())};
-        const auto r{rhs.is<u64>() ? rhs.as<u64>() : static_cast<u64>(rhs.as<i64>())};
-        const auto res_type{lhs.get_type() ? lhs.get_type() : rhs.get_type()};
-        return fold_binary_arithmetic(op_type, l, r, res_type, bool_type, on_div_zero);
-    }
-
-    if ((lhs.is<i64>() || lhs.is<u64>()) && (rhs.is<i64>() || rhs.is<u64>())) {
-        const auto l{lhs.is<i64>() ? lhs.as<i64>() : static_cast<i64>(lhs.as<u64>())};
-        const auto r{rhs.is<i64>() ? rhs.as<i64>() : static_cast<i64>(rhs.as<u64>())};
-        const auto res_type{lhs.get_type() ? lhs.get_type() : rhs.get_type()};
-        return fold_binary_arithmetic(op_type, l, r, res_type, bool_type, on_div_zero);
+    if (is_integer_arm(lhs) && is_integer_arm(rhs)) {
+        return fold_integer_binary(op_type, lhs, rhs, id);
     }
 
     if (lhs.is<bool>() && rhs.is<bool>()) {
@@ -2661,7 +2803,24 @@ auto const_eval::eval_unary(ast::node_id id, const ast::unary_expr& unary)
     if (!val) { return stdx::none; }
 
     const auto op_type{id.get_token_type()};
+    if (op_type == syntax::token_type_t::PLUS) { return val; }
     if (op_type == syntax::token_type_t::MINUS) {
+        const auto type{val->get_type()};
+        const auto width{type ? integer_target_width(*type, target_pointer_bits()) : stdx::none};
+        if (is_integer_arm(*val) && width && width->second) {
+            const auto exact{
+                checked_signed_arith(syntax::token_type_t::MINUS, 0, *val->as_int_opt())};
+            if (!exact || !sema::constexpr_int_fits(*exact, *type, target_pointer_bits())) {
+                ctx_.diags.emplace_back(fmt::format("Signed integer overflow in compile-time "
+                                                    "constant expression: the result does not "
+                                                    "fit '{}'",
+                                                    ctx_.type_display_name(*type)),
+                                        sema::error::CONSTEXPR_EVALUATION_FAILED,
+                                        module_->ast.location_of(id));
+                return const_value::make_poison();
+            }
+            return make_scalar_const(*exact, type);
+        }
         if (val->is<i64>()) {
             return make_scalar_const(-static_cast<i128>(val->as<i64>()), val->get_type());
         }
@@ -2678,12 +2837,18 @@ auto const_eval::eval_unary(ast::node_id id, const ast::unary_expr& unary)
             }
             return const_value{-static_cast<i128>(u), val->get_type()};
         }
-        if (val->is<f64>()) { return const_value{-val->as<f64>(), val->get_type()}; }
+        if (const auto f{val->as_opt<f128>()}) { return const_value{-*f, val->get_type()}; }
     } else if (op_type == syntax::token_type_t::MINUS_PERCENT) {
         // '-%' is restricted to signed integers by sema, so only signed arms meaningful here
         stdx::option<const_value> negated;
-        if (val->is<i64>()) { negated.emplace(-val->as<i64>(), val->get_type()); }
-        if (val->is<i128>()) { negated.emplace(-val->as<i128>(), val->get_type()); }
+        if (val->is<i64>()) {
+            negated.emplace(-static_cast<i128>(val->as<i64>()), val->get_type());
+        }
+        // Negating `i128` min wraps back to itself, which is exactly what `-%` means
+        if (val->is<i128>()) {
+            negated.emplace(static_cast<i128>(~static_cast<u128>(val->as<i128>()) + 1),
+                            val->get_type());
+        }
         if (!negated) { return stdx::none; }
 
         const auto res_type{negated->get_type()};
@@ -2691,8 +2856,7 @@ auto const_eval::eval_unary(ast::node_id id, const ast::unary_expr& unary)
             return wrap_to_width(*negated, sema::int_width(*res_type), true, res_type);
         }
         if (res_type && res_type->get_kind() == sema::type_kind::ISIZE) {
-            const auto ptr_bits{
-                codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
+            const auto ptr_bits{target_pointer_bits()};
             return wrap_to_width(*negated, static_cast<u16>(ptr_bits), true, res_type);
         }
         return negated; // `constexpr_int`: no wrap, plain negate stands.
@@ -3104,6 +3268,28 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
     return stdx::none;
 }
 
+auto const_eval::target_pointer_bits() const -> u32 {
+    return codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits;
+}
+
+auto const_eval::target_pointer_bytes() const -> usize { return target_pointer_bits() / 8; }
+
+auto const_eval::cast_operand(const ast::call_expr& call) -> stdx::option<ast::expr_handle> {
+    if (call.arguments.empty()) { return stdx::none; }
+    const auto op_arg_idx{call.arguments.size() == 1 ? 0UZ : 1UZ};
+    const auto op_h{call.arguments[op_arg_idx].as_opt<ast::expr_handle>()};
+    if (!op_h) { return stdx::none; }
+    return *op_h;
+}
+
+auto const_eval::builtin_result_type(ast::node_id id, const ast::call_expr& call) const
+    -> stdx::option<sema::type&> {
+    if (id.is_valid()) {
+        if (auto target{module_->get_sema_type_opt(id)}) { return target; }
+    }
+    return module_->get_sema_type_opt(call.function);
+}
+
 auto const_eval::eval_builtin(ast::node_id          id,
                               const ast::call_expr& call,
                               syntax::token_type_t  builtin_type) -> stdx::option<const_value> {
@@ -3159,9 +3345,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto target_type{eval_layout_argument(call.arguments.front())};
         if (!target_type) { return stdx::none; }
 
-        const auto ptr_size{
-            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? usize{8}
-                                                                                      : usize{4}};
+        const auto ptr_size{target_pointer_bytes()};
         const auto sz{type_size_of(*target_type, ptr_size)};
         return const_value{static_cast<u64>(sz), usize_type};
     }
@@ -3170,9 +3354,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto target_type{eval_layout_argument(call.arguments.front())};
         if (!target_type) { return stdx::none; }
 
-        const auto ptr_size{
-            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? usize{8}
-                                                                                      : usize{4}};
+        const auto ptr_size{target_pointer_bytes()};
         const auto al{type_align_of(*target_type, ptr_size)};
         return const_value{static_cast<u64>(al), usize_type};
     }
@@ -3181,9 +3363,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto target_type{eval_layout_argument(call.arguments.front())};
         if (!target_type) { return stdx::none; }
 
-        const auto ptr_size{
-            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? usize{8}
-                                                                                      : usize{4}};
+        const auto ptr_size{target_pointer_bytes()};
         const auto ptr_bits{static_cast<u32>(ptr_size) * 8};
 
         const auto kind{target_type->get_kind()};
@@ -3343,7 +3523,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
             const auto v{arg->as<i64>()};
             return const_value{v < 0 ? -v : v, arg->get_type()};
         }
-        if (arg->is<f64>()) { return const_value{std::abs(arg->as<f64>()), arg->get_type()}; }
+        if (const auto f{arg->as_opt<f128>()}) { return const_value{f->abs(), arg->get_type()}; }
         return arg;
     }
     case syntax::token_type_t::BUILTIN_CLZ: {
@@ -3354,7 +3534,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!arg) { return stdx::none; }
         if (!arg->is<u64>() && !arg->is<i64>()) { return stdx::none; }
         const auto v{arg->is<u64>() ? arg->as<u64>() : static_cast<u64>(arg->as<i64>())};
-        const auto ptr_bits{codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
+        const auto ptr_bits{target_pointer_bits()};
         const auto arg_ty{arg->get_type()};
         const auto bits_opt{arg_ty ? integer_or_constexpr_width(*arg_ty, ptr_bits) : stdx::none};
         if (!bits_opt) { return stdx::none; }
@@ -3372,7 +3552,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!arg) { return stdx::none; }
         if (!arg->is<u64>() && !arg->is<i64>()) { return stdx::none; }
         const auto v{arg->is<u64>() ? arg->as<u64>() : static_cast<u64>(arg->as<i64>())};
-        const auto ptr_bits{codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
+        const auto ptr_bits{target_pointer_bits()};
         const auto arg_ty{arg->get_type()};
         const auto bits_opt{arg_ty ? integer_or_constexpr_width(*arg_ty, ptr_bits) : stdx::none};
         if (!bits_opt) { return stdx::none; }
@@ -3453,9 +3633,9 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (a->is<u64>() && b->is<u64>()) { return fold_int(a->as<u64>(), b->as<u64>()); }
         if ((tok == syntax::token_type_t::BUILTIN_MIN ||
              tok == syntax::token_type_t::BUILTIN_MAX) &&
-            a->is<f64>() && b->is<f64>()) {
-            const auto av{a->as<f64>()};
-            const auto bv{b->as<f64>()};
+            a->is<f128>() && b->is<f128>()) {
+            const auto av{a->as<f128>()};
+            const auto bv{b->as<f128>()};
             const bool want_max{tok == syntax::token_type_t::BUILTIN_MAX};
             return const_value{want_max ? (av > bv ? av : bv) : (av < bv ? av : bv), a->get_type()};
         }
@@ -3466,24 +3646,37 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto a_h{call.arguments[1].as_opt<ast::expr_handle>()};
         const auto b_h{call.arguments[2].as_opt<ast::expr_handle>()};
         const auto c_h{call.arguments[3].as_opt<ast::expr_handle>()};
-        if (a_h && b_h && c_h) {
-            const auto a{try_eval(*a_h)};
-            const auto b{try_eval(*b_h)};
-            const auto c{try_eval(*c_h)};
-            if (a && b && c) {
-                if (a->is<f64>() && b->is<f64>() && c->is<f64>()) {
-                    return const_value{std::fma(a->as<f64>(), b->as<f64>(), c->as<f64>()),
-                                       a->get_type()};
-                }
-                if (a->is<i64>() && b->is<i64>() && c->is<i64>()) {
-                    return const_value{(a->as<i64>() * b->as<i64>()) + c->as<i64>(), a->get_type()};
-                }
-                if (a->is<u64>() && b->is<u64>() && c->is<u64>()) {
-                    return const_value{(a->as<u64>() * b->as<u64>()) + c->as<u64>(), a->get_type()};
-                }
+        const auto result_type{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
+        if (!a_h || !b_h || !c_h || !result_type) { return stdx::none; }
+
+        // Each operand is a `T`, so it is range-checked and rounded into `T` before the fma
+        std::array<const_value, 3> operands;
+        for (usize i{0}; const auto handle : {*a_h, *b_h, *c_h}) {
+            auto operand{try_eval(handle)};
+            if (!operand || operand->is_poison()) { return operand; }
+            const auto as_float{operand->is<f128>() ? stdx::option<f128>{operand->as<f128>()}
+                                                    : operand->int_as_float_opt()};
+            if (as_float && !sema::constexpr_float_fits(*as_float, *result_type)) {
+                ctx_.diags.emplace_back(fmt::format("float value {} is out of range for type '{}'",
+                                                    *as_float,
+                                                    ctx_.type_display_name(*result_type)),
+                                        sema::error::LITERAL_OUT_OF_RANGE,
+                                        module_->ast.location_of(handle));
+                return const_value::make_poison();
             }
+            operands[i++] = with_declared_type(std::move(*operand), *result_type);
         }
-        return stdx::none;
+
+        const auto& [a, b, c]{operands};
+        if (const auto format{sema::float_format_of(*result_type)}) {
+            if (!a.is<f128>() || !b.is<f128>() || !c.is<f128>()) { return stdx::none; }
+            return const_value{
+                fused_multiply_add(a.as<f128>(), b.as<f128>(), c.as<f128>(), *format), result_type};
+        }
+        if (!is_integer_arm(a) || !is_integer_arm(b) || !is_integer_arm(c)) { return stdx::none; }
+        const auto product{fold_integer_binary(syntax::token_type_t::STAR, a, b, id)};
+        if (!product || product->is_poison()) { return product; }
+        return fold_integer_binary(syntax::token_type_t::PLUS, *product, c, id);
     }
     case syntax::token_type_t::BUILTIN_TAG_NAME: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
@@ -3507,7 +3700,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         // Match the resolver: a fixed-length, null-terminated byte array (like a string literal).
         auto  name{ctx_.type_display_name(force_deferred_type(*target_type))};
         auto& t_u8{ctx_.get_int(8, false)};
-        auto& arr_type{ctx_.get_array(sema::types::mut::CONSTANT, true, name.size() + 1, t_u8)};
+        auto& arr_type{ctx_.get_array(sema::types::mut::CONSTANT, true, name.size(), t_u8)};
         return const_value{std::move(name), arr_type};
     }
     case syntax::token_type_t::BUILTIN_TYPE_INFO: {
@@ -3653,8 +3846,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!operand) { return stdx::none; }
         const auto bits{operand->as_int_opt()};
         if (!bits) { return stdx::none; }
-        auto target{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
-        if (!target) { target = module_->get_sema_type_opt(call.function); }
+        auto target{builtin_result_type(id, call)};
         return const_value{static_cast<u64>(static_cast<u128>(*bits)), target};
     }
     case syntax::token_type_t::BUILTIN_INT_FROM_PTR: {
@@ -3681,19 +3873,15 @@ auto const_eval::eval_builtin(ast::node_id          id,
         return operand;
     }
     case syntax::token_type_t::BUILTIN_INT_CAST: {
-        const auto op_arg_idx{call.arguments.size() == 1 ? 0UZ : 1UZ};
-        if (call.arguments.size() < (op_arg_idx + 1)) { return stdx::none; }
-        const auto op_h{call.arguments[op_arg_idx].as_opt<ast::expr_handle>()};
+        const auto op_h{cast_operand(call)};
         if (!op_h) { return stdx::none; }
         const auto operand{try_eval(*op_h)};
         if (!operand) { return stdx::none; }
         const auto src_int{operand->as_int_opt()};
         if (!src_int) { return stdx::none; }
-        auto target{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
-        if (!target) { target = module_->get_sema_type_opt(call.function); }
+        auto target{builtin_result_type(id, call)};
         if (!target) { return stdx::none; }
-        const auto ptr_bits{static_cast<u32>(
-            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? 64 : 32)};
+        const auto ptr_bits{target_pointer_bits()};
         if (!sema::constexpr_int_fits(*src_int, *target, ptr_bits)) {
             ctx_.diags.emplace_back(
                 fmt::format("Integer value {} is out of range for target type '{}' in @intCast",
@@ -3709,19 +3897,15 @@ auto const_eval::eval_builtin(ast::node_id          id,
         return stdx::none;
     }
     case syntax::token_type_t::BUILTIN_TRUNCATE: {
-        const auto op_arg_idx{call.arguments.size() == 1 ? 0UZ : 1UZ};
-        if (call.arguments.size() < (op_arg_idx + 1)) { return stdx::none; }
-        const auto op_h{call.arguments[op_arg_idx].as_opt<ast::expr_handle>()};
+        const auto op_h{cast_operand(call)};
         if (!op_h) { return stdx::none; }
         const auto operand{try_eval(*op_h)};
         if (!operand) { return stdx::none; }
         const auto src_int{operand->as_int_opt()};
         if (!src_int) { return stdx::none; }
-        auto target{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
-        if (!target) { target = module_->get_sema_type_opt(call.function); }
+        auto target{builtin_result_type(id, call)};
         if (!target) { return stdx::none; }
-        const auto ptr_bits{static_cast<u32>(
-            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? 64 : 32)};
+        const auto ptr_bits{target_pointer_bits()};
         if (const auto w{integer_target_width(*target, ptr_bits)}) {
             return wrap_to_width(*operand, w->first, w->second, target);
         }
@@ -3743,16 +3927,13 @@ auto const_eval::eval_builtin(ast::node_id          id,
         return stdx::none;
     }
     case syntax::token_type_t::BUILTIN_INT_FROM_BOOL: {
-        const auto op_arg_idx{call.arguments.size() == 1 ? 0UZ : 1UZ};
-        if (call.arguments.size() < (op_arg_idx + 1)) { return stdx::none; }
-        const auto op_h{call.arguments[op_arg_idx].as_opt<ast::expr_handle>()};
+        const auto op_h{cast_operand(call)};
         if (!op_h) { return stdx::none; }
         const auto operand{try_eval(*op_h)};
         if (!operand) { return stdx::none; }
         const auto src_bool{operand->as_opt<bool>()};
         if (!src_bool) { return stdx::none; }
-        auto target{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
-        if (!target) { target = module_->get_sema_type_opt(call.function); }
+        auto target{builtin_result_type(id, call)};
         if (!target) { return stdx::none; }
         const u64 int_val{*src_bool ? 1ULL : 0ULL};
         return const_value{int_val, target};
@@ -3766,33 +3947,33 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!operand || !target) { return stdx::none; }
 
         if (builtin_type == syntax::token_type_t::BUILTIN_FLOAT_FROM_INT) {
-            // `f80`/`f128` can't be represented exactly at compile time
-            if (target->get_kind() == sema::type_kind::F80 ||
-                target->get_kind() == sema::type_kind::F128) {
-                return stdx::none;
+            // Converted exactly first so an overflowing result is still reported by value
+            const auto f{operand->int_as_float_opt()};
+            if (!f) { return stdx::none; }
+            if (!sema::constexpr_float_fits(*f, *target)) {
+                ctx_.diags.emplace_back(fmt::format("float value {} is out of range for type '{}'",
+                                                    *f,
+                                                    ctx_.type_display_name(*target)),
+                                        sema::error::LITERAL_OUT_OF_RANGE,
+                                        module_->ast.location_of(*op_h));
+                return const_value::make_poison();
             }
-            if (const auto u{operand->as_opt<u64>()}) {
-                return const_value{static_cast<f64>(*u), target};
-            }
-            const auto i{operand->as_opt<i64>()};
-            if (!i) { return stdx::none; }
-            return const_value{static_cast<f64>(*i), target};
+            return const_value{*f, target};
         }
 
-        const auto f{operand->as_opt<f64>()};
+        const auto f{operand->as_opt<f128>()};
         if (!f) { return stdx::none; }
-        const auto truncated{std::trunc(*f)};
-        const auto ptr_bits{codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
-        // Past 64 bits the value is left to the (range-checked) runtime conversion
-        stdx::option<i128> folded;
-        if (truncated >= -0x1p63 && truncated < 0x1p63) {
-            folded = i128{static_cast<i64>(truncated)};
-        } else if (truncated >= 0.0 && truncated < 0x1p64) {
-            folded = i128{static_cast<u64>(truncated)};
+        const auto ptr_bits{target_pointer_bits()};
+        const auto width{integer_target_width(*target, ptr_bits)};
+        // An unsigned 128-bit target reaches past the signed range
+        if (const auto magnitude{f->to_uint()};
+            magnitude && width && width->first == 128 && !width->second) {
+            return make_scalar_const(*magnitude, target);
         }
+        const auto folded{f->to_int()};
         if (!folded || !sema::constexpr_int_fits(*folded, *target, ptr_bits)) {
-            const auto width{integer_target_width(*target, ptr_bits)};
-            if (std::isfinite(*f) && !folded && width && width->first > 64) { return stdx::none; }
+            // Past 128 bits the value is left to the (range-checked) runtime conversion
+            if (f->is_finite() && !folded && width && width->first > 128) { return stdx::none; }
             ctx_.diags.emplace_back(
                 fmt::format("Float value {} is out of range for target type '{}' in @intFromFloat",
                             *f,
@@ -3817,19 +3998,15 @@ auto const_eval::eval_builtin(ast::node_id          id,
     case syntax::token_type_t::BUILTIN_BIT_CAST:
     case syntax::token_type_t::BUILTIN_FROM_BACKING_INT: {
         // Fold the numeric/pointer subset; leave floats, enums and aggregates to the emitter.
-        const auto op_arg_idx{call.arguments.size() == 1 ? 0UZ : 1UZ};
-        if (call.arguments.size() < (op_arg_idx + 1)) { return stdx::none; }
-        const auto op_h{call.arguments[op_arg_idx].as_opt<ast::expr_handle>()};
+        const auto op_h{cast_operand(call)};
         if (!op_h) { return stdx::none; }
         const auto operand{try_eval(*op_h)};
         if (!operand) { return stdx::none; }
         const auto src_int{operand->as_int_opt()};
         if (!src_int) { return stdx::none; }
-        auto target{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
-        if (!target) { target = module_->get_sema_type_opt(call.function); }
+        auto target{builtin_result_type(id, call)};
         if (!target) { return stdx::none; }
-        const auto ptr_bits{static_cast<u32>(
-            codegen::resolve_target_triple(ctx_.target_opts.triple_str).isArch64Bit() ? 64 : 32)};
+        const auto ptr_bits{target_pointer_bits()};
         // Unlike `@bitCast`/`@truncate`, `@as` rejects narrowing a CONCRETE  integer operand
         if (builtin_type == syntax::token_type_t::BUILTIN_AS &&
             sema::is_integer(target->get_kind()) &&
@@ -3849,19 +4026,11 @@ auto const_eval::eval_builtin(ast::node_id          id,
         }
         if (const auto en{target->get_data().as_opt<sema::types::enum_t>()}) {
             std::string name;
+            const auto  values{enum_member_values(*en)};
             for (usize idx{0}; idx < en->ast_enumerations.size(); ++idx) {
                 const auto& e{en->ast_enumerations[idx]};
                 const auto& vname{en->enclosing.ast.get_as<ast::identifier_expr>(e.name).name};
-                auto        val{static_cast<i64>(idx)};
-                if (e.value) {
-                    auto&      enclosing_mod{en->enclosing};
-                    const_eval enclosing_eval{ctx_, enclosing_mod};
-                    enclosing_eval.set_symbol_scoping(symbol_scoping_);
-                    enclosing_eval.set_constexpr_context(is_constexpr_context());
-                    if (const auto ev{enclosing_eval.try_eval(*e.value)}) {
-                        val = static_cast<i64>(ev->as_int_opt().value_or(val));
-                    }
-                }
+                const auto  val{static_cast<i64>(values[idx])};
                 if (val == static_cast<i64>(*src_int)) {
                     name = std::string{vname};
                     break;
@@ -3960,7 +4129,13 @@ auto const_eval::eval_decl_value(const ast::decl_stmt& decl) -> stdx::option<con
     ASSERT(decl.value, "Only a declaration with an initializer has a value to fold");
     const sema::constexpr_evaluation_scope scope{ctx_,
                                                  decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
-    return try_eval(*decl.value);
+    auto                                   value{try_eval(*decl.value)};
+    if (value && decl.explicit_type) {
+        if (const auto declared{module_->get_sema_type_opt(*decl.explicit_type)}) {
+            return with_declared_type(std::move(*value), *declared);
+        }
+    }
+    return value;
 }
 
 auto const_eval::eval_call_args(const ast::call_expr& call)
@@ -4193,6 +4368,16 @@ auto const_eval::eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_v
         });
 }
 
+auto const_eval::eval_non_break(const ast::stmt_handle& stmt) -> stdx::option<const_value> {
+    // `else <expr>` is the loop's value, unlike an expression statement inside a block
+    if (const auto expr{module_->ast.get_as_opt<ast::expr_stmt>(*stmt)}) {
+        auto val{try_eval(expr->expression)};
+        if (!val) { cond_unknown_ = true; }
+        return val;
+    }
+    return eval_stmt(stmt);
+}
+
 auto const_eval::eval_block(ast::node_id, const ast::block_stmt& block)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
@@ -4254,7 +4439,8 @@ auto const_eval::eval_label(ast::node_id, const ast::label_expr& label)
     if (label.body.is<ast::block_stmt>()) {
         body_res = eval_block(body_id, module_->ast.get_as<ast::block_stmt>(body_id));
     } else {
-        body_res = try_eval(body_id);
+        pending_loop_label_ = label_name;
+        body_res            = try_eval(body_id);
     }
 
     if (current_signal_.kind == eval_signal_kind::BREAK) {
@@ -4332,42 +4518,54 @@ auto const_eval::eval_if(ast::node_id, const ast::if_expr& if_expr) -> stdx::opt
     return stdx::none;
 }
 
+auto const_eval::exceeded_unroll_limit(usize& iterations) -> bool {
+    if (iterations >= ctx_.eval_unroll_limit) {
+        cond_unknown_ = true;
+        return true;
+    }
+    ++iterations;
+    return false;
+}
+
+auto const_eval::eval_loop_condition(ast::expr_handle condition) -> stdx::option<bool> {
+    const auto cond{try_eval(condition)};
+    if (!cond || !cond->is<bool>()) {
+        cond_unknown_ = true;
+        return stdx::none;
+    }
+    return cond->as<bool>();
+}
+
+auto const_eval::consume_loop_signal(stdx::option<std::string_view> own_label) -> loop_step {
+    const auto kind{current_signal_.kind};
+    if (kind == eval_signal_kind::BREAK || kind == eval_signal_kind::CONTINUE) {
+        // A labeled `break` carries its value out to the label, which consumes it
+        const bool continues_this_loop{kind == eval_signal_kind::CONTINUE &&
+                                       current_signal_.target_label == own_label};
+        if (current_signal_.target_label && !continues_this_loop) { return loop_step::EXIT; }
+        current_signal_ = eval_signal{};
+        return kind == eval_signal_kind::BREAK ? loop_step::STOP : loop_step::NEXT;
+    }
+    return kind || cond_unknown_ ? loop_step::EXIT : loop_step::NEXT;
+}
+
 auto const_eval::eval_while(ast::node_id, const ast::while_loop_expr& loop)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
-    usize iterations{0};
-    while (true) {
-        if (iterations >= ctx_.eval_unroll_limit) {
-            cond_unknown_ = true;
-            return stdx::none;
-        }
-        ++iterations;
-        const auto cond{try_eval(loop.condition)};
-        if (!cond || !cond->is<bool>()) {
-            cond_unknown_ = true;
-            return stdx::none;
-        }
-        if (!cond->as<bool>()) { break; }
+    const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
+    usize      iterations{0};
+    while (!exceeded_unroll_limit(iterations)) {
+        const auto cond{eval_loop_condition(loop.condition)};
+        if (!cond) { return stdx::none; }
+        // Running out of iterations (not a `break`) is what reaches the `else` branch
+        if (!*cond) { return loop.non_break ? eval_non_break(*loop.non_break) : stdx::none; }
 
-        const auto body_res{eval_stmt(loop.block)};
-        if (current_signal_.kind == eval_signal_kind::BREAK) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                break;
-            }
-            return current_signal_.value;
+        DISCARD(eval_stmt(loop.block));
+        switch (consume_loop_signal(own_label)) {
+        case loop_step::STOP: return stdx::none;
+        case loop_step::EXIT: return current_signal_.value;
+        case loop_step::NEXT: break;
         }
-        if (current_signal_.kind == eval_signal_kind::CONTINUE) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                if (loop.continuation) { DISCARD(try_eval(*loop.continuation)); }
-                continue;
-            }
-            return current_signal_.value;
-        }
-        if (current_signal_.kind) { return current_signal_.value; }
-        if (cond_unknown_) { return stdx::none; }
-
         if (loop.continuation) { DISCARD(try_eval(*loop.continuation)); }
     }
     return stdx::none;
@@ -4376,37 +4574,17 @@ auto const_eval::eval_while(ast::node_id, const ast::while_loop_expr& loop)
 auto const_eval::eval_do_while(ast::node_id, const ast::do_while_loop_expr& loop)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
-    usize iterations{0};
-    while (true) {
-        if (iterations >= ctx_.eval_unroll_limit) {
-            cond_unknown_ = true;
-            return stdx::none;
+    const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
+    usize      iterations{0};
+    while (!exceeded_unroll_limit(iterations)) {
+        DISCARD(eval_stmt(loop.block));
+        switch (consume_loop_signal(own_label)) {
+        case loop_step::STOP: return stdx::none;
+        case loop_step::EXIT: return current_signal_.value;
+        case loop_step::NEXT: break;
         }
-        ++iterations;
-        const auto body_res{eval_stmt(loop.block)};
-        if (current_signal_.kind == eval_signal_kind::BREAK) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                break;
-            }
-            return current_signal_.value;
-        }
-        if (current_signal_.kind == eval_signal_kind::CONTINUE) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                continue;
-            }
-            return current_signal_.value;
-        }
-        if (current_signal_.kind) { return current_signal_.value; }
-        if (cond_unknown_) { return stdx::none; }
-
-        const auto cond{try_eval(loop.condition)};
-        if (!cond || !cond->is<bool>()) {
-            cond_unknown_ = true;
-            return stdx::none;
-        }
-        if (!cond->as<bool>()) { break; }
+        const auto cond{eval_loop_condition(loop.condition)};
+        if (!cond || !*cond) { return stdx::none; }
     }
     return stdx::none;
 }
@@ -4414,31 +4592,15 @@ auto const_eval::eval_do_while(ast::node_id, const ast::do_while_loop_expr& loop
 auto const_eval::eval_infinite_loop(ast::node_id, const ast::infinite_loop_expr& loop)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
-    usize iterations{0};
-    while (true) {
-        if (iterations >= ctx_.eval_unroll_limit) {
-            cond_unknown_ = true;
-            return stdx::none;
+    const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
+    usize      iterations{0};
+    while (!exceeded_unroll_limit(iterations)) {
+        DISCARD(eval_stmt(loop.block));
+        switch (consume_loop_signal(own_label)) {
+        case loop_step::STOP: return stdx::none;
+        case loop_step::EXIT: return current_signal_.value;
+        case loop_step::NEXT: break;
         }
-        ++iterations;
-        const auto body_res{eval_stmt(loop.block)};
-        if (current_signal_.kind == eval_signal_kind::BREAK) {
-            if (!current_signal_.target_label.has_value()) {
-                const auto val{current_signal_.value};
-                current_signal_ = eval_signal{};
-                return val;
-            }
-            return current_signal_.value;
-        }
-        if (current_signal_.kind == eval_signal_kind::CONTINUE) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                continue;
-            }
-            return current_signal_.value;
-        }
-        if (current_signal_.kind) { return current_signal_.value; }
-        if (cond_unknown_) { return stdx::none; }
     }
     return stdx::none;
 }
@@ -4446,6 +4608,7 @@ auto const_eval::eval_infinite_loop(ast::node_id, const ast::infinite_loop_expr&
 auto const_eval::eval_for(ast::node_id, const ast::for_loop_expr& loop)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
+    const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
     VERIFY(loop.iterables.size() == loop.captures.size(),
            "For loop iterables and captures must match in count");
     // Every early exit below means the set of values to iterate couldn't be determined, which
@@ -4529,26 +4692,16 @@ auto const_eval::eval_for(ast::node_id, const ast::for_loop_expr& loop)
             }
         }
 
-        const auto body_res{eval_stmt(loop.block)};
-        if (current_signal_.kind == eval_signal_kind::BREAK) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                break;
-            }
-            return current_signal_.value;
+        DISCARD(eval_stmt(loop.block));
+        switch (consume_loop_signal(own_label)) {
+        // A `break` leaves the loop without running its `else` branch
+        case loop_step::STOP: return stdx::none;
+        case loop_step::EXIT: return current_signal_.value;
+        case loop_step::NEXT: break;
         }
-        if (current_signal_.kind == eval_signal_kind::CONTINUE) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                continue;
-            }
-            return current_signal_.value;
-        }
-        if (current_signal_.kind) { return current_signal_.value; }
-        if (cond_unknown_) { return stdx::none; }
     }
 
-    if (loop.non_break) { return eval_stmt(*loop.non_break); }
+    if (loop.non_break) { return eval_non_break(*loop.non_break); }
 
     return stdx::none;
 }
@@ -4699,9 +4852,20 @@ auto const_eval::simulate_expr(ast::node_id id) -> void {
     } else if (const auto for_loop = module_->ast.get_as_opt<ast::for_loop_expr>(id)) {
         simulate_for(*for_loop);
     } else if (const auto label = module_->ast.get_as_opt<ast::label_expr>(id)) {
-        simulate_expr(*label->body);
+        simulate_label(*label);
     } else if (module_->ast[id].is<ast::call_expr>()) {
         DISCARD(try_eval(id));
+    }
+}
+
+auto const_eval::simulate_label(const ast::label_expr& label) -> void {
+    stdx::option<std::string_view> name;
+    if (label.name) { name = module_->ast.get_as<ast::identifier_expr>(*label.name).name; }
+    if (!label.body.is<ast::block_stmt>()) { pending_loop_label_ = name; }
+    simulate_expr(*label.body);
+    // A `break` out of this label ends here instead of unwinding further
+    if (current_signal_.kind == eval_signal_kind::BREAK && current_signal_.target_label == name) {
+        current_signal_ = eval_signal{};
     }
 }
 
@@ -4873,82 +5037,38 @@ auto const_eval::simulate_if(const ast::if_expr& if_expr) -> void {
 }
 
 auto const_eval::simulate_while(const ast::while_loop_expr& loop) -> void {
-    usize iterations{0};
-    while (true) {
-        if (iterations >= ctx_.eval_unroll_limit) {
-            cond_unknown_ = true;
+    const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
+    usize      iterations{0};
+    while (!exceeded_unroll_limit(iterations)) {
+        const auto cond{eval_loop_condition(loop.condition)};
+        if (!cond) { return; }
+        if (!*cond) {
+            if (loop.non_break) { simulate_stmt(*loop.non_break); }
             return;
         }
-        ++iterations;
-        const auto cond = try_eval(loop.condition);
-        if (!cond || !cond->is<bool>()) {
-            cond_unknown_ = true;
-            return;
-        }
-        if (!cond->as<bool>()) { break; }
 
         simulate_stmt(loop.block);
-        if (current_signal_.kind == eval_signal_kind::BREAK) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                break;
-            }
-            return;
-        }
-        if (current_signal_.kind == eval_signal_kind::CONTINUE) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                if (loop.continuation) { simulate_expr(*loop.continuation); }
-                continue;
-            }
-            return;
-        }
-        if (current_signal_.kind || cond_unknown_) { return; }
-
+        if (consume_loop_signal(own_label) != loop_step::NEXT) { return; }
         if (loop.continuation) {
             simulate_expr(*loop.continuation);
             if (cond_unknown_) { return; }
         }
     }
-    if (loop.non_break && !current_signal_.kind) { simulate_stmt(*loop.non_break); }
 }
 
 auto const_eval::simulate_do_while(const ast::do_while_loop_expr& loop) -> void {
-    usize iterations{0};
-    while (true) {
-        if (iterations >= ctx_.eval_unroll_limit) {
-            cond_unknown_ = true;
-            return;
-        }
-        ++iterations;
+    const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
+    usize      iterations{0};
+    while (!exceeded_unroll_limit(iterations)) {
         simulate_stmt(loop.block);
-        if (current_signal_.kind == eval_signal_kind::BREAK) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                break;
-            }
-            return;
-        }
-        if (current_signal_.kind == eval_signal_kind::CONTINUE) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-            } else {
-                return;
-            }
-        } else if (current_signal_.kind || cond_unknown_) {
-            return;
-        }
-
-        const auto cond = try_eval(loop.condition);
-        if (!cond || !cond->is<bool>()) {
-            cond_unknown_ = true;
-            return;
-        }
-        if (!cond->as<bool>()) { break; }
+        if (consume_loop_signal(own_label) != loop_step::NEXT) { return; }
+        const auto cond{eval_loop_condition(loop.condition)};
+        if (!cond || !*cond) { return; }
     }
 }
 
 auto const_eval::simulate_for(const ast::for_loop_expr& loop) -> void {
+    const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
     if (loop.iterables.size() != loop.captures.size() || loop.iterables.empty()) {
         cond_unknown_ = true;
         return;
@@ -5039,52 +5159,19 @@ auto const_eval::simulate_for(const ast::for_loop_expr& loop) -> void {
         }
 
         simulate_stmt(loop.block);
-        if (current_signal_.kind == eval_signal_kind::BREAK) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                break;
-            }
-            return;
-        }
-        if (current_signal_.kind == eval_signal_kind::CONTINUE) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                continue;
-            }
-            return;
-        }
-        if (current_signal_.kind || cond_unknown_) { return; }
+        // A `break` leaves the loop without running its `else` branch
+        if (consume_loop_signal(own_label) != loop_step::NEXT) { return; }
     }
 
-    if (loop.non_break && !current_signal_.kind) { simulate_stmt(*loop.non_break); }
+    if (loop.non_break) { simulate_stmt(*loop.non_break); }
 }
 
 auto const_eval::simulate_infinite_loop(const ast::infinite_loop_expr& loop) -> void {
-    usize iterations{0};
-    while (true) {
-        if (iterations >= ctx_.eval_unroll_limit) {
-            cond_unknown_ = true;
-            return;
-        }
-        ++iterations;
+    const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
+    usize      iterations{0};
+    while (!exceeded_unroll_limit(iterations)) {
         simulate_stmt(loop.block);
-        if (current_signal_.kind == eval_signal_kind::BREAK) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                break;
-            }
-            return;
-        }
-        if (current_signal_.kind == eval_signal_kind::CONTINUE) {
-            if (!current_signal_.target_label.has_value()) {
-                current_signal_ = eval_signal{};
-                continue;
-            } else {
-                return;
-            }
-        } else if (current_signal_.kind || cond_unknown_) {
-            return;
-        }
+        if (consume_loop_signal(own_label) != loop_step::NEXT) { return; }
     }
 }
 

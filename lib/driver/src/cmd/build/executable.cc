@@ -1,40 +1,21 @@
 #include "driver/cmd/build/executable.hh"
 
-#include <filesystem>
-#include <system_error>
-
 #include <fmt/base.h>
-#include <fmt/format.h>
 #include <fmt/ostream.h>
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
 
-#include "compiler/module/file_loader.hh"
-#include "compiler/module/module.hh"
-#include "compiler/sema/analyzer.hh"
 #include "driver/clap/error.hh"
-#include "ghoti/config.h"
+#include "driver/cmd/build/options.hh"
 
 namespace ghoti::cmd {
 
 auto build_exe::execute() -> stdx::result<void, clap::error> {
     PROFILE_FUNCTION();
 
-    std::error_code ec;
-    if (!std::filesystem::exists(opts_.input_path, ec)) {
-        return clap::fatal_error(error_stream_,
-                                 fmt::format("file '{}' not found", opts_.input_path.string()),
-                                 clap::error::FILE_NOT_FOUND);
-    }
-
-    opts_.make_path_relative();
-    mod::file_loader    loader;
-    mod::module_manager manager{loader};
-    TRY(opts_.setup_module_manager(manager, error_stream_));
-
-    sema::analyzer analyzer{
-        manager, error_stream_, true, opts_.target_opts, false, opts_.runtime_safety};
-    auto [module, gir_mod]{TRY(opts_.analyze(analyzer, manager, error_stream_))};
+    build::compilation compilation{opts_, error_stream_};
+    auto [module, gir_mod]{TRY(compilation.analyze())};
+    auto& analyzer{compilation.get_analyzer()};
 
     // Validate that root module contains valid 'pub const main := fn(args: [][:0]u8): void'
     if (auto val_res{analyzer.validate_main_entry(*module)}; !val_res) {
@@ -42,22 +23,15 @@ auto build_exe::execute() -> stdx::result<void, clap::error> {
         return stdx::err{clap::error::COMPILATION_FAILED};
     }
 
-    TRY(opts_.emit_debug_artifacts(analyzer, gir_mod, error_stream_));
+    TRY(opts_.emit_debug_artifacts(
+        analyzer, gir_mod, error_stream_, sema::build_artifact::EXECUTABLE));
 
     auto emit_res{analyzer.emit_executable(gir_mod,
                                            opts_.target_opts,
                                            opts_.opt_opts,
                                            opts_.output_path,
-                                           {
-                                               .objects       = opts_.extra_objects,
-                                               .library_paths = opts_.library_paths,
-                                               .libraries     = opts_.libraries,
-                                           })};
-    if (!emit_res) {
-        return clap::fatal_error(error_stream_,
-                                 emit_res.error().get_message().value_or(GHOTI_UNKNOWN_ERROR),
-                                 clap::error::COMPILATION_FAILED);
-    }
+                                           compilation.linker_options())};
+    if (!emit_res) { return build::report_codegen_error(error_stream_, emit_res.error()); }
     return {};
 }
 

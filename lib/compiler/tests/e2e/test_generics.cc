@@ -561,4 +561,32 @@ TEST_CASE("`@TypeOf(x)` nested in a compound type annotation denotes the type, n
     }
 }
 
+TEST_CASE("a `[n]T` parameter or return type of a `T: type` generic is monomorphized concretely") {
+    CHECK(helpers::compile_and_run(R"(
+        const first := fn(T: type, xs: [2]T): T { return xs[0]; };
+        pub const main := fn(): i32 {
+            const values: [2]i32 = .{ 7, 8 };
+            return first(i32, values);
+        };
+    )") == 7);
+
+    CHECK(helpers::compile_and_run(R"(
+        const echo := fn(T: type, xs: [2]T): [2]T { return xs; };
+        const second := fn(a: [2]i32): i32 { return a[1]; };
+        pub const main := fn(): i32 {
+            const values: [2]i32 = .{ 4, 5 };
+            const direct := echo(i32, values);
+            return second(echo(i32, .{ 4, 5 })) + direct[1];
+        };
+    )") == 10);
+
+    CHECK(helpers::compile_and_run(R"(
+        const pair := fn(T: type, x: T): [2]T { return .{ x, x }; };
+        pub const main := fn(): i32 {
+            const p := pair(i32, 7);
+            return p[0] + p[1];
+        };
+    )") == 14);
+}
+
 } // namespace ghoti::tests

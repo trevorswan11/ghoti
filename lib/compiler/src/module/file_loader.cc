@@ -12,13 +12,14 @@
 #include <stdx/result.hh>
 
 #include "compiler/module/error.hh"
+#include "support/path_utils.hh"
 
 namespace ghoti::mod {
 
 auto file_loader::load(const std::filesystem::path& path) -> stdx::result<std::string, diagnostic> {
     PROFILE_FUNCTION();
     std::error_code ec;
-    if (!std::filesystem::exists(path, ec)) {
+    if (!path_utils::exists(path)) {
         return make_mod_err(fmt::format("Path '{}' does not exist", path.string()),
                             error::PATH_DOES_NOT_EXIST);
     }

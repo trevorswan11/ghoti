@@ -134,7 +134,7 @@ TEST_CASE("Function call type checking") {
 
     SECTION("Valid C va builtins type check successfully") {
         helpers::type_check_and_verify(R"(
-            const f := fn(ap: ^mut opaque, dest: ^mut opaque): void {
+            const f := fn(ap: ^mut opaque, dest: ^mut opaque, ...): void {
                 @cVaStart(ap);
                 const val: i32 = @cVaArg(ap, i32);
                 @cVaCopy(dest, ap);

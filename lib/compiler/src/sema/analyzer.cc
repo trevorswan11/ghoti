@@ -20,10 +20,12 @@
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
 
+#include "compiler/ast/statement.hh"
 #include "compiler/codegen/error.hh"
 #include "compiler/codegen/linker.hh"
 #include "compiler/codegen/llvm_lowering.hh"
 #include "compiler/codegen/llvm_optimizer.hh"
+#include "compiler/codegen/mem_intrinsics.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/emitter.hh"
@@ -81,6 +83,82 @@ constexpr std::array supported_archs{
     "thumb",
     "loongarch64",
 };
+
+auto prune_to_test_reachable(gir::module& gir_module) -> void {
+    std::vector<std::string_view> roots;
+    for (const auto* fn : gir_module.get_test_functions()) { roots.emplace_back(fn->get_name()); }
+    roots.emplace_back("test_runner");
+    roots.emplace_back("expect_handler");
+    roots.emplace_back("require_handler");
+    roots.emplace_back("skip_handler");
+    gir_module.prune_unreachable(roots);
+}
+
+// The LLVM-level names of every `export` function and global, which must survive internalizing
+[[nodiscard]] auto exported_symbol_names(const gir::module& mod) -> std::vector<std::string> {
+    std::vector<std::string> names;
+    for (const auto* fn : mod.get_functions()) {
+        if (fn->get_linkage() != gir::linkage::EXPORT) { continue; }
+        names.emplace_back(fn->get_link_name().empty() ? fn->get_name() : fn->get_link_name());
+    }
+    for (const auto* g : mod.get_globals()) {
+        if (g->linkage == gir::linkage::EXPORT) {
+            names.emplace_back(g->link_name.empty() ? g->name : g->link_name);
+        }
+    }
+    return names;
+}
+
+[[nodiscard]] auto with_target_machine(const codegen::optimizer_options& opt_options,
+                                       const codegen::target_options&    target_opts,
+                                       llvm::TargetMachine&              target_machine)
+    -> codegen::optimizer_options {
+    codegen::optimizer_options opts{opt_options};
+    opts.target_machine = &target_machine;
+    if (opts.level == codegen::opt_level::O0 && target_opts.level != codegen::opt_level::O0) {
+        opts.level = target_opts.level;
+    }
+    return opts;
+}
+
+// Libraries named by `extern("lib", ...)` declarations join the ones given on the command line
+[[nodiscard]] auto merged_libraries(const codegen::extra_linker_options& linker_opts,
+                                    const gir::module& gir_module) -> std::vector<std::string> {
+    std::vector<std::string> merged{linker_opts.libraries.begin(), linker_opts.libraries.end()};
+    for (auto& lib : gir_module.get_required_libraries()) { merged.emplace_back(std::move(lib)); }
+    return merged;
+}
+
+[[nodiscard]] auto check_freestanding_entry(const llvm::Triple& triple, std::string_view artifact)
+    -> stdx::result<void, codegen::diagnostic> {
+    if (codegen::can_emit_freestanding_entry(triple)) { return {}; }
+    return codegen::make_codegen_err(
+        fmt::format("cannot build {} for target '{}': ghoti links no C runtime on Linux and has no "
+                    "freestanding entry point for the '{}' architecture (supported: {})",
+                    artifact,
+                    triple.str(),
+                    codegen::normalized_target_arch(triple),
+                    fmt::join(supported_archs, ", ")),
+        codegen::error::UNSUPPORTED_TARGET);
+}
+
+[[nodiscard]] auto verify_and_optimize(llvm::Module&                     llvm_mod,
+                                       const codegen::optimizer_options& options)
+    -> stdx::result<void, codegen::diagnostic> {
+    std::string              err_str;
+    llvm::raw_string_ostream os{err_str};
+    if (llvm::verifyModule(llvm_mod, &os)) {
+        return codegen::make_codegen_err(err_str, codegen::error::VERIFICATION_FAILED);
+    }
+
+    if (options.level != codegen::opt_level::O0 || options.debug_logging || options.time_passes) {
+        codegen::llvm_optimizer optimizer{llvm_mod.getContext()};
+        TRY(optimizer.optimize(llvm_mod, options));
+        // Optimization may turn loops into `mem*` calls lowering never saw
+        codegen::define_mem_intrinsic_fallbacks(llvm_mod);
+    }
+    return {};
+}
 
 } // namespace
 
@@ -155,76 +233,100 @@ auto analyzer::emit_llvm_ir(gir::module&                      gir_module,
         lowering.module().setTargetTriple(options.target_machine->getTargetTriple());
     }
     auto llvm_mod{lowering.lower(gir_module)};
-
-    std::string              err_str;
-    llvm::raw_string_ostream os{err_str};
-    if (llvm::verifyModule(*llvm_mod, &os)) {
-        return codegen::make_codegen_err(err_str, codegen::error::VERIFICATION_FAILED);
-    }
-
-    if (options.level != codegen::opt_level::O0 || options.debug_logging || options.time_passes) {
-        codegen::llvm_optimizer optimizer{llvm_mod->getContext()};
-        TRY(optimizer.optimize(*llvm_mod, options));
-    }
-
+    TRY(verify_and_optimize(*llvm_mod, options));
     return llvm_mod;
 }
 
-auto analyzer::emit_llvm_ir_text(gir::module& gir_module, const codegen::optimizer_options& options)
-    -> stdx::result<std::string, codegen::diagnostic> {
+auto analyzer::emit_llvm_ir_executable(gir::module&                      gir_module,
+                                       llvm::LLVMContext&                context,
+                                       const codegen::optimizer_options& options,
+                                       std::string_view                  user_main_name)
+    -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic> {
     PROFILE_FUNCTION();
-    llvm::LLVMContext context;
-    auto              llvm_mod{TRY(emit_llvm_ir(gir_module, context, options))};
-    return codegen::llvm_lowering::to_ir_string(*llvm_mod);
-}
-
-namespace {
-
-auto prune_to_test_reachable(gir::module& gir_module) -> void {
-    std::vector<std::string_view> roots;
-    for (const auto* fn : gir_module.get_test_functions()) { roots.emplace_back(fn->get_name()); }
-    roots.emplace_back("test_runner");
-    roots.emplace_back("expect_handler");
-    roots.emplace_back("require_handler");
-    roots.emplace_back("skip_handler");
+    const auto effective_main_name{user_main_name == "main" && ctx_.user_main_name != "main"
+                                       ? std::string_view{ctx_.user_main_name}
+                                       : user_main_name};
+    const std::vector<std::string_view> roots{effective_main_name};
     gir_module.prune_unreachable(roots);
+    codegen::llvm_lowering lowering{context, gir_module.get_ast_module().path.string()};
+    if (options.target_machine) {
+        const llvm::Triple triple{options.target_machine->getTargetTriple()};
+        TRY(check_freestanding_entry(triple, "an executable"));
+        lowering.module().setDataLayout(options.target_machine->createDataLayout());
+        lowering.module().setTargetTriple(triple);
+    }
+    auto llvm_mod{lowering.lower_executable(gir_module, effective_main_name)};
+
+    codegen::optimizer_options exe_opts{options};
+    exe_opts.internalize = true;
+    exe_opts.preserved_symbols.emplace_back("main");
+    for (auto& name : exported_symbol_names(gir_module)) {
+        exe_opts.preserved_symbols.emplace_back(std::move(name));
+    }
+    TRY(verify_and_optimize(*llvm_mod, exe_opts));
+    return llvm_mod;
 }
 
-} // namespace
-
-auto analyzer::emit_llvm_ir_text_test_executable(gir::module&                      gir_module,
-                                                 const codegen::optimizer_options& options)
-    -> stdx::result<std::string, codegen::diagnostic> {
+auto analyzer::emit_llvm_ir_test_executable(gir::module&                      gir_module,
+                                            llvm::LLVMContext&                context,
+                                            const codegen::optimizer_options& options)
+    -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic> {
     PROFILE_FUNCTION();
     prune_to_test_reachable(gir_module);
-    return emit_llvm_ir_text(gir_module, options);
+    codegen::llvm_lowering lowering{context, gir_module.get_ast_module().path.string()};
+    bool                   recover_args{true};
+    if (options.target_machine) {
+        const llvm::Triple triple{options.target_machine->getTargetTriple()};
+        TRY(check_freestanding_entry(triple, "a test executable"));
+        lowering.module().setDataLayout(options.target_machine->createDataLayout());
+        lowering.module().setTargetTriple(triple);
+        // A freestanding Windows entry recovers argv through kernel32 / shell32
+        recover_args = !triple.isOSWindows() || codegen::has_windows_argv_sysroot();
+    }
+    auto llvm_mod{lowering.lower_test_executable(gir_module, stdx::none, recover_args)};
+    TRY(verify_and_optimize(*llvm_mod, options));
+    return llvm_mod;
 }
 
-auto analyzer::emit_asm_text(gir::module&                      gir_module,
-                             const codegen::target_options&    target_opts,
-                             const codegen::optimizer_options& opt_options)
+auto analyzer::lower_artifact(gir::module&                      gir_module,
+                              llvm::LLVMContext&                context,
+                              const codegen::optimizer_options& options,
+                              build_artifact                    artifact)
+    -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic> {
+    switch (artifact) {
+    case build_artifact::EXECUTABLE: return emit_llvm_ir_executable(gir_module, context, options);
+    case build_artifact::TEST_EXECUTABLE:
+        return emit_llvm_ir_test_executable(gir_module, context, options);
+    case build_artifact::LIBRARY: gir_module.prune_unreachable(export_roots(gir_module)); break;
+    case build_artifact::OBJECT:  gir_module.prune_unreachable({}); break;
+    }
+    return emit_llvm_ir(gir_module, context, options);
+}
+
+auto analyzer::emit_llvm_ir_text(gir::module&                      gir_module,
+                                 const codegen::target_options&    target_opts,
+                                 const codegen::optimizer_options& opt_options,
+                                 build_artifact                    artifact)
     -> stdx::result<std::string, codegen::diagnostic> {
     PROFILE_FUNCTION();
     llvm::LLVMContext context;
     auto              target_machine{TRY(codegen::create_target_machine(target_opts))};
-
-    codegen::optimizer_options opts{opt_options};
-    opts.target_machine = target_machine.get();
-    if (opts.level == codegen::opt_level::O0 && target_opts.level != codegen::opt_level::O0) {
-        opts.level = target_opts.level;
-    }
-
-    auto llvm_mod{TRY(emit_llvm_ir(gir_module, context, opts))};
-    return codegen::emit_asm_string(*llvm_mod, *target_machine);
+    const auto        opts{with_target_machine(opt_options, target_opts, *target_machine)};
+    auto              llvm_mod{TRY(lower_artifact(gir_module, context, opts, artifact))};
+    return codegen::llvm_lowering::to_ir_string(*llvm_mod);
 }
 
-auto analyzer::emit_asm_text_test_executable(gir::module&                      gir_module,
-                                             const codegen::target_options&    target_opts,
-                                             const codegen::optimizer_options& opt_options)
+auto analyzer::emit_asm_text(gir::module&                      gir_module,
+                             const codegen::target_options&    target_opts,
+                             const codegen::optimizer_options& opt_options,
+                             build_artifact                    artifact)
     -> stdx::result<std::string, codegen::diagnostic> {
     PROFILE_FUNCTION();
-    prune_to_test_reachable(gir_module);
-    return emit_asm_text(gir_module, target_opts, opt_options);
+    llvm::LLVMContext context;
+    auto              target_machine{TRY(codegen::create_target_machine(target_opts))};
+    const auto        opts{with_target_machine(opt_options, target_opts, *target_machine)};
+    auto              llvm_mod{TRY(lower_artifact(gir_module, context, opts, artifact))};
+    return codegen::emit_asm_string(*llvm_mod, *target_machine);
 }
 
 auto analyzer::validate_main_entry(const mod::module& root_module) const
@@ -259,6 +361,12 @@ auto analyzer::validate_main_entry(const mod::module& root_module) const
     const auto node_sym{main_sym.get_data().as_opt<symbols::node_t>()};
     if (!node_sym) {
         return make_sema_err("'main' must be a user-defined function",
+                             error::TYPE_MISMATCH,
+                             main_sym.get_symbol_location(root_module));
+    }
+    if (const auto decl{root_module.ast.get_as_opt<ast::decl_stmt>(*node_sym)};
+        decl && decl->has_modifier(ast::decl_modifiers::EXTERN)) {
+        return make_sema_err("'main' must be defined in this module, not declared 'extern'",
                              error::TYPE_MISMATCH,
                              main_sym.get_symbol_location(root_module));
     }
@@ -373,118 +481,10 @@ auto analyzer::emit_object(gir::module&                      gir_module,
                            const std::filesystem::path&      output_path)
     -> stdx::result<void, codegen::diagnostic> {
     PROFILE_FUNCTION();
-    auto target_machine{TRY(codegen::create_target_machine(target_opts))};
-
-    codegen::optimizer_options opts{opt_options};
-    opts.target_machine = target_machine.get();
-    if (opts.level == codegen::opt_level::O0 && target_opts.level != codegen::opt_level::O0) {
-        opts.level = target_opts.level;
-    }
-
-    gir_module.prune_unreachable({});
-    auto llvm_mod{TRY(emit_llvm_ir(gir_module, context, opts))};
+    auto       target_machine{TRY(codegen::create_target_machine(target_opts))};
+    const auto opts{with_target_machine(opt_options, target_opts, *target_machine)};
+    auto       llvm_mod{TRY(lower_artifact(gir_module, context, opts, build_artifact::OBJECT))};
     return codegen::emit_object_file(*llvm_mod, *target_machine, output_path);
-}
-
-auto analyzer::emit_llvm_ir_executable(gir::module&                      gir_module,
-                                       llvm::LLVMContext&                context,
-                                       const codegen::optimizer_options& options,
-                                       std::string_view                  user_main_name)
-    -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic> {
-    PROFILE_FUNCTION();
-    const auto effective_main_name{user_main_name == "main" && ctx_.user_main_name != "main"
-                                       ? std::string_view{ctx_.user_main_name}
-                                       : user_main_name};
-    const std::vector<std::string_view> roots{effective_main_name};
-    gir_module.prune_unreachable(roots);
-    codegen::llvm_lowering lowering{context, gir_module.get_ast_module().path.string()};
-    if (options.target_machine) {
-        const llvm::Triple triple{options.target_machine->getTargetTriple()};
-        if (!codegen::can_emit_freestanding_entry(triple)) {
-            return codegen::make_codegen_err(
-                fmt::format(
-                    "cannot build an executable for target '{}': ghoti links no C runtime "
-                    "on Linux and has no freestanding entry point for the '{}' architecture "
-                    "(supported: {})",
-                    triple.str(),
-                    codegen::normalized_target_arch(triple),
-                    fmt::join(supported_archs, ", ")),
-                codegen::error::UNSUPPORTED_TARGET);
-        }
-        lowering.module().setDataLayout(options.target_machine->createDataLayout());
-        lowering.module().setTargetTriple(triple);
-    }
-    auto llvm_mod{lowering.lower_executable(gir_module, effective_main_name)};
-
-    std::string              err_str;
-    llvm::raw_string_ostream os{err_str};
-    if (llvm::verifyModule(*llvm_mod, &os)) {
-        return codegen::make_codegen_err(err_str, codegen::error::VERIFICATION_FAILED);
-    }
-
-    if (options.level != codegen::opt_level::O0 || options.debug_logging || options.time_passes) {
-        codegen::optimizer_options exe_opts{options};
-        exe_opts.internalize = true;
-        exe_opts.preserved_symbols.emplace_back("main");
-        for (const auto* fn : gir_module.get_functions()) {
-            if (fn->get_linkage() == gir::linkage::EXPORT) {
-                exe_opts.preserved_symbols.emplace_back(fn->get_link_name().empty()
-                                                            ? std::string{fn->get_name()}
-                                                            : std::string{fn->get_link_name()});
-            }
-        }
-        for (const auto* g : gir_module.get_globals()) {
-            if (g->linkage == gir::linkage::EXPORT) {
-                exe_opts.preserved_symbols.emplace_back(g->link_name.empty() ? g->name
-                                                                             : g->link_name);
-            }
-        }
-        codegen::llvm_optimizer optimizer{llvm_mod->getContext()};
-        TRY(optimizer.optimize(*llvm_mod, exe_opts));
-    }
-
-    return llvm_mod;
-}
-
-auto analyzer::emit_llvm_ir_test_executable(gir::module&                      gir_module,
-                                            llvm::LLVMContext&                context,
-                                            const codegen::optimizer_options& options)
-    -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic> {
-    PROFILE_FUNCTION();
-    prune_to_test_reachable(gir_module);
-    codegen::llvm_lowering lowering{context, gir_module.get_ast_module().path.string()};
-    bool                   recover_args{true};
-    if (options.target_machine) {
-        const llvm::Triple triple{options.target_machine->getTargetTriple()};
-        if (!codegen::can_emit_freestanding_entry(triple)) {
-            return codegen::make_codegen_err(
-                fmt::format("cannot build a test executable for target '{}': ghoti links no C "
-                            "runtime on Linux and has no freestanding entry point for the '{}' "
-                            "architecture (supported: {})",
-                            triple.str(),
-                            codegen::normalized_target_arch(triple),
-                            fmt::join(supported_archs, ", ")),
-                codegen::error::UNSUPPORTED_TARGET);
-        }
-        lowering.module().setDataLayout(options.target_machine->createDataLayout());
-        lowering.module().setTargetTriple(triple);
-        // A freestanding Windows entry recovers argv through kernel32 / shell32
-        recover_args = !triple.isOSWindows() || codegen::has_windows_argv_sysroot();
-    }
-    auto llvm_mod{lowering.lower_test_executable(gir_module, stdx::none, recover_args)};
-
-    std::string              err_str;
-    llvm::raw_string_ostream os{err_str};
-    if (llvm::verifyModule(*llvm_mod, &os)) {
-        return codegen::make_codegen_err(err_str, codegen::error::VERIFICATION_FAILED);
-    }
-
-    if (options.level != codegen::opt_level::O0 || options.debug_logging || options.time_passes) {
-        codegen::llvm_optimizer optimizer{llvm_mod->getContext()};
-        TRY(optimizer.optimize(*llvm_mod, options));
-    }
-
-    return llvm_mod;
 }
 
 auto analyzer::emit_test_executable(gir::module&                         gir_module,
@@ -506,29 +506,13 @@ auto analyzer::emit_test_executable(gir::module&                         gir_mod
                                     const codegen::extra_linker_options& linker_opts)
     -> stdx::result<void, codegen::diagnostic> {
     PROFILE_FUNCTION();
-    auto target_machine{TRY(codegen::create_target_machine(target_opts))};
-
-    codegen::optimizer_options opts{opt_options};
-    opts.target_machine = target_machine.get();
-    if (opts.level == codegen::opt_level::O0 && target_opts.level != codegen::opt_level::O0) {
-        opts.level = target_opts.level;
-    }
-
-    auto llvm_mod{TRY(emit_llvm_ir_test_executable(gir_module, context, opts))};
-    auto temp_obj_path{make_tmp_obj(output_path)};
-    TRY(codegen::emit_object_file(*llvm_mod, *target_machine, temp_obj_path));
-
-    auto effective_linker_opts{linker_opts};
-    effective_linker_opts.needs_windows_argv_apis =
-        llvm_mod->getFunction("GetCommandLineW") != nullptr;
-
-    std::vector<std::string> merged_libraries{linker_opts.libraries.begin(),
-                                              linker_opts.libraries.end()};
-    for (auto& lib : gir_module.get_required_libraries()) {
-        merged_libraries.emplace_back(std::move(lib));
-    }
-    effective_linker_opts.libraries = merged_libraries;
-    return codegen::link_executable(temp_obj_path, output_path, target_opts, effective_linker_opts);
+    return link_artifact(gir_module,
+                         context,
+                         target_opts,
+                         opt_options,
+                         output_path,
+                         linker_opts,
+                         build_artifact::TEST_EXECUTABLE);
 }
 
 auto analyzer::emit_executable(gir::module&                         gir_module,
@@ -549,30 +533,13 @@ auto analyzer::emit_executable(gir::module&                         gir_module,
                                const codegen::extra_linker_options& linker_opts)
     -> stdx::result<void, codegen::diagnostic> {
     PROFILE_FUNCTION();
-    auto target_machine{TRY(codegen::create_target_machine(target_opts))};
-
-    codegen::optimizer_options opts{opt_options};
-    opts.target_machine = target_machine.get();
-    if (opts.level == codegen::opt_level::O0 && target_opts.level != codegen::opt_level::O0) {
-        opts.level = target_opts.level;
-    }
-
-    auto llvm_mod{TRY(emit_llvm_ir_executable(gir_module, context, opts))};
-    auto temp_obj_path{make_tmp_obj(output_path)};
-    TRY(codegen::emit_object_file(*llvm_mod, *target_machine, temp_obj_path));
-
-    // Only link kernel32/shell32 when the wrapper actually needs them to recover argv.
-    auto effective_linker_opts{linker_opts};
-    effective_linker_opts.needs_windows_argv_apis =
-        llvm_mod->getFunction("GetCommandLineW") != nullptr;
-
-    std::vector<std::string> merged_libraries{linker_opts.libraries.begin(),
-                                              linker_opts.libraries.end()};
-    for (auto& lib : gir_module.get_required_libraries()) {
-        merged_libraries.emplace_back(std::move(lib));
-    }
-    effective_linker_opts.libraries = merged_libraries;
-    return codegen::link_executable(temp_obj_path, output_path, target_opts, effective_linker_opts);
+    return link_artifact(gir_module,
+                         context,
+                         target_opts,
+                         opt_options,
+                         output_path,
+                         linker_opts,
+                         build_artifact::EXECUTABLE);
 }
 
 auto analyzer::emit_static_library(gir::module&                         gir_module,
@@ -594,22 +561,14 @@ auto analyzer::emit_static_library(gir::module&                         gir_modu
                                    const codegen::extra_linker_options& linker_opts)
     -> stdx::result<void, codegen::diagnostic> {
     PROFILE_FUNCTION();
-    auto target_machine{TRY(codegen::create_target_machine(target_opts))};
-
-    codegen::optimizer_options opts{opt_options};
-    opts.target_machine = target_machine.get();
-    if (opts.level == codegen::opt_level::O0 && target_opts.level != codegen::opt_level::O0) {
-        opts.level = target_opts.level;
-    }
-
-    auto temp_obj_path{make_tmp_obj(output_path)};
-    gir_module.prune_unreachable(export_roots(gir_module));
-    auto llvm_mod{TRY(emit_llvm_ir(gir_module, context, opts))};
+    auto       target_machine{TRY(codegen::create_target_machine(target_opts))};
+    const auto opts{with_target_machine(opt_options, target_opts, *target_machine)};
+    auto       llvm_mod{TRY(lower_artifact(gir_module, context, opts, build_artifact::LIBRARY))};
+    const auto temp_obj_path{make_tmp_obj(output_path)};
     TRY(codegen::emit_object_file(*llvm_mod, *target_machine, temp_obj_path));
 
     std::vector<std::filesystem::path> objects;
     objects.reserve(linker_opts.objects.size() + 1);
-
     objects.emplace_back(temp_obj_path);
     for (const auto& obj : linker_opts.objects) { objects.emplace_back(obj); }
     return codegen::create_static_library(output_path, objects, target_opts);
@@ -638,28 +597,38 @@ auto analyzer::emit_dynamic_library(gir::module&                         gir_mod
         return codegen::make_codegen_err("Dynamic libraries require PIC relocation mode enabled",
                                          codegen::error::ILLEGAL_DYLIB_RELOC_MODE);
     }
-    auto target_machine{TRY(codegen::create_target_machine(target_opts))};
-
-    codegen::optimizer_options opts{opt_options};
-    opts.target_machine = target_machine.get();
-    if (opts.level == codegen::opt_level::O0 && target_opts.level != codegen::opt_level::O0) {
-        opts.level = target_opts.level;
-    }
-
-    auto temp_obj_path{make_tmp_obj(output_path)};
-    gir_module.prune_unreachable(export_roots(gir_module));
-    auto llvm_mod{TRY(emit_llvm_ir(gir_module, context, opts))};
+    auto       target_machine{TRY(codegen::create_target_machine(target_opts))};
+    const auto opts{with_target_machine(opt_options, target_opts, *target_machine)};
+    auto       llvm_mod{TRY(lower_artifact(gir_module, context, opts, build_artifact::LIBRARY))};
+    const auto temp_obj_path{make_tmp_obj(output_path)};
     TRY(codegen::emit_object_file(*llvm_mod, *target_machine, temp_obj_path));
-
-    auto                     effective_linker_opts{linker_opts};
-    std::vector<std::string> merged_libraries{linker_opts.libraries.begin(),
-                                              linker_opts.libraries.end()};
-    for (auto& lib : gir_module.get_required_libraries()) {
-        merged_libraries.emplace_back(std::move(lib));
-    }
-    effective_linker_opts.libraries = merged_libraries;
+    auto libraries{merged_libraries(linker_opts, gir_module)};
+    auto effective_linker_opts{linker_opts};
+    effective_linker_opts.libraries = libraries;
     return codegen::link_dynamic_library(
         temp_obj_path, output_path, target_opts, effective_linker_opts);
+}
+
+auto analyzer::link_artifact(gir::module&                         gir_module,
+                             llvm::LLVMContext&                   context,
+                             const codegen::target_options&       target_opts,
+                             const codegen::optimizer_options&    opt_options,
+                             const std::filesystem::path&         output_path,
+                             const codegen::extra_linker_options& linker_opts,
+                             build_artifact artifact) -> stdx::result<void, codegen::diagnostic> {
+    auto       target_machine{TRY(codegen::create_target_machine(target_opts))};
+    const auto opts{with_target_machine(opt_options, target_opts, *target_machine)};
+    auto       llvm_mod{TRY(lower_artifact(gir_module, context, opts, artifact))};
+    const auto temp_obj_path{make_tmp_obj(output_path)};
+    TRY(codegen::emit_object_file(*llvm_mod, *target_machine, temp_obj_path));
+
+    // Only link kernel32/shell32 when the entry wrapper actually needs them to recover argv
+    auto libraries{merged_libraries(linker_opts, gir_module)};
+    auto effective_linker_opts{linker_opts};
+    effective_linker_opts.libraries = libraries;
+    effective_linker_opts.needs_windows_argv_apis =
+        llvm_mod->getFunction("GetCommandLineW") != nullptr;
+    return codegen::link_executable(temp_obj_path, output_path, target_opts, effective_linker_opts);
 }
 
 } // namespace ghoti::sema

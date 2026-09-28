@@ -18,6 +18,7 @@
 #include <llvm/Object/Archive.h>
 #include <llvm/Object/ArchiveWriter.h>
 #include <llvm/Support/Error.h>
+#include <llvm/Support/JSON.h>
 #include <llvm/Support/ManagedStatic.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/Path.h>
@@ -33,6 +34,7 @@
 
 #include "compiler/codegen/error.hh"
 #include "compiler/codegen/target.hh"
+#include "compiler/module/stdlib.hh"
 #include "support/env.hh"
 #include "support/string_utils.hh"
 #include "support/subprocess.hh"
@@ -52,22 +54,73 @@ constexpr auto exe_permissions{
     std::filesystem::perms::group_exec | std::filesystem::perms::others_read |
     std::filesystem::perms::others_exec};
 
-// `SDKROOT` isn't set in every environment that has a usable macOS SDK, fall back to xcrun
-[[nodiscard]] auto resolve_darwin_sdkroot() -> stdx::option<std::string> {
-    if (const auto sdkroot{get_env("SDKROOT")}) { return std::string{*sdkroot}; }
+// A real SDK is used as the link sysroot
+struct darwin_sdk {
+    std::string path;
+    bool        bundled{false};
+};
 
-    static const auto cached_sdkroot{[] -> stdx::option<std::string> {
+// `SDKROOT` isn't set in every environment that has a usable macOS SDK, fall back to xcrun and
+// then to the shipped stubs so cross links work from any host
+[[nodiscard]] auto resolve_darwin_sdk() -> stdx::option<darwin_sdk> {
+    if (const auto sdkroot{get_env("SDKROOT")}) { return darwin_sdk{std::string{*sdkroot}}; }
+
+    static const auto cached_sdk{[] -> stdx::option<darwin_sdk> {
         piped_process proc{mock_argv{"xcrun", "-sdk", "macosx", "--show-sdk-path"}};
         const auto    exit_code{proc.close_stdin_and_wait()};
-        if (!exit_code || *exit_code != 0) { return stdx::none; }
+        if (exit_code && *exit_code == 0) {
+            std::string path;
+            std::getline(proc.stdout_stream(), path);
+            string_utils::strip_trailing_cr(path);
+            if (!path.empty()) { return darwin_sdk{path}; }
+        }
 
-        std::string path;
-        std::getline(proc.stdout_stream(), path);
-        string_utils::strip_trailing_cr(path);
-        if (path.empty()) { return stdx::none; }
-        return path;
+        if (const auto bundled{mod::find_lib_path("darwin")}) {
+            return darwin_sdk{bundled->string(), true};
+        }
+        return stdx::none;
     }()};
-    return cached_sdkroot;
+    return cached_sdk;
+}
+
+// The SDK version recorded in `SDKSettings.json`, which the linker stamps into the image
+[[nodiscard]] auto read_darwin_sdk_version(const std::string& sdk_path)
+    -> stdx::option<std::string> {
+    auto buffer{llvm::MemoryBuffer::getFile(
+        (std::filesystem::path{sdk_path} / "SDKSettings.json").string())};
+    if (!buffer) { return stdx::none; }
+
+    auto parsed{llvm::json::parse((*buffer)->getBuffer())};
+    if (!parsed) {
+        llvm::consumeError(parsed.takeError());
+        return stdx::none;
+    }
+    const auto* settings{parsed->getAsObject()};
+    if (!settings) { return stdx::none; }
+    for (const auto* key : {"Version", "MinimalDisplayName"}) {
+        if (const auto version{settings->getString(key)}) { return version->str(); }
+    }
+    return stdx::none;
+}
+
+// Extra objects, then one `<dir_flag><dir>` per library search path
+auto add_extra_inputs(std::vector<std::string>&   args,
+                      const extra_linker_options& linker_opts,
+                      std::string_view            dir_flag) -> void {
+    for (const auto& obj : linker_opts.objects) { args.emplace_back(obj.string()); }
+    for (const auto& dir : linker_opts.library_paths) {
+        args.emplace_back(fmt::format("{}{}", dir_flag, dir.string()));
+    }
+}
+
+// Last, so every other input gets first claim on a symbol
+auto add_builtins(std::vector<std::string>& args, const extra_linker_options& linker_opts) -> void {
+    if (linker_opts.builtins) { args.emplace_back(linker_opts.builtins->string()); }
+}
+
+auto add_unix_libraries(std::vector<std::string>& args, const extra_linker_options& linker_opts)
+    -> void {
+    for (const auto& lib : linker_opts.libraries) { args.emplace_back(fmt::format("-l{}", lib)); }
 }
 
 auto add_darwin_args(std::vector<std::string>&   args,
@@ -97,26 +150,31 @@ auto add_darwin_args(std::vector<std::string>&   args,
         min_version = "10.15.0";
     }
 
-    std::string sdk_version = min_version;
+    const auto sdk{resolve_darwin_sdk()};
+    auto       sdk_version{min_version};
+    if (sdk) {
+        if (auto version{read_darwin_sdk_version(sdk->path)}) { sdk_version = std::move(*version); }
+    }
     args.emplace_back(min_version);
     args.emplace_back(sdk_version);
     args.emplace_back(obj_path_str);
 
-    for (const auto& obj : linker_opts.objects) { args.emplace_back(obj.string()); }
-    for (const auto& dir : linker_opts.library_paths) {
-        args.emplace_back(fmt::format("-L{}", dir.string()));
-    }
+    add_extra_inputs(args, linker_opts, "-L");
 
     args.emplace_back("-o");
     args.emplace_back(out_path_str);
 
     args.emplace_back("-dead_strip");
-    if (const auto sdkroot{resolve_darwin_sdkroot()}) {
+    if (sdk && sdk->bundled) {
+        args.emplace_back(fmt::format("-L{}", sdk->path));
+        args.emplace_back("-lSystem");
+    } else if (sdk) {
         args.emplace_back("-syslibroot");
-        args.emplace_back(*sdkroot);
+        args.emplace_back(sdk->path);
         args.emplace_back("-lSystem");
     }
-    for (const auto& lib : linker_opts.libraries) { args.emplace_back(fmt::format("-l{}", lib)); }
+    add_unix_libraries(args, linker_opts);
+    add_builtins(args, linker_opts);
 }
 
 // Directories that may hold the Win32 import libraries (`kernel32.lib`, `shell32.lib`, ...).
@@ -195,24 +253,25 @@ auto add_mingw_args(std::vector<std::string>&   args,
     args.emplace_back("-m");
     args.emplace_back(emulation);
     args.emplace_back(obj_path_str);
-    for (const auto& obj : linker_opts.objects) { args.emplace_back(obj.string()); }
-    for (const auto& dir : linker_opts.library_paths) {
-        args.emplace_back(fmt::format("-L{}", dir.string()));
-    }
+    add_extra_inputs(args, linker_opts, "-L");
     // Auto-detected Win32 import-lib directories, so `-l` names resolve with no manual `-L`.
     for (const auto& dir : windows_import_lib_dirs(triple)) {
         args.emplace_back(fmt::format("-L{}", dir));
     }
-    for (const auto& lib : linker_opts.libraries) { args.emplace_back(fmt::format("-l{}", lib)); }
+    add_unix_libraries(args, linker_opts);
     // The entry wrapper's own Win32 API calls need their import libs listed explicitly.
     if (linker_opts.needs_windows_argv_apis) {
         args.emplace_back("-lkernel32");
         args.emplace_back("-lshell32");
     }
+    add_builtins(args, linker_opts);
     args.emplace_back("--gc-sections");
     args.emplace_back("-o");
     args.emplace_back(out_path_str);
-    if (!is_dylib) {
+    if (is_dylib) {
+        // ghoti links no CRT, so there is no `DllMainCRTStartup` to default the entry to
+        args.emplace_back("--Xlink=-noentry");
+    } else {
         args.emplace_back("-e");
         args.emplace_back("main");
         args.emplace_back("--subsystem");
@@ -230,10 +289,7 @@ auto add_msvc_args(std::vector<std::string>&   args,
     args.emplace_back("lld-link");
     if (is_dylib) { args.emplace_back("/dll"); }
     args.emplace_back(obj_path_str);
-    for (const auto& obj : linker_opts.objects) { args.emplace_back(obj.string()); }
-    for (const auto& dir : linker_opts.library_paths) {
-        args.emplace_back(fmt::format("/libpath:{}", dir.string()));
-    }
+    add_extra_inputs(args, linker_opts, "/libpath:");
     // Auto-detected Win32 import-lib directories, so `.lib` names resolve with no manual `-L`.
     for (const auto& dir : windows_import_lib_dirs(triple)) {
         args.emplace_back(fmt::format("/libpath:{}", dir));
@@ -246,10 +302,13 @@ auto add_msvc_args(std::vector<std::string>&   args,
         args.emplace_back("kernel32.lib");
         args.emplace_back("shell32.lib");
     }
+    add_builtins(args, linker_opts);
     args.emplace_back("/opt:ref");
     args.emplace_back("/opt:icf");
     args.emplace_back(fmt::format("/out:{}", out_path_str));
-    if (!is_dylib) {
+    if (is_dylib) {
+        args.emplace_back("/noentry");
+    } else {
         args.emplace_back("/entry:main");
         args.emplace_back("/subsystem:console");
     }
@@ -266,11 +325,9 @@ auto add_wasm_args(std::vector<std::string>&   args,
         args.emplace_back("-shared");
     }
     args.emplace_back(obj_path_str);
-    for (const auto& obj : linker_opts.objects) { args.emplace_back(obj.string()); }
-    for (const auto& dir : linker_opts.library_paths) {
-        args.emplace_back(fmt::format("-L{}", dir.string()));
-    }
-    for (const auto& lib : linker_opts.libraries) { args.emplace_back(fmt::format("-l{}", lib)); }
+    add_extra_inputs(args, linker_opts, "-L");
+    add_unix_libraries(args, linker_opts);
+    add_builtins(args, linker_opts);
     args.emplace_back("--gc-sections");
     args.emplace_back("-o");
     args.emplace_back(out_path_str);
@@ -290,11 +347,9 @@ auto add_elf_args(std::vector<std::string>&   args,
     args.emplace_back("ld.lld");
     if (is_dylib) { args.emplace_back("-shared"); }
     args.emplace_back(obj_path_str);
-    for (const auto& obj : linker_opts.objects) { args.emplace_back(obj.string()); }
-    for (const auto& dir : linker_opts.library_paths) {
-        args.emplace_back(fmt::format("-L{}", dir.string()));
-    }
-    for (const auto& lib : linker_opts.libraries) { args.emplace_back(fmt::format("-l{}", lib)); }
+    add_extra_inputs(args, linker_opts, "-L");
+    add_unix_libraries(args, linker_opts);
+    add_builtins(args, linker_opts);
     args.emplace_back("--gc-sections");
     args.emplace_back("-o");
     args.emplace_back(out_path_str);
@@ -344,10 +399,50 @@ auto add_elf_args(std::vector<std::string>&   args,
                 "is set), or set GHOTI_WIN_SYSROOT_LIB / pass -L pointing to a directory that "
                 "contains kernel32.lib";
         }
+        if (triple.isOSDarwin() && !resolve_darwin_sdk()) {
+            if (!error_output.empty() && !error_output.ends_with('\n')) { extra_hint += '\n'; }
+            extra_hint += "hint: no macOS SDK was found; set SDKROOT to one, or keep the "
+                          "`lib/darwin` directory that ships next to ghoti";
+        }
         return make_codegen_err(
             fmt::format(
                 "Linking failed for target '{}':\n{}{}", triple.str(), error_output, extra_hint),
             error::LINKING_FAILED);
+    }
+    return {};
+}
+
+[[nodiscard]] auto link_image(const std::filesystem::path& object_file,
+                              const std::filesystem::path& output_file,
+                              const target_options&        target_opts,
+                              const extra_linker_options&  linker_opts,
+                              bool is_dylib) -> stdx::result<void, diagnostic> {
+    const auto               triple{resolve_target_triple(target_opts.triple_str)};
+    const auto               obj_path_str{object_file.string()};
+    const auto               out_path_str{output_file.string()};
+    std::vector<std::string> args;
+
+    if (triple.isOSDarwin()) {
+        add_darwin_args(args, triple, obj_path_str, out_path_str, linker_opts, is_dylib);
+    } else if (triple.isWindowsGNUEnvironment()) {
+        add_mingw_args(args, triple, obj_path_str, out_path_str, linker_opts, is_dylib);
+    } else if (triple.isOSWindows()) {
+        add_msvc_args(args, triple, obj_path_str, out_path_str, linker_opts, is_dylib);
+    } else if (triple.isWasm()) {
+        add_wasm_args(args, obj_path_str, out_path_str, linker_opts, is_dylib);
+    } else {
+        add_elf_args(args, triple, obj_path_str, out_path_str, linker_opts, is_dylib);
+    }
+    TRY(run_link(triple, args));
+
+    // Ensure the output carries executable permissions on POSIX systems
+    std::error_code ec;
+    std::filesystem::permissions(
+        output_file, exe_permissions, std::filesystem::perm_options::add, ec);
+    if (ec) {
+        return make_codegen_err(
+            fmt::format("Failed to edit executable permissions:\n{}", ec.message()),
+            error::PERMISSIONS_ERROR);
     }
     return {};
 }
@@ -368,36 +463,7 @@ auto link_executable(const std::filesystem::path& object_file,
                      const target_options&        target_opts,
                      const extra_linker_options&  linker_opts) -> stdx::result<void, diagnostic> {
     PROFILE_FUNCTION();
-
-    const auto               triple{resolve_target_triple(target_opts.triple_str)};
-    const auto               obj_path_str{object_file.string()};
-    const auto               out_path_str{output_file.string()};
-    std::vector<std::string> args;
-
-    if (triple.isOSDarwin()) {
-        add_darwin_args(args, triple, obj_path_str, out_path_str, linker_opts, false);
-    } else if (triple.isWindowsGNUEnvironment()) {
-        add_mingw_args(args, triple, obj_path_str, out_path_str, linker_opts, false);
-    } else if (triple.isOSWindows()) {
-        add_msvc_args(args, triple, obj_path_str, out_path_str, linker_opts, false);
-    } else if (triple.isWasm()) {
-        add_wasm_args(args, obj_path_str, out_path_str, linker_opts, false);
-    } else {
-        add_elf_args(args, triple, obj_path_str, out_path_str, linker_opts, false);
-    }
-    TRY(run_link(triple, args));
-
-    // Ensure output file has executable permissions on POSIX systems
-    std::error_code ec;
-    std::filesystem::permissions(
-        output_file, exe_permissions, std::filesystem::perm_options::add, ec);
-
-    if (ec) {
-        return make_codegen_err(
-            fmt::format("Failed to edit executable permissions:\n{}", ec.message()),
-            error::PERMISSIONS_ERROR);
-    }
-    return {};
+    return link_image(object_file, output_file, target_opts, linker_opts, false);
 }
 
 auto create_static_library(const std::filesystem::path&           output_file,
@@ -449,36 +515,7 @@ auto link_dynamic_library(const std::filesystem::path& object_file,
                           const extra_linker_options&  linker_opts)
     -> stdx::result<void, diagnostic> {
     PROFILE_FUNCTION();
-
-    const auto               triple{resolve_target_triple(target_opts.triple_str)};
-    const auto               obj_path_str{object_file.string()};
-    const auto               out_path_str{output_file.string()};
-    std::vector<std::string> args;
-
-    if (triple.isOSDarwin()) {
-        add_darwin_args(args, triple, obj_path_str, out_path_str, linker_opts, true);
-    } else if (triple.isWindowsGNUEnvironment()) {
-        add_mingw_args(args, triple, obj_path_str, out_path_str, linker_opts, true);
-    } else if (triple.isOSWindows()) {
-        add_msvc_args(args, triple, obj_path_str, out_path_str, linker_opts, true);
-    } else if (triple.isWasm()) {
-        add_wasm_args(args, obj_path_str, out_path_str, linker_opts, true);
-    } else {
-        add_elf_args(args, triple, obj_path_str, out_path_str, linker_opts, true);
-    }
-    TRY(run_link(triple, args));
-
-    // Ensure output permissions if needed
-    std::error_code ec;
-    std::filesystem::permissions(
-        output_file, exe_permissions, std::filesystem::perm_options::add, ec);
-
-    if (ec) {
-        return make_codegen_err(
-            fmt::format("Failed to edit executable permissions:\n{}", ec.message()),
-            error::PERMISSIONS_ERROR);
-    }
-    return {};
+    return link_image(object_file, output_file, target_opts, linker_opts, true);
 }
 
 } // namespace ghoti::codegen

@@ -18,4 +18,7 @@ namespace ghoti::path_utils {
 // Renders a filesystem path as a `file://` URI per the LSP spec's URI conventions
 [[nodiscard]] auto path_to_uri(const std::filesystem::path& path) -> std::string;
 
+[[nodiscard]] auto exists(const std::filesystem::path& path) -> bool;
+[[nodiscard]] auto is_file(const std::filesystem::path& path) -> bool;
+
 } // namespace ghoti::path_utils

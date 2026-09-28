@@ -13,6 +13,7 @@
 
 #include "driver/clap/error.hh"
 #include "driver/cmd/format/options.hh"
+#include "support/path_utils.hh"
 
 namespace ghoti::cmd::format {
 
@@ -70,38 +71,25 @@ auto options::process_raw(const raw_options& raw, std::ostream& error_stream)
 
     for (const auto& input_path : raw.input_paths) {
         std::filesystem::path path{input_path};
-        std::error_code       ec;
-
-        const bool path_exists{std::filesystem::exists(path, ec)};
-        if (ec) {
-            clap::warn_error(
-                error_stream,
-                fmt::format("could not check path '{}': {}", path.string(), ec.message()));
-            continue;
-        }
-        if (!path_exists) {
-            clap::warn_error(error_stream, fmt::format("path '{}' does not exist", path.string()));
-            continue;
+        if (!path_utils::exists(path)) {
+            return clap::fatal_error(error_stream,
+                                     fmt::format("path '{}' does not exist", path.string()),
+                                     clap::error::FILE_NOT_FOUND);
         }
 
-        const bool is_dir{std::filesystem::is_directory(path, ec)};
-        if (ec) {
-            clap::warn_error(
-                error_stream,
-                fmt::format("could not check path '{}': {}", path.string(), ec.message()));
-            continue;
-        }
-
-        if (is_dir) {
+        std::error_code ec;
+        if (std::filesystem::is_directory(path, ec)) {
             collect_gh_files(path, input_paths);
         } else if (!try_add_file(input_paths, path)) {
-            clap::warn_error(error_stream,
-                             fmt::format("path '{}' is not a valid file type", path.string()));
-            continue;
+            return clap::fatal_error(
+                error_stream,
+                fmt::format("path '{}' is not a regular file or directory", path.string()),
+                clap::error::FILE_NOT_FOUND);
         }
     }
 
-    const auto reading_stdin{input_paths.empty()};
+    // Only an empty argument list means stdin; a directory holding no `.gh` files is a no-op
+    const auto reading_stdin{raw.input_paths.empty()};
     if (reading_stdin && raw.write_in_place) {
         return clap::fatal_error(
             error_stream,
@@ -116,10 +104,16 @@ auto options::process_raw(const raw_options& raw, std::ostream& error_stream)
             clap::error::CONFLICTING_OPTIONS);
     }
 
-    if (raw.max_width < 20 || (raw.indent_spaces < 1 || raw.indent_spaces > 16)) {
+    if (raw.max_width < 20) {
         return clap::fatal_error(
             error_stream,
-            fmt::format("provided options are not sensible for consistent formatting"),
+            fmt::format("--max-width must be at least 20; got {}", raw.max_width),
+            clap::error::CONFLICTING_OPTIONS);
+    }
+    if (raw.indent_spaces < 1 || raw.indent_spaces > 16) {
+        return clap::fatal_error(
+            error_stream,
+            fmt::format("--indent-spaces must be between 1 and 16; got {}", raw.indent_spaces),
             clap::error::CONFLICTING_OPTIONS);
     }
 
@@ -130,7 +124,7 @@ auto options::process_raw(const raw_options& raw, std::ostream& error_stream)
         .reading_stdin  = reading_stdin,
         .stdin_filepath =
             std::move(raw.stdin_filepath)
-                .transform([](const std::string s) -> std::filesystem::path { return s; }),
+                .transform([](const std::string& s) -> std::filesystem::path { return s; }),
         .max_width     = raw.max_width,
         .indent_spaces = raw.indent_spaces,
     };

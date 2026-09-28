@@ -126,7 +126,8 @@ auto parser::setup_lsp_subcmd() -> gsl::not_null<CLI::App*> {
     sub->add_option("--throttle-ms",
                     lsp_throttle_ms_,
                     "Minimum milliseconds between full workspace reanalysis passes")
-        ->default_val(lsp_throttle_ms_);
+        ->default_val(lsp_throttle_ms_)
+        ->check(CLI::NonNegativeNumber);
     sub->add_option("--workspace-exclude",
                     lsp_workspace_excludes_,
                     "Directory name to skip during workspace file discovery")
@@ -134,7 +135,8 @@ auto parser::setup_lsp_subcmd() -> gsl::not_null<CLI::App*> {
     sub->add_option("--workspace-file-cap",
                     lsp_workspace_file_cap_,
                     "Maximum number of files to discover during workspace-wide file discovery")
-        ->default_val(lsp_workspace_file_cap_);
+        ->default_val(lsp_workspace_file_cap_)
+        ->check(CLI::NonNegativeNumber);
     return sub;
 }
 

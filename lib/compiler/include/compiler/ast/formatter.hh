@@ -5,6 +5,7 @@
 #include <utility>
 #include <vector>
 
+#include <stdx/option.hh>
 #include <stdx/types.hh>
 #include <stdx/variant.hh>
 
@@ -60,6 +61,16 @@ class formatter {
     [[nodiscard]] auto format_callconv(calling_convention conv, bool is_explicit) -> syntax::doc_id;
     [[nodiscard]] auto blank_line_between(node_id before, node_id after) const -> bool;
     [[nodiscard]] auto is_function_or_aggregate_node(node_id id) const -> bool;
+
+    // Shared layout of `struct` / `union`; `keyword_and_space` must be a literal like `"struct "`
+    template <typename Node, typename FieldItem, typename FieldEndLine>
+    auto format_field_aggregate(const Node&      node,
+                                std::string_view keyword_and_space,
+                                FieldItem&&      field_item,
+                                FieldEndLine&&   field_end_line) -> syntax::doc_id;
+    // `[@alignas(n) ]T`
+    auto format_aligned_field_type(stdx::option<expr_handle> alignment, explicit_type_id type)
+        -> syntax::doc_id;
 
     [[nodiscard]] auto format_struct(const struct_expr& node) -> syntax::doc_id;
     [[nodiscard]] auto format_union(const union_expr& node) -> syntax::doc_id;

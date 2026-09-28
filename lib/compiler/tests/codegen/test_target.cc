@@ -30,6 +30,7 @@
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
 #include "support/bin_utils.hh"
+#include "support/path_utils.hh"
 #include "support/tempfile.hh"
 #include "support/test.hh"
 
@@ -129,7 +130,7 @@ TEST_CASE("Object file emission") {
         codegen::optimizer_options opt_opts{.level = codegen::opt_level::O2};
 
         REQUIRE(helpers::emit_object(*ctx, context, f, target_opts, opt_opts));
-        CHECK(std::filesystem::exists(f));
+        CHECK(path_utils::exists(f));
         CHECK(std::filesystem::file_size(f) > 0);
     }
 
@@ -145,7 +146,7 @@ TEST_CASE("Object file emission") {
         };
 
         REQUIRE(helpers::emit_object(*ctx, context, f, target_opts));
-        CHECK(std::filesystem::exists(f));
+        CHECK(path_utils::exists(f));
         CHECK(std::filesystem::file_size(f) > 0);
         CHECK(bin_utils::check_elf_header(f));
     }
@@ -162,7 +163,7 @@ TEST_CASE("Object file emission") {
         };
 
         REQUIRE(helpers::emit_object(*ctx, context, f, target_opts));
-        CHECK(std::filesystem::exists(f));
+        CHECK(path_utils::exists(f));
         CHECK(std::filesystem::file_size(f) > 0);
     }
 }

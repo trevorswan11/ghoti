@@ -26,6 +26,7 @@
 #include "compiler/ast/id.hh"
 #include "compiler/ast/type.hh"
 #include "compiler/module/module.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 
 namespace ghoti::sema {
@@ -203,6 +204,9 @@ using type_name_map = ankerl::unordered_dense::map<const type*, std::string_view
 // True when `t` still contains an unbound generic parameter rather than a fully concrete type.
 [[nodiscard]] auto is_generic_type(const type& t, bool unmodified = true) noexcept -> bool;
 
+// A `type`-kinded slot that takes a type argument, as opposed to a still-deferred `[n]T`
+[[nodiscard]] auto is_type_parameter_slot(const type& t) noexcept -> bool;
+
 // True when a value of `t` holds a `type`, so it only exists at compile time and has no runtime
 // representation
 [[nodiscard]] auto holds_type_values(const type& t) noexcept -> bool;
@@ -278,6 +282,12 @@ struct union_t {
         if (idx < fields.size()) { return *fields[idx]; }
         return *members[idx - fields.size()];
     }
+
+    // Null while the member at `idx` is itself still being resolved (e.g. a recursive method)
+    [[nodiscard]] auto type_at_opt(usize idx) const noexcept -> stdx::option<type&> {
+        ASSERT(idx < fields.size() + members.size(), "Index exceeds union's types");
+        return idx < fields.size() ? fields[idx] : members[idx - fields.size()];
+    }
 };
 
 struct struct_t {
@@ -298,6 +308,12 @@ struct struct_t {
         ASSERT(idx < fields.size() + members.size(), "Index exceeds struct's types");
         if (idx < fields.size()) { return *fields[idx]; }
         return *members[idx - fields.size()];
+    }
+
+    // Null while the member at `idx` is itself still being resolved (e.g. a recursive method)
+    [[nodiscard]] auto type_at_opt(usize idx) const noexcept -> stdx::option<type&> {
+        ASSERT(idx < fields.size() + members.size(), "Index exceeds struct's types");
+        return idx < fields.size() ? fields[idx] : members[idx - fields.size()];
     }
 };
 
@@ -618,6 +634,16 @@ static_assert(stdx::TriviallyDestructible<type>);
 [[nodiscard]] auto constexpr_int_fits(i128 value, const type& target, u32 ptr_bits) noexcept
     -> bool;
 
+// The format a compile-time float of type `t` is held in; `constexpr_float` keeps full `f128`
+[[nodiscard]] auto float_format_of(const type& t) noexcept -> stdx::option<float_format>;
+
+// `value` rounded into `t`'s format, unchanged when `t` is not a float type
+[[nodiscard]] auto fit_float(f128 value, const type& t) -> f128;
+
+// Whether the compile-time float `value` stays finite once rounded to `target`; a value that is
+// already infinite or NaN, or a target that is not a concrete float, always fits
+[[nodiscard]] auto constexpr_float_fits(f128 value, const type& target) -> bool;
+
 // Bit width of `t` when used as a field of a bit-packed `packed struct`/`packed union`, or
 // none when `t` is not packed-eligible. `ptr_bits` sizes pointer-like fields.
 [[nodiscard]] auto packed_field_bits(const type& t, u32 ptr_bits) noexcept -> stdx::option<u32>;
@@ -726,6 +752,10 @@ class type_pool {
 };
 
 // Unwraps meta_type to obtain the denoted underlying instance type
+// The signature behind a function value typed directly, by reference, or by pointer
+[[nodiscard]] auto signature_of(const type& fn_value_type) noexcept
+    -> stdx::option<const types::function&>;
+
 template <typename Type> [[nodiscard]] auto denoted_type(Type& t) noexcept -> Type& {
     if (t.get_kind() == type_kind::TYPE) {
         if (const auto meta{t.get_data().template as_opt<types::meta_type>()}) {

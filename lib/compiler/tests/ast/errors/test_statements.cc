@@ -23,7 +23,7 @@ TEST_CASE("Non-terminated block") {
     helpers::test_parser_fail(
         "{ ",
         syntax::diagnostic{
-            "Expected token RBRACE, found END", syntax::error::UNEXPECTED_TOKEN, 0, 2});
+            "Expected '}', found the end of input", syntax::error::UNEXPECTED_TOKEN, 0, 2});
 }
 
 namespace {
@@ -96,18 +96,22 @@ TEST_CASE("Extern requirements") {
 TEST_CASE("Malformed extern targets") {
     helpers::test_parser_fail(
         "extern(",
-        syntax::diagnostic{
-            "Expected token STRING, found END", syntax::error::UNEXPECTED_TOKEN, 0, 7});
+        syntax::diagnostic{"Expected a string literal, found the end of input",
+                           syntax::error::UNEXPECTED_TOKEN,
+                           0,
+                           7});
 
     helpers::test_parser_fail(
         "extern()",
         syntax::diagnostic{
-            "Expected token STRING, found RPAREN", syntax::error::UNEXPECTED_TOKEN, 0, 7});
+            "Expected a string literal, found ')'", syntax::error::UNEXPECTED_TOKEN, 0, 7});
 
     helpers::test_parser_fail(
         "extern(42)",
-        syntax::diagnostic{
-            "Expected token STRING, found INT_10", syntax::error::UNEXPECTED_TOKEN, 0, 7});
+        syntax::diagnostic{"Expected a string literal, found an integer literal",
+                           syntax::error::UNEXPECTED_TOKEN,
+                           0,
+                           7});
 
     helpers::test_parser_fail(R"(extern("") a: i32;)",
                               syntax::diagnostic{"Extern target may not be empty",
@@ -144,7 +148,7 @@ TEST_CASE("Non-terminated decls") {
     helpers::test_parser_fail(
         "var a: i32 = 2",
         syntax::diagnostic{
-            "Expected token SEMICOLON, found END", syntax::error::UNEXPECTED_TOKEN, 0, 14});
+            "Expected ';', found the end of input", syntax::error::UNEXPECTED_TOKEN, 0, 14});
 }
 
 TEST_CASE("Duplicate declaration modifier") {
@@ -179,19 +183,17 @@ TEST_CASE("Missing deferred statements") {
 }
 
 TEST_CASE("Misplaced correct discardedstatement") {
-    helpers::test_parser_fail(
-        "_ = import std;",
-        syntax::diagnostic{"No prefix parse function for IMPORT(import) found",
-                           syntax::error::MISSING_PREFIX_PARSER,
-                           std::pair{0UZ, 4UZ}});
+    helpers::test_parser_fail("_ = import std;",
+                              syntax::diagnostic{"Expected an expression, found 'import'",
+                                                 syntax::error::MISSING_PREFIX_PARSER,
+                                                 std::pair{0UZ, 4UZ}});
 }
 
 TEST_CASE("Misplaced incorrect discarded statement") {
-    helpers::test_parser_fail(
-        "_ = import 3;",
-        syntax::diagnostic{"No prefix parse function for IMPORT(import) found",
-                           syntax::error::MISSING_PREFIX_PARSER,
-                           std::pair{0UZ, 4UZ}});
+    helpers::test_parser_fail("_ = import 3;",
+                              syntax::diagnostic{"Expected an expression, found 'import'",
+                                                 syntax::error::MISSING_PREFIX_PARSER,
+                                                 std::pair{0UZ, 4UZ}});
 }
 
 TEST_CASE("Missing discardee") {
@@ -216,10 +218,11 @@ TEST_CASE("Incorrect library imports") {
     helpers::test_parser_fail("import as 2;", expected_diag());
     helpers::test_parser_fail("import 2 as 3;", expected_diag());
 
-    helpers::test_parser_fail(
-        "import std as 2;",
-        syntax::diagnostic{
-            "Expected token IDENT, found INT_10", syntax::error::UNEXPECTED_TOKEN, 0, 14});
+    helpers::test_parser_fail("import std as 2;",
+                              syntax::diagnostic{"Expected an identifier, found an integer literal",
+                                                 syntax::error::UNEXPECTED_TOKEN,
+                                                 0,
+                                                 14});
 }
 
 TEST_CASE("Incorrect file imports ") {
@@ -239,24 +242,25 @@ TEST_CASE("Incorrect file imports ") {
                            syntax::error::FILE_IMPORT_MISSING_ALIAS,
                            std::pair{0UZ, 0UZ}});
 
-    helpers::test_parser_fail(
-        R"(import "ast/node.p" as 2;)",
-        syntax::diagnostic{
-            "Expected token IDENT, found INT_10", syntax::error::UNEXPECTED_TOKEN, 0, 23});
+    helpers::test_parser_fail(R"(import "ast/node.p" as 2;)",
+                              syntax::diagnostic{"Expected an identifier, found an integer literal",
+                                                 syntax::error::UNEXPECTED_TOKEN,
+                                                 0,
+                                                 23});
 }
 
 TEST_CASE("Non-terminated imports") {
     helpers::test_parser_fail(
         "import std",
         syntax::diagnostic{
-            "Expected token SEMICOLON, found END", syntax::error::UNEXPECTED_TOKEN, 0, 10});
+            "Expected ';', found the end of input", syntax::error::UNEXPECTED_TOKEN, 0, 10});
 }
 
 TEST_CASE("Incorrectly terminated jumps") {
     using namespace std::string_view_literals;
     const auto input{GENERATE("return"sv, "continue"sv, "break"sv)};
     helpers::test_parser_fail(input,
-                              syntax::diagnostic{"Expected token SEMICOLON, found END",
+                              syntax::diagnostic{"Expected ';', found the end of input",
                                                  syntax::error::UNEXPECTED_TOKEN,
                                                  std::pair{0UZ, input.size()}});
 }
@@ -272,18 +276,17 @@ TEST_CASE("Illegal control flow") {
                                                  syntax::error::VALUED_BREAK_MISSING_LABEL,
                                                  std::pair{0UZ, 0UZ}});
 
-    helpers::test_parser_fail(
-        "return return",
-        syntax::diagnostic{"No prefix parse function for RETURN(return) found",
-                           syntax::error::MISSING_PREFIX_PARSER,
-                           std::pair{0UZ, 7UZ}});
+    helpers::test_parser_fail("return return",
+                              syntax::diagnostic{"Expected an expression, found 'return'",
+                                                 syntax::error::MISSING_PREFIX_PARSER,
+                                                 std::pair{0UZ, 7UZ}});
 }
 
 TEST_CASE("Non-terminated test") {
     helpers::test_parser_fail(
         "test {",
         syntax::diagnostic{
-            "Expected token RBRACE, found END", syntax::error::UNEXPECTED_TOKEN, 0, 6});
+            "Expected '}', found the end of input", syntax::error::UNEXPECTED_TOKEN, 0, 6});
 }
 
 TEST_CASE("Empty test description") {
@@ -297,7 +300,16 @@ TEST_CASE("`using` is an ordinary identifier") {
     helpers::test_parser_fail(
         "using T = i32;",
         syntax::diagnostic{
-            "Expected token SEMICOLON, found IDENT", syntax::error::UNEXPECTED_TOKEN, 0, 6});
+            "Expected ';', found an identifier", syntax::error::UNEXPECTED_TOKEN, 0, 6});
+}
+
+TEST_CASE("A failed top-level statement is skipped as a unit without cascading errors") {
+    helpers::test_parser_fail(
+        R"(const f := fn(x: i32, y): i32 { return 0; };
+const g := 1 +;)",
+        syntax::diagnostic{"Expected ':', found ')'", syntax::error::UNEXPECTED_TOKEN, 0, 23},
+        syntax::diagnostic{
+            "Expected an expression, found ';'", syntax::error::MISSING_PREFIX_PARSER, 1, 14});
 }
 
 } // namespace ghoti::tests

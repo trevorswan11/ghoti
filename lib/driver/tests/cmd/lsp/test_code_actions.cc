@@ -34,7 +34,7 @@ auto point_diagnostic(std::string code, std::string message) -> nlohmann::json {
 
 TEST_CASE("code_actions offers a missing-semicolon quick fix") {
     const nlohmann::json diagnostics{
-        point_diagnostic("UNEXPECTED_TOKEN", "Expected token SEMICOLON, found PUBLIC")};
+        point_diagnostic("UNEXPECTED_TOKEN", "Expected ';', found 'pub'")};
 
     const auto actions = lsp::code_actions("file:///test.gh", diagnostics);
     REQUIRE(actions.size() == 1);
@@ -62,13 +62,10 @@ TEST_CASE("code_actions offers both const and var as missing-mutability-modifier
 }
 
 TEST_CASE("code_actions offers quick fixes for other unambiguous missing tokens") {
-    for (const auto& [expected, spelling] : {std::pair{"RBRACE", "}"},
-                                             std::pair{"RPAREN", ")"},
-                                             std::pair{"RBRACKET", "]"},
-                                             std::pair{"COLON", ":"},
-                                             std::pair{"COMMA", ","}}) {
-        const nlohmann::json diagnostics{point_diagnostic(
-            "UNEXPECTED_TOKEN", std::string{"Expected token "} + expected + ", found END")};
+    for (const auto* spelling : {"}", ")", "]", ":", ","}) {
+        const nlohmann::json diagnostics{
+            point_diagnostic("UNEXPECTED_TOKEN",
+                             std::string{"Expected '"} + spelling + "', found the end of input")};
 
         const auto actions = lsp::code_actions("file:///test.gh", diagnostics);
         REQUIRE(actions.size() == 1);
@@ -89,8 +86,8 @@ TEST_CASE("code_actions skips diagnostics it has no known fix for") {
 
 TEST_CASE("code_actions handles several diagnostics at once, only fixing the known ones") {
     const nlohmann::json diagnostics{
-        point_diagnostic("UNEXPECTED_TOKEN", "Expected token SEMICOLON, found RBRACE"),
-        point_diagnostic("UNEXPECTED_TOKEN", "Expected token IDENT, found SEMICOLON"), // unsafe
+        point_diagnostic("UNEXPECTED_TOKEN", "Expected ';', found '}'"),
+        point_diagnostic("UNEXPECTED_TOKEN", "Expected an identifier, found ';'"), // unsafe
     };
 
     const auto actions = lsp::code_actions("file:///test.gh", diagnostics);

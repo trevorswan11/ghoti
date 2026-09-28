@@ -84,7 +84,6 @@ auto symbol_collector::collect_symbols(mod::module& module, context& ctx) -> mod
 // Many terminal expressions are skipped on this pass
 #define MAKE_COLLECTOR_NOOPS(X) \
     X(identifier_expr)          \
-    X(dot_expr)                 \
     X(implicit_access_expr)     \
     X(string_expr)              \
     X(int_literal_expr)         \
@@ -98,6 +97,17 @@ auto symbol_collector::collect_symbols(mod::module& module, context& ctx) -> mod
 #define COLLECTOR_NOOP_X(NodeType) AST_NODE_VISITOR_NOOP(symbol_collector, NodeType)
 MAKE_COLLECTOR_NOOPS(COLLECTOR_NOOP_X)
 #undef COLLECTOR_NOOP_X
+
+// The member is a bare name, but the object may hold scoped nodes (`fn(...) {...}.x`). An
+// anonymous aggregate stays untyped so the resolver reports it as used mid-expression.
+auto symbol_collector::visit(ast::node_id, const ast::dot_expr& node) -> void {
+    PROFILE_FUNCTION();
+    if (node.object.any<ast::struct_expr, ast::union_expr, ast::enum_expr, ast::interface_expr>()) {
+        return;
+    }
+    const default_counter::guard g{in_expr_scope_};
+    collect(node.object);
+}
 
 auto symbol_collector::visit(ast::node_id, const ast::type_expr& node) -> void {
     PROFILE_FUNCTION();
@@ -320,6 +330,8 @@ auto symbol_collector::visit(ast::node_id, const ast::range_expr& node) -> void 
 auto symbol_collector::visit(ast::node_id, const ast::initializer_expr& init) -> void {
     PROFILE_FUNCTION();
     const default_counter::guard g{in_expr_scope_};
+    // `(blk: {...}){ ... }` / `match (...) {...}{ ... }`: the type may hold scoped nodes too
+    if (init.object_type) { collect(*init.object_type); }
     for (const auto& initializer : init.initializers) { collect(initializer.value); }
 }
 
@@ -737,7 +749,11 @@ auto symbol_collector::visit(ast::node_id id, const ast::import_stmt& import_stm
     }
 
     collecting_.add_identifier_position(named->first);
-    if (!try_declare<symbols::node_t>(alias, id)) { return; }
+    // A clashing alias is already reported; later passes still need the node typed
+    if (!try_declare<symbols::node_t>(alias, id)) {
+        ctx_.poison_node(collecting_, id);
+        return;
+    }
     if (imported_mod && !imported_mod->is_errored()) {
         // Its much easier for other steps to get the enclosing module if we resolve now
         auto& type =

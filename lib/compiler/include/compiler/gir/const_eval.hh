@@ -24,6 +24,7 @@
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
+#include "support/int128.hh"
 
 namespace ghoti::gir {
 
@@ -88,6 +89,14 @@ class const_eval {
                                           const const_value&   rhs,
                                           ast::node_id         id) -> stdx::option<const_value>;
 
+    // Folds two integers exactly: a concrete signed type rejects overflow unless `wrapping`, and
+    // unsigned results (and shifts) wrap to the type's width as they do at runtime
+    [[nodiscard]] auto fold_integer_binary(syntax::token_type_t op_type,
+                                           const const_value&   lhs,
+                                           const const_value&   rhs,
+                                           ast::node_id         id,
+                                           bool wrapping = false) -> stdx::option<const_value>;
+
     [[nodiscard]] auto arm_pattern_matches(const ast::match_pattern_handle& pattern,
                                            const const_value&               target) -> bool {
         return match_pattern(pattern, target);
@@ -105,6 +114,13 @@ class const_eval {
 
     // Forces a single possibly-deferred array type to its concrete resolved form
     [[nodiscard]] auto force_deferred_array(sema::type& maybe_deferred) -> sema::type&;
+
+    // Every member's discriminant in declaration order (an unvalued member is its predecessor + 1)
+    [[nodiscard]] static auto is_sentinel_terminated(stdx::option<sema::type&> type) noexcept
+        -> bool;
+    [[nodiscard]] auto enum_member_values(const sema::types::enum_t& en) -> std::vector<i128>;
+    [[nodiscard]] auto enum_member_value(const sema::types::enum_t& en, std::string_view member)
+        -> stdx::option<i128>;
 
     // As above, and also through pointer, reference, slice, and function signature types
     [[nodiscard]] auto force_deferred_type(sema::type& maybe_deferred) -> sema::type&;
@@ -189,6 +205,13 @@ class const_eval {
         stdx::option<const_value>      value{};
     };
 
+    // What a loop does after its body ran
+    enum class loop_step : u8 {
+        NEXT, // iterate again
+        STOP, // stop (unlabeled `break`)
+        EXIT, // exit with `current_signal_`
+    };
+
   private:
     [[nodiscard]] auto resolve_deferred_array(const sema::types::deferred_array& deferred)
         -> stdx::option<sema::type&>;
@@ -230,6 +253,15 @@ class const_eval {
     [[nodiscard]] auto target_enum_value(std::string_view enum_name, std::string_view member)
         -> const_value;
 
+    [[nodiscard]] auto target_pointer_bits() const -> u32;
+    [[nodiscard]] auto target_pointer_bytes() const -> usize;
+    // The value operand of a cast-style builtin: `@cast(T, x)` or `@cast(x)`
+    [[nodiscard]] static auto cast_operand(const ast::call_expr& call)
+        -> stdx::option<ast::expr_handle>;
+    // A builtin call's resolved type, falling back to the type recorded on its callee
+    [[nodiscard]] auto builtin_result_type(ast::node_id id, const ast::call_expr& call) const
+        -> stdx::option<sema::type&>;
+
     // `@typeInfo(T)`: builds the `builtin::TypeInfo` tagged union for `denoted` (already
     // unwrapped past any `TYPE`/`deferred_call` wrapper) by switching on its `type_kind`.
     [[nodiscard]] auto eval_type_info(sema::type& denoted) -> const_value;
@@ -248,10 +280,18 @@ class const_eval {
     auto lookup_bound_callable(std::string_view name) -> stdx::option<bound_callable>;
 
     auto eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_value>;
+    // A loop's `else` branch, whose expression (if it is one) is the loop's value
+    auto eval_non_break(const ast::stmt_handle& stmt) -> stdx::option<const_value>;
     auto eval_decl(ast::node_id id, const ast::decl_stmt& decl) -> stdx::option<const_value>;
     auto eval_block(ast::node_id id, const ast::block_stmt& block) -> stdx::option<const_value>;
     auto eval_label(ast::node_id id, const ast::label_expr& label) -> stdx::option<const_value>;
     auto eval_if(ast::node_id id, const ast::if_expr& if_expr) -> stdx::option<const_value>;
+    // Counts one iteration, flagging unknown control flow once the unroll limit is reached
+    auto exceeded_unroll_limit(usize& iterations) -> bool;
+    // A loop condition folded to `bool`; `none` (and unknown control flow) otherwise
+    auto eval_loop_condition(ast::expr_handle condition) -> stdx::option<bool>;
+    // Consumes an unlabeled `break` / `continue` aimed at the current loop
+    auto consume_loop_signal(stdx::option<std::string_view> own_label) -> loop_step;
     auto eval_while(ast::node_id id, const ast::while_loop_expr& loop) -> stdx::option<const_value>;
     auto eval_do_while(ast::node_id id, const ast::do_while_loop_expr& loop)
         -> stdx::option<const_value>;
@@ -309,6 +349,7 @@ class const_eval {
     auto simulate_infinite_loop(const ast::infinite_loop_expr& loop) -> void;
     auto simulate_for(const ast::for_loop_expr& loop) -> void;
     auto simulate_block(const ast::block_stmt& block) -> void;
+    auto simulate_label(const ast::label_expr& label) -> void;
 
   private:
     // Names of mutable `constexpr var` bindings currently in scope during simulation.
@@ -323,12 +364,12 @@ class const_eval {
     std::vector<call_frame>                        call_stack_;
     default_counter                                recursion_depth_;
 
-    // Set by `eval_if`/`eval_while`/`eval_do_while`/`eval_for` when a construct's own
-    // condition/iterable can't be folded.
-    bool                      cond_unknown_{false};
-    bool                      constexpr_context_{false};
-    eval_signal               current_signal_{};
-    stdx::option<const_value> current_error_val_{};
+    // A label's name, handed to the loop it directly wraps so it can consume jumps aimed at it
+    stdx::option<std::string_view> pending_loop_label_;
+    bool                           cond_unknown_{false};
+    bool                           constexpr_context_{false};
+    eval_signal                    current_signal_{};
+    stdx::option<const_value>      current_error_val_{};
 
     ankerl::unordered_dense::map<memo_key, const_value, memo_key_hash> memo_cache_;
     ankerl::unordered_dense::map<std::string, const_value>             global_cx_vars_;

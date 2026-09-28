@@ -62,7 +62,9 @@ class lexer {
 
   public:
     lexer() noexcept = default;
-    explicit lexer(std::string_view input) noexcept : input_{input} { read_character(); }
+    explicit lexer(std::string_view input) noexcept : input_{strip_byte_order_mark(input)} {
+        read_character();
+    }
 
     auto reset(std::string_view input = {}) noexcept -> void;
     auto advance() noexcept -> token_t;
@@ -72,6 +74,15 @@ class lexer {
     static auto end() noexcept -> std::default_sentinel_t { return std::default_sentinel; }
 
   private:
+    [[nodiscard]] static constexpr auto strip_byte_order_mark(std::string_view input) noexcept
+        -> std::string_view {
+        constexpr std::string_view utf8_bom{"\xEF\xBB\xBF"};
+        if (input.starts_with(utf8_bom)) { input.remove_prefix(utf8_bom.size()); }
+        return input;
+    }
+
+    [[nodiscard]] auto at_end() const noexcept -> bool { return pos_ >= input_.size(); }
+
     auto        skip_whitespace() noexcept -> void;
     static auto lu_builtin(std::string_view ident) noexcept -> token_type_t;
     static auto lu_ident(std::string_view ident) noexcept -> token_type_t;
@@ -81,8 +92,9 @@ class lexer {
     [[nodiscard]] auto read_operator() const noexcept -> stdx::option<token_t>;
     auto               read_ident(bool builtin) noexcept -> std::string_view;
     auto               read_number() noexcept -> token_t;
-    auto               read_escape() noexcept -> char;
-    auto               read_string() noexcept -> token_t;
+    // Consumes an escape sequence's introducer and code, reporting whether ghoti recognizes it
+    auto read_escape() noexcept -> bool;
+    auto read_string() noexcept -> token_t;
 
     // Reads a raw identifier `@"..."`, assuming `current_byte_` is looking at the leading `@`.
     auto read_raw_identifier() noexcept -> token_t;

@@ -24,7 +24,7 @@ TEST_CASE("`@typeName` of a primitive type") {
             const s := @typeName(i32);
             return @intCast(i32, s.len) + @as(i32, s[0]);
         };
-    )") == (4 + 'i'));
+    )") == (3 + 'i'));
 }
 
 TEST_CASE("`@typeName` of a user struct reports its declared name") {
@@ -35,7 +35,7 @@ TEST_CASE("`@typeName` of a user struct reports its declared name") {
             const s := @typeName(Point);
             return @intCast(i32, s.len) * 10 + @as(i32, s[0]) + @as(i32, s[4]) - 187;
         };
-    )") == (6 * 10 + 'P' + 't' - 187));
+    )") == (5 * 10 + 'P' + 't' - 187));
 }
 
 TEST_CASE("`@typeName` of a user enum reports its declared name") {
@@ -46,7 +46,7 @@ TEST_CASE("`@typeName` of a user enum reports its declared name") {
             const s := @typeName(Color);
             return @intCast(i32, s.len) * 10 + @as(i32, s[0]);
         };
-    )") == (6 * 10 + 'C'));
+    )") == (5 * 10 + 'C'));
 }
 
 TEST_CASE("`@typeName` takes the type of a value expression") {
@@ -58,7 +58,7 @@ TEST_CASE("`@typeName` takes the type of a value expression") {
             const s := @typeName(@TypeOf(w));
             return @intCast(i32, s.len) * 10 + @as(i32, s[0]) - 100;
         };
-    )") == (7 * 10 + 'W' - 100));
+    )") == (6 * 10 + 'W' - 100));
 }
 
 TEST_CASE("`@typeName` of a pointer type renders structurally") {
@@ -67,7 +67,7 @@ TEST_CASE("`@typeName` of a pointer type renders structurally") {
             const s := @typeName(^u8);
             return @intCast(i32, s.len) + @as(i32, s[0]);
         };
-    )") == (4 + '^'));
+    )") == (3 + '^'));
 }
 
 TEST_CASE("`@typeName` renders the `mut` qualifier on a pointer's pointee") {
@@ -76,7 +76,7 @@ TEST_CASE("`@typeName` renders the `mut` qualifier on a pointer's pointee") {
             const s := @typeName(^mut u8);
             return @intCast(i32, s.len)  + @as(i32, s[1]);
         };
-    )") == (8 + 'm'));
+    )") == (7 + 'm'));
 }
 
 TEST_CASE("`@typeName` of a function type uses `:` before the return type") {

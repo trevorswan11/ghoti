@@ -4,6 +4,7 @@
 #include <string>
 
 #include <gsl/span>
+#include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
@@ -18,6 +19,8 @@ struct extra_linker_options {
     gsl::span<std::string>           libraries{};
     // Set when the entry wrapper calls the raw Win32 APIs used to recover real argv.
     bool needs_windows_argv_apis{false};
+    // Compiler builtins archive, linked after every other input so it only fills in what's missing
+    stdx::option<std::filesystem::path> builtins{};
 };
 
 // True when an import-lib directory for the Windows Win32 APIs (kernel32 / shell32) is configured

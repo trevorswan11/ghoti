@@ -15,6 +15,7 @@
 #include "helpers/common.hh"
 #include "helpers/gir.hh"
 #include "helpers/sema.hh"
+#include "support/float128.hh"
 
 namespace ghoti::tests {
 
@@ -75,9 +76,9 @@ TEST_CASE("GIR value types and operations") {
     CHECK(v_u64.is<u64>());
     CHECK(UNWRAP(v_u64.as_opt<u64>()) == 456);
 
-    const value v_f64{3.14};
-    CHECK(v_f64.is<f64>());
-    CHECK(UNWRAP(v_f64.as_opt<f64>()) == 3.14);
+    const value v_f64{f128::from_f64(3.14)};
+    CHECK(v_f64.is<f128>());
+    CHECK(UNWRAP(v_f64.as_opt<f128>()).to_f64() == 3.14);
 
     const value v_bool{true};
     CHECK(v_bool.is<bool>());

@@ -36,6 +36,8 @@
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "support/diagnostic.hh"
+#include "support/float128.hh"
+#include "support/int128.hh"
 #include "support/scope_guard.hh"
 
 namespace ghoti::sema {
@@ -60,6 +62,19 @@ class type_resolver {
         }
     };
 
+    // Resolves `block`'s statements in order, stopping at (and reporting) the first poisoned one
+    struct enum_value_tracker {
+        const type&                                    underlying;
+        stdx::option<i128>                             next{i128{0}};
+        std::vector<std::pair<i128, std::string_view>> seen{};
+    };
+
+    enum class operand_nature_t : u8 {
+        TYPE,
+        VALUE,
+        UNKNOWN,
+    };
+
   public:
     static auto resolve_types(mod::module& module, context& ctx) -> mod::module_state;
 
@@ -78,6 +93,8 @@ class type_resolver {
     // Resolves a parameterized impl once against opaque sentinels + dummy `constexpr` values to
     // record its abstract target + method signatures on the shared `impl_registry`
     auto build_param_impl_template(const ast::impl_stmt& impl, ast::node_id site) -> void;
+    // A member `fn` whose type could not be resolved, which no instantiation re-resolves
+    [[nodiscard]] auto member_function_is_poisoned(ast::member_handle member) const -> bool;
     // Re-resolves a parameterized impl's method bodies for one monomorphization, binding its
     // impl params to concrete types / folded `constexpr` values, and diffs the result into `out`.
     auto
@@ -116,6 +133,36 @@ class type_resolver {
                                const ast::function_expr&                                 base_fn,
                                std::string_view ctor_mangled) -> void;
     auto check_deferred_body_jumps(ast::stmt_handle body) -> void;
+    // Runs `check_deferred_body_jumps`, reporting whether it found a jump
+    [[nodiscard]] auto deferred_body_jumps(ast::stmt_handle body) -> bool;
+
+    // Checks an enum member's (explicit or implied) value fits and is unique
+    [[nodiscard]] auto check_enum_value(enum_value_tracker&            values,
+                                        ast::identifier_handle         name,
+                                        stdx::option<ast::expr_handle> value)
+        -> stdx::option<diagnostic>;
+    [[nodiscard]] auto probe_fold(ast::expr_handle expr) const -> stdx::option<gir::const_value>;
+
+    // Whether an operand names a type, holds a value, or cannot tell before instantiation
+    [[nodiscard]] auto operand_nature(ast::expr_handle expr) const -> operand_nature_t;
+    [[nodiscard]] auto call_arg_denotes_type(const ast::call_expr::argument& arg) const -> bool;
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto untyped_aggregate_literal(ID id, std::string_view kind) -> type&;
+    [[nodiscard]] auto declares_generic_params(const ast::function_expr& fn_expr) const -> bool;
+    [[nodiscard]] auto names_a_value(const symbol& sym, usize table_idx) -> bool;
+    [[nodiscard]] auto check_array_dimension(ast::expr_handle dimension, const type& item_type)
+        -> stdx::option<diagnostic>;
+    // The bit width `@bitCast` reinterprets, or none for a type with no defined bit layout
+    [[nodiscard]] auto        bit_cast_width(const type& t) const -> stdx::option<u64>;
+    [[nodiscard]] static auto has_fixed_bit_layout(const type& t) noexcept -> bool;
+    // Reports a loop/block/test body failure without discarding the node's own scope type
+    auto               fail_scoped_body() -> void;
+    [[nodiscard]] auto resolve_block_statements(const ast::block_stmt& block) -> bool;
+    [[nodiscard]] auto is_declared_later_in_active_block(ast::node_id decl) const -> bool;
+    [[nodiscard]] auto is_runtime_local_decl(ast::node_id decl) const -> bool;
+
+    // Folds a `[n]T` whose dimension is still deferred into its concrete array type
+    [[nodiscard]] auto concrete_array_type(type& maybe_deferred) -> type&;
 
   private:
     using scope = symbol_table_stack::scope;
@@ -447,6 +494,8 @@ class type_resolver {
 
     // Poisons `value` when it names a type where `expected` wants a value (`const w: S = S;`);
     // returns whether it did
+    auto reject_unassignable_global_initializer(ast::expr_handle value, const type& declared)
+        -> bool;
     auto reject_type_as_value(ast::expr_handle value, const type& expected) -> bool;
 
     // Records which declaration `id` names, for LSP features like hover
@@ -463,6 +512,10 @@ class type_resolver {
     auto thin_if_constexpr(const ast::function_expr::parameter& param, type& param_type) -> type&;
 
     // Reports an interface or bare `dyn I` used as a by-value slot type; returns whether it did
+    // `reject_unsized_slot`, plus the compile-time-only `@TypeOf(undefined)`
+    auto reject_non_runtime_slot(ast::explicit_type_id at, const type& slot_type) -> bool;
+    // `@TypeOf(undefined)` itself, or an array of it at any depth
+    [[nodiscard]] static auto holds_undefined_by_value(const type& t) -> bool;
     auto reject_unsized_slot(ast::explicit_type_id at, const type& slot_type) -> bool;
 
     template <ast::IndexableID ID> auto visit(ID, const ast::struct_expr&) -> void;
@@ -557,6 +610,10 @@ class type_resolver {
     }
 
     [[nodiscard]] auto target_has_x86_fp80() const -> bool;
+    // Why a literal can't be held in the float type `target`, if it can't
+    [[nodiscard]] auto float_literal_range_problem(f128 exact, f128 rounded, const type& target)
+        -> stdx::option<std::string>;
+    auto               float_literal_out_of_range(ast::node_id id, std::string message) -> type&;
     [[nodiscard]] auto target_ptr_bits() const -> u32;
     [[nodiscard]] auto target_has_128bit_atomics() const -> bool;
     // `.c` is always portable; the other `callconv(...)` choices are only meaningful for the ISA
@@ -583,6 +640,7 @@ class type_resolver {
     bool for_generic_instantiation_{false};
     bool in_subscript_index_{false};
     bool in_for_iterable_{false};
+    bool resolving_callee_{false};
     bool in_expr_branch_{false};
     // Skips `if`/`match constexpr` folding and the throwaway `Ctor(<dummy>)` cache insert
     bool building_param_template_{false};

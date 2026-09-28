@@ -1,5 +1,6 @@
 #include "compiler/syntax/token.hh"
 
+#include <array>
 #include <iterator>
 #include <string>
 #include <string_view>
@@ -24,21 +25,51 @@ auto decode_escapes(std::string_view inner) -> std::string {
             continue;
         }
         ++it;
-        switch (*it) {
-        case 'n':  decoded.push_back('\n'); break;
-        case 'r':  decoded.push_back('\r'); break;
-        case 't':  decoded.push_back('\t'); break;
-        case '\\': decoded.push_back('\\'); break;
-        case '\'': decoded.push_back('\''); break;
-        case '"':  decoded.push_back('"'); break;
-        case '0':  decoded.push_back('\0'); break;
-        default:   decoded.push_back(*it); break;
-        }
+        // The lexer rejects unknown escapes, so the fallback only guards direct construction
+        decoded.push_back(decode_escape(*it).value_or(*it));
     }
     return decoded;
 }
 
 } // namespace
+
+auto is_valid_utf8(std::string_view bytes) noexcept -> bool {
+    // Thanks claude
+    usize i{0};
+    while (i < bytes.size()) {
+        const auto lead{static_cast<u8>(bytes[i])};
+        usize      extra{0};
+        u32        code_point{0};
+        if (lead < 0x80) {
+            ++i;
+            continue;
+        }
+        if ((lead & 0xE0U) == 0xC0U) {
+            extra      = 1;
+            code_point = lead & 0x1FU;
+        } else if ((lead & 0xF0U) == 0xE0U) {
+            extra      = 2;
+            code_point = lead & 0x0FU;
+        } else if ((lead & 0xF8U) == 0xF0U) {
+            extra      = 3;
+            code_point = lead & 0x07U;
+        } else {
+            return false;
+        }
+        if (i + extra >= bytes.size()) { return false; }
+        for (usize k{1}; k <= extra; ++k) {
+            const auto cont{static_cast<u8>(bytes[i + k])};
+            if ((cont & 0xC0U) != 0x80U) { return false; }
+            code_point = (code_point << 6U) | (cont & 0x3FU);
+        }
+        constexpr std::array<u32, 4> min_for_length{0, 0x80, 0x800, 0x10000};
+        const bool                   overlong{code_point < min_for_length[extra]};
+        const bool                   surrogate{code_point >= 0xD800 && code_point <= 0xDFFF};
+        if (overlong || surrogate || code_point > 0x10FFFF) { return false; }
+        i += extra + 1;
+    }
+    return true;
+}
 
 auto token_t::materialize_string() const -> std::string {
     ASSERT(type == token_type_t::STRING || type == token_type_t::MULTILINE_STRING);

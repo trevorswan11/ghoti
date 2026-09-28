@@ -23,6 +23,7 @@
 #include "compiler/ast/id.hh"
 #include "compiler/ast/primitive.hh"
 #include "compiler/module/module.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 #include "support/string_utils.hh"
 
@@ -146,6 +147,27 @@ auto int_width(const type& t) noexcept -> u16 {
 auto is_i32(const type& t) noexcept -> bool {
     const auto info{as_integer(t)};
     return info && info->bits == 32 && info->is_signed;
+}
+
+auto float_format_of(const type& t) noexcept -> stdx::option<float_format> {
+    switch (t.get_kind()) {
+    case type_kind::F16:             return float_format::HALF;
+    case type_kind::F32:             return float_format::SINGLE;
+    case type_kind::F64:             return float_format::DOUBLE;
+    case type_kind::F80:             return float_format::X87;
+    case type_kind::F128:
+    case type_kind::CONSTEXPR_FLOAT: return float_format::QUAD;
+    default:                         return stdx::none;
+    }
+}
+
+auto fit_float(f128 value, const type& t) -> f128 {
+    const auto format{float_format_of(t)};
+    return format ? value.round_to(*format) : value;
+}
+
+auto constexpr_float_fits(f128 value, const type& target) -> bool {
+    return !value.is_finite() || fit_float(value, target).is_finite();
 }
 
 auto constexpr_int_fits(i128 value, const type& target, u32 ptr_bits) noexcept -> bool {
@@ -628,6 +650,19 @@ auto is_generic_type(const type& t, bool unmodified) noexcept -> bool {
         return false;
     }
     return false;
+}
+
+auto signature_of(const type& fn_value_type) noexcept -> stdx::option<const types::function&> {
+    const type* target{&fn_value_type};
+    if (const auto ref{target->get_data().as_opt<types::reference>()}) {
+        target = &ref->underlying;
+    }
+    if (const auto ptr{target->get_data().as_opt<types::pointer>()}) { target = &ptr->underlying; }
+    return target->get_data().as_opt<types::function>();
+}
+
+auto is_type_parameter_slot(const type& t) noexcept -> bool {
+    return t.get_kind() == type_kind::TYPE && !t.get_data().is<types::deferred_array>();
 }
 
 auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {

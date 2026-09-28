@@ -109,7 +109,19 @@ class emitter {
     using constexpr_frame_guard = ghoti::scope_guard<std::vector<sema::constexpr_frame>>;
     using type_guard            = ghoti::scope_guard<std::vector<sema::type*>>;
 
+    // Repeatedly folds the condition and replays the body via `emit_block` for as long as it
+    // holds `true`; no runtime loop, no `body_type_diff`
+    enum class constexpr_body_exit : u8 {
+        NEXT,
+        CONTINUE,
+        BREAK,
+    };
+
   private:
+    // The `undefined` literal or anything aliasing it
+    [[nodiscard]] auto is_undefined_value(ast::node_id expr) -> bool;
+    // Whether a control-flow expression of `type` produces a value to store (not a scope/label)
+    [[nodiscard]] static auto yields_runtime_value(stdx::option<sema::type&> type) -> bool;
     auto emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -> void;
     auto emit_top_level_test(ast::node_id id, const ast::test_stmt& test) -> void;
     // Emits the member functions of an `impl [I for] T { ... }` block under names scoped to the
@@ -261,6 +273,17 @@ class emitter {
     auto               emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value;
     auto               emit_match(ast::node_id id, const ast::match_expr& match) -> value;
 
+    [[nodiscard]] auto
+         fold_compile_time_only(ast::node_id id, std::string_view what, sema::type& type) -> value;
+    auto bind_declared_params(gir::function&            fn,
+                              const ast::function_expr& fn_expr,
+                              const mod::module&        owner) -> void;
+    auto emit_implicit_return(sema::type& return_type) -> void;
+    auto emit_c_va_builtin(const ast::call_expr& call,
+                           syntax::token_type_t  builtin,
+                           sema::type&           ret_type) -> value;
+    [[nodiscard]] auto current_function_is_c_variadic() -> bool;
+
     // @mem* decompose the slice args into a data pointer + byte length. A length check is only
     // needed when the operands' lengths were not already proven equal statically.
     auto emit_mem_intrinsic(ast::node_id         id,
@@ -298,8 +321,15 @@ class emitter {
                     stdx::option<std::string_view> label       = stdx::none,
                     stdx::option<local_id>         res_slot    = stdx::none,
                     stdx::option<sema::type&>      result_type = stdx::none) -> value;
-    // Repeatedly folds the condition and replays the body via `emit_block` for as long as it
-    // holds `true`; no runtime loop, no `body_type_diff`
+
+    // Emits one unrolled iteration of a constexpr loop body, consuming its break/continue flags
+    auto emit_constexpr_loop_body(const ast::block_stmt& block) -> constexpr_body_exit;
+    [[nodiscard]] auto constexpr_unroll_limit_reached(usize            iterations,
+                                                      std::string_view loop_kind,
+                                                      ast::node_id     id) -> bool;
+    [[nodiscard]] auto fold_constexpr_loop_condition(ast::expr_handle condition,
+                                                     std::string_view loop_kind)
+        -> stdx::option<bool>;
     auto emit_constexpr_while(ast::node_id id, const ast::while_loop_expr& while_loop) -> value;
     auto emit_do_while(ast::node_id                   id,
                        const ast::do_while_loop_expr& do_while,
@@ -404,6 +434,17 @@ class emitter {
     // The i64/u64/i128/u128 payload of a compile-time integer `value`, as a 128-bit signed
     // int; none when `v` has no integer payload.
     [[nodiscard]] static auto folded_int(const value& v) noexcept -> stdx::option<i128>;
+    [[nodiscard]] static auto is_concrete_float(const value& v) noexcept -> bool;
+    [[nodiscard]] static auto is_untyped_number(const value& v) noexcept -> bool;
+    // A compile-time number whose type isn't `t`
+    [[nodiscard]] static auto is_foreign_constant(const value& v, const sema::type& t) noexcept
+        -> bool;
+    // A `constexpr_int`/`constexpr_float` value converted to the float type `target`
+    [[nodiscard]] auto untyped_number_as_float(const value& v, sema::type& target, ast::node_id at)
+        -> value;
+    // Diagnoses a compile-time float that rounds to infinity in `target`
+    auto check_constexpr_float_fits(const value& v, const sema::type& target, ast::node_id at)
+        -> void;
     // Emits a `LITERAL_OUT_OF_RANGE` diagnostic at `at` if the `constexpr_int` `v` does not
     // fit `target` (a concrete integer type). Returns `v` retyped to `target`.
     [[nodiscard]] auto coerce_constexpr_int(value v, sema::type& target, ast::node_id at) -> value;

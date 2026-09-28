@@ -1,10 +1,12 @@
 #include "compiler/gir/emitter.hh"
 
 #include <algorithm>
+#include <concepts>
 #include <limits>
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -18,6 +20,7 @@
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
@@ -38,11 +41,13 @@
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
+#include "compiler/sema/impl_registry.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/sema/unwrap_shape.hh"
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 
 namespace ghoti::gir {
@@ -251,8 +256,9 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
 
     for (const auto name : pending_builtin_runtime_) { ensure_builtin_runtime(name); }
 
-    // A foreign module's errors still have to stop this module's compilation
-    if (attributed_foreign_diags_) {
+    // Any emission error (including a foreign module's) stops this module before type checking,
+    // which would otherwise pile follow-on errors onto the poisoned values
+    if (attributed_foreign_diags_ || !ctx_.diags.empty()) {
         ast_module_.error_out(ctx_.diags.split_off(0), mod::module_state::POISONED_TYPE_RESOLVED);
     }
 
@@ -397,10 +403,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
         std::vector<std::string> pack_hidden_names; // stable storage for synthesized param names
         pack_hidden_names.reserve(req.arg_types.size());
         for (const auto& param : fn_expr.parameters) {
-            std::string_view p_name{};
-            if (param.name.is<ast::identifier_expr>()) {
-                p_name = fn_mod.ast.get_as<ast::identifier_expr>(param.name).name;
-            }
+            const auto p_name{ast::parameter_name(fn_mod.ast, param)};
 
             // A pack's elements each get a real, individually-named hidden parameter; `rest`
             // itself binds to nothing (`current_pack_` is how `rest.len`/`rest[k]` resolve).
@@ -492,13 +495,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
         const auto saved_scope_prefix{std::exchange(typing_scope_prefix_, req.mangled_name)};
         emit_block(fn_mod.ast.get_as<ast::block_stmt>(fn_expr.body));
         typing_scope_prefix_ = saved_scope_prefix;
-        if (const auto cur_seg{builder_.get_segment()}; cur_seg && !cur_seg->has_terminator()) {
-            if (req.return_type->get_kind() == sema::type_kind::VOID_) {
-                builder_.emit_return();
-            } else {
-                builder_.emit_return(value{undefined_val{}, *req.return_type});
-            }
-        }
+        emit_implicit_return(*req.return_type);
     }
 
     const_eval_.set_enclosing_type(stdx::none);
@@ -734,6 +731,50 @@ auto emitter::folded_int(const value& v) noexcept -> stdx::option<i128> {
     return stdx::none;
 }
 
+auto emitter::check_constexpr_float_fits(const value& v, const sema::type& target, ast::node_id at)
+    -> void {
+    // An integer headed for a float type is checked by its exact value
+    stdx::option<f128> f;
+    if (const auto as_float{v.as_opt<f128>()}) {
+        f = *as_float;
+    } else if (const auto as_unsigned{v.as_opt<u128>()}) {
+        f = f128::from_uint(*as_unsigned);
+    } else if (const auto as_signed{folded_int(v)}) {
+        f = f128::from_int(*as_signed);
+    }
+    if (!f || sema::constexpr_float_fits(*f, target)) { return; }
+    ctx_.diags.emplace_back(fmt::format("float value {} is out of range for type '{}'",
+                                        *f,
+                                        ctx_.type_display_name(target)),
+                            sema::error::LITERAL_OUT_OF_RANGE,
+                            active_ast().location_of(at));
+}
+
+auto emitter::is_concrete_float(const value& v) noexcept -> bool {
+    return v.type && sema::is_float(v.type->get_kind());
+}
+
+auto emitter::is_untyped_number(const value& v) noexcept -> bool {
+    return v.type && sema::is_constexpr_numeric(v.type->get_kind());
+}
+
+auto emitter::is_foreign_constant(const value& v, const sema::type& t) noexcept -> bool {
+    const bool is_constant_number{v.is<f128>() || v.is<i64>() || v.is<u64>() || v.is<i128>() ||
+                                  v.is<u128>()};
+    return is_constant_number && (!v.type || !sema::is_same_unqualified(*v.type, t));
+}
+
+auto emitter::untyped_number_as_float(const value& v, sema::type& target, ast::node_id at)
+    -> value {
+    check_constexpr_float_fits(v, target, at);
+    if (v.is<f128>()) { return value{v.data, target}; }
+    if (const auto as_unsigned{v.as_opt<u128>()}) {
+        return value{f128::from_uint(*as_unsigned), target};
+    }
+    if (const auto as_signed{folded_int(v)}) { return value{f128::from_int(*as_signed), target}; }
+    return v;
+}
+
 auto emitter::coerce_constexpr_int(value v, sema::type& target, ast::node_id at) -> value {
     const auto folded{folded_int(v)};
     if (folded && !sema::constexpr_int_fits(*folded, target, target_ptr_bits_)) {
@@ -873,9 +914,7 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
         return emit_expression_id_raw(*expr_id);
     }
     // `undefined` carries no type of its own; adopt the destination's so codegen can size it.
-    if (active_ast().get_as_opt<ast::undefined_expr>(*expr_id)) {
-        return value{undefined_val{}, dest_type};
-    }
+    if (is_undefined_value(*expr_id)) { return value{undefined_val{}, dest_type}; }
 
     const auto val{emit_expression(expr_id)};
 
@@ -887,13 +926,11 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
         if (sema::is_float(dest_type.get_kind()) &&
             val.type->get_kind() == sema::type_kind::CONSTEXPR_INT) {
             // int literal -> float context: convert the payload to floating point.
-            if (const auto iv{val.as_opt<i64>()}) { return value{static_cast<f64>(*iv), concrete}; }
-            if (const auto uv{val.as_opt<u64>()}) { return value{static_cast<f64>(*uv), concrete}; }
-            if (const auto iv{val.as_opt<i128>()}) {
-                return value{static_cast<f64>(*iv), concrete};
-            }
-            if (const auto uv{val.as_opt<u128>()}) {
-                return value{static_cast<f64>(*uv), concrete};
+            if (const auto folded{folded_int(val)}) {
+                const auto exact{val.as_opt<u128>() ? f128::from_uint(*val.as_opt<u128>())
+                                                    : f128::from_int(*folded)};
+                check_constexpr_float_fits(value{exact}, concrete, *expr_id);
+                return value{exact, concrete};
             }
         }
         // Reject a compile-time integer that does not fit its concrete integer target.
@@ -901,6 +938,7 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
             sema::is_integer(dest_type.get_kind())) {
             return coerce_constexpr_int(val, concrete, *expr_id);
         }
+        check_constexpr_float_fits(val, concrete, *expr_id);
         return value{val.data, concrete};
     }
 
@@ -936,6 +974,15 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
     }
 
     return val;
+}
+
+auto emitter::yields_runtime_value(stdx::option<sema::type&> type) -> bool {
+    return type && sema::is_value_type(type->get_kind());
+}
+
+auto emitter::is_undefined_value(ast::node_id expr) -> bool {
+    const auto t{active_mod().get_sema_type_opt(expr)};
+    return t && t->get_kind() == sema::type_kind::UNDEFINED;
 }
 
 auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -> void {
@@ -1028,7 +1075,7 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
 
     stdx::option<value>       init_val;
     stdx::option<const_value> const_init;
-    if (decl.value && !active_ast().get_as_opt<ast::undefined_expr>(*decl.value)) {
+    if (decl.value && !is_undefined_value(*decl.value)) {
         const gir::const_eval::constexpr_context_guard g{const_eval_, true};
         const auto                                     diags_before{ctx_.diags.size()};
         if (auto cv{const_eval_.try_eval(*decl.value)}) {
@@ -1057,6 +1104,14 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                      v.type->get_kind() == sema::type_kind::CONSTEXPR_INT) &&
                     sema::is_integer(sema_type->get_kind())) {
                     v = coerce_constexpr_int(v, *sema_type, *decl.value);
+                }
+                if (decl.explicit_type && sema::is_float(sema_type->get_kind())) {
+                    // An integer constant bound to a float global needs a real conversion
+                    if (const auto as_float{cv->int_as_float_opt()}; as_float && !v.is<f128>()) {
+                        v = value{*as_float};
+                    }
+                    check_constexpr_float_fits(v, *sema_type, *decl.value);
+                    if (v.is<f128>()) { v = value{v.data, *sema_type}; }
                 }
                 init_val.emplace(v);
             }
@@ -1199,10 +1254,7 @@ auto emitter::emit_impl_default_method(std::string_view          gir_name,
                                         });
     }
     for (const auto& param : fn_expr.parameters) {
-        std::string_view p_name{};
-        if (param.name.is<ast::identifier_expr>()) {
-            p_name = active_ast().get_as<ast::identifier_expr>(param.name).name;
-        }
+        const auto p_name{ast::parameter_name(active_ast(), param)};
         const auto p_type{active_mod().get_sema_type_opt(param.name)};
         if (!p_type) { continue; }
         auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
@@ -1220,15 +1272,10 @@ auto emitter::emit_impl_default_method(std::string_view          gir_name,
     emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
     emitting_impl_default_scope_.reset();
 
-    if (const auto cur_seg{builder_.get_segment()}) {
-        if (!cur_seg->has_terminator()) {
-            if (const auto fd{sema_type->get_data().as_opt<sema::types::function>()};
-                fd && fd->return_type.get_kind() != sema::type_kind::VOID_) {
-                builder_.emit_return(value{undefined_val{}, fd->return_type});
-            } else {
-                builder_.emit_return();
-            }
-        }
+    if (const auto fd{sema_type->get_data().as_opt<sema::types::function>()}) {
+        emit_implicit_return(fd->return_type);
+    } else {
+        emit_implicit_return(ctx_.get_builtin_resolved_type(sema::type_kind::VOID_));
     }
 }
 
@@ -1316,26 +1363,7 @@ auto emitter::emit_function(ast::node_id                   id,
                                         });
     }
 
-    for (const auto& param : fn_expr.parameters) {
-        std::string_view p_name{};
-        if (param.name.is<ast::identifier_expr>()) {
-            p_name = active_ast().get_as<ast::identifier_expr>(param.name).name;
-        }
-        const auto p_type{active_mod().get_sema_type_opt(param.name)};
-        ASSERT(p_type, "Function parameter must have a resolved sema type");
-
-        auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
-        const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-        if (!p_name.empty()) {
-            scopes_.back().bindings.emplace(p_name,
-                                            local_binding{
-                                                .id        = p_slot.id,
-                                                .type      = *p_type,
-                                                .is_alloca = p_spilled,
-                                                .const_val = stdx::none,
-                                            });
-        }
-    }
+    bind_declared_params(fn, fn_expr, active_mod());
 
     emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
     if (const auto cur_seg{builder_.get_segment()}) {
@@ -1344,27 +1372,65 @@ auto emitter::emit_function(ast::node_id                   id,
                 // A naked body owns its own control flow; never synthesise a return.
                 builder_.emit_unreachable();
             } else {
-                stdx::option<const sema::types::function&> fn_data;
-                auto                                       target_t{sema_type};
-                if (target_t) {
-                    if (const auto ref{target_t->get_data().as_opt<sema::types::reference>()}) {
-                        target_t.emplace(ref->underlying);
-                    }
-                    if (const auto ptr{target_t->get_data().as_opt<sema::types::pointer>()}) {
-                        target_t.emplace(ptr->underlying);
-                    }
-                    fn_data = target_t->get_data().as_opt<sema::types::function>();
-                }
-                if (fn_data && fn_data->return_type.get_kind() == sema::type_kind::VOID_) {
-                    builder_.emit_return();
-                } else if (fn_data) {
-                    builder_.emit_return(value{undefined_val{}, fn_data->return_type});
+                const auto fn_data{sema_type ? sema::signature_of(*sema_type)
+                                             : stdx::option<const sema::types::function&>{}};
+                if (fn_data) {
+                    emit_implicit_return(fn_data->return_type);
                 } else {
                     builder_.emit_return();
                 }
             }
         }
     }
+}
+
+auto emitter::bind_declared_params(gir::function&            fn,
+                                   const ast::function_expr& fn_expr,
+                                   const mod::module&        owner) -> void {
+    for (const auto& param : fn_expr.parameters) {
+        const auto p_name{ast::parameter_name(owner.ast, param)};
+        const auto p_type{owner.get_sema_type_opt(param.name)};
+        ASSERT(p_type, "Function parameter must have a resolved sema type");
+
+        // A slice parameter is spilled to a slot so it can be sub-sliced and re-bound
+        auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
+        const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
+        if (p_name.empty()) { continue; }
+        scopes_.back().bindings.emplace(p_name,
+                                        local_binding{
+                                            .id        = p_slot.id,
+                                            .type      = *p_type,
+                                            .is_alloca = p_spilled,
+                                            .const_val = stdx::none,
+                                        });
+    }
+}
+
+// A body that falls off its end still needs a terminator; a non-void one yields `undefined`
+auto emitter::emit_implicit_return(sema::type& return_type) -> void {
+    const auto cur_seg{builder_.get_segment()};
+    if (!cur_seg || cur_seg->has_terminator()) { return; }
+    if (return_type.get_kind() == sema::type_kind::VOID_) {
+        builder_.emit_return();
+    } else {
+        builder_.emit_return(value{undefined_val{}, return_type});
+    }
+}
+
+// An expression with no runtime representation must fold; one that cannot is a user error
+auto emitter::fold_compile_time_only(ast::node_id id, std::string_view what, sema::type& type)
+    -> value {
+    const auto diags_before{ctx_.diags.size()};
+    if (const auto cv{const_eval_.try_eval(id)}; cv && !cv->is_poison()) {
+        return type.get_kind() == sema::type_kind::TYPE ? cv->to_gir_value()
+                                                        : materialize_const(*cv);
+    }
+    if (ctx_.diags.size() == diags_before) {
+        ctx_.diags.emplace_back(std::string{what},
+                                sema::error::CONSTEXPR_EVALUATION_FAILED,
+                                active_ast().location_of(id));
+    }
+    return value{undefined_val{}, type};
 }
 
 auto emitter::emit_anonymous_function(ast::node_id id, const ast::function_expr& fn_expr)
@@ -1385,39 +1451,12 @@ auto emitter::emit_anonymous_function(ast::node_id id, const ast::function_expr&
 
     {
         const scope_guard g{scopes_};
-        for (const auto& param : fn_expr.parameters) {
-            std::string_view p_name{};
-            if (param.name.is<ast::identifier_expr>()) {
-                p_name = active_ast().get_as<ast::identifier_expr>(param.name).name;
-            }
-            const auto p_type{active_mod().get_sema_type_opt(param.name)};
-            ASSERT(p_type, "Anonymous function parameter must have a resolved sema type");
-
-            auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
-            const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-            if (!p_name.empty()) {
-                scopes_.back().bindings.emplace(p_name,
-                                                local_binding{
-                                                    .id        = p_slot.id,
-                                                    .type      = *p_type,
-                                                    .is_alloca = p_spilled,
-                                                    .const_val = stdx::none,
-                                                });
-            }
-        }
+        bind_declared_params(fn, fn_expr, active_mod());
 
         emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
-        if (const auto cur_seg{builder_.get_segment()}) {
-            if (!cur_seg->has_terminator()) {
-                const auto fn_data{fn_type.get_data().as_opt<sema::types::function>()};
-                ASSERT(fn_data, "Function type must contain function type data");
-                if (fn_data->return_type.get_kind() == sema::type_kind::VOID_) {
-                    builder_.emit_return();
-                } else {
-                    builder_.emit_return(value{undefined_val{}, fn_data->return_type});
-                }
-            }
-        }
+        const auto fn_data{fn_type.get_data().as_opt<sema::types::function>()};
+        ASSERT(fn_data, "Function type must contain function type data");
+        emit_implicit_return(fn_data->return_type);
     }
 
     if (prev_fn && prev_seg) { builder_.set_insert_point(*prev_fn, *prev_seg); }
@@ -1458,39 +1497,12 @@ auto emitter::emit_named_local_function(std::string_view          name,
                                             .is_const  = true,
                                         });
 
-        for (const auto& param : fn_expr.parameters) {
-            std::string_view p_name{};
-            if (param.name.is<ast::identifier_expr>()) {
-                p_name = active_ast().get_as<ast::identifier_expr>(param.name).name;
-            }
-            const auto p_type{active_mod().get_sema_type_opt(param.name)};
-            ASSERT(p_type, "Local function parameter must have a resolved sema type");
-
-            auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
-            const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-            if (!p_name.empty()) {
-                scopes_.back().bindings.emplace(p_name,
-                                                local_binding{
-                                                    .id        = p_slot.id,
-                                                    .type      = *p_type,
-                                                    .is_alloca = p_spilled,
-                                                    .const_val = stdx::none,
-                                                });
-            }
-        }
+        bind_declared_params(fn, fn_expr, active_mod());
 
         emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
-        if (const auto cur_seg{builder_.get_segment()}) {
-            if (!cur_seg->has_terminator()) {
-                const auto fn_data{fn_type.get_data().as_opt<sema::types::function>()};
-                ASSERT(fn_data, "Function type must contain function type data");
-                if (fn_data->return_type.get_kind() == sema::type_kind::VOID_) {
-                    builder_.emit_return();
-                } else {
-                    builder_.emit_return(value{undefined_val{}, fn_data->return_type});
-                }
-            }
-        }
+        const auto fn_data{fn_type.get_data().as_opt<sema::types::function>()};
+        ASSERT(fn_data, "Function type must contain function type data");
+        emit_implicit_return(fn_data->return_type);
     }
 
     if (prev_fn && prev_seg) { builder_.set_insert_point(*prev_fn, *prev_seg); }
@@ -1540,25 +1552,7 @@ auto emitter::emit_closure_function(const ast::function_expr&     fn_expr,
                                             .const_val = stdx::none,
                                         });
 
-        for (const auto& param : fn_expr.parameters) {
-            std::string_view p_name{};
-            if (param.name.is<ast::identifier_expr>()) {
-                p_name = active_ast().get_as<ast::identifier_expr>(param.name).name;
-            }
-            const auto p_type{active_mod().get_sema_type_opt(param.name)};
-            ASSERT(p_type, "Closure parameter must have a resolved sema type");
-            auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
-            const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-            if (!p_name.empty()) {
-                scopes_.back().bindings.emplace(p_name,
-                                                local_binding{
-                                                    .id        = p_slot.id,
-                                                    .type      = *p_type,
-                                                    .is_alloca = p_spilled,
-                                                    .const_val = stdx::none,
-                                                });
-            }
-        }
+        bind_declared_params(fn, fn_expr, active_mod());
 
         // Load every capture once, up front, from `self`
         auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
@@ -1582,15 +1576,7 @@ auto emitter::emit_closure_function(const ast::function_expr&     fn_expr,
         }
 
         emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
-        if (const auto cur_seg{builder_.get_segment()}) {
-            if (!cur_seg->has_terminator()) {
-                if (impl_sig_data->return_type.get_kind() == sema::type_kind::VOID_) {
-                    builder_.emit_return();
-                } else {
-                    builder_.emit_return(value{undefined_val{}, impl_sig_data->return_type});
-                }
-            }
-        }
+        emit_implicit_return(impl_sig_data->return_type);
     }
 
     if (prev_fn && prev_seg) { builder_.set_insert_point(*prev_fn, *prev_seg); }
@@ -1674,34 +1660,10 @@ auto emitter::emit_constexpr_closure(const const_closure& cl) -> std::string {
         }
         const constexpr_frame_guard cxg{ctx_.constexpr_binding_frames, std::move(cx_frame)};
 
-        for (const auto& param : fn_expr.parameters) {
-            std::string_view p_name{};
-            if (param.name.is<ast::identifier_expr>()) {
-                p_name = def_mod.ast.get_as<ast::identifier_expr>(param.name).name;
-            }
-            const auto p_type{def_mod.get_sema_type_opt(param.name)};
-            ASSERT(p_type, "closure parameter must have a resolved sema type");
-            auto&      p_slot{fn.add_param(std::string{p_name}, *p_type)};
-            const bool p_spilled{p_type->get_kind() == sema::type_kind::SLICE};
-            if (!p_name.empty()) {
-                scopes_.back().bindings.emplace(p_name,
-                                                local_binding{
-                                                    .id        = p_slot.id,
-                                                    .type      = *p_type,
-                                                    .is_alloca = p_spilled,
-                                                    .const_val = stdx::none,
-                                                });
-            }
-        }
+        bind_declared_params(fn, fn_expr, def_mod);
 
         emit_block(def_mod.ast.get_as<ast::block_stmt>(fn_expr.body));
-        if (const auto cur_seg{builder_.get_segment()}; cur_seg && !cur_seg->has_terminator()) {
-            if (sig_data->return_type.get_kind() == sema::type_kind::VOID_) {
-                builder_.emit_return();
-            } else {
-                builder_.emit_return(value{undefined_val{}, sig_data->return_type});
-            }
-        }
+        emit_implicit_return(sig_data->return_type);
     }
 
     active_module_ = prev_module;
@@ -2014,29 +1976,23 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                                 sema::is_implicit_widenable(*scalar.type, *sema_type))) {
                         // An integer constant widening into a float-typed binding needs an
                         // actual numeric conversion
-                        if (const auto iv{cv->as_int_opt()}) {
-                            scalar = value{static_cast<f64>(*iv), *sema_type};
-                        }
+                        if (const auto f{cv->int_as_float_opt()}) { scalar = value{*f}; }
+                    }
+                    if (decl.explicit_type) {
+                        check_constexpr_float_fits(scalar, *sema_type, *decl.value);
                     }
 
                     // Prevent foldable `const`/`constexpr var` initializer from bypassing type
                     // checking
                     if (decl.explicit_type && scalar.type &&
                         !sema::is_assignable(*scalar.type, *sema_type)) {
-                        const auto reason{sema::cast_rejection_reason(
-                            *scalar.type, *sema_type, target_ptr_bits_, ctx_.user_type_names)};
                         ctx_.diags.emplace_back(
-                            reason
-                                ? fmt::format("Type mismatch in store: cannot assign '{}' to "
-                                              "'{}' ({})",
-                                              ctx_.type_display_name(*scalar.type),
-                                              ctx_.type_display_name(*sema_type),
-                                              *reason)
-                                : fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
-                                              ctx_.type_display_name(*scalar.type),
-                                              ctx_.type_display_name(*sema_type)),
+                            ctx_.store_mismatch_message(*scalar.type, *sema_type, target_ptr_bits_),
                             sema::error::TYPE_MISMATCH,
                             active_ast().location_of(*decl.value));
+                    }
+                    if (decl.explicit_type && scalar.is<f128>()) {
+                        scalar = value{scalar.data, *sema_type};
                     }
 
                     bound = scalar;
@@ -2051,7 +2007,8 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                                                     .is_constexpr_var = is_constexpr_var,
                                                 });
                 if (is_constexpr) {
-                    ctx_.constexpr_binding_frames.back().insert_or_assign(name, *cv);
+                    ctx_.constexpr_binding_frames.back().insert_or_assign(
+                        name, decl.explicit_type ? with_declared_type(*cv, *sema_type) : *cv);
                 }
                 return;
             }
@@ -2072,16 +2029,8 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         // A non-foldable `const` binds directly to its initializer's value, bypassing the
         // store-typecheck a `var` alloca would get; re-check the annotated type here.
         if (decl.explicit_type && val.type && !sema::is_assignable(*val.type, *sema_type)) {
-            const auto reason{sema::cast_rejection_reason(
-                *val.type, *sema_type, target_ptr_bits_, ctx_.user_type_names)};
             ctx_.diags.emplace_back(
-                reason ? fmt::format("Type mismatch in store: cannot assign '{}' to '{}' ({})",
-                                     ctx_.type_display_name(*val.type),
-                                     ctx_.type_display_name(*sema_type),
-                                     *reason)
-                       : fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
-                                     ctx_.type_display_name(*val.type),
-                                     ctx_.type_display_name(*sema_type)),
+                ctx_.store_mismatch_message(*val.type, *sema_type, target_ptr_bits_),
                 sema::error::TYPE_MISMATCH,
                 active_ast().location_of(*decl.value));
         }
@@ -2110,7 +2059,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
 
     const auto slot{builder_.emit_alloca(*sema_type, name, is_const)};
     // A fresh alloca is already uninitialized, so `= undefined` needs no store.
-    if (decl.value && !active_ast().get_as_opt<ast::undefined_expr>(*decl.value)) {
+    if (decl.value && !is_undefined_value(*decl.value)) {
         const value val{emit_coerced_expr(*decl.value, *sema_type)};
         builder_.emit_store(value{slot, *sema_type}, val).is_initializer = true;
     }
@@ -2227,9 +2176,13 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
             auto&      t{sema_type ? *sema_type : ctx_.get_int(32, true)};
             // An unsuffixed integer literal in a float context is a float constant.
             if (sema::is_float(t.get_kind()) || t.get_kind() == sema::type_kind::CONSTEXPR_FLOAT) {
-                return value{static_cast<f64>(static_cast<i128>(data.value)), t};
+                return value{f128::from_uint(data.value,
+                                             sema::float_format_of(t).value_or(float_format::QUAD)),
+                             t};
             }
-            if (sema::is_unsigned_integer(t)) {
+            // Past `i128` max only an unsigned payload keeps the literal's value
+            if (sema::is_unsigned_integer(t) ||
+                data.value > static_cast<u128>(std::numeric_limits<i128>::max())) {
                 const u128 v{data.value};
                 if (v <= static_cast<u128>(std::numeric_limits<u64>::max())) {
                     return value{static_cast<u64>(v), t};
@@ -2245,9 +2198,8 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
         },
         [&](const ast::float_literal_expr& data) -> value {
             const auto sema_type{active_mod().get_sema_type_opt(id)};
-            return value{data.value,
-                         sema_type ? *sema_type
-                                   : ctx_.get_builtin_resolved_type(sema::type_kind::F64)};
+            auto& t{sema_type ? *sema_type : ctx_.get_builtin_resolved_type(sema::type_kind::F64)};
+            return value{data.value_in(sema::float_format_of(t).value_or(float_format::QUAD)), t};
         },
         [&](ast::bool_expr) -> value {
             return value{id.get_token_type() == syntax::token_type_t::BOOLEAN_TRUE,
@@ -2277,10 +2229,16 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
                          ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN)};
         },
         [&](const ast::identifier_expr& data) -> value { return emit_ident(id, data); },
-        // A type spelled only as a type (`dyn I`) carries no runtime value
+        // A type spelled only as a type (`dyn I`, `struct { ... }`) carries no runtime value
         [&](const ast::type_expr&) -> value {
             return value{void_val{}, active_mod().get_sema_type_opt(id)};
         },
+        [&](const auto& data) -> value
+            requires(std::same_as<std::remove_cvref_t<decltype(data)>, ast::struct_expr> ||
+                     std::same_as<std::remove_cvref_t<decltype(data)>, ast::union_expr> ||
+                     std::same_as<std::remove_cvref_t<decltype(data)>, ast::enum_expr> ||
+                     std::same_as<std::remove_cvref_t<decltype(data)>, ast::interface_expr>)
+        { return value{void_val{}, active_mod().get_sema_type_opt(id)}; },
         [&](const ast::function_expr& data) -> value {
             const auto sema_type{active_mod().get_sema_type_opt(id)};
             // A bodyless `fn(...): ret` type expression carries no runtime value.
@@ -2514,8 +2472,11 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
     ASSERT(kind_opt, "Binary operator must be mapped to instruction kind");
     ASSERT(sema_type, "Binary expression must have a resolved sema type");
 
-    // An operand'ssema type can be narrower than the value's actual constexpr-only dest
-    if (*kind_opt == instruction_kind::SHL || *kind_opt == instruction_kind::SHR) {
+    // An operand's sema type can be narrower than the value's actual constexpr-only dest, and an
+    // untyped result would otherwise materialize at a fixed width (`f64`/`i32`) before meeting its
+    // real type
+    if (*kind_opt == instruction_kind::SHL || *kind_opt == instruction_kind::SHR ||
+        sema::is_constexpr_numeric(sema_type->get_kind())) {
         if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
     }
 
@@ -2534,16 +2495,46 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
         // comparing two of them must fully const-fold rather than reach codegen.
         const auto lhs_ty{active_mod().get_sema_type_opt(binary.lhs)};
         const auto rhs_ty{active_mod().get_sema_type_opt(binary.rhs)};
+        // Inside an instantiation a bound `T` is typed as the concrete type, so fold to check
+        const auto folds_to_type{[&](ast::expr_handle operand) {
+            const auto diags_before{ctx_.diags.size()};
+            const auto cv{const_eval_.try_eval(operand)};
+            if (ctx_.diags.size() > diags_before) {
+                DISCARD(ctx_.diags.split_off(diags_before));
+                return false;
+            }
+            return cv && cv->is<stdx::option<sema::type&>>();
+        }};
         if ((lhs_ty && lhs_ty->get_kind() == sema::type_kind::TYPE) ||
-            (rhs_ty && rhs_ty->get_kind() == sema::type_kind::TYPE)) {
-            const auto cv{const_eval_.try_eval(id)};
-            VERIFY(cv, "Comparison of type values must be constant-evaluable");
-            return materialize_const(*cv);
+            (rhs_ty && rhs_ty->get_kind() == sema::type_kind::TYPE) || folds_to_type(binary.lhs) ||
+            folds_to_type(binary.rhs)) {
+            return fold_compile_time_only(
+                id, "a comparison between types must be known at compile time", *sema_type);
         }
     }
 
-    const auto lhs{emit_expression(binary.lhs)};
-    const auto rhs{emit_expression(binary.rhs)};
+    auto lhs{emit_expression(binary.lhs)};
+    auto rhs{emit_expression(binary.rhs)};
+    // Float arithmetic converts a constant operand of another type to the result's float type;
+    // a comparison converts an untyped constant to the float it meets (`@abs(3) < x`)
+    if (sema::is_float(sema_type->get_kind())) {
+        if (is_foreign_constant(lhs, *sema_type)) {
+            lhs = untyped_number_as_float(lhs, *sema_type, binary.lhs);
+        }
+        if (is_foreign_constant(rhs, *sema_type)) {
+            rhs = untyped_number_as_float(rhs, *sema_type, binary.rhs);
+        }
+    } else if (is_concrete_float(lhs) && is_untyped_number(rhs)) {
+        rhs = untyped_number_as_float(rhs, *lhs.type, binary.rhs);
+    } else if (is_concrete_float(rhs) && is_untyped_number(lhs)) {
+        lhs = untyped_number_as_float(lhs, *rhs.type, binary.lhs);
+    }
+    // Pointer arithmetic lowers as `ptr + n`; addition commutes, so normalize `n + ptr`
+    const auto is_pointer{
+        [](const value& v) { return v.type && v.type->get_kind() == sema::type_kind::POINTER; }};
+    if (*kind_opt == instruction_kind::ADD && is_pointer(rhs) && !is_pointer(lhs)) {
+        std::swap(lhs, rhs);
+    }
     return value{emit_checked_binary(*kind_opt,
                                      lhs,
                                      rhs,
@@ -2557,6 +2548,10 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
 auto emitter::emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value {
     PROFILE_FUNCTION();
     const auto op_type{id.get_token_type()};
+    if (op_type == syntax::token_type_t::PLUS) {
+        if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+        return emit_expression(unary.rhs);
+    }
     const auto kind_opt{map_unary_op(op_type)};
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(kind_opt, "Unary operator must be mapped to instruction kind");
@@ -2856,6 +2851,14 @@ auto emitter::emit_packed_field_assign(ast::node_id                id,
     value new_field{};
     if (op_type == syntax::token_type_t::ASSIGN) {
         new_field = emit_coerced_expr(assign.rhs, field_type);
+        // A packed write is bit arithmetic on the backing integer, so no typed store checks it
+        if (new_field.type && !sema::is_assignable(*new_field.type, field_type)) {
+            ctx_.diags.emplace_back(
+                ctx_.store_mismatch_message(*new_field.type, field_type, target_ptr_bits_),
+                sema::error::TYPE_MISMATCH,
+                active_ast().location_of(assign.rhs));
+            return new_field;
+        }
     } else {
         auto&       backing_ty{ctx_.get_int(static_cast<u16>(layout.n), false)};
         const value backing{emit_expression(dot.object).data, backing_ty};
@@ -3353,6 +3356,9 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                                fn_token == syntax::token_type_t::BUILTIN_ALIGN_CAST) {
                         cast_kind = instruction_kind::PTR_CAST;
                     }
+                    if (fn_token == syntax::token_type_t::BUILTIN_AS) {
+                        check_constexpr_float_fits(operand, ret_type, *op_expr);
+                    }
                     // A compile-time operand folds, so an out-of-range float is a compile error
                     if (fn_token == syntax::token_type_t::BUILTIN_INT_FROM_FLOAT ||
                         fn_token == syntax::token_type_t::BUILTIN_FLOAT_FROM_INT) {
@@ -3811,6 +3817,27 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             }
             return value{void_val{}, ret_type};
         }
+        case syntax::token_type_t::BUILTIN_MUL_ADD: {
+            if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+
+            // `@mulAdd(T, a, b, c)`: each operand is a `T`
+            std::vector<value> args;
+            for (usize i{1}; i < call.arguments.size(); ++i) {
+                if (const auto expr_h{call.arguments[i].as_opt<ast::expr_handle>()}) {
+                    args.emplace_back(emit_coerced_expr(*expr_h, ret_type));
+                }
+            }
+            const auto name{*syntax::get_builtin_opt(fn_token)};
+            if (const auto res{builder_.emit_builtin_call(name, std::move(args), ret_type)}) {
+                return value{*res, ret_type};
+            }
+            return value{void_val{}, ret_type};
+        }
+        case syntax::token_type_t::BUILTIN_C_VA_START:
+        case syntax::token_type_t::BUILTIN_C_VA_COPY:
+        case syntax::token_type_t::BUILTIN_C_VA_END:
+        case syntax::token_type_t::BUILTIN_C_VA_ARG:
+            return emit_c_va_builtin(call, fn_token, ret_type);
         case syntax::token_type_t::BUILTIN_ADD_WITH_OVERFLOW:
         case syntax::token_type_t::BUILTIN_SUB_WITH_OVERFLOW:
         case syntax::token_type_t::BUILTIN_MUL_WITH_OVERFLOW:
@@ -3916,18 +3943,16 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
 
     // `fn(...): type` is a compile-time type constructor with no runtime body
     if (ret_type.get_kind() == sema::type_kind::TYPE) {
-        const auto cv{const_eval_.try_eval(id)};
-        VERIFY(cv, "Call to a type-constructor function must be constant-evaluable");
-        return cv->to_gir_value();
+        return fold_compile_time_only(
+            id, "a call to a `fn(...): type` constructor must be known at compile time", ret_type);
     }
 
     if (ret_type.get_kind() == sema::type_kind::CONSTEXPR_INT ||
         ret_type.get_kind() == sema::type_kind::CONSTEXPR_FLOAT) {
-        const auto cv{const_eval_.try_eval(id)};
-        VERIFY(cv,
-               "Call to a function returning 'constexpr_int'/'constexpr_float' must be "
-               "constant-evaluable");
-        return cv->to_gir_value();
+        return fold_compile_time_only(id,
+                                      "a call returning 'constexpr_int' or 'constexpr_float' "
+                                      "must be known at compile time",
+                                      ret_type);
     }
 
     stdx::option<std::string> callee_name;
@@ -4426,7 +4451,7 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
             if (expr_type->get_kind() != sema::type_kind::VOID_) { sema_type = expr_type; }
         }
     }
-    const bool yields_value{if_expr.alternate && sema_type && is_value_type(sema_type->get_kind())};
+    const bool yields_value{if_expr.alternate && yields_runtime_value(sema_type)};
 
     const auto emit_single_arm{[&](ast::stmt_handle arm) -> value {
         return yields_value ? emit_stmt_as_value(arm)
@@ -4535,6 +4560,58 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
     return value{void_val{}, sema_type};
 }
 
+auto emitter::constexpr_unroll_limit_reached(usize            iterations,
+                                             std::string_view loop_kind,
+                                             ast::node_id     id) -> bool {
+    if (iterations < ctx_.eval_unroll_limit) { return false; }
+    ctx_.diags.emplace_back(
+        fmt::format("{} exceeded its unroll limit of {}; raise it with `@setEvalUnrollLimit`",
+                    loop_kind,
+                    ctx_.eval_unroll_limit),
+        sema::error::CONSTEXPR_LOOP_LIMIT,
+        active_ast().location_of(id));
+    return true;
+}
+
+auto emitter::fold_constexpr_loop_condition(ast::expr_handle condition, std::string_view loop_kind)
+    -> stdx::option<bool> {
+    const gir::const_eval::constexpr_context_guard g{const_eval_, true};
+    const auto                                     diags_before{ctx_.diags.size()};
+    const auto                                     cond_val{const_eval_.try_eval(condition)};
+    stdx::option<bool>                             cond;
+    if (cond_val) {
+        if (const auto folded{cond_val->as_opt<bool>()}) { cond = *folded; }
+    }
+    if (!cond && ctx_.diags.size() == diags_before) {
+        ctx_.diags.emplace_back(
+            fmt::format("{}'s condition must fold to a compile-time-known `bool`", loop_kind),
+            sema::error::CONSTEXPR_WHILE_NONFOLDABLE_COND,
+            active_ast().location_of(condition));
+    }
+    return cond;
+}
+
+auto emitter::emit_constexpr_loop_body(const ast::block_stmt& block) -> constexpr_body_exit {
+    {
+        const loop_context_guard g_loop{loop_stack_,
+                                        loop_context{
+                                            .label           = stdx::none,
+                                            .break_target    = segment_id{0},
+                                            .continue_target = segment_id{0},
+                                            .result_slot     = stdx::none,
+                                            .scope_depth     = scopes_.size(),
+                                            .is_constexpr    = true,
+                                        }};
+        emit_block(block);
+    }
+    if (const auto cur_seg{builder_.get_segment()}; cur_seg && cur_seg->has_terminator()) {
+        return constexpr_body_exit::BREAK;
+    }
+    if (std::exchange(constexpr_loop_break_, false)) { return constexpr_body_exit::BREAK; }
+    if (std::exchange(constexpr_loop_continue_, false)) { return constexpr_body_exit::CONTINUE; }
+    return constexpr_body_exit::NEXT;
+}
+
 auto emitter::emit_constexpr_while(ast::node_id id, const ast::while_loop_expr& while_loop)
     -> value {
     PROFILE_FUNCTION();
@@ -4546,54 +4623,10 @@ auto emitter::emit_constexpr_while(ast::node_id id, const ast::while_loop_expr& 
         // Each pass re-binds the loop's `constexpr var`(s) to their just-updated value; a stale
         // memoized fold of the condition (or anything the body reads) must not survive across it.
         const_eval_.clear_memo();
-        const gir::const_eval::constexpr_context_guard g{const_eval_, true};
-        const auto                                     diags_before{ctx_.diags.size()};
-        const auto cond_val{const_eval_.try_eval(while_loop.condition)};
-        const auto cond{cond_val ? cond_val->as_opt<bool>() : stdx::none};
-        if (!cond) {
-            if (ctx_.diags.size() == diags_before) {
-                ctx_.diags.emplace_back(
-                    "`while constexpr`'s condition must fold to a compile-time-known `bool`",
-                    sema::error::CONSTEXPR_WHILE_NONFOLDABLE_COND,
-                    active_ast().location_of(while_loop.condition));
-            }
-            break;
-        }
-        if (!*cond) { break; }
-        if (iterations >= ctx_.eval_unroll_limit) {
-            ctx_.diags.emplace_back(
-                fmt::format("`while constexpr` exceeded its unroll limit of {}; raise it with "
-                            "`@setEvalUnrollLimit`",
-                            ctx_.eval_unroll_limit),
-                sema::error::CONSTEXPR_LOOP_LIMIT,
-                active_ast().location_of(id));
-            break;
-        }
-        ++iterations;
-        {
-            const loop_context_guard g_loop{loop_stack_,
-                                            loop_context{
-                                                .label           = stdx::none,
-                                                .break_target    = segment_id{0},
-                                                .continue_target = segment_id{0},
-                                                .result_slot     = stdx::none,
-                                                .scope_depth     = scopes_.size(),
-                                                .is_constexpr    = true,
-                                            }};
-            emit_block(block);
-        }
-        if (const auto cur_seg{builder_.get_segment()}; cur_seg && cur_seg->has_terminator()) {
-            break;
-        }
-        if (constexpr_loop_break_) {
-            constexpr_loop_break_ = false;
-            break;
-        }
-        if (constexpr_loop_continue_) {
-            constexpr_loop_continue_ = false;
-            if (while_loop.continuation) { emit_expression(*while_loop.continuation); }
-            continue;
-        }
+        const auto cond{fold_constexpr_loop_condition(while_loop.condition, "`while constexpr`")};
+        if (!cond || !*cond) { break; }
+        if (constexpr_unroll_limit_reached(iterations++, "`while constexpr`", id)) { break; }
+        if (emit_constexpr_loop_body(block) == constexpr_body_exit::BREAK) { break; }
         if (while_loop.continuation) { emit_expression(*while_loop.continuation); }
     }
     return value{void_val{}, void_type};
@@ -4607,7 +4640,7 @@ auto emitter::emit_while(ast::node_id                   id,
     PROFILE_FUNCTION();
     if (while_loop.is_constexpr) { return emit_constexpr_while(id, while_loop); }
     const auto sema_type{result_type ? result_type : active_mod().get_sema_type_opt(id)};
-    const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
+    const bool yields_value{yields_runtime_value(sema_type)};
 
     auto fn_opt{builder_.get_function()};
     ASSERT(fn_opt, "While loop must be within an active function");
@@ -4692,55 +4725,15 @@ auto emitter::emit_constexpr_do_while(ast::node_id id, const ast::do_while_loop_
 
     usize iterations{0};
     while (true) {
-        if (iterations >= ctx_.eval_unroll_limit) {
-            ctx_.diags.emplace_back(
-                fmt::format(
-                    "`do ... while constexpr` exceeded its unroll limit of {}; raise it with "
-                    "`@setEvalUnrollLimit`",
-                    ctx_.eval_unroll_limit),
-                sema::error::CONSTEXPR_LOOP_LIMIT,
-                active_ast().location_of(id));
-            break;
-        }
-        ++iterations;
+        if (constexpr_unroll_limit_reached(iterations++, "`do ... while constexpr`", id)) { break; }
         const_eval_.clear_memo();
 
-        {
-            const loop_context_guard g_loop{loop_stack_,
-                                            loop_context{
-                                                .label           = stdx::none,
-                                                .break_target    = segment_id{0},
-                                                .continue_target = segment_id{0},
-                                                .result_slot     = stdx::none,
-                                                .scope_depth     = scopes_.size(),
-                                                .is_constexpr    = true,
-                                            }};
-            emit_block(block);
-        }
-        if (const auto cur_seg{builder_.get_segment()}; cur_seg && cur_seg->has_terminator()) {
-            break;
-        }
-        if (constexpr_loop_break_) {
-            constexpr_loop_break_ = false;
-            break;
-        }
-        if (constexpr_loop_continue_) { constexpr_loop_continue_ = false; }
+        if (emit_constexpr_loop_body(block) == constexpr_body_exit::BREAK) { break; }
 
         const_eval_.clear_memo();
-        const gir::const_eval::constexpr_context_guard g{const_eval_, true};
-        const auto                                     diags_before{ctx_.diags.size()};
-        const auto cond_val{const_eval_.try_eval(do_while.condition)};
-        const auto cond{cond_val ? cond_val->as_opt<bool>() : stdx::none};
-        if (!cond) {
-            if (ctx_.diags.size() == diags_before) {
-                ctx_.diags.emplace_back(
-                    "`do ... while constexpr`'s condition must fold to a compile-time-known `bool`",
-                    sema::error::CONSTEXPR_WHILE_NONFOLDABLE_COND,
-                    active_ast().location_of(do_while.condition));
-            }
-            break;
-        }
-        if (!*cond) { break; }
+        const auto cond{
+            fold_constexpr_loop_condition(do_while.condition, "`do ... while constexpr`")};
+        if (!cond || !*cond) { break; }
     }
     return value{void_val{}, void_type};
 }
@@ -4753,7 +4746,7 @@ auto emitter::emit_do_while(ast::node_id                   id,
     PROFILE_FUNCTION();
     if (do_while.is_constexpr) { return emit_constexpr_do_while(id, do_while); }
     const auto sema_type{result_type ? result_type : active_mod().get_sema_type_opt(id)};
-    const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
+    const bool yields_value{yields_runtime_value(sema_type)};
 
     auto fn_opt{builder_.get_function()};
     ASSERT(fn_opt, "Do-while loop must be within an active function");
@@ -4808,41 +4801,10 @@ auto emitter::emit_constexpr_infinite_loop(ast::node_id id, const ast::infinite_
 
     usize iterations{0};
     while (true) {
-        if (iterations >= ctx_.eval_unroll_limit) {
-            ctx_.diags.emplace_back(
-                fmt::format("`loop constexpr` exceeded its unroll limit of {}; raise it with "
-                            "`@setEvalUnrollLimit`",
-                            ctx_.eval_unroll_limit),
-                sema::error::CONSTEXPR_LOOP_LIMIT,
-                active_ast().location_of(id));
-            break;
-        }
-        ++iterations;
+        if (constexpr_unroll_limit_reached(iterations++, "`loop constexpr`", id)) { break; }
 
         const_eval_.clear_memo();
-        {
-            const loop_context_guard g_loop{loop_stack_,
-                                            loop_context{
-                                                .label           = stdx::none,
-                                                .break_target    = segment_id{0},
-                                                .continue_target = segment_id{0},
-                                                .result_slot     = stdx::none,
-                                                .scope_depth     = scopes_.size(),
-                                                .is_constexpr    = true,
-                                            }};
-            emit_block(block);
-        }
-        if (const auto cur_seg{builder_.get_segment()}; cur_seg && cur_seg->has_terminator()) {
-            break;
-        }
-        if (constexpr_loop_break_) {
-            constexpr_loop_break_ = false;
-            break;
-        }
-        if (constexpr_loop_continue_) {
-            constexpr_loop_continue_ = false;
-            continue;
-        }
+        if (emit_constexpr_loop_body(block) == constexpr_body_exit::BREAK) { break; }
     }
     return value{void_val{}, void_type};
 }
@@ -4855,7 +4817,7 @@ auto emitter::emit_infinite_loop(ast::node_id                   id,
     PROFILE_FUNCTION();
     if (loop.is_constexpr) { return emit_constexpr_infinite_loop(id, loop); }
     const auto sema_type{result_type ? result_type : active_mod().get_sema_type_opt(id)};
-    const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
+    const bool yields_value{yields_runtime_value(sema_type)};
 
     auto fn_opt{builder_.get_function()};
     ASSERT(fn_opt, "Infinite loop must be within an active function");
@@ -4980,29 +4942,7 @@ auto emitter::emit_constexpr_for(ast::node_id id, const ast::for_loop_expr& for_
             cx_frame.insert_or_assign(*companion_name, (*cx_args)[i++]);
         }
         const constexpr_frame_guard cfg{ctx_.constexpr_binding_frames, std::move(cx_frame)};
-        {
-            const loop_context_guard g_loop{loop_stack_,
-                                            loop_context{
-                                                .label           = stdx::none,
-                                                .break_target    = segment_id{0},
-                                                .continue_target = segment_id{0},
-                                                .result_slot     = stdx::none,
-                                                .scope_depth     = scopes_.size(),
-                                                .is_constexpr    = true,
-                                            }};
-            emit_block(block);
-        }
-        if (const auto cur_seg{builder_.get_segment()}; cur_seg && cur_seg->has_terminator()) {
-            break;
-        }
-        if (constexpr_loop_break_) {
-            constexpr_loop_break_ = false;
-            break;
-        }
-        if (constexpr_loop_continue_) {
-            constexpr_loop_continue_ = false;
-            continue;
-        }
+        if (emit_constexpr_loop_body(block) == constexpr_body_exit::BREAK) { break; }
     }
 
     return value{void_val{}, void_type};
@@ -5016,7 +4956,7 @@ auto emitter::emit_for(ast::node_id                   id,
     PROFILE_FUNCTION();
     if (for_loop.is_constexpr) { return emit_constexpr_for(id, for_loop); }
     const auto sema_type{result_type ? result_type : active_mod().get_sema_type_opt(id)};
-    const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
+    const bool yields_value{yields_runtime_value(sema_type)};
 
     auto fn_opt{builder_.get_function()};
     ASSERT(fn_opt, "For loop must be within an active function");
@@ -5294,7 +5234,7 @@ auto emitter::emit_for(ast::node_id                   id,
 auto emitter::emit_label(ast::node_id id, const ast::label_expr& label) -> value {
     PROFILE_FUNCTION();
     const auto sema_type{active_mod().get_sema_type_opt(id)};
-    const bool yields_value{sema_type && sema_type->get_kind() != sema::type_kind::VOID_};
+    const bool yields_value{yields_runtime_value(sema_type)};
 
     if (label.is_constexpr(active_ast())) {
         const auto cv{const_eval_.try_eval(id)};
@@ -5701,23 +5641,8 @@ auto emitter::emit_null_pointer_check(value ptr, ast::node_id site) -> void {
 
 auto emitter::enum_discriminants(const sema::types::enum_t& en) -> std::vector<i64> {
     std::vector<i64> discriminants;
-    discriminants.reserve(en.ast_enumerations.size());
-
-    // A variant's initializer node is only valid against the enum's defining module's AST arena,
-    // which may differ from whichever module `const_eval_` is currently scoped to
-    auto&      enclosing_mod{en.enclosing};
-    const_eval enclosing_eval{ctx_, enclosing_mod};
-    enclosing_eval.set_symbol_scoping(symbol_scoping_);
-
-    for (usize idx{0}; idx < en.ast_enumerations.size(); ++idx) {
-        const auto& enumeration{en.ast_enumerations[idx]};
-        i64         disc{static_cast<i64>(idx)};
-        if (enumeration.value) {
-            if (const auto ev{enclosing_eval.try_eval(*enumeration.value)}) {
-                disc = static_cast<i64>(ev->as_int_opt().value_or(disc));
-            }
-        }
-        discriminants.emplace_back(disc);
+    for (const auto value : const_eval_.enum_member_values(en)) {
+        discriminants.emplace_back(static_cast<i64>(value));
     }
     return discriminants;
 }
@@ -6162,7 +6087,15 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                     return spill_to_temporary(emit_ident(id, ident), *sema_type, true);
                 }
             }
-            ASSERT(binding, "LValue identifier must be bound in scope");
+            if (!binding) {
+                // e.g. a `const` whose own initializer is still being folded
+                ctx_.diags.emplace_back(
+                    fmt::format("'{}' has no storage to assign to or take the address of here",
+                                ident.name),
+                    sema::error::ASSIGNMENT_TO_CONST,
+                    active_ast().location_of(id));
+                return value{undefined_val{}, active_mod().get_sema_type_opt(id)};
+            }
             return lvalue_of_binding(ident.name);
         },
         [&](const ast::call_expr& call) -> value {
@@ -6478,7 +6411,7 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
     PROFILE_FUNCTION();
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Match expression must have a resolved sema type");
-    const bool yields_value{sema_type->get_kind() != sema::type_kind::VOID_};
+    const bool yields_value{yields_runtime_value(sema_type)};
 
     // The resolver already selected an arm (`match` on a compile-time type, or `match constexpr`).
     stdx::opt_size forced_arm;
@@ -6515,7 +6448,7 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
         if (const auto cv{const_eval_.try_eval(id)}) {
             if (const auto i{cv->as_int_opt()}) { return value{static_cast<i64>(*i), sema_type}; }
             if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
-            if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
+            if (const auto f{cv->as_opt<f128>()}) { return value{*f, sema_type}; }
         }
     }
 
@@ -6758,6 +6691,38 @@ auto emitter::emit_union_active_field_guard(value            union_addr,
     emit_panic_call(fmt::format("accessed inactive union field '{}'", field_name), site);
 
     builder_.set_segment(active_seg);
+}
+
+auto emitter::emit_c_va_builtin(const ast::call_expr& call,
+                                syntax::token_type_t  builtin,
+                                sema::type&           ret_type) -> value {
+    PROFILE_FUNCTION();
+    if (builtin == syntax::token_type_t::BUILTIN_C_VA_START && !current_function_is_c_variadic()) {
+        ctx_.diags.emplace_back("'@cVaStart' can only be used inside a C-variadic `fn(..., ...)`",
+                                sema::error::TYPE_MISMATCH,
+                                active_ast().location_of(call.function));
+        return value{void_val{}, ret_type};
+    }
+
+    // `@cVaArg`'s trailing type argument only shapes the result type
+    const usize list_arg_count{builtin == syntax::token_type_t::BUILTIN_C_VA_COPY ? 2UZ : 1UZ};
+    std::vector<value> args;
+    args.reserve(list_arg_count);
+    for (usize i{0}; i < list_arg_count; ++i) {
+        args.emplace_back(emit_expression(*call.arguments[i].as_opt<ast::expr_handle>()));
+    }
+    const auto name{*syntax::get_builtin_opt(builtin)};
+    if (const auto res{builder_.emit_builtin_call(name, std::move(args), ret_type)}) {
+        return value{*res, ret_type};
+    }
+    return value{void_val{}, ret_type};
+}
+
+auto emitter::current_function_is_c_variadic() -> bool {
+    const auto fn{builder_.get_function()};
+    if (!fn) { return false; }
+    const auto sig{sema::signature_of(fn->get_type())};
+    return sig && sig->is_variadic;
 }
 
 auto emitter::emit_mem_intrinsic(ast::node_id         id,
@@ -7023,7 +6988,7 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
     if (const auto cv{const_eval_.try_eval(id)}) {
         if (const auto i{cv->as_int_opt()}) { return value{static_cast<i64>(*i), sema_type}; }
         if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
-        if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
+        if (const auto f{cv->as_opt<f128>()}) { return value{*f, sema_type}; }
     }
 
     const auto struct_slot{builder_.emit_alloca(*sema_type)};
@@ -7269,7 +7234,7 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
         if (const auto cv{const_eval_.try_eval(id)}) {
             if (const auto i{cv->as_int_opt()}) { return value{static_cast<i64>(*i), sema_type}; }
             if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
-            if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
+            if (const auto f{cv->as_opt<f128>()}) { return value{*f, sema_type}; }
             if (const auto cv_type{cv->get_type()};
                 cv_type && cv_type->get_kind() == sema::type_kind::FUNCTION) {
                 if (const auto sym_name{cv->as_opt<std::string>()}) {
@@ -7402,7 +7367,7 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
     if (const auto cv{const_eval_.try_eval(id)}) {
         if (const auto i{cv->as_int_opt()}) { return value{static_cast<i64>(*i), sema_type}; }
         if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
-        if (const auto f{cv->as_opt<f64>()}) { return value{*f, sema_type}; }
+        if (const auto f{cv->as_opt<f128>()}) { return value{*f, sema_type}; }
         if (cv->is<const_struct>() || cv->is<const_array>() || cv->is<const_union>() ||
             cv->is<const_addr>() || cv->is<const_dyn_fat_ptr>() || cv->is<std::string>()) {
             return materialize_const(*cv);

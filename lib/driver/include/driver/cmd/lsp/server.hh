@@ -19,6 +19,13 @@
 
 namespace ghoti::cmd {
 
+enum : i32 {
+    PARSE_ERROR      = -32'700,
+    INVALID_REQUEST  = -32'600,
+    METHOD_NOT_FOUND = -32'601,
+    INTERNAL_ERROR   = -32'603,
+};
+
 // A JSON-RPC/LSP server over stdio
 //
 // https://www.jsonrpc.org/specification

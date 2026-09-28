@@ -36,10 +36,7 @@ TEST_CASE("Bodied function type") {
     helpers::test_parser_fail("var a: ^mut fn(): void { b; };",
                               syntax::diagnostic{"Function types may not have a body",
                                                  syntax::error::EXPLICIT_FN_TYPE_HAS_BODY,
-                                                 std::pair{0UZ, 12UZ}},
-                              syntax::diagnostic{"No prefix parse function for RBRACE(}) found",
-                                                 syntax::error::MISSING_PREFIX_PARSER,
-                                                 std::pair{0UZ, 28UZ}});
+                                                 std::pair{0UZ, 12UZ}});
 }
 
 TEST_CASE("Function return type restrictions") {

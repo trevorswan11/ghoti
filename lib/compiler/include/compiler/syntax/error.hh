@@ -95,6 +95,9 @@ enum class error : u8 {
     PACK_EXPANSION_MISPLACED,
     CONSTEXPR_LOOP_HAS_ELSE,
     CONSTEXPR_LOOP_LABELED,
+    UNEXPECTED_CHARACTER,
+    UNKNOWN_BUILTIN,
+    INVALID_UTF8,
 };
 
 using diagnostic  = diagnostic<error>;

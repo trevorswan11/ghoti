@@ -16,6 +16,7 @@
 #include "compiler/ast/id.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/sema/type.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 
 namespace ghoti::sema { struct context; } // namespace ghoti::sema
@@ -83,7 +84,7 @@ class const_value {
                                  u64,
                                  i128,
                                  u128,
-                                 f64,
+                                 f128,
                                  bool,
                                  std::string,
                                  stdx::option<sema::type&>,
@@ -103,8 +104,11 @@ class const_value {
     constexpr const_value() noexcept = default;
     constexpr explicit const_value(sema::type& t) noexcept
         : data_{stdx::option<sema::type&>{t}}, type_{t} {}
-    constexpr explicit const_value(data_t val, stdx::option<sema::type&> t = stdx::none) noexcept
-        : data_{std::move(val)}, type_{t} {}
+    // A float payload is rounded into its type's format, so folding sees what runtime would
+    constexpr explicit const_value(data_t val, stdx::option<sema::type&> t = stdx::none)
+        : data_{std::move(val)}, type_{t} {
+        if !consteval { fit_float_payload(); }
+    }
 
     [[nodiscard]] static constexpr auto make_poison() noexcept -> const_value {
         return const_value{poison_val{}};
@@ -135,6 +139,14 @@ class const_value {
         if (is<i128>()) { return as<i128>(); }
         if (is<u128>()) { return static_cast<i128>(as<u128>()); }
         if (is<const_enum>()) { return as<const_enum>().value; }
+        return stdx::none;
+    }
+
+    // An integer payload rounded into `format`, reading unsigned payloads as unsigned
+    [[nodiscard]] auto int_as_float_opt(float_format format = float_format::QUAD) const
+        -> stdx::option<f128> {
+        if (const auto u{as_uint_opt()}) { return f128::from_uint(*u, format); }
+        if (const auto i{as_int_opt()}) { return f128::from_int(*i, format); }
         return stdx::none;
     }
 
@@ -174,7 +186,10 @@ class const_value {
     MAKE_GETTER(type, stdx::option<sema::type&>);
     MAKE_DEDUCING_GETTER(data);
 
-    constexpr auto     set_type(stdx::option<sema::type&> t) noexcept -> void { type_ = t; }
+    constexpr auto set_type(stdx::option<sema::type&> t) -> void {
+        type_ = t;
+        if !consteval { fit_float_payload(); }
+    }
     [[nodiscard]] auto to_gir_value() const noexcept -> value;
     [[nodiscard]] auto operator==(const const_value& other) const noexcept -> bool;
 
@@ -182,8 +197,17 @@ class const_value {
     [[nodiscard]] auto mangle() const -> std::string;
 
   private:
+    auto fit_float_payload() -> void {
+        if (auto f{data_.as_opt<f128>()}; f && type_) { *f = sema::fit_float(*f, *type_); }
+    }
+
+  private:
     data_t                    data_{poison_val{}};
     stdx::option<sema::type&> type_;
 };
+
+// A number as its declared type rather than its untyped initializer's: an integer bound to a float
+// type converts, other numbers just retype, and anything else is returned unchanged
+[[nodiscard]] auto with_declared_type(const_value value, sema::type& declared) -> const_value;
 
 } // namespace ghoti::gir

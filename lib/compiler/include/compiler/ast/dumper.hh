@@ -107,22 +107,43 @@ class dumper {
     auto visit(explicit_type_id, const explicit_array_type&) -> void;
     auto visit(explicit_type_id, const explicit_dyn_type&) -> void;
 
-    template <typename T, typename Func> void dump_container(const T& container, Func&& func) {
+    template <typename T, typename Func>
+    auto dump_container(const T& container, Func&& func) -> void {
         for (auto it{container.begin()}; it != container.end(); ++it) {
             indent::guard g{indent_, std::next(it) == container.end()};
             std::forward<Func>(func)(*it);
         }
     }
 
-    template <typename T> void dump_node_list(const T& list) {
+    template <typename T> auto dump_node_list(const T& list) -> void {
         dump_container(list, [this](const auto& node_handle) -> void {
             fmt::print(out_, "{}", indent_.current_branch());
             dump(*node_handle);
         });
     }
 
+    // The `@cfg` field groups, members, and `@cfg` member groups closing a struct or union
+    template <typename Node> auto dump_aggregate_tail(const Node& node) -> void {
+        const auto has_cfg{!node.cfg_groups.empty()};
+        const auto has_members{!node.members.empty()};
+        const auto has_member_cfg{!node.member_cfg_groups.empty()};
+        if (has_cfg) {
+            const indent::guard g{indent_, !has_members && !has_member_cfg};
+            dump_cfg_groups(node.cfg_groups);
+        }
+        if (has_members) {
+            const indent::guard g{indent_, !has_member_cfg};
+            fmt::println(out_, "{}Members:", indent_.current_branch());
+            dump_node_list(node.members);
+        }
+        if (has_member_cfg) {
+            const indent::guard g{indent_, true};
+            dump_cfg_groups(node.member_cfg_groups);
+        }
+    }
+
     // Compact dump of an aggregate's `@cfg` groups; Only enough for AST comparison.
-    template <typename Group> void dump_cfg_groups(const std::vector<Group>& groups) {
+    template <typename Group> auto dump_cfg_groups(const std::vector<Group>& groups) -> void {
         fmt::println(out_, "{}CfgGroups:", indent_.current_branch());
         dump_container(groups, [this](const Group& group) -> void {
             fmt::println(out_, "{}Group @ {}", indent_.current_branch(), group.position);
@@ -145,7 +166,7 @@ class dumper {
         });
     }
 
-    template <> void dump_node_list<member_list>(const member_list& list) {
+    template <> auto dump_node_list<member_list>(const member_list& list) -> void {
         dump_container(list, [this](const member_handle& mem_handle) -> void {
             fmt::print(out_, "{}", indent_.current_branch());
             dump(*mem_handle);

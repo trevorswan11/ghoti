@@ -79,6 +79,10 @@ struct context {
     // Persists across all const evaluators
     usize eval_unroll_limit{256};
 
+    // Nesting of in-progress generic instantiations, bounded so runaway recursion is reported
+    usize                  generic_instantiation_depth{0};
+    static constexpr usize max_generic_instantiation_depth{256};
+
     auto advance_epoch() noexcept -> u64 { return ++env_epoch; }
 
     context(mod::module_manager&         modules,
@@ -202,6 +206,9 @@ struct context {
     [[nodiscard]] auto get_builtin_type(std::string_view name) -> type&;
 
     [[nodiscard]] auto type_display_name(const type& t) const -> std::string;
+    // "Type mismatch in store: cannot assign 'from' to 'to'", with the rejection reason if any
+    [[nodiscard]] auto store_mismatch_message(const type& from, const type& to, u32 ptr_bits) const
+        -> std::string;
 
     // The bound value of a `constexpr` parameter named `name`, searching innermost frame first
     [[nodiscard]] auto lookup_constexpr_binding(std::string_view name) const

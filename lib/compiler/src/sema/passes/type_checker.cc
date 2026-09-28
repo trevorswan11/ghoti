@@ -74,16 +74,7 @@ auto type_checker::check_types(gir::module& gir_mod, mod::module& ast_mod, conte
 
 auto type_checker::format_store_mismatch(const type& val_t, const type& dest_t) const
     -> std::string {
-    if (const auto reason{
-            cast_rejection_reason(val_t, dest_t, target_ptr_bits_, ctx_.user_type_names)}) {
-        return fmt::format("Type mismatch in store: cannot assign '{}' to '{}' ({})",
-                           ctx_.type_display_name(val_t),
-                           ctx_.type_display_name(dest_t),
-                           *reason);
-    }
-    return fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
-                       ctx_.type_display_name(val_t),
-                       ctx_.type_display_name(dest_t));
+    return ctx_.store_mismatch_message(val_t, dest_t, target_ptr_bits_);
 }
 
 auto type_checker::format_arg_mismatch(usize                          arg_idx,
@@ -224,27 +215,13 @@ auto type_checker::check_function(gir::function& fn) -> void {
             if (!curr_seg_opt) { continue; }
 
             for (const auto* inst : (*curr_seg_opt)->get_instructions()) {
-                if (inst->target_segment) {
-                    const auto target_idx{std::to_underlying(*inst->target_segment)};
+                for (const auto successor :
+                     {inst->target_segment, inst->true_segment, inst->false_segment}) {
+                    if (!successor) { continue; }
+                    const auto target_idx{std::to_underlying(*successor)};
                     if (target_idx < segments.size() && !reachable[target_idx]) {
                         reachable[target_idx] = true;
-                        worklist.emplace_back(*inst->target_segment);
-                    }
-                }
-
-                if (inst->true_segment) {
-                    const auto target_idx{std::to_underlying(*inst->true_segment)};
-                    if (target_idx < segments.size() && !reachable[target_idx]) {
-                        reachable[target_idx] = true;
-                        worklist.emplace_back(*inst->true_segment);
-                    }
-                }
-
-                if (inst->false_segment) {
-                    const auto target_idx{std::to_underlying(*inst->false_segment)};
-                    if (target_idx < segments.size() && !reachable[target_idx]) {
-                        reachable[target_idx] = true;
-                        worklist.emplace_back(*inst->false_segment);
+                        worklist.emplace_back(*successor);
                     }
                 }
             }
@@ -263,6 +240,27 @@ auto type_checker::check_segment(gir::function& fn, gir::segment& seg) -> void {
     for (const auto* inst : seg.get_instructions()) { check_instruction(fn, *inst); }
 }
 
+auto type_checker::record_value_result(const gir::instruction& inst) -> void {
+    if (!inst.result || !inst.type) { return; }
+    locals_.insert_or_assign(*inst.result,
+                             local_info{
+                                 .type      = inst.type.get(),
+                                 .is_alloca = false,
+                                 .is_const  = false,
+                             });
+}
+
+auto type_checker::report_operator_mismatch(const gir::instruction& inst,
+                                            const type&             lhs,
+                                            const type&             rhs) -> void {
+    emit_diagnostic(fmt::format("Operator '{}' cannot be applied to types '{}' and '{}'",
+                                binary_operator_symbol(inst.kind),
+                                ctx_.type_display_name(lhs),
+                                ctx_.type_display_name(rhs)),
+                    error::OPERATOR_TYPE_MISMATCH,
+                    inst.location);
+}
+
 auto type_checker::check_instruction(gir::function& fn, const gir::instruction& inst) -> void {
     PROFILE_FUNCTION();
 
@@ -271,6 +269,11 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
         if (inst.type && inst.type->get_kind() == type_kind::OPAQUE) {
             emit_diagnostic("Cannot allocate variable of opaque type",
                             error::ILLEGAL_OPAQUE_TYPE,
+                            inst.location);
+        }
+        if (inst.type && inst.type->get_kind() == type_kind::NORETURN) {
+            emit_diagnostic("Cannot declare a variable of type 'noreturn'; it has no values",
+                            error::TYPE_MISMATCH,
                             inst.location);
         }
         if (inst.result && inst.type) {
@@ -284,14 +287,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
         break;
     }
     case gir::instruction_kind::LOAD: {
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::STORE: {
@@ -320,26 +316,24 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                         (lhs_ptr_rhs_int ||
                          (inst.kind == gir::instruction_kind::ADD && rhs_ptr_lhs_int))};
                     if (!ptr_arith) {
-                        emit_diagnostic(
-                            fmt::format("Operator '{}' cannot be applied to types '{}' and '{}'",
-                                        binary_operator_symbol(inst.kind),
-                                        ctx_.type_display_name(*lhs_t),
-                                        ctx_.type_display_name(*rhs_t)),
-                            error::OPERATOR_TYPE_MISMATCH,
-                            inst.location);
+                        report_operator_mismatch(inst, *lhs_t, *rhs_t);
+                    } else {
+                        const auto& ptr_t{lhs_ptr_rhs_int ? *lhs_t : *rhs_t};
+                        const auto& pointee{ptr_t.get_data().as<types::pointer>().underlying};
+                        if (!is_value_type(pointee.get_kind())) {
+                            emit_diagnostic(
+                                fmt::format("Pointer arithmetic requires a pointee of known size; "
+                                            "'{}' has none",
+                                            ctx_.type_display_name(ptr_t)),
+                                error::OPERATOR_TYPE_MISMATCH,
+                                inst.location);
+                        }
                     }
                 }
             }
         }
 
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::AND:
@@ -354,25 +348,12 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                                          is_integer(rhs_t->get_kind()) &&
                                          is_same_unqualified(*lhs_t, *rhs_t)};
                 if (!both_bool && !both_same_int) {
-                    emit_diagnostic(
-                        fmt::format("Operator '{}' cannot be applied to types '{}' and '{}'",
-                                    binary_operator_symbol(inst.kind),
-                                    ctx_.type_display_name(*lhs_t),
-                                    ctx_.type_display_name(*rhs_t)),
-                        error::OPERATOR_TYPE_MISMATCH,
-                        inst.location);
+                    report_operator_mismatch(inst, *lhs_t, *rhs_t);
                 }
             }
         }
 
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::XOR:
@@ -384,25 +365,12 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             if (lhs_t && rhs_t && !lhs_t->is_poison() && !rhs_t->is_poison()) {
                 if (!is_integer(lhs_t->get_kind()) || !is_integer(rhs_t->get_kind()) ||
                     !is_same_unqualified(*lhs_t, *rhs_t)) {
-                    emit_diagnostic(
-                        fmt::format("Operator '{}' cannot be applied to types '{}' and '{}'",
-                                    binary_operator_symbol(inst.kind),
-                                    ctx_.type_display_name(*lhs_t),
-                                    ctx_.type_display_name(*rhs_t)),
-                        error::OPERATOR_TYPE_MISMATCH,
-                        inst.location);
+                    report_operator_mismatch(inst, *lhs_t, *rhs_t);
                 }
             }
         }
 
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::EQ:
@@ -432,14 +400,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             }
         }
 
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::LT:
@@ -463,14 +424,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             }
         }
 
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::NEG: {
@@ -487,14 +441,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             }
         }
 
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::NOT: {
@@ -511,14 +458,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             }
         }
 
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::BITNOT: {
@@ -535,14 +475,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             }
         }
 
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::RET: {
@@ -712,14 +645,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             }
         }
 
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::PTR_CAST: {
@@ -751,14 +677,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             }
         }
 
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::INT_CAST: {
@@ -780,14 +699,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                 }
             }
         }
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::TRUNC_CAST: {
@@ -806,14 +718,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                 }
             }
         }
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::WIDEN_CAST: {
@@ -868,14 +773,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             }
         }
 
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::COND_GOTO:
@@ -934,14 +832,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                 }
             }
         }
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::DEREF:
@@ -961,14 +852,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
         break;
     case gir::instruction_kind::INLINE_ASM:
         // Operand well-formedness is enforced during type resolution
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     case gir::instruction_kind::GOTO:
     case gir::instruction_kind::UNREACHABLE: break;

@@ -3,26 +3,25 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <charconv>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <utility>
 
 #include <stdx/assert.hh>
-#include <stdx/fixed/vector.hh>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
+#include <stdx/string.hh>
 #include <stdx/type_traits.hh>
 #include <stdx/types.hh>
 
 #include "compiler/ast/handle.hh"
 #include "compiler/syntax/error.hh"
 #include "compiler/syntax/parser.hh"
+#include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
-#include "stdx/string.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 #include "support/string_utils.hh"
 
@@ -54,6 +53,15 @@ namespace {
         value = value * radix + d;
     }
     return value;
+}
+
+[[nodiscard]] auto without_separators(std::string_view digits) -> std::string {
+    std::string cleaned;
+    cleaned.reserve(digits.size());
+    for (const char c : digits) {
+        if (c != '_') { cleaned.push_back(c); }
+    }
+    return cleaned;
 }
 
 [[nodiscard]] auto all_digits(std::string_view s) noexcept -> bool {
@@ -157,16 +165,13 @@ auto int_literal_expr::parse(syntax::parser& parser)
     if (start_token.type == syntax::token_type_t::U8) {
         u8 value{static_cast<u8>(slice[1])};
         if (slice[1] == '\\') {
-            switch (slice[2]) {
-            case 'n':  value = '\n'; break;
-            case 'r':  value = '\r'; break;
-            case 't':  value = '\t'; break;
-            case '\\': value = '\\'; break;
-            case '\'': value = '\''; break;
-            case '"':  value = '"'; break;
-            case '0':  value = '\0'; break;
-            default:   return make_syntax_err(syntax::error::UNKNOWN_CHARACTER_ESCAPE, start_token);
+            const auto decoded{syntax::decode_escape(slice[2])};
+            if (!decoded) {
+                return make_syntax_err("Invalid escape sequence in character literal",
+                                       syntax::error::UNKNOWN_CHARACTER_ESCAPE,
+                                       start_token);
             }
+            value = static_cast<u8>(*decoded);
         }
         return parser.add_expr<int_literal_expr>(start_token,
                                                  int_literal_expr{
@@ -214,10 +219,16 @@ auto float_literal_expr::parse(syntax::parser& parser)
     const auto start_token{parser.get_current_token()};
     const auto slice{start_token.slice};
 
+    // Hex digits include `f`, so a hex literal's suffix can only follow its `p` exponent
+    const bool hex{slice.size() > 1 && (slice[1] == 'x' || slice[1] == 'X')};
+    const auto suffix_search{hex ? slice.find_first_of("pP") : 0};
+
     // Trailing `f<width>` suffix, if any.
     std::string_view mantissa{slice};
     u8               width{0};
-    if (const auto pos{slice.find_last_of("fF")}; pos != std::string_view::npos) {
+    if (const auto pos{slice.find_last_of("fF")}; pos != std::string_view::npos &&
+                                                  suffix_search != std::string_view::npos &&
+                                                  pos > suffix_search) {
         const auto ws{stdx::string::substr(slice, pos + 1)};
         if (ws.empty() || !all_digits(ws)) {
             return make_syntax_err(
@@ -235,21 +246,29 @@ auto float_literal_expr::parse(syntax::parser& parser)
         mantissa = stdx::string::substr(slice, 0, pos);
     }
 
-    using namespace stdx::size_literals;
-    static thread_local stdx::fixed::vector<char, 1_KiB> buffer;
-    buffer.clear();
-    for (const char c : mantissa) {
-        if (c != '_') { buffer.emplace_back(c); }
-    }
-
-    f64                          value{};
-    const std::from_chars_result result{std::from_chars(buffer.begin(), buffer.end(), value)};
-    if (result.ec != std::errc{} || result.ptr != buffer.end()) {
+    const auto parsed{f128::parse(without_separators(mantissa))};
+    switch (parsed.status) {
+    case float_parse_status::OK: break;
+    case float_parse_status::TOO_SMALL:
+        return make_syntax_err(
+            "Float literal is too small to represent", syntax::error::DOUBLE_OVERFLOW, start_token);
+    case float_parse_status::TOO_LARGE:
+    case float_parse_status::MALFORMED:
         return make_syntax_err("Overflow of literal", syntax::error::DOUBLE_OVERFLOW, start_token);
     }
 
-    return parser.add_expr<float_literal_expr>(
-        start_token, float_literal_expr{.value = value, .width = width, .spelling = slice});
+    return parser.add_expr<float_literal_expr>(start_token,
+                                               float_literal_expr{
+                                                   .value    = parsed.value,
+                                                   .width    = width,
+                                                   .spelling = slice,
+                                                   .mantissa = mantissa,
+                                               });
+}
+
+auto float_literal_expr::value_in(float_format format) const -> f128 {
+    if (mantissa.empty() || format == float_format::QUAD) { return value.round_to(format); }
+    return f128::parse(without_separators(mantissa), format).value;
 }
 
 auto bool_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {

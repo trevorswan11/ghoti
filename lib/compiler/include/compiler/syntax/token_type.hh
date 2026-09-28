@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -301,6 +302,9 @@ namespace token_type {
 
 [[nodiscard]] auto to_base(token_type_t tt) noexcept -> stdx::option<numeric_base>;
 [[nodiscard]] auto misc_from_char(char c) noexcept -> stdx::option<token_type_t>;
+
+// How a diagnostic names a token kind: its spelling in quotes, or a phrase for literal classes
+[[nodiscard]] auto describe(token_type_t tt) -> std::string;
 
 [[nodiscard]] constexpr auto is_int(token_type_t tt) noexcept -> bool {
     return token_type_t::INT_2 <= tt && tt <= token_type_t::INT_16;

@@ -66,4 +66,21 @@ TEST_CASE("An asm output operand must be an lvalue") {
           sema::error::ILLEGAL_INLINE_ASM);
 }
 
+TEST_CASE("Operand constraints must be single well-formed constraints of their direction") {
+    CHECK(resolve_asm_error(
+              R"(asm { template: "syscall", inputs: ("r11{rdx}" = n), options: (volatile) };)") ==
+          sema::error::ILLEGAL_INLINE_ASM);
+    CHECK(resolve_asm_error(
+              R"(asm { template: "syscall", inputs: ("={rax}" = n), options: (volatile) };)") ==
+          sema::error::ILLEGAL_INLINE_ASM);
+    CHECK(resolve_asm_error(
+              R"(asm { template: "nop", outputs: ("{rax}" = n), options: (volatile) };)") ==
+          sema::error::ILLEGAL_INLINE_ASM);
+    CHECK(resolve_asm_error(
+              R"(asm { template: "syscall", inputs: ("" = n), options: (volatile) };)") ==
+          sema::error::ILLEGAL_INLINE_ASM);
+    CHECK_FALSE(resolve_asm_error(
+        R"(asm { template: "syscall", inputs: ("{rax}" = n, "r" = fd), options: (volatile) };)"));
+}
+
 } // namespace ghoti::tests
