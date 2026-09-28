@@ -91,10 +91,7 @@ struct darwin_sdk {
     if (!buffer) { return stdx::none; }
 
     auto parsed{llvm::json::parse((*buffer)->getBuffer())};
-    if (!parsed) {
-        llvm::consumeError(parsed.takeError());
-        return stdx::none;
-    }
+    if (!parsed) { return stdx::none; }
     const auto* settings{parsed->getAsObject()};
     if (!settings) { return stdx::none; }
     for (const auto* key : {"Version", "MinimalDisplayName"}) {

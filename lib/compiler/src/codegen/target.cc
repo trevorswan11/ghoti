@@ -79,7 +79,9 @@ class emission_diagnostics {
   public:
     explicit emission_diagnostics(llvm::LLVMContext& context)
         : context_{context}, previous_{context.getDiagnosticHandler()} {
-        context_.setDiagnosticHandler(stdx::make_nullable_box<collector>(errors_));
+        auto handler{stdx::make_nullable_box<llvm::DiagnosticHandler>(&errors_)};
+        handler->DiagHandlerCallback = &collect;
+        context_.setDiagnosticHandler(std::move(handler));
     }
     ~emission_diagnostics() { context_.setDiagnosticHandler(std::move(previous_)); }
     MAKE_PINNED(emission_diagnostics);
@@ -90,21 +92,16 @@ class emission_diagnostics {
     }
 
   private:
-    struct collector final : llvm::DiagnosticHandler {
-        explicit collector(std::vector<std::string>& errors) : errors_{errors} {}
-        auto handleDiagnostics(const llvm::DiagnosticInfo& info) -> bool override {
-            if (info.getSeverity() != llvm::DS_Error) { return true; }
-            std::string                       message;
-            llvm::raw_string_ostream          os{message};
-            llvm::DiagnosticPrinterRawOStream printer{os};
-            info.print(printer);
-            errors_.emplace_back(with_asm_location(info, std::move(message)));
-            return true;
-        }
-        std::vector<std::string>& errors_;
-    };
+    static auto collect(const llvm::DiagnosticInfo* info, void* context) -> void {
+        if (info->getSeverity() != llvm::DS_Error) { return; }
+        std::string                       message;
+        llvm::raw_string_ostream          os{message};
+        llvm::DiagnosticPrinterRawOStream printer{os};
+        info->print(printer);
+        static_cast<std::vector<std::string>*>(context)->emplace_back(
+            with_asm_location(*info, std::move(message)));
+    }
 
-  private:
     // The lowering packs an `asm` block's line/column into its `srcloc` cookie
     [[nodiscard]] static auto with_asm_location(const llvm::DiagnosticInfo& info,
                                                 std::string message) -> std::string {

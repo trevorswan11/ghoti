@@ -51,7 +51,6 @@ constexpr std::array ALL_FORMATS{float_format::HALF,
 [[nodiscard]] auto apfloat_from_text(std::string_view text, float_format format) -> llvm::APFloat {
     llvm::APFloat value{semantics_of(format)};
     auto          status{value.convertFromString(text, llvm::APFloat::rmNearestTiesToEven)};
-    if (!status) { llvm::consumeError(status.takeError()); }
     REQUIRE(static_cast<bool>(status));
     return value;
 }

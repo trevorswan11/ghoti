@@ -33,10 +33,7 @@ namespace {
                                                  "__indirect_function_table"};
 
     auto binary{llvm::object::createBinary(object_path.string())};
-    if (!binary) {
-        llvm::consumeError(binary.takeError());
-        return {"<unreadable object>"};
-    }
+    if (!binary) { return {"<unreadable object>"}; }
     const auto* object{llvm::dyn_cast<llvm::object::ObjectFile>(binary->getBinary())};
     if (!object) { return {"<not an object>"}; }
 
@@ -44,11 +41,7 @@ namespace {
     for (const auto& symbol : object->symbols()) {
         auto flags{symbol.getFlags()};
         auto name{symbol.getName()};
-        if (!flags || !name) {
-            if (!flags) { llvm::consumeError(flags.takeError()); }
-            if (!name) { llvm::consumeError(name.takeError()); }
-            continue;
-        }
+        if (!flags || !name) { continue; }
         if ((*flags & llvm::object::SymbolRef::SF_Undefined) == 0 || name->empty()) { continue; }
         if (std::ranges::contains(linker_provided, std::string_view{*name})) { continue; }
         names.emplace_back(name->str());
