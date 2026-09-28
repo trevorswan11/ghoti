@@ -107,4 +107,14 @@ auto path_to_uri(const std::filesystem::path& path) -> std::string {
     return fmt::format("file://{}{}", prefix, percent_encode(utf8));
 }
 
+auto exists(const std::filesystem::path& path) -> bool {
+    std::error_code ec;
+    return std::filesystem::exists(path, ec);
+}
+
+auto is_file(const std::filesystem::path& path) -> bool {
+    std::error_code ec;
+    return std::filesystem::exists(path, ec) && !std::filesystem::is_directory(path, ec);
+}
+
 } // namespace ghoti::path_utils

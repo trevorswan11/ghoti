@@ -507,5 +507,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `std.io.Reader`, `std.io.Writer`, and `std.io.Seeker` default their `Error` to `std.io.Error`, so `&mut dyn std.io.Writer` no longer needs `(Error = std.io.Error)`
 
 ## Tooling
+- Releases ship a `lib/compiler_rt` directory, and every link now takes an optional compiler builtins archive as its last input; nothing is built into it yet
+- Cross compiling for macOS links from any host: releases ship `libSystem.tbd` and `SDKSettings.json` in `lib/darwin`, used when neither `SDKROOT` nor `xcrun` names an SDK (#342)
+    - The linker stamps the SDK version from `SDKSettings.json` into the image instead of reusing the minimum OS version
 - LSP hover names a callable's parameters: `fn(lhs: i32, rhs: i32): i32` instead of `fn(i32, i32): i32` (#305)
     - Covers function declarations, `fn`-typed parameters and fields, `dyn Fn` aliases, and aliases like `f: Callback`, `f: mod.Callback`, or `const g := mod.f;`, including across modules

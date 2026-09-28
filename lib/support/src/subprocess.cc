@@ -19,6 +19,7 @@
 #include <stdx/types.hh>
 
 #include "ghoti/config.h"
+#include "support/path_utils.hh"
 
 #if GHOTI_WINDOWS
 #    include <iterator>
@@ -180,12 +181,12 @@ auto ghoti_binary_path() -> std::filesystem::path {
 #if GHOTI_WINDOWS
     path += ".exe";
 #endif
-    if (!std::filesystem::exists(path)) {
+    if (!path_utils::exists(path)) {
         auto fallback{std::filesystem::current_path() / "zig-out" / "bin" / "ghoti"};
 #if GHOTI_WINDOWS
         fallback += ".exe";
 #endif
-        if (std::filesystem::exists(fallback)) { return fallback; }
+        if (path_utils::exists(fallback)) { return fallback; }
     }
     return path;
 }

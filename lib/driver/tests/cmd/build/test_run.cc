@@ -1,6 +1,5 @@
 #include <filesystem>
 #include <fstream>
-#include <system_error>
 
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/ostream.h>
@@ -9,6 +8,7 @@
 #include "compiler/codegen/llvm_scope.hh"
 #include "driver/clap/error.hh"
 #include "driver/cmd/build/run.hh"
+#include "support/path_utils.hh"
 #include "support/tempfile.hh"
 #include "support/test.hh"
 
@@ -80,9 +80,8 @@ TEST_CASE("run command execution") {
         cmd::run_cmd cmd{{.input_path = src_file}};
         REQUIRE(cmd.execute());
 
-        std::error_code ec;
         CHECK(!cmd.get_opts().output_path.empty());
-        CHECK(!std::filesystem::exists(cmd.get_opts().output_path, ec));
+        CHECK(!path_utils::exists(cmd.get_opts().output_path));
     }
 }
 

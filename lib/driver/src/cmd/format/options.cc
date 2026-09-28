@@ -13,6 +13,7 @@
 
 #include "driver/clap/error.hh"
 #include "driver/cmd/format/options.hh"
+#include "support/path_utils.hh"
 
 namespace ghoti::cmd::format {
 
@@ -70,13 +71,13 @@ auto options::process_raw(const raw_options& raw, std::ostream& error_stream)
 
     for (const auto& input_path : raw.input_paths) {
         std::filesystem::path path{input_path};
-        std::error_code       ec;
-        if (!std::filesystem::exists(path, ec) || ec) {
+        if (!path_utils::exists(path)) {
             return clap::fatal_error(error_stream,
                                      fmt::format("path '{}' does not exist", path.string()),
                                      clap::error::FILE_NOT_FOUND);
         }
 
+        std::error_code ec;
         if (std::filesystem::is_directory(path, ec)) {
             collect_gh_files(path, input_paths);
         } else if (!try_add_file(input_paths, path)) {

@@ -1,6 +1,5 @@
 #include <filesystem>
 #include <fstream>
-#include <system_error>
 
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/ostream.h>
@@ -10,6 +9,7 @@
 #include "compiler/codegen/target.hh"
 #include "driver/clap/error.hh"
 #include "driver/cmd/build/test.hh"
+#include "support/path_utils.hh"
 #include "support/tempfile.hh"
 #include "support/test.hh"
 
@@ -480,9 +480,7 @@ TEST_CASE("test command execution") {
             .output_explicit = true,
         }};
         REQUIRE(cmd.execute());
-
-        std::error_code ec;
-        CHECK(std::filesystem::exists(out_path, ec));
+        CHECK(path_utils::exists(out_path));
     }
 }
 

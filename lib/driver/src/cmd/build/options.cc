@@ -20,6 +20,7 @@
 #include <stdx/string.hh>
 
 #include "compiler/codegen/error.hh"
+#include "compiler/codegen/linker.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/module.hh"
@@ -27,6 +28,7 @@
 #include "compiler/module/stdlib.hh"
 #include "compiler/sema/analyzer.hh"
 #include "driver/clap/error.hh"
+#include "driver/cmd/build/compiler_rt.hh"
 #include "ghoti/config.h"
 #include "support/path_utils.hh"
 #include "support/subprocess.hh"
@@ -185,14 +187,22 @@ auto compilation::analyze(bool for_test_executable) -> stdx::result<analyzed_mod
     return std::make_pair(module, std::move(*gir_mod_res));
 }
 
+auto compilation::linker_options() const -> codegen::extra_linker_options {
+    return {
+        .objects       = opts_.extra_objects,
+        .library_paths = opts_.library_paths,
+        .libraries     = opts_.libraries,
+        .builtins      = resolve_compiler_rt(opts_.target_opts),
+    };
+}
+
 auto compilation::validate_input_path() -> stdx::result<void, clap::error> {
-    std::error_code ec;
-    if (!std::filesystem::exists(opts_.input_path, ec)) {
+    if (!path_utils::exists(opts_.input_path)) {
         return clap::fatal_error(error_stream_,
                                  fmt::format("file '{}' not found", opts_.input_path.string()),
                                  clap::error::FILE_NOT_FOUND);
     }
-    if (!std::filesystem::is_regular_file(opts_.input_path, ec)) {
+    if (!std::filesystem::is_regular_file(opts_.input_path)) {
         return clap::fatal_error(
             error_stream_,
             fmt::format("input path '{}' is not a regular file", opts_.input_path.string()),
@@ -210,7 +220,7 @@ auto compilation::ensure_output_directory() -> stdx::result<void, clap::error> {
     if (parent.empty()) { return {}; }
     std::error_code ec;
     if (std::filesystem::is_directory(parent, ec)) { return {}; }
-    if (std::filesystem::exists(parent, ec)) {
+    if (path_utils::exists(parent)) {
         return clap::fatal_error(
             error_stream_,
             fmt::format("output location '{}' is not a directory", parent.string()),
@@ -245,8 +255,7 @@ auto compilation::setup_module_manager() -> stdx::result<void, clap::error> {
     }
 
     for (const auto& mod : opts_.modules) {
-        std::error_code ec;
-        if (!std::filesystem::exists(mod.path, ec)) {
+        if (!path_utils::exists(mod.path)) {
             return clap::fatal_error(
                 error_stream_,
                 fmt::format("module '{}' root path '{}' not found", mod.name, mod.path.string()),

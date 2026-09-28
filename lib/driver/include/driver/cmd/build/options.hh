@@ -12,6 +12,7 @@
 #include <stdx/utility.hh>
 
 #include "compiler/codegen/error.hh"
+#include "compiler/codegen/linker.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/module.hh"
@@ -101,6 +102,9 @@ class compilation {
         -> stdx::result<analyzed_module, clap::error>;
 
     [[nodiscard]] auto get_analyzer() noexcept -> sema::analyzer& { return analyzer_; }
+
+    // The command line's objects, search paths, and libraries, plus the target's compiler builtins
+    [[nodiscard]] auto linker_options() const -> codegen::extra_linker_options;
 
   private:
     [[nodiscard]] auto validate_input_path() -> stdx::result<void, clap::error>;

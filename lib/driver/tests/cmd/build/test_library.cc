@@ -12,6 +12,7 @@
 #include "driver/clap/error.hh"
 #include "driver/cmd/build/executable.hh"
 #include "driver/cmd/build/library.hh"
+#include "support/path_utils.hh"
 #include "support/tempfile.hh"
 #include "support/test.hh"
 
@@ -51,7 +52,7 @@ TEST_CASE("build_lib command execution") {
             .opt_opts    = opt_opts,
         }};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(lib_file));
+        CHECK(path_utils::exists(lib_file));
         CHECK(std::filesystem::file_size(lib_file) > 0);
     }
 
@@ -80,7 +81,7 @@ TEST_CASE("build_lib command execution") {
             .opt_opts    = opt_opts,
         }};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(lib_file));
+        CHECK(path_utils::exists(lib_file));
         CHECK(std::filesystem::file_size(lib_file) > 0);
     }
 
@@ -110,7 +111,7 @@ TEST_CASE("build_lib command execution") {
             .dynamic     = true,
         }};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(lib_file));
+        CHECK(path_utils::exists(lib_file));
         CHECK(std::filesystem::file_size(lib_file) > 0);
     }
 
@@ -134,7 +135,7 @@ TEST_CASE("build_lib command execution") {
             .dynamic     = true,
         }};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(lib_file));
+        CHECK(path_utils::exists(lib_file));
     }
 
     SECTION("Directory input path reports FILE_NOT_FOUND instead of failing silently") {
@@ -183,7 +184,7 @@ TEST_CASE("build_lib command execution") {
             .opt_opts    = opt_opts,
         }};
         REQUIRE(lib_cmd.execute());
-        REQUIRE(std::filesystem::exists(lib_file));
+        REQUIRE(path_utils::exists(lib_file));
 
         // 2. Build executable linking against the static library via extra_objects
         cmd::build_exe exe_cmd{{
@@ -194,7 +195,7 @@ TEST_CASE("build_lib command execution") {
             .extra_objects = {lib_file},
         }};
         REQUIRE(exe_cmd.execute());
-        CHECK(std::filesystem::exists(exe_file));
+        CHECK(path_utils::exists(exe_file));
         CHECK(std::filesystem::file_size(exe_file) > 0);
     }
 }

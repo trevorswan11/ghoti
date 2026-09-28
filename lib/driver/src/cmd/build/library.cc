@@ -25,11 +25,7 @@ auto build_lib::execute() -> stdx::result<void, clap::error> {
                                                  opts_.target_opts,
                                                  opts_.opt_opts,
                                                  opts_.output_path,
-                                                 {
-                                                     .objects       = opts_.extra_objects,
-                                                     .library_paths = opts_.library_paths,
-                                                     .libraries     = opts_.libraries,
-                                                 });
+                                                 compilation.linker_options());
     } else {
         emit_res = analyzer.emit_static_library(gir_mod,
                                                 opts_.target_opts,

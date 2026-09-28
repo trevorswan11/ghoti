@@ -161,6 +161,8 @@ pub const ProjectPaths = struct {
     }
 
     const stdlib = "lib/std/";
+    const darwin_sdk = "lib/darwin/";
+    const compiler_rt = "lib/compiler_rt/";
     pub const stdlib_entry = "lib/std/std.gh";
     pub const site = "site/";
     const third_party = "third-party/";
@@ -624,6 +626,8 @@ fn addPackageStep(b: *std.Build, config: struct {
             .{ .source = b.path("README.md"), .destination = "README.md" },
             .{ .source = b.path(".github/CHANGELOG.md"), .destination = "CHANGELOG.md" },
             .{ .source = b.path(ProjectPaths.stdlib), .destination = "lib/std", .kind = .dir },
+            .{ .source = b.path(ProjectPaths.darwin_sdk), .destination = "lib/darwin", .kind = .dir },
+            .{ .source = b.path(ProjectPaths.compiler_rt), .destination = "lib/compiler_rt", .kind = .dir },
         };
 
         packager.addArchives(.{

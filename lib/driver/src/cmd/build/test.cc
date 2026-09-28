@@ -34,11 +34,7 @@ auto test_cmd::execute() -> stdx::result<void, clap::error> {
                                                 opts_.target_opts,
                                                 opts_.opt_opts,
                                                 opts_.output_path,
-                                                {
-                                                    .objects       = opts_.extra_objects,
-                                                    .library_paths = opts_.library_paths,
-                                                    .libraries     = opts_.libraries,
-                                                })};
+                                                compilation.linker_options())};
     if (!emit_res) { return build::report_codegen_error(error_stream_, emit_res.error()); }
     return build::run_built_executable(opts_, error_stream_, !opts_.output_explicit);
 }
