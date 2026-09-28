@@ -1,4 +1,4 @@
-pub const version := "0.4.0-alpha.1";
+pub const version := "0.4.0-alpha.2";
 
 import "types/result.gh" as result;
 import "types/option.gh" as option;
