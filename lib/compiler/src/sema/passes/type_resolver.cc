@@ -4227,11 +4227,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
                              resolving_.ast.location_of(id)));
     }
 
-    if (fn.attributes && !resolving_.attributes_of(id)) {
-        const bool returns_void{fn.explicit_return_type.get_token_type() ==
-                                syntax::token_type_t::VOID_TYPE};
-        resolve_attributes(id, *fn.attributes, ast::attribute_target::FN, returns_void);
-    }
+    resolve_fn_literal_attributes(id, fn);
 
     if (!target_supports_callconv(fn.conv)) {
         return last_type_.emplace(
@@ -9216,14 +9212,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             }
         }
 
-        if (decl.attributes) {
-            const auto return_kind{callable_return_kind(type_data)};
-            resolve_attributes(id,
-                               *decl.attributes,
-                               return_kind ? ast::attribute_target::FN_DECL
-                                           : ast::attribute_target::DECL,
-                               return_kind == type_kind::VOID_);
-        }
+        resolve_decl_attributes(id, decl, type_data);
 
         const bool literal_type_anno{decl.explicit_type && decl.explicit_type->get_token_type() ==
                                                                syntax::token_type_t::TYPE_TYPE};
@@ -9809,47 +9798,148 @@ auto type_resolver::visit(ast::node_id id, const ast::discard_stmt& discard) -> 
 
 auto type_resolver::fold_attribute_bool(const ast::attribute& item) -> stdx::option<bool> {
     if (item.args.empty()) { return true; }
+    const auto arg{item.args.front()};
+    resolve(arg);
     gir::const_eval evaluator{ctx_, resolving_};
-    const auto      cv{evaluator.try_eval(item.args.front())};
+    const auto      cv{evaluator.try_eval(arg)};
     if (const auto folded{cv ? cv->as_opt<bool>() : stdx::none}) { return *folded; }
     ctx_.diags.emplace_back(fmt::format("Attribute '{}' requires a compile-time 'bool' argument",
                                         ast::attribute_spec_of(item.kind).name),
                             error::ILLEGAL_ATTRIBUTE,
-                            resolving_.ast.location_of(item.args.front()));
+                            resolving_.ast.location_of(arg));
     return stdx::none;
 }
 
-auto type_resolver::resolve_attributes(ast::node_id               owner,
-                                       const ast::attribute_list& list,
-                                       ast::attribute_target      site,
-                                       bool                       returns_void) -> void {
+auto type_resolver::fold_attribute_enum(const ast::attribute& item, std::string_view enum_name)
+    -> stdx::option<std::string> {
+    const auto arg{item.args.front()};
+    auto&      enum_type{ctx_.get_builtin_type(enum_name)};
+    {
+        const structural_guard g{implicit_type_stack_, enum_type};
+        resolve(arg);
+    }
+
+    const auto arg_type{resolving_.get_sema_type_opt(arg)};
+    if (arg_type && arg_type.get() == &enum_type) {
+        gir::const_eval evaluator{ctx_, resolving_};
+        const auto      cv{evaluator.try_eval(arg)};
+        if (const auto variant{cv ? cv->as_opt<gir::const_enum>() : stdx::none}) {
+            return variant->name;
+        }
+    }
+    ctx_.diags.emplace_back(fmt::format("Attribute '{}' requires a compile-time 'builtin.{}' value",
+                                        ast::attribute_spec_of(item.kind).name,
+                                        enum_name),
+                            error::ILLEGAL_ATTRIBUTE,
+                            resolving_.ast.location_of(arg));
+    return stdx::none;
+}
+
+auto type_resolver::check_attribute_conflicts(const attribute_refs&      items,
+                                              const resolved_attributes& resolved) -> void {
+    if (!resolved.naked || resolved.inlining != ast::inline_mode::ALWAYS) { return; }
+    const auto inline_item{std::ranges::find_if(
+        items, [](const auto item) { return item->kind == ast::attribute_kind::INLINE; })};
+    ctx_.diags.emplace_back("A 'naked' function cannot be 'inline(.always)'",
+                            error::ILLEGAL_ATTRIBUTE,
+                            resolving_.ast.location_of((*inline_item)->name));
+}
+
+auto type_resolver::resolve_attributes(ast::node_id          owner,
+                                       const attribute_refs& items,
+                                       ast::attribute_target site,
+                                       bool                  returns_void) -> void {
     resolved_attributes resolved;
-    for (const auto& item : list.items) {
-        const auto& spec{ast::attribute_spec_of(item.kind)};
+    for (const auto item : items) {
+        const auto& spec{ast::attribute_spec_of(item->kind)};
         if (!static_cast<bool>(spec.targets & site)) {
+            const auto* what{ast::is_function_only(item->kind)
+                                 ? "a declaration whose initializer is not a function literal"
+                                 : "a non-function declaration"};
             ctx_.diags.emplace_back(
-                fmt::format("Attribute '{}' cannot be applied to {}",
-                            spec.name,
-                            site == ast::attribute_target::DECL ? "a non-function declaration"
-                                                                : "this item"),
+                fmt::format("Attribute '{}' cannot be applied to {}", spec.name, what),
                 error::ILLEGAL_ATTRIBUTE,
-                resolving_.ast.location_of(item.name));
+                resolving_.ast.location_of(item->name));
             continue;
         }
 
-        switch (item.kind) {
+        switch (item->kind) {
         case ast::attribute_kind::DISCARDABLE:
             if (returns_void) {
                 ctx_.diags.emplace_back(
                     "Attribute 'discardable' has no effect on a function that returns 'void'",
                     error::ILLEGAL_ATTRIBUTE,
-                    resolving_.ast.location_of(item.name));
+                    resolving_.ast.location_of(item->name));
             }
-            resolved.discardable = fold_attribute_bool(item).value_or(false);
+            resolved.discardable = fold_attribute_bool(*item).value_or(false);
+            break;
+        case ast::attribute_kind::INLINE:
+            if (const auto variant{fold_attribute_enum(*item, "Inline")}) {
+                resolved.inlining = ast::inline_mode_from_name(*variant);
+            }
+            break;
+        case ast::attribute_kind::NAKED:
+            resolved.naked = fold_attribute_bool(*item).value_or(false);
             break;
         }
     }
+
+    check_attribute_conflicts(items, resolved);
+    if (resolved.naked && !resolved.inlining) { resolved.inlining = ast::inline_mode::NEVER; }
     resolving_.node_attributes.insert_or_assign(owner.get_index(), resolved);
+}
+
+auto type_resolver::resolve_decl_attributes(ast::node_id          id,
+                                            const ast::decl_stmt& decl,
+                                            const type::data_t&   type_data) -> void {
+    if (!decl.attributes) { return; }
+    const bool initializes_fn_literal{decl.value && decl.value->is<ast::function_expr>()};
+
+    // Function-only attributes belong to the literal and resolve with it instead
+    attribute_refs own;
+    for (const auto& item : decl.attributes->items) {
+        if (initializes_fn_literal && ast::is_function_only(item.kind)) { continue; }
+        own.emplace_back(&item);
+    }
+
+    const auto return_kind{callable_return_kind(type_data)};
+    resolve_attributes(id,
+                       own,
+                       return_kind ? ast::attribute_target::FN_DECL : ast::attribute_target::DECL,
+                       return_kind == type_kind::VOID_);
+}
+
+auto type_resolver::resolve_fn_literal_attributes(ast::node_id id, const ast::function_expr& fn)
+    -> void {
+    if (resolving_.attributes_of(id)) { return; }
+
+    attribute_refs items;
+    if (fn.attributes) {
+        for (const auto& item : fn.attributes->items) { items.emplace_back(&item); }
+    }
+    if (fn.declaring_decl) {
+        const auto& decl{resolving_.ast.get_as<ast::decl_stmt>(*fn.declaring_decl)};
+        if (decl.attributes) {
+            for (const auto& item : decl.attributes->items) {
+                if (!ast::is_function_only(item.kind)) { continue; }
+                if (fn.attributes && fn.attributes->find(item.kind)) {
+                    ctx_.diags.emplace_back(
+                        fmt::format("Attribute '{}' is applied to both the declaration and its "
+                                    "function literal",
+                                    ast::attribute_spec_of(item.kind).name),
+                        error::ILLEGAL_ATTRIBUTE,
+                        resolving_.ast.location_of(item.name));
+                    continue;
+                }
+                items.emplace_back(&item);
+            }
+        }
+    }
+    if (items.empty()) { return; }
+
+    const bool returns_void{fn.explicit_return_type.get_token_type() ==
+                            syntax::token_type_t::VOID_TYPE};
+    resolve_attributes(id, items, ast::attribute_target::FN, returns_void);
 }
 
 auto type_resolver::callee_is_discardable(const ast::call_expr& call) const -> bool {

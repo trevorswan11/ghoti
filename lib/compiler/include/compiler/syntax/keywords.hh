@@ -55,7 +55,6 @@ constexpr keyword_t EXTERN{"extern", token_type_t::EXTERN};
 constexpr keyword_t EXPORT{"export", token_type_t::EXPORT};
 constexpr keyword_t THREADLOCAL{"threadlocal", token_type_t::THREADLOCAL};
 constexpr keyword_t WEAK{"weak", token_type_t::WEAK};
-constexpr keyword_t NAKED{"naked", token_type_t::NAKED};
 constexpr keyword_t CALLCONV{"callconv", token_type_t::CALLCONV};
 constexpr keyword_t VOLATILE{"volatile", token_type_t::VOLATILE};
 constexpr keyword_t MUT{"mut", token_type_t::MUT};
@@ -123,7 +122,6 @@ constexpr std::array ALL_KEYWORDS{
     keywords::EXPORT,
     keywords::THREADLOCAL,
     keywords::WEAK,
-    keywords::NAKED,
     keywords::CALLCONV,
     keywords::VOLATILE,
     keywords::MUT,

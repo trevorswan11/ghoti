@@ -64,7 +64,7 @@ R"([_:0]^N{a, b, c, d, e, 3, "54" };
     threadlocal var tls_ctr: i32 = 0;
     weak extern const maybe: fn(): void;
     const mv := move fn(): i32 { return 0; };
-    const stub := naked fn(): void {};
+    const stub := @[naked] fn(): void {};
     const cb := fn() callconv(.stdcall): void {};
     const ExS := extern struct { a: i32 };
     const ExPS := extern packed struct { a: i32, b: u8 };

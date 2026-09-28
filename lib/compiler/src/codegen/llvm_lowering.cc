@@ -62,6 +62,17 @@ namespace ghoti::codegen {
 
 namespace {
 
+auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attributes& attributes)
+    -> void {
+    if (attributes.naked) { llvm_fn.addFnAttr(llvm::Attribute::Naked); }
+    if (!attributes.inlining) { return; }
+    switch (*attributes.inlining) {
+    case ast::inline_mode::ALWAYS: llvm_fn.addFnAttr(llvm::Attribute::AlwaysInline); break;
+    case ast::inline_mode::NEVER:  llvm_fn.addFnAttr(llvm::Attribute::NoInline); break;
+    case ast::inline_mode::HINT:   llvm_fn.addFnAttr(llvm::Attribute::InlineHint); break;
+    }
+}
+
 // A `constexpr_float` materializes as `f64`; a `constexpr_int` as `i32`.
 [[nodiscard]] auto materialized_is_float(sema::type_kind k) noexcept -> bool {
     return sema::is_float(k) || k == sema::type_kind::CONSTEXPR_FLOAT;
@@ -1487,10 +1498,7 @@ auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function*
     if (fn.get_calling_conv() != ast::calling_convention::C) {
         llvm_fn->setCallingConv(to_llvm_callconv(fn.get_calling_conv()));
     }
-    if (fn.get_is_naked()) {
-        llvm_fn->addFnAttr(llvm::Attribute::Naked);
-        llvm_fn->addFnAttr(llvm::Attribute::NoInline);
-    }
+    apply_fn_attributes(*llvm_fn, fn.get_attributes());
     for (usize arg_idx{0}; const auto& param : fn.get_params()) {
         auto* p_ty{types_.translate(param->type)};
         if (p_ty->isVoidTy()) { continue; }

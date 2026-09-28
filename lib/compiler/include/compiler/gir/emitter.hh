@@ -154,9 +154,26 @@ class emitter {
     // Emits a capturing function_expr's implementation (once, idempotently) and constructs its
     // environment value at the current (definition-site) insertion point
     auto emit_closure(ast::node_id id, const ast::function_expr& fn_expr) -> value;
-    auto emit_closure_function(const ast::function_expr&     fn_expr,
+    auto emit_closure_function(ast::node_id                  id,
+                               const ast::function_expr&     fn_expr,
                                const sema::types::closure_t& cl,
                                sema::type&                   closure_type) -> void;
+
+    // Copies the resolved `@[...]` attributes of `owner`'s function literal `fn_node` onto `fn`
+    static auto apply_fn_attributes(gir::function&     fn,
+                                    const mod::module& owner,
+                                    ast::node_id       fn_node) -> void {
+        if (const auto resolved{owner.attributes_of(fn_node)}) { fn.set_attributes(*resolved); }
+    }
+
+    // A decl's function literal initializer, or `node` itself when it already is the literal
+    [[nodiscard]] static auto fn_literal_node(const mod::module& owner, ast::node_id node)
+        -> ast::node_id {
+        if (const auto decl{owner.ast.get_as_opt<ast::decl_stmt>(node)}; decl && decl->value) {
+            return *decl->value;
+        }
+        return node;
+    }
     auto emit_closure_env(const sema::types::closure_t& cl, sema::type& closure_type) -> value;
 
     // Emits as a plain non-capturing fn with its captures baked in as constants

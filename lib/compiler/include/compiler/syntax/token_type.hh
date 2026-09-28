@@ -170,7 +170,6 @@ enum class token_type_t : u8 {
     EXPORT,
     THREADLOCAL,
     WEAK,
-    NAKED,
     CALLCONV,
     VOLATILE,
     MUT,

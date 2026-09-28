@@ -31,7 +31,19 @@ enum class calling_convention : u8 {
 
 enum class attribute_kind : u8 {
     DISCARDABLE,
+    INLINE,
+    NAKED,
 };
+
+// Mirrors `builtin.Inline`
+enum class inline_mode : u8 {
+    ALWAYS,
+    NEVER,
+    HINT,
+};
+
+[[nodiscard]] auto inline_mode_from_name(std::string_view name) noexcept
+    -> stdx::option<inline_mode>;
 
 // What an attribute may annotate. `FN_DECL` is a declaration whose type is callable.
 enum class attribute_target : u8 {
@@ -54,6 +66,9 @@ struct attribute_spec {
 [[nodiscard]] auto attribute_spec_of(std::string_view name) noexcept
     -> stdx::option<const attribute_spec&>;
 [[nodiscard]] auto attribute_spec_of(attribute_kind kind) noexcept -> const attribute_spec&;
+
+// Applies only to a function definition, so on a declaration it reaches through to the initializer
+[[nodiscard]] auto is_function_only(attribute_kind kind) noexcept -> bool;
 
 // One `name` or `name(args...)` entry of an `@[...]` list
 struct attribute {

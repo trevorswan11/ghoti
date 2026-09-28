@@ -343,6 +343,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
 
     auto& fn{add_gir_function(
         req.mangled_name, fn_type, false, false, fn_expr.variadic, gir::linkage::INTERNAL)};
+    apply_fn_attributes(fn, fn_mod, fn_literal_node(fn_mod, req.fn_node_id));
     auto& entry{fn.add_segment()};
     builder_.set_insert_point(fn, entry);
 
@@ -1224,6 +1225,7 @@ auto emitter::emit_impl_default_method(std::string_view          gir_name,
 
     auto& fn{add_gir_function(
         std::string{gir_name}, *sema_type, false, false, fn_expr.variadic, gir::linkage::INTERNAL)};
+    apply_fn_attributes(fn, iface_mod, sig_id);
     auto& entry{fn.add_segment()};
     builder_.set_insert_point(fn, entry);
 
@@ -1332,7 +1334,7 @@ auto emitter::emit_function(ast::node_id                   id,
         add_gir_function(gir_name, *sema_type, false, is_constexpr, fn_expr.variadic, linkage)};
     if (!name_override) { fn.set_link_name(get_link_name(active_ast(), decl)); }
     fn.set_weak(decl.has_modifier(ast::decl_modifiers::WEAK));
-    fn.set_naked(fn_expr.is_naked);
+    apply_fn_attributes(fn, active_mod(), *decl.value);
     fn.set_calling_conv(fn_expr.conv);
 
     auto& entry{fn.add_segment()};
@@ -1368,7 +1370,7 @@ auto emitter::emit_function(ast::node_id                   id,
     emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
     if (const auto cur_seg{builder_.get_segment()}) {
         if (!cur_seg->has_terminator()) {
-            if (fn_expr.is_naked) {
+            if (fn.get_attributes().naked) {
                 // A naked body owns its own control flow; never synthesise a return.
                 builder_.emit_unreachable();
             } else {
@@ -1443,6 +1445,7 @@ auto emitter::emit_anonymous_function(ast::node_id id, const ast::function_expr&
 
     auto& fn{add_gir_function(anon_name, fn_type, false, false, fn_expr.variadic)};
     fn.set_calling_conv(fn_expr.conv);
+    apply_fn_attributes(fn, active_mod(), id);
     const auto prev_fn{builder_.get_function()};
     const auto prev_seg{builder_.get_segment()};
 
@@ -1476,6 +1479,7 @@ auto emitter::emit_named_local_function(std::string_view          name,
 
     auto& fn{add_gir_function(anon_name, fn_type, false, false, fn_expr.variadic)};
     fn.set_calling_conv(fn_expr.conv);
+    apply_fn_attributes(fn, active_mod(), id);
     const auto prev_fn{builder_.get_function()};
     const auto prev_seg{builder_.get_segment()};
 
@@ -1515,11 +1519,12 @@ auto emitter::emit_closure(ast::node_id id, const ast::function_expr& fn_expr) -
     const auto cl{closure_type.get_data().as_opt<sema::types::closure_t>()};
     ASSERT(cl, "Closure expression must have closure type data");
 
-    emit_closure_function(fn_expr, *cl, closure_type);
+    emit_closure_function(id, fn_expr, *cl, closure_type);
     return emit_closure_env(*cl, closure_type);
 }
 
-auto emitter::emit_closure_function(const ast::function_expr&     fn_expr,
+auto emitter::emit_closure_function(ast::node_id                  id,
+                                    const ast::function_expr&     fn_expr,
                                     const sema::types::closure_t& cl,
                                     sema::type&                   closure_type) -> void {
     PROFILE_FUNCTION();
@@ -1531,6 +1536,7 @@ auto emitter::emit_closure_function(const ast::function_expr&     fn_expr,
     ASSERT(impl_sig_data, "Closure implementation signature must contain function type data");
 
     auto&      fn{add_gir_function(fn_name, cl.impl_signature, false, false, fn_expr.variadic)};
+    apply_fn_attributes(fn, active_mod(), id);
     const auto prev_fn{builder_.get_function()};
     const auto prev_seg{builder_.get_segment()};
 
@@ -1635,6 +1641,7 @@ auto emitter::emit_constexpr_closure(const const_closure& cl) -> std::string {
     ASSERT(sig_data, "constexpr callable must have a function signature");
 
     auto&      fn{add_gir_function(fn_name, sig, false, false, fn_expr.variadic)};
+    apply_fn_attributes(fn, def_mod, cl.fn_node);
     const auto prev_fn{builder_.get_function()};
     const auto prev_seg{builder_.get_segment()};
     auto       prev_module{std::exchange(active_module_, &def_mod)};

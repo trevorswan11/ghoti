@@ -314,7 +314,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
 constexpr std::string_view BUILTIN_MODULE_SOURCE{
 #include "builtin.gh.inc"
 };
-// recompile
+// recompile: attributes
 
 constexpr std::string_view BUILTIN_NAMESPACE{"builtin"};
 

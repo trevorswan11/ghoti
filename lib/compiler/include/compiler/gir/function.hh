@@ -17,6 +17,7 @@
 #include "compiler/ast/attributes.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/segment.hh"
+#include "compiler/sema/side_tables.hh"
 #include "compiler/sema/type.hh"
 
 namespace ghoti::mod { struct module; } // namespace ghoti::mod
@@ -54,7 +55,7 @@ class function {
     MAKE_GETTER(abi_name, std::string_view);
     MAKE_GETTER(link_name, std::string_view);
     MAKE_GETTER(is_weak, bool);
-    MAKE_GETTER(is_naked, bool);
+    MAKE_GETTER(attributes, const sema::resolved_attributes&);
     MAKE_GETTER(calling_conv, ast::calling_convention);
     MAKE_GETTER(test_desc, std::string_view);
     MAKE_GETTER(test_file, std::string_view);
@@ -71,7 +72,9 @@ class function {
 
     auto set_link_name(std::string name) -> void { link_name_ = std::move(name); }
     auto set_weak(bool weak) -> void { is_weak_ = weak; }
-    auto set_naked(bool naked) -> void { is_naked_ = naked; }
+    auto set_attributes(const sema::resolved_attributes& attributes) -> void {
+        attributes_ = attributes;
+    }
     auto set_calling_conv(ast::calling_convention conv) -> void { calling_conv_ = conv; }
     auto set_test_desc(std::string desc) -> void { test_desc_ = std::move(desc); }
     auto set_test_location(std::string file, u32 line, u32 col) -> void {
@@ -114,7 +117,7 @@ class function {
     bool                       is_constexpr_{false};
     bool                       is_variadic_{false};
     bool                       is_weak_{false};
-    bool                       is_naked_{false};
+    sema::resolved_attributes  attributes_{};
     ast::calling_convention    calling_conv_{ast::calling_convention::C};
     gir::linkage               linkage_{linkage::INTERNAL};
     std::string                abi_name_{"c"};

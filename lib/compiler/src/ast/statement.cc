@@ -334,7 +334,7 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
     }
 
     TRY(parser.expect_semicolon());
-    return parser.add_node<stmt_handle, decl_stmt>(source_info<syntax::token_t>::get(span_start),
+    const auto decl{parser.add_node<stmt_handle, decl_stmt>(source_info<syntax::token_t>::get(span_start),
                                                    start_token,
                                                    decl_name,
                                                    decl_type,
@@ -342,7 +342,11 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
                                                    modifiers,
                                                    extern_target,
                                                    link_name,
-                                                   std::move(attributes));
+                                                   std::move(attributes))};
+    if (decl_value && decl_value->is<function_expr>()) {
+        parser.get_ast().get_as_mut<function_expr>(**decl_value).declaring_decl.emplace(*decl);
+    }
+    return decl;
 }
 
 auto defer_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {

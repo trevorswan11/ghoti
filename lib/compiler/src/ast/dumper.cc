@@ -330,11 +330,6 @@ auto dumper::visit(node_id, const function_expr& function) -> void {
         fmt::println(out_, "{}Move: {}", indent_.current_branch(), function.is_move);
     }
 
-    {
-        const indent::guard g{indent_, false};
-        fmt::println(out_, "{}Naked: {}", indent_.current_branch(), function.is_naked);
-    }
-
     if (function.is_extern) {
         const indent::guard g{indent_, false};
         fmt::println(out_, "{}Extern: true", indent_.current_branch());

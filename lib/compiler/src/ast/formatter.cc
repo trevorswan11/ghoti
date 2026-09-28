@@ -941,7 +941,6 @@ auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
                                                doc_manager_.text(" ")})
                         : doc_manager_.nil(),
         node.is_move ? doc_manager_.text("move ") : doc_manager_.nil(),
-        node.is_naked ? doc_manager_.text("naked ") : doc_manager_.nil(),
         doc_manager_.text("fn"),
         doc_manager_.delimited("(", ")", std::move(params), false, true, node.params_force_break),
         callconv_doc,

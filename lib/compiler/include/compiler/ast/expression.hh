@@ -197,7 +197,6 @@ struct function_expr {
     block_handle                 body;
     bool                         variadic;
     bool                         is_move{false};
-    bool                         is_naked{false};
     bool                         is_type_expr{false};
     bool                         params_force_break{false};
     calling_convention           conv{calling_convention::C};
@@ -205,14 +204,14 @@ struct function_expr {
     bool                         is_extern{false}; // `extern fn(...): R` bodyless type value
     std::vector<impl_bound>      impl_bounds{};
     stdx::option<attribute_list> attributes{};
+    stdx::option<node_id>        declaring_decl{}; // set when this literal initializes a decl
 
     // Parse the function as a value. Meant for the parser LUT
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic> {
-        return parse(parser, false, false);
+        return parse(parser, false);
     }
-    [[nodiscard]] static auto
-    parse(syntax::parser& parser, bool is_move, bool is_naked, bool is_extern = false)
+    [[nodiscard]] static auto parse(syntax::parser& parser, bool is_move, bool is_extern = false)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
@@ -222,10 +221,6 @@ struct function_expr {
     -> stdx::result<expr_handle, syntax::diagnostic>;
 
 [[nodiscard]] auto parse_move_function_expr(syntax::parser& parser)
-    -> stdx::result<expr_handle, syntax::diagnostic>;
-
-// Consumes a leading `naked` modifier before delegating to function_expr::parse
-[[nodiscard]] auto parse_naked_function_expr(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic>;
 
 // `@[...] fn(...) {...}`: an attribute list applied to a function literal in expression position

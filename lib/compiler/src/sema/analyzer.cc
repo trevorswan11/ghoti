@@ -1,5 +1,6 @@
 #include "compiler/sema/analyzer.hh"
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <string>
@@ -10,6 +11,8 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <gsl/util>
+#include <llvm/IR/Attributes.h>
+#include <llvm/IR/Function.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
@@ -142,6 +145,13 @@ auto prune_to_test_reachable(gir::module& gir_module) -> void {
         codegen::error::UNSUPPORTED_TARGET);
 }
 
+// `@[inline(.always)]` is honored even at -O0, where only the always-inliner runs
+[[nodiscard]] auto has_always_inline(const llvm::Module& llvm_mod) -> bool {
+    return std::ranges::any_of(llvm_mod, [](const llvm::Function& fn) {
+        return fn.hasFnAttribute(llvm::Attribute::AlwaysInline);
+    });
+}
+
 [[nodiscard]] auto verify_and_optimize(llvm::Module&                     llvm_mod,
                                        const codegen::optimizer_options& options)
     -> stdx::result<void, codegen::diagnostic> {
@@ -151,7 +161,8 @@ auto prune_to_test_reachable(gir::module& gir_module) -> void {
         return codegen::make_codegen_err(err_str, codegen::error::VERIFICATION_FAILED);
     }
 
-    if (options.level != codegen::opt_level::O0 || options.debug_logging || options.time_passes) {
+    if (options.level != codegen::opt_level::O0 || options.debug_logging || options.time_passes ||
+        has_always_inline(llvm_mod)) {
         codegen::llvm_optimizer optimizer{llvm_mod.getContext()};
         TRY(optimizer.optimize(llvm_mod, options));
         // Optimization may turn loops into `mem*` calls lowering never saw

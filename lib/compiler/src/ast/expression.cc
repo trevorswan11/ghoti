@@ -844,19 +844,7 @@ auto parse_move_function_expr(syntax::parser& parser)
                                parser.get_current_token());
     }
     parser.advance();
-    return function_expr::parse(parser, true, false);
-}
-
-auto parse_naked_function_expr(syntax::parser& parser)
-    -> stdx::result<expr_handle, syntax::diagnostic> {
-    PROFILE_FUNCTION();
-    if (!parser.peek_token_is(syntax::token_type_t::FUNCTION)) {
-        return make_syntax_err("'naked' may only appear directly before 'fn'",
-                               syntax::error::ILLEGAL_MOVE_USAGE,
-                               parser.get_current_token());
-    }
-    parser.advance();
-    return function_expr::parse(parser, false, true);
+    return function_expr::parse(parser, true);
 }
 
 auto parse_attributed_function_expr(syntax::parser& parser)
@@ -864,7 +852,7 @@ auto parse_attributed_function_expr(syntax::parser& parser)
     using tt = syntax::token_type_t;
     auto attributes{TRY(parse_attribute_list(parser))};
     const auto& next{parser.get_peek_token()};
-    if (next.type != tt::FUNCTION && next.type != tt::MOVE && next.type != tt::NAKED) {
+    if (next.type != tt::FUNCTION && next.type != tt::MOVE) {
         return make_syntax_err("An attribute list in expression position must precede a function "
                                "literal",
                                syntax::error::MISPLACED_ATTRIBUTES,
@@ -903,7 +891,7 @@ auto parse_attributed_function_expr(syntax::parser& parser)
     return *conv;
 }
 
-auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked, bool is_extern)
+auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_extern)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto                           start_token{parser.get_current_token()};
@@ -1070,7 +1058,6 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked, b
                                               block_handle::make_invalid(),
                                               variadic,
                                               is_move,
-                                              is_naked,
                                               true,
                                               params_force_break,
                                               conv,
@@ -1089,7 +1076,6 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_naked, b
                                           body,
                                           variadic,
                                           is_move,
-                                          is_naked,
                                           false,
                                           params_force_break,
                                           conv,
@@ -1890,7 +1876,7 @@ auto parse_modified_struct_or_union(syntax::parser& parser)
     if (parser.current_token_is(syntax::token_type_t::EXTERN) &&
         parser.peek_token_is(syntax::token_type_t::FUNCTION)) {
         parser.advance();
-        return function_expr::parse(parser, false, false, true);
+        return function_expr::parse(parser, false, true);
     }
 
     bool is_extern{false};

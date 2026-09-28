@@ -10,6 +10,7 @@
 #include <stdx/types.hh>
 
 #include "compiler/ast/ast.hh"
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/ast/traits.hh"
 #include "support/diagnostic.hh"
@@ -57,7 +58,9 @@ struct capture_info {
 
 // The folded result of an `@[...]` list on a declaration or function literal
 struct resolved_attributes {
-    bool discardable{false};
+    bool                           discardable{false};
+    stdx::option<ast::inline_mode> inlining;
+    bool                           naked{false};
 };
 
 // Empty for any function_expr that captures nothing

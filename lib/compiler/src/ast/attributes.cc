@@ -39,6 +39,16 @@ constexpr std::array ALL_ATTRIBUTES{
                    .min_args = 0,
                    .max_args = 1,
                    .targets  = attribute_target::FN_DECL | attribute_target::FN},
+    attribute_spec{.name     = "inline",
+                   .kind     = attribute_kind::INLINE,
+                   .min_args = 1,
+                   .max_args = 1,
+                   .targets  = attribute_target::FN},
+    attribute_spec{.name     = "naked",
+                   .kind     = attribute_kind::NAKED,
+                   .min_args = 0,
+                   .max_args = 1,
+                   .targets  = attribute_target::FN},
 };
 
 [[nodiscard]] auto parse_attribute_args(syntax::parser& parser)
@@ -112,6 +122,17 @@ auto attribute_spec_of(std::string_view name) noexcept -> stdx::option<const att
 
 auto attribute_spec_of(attribute_kind kind) noexcept -> const attribute_spec& {
     return *std::ranges::find(ALL_ATTRIBUTES, kind, &attribute_spec::kind);
+}
+
+auto is_function_only(attribute_kind kind) noexcept -> bool {
+    return attribute_spec_of(kind).targets == attribute_target::FN;
+}
+
+auto inline_mode_from_name(std::string_view name) noexcept -> stdx::option<inline_mode> {
+    if (name == "always") { return inline_mode::ALWAYS; }
+    if (name == "never") { return inline_mode::NEVER; }
+    if (name == "hint") { return inline_mode::HINT; }
+    return stdx::none;
 }
 
 auto parse_attribute_list(syntax::parser& parser)

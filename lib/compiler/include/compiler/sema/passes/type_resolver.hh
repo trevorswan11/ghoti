@@ -352,12 +352,24 @@ class type_resolver {
     [[nodiscard]] auto get_call_arg_location(const ast::call_expr::argument& arg)
         -> source_location;
 
-    // Validates `list` against what it annotates and records the folded result for `owner`
-    auto resolve_attributes(ast::node_id               owner,
-                            const ast::attribute_list& list,
-                            ast::attribute_target      site,
-                            bool                       returns_void) -> void;
+    using attribute_refs = std::vector<gsl::not_null<const ast::attribute*>>;
+
+    // Validates `items` against what they annotate and records the folded result for `owner`
+    auto resolve_attributes(ast::node_id          owner,
+                            const attribute_refs& items,
+                            ast::attribute_target site,
+                            bool                  returns_void) -> void;
+    auto resolve_decl_attributes(ast::node_id          id,
+                                 const ast::decl_stmt& decl,
+                                 const type::data_t&   type_data) -> void;
+    // A literal's own list plus the function-only attributes of the declaration it initializes
+    auto resolve_fn_literal_attributes(ast::node_id id, const ast::function_expr& fn) -> void;
+    auto check_attribute_conflicts(const attribute_refs&      items,
+                                   const resolved_attributes& resolved) -> void;
     [[nodiscard]] auto fold_attribute_bool(const ast::attribute& item) -> stdx::option<bool>;
+    // The variant name of an `item` argument typed against the prelude enum `enum_name`
+    [[nodiscard]] auto fold_attribute_enum(const ast::attribute& item, std::string_view enum_name)
+        -> stdx::option<std::string>;
 
     // Whether the outermost callee of `call` resolves to a `@[discardable]` declaration
     [[nodiscard]] auto callee_is_discardable(const ast::call_expr& call) const -> bool;
