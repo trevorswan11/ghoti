@@ -167,6 +167,7 @@ class fallback_builder {
         builder_.CreateBr(head);
     }
 
+  private:
     llvm::Module&      module_;
     llvm::LLVMContext& context_;
     llvm::IRBuilder<>  builder_;

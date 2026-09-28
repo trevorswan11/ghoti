@@ -36,6 +36,7 @@
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "support/diagnostic.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 #include "support/scope_guard.hh"
 
@@ -493,7 +494,6 @@ class type_resolver {
 
     // Poisons `value` when it names a type where `expected` wants a value (`const w: S = S;`);
     // returns whether it did
-    // A module-scope `const x: T = v` whose `v` cannot become a `T`
     auto reject_unassignable_global_initializer(ast::expr_handle value, const type& declared)
         -> bool;
     auto reject_type_as_value(ast::expr_handle value, const type& expected) -> bool;

@@ -16,6 +16,7 @@
 #include "compiler/ast/id.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/sema/type.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 
 namespace ghoti::sema { struct context; } // namespace ghoti::sema
@@ -200,6 +201,7 @@ class const_value {
         if (auto f{data_.as_opt<f128>()}; f && type_) { *f = sema::fit_float(*f, *type_); }
     }
 
+  private:
     data_t                    data_{poison_val{}};
     stdx::option<sema::type&> type_;
 };

@@ -134,7 +134,7 @@ class big_uint {
             limb  = static_cast<u32>(product);
             carry = product >> 32;
         }
-        if (carry != 0) { limbs_.push_back(static_cast<u32>(carry)); }
+        if (carry != 0) { limbs_.emplace_back(static_cast<u32>(carry)); }
         trim();
     }
 
@@ -196,7 +196,7 @@ class big_uint {
         if (is_zero()) { return "0"; }
         big_uint         rest{*this};
         std::vector<u32> chunks;
-        while (!rest.is_zero()) { chunks.push_back(rest.divide_small(1'000'000'000)); }
+        while (!rest.is_zero()) { chunks.emplace_back(rest.divide_small(1'000'000'000)); }
         auto digits{std::to_string(chunks.back())};
         for (usize i{chunks.size() - 1}; i-- > 0;) {
             const auto chunk{std::to_string(chunks[i])};
@@ -223,7 +223,7 @@ class big_uint {
             limb  = (limb << 1) | carry;
             carry = next_carry;
         }
-        if (carry != 0) { limbs_.push_back(carry); }
+        if (carry != 0) { limbs_.emplace_back(carry); }
     }
 
     auto trim() -> void {
@@ -237,10 +237,10 @@ constexpr u32 QUAD_FRACTION_BITS{112};
 constexpr i64 QUAD_BIAS{16'383};
 constexpr i64 QUAD_MIN_EXPONENT{-16'382};
 // Exponent of a quad subnormal's lowest significand bit
-constexpr i64 QUAD_SUBNORMAL_EXPONENT{QUAD_MIN_EXPONENT - QUAD_FRACTION_BITS};
-const u128    QUAD_SIGN_BIT{u128{1} << 127};
-const u128    QUAD_FRACTION_MASK{(u128{1} << QUAD_FRACTION_BITS) - 1};
-constexpr u64 QUAD_EXPONENT_MASK{0x7fff};
+constexpr i64  QUAD_SUBNORMAL_EXPONENT{QUAD_MIN_EXPONENT - QUAD_FRACTION_BITS};
+constexpr u128 QUAD_SIGN_BIT{u128{1} << 127};
+constexpr u128 QUAD_FRACTION_MASK{(u128{1} << QUAD_FRACTION_BITS) - 1};
+constexpr u64  QUAD_EXPONENT_MASK{0x7fff};
 
 [[nodiscard]] auto significant_bits(u128 value) noexcept -> u32 {
     return value.high != 0 ? 64 + static_cast<u32>(std::bit_width(value.high))
@@ -355,17 +355,19 @@ round_exact(bool negative, big_uint significand, i64 exponent, bool sticky, floa
     return round_exact(rhs_negative, std::move(rhs), common_exponent, false, format);
 }
 
-[[nodiscard]] auto is_hex_digit(char c) noexcept -> bool {
+[[nodiscard]] constexpr auto is_hex_digit(char c) noexcept -> bool {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }
 
-[[nodiscard]] auto hex_digit_value(char c) noexcept -> u32 {
+[[nodiscard]] constexpr auto hex_digit_value(char c) noexcept -> u32 {
     if (c >= '0' && c <= '9') { return static_cast<u32>(c - '0'); }
     if (c >= 'a' && c <= 'f') { return static_cast<u32>(c - 'a' + 10); }
     return static_cast<u32>(c - 'A' + 10);
 }
 
-[[nodiscard]] auto is_decimal_digit(char c) noexcept -> bool { return c >= '0' && c <= '9'; }
+[[nodiscard]] constexpr auto is_decimal_digit(char c) noexcept -> bool {
+    return c >= '0' && c <= '9';
+}
 
 // A signed decimal exponent, saturated well past any representable float
 [[nodiscard]] auto parse_exponent(std::string_view text) -> stdx::option<i64> {
@@ -643,13 +645,49 @@ class round_trip_interval {
 
 auto format_info(float_format format) noexcept -> float_format_info {
     switch (format) {
-    case float_format::HALF:   return {11, -14, 15, 16};
-    case float_format::SINGLE: return {24, -126, 127, 32};
-    case float_format::DOUBLE: return {53, -1'022, 1'023, 64};
-    case float_format::X87:    return {64, -16'382, 16'383, 80};
-    case float_format::QUAD:   return {113, -16'382, 16'383, 128};
+    case float_format::HALF:
+        return {
+            .precision    = 11,
+            .min_exponent = -14,
+            .max_exponent = 15,
+            .storage_bits = 16,
+        };
+    case float_format::SINGLE:
+        return {
+            .precision    = 24,
+            .min_exponent = -126,
+            .max_exponent = 127,
+            .storage_bits = 32,
+        };
+    case float_format::DOUBLE:
+        return {
+            .precision    = 53,
+            .min_exponent = -1'022,
+            .max_exponent = 1'023,
+            .storage_bits = 64,
+        };
+    case float_format::X87:
+        return {
+            .precision    = 64,
+            .min_exponent = -16'382,
+            .max_exponent = 16'383,
+            .storage_bits = 80,
+        };
+    case float_format::QUAD:
+        return {
+            .precision    = 113,
+            .min_exponent = -16'382,
+            .max_exponent = 16'383,
+            .storage_bits = 128,
+        };
+    default:
+        return {
+            .precision    = 113,
+            .min_exponent = -16'382,
+            .max_exponent = 16'383,
+            .storage_bits = 128,
+        };
     }
-    return {113, -16'382, 16'383, 128};
 }
 
 auto f128::from_bits(u128 bits) noexcept -> f128 {

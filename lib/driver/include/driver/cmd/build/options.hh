@@ -2,7 +2,6 @@
 
 #include <filesystem>
 #include <iostream>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -32,22 +31,22 @@ struct module_binding {
 
 // Raw options populated directly by CLI parser
 struct raw_options {
-    std::string                input;
-    std::string                output;
-    std::string                target;
-    std::string                cpu{"generic"};
-    std::string                features;
-    std::optional<std::string> opt_level_str; // unset unless `-O` was given (even as `-O ""`)
-    std::vector<std::string>   module_raw_args;
-    std::vector<std::string>   extra_objects;
-    std::vector<std::string>   library_paths;
-    std::vector<std::string>   libraries;
-    std::vector<std::string>   forwarded_args;
-    bool                       release{false};
-    bool                       debug_passes{false};
-    bool                       time_passes{false};
-    bool                       dynamic{false};
-    bool                       unsafe{false};
+    std::string               input;
+    std::string               output;
+    std::string               target;
+    std::string               cpu{"generic"};
+    std::string               features;
+    stdx::option<std::string> opt_level_str; // unset unless `-O` was given (even as `-O ""`)
+    std::vector<std::string>  module_raw_args;
+    std::vector<std::string>  extra_objects;
+    std::vector<std::string>  library_paths;
+    std::vector<std::string>  libraries;
+    std::vector<std::string>  forwarded_args;
+    bool                      release{false};
+    bool                      debug_passes{false};
+    bool                      time_passes{false};
+    bool                      dynamic{false};
+    bool                      unsafe{false};
 
     std::string emit_gir_path;
     std::string emit_llvm_ir_path;

@@ -1,12 +1,15 @@
+#include <algorithm>
 #include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/Object/Binary.h>
 #include <llvm/Object/ObjectFile.h>
+#include <llvm/Support/Casting.h>
 #include <llvm/Support/Error.h>
 
 #include "compiler/codegen/llvm_scope.hh"
@@ -73,8 +76,6 @@ TEST_CASE("objects reference no C runtime, even after the optimizer forms mem* c
                                           "x86_64-apple-macos",
                                           // 32-bit `usize`; also must not need EHABI unwinding
                                           "arm-unknown-linux-gnueabihf",
-                                          // Their backends keep a one-time static allocation
-                                          // that the harness reports as a leak
                                           "riscv32-unknown-linux-gnu",
                                           "wasm32-unknown-unknown"}) {
         for (const auto level : {codegen::opt_level::O0, codegen::opt_level::O2}) {

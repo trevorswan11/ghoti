@@ -1,15 +1,19 @@
 #include <bit>
 #include <charconv>
 #include <cmath>
+#include <compare>
 #include <limits>
 #include <random>
 #include <string>
-#include <system_error>
+#include <string_view>
 
+#include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
+#include <stdx/types.hh>
 
 #include "support/float128.hh"
+#include "support/int128.hh"
 #include "support/test.hh"
 
 namespace ghoti::tests {
@@ -20,14 +24,14 @@ namespace {
 class double_source {
   public:
     auto next() -> f64 {
-        for (;;) {
+        while (true) {
             const auto value{std::bit_cast<f64>(bits_(engine_))};
             if (std::isfinite(value)) { return value; }
         }
     }
 
     auto next_float() -> f32 {
-        for (;;) {
+        while (true) {
             const auto value{std::bit_cast<f32>(static_cast<u32>(bits_(engine_)))};
             if (std::isfinite(value)) { return value; }
         }

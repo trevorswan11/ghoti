@@ -43,11 +43,6 @@ namespace ghoti::cmd {
 
 namespace {
 
-constexpr i32 PARSE_ERROR{-32'700};
-constexpr i32 INVALID_REQUEST{-32'600};
-constexpr i32 METHOD_NOT_FOUND{-32'601};
-constexpr i32 INTERNAL_ERROR{-32'603};
-
 auto make_response(const nlohmann::json& id, nlohmann::json result) -> nlohmann::json {
     return {
         {"jsonrpc", "2.0"},

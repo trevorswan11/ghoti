@@ -1,7 +1,6 @@
 #include "compiler/codegen/target.hh"
 
 #include <filesystem>
-#include <memory>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -18,6 +17,7 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Type.h>
 #include <llvm/MC/TargetRegistry.h>
+#include <llvm/Support/Casting.h>
 #include <llvm/Support/CodeGen.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/TargetSelect.h>
@@ -31,6 +31,8 @@
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
+#include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/codegen/error.hh"
 #include "compiler/codegen/opt_level.hh"
@@ -72,22 +74,35 @@ auto to_llvm_code_model(code_model model) noexcept -> llvm::CodeModel::Model {
     }
 }
 
-// Collects backend errors (e.g. a malformed inline-asm template) for the lifetime of the guard;
-// LLVM's default handler would print them and exit the process
+// Collects backend errors for the lifetime of the guard
 class emission_diagnostics {
   public:
     explicit emission_diagnostics(llvm::LLVMContext& context)
         : context_{context}, previous_{context.getDiagnosticHandler()} {
-        context_.setDiagnosticHandler(std::make_unique<collector>(errors_));
+        context_.setDiagnosticHandler(stdx::make_nullable_box<collector>(errors_));
     }
     ~emission_diagnostics() { context_.setDiagnosticHandler(std::move(previous_)); }
-    emission_diagnostics(const emission_diagnostics&)                    = delete;
-    auto operator=(const emission_diagnostics&) -> emission_diagnostics& = delete;
+    MAKE_PINNED(emission_diagnostics);
 
     [[nodiscard]] auto first_error() const -> stdx::option<std::string> {
         if (errors_.empty()) { return stdx::none; }
         return errors_.front();
     }
+
+  private:
+    struct collector final : llvm::DiagnosticHandler {
+        explicit collector(std::vector<std::string>& errors) : errors_{errors} {}
+        auto handleDiagnostics(const llvm::DiagnosticInfo& info) -> bool override {
+            if (info.getSeverity() != llvm::DS_Error) { return true; }
+            std::string                       message;
+            llvm::raw_string_ostream          os{message};
+            llvm::DiagnosticPrinterRawOStream printer{os};
+            info.print(printer);
+            errors_.emplace_back(with_asm_location(info, std::move(message)));
+            return true;
+        }
+        std::vector<std::string>& errors_;
+    };
 
   private:
     // The lowering packs an `asm` block's line/column into its `srcloc` cookie
@@ -103,23 +118,10 @@ class emission_diagnostics {
                            message);
     }
 
-    struct collector final : llvm::DiagnosticHandler {
-        explicit collector(std::vector<std::string>& errors) : errors_{errors} {}
-        auto handleDiagnostics(const llvm::DiagnosticInfo& info) -> bool override {
-            if (info.getSeverity() != llvm::DS_Error) { return true; }
-            std::string                       message;
-            llvm::raw_string_ostream          os{message};
-            llvm::DiagnosticPrinterRawOStream printer{os};
-            info.print(printer);
-            errors_.emplace_back(with_asm_location(info, std::move(message)));
-            return true;
-        }
-        std::vector<std::string>& errors_;
-    };
-
-    llvm::LLVMContext&                       context_;
-    std::unique_ptr<llvm::DiagnosticHandler> previous_;
-    std::vector<std::string>                 errors_;
+  private:
+    llvm::LLVMContext&                          context_;
+    stdx::nullable_box<llvm::DiagnosticHandler> previous_;
+    std::vector<std::string>                    errors_;
 };
 
 } // namespace

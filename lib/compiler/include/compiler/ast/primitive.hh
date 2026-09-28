@@ -38,7 +38,7 @@ struct int_literal_expr {
 };
 
 struct float_literal_expr {
-    f128             value;    // rounded to `f128`
+    f128             value;
     u8               width{0}; // `width == 0` means coercible
     std::string_view spelling;
     std::string_view mantissa; // the source digits, empty for a synthesized literal

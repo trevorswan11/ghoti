@@ -20,6 +20,7 @@
 
 #include "compiler/sema/type.hh"
 #include "support/diagnostic.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 
 namespace ghoti::gir {

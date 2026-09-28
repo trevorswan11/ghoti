@@ -19,6 +19,7 @@
 #include <stdx/result.hh>
 #include <stdx/string.hh>
 
+#include "compiler/codegen/error.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/module.hh"

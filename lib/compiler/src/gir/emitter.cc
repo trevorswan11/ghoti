@@ -1,10 +1,12 @@
 #include "compiler/gir/emitter.hh"
 
 #include <algorithm>
+#include <concepts>
 #include <limits>
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -18,6 +20,7 @@
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
@@ -38,11 +41,13 @@
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
+#include "compiler/sema/impl_registry.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/sema/unwrap_shape.hh"
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 
 namespace ghoti::gir {

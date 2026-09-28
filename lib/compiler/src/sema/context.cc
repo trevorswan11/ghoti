@@ -9,6 +9,7 @@
 #include <string_view>
 #include <utility>
 
+#include <fmt/format.h>
 #include <gsl/pointers>
 #include <gsl/span>
 #include <stdx/assert.hh>

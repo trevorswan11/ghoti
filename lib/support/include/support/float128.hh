@@ -40,8 +40,6 @@ enum class float_parse_status : u8 {
 
 class binary128;
 struct float_parse_result;
-
-// The compile-time `f128`, like `i128`/`u128` for integers
 using f128 = binary128;
 
 // An IEEE-754 binary128 value. Operations compute the exact result and round it once, to nearest

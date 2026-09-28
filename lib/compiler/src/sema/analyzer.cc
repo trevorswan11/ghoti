@@ -20,6 +20,7 @@
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
 
+#include "compiler/ast/statement.hh"
 #include "compiler/codegen/error.hh"
 #include "compiler/codegen/linker.hh"
 #include "compiler/codegen/llvm_lowering.hh"

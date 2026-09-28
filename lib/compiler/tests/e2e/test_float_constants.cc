@@ -1,6 +1,9 @@
+#include <string_view>
 #include <utility>
 
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/format.h>
+#include <stdx/types.hh>
 
 #include "compiler/sema/error.hh"
 #include "ghoti/config.h"
@@ -46,8 +49,6 @@ TEST_CASE("f128 constants keep full quad precision") {
 }
 
 TEST_CASE("a typed literal rounds once, straight from its digits") {
-    // Just above the midpoint between 1 and the next f32; rounding through f128 first lands
-    // exactly on the midpoint and then ties down to 1.0
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             const x: f32 = 1.0000000596046447753906250000000000000001;
@@ -86,7 +87,6 @@ TEST_CASE("f80 constants keep full x87 precision") {
 #endif
 
 TEST_CASE("a typed global built from an untyped constant folds as its declared type") {
-    // These used to hand LLVM the untyped constant's width and trip an invalid-cast assertion
     CHECK(helpers::compile_and_run(R"(
         const big := 16777217.0;
         const a: f32 = big;
@@ -109,7 +109,6 @@ TEST_CASE("a typed global built from an untyped constant folds as its declared t
 }
 
 TEST_CASE("floats of different widths compare after widening the narrower one") {
-    // Previously handed LLVM an `fcmp` with mismatched operand types
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             var narrow: f32 = 0.1;
@@ -125,7 +124,6 @@ TEST_CASE("floats of different widths compare after widening the narrower one") 
 }
 
 TEST_CASE("@mulAdd runs at runtime with its operands coerced to T") {
-    // A non-constant `@mulAdd` used to reach codegen as an ordinary call and crash
     CHECK(helpers::compile_and_run(R"(
         const id := fn(x: f32): f32 { return x; };
         pub const main := fn(): i32 {
@@ -141,7 +139,6 @@ TEST_CASE("@mulAdd runs at runtime with its operands coerced to T") {
 }
 
 TEST_CASE("nested untyped constant arithmetic meets a typed float") {
-    // The inner product used to materialize as an `f64` operation and be rejected against `f32`
     CHECK(helpers::compile_and_run(R"(
         const half := 0.5;
         pub const main := fn(): i32 {

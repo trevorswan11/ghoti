@@ -23,6 +23,7 @@
 #include "compiler/ast/id.hh"
 #include "compiler/ast/primitive.hh"
 #include "compiler/module/module.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 #include "support/string_utils.hh"
 

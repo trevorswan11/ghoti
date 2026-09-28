@@ -15,6 +15,7 @@
 #include "helpers/common.hh"
 #include "helpers/gir.hh"
 #include "helpers/sema.hh"
+#include "support/float128.hh"
 
 namespace ghoti::tests {
 

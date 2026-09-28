@@ -212,7 +212,6 @@ constexpr std::string_view golden_input{R"(
     }
 )"};
 
-// A failing run prints the actual dump; after checking it, paste it into `gir/dump.inc`
 constexpr std::string_view expected_gir{
 #include "gir/dump.inc"
 };

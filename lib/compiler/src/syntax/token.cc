@@ -34,6 +34,7 @@ auto decode_escapes(std::string_view inner) -> std::string {
 } // namespace
 
 auto is_valid_utf8(std::string_view bytes) noexcept -> bool {
+    // Thanks claude
     usize i{0};
     while (i < bytes.size()) {
         const auto lead{static_cast<u8>(bytes[i])};

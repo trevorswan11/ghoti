@@ -37,7 +37,6 @@ auto classify_comment(token_t token) noexcept -> token_t {
     return token;
 }
 
-// The <cctype> classifiers are undefined for negative `char` values (any non-ASCII byte)
 [[nodiscard]] auto is_alpha(char c) noexcept -> bool { return std::isalpha(static_cast<u8>(c)); }
 [[nodiscard]] auto is_digit(char c) noexcept -> bool { return std::isdigit(static_cast<u8>(c)); }
 [[nodiscard]] auto is_alnum(char c) noexcept -> bool { return std::isalnum(static_cast<u8>(c)); }

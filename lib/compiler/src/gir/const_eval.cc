@@ -1,8 +1,9 @@
 #include "compiler/gir/const_eval.hh"
 
 #include <algorithm>
+#include <array>
 #include <bit>
-#include <cmath>
+#include <concepts>
 #include <filesystem>
 #include <limits>
 #include <ranges>
@@ -44,6 +45,7 @@
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 #include "support/scope_guard.hh"
 
@@ -87,6 +89,7 @@ template <typename T>
             return std::string{"Negative shift amount in compile-time constant expression"};
         }
     }
+
     // `constexpr_int` folds modulo 2^128, where shifting out all 128 bits is still meaningful
     u64  width{128};
     bool full_shift_ok{true};

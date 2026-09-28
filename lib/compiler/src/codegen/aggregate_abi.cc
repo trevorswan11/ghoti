@@ -1,18 +1,21 @@
 #include "compiler/codegen/aggregate_abi.hh"
 
-#include <utility>
 #include <vector>
 
 #include <llvm/ADT/STLExtras.h>
+#include <llvm/IR/Argument.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/GlobalValue.h>
 #include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/Support/Alignment.h>
+#include <llvm/Support/Casting.h>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
@@ -21,8 +24,7 @@ namespace ghoti::codegen {
 
 namespace {
 
-// Past this, a by-value aggregate costs more than a pointer to it (and eventually cannot be
-// selected)
+// Past this, a by-value aggregate costs more than a pointer to it
 constexpr u64 max_direct_aggregate_bytes{256};
 
 class aggregate_lowering {
@@ -45,6 +47,7 @@ class aggregate_lowering {
         std::vector<llvm::Type*> indirect_params; // the aggregate passed by pointer, or null
     };
 
+  private:
     [[nodiscard]] auto is_large(llvm::Type* ty) const -> bool {
         return ty->isAggregateType() && ty->isSized() &&
                layout_.getTypeAllocSize(ty).getFixedValue() > max_direct_aggregate_bytes;

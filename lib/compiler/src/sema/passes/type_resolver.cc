@@ -61,6 +61,7 @@
 #include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/diagnostic.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 
 namespace ghoti::sema {
@@ -3728,9 +3729,8 @@ auto type_resolver::untyped_aggregate_literal(ID id, std::string_view kind) -> t
     return ctx_.poison_node(
         resolving_,
         id,
-        fmt::format("An anonymous {} type cannot be used in an expression; declare it first "
-                    "(e.g. `const T := {} {{ ... }};`)",
-                    kind,
+        fmt::format("An anonymous {0} type cannot be used in an expression; declare it first "
+                    "(e.g. `const T := {0} {{ ... }};`)",
                     kind),
         error::TYPE_MISMATCH,
         resolving_.ast.location_of(id));

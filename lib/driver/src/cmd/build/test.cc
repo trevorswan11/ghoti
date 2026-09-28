@@ -5,6 +5,7 @@
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
 
+#include "compiler/sema/analyzer.hh"
 #include "driver/clap/error.hh"
 #include "driver/cmd/build/options.hh"
 

@@ -1,17 +1,21 @@
 #include <array>
 #include <random>
 #include <string>
+#include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
+#include <catch2/generators/catch_generators_range.hpp>
 #include <fmt/format.h>
 #include <llvm/ADT/APFloat.h>
 #include <llvm/ADT/APInt.h>
 #include <llvm/ADT/APSInt.h>
 #include <llvm/Support/Error.h>
-
+#include <stdx/types.hh>
 #include <stdx/utility.hh>
 
 #include "support/float128.hh"
+#include "support/int128.hh"
 
 namespace ghoti::tests {
 
@@ -32,22 +36,6 @@ constexpr std::array ALL_FORMATS{float_format::HALF,
     case float_format::QUAD:   return llvm::APFloat::IEEEquad();
     }
     return llvm::APFloat::IEEEquad();
-}
-
-[[nodiscard]] auto format_name(float_format format) -> std::string_view {
-    switch (format) {
-    case float_format::HALF:   return "half";
-    case float_format::SINGLE: return "single";
-    case float_format::DOUBLE: return "double";
-    case float_format::X87:    return "x87";
-    case float_format::QUAD:   return "quad";
-    }
-    return "quad";
-}
-
-// Raw bits keep failure messages cheap; formatting extreme values as decimal is not
-[[nodiscard]] auto hex_bits(f128 value) -> std::string {
-    return fmt::format("{:016x}{:016x}", value.bits().high, value.bits().low);
 }
 
 [[nodiscard]] auto to_apint(u128 bits, u32 width) -> llvm::APInt {
@@ -131,92 +119,80 @@ TEST_CASE("f128 arithmetic matches APFloat in every format") {
     }};
 
     value_source source;
-    for (const auto format : ALL_FORMATS) {
-        for (i32 i{0}; i < 3'000; ++i) {
-            const auto a{source.next(format)};
-            const auto b{source.next(format)};
-            const auto c{source.next(format)};
-            INFO(fmt::format(
-                "{} {} {} {}", format_name(format), hex_bits(a), hex_bits(b), hex_bits(c)));
-            for (const auto& [apfloat_fn, float128_fn] : ops) {
-                auto expected{to_apfloat(a, format)};
-                DISCARD((expected.*apfloat_fn)(to_apfloat(b, format), RNE));
-                CHECK(agrees(expected, float128_fn(a, b, format), format));
-            }
-            auto expected_fma{to_apfloat(a, format)};
-            DISCARD(
-                expected_fma.fusedMultiplyAdd(to_apfloat(b, format), to_apfloat(c, format), RNE));
-            CHECK(agrees(expected_fma, fused_multiply_add(a, b, c, format), format));
+    const auto   format{GENERATE(from_range(ALL_FORMATS))};
+    for (i32 i{0}; i < 3'000; ++i) {
+        const auto a{source.next(format)};
+        const auto b{source.next(format)};
+        const auto c{source.next(format)};
+
+        for (const auto& [apfloat_fn, float128_fn] : ops) {
+            auto expected{to_apfloat(a, format)};
+            DISCARD((expected.*apfloat_fn)(to_apfloat(b, format), RNE));
+            CHECK(agrees(expected, float128_fn(a, b, format), format));
         }
+        auto expected_fma{to_apfloat(a, format)};
+        DISCARD(expected_fma.fusedMultiplyAdd(to_apfloat(b, format), to_apfloat(c, format), RNE));
+        CHECK(agrees(expected_fma, fused_multiply_add(a, b, c, format), format));
     }
 }
 
 TEST_CASE("f128 narrowing and widening match APFloat") {
+    const auto   format{GENERATE(from_range(ALL_FORMATS))};
     value_source source;
     for (i32 i{0}; i < 5'000; ++i) {
         const auto wide{source.next(float_format::QUAD)};
-        for (const auto format : ALL_FORMATS) {
-            INFO(fmt::format("{} {}", format_name(format), hex_bits(wide)));
-            auto expected{to_apfloat(wide, float_format::QUAD)};
-            bool loses_info{false};
-            DISCARD(expected.convert(
-                semantics_of(format), llvm::APFloat::rmNearestTiesToEven, &loses_info));
-            CHECK(agrees(expected, wide.round_to(format), format));
+        auto       expected{to_apfloat(wide, float_format::QUAD)};
+        bool       loses_info{false};
+        DISCARD(expected.convert(
+            semantics_of(format), llvm::APFloat::rmNearestTiesToEven, &loses_info));
+        CHECK(agrees(expected, wide.round_to(format), format));
 
-            // Decoding a narrow encoding back is exact
-            const auto narrow{wide.round_to(format)};
-            const auto decoded{f128::decode(narrow.encode(format), format)};
-            CHECK((decoded.is_nan() ? narrow.is_nan() : decoded.bits() == narrow.bits()));
-        }
+        // Decoding a narrow encoding back is exact
+        const auto narrow{wide.round_to(format)};
+        const auto decoded{f128::decode(narrow.encode(format), format)};
+        CHECK((decoded.is_nan() ? narrow.is_nan() : decoded.bits() == narrow.bits()));
     }
 }
 
 TEST_CASE("f128 parses decimal and hex text like APFloat") {
+    const bool   hex{GENERATE(true, false)};
+    const auto   format{GENERATE(from_range(ALL_FORMATS))};
     value_source source;
     for (i32 i{0}; i < 1'500; ++i) {
-        for (const bool hex : {false, true}) {
-            const auto text{source.next_decimal_text(hex)};
-            for (const auto format : ALL_FORMATS) {
-                INFO(fmt::format("{} {}", format_name(format), text));
-                const auto expected{apfloat_from_text(text, format)};
-                const auto parsed{f128::parse(text, format)};
-                REQUIRE(parsed.status != float_parse_status::MALFORMED);
-                CHECK(agrees(expected, parsed.value, format));
-            }
-        }
+        const auto text{source.next_decimal_text(hex)};
+        const auto expected{apfloat_from_text(text, format)};
+        const auto parsed{f128::parse(text, format)};
+        REQUIRE(parsed.status != float_parse_status::MALFORMED);
+        CHECK(agrees(expected, parsed.value, format));
     }
 }
 
 TEST_CASE("f128 shortest text reads back in every format") {
+    const auto   format{GENERATE(from_range(ALL_FORMATS))};
     value_source source;
-    for (const auto format : ALL_FORMATS) {
-        for (i32 i{0}; i < 300; ++i) {
-            const auto value{source.next(format)};
-            const auto text{value.to_string(format)};
-            INFO(fmt::format("{} {}", format_name(format), text));
-            if (value.is_nan() || value.is_infinite()) { continue; }
-            const auto parsed{f128::parse(text, format).value};
-            CHECK(parsed.bits() == value.bits());
+    for (i32 i{0}; i < 300; ++i) {
+        const auto value{source.next(format)};
+        const auto text{value.to_string(format)};
+        if (value.is_nan() || value.is_infinite()) { continue; }
+        const auto parsed{f128::parse(text, format).value};
+        CHECK(parsed.bits() == value.bits());
 
-            // APFloat reads the same text to the same value
-            CHECK(agrees(apfloat_from_text(text, format), value, format));
-        }
+        // APFloat reads the same text to the same value
+        CHECK(agrees(apfloat_from_text(text, format), value, format));
     }
 }
 
 TEST_CASE("f128 integer conversions match APFloat") {
+    const auto   format{GENERATE(from_range(ALL_FORMATS))};
     value_source source;
     for (i32 i{0}; i < 5'000; ++i) {
         const auto               integer{source.next_int()};
         const std::array<u64, 2> words{static_cast<u128>(integer).low,
                                        static_cast<u128>(integer).high};
-        for (const auto format : ALL_FORMATS) {
-            INFO(fmt::format("{} {}", format_name(format), integer));
-            llvm::APFloat expected{semantics_of(format)};
-            DISCARD(expected.convertFromAPInt(
-                llvm::APInt{128, words}, true, llvm::APFloat::rmNearestTiesToEven));
-            CHECK(agrees(expected, f128::from_int(integer, format), format));
-        }
+        llvm::APFloat            expected{semantics_of(format)};
+        DISCARD(expected.convertFromAPInt(
+            llvm::APInt{128, words}, true, llvm::APFloat::rmNearestTiesToEven));
+        CHECK(agrees(expected, f128::from_int(integer, format), format));
 
         const auto   value{source.next(float_format::QUAD)};
         llvm::APSInt truncated{128, false};
@@ -224,7 +200,6 @@ TEST_CASE("f128 integer conversions match APFloat") {
         const auto   status{to_apfloat(value, float_format::QUAD)
                               .convertToInteger(truncated, llvm::APFloat::rmTowardZero, &is_exact)};
         const auto   actual{value.to_int()};
-        INFO(hex_bits(value));
         CHECK((status == llvm::APFloat::opInvalidOp) == !actual);
         if (actual) {
             CHECK(truncated.getLoBits(64).getZExtValue() == static_cast<u128>(*actual).low);

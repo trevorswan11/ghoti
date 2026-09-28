@@ -1,6 +1,9 @@
+#include <string_view>
 #include <utility>
 
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/format.h>
+#include <stdx/types.hh>
 
 #include "compiler/sema/error.hh"
 #include "helpers/codegen.hh"
@@ -9,7 +12,6 @@
 namespace ghoti::tests {
 
 TEST_CASE("untyped integer constants fold exactly past 64 bits") {
-    // These used to overflow `i64` inside the compiler or wrap modulo 2^64
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             constexpr product := 111334094107016374 * 242;

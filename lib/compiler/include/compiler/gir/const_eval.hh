@@ -24,6 +24,7 @@
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
+#include "support/int128.hh"
 
 namespace ghoti::gir {
 

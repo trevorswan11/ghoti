@@ -21,6 +21,7 @@
 #include "compiler/syntax/parser.hh"
 #include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 #include "support/string_utils.hh"
 
@@ -256,10 +257,13 @@ auto float_literal_expr::parse(syntax::parser& parser)
         return make_syntax_err("Overflow of literal", syntax::error::DOUBLE_OVERFLOW, start_token);
     }
 
-    return parser.add_expr<float_literal_expr>(
-        start_token,
-        float_literal_expr{
-            .value = parsed.value, .width = width, .spelling = slice, .mantissa = mantissa});
+    return parser.add_expr<float_literal_expr>(start_token,
+                                               float_literal_expr{
+                                                   .value    = parsed.value,
+                                                   .width    = width,
+                                                   .spelling = slice,
+                                                   .mantissa = mantissa,
+                                               });
 }
 
 auto float_literal_expr::value_in(float_format format) const -> f128 {
