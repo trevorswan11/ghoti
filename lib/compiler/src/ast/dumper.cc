@@ -725,7 +725,8 @@ auto dumper::visit(node_id, const struct_expr& node) -> void {
             }
 
             const auto has_default{field.default_value.has_value()};
-            const auto has_alignment{field.explicit_alignment.has_value()};
+            const auto alignment{field.explicit_alignment()};
+            const auto has_alignment{alignment.has_value()};
             {
                 const indent::guard g_type{indent_, !has_default && !has_alignment};
                 fmt::print(out_, "{}Type: ", indent_.current_branch());
@@ -741,7 +742,7 @@ auto dumper::visit(node_id, const struct_expr& node) -> void {
             if (has_alignment) {
                 const indent::guard g_align{indent_, true};
                 fmt::print(out_, "{}Alignment: ", indent_.current_branch());
-                dump(*field.explicit_alignment);
+                dump(*alignment);
             }
         });
     }
@@ -775,7 +776,8 @@ auto dumper::visit(node_id, const union_expr& node) -> void {
                 dump(field.name);
             }
 
-            const auto has_alignment{field.explicit_alignment.has_value()};
+            const auto alignment{field.explicit_alignment()};
+            const auto has_alignment{alignment.has_value()};
             {
                 const indent::guard g_result{indent_, !has_alignment};
                 fmt::print(out_, "{}Type: ", indent_.current_branch());
@@ -785,7 +787,7 @@ auto dumper::visit(node_id, const union_expr& node) -> void {
             if (has_alignment) {
                 const indent::guard g_align{indent_, true};
                 fmt::print(out_, "{}Alignment: ", indent_.current_branch());
-                dump(*field.explicit_alignment);
+                dump(*alignment);
             }
         });
     }

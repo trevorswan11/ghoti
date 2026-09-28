@@ -367,6 +367,11 @@ class type_resolver {
     auto check_attribute_conflicts(const attribute_refs&      items,
                                    const resolved_attributes& resolved) -> void;
     [[nodiscard]] auto fold_attribute_bool(const ast::attribute& item) -> stdx::option<bool>;
+    // A positive power-of-two byte alignment, reporting anything else
+    [[nodiscard]] auto fold_alignment(ast::expr_handle arg) -> stdx::option<u64>;
+    // Fields accept only field attributes; returns the field's folded `align`, if any
+    [[nodiscard]] auto resolve_field_attributes(const stdx::option<ast::attribute_list>& attributes)
+        -> stdx::option<u64>;
     // The variant name of an `item` argument typed against the prelude enum `enum_name`
     [[nodiscard]] auto fold_attribute_enum(const ast::attribute& item, std::string_view enum_name)
         -> stdx::option<std::string>;

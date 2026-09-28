@@ -7,10 +7,12 @@
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Type.h>
+#include <llvm/Support/MathExtras.h>
 #include <stdx/assert.hh>
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
 
+#include "compiler/gir/const_eval.hh"
 #include "compiler/sema/type.hh"
 
 namespace ghoti::codegen {
@@ -190,8 +192,73 @@ auto type_translator::translate_struct(const sema::types::struct_t& s, const sem
             element_types.emplace_back(translate(*field));
         }
     }
-    struct_ty->setBody(element_types, s.is_packed);
+    set_struct_body(struct_ty, s, element_types);
     return struct_ty;
+}
+
+auto type_translator::set_struct_body(llvm::StructType*               struct_ty,
+                                      const sema::types::struct_t&    s,
+                                      const std::vector<llvm::Type*>& element_types) -> void {
+    const auto& dl{module_.getDataLayout()};
+    const auto  ptr_size{static_cast<usize>(dl.getPointerSize())};
+
+    std::vector<llvm::Type*> padded;
+    padded_layout            layout{.field_indices = {}, .alignment = 1};
+    u64                      end{0};
+    bool                     inserted_padding{false};
+    const auto               pad_to{[&](u64 offset) {
+        if (offset == end) { return; }
+        padded.emplace_back(llvm::ArrayType::get(get_int8_ty(), offset - end));
+        end              = offset;
+        inserted_padding = true;
+    }};
+
+    for (usize i{0}; i < element_types.size(); ++i) {
+        auto*      elem_ty{element_types[i]};
+        const auto natural{s.is_packed ? 1 : dl.getABITypeAlign(elem_ty).value()};
+        const auto wanted{std::max<u64>(natural,
+                                        s.is_packed ? s.explicit_field_alignment(i)
+                                                    : gir::const_eval::struct_field_align(
+                                                          s, i, ptr_size))};
+        const auto offset{llvm::alignTo(end, wanted)};
+        if (offset != llvm::alignTo(end, natural)) { pad_to(offset); }
+
+        layout.field_indices.emplace_back(static_cast<u32>(padded.size()));
+        padded.emplace_back(elem_ty);
+        end              = offset + dl.getTypeAllocSize(elem_ty).getFixedValue();
+        layout.alignment = std::max(layout.alignment, wanted);
+    }
+
+    // LLVM rounds the size up to its own natural alignment; any excess becomes trailing padding
+    u64 natural_alignment{1};
+    for (auto* elem_ty : element_types) {
+        if (s.is_packed) { break; }
+        natural_alignment = std::max<u64>(natural_alignment, dl.getABITypeAlign(elem_ty).value());
+    }
+    const auto total{llvm::alignTo(end, layout.alignment)};
+    if (total != llvm::alignTo(end, natural_alignment)) { pad_to(total); }
+
+    if (!inserted_padding) {
+        struct_ty->setBody(element_types, s.is_packed);
+        return;
+    }
+    struct_ty->setBody(padded, s.is_packed);
+    padded_structs_.insert_or_assign(struct_ty, std::move(layout));
+}
+
+auto type_translator::struct_field_index(llvm::Type* struct_ty, u32 field) const -> u32 {
+    const auto it{padded_structs_.find(struct_ty)};
+    return it == padded_structs_.end() ? field : it->second.field_indices[field];
+}
+
+auto type_translator::explicit_alignment_of(const sema::type& type) -> stdx::option<u64> {
+    if (const auto arr{type.get_data().as_opt<sema::types::array>()}) {
+        return explicit_alignment_of(arr->underlying);
+    }
+    if (type.get_kind() != sema::type_kind::STRUCT) { return stdx::none; }
+    const auto it{padded_structs_.find(translate(type))};
+    if (it == padded_structs_.end()) { return stdx::none; }
+    return it->second.alignment;
 }
 
 auto type_translator::translate_union(const sema::types::union_t& u, const sema::type& original)

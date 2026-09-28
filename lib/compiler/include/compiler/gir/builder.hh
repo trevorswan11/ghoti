@@ -41,7 +41,10 @@ class builder {
     }
 
     auto emit_instruction(instruction inst) -> instruction&;
-    auto emit_alloca(sema::type& type, std::string_view name = {}, bool is_const = false)
+    auto emit_alloca(sema::type&       type,
+                     std::string_view  name      = {},
+                     bool              is_const  = false,
+                     stdx::option<u64> alignment = stdx::none)
         -> local_id;
 
     // An alloca hoisted into the function's entry segment (before its terminator) so it dominates

@@ -68,9 +68,6 @@ class formatter {
                                 std::string_view keyword_and_space,
                                 FieldItem&&      field_item,
                                 FieldEndLine&&   field_end_line) -> syntax::doc_id;
-    // `[@alignas(n) ]T`
-    auto format_aligned_field_type(stdx::option<expr_handle> alignment, explicit_type_id type)
-        -> syntax::doc_id;
 
     [[nodiscard]] auto format_struct(const struct_expr& node) -> syntax::doc_id;
     [[nodiscard]] auto format_union(const union_expr& node) -> syntax::doc_id;

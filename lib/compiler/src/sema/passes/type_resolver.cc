@@ -6,6 +6,7 @@
 #include <cctype>
 #include <concepts>
 #include <filesystem>
+#include <limits>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -2551,7 +2552,7 @@ auto type_resolver::synthesize_struct(source_location loc, const gir::const_stru
                                                    syntax::token_type_t::IDENT,
                                                    static_cast<u64>((*ty_ident).get_index())},
             .default_value      = default_value,
-            .explicit_alignment = stdx::none,
+            .attributes         = stdx::none,
         };
 
         // The key must be the stable,  arena-backed name, not `*name_v`
@@ -2618,7 +2619,7 @@ auto type_resolver::synthesize_union(source_location loc, const gir::const_struc
                                                    ast::type_modifier{},
                                                    syntax::token_type_t::IDENT,
                                                    static_cast<u64>((*ty_ident).get_index())},
-            .explicit_alignment = stdx::none,
+            .attributes         = stdx::none,
         };
 
         const auto stable_name{resolving_.ast.get_as<ast::identifier_expr>(name_ident).name};
@@ -8461,11 +8462,11 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
                 error::ILLEGAL_PACKED_FIELD,
                 resolving_.ast.location_of(field.explicit_type)));
         }
-        if (struct_expr.is_packed && !struct_expr.is_extern && field.explicit_alignment) {
+        if (struct_expr.is_packed && !struct_expr.is_extern && field.explicit_alignment()) {
             return last_type_.emplace(ctx_.poison_node(
                 resolving_,
                 id,
-                fmt::format("a 'packed struct' field cannot specify 'alignas' (field '{}')",
+                fmt::format("a 'packed struct' field cannot specify 'align' (field '{}')",
                             ident.name),
                 error::ILLEGAL_PACKED_FIELD,
                 resolving_.ast.location_of(field.explicit_type)));
@@ -8504,19 +8505,7 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
     auto member_types{ctx_.pool.get_many_unsafe(struct_expr.members.size())};
     auto field_alignments{ctx_.arena.make_span<u64>(struct_expr.fields.size())};
     for (usize i{0}; const auto& field : struct_expr.fields) {
-        u64 align_val{0};
-        if (field.explicit_alignment) {
-            gir::const_eval ce{ctx_, resolving_};
-            const auto      cv{ce.try_eval(*field.explicit_alignment)};
-            if (cv) {
-                if (const auto val{cv->as_opt<u64>()}) {
-                    align_val = *val;
-                } else if (const auto sval{cv->as_opt<i64>()}) {
-                    if (*sval > 0) { align_val = static_cast<u64>(*sval); }
-                }
-            }
-        }
-        field_alignments[i++] = align_val;
+        field_alignments[i++] = resolve_field_attributes(field.attributes).value_or(0);
     }
 
     if (struct_expr.is_packed && !struct_expr.is_extern) {
@@ -8642,11 +8631,16 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
                 error::ILLEGAL_PACKED_FIELD,
                 resolving_.ast.location_of(field.explicit_type)));
         }
-        if (union_expr.is_packed && !union_expr.is_extern && field.explicit_alignment) {
+        if (resolve_field_attributes(field.attributes)) {
+            ctx_.diags.emplace_back("Attribute 'align' is not supported on union fields",
+                                    error::ILLEGAL_ATTRIBUTE,
+                                    resolving_.ast.location_of(field.name));
+        }
+        if (union_expr.is_packed && !union_expr.is_extern && field.explicit_alignment()) {
             return last_type_.emplace(ctx_.poison_node(
                 resolving_,
                 id,
-                fmt::format("a 'packed union' field cannot specify 'alignas' (field '{}')",
+                fmt::format("a 'packed union' field cannot specify 'align' (field '{}')",
                             ident.name),
                 error::ILLEGAL_PACKED_FIELD,
                 resolving_.ast.location_of(field.explicit_type)));
@@ -9810,6 +9804,41 @@ auto type_resolver::fold_attribute_bool(const ast::attribute& item) -> stdx::opt
     return stdx::none;
 }
 
+auto type_resolver::fold_alignment(ast::expr_handle arg) -> stdx::option<u64> {
+    resolve(arg);
+    gir::const_eval evaluator{ctx_, resolving_};
+    const auto      cv{evaluator.try_eval(arg)};
+    const auto      value{cv ? cv->as_uint_opt() : stdx::none};
+    const auto      is_power_of_two{value && *value > 0 && (*value & (*value - 1)) == 0};
+    if (is_power_of_two && *value <= std::numeric_limits<u32>::max()) {
+        return static_cast<u64>(*value);
+    }
+    ctx_.diags.emplace_back("Attribute 'align' requires a compile-time power-of-two integer",
+                            error::ILLEGAL_ATTRIBUTE,
+                            resolving_.ast.location_of(arg));
+    return stdx::none;
+}
+
+auto type_resolver::resolve_field_attributes(const stdx::option<ast::attribute_list>& attributes)
+    -> stdx::option<u64> {
+    if (!attributes) { return stdx::none; }
+    stdx::option<u64> alignment;
+    for (const auto& item : attributes->items) {
+        const auto& spec{ast::attribute_spec_of(item.kind)};
+        if (!static_cast<bool>(spec.targets & ast::attribute_target::FIELD)) {
+            ctx_.diags.emplace_back(
+                fmt::format("Attribute '{}' cannot be applied to a field", spec.name),
+                error::ILLEGAL_ATTRIBUTE,
+                resolving_.ast.location_of(item.name));
+            continue;
+        }
+        if (item.kind == ast::attribute_kind::ALIGN) {
+            alignment = fold_alignment(item.args.front());
+        }
+    }
+    return alignment;
+}
+
 auto type_resolver::fold_attribute_enum(const ast::attribute& item, std::string_view enum_name)
     -> stdx::option<std::string> {
     const auto arg{item.args.front()};
@@ -9853,7 +9882,7 @@ auto type_resolver::resolve_attributes(ast::node_id          owner,
     for (const auto item : items) {
         const auto& spec{ast::attribute_spec_of(item->kind)};
         if (!static_cast<bool>(spec.targets & site)) {
-            const auto* what{ast::is_function_only(item->kind)
+            const auto* what{ast::routes_to_fn_literal(item->kind)
                                  ? "a declaration whose initializer is not a function literal"
                                  : "a non-function declaration"};
             ctx_.diags.emplace_back(
@@ -9881,6 +9910,9 @@ auto type_resolver::resolve_attributes(ast::node_id          owner,
         case ast::attribute_kind::NAKED:
             resolved.naked = fold_attribute_bool(*item).value_or(false);
             break;
+        case ast::attribute_kind::ALIGN:
+            resolved.alignment = fold_alignment(item->args.front());
+            break;
         }
     }
 
@@ -9898,7 +9930,7 @@ auto type_resolver::resolve_decl_attributes(ast::node_id          id,
     // Function-only attributes belong to the literal and resolve with it instead
     attribute_refs own;
     for (const auto& item : decl.attributes->items) {
-        if (initializes_fn_literal && ast::is_function_only(item.kind)) { continue; }
+        if (initializes_fn_literal && ast::routes_to_fn_literal(item.kind)) { continue; }
         own.emplace_back(&item);
     }
 
@@ -9907,6 +9939,14 @@ auto type_resolver::resolve_decl_attributes(ast::node_id          id,
                        own,
                        return_kind ? ast::attribute_target::FN_DECL : ast::attribute_target::DECL,
                        return_kind == type_kind::VOID_);
+
+    const auto align_item{decl.attributes->find(ast::attribute_kind::ALIGN)};
+    if (align_item && !initializes_fn_literal && decl.has_modifier(ast::decl_modifiers::CONSTEXPR)) {
+        ctx_.diags.emplace_back("Attribute 'align' needs storage; a 'constexpr' declaration has "
+                                "none",
+                                error::ILLEGAL_ATTRIBUTE,
+                                resolving_.ast.location_of(align_item->name));
+    }
 }
 
 auto type_resolver::resolve_fn_literal_attributes(ast::node_id id, const ast::function_expr& fn)
@@ -9921,7 +9961,7 @@ auto type_resolver::resolve_fn_literal_attributes(ast::node_id id, const ast::fu
         const auto& decl{resolving_.ast.get_as<ast::decl_stmt>(*fn.declaring_decl)};
         if (decl.attributes) {
             for (const auto& item : decl.attributes->items) {
-                if (!ast::is_function_only(item.kind)) { continue; }
+                if (!ast::routes_to_fn_literal(item.kind)) { continue; }
                 if (fn.attributes && fn.attributes->find(item.kind)) {
                     ctx_.diags.emplace_back(
                         fmt::format("Attribute '{}' is applied to both the declaration and its "

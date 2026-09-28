@@ -211,7 +211,7 @@ TEST_CASE("Function call type checking") {
         helpers::type_check_and_verify(R"(
             const CPacked := extern packed struct {
                 tag: u8,
-                data: @alignas(4) i32,
+                @[align(4)] data: i32,
             };
             const f := fn(p: CPacked): i32 {
                 return p.data;

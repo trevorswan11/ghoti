@@ -418,11 +418,14 @@ struct struct_expr {
     struct field {
         identifier_handle         name;
         explicit_type_id          explicit_type;
-        stdx::option<expr_handle> default_value;
-        stdx::option<expr_handle> explicit_alignment;
+        stdx::option<expr_handle>    default_value;
+        stdx::option<attribute_list> attributes;
 
         [[nodiscard]] constexpr auto is_public() const noexcept -> bool {
             return name->get_token_type() == syntax::token_type_t::PUBLIC;
+        }
+        [[nodiscard]] auto explicit_alignment() const noexcept -> stdx::option<expr_handle> {
+            return attribute_arg(attributes, attribute_kind::ALIGN);
         }
     };
 
@@ -448,8 +451,12 @@ struct struct_expr {
 struct union_expr {
     struct field {
         identifier_handle         name;
-        explicit_type_id          explicit_type;
-        stdx::option<expr_handle> explicit_alignment;
+        explicit_type_id             explicit_type;
+        stdx::option<attribute_list> attributes;
+
+        [[nodiscard]] auto explicit_alignment() const noexcept -> stdx::option<expr_handle> {
+            return attribute_arg(attributes, attribute_kind::ALIGN);
+        }
     };
 
     using cfg_group        = cfg_item_group<field>;

@@ -59,8 +59,9 @@ struct capture_info {
 // The folded result of an `@[...]` list on a declaration or function literal
 struct resolved_attributes {
     bool                           discardable{false};
-    stdx::option<ast::inline_mode> inlining;
+    stdx::option<ast::inline_mode> inlining{};
     bool                           naked{false};
+    stdx::option<u64>              alignment{};
 };
 
 // Empty for any function_expr that captures nothing

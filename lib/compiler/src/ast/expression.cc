@@ -516,6 +516,10 @@ using member_cfg_group = cfg_item_group<member_handle>;
         }
     }
     if (parser.peek_token_is(tt::LBRACE)) { parser.advance(); }
+    if (parser.peek_token_is(tt::AT_LBRACKET)) {
+        parser.advance();
+        if (!parse_attribute_list(parser)) { return false; }
+    }
     if (parser.peek_token_is(tt::PUBLIC)) { parser.advance(); }
     return parser.get_peek_token().is_member_token();
 }
@@ -537,24 +541,28 @@ using member_cfg_group = cfg_item_group<member_handle>;
     return members;
 }
 
-[[nodiscard]] auto try_parse_alignment(syntax::parser& parser)
-    -> stdx::result<stdx::option<expr_handle>, syntax::diagnostic> {
-    stdx::option<expr_handle> explicit_alignment;
-    if (parser.peek_token_is(syntax::token_type_t::BUILTIN_ALIGNAS)) {
-        parser.advance();
-        TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
-        parser.advance();
-        explicit_alignment.emplace(TRY(parser.parse_expression()));
-        TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
-    }
-    return explicit_alignment;
+// Whether the `@[...]` at the peek token precedes a member declaration rather than a field
+[[nodiscard]] auto attributes_precede_member(syntax::parser& parser) -> bool {
+    syntax::parser::transaction tx{parser};
+    parser.advance(); // current == @[
+    if (!parse_attribute_list(parser)) { return false; }
+    if (parser.peek_token_is(syntax::token_type_t::PUBLIC)) { parser.advance(); }
+    return parser.get_peek_token().is_member_token();
+}
+
+// A field's optional leading `@[...]`; leaves the peek token on the field's first token
+[[nodiscard]] auto try_parse_field_attributes(syntax::parser& parser)
+    -> stdx::result<stdx::option<attribute_list>, syntax::diagnostic> {
+    if (!parser.peek_token_is(syntax::token_type_t::AT_LBRACKET)) { return stdx::none; }
+    parser.advance();
+    return TRY(parse_attribute_list(parser));
 }
 
 [[nodiscard]] auto parse_struct_field(syntax::parser& parser)
     -> stdx::result<struct_expr::field, syntax::diagnostic> {
     using tt = syntax::token_type_t;
     const auto doc_floor{parser.get_current_token().line};
-    auto       align{TRY(try_parse_alignment(parser))};
+    auto       attributes{TRY(try_parse_field_attributes(parser))};
     bool       is_public{false};
     if (parser.peek_token_is(tt::PUBLIC)) {
         parser.advance();
@@ -565,31 +573,27 @@ using member_cfg_group = cfg_item_group<member_handle>;
     identifier_handle ident{TRY(identifier_expr::parse(parser))};
     parser.attach_member_doc(ident, doc_floor);
     TRY(parser.expect_peek(tt::COLON));
-    if (!align) { align = TRY(try_parse_alignment(parser)); }
-    const auto type{TRY(explicit_type::parse(parser))};
-    if (!align) { align = TRY(try_parse_alignment(parser)); }
+    const auto                type{TRY(explicit_type::parse(parser))};
     stdx::option<expr_handle> value;
     if (parser.peek_token_is(tt::ASSIGN)) {
         parser.advance(2);
         value.emplace(TRY(parser.parse_expression()));
     }
     if (is_public) { ident->set_token_type(tt::PUBLIC); }
-    return struct_expr::field{ident, type, value, align};
+    return struct_expr::field{ident, type, value, std::move(attributes)};
 }
 
 [[nodiscard]] auto parse_union_field(syntax::parser& parser)
     -> stdx::result<union_expr::field, syntax::diagnostic> {
     using tt = syntax::token_type_t;
     const auto doc_floor{parser.get_current_token().line};
-    auto       align{TRY(try_parse_alignment(parser))};
+    auto       attributes{TRY(try_parse_field_attributes(parser))};
     TRY(parser.expect_peek(tt::IDENT));
     const identifier_handle ident{TRY(identifier_expr::parse(parser))};
     parser.attach_member_doc(ident, doc_floor);
     TRY(parser.expect_peek(tt::COLON));
-    if (!align) { align = TRY(try_parse_alignment(parser)); }
     const auto type{TRY(explicit_type::parse(parser))};
-    if (!align) { align = TRY(try_parse_alignment(parser)); }
-    return union_expr::field{ident, type, align};
+    return union_expr::field{ident, type, std::move(attributes)};
 }
 
 [[nodiscard]] auto parse_enumeration(syntax::parser& parser)
@@ -1748,7 +1752,11 @@ auto struct_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
 
         const auto doc_floor{parser.get_current_token().line};
         bool       is_public{false};
-        auto       explicit_alignment{TRY(try_parse_alignment(parser))};
+        if (parser.peek_token_is(syntax::token_type_t::AT_LBRACKET) &&
+            attributes_precede_member(parser)) {
+            break;
+        }
+        auto attributes{TRY(try_parse_field_attributes(parser))};
 
         if (parser.peek_token_is(syntax::token_type_t::PUBLIC)) {
             // Use a transaction to preserve the public modifier
@@ -1772,9 +1780,7 @@ auto struct_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
         identifier_handle ident{TRY(identifier_expr::parse(parser))};
         parser.attach_member_doc(ident, doc_floor);
         TRY(parser.expect_peek(syntax::token_type_t::COLON));
-        if (!explicit_alignment) { explicit_alignment = TRY(try_parse_alignment(parser)); }
         const auto type{TRY(explicit_type::parse(parser))};
-        if (!explicit_alignment) { explicit_alignment = TRY(try_parse_alignment(parser)); }
 
         stdx::option<expr_handle> value;
         if (parser.peek_token_is(syntax::token_type_t::ASSIGN)) {
@@ -1784,7 +1790,7 @@ auto struct_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
 
         // The identifier holds public information to save space in the field
         if (is_public) { ident->set_token_type(syntax::token_type_t::PUBLIC); }
-        fields.emplace_back(ident, type, value, explicit_alignment);
+        fields.emplace_back(ident, type, value, std::move(attributes));
 
         // No comma means that its the end or that there is a decl list starting
         const bool had_comma{parser.peek_token_is(syntax::token_type_t::COMMA)};
@@ -1826,20 +1832,22 @@ auto union_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
             if (parser.peek_token_is(syntax::token_type_t::COMMA)) { parser.advance(); }
             continue;
         }
-        if (parser.get_peek_token().is_member_token()) { break; }
+        if (parser.peek_token_is(syntax::token_type_t::AT_LBRACKET)
+                ? attributes_precede_member(parser)
+                : parser.get_peek_token().is_member_token()) {
+            break;
+        }
 
         const auto doc_floor{parser.get_current_token().line};
-        auto       explicit_alignment{TRY(try_parse_alignment(parser))};
+        auto       attributes{TRY(try_parse_field_attributes(parser))};
         TRY(parser.expect_peek(syntax::token_type_t::IDENT));
         const identifier_handle ident{TRY(identifier_expr::parse(parser))};
         parser.attach_member_doc(ident, doc_floor);
 
         TRY(parser.expect_peek(syntax::token_type_t::COLON));
-        if (!explicit_alignment) { explicit_alignment = TRY(try_parse_alignment(parser)); }
         const auto type{TRY(explicit_type::parse(parser))};
-        if (!explicit_alignment) { explicit_alignment = TRY(try_parse_alignment(parser)); }
 
-        fields.emplace_back(ident, type, explicit_alignment);
+        fields.emplace_back(ident, type, std::move(attributes));
 
         // No comma means that its the end or that there is a decl list starting
         const bool had_comma{parser.peek_token_is(syntax::token_type_t::COMMA)};

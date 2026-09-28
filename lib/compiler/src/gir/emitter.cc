@@ -1134,6 +1134,7 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
     g.link_name       = get_link_name(active_ast(), decl);
     g.is_thread_local = decl.has_modifier(ast::decl_modifiers::THREADLOCAL);
     g.is_weak         = decl.has_modifier(ast::decl_modifiers::WEAK);
+    g.alignment       = decl_alignment(active_mod(), id);
 }
 
 auto emitter::emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -> void {
@@ -1934,7 +1935,8 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
     // An ordinary aggregate const/constexpr needs one stable address across every use, so only a
     // non-aggregate can skip storage below except a `constexpr var` since it has no storage
     const auto is_structural{sema::is_structural(sema_type->get_kind())};
-    if (is_const && decl.value && (!is_structural || is_constexpr_var)) {
+    const auto alignment{decl_alignment(active_mod(), id)};
+    if (is_const && decl.value && (!is_structural || is_constexpr_var) && !alignment) {
         // A `fn(...)`-annotated literal is a callable value built below, not a named function
         const auto fn_expr{sema::is_fat_callable(*sema_type)
                                ? stdx::none
@@ -2064,7 +2066,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         return;
     }
 
-    const auto slot{builder_.emit_alloca(*sema_type, name, is_const)};
+    const auto slot{builder_.emit_alloca(*sema_type, name, is_const, alignment)};
     // A fresh alloca is already uninitialized, so `= undefined` needs no store.
     if (decl.value && !is_undefined_value(*decl.value)) {
         const value val{emit_coerced_expr(*decl.value, *sema_type)};

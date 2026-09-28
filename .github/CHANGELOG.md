@@ -372,6 +372,10 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - The argument may be computed at compile time: `@[inline(if (FAST) .always else .never)]`
     - `.always` is honored at `-O0` too
     - A function-only attribute written on a declaration applies to its function literal initializer, and is an error on any other declaration
+- **Breaking:** `@alignas(n)` is removed; write `@[align(n)]` before the field (`@[align(16)] data: [4]f32`)
+- `@[align(n)]` also raises the alignment of globals, static members, locals, and functions; `n` must be a compile-time power of two
+- Fixed: an explicitly aligned struct field was accepted but ignored; it now moves the field to its aligned offset and raises the struct's alignment and size, in `@sizeOf`/`@alignOf` and in generated code
+    - `align` on a union field is now an error instead of being silently ignored
 - Constexpr can now be applied to labels and blocks (expression slots and top level)
     - They must be constant evaluatable and will error if not
 - `@assert` and `@verify` have been hardened such that they can work correctly in constexpr contexts

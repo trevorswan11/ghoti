@@ -514,6 +514,12 @@ namespace {
 
 } // namespace
 
+auto const_eval::struct_field_align(const sema::types::struct_t& st, usize idx, usize ptr_size)
+    -> usize {
+    const auto natural{type_align_of(*st.fields[idx], ptr_size)};
+    return std::max(natural, static_cast<usize>(st.explicit_field_alignment(idx)));
+}
+
 auto const_eval::type_align_of(const sema::type& type, usize ptr_size) -> usize {
     PROFILE_FUNCTION();
     switch (type.get_kind()) {
@@ -548,13 +554,12 @@ auto const_eval::type_align_of(const sema::type& type, usize ptr_size) -> usize 
                     return int_abi_bytes(static_cast<u16>(*bits));
                 }
             }
-            return std::ranges::fold_left(st->fields | std::views::filter([](const auto* f) {
-                                              return f != nullptr;
-                                          }) | std::views::transform([ptr_size](const auto* f) {
-                                              return type_align_of(*f, ptr_size);
-                                          }),
-                                          1UZ,
-                                          [](usize a, usize b) { return std::max(a, b); });
+            usize max_align{1};
+            for (usize i{0}; i < st->fields.size(); ++i) {
+                if (!st->fields[i]) { continue; }
+                max_align = std::max(max_align, struct_field_align(*st, i, ptr_size));
+            }
+            return max_align;
         }
         UNREACHABLE("type_kind::STRUCT associated with improper type");
     case sema::type_kind::UNION:
@@ -642,9 +647,10 @@ auto const_eval::type_size_of(const sema::type& type, usize ptr_size) -> usize {
             }
             usize current_offset{0};
             usize max_align{1};
-            for (const auto* field : st->fields) {
+            for (usize i{0}; i < st->fields.size(); ++i) {
+                const auto* field{st->fields[i]};
                 if (!field) { continue; }
-                const auto f_align{type_align_of(*field, ptr_size)};
+                const auto f_align{struct_field_align(*st, i, ptr_size)};
                 max_align = std::max(max_align, f_align);
                 if (f_align > 0) {
                     current_offset = (current_offset + f_align - 1) / f_align * f_align;

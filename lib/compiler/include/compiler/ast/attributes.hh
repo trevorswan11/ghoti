@@ -33,6 +33,7 @@ enum class attribute_kind : u8 {
     DISCARDABLE,
     INLINE,
     NAKED,
+    ALIGN,
 };
 
 // Mirrors `builtin.Inline`
@@ -67,8 +68,9 @@ struct attribute_spec {
     -> stdx::option<const attribute_spec&>;
 [[nodiscard]] auto attribute_spec_of(attribute_kind kind) noexcept -> const attribute_spec&;
 
-// Applies only to a function definition, so on a declaration it reaches through to the initializer
-[[nodiscard]] auto is_function_only(attribute_kind kind) noexcept -> bool;
+// Describes a function definition rather than a name, so on a declaration initialized by a
+// function literal it reaches through to that literal
+[[nodiscard]] auto routes_to_fn_literal(attribute_kind kind) noexcept -> bool;
 
 // One `name` or `name(args...)` entry of an `@[...]` list
 struct attribute {
@@ -88,6 +90,11 @@ struct attribute_list {
         return stdx::none;
     }
 };
+
+// The first argument of `kind` in `attributes`, if that attribute is present
+[[nodiscard]] auto attribute_arg(const stdx::option<attribute_list>& attributes,
+                                 attribute_kind                      kind) noexcept
+    -> stdx::option<expr_handle>;
 
 // Parses `@[...]` with the current token on `@[`, leaving it on the closing `]`
 [[nodiscard]] auto parse_attribute_list(syntax::parser& parser)

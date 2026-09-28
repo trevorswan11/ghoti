@@ -396,26 +396,19 @@ auto formatter::format_field_aggregate(const Node&      node,
     return doc_manager_.concat(std::move(head));
 }
 
-auto formatter::format_aligned_field_type(stdx::option<expr_handle> alignment,
-                                          explicit_type_id          type) -> syntax::doc_id {
-    if (!alignment) { return format(type); }
-    return doc_manager_.concat({doc_manager_.text("@alignas("),
-                                format(*alignment),
-                                doc_manager_.text(") "),
-                                format(type)});
-}
-
 auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
     return format_field_aggregate(
         node,
         "struct ",
         [&](const struct_expr::field& field) -> syntax::doc_id {
             std::vector<syntax::doc_id> parts;
-            if (field.is_public()) { parts.emplace_back(doc_manager_.text("pub ")); }
-            parts.emplace_back(format(field.name));
+            parts.emplace_back(with_attributes(
+                field.attributes,
+                doc_manager_.concat({field.is_public() ? doc_manager_.text("pub ")
+                                                       : doc_manager_.nil(),
+                                     format(field.name)})));
             parts.emplace_back(doc_manager_.text(": "));
-            parts.emplace_back(
-                format_aligned_field_type(field.explicit_alignment, field.explicit_type));
+            parts.emplace_back(format(field.explicit_type));
             if (field.default_value) {
                 parts.emplace_back(doc_manager_.text(" = "));
                 parts.emplace_back(format(*field.default_value));
@@ -424,9 +417,6 @@ auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
         },
         [&](const struct_expr::field& field) -> usize {
             if (field.default_value) { return ast_.end_location_of(*field.default_value).line; }
-            if (field.explicit_alignment) {
-                return ast_.end_location_of(*field.explicit_alignment).line;
-            }
             return ast_.end_location_of(field.explicit_type).line;
         });
 }
@@ -436,10 +426,9 @@ auto formatter::format_union(const union_expr& node) -> syntax::doc_id {
         node,
         "union ",
         [&](const union_expr::field& field) -> syntax::doc_id {
-            return doc_manager_.concat(
-                {format(field.name),
-                 doc_manager_.text(": "),
-                 format_aligned_field_type(field.explicit_alignment, field.explicit_type)});
+            return doc_manager_.concat({with_attributes(field.attributes, format(field.name)),
+                                        doc_manager_.text(": "),
+                                        format(field.explicit_type)});
         },
         [&](const union_expr::field& field) -> usize {
             return ast_.end_location_of(field.explicit_type).line;

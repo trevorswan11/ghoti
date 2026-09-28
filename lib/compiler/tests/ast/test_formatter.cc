@@ -555,6 +555,9 @@ TEST_CASE("formatter round trip: attribute lists") {
     // Without one, a list written on its own line is pulled beside a head that fits.
     CHECK(format_source("@[discardable]\nconst log := fn(msg: i32): i32 { return msg; };") ==
           "@[discardable] const log := fn(msg: i32): i32 {\n    return msg;\n};\n");
+    round_trips("const S := struct { @[align(8)] a: u8, @[align(4)] pub b: u8 };");
+    round_trips("const U := union { @[align(16)] a: i32, b: u8 };");
+    round_trips("@[align(64)] var buffer: [4]u8 = undefined;");
     // A doc comment stays above the list.
     round_trips("/// Logs.\n@[discardable] const log := fn(msg: i32): i32 { return msg; };");
 }

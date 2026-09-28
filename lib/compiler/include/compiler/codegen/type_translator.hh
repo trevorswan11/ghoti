@@ -6,7 +6,10 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Type.h>
+#include <stdx/option.hh>
+#include <stdx/types.hh>
 #include <stdx/utility.hh>
+#include <vector>
 
 #include "compiler/sema/type.hh"
 
@@ -39,6 +42,11 @@ class type_translator {
     [[nodiscard]] auto get_void_ty() const noexcept -> llvm::Type*;
     [[nodiscard]] auto get_ptr_ty() const noexcept -> llvm::PointerType*;
 
+    // The LLVM element index of ghoti field `field` in `struct_ty`, past any inserted padding
+    [[nodiscard]] auto struct_field_index(llvm::Type* struct_ty, u32 field) const -> u32;
+    // A struct (or array of them) whose `@[align(n)]` fields raise its alignment past LLVM's
+    [[nodiscard]] auto explicit_alignment_of(const sema::type& type) -> stdx::option<u64>;
+
   private:
     using type_cache_t = ankerl::unordered_dense::map<const sema::type*, llvm::Type*>;
     using aggregate_identity_cache_t =
@@ -49,6 +57,10 @@ class type_translator {
     auto translate_array(const sema::types::array& a) -> llvm::Type*;
     auto translate_struct(const sema::types::struct_t& s, const sema::type& original)
         -> llvm::Type*;
+    // Lays `element_types` out at the offsets their `@[align(n)]` fields demand, if any differ
+    auto set_struct_body(llvm::StructType*               struct_ty,
+                         const sema::types::struct_t&    s,
+                         const std::vector<llvm::Type*>& element_types) -> void;
     auto translate_union(const sema::types::union_t& u, const sema::type& original) -> llvm::Type*;
     auto translate_enum(const sema::types::enum_t& e) -> llvm::Type*;
     auto translate_closure(const sema::types::closure_t& c, const sema::type& original)
@@ -62,6 +74,12 @@ class type_translator {
     type_cache_t               closure_cache_;
     aggregate_identity_cache_t struct_identity_cache_;
     aggregate_identity_cache_t union_identity_cache_;
+
+    struct padded_layout {
+        std::vector<u32> field_indices;
+        u64              alignment;
+    };
+    ankerl::unordered_dense::map<const llvm::Type*, padded_layout> padded_structs_;
 };
 
 } // namespace ghoti::codegen

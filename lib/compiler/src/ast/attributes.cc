@@ -49,6 +49,12 @@ constexpr std::array ALL_ATTRIBUTES{
                    .min_args = 0,
                    .max_args = 1,
                    .targets  = attribute_target::FN},
+    attribute_spec{.name     = "align",
+                   .kind     = attribute_kind::ALIGN,
+                   .min_args = 1,
+                   .max_args = 1,
+                   .targets  = attribute_target::DECL | attribute_target::FN |
+                              attribute_target::FIELD},
 };
 
 [[nodiscard]] auto parse_attribute_args(syntax::parser& parser)
@@ -124,8 +130,18 @@ auto attribute_spec_of(attribute_kind kind) noexcept -> const attribute_spec& {
     return *std::ranges::find(ALL_ATTRIBUTES, kind, &attribute_spec::kind);
 }
 
-auto is_function_only(attribute_kind kind) noexcept -> bool {
-    return attribute_spec_of(kind).targets == attribute_target::FN;
+auto routes_to_fn_literal(attribute_kind kind) noexcept -> bool {
+    const auto targets{attribute_spec_of(kind).targets};
+    return static_cast<bool>(targets & attribute_target::FN) &&
+           !static_cast<bool>(targets & attribute_target::FN_DECL);
+}
+
+auto attribute_arg(const stdx::option<attribute_list>& attributes, attribute_kind kind) noexcept
+    -> stdx::option<expr_handle> {
+    if (!attributes) { return stdx::none; }
+    const auto item{attributes->find(kind)};
+    if (!item || item->args.empty()) { return stdx::none; }
+    return item->args.front();
 }
 
 auto inline_mode_from_name(std::string_view name) noexcept -> stdx::option<inline_mode> {
