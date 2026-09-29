@@ -37,6 +37,18 @@ enum class attribute_kind : u8 {
     DEPRECATED,
 };
 
+// Mirrors `builtin.BranchHint`
+enum class branch_hint : u8 {
+    NONE,
+    LIKELY,
+    UNLIKELY,
+    COLD,
+    UNPREDICTABLE,
+};
+
+[[nodiscard]] auto branch_hint_from_name(std::string_view name) noexcept
+    -> stdx::option<branch_hint>;
+
 // Mirrors `builtin.Inline`
 enum class inline_mode : u8 {
     ALWAYS,

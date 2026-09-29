@@ -147,6 +147,15 @@ auto attribute_arg(const stdx::option<attribute_list>& attributes, attribute_kin
     return item->args.front();
 }
 
+auto branch_hint_from_name(std::string_view name) noexcept -> stdx::option<branch_hint> {
+    if (name == "none") { return branch_hint::NONE; }
+    if (name == "likely") { return branch_hint::LIKELY; }
+    if (name == "unlikely") { return branch_hint::UNLIKELY; }
+    if (name == "cold") { return branch_hint::COLD; }
+    if (name == "unpredictable") { return branch_hint::UNPREDICTABLE; }
+    return stdx::none;
+}
+
 auto inline_mode_from_name(std::string_view name) noexcept -> stdx::option<inline_mode> {
     if (name == "always") { return inline_mode::ALWAYS; }
     if (name == "never") { return inline_mode::NEVER; }

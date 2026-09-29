@@ -62,6 +62,7 @@ struct resolved_attributes {
     stdx::option<ast::inline_mode> inlining{};
     bool                           naked{false};
     stdx::option<u64>              alignment{};
+    bool                           cold{false}; // `@branchHint(.cold)` opens the body
 
     [[nodiscard]] auto operator==(const resolved_attributes&) const noexcept -> bool = default;
 };

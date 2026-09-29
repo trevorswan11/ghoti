@@ -1316,6 +1316,58 @@ auto emitter::emit_top_level_test(ast::node_id id, const ast::test_stmt& test) -
     }
 }
 
+auto emitter::apply_fn_attributes(gir::function& fn, const mod::module& owner, ast::node_id fn_node)
+    -> void {
+    sema::resolved_attributes resolved;
+    if (const auto folded{owner.attributes_of(fn_node)}) { resolved = *folded; }
+    if (const auto literal{owner.ast.get_as_opt<ast::function_expr>(fn_node)};
+        literal && literal->body.is_valid()) {
+        resolved.cold = branch_hint_of(owner, *literal->body) == ast::branch_hint::COLD;
+    }
+    fn.set_attributes(resolved);
+}
+
+auto emitter::branch_hint_of(const mod::module& owner, ast::node_id stmt)
+    -> stdx::option<ast::branch_hint> {
+    const auto block{owner.ast.get_as_opt<ast::block_stmt>(stmt)};
+    if (!block || block->statements.empty()) { return stdx::none; }
+    const auto first{owner.ast.get_as_opt<ast::expr_stmt>(*block->statements.front())};
+    if (!first) { return stdx::none; }
+    const auto call{owner.ast.get_as_opt<ast::call_expr>(*first->expression)};
+    if (!call || ast::node_id{call->function}.get_token_type() !=
+                     syntax::token_type_t::BUILTIN_BRANCH_HINT) {
+        return stdx::none;
+    }
+    const auto cv{const_eval_.try_eval(*call->arguments[0].as_opt<ast::expr_handle>())};
+    const auto variant{cv ? cv->as_opt<gir::const_enum>() : stdx::none};
+    return variant ? ast::branch_hint_from_name(variant->name) : stdx::none;
+}
+
+auto emitter::apply_branch_hints(gir::instruction&              branch,
+                                 stdx::option<ast::branch_hint> on_true,
+                                 stdx::option<ast::branch_hint> on_false) -> void {
+    static constexpr u32 LIKELY_WEIGHT{2'000};
+    static constexpr u32 UNLIKELY_WEIGHT{1};
+    const auto           weight_of{[](stdx::option<ast::branch_hint> hint) -> stdx::option<u32> {
+        if (hint == ast::branch_hint::LIKELY) { return LIKELY_WEIGHT; }
+        if (hint == ast::branch_hint::UNLIKELY || hint == ast::branch_hint::COLD) {
+            return UNLIKELY_WEIGHT;
+        }
+        return stdx::none;
+    }};
+    const auto           opposite{
+        [](u32 weight) { return weight == LIKELY_WEIGHT ? UNLIKELY_WEIGHT : LIKELY_WEIGHT; }};
+
+    const auto true_weight{weight_of(on_true)};
+    const auto false_weight{weight_of(on_false)};
+    if (true_weight || false_weight) {
+        branch.branch_weights.emplace(true_weight.value_or(opposite(*false_weight)),
+                                      false_weight.value_or(opposite(*true_weight)));
+    }
+    branch.unpredictable =
+        on_true == ast::branch_hint::UNPREDICTABLE || on_false == ast::branch_hint::UNPREDICTABLE;
+}
+
 auto emitter::safety_enabled() const -> bool {
     const auto current{builder_.get_function()};
     for (const auto& frame : scopes_ | std::views::reverse) {
@@ -3643,6 +3695,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                                     active_ast().location_of(call.function));
             return value{undefined_val{}, ret_type};
         }
+        case syntax::token_type_t::BUILTIN_BRANCH_HINT:        return value{void_val{}, ret_type};
         case syntax::token_type_t::BUILTIN_SET_RUNTIME_SAFETY: {
             const auto arg{*call.arguments[0].as_opt<ast::expr_handle>()};
             if (const auto cv{const_eval_.try_eval(arg)}) {
@@ -4554,7 +4607,11 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
     auto& merge_seg{fn.add_segment()};
 
     const auto false_target{alternate_seg_ptr ? alternate_seg_ptr->get_id() : merge_seg.get_id()};
-    builder_.emit_cond_goto(cond_val, consequence_seg.get_id(), false_target);
+    auto&      branch{builder_.emit_cond_goto(cond_val, consequence_seg.get_id(), false_target)};
+    apply_branch_hints(branch,
+                       branch_hint_of(active_mod(), *if_expr.consequence),
+                       if_expr.alternate ? branch_hint_of(active_mod(), **if_expr.alternate)
+                                         : stdx::none);
 
     // Consequence branch
     builder_.set_segment(consequence_seg);
@@ -6581,7 +6638,9 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
                                           bool_type}
                                   : test;
             }
-            builder_.emit_cond_goto(*matched, arm_body_seg.get_id(), next_arm_seg.get_id());
+            auto& branch{
+                builder_.emit_cond_goto(*matched, arm_body_seg.get_id(), next_arm_seg.get_id())};
+            apply_branch_hints(branch, branch_hint_of(active_mod(), *arm.dispatch), stdx::none);
         }
 
         builder_.set_segment(arm_body_seg);

@@ -166,10 +166,16 @@ class emitter {
                                sema::type&                   closure_type) -> void;
 
     // Copies the resolved `@[...]` attributes of `owner`'s function literal `fn_node` onto `fn`
-    static auto
-    apply_fn_attributes(gir::function& fn, const mod::module& owner, ast::node_id fn_node) -> void {
-        if (const auto resolved{owner.attributes_of(fn_node)}) { fn.set_attributes(*resolved); }
-    }
+    auto apply_fn_attributes(gir::function& fn, const mod::module& owner, ast::node_id fn_node)
+        -> void;
+
+    // The `@branchHint` opening `stmt`, if it is a block that starts with one
+    [[nodiscard]] auto branch_hint_of(const mod::module& owner, ast::node_id stmt)
+        -> stdx::option<ast::branch_hint>;
+    // Weights a two-way branch from the hints on its true and false sides
+    static auto apply_branch_hints(gir::instruction&              branch,
+                                   stdx::option<ast::branch_hint> on_true,
+                                   stdx::option<ast::branch_hint> on_false) -> void;
 
     // The `@[align(n)]` of a declaration's own storage
     [[nodiscard]] static auto decl_alignment(const mod::module& owner, ast::node_id decl)

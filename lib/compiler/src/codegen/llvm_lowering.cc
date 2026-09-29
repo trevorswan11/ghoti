@@ -23,6 +23,7 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/MDBuilder.h>
 #include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Value.h>
@@ -65,6 +66,7 @@ namespace {
 auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attributes& attributes)
     -> void {
     if (attributes.naked) { llvm_fn.addFnAttr(llvm::Attribute::Naked); }
+    if (attributes.cold) { llvm_fn.addFnAttr(llvm::Attribute::Cold); }
     if (attributes.alignment) { llvm_fn.setAlignment(llvm::Align{*attributes.alignment}); }
     if (!attributes.inlining) { return; }
     switch (*attributes.inlining) {
@@ -3071,7 +3073,15 @@ auto llvm_lowering::emit_cond_goto(const gir::instruction& inst) -> void {
     const auto false_it{segment_blocks_.find(*inst.false_segment)};
     ASSERT(true_it != segment_blocks_.end() && false_it != segment_blocks_.end(),
            "COND_GOTO branch target blocks not found");
-    builder_.CreateCondBr(cond_val, true_it->second, false_it->second);
+    auto*           branch{builder_.CreateCondBr(cond_val, true_it->second, false_it->second)};
+    llvm::MDBuilder md{context_};
+    if (inst.branch_weights) {
+        const auto [on_true, on_false]{*inst.branch_weights};
+        branch->setMetadata(llvm::LLVMContext::MD_prof, md.createBranchWeights(on_true, on_false));
+    }
+    if (inst.unpredictable) {
+        branch->setMetadata(llvm::LLVMContext::MD_unpredictable, md.createUnpredictable());
+    }
 }
 
 auto llvm_lowering::emit_unreachable() -> void { builder_.CreateUnreachable(); }

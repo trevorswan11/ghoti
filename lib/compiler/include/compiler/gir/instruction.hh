@@ -255,6 +255,10 @@ struct instruction {
     stdx::option<u8> atomic_fail_order{stdx::none}; // `@cmpxchgWeak`/`Strong`'s failure order
     stdx::option<u64> alignment{stdx::none};         // an `@[align(n)]` stack slot
 
+    // A `@branchHint`ed `COND_GOTO`: relative weights of its true and false targets
+    stdx::option<std::pair<u32, u32>> branch_weights{stdx::none};
+    bool                              unpredictable{false};
+
     [[nodiscard]] auto is_terminator() const noexcept -> bool { return gir::is_terminator(kind); }
     [[nodiscard]] auto has_result() const noexcept -> bool { return result.has_value(); }
     [[nodiscard]] auto is_volatile() const noexcept -> bool {

@@ -130,6 +130,9 @@ pub weak const skip_handler := fn(_: []u8, _: SourceLocation): void {};
 /// Exact set of calling conventions ghoti supports, matching `ast::calling_convention` 1:1.
 pub const CallConv := enum { c, sysv, win64, stdcall, fastcall, aapcs };
 
+/// How likely a branch is to run, for `@branchHint`, matching `ast::branch_hint` 1:1.
+pub const BranchHint := enum { none, likely, unlikely, cold, unpredictable };
+
 /// The build mode `--mode` selected, matching `sema::optimize_mode` 1:1.
 pub const OptimizeMode := enum { debug, release_safe, release_fast, release_small };
 

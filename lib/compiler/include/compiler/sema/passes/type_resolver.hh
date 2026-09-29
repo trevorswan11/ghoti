@@ -366,6 +366,15 @@ class type_resolver {
     auto check_attribute_conflicts(const attribute_refs& items, const resolved_attributes& resolved)
         -> void;
     [[nodiscard]] auto fold_attribute_bool(const ast::attribute& item) -> stdx::option<bool>;
+    enum class hint_site : u8 {
+        BRANCH,  // an `if`/`else` branch or `match` arm body
+        FN_BODY, // a function literal's body
+    };
+    // What the block holding the statement being resolved is the body of, if anything hintable
+    [[nodiscard]] auto hint_site_of(const ast::block_stmt& block) -> stdx::option<hint_site>;
+    ankerl::unordered_dense::map<const ast::block_stmt*, hint_site> hint_sites_;
+    bool                                                            hint_sites_built_{false};
+
     // The safety a `@setRuntimeSafety` in this function's enclosing blocks chose, else the build's
     [[nodiscard]] auto scoped_runtime_safety() const -> bool;
 

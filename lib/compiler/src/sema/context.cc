@@ -278,6 +278,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::OPTIMIZE_MODE, params(), t_c_str);
     inject_function(bis::RUNTIME_SAFETY, params(), t_bool);
     inject_function(bis::SET_RUNTIME_SAFETY, params(t_bool), t_void);
+    inject_function(bis::BRANCH_HINT, params(t_auto), t_void);
 
     inject_function(bis::SET_EVAL_RECURSION_LIMIT, params(t_usize), t_void);
     inject_function(bis::SET_EVAL_UNROLL_LIMIT, params(t_usize), t_void);
@@ -317,7 +318,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
 constexpr std::string_view BUILTIN_MODULE_SOURCE{
 #include "builtin.gh.inc"
 };
-// recompile: attributes, optimize mode
+// recompile: attributes, optimize mode, branch hint
 
 constexpr std::string_view BUILTIN_NAMESPACE{"builtin"};
 

@@ -387,6 +387,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `@optimizeMode()` returns the build's `builtin.OptimizeMode` (`.debug`, `.release_safe`, `.release_fast`, `.release_small`) and `@runtimeSafety()` whether runtime safety checks are on; both fold at compile time
     - `optimize` and `safety` are also `@cfg` / `@cfgValue` names: `@cfg (optimize == .debug) { ... }`, `@cfg (safety) { ... }`
 - `@setRuntimeSafety(bool)` turns runtime safety checks on or off for the rest of its block, nested blocks included; it never reaches into called functions, and `@runtimeSafety()` observes it
+- `@branchHint(hint)` as the first statement of an `if`/`else` branch or `match` arm weights that branch (`builtin.BranchHint`: `.none`, `.likely`, `.unlikely`, `.cold`, `.unpredictable`)
+    - `@branchHint(.cold)` as the first statement of a function body marks the function cold
 - Constexpr can now be applied to labels and blocks (expression slots and top level)
     - They must be constant evaluatable and will error if not
 - `@assert` and `@verify` have been hardened such that they can work correctly in constexpr contexts

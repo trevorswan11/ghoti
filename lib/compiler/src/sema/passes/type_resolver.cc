@@ -1529,6 +1529,36 @@ template <ast::IndexableID ID>
         resolving_.scoped_runtime_safety.insert_or_assign(id.get_index(), scoped_runtime_safety());
         return_type = &builtin.return_type;
         break;
+    case token_type_t::BUILTIN_BRANCH_HINT: {
+        const auto      arg{*call.arguments[0].as_opt<ast::expr_handle>()};
+        gir::const_eval evaluator{ctx_, resolving_};
+        const auto      cv{evaluator.try_eval(arg)};
+        const auto      variant{cv ? cv->as_opt<gir::const_enum>() : stdx::none};
+        if (!variant) {
+            return make_sema_err("@branchHint requires a compile-time 'builtin.BranchHint'",
+                                 error::TYPE_MISMATCH,
+                                 resolving_.ast.location_of(arg));
+        }
+
+        const auto site{active_blocks_.empty() || active_blocks_.back().current_stmt_idx != 0
+                            ? stdx::none
+                            : hint_site_of(*active_blocks_.back().block)};
+        if (!site) {
+            return make_sema_err("@branchHint must be the first statement of an 'if'/'else' "
+                                 "branch, a 'match' arm, or a function body",
+                                 error::TYPE_MISMATCH,
+                                 resolving_.ast.location_of(call.function));
+        }
+        const auto hint{ast::branch_hint_from_name(variant->name)};
+        const bool fits_fn_body{hint == ast::branch_hint::COLD || hint == ast::branch_hint::NONE};
+        if (*site == hint_site::FN_BODY && !fits_fn_body) {
+            return make_sema_err("A function body only accepts '@branchHint(.cold)'",
+                                 error::TYPE_MISMATCH,
+                                 resolving_.ast.location_of(arg));
+        }
+        return_type = &ctx_.get_builtin_resolved_type(type_kind::VOID_);
+        break;
+    }
     case token_type_t::BUILTIN_SET_RUNTIME_SAFETY: {
         if (active_blocks_.empty() || return_trackers_.empty()) {
             return make_sema_err("@setRuntimeSafety can only be used within a function body",
@@ -3623,6 +3653,9 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
             break;
         case token_type_t::BUILTIN_ENUM:
             descriptor_hint.emplace(ctx_.get_builtin_type("EnumInfo"));
+            break;
+        case token_type_t::BUILTIN_BRANCH_HINT:
+            descriptor_hint.emplace(ctx_.get_builtin_type("BranchHint"));
             break;
         default: break;
         }
@@ -9834,6 +9867,38 @@ auto type_resolver::fold_attribute_bool(const ast::attribute& item) -> stdx::opt
                             error::ILLEGAL_ATTRIBUTE,
                             resolving_.ast.location_of(arg));
     return stdx::none;
+}
+
+auto type_resolver::hint_site_of(const ast::block_stmt& block) -> stdx::option<hint_site> {
+    if (!hint_sites_built_) {
+        hint_sites_built_ = true;
+        const auto& tree{resolving_.ast};
+        const auto  add_branch{[&](ast::stmt_handle stmt) {
+            if (const auto branch{tree.get_as_opt<ast::block_stmt>(*stmt)}) {
+                hint_sites_.try_emplace(branch.get(), hint_site::BRANCH);
+            }
+        }};
+        for (const auto id : tree.nodes_of<ast::if_expr>()) {
+            const auto& if_expr{tree.get_as<ast::if_expr>(id)};
+            add_branch(if_expr.consequence);
+            if (if_expr.alternate) { add_branch(*if_expr.alternate); }
+        }
+        for (const auto id : tree.nodes_of<ast::match_expr>()) {
+            for (const auto& arm : tree.get_as<ast::match_expr>(id).arms) {
+                add_branch(arm.dispatch);
+            }
+        }
+        for (const auto id : tree.nodes_of<ast::function_expr>()) {
+            const auto& fn{tree.get_as<ast::function_expr>(id)};
+            if (fn.body.is_valid()) {
+                hint_sites_.try_emplace(&tree.get_as<ast::block_stmt>(*fn.body),
+                                        hint_site::FN_BODY);
+            }
+        }
+    }
+    const auto it{hint_sites_.find(&block)};
+    if (it == hint_sites_.end()) { return stdx::none; }
+    return it->second;
 }
 
 auto type_resolver::scoped_runtime_safety() const -> bool {

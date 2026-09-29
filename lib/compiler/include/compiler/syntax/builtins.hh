@@ -97,6 +97,7 @@ constexpr builtin_t OPTIMIZE_MODE{"@optimizeMode", token_type_t::BUILTIN_OPTIMIZ
 constexpr builtin_t RUNTIME_SAFETY{"@runtimeSafety", token_type_t::BUILTIN_RUNTIME_SAFETY};
 constexpr builtin_t SET_RUNTIME_SAFETY{"@setRuntimeSafety",
                                        token_type_t::BUILTIN_SET_RUNTIME_SAFETY};
+constexpr builtin_t BRANCH_HINT{"@branchHint", token_type_t::BUILTIN_BRANCH_HINT};
 
 constexpr builtin_t SET_EVAL_RECURSION_LIMIT{"@setEvalRecursionLimit",
                                              token_type_t::BUILTIN_SET_EVAL_RECURSION_LIMIT};
@@ -215,6 +216,7 @@ constexpr std::array ALL_BUILTINS{
     builtins::OPTIMIZE_MODE,
     builtins::RUNTIME_SAFETY,
     builtins::SET_RUNTIME_SAFETY,
+    builtins::BRANCH_HINT,
     builtins::SET_EVAL_RECURSION_LIMIT,
     builtins::SET_EVAL_UNROLL_LIMIT,
     builtins::SET_MAIN_SYMBOL,

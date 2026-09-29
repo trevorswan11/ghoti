@@ -3765,7 +3765,8 @@ auto const_eval::eval_builtin(ast::node_id          id,
                                                                           : ctx_.runtime_safety};
         return const_value{enabled, ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
     }
-    case syntax::token_type_t::BUILTIN_SET_RUNTIME_SAFETY: return const_value{void_val{}};
+    case syntax::token_type_t::BUILTIN_SET_RUNTIME_SAFETY:
+    case syntax::token_type_t::BUILTIN_BRANCH_HINT:        return const_value{void_val{}};
     case syntax::token_type_t::BUILTIN_TARGET_ENDIAN: {
         const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
         return target_enum_value("Endian", facts.endian);
