@@ -253,7 +253,7 @@ struct instruction {
     stdx::option<u8> atomic_op{stdx::none};         // `@atomicRmw`'s op
     stdx::option<u8> atomic_order{stdx::none};      // `atomic_order` is the memory order
     stdx::option<u8> atomic_fail_order{stdx::none}; // `@cmpxchgWeak`/`Strong`'s failure order
-    stdx::option<u64> alignment{stdx::none};        // an `@[align(n)]` stack slot
+    stdx::option<u64> alignment{stdx::none};         // an `@[align(n)]` stack slot
 
     [[nodiscard]] auto is_terminator() const noexcept -> bool { return gir::is_terminator(kind); }
     [[nodiscard]] auto has_result() const noexcept -> bool { return result.has_value(); }

@@ -18,9 +18,9 @@ namespace {
 using helpers::mock_file;
 
 // The warning messages resolving `source` reported, after checking it raised no errors
-[[nodiscard]] auto warnings_of(std::string_view                 source,
-                               sema::deprecation_policy         policy  = sema::deprecation_policy::WARN,
-                               const std::vector<mock_file>&    imports = {})
+[[nodiscard]] auto warnings_of(std::string_view         source,
+                               sema::deprecation_policy policy = sema::deprecation_policy::WARN,
+                               const std::vector<mock_file>& imports = {})
     -> std::vector<std::string> {
     auto [ctx, idx]{helpers::collect(source, imports)};
     ctx->analyzer.set_deprecation_policy(policy);

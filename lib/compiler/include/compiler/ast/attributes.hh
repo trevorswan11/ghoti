@@ -94,8 +94,7 @@ struct attribute_list {
 
 // The first argument of `kind` in `attributes`, if that attribute is present
 [[nodiscard]] auto attribute_arg(const stdx::option<attribute_list>& attributes,
-                                 attribute_kind                      kind) noexcept
-    -> stdx::option<expr_handle>;
+                                 attribute_kind kind) noexcept -> stdx::option<expr_handle>;
 
 // Parses `@[...]` with the current token on `@[`, leaving it on the closing `]`
 [[nodiscard]] auto parse_attribute_list(syntax::parser& parser)

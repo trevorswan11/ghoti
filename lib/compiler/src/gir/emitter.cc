@@ -3666,7 +3666,9 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         case syntax::token_type_t::BUILTIN_TYPE_NAME:
         case syntax::token_type_t::BUILTIN_TARGET_OS:
         case syntax::token_type_t::BUILTIN_TARGET_ARCH:
-        case syntax::token_type_t::BUILTIN_TARGET_TRIPLE: {
+        case syntax::token_type_t::BUILTIN_TARGET_TRIPLE:
+        case syntax::token_type_t::BUILTIN_OPTIMIZE_MODE:
+        case syntax::token_type_t::BUILTIN_RUNTIME_SAFETY: {
             if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
             break;
         }

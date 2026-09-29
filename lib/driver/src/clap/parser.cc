@@ -175,12 +175,7 @@ auto parser::setup_run_subcmd() -> gsl::not_null<CLI::App*> {
     sub->add_option(
         "-L,--library-path", run_opts_.library_paths, "Add directory to library search paths");
     sub->add_option("-l,--library", run_opts_.libraries, "Link against library name");
-    sub->add_option(
-        "-O,--opt-level", run_opts_.opt_level_str, "Optimization level (0, 1, 2, 3, s, z)");
-    sub->add_flag("--release", run_opts_.release, "Build in release mode (defaults to -O2)")
-        ->default_val(run_opts_.release);
-    sub->add_flag("--unsafe", run_opts_.unsafe, "Disable all runtime safety checks")
-        ->default_val(run_opts_.unsafe);
+    cmd::build::add_mode_option(sub, run_opts_);
     cmd::build::add_deprecated_option(sub, run_opts_);
     return sub;
 }

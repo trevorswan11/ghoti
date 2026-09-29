@@ -53,8 +53,8 @@ constexpr std::array ALL_ATTRIBUTES{
                    .kind     = attribute_kind::ALIGN,
                    .min_args = 1,
                    .max_args = 1,
-                   .targets  = attribute_target::DECL | attribute_target::FN |
-                              attribute_target::FIELD},
+                   .targets =
+                       attribute_target::DECL | attribute_target::FN | attribute_target::FIELD},
     attribute_spec{.name     = "deprecated",
                    .kind     = attribute_kind::DEPRECATED,
                    .min_args = 0,
@@ -78,9 +78,8 @@ constexpr std::array ALL_ATTRIBUTES{
     return args;
 }
 
-[[nodiscard]] auto check_arity(const attribute_spec&      spec,
-                               usize                      arg_count,
-                               const syntax::token_t&     name_token)
+[[nodiscard]] auto
+check_arity(const attribute_spec& spec, usize arg_count, const syntax::token_t& name_token)
     -> stdx::result<void, syntax::diagnostic> {
     if (arg_count >= spec.min_args && arg_count <= spec.max_args) { return {}; }
     const auto expected{spec.min_args == spec.max_args
@@ -98,11 +97,11 @@ constexpr std::array ALL_ATTRIBUTES{
 [[nodiscard]] auto parse_one_attribute(syntax::parser& parser, const attribute_list& seen)
     -> stdx::result<attribute, syntax::diagnostic> {
     if (!parser.peek_token_is(syntax::token_type_t::IDENT)) {
-        return make_syntax_err(fmt::format("Expected an attribute name, found {}",
-                                           syntax::token_type::describe(
-                                               parser.get_peek_token().type)),
-                               syntax::error::UNKNOWN_ATTRIBUTE,
-                               parser.get_peek_token());
+        return make_syntax_err(
+            fmt::format("Expected an attribute name, found {}",
+                        syntax::token_type::describe(parser.get_peek_token().type)),
+            syntax::error::UNKNOWN_ATTRIBUTE,
+            parser.get_peek_token());
     }
     parser.advance();
     const auto name_token{parser.get_current_token()};
@@ -168,9 +167,8 @@ auto parse_attribute_list(syntax::parser& parser)
     TRY(parser.expect_peek(syntax::token_type_t::RBRACKET));
 
     if (list.items.empty()) {
-        return make_syntax_err("An attribute list may not be empty",
-                               syntax::error::MISPLACED_ATTRIBUTES,
-                               open_token);
+        return make_syntax_err(
+            "An attribute list may not be empty", syntax::error::MISPLACED_ATTRIBUTES, open_token);
     }
     if (parser.peek_token_is(syntax::token_type_t::AT_LBRACKET)) {
         return make_syntax_err("Only one attribute list may be applied; merge them into one",

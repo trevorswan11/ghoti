@@ -64,21 +64,18 @@ TEST_CASE("build-obj subcommand parser") {
         CHECK(opts.output_path == "bin/out.o");
     }
 
-    SECTION("Runtime safety defaults on and --unsafe turns it off") {
-        {
-            mock_argv    args{"ghoti", "build-obj", "main.gh"};
+    SECTION("Runtime safety follows the build mode") {
+        const auto safety_for{[](std::string_view mode) {
+            mock_argv    args{"ghoti", "build-obj", "--mode", std::string{mode}, "main.gh"};
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
             auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
-            CHECK(build_cmd.get_opts().runtime_safety);
-        }
-        {
-            mock_argv    args{"ghoti", "build-obj", "--unsafe", "main.gh"};
-            clap::parser parser{args.argc(), args.argv(), std::cerr, false};
-            auto         cmd{UNWRAP(parser.parse())};
-            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
-            CHECK_FALSE(build_cmd.get_opts().runtime_safety);
-        }
+            return build_cmd.get_opts().runtime_safety;
+        }};
+        CHECK(safety_for("debug"));
+        CHECK(safety_for("release_safe"));
+        CHECK_FALSE(safety_for("release_fast"));
+        CHECK_FALSE(safety_for("release_small"));
     }
 
     SECTION("Target options parsing") {
@@ -100,41 +97,29 @@ TEST_CASE("build-obj subcommand parser") {
         CHECK(target_opts.features == "+avx2");
     }
 
-    SECTION("Optimization flag parsing") {
-        SECTION("Default is O0") {
+    SECTION("Build mode parsing") {
+        SECTION("Default is debug at O0") {
             mock_argv    args{"ghoti", "build-obj", "main.gh"};
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
             auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
             const auto&  opts{build_cmd.get_opts()};
+            CHECK(opts.mode == sema::optimize_mode::DEBUG);
             CHECK(opts.opt_opts.level == codegen::opt_level::O0);
         }
 
-        SECTION("Release flag sets O2 default") {
-            mock_argv    args{"ghoti", "build-obj", "--release", "main.gh"};
-            clap::parser parser{args.argc(), args.argv(), std::cerr, false};
-            auto         cmd{UNWRAP(parser.parse())};
-            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
-            const auto&  opts{build_cmd.get_opts()};
-            CHECK(opts.opt_opts.level == codegen::opt_level::O2);
-        }
-
-        SECTION("Explicit -O flags override default") {
-            mock_argv    args{"ghoti", "build-obj", "-O3", "main.gh"};
-            clap::parser parser{args.argc(), args.argv(), std::cerr, false};
-            auto         cmd{UNWRAP(parser.parse())};
-            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
-            const auto&  opts{build_cmd.get_opts()};
-            CHECK(opts.opt_opts.level == codegen::opt_level::O3);
-        }
-
-        SECTION("Explicit -Os and -Oz flags") {
-            mock_argv    args{"ghoti", "build-obj", "-Os", "main.gh"};
-            clap::parser parser{args.argc(), args.argv(), std::cerr, false};
-            auto         cmd{UNWRAP(parser.parse())};
-            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
-            const auto&  opts{build_cmd.get_opts()};
-            CHECK(opts.opt_opts.level == codegen::opt_level::Os);
+        SECTION("Each release mode picks its optimization level") {
+            const auto level_for{[](std::string_view flag, std::string_view mode) {
+                mock_argv args{
+                    "ghoti", "build-obj", std::string{flag}, std::string{mode}, "main.gh"};
+                clap::parser parser{args.argc(), args.argv(), std::cerr, false};
+                auto         cmd{UNWRAP(parser.parse())};
+                auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+                return build_cmd.get_opts().opt_opts.level;
+            }};
+            CHECK(level_for("--mode", "release_safe") == codegen::opt_level::O2);
+            CHECK(level_for("--mode", "release_fast") == codegen::opt_level::O3);
+            CHECK(level_for("-M", "release_small") == codegen::opt_level::Oz);
         }
 
         SECTION("Pass debugging and timing flags") {
@@ -147,19 +132,23 @@ TEST_CASE("build-obj subcommand parser") {
             CHECK(opts.opt_opts.time_passes);
         }
 
-        SECTION("An explicitly empty optimization level is an error, not the default") {
-            mock_argv          args{"ghoti", "build-obj", "-O", "", "main.gh"};
-            std::ostringstream error_ss;
-            clap::parser       parser{args.argc(), args.argv(), error_ss, false};
-            CHECK(UNWRAP_ERR(parser.parse()) == clap::error::INVALID_OPTIMIZATION);
+        SECTION("An unknown or empty build mode is an error") {
+            for (const auto* mode : {"fast", ""}) {
+                mock_argv          args{"ghoti", "build-obj", "--mode", mode, "main.gh"};
+                std::ostringstream error_ss;
+                clap::parser       parser{args.argc(), args.argv(), error_ss, false};
+                CHECK(UNWRAP_ERR(parser.parse()) == clap::error::INVALID_OPTIMIZATION);
+                CHECK_FALSE(error_ss.view().empty());
+            }
         }
 
-        SECTION("Invalid optimization level returns error") {
-            mock_argv          args{"ghoti", "build-obj", "-Oinvalid", "main.gh"};
-            std::ostringstream error_ss;
-            clap::parser       parser{args.argc(), args.argv(), error_ss, false};
-            CHECK(UNWRAP_ERR(parser.parse()) == clap::error::INVALID_OPTIMIZATION);
-            CHECK_FALSE(error_ss.view().empty());
+        SECTION("The removed -O, --release, and --unsafe flags are rejected") {
+            for (const auto* flag : {"-O2", "--release", "--unsafe"}) {
+                mock_argv          args{"ghoti", "build-obj", flag, "main.gh"};
+                std::ostringstream error_ss;
+                clap::parser       parser{args.argc(), args.argv(), error_ss, false};
+                CHECK_FALSE(parser.parse());
+            }
         }
     }
 

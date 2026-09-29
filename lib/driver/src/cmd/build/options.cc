@@ -38,6 +38,30 @@ namespace ghoti::cmd::build {
 
 namespace {
 
+[[nodiscard]] auto parse_optimize_mode(std::string_view name) -> stdx::option<sema::optimize_mode> {
+    for (const auto mode : {sema::optimize_mode::DEBUG,
+                            sema::optimize_mode::RELEASE_SAFE,
+                            sema::optimize_mode::RELEASE_FAST,
+                            sema::optimize_mode::RELEASE_SMALL}) {
+        if (sema::optimize_mode_name(mode) == name) { return mode; }
+    }
+    return stdx::none;
+}
+
+[[nodiscard]] auto mode_opt_level(sema::optimize_mode mode) -> codegen::opt_level {
+    switch (mode) {
+    case sema::optimize_mode::DEBUG:         return codegen::opt_level::O0;
+    case sema::optimize_mode::RELEASE_SAFE:  return codegen::opt_level::O2;
+    case sema::optimize_mode::RELEASE_FAST:  return codegen::opt_level::O3;
+    case sema::optimize_mode::RELEASE_SMALL: return codegen::opt_level::Oz;
+    }
+    return codegen::opt_level::O0;
+}
+
+[[nodiscard]] auto mode_has_runtime_safety(sema::optimize_mode mode) -> bool {
+    return mode == sema::optimize_mode::DEBUG || mode == sema::optimize_mode::RELEASE_SAFE;
+}
+
 [[nodiscard]] auto parse_deprecation_policy(std::string_view name) -> sema::deprecation_policy {
     if (name == "error") { return sema::deprecation_policy::DENY; }
     if (name == "ignore") { return sema::deprecation_policy::ALLOW; }
@@ -45,6 +69,14 @@ namespace {
 }
 
 } // namespace
+
+auto add_mode_option(CLI::App* subcmd, raw_options& opts) -> void {
+    subcmd
+        ->add_option("-M,--mode",
+                     opts.mode,
+                     "Build mode: debug (default), release_safe, release_fast, or release_small")
+        ->default_val(opts.mode);
+}
 
 auto add_deprecated_option(CLI::App* subcmd, raw_options& opts) -> void {
     subcmd
@@ -63,25 +95,15 @@ auto options::process_raw(const raw_options&   raw,
         .time_passes   = raw.time_passes,
     };
 
-    if (raw.opt_level_str && raw.release) {
-        clap::warn_error(
-            error_stream,
-            fmt::format("--release is overridden by the explicit -O {}", *raw.opt_level_str));
+    const auto mode{parse_optimize_mode(raw.mode)};
+    if (!mode) {
+        return clap::fatal_error(error_stream,
+                                 fmt::format("invalid build mode '{}'; expected debug, "
+                                             "release_safe, release_fast, or release_small",
+                                             raw.mode),
+                                 clap::error::INVALID_OPTIMIZATION);
     }
-    if (raw.opt_level_str) {
-        if (auto level{codegen::parse_opt_level(*raw.opt_level_str)}) {
-            opt_opts.level = *level;
-        } else {
-            return clap::fatal_error(
-                error_stream,
-                fmt::format("invalid optimization level '{}'", *raw.opt_level_str),
-                clap::error::INVALID_OPTIMIZATION);
-        }
-    } else if (raw.release) {
-        opt_opts.level = codegen::opt_level::O2;
-    } else {
-        opt_opts.level = codegen::opt_level::O0;
-    }
+    opt_opts.level = mode_opt_level(*mode);
 
     std::filesystem::path input_path{raw.input};
     std::filesystem::path output_path;
@@ -145,7 +167,8 @@ auto options::process_raw(const raw_options&   raw,
         .libraries         = raw.libraries,
         .forwarded_args    = raw.forwarded_args,
         .dynamic           = raw.dynamic,
-        .runtime_safety    = !raw.unsafe,
+        .mode              = *mode,
+        .runtime_safety    = mode_has_runtime_safety(*mode),
         .deprecated_policy = parse_deprecation_policy(raw.deprecated),
         .output_explicit   = !raw.output.empty(),
         .emit_gir_path     = std::move(emit_gir_path),
@@ -171,6 +194,7 @@ compilation::compilation(options& opts, std::ostream& error_stream)
     : opts_{opts}, error_stream_{error_stream}, manager_{loader_},
       analyzer_{manager_, error_stream_, true, opts_.target_opts, false, opts_.runtime_safety} {
     analyzer_.set_deprecation_policy(opts_.deprecated_policy);
+    analyzer_.set_optimize_mode(opts_.mode);
     // Spawned children resolve a bare relative name via PATH, so pin the output path first
     opts_.make_output_path_absolute();
 }
@@ -337,10 +361,7 @@ auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_v
     subcmd->add_option("--target", opts.target, "Target triple");
     subcmd->add_option("--cpu", opts.cpu, "Target CPU architecture")->default_val(opts.cpu);
     subcmd->add_option("--features", opts.features, "Target CPU features");
-    subcmd->add_option(
-        "-O,--opt-level", opts.opt_level_str, "Optimization level (0, 1, 2, 3, s, z)");
-    subcmd->add_flag("--release", opts.release, "Build in release mode (defaults to -O2)")
-        ->default_val(opts.release);
+    add_mode_option(subcmd, opts);
     subcmd
         ->add_flag("--debug-passes",
                    opts.debug_passes,
@@ -348,8 +369,6 @@ auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_v
         ->default_val(opts.debug_passes);
     subcmd->add_flag("--time-passes", opts.time_passes, "Enable pass execution timing report")
         ->default_val(opts.time_passes);
-    subcmd->add_flag("--unsafe", opts.unsafe, "Disable all runtime safety checks")
-        ->default_val(opts.unsafe);
     add_deprecated_option(subcmd, opts);
     subcmd
         ->add_option("--emit-gir", opts.emit_gir_path, "Write the GIR dump to the given file path")

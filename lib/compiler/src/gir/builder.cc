@@ -24,7 +24,7 @@ auto builder::emit_instruction(instruction inst) -> instruction& {
     return segment_->append(std::move(inst));
 }
 
-auto builder::emit_alloca(sema::type&       type,
+auto builder::emit_alloca(sema::type& type,
                           std::string_view,
                           bool              is_const,
                           stdx::option<u64> alignment) -> local_id {

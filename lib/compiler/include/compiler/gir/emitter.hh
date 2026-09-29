@@ -160,9 +160,8 @@ class emitter {
                                sema::type&                   closure_type) -> void;
 
     // Copies the resolved `@[...]` attributes of `owner`'s function literal `fn_node` onto `fn`
-    static auto apply_fn_attributes(gir::function&     fn,
-                                    const mod::module& owner,
-                                    ast::node_id       fn_node) -> void {
+    static auto
+    apply_fn_attributes(gir::function& fn, const mod::module& owner, ast::node_id fn_node) -> void {
         if (const auto resolved{owner.attributes_of(fn_node)}) { fn.set_attributes(*resolved); }
     }
 

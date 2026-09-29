@@ -357,15 +357,14 @@ class type_resolver {
     // Validates `items` against what they annotate and folds them
     [[nodiscard]] auto resolve_attributes(const attribute_refs& items,
                                           ast::attribute_target site,
-                                          bool                  returns_void)
-        -> resolved_attributes;
-    auto resolve_decl_attributes(ast::node_id          id,
-                                 const ast::decl_stmt& decl,
-                                 const type::data_t&   type_data) -> void;
+                                          bool returns_void) -> resolved_attributes;
+    auto               resolve_decl_attributes(ast::node_id          id,
+                                               const ast::decl_stmt& decl,
+                                               const type::data_t&   type_data) -> void;
     // A literal's own list plus the function-only attributes of the declaration it initializes
     auto resolve_fn_literal_attributes(ast::node_id id, const ast::function_expr& fn) -> void;
-    auto check_attribute_conflicts(const attribute_refs&      items,
-                                   const resolved_attributes& resolved) -> void;
+    auto check_attribute_conflicts(const attribute_refs& items, const resolved_attributes& resolved)
+        -> void;
     [[nodiscard]] auto fold_attribute_bool(const ast::attribute& item) -> stdx::option<bool>;
     // `deprecated` takes at most a string literal message
     auto check_deprecation_message(const ast::attribute& item) -> void;
@@ -397,8 +396,7 @@ class type_resolver {
     [[nodiscard]] auto discardable_holds(const mod::module&                       home,
                                          ast::node_id                             owner,
                                          const stdx::option<ast::attribute_list>& attributes,
-                                         ast::node_id                             call_id) const
-        -> stdx::option<bool>;
+                                         ast::node_id call_id) const -> stdx::option<bool>;
     // Errors on a non-`void` call result dropped in statement position
     auto check_unused_result(ast::node_id stmt_id, const ast::expr_stmt& stmt) -> void;
 

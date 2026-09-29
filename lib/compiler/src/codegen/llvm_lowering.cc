@@ -1786,8 +1786,8 @@ auto llvm_lowering::emit_alloca(const gir::instruction& inst) -> llvm::Value* {
     }
 
     auto* slot{builder_.CreateAlloca(elem_ty, nullptr, "slot")};
-    const auto wanted{std::max(inst.alignment.value_or(0),
-                               types_.explicit_alignment_of(*inst.type).value_or(0))};
+    const auto wanted{
+        std::max(inst.alignment.value_or(0), types_.explicit_alignment_of(*inst.type).value_or(0))};
     if (wanted > slot->getAlign().value()) { slot->setAlignment(llvm::Align{wanted}); }
     if (inst.result) { set_local(*inst.result, slot); }
     return slot;
@@ -1884,7 +1884,8 @@ auto llvm_lowering::emit_get_element_ptr(const gir::instruction& inst) -> llvm::
                 }
                 const bool is_field_index{indices.size() == 1 &&
                                           base_type.get_kind() == sema::type_kind::STRUCT};
-                if (auto* ci{llvm::dyn_cast_or_null<llvm::ConstantInt>(idx)}; ci && is_field_index) {
+                if (auto* ci{llvm::dyn_cast_or_null<llvm::ConstantInt>(idx)};
+                    ci && is_field_index) {
                     const auto field{static_cast<u32>(ci->getZExtValue())};
                     idx = builder_.getInt32(types_.struct_field_index(source_elem_ty, field));
                 }

@@ -130,6 +130,9 @@ pub weak const skip_handler := fn(_: []u8, _: SourceLocation): void {};
 /// Exact set of calling conventions ghoti supports, matching `ast::calling_convention` 1:1.
 pub const CallConv := enum { c, sysv, win64, stdcall, fastcall, aapcs };
 
+/// The build mode `--mode` selected, matching `sema::optimize_mode` 1:1.
+pub const OptimizeMode := enum { debug, release_safe, release_fast, release_small };
+
 /// How an `@[inline(...)]` function is inlined, matching `ast::inline_mode` 1:1.
 pub const Inline := enum { always, never, hint };
 

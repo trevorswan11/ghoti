@@ -43,7 +43,7 @@ using syntax::token_type_t;
 
 [[nodiscard]] auto is_cfg_atom(std::string_view name) -> bool {
     return name == "os" || name == "arch" || name == "abi" || name == "family" ||
-           name == "endian" || name == "ptr_bits";
+           name == "endian" || name == "ptr_bits" || name == "optimize" || name == "safety";
 }
 
 struct atom_enum_info {
@@ -98,6 +98,8 @@ constexpr std::array<std::string_view, 15> ABI_MEMBERS{"gnu",
                                                        "none"};
 constexpr std::array<std::string_view, 4>  FAMILY_MEMBERS{"unix", "windows", "wasm", "other"};
 constexpr std::array<std::string_view, 2>  ENDIAN_MEMBERS{"little", "big"};
+constexpr std::array<std::string_view, 4>  OPTIMIZE_MEMBERS{
+    "debug", "release_safe", "release_fast", "release_small"};
 
 [[nodiscard]] auto atom_enum(std::string_view atom) -> stdx::option<atom_enum_info> {
     if (atom == "os") { return atom_enum_info{"Os", OS_MEMBERS}; }
@@ -105,7 +107,8 @@ constexpr std::array<std::string_view, 2>  ENDIAN_MEMBERS{"little", "big"};
     if (atom == "abi") { return atom_enum_info{"Abi", ABI_MEMBERS}; }
     if (atom == "family") { return atom_enum_info{"Family", FAMILY_MEMBERS}; }
     if (atom == "endian") { return atom_enum_info{"Endian", ENDIAN_MEMBERS}; }
-    return stdx::none; // `ptr_bits` is integer-typed, not an enum
+    if (atom == "optimize") { return atom_enum_info{"OptimizeMode", OPTIMIZE_MEMBERS}; }
+    return stdx::none; // `ptr_bits` is integer-typed and `safety` is a bool, not enums
 }
 
 // The closest canonical member to `needle`, if one is within a small edit distance.
@@ -264,12 +267,14 @@ auto cfg_pass::atom_value_str(std::string_view atom) const -> std::string_view {
     if (atom == "arch") { return facts_.arch; }
     if (atom == "abi") { return facts_.abi; }
     if (atom == "family") { return facts_.family; }
+    if (atom == "optimize") { return optimize_mode_name(ctx_.build_mode); }
     return facts_.endian; // endian
 }
 
 auto cfg_pass::atom_value(std::string_view atom) -> cfg_value {
     PROFILE_FUNCTION();
     if (atom == "ptr_bits") { return cfg_value{static_cast<i64>(facts_.ptr_bits)}; }
+    if (atom == "safety") { return cfg_value{ctx_.runtime_safety}; }
     return cfg_value{cfgval::member{atom_value_str(atom)}};
 }
 
@@ -293,7 +298,8 @@ auto cfg_pass::eval_term(ast::expr_handle h) -> stdx::option<cfg_value> {
         }
         fail(id,
              error::CFG_UNKNOWN_ATOM,
-             "unknown cfg atom '{}'; valid: os, arch, abi, family, endian, ptr_bits "
+             "unknown cfg atom '{}'; valid: os, arch, abi, family, endian, ptr_bits, "
+             "optimize, safety "
              "(or a @cfgValue constant)",
              name);
         return stdx::none;
@@ -379,6 +385,9 @@ auto cfg_pass::classify_operand(ast::expr_handle h) -> operand {
     case ast::node_kind::IDENTIFIER_EXPRESSION: {
         const auto& name{module_.ast.get_as<ast::identifier_expr>(id).name};
         if (name == "ptr_bits") { return {.tag = operand::kind::PTR_BITS}; }
+        if (name == "safety") {
+            return {.tag = operand::kind::BOOL, .boolean = ctx_.runtime_safety};
+        }
         if (is_cfg_atom(name)) { return {.tag = operand::kind::ATOM, .text = name}; }
         if (const auto ref{cfg_value_decls_.find(name)}; ref != cfg_value_decls_.end()) {
             const auto value{resolve_cfg_value(ref->second)};
@@ -394,7 +403,8 @@ auto cfg_pass::classify_operand(ast::expr_handle h) -> operand {
         }
         fail(id,
              error::CFG_UNKNOWN_ATOM,
-             "unknown cfg atom '{}'; valid: os, arch, abi, family, endian, ptr_bits "
+             "unknown cfg atom '{}'; valid: os, arch, abi, family, endian, ptr_bits, "
+             "optimize, safety "
              "(or a @cfgValue constant)",
              name);
         return {};

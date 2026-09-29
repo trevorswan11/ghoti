@@ -854,7 +854,7 @@ auto parse_move_function_expr(syntax::parser& parser)
 auto parse_attributed_function_expr(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     using tt = syntax::token_type_t;
-    auto attributes{TRY(parse_attribute_list(parser))};
+    auto        attributes{TRY(parse_attribute_list(parser))};
     const auto& next{parser.get_peek_token()};
     if (next.type != tt::FUNCTION && next.type != tt::MOVE) {
         return make_syntax_err("An attribute list in expression position must precede a function "

@@ -122,7 +122,7 @@ TEST_CASE("@[discardable] on an interface member covers its implementations") {
             pub const size := fn(&self): i32 { return 0; };
         }
     )"};
-    const auto with_main{[&](std::string_view body) {
+    const auto                 with_main{[&](std::string_view body) {
         return fmt::format("{}\npub const main := fn(): i32 {{ {} return 0; }};", shapes, body);
     }};
 
@@ -174,10 +174,12 @@ TEST_CASE("@[discardable] is rejected where it cannot apply") {
         CHECK(has_error("@[discardable] const X: i32 = 3;", sema::error::ILLEGAL_ATTRIBUTE));
     }
     SECTION("on a function that returns void") {
-        CHECK(has_error("@[discardable] const f := fn(): void {};", sema::error::ILLEGAL_ATTRIBUTE));
+        CHECK(
+            has_error("@[discardable] const f := fn(): void {};", sema::error::ILLEGAL_ATTRIBUTE));
     }
     SECTION("on a void function literal") {
-        CHECK(has_error("const f := @[discardable] fn(): void {};", sema::error::ILLEGAL_ATTRIBUTE));
+        CHECK(
+            has_error("const f := @[discardable] fn(): void {};", sema::error::ILLEGAL_ATTRIBUTE));
     }
 }
 

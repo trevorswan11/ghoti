@@ -402,11 +402,11 @@ auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
         "struct ",
         [&](const struct_expr::field& field) -> syntax::doc_id {
             std::vector<syntax::doc_id> parts;
-            parts.emplace_back(with_attributes(
-                field.attributes,
-                doc_manager_.concat({field.is_public() ? doc_manager_.text("pub ")
-                                                       : doc_manager_.nil(),
-                                     format(field.name)})));
+            parts.emplace_back(
+                with_attributes(field.attributes,
+                                doc_manager_.concat({field.is_public() ? doc_manager_.text("pub ")
+                                                                       : doc_manager_.nil(),
+                                                     format(field.name)})));
             parts.emplace_back(doc_manager_.text(": "));
             parts.emplace_back(format(field.explicit_type));
             if (field.default_value) {
@@ -568,12 +568,12 @@ auto formatter::format_interface(const interface_expr& node) -> syntax::doc_id {
         add_member(
             ast_.location_of(m.name).line, ast_.end_location_of(*m.signature).line, i == 0, [&] {
                 std::vector<syntax::doc_id> parts;
-                parts.emplace_back(with_attributes(
-                    m.attributes,
-                    doc_manager_.concat({m.is_public() ? doc_manager_.text("pub ")
-                                                       : doc_manager_.nil(),
-                                         doc_manager_.text("const "),
-                                         format(m.name)})));
+                parts.emplace_back(
+                    with_attributes(m.attributes,
+                                    doc_manager_.concat({m.is_public() ? doc_manager_.text("pub ")
+                                                                       : doc_manager_.nil(),
+                                                         doc_manager_.text("const "),
+                                                         format(m.name)})));
                 parts.emplace_back(doc_manager_.text(" := "));
                 parts.emplace_back(format(*m.signature));
                 parts.emplace_back(doc_manager_.text(";"));
@@ -622,19 +622,19 @@ auto formatter::attribute_list_doc(const attribute_list& list) -> syntax::doc_id
         std::vector<syntax::doc_id> args;
         args.reserve(item.args.size());
         for (const auto arg : item.args) { args.emplace_back(format(arg)); }
-        items.emplace_back(doc_manager_.concat({name,
-                                                doc_manager_.text("("),
-                                                doc_manager_.join(std::move(args),
-                                                                  doc_manager_.text(", ")),
-                                                doc_manager_.text(")")}));
+        items.emplace_back(
+            doc_manager_.concat({name,
+                                 doc_manager_.text("("),
+                                 doc_manager_.join(std::move(args), doc_manager_.text(", ")),
+                                 doc_manager_.text(")")}));
     }
     return doc_manager_.concat({doc_manager_.text("@["),
                                 doc_manager_.join(std::move(items), doc_manager_.text(", ")),
                                 doc_manager_.text(list.force_break ? ",]" : "]")});
 }
 
-auto formatter::with_attributes(const stdx::option<attribute_list>& attributes,
-                                syntax::doc_id                      head) -> syntax::doc_id {
+auto formatter::with_attributes(const stdx::option<attribute_list>& attributes, syntax::doc_id head)
+    -> syntax::doc_id {
     if (!attributes) { return head; }
     const auto separator{attributes->force_break ? doc_manager_.hard_line() : doc_manager_.line()};
     return doc_manager_.group(
@@ -929,9 +929,9 @@ auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
     }
 
     return doc_manager_.concat({
-        node.attributes ? doc_manager_.concat({attribute_list_doc(*node.attributes),
-                                               doc_manager_.text(" ")})
-                        : doc_manager_.nil(),
+        node.attributes
+            ? doc_manager_.concat({attribute_list_doc(*node.attributes), doc_manager_.text(" ")})
+            : doc_manager_.nil(),
         node.is_move ? doc_manager_.text("move ") : doc_manager_.nil(),
         doc_manager_.text("fn"),
         doc_manager_.delimited("(", ")", std::move(params), false, true, node.params_force_break),

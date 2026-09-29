@@ -111,7 +111,8 @@ auto module_manager::add_library_module(std::string_view name, const std::filesy
 
 auto module::print_warnings(std::ostream& os) const -> void {
     for (const auto& warning : warnings) {
-        format_module_diagnostic(os, warning.to_formattable(), *this, warnings.get_terminal_status())
+        format_module_diagnostic(
+            os, warning.to_formattable(), *this, warnings.get_terminal_status())
             << "\n";
     }
 }

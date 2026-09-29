@@ -37,17 +37,15 @@ struct raw_options {
     std::string               target;
     std::string               cpu{"generic"};
     std::string               features;
-    stdx::option<std::string> opt_level_str; // unset unless `-O` was given (even as `-O ""`)
+    std::string               mode{"debug"};
     std::vector<std::string>  module_raw_args;
     std::vector<std::string>  extra_objects;
     std::vector<std::string>  library_paths;
     std::vector<std::string>  libraries;
     std::vector<std::string>  forwarded_args;
-    bool                      release{false};
     bool                      debug_passes{false};
     bool                      time_passes{false};
     bool                      dynamic{false};
-    bool                      unsafe{false};
     std::string               deprecated{"warn"};
 
     std::string emit_gir_path;
@@ -66,6 +64,7 @@ struct options {
     std::vector<std::string>           libraries{};
     std::vector<std::string>           forwarded_args{};
     bool                               dynamic{false};
+    sema::optimize_mode                mode{sema::optimize_mode::DEBUG};
     bool                               runtime_safety{true};
     sema::deprecation_policy           deprecated_policy{sema::deprecation_policy::WARN};
     bool output_explicit{false}; // `ghoti test` only: true when `-o/--output` was given
@@ -132,6 +131,8 @@ class compilation {
 // Helper to register standard build options into CLI subcommands
 // `--deprecated=warn|error|ignore`, shared by every subcommand that runs sema
 auto add_deprecated_option(CLI::App* subcmd, raw_options& opts) -> void;
+// `-M,--mode debug|release_safe|release_fast|release_small`, shared by every compiling subcommand
+auto add_mode_option(CLI::App* subcmd, raw_options& opts) -> void;
 auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_view> output_desc)
     -> void;
 

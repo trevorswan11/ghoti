@@ -217,9 +217,9 @@ auto type_translator::set_struct_body(llvm::StructType*               struct_ty,
         auto*      elem_ty{element_types[i]};
         const auto natural{s.is_packed ? 1 : dl.getABITypeAlign(elem_ty).value()};
         const auto wanted{std::max<u64>(natural,
-                                        s.is_packed ? s.explicit_field_alignment(i)
-                                                    : gir::const_eval::struct_field_align(
-                                                          s, i, ptr_size))};
+                                        s.is_packed
+                                            ? s.explicit_field_alignment(i)
+                                            : gir::const_eval::struct_field_align(s, i, ptr_size))};
         const auto offset{llvm::alignTo(end, wanted)};
         if (offset != llvm::alignTo(end, natural)) { pad_to(offset); }
 

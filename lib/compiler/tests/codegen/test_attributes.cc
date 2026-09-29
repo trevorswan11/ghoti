@@ -60,9 +60,8 @@ TEST_CASE("Codegen: @[inline(...)] maps each mode onto its LLVM attribute") {
     auto& always{UNWRAP(llvm_mod->getFunction("always"))};
     CHECK(always.hasFnAttribute(llvm::Attribute::AlwaysInline));
     // The always-inliner runs even at -O0, so no call to `always` survives
-    CHECK(std::ranges::none_of(always.users(), [](const llvm::User* user) {
-        return llvm::isa<llvm::CallBase>(user);
-    }));
+    CHECK(std::ranges::none_of(
+        always.users(), [](const llvm::User* user) { return llvm::isa<llvm::CallBase>(user); }));
     CHECK(UNWRAP(llvm_mod->getFunction("never")).hasFnAttribute(llvm::Attribute::NoInline));
     CHECK(UNWRAP(llvm_mod->getFunction("hint")).hasFnAttribute(llvm::Attribute::InlineHint));
     CHECK(UNWRAP(llvm_mod->getFunction("computed")).hasFnAttribute(llvm::Attribute::AlwaysInline));
@@ -149,7 +148,7 @@ TEST_CASE("Codegen: an over-aligned field is laid out at its aligned offset") {
     auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
     CHECK_FALSE(llvm::verifyModule(*llvm_mod));
 
-    auto& global_s{UNWRAP(llvm_mod->getGlobalVariable("global_s"))};
+    auto&       global_s{UNWRAP(llvm_mod->getGlobalVariable("global_s"))};
     const auto& dl{llvm_mod->getDataLayout()};
     auto*       struct_ty{llvm::cast<llvm::StructType>(global_s.getValueType())};
     CHECK(dl.getTypeAllocSize(struct_ty) == 32);
@@ -202,8 +201,8 @@ TEST_CASE("@[align(n)] is validated") {
     CHECK(has_error("@[align(8)] constexpr X := 3;", sema::error::ILLEGAL_ATTRIBUTE));
     CHECK(has_error("const S := struct { @[inline(.always)] a: i32 };",
                     sema::error::ILLEGAL_ATTRIBUTE));
-    CHECK(has_error("const S := struct { @[discardable] a: i32 };",
-                    sema::error::ILLEGAL_ATTRIBUTE));
+    CHECK(
+        has_error("const S := struct { @[discardable] a: i32 };", sema::error::ILLEGAL_ATTRIBUTE));
 }
 
 TEST_CASE("An attribute list inside an aggregate starts a field or a member") {
@@ -259,11 +258,11 @@ TEST_CASE("A generic function's conditional discardable folds per instantiation"
         @[discardable(@sizeOf(T) == 1)]
         const echo := fn(T: type, x: T): T { return x; };
     )"};
-    helpers::resolve_and_check(fmt::format(
-        "{}\npub const main := fn(): i32 {{ echo(u8, 1); return 0; }};", generic));
-    CHECK(has_error(fmt::format("{}\npub const main := fn(): i32 {{ echo(i32, 1); return 0; }};",
-                                generic),
-                    sema::error::UNUSED_RESULT));
+    helpers::resolve_and_check(
+        fmt::format("{}\npub const main := fn(): i32 {{ echo(u8, 1); return 0; }};", generic));
+    CHECK(has_error(
+        fmt::format("{}\npub const main := fn(): i32 {{ echo(i32, 1); return 0; }};", generic),
+        sema::error::UNUSED_RESULT));
 }
 
 TEST_CASE("A constexpr parameter reaches the function's attribute arguments") {

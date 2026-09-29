@@ -32,11 +32,10 @@ TEST_CASE("Attribute arguments are checked against the attribute's arity") {
 }
 
 TEST_CASE("An attribute may appear once, in a single list") {
-    helpers::test_parser_fail(
-        "@[discardable, discardable] const f := fn(): i32 { return 0; };",
-        syntax::diagnostic{"Attribute 'discardable' may only appear once",
-                           syntax::error::DUPLICATE_ATTRIBUTE,
-                           std::pair{0UZ, 15UZ}});
+    helpers::test_parser_fail("@[discardable, discardable] const f := fn(): i32 { return 0; };",
+                              syntax::diagnostic{"Attribute 'discardable' may only appear once",
+                                                 syntax::error::DUPLICATE_ATTRIBUTE,
+                                                 std::pair{0UZ, 15UZ}});
     helpers::test_parser_fail(
         "@[discardable] @[discardable] const f := fn(): i32 { return 0; };",
         syntax::diagnostic{"Only one attribute list may be applied; merge them into one",

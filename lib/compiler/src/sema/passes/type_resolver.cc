@@ -1521,6 +1521,13 @@ template <ast::IndexableID ID>
     case token_type_t::BUILTIN_TARGET_ARCH:     return_type = &ctx_.get_builtin_type("Arch"); break;
     case token_type_t::BUILTIN_TARGET_ABI:      return_type = &ctx_.get_builtin_type("Abi"); break;
     case token_type_t::BUILTIN_TARGET_FAMILY:   return_type = &ctx_.get_builtin_type("Family"); break;
+    case token_type_t::BUILTIN_OPTIMIZE_MODE:
+        return_type = &ctx_.get_builtin_type("OptimizeMode");
+        break;
+    case token_type_t::BUILTIN_RUNTIME_SAFETY:
+        ASSERT(builtin.return_type.get_kind() == type_kind::BOOL);
+        return_type = &builtin.return_type;
+        break;
     case token_type_t::BUILTIN_TARGET_ENDIAN:   return_type = &ctx_.get_builtin_type("Endian"); break;
     case token_type_t::BUILTIN_TARGET_PTR_BITS: {
         ASSERT(builtin.return_type.get_kind() == type_kind::USIZE);
@@ -2546,13 +2553,13 @@ auto type_resolver::synthesize_struct(source_location loc, const gir::const_stru
         const auto name_ident{synthesize_ident(*name_v, true)};
         const auto ty_ident{synthesize_ident(ctx_.type_display_name(*type_v), false)};
         new (&ast_fields[i]) ast::struct_expr::field{
-            .name               = name_ident,
-            .explicit_type      = ast::explicit_type_id{ast::explicit_type_kind::IDENT,
+            .name          = name_ident,
+            .explicit_type = ast::explicit_type_id{ast::explicit_type_kind::IDENT,
                                                    ast::type_modifier{},
                                                    syntax::token_type_t::IDENT,
                                                    static_cast<u64>((*ty_ident).get_index())},
-            .default_value      = default_value,
-            .attributes         = stdx::none,
+            .default_value = default_value,
+            .attributes    = stdx::none,
         };
 
         // The key must be the stable,  arena-backed name, not `*name_v`
@@ -2614,12 +2621,12 @@ auto type_resolver::synthesize_union(source_location loc, const gir::const_struc
         const auto name_ident{synthesize_ident(*name_v, true)};
         const auto ty_ident{synthesize_ident(ctx_.type_display_name(*type_v), false)};
         new (&ast_fields[i]) ast::union_expr::field{
-            .name               = name_ident,
-            .explicit_type      = ast::explicit_type_id{ast::explicit_type_kind::IDENT,
+            .name          = name_ident,
+            .explicit_type = ast::explicit_type_id{ast::explicit_type_kind::IDENT,
                                                    ast::type_modifier{},
                                                    syntax::token_type_t::IDENT,
                                                    static_cast<u64>((*ty_ident).get_index())},
-            .attributes         = stdx::none,
+            .attributes    = stdx::none,
         };
 
         const auto stable_name{resolving_.ast.get_as<ast::identifier_expr>(name_ident).name};
@@ -8993,7 +9000,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
     const bool is_deprecated{decl.attributes &&
                              decl.attributes->find(ast::attribute_kind::DEPRECATED)};
     if (is_deprecated) { ++deprecated_scope_depth_; }
-    const auto deprecated_scope_restore{gsl::finally([&] {
+    const auto                       deprecated_scope_restore{gsl::finally([&] {
         if (is_deprecated) { --deprecated_scope_depth_; }
     })};
     const constexpr_evaluation_scope cx_scope{ctx_,
@@ -9853,8 +9860,8 @@ auto type_resolver::report_deprecated_use(ID id, const mod::module& owner, const
 
     std::string message{fmt::format("'{}' is deprecated", sym.get_name())};
     if (!deprecation->args.empty()) {
-        message += fmt::format(
-            ": {}", owner.ast.get_as<ast::string_expr>(deprecation->args.front()).value);
+        message += fmt::format(": {}",
+                               owner.ast.get_as<ast::string_expr>(deprecation->args.front()).value);
     }
     if (ctx_.deprecated_policy == deprecation_policy::DENY) {
         ctx_.diags.emplace_back(std::move(message), error::DEPRECATED_USE, loc);
@@ -9998,14 +10005,15 @@ auto type_resolver::resolve_decl_attributes(ast::node_id          id,
     }
 
     const auto return_kind{callable_return_kind(type_data)};
-    resolving_.set_node_attributes(
-        id,
-        resolve_attributes(own,
-                           return_kind ? ast::attribute_target::FN_DECL : ast::attribute_target::DECL,
-                           return_kind == type_kind::VOID_));
+    resolving_.set_node_attributes(id,
+                                   resolve_attributes(own,
+                                                      return_kind ? ast::attribute_target::FN_DECL
+                                                                  : ast::attribute_target::DECL,
+                                                      return_kind == type_kind::VOID_));
 
     const auto align_item{decl.attributes->find(ast::attribute_kind::ALIGN)};
-    if (align_item && !initializes_fn_literal && decl.has_modifier(ast::decl_modifiers::CONSTEXPR)) {
+    if (align_item && !initializes_fn_literal &&
+        decl.has_modifier(ast::decl_modifiers::CONSTEXPR)) {
         ctx_.diags.emplace_back("Attribute 'align' needs storage; a 'constexpr' declaration has "
                                 "none",
                                 error::ILLEGAL_ATTRIBUTE,
@@ -10044,15 +10052,14 @@ auto type_resolver::resolve_fn_literal_attributes(ast::node_id id, const ast::fu
 
     const bool returns_void{fn.explicit_return_type.get_token_type() ==
                             syntax::token_type_t::VOID_TYPE};
-    resolving_.set_node_attributes(id,
-                                   resolve_attributes(items, ast::attribute_target::FN, returns_void));
+    resolving_.set_node_attributes(
+        id, resolve_attributes(items, ast::attribute_target::FN, returns_void));
 }
 
 auto type_resolver::discardable_holds(const mod::module&                       home,
                                       ast::node_id                             owner,
                                       const stdx::option<ast::attribute_list>& attributes,
-                                      ast::node_id                             call_id) const
-    -> stdx::option<bool> {
+                                      ast::node_id call_id) const -> stdx::option<bool> {
     if (!attributes) { return stdx::none; }
     const auto item{attributes->find(ast::attribute_kind::DISCARDABLE)};
     if (!item) { return stdx::none; }
@@ -10071,8 +10078,7 @@ auto type_resolver::discardable_holds(const mod::module&                       h
 
 auto type_resolver::interface_member_discardable(const type&      interface_type,
                                                  std::string_view name,
-                                                 ast::node_id     call_id) const
-    -> stdx::option<bool> {
+                                                 ast::node_id call_id) const -> stdx::option<bool> {
     const auto iface{interface_type.get_data().as_opt<types::interface_t>()};
     if (!iface) { return stdx::none; }
     for (const auto& method : iface->ast_methods) {
@@ -10189,9 +10195,8 @@ auto type_resolver::callee_is_discardable(ast::node_id call_id, const ast::call_
         if (!node) { return false; }
         const auto decl{home->ast.get_as_opt<ast::decl_stmt>(*node)};
         if (!decl) { return false; }
-        const auto fn_literal{decl->value
-                                  ? home->ast.get_as_opt<ast::function_expr>(*decl->value)
-                                  : stdx::none};
+        const auto fn_literal{decl->value ? home->ast.get_as_opt<ast::function_expr>(*decl->value)
+                                          : stdx::none};
         // A literal's list and its declaration's both fold onto the literal
         const auto owner{fn_literal ? ast::node_id{*decl->value} : ast::node_id{*node}};
         if (const auto holds{discardable_holds(*home, owner, decl->attributes, call_id)}) {
@@ -12518,7 +12523,8 @@ auto type_resolver::instantiate_generic(type&                             callee
     // Re-type body-local decls this instantiation reaches even if a prior monomorphization of the
     // same generic already resolved them
     inst_resolver.reresolve_floor_.emplace(fn_table_idx);
-    inst_resolver.deprecated_scope_depth_ = deprecated_scope_depth_ + (declares_deprecated_fn(fn_mod, fn_info.node_id) ? 1U : 0U);
+    inst_resolver.deprecated_scope_depth_ =
+        deprecated_scope_depth_ + (declares_deprecated_fn(fn_mod, fn_info.node_id) ? 1U : 0U);
 
     // This freestanding resolver has no enclosing-type context, so @This() needs it restored.
     stdx::option<structural_guard> this_type_guard;

@@ -384,6 +384,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Uses inside a deprecated item (including a deprecated generic's instantiations) stay quiet
     - `--deprecated=warn|error|ignore` on `build-*`, `run`, and `test` controls the report; `warn` is the default and never fails the build
     - The LSP publishes it as a warning tagged `Deprecated` (rendered struck through) and hover shows the message
+- `@optimizeMode()` returns the build's `builtin.OptimizeMode` (`.debug`, `.release_safe`, `.release_fast`, `.release_small`) and `@runtimeSafety()` whether runtime safety checks are on; both fold at compile time
+    - `optimize` and `safety` are also `@cfg` / `@cfgValue` names: `@cfg (optimize == .debug) { ... }`, `@cfg (safety) { ... }`
 - Constexpr can now be applied to labels and blocks (expression slots and top level)
     - They must be constant evaluatable and will error if not
 - `@assert` and `@verify` have been hardened such that they can work correctly in constexpr contexts
@@ -529,6 +531,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `std.io.Reader`, `std.io.Writer`, and `std.io.Seeker` default their `Error` to `std.io.Error`, so `&mut dyn std.io.Writer` no longer needs `(Error = std.io.Error)`
 
 ## Tooling
+- **Breaking:** `-M, --mode debug|release_safe|release_fast|release_small` replaces `-O`, `--release`, and `--unsafe` on `build-*`, `run`, and `test`
+    - `debug` (the default) is `-O0` with runtime safety, `release_safe` is `-O2` with safety, `release_fast` is `-O3` without, and `release_small` is `-Oz` without
+    - The LSP analyzes as `debug`
 - Releases ship a `lib/compiler_rt` directory, and every link now takes an optional compiler builtins archive as its last input; nothing is built into it yet
 - Cross compiling for macOS links from any host: releases ship `libSystem.tbd` and `SDKSettings.json` in `lib/darwin`, used when neither `SDKROOT` nor `xcrun` names an SDK (#342)
     - The linker stamps the SDK version from `SDKSettings.json` into the image instead of reusing the minimum OS version

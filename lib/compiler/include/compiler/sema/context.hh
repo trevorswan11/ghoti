@@ -41,6 +41,24 @@ struct active_block_frame {
 
 using constexpr_frame = ankerl::unordered_dense::map<std::string_view, gir::const_value>;
 
+// Mirrors `builtin.OptimizeMode`
+enum class optimize_mode : u8 {
+    DEBUG,
+    RELEASE_SAFE,
+    RELEASE_FAST,
+    RELEASE_SMALL,
+};
+
+[[nodiscard]] constexpr auto optimize_mode_name(optimize_mode mode) noexcept -> std::string_view {
+    switch (mode) {
+    case optimize_mode::DEBUG:         return "debug";
+    case optimize_mode::RELEASE_SAFE:  return "release_safe";
+    case optimize_mode::RELEASE_FAST:  return "release_fast";
+    case optimize_mode::RELEASE_SMALL: return "release_small";
+    }
+    return "debug";
+}
+
 // What a use of a `@[deprecated]` name reports
 enum class deprecation_policy : u8 {
     WARN,
@@ -66,6 +84,7 @@ struct context {
     codegen::target_options target_opts;
     std::string             user_main_name{"main"};
     bool                    runtime_safety{true};
+    optimize_mode           build_mode{optimize_mode::DEBUG};
     deprecation_policy      deprecated_policy{deprecation_policy::WARN};
 
     // `path:line:column` of every deprecated use already reported, so re-resolution stays quiet
@@ -120,7 +139,7 @@ struct context {
           diags{other.diags.create_new()}, error_stream{other.error_stream},
           prelude_index{other.prelude_index}, target_opts{other.target_opts},
           user_main_name{other.user_main_name}, runtime_safety{other.runtime_safety},
-          deprecated_policy{other.deprecated_policy},
+          build_mode{other.build_mode}, deprecated_policy{other.deprecated_policy},
           constexpr_binding_frames{other.constexpr_binding_frames},
           constexpr_evaluation_depth{other.constexpr_evaluation_depth},
           user_type_names{other.user_type_names}, embed_cache{other.embed_cache},
