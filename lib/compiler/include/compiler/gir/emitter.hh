@@ -14,6 +14,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
@@ -101,7 +102,7 @@ class emitter {
         ankerl::unordered_dense::map<std::string_view, local_binding> bindings;
         std::vector<deferred_entry>                                   defers;
         stdx::option<bool>           runtime_safety{}; // set by `@setRuntimeSafety`
-        stdx::option<gir::function&> safety_owner{};   // the function that set it
+        stdx::option<gir::function&> safety_owner{};   // the function that called setRuntimeSafety
     };
 
     // Whether runtime safety checks are emitted here: the innermost `@setRuntimeSafety` of the

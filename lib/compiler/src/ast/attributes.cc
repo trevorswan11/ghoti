@@ -4,15 +4,20 @@
 #include <array>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <fmt/format.h>
 #include <stdx/fixed/enum_map.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
+#include <stdx/types.hh>
 
-#include "compiler/ast/ast.hh"
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/handle.hh"
+#include "compiler/syntax/error.hh"
 #include "compiler/syntax/parser.hh"
+#include "compiler/syntax/token.hh"
+#include "compiler/syntax/token_type.hh"
 #include "support/string_utils.hh"
 
 namespace ghoti::ast {
@@ -34,33 +39,41 @@ constexpr auto CALLCONV_VALS_TO_NAMES{[] {
 }()};
 
 constexpr std::array ALL_ATTRIBUTES{
-    attribute_spec{.name     = "discardable",
-                   .kind     = attribute_kind::DISCARDABLE,
-                   .min_args = 0,
-                   .max_args = 1,
-                   .targets  = attribute_target::FN_DECL | attribute_target::FN},
-    attribute_spec{.name     = "inline",
-                   .kind     = attribute_kind::INLINE,
-                   .min_args = 1,
-                   .max_args = 1,
-                   .targets  = attribute_target::FN},
-    attribute_spec{.name     = "naked",
-                   .kind     = attribute_kind::NAKED,
-                   .min_args = 0,
-                   .max_args = 1,
-                   .targets  = attribute_target::FN},
-    attribute_spec{.name     = "align",
-                   .kind     = attribute_kind::ALIGN,
-                   .min_args = 1,
-                   .max_args = 1,
-                   .targets =
-                       attribute_target::DECL | attribute_target::FN | attribute_target::FIELD},
-    attribute_spec{.name     = "deprecated",
-                   .kind     = attribute_kind::DEPRECATED,
-                   .min_args = 0,
-                   .max_args = 1,
-                   .targets  = attribute_target::DECL | attribute_target::FN_DECL |
-                              attribute_target::FIELD},
+    attribute_spec{
+        .name     = "discardable",
+        .kind     = attribute_kind::DISCARDABLE,
+        .min_args = 0,
+        .max_args = 1,
+        .targets  = attribute_target::FN_DECL | attribute_target::FN,
+    },
+    attribute_spec{
+        .name     = "inline",
+        .kind     = attribute_kind::INLINE,
+        .min_args = 1,
+        .max_args = 1,
+        .targets  = attribute_target::FN,
+    },
+    attribute_spec{
+        .name     = "naked",
+        .kind     = attribute_kind::NAKED,
+        .min_args = 0,
+        .max_args = 1,
+        .targets  = attribute_target::FN,
+    },
+    attribute_spec{
+        .name     = "align",
+        .kind     = attribute_kind::ALIGN,
+        .min_args = 1,
+        .max_args = 1,
+        .targets  = attribute_target::DECL | attribute_target::FN | attribute_target::FIELD,
+    },
+    attribute_spec{
+        .name     = "deprecated",
+        .kind     = attribute_kind::DEPRECATED,
+        .min_args = 0,
+        .max_args = 1,
+        .targets  = attribute_target::DECL | attribute_target::FN_DECL | attribute_target::FIELD,
+    },
 };
 
 [[nodiscard]] auto parse_attribute_args(syntax::parser& parser)

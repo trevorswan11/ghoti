@@ -7,7 +7,6 @@
 #include "compiler/syntax/error.hh"
 #include "compiler/syntax/parser.hh"
 #include "helpers/ast.hh"
-#include "helpers/common.hh"
 
 namespace ghoti::tests {
 

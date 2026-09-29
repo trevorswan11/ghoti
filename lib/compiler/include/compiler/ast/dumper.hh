@@ -8,9 +8,11 @@
 
 #include <fmt/ostream.h>
 #include <stdx/assert.hh>
+#include <stdx/option.hh>
 #include <stdx/variant.hh>
 
 #include "compiler/ast/ast.hh"
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/format.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"

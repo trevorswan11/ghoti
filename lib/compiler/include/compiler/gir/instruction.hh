@@ -250,9 +250,9 @@ struct instruction {
     bool                          is_saturating{false}; // `+| -| *| <<|` clamp instead of wrap
     bool                          explicit_volatile{false};
 
-    stdx::option<u8> atomic_op{stdx::none};         // `@atomicRmw`'s op
-    stdx::option<u8> atomic_order{stdx::none};      // `atomic_order` is the memory order
-    stdx::option<u8> atomic_fail_order{stdx::none}; // `@cmpxchgWeak`/`Strong`'s failure order
+    stdx::option<u8>  atomic_op{stdx::none};         // `@atomicRmw`'s op
+    stdx::option<u8>  atomic_order{stdx::none};      // `atomic_order` is the memory order
+    stdx::option<u8>  atomic_fail_order{stdx::none}; // `@cmpxchgWeak`/`Strong`'s failure order
     stdx::option<u64> alignment{stdx::none};         // an `@[align(n)]` stack slot
 
     // A `@branchHint`ed `COND_GOTO`: relative weights of its true and false targets

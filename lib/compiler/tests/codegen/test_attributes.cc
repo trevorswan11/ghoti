@@ -2,9 +2,8 @@
 #include <string_view>
 #include <vector>
 
-#include <fmt/format.h>
-
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/format.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -15,7 +14,9 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/Support/Alignment.h>
 #include <llvm/Support/Casting.h>
+#include <stdx/types.hh>
 
 #include "compiler/arena.hh"
 #include "compiler/ast/ast.hh"

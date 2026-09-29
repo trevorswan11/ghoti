@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <string_view>
 #include <vector>
 
@@ -100,8 +101,8 @@ struct attribute_list {
     bool                   force_break{false}; // `@[a, b,]`: keep the list on its own line
 
     [[nodiscard]] auto find(attribute_kind kind) const noexcept -> stdx::option<const attribute&> {
-        for (const auto& item : items) {
-            if (item.kind == kind) { return item; }
+        if (const auto it{std::ranges::find(items, kind, &attribute::kind)}; it != items.end()) {
+            return *it;
         }
         return stdx::none;
     }

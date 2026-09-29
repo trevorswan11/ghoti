@@ -20,6 +20,7 @@
 #include "compiler/gir/symbol_scoping.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
+#include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/token_type.hh"

@@ -32,21 +32,21 @@ struct module_binding {
 
 // Raw options populated directly by CLI parser
 struct raw_options {
-    std::string               input;
-    std::string               output;
-    std::string               target;
-    std::string               cpu{"generic"};
-    std::string               features;
-    std::string               mode{"debug"};
-    std::vector<std::string>  module_raw_args;
-    std::vector<std::string>  extra_objects;
-    std::vector<std::string>  library_paths;
-    std::vector<std::string>  libraries;
-    std::vector<std::string>  forwarded_args;
-    bool                      debug_passes{false};
-    bool                      time_passes{false};
-    bool                      dynamic{false};
-    std::string               deprecated{"warn"};
+    std::string              input;
+    std::string              output;
+    std::string              target;
+    std::string              cpu{"generic"};
+    std::string              features;
+    std::string              mode{"debug"};
+    std::vector<std::string> module_raw_args;
+    std::vector<std::string> extra_objects;
+    std::vector<std::string> library_paths;
+    std::vector<std::string> libraries;
+    std::vector<std::string> forwarded_args;
+    bool                     debug_passes{false};
+    bool                     time_passes{false};
+    bool                     dynamic{false};
+    std::string              deprecated{"warn"};
 
     std::string emit_gir_path;
     std::string emit_llvm_ir_path;

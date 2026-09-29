@@ -1517,10 +1517,10 @@ template <ast::IndexableID ID>
         return_type = meta;
         break;
     }
-    case token_type_t::BUILTIN_TARGET_OS:       return_type = &ctx_.get_builtin_type("Os"); break;
-    case token_type_t::BUILTIN_TARGET_ARCH:     return_type = &ctx_.get_builtin_type("Arch"); break;
-    case token_type_t::BUILTIN_TARGET_ABI:      return_type = &ctx_.get_builtin_type("Abi"); break;
-    case token_type_t::BUILTIN_TARGET_FAMILY:   return_type = &ctx_.get_builtin_type("Family"); break;
+    case token_type_t::BUILTIN_TARGET_OS:     return_type = &ctx_.get_builtin_type("Os"); break;
+    case token_type_t::BUILTIN_TARGET_ARCH:   return_type = &ctx_.get_builtin_type("Arch"); break;
+    case token_type_t::BUILTIN_TARGET_ABI:    return_type = &ctx_.get_builtin_type("Abi"); break;
+    case token_type_t::BUILTIN_TARGET_FAMILY: return_type = &ctx_.get_builtin_type("Family"); break;
     case token_type_t::BUILTIN_OPTIMIZE_MODE:
         return_type = &ctx_.get_builtin_type("OptimizeMode");
         break;

@@ -1,7 +1,10 @@
 #pragma once
 
+#include <vector>
+
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
+#include <gsl/span>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -9,7 +12,6 @@
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
-#include <vector>
 
 #include "compiler/sema/type.hh"
 
@@ -52,15 +54,20 @@ class type_translator {
     using aggregate_identity_cache_t =
         ankerl::unordered_dense::map<sema::types::key_t, llvm::Type*>;
 
+    struct padded_layout {
+        std::vector<u32> field_indices;
+        u64              alignment;
+    };
+
   private:
     auto translate_slice(const sema::types::slice& s) -> llvm::Type*;
     auto translate_array(const sema::types::array& a) -> llvm::Type*;
     auto translate_struct(const sema::types::struct_t& s, const sema::type& original)
         -> llvm::Type*;
     // Lays `element_types` out at the offsets their `@[align(n)]` fields demand, if any differ
-    auto set_struct_body(llvm::StructType*               struct_ty,
-                         const sema::types::struct_t&    s,
-                         const std::vector<llvm::Type*>& element_types) -> void;
+    auto set_struct_body(llvm::StructType*            struct_ty,
+                         const sema::types::struct_t& s,
+                         gsl::span<llvm::Type* const> element_types) -> void;
     auto translate_union(const sema::types::union_t& u, const sema::type& original) -> llvm::Type*;
     auto translate_enum(const sema::types::enum_t& e) -> llvm::Type*;
     auto translate_closure(const sema::types::closure_t& c, const sema::type& original)
@@ -75,10 +82,6 @@ class type_translator {
     aggregate_identity_cache_t struct_identity_cache_;
     aggregate_identity_cache_t union_identity_cache_;
 
-    struct padded_layout {
-        std::vector<u32> field_indices;
-        u64              alignment;
-    };
     ankerl::unordered_dense::map<const llvm::Type*, padded_layout> padded_structs_;
 };
 

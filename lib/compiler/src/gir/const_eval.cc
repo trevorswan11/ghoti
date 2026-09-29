@@ -39,6 +39,7 @@
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/sema/unwrap_shape.hh"
@@ -3818,7 +3819,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
     }
     case syntax::token_type_t::BUILTIN_SET_RUNTIME_SAFETY:
     case syntax::token_type_t::BUILTIN_BRANCH_HINT:        return const_value{void_val{}};
-    case syntax::token_type_t::BUILTIN_TARGET_ENDIAN: {
+    case syntax::token_type_t::BUILTIN_TARGET_ENDIAN:      {
         const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
         return target_enum_value("Endian", facts.endian);
     }

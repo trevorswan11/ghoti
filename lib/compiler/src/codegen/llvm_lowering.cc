@@ -1788,7 +1788,7 @@ auto llvm_lowering::emit_alloca(const gir::instruction& inst) -> llvm::Value* {
         return dummy;
     }
 
-    auto* slot{builder_.CreateAlloca(elem_ty, nullptr, "slot")};
+    auto*      slot{builder_.CreateAlloca(elem_ty, nullptr, "slot")};
     const auto wanted{
         std::max(inst.alignment.value_or(0), types_.explicit_alignment_of(*inst.type).value_or(0))};
     if (wanted > slot->getAlign().value()) { slot->setAlignment(llvm::Align{wanted}); }

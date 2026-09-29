@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <vector>
 
+#include <gsl/span>
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/LLVMContext.h>
@@ -196,9 +197,9 @@ auto type_translator::translate_struct(const sema::types::struct_t& s, const sem
     return struct_ty;
 }
 
-auto type_translator::set_struct_body(llvm::StructType*               struct_ty,
-                                      const sema::types::struct_t&    s,
-                                      const std::vector<llvm::Type*>& element_types) -> void {
+auto type_translator::set_struct_body(llvm::StructType*            struct_ty,
+                                      const sema::types::struct_t& s,
+                                      gsl::span<llvm::Type* const> element_types) -> void {
     const auto& dl{module_.getDataLayout()};
     const auto  ptr_size{static_cast<usize>(dl.getPointerSize())};
 

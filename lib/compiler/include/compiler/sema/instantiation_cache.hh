@@ -247,11 +247,11 @@ struct body_typing_snapshot {
     // Restores `m`'s side tables and branch cache back to the captured state.
     auto restore_to(mod::module& m) const -> void;
 
-    std::vector<stdx::option<type&>>                    nodes;
-    std::vector<stdx::option<type&>>                    types;
-    ankerl::unordered_dense::map<usize, mod::if_branch> ifs;
-    ankerl::unordered_dense::map<usize, usize>          matches;
-    std::vector<stdx::option<std::string>>              calls;
+    std::vector<stdx::option<type&>>                         nodes;
+    std::vector<stdx::option<type&>>                         types;
+    ankerl::unordered_dense::map<usize, mod::if_branch>      ifs;
+    ankerl::unordered_dense::map<usize, usize>               matches;
+    std::vector<stdx::option<std::string>>                   calls;
     ankerl::unordered_dense::map<usize, resolved_attributes> attributes;
 };
 

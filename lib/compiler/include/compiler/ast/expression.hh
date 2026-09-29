@@ -416,8 +416,8 @@ struct implicit_access_expr {
 struct struct_expr {
     // Field publicity is baked into the identifier's token type
     struct field {
-        identifier_handle         name;
-        explicit_type_id          explicit_type;
+        identifier_handle            name;
+        explicit_type_id             explicit_type;
         stdx::option<expr_handle>    default_value;
         stdx::option<attribute_list> attributes;
 
@@ -450,7 +450,7 @@ struct struct_expr {
 
 struct union_expr {
     struct field {
-        identifier_handle         name;
+        identifier_handle            name;
         explicit_type_id             explicit_type;
         stdx::option<attribute_list> attributes;
 

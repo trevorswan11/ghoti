@@ -17,6 +17,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
@@ -290,6 +291,12 @@ class type_resolver {
         MAKE_PINNED(binding_restore_guard);
     };
 
+    enum class hint_site : u8 {
+        BRANCH,  // an `if`/`else` branch or `match` arm body
+        FN_BODY, // a function literal's body
+    };
+    using attribute_refs = std::vector<gsl::not_null<const ast::attribute*>>;
+
   private:
     auto visit(ast::node_id, const ast::array_expr&) -> void;
     auto visit(ast::node_id, const ast::asm_expr&) -> void;
@@ -352,8 +359,6 @@ class type_resolver {
     [[nodiscard]] auto get_call_arg_location(const ast::call_expr::argument& arg)
         -> source_location;
 
-    using attribute_refs = std::vector<gsl::not_null<const ast::attribute*>>;
-
     // Validates `items` against what they annotate and folds them
     [[nodiscard]] auto resolve_attributes(const attribute_refs& items,
                                           ast::attribute_target site,
@@ -366,10 +371,7 @@ class type_resolver {
     auto check_attribute_conflicts(const attribute_refs& items, const resolved_attributes& resolved)
         -> void;
     [[nodiscard]] auto fold_attribute_bool(const ast::attribute& item) -> stdx::option<bool>;
-    enum class hint_site : u8 {
-        BRANCH,  // an `if`/`else` branch or `match` arm body
-        FN_BODY, // a function literal's body
-    };
+
     // What the block holding the statement being resolved is the body of, if anything hintable
     [[nodiscard]] auto hint_site_of(const ast::block_stmt& block) -> stdx::option<hint_site>;
     ankerl::unordered_dense::map<const ast::block_stmt*, hint_site> hint_sites_;

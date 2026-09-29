@@ -1598,7 +1598,7 @@ auto emitter::emit_closure_function(ast::node_id                  id,
     const auto impl_sig_data{cl.impl_signature.get_data().as_opt<sema::types::function>()};
     ASSERT(impl_sig_data, "Closure implementation signature must contain function type data");
 
-    auto&      fn{add_gir_function(fn_name, cl.impl_signature, false, false, fn_expr.variadic)};
+    auto& fn{add_gir_function(fn_name, cl.impl_signature, false, false, fn_expr.variadic)};
     apply_fn_attributes(fn, active_mod(), id);
     const auto prev_fn{builder_.get_function()};
     const auto prev_seg{builder_.get_segment()};
@@ -1703,7 +1703,7 @@ auto emitter::emit_constexpr_closure(const const_closure& cl) -> std::string {
     const auto sig_data{sig.get_data().as_opt<sema::types::function>()};
     ASSERT(sig_data, "constexpr callable must have a function signature");
 
-    auto&      fn{add_gir_function(fn_name, sig, false, false, fn_expr.variadic)};
+    auto& fn{add_gir_function(fn_name, sig, false, false, fn_expr.variadic)};
     apply_fn_attributes(fn, def_mod, cl.fn_node);
     const auto prev_fn{builder_.get_function()};
     const auto prev_seg{builder_.get_segment()};

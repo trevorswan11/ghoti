@@ -130,13 +130,13 @@ pub weak const skip_handler := fn(_: []u8, _: SourceLocation): void {};
 /// Exact set of calling conventions ghoti supports, matching `ast::calling_convention` 1:1.
 pub const CallConv := enum { c, sysv, win64, stdcall, fastcall, aapcs };
 
-/// How likely a branch is to run, for `@branchHint`, matching `ast::branch_hint` 1:1.
+/// How likely a branch is to run, for `@branchHint`
 pub const BranchHint := enum { none, likely, unlikely, cold, unpredictable };
 
-/// The build mode `--mode` selected, matching `sema::optimize_mode` 1:1.
+/// The build mode `--mode` selected
 pub const OptimizeMode := enum { debug, release_safe, release_fast, release_small };
 
-/// How an `@[inline(...)]` function is inlined, matching `ast::inline_mode` 1:1; `default` leaves
+/// How an `@[inline(...)]` function is inlined; `default` leaves
 /// the choice to the optimizer, as if no `inline` were written.
 pub const Inline := enum { always, never, hint, default };
 
