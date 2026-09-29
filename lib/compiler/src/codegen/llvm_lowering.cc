@@ -63,8 +63,26 @@ namespace ghoti::codegen {
 
 namespace {
 
+// Local symbols are invisible to the linker, and LLVM requires them to keep default visibility
+auto apply_visibility(llvm::GlobalValue& value, stdx::option<ast::symbol_visibility> visibility)
+    -> void {
+    if (!visibility || value.hasLocalLinkage()) { return; }
+    switch (*visibility) {
+    case ast::symbol_visibility::DEFAULT:
+        value.setVisibility(llvm::GlobalValue::DefaultVisibility);
+        break;
+    case ast::symbol_visibility::HIDDEN:
+        value.setVisibility(llvm::GlobalValue::HiddenVisibility);
+        break;
+    case ast::symbol_visibility::PROTECTED:
+        value.setVisibility(llvm::GlobalValue::ProtectedVisibility);
+        break;
+    }
+}
+
 auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attributes& attributes)
     -> void {
+    apply_visibility(llvm_fn, attributes.visibility);
     if (attributes.naked) { llvm_fn.addFnAttr(llvm::Attribute::Naked); }
     if (attributes.cold) { llvm_fn.addFnAttr(llvm::Attribute::Cold); }
     if (attributes.alignment) { llvm_fn.setAlignment(llvm::Align{*attributes.alignment}); }
@@ -1399,6 +1417,7 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
         const auto natural{llvm_module_->getDataLayout().getPrefTypeAlign(g_type)};
         gvar->setAlignment(std::max(natural, llvm::Align{wanted_alignment}));
     }
+    apply_visibility(*gvar, g.visibility);
     globals_[g.name] = gvar;
 
     llvm::Constant* init{nullptr};
@@ -1566,10 +1585,16 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
         builder_.CreateStore(builder_.getInt1(false), get_or_create_test_skipped_flag());
     }
 
-    // Lower each segment
+    // Lower each segment; dead code after a diverging expression was never type checked
+    const auto reachable{gir::reachable_segments(fn)};
     for (const auto* seg : fn.get_segments()) {
         auto* bb{segment_blocks_[seg->get_id()]};
         builder_.SetInsertPoint(bb);
+        if (const auto idx{std::to_underlying(seg->get_id())};
+            idx < reachable.size() && !reachable[idx]) {
+            builder_.CreateUnreachable();
+            continue;
+        }
 
         for (const auto* inst : seg->get_instructions()) { lower_instruction(*inst); }
         if (!bb->getTerminator()) {

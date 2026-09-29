@@ -21,6 +21,7 @@
 #include <gsl/span>
 #include <gsl/util>
 #include <llvm/IR/InlineAsm.h>
+#include <llvm/TargetParser/Triple.h>
 #include <stdx/assert.hh>
 #include <stdx/enum.hh>
 #include <stdx/option.hh>
@@ -617,6 +618,14 @@ template <ast::IndexableID ID>
             return make_sema_err(
                 fmt::format("'{}' expects a value to convert, but was given a type", name),
                 error::TYPE_USED_AS_VALUE,
+                get_call_arg_location(*args.operand));
+        }
+        if (get_resolved_call_arg_type(*args.operand)->get_kind() == type_kind::UNDEFINED) {
+            return make_sema_err(
+                fmt::format("'{}' has no value to convert in 'undefined'; assign 'undefined' "
+                            "directly instead",
+                            name),
+                error::TYPE_MISMATCH,
                 get_call_arg_location(*args.operand));
         }
         return args;
@@ -1247,8 +1256,20 @@ template <ast::IndexableID ID>
         break;
     }
     case token_type_t::BUILTIN_HAS_FIELD: {
-        DISCARD(get_resolved_call_arg_type(call.arguments[0]));
+        // Always folds, so anything that can't is an error here rather than a runtime call later
+        const auto& owner_type{*get_resolved_call_arg_type(call.arguments[0])};
+        if (!owner_type.is_poison() && !call_arg_denotes_type(call.arguments[0]) &&
+            owner_type.get_kind() != type_kind::TYPE) {
+            return make_sema_err("@hasField: the first argument must be a type",
+                                 error::TYPE_MISMATCH,
+                                 get_call_arg_location(call.arguments[0]));
+        }
         DISCARD(get_resolved_call_arg_type(call.arguments[1]));
+        if (!resolve_field_name_string(call.arguments[1])) {
+            return make_sema_err("@hasField: the field name must be a compile-time-known string",
+                                 error::TYPE_MISMATCH,
+                                 get_call_arg_location(call.arguments[1]));
+        }
         ASSERT(builtin.return_type.get_kind() == type_kind::BOOL);
         return_type = &builtin.return_type;
         break;
@@ -4665,6 +4686,8 @@ auto type_resolver::get_resolved_symbol_type(symbol::data_t& symbol_data) -> typ
         [this](HasBothNameAndType auto& sym) -> type& {
             ASSERT(resolving_.has_sema_type(sym.name), "Symbol was never typed");
             auto& type{resolving_.get_sema_type(sym.name)};
+            // An untyped pack parameter (`rest...`) has no explicit type to compare against
+            if (!sym.explicit_type.is_valid()) { return type; }
             if (const auto explicit_opt{resolving_.get_sema_type_opt(sym.explicit_type)}) {
                 const auto exp_kind{explicit_opt->get_kind()};
                 ASSERT(type == *explicit_opt || exp_kind == type_kind::AUTO ||
@@ -7235,9 +7258,11 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
         effective_matcher_type.emplace(ref->underlying);
     }
 
-    stdx::option<type&> first_type;
-    bool                matcher_is_const{false};
-    bool                matcher_is_addressable{false};
+    stdx::option<type&>            first_type;
+    stdx::option<ast::expr_handle> type_arm;
+    bool                           value_arm{false};
+    bool                           matcher_is_const{false};
+    bool                           matcher_is_addressable{false};
     if (matcher_type.get_data().is<types::reference>()) {
         matcher_is_const       = matcher_type.is_constant();
         matcher_is_addressable = true;
@@ -7554,9 +7579,25 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                     if (inner_type->get_kind() != type_kind::NORETURN && !first_type) {
                         first_type = *inner_type;
                     }
+                    if (decl_value_denotes_type(expr_stmt_node->expression)) {
+                        if (!type_arm) { type_arm.emplace(expr_stmt_node->expression); }
+                    } else if (inner_type->get_kind() != type_kind::NORETURN) {
+                        value_arm = true;
+                    }
                 }
             }
         }
+    }
+
+    // Arms that yield a type next to arms that yield a value have no common result
+    if (type_arm && value_arm) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            *type_arm,
+            fmt::format("This match arm yields the type '{}' where the other arms yield values",
+                        ctx_.type_display_name(denoted_type(resolving_.get_sema_type(*type_arm)))),
+            error::TYPE_USED_AS_VALUE,
+            resolving_.ast.location_of(*type_arm)));
     }
 
     // Two arm patterns that both fold to constants may not cover the same value.
@@ -7785,6 +7826,18 @@ auto type_resolver::reject_non_runtime_slot(ast::explicit_type_id at, const type
         ctx_.diags.emplace_back("'@TypeOf(undefined)' only exists at compile time; only a 'const' "
                                 "binding can have this type",
                                 error::COMPILE_TIME_ONLY_VALUE,
+                                resolving_.ast.location_of(at));
+        return true;
+    }
+    return false;
+}
+
+auto type_resolver::reject_storage_slot(ast::explicit_type_id at, const type& slot_type) -> bool {
+    if (reject_non_runtime_slot(at, slot_type)) { return true; }
+    // Only a return or a diverging expression has this type; nothing can be stored as it
+    if (slot_type.get_kind() == type_kind::NORETURN) {
+        ctx_.diags.emplace_back("'noreturn' has no values, so nothing can be stored with this type",
+                                error::TYPE_MISMATCH,
                                 resolving_.ast.location_of(at));
         return true;
     }
@@ -8056,6 +8109,18 @@ auto type_resolver::visit(ast::node_id id, const ast::dereference_expr& deref) -
 auto type_resolver::visit(ast::node_id id, const ast::unary_expr& node) -> void {
     PROFILE_FUNCTION();
     TRY_RESOLVE(node.rhs);
+    // No unary operator takes a type (`-i64`); the emitter would have no value to apply it to
+    if (const auto& operand{*last_type_};
+        !operand.is_poison() && decl_value_denotes_type(node.rhs)) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             fmt::format("operator {} expects a value, but found the type '{}'",
+                                         syntax::token_type::describe(id.get_token_type()),
+                                         ctx_.type_display_name(denoted_type(operand))),
+                             error::TYPE_USED_AS_VALUE,
+                             resolving_.ast.location_of(node.rhs)));
+    }
     if (id.get_token_type() == syntax::token_type_t::BANG) {
         last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::BOOL));
     } else if (id.get_token_type() == syntax::token_type_t::PLUS) {
@@ -8534,7 +8599,7 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
                                                               .annotation = field.explicit_type});
         // `f: @TypeOf(g)` / `f: FnAlias` stores the denoted type, not a `type` value
         auto* field_type{&denoted_type(*last_type_.take())};
-        if (reject_non_runtime_slot(field.explicit_type, *field_type)) {
+        if (reject_storage_slot(field.explicit_type, *field_type)) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
 
@@ -8695,7 +8760,7 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
                                                               .decl       = stdx::none,
                                                               .annotation = field.explicit_type});
         auto& field_type{denoted_type(*last_type_.take())};
-        if (reject_non_runtime_slot(field.explicit_type, field_type)) {
+        if (reject_storage_slot(field.explicit_type, field_type)) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
 
@@ -9218,7 +9283,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             auto&      explicit_type{*explicit_type_p};
             const bool aliases_undefined{explicit_type.get_kind() == type_kind::UNDEFINED};
             if (aliases_undefined ? reject_unsized_slot(*decl.explicit_type, explicit_type)
-                                  : reject_non_runtime_slot(*decl.explicit_type, explicit_type)) {
+                                  : reject_storage_slot(*decl.explicit_type, explicit_type)) {
                 ctx_.poison_symbol(sym);
                 resolving_.set_sema_type(decl.name, ctx_.get_poison());
                 return last_type_.emplace(ctx_.poison_node(resolving_, id));
@@ -9553,7 +9618,8 @@ auto type_resolver::check_deferred_body_jumps(ast::stmt_handle body) -> void {
                 if (data.value) { self(self, **data.value, loop_depth); }
             },
             [&](const ast::if_expr& data) {
-                self(self, *data.condition, loop_depth);
+                // `if constexpr { ... }` has no condition
+                if (data.condition) { self(self, **data.condition, loop_depth); }
                 self(self, *data.consequence, loop_depth);
                 if (data.alternate) { self(self, *data.alternate, loop_depth); }
             },
@@ -9750,7 +9816,9 @@ auto type_resolver::check_constexpr_loop_jumps(ast::stmt_handle body) -> void {
                 }
             },
             [&](const ast::if_expr& data) {
-                self(self, *data.condition, loop_depth, runtime_control_flow_depth);
+                if (data.condition) {
+                    self(self, **data.condition, loop_depth, runtime_control_flow_depth);
+                }
                 const usize next_depth{runtime_control_flow_depth +
                                        (data.constexpr_condition ? 0 : 1)};
                 self(self, *data.consequence, loop_depth, next_depth);
@@ -10089,6 +10157,38 @@ auto type_resolver::fold_attribute_enum(const ast::attribute& item, std::string_
     return stdx::none;
 }
 
+auto type_resolver::fold_visibility(const ast::attribute& item)
+    -> stdx::option<ast::symbol_visibility> {
+    const auto variant{fold_attribute_enum(item, "Visibility")};
+    const auto visibility{variant ? ast::symbol_visibility_from_name(*variant) : stdx::none};
+    if (visibility != ast::symbol_visibility::PROTECTED) { return visibility; }
+
+    const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
+    if (triple.isOSBinFormatELF()) { return visibility; }
+    ctx_.diags.emplace_back(fmt::format("Visibility '.protected' needs an ELF target; '{}' has no "
+                                        "protected symbols",
+                                        triple.str()),
+                            error::ILLEGAL_ATTRIBUTE,
+                            resolving_.ast.location_of(item.args.front()));
+    return stdx::none;
+}
+
+auto type_resolver::check_visibility_linkage(const attribute_refs&               items,
+                                             stdx::option<const ast::decl_stmt&> decl) -> void {
+    const auto item{std::ranges::find_if(
+        items, [](const auto attr) { return attr->kind == ast::attribute_kind::VISIBILITY; })};
+    if (item == items.end()) { return; }
+
+    using enum ast::decl_modifiers;
+    const bool linked{decl && (decl->has_modifier(PUBLIC) || decl->has_modifier(EXPORT) ||
+                               decl->has_modifier(EXTERN) || decl->has_modifier(WEAK))};
+    if (linked) { return; }
+    ctx_.diags.emplace_back("Attribute 'visibility' needs a symbol other objects can link to: a "
+                            "'pub', 'export', 'extern', or 'weak' declaration",
+                            error::ILLEGAL_ATTRIBUTE,
+                            resolving_.ast.location_of((*item)->name));
+}
+
 auto type_resolver::check_attribute_conflicts(const attribute_refs&      items,
                                               const resolved_attributes& resolved) -> void {
     if (!resolved.naked || resolved.inlining != ast::inline_mode::ALWAYS) { return; }
@@ -10139,6 +10239,7 @@ auto type_resolver::resolve_attributes(const attribute_refs& items,
             resolved.alignment = fold_alignment(item->args.front());
             break;
         case ast::attribute_kind::DEPRECATED: check_deprecation_message(*item); break;
+        case ast::attribute_kind::VISIBILITY: resolved.visibility = fold_visibility(*item); break;
         }
     }
 
@@ -10160,6 +10261,7 @@ auto type_resolver::resolve_decl_attributes(ast::node_id          id,
         own.emplace_back(&item);
     }
 
+    check_visibility_linkage(own, decl);
     const auto return_kind{callable_return_kind(type_data)};
     resolving_.set_node_attributes(id,
                                    resolve_attributes(own,
@@ -10243,9 +10345,14 @@ auto type_resolver::resolve_fn_literal_attributes(ast::node_id              id,
         });
     }
 
-    const bool returns_void{fn.explicit_return_type.get_token_type() ==
+    const bool                          returns_void{fn.explicit_return_type.get_token_type() ==
                             syntax::token_type_t::VOID_TYPE};
-    auto       resolved{resolve_attributes(items, ast::attribute_target::FN, returns_void)};
+    stdx::option<const ast::decl_stmt&> declaring;
+    if (fn.declaring_decl) {
+        declaring.emplace(resolving_.ast.get_as<ast::decl_stmt>(*fn.declaring_decl));
+    }
+    check_visibility_linkage(items, declaring);
+    auto resolved{resolve_attributes(items, ast::attribute_target::FN, returns_void)};
     resolved.dependent = dependent;
     resolving_.set_node_attributes(id, resolved);
 }
@@ -10467,7 +10574,13 @@ auto type_resolver::visit(ast::node_id id, const ast::import_stmt& import_stmt) 
     }
 
     const auto [ident_id, name]{*named};
-    auto& sym{ctx_.registry.get_from(table_idx_, name)};
+    // The collector rejected the binding (e.g. it shadows another import) and said why
+    const auto sym_opt{ctx_.registry.get_from_opt(table_idx_, name)};
+    if (!sym_opt) {
+        last_type_.emplace(ctx_.get_poison());
+        return resolving_.set_sema_type(ident_id, *last_type_);
+    }
+    auto& sym{*sym_opt};
 
     const auto poison_out = [&] -> void {
         last_type_.emplace(ctx_.get_poison());
@@ -12290,7 +12403,7 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_array_ty
                              error::ILLEGAL_AUTO_USAGE,
                              resolving_.ast.location_of(array.inner_explicit_type)));
     }
-    if (reject_non_runtime_slot(array.inner_explicit_type, item_type)) {
+    if (reject_storage_slot(array.inner_explicit_type, item_type)) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id));
     }
 

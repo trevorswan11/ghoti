@@ -1061,6 +1061,8 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                                       get_extern_target(active_ast(), decl))};
             fn.set_link_name(get_link_name(active_ast(), decl));
             fn.set_weak(decl.has_modifier(ast::decl_modifiers::WEAK));
+            // With no literal, the declaration itself holds the attributes, like `visibility`
+            apply_fn_attributes(fn, active_mod(), id);
             for (usize i{0}; const auto& param : fn_data->params) {
                 fn.add_param(fmt::format("param.{}", i++), *param);
             }
@@ -1135,6 +1137,7 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
     g.is_thread_local = decl.has_modifier(ast::decl_modifiers::THREADLOCAL);
     g.is_weak         = decl.has_modifier(ast::decl_modifiers::WEAK);
     g.alignment       = decl_alignment(active_mod(), id);
+    g.visibility      = decl_visibility(active_mod(), id);
 }
 
 auto emitter::emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -> void {

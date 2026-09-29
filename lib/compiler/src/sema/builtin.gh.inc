@@ -140,6 +140,10 @@ pub const OptimizeMode := enum { debug, release_safe, release_fast, release_smal
 /// the choice to the optimizer, as if no `inline` were written.
 pub const Inline := enum { always, never, hint, default };
 
+/// Who outside the linked image can see a symbol, for `@[visibility(...)]`;
+/// `protected` exists only in ELF.
+pub const Visibility := enum { default, hidden, protected };
+
 pub const Signedness := enum : u1 { signed, unsigned };
 
 pub const IntInfo := struct {
@@ -229,6 +233,8 @@ pub const FnInfo := struct {
     pub cold: bool = false,
     /// The function's `@[align(n)]`, or 0 for the target's default.
     pub alignment: usize = 0,
+    /// The function's `@[visibility(...)]`.
+    pub visibility: Visibility = .default,
 };
 
 /// The keystone reflection value: `@typeInfo(T)` returns one of these.

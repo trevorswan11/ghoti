@@ -1,5 +1,9 @@
 #include <string>
+#include <string_view>
 #include <utility>
+
+#include <fmt/format.h>
+#include <fmt/ranges.h>
 
 #include <catch2/catch_test_macros.hpp>
 #include <llvm/IR/LLVMContext.h>
@@ -41,6 +45,51 @@ TEST_CASE("f16 and f128 type-check, widen, and lower to the expected LLVM types"
     const auto ir{helpers::ir_text(*llvm_mod)};
     CHECK(ir.find("half") != std::string::npos);
     CHECK(ir.find("fp128") != std::string::npos);
+}
+
+// Runs once lib/compiler_rt defines every soft-float routine the program calls; until then it's
+// skipped, naming what's missing
+auto run_with_builtins(std::string_view source) -> void {
+    if (const auto missing{helpers::missing_builtins(source)}; !missing.empty()) {
+        SKIP(fmt::format("needs compiler_rt: {}", fmt::join(missing, ", ")));
+    }
+    CHECK(helpers::compile_and_run(source) == 0);
+}
+
+TEST_CASE("f128 arithmetic, comparison, and conversion at runtime") {
+    run_with_builtins(R"(
+        var a: f128 = 1.5f128;
+        var b: f128 = 2.25f128;
+        var i: i64 = -7;
+
+        pub const main := fn(): i32 {
+            if (a + b != 3.75f128) { return 1; }
+            if (b - a != 0.75f128) { return 2; }
+            if (a * b != 3.375f128) { return 3; }
+            if (b / a != 1.5f128) { return 4; }
+            if (!(a < b) or a >= b) { return 5; }
+            const widened: f128 = @as(f64, 0.5);
+            if (widened != 0.5f128) { return 6; }
+            if (@floatFromInt(f128, i) != -7.0f128) { return 7; }
+            if (@intFromFloat(i64, b * 4.0f128) != 9) { return 8; }
+            return 0;
+        };
+    )");
+}
+
+TEST_CASE("f16 arithmetic and conversion at runtime") {
+    run_with_builtins(R"(
+        var h: f16 = 1.5f16;
+        var k: f16 = 0.25f16;
+
+        pub const main := fn(): i32 {
+            if (h + k != 1.75f16) { return 1; }
+            if (h * k != 0.375f16) { return 2; }
+            const wide: f32 = h;
+            if (wide != 1.5) { return 3; }
+            return 0;
+        };
+    )");
 }
 
 TEST_CASE("@sizeOf of the extended float types") {

@@ -40,39 +40,59 @@ constexpr auto CALLCONV_VALS_TO_NAMES{[] {
 
 constexpr std::array ALL_ATTRIBUTES{
     attribute_spec{
-        .name     = "discardable",
-        .kind     = attribute_kind::DISCARDABLE,
-        .min_args = 0,
-        .max_args = 1,
-        .targets  = attribute_target::FN_DECL | attribute_target::FN,
+        .name      = "discardable",
+        .kind      = attribute_kind::DISCARDABLE,
+        .min_args  = 0,
+        .max_args  = 1,
+        .targets   = attribute_target::FN_DECL | attribute_target::FN,
+        .signature = "discardable(bool = true)",
+        .doc       = "The function's result may be ignored without `_ = ...`",
     },
     attribute_spec{
-        .name     = "inline",
-        .kind     = attribute_kind::INLINE,
-        .min_args = 1,
-        .max_args = 1,
-        .targets  = attribute_target::FN,
+        .name      = "inline",
+        .kind      = attribute_kind::INLINE,
+        .min_args  = 1,
+        .max_args  = 1,
+        .targets   = attribute_target::FN,
+        .signature = "inline(builtin.Inline)",
+        .doc = "How calls to the function are inlined: `.always`, `.never`, `.hint`, or `.default`",
     },
     attribute_spec{
-        .name     = "naked",
-        .kind     = attribute_kind::NAKED,
-        .min_args = 0,
-        .max_args = 1,
-        .targets  = attribute_target::FN,
+        .name      = "naked",
+        .kind      = attribute_kind::NAKED,
+        .min_args  = 0,
+        .max_args  = 1,
+        .targets   = attribute_target::FN,
+        .signature = "naked(bool = true)",
+        .doc       = "Emits no prologue or epilogue; the body must be inline assembly",
     },
     attribute_spec{
-        .name     = "align",
-        .kind     = attribute_kind::ALIGN,
-        .min_args = 1,
-        .max_args = 1,
-        .targets  = attribute_target::DECL | attribute_target::FN | attribute_target::FIELD,
+        .name      = "align",
+        .kind      = attribute_kind::ALIGN,
+        .min_args  = 1,
+        .max_args  = 1,
+        .targets   = attribute_target::DECL | attribute_target::FN | attribute_target::FIELD,
+        .signature = "align(power-of-two integer)",
+        .doc = "Minimum alignment in bytes of the declaration's storage or the function's code",
     },
     attribute_spec{
-        .name     = "deprecated",
-        .kind     = attribute_kind::DEPRECATED,
-        .min_args = 0,
-        .max_args = 1,
-        .targets  = attribute_target::DECL | attribute_target::FN_DECL | attribute_target::FIELD,
+        .name      = "deprecated",
+        .kind      = attribute_kind::DEPRECATED,
+        .min_args  = 0,
+        .max_args  = 1,
+        .targets   = attribute_target::DECL | attribute_target::FN_DECL | attribute_target::FIELD,
+        .signature = "deprecated([]u8 = none)",
+        .doc = "Uses warn, or fail with `--deprecated=error`; the optional message explains why",
+    },
+    attribute_spec{
+        .name      = "visibility",
+        .kind      = attribute_kind::VISIBILITY,
+        .min_args  = 1,
+        .max_args  = 1,
+        .targets   = attribute_target::DECL | attribute_target::FN_DECL | attribute_target::FN,
+        .signature = "visibility(builtin.Visibility)",
+        .doc = "Who outside the linked image sees the symbol: `.default`, `.hidden` (this image "
+               "only), or `.protected` (ELF: exported but never preempted)",
     },
 };
 
@@ -144,6 +164,20 @@ auto attribute_spec_of(std::string_view name) noexcept -> stdx::option<const att
     return *it;
 }
 
+auto all_attribute_specs() noexcept -> std::span<const attribute_spec> { return ALL_ATTRIBUTES; }
+
+auto attribute_enum_variants(attribute_kind kind) noexcept -> std::span<const std::string_view> {
+    static constexpr std::array<std::string_view, 4> inline_variants{
+        "always", "never", "hint", "default"};
+    static constexpr std::array<std::string_view, 3> visibility_variants{
+        "default", "hidden", "protected"};
+    switch (kind) {
+    case attribute_kind::INLINE:     return inline_variants;
+    case attribute_kind::VISIBILITY: return visibility_variants;
+    default:                         return {};
+    }
+}
+
 auto attribute_spec_of(attribute_kind kind) noexcept -> const attribute_spec& {
     return *std::ranges::find(ALL_ATTRIBUTES, kind, &attribute_spec::kind);
 }
@@ -185,6 +219,23 @@ auto inline_mode_name(inline_mode mode) noexcept -> std::string_view {
     case inline_mode::DEFAULT: return "default";
     }
     return "default";
+}
+
+auto symbol_visibility_name(symbol_visibility visibility) noexcept -> std::string_view {
+    switch (visibility) {
+    case symbol_visibility::DEFAULT:   return "default";
+    case symbol_visibility::HIDDEN:    return "hidden";
+    case symbol_visibility::PROTECTED: return "protected";
+    }
+    return "default";
+}
+
+auto symbol_visibility_from_name(std::string_view name) noexcept
+    -> stdx::option<symbol_visibility> {
+    if (name == "default") { return symbol_visibility::DEFAULT; }
+    if (name == "hidden") { return symbol_visibility::HIDDEN; }
+    if (name == "protected") { return symbol_visibility::PROTECTED; }
+    return stdx::none;
 }
 
 auto parse_attribute_list(syntax::parser& parser)

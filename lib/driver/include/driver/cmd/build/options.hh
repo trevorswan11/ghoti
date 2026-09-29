@@ -46,6 +46,7 @@ struct raw_options {
     bool                     debug_passes{false};
     bool                     time_passes{false};
     bool                     dynamic{false};
+    bool                     no_compiler_rt{false};
     std::string              deprecated{"warn"};
 
     std::string emit_gir_path;
@@ -64,6 +65,7 @@ struct options {
     std::vector<std::string>           libraries{};
     std::vector<std::string>           forwarded_args{};
     bool                               dynamic{false};
+    bool                               compiler_rt{true};
     sema::optimize_mode                mode{sema::optimize_mode::DEBUG};
     bool                               runtime_safety{true};
     sema::deprecation_policy           deprecated_policy{sema::deprecation_policy::WARN};
@@ -133,6 +135,8 @@ class compilation {
 auto add_deprecated_option(CLI::App* subcmd, raw_options& opts) -> void;
 // `-M,--mode debug|release_safe|release_fast|release_small`, shared by every compiling subcommand
 auto add_mode_option(CLI::App* subcmd, raw_options& opts) -> void;
+// `--no-compiler-rt`, shared by every subcommand that links
+auto add_compiler_rt_option(CLI::App* subcmd, raw_options& opts) -> void;
 auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_view> output_desc)
     -> void;
 

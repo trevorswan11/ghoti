@@ -386,6 +386,8 @@ auto const_eval::try_eval(ast::node_id id) -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     if (const auto sema_ty{module_->get_sema_type_opt(id)}) {
         if (sema_ty->is_volatile()) { return stdx::none; }
+        // Resolution already reported why; evaluating a malformed node would trip its invariants
+        if (sema_ty->is_poison()) { return const_value::make_poison(); }
     }
     const memo_key key{id.get_index(), ctx_.env_epoch, in_evaluation_context()};
     const bool     is_outermost{call_stack_.empty()};
@@ -2182,6 +2184,12 @@ auto const_eval::eval_type_info(sema::type&                                    d
         s.fields.emplace("discardable", const_value{attributes.discardable, bool_type});
         s.fields.emplace("cold", const_value{attributes.cold, bool_type});
         s.fields.emplace("alignment", const_value{attributes.alignment.value_or(0), usize_type});
+        const auto visibility{attributes.visibility.value_or(ast::symbol_visibility::DEFAULT)};
+        s.fields.emplace(
+            "visibility",
+            const_value{const_enum{std::string{ast::symbol_visibility_name(visibility)},
+                                   static_cast<i64>(visibility)},
+                        ctx_.get_builtin_type("Visibility")});
         return wrap("function", std::move(s), ctx_.get_builtin_type("FnInfo"));
     }
     case sema::type_kind::ENUM: {

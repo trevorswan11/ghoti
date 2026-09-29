@@ -534,6 +534,11 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a typed module constant built from an untyped constant (`const a: f32 = big;`, `const b: u8 = two_hundred;`) folded as the untyped type, crashing `@bitCast` and friends; an integer constant bound to a float global (`const f: f32 = five;`) crashed too
 - Fixed: nested untyped constant arithmetic next to a typed float (`((c * c) + c) * f32_value`) was rejected
 - Fixed: a compile-time-false `@assert` in an `if` or `match` arm that a folded condition rules out was an error, e.g. `if (N > 4) { @assert(N > 4); }` with `N = 2`, including inside generic instantiations
+- `@[visibility(.default)]`, `@[visibility(.hidden)]`, and `@[visibility(.protected)]` set a symbol's visibility, backed by the new `builtin.Visibility` enum
+    - Allowed on `pub`, `export`, `extern`, and `weak` declarations; `.protected` only on ELF targets
+    - `@typeInfo(f).function.visibility` reflects it
+- Fixed: several malformed programs crashed the compiler instead of reporting an error, including `@hasField` with a non-type or non-string argument, `return 1.5` from an integer function, `-i64`, `@bitCast(undefined)`, a `noreturn` field or variable, a pack parameter used as a return type, and a match mixing type and value arms
+- Fixed: code after a `match` or `if` whose arms all return is treated as dead instead of miscompiling
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
@@ -544,7 +549,13 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - **Breaking:** `-M, --mode debug|release_safe|release_fast|release_small` replaces `-O`, `--release`, and `--unsafe` on `build-*`, `run`, and `test`
     - `debug` (the default) is `-O0` with runtime safety, `release_safe` is `-O2` with safety, `release_fast` is `-O3` without, and `release_small` is `-Oz` without
     - The LSP analyzes as `debug`
-- Releases ship a `lib/compiler_rt` directory, and every link now takes an optional compiler builtins archive as its last input; nothing is built into it yet
+- Releases ship a `lib/compiler_rt` directory of ghoti sources for the routines LLVM calls on its own (`__addtf3`, `__divti3`, `fmodf`, ...); nothing is written in it yet
+    - A link whose object needs one builds `lib/compiler_rt` for the target (at most once per process) and links it last; `GHOTI_COMPILER_RT=<file>` points at another root
+    - `--no-compiler-rt` on `build-exe`, `build-lib`, `run`, and `test` skips it
+    - A routine that fails to compile, or that compiles into a call to itself, is a build error naming its file
+    - A link that fails on a missing builtin says which ones and that `lib/compiler_rt` doesn't provide them yet
+- Fixed: a `build-lib --dynamic` DLL for an MSVC target exported nothing; Windows DLLs now export every non-hidden symbol, like `.so` and `.dylib`
+- LSP completes attribute names inside `@[...]` and enum arguments like `@[visibility(.hidden)]`, and hover describes an attribute
 - Cross compiling for macOS links from any host: releases ship `libSystem.tbd` and `SDKSettings.json` in `lib/darwin`, used when neither `SDKROOT` nor `xcrun` names an SDK (#342)
     - The linker stamps the SDK version from `SDKSettings.json` into the image instead of reusing the minimum OS version
 - LSP hover names a callable's parameters: `fn(lhs: i32, rhs: i32): i32` instead of `fn(i32, i32): i32` (#305)

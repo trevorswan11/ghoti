@@ -400,6 +400,12 @@ class type_resolver {
     // The variant name of an `item` argument typed against the prelude enum `enum_name`
     [[nodiscard]] auto fold_attribute_enum(const ast::attribute& item, std::string_view enum_name)
         -> stdx::option<std::string>;
+    // `visibility`'s argument, rejecting `.protected` outside ELF
+    [[nodiscard]] auto fold_visibility(const ast::attribute& item)
+        -> stdx::option<ast::symbol_visibility>;
+    // `visibility` only means something on a declaration with an externally linked symbol
+    auto check_visibility_linkage(const attribute_refs&               items,
+                                  stdx::option<const ast::decl_stmt&> decl) -> void;
 
     // Whether the outermost callee of `call` resolves to a `@[discardable]` declaration
     [[nodiscard]] auto callee_is_discardable(ast::node_id call_id, const ast::call_expr& call) const
@@ -581,6 +587,8 @@ class type_resolver {
     // `@TypeOf(undefined)` itself, or an array of it at any depth
     [[nodiscard]] static auto holds_undefined_by_value(const type& t) -> bool;
     auto reject_unsized_slot(ast::explicit_type_id at, const type& slot_type) -> bool;
+    // A field, variable, or array element: a runtime slot that also has to hold a value
+    auto reject_storage_slot(ast::explicit_type_id at, const type& slot_type) -> bool;
 
     template <ast::IndexableID ID> auto visit(ID, const ast::struct_expr&) -> void;
     template <ast::IndexableID ID> auto visit(ID, const ast::union_expr&) -> void;
