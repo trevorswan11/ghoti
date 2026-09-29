@@ -1966,16 +1966,16 @@ auto const_eval::target_enum_value(std::string_view enum_name, std::string_view 
     return const_value{const_enum{std::string{member}, ordinal}, enum_type};
 }
 
-auto const_eval::declared_fn_attributes(ast::expr_handle arg)
-    -> stdx::option<sema::resolved_attributes> {
-    const auto declaration{module_->get_identifier_declaration(ast::node_id{arg})};
-    if (!declaration || !declaration->owner || !declaration->decl) { return stdx::none; }
-    const auto& owner{*declaration->owner};
-    const auto  literal_node{owner.fn_literal_node(*declaration->decl)};
-    const auto  literal{owner.ast.get_as_opt<ast::function_expr>(literal_node)};
+namespace {
+
+// The folded attributes of `decl` (a declaration or a function literal) as `owner` sees them now
+[[nodiscard]] auto fn_decl_attributes(const mod::module& owner, ast::node_id decl)
+    -> sema::resolved_attributes {
+    const auto literal_node{owner.fn_literal_node(decl)};
+    const auto literal{owner.ast.get_as_opt<ast::function_expr>(literal_node)};
 
     sema::resolved_attributes resolved;
-    if (const auto folded{owner.attributes_of(literal ? literal_node : *declaration->decl)}) {
+    if (const auto folded{owner.attributes_of(literal ? literal_node : decl)}) {
         resolved = *folded;
     }
     // `@branchHint(.cold)` opening the body, read the way the emitter reads it
@@ -1995,6 +1995,61 @@ auto const_eval::declared_fn_attributes(ast::expr_handle arg)
         }
     }
     return resolved;
+}
+
+} // namespace
+
+auto const_eval::declared_fn_attributes(ast::expr_handle arg)
+    -> stdx::option<sema::resolved_attributes> {
+    if (const auto dot{module_->ast.get_as_opt<ast::dot_expr>(*arg)}) {
+        return member_fn_attributes(*dot);
+    }
+    const auto declaration{module_->get_identifier_declaration(ast::node_id{arg})};
+    if (!declaration || !declaration->owner || !declaration->decl) { return stdx::none; }
+    return fn_decl_attributes(*declaration->owner, *declaration->decl);
+}
+
+auto const_eval::member_fn_attributes(const ast::dot_expr& dot)
+    -> stdx::option<sema::resolved_attributes> {
+    // The resolver's view names a type constructor's per-instantiation clone, while re-evaluating
+    // its call may rebuild the shared literal type
+    stdx::option<sema::type&> denoted;
+    if (const auto recorded{module_->get_sema_type_opt(*dot.object)}) {
+        if (const auto meta{recorded->get_data().as_opt<sema::types::meta_type>()}) {
+            denoted.emplace(meta->instance);
+        } else if (ctx_.generic_functions.get_type_ctor_member_prefix(*recorded)) {
+            denoted.emplace(*recorded);
+        }
+    }
+    if (!denoted) {
+        if (const auto val{try_eval(dot.object)}; val && val->is<stdx::option<sema::type&>>()) {
+            denoted = val->as<stdx::option<sema::type&>>();
+        }
+    }
+    if (!denoted) { return stdx::none; }
+
+    stdx::option<mod::module&> owner;
+    if (const auto st{denoted->get_data().as_opt<sema::types::struct_t>()}) {
+        owner.emplace(st->enclosing);
+    } else if (const auto un{denoted->get_data().as_opt<sema::types::union_t>()}) {
+        owner.emplace(un->enclosing);
+    } else if (const auto en{denoted->get_data().as_opt<sema::types::enum_t>()}) {
+        owner.emplace(en->enclosing);
+    }
+    const auto tbl_idx{denoted->get_symbol_table_idx_opt()};
+    if (!owner || !tbl_idx) { return stdx::none; }
+
+    const auto& member{module_->ast.get_as<ast::identifier_expr>(dot.member).name};
+    const auto  msym{ctx_.registry.get(*tbl_idx).get_opt(member)};
+    const auto  node{msym ? msym->get_data().as_opt<sema::symbols::node_t>() : stdx::none};
+    if (!node) { return stdx::none; }
+
+    // A type constructor's member folded its attributes once per instantiation
+    const auto prefix{ctx_.generic_functions.get_type_ctor_member_prefix(*denoted)};
+    const auto diff{prefix ? ctx_.instantiation_cache.get_body_type_diff(*prefix)
+                           : owner->active_body_diff};
+    const mod::body_diff_guard diff_guard{*owner, diff};
+    return fn_decl_attributes(*owner, *node);
 }
 
 auto const_eval::eval_type_info(sema::type&                                    denoted,
@@ -3766,6 +3821,8 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (forced.get_data().is<sema::types::deferred_array>()) { return stdx::none; }
         const auto arg{call.arguments.front().as_opt<ast::expr_handle>()};
         const auto declared{arg ? declared_fn_attributes(*arg) : stdx::none};
+        // Outside an instantiation a parameter-dependent attribute has no value to report
+        if (declared && declared->dependent) { return stdx::none; }
         return eval_type_info(forced,
                               declared ? stdx::option<const sema::resolved_attributes&>{*declared}
                                        : stdx::none);

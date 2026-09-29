@@ -52,6 +52,87 @@ TEST_CASE("A forwarding wrapper can copy its target's discardability") {
     )");
 }
 
+TEST_CASE("@typeInfo of a generic function reflects its parameter-independent attributes") {
+    helpers::resolve_and_check(R"(
+        @[inline(.always), discardable, align(16)]
+        const g := fn(T: type, x: T): T { return x; };
+        const pick := fn(constexpr N: usize): usize {
+            @branchHint(.cold);
+            return N;
+        };
+        constexpr {
+            @assert(@typeInfo(g).function.inline_mode == .always);
+            @assert(@typeInfo(g).function.discardable);
+            @assert(@typeInfo(g).function.alignment == 16);
+            @assert(@typeInfo(pick).function.cold);
+        }
+        pub const main := fn(): i32 {
+            const a := pick(2);
+            return g(i32, 1);
+        };
+    )");
+}
+
+TEST_CASE("A generic function sees its own instantiation's attributes") {
+    helpers::resolve_and_check(R"(
+        @[inline(if (N > 4) .never else .always)]
+        const f := fn(constexpr N: usize): usize {
+            constexpr {
+                @assert(N <= 4 or @typeInfo(f).function.inline_mode == .never);
+                @assert(N > 4 or @typeInfo(f).function.inline_mode == .always);
+            }
+            return N;
+        };
+        pub const main := fn(): i32 {
+            const a := f(2);
+            const b := f(8);
+            const c := f(3);
+            return 0;
+        };
+    )");
+}
+
+TEST_CASE("Reflecting a parameter-dependent attribute outside an instantiation is an error") {
+    CHECK(helpers::raised(R"(
+        @[inline(if (N > 4) .never else .always)]
+        const f := fn(constexpr N: usize): usize { return N; };
+        constexpr { @assert(@typeInfo(f).function.inline_mode == .always); }
+    )",
+                          sema::error::ILLEGAL_ATTRIBUTE));
+}
+
+TEST_CASE("@typeInfo of a member function reflects its attributes") {
+    helpers::resolve_and_check(R"(
+        const S := struct {
+            @[inline(.never), align(32)] pub const f := fn(): i32 { return 1; };
+        };
+        constexpr {
+            @assert(@typeInfo(S.f).function.inline_mode == .never);
+            @assert(@typeInfo(S.f).function.alignment == 32);
+        }
+    )");
+}
+
+TEST_CASE("@typeInfo of a type constructor's member reflects that instantiation's attributes") {
+    helpers::resolve_and_check(R"(
+        const Box := fn(T: type): type {
+            return struct {
+                v: T,
+                @[inline(if (@sizeOf(T) > 4) .never else .always), discardable(@sizeOf(T) == 1)]
+                pub const get := fn(self): T { return self.v; };
+                @[align(16)] pub const plain := fn(): i32 { return 1; };
+            };
+        };
+        constexpr {
+            @assert(@typeInfo(Box(u8).plain).function.alignment == 16);
+            @assert(@typeInfo(Box(u8).get).function.inline_mode == .always);
+            @assert(@typeInfo(Box(u8).get).function.discardable);
+            @assert(@typeInfo(Box(i64).get).function.inline_mode == .never);
+            @assert(!@typeInfo(Box(i64).get).function.discardable);
+        }
+    )");
+}
+
 TEST_CASE("inline(.default) leaves inlining to the optimizer") {
     helpers::resolve_and_check(R"(
         @[inline(.default)] const f := fn(x: i32): i32 { return x; };

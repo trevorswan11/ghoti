@@ -63,6 +63,9 @@ struct resolved_attributes {
     bool                           naked{false};
     stdx::option<u64>              alignment{};
     bool                           cold{false}; // `@branchHint(.cold)` opens the body
+    // On a generic template, an attribute whose argument names a parameter so only folds per
+    // instantiation
+    stdx::option<ast::attribute_kind> dependent{};
 
     [[nodiscard]] auto operator==(const resolved_attributes&) const noexcept -> bool = default;
 };

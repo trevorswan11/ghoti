@@ -367,7 +367,12 @@ class type_resolver {
                                                const ast::decl_stmt& decl,
                                                const type::data_t&   type_data) -> void;
     // A literal's own list plus the function-only attributes of the declaration it initializes
-    auto resolve_fn_literal_attributes(ast::node_id id, const ast::function_expr& fn) -> void;
+    // A generic `is_template` folds only the attributes whose arguments ignore its parameters
+    auto resolve_fn_literal_attributes(ast::node_id              id,
+                                       const ast::function_expr& fn,
+                                       bool                      is_template = false) -> void;
+    [[nodiscard]] auto mentions_fn_param(const ast::attribute&     item,
+                                         const ast::function_expr& fn) const -> bool;
     auto check_attribute_conflicts(const attribute_refs& items, const resolved_attributes& resolved)
         -> void;
     [[nodiscard]] auto fold_attribute_bool(const ast::attribute& item) -> stdx::option<bool>;

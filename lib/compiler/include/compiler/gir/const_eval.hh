@@ -160,6 +160,11 @@ class const_eval {
 
     auto set_constexpr_context(bool enabled) noexcept -> void { constexpr_context_ = enabled; }
 
+    // The folded attributes of the function declaration `arg` names, as `f` or as `T.f`, seen
+    // through the instantiation that produced `T` when a type constructor did
+    [[nodiscard]] auto declared_fn_attributes(ast::expr_handle arg)
+        -> stdx::option<sema::resolved_attributes>;
+
   private:
     struct defer_entry {
         ast::stmt_handle                            stmt;
@@ -268,13 +273,12 @@ class const_eval {
 
     // `@typeInfo(T)`: builds the `builtin::TypeInfo` tagged union for `denoted` (already
     // unwrapped past any `TYPE`/`deferred_call` wrapper) by switching on its `type_kind`.
+    [[nodiscard]] auto member_fn_attributes(const ast::dot_expr& dot)
+        -> stdx::option<sema::resolved_attributes>;
     [[nodiscard]] auto
     eval_type_info(sema::type&                                    denoted,
                    stdx::option<const sema::resolved_attributes&> declared = stdx::none)
         -> const_value;
-    // The folded attributes of the function declaration `arg` names, if it names one
-    [[nodiscard]] auto declared_fn_attributes(ast::expr_handle arg)
-        -> stdx::option<sema::resolved_attributes>;
     // An `if`'s folded condition; `if constexpr { ... }` is true only in a constexpr context
     auto eval_if_condition(const ast::if_expr& if_expr) -> stdx::option<const_value>;
     // Folds a declaration's initializer; a `constexpr` one is always compile-time evaluation

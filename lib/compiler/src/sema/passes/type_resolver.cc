@@ -1231,6 +1231,18 @@ template <ast::IndexableID ID>
     }
     case token_type_t::BUILTIN_TYPE_INFO: {
         DISCARD(get_resolved_call_arg_type(call.arguments[0]));
+        if (const auto arg{call.arguments[0].as_opt<ast::expr_handle>()}) {
+            gir::const_eval evaluator{ctx_, resolving_};
+            const auto      declared{evaluator.declared_fn_attributes(*arg)};
+            if (const auto dependent{declared ? declared->dependent : stdx::none}) {
+                return make_sema_err(
+                    fmt::format("Attribute '{}' depends on the function's parameters, so it has "
+                                "a value only within an instantiation",
+                                ast::attribute_spec_of(*dependent).name),
+                    error::ILLEGAL_ATTRIBUTE,
+                    get_call_arg_location(call.arguments[0]));
+            }
+        }
         return_type = &denoted_type(ctx_.get_builtin_type("TypeInfo"));
         break;
     }
@@ -4301,7 +4313,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
                              resolving_.ast.location_of(id)));
     }
 
-    if (!declares_generic_params(fn)) { resolve_fn_literal_attributes(id, fn); }
+    resolve_fn_literal_attributes(id, fn, declares_generic_params(fn));
 
     if (!target_supports_callconv(fn.conv)) {
         return last_type_.emplace(
@@ -10133,8 +10145,36 @@ auto type_resolver::resolve_decl_attributes(ast::node_id          id,
     }
 }
 
-auto type_resolver::resolve_fn_literal_attributes(ast::node_id id, const ast::function_expr& fn)
-    -> void {
+auto type_resolver::mentions_fn_param(const ast::attribute&     item,
+                                      const ast::function_expr& fn) const -> bool {
+    const auto& tree{resolving_.ast};
+    std::vector<std::string_view> params;
+    for (const auto& p : fn.parameters) {
+        if (const auto name{tree.get_as_opt<ast::identifier_expr>(p.name)}) {
+            params.emplace_back(name->name);
+        }
+    }
+    if (params.empty()) { return false; }
+
+    // Any identifier spelled inside an argument's span, so a member named like a parameter counts
+    const auto position{[](const source_location& loc) { return std::pair{loc.line, loc.column}; }};
+    for (const auto arg : item.args) {
+        const auto start{position(tree.location_of(arg))};
+        const auto end{position(tree.end_location_of(arg))};
+        for (const auto id : tree.nodes_of<ast::identifier_expr>()) {
+            const auto at{position(tree.location_of(id))};
+            if (at < start || at >= end) { continue; }
+            if (std::ranges::contains(params, tree.get_as<ast::identifier_expr>(id).name)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+auto type_resolver::resolve_fn_literal_attributes(ast::node_id              id,
+                                                  const ast::function_expr& fn,
+                                                  bool                      is_template) -> void {
     // Inside a monomorph every visit refolds, since the arguments may depend on its parameters
     if (!for_generic_instantiation_ && resolving_.attributes_of(id)) { return; }
 
@@ -10162,10 +10202,20 @@ auto type_resolver::resolve_fn_literal_attributes(ast::node_id id, const ast::fu
     }
     if (items.empty()) { return; }
 
+    stdx::option<ast::attribute_kind> dependent;
+    if (is_template) {
+        std::erase_if(items, [&](const auto item) {
+            if (!mentions_fn_param(*item, fn)) { return false; }
+            if (!dependent) { dependent = item->kind; }
+            return true;
+        });
+    }
+
     const bool returns_void{fn.explicit_return_type.get_token_type() ==
                             syntax::token_type_t::VOID_TYPE};
-    resolving_.set_node_attributes(
-        id, resolve_attributes(items, ast::attribute_target::FN, returns_void));
+    auto resolved{resolve_attributes(items, ast::attribute_target::FN, returns_void)};
+    resolved.dependent = dependent;
+    resolving_.set_node_attributes(id, resolved);
 }
 
 auto type_resolver::discardable_holds(const mod::module&                       home,
@@ -12735,11 +12785,12 @@ auto type_resolver::instantiate_generic(type&                             callee
                                                  std::move(type_param_frame)};
     inst_resolver.resolve(fn_expr.explicit_return_type);
     if (inst_resolver.last_type_->is_poison()) { return stdx::none; }
-    inst_resolver.resolve_fn_literal_attributes(fn_mod.fn_literal_node(fn_info.node_id), fn_expr);
     // `denoted_type` unwraps a `@TypeOf(param)` return annotation to the type it names, so it
     // isn't mistaken for a `fn(...): type` type constructor.
     auto& return_type{
         inst_resolver.concrete_array_type(denoted_type(*inst_resolver.last_type_.take()))};
+    // Taken after the return type since folding the arguments overwrites `last_type_`
+    inst_resolver.resolve_fn_literal_attributes(fn_mod.fn_literal_node(fn_info.node_id), fn_expr);
     const auto is_auto_return{return_type.get_kind() == type_kind::AUTO};
     inst_resolver.return_trackers_.emplace_back(return_tracker{
         .return_types   = {},
@@ -12774,6 +12825,13 @@ auto type_resolver::instantiate_generic(type&                             callee
     // this instantiation's body/signature typing, to be replayed at emit time.
     body_type_diff typing;
     snap.diff_into(ctx_, fn_mod, typing, &write_log);
+    // Outside the overlay the literal reads as its template again, not the last instantiation
+    const auto literal_idx{fn_mod.fn_literal_node(fn_info.node_id).get_index()};
+    if (const auto templ{snap.attributes.find(literal_idx)}; templ != snap.attributes.end()) {
+        fn_mod.node_attributes.insert_or_assign(literal_idx, templ->second);
+    } else {
+        fn_mod.node_attributes.erase(literal_idx);
+    }
 
     // The per-inst typing lives in `typing` and must not leak into `fn_mod`'s shared side tables
     const auto rollback_poisoned{[](auto& live, const auto& snapshot, const auto& changed) {
