@@ -90,6 +90,9 @@ pub fn build(b: *std.Build) !void {
         .compressor = stdx_dep.artifact("compressor"),
     });
 
+    // Last, so the keep-list sees every install step
+    try addPrune(b);
+
     if (stdx.KcovBuilder.allowedTarget(b.graph.host)) {
         if (artifacts.tests) |tests| try stdx.steps.addCoverage(b, .{
             .curl = stdx_dep.artifact("execurl"),
@@ -159,6 +162,7 @@ pub const ProjectPaths = struct {
                 "build.zig.zon",
                 "build/DepStamp.zig",
                 "build/VerifyDeps.zig",
+                "build/Prune.zig",
                 site ++ "rebuild.zig",
                 third_party ++ "go/SiteBuilder.zig",
             },
@@ -582,6 +586,70 @@ fn addDepTracking(b: *std.Build) !void {
     });
     const step = b.step("verify-deps", "Check that editing each kind of C++ dependency triggers a rebuild");
     step.dependOn(&run.step);
+}
+
+/// `prune` reclaims `.zig-cache` and `zig-out` space; see build/Prune.zig for the policy
+fn addPrune(b: *std.Build) !void {
+    const dry_run = b.option(bool, "prune-dry-run", "Print what prune would delete (default: false)") orelse false;
+    const keep = b.option(u32, "prune-keep", "Generations kept per linked artifact (default: 2)") orelse 2;
+    const age_days = b.option(u32, "prune-age-days", "Age for tmp/, cppcheck/ and args/ entries (default: 14)") orelse 14;
+    const prune_llvm = b.option(bool, "prune-llvm", "Let prune evict old LLVM/LLD/Clang generations (default: false)") orelse false;
+
+    const prune_module = b.createModule(.{
+        .root_source_file = b.path("build/Prune.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const runner = b.addExecutable(.{ .name = "prune", .root_module = prune_module });
+    const run = b.addRunArtifact(runner);
+    run.has_side_effects = true;
+
+    const cache_root = b.cache_root.path orelse ".";
+    run.addArg(if (std.fs.path.isAbsolute(cache_root)) cache_root else b.pathFromRoot(cache_root));
+    run.addArg(b.install_prefix);
+    run.addFileArg(b.addWriteFiles().add("prune-keep.txt", try installKeepList(b)));
+    run.addArg(b.pathFromRoot("."));
+    run.addArg(b.dependency("llvm", .{}).builder.build_root.path orelse "");
+    run.addArgs(&.{ "--keep", b.fmt("{d}", .{keep}), "--age-days", b.fmt("{d}", .{age_days}) });
+    if (dry_run) run.addArg("--dry-run");
+    if (prune_llvm) run.addArg("--prune-llvm");
+
+    const step = b.step("prune", "Delete superseded .zig-cache generations and stale zig-out files");
+    step.dependOn(&run.step);
+
+    const tests = b.addTest(.{ .root_module = prune_module });
+    const test_step = b.step("test-build", "Run the build tooling's unit tests");
+    test_step.dependOn(&b.addRunArtifact(tests).step);
+}
+
+/// Every path the install graph writes, as rules for build/Prune.zig
+fn installKeepList(b: *std.Build) ![]const u8 {
+    var rules: std.ArrayList(u8) = .empty;
+    var visited: std.AutoHashMapUnmanaged(*std.Build.Step, void) = .empty;
+    var pending: std.ArrayList(*std.Build.Step) = .empty;
+    for (b.top_level_steps.values()) |top| try pending.append(b.allocator, &top.step);
+
+    while (pending.pop()) |step| {
+        if ((try visited.getOrPut(b.allocator, step)).found_existing) continue;
+        try pending.appendSlice(b.allocator, step.dependencies.items);
+
+        const owner = step.owner;
+        if (step.cast(std.Build.Step.InstallArtifact)) |install| {
+            const name = install.artifact.name;
+            if (install.dest_dir) |dir| {
+                try rules.print(b.allocator, "F {s}\n", .{owner.getInstallPath(dir, install.dest_sub_path)});
+                try rules.print(b.allocator, "S {s}|lib{s}\n", .{ owner.getInstallPath(dir, ""), name });
+            }
+            for ([_]?std.Build.InstallDir{ install.pdb_dir, install.implib_dir, install.h_dir }) |maybe_dir| {
+                if (maybe_dir) |dir| try rules.print(b.allocator, "S {s}|{s}\n", .{ owner.getInstallPath(dir, ""), name });
+            }
+        } else if (step.cast(std.Build.Step.InstallDir)) |install| {
+            try rules.print(b.allocator, "D {s}\n", .{owner.getInstallPath(install.options.install_dir, install.options.install_subdir)});
+        } else if (step.cast(std.Build.Step.InstallFile)) |install| {
+            try rules.print(b.allocator, "F {s}\n", .{owner.getInstallPath(install.dir, install.dest_rel_path)});
+        }
+    }
+    return rules.items;
 }
 
 const counted_extensions = [_][]const u8{

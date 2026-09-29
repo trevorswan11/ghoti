@@ -549,3 +549,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - The linker stamps the SDK version from `SDKSettings.json` into the image instead of reusing the minimum OS version
 - LSP hover names a callable's parameters: `fn(lhs: i32, rhs: i32): i32` instead of `fn(i32, i32): i32` (#305)
     - Covers function declarations, `fn`-typed parameters and fields, `dyn Fn` aliases, and aliases like `f: Callback`, `f: mod.Callback`, or `const g := mod.f;`, including across modules
+- Building from source: editing any header or `.inc` now always rebuilds the objects that include it
+    - Zig 0.16 drops a cached object's headers from the library's cache manifest, so edits to them were silently ignored; `zig build verify-deps` checks this against a fixture
+    - `zig build -Dinstall-tests-only=true` now installs the test binaries instead of doing nothing
+    - `zig build prune` deletes superseded `.zig-cache` generations and stale `zig-out` files, never LLVM (`-Dprune-dry-run=true` to preview)
