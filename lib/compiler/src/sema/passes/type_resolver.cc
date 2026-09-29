@@ -2221,7 +2221,8 @@ template <ast::IndexableID ID>
                 } else if (cv->is<gir::nullptr_val>()) {
                     is_false = true;
                 }
-                if (is_false) {
+                // An arm a folded condition rules out never runs
+                if (is_false && !in_dead_arm()) {
                     ctx_.diags.emplace_back(
                         fmt::format("{} failed at compile time{}",
                                     name,
@@ -5252,12 +5253,39 @@ auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void 
     resolve_if_arms(id, if_expr);
 }
 
+auto type_resolver::in_dead_arm() -> bool {
+    gir::const_eval evaluator{ctx_, resolving_};
+    return std::ranges::any_of(enclosing_arms_, [&](const enclosing_arm& arm) {
+        if (arm.match) {
+            const auto selected{evaluator.selected_match_arm(*arm.match)};
+            return selected && *selected != arm.arm_idx;
+        }
+        const auto cv{evaluator.try_eval(*arm.condition)};
+        const auto taken{cv ? cv->as_opt<bool>() : stdx::none};
+        return taken && *taken != arm.consequence;
+    });
+}
+
 auto type_resolver::resolve_if_arms(ast::node_id id, const ast::if_expr& if_expr) -> void {
     const mutating_context_guard branch_g{in_expr_branch_, true};
-    TRY_RESOLVE(if_expr.consequence);
+    // `if constexpr { } else { }` has no condition and keeps both arms live
+    const bool track_arms{if_expr.condition.has_value()};
+    {
+        stdx::option<scope_guard<std::vector<enclosing_arm>>> arm_g;
+        if (track_arms) {
+            arm_g.emplace(enclosing_arms_,
+                          enclosing_arm{.condition = if_expr.condition, .consequence = true});
+        }
+        TRY_RESOLVE(if_expr.consequence);
+    }
 
     auto* branch_type{last_type_.take()};
     if (if_expr.alternate) {
+        stdx::option<scope_guard<std::vector<enclosing_arm>>> arm_g;
+        if (track_arms) {
+            arm_g.emplace(enclosing_arms_,
+                          enclosing_arm{.condition = if_expr.condition, .consequence = false});
+        }
         TRY_RESOLVE(*if_expr.alternate);
         if (const auto cons_expr{resolving_.ast.get_as_opt<ast::expr_stmt>(if_expr.consequence)}) {
             if (const auto alt_expr{
@@ -7510,6 +7538,10 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
         }
         {
             const mutating_context_guard branch_g{in_expr_branch_, true};
+            const scope_guard            arm_g{
+                enclosing_arms_,
+                enclosing_arm{.match   = match,
+                              .arm_idx = static_cast<usize>(&arm - match.arms.data())}};
             TRY_RESOLVE(arm.dispatch);
         }
 

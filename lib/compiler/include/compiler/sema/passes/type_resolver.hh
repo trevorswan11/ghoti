@@ -368,6 +368,8 @@ class type_resolver {
                                                const type::data_t&   type_data) -> void;
     // A literal's own list plus the function-only attributes of the declaration it initializes
     // A generic `is_template` folds only the attributes whose arguments ignore its parameters
+    // Whether an enclosing `if` condition or `match` matcher folds to rule out the current arm
+    [[nodiscard]] auto in_dead_arm() -> bool;
     auto resolve_fn_literal_attributes(ast::node_id              id,
                                        const ast::function_expr& fn,
                                        bool                      is_template = false) -> void;
@@ -704,6 +706,14 @@ class type_resolver {
     bool in_for_iterable_{false};
     bool resolving_callee_{false};
     bool in_expr_branch_{false};
+    // The runtime `if` / `match` arms enclosing the node being resolved, innermost last
+    struct enclosing_arm {
+        stdx::option<ast::expr_handle>     condition{}; // an `if` arm
+        bool                               consequence{false};
+        stdx::option<const ast::match_expr&> match{};   // a `match` arm
+        usize                              arm_idx{0};
+    };
+    std::vector<enclosing_arm> enclosing_arms_;
     // Skips `if`/`match constexpr` folding and the throwaway `Ctor(<dummy>)` cache insert
     bool building_param_template_{false};
     bool in_constexpr_loop_{false};

@@ -2395,6 +2395,20 @@ auto const_eval::eval_module_member(mod::module& target_mod, std::string_view me
     return inner_eval.eval_decl_value(*decl);
 }
 
+auto const_eval::selected_match_arm(const ast::match_expr& match) -> stdx::opt_size {
+    const auto matcher_val{try_eval(match.matcher)};
+    if (!matcher_val) { return stdx::none; }
+    for (usize i{0}; i < match.arms.size(); ++i) {
+        if (match.catch_all_idx && i == *match.catch_all_idx) { continue; }
+        if (std::ranges::any_of(match.arms[i].patterns, [&](const auto& pattern) {
+                return match_pattern(pattern, *matcher_val);
+            })) {
+            return i;
+        }
+    }
+    return match.catch_all_idx;
+}
+
 auto const_eval::eval_match(ast::node_id id, const ast::match_expr& match)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();

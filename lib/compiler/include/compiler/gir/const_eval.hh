@@ -160,6 +160,9 @@ class const_eval {
 
     auto set_constexpr_context(bool enabled) noexcept -> void { constexpr_context_ = enabled; }
 
+    // The arm a folded matcher selects; none when the matcher does not fold or nothing matches
+    [[nodiscard]] auto selected_match_arm(const ast::match_expr& match) -> stdx::opt_size;
+
     // The folded attributes of the function declaration `arg` names, as `f` or as `T.f`, seen
     // through the instantiation that produced `T` when a type constructor did
     [[nodiscard]] auto declared_fn_attributes(ast::expr_handle arg)

@@ -533,6 +533,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: comparing floats of different widths (`f32 < f64`), or an untyped integer result with a float (`@abs(3) < x`), crashed code generation
 - Fixed: a typed module constant built from an untyped constant (`const a: f32 = big;`, `const b: u8 = two_hundred;`) folded as the untyped type, crashing `@bitCast` and friends; an integer constant bound to a float global (`const f: f32 = five;`) crashed too
 - Fixed: nested untyped constant arithmetic next to a typed float (`((c * c) + c) * f32_value`) was rejected
+- Fixed: a compile-time-false `@assert` in an `if` or `match` arm that a folded condition rules out was an error, e.g. `if (N > 4) { @assert(N > 4); }` with `N = 2`, including inside generic instantiations
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
