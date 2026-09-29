@@ -382,6 +382,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `@[discardable]` on an interface method applies to calls through `dyn` and `impl` receivers and to the implementing methods
 - `@[deprecated]` / `@[deprecated("message")]` on declarations, fields, and interface methods: naming one reports a warning, the compiler's first
     - Uses inside a deprecated item (including a deprecated generic's instantiations) stay quiet
+    - Initializing a deprecated field (`.{ .x = 1 }`, `P{ .x = 1 }`, a union's `.{ .legacy = v }`) warns too, including inside generic and type-constructor instantiations, once per site
     - `--deprecated=warn|error|ignore` on `build-*`, `run`, and `test` controls the report; `warn` is the default and never fails the build
     - The LSP publishes it as a warning tagged `Deprecated` (rendered struck through) and hover shows the message
 - `@optimizeMode()` returns the build's `builtin.OptimizeMode` (`.debug`, `.release_safe`, `.release_fast`, `.release_small`) and `@runtimeSafety()` whether runtime safety checks are on; both fold at compile time

@@ -4976,6 +4976,9 @@ auto type_resolver::record_member_owner(ast::node_id           ref_id,
     const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(member)};
     if (const auto sym{ctx_.registry.get_from_opt(table_idx, member_ident.name)}) {
         record_symbol_owner(ref_id, table_idx, *enclosing, *sym);
+        // Covers `.field = v` initializers and `.member` implicit access, which record no
+        // declaration reference of their own
+        report_deprecated_use(ast::node_id{member}, *enclosing, *sym);
     }
 }
 

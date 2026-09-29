@@ -33,7 +33,7 @@ template <typename DiagList> auto check_errors(const mod::module& module) {
 }
 
 // Checks if the error list is matches the expected, dumping the list's contents otherwise.
-template <typename E, std::same_as<E>... Es>
+template <typename E, std::convertible_to<E>... Es>
 auto check_errors_against(gsl::span<const E> errors, Es&&... expected_errors) {
     const std::array expected_arr{std::forward<Es>(expected_errors)...};
     constexpr auto   expected_count{sizeof...(Es)};
