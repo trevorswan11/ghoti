@@ -2045,9 +2045,9 @@ auto const_eval::member_fn_attributes(const ast::dot_expr& dot)
     if (!node) { return stdx::none; }
 
     // A type constructor's member folded its attributes once per instantiation
-    const auto prefix{ctx_.generic_functions.get_type_ctor_member_prefix(*denoted)};
-    const auto diff{prefix ? ctx_.instantiation_cache.get_body_type_diff(*prefix)
-                           : owner->active_body_diff};
+    const auto                 prefix{ctx_.generic_functions.get_type_ctor_member_prefix(*denoted)};
+    const auto                 diff{prefix ? ctx_.instantiation_cache.get_body_type_diff(*prefix)
+                                           : owner->active_body_diff};
     const mod::body_diff_guard diff_guard{*owner, diff};
     return fn_decl_attributes(*owner, *node);
 }

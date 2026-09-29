@@ -7541,7 +7541,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
             const scope_guard            arm_g{
                 enclosing_arms_,
                 enclosing_arm{.match   = match,
-                              .arm_idx = static_cast<usize>(&arm - match.arms.data())}};
+                                         .arm_idx = static_cast<usize>(&arm - match.arms.data())}};
             TRY_RESOLVE(arm.dispatch);
         }
 
@@ -10179,7 +10179,7 @@ auto type_resolver::resolve_decl_attributes(ast::node_id          id,
 
 auto type_resolver::mentions_fn_param(const ast::attribute&     item,
                                       const ast::function_expr& fn) const -> bool {
-    const auto& tree{resolving_.ast};
+    const auto&                   tree{resolving_.ast};
     std::vector<std::string_view> params;
     for (const auto& p : fn.parameters) {
         if (const auto name{tree.get_as_opt<ast::identifier_expr>(p.name)}) {
@@ -10245,7 +10245,7 @@ auto type_resolver::resolve_fn_literal_attributes(ast::node_id              id,
 
     const bool returns_void{fn.explicit_return_type.get_token_type() ==
                             syntax::token_type_t::VOID_TYPE};
-    auto resolved{resolve_attributes(items, ast::attribute_target::FN, returns_void)};
+    auto       resolved{resolve_attributes(items, ast::attribute_target::FN, returns_void)};
     resolved.dependent = dependent;
     resolving_.set_node_attributes(id, resolved);
 }

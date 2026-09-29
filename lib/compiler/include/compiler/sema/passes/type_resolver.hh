@@ -370,9 +370,9 @@ class type_resolver {
     // A generic `is_template` folds only the attributes whose arguments ignore its parameters
     // Whether an enclosing `if` condition or `match` matcher folds to rule out the current arm
     [[nodiscard]] auto in_dead_arm() -> bool;
-    auto resolve_fn_literal_attributes(ast::node_id              id,
-                                       const ast::function_expr& fn,
-                                       bool                      is_template = false) -> void;
+    auto               resolve_fn_literal_attributes(ast::node_id              id,
+                                                     const ast::function_expr& fn,
+                                                     bool                      is_template = false) -> void;
     [[nodiscard]] auto mentions_fn_param(const ast::attribute&     item,
                                          const ast::function_expr& fn) const -> bool;
     auto check_attribute_conflicts(const attribute_refs& items, const resolved_attributes& resolved)
@@ -708,10 +708,10 @@ class type_resolver {
     bool in_expr_branch_{false};
     // The runtime `if` / `match` arms enclosing the node being resolved, innermost last
     struct enclosing_arm {
-        stdx::option<ast::expr_handle>     condition{}; // an `if` arm
-        bool                               consequence{false};
-        stdx::option<const ast::match_expr&> match{};   // a `match` arm
-        usize                              arm_idx{0};
+        stdx::option<ast::expr_handle>       condition{}; // an `if` arm
+        bool                                 consequence{false};
+        stdx::option<const ast::match_expr&> match{}; // a `match` arm
+        usize                                arm_idx{0};
     };
     std::vector<enclosing_arm> enclosing_arms_;
     // Skips `if`/`match constexpr` folding and the throwaway `Ctor(<dummy>)` cache insert
