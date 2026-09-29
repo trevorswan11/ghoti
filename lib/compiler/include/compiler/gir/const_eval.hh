@@ -267,7 +267,13 @@ class const_eval {
 
     // `@typeInfo(T)`: builds the `builtin::TypeInfo` tagged union for `denoted` (already
     // unwrapped past any `TYPE`/`deferred_call` wrapper) by switching on its `type_kind`.
-    [[nodiscard]] auto eval_type_info(sema::type& denoted) -> const_value;
+    [[nodiscard]] auto
+    eval_type_info(sema::type&                                    denoted,
+                   stdx::option<const sema::resolved_attributes&> declared = stdx::none)
+        -> const_value;
+    // The folded attributes of the function declaration `arg` names, if it names one
+    [[nodiscard]] auto declared_fn_attributes(ast::expr_handle arg)
+        -> stdx::option<sema::resolved_attributes>;
     // An `if`'s folded condition; `if constexpr { ... }` is true only in a constexpr context
     auto eval_if_condition(const ast::if_expr& if_expr) -> stdx::option<const_value>;
     // Folds a declaration's initializer; a `constexpr` one is always compile-time evaluation

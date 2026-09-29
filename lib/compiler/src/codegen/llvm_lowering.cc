@@ -70,9 +70,10 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
     if (attributes.alignment) { llvm_fn.setAlignment(llvm::Align{*attributes.alignment}); }
     if (!attributes.inlining) { return; }
     switch (*attributes.inlining) {
-    case ast::inline_mode::ALWAYS: llvm_fn.addFnAttr(llvm::Attribute::AlwaysInline); break;
-    case ast::inline_mode::NEVER:  llvm_fn.addFnAttr(llvm::Attribute::NoInline); break;
-    case ast::inline_mode::HINT:   llvm_fn.addFnAttr(llvm::Attribute::InlineHint); break;
+    case ast::inline_mode::ALWAYS:  llvm_fn.addFnAttr(llvm::Attribute::AlwaysInline); break;
+    case ast::inline_mode::NEVER:   llvm_fn.addFnAttr(llvm::Attribute::NoInline); break;
+    case ast::inline_mode::HINT:    llvm_fn.addFnAttr(llvm::Attribute::InlineHint); break;
+    case ast::inline_mode::DEFAULT: break;
     }
 }
 

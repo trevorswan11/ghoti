@@ -2558,6 +2558,7 @@ auto type_resolver::synthesize_struct(source_location loc, const gir::const_stru
     const auto n{fields_arr->elements.size()};
     auto       ast_fields{make_uninit_span<ast::struct_expr::field>(ctx_.arena, n)};
     auto       field_types{ctx_.pool.get_many_unsafe(n)};
+    auto       field_alignments{ctx_.arena.make_span<u64>(n)};
     const auto scope_idx{ctx_.registry.create()};
     for (usize i{0}; i < n; ++i) {
         const auto fs{fields_arr->elements[i].as_opt<gir::const_struct>()};
@@ -2601,6 +2602,17 @@ auto type_resolver::synthesize_struct(source_location loc, const gir::const_stru
             default_value.emplace(*lit);
         }
 
+        field_alignments[i] = 0;
+        if (const auto align_field{fs->get_field_opt("alignment")}) {
+            const auto requested{align_field->as_uint_opt().value_or(0)};
+            if (requested != 0 && (requested & (requested - 1)) != 0) {
+                return field_err(fmt::format("field '{}' alignment {} is not a power of two",
+                                             *name_v,
+                                             static_cast<u64>(requested)));
+            }
+            field_alignments[i] = static_cast<u64>(requested);
+        }
+
         const auto name_ident{synthesize_ident(*name_v, true)};
         const auto ty_ident{synthesize_ident(ctx_.type_display_name(*type_v), false)};
         new (&ast_fields[i]) ast::struct_expr::field{
@@ -2633,7 +2645,7 @@ auto type_resolver::synthesize_struct(source_location loc, const gir::const_stru
                                             resolving_,
                                             *is_extern_v,
                                             *is_packed_v,
-                                            gsl::span<u64>{});
+                                            field_alignments);
     struct_type.set_symbol_table_idx(scope_idx);
     return gsl::not_null{&struct_type};
 }
@@ -10069,7 +10081,8 @@ auto type_resolver::resolve_attributes(const attribute_refs& items,
             break;
         case ast::attribute_kind::INLINE:
             if (const auto variant{fold_attribute_enum(*item, "Inline")}) {
-                resolved.inlining = ast::inline_mode_from_name(*variant);
+                const auto mode{ast::inline_mode_from_name(*variant)};
+                if (mode != ast::inline_mode::DEFAULT) { resolved.inlining = mode; }
             }
             break;
         case ast::attribute_kind::NAKED:

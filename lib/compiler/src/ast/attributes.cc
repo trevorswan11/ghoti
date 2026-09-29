@@ -160,7 +160,18 @@ auto inline_mode_from_name(std::string_view name) noexcept -> stdx::option<inlin
     if (name == "always") { return inline_mode::ALWAYS; }
     if (name == "never") { return inline_mode::NEVER; }
     if (name == "hint") { return inline_mode::HINT; }
+    if (name == "default") { return inline_mode::DEFAULT; }
     return stdx::none;
+}
+
+auto inline_mode_name(inline_mode mode) noexcept -> std::string_view {
+    switch (mode) {
+    case inline_mode::ALWAYS:  return "always";
+    case inline_mode::NEVER:   return "never";
+    case inline_mode::HINT:    return "hint";
+    case inline_mode::DEFAULT: return "default";
+    }
+    return "default";
 }
 
 auto parse_attribute_list(syntax::parser& parser)

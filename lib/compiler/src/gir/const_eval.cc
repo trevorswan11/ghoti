@@ -1965,7 +1965,40 @@ auto const_eval::target_enum_value(std::string_view enum_name, std::string_view 
     return const_value{const_enum{std::string{member}, ordinal}, enum_type};
 }
 
-auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
+auto const_eval::declared_fn_attributes(ast::expr_handle arg)
+    -> stdx::option<sema::resolved_attributes> {
+    const auto declaration{module_->get_identifier_declaration(ast::node_id{arg})};
+    if (!declaration || !declaration->owner || !declaration->decl) { return stdx::none; }
+    const auto& owner{*declaration->owner};
+    const auto  literal_node{owner.fn_literal_node(*declaration->decl)};
+    const auto  literal{owner.ast.get_as_opt<ast::function_expr>(literal_node)};
+
+    sema::resolved_attributes resolved;
+    if (const auto folded{owner.attributes_of(literal ? literal_node : *declaration->decl)}) {
+        resolved = *folded;
+    }
+    // `@branchHint(.cold)` opening the body, read the way the emitter reads it
+    if (literal && literal->body.is_valid()) {
+        const auto& body{owner.ast.get_as<ast::block_stmt>(*literal->body)};
+        const auto  first{body.statements.empty()
+                              ? stdx::none
+                              : owner.ast.get_as_opt<ast::expr_stmt>(*body.statements.front())};
+        const auto  call{first ? owner.ast.get_as_opt<ast::call_expr>(*first->expression)
+                               : stdx::none};
+        if (call && ast::node_id{call->function}.get_token_type() ==
+                        syntax::token_type_t::BUILTIN_BRANCH_HINT) {
+            const auto hint{owner.ast.get_as_opt<ast::implicit_access_expr>(
+                *call->arguments[0].as_opt<ast::expr_handle>())};
+            resolved.cold =
+                hint && owner.ast.get_as<ast::identifier_expr>(hint->member).name == "cold";
+        }
+    }
+    return resolved;
+}
+
+auto const_eval::eval_type_info(sema::type&                                    denoted,
+                                stdx::option<const sema::resolved_attributes&> declared)
+    -> const_value {
     PROFILE_FUNCTION();
     auto& info_type{ctx_.get_builtin_type("TypeInfo")};
     auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
@@ -2081,6 +2114,18 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
                          const_value{const_enum{std::string{ast::calling_convention_name(fn.conv)},
                                                 static_cast<i64>(fn.conv)},
                                      ctx_.get_builtin_type("CallConv")});
+
+        const sema::resolved_attributes attributes{declared ? *declared
+                                                            : sema::resolved_attributes{}};
+        const auto inlining{attributes.inlining.value_or(ast::inline_mode::DEFAULT)};
+        s.fields.emplace("inline_mode",
+                         const_value{const_enum{std::string{ast::inline_mode_name(inlining)},
+                                                static_cast<i64>(inlining)},
+                                     ctx_.get_builtin_type("Inline")});
+        s.fields.emplace("naked", const_value{attributes.naked, bool_type});
+        s.fields.emplace("discardable", const_value{attributes.discardable, bool_type});
+        s.fields.emplace("cold", const_value{attributes.cold, bool_type});
+        s.fields.emplace("alignment", const_value{attributes.alignment.value_or(0), usize_type});
         return wrap("function", std::move(s), ctx_.get_builtin_type("FnInfo"));
     }
     case sema::type_kind::ENUM: {
@@ -2131,6 +2176,8 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
                 default_val && !default_val->is_poison()
                     ? const_value{const_addr{{}, {std::move(*default_val)}}, opaque_ptr_type}
                     : const_value{nullptr_val{}, opaque_ptr_type});
+            fs.fields.emplace("alignment",
+                              const_value{st.explicit_field_alignment(idx), usize_type});
             fields.elements.emplace_back(const_value{std::move(fs), field_type});
         }
         const auto ptr_bits{target_pointer_bits()};
@@ -3716,7 +3763,11 @@ auto const_eval::eval_builtin(ast::node_id          id,
         // An unfolded `[N]T` would otherwise report as `.type`
         auto& forced{force_deferred_type(*target_type)};
         if (forced.get_data().is<sema::types::deferred_array>()) { return stdx::none; }
-        return eval_type_info(forced);
+        const auto arg{call.arguments.front().as_opt<ast::expr_handle>()};
+        const auto declared{arg ? declared_fn_attributes(*arg) : stdx::none};
+        return eval_type_info(forced,
+                              declared ? stdx::option<const sema::resolved_attributes&>{*declared}
+                                       : stdx::none);
     }
     case syntax::token_type_t::BUILTIN_HAS_FIELD:
     case syntax::token_type_t::BUILTIN_FIELD_TYPE: {

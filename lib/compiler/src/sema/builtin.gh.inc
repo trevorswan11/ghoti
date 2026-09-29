@@ -136,8 +136,9 @@ pub const BranchHint := enum { none, likely, unlikely, cold, unpredictable };
 /// The build mode `--mode` selected, matching `sema::optimize_mode` 1:1.
 pub const OptimizeMode := enum { debug, release_safe, release_fast, release_small };
 
-/// How an `@[inline(...)]` function is inlined, matching `ast::inline_mode` 1:1.
-pub const Inline := enum { always, never, hint };
+/// How an `@[inline(...)]` function is inlined, matching `ast::inline_mode` 1:1; `default` leaves
+/// the choice to the optimizer, as if no `inline` were written.
+pub const Inline := enum { always, never, hint, default };
 
 pub const Signedness := enum : u1 { signed, unsigned };
 
@@ -176,6 +177,8 @@ pub const StructFieldInfo := struct {
     pub @"type": type,
     /// The field's default value, cast through `^opaque`, or `nullptr` for none.
     pub default_value: ^opaque = nullptr,
+    /// The field's `@[align(n)]`, or 0 when it keeps its type's natural alignment.
+    pub alignment: usize = 0,
 };
 
 pub const StructInfo := struct {
@@ -217,6 +220,15 @@ pub const FnInfo := struct {
     /// `true` for a `{ctx, code}` callable (`fn(...)`), `false` for a thin code pointer
     /// (`extern fn(...)` or a function's own type)
     pub erased: bool = true,
+    /// The rest reflect the `@[...]` attributes of a function *declaration* passed to
+    /// `@typeInfo`; a bare function type reports these defaults.
+    pub inline_mode: Inline = .default,
+    pub naked: bool = false,
+    pub discardable: bool = false,
+    /// Opened by `@branchHint(.cold)`.
+    pub cold: bool = false,
+    /// The function's `@[align(n)]`, or 0 for the target's default.
+    pub alignment: usize = 0,
 };
 
 /// The keystone reflection value: `@typeInfo(T)` returns one of these.

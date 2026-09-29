@@ -389,6 +389,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `@setRuntimeSafety(bool)` turns runtime safety checks on or off for the rest of its block, nested blocks included; it never reaches into called functions, and `@runtimeSafety()` observes it
 - `@branchHint(hint)` as the first statement of an `if`/`else` branch or `match` arm weights that branch (`builtin.BranchHint`: `.none`, `.likely`, `.unlikely`, `.cold`, `.unpredictable`)
     - `@branchHint(.cold)` as the first statement of a function body marks the function cold
+- `@typeInfo` of a function declaration reports its attributes in `FnInfo` (`inline_mode`, `naked`, `discardable`, `cold`, `alignment`); a bare function type reports defaults
+    - `StructFieldInfo.alignment` reflects a field's `@[align(n)]` (0 when natural), and `@Struct` honors it
+    - `builtin.Inline` gains `.default`, which leaves inlining to the optimizer (`@[inline(if (fast) .always else .default)]`)
 - Constexpr can now be applied to labels and blocks (expression slots and top level)
     - They must be constant evaluatable and will error if not
 - `@assert` and `@verify` have been hardened such that they can work correctly in constexpr contexts

@@ -54,7 +54,10 @@ enum class inline_mode : u8 {
     ALWAYS,
     NEVER,
     HINT,
+    DEFAULT,
 };
+
+[[nodiscard]] auto inline_mode_name(inline_mode mode) noexcept -> std::string_view;
 
 [[nodiscard]] auto inline_mode_from_name(std::string_view name) noexcept
     -> stdx::option<inline_mode>;
