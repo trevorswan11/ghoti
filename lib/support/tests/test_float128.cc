@@ -98,6 +98,7 @@ TEST_CASE("f128 arithmetic rounded to double matches hardware doubles") {
         CHECK(same_double(a - b, subtract(x, y, float_format::DOUBLE).to_f64()));
         CHECK(same_double(a * b, multiply(x, y, float_format::DOUBLE).to_f64()));
         CHECK(same_double(a / b, divide(x, y, float_format::DOUBLE).to_f64()));
+        CHECK(same_double(std::fmod(a, b), remainder_trunc(x, y, float_format::DOUBLE).to_f64()));
         CHECK(same_double(std::fma(a, b, c),
                           fused_multiply_add(x, y, z, float_format::DOUBLE).to_f64()));
     }
@@ -256,6 +257,36 @@ TEST_CASE("f128 keeps signed zeros and special values by IEEE rules") {
     CHECK(fused_multiply_add(f128::infinity(), zero, one).is_nan());
     CHECK(f128::from_f64(-2.5).trunc().to_f64() == -2.0);
     CHECK(f128::from_f64(-0.5).trunc().is_negative());
+}
+
+TEST_CASE("x87 encodings the hardware rejects decode to NaN") {
+    const auto x87 = [](u64 sign_exponent, u64 significand) {
+        return f128::decode((u128{sign_exponent} << 64) | u128{significand}, float_format::X87);
+    };
+    CHECK(x87(0x3fff, 0x8000000000000000ULL).to_f64() == 1.0);
+    // Unnormal: a nonzero exponent with the explicit integer bit clear
+    CHECK(x87(0x4000, 0x3000000000000000ULL).is_nan());
+    // Pseudo-infinity and pseudo-NaN: an all-ones exponent with the integer bit clear
+    CHECK(x87(0x7fff, 0).is_nan());
+    CHECK(x87(0x7fff, 0x4000000000000000ULL).is_nan());
+    CHECK(x87(0x7fff, 0x8000000000000000ULL).is_infinite());
+    // Pseudo-denormal: a zero exponent with the integer bit set reads like exponent 1
+    CHECK(x87(0, 0x8000000000000000ULL) == x87(1, 0x8000000000000000ULL));
+}
+
+TEST_CASE("remainder_trunc is C's fmod, exact at any exponent distance") {
+    const auto value{[](f64 v) { return f128::from_f64(v); }};
+    CHECK(remainder_trunc(value(5.5), value(2.0)).to_f64() == 1.5);
+    CHECK(remainder_trunc(value(-5.5), value(2.0)).to_f64() == -1.5);
+    CHECK(remainder_trunc(value(5.5), value(-2.0)).to_f64() == 1.5);
+    // 2^1000 mod 3 is 1: the dividend is 1000 bits above the divisor
+    CHECK(remainder_trunc(value(std::ldexp(1.0, 1'000)), value(3.0)).to_f64() == 1.0);
+    CHECK(remainder_trunc(value(0.75), value(std::ldexp(1.0, -1'074))).is_zero());
+    CHECK(remainder_trunc(value(-4.0), value(2.0)).is_negative());
+    CHECK(remainder_trunc(value(1.0), f128::zero()).is_nan());
+    CHECK(remainder_trunc(f128::infinity(), value(1.0)).is_nan());
+    CHECK(remainder_trunc(value(3.0), f128::infinity()).to_f64() == 3.0);
+    CHECK(remainder_trunc(f128::quiet_nan(), value(1.0)).is_nan());
 }
 
 } // namespace ghoti::tests

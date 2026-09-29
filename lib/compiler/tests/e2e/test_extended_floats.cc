@@ -114,6 +114,34 @@ TEST_CASE("f80 is accepted on the x86-64 host") {
         };
     )") == 0);
 }
+
+// Windows starts x87 at 53-bit precision; the entry wrapper switches it to the full 64 bits
+TEST_CASE("f80 keeps its 64-bit significand at runtime") {
+    CHECK(helpers::compile_and_run(R"(
+        var big: usize = 0x3fffffffffffffff;
+        var nearly_one: u80 = 0x3ffeffffffffffffffff;
+        pub const main := fn(): i32 {
+            const f := @floatFromInt(f80, big);
+            if (@bitCast(u80, f) != 0x403cfffffffffffffffc) { return 1; }
+            if (@intFromFloat(usize, @bitCast(f80, nearly_one)) != 0) { return 2; }
+            return 0;
+        };
+    )") == 0);
+}
+
+TEST_CASE("f80 encodings x87 rejects fold to NaN like they run") {
+    CHECK(helpers::compile_and_run(R"(
+        // An unnormal: nonzero exponent with the explicit integer bit clear
+        const folded: f80 = @bitCast(f80, @as(u80, 0x40003000000000000000)) + 1.0f80;
+        var unnormal: u80 = 0x40003000000000000000;
+        pub const main := fn(): i32 {
+            if (folded == folded) { return 1; }
+            const runtime := @bitCast(f80, unnormal) + 1.0f80;
+            if (runtime == runtime) { return 2; }
+            return 0;
+        };
+    )") == 0);
+}
 #endif
 
 TEST_CASE("f80 is rejected on non-x86 targets") {

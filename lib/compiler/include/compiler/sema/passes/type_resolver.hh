@@ -707,6 +707,8 @@ class type_resolver {
     std::vector<active_block_frame> active_blocks_;
 
     bool in_mutating_context_{false};
+    // Member identifiers that resolved to an array's read-only `.len`/`.ptr`
+    ankerl::unordered_dense::set<usize> structural_members_;
     // Set while resolving a `dyn I` that may stay unsized: a `&`/`^` operand or an alias value
     bool dyn_unsized_ok_{false};
     bool for_generic_instantiation_{false};

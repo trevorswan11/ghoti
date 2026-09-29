@@ -3724,6 +3724,47 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
             // The result type must not flow into a literal operand of the other numeric kind
             const structural_guard shield{implicit_type_stack_, nullptr};
             args_result = resolve_call_args(call.arguments);
+        } else if (const auto tok{call.function->get_token_type()};
+                   (tok == token_type_t::BUILTIN_AS || tok == token_type_t::BUILTIN_BIT_CAST ||
+                    tok == token_type_t::BUILTIN_INT_CAST ||
+                    tok == token_type_t::BUILTIN_TRUNCATE) &&
+                   call.arguments.size() == 2) {
+            const auto is_numeric_literal = [this](const ast::call_expr::argument& arg) {
+                const auto handle{arg.as_opt<ast::expr_handle>()};
+                if (!handle) { return false; }
+                ast::node_id node{*handle};
+                if (const auto un{resolving_.ast.get_as_opt<ast::unary_expr>(node)};
+                    un && node.get_token_type() == token_type_t::MINUS) {
+                    node = un->rhs;
+                }
+                return resolving_.ast[node].is<ast::int_literal_expr>() ||
+                       resolving_.ast[node].is<ast::float_literal_expr>();
+            };
+            {
+                const structural_guard shield{implicit_type_stack_, nullptr};
+                args_result = resolve_call_args(
+                    gsl::span<const ast::call_expr::argument>{call.arguments}.first(1));
+            }
+            // A cast's operand is typed by the cast, never by the context the cast sits in
+            // (`@bitCast(f32, @as(u32, 5)) < x` must not make `5` a float). `@as` passes its
+            // target on (`@as(T, .{...})`, `@as(i32, @intCast(x))`), except to a numeric literal,
+            // which `@as` range-checks by value in whatever context it had.
+            const bool as_literal{tok == token_type_t::BUILTIN_AS &&
+                                  is_numeric_literal(call.arguments[1])};
+            if (args_result == resolve_result::OK && as_literal) {
+                args_result = resolve_call_args(
+                    gsl::span<const ast::call_expr::argument>{call.arguments}.subspan(1));
+            } else if (args_result == resolve_result::OK) {
+                stdx::option<type&> operand_hint;
+                if (tok == token_type_t::BUILTIN_AS && call_arg_denotes_type(call.arguments[0])) {
+                    operand_hint.emplace(
+                        denoted_type(*get_resolved_call_arg_type(call.arguments[0])));
+                }
+                const structural_guard g{implicit_type_stack_,
+                                         operand_hint ? &*operand_hint : nullptr};
+                args_result = resolve_call_args(
+                    gsl::span<const ast::call_expr::argument>{call.arguments}.subspan(1));
+            }
         } else {
             args_result = resolve_call_args(call.arguments);
         }
@@ -5582,6 +5623,17 @@ auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -
                              error::TYPE_MISMATCH,
                              resolving_.ast.location_of(assign.lhs)));
     }
+    // An array's `.len` and `.ptr` are read-only (a `var` slice's are assignable)
+    if (const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(assign.lhs)};
+        dot && structural_members_.contains(ast::node_id{dot->member}.get_index())) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            fmt::format("'.{}' of an array is read-only",
+                        resolving_.ast.get_as<ast::identifier_expr>(dot->member).name),
+            error::TYPE_MISMATCH,
+            resolving_.ast.location_of(assign.lhs)));
+    }
     {
         const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(lhs_type)};
         TRY_RESOLVE(assign.rhs);
@@ -6069,9 +6121,11 @@ auto type_resolver::resolve_structural_access(type&                  object_type
         const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(member)};
         auto&       underlying{slice_type ? slice_type->underlying : array_type->underlying};
         if (member_ident.name == "ptr") {
+            if (array_type) { structural_members_.insert(ast::node_id{member}.get_index()); }
             return &ctx_.get_pointer(target_type->get_key().get_mut(), underlying);
         }
         if (member_ident.name == "len") {
+            if (array_type) { structural_members_.insert(ast::node_id{member}.get_index()); }
             return &ctx_.get_builtin_resolved_type(type_kind::USIZE);
         }
         return make_sema_err(fmt::format("Type '{}' has no field named '{}'",
@@ -7899,16 +7953,21 @@ auto type_resolver::reject_unassignable_global_initializer(ast::expr_handle valu
 }
 
 auto type_resolver::reject_type_as_value(ast::expr_handle value, const type& expected) -> bool {
-    // A `type`, `auto`, or generic slot legitimately takes a type, and a not-yet-folded `[N]T`
-    // slot shares the `type` kind
-    if (!expected.is_resolved() || expected.is_poison() || is_generic_type(expected) ||
-        expected.get_kind() == type_kind::TYPE) {
+    // A `type`, `auto`, or bare generic slot legitimately takes a type, and a not-yet-folded
+    // `[N]T` slot shares the `type` kind. A generic `[]T`, `^T`, or `&T` slot is still a value.
+    const auto kind{expected.get_kind()};
+    const bool value_shaped{kind == type_kind::SLICE || kind == type_kind::POINTER ||
+                            kind == type_kind::REFERENCE};
+    if (!expected.is_resolved() || expected.is_poison() ||
+        (is_generic_type(expected) && !value_shaped) || kind == type_kind::TYPE) {
         return false;
     }
     const auto value_type{resolving_.get_sema_type_opt(value)};
     if (!value_type || value_type->is_poison()) { return false; }
-    // A bare `type` (or a generic template's placeholder) can't say whether it names a type yet
+    // A bare `type` (or a generic template's placeholder) can't say whether it names a type yet,
+    // but the `type` keyword itself always does
     if (value_type->get_kind() == type_kind::TYPE &&
+        ast::node_id{value}.get_token_type() != syntax::token_type_t::TYPE_TYPE &&
         !value_type->get_data().is<types::meta_type>() &&
         !value_type->get_data().is<types::deferred_call>()) {
         return false;
@@ -9062,6 +9121,14 @@ auto type_resolver::visit(ast::node_id id, const ast::while_loop_expr& while_loo
 // DONT CALL ME FROM ANY LOOP/CONDITION/FN RESOLVER
 auto type_resolver::visit(ast::node_id id, const ast::block_stmt& block) -> void {
     PROFILE_FUNCTION();
+    // Only blocks in statement or branch position get a scope (`{ ... }[1]` never does)
+    if (!resolving_.has_sema_type(id)) {
+        return last_type_.emplace(ctx_.poison_node(resolving_,
+                                                   id,
+                                                   "a block can't be used as a value here",
+                                                   error::TYPE_MISMATCH,
+                                                   resolving_.ast.location_of(id)));
+    }
     auto& block_type{resolving_.get_sema_type(id)};
     // Poisoned by an earlier error (e.g. a prior unrolling); its scope is gone
     if (!block_type.has_symbol_table_idx()) { return last_type_.emplace(ctx_.get_poison()); }

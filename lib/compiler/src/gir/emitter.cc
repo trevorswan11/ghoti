@@ -36,6 +36,7 @@
 #include "compiler/gir/layout.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/gir/segment.hh"
+#include "compiler/gir/semantics.hh"
 #include "compiler/gir/symbol_scoping.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
@@ -1047,6 +1048,8 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                 }
 
                 if (pushed) { user_type_stack_.pop_back(); }
+                // The type itself has no storage
+                return;
             }
         }
     } else if (decl.has_modifier(ast::decl_modifiers::EXTERN)) {
@@ -3898,8 +3901,25 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                     args.emplace_back(emit_expression(*expr_h));
                 }
             }
+            // Division by zero, `MIN / -1`, and `@abs(MIN)` panic like the operators they mirror
+            const auto                  int_op{semantics::int_op_of(fn_token)};
+            const bool                  is_int{sema::is_integer(ret_type.get_kind())};
+            const semantics::int_domain domain{.bits      = 1,
+                                               .is_signed = sema::is_signed_integer(ret_type)};
+            const bool                  checked{
+                safety_enabled() && is_int &&
+                ((int_op && semantics::any(semantics::runtime_checks(*int_op, domain))) ||
+                 (fn_token == syntax::token_type_t::BUILTIN_ABS &&
+                  semantics::any(
+                      semantics::runtime_checks(semantics::int_unary_op::ABS, domain))))};
             const auto name{*syntax::get_builtin_opt(fn_token)};
-            if (const auto res{builder_.emit_builtin_call(name, std::move(args), ret_type)}) {
+            if (const auto res{builder_.emit_builtin_call(name,
+                                                          std::move(args),
+                                                          ret_type,
+                                                          stdx::none,
+                                                          stdx::none,
+                                                          stdx::none,
+                                                          checked)}) {
                 return value{*res, ret_type};
             }
             return value{void_val{}, ret_type};
@@ -6037,14 +6057,11 @@ auto emitter::emit_checked_binary(instruction_kind kind,
                                   ast::node_id,
                                   bool wrapping,
                                   bool saturating) -> local_id {
-    // Only integer arithmetic can trap, and only signed +/-/* can overflow.
-    const auto k{result_type.get_kind()};
-    const bool checkable{!wrapping && !saturating && safety_enabled() && sema::is_integer(k) &&
-                         (((kind == instruction_kind::ADD || kind == instruction_kind::SUB ||
-                            kind == instruction_kind::MUL) &&
-                           sema::is_signed_integer(result_type)) ||
-                          kind == instruction_kind::DIV || kind == instruction_kind::MOD ||
-                          kind == instruction_kind::SHL || kind == instruction_kind::SHR)};
+    // What must be checked is the shared contract's call; floats never trap
+    const auto op{semantics::int_op_of(kind, wrapping, saturating)};
+    const bool checkable{op && safety_enabled() && sema::is_integer(result_type.get_kind()) &&
+                         semantics::any(semantics::runtime_checks(
+                             *op, {.bits = 1, .is_signed = sema::is_signed_integer(result_type)}))};
     return builder_.emit_binary(
         kind, std::move(lhs), std::move(rhs), result_type, checkable, saturating);
 }
@@ -6055,7 +6072,9 @@ auto emitter::emit_checked_unary(instruction_kind kind,
                                  ast::node_id,
                                  bool wrapping) -> local_id {
     const bool checkable{!wrapping && safety_enabled() && kind == instruction_kind::NEG &&
-                         sema::is_signed_integer(result_type)};
+                         semantics::any(semantics::runtime_checks(
+                             semantics::int_unary_op::NEG,
+                             {.bits = 1, .is_signed = sema::is_signed_integer(result_type)}))};
     return builder_.emit_unary(kind, std::move(operand), result_type, checkable);
 }
 

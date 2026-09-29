@@ -539,6 +539,22 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `@typeInfo(f).function.visibility` reflects it
 - Fixed: several malformed programs crashed the compiler instead of reporting an error, including `@hasField` with a non-type or non-string argument, `return 1.5` from an integer function, `-i64`, `@bitCast(undefined)`, a `noreturn` field or variable, a pack parameter used as a return type, and a match mixing type and value arms
 - Fixed: code after a `match` or `if` whose arms all return is treated as dead instead of miscompiling
+- Compile-time evaluation and runtime code now share one definition of every integer and float operation, and a differential test checks that each folded result is bit-identical to the one computed at runtime
+    - **Breaking:** float division by zero folds to an infinity or NaN like it runs, instead of being a compile error
+    - **Breaking:** `@divTrunc`, `@divFloor`, `@rem`, and `@mod` panic on division by zero and on `MIN / -1` under runtime safety, and signed `@abs(MIN)` panics; each was already a compile error when folded
+    - `x <<% n` with `n` at or past the bit width is `0` both folded and at runtime
+    - Float `@min` / `@max` are IEEE `minimumNumber` / `maximumNumber`: a NaN operand loses and `-0 < +0`, folded and at runtime
+    - Float `%` folds exactly, with the sign of the dividend, like it runs
+    - `f80` operands with an encoding x87 rejects (unnormals, pseudo-infinities, pseudo-NaNs) fold to NaN like they run
+- Fixed: a float `!=` with a NaN operand was `false` at runtime (it folded to `true`); `x != x` now detects NaN everywhere
+- Fixed: `@floatFromInt` of an integer wider than 113 bits could round twice when folded
+- Fixed: a float `@as` never folded, so `const x: u8 = @intFromFloat(u8, @as(f32, 3.5));` was rejected at module scope
+- **Breaking:** `@floatFromInt` of a typed integer past the target's range folds to an infinity, like it runs, instead of being a compile error; an out-of-range untyped literal is still rejected
+- Fixed: on Windows, `f80` arithmetic and conversions rounded to `f64` precision, because the x87 unit starts in 53-bit mode there; executables and test binaries now switch it to full 64-bit precision at startup
+- Fixed: a `@as`, `@bitCast`, `@intCast`, or `@truncate` operand took its type from the surrounding expression, so `@bitCast(f32, @as(u32, 5)) >= x` treated `5` as a float and was rejected
+- Fixed: a type declaration emitted a zeroed global the size of the type, so declaring a huge type (`struct { data: [100000000000]u8 }`) ran the compiler out of memory writing the object file
+- Fixed: more malformed programs crashed the compiler instead of reporting an error, including a type whose layout depends on its own `@sizeOf`/`@alignOf`, assigning to an array's `.len`, indexing a block, `@cfg` inside an `if` used as an operand, and passing a type (or the `type` keyword) where a value is expected, including to a generic `[]T` parameter
+- Fixed: some operations on 128-bit and odd-width integers (`+|`, `-|`, `-%`, `~`) could not be folded, or folded to a different value than the one computed at runtime
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

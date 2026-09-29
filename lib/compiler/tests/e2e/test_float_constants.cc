@@ -205,4 +205,20 @@ const f := fn(): void {
                          std::pair{2UZ, 22UZ}});
 }
 
+TEST_CASE("A NaN compares unequal to everything, itself included, folded and at runtime") {
+    CHECK(helpers::compile_and_run(R"(
+        const folded_nan: f32 = @bitCast(f32, @as(u32, 0x7fc00000));
+        const folded_ne: bool = folded_nan != folded_nan;
+        var bits: u32 = 0x7fc00000;
+        pub const main := fn(): i32 {
+            const nan := @bitCast(f32, bits);
+            if (!folded_ne) { return 1; }
+            if (!(nan != nan)) { return 2; }
+            if (!(nan != 0.0f32)) { return 3; }
+            if (nan == nan or nan < 1.0f32 or nan >= 1.0f32) { return 4; }
+            return 0;
+        };
+    )") == 0);
+}
+
 } // namespace ghoti::tests

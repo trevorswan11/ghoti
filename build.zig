@@ -225,6 +225,25 @@ const TestArtifacts = struct {
             }
         }
 
+        // The differential suite over every type and boundary value: slow, for release prep
+        const full = b.addRunArtifact(self.compiler_tests);
+        full.addArgs(&.{ "-#", "[#test_semantics_differential]" });
+        full.setEnvironmentVariable("GHOTI_STDLIB", b.pathFromRoot(ProjectPaths.stdlib_entry));
+        full.setEnvironmentVariable("GHOTI_DIFF_FULL", "1");
+        full.has_side_effects = true;
+        const full_step = b.step("test-semantics", "Run the compile-time vs runtime differential suite over every type and boundary value");
+        full_step.dependOn(&full.step);
+
+        // Random-seed differential rounds for a time budget, never part of `test`
+        const fuzz_minutes = b.option(u32, "fuzz-minutes", "Time budget for fuzz-semantics (default: 20)") orelse 20;
+        const fuzz = b.addRunArtifact(self.compiler_tests);
+        fuzz.addArg("[.fuzz-semantics]");
+        fuzz.setEnvironmentVariable("GHOTI_STDLIB", b.pathFromRoot(ProjectPaths.stdlib_entry));
+        fuzz.setEnvironmentVariable("GHOTI_DIFF_FUZZ_MINUTES", b.fmt("{d}", .{fuzz_minutes}));
+        fuzz.has_side_effects = true;
+        const fuzz_step = b.step("fuzz-semantics", "Check compile-time folding against runtime results on random operands");
+        fuzz_step.dependOn(&fuzz.step);
+
         // Otherwise `zig build -Dinstall-tests-only=true` silently leaves stale test binaries behind
         if (install_only) b.getInstallStep().dependOn(test_step);
     }

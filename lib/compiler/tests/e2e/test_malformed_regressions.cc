@@ -1,7 +1,11 @@
 #include <catch2/catch_test_macros.hpp>
+#include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/Module.h>
 
+#include "compiler/sema/error.hh"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
+#include "support/test.hh"
 
 // Inputs the mutation fuzzer turned into compiler crashes; each must now be a clean diagnostic
 namespace ghoti::tests {
@@ -108,6 +112,67 @@ TEST_CASE("Match arms yielding a type beside arms yielding values are an error")
             };
         };
     )");
+}
+
+TEST_CASE("A type whose layout depends on its own size or alignment is an error") {
+    CHECK(helpers::raised(R"(
+        const S := struct { pub d: [N]u64, pub x: u8, };
+        const N: [@alignOf(S)]u8 = undefined;
+    )",
+                          sema::error::CONSTEXPR_EVALUATION_FAILED));
+}
+
+TEST_CASE("An array's `.len` and `.ptr` can't be assigned") {
+    CHECK(helpers::raised(
+        "pub const main := fn(): i32 { var a: [4]u8 = undefined; a.len = 3; return 0; };",
+        sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised(R"(
+        const size: [4]u8 = undefined;
+        pub const main := fn(): i32 { if (size.len = 32) { return 1; } return 0; };
+    )",
+                          sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("A block can't be indexed like a value") {
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            const n: usize = 3;
+            if (n != 3) { return -1; }[1];
+            return 0;
+        };
+    )");
+}
+
+TEST_CASE("@cfg inside an if nested in an operand is expanded") {
+    helpers::expect_compile_error(R"(
+        pub const f := fn(): i32 {
+            const b := 1 >= if (true) {
+                @cfg(ptr_bits >= 8) { @compileError("reached in if"); }
+            };
+            return 0;
+        };
+    )");
+}
+
+TEST_CASE("The `type` keyword and a type argument for a generic `[]T` slot are not values") {
+    helpers::expect_compile_error(
+        "pub const main := fn(): i32 { const s: [:0]u8 = type; return 0; };");
+    helpers::expect_compile_error(R"(
+        pub constexpr f := fn(T: type, a: []T): usize { return a.len; };
+        pub const main := fn(): i32 { return @intCast(i32, f(u8, noreturn)); };
+    )");
+}
+
+TEST_CASE("A type declaration has no storage, however large the type") {
+    llvm::LLVMContext context;
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const Big := struct { data: [100000100000]mut u8 };
+        const E := enum { a, b };
+        pub const size := fn(): usize { return @sizeOf(Big); };
+    )")};
+    auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
+    CHECK(llvm_mod->getNamedGlobal("Big") == nullptr);
+    CHECK(llvm_mod->getNamedGlobal("E") == nullptr);
 }
 
 } // namespace ghoti::tests

@@ -288,7 +288,8 @@ auto builder::emit_builtin_call(std::string_view   callee,
                                 sema::type&        return_type,
                                 stdx::option<u8>   atomic_op,
                                 stdx::option<u8>   atomic_order,
-                                stdx::option<u8>   atomic_fail_order) -> stdx::option<local_id> {
+                                stdx::option<u8>   atomic_fail_order,
+                                bool               checked) -> stdx::option<local_id> {
     PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit builtin call instruction without an active function");
     if (return_type.get_kind() != sema::type_kind::VOID_) {
@@ -299,6 +300,7 @@ auto builder::emit_builtin_call(std::string_view   callee,
             .result            = dest,
             .operands          = std::move(args),
             .callee_name       = std::string{callee},
+            .is_checked        = checked,
             .atomic_op         = atomic_op,
             .atomic_order      = atomic_order,
             .atomic_fail_order = atomic_fail_order,

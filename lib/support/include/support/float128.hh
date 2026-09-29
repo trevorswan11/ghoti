@@ -105,6 +105,9 @@ struct float_parse_result {
 // `a * b + c` with a single rounding
 [[nodiscard]] auto
 fused_multiply_add(f128 a, f128 b, f128 c, float_format format = float_format::QUAD) -> f128;
+// C's `fmod`: `lhs - trunc(lhs / rhs) * rhs`, which is always exact, with `lhs`'s sign
+[[nodiscard]] auto remainder_trunc(f128 lhs, f128 rhs, float_format format = float_format::QUAD)
+    -> f128;
 
 [[nodiscard]] inline auto operator+(f128 lhs, f128 rhs) -> f128 { return add(lhs, rhs); }
 [[nodiscard]] inline auto operator-(f128 lhs, f128 rhs) -> f128 { return subtract(lhs, rhs); }

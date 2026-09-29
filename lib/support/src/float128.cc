@@ -11,6 +11,7 @@
 
 #include <stdx/option.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "support/int128.hh"
 
@@ -721,6 +722,10 @@ auto f128::decode(u128 bits, float_format format) -> f128 {
     const bool negative{((bits >> (info.storage_bits - 1)) & 1) != 0};
     const auto biased{static_cast<u64>(bits >> field_bits) & all_ones};
     const auto field{bits & low_mask(field_bits)};
+    // x87 rejects encodings whose explicit integer bit disagrees with a nonzero exponent
+    // (unnormals, pseudo-infinities, pseudo-NaNs) as invalid operands, which produce NaN
+    const bool integer_bit_clear{explicit_integer_bit && ((field >> (field_bits - 1)) & 1) == 0};
+    if (biased != 0 && integer_bit_clear) { return quiet_nan(); }
     if (biased == all_ones) {
         const auto payload{explicit_integer_bit ? field & low_mask(field_bits - 1) : field};
         return payload == 0 ? infinity(negative) : quiet_nan();
@@ -929,6 +934,25 @@ auto divide(f128 lhs, f128 rhs, float_format format) -> f128 {
                        l.exponent - r.exponent - shift,
                        !numerator.is_zero(),
                        format);
+}
+
+auto remainder_trunc(f128 lhs, f128 rhs, float_format format) -> f128 {
+    if (lhs.is_nan() || rhs.is_nan() || lhs.is_infinite() || rhs.is_zero()) {
+        return f128::quiet_nan();
+    }
+    if (rhs.is_infinite() || lhs.is_zero()) { return lhs; }
+
+    // Both at the smaller exponent, where the remainder is an exact integer multiple
+    const auto l{unpack(lhs.bits())};
+    const auto r{unpack(rhs.bits())};
+    const auto exponent{std::min(l.exponent, r.exponent)};
+    big_uint   numerator{l.significand};
+    big_uint   divisor{r.significand};
+    numerator.shift_left(static_cast<u64>(l.exponent - exponent));
+    divisor.shift_left(static_cast<u64>(r.exponent - exponent));
+    DISCARD(big_uint::divide(numerator, divisor));
+    if (numerator.is_zero()) { return f128::zero(lhs.is_negative()); }
+    return round_exact(lhs.is_negative(), std::move(numerator), exponent, false, format);
 }
 
 auto fused_multiply_add(f128 a, f128 b, f128 c, float_format format) -> f128 {
