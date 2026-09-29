@@ -386,6 +386,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - The LSP publishes it as a warning tagged `Deprecated` (rendered struck through) and hover shows the message
 - `@optimizeMode()` returns the build's `builtin.OptimizeMode` (`.debug`, `.release_safe`, `.release_fast`, `.release_small`) and `@runtimeSafety()` whether runtime safety checks are on; both fold at compile time
     - `optimize` and `safety` are also `@cfg` / `@cfgValue` names: `@cfg (optimize == .debug) { ... }`, `@cfg (safety) { ... }`
+- `@setRuntimeSafety(bool)` turns runtime safety checks on or off for the rest of its block, nested blocks included; it never reaches into called functions, and `@runtimeSafety()` observes it
 - Constexpr can now be applied to labels and blocks (expression slots and top level)
     - They must be constant evaluatable and will error if not
 - `@assert` and `@verify` have been hardened such that they can work correctly in constexpr contexts

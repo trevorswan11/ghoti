@@ -1526,8 +1526,29 @@ template <ast::IndexableID ID>
         break;
     case token_type_t::BUILTIN_RUNTIME_SAFETY:
         ASSERT(builtin.return_type.get_kind() == type_kind::BOOL);
+        resolving_.scoped_runtime_safety.insert_or_assign(id.get_index(), scoped_runtime_safety());
         return_type = &builtin.return_type;
         break;
+    case token_type_t::BUILTIN_SET_RUNTIME_SAFETY: {
+        if (active_blocks_.empty() || return_trackers_.empty()) {
+            return make_sema_err("@setRuntimeSafety can only be used within a function body",
+                                 error::TYPE_MISMATCH,
+                                 resolving_.ast.location_of(call.function));
+        }
+        const auto      arg{*call.arguments[0].as_opt<ast::expr_handle>()};
+        gir::const_eval evaluator{ctx_, resolving_};
+        const auto      cv{evaluator.try_eval(arg)};
+        const auto      enabled{cv ? cv->as_opt<bool>() : stdx::none};
+        if (!enabled) {
+            return make_sema_err("@setRuntimeSafety requires a compile-time 'bool'",
+                                 error::TYPE_MISMATCH,
+                                 resolving_.ast.location_of(arg));
+        }
+        active_blocks_.back().runtime_safety  = *enabled;
+        active_blocks_.back().safety_fn_depth = function_boundaries_.size();
+        return_type                           = &ctx_.get_builtin_resolved_type(type_kind::VOID_);
+        break;
+    }
     case token_type_t::BUILTIN_TARGET_ENDIAN:   return_type = &ctx_.get_builtin_type("Endian"); break;
     case token_type_t::BUILTIN_TARGET_PTR_BITS: {
         ASSERT(builtin.return_type.get_kind() == type_kind::USIZE);
@@ -9813,6 +9834,16 @@ auto type_resolver::fold_attribute_bool(const ast::attribute& item) -> stdx::opt
                             error::ILLEGAL_ATTRIBUTE,
                             resolving_.ast.location_of(arg));
     return stdx::none;
+}
+
+auto type_resolver::scoped_runtime_safety() const -> bool {
+    for (const auto& frame : active_blocks_ | std::views::reverse) {
+        if (!frame.runtime_safety) { continue; }
+        // A setting in an enclosing function's body does not reach into this one
+        if (frame.safety_fn_depth != function_boundaries_.size()) { break; }
+        return *frame.runtime_safety;
+    }
+    return ctx_.runtime_safety;
 }
 
 auto type_resolver::check_deprecation_message(const ast::attribute& item) -> void {

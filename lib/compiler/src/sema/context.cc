@@ -277,6 +277,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::TARGET_FAMILY, params(), t_c_str);
     inject_function(bis::OPTIMIZE_MODE, params(), t_c_str);
     inject_function(bis::RUNTIME_SAFETY, params(), t_bool);
+    inject_function(bis::SET_RUNTIME_SAFETY, params(t_bool), t_void);
 
     inject_function(bis::SET_EVAL_RECURSION_LIMIT, params(t_usize), t_void);
     inject_function(bis::SET_EVAL_UNROLL_LIMIT, params(t_usize), t_void);

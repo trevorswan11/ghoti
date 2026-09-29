@@ -120,6 +120,9 @@ struct module {
     auto record_node_write(usize idx) noexcept -> void;
     auto record_explicit_write(usize idx) noexcept -> void;
 
+    // `@runtimeSafety()` call node index -> the lexically scoped safety it observed
+    ankerl::unordered_dense::map<usize, bool> scoped_runtime_safety;
+
     // Attributed `decl_stmt` / `function_expr` node index -> its folded `@[...]` list
     ankerl::unordered_dense::map<usize, sema::resolved_attributes> node_attributes;
 

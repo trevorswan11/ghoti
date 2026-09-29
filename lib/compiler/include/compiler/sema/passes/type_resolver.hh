@@ -366,6 +366,9 @@ class type_resolver {
     auto check_attribute_conflicts(const attribute_refs& items, const resolved_attributes& resolved)
         -> void;
     [[nodiscard]] auto fold_attribute_bool(const ast::attribute& item) -> stdx::option<bool>;
+    // The safety a `@setRuntimeSafety` in this function's enclosing blocks chose, else the build's
+    [[nodiscard]] auto scoped_runtime_safety() const -> bool;
+
     // `deprecated` takes at most a string literal message
     auto check_deprecation_message(const ast::attribute& item) -> void;
     // Warns (or errors, per `--deprecated`) when `id` names a `@[deprecated]` declaration or field

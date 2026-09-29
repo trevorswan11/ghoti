@@ -37,6 +37,8 @@ namespace ghoti::sema {
 struct active_block_frame {
     stdx::option<const ast::block_stmt&> block{};
     usize                                current_stmt_idx{0};
+    stdx::option<bool>                   runtime_safety{}; // set by `@setRuntimeSafety`
+    usize                                safety_fn_depth{0};
 };
 
 using constexpr_frame = ankerl::unordered_dense::map<std::string_view, gir::const_value>;

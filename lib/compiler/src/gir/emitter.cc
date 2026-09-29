@@ -1316,6 +1316,16 @@ auto emitter::emit_top_level_test(ast::node_id id, const ast::test_stmt& test) -
     }
 }
 
+auto emitter::safety_enabled() const -> bool {
+    const auto current{builder_.get_function()};
+    for (const auto& frame : scopes_ | std::views::reverse) {
+        if (!frame.runtime_safety) { continue; }
+        if (!current || frame.safety_owner.get() != current.get()) { break; }
+        return *frame.runtime_safety;
+    }
+    return runtime_safety_;
+}
+
 auto emitter::emit_function(ast::node_id                   id,
                             const ast::decl_stmt&          decl,
                             const ast::function_expr&      fn_expr,
@@ -2229,7 +2239,7 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
         },
         [&](ast::unreachable_expr) -> value {
             // Reaching a `unreachable` is a safety-check violation; `--unsafe` makes it true UB.
-            if (runtime_safety_) {
+            if (safety_enabled()) {
                 emit_panic_call("reached unreachable code", id);
             } else {
                 builder_.emit_unreachable();
@@ -3375,7 +3385,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                             return materialize_const(*cv);
                         }
                     }
-                    const bool checked{runtime_safety_ &&
+                    const bool checked{safety_enabled() &&
                                        fn_token == syntax::token_type_t::BUILTIN_INT_FROM_FLOAT};
                     const auto dest{builder_.emit_cast(cast_kind, operand, ret_type, checked)};
                     value      result{dest, ret_type};
@@ -3633,6 +3643,16 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                                     active_ast().location_of(call.function));
             return value{undefined_val{}, ret_type};
         }
+        case syntax::token_type_t::BUILTIN_SET_RUNTIME_SAFETY: {
+            const auto arg{*call.arguments[0].as_opt<ast::expr_handle>()};
+            if (const auto cv{const_eval_.try_eval(arg)}) {
+                if (const auto enabled{cv->as_opt<bool>()}) {
+                    scopes_.back().runtime_safety = *enabled;
+                    scopes_.back().safety_owner   = builder_.get_function();
+                }
+            }
+            return value{void_val{}, ret_type};
+        }
         case syntax::token_type_t::BUILTIN_TRAP: {
             builder_.emit_builtin_call("@trap", {}, ret_type);
             builder_.emit_unreachable();
@@ -3745,7 +3765,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                     }
                 }
             }
-            if (!is_verify && !runtime_safety_) { return value{void_val{}, ret_type}; }
+            if (!is_verify && !safety_enabled()) { return value{void_val{}, ret_type}; }
 
             std::string message{is_verify ? "verification failed" : "assertion failed"};
             if (call.arguments.size() > 1) {
@@ -5630,7 +5650,7 @@ auto emitter::emit_panic_call(std::string_view message, ast::node_id site) -> vo
 }
 
 auto emitter::emit_null_pointer_check(value ptr, ast::node_id site) -> void {
-    if (!runtime_safety_ || !ptr.type || ptr.type->get_kind() != sema::type_kind::POINTER) {
+    if (!safety_enabled() || !ptr.type || ptr.type->get_kind() != sema::type_kind::POINTER) {
         return;
     }
     auto fn_opt{builder_.get_function()};
@@ -5662,7 +5682,7 @@ auto emitter::emit_enum_cast_guard(ast::node_id     site,
                                    const value&     enum_val,
                                    const value&     src_val,
                                    ast::expr_handle src_expr) -> void {
-    if (!runtime_safety_ || !enum_val.type || !src_val.type) { return; }
+    if (!safety_enabled() || !enum_val.type || !src_val.type) { return; }
 
     // Only integer -> enum casts need guarding
     if (!sema::is_integer(src_val.type->get_kind())) { return; }
@@ -5750,7 +5770,7 @@ auto emitter::emit_int_cast_guard(value operand, const sema::type& dest_type, as
         return;
     }
 
-    if (!runtime_safety_) { return; }
+    if (!safety_enabled()) { return; }
 
     auto fn_opt{builder_.get_function()};
     if (!fn_opt) { return; }
@@ -5959,7 +5979,7 @@ auto emitter::emit_checked_binary(instruction_kind kind,
                                   bool saturating) -> local_id {
     // Only integer arithmetic can trap, and only signed +/-/* can overflow.
     const auto k{result_type.get_kind()};
-    const bool checkable{!wrapping && !saturating && runtime_safety_ && sema::is_integer(k) &&
+    const bool checkable{!wrapping && !saturating && safety_enabled() && sema::is_integer(k) &&
                          (((kind == instruction_kind::ADD || kind == instruction_kind::SUB ||
                             kind == instruction_kind::MUL) &&
                            sema::is_signed_integer(result_type)) ||
@@ -5974,7 +5994,7 @@ auto emitter::emit_checked_unary(instruction_kind kind,
                                  sema::type&      result_type,
                                  ast::node_id,
                                  bool wrapping) -> local_id {
-    const bool checkable{!wrapping && runtime_safety_ && kind == instruction_kind::NEG &&
+    const bool checkable{!wrapping && safety_enabled() && kind == instruction_kind::NEG &&
                          sema::is_signed_integer(result_type)};
     return builder_.emit_unary(kind, std::move(operand), result_type, checkable);
 }
@@ -6293,7 +6313,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             }
 
             if (const auto arr_data{obj_type->get_data().as_opt<sema::types::array>()}) {
-                if (runtime_safety_) {
+                if (safety_enabled()) {
                     auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
                     auto&      isize_type{ctx_.get_builtin_resolved_type(sema::type_kind::ISIZE)};
                     auto&      bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
@@ -6345,7 +6365,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                     base_lval, {value{SLICE_PTR_FIELD_INDEX, usize_type}}, ptr_type)};
                 const auto ptr_val{builder_.emit_load(value{ptr_slot, ptr_type}, ptr_type)};
 
-                if (runtime_safety_) {
+                if (safety_enabled()) {
                     auto& isize_type{ctx_.get_builtin_resolved_type(sema::type_kind::ISIZE)};
                     auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
 
@@ -6676,7 +6696,7 @@ auto emitter::emit_union_active_field_guard(value            union_addr,
                                             std::string_view field_name,
                                             ast::node_id     site) -> void {
     PROFILE_FUNCTION();
-    if (!runtime_safety_) { return; }
+    if (!safety_enabled()) { return; }
     auto fn_opt{builder_.get_function()};
     if (!fn_opt) { return; }
     auto& fn{*fn_opt};
@@ -6826,7 +6846,7 @@ auto emitter::emit_mem_intrinsic(ast::node_id         id,
     auto [src_ptr, src_len]{decompose(rhs_h)};
 
     // `@memcpy` / `@memmove` require equal lengths; guard it when safety checks are on.
-    if (runtime_safety_ && check_lengths) {
+    if (safety_enabled() && check_lengths) {
         const auto eq{builder_.emit_binary(instruction_kind::EQ, dest_len, src_len, bool_type)};
         auto       fn_opt{builder_.get_function()};
         ASSERT(fn_opt, "mem intrinsic must be within an active function");
@@ -7469,7 +7489,7 @@ auto emitter::emit_slice_range(ast::node_id id, const ast::index_expr& index) ->
     }
 
     // Bounds check: lo <= hi, and hi <= len when the source length is known.
-    if (runtime_safety_) {
+    if (safety_enabled()) {
         auto fn_opt{builder_.get_function()};
         ASSERT(fn_opt, "Slice range must be within an active function");
         auto&      fn{*fn_opt};

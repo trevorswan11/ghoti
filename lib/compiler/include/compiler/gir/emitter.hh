@@ -100,7 +100,13 @@ class emitter {
     struct scope_frame {
         ankerl::unordered_dense::map<std::string_view, local_binding> bindings;
         std::vector<deferred_entry>                                   defers;
+        stdx::option<bool>           runtime_safety{}; // set by `@setRuntimeSafety`
+        stdx::option<gir::function&> safety_owner{};   // the function that set it
     };
+
+    // Whether runtime safety checks are emitted here: the innermost `@setRuntimeSafety` of the
+    // current function's enclosing blocks, else the build's setting
+    [[nodiscard]] auto safety_enabled() const -> bool;
 
     using scope_guard           = ghoti::scope_guard<std::vector<scope_frame>>;
     using loop_context_guard    = ghoti::scope_guard<std::vector<loop_context>>;

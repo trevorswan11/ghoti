@@ -95,6 +95,8 @@ constexpr builtin_t TARGET_ENDIAN{"@targetEndian", token_type_t::BUILTIN_TARGET_
 constexpr builtin_t TARGET_FAMILY{"@targetFamily", token_type_t::BUILTIN_TARGET_FAMILY};
 constexpr builtin_t OPTIMIZE_MODE{"@optimizeMode", token_type_t::BUILTIN_OPTIMIZE_MODE};
 constexpr builtin_t RUNTIME_SAFETY{"@runtimeSafety", token_type_t::BUILTIN_RUNTIME_SAFETY};
+constexpr builtin_t SET_RUNTIME_SAFETY{"@setRuntimeSafety",
+                                       token_type_t::BUILTIN_SET_RUNTIME_SAFETY};
 
 constexpr builtin_t SET_EVAL_RECURSION_LIMIT{"@setEvalRecursionLimit",
                                              token_type_t::BUILTIN_SET_EVAL_RECURSION_LIMIT};
@@ -212,6 +214,7 @@ constexpr std::array ALL_BUILTINS{
     builtins::TARGET_FAMILY,
     builtins::OPTIMIZE_MODE,
     builtins::RUNTIME_SAFETY,
+    builtins::SET_RUNTIME_SAFETY,
     builtins::SET_EVAL_RECURSION_LIMIT,
     builtins::SET_EVAL_UNROLL_LIMIT,
     builtins::SET_MAIN_SYMBOL,
