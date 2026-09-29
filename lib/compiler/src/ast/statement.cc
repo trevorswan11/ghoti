@@ -183,8 +183,7 @@ constexpr auto LEGAL_MODIFIERS{
         modifier_mapping{syntax::token_type_t::EXTERN, decl_modifiers::EXTERN},
         modifier_mapping{syntax::token_type_t::EXPORT, decl_modifiers::EXPORT},
         modifier_mapping{syntax::token_type_t::THREADLOCAL, decl_modifiers::THREADLOCAL},
-        modifier_mapping{syntax::token_type_t::WEAK, decl_modifiers::WEAK},
-        modifier_mapping{syntax::token_type_t::BUILTIN_DISCARDABLE, decl_modifiers::DISCARDABLE})};
+        modifier_mapping{syntax::token_type_t::WEAK, decl_modifiers::WEAK})};
 
 [[nodiscard]] constexpr auto validate_modifiers(decl_modifiers modifiers) noexcept
     -> stdx::option<std::string> {
@@ -257,12 +256,23 @@ struct binding_args {
 
 auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
+    const auto                   span_start{parser.get_current_token()};
+    stdx::option<attribute_list> attributes;
+    if (parser.current_token_is(syntax::token_type_t::AT_LBRACKET)) {
+        attributes.emplace(TRY(parse_attribute_list(parser)));
+        if (!LEGAL_MODIFIERS[parser.get_peek_token().type]) {
+            return make_syntax_err("An attribute list must precede a declaration",
+                                   syntax::error::MISPLACED_ATTRIBUTES,
+                                   parser.get_peek_token());
+        }
+        parser.advance();
+    }
+
     const auto start_token{parser.get_current_token()};
     auto       modifiers{LEGAL_MODIFIERS[start_token.type].value()};
 
     stdx::option<string_handle> extern_target;
     stdx::option<string_handle> link_name;
-    stdx::option<expr_handle>   discardable_condition;
 
     const auto parse_binding_for{[&](decl_modifiers m) -> stdx::result<void, syntax::diagnostic> {
         if (m == decl_modifiers::EXTERN) {
@@ -272,11 +282,6 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
         } else if (m == decl_modifiers::EXPORT) {
             auto args{TRY(try_parse_binding_args(parser, false))};
             if (args.first) { link_name = args.first; }
-        } else if (m == decl_modifiers::DISCARDABLE &&
-                   parser.peek_token_is(syntax::token_type_t::LPAREN)) {
-            parser.advance(2); // onto `(`, then first token of the condition
-            discardable_condition.emplace(TRY(parser.parse_expression()));
-            TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
         }
         return {};
     }};
@@ -329,14 +334,20 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
     }
 
     TRY(parser.expect_semicolon());
-    return parser.add_stmt<decl_stmt>(start_token,
-                                      decl_name,
-                                      decl_type,
-                                      decl_value,
-                                      modifiers,
-                                      extern_target,
-                                      link_name,
-                                      discardable_condition);
+    const auto decl{
+        parser.add_node<stmt_handle, decl_stmt>(source_info<syntax::token_t>::get(span_start),
+                                                start_token,
+                                                decl_name,
+                                                decl_type,
+                                                decl_value,
+                                                modifiers,
+                                                extern_target,
+                                                link_name,
+                                                std::move(attributes))};
+    if (decl_value && decl_value->is<function_expr>()) {
+        parser.get_ast().get_as_mut<function_expr>(**decl_value).declaring_decl.emplace(*decl);
+    }
+    return decl;
 }
 
 auto defer_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {

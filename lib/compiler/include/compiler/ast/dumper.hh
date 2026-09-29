@@ -8,9 +8,11 @@
 
 #include <fmt/ostream.h>
 #include <stdx/assert.hh>
+#include <stdx/option.hh>
 #include <stdx/variant.hh>
 
 #include "compiler/ast/ast.hh"
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/format.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
@@ -113,6 +115,22 @@ class dumper {
             indent::guard g{indent_, std::next(it) == container.end()};
             std::forward<Func>(func)(*it);
         }
+    }
+
+    auto dump_attributes(const stdx::option<attribute_list>& attributes) -> void {
+        if (!attributes) { return; }
+        const indent::guard g{indent_, false};
+        fmt::println(out_, "{}Attributes:", indent_.current_branch());
+        dump_container(attributes->items, [this](const attribute& item) -> void {
+            fmt::println(out_,
+                         "{}Attribute: {}",
+                         indent_.current_branch(),
+                         attribute_spec_of(item.kind).name);
+            if (item.args.empty()) { return; }
+            const indent::guard g_args{indent_, true};
+            fmt::println(out_, "{}Args:", indent_.current_branch());
+            dump_node_list(item.args);
+        });
     }
 
     template <typename T> auto dump_node_list(const T& list) -> void {

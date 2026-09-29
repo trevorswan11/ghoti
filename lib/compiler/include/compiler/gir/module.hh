@@ -32,6 +32,7 @@ struct global_decl {
     bool                      is_constant{false};
     bool                      is_thread_local{false};
     bool                      is_weak{false};
+    stdx::option<u64>         alignment{};
 };
 
 struct type_decl {

@@ -9,6 +9,7 @@
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
@@ -39,6 +40,16 @@ class symbol_collector {
 
   private:
     using scope = symbol_table_stack::scope;
+
+    // `routed` selects the items that reach through to a function literal initializer
+    auto collect_attribute_args(const stdx::option<ast::attribute_list>& attributes,
+                                stdx::option<bool> routed = stdx::none) -> void {
+        if (!attributes) { return; }
+        for (const auto& item : attributes->items) {
+            if (routed && ast::routes_to_fn_literal(item.kind) != *routed) { continue; }
+            for (const auto arg : item.args) { collect(arg); }
+        }
+    }
 
   private:
     auto                                visit(ast::node_id, const ast::array_expr&) -> void;

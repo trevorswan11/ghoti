@@ -141,7 +141,7 @@ TEST_CASE("Codegen: naked function carries the naked attribute and no synthesize
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const trap_stub := naked fn(): void {
+        @[naked] pub const trap_stub := fn(): void {
             asm {
                 template: "",
                 options: (volatile, noreturn),

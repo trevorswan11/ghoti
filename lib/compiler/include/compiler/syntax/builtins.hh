@@ -85,7 +85,6 @@ constexpr builtin_t C_VA_START{"@cVaStart", token_type_t::BUILTIN_C_VA_START};
 constexpr builtin_t C_VA_ARG{"@cVaArg", token_type_t::BUILTIN_C_VA_ARG};
 constexpr builtin_t C_VA_COPY{"@cVaCopy", token_type_t::BUILTIN_C_VA_COPY};
 constexpr builtin_t C_VA_END{"@cVaEnd", token_type_t::BUILTIN_C_VA_END};
-constexpr builtin_t ALIGNAS{"@alignas", token_type_t::BUILTIN_ALIGNAS};
 
 constexpr builtin_t TARGET_OS{"@targetOs", token_type_t::BUILTIN_TARGET_OS};
 constexpr builtin_t TARGET_ARCH{"@targetArch", token_type_t::BUILTIN_TARGET_ARCH};
@@ -94,6 +93,11 @@ constexpr builtin_t TARGET_ABI{"@targetAbi", token_type_t::BUILTIN_TARGET_ABI};
 constexpr builtin_t TARGET_PTR_BITS{"@targetPtrBits", token_type_t::BUILTIN_TARGET_PTR_BITS};
 constexpr builtin_t TARGET_ENDIAN{"@targetEndian", token_type_t::BUILTIN_TARGET_ENDIAN};
 constexpr builtin_t TARGET_FAMILY{"@targetFamily", token_type_t::BUILTIN_TARGET_FAMILY};
+constexpr builtin_t OPTIMIZE_MODE{"@optimizeMode", token_type_t::BUILTIN_OPTIMIZE_MODE};
+constexpr builtin_t RUNTIME_SAFETY{"@runtimeSafety", token_type_t::BUILTIN_RUNTIME_SAFETY};
+constexpr builtin_t SET_RUNTIME_SAFETY{"@setRuntimeSafety",
+                                       token_type_t::BUILTIN_SET_RUNTIME_SAFETY};
+constexpr builtin_t BRANCH_HINT{"@branchHint", token_type_t::BUILTIN_BRANCH_HINT};
 
 constexpr builtin_t SET_EVAL_RECURSION_LIMIT{"@setEvalRecursionLimit",
                                              token_type_t::BUILTIN_SET_EVAL_RECURSION_LIMIT};
@@ -128,9 +132,6 @@ constexpr builtin_t EMBED{"@embed", token_type_t::BUILTIN_EMBED};
 constexpr builtin_t RETURN_ADDRESS{"@returnAddress", token_type_t::BUILTIN_RETURN_ADDRESS};
 constexpr builtin_t CFG{"@cfg", token_type_t::BUILTIN_CFG};
 constexpr builtin_t CFG_VALUE{"@cfgValue", token_type_t::BUILTIN_CFG_VALUE};
-
-// A declaration-level attribute, not a callable builtin: `@discardable const f := fn ...`.
-constexpr builtin_t DISCARDABLE{"@discardable", token_type_t::BUILTIN_DISCARDABLE};
 
 constexpr auto ALL_TOKEN_TYPES{
     stdx::enum_range<token_type_t::BUILTIN_ALIGN_CAST, token_type_t::BUILTIN_RETURN_ADDRESS>()};
@@ -205,7 +206,6 @@ constexpr std::array ALL_BUILTINS{
     builtins::C_VA_ARG,
     builtins::C_VA_COPY,
     builtins::C_VA_END,
-    builtins::ALIGNAS,
     builtins::TARGET_OS,
     builtins::TARGET_ARCH,
     builtins::TARGET_TRIPLE,
@@ -213,6 +213,10 @@ constexpr std::array ALL_BUILTINS{
     builtins::TARGET_PTR_BITS,
     builtins::TARGET_ENDIAN,
     builtins::TARGET_FAMILY,
+    builtins::OPTIMIZE_MODE,
+    builtins::RUNTIME_SAFETY,
+    builtins::SET_RUNTIME_SAFETY,
+    builtins::BRANCH_HINT,
     builtins::SET_EVAL_RECURSION_LIMIT,
     builtins::SET_EVAL_UNROLL_LIMIT,
     builtins::SET_MAIN_SYMBOL,
@@ -235,7 +239,6 @@ constexpr std::array ALL_BUILTINS{
     builtins::FENCE,
     builtins::CFG,
     builtins::CFG_VALUE,
-    builtins::DISCARDABLE,
     builtins::COMPILE_ERROR,
     builtins::EMBED,
     builtins::RETURN_ADDRESS,

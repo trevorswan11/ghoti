@@ -286,6 +286,7 @@ auto dumper::visit(node_id, const for_loop_expr& for_loop) -> void {
 auto dumper::visit(node_id, const function_expr& function) -> void {
     PROFILE_FUNCTION();
     fmt::println(out_, "FunctionExpression");
+    dump_attributes(function.attributes);
     if (function.self) {
         const indent::guard g{indent_, false};
         fmt::print(out_, "{}", indent_.current_branch());
@@ -327,11 +328,6 @@ auto dumper::visit(node_id, const function_expr& function) -> void {
     {
         const indent::guard g{indent_, false};
         fmt::println(out_, "{}Move: {}", indent_.current_branch(), function.is_move);
-    }
-
-    {
-        const indent::guard g{indent_, false};
-        fmt::println(out_, "{}Naked: {}", indent_.current_branch(), function.is_naked);
     }
 
     if (function.is_extern) {
@@ -729,7 +725,8 @@ auto dumper::visit(node_id, const struct_expr& node) -> void {
             }
 
             const auto has_default{field.default_value.has_value()};
-            const auto has_alignment{field.explicit_alignment.has_value()};
+            const auto alignment{field.explicit_alignment()};
+            const auto has_alignment{alignment.has_value()};
             {
                 const indent::guard g_type{indent_, !has_default && !has_alignment};
                 fmt::print(out_, "{}Type: ", indent_.current_branch());
@@ -745,7 +742,7 @@ auto dumper::visit(node_id, const struct_expr& node) -> void {
             if (has_alignment) {
                 const indent::guard g_align{indent_, true};
                 fmt::print(out_, "{}Alignment: ", indent_.current_branch());
-                dump(*field.explicit_alignment);
+                dump(*alignment);
             }
         });
     }
@@ -779,7 +776,8 @@ auto dumper::visit(node_id, const union_expr& node) -> void {
                 dump(field.name);
             }
 
-            const auto has_alignment{field.explicit_alignment.has_value()};
+            const auto alignment{field.explicit_alignment()};
+            const auto has_alignment{alignment.has_value()};
             {
                 const indent::guard g_result{indent_, !has_alignment};
                 fmt::print(out_, "{}Type: ", indent_.current_branch());
@@ -789,7 +787,7 @@ auto dumper::visit(node_id, const union_expr& node) -> void {
             if (has_alignment) {
                 const indent::guard g_align{indent_, true};
                 fmt::print(out_, "{}Alignment: ", indent_.current_branch());
-                dump(*field.explicit_alignment);
+                dump(*alignment);
             }
         });
     }
@@ -861,6 +859,7 @@ auto dumper::visit(node_id, const interface_expr& node) -> void {
                          indent_.current_branch(),
                          fn.is_type_expr ? "required" : "default",
                          m.is_public() ? "pub" : "sealed");
+            dump_attributes(m.attributes);
             {
                 const indent::guard g_name{indent_, false};
                 fmt::print(out_, "{}Name: ", indent_.current_branch());
@@ -992,11 +991,7 @@ auto dumper::visit(node_id, const decl_stmt& decl) -> void {
         dump(*decl.link_name);
     }
 
-    if (decl.discardable_condition) {
-        const indent::guard g{indent_, false};
-        fmt::print(out_, "{}Discardable Condition: ", indent_.current_branch());
-        dump(*decl.discardable_condition);
-    }
+    dump_attributes(decl.attributes);
 
     const auto has_value{decl.value.has_value()};
     {

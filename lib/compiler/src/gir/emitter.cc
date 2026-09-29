@@ -343,6 +343,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
 
     auto& fn{add_gir_function(
         req.mangled_name, fn_type, false, false, fn_expr.variadic, gir::linkage::INTERNAL)};
+    apply_fn_attributes(fn, fn_mod, fn_mod.fn_literal_node(req.fn_node_id));
     auto& entry{fn.add_segment()};
     builder_.set_insert_point(fn, entry);
 
@@ -1133,6 +1134,7 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
     g.link_name       = get_link_name(active_ast(), decl);
     g.is_thread_local = decl.has_modifier(ast::decl_modifiers::THREADLOCAL);
     g.is_weak         = decl.has_modifier(ast::decl_modifiers::WEAK);
+    g.alignment       = decl_alignment(active_mod(), id);
 }
 
 auto emitter::emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -> void {
@@ -1224,6 +1226,7 @@ auto emitter::emit_impl_default_method(std::string_view          gir_name,
 
     auto& fn{add_gir_function(
         std::string{gir_name}, *sema_type, false, false, fn_expr.variadic, gir::linkage::INTERNAL)};
+    apply_fn_attributes(fn, iface_mod, sig_id);
     auto& entry{fn.add_segment()};
     builder_.set_insert_point(fn, entry);
 
@@ -1313,6 +1316,68 @@ auto emitter::emit_top_level_test(ast::node_id id, const ast::test_stmt& test) -
     }
 }
 
+auto emitter::apply_fn_attributes(gir::function& fn, const mod::module& owner, ast::node_id fn_node)
+    -> void {
+    sema::resolved_attributes resolved;
+    if (const auto folded{owner.attributes_of(fn_node)}) { resolved = *folded; }
+    if (const auto literal{owner.ast.get_as_opt<ast::function_expr>(fn_node)};
+        literal && literal->body.is_valid()) {
+        resolved.cold = branch_hint_of(owner, *literal->body) == ast::branch_hint::COLD;
+    }
+    fn.set_attributes(resolved);
+}
+
+auto emitter::branch_hint_of(const mod::module& owner, ast::node_id stmt)
+    -> stdx::option<ast::branch_hint> {
+    const auto block{owner.ast.get_as_opt<ast::block_stmt>(stmt)};
+    if (!block || block->statements.empty()) { return stdx::none; }
+    const auto first{owner.ast.get_as_opt<ast::expr_stmt>(*block->statements.front())};
+    if (!first) { return stdx::none; }
+    const auto call{owner.ast.get_as_opt<ast::call_expr>(*first->expression)};
+    if (!call || ast::node_id{call->function}.get_token_type() !=
+                     syntax::token_type_t::BUILTIN_BRANCH_HINT) {
+        return stdx::none;
+    }
+    const auto cv{const_eval_.try_eval(*call->arguments[0].as_opt<ast::expr_handle>())};
+    const auto variant{cv ? cv->as_opt<gir::const_enum>() : stdx::none};
+    return variant ? ast::branch_hint_from_name(variant->name) : stdx::none;
+}
+
+auto emitter::apply_branch_hints(gir::instruction&              branch,
+                                 stdx::option<ast::branch_hint> on_true,
+                                 stdx::option<ast::branch_hint> on_false) -> void {
+    static constexpr u32 LIKELY_WEIGHT{2'000};
+    static constexpr u32 UNLIKELY_WEIGHT{1};
+    const auto           weight_of{[](stdx::option<ast::branch_hint> hint) -> stdx::option<u32> {
+        if (hint == ast::branch_hint::LIKELY) { return LIKELY_WEIGHT; }
+        if (hint == ast::branch_hint::UNLIKELY || hint == ast::branch_hint::COLD) {
+            return UNLIKELY_WEIGHT;
+        }
+        return stdx::none;
+    }};
+    const auto           opposite{
+        [](u32 weight) { return weight == LIKELY_WEIGHT ? UNLIKELY_WEIGHT : LIKELY_WEIGHT; }};
+
+    const auto true_weight{weight_of(on_true)};
+    const auto false_weight{weight_of(on_false)};
+    if (true_weight || false_weight) {
+        branch.branch_weights.emplace(true_weight.value_or(opposite(*false_weight)),
+                                      false_weight.value_or(opposite(*true_weight)));
+    }
+    branch.unpredictable =
+        on_true == ast::branch_hint::UNPREDICTABLE || on_false == ast::branch_hint::UNPREDICTABLE;
+}
+
+auto emitter::safety_enabled() const -> bool {
+    const auto current{builder_.get_function()};
+    for (const auto& frame : scopes_ | std::views::reverse) {
+        if (!frame.runtime_safety) { continue; }
+        if (!current || frame.safety_owner.get() != current.get()) { break; }
+        return *frame.runtime_safety;
+    }
+    return runtime_safety_;
+}
+
 auto emitter::emit_function(ast::node_id                   id,
                             const ast::decl_stmt&          decl,
                             const ast::function_expr&      fn_expr,
@@ -1332,7 +1397,7 @@ auto emitter::emit_function(ast::node_id                   id,
         add_gir_function(gir_name, *sema_type, false, is_constexpr, fn_expr.variadic, linkage)};
     if (!name_override) { fn.set_link_name(get_link_name(active_ast(), decl)); }
     fn.set_weak(decl.has_modifier(ast::decl_modifiers::WEAK));
-    fn.set_naked(fn_expr.is_naked);
+    apply_fn_attributes(fn, active_mod(), *decl.value);
     fn.set_calling_conv(fn_expr.conv);
 
     auto& entry{fn.add_segment()};
@@ -1368,7 +1433,7 @@ auto emitter::emit_function(ast::node_id                   id,
     emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
     if (const auto cur_seg{builder_.get_segment()}) {
         if (!cur_seg->has_terminator()) {
-            if (fn_expr.is_naked) {
+            if (fn.get_attributes().naked) {
                 // A naked body owns its own control flow; never synthesise a return.
                 builder_.emit_unreachable();
             } else {
@@ -1443,6 +1508,7 @@ auto emitter::emit_anonymous_function(ast::node_id id, const ast::function_expr&
 
     auto& fn{add_gir_function(anon_name, fn_type, false, false, fn_expr.variadic)};
     fn.set_calling_conv(fn_expr.conv);
+    apply_fn_attributes(fn, active_mod(), id);
     const auto prev_fn{builder_.get_function()};
     const auto prev_seg{builder_.get_segment()};
 
@@ -1476,6 +1542,7 @@ auto emitter::emit_named_local_function(std::string_view          name,
 
     auto& fn{add_gir_function(anon_name, fn_type, false, false, fn_expr.variadic)};
     fn.set_calling_conv(fn_expr.conv);
+    apply_fn_attributes(fn, active_mod(), id);
     const auto prev_fn{builder_.get_function()};
     const auto prev_seg{builder_.get_segment()};
 
@@ -1515,11 +1582,12 @@ auto emitter::emit_closure(ast::node_id id, const ast::function_expr& fn_expr) -
     const auto cl{closure_type.get_data().as_opt<sema::types::closure_t>()};
     ASSERT(cl, "Closure expression must have closure type data");
 
-    emit_closure_function(fn_expr, *cl, closure_type);
+    emit_closure_function(id, fn_expr, *cl, closure_type);
     return emit_closure_env(*cl, closure_type);
 }
 
-auto emitter::emit_closure_function(const ast::function_expr&     fn_expr,
+auto emitter::emit_closure_function(ast::node_id                  id,
+                                    const ast::function_expr&     fn_expr,
                                     const sema::types::closure_t& cl,
                                     sema::type&                   closure_type) -> void {
     PROFILE_FUNCTION();
@@ -1530,7 +1598,8 @@ auto emitter::emit_closure_function(const ast::function_expr&     fn_expr,
     const auto impl_sig_data{cl.impl_signature.get_data().as_opt<sema::types::function>()};
     ASSERT(impl_sig_data, "Closure implementation signature must contain function type data");
 
-    auto&      fn{add_gir_function(fn_name, cl.impl_signature, false, false, fn_expr.variadic)};
+    auto& fn{add_gir_function(fn_name, cl.impl_signature, false, false, fn_expr.variadic)};
+    apply_fn_attributes(fn, active_mod(), id);
     const auto prev_fn{builder_.get_function()};
     const auto prev_seg{builder_.get_segment()};
 
@@ -1634,7 +1703,8 @@ auto emitter::emit_constexpr_closure(const const_closure& cl) -> std::string {
     const auto sig_data{sig.get_data().as_opt<sema::types::function>()};
     ASSERT(sig_data, "constexpr callable must have a function signature");
 
-    auto&      fn{add_gir_function(fn_name, sig, false, false, fn_expr.variadic)};
+    auto& fn{add_gir_function(fn_name, sig, false, false, fn_expr.variadic)};
+    apply_fn_attributes(fn, def_mod, cl.fn_node);
     const auto prev_fn{builder_.get_function()};
     const auto prev_seg{builder_.get_segment()};
     auto       prev_module{std::exchange(active_module_, &def_mod)};
@@ -1927,7 +1997,8 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
     // An ordinary aggregate const/constexpr needs one stable address across every use, so only a
     // non-aggregate can skip storage below except a `constexpr var` since it has no storage
     const auto is_structural{sema::is_structural(sema_type->get_kind())};
-    if (is_const && decl.value && (!is_structural || is_constexpr_var)) {
+    const auto alignment{decl_alignment(active_mod(), id)};
+    if (is_const && decl.value && (!is_structural || is_constexpr_var) && !alignment) {
         // A `fn(...)`-annotated literal is a callable value built below, not a named function
         const auto fn_expr{sema::is_fat_callable(*sema_type)
                                ? stdx::none
@@ -2057,7 +2128,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         return;
     }
 
-    const auto slot{builder_.emit_alloca(*sema_type, name, is_const)};
+    const auto slot{builder_.emit_alloca(*sema_type, name, is_const, alignment)};
     // A fresh alloca is already uninitialized, so `= undefined` needs no store.
     if (decl.value && !is_undefined_value(*decl.value)) {
         const value val{emit_coerced_expr(*decl.value, *sema_type)};
@@ -2220,7 +2291,7 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
         },
         [&](ast::unreachable_expr) -> value {
             // Reaching a `unreachable` is a safety-check violation; `--unsafe` makes it true UB.
-            if (runtime_safety_) {
+            if (safety_enabled()) {
                 emit_panic_call("reached unreachable code", id);
             } else {
                 builder_.emit_unreachable();
@@ -3366,7 +3437,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                             return materialize_const(*cv);
                         }
                     }
-                    const bool checked{runtime_safety_ &&
+                    const bool checked{safety_enabled() &&
                                        fn_token == syntax::token_type_t::BUILTIN_INT_FROM_FLOAT};
                     const auto dest{builder_.emit_cast(cast_kind, operand, ret_type, checked)};
                     value      result{dest, ret_type};
@@ -3624,6 +3695,17 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                                     active_ast().location_of(call.function));
             return value{undefined_val{}, ret_type};
         }
+        case syntax::token_type_t::BUILTIN_BRANCH_HINT:        return value{void_val{}, ret_type};
+        case syntax::token_type_t::BUILTIN_SET_RUNTIME_SAFETY: {
+            const auto arg{*call.arguments[0].as_opt<ast::expr_handle>()};
+            if (const auto cv{const_eval_.try_eval(arg)}) {
+                if (const auto enabled{cv->as_opt<bool>()}) {
+                    scopes_.back().runtime_safety = *enabled;
+                    scopes_.back().safety_owner   = builder_.get_function();
+                }
+            }
+            return value{void_val{}, ret_type};
+        }
         case syntax::token_type_t::BUILTIN_TRAP: {
             builder_.emit_builtin_call("@trap", {}, ret_type);
             builder_.emit_unreachable();
@@ -3657,7 +3739,9 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         case syntax::token_type_t::BUILTIN_TYPE_NAME:
         case syntax::token_type_t::BUILTIN_TARGET_OS:
         case syntax::token_type_t::BUILTIN_TARGET_ARCH:
-        case syntax::token_type_t::BUILTIN_TARGET_TRIPLE: {
+        case syntax::token_type_t::BUILTIN_TARGET_TRIPLE:
+        case syntax::token_type_t::BUILTIN_OPTIMIZE_MODE:
+        case syntax::token_type_t::BUILTIN_RUNTIME_SAFETY: {
             if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
             break;
         }
@@ -3734,7 +3818,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                     }
                 }
             }
-            if (!is_verify && !runtime_safety_) { return value{void_val{}, ret_type}; }
+            if (!is_verify && !safety_enabled()) { return value{void_val{}, ret_type}; }
 
             std::string message{is_verify ? "verification failed" : "assertion failed"};
             if (call.arguments.size() > 1) {
@@ -4523,7 +4607,11 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
     auto& merge_seg{fn.add_segment()};
 
     const auto false_target{alternate_seg_ptr ? alternate_seg_ptr->get_id() : merge_seg.get_id()};
-    builder_.emit_cond_goto(cond_val, consequence_seg.get_id(), false_target);
+    auto&      branch{builder_.emit_cond_goto(cond_val, consequence_seg.get_id(), false_target)};
+    apply_branch_hints(branch,
+                       branch_hint_of(active_mod(), *if_expr.consequence),
+                       if_expr.alternate ? branch_hint_of(active_mod(), **if_expr.alternate)
+                                         : stdx::none);
 
     // Consequence branch
     builder_.set_segment(consequence_seg);
@@ -5619,7 +5707,7 @@ auto emitter::emit_panic_call(std::string_view message, ast::node_id site) -> vo
 }
 
 auto emitter::emit_null_pointer_check(value ptr, ast::node_id site) -> void {
-    if (!runtime_safety_ || !ptr.type || ptr.type->get_kind() != sema::type_kind::POINTER) {
+    if (!safety_enabled() || !ptr.type || ptr.type->get_kind() != sema::type_kind::POINTER) {
         return;
     }
     auto fn_opt{builder_.get_function()};
@@ -5651,7 +5739,7 @@ auto emitter::emit_enum_cast_guard(ast::node_id     site,
                                    const value&     enum_val,
                                    const value&     src_val,
                                    ast::expr_handle src_expr) -> void {
-    if (!runtime_safety_ || !enum_val.type || !src_val.type) { return; }
+    if (!safety_enabled() || !enum_val.type || !src_val.type) { return; }
 
     // Only integer -> enum casts need guarding
     if (!sema::is_integer(src_val.type->get_kind())) { return; }
@@ -5739,7 +5827,7 @@ auto emitter::emit_int_cast_guard(value operand, const sema::type& dest_type, as
         return;
     }
 
-    if (!runtime_safety_) { return; }
+    if (!safety_enabled()) { return; }
 
     auto fn_opt{builder_.get_function()};
     if (!fn_opt) { return; }
@@ -5948,7 +6036,7 @@ auto emitter::emit_checked_binary(instruction_kind kind,
                                   bool saturating) -> local_id {
     // Only integer arithmetic can trap, and only signed +/-/* can overflow.
     const auto k{result_type.get_kind()};
-    const bool checkable{!wrapping && !saturating && runtime_safety_ && sema::is_integer(k) &&
+    const bool checkable{!wrapping && !saturating && safety_enabled() && sema::is_integer(k) &&
                          (((kind == instruction_kind::ADD || kind == instruction_kind::SUB ||
                             kind == instruction_kind::MUL) &&
                            sema::is_signed_integer(result_type)) ||
@@ -5963,7 +6051,7 @@ auto emitter::emit_checked_unary(instruction_kind kind,
                                  sema::type&      result_type,
                                  ast::node_id,
                                  bool wrapping) -> local_id {
-    const bool checkable{!wrapping && runtime_safety_ && kind == instruction_kind::NEG &&
+    const bool checkable{!wrapping && safety_enabled() && kind == instruction_kind::NEG &&
                          sema::is_signed_integer(result_type)};
     return builder_.emit_unary(kind, std::move(operand), result_type, checkable);
 }
@@ -6282,7 +6370,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             }
 
             if (const auto arr_data{obj_type->get_data().as_opt<sema::types::array>()}) {
-                if (runtime_safety_) {
+                if (safety_enabled()) {
                     auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
                     auto&      isize_type{ctx_.get_builtin_resolved_type(sema::type_kind::ISIZE)};
                     auto&      bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
@@ -6334,7 +6422,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                     base_lval, {value{SLICE_PTR_FIELD_INDEX, usize_type}}, ptr_type)};
                 const auto ptr_val{builder_.emit_load(value{ptr_slot, ptr_type}, ptr_type)};
 
-                if (runtime_safety_) {
+                if (safety_enabled()) {
                     auto& isize_type{ctx_.get_builtin_resolved_type(sema::type_kind::ISIZE)};
                     auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
 
@@ -6550,7 +6638,9 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
                                           bool_type}
                                   : test;
             }
-            builder_.emit_cond_goto(*matched, arm_body_seg.get_id(), next_arm_seg.get_id());
+            auto& branch{
+                builder_.emit_cond_goto(*matched, arm_body_seg.get_id(), next_arm_seg.get_id())};
+            apply_branch_hints(branch, branch_hint_of(active_mod(), *arm.dispatch), stdx::none);
         }
 
         builder_.set_segment(arm_body_seg);
@@ -6665,7 +6755,7 @@ auto emitter::emit_union_active_field_guard(value            union_addr,
                                             std::string_view field_name,
                                             ast::node_id     site) -> void {
     PROFILE_FUNCTION();
-    if (!runtime_safety_) { return; }
+    if (!safety_enabled()) { return; }
     auto fn_opt{builder_.get_function()};
     if (!fn_opt) { return; }
     auto& fn{*fn_opt};
@@ -6815,7 +6905,7 @@ auto emitter::emit_mem_intrinsic(ast::node_id         id,
     auto [src_ptr, src_len]{decompose(rhs_h)};
 
     // `@memcpy` / `@memmove` require equal lengths; guard it when safety checks are on.
-    if (runtime_safety_ && check_lengths) {
+    if (safety_enabled() && check_lengths) {
         const auto eq{builder_.emit_binary(instruction_kind::EQ, dest_len, src_len, bool_type)};
         auto       fn_opt{builder_.get_function()};
         ASSERT(fn_opt, "mem intrinsic must be within an active function");
@@ -7458,7 +7548,7 @@ auto emitter::emit_slice_range(ast::node_id id, const ast::index_expr& index) ->
     }
 
     // Bounds check: lo <= hi, and hi <= len when the source length is known.
-    if (runtime_safety_) {
+    if (safety_enabled()) {
         auto fn_opt{builder_.get_function()};
         ASSERT(fn_opt, "Slice range must be within an active function");
         auto&      fn{*fn_opt};

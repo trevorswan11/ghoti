@@ -13,7 +13,7 @@ TEST_CASE("a non-packable field is rejected in a bit-packed packed struct") {
 }
 
 TEST_CASE("alignas on a bit-packed packed struct field is rejected") {
-    CHECK(helpers::raised("const S := packed struct { @alignas(4) a: u8, b: u8 };",
+    CHECK(helpers::raised("const S := packed struct { @[align(4)] a: u8, b: u8 };",
                           sema::error::ILLEGAL_PACKED_FIELD));
 }
 
@@ -45,14 +45,14 @@ TEST_CASE("packable fields are accepted in a bit-packed packed struct") {
 // An `extern packed struct` keeps C layout, so `alignas` and larger widths stay legal.
 TEST_CASE("extern packed struct is not bit-packed and keeps its relaxed rules") {
     helpers::resolve_and_check(
-        "const S := extern packed struct { @alignas(4) a: i32, b: u8, c: i32 };");
+        "const S := extern packed struct { @[align(4)] a: i32, b: u8, c: i32 };");
 }
 
 TEST_CASE("packed union accepts packable fields and rejects the rest") {
     helpers::resolve_and_check("const U := packed union { a: u8, b: u3, f: f16, p: ^i32 };");
     CHECK(helpers::raised("const U := packed union { a: u8, b: []i32 };",
                           sema::error::ILLEGAL_PACKED_FIELD));
-    CHECK(helpers::raised("const U := packed union { @alignas(4) a: u8, b: u3 };",
+    CHECK(helpers::raised("const U := packed union { @[align(4)] a: u8, b: u3 };",
                           sema::error::ILLEGAL_PACKED_FIELD));
     CHECK(helpers::raised("const U := packed union { a: u200, b: u8 };",
                           sema::error::ILLEGAL_PACKED_FIELD));

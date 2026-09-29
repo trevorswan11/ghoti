@@ -24,16 +24,20 @@ auto builder::emit_instruction(instruction inst) -> instruction& {
     return segment_->append(std::move(inst));
 }
 
-auto builder::emit_alloca(sema::type& type, std::string_view, bool is_const) -> local_id {
+auto builder::emit_alloca(sema::type& type,
+                          std::string_view,
+                          bool              is_const,
+                          stdx::option<u64> alignment) -> local_id {
     PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit alloca without an active function");
     const auto slot{function_->next_local_id(local_kind::ALLOCA)};
     emit_instruction({
-        .kind     = instruction_kind::ALLOCA,
-        .type     = type,
-        .result   = slot,
-        .operands = {},
-        .is_const = is_const,
+        .kind      = instruction_kind::ALLOCA,
+        .type      = type,
+        .result    = slot,
+        .operands  = {},
+        .is_const  = is_const,
+        .alignment = alignment,
     });
     return slot;
 }

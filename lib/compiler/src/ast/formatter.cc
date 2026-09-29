@@ -396,26 +396,19 @@ auto formatter::format_field_aggregate(const Node&      node,
     return doc_manager_.concat(std::move(head));
 }
 
-auto formatter::format_aligned_field_type(stdx::option<expr_handle> alignment,
-                                          explicit_type_id          type) -> syntax::doc_id {
-    if (!alignment) { return format(type); }
-    return doc_manager_.concat({doc_manager_.text("@alignas("),
-                                format(*alignment),
-                                doc_manager_.text(") "),
-                                format(type)});
-}
-
 auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
     return format_field_aggregate(
         node,
         "struct ",
         [&](const struct_expr::field& field) -> syntax::doc_id {
             std::vector<syntax::doc_id> parts;
-            if (field.is_public()) { parts.emplace_back(doc_manager_.text("pub ")); }
-            parts.emplace_back(format(field.name));
-            parts.emplace_back(doc_manager_.text(": "));
             parts.emplace_back(
-                format_aligned_field_type(field.explicit_alignment, field.explicit_type));
+                with_attributes(field.attributes,
+                                doc_manager_.concat({field.is_public() ? doc_manager_.text("pub ")
+                                                                       : doc_manager_.nil(),
+                                                     format(field.name)})));
+            parts.emplace_back(doc_manager_.text(": "));
+            parts.emplace_back(format(field.explicit_type));
             if (field.default_value) {
                 parts.emplace_back(doc_manager_.text(" = "));
                 parts.emplace_back(format(*field.default_value));
@@ -424,9 +417,6 @@ auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
         },
         [&](const struct_expr::field& field) -> usize {
             if (field.default_value) { return ast_.end_location_of(*field.default_value).line; }
-            if (field.explicit_alignment) {
-                return ast_.end_location_of(*field.explicit_alignment).line;
-            }
             return ast_.end_location_of(field.explicit_type).line;
         });
 }
@@ -436,10 +426,9 @@ auto formatter::format_union(const union_expr& node) -> syntax::doc_id {
         node,
         "union ",
         [&](const union_expr::field& field) -> syntax::doc_id {
-            return doc_manager_.concat(
-                {format(field.name),
-                 doc_manager_.text(": "),
-                 format_aligned_field_type(field.explicit_alignment, field.explicit_type)});
+            return doc_manager_.concat({with_attributes(field.attributes, format(field.name)),
+                                        doc_manager_.text(": "),
+                                        format(field.explicit_type)});
         },
         [&](const union_expr::field& field) -> usize {
             return ast_.end_location_of(field.explicit_type).line;
@@ -579,9 +568,12 @@ auto formatter::format_interface(const interface_expr& node) -> syntax::doc_id {
         add_member(
             ast_.location_of(m.name).line, ast_.end_location_of(*m.signature).line, i == 0, [&] {
                 std::vector<syntax::doc_id> parts;
-                if (m.is_public()) { parts.emplace_back(doc_manager_.text("pub ")); }
-                parts.emplace_back(doc_manager_.text("const "));
-                parts.emplace_back(format(m.name));
+                parts.emplace_back(
+                    with_attributes(m.attributes,
+                                    doc_manager_.concat({m.is_public() ? doc_manager_.text("pub ")
+                                                                       : doc_manager_.nil(),
+                                                         doc_manager_.text("const "),
+                                                         format(m.name)})));
                 parts.emplace_back(doc_manager_.text(" := "));
                 parts.emplace_back(format(*m.signature));
                 parts.emplace_back(doc_manager_.text(";"));
@@ -618,19 +610,42 @@ auto formatter::aggregate_body(std::vector<syntax::doc_id> entries,
                               force_break);
 }
 
+auto formatter::attribute_list_doc(const attribute_list& list) -> syntax::doc_id {
+    std::vector<syntax::doc_id> items;
+    items.reserve(list.items.size());
+    for (const auto& item : list.items) {
+        const auto name{doc_manager_.text(attribute_spec_of(item.kind).name)};
+        if (item.args.empty()) {
+            items.emplace_back(name);
+            continue;
+        }
+        std::vector<syntax::doc_id> args;
+        args.reserve(item.args.size());
+        for (const auto arg : item.args) { args.emplace_back(format(arg)); }
+        items.emplace_back(
+            doc_manager_.concat({name,
+                                 doc_manager_.text("("),
+                                 doc_manager_.join(std::move(args), doc_manager_.text(", ")),
+                                 doc_manager_.text(")")}));
+    }
+    return doc_manager_.concat({doc_manager_.text("@["),
+                                doc_manager_.join(std::move(items), doc_manager_.text(", ")),
+                                doc_manager_.text(list.force_break ? ",]" : "]")});
+}
+
+auto formatter::with_attributes(const stdx::option<attribute_list>& attributes, syntax::doc_id head)
+    -> syntax::doc_id {
+    if (!attributes) { return head; }
+    const auto separator{attributes->force_break ? doc_manager_.hard_line() : doc_manager_.line()};
+    return doc_manager_.group(
+        doc_manager_.concat({attribute_list_doc(*attributes), separator, head}),
+        attributes->force_break);
+}
+
 auto formatter::decl_prefix(const decl_stmt& node) -> syntax::doc_id {
     std::vector<syntax::doc_id> parts;
     if (node.has_modifier(decl_modifiers::PUBLIC)) {
         parts.emplace_back(doc_manager_.text("pub "));
-    }
-    if (node.has_modifier(decl_modifiers::DISCARDABLE)) {
-        if (node.discardable_condition) {
-            parts.emplace_back(doc_manager_.concat({doc_manager_.text("@discardable("),
-                                                    format(*node.discardable_condition),
-                                                    doc_manager_.text(") ")}));
-        } else {
-            parts.emplace_back(doc_manager_.text("@discardable "));
-        }
     }
     if (node.has_modifier(decl_modifiers::EXPORT)) {
         if (node.link_name) {
@@ -914,8 +929,10 @@ auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
     }
 
     return doc_manager_.concat({
+        node.attributes
+            ? doc_manager_.concat({attribute_list_doc(*node.attributes), doc_manager_.text(" ")})
+            : doc_manager_.nil(),
         node.is_move ? doc_manager_.text("move ") : doc_manager_.nil(),
-        node.is_naked ? doc_manager_.text("naked ") : doc_manager_.nil(),
         doc_manager_.text("fn"),
         doc_manager_.delimited("(", ")", std::move(params), false, true, node.params_force_break),
         callconv_doc,
@@ -1417,8 +1434,8 @@ auto formatter::visit(node_id, const continue_stmt& node) -> syntax::doc_id {
 auto formatter::visit(node_id, const decl_stmt& node) -> syntax::doc_id {
     const auto walrus{!node.explicit_type && node.value};
     return doc_manager_.concat({
-        decl_prefix(node),
-        format(node.name),
+        with_attributes(node.attributes,
+                        doc_manager_.concat({decl_prefix(node), format(node.name)})),
         node.explicit_type
             ? doc_manager_.concat({doc_manager_.text(": "), format(*node.explicit_type)})
             : doc_manager_.nil(),

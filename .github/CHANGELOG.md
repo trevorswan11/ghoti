@@ -362,6 +362,39 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 ## alpha.2
 
 ## Language Features and Fixes
+- **Breaking:** the `@discardable` declaration modifier is replaced by an attribute list; write `@[discardable]` (or `@[discardable(cond)]`) before the declaration, ahead of `pub`
+- Attribute lists `@[a, b(args)]` annotate declarations and function literals (`const f := @[discardable] fn(): i32 { ... };`)
+    - Arguments are compile-time expressions; unknown, repeated, or misplaced attributes are errors
+    - `ghoti fmt` keeps a list beside a declaration head that fits and puts it on its own line otherwise, or when the list ends in a trailing comma (`@[discardable,]`)
+    - `@[discardable]` also applies to `extern` function declarations and to function literals
+- **Breaking:** the `naked` keyword is removed; write `@[naked]` on the declaration or the function literal (`const stub := @[naked] fn(): void { ... };`)
+- `@[inline(.always)]`, `@[inline(.never)]`, and `@[inline(.hint)]` control inlining, backed by the new `builtin.Inline` enum
+    - The argument may be computed at compile time: `@[inline(if (FAST) .always else .never)]`
+    - `.always` is honored at `-O0` too
+    - A function-only attribute written on a declaration applies to its function literal initializer, and is an error on any other declaration
+- **Breaking:** `@alignas(n)` is removed; write `@[align(n)]` before the field (`@[align(16)] data: [4]f32`)
+- `@[align(n)]` also raises the alignment of globals, static members, locals, and functions; `n` must be a compile-time power of two
+- Fixed: an explicitly aligned struct field was accepted but ignored; it now moves the field to its aligned offset and raises the struct's alignment and size, in `@sizeOf`/`@alignOf` and in generated code
+    - `align` on a union field is now an error instead of being silently ignored
+- Attribute arguments are evaluated per instantiation: a function's attributes see its `type` and `constexpr` parameters, and attributes inside generic bodies and type constructors see the instantiation's bindings
+    - `@[inline(if (@sizeOf(T) <= 16) .always else .hint)] const swap := fn(T: type, ...)`
+    - `struct { @[align(@alignOf(T) * 4)] value: T }` inside a `fn(T: type): type`
+- `@[discardable]` on an interface method applies to calls through `dyn` and `impl` receivers and to the implementing methods
+- `@[deprecated]` / `@[deprecated("message")]` on declarations, fields, and interface methods: naming one reports a warning, the compiler's first
+    - Uses inside a deprecated item (including a deprecated generic's instantiations) stay quiet
+    - Initializing a deprecated field (`.{ .x = 1 }`, `P{ .x = 1 }`, a union's `.{ .legacy = v }`) warns too, including inside generic and type-constructor instantiations, once per site
+    - `--deprecated=warn|error|ignore` on `build-*`, `run`, and `test` controls the report; `warn` is the default and never fails the build
+    - The LSP publishes it as a warning tagged `Deprecated` (rendered struck through) and hover shows the message
+- `@optimizeMode()` returns the build's `builtin.OptimizeMode` (`.debug`, `.release_safe`, `.release_fast`, `.release_small`) and `@runtimeSafety()` whether runtime safety checks are on; both fold at compile time
+    - `optimize` and `safety` are also `@cfg` / `@cfgValue` names: `@cfg (optimize == .debug) { ... }`, `@cfg (safety) { ... }`
+- `@setRuntimeSafety(bool)` turns runtime safety checks on or off for the rest of its block, nested blocks included; it never reaches into called functions, and `@runtimeSafety()` observes it
+- `@branchHint(hint)` as the first statement of an `if`/`else` branch or `match` arm weights that branch (`builtin.BranchHint`: `.none`, `.likely`, `.unlikely`, `.cold`, `.unpredictable`)
+    - `@branchHint(.cold)` as the first statement of a function body marks the function cold
+- `@typeInfo` of a function declaration reports its attributes in `FnInfo` (`inline_mode`, `naked`, `discardable`, `cold`, `alignment`); a bare function type reports defaults
+    - It also reads through member access (`S.f`, `Box(u8).get`); a type constructor's member reports that instantiation's attributes
+    - On a generic function it reports the attributes whose arguments ignore the parameters; one that depends on them is an error outside an instantiation, and reflects that instantiation's value inside its body
+    - `StructFieldInfo.alignment` reflects a field's `@[align(n)]` (0 when natural), and `@Struct` honors it
+    - `builtin.Inline` gains `.default`, which leaves inlining to the optimizer (`@[inline(if (fast) .always else .default)]`)
 - Constexpr can now be applied to labels and blocks (expression slots and top level)
     - They must be constant evaluatable and will error if not
 - `@assert` and `@verify` have been hardened such that they can work correctly in constexpr contexts
@@ -500,6 +533,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: comparing floats of different widths (`f32 < f64`), or an untyped integer result with a float (`@abs(3) < x`), crashed code generation
 - Fixed: a typed module constant built from an untyped constant (`const a: f32 = big;`, `const b: u8 = two_hundred;`) folded as the untyped type, crashing `@bitCast` and friends; an integer constant bound to a float global (`const f: f32 = five;`) crashed too
 - Fixed: nested untyped constant arithmetic next to a typed float (`((c * c) + c) * f32_value`) was rejected
+- Fixed: a compile-time-false `@assert` in an `if` or `match` arm that a folded condition rules out was an error, e.g. `if (N > 4) { @assert(N > 4); }` with `N = 2`, including inside generic instantiations
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
@@ -507,6 +541,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `std.io.Reader`, `std.io.Writer`, and `std.io.Seeker` default their `Error` to `std.io.Error`, so `&mut dyn std.io.Writer` no longer needs `(Error = std.io.Error)`
 
 ## Tooling
+- **Breaking:** `-M, --mode debug|release_safe|release_fast|release_small` replaces `-O`, `--release`, and `--unsafe` on `build-*`, `run`, and `test`
+    - `debug` (the default) is `-O0` with runtime safety, `release_safe` is `-O2` with safety, `release_fast` is `-O3` without, and `release_small` is `-Oz` without
+    - The LSP analyzes as `debug`
 - Releases ship a `lib/compiler_rt` directory, and every link now takes an optional compiler builtins archive as its last input; nothing is built into it yet
 - Cross compiling for macOS links from any host: releases ship `libSystem.tbd` and `SDKSettings.json` in `lib/darwin`, used when neither `SDKROOT` nor `xcrun` names an SDK (#342)
     - The linker stamps the SDK version from `SDKSettings.json` into the image instead of reusing the minimum OS version

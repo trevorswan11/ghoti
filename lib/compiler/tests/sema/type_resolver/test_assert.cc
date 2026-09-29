@@ -79,4 +79,54 @@ TEST_CASE("@assert / @verify reject the wrong argument count") {
                           sema::error::ARITY_MISMATCH));
 }
 
+TEST_CASE("A failing @assert in an arm a folded condition rules out is not an error") {
+    helpers::resolve_and_check(R"(
+        constexpr N := 2;
+        constexpr {
+            if (N > 4) { @assert(N > 4); } else { @assert(N <= 4); }
+        }
+        const f := fn(constexpr M: usize): usize {
+            constexpr {
+                if (M > 4) { @assert(M > 4); } else { @assert(M <= 4); }
+            }
+            match (M) {
+                2 => @assert(M == 2),
+                _ => @assert(M != 2),
+            }
+            return M;
+        };
+        pub const main := fn(): i32 {
+            if (N > 4) { @assert(N > 4); }
+            const a := f(2);
+            const b := f(8);
+            return 0;
+        };
+    )");
+}
+
+TEST_CASE("A failing @assert in the live arm is still an error") {
+    CHECK(helpers::raised(R"(
+        const f := fn(constexpr M: usize): usize {
+            if (M > 4) { @assert(M < 4); }
+            return M;
+        };
+        pub const main := fn(): i32 {
+            const b := f(8);
+            return 0;
+        };
+    )",
+                          sema::error::STATIC_ASSERTION_FAILED));
+    CHECK(helpers::raised(R"(
+        constexpr N := 2;
+        pub const main := fn(): i32 {
+            match (N) {
+                2 => @assert(N == 3),
+                _ => {},
+            }
+            return 0;
+        };
+    )",
+                          sema::error::STATIC_ASSERTION_FAILED));
+}
+
 } // namespace ghoti::tests

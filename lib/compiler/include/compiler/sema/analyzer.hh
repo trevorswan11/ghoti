@@ -77,6 +77,12 @@ class analyzer {
     ~analyzer() = default;
     MAKE_MOVE_CONSTRUCTABLE_ONLY(analyzer);
 
+    auto set_optimize_mode(optimize_mode mode) noexcept -> void { ctx_.build_mode = mode; }
+    auto set_runtime_safety(bool enabled) noexcept -> void { ctx_.runtime_safety = enabled; }
+    auto set_deprecation_policy(deprecation_policy policy) noexcept -> void {
+        ctx_.deprecated_policy = policy;
+    }
+
     // Runs the entire sema pipeline
     auto analyze(const std::filesystem::path& entry_path, bool for_test_executable = false)
         -> stdx::result<gir::module, diagnostic>;

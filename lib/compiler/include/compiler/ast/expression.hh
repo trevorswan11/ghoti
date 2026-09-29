@@ -197,21 +197,21 @@ struct function_expr {
     block_handle                 body;
     bool                         variadic;
     bool                         is_move{false};
-    bool                         is_naked{false};
     bool                         is_type_expr{false};
     bool                         params_force_break{false};
     calling_convention           conv{calling_convention::C};
     bool                         has_explicit_conv{false};
     bool                         is_extern{false}; // `extern fn(...): R` bodyless type value
     std::vector<impl_bound>      impl_bounds{};
+    stdx::option<attribute_list> attributes{};
+    stdx::option<node_id>        declaring_decl{}; // set when this literal initializes a decl
 
     // Parse the function as a value. Meant for the parser LUT
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic> {
-        return parse(parser, false, false);
+        return parse(parser, false);
     }
-    [[nodiscard]] static auto
-    parse(syntax::parser& parser, bool is_move, bool is_naked, bool is_extern = false)
+    [[nodiscard]] static auto parse(syntax::parser& parser, bool is_move, bool is_extern = false)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
@@ -223,8 +223,8 @@ struct function_expr {
 [[nodiscard]] auto parse_move_function_expr(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic>;
 
-// Consumes a leading `naked` modifier before delegating to function_expr::parse
-[[nodiscard]] auto parse_naked_function_expr(syntax::parser& parser)
+// `@[...] fn(...) {...}`: an attribute list applied to a function literal in expression position
+[[nodiscard]] auto parse_attributed_function_expr(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic>;
 
 struct grouped_expr {
@@ -416,13 +416,16 @@ struct implicit_access_expr {
 struct struct_expr {
     // Field publicity is baked into the identifier's token type
     struct field {
-        identifier_handle         name;
-        explicit_type_id          explicit_type;
-        stdx::option<expr_handle> default_value;
-        stdx::option<expr_handle> explicit_alignment;
+        identifier_handle            name;
+        explicit_type_id             explicit_type;
+        stdx::option<expr_handle>    default_value;
+        stdx::option<attribute_list> attributes;
 
         [[nodiscard]] constexpr auto is_public() const noexcept -> bool {
             return name->get_token_type() == syntax::token_type_t::PUBLIC;
+        }
+        [[nodiscard]] auto explicit_alignment() const noexcept -> stdx::option<expr_handle> {
+            return attribute_arg(attributes, attribute_kind::ALIGN);
         }
     };
 
@@ -447,9 +450,13 @@ struct struct_expr {
 
 struct union_expr {
     struct field {
-        identifier_handle         name;
-        explicit_type_id          explicit_type;
-        stdx::option<expr_handle> explicit_alignment;
+        identifier_handle            name;
+        explicit_type_id             explicit_type;
+        stdx::option<attribute_list> attributes;
+
+        [[nodiscard]] auto explicit_alignment() const noexcept -> stdx::option<expr_handle> {
+            return attribute_arg(attributes, attribute_kind::ALIGN);
+        }
     };
 
     using cfg_group        = cfg_item_group<field>;
@@ -494,8 +501,9 @@ struct interface_expr {
 
     // Bodyless signature is a requirement; one with a body is a default method.
     struct method {
-        identifier_handle name; // Publicity hides in here
-        function_handle   signature;
+        identifier_handle            name; // Publicity hides in here
+        function_handle              signature;
+        stdx::option<attribute_list> attributes{};
 
         [[nodiscard]] constexpr auto is_public() const noexcept -> bool {
             return name->get_token_type() == syntax::token_type_t::PUBLIC;

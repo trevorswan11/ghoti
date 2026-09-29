@@ -132,7 +132,6 @@ ExpressionStatement
                 │           └─ IdentifierExpression: B
                 ├─ Variadic: false
                 ├─ Move: false
-                ├─ Naked: false
                 ├─ CallConv: c
                 ├─ Returns: ExplicitType (modifier: VALUE)
                 │   └─ IdentifierExpression: C
@@ -265,7 +264,6 @@ ExpressionStatement
     │           └─ IdentifierExpression: B
     ├─ Variadic: false
     ├─ Move: false
-    ├─ Naked: false
     ├─ CallConv: c
     ├─ Returns: ExplicitType (modifier: VALUE)
     │   └─ IdentifierExpression: i32 (primitive)
@@ -452,7 +450,6 @@ ExpressionStatement
                 │           └─ IdentifierExpression: A
                 ├─ Variadic: false
                 ├─ Move: false
-                ├─ Naked: false
                 ├─ CallConv: c
                 ├─ Returns: ExplicitType (modifier: VALUE)
                 │   └─ IdentifierExpression: C
@@ -481,7 +478,6 @@ ExpressionStatement
                 │           └─ IdentifierExpression: A
                 ├─ Variadic: false
                 ├─ Move: false
-                ├─ Naked: false
                 ├─ CallConv: c
                 ├─ Returns: ExplicitType (modifier: VALUE)
                 │   └─ IdentifierExpression: C
@@ -559,7 +555,6 @@ ExpressionStatement
     ├─ Self: self (modifier: VALUE)
     ├─ Variadic: false
     ├─ Move: false
-    ├─ Naked: false
     ├─ CallConv: c
     ├─ Returns: ExplicitType (modifier: VALUE)
     │   └─ IdentifierExpression: i32 (primitive)
@@ -641,7 +636,6 @@ DeclStatement
     │           └─ IdentifierExpression: i32 (primitive)
     ├─ Variadic: false
     ├─ Move: false
-    ├─ Naked: false
     ├─ CallConv: c
     ├─ Returns: ExplicitType (modifier: VALUE)
     │   └─ IdentifierExpression: i32 (primitive)
@@ -669,7 +663,6 @@ DeclStatement
 └─ Value: FunctionExpression
     ├─ Variadic: false
     ├─ Move: true
-    ├─ Naked: false
     ├─ CallConv: c
     ├─ Returns: ExplicitType (modifier: VALUE)
     │   └─ IdentifierExpression: i32 (primitive)
@@ -681,9 +674,10 @@ DeclStatement
 ├─ Modifiers: CONSTANT
 ├─ Type: (inferred)
 └─ Value: FunctionExpression
+    ├─ Attributes:
+    │   └─ Attribute: naked
     ├─ Variadic: false
     ├─ Move: false
-    ├─ Naked: true
     ├─ CallConv: c
     ├─ Returns: ExplicitType (modifier: VALUE)
     │   └─ IdentifierExpression: void (primitive)
@@ -696,7 +690,6 @@ DeclStatement
 └─ Value: FunctionExpression
     ├─ Variadic: false
     ├─ Move: false
-    ├─ Naked: false
     ├─ CallConv: stdcall
     ├─ Returns: ExplicitType (modifier: VALUE)
     │   └─ IdentifierExpression: void (primitive)
@@ -868,7 +861,6 @@ DeclStatement
         │       │                   └─ IdentifierExpression: u8 (primitive)
         │       ├─ Variadic: false
         │       ├─ Move: false
-        │       ├─ Naked: false
         │       ├─ CallConv: c
         │       ├─ Returns: ExplicitType (modifier: VALUE)
         │       │   └─ IdentifierExpression: E
@@ -878,7 +870,6 @@ DeclStatement
         │       ├─ Self: self (modifier: REF)
         │       ├─ Variadic: false
         │       ├─ Move: false
-        │       ├─ Naked: false
         │       ├─ CallConv: c
         │       ├─ Returns: ExplicitType (modifier: VALUE)
         │       │   └─ ArrayType
@@ -901,7 +892,6 @@ DeclStatement
                 │                   └─ IdentifierExpression: u8 (primitive)
                 ├─ Variadic: false
                 ├─ Move: false
-                ├─ Naked: false
                 ├─ CallConv: c
                 ├─ Returns: ExplicitType (modifier: VALUE)
                 │   └─ IdentifierExpression: E
@@ -930,7 +920,6 @@ ImplStatement
             │           └─ IdentifierExpression: i32 (primitive)
             ├─ Variadic: false
             ├─ Move: false
-            ├─ Naked: false
             ├─ CallConv: c
             ├─ Returns: ExplicitType (modifier: VALUE)
             │   └─ CallExpression
@@ -968,7 +957,6 @@ ImplStatement
             │                   └─ IdentifierExpression: u8 (primitive)
             ├─ Variadic: false
             ├─ Move: false
-            ├─ Naked: false
             ├─ CallConv: c
             ├─ Returns: ExplicitType (modifier: VALUE)
             │   └─ IdentifierExpression: E
@@ -1000,7 +988,6 @@ ImplStatement
             │           └─ IdentifierExpression: H
             ├─ Variadic: false
             ├─ Move: false
-            ├─ Naked: false
             ├─ CallConv: c
             ├─ Returns: ExplicitType (modifier: VALUE)
             │   └─ CallExpression
@@ -1041,7 +1028,6 @@ DeclStatement
     │                   └─ IdentifierExpression: IW
     ├─ Variadic: false
     ├─ Move: false
-    ├─ Naked: false
     ├─ CallConv: c
     ├─ Returns: ExplicitType (modifier: VALUE)
     │   └─ IdentifierExpression: void (primitive)

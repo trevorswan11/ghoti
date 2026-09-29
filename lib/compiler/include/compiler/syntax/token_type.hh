@@ -110,6 +110,7 @@ enum class token_type_t : u8 {
     RBRACE,
     LBRACKET,
     RBRACKET,
+    AT_LBRACKET, // `@[` opening an attribute list
 
     SINGLE_QUOTE,
     UNDERSCORE,
@@ -169,7 +170,6 @@ enum class token_type_t : u8 {
     EXPORT,
     THREADLOCAL,
     WEAK,
-    NAKED,
     CALLCONV,
     VOLATILE,
     MUT,
@@ -242,7 +242,6 @@ enum class token_type_t : u8 {
     BUILTIN_C_VA_ARG,
     BUILTIN_C_VA_COPY,
     BUILTIN_C_VA_END,
-    BUILTIN_ALIGNAS,
     BUILTIN_TARGET_OS,
     BUILTIN_TARGET_ARCH,
     BUILTIN_TARGET_TRIPLE,
@@ -250,6 +249,10 @@ enum class token_type_t : u8 {
     BUILTIN_TARGET_PTR_BITS,
     BUILTIN_TARGET_ENDIAN,
     BUILTIN_TARGET_FAMILY,
+    BUILTIN_OPTIMIZE_MODE,
+    BUILTIN_RUNTIME_SAFETY,
+    BUILTIN_SET_RUNTIME_SAFETY,
+    BUILTIN_BRANCH_HINT,
     BUILTIN_SET_EVAL_RECURSION_LIMIT,
     BUILTIN_SET_EVAL_UNROLL_LIMIT,
     BUILTIN_SET_MAIN_SYMBOL,
@@ -276,8 +279,6 @@ enum class token_type_t : u8 {
 
     BUILTIN_CFG,
     BUILTIN_CFG_VALUE,
-
-    BUILTIN_DISCARDABLE,
 
     ILLEGAL,
 };

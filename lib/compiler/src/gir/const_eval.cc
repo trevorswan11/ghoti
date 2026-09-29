@@ -39,6 +39,7 @@
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/sema/unwrap_shape.hh"
@@ -514,6 +515,12 @@ namespace {
 
 } // namespace
 
+auto const_eval::struct_field_align(const sema::types::struct_t& st, usize idx, usize ptr_size)
+    -> usize {
+    const auto natural{type_align_of(*st.fields[idx], ptr_size)};
+    return std::max(natural, static_cast<usize>(st.explicit_field_alignment(idx)));
+}
+
 auto const_eval::type_align_of(const sema::type& type, usize ptr_size) -> usize {
     PROFILE_FUNCTION();
     switch (type.get_kind()) {
@@ -548,13 +555,12 @@ auto const_eval::type_align_of(const sema::type& type, usize ptr_size) -> usize 
                     return int_abi_bytes(static_cast<u16>(*bits));
                 }
             }
-            return std::ranges::fold_left(st->fields | std::views::filter([](const auto* f) {
-                                              return f != nullptr;
-                                          }) | std::views::transform([ptr_size](const auto* f) {
-                                              return type_align_of(*f, ptr_size);
-                                          }),
-                                          1UZ,
-                                          [](usize a, usize b) { return std::max(a, b); });
+            usize max_align{1};
+            for (usize i{0}; i < st->fields.size(); ++i) {
+                if (!st->fields[i]) { continue; }
+                max_align = std::max(max_align, struct_field_align(*st, i, ptr_size));
+            }
+            return max_align;
         }
         UNREACHABLE("type_kind::STRUCT associated with improper type");
     case sema::type_kind::UNION:
@@ -642,9 +648,10 @@ auto const_eval::type_size_of(const sema::type& type, usize ptr_size) -> usize {
             }
             usize current_offset{0};
             usize max_align{1};
-            for (const auto* field : st->fields) {
+            for (usize i{0}; i < st->fields.size(); ++i) {
+                const auto* field{st->fields[i]};
                 if (!field) { continue; }
-                const auto f_align{type_align_of(*field, ptr_size)};
+                const auto f_align{struct_field_align(*st, i, ptr_size)};
                 max_align = std::max(max_align, f_align);
                 if (f_align > 0) {
                     current_offset = (current_offset + f_align - 1) / f_align * f_align;
@@ -1959,7 +1966,95 @@ auto const_eval::target_enum_value(std::string_view enum_name, std::string_view 
     return const_value{const_enum{std::string{member}, ordinal}, enum_type};
 }
 
-auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
+namespace {
+
+// The folded attributes of `decl` (a declaration or a function literal) as `owner` sees them now
+[[nodiscard]] auto fn_decl_attributes(const mod::module& owner, ast::node_id decl)
+    -> sema::resolved_attributes {
+    const auto literal_node{owner.fn_literal_node(decl)};
+    const auto literal{owner.ast.get_as_opt<ast::function_expr>(literal_node)};
+
+    sema::resolved_attributes resolved;
+    if (const auto folded{owner.attributes_of(literal ? literal_node : decl)}) {
+        resolved = *folded;
+    }
+    // `@branchHint(.cold)` opening the body, read the way the emitter reads it
+    if (literal && literal->body.is_valid()) {
+        const auto& body{owner.ast.get_as<ast::block_stmt>(*literal->body)};
+        const auto  first{body.statements.empty()
+                              ? stdx::none
+                              : owner.ast.get_as_opt<ast::expr_stmt>(*body.statements.front())};
+        const auto  call{first ? owner.ast.get_as_opt<ast::call_expr>(*first->expression)
+                               : stdx::none};
+        if (call && ast::node_id{call->function}.get_token_type() ==
+                        syntax::token_type_t::BUILTIN_BRANCH_HINT) {
+            const auto hint{owner.ast.get_as_opt<ast::implicit_access_expr>(
+                *call->arguments[0].as_opt<ast::expr_handle>())};
+            resolved.cold =
+                hint && owner.ast.get_as<ast::identifier_expr>(hint->member).name == "cold";
+        }
+    }
+    return resolved;
+}
+
+} // namespace
+
+auto const_eval::declared_fn_attributes(ast::expr_handle arg)
+    -> stdx::option<sema::resolved_attributes> {
+    if (const auto dot{module_->ast.get_as_opt<ast::dot_expr>(*arg)}) {
+        return member_fn_attributes(*dot);
+    }
+    const auto declaration{module_->get_identifier_declaration(ast::node_id{arg})};
+    if (!declaration || !declaration->owner || !declaration->decl) { return stdx::none; }
+    return fn_decl_attributes(*declaration->owner, *declaration->decl);
+}
+
+auto const_eval::member_fn_attributes(const ast::dot_expr& dot)
+    -> stdx::option<sema::resolved_attributes> {
+    // The resolver's view names a type constructor's per-instantiation clone, while re-evaluating
+    // its call may rebuild the shared literal type
+    stdx::option<sema::type&> denoted;
+    if (const auto recorded{module_->get_sema_type_opt(*dot.object)}) {
+        if (const auto meta{recorded->get_data().as_opt<sema::types::meta_type>()}) {
+            denoted.emplace(meta->instance);
+        } else if (ctx_.generic_functions.get_type_ctor_member_prefix(*recorded)) {
+            denoted.emplace(*recorded);
+        }
+    }
+    if (!denoted) {
+        if (const auto val{try_eval(dot.object)}; val && val->is<stdx::option<sema::type&>>()) {
+            denoted = val->as<stdx::option<sema::type&>>();
+        }
+    }
+    if (!denoted) { return stdx::none; }
+
+    stdx::option<mod::module&> owner;
+    if (const auto st{denoted->get_data().as_opt<sema::types::struct_t>()}) {
+        owner.emplace(st->enclosing);
+    } else if (const auto un{denoted->get_data().as_opt<sema::types::union_t>()}) {
+        owner.emplace(un->enclosing);
+    } else if (const auto en{denoted->get_data().as_opt<sema::types::enum_t>()}) {
+        owner.emplace(en->enclosing);
+    }
+    const auto tbl_idx{denoted->get_symbol_table_idx_opt()};
+    if (!owner || !tbl_idx) { return stdx::none; }
+
+    const auto& member{module_->ast.get_as<ast::identifier_expr>(dot.member).name};
+    const auto  msym{ctx_.registry.get(*tbl_idx).get_opt(member)};
+    const auto  node{msym ? msym->get_data().as_opt<sema::symbols::node_t>() : stdx::none};
+    if (!node) { return stdx::none; }
+
+    // A type constructor's member folded its attributes once per instantiation
+    const auto                 prefix{ctx_.generic_functions.get_type_ctor_member_prefix(*denoted)};
+    const auto                 diff{prefix ? ctx_.instantiation_cache.get_body_type_diff(*prefix)
+                                           : owner->active_body_diff};
+    const mod::body_diff_guard diff_guard{*owner, diff};
+    return fn_decl_attributes(*owner, *node);
+}
+
+auto const_eval::eval_type_info(sema::type&                                    denoted,
+                                stdx::option<const sema::resolved_attributes&> declared)
+    -> const_value {
     PROFILE_FUNCTION();
     auto& info_type{ctx_.get_builtin_type("TypeInfo")};
     auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
@@ -2075,6 +2170,18 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
                          const_value{const_enum{std::string{ast::calling_convention_name(fn.conv)},
                                                 static_cast<i64>(fn.conv)},
                                      ctx_.get_builtin_type("CallConv")});
+
+        const sema::resolved_attributes attributes{declared ? *declared
+                                                            : sema::resolved_attributes{}};
+        const auto inlining{attributes.inlining.value_or(ast::inline_mode::DEFAULT)};
+        s.fields.emplace("inline_mode",
+                         const_value{const_enum{std::string{ast::inline_mode_name(inlining)},
+                                                static_cast<i64>(inlining)},
+                                     ctx_.get_builtin_type("Inline")});
+        s.fields.emplace("naked", const_value{attributes.naked, bool_type});
+        s.fields.emplace("discardable", const_value{attributes.discardable, bool_type});
+        s.fields.emplace("cold", const_value{attributes.cold, bool_type});
+        s.fields.emplace("alignment", const_value{attributes.alignment.value_or(0), usize_type});
         return wrap("function", std::move(s), ctx_.get_builtin_type("FnInfo"));
     }
     case sema::type_kind::ENUM: {
@@ -2125,6 +2232,8 @@ auto const_eval::eval_type_info(sema::type& denoted) -> const_value {
                 default_val && !default_val->is_poison()
                     ? const_value{const_addr{{}, {std::move(*default_val)}}, opaque_ptr_type}
                     : const_value{nullptr_val{}, opaque_ptr_type});
+            fs.fields.emplace("alignment",
+                              const_value{st.explicit_field_alignment(idx), usize_type});
             fields.elements.emplace_back(const_value{std::move(fs), field_type});
         }
         const auto ptr_bits{target_pointer_bits()};
@@ -2284,6 +2393,20 @@ auto const_eval::eval_module_member(mod::module& target_mod, std::string_view me
     inner_eval.set_symbol_scoping(symbol_scoping_);
     inner_eval.set_constexpr_context(is_constexpr_context());
     return inner_eval.eval_decl_value(*decl);
+}
+
+auto const_eval::selected_match_arm(const ast::match_expr& match) -> stdx::opt_size {
+    const auto matcher_val{try_eval(match.matcher)};
+    if (!matcher_val) { return stdx::none; }
+    for (usize i{0}; i < match.arms.size(); ++i) {
+        if (match.catch_all_idx && i == *match.catch_all_idx) { continue; }
+        if (std::ranges::any_of(match.arms[i].patterns, [&](const auto& pattern) {
+                return match_pattern(pattern, *matcher_val);
+            })) {
+            return i;
+        }
+    }
+    return match.catch_all_idx;
 }
 
 auto const_eval::eval_match(ast::node_id id, const ast::match_expr& match)
@@ -3710,7 +3833,13 @@ auto const_eval::eval_builtin(ast::node_id          id,
         // An unfolded `[N]T` would otherwise report as `.type`
         auto& forced{force_deferred_type(*target_type)};
         if (forced.get_data().is<sema::types::deferred_array>()) { return stdx::none; }
-        return eval_type_info(forced);
+        const auto arg{call.arguments.front().as_opt<ast::expr_handle>()};
+        const auto declared{arg ? declared_fn_attributes(*arg) : stdx::none};
+        // Outside an instantiation a parameter-dependent attribute has no value to report
+        if (declared && declared->dependent) { return stdx::none; }
+        return eval_type_info(forced,
+                              declared ? stdx::option<const sema::resolved_attributes&>{*declared}
+                                       : stdx::none);
     }
     case syntax::token_type_t::BUILTIN_HAS_FIELD:
     case syntax::token_type_t::BUILTIN_FIELD_TYPE: {
@@ -3751,7 +3880,17 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
         return target_enum_value("Family", facts.family);
     }
-    case syntax::token_type_t::BUILTIN_TARGET_ENDIAN: {
+    case syntax::token_type_t::BUILTIN_OPTIMIZE_MODE:
+        return target_enum_value("OptimizeMode", sema::optimize_mode_name(ctx_.build_mode));
+    case syntax::token_type_t::BUILTIN_RUNTIME_SAFETY: {
+        const auto scoped{module_->scoped_runtime_safety.find(id.get_index())};
+        const bool enabled{scoped != module_->scoped_runtime_safety.end() ? scoped->second
+                                                                          : ctx_.runtime_safety};
+        return const_value{enabled, ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    }
+    case syntax::token_type_t::BUILTIN_SET_RUNTIME_SAFETY:
+    case syntax::token_type_t::BUILTIN_BRANCH_HINT:        return const_value{void_val{}};
+    case syntax::token_type_t::BUILTIN_TARGET_ENDIAN:      {
         const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
         return target_enum_value("Endian", facts.endian);
     }

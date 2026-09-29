@@ -256,6 +256,11 @@ auto symbol_collector::visit(ast::node_id id, const ast::function_expr& fn) -> v
         }
     }
     collect(fn.explicit_return_type);
+    collect_attribute_args(fn.attributes);
+    if (fn.declaring_decl) {
+        const auto& decl{collecting_.ast.get_as<ast::decl_stmt>(*fn.declaring_decl)};
+        collect_attribute_args(decl.attributes, true);
+    }
 
     if (!fn.is_type_expr) {
         const auto& block{collecting_.ast.get_as<ast::block_stmt>(fn.body)};
@@ -570,7 +575,10 @@ auto symbol_collector::visit(ast::node_id id, const ast::decl_stmt& decl) -> voi
         }
     }
 
-    if (decl.discardable_condition) { collect(*decl.discardable_condition); }
+    // Attributes that reach through to a function literal see its parameters, so collect there
+    const bool initializes_fn_literal{decl.value && decl.value->is<ast::function_expr>()};
+    collect_attribute_args(decl.attributes,
+                           initializes_fn_literal ? stdx::option<bool>{false} : stdx::none);
     if (!try_declare<symbols::node_t>(name, id)) { return; };
     if (!decl.value) { return; }
 

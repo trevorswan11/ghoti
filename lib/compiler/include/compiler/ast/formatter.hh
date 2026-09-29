@@ -68,9 +68,6 @@ class formatter {
                                 std::string_view keyword_and_space,
                                 FieldItem&&      field_item,
                                 FieldEndLine&&   field_end_line) -> syntax::doc_id;
-    // `[@alignas(n) ]T`
-    auto format_aligned_field_type(stdx::option<expr_handle> alignment, explicit_type_id type)
-        -> syntax::doc_id;
 
     [[nodiscard]] auto format_struct(const struct_expr& node) -> syntax::doc_id;
     [[nodiscard]] auto format_union(const union_expr& node) -> syntax::doc_id;
@@ -108,6 +105,11 @@ class formatter {
     }
 
     [[nodiscard]] auto decl_prefix(const decl_stmt& node) -> syntax::doc_id;
+    [[nodiscard]] auto attribute_list_doc(const attribute_list& list) -> syntax::doc_id;
+
+    // Keeps `@[...]` beside `head` when both fit on one line, otherwise puts it on its own line
+    [[nodiscard]] auto with_attributes(const stdx::option<attribute_list>& attributes,
+                                       syntax::doc_id                      head) -> syntax::doc_id;
     [[nodiscard]] auto tail_clause(node_id stmt) -> syntax::doc_id;
 
     auto visit(node_id, const array_expr&) -> syntax::doc_id;

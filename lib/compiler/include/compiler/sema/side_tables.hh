@@ -10,6 +10,7 @@
 #include <stdx/types.hh>
 
 #include "compiler/ast/ast.hh"
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/ast/traits.hh"
 #include "support/diagnostic.hh"
@@ -53,6 +54,20 @@ enum class capture_usage : u8 {
 struct capture_info {
     std::string_view name;
     capture_usage    usage;
+};
+
+// The folded result of an `@[...]` list on a declaration or function literal
+struct resolved_attributes {
+    bool                           discardable{false};
+    stdx::option<ast::inline_mode> inlining{};
+    bool                           naked{false};
+    stdx::option<u64>              alignment{};
+    bool                           cold{false}; // `@branchHint(.cold)` opens the body
+    // On a generic template, an attribute whose argument names a parameter so only folds per
+    // instantiation
+    stdx::option<ast::attribute_kind> dependent{};
+
+    [[nodiscard]] auto operator==(const resolved_attributes&) const noexcept -> bool = default;
 };
 
 // Empty for any function_expr that captures nothing

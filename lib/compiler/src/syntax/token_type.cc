@@ -80,6 +80,7 @@ auto describe(token_type_t tt) -> std::string {
     case token_type_t::INT_TYPE:           return "an integer type";
     case token_type_t::ILLEGAL:            return "an invalid token";
     case token_type_t::UNDERSCORE:         return "'_'";
+    case token_type_t::AT_LBRACKET:        return "'@['";
     case token_type_t::SINGLE_QUOTE:       return "'\''";
     case token_type_t::DOC_COMMENT:        return "a doc comment";
     case token_type_t::MODULE_DOC_COMMENT: return "a module doc comment";

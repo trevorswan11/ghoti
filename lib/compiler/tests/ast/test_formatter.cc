@@ -536,11 +536,33 @@ TEST_CASE("formatter round trip: functions and types") {
     round_trips("pub threadlocal var tls_state: i64 = 0i64;");
     round_trips("weak extern const maybe: fn(): void;");
     round_trips("pub weak const overridable := fn(): i32 { return 1; };");
-    round_trips("@discardable extern const puts: fn(s: ^u8): i32;");
-    round_trips("pub @discardable const log := fn(msg: i32): i32 { return msg; };");
-    round_trips("pub const stub := naked fn(): void {};");
+    round_trips("@[discardable] extern const puts: fn(s: ^u8): i32;");
+    round_trips("@[discardable] pub const log := fn(msg: i32): i32 { return msg; };");
+    round_trips("@[naked] pub const stub := fn(): void {};");
+    round_trips("pub const stub := @[naked] fn(): void {};");
     round_trips("pub const handler := fn() callconv(.win64): void {};");
     round_trips("const cb := fn(x: i32) callconv(.stdcall): i32 { return x; };");
+}
+
+TEST_CASE("formatter round trip: attribute lists") {
+    round_trips("@[discardable(true)] const log := fn(msg: i32): i32 { return msg; };");
+    round_trips("const log := @[discardable] fn(msg: i32): i32 { return msg; };");
+    round_trips("@[discardable,]\nconst log := fn(msg: i32): i32 { return msg; };");
+
+    // A trailing comma forces the list onto its own line, even when the declaration fits.
+    CHECK(format_source("@[discardable,] const log := fn(msg: i32): i32 { return msg; };") ==
+          "@[discardable,]\nconst log := fn(msg: i32): i32 {\n    return msg;\n};\n");
+    // Without one, a list written on its own line is pulled beside a head that fits.
+    CHECK(format_source("@[discardable]\nconst log := fn(msg: i32): i32 { return msg; };") ==
+          "@[discardable] const log := fn(msg: i32): i32 {\n    return msg;\n};\n");
+    round_trips("const S := struct { @[align(8)] a: u8, @[align(4)] pub b: u8 };");
+    round_trips("const U := union { @[align(16)] a: i32, b: u8 };");
+    round_trips("@[align(64)] var buffer: [4]u8 = undefined;");
+    round_trips("const I := interface { @[discardable] pub const close := fn(&self): i32; };");
+    round_trips("@[deprecated(\"use y\")] const x := 1;");
+    round_trips("const S := struct { @[deprecated] a: u8, b: u8 };");
+    // A doc comment stays above the list.
+    round_trips("/// Logs.\n@[discardable] const log := fn(msg: i32): i32 { return msg; };");
 }
 
 TEST_CASE("formatter round trip: raw identifiers") {

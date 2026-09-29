@@ -17,6 +17,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
@@ -290,6 +291,12 @@ class type_resolver {
         MAKE_PINNED(binding_restore_guard);
     };
 
+    enum class hint_site : u8 {
+        BRANCH,  // an `if`/`else` branch or `match` arm body
+        FN_BODY, // a function literal's body
+    };
+    using attribute_refs = std::vector<gsl::not_null<const ast::attribute*>>;
+
   private:
     auto visit(ast::node_id, const ast::array_expr&) -> void;
     auto visit(ast::node_id, const ast::asm_expr&) -> void;
@@ -352,8 +359,65 @@ class type_resolver {
     [[nodiscard]] auto get_call_arg_location(const ast::call_expr::argument& arg)
         -> source_location;
 
-    // Whether the outermost callee of `call` resolves to a `@discardable` declaration
-    [[nodiscard]] auto callee_is_discardable(const ast::call_expr& call) const -> bool;
+    // Validates `items` against what they annotate and folds them
+    [[nodiscard]] auto resolve_attributes(const attribute_refs& items,
+                                          ast::attribute_target site,
+                                          bool returns_void) -> resolved_attributes;
+    auto               resolve_decl_attributes(ast::node_id          id,
+                                               const ast::decl_stmt& decl,
+                                               const type::data_t&   type_data) -> void;
+    // A literal's own list plus the function-only attributes of the declaration it initializes
+    // A generic `is_template` folds only the attributes whose arguments ignore its parameters
+    // Whether an enclosing `if` condition or `match` matcher folds to rule out the current arm
+    [[nodiscard]] auto in_dead_arm() -> bool;
+    auto               resolve_fn_literal_attributes(ast::node_id              id,
+                                                     const ast::function_expr& fn,
+                                                     bool                      is_template = false) -> void;
+    [[nodiscard]] auto mentions_fn_param(const ast::attribute&     item,
+                                         const ast::function_expr& fn) const -> bool;
+    auto check_attribute_conflicts(const attribute_refs& items, const resolved_attributes& resolved)
+        -> void;
+    [[nodiscard]] auto fold_attribute_bool(const ast::attribute& item) -> stdx::option<bool>;
+
+    // What the block holding the statement being resolved is the body of, if anything hintable
+    [[nodiscard]] auto hint_site_of(const ast::block_stmt& block) -> stdx::option<hint_site>;
+    ankerl::unordered_dense::map<const ast::block_stmt*, hint_site> hint_sites_;
+    bool                                                            hint_sites_built_{false};
+
+    // The safety a `@setRuntimeSafety` in this function's enclosing blocks chose, else the build's
+    [[nodiscard]] auto scoped_runtime_safety() const -> bool;
+
+    // `deprecated` takes at most a string literal message
+    auto check_deprecation_message(const ast::attribute& item) -> void;
+    // Warns (or errors, per `--deprecated`) when `id` names a `@[deprecated]` declaration or field
+    template <ast::IndexableID ID>
+    auto report_deprecated_use(ID id, const mod::module& owner, const symbol& sym) -> void;
+    // A positive power-of-two byte alignment, reporting anything else
+    [[nodiscard]] auto fold_alignment(ast::expr_handle arg) -> stdx::option<u64>;
+    // Fields accept only field attributes; returns the field's folded `align`, if any
+    [[nodiscard]] auto resolve_field_attributes(const stdx::option<ast::attribute_list>& attributes)
+        -> stdx::option<u64>;
+    // The variant name of an `item` argument typed against the prelude enum `enum_name`
+    [[nodiscard]] auto fold_attribute_enum(const ast::attribute& item, std::string_view enum_name)
+        -> stdx::option<std::string>;
+
+    // Whether the outermost callee of `call` resolves to a `@[discardable]` declaration
+    [[nodiscard]] auto callee_is_discardable(ast::node_id call_id, const ast::call_expr& call) const
+        -> bool;
+    // A method on an `impl` block for `target`, or the interface member it implements
+    [[nodiscard]] auto impl_method_discardable(const type&      target,
+                                               std::string_view name,
+                                               ast::node_id     call_id) const -> bool;
+    [[nodiscard]] auto interface_member_discardable(const type&      interface_type,
+                                                    std::string_view name,
+                                                    ast::node_id     call_id) const
+        -> stdx::option<bool>;
+    // Whether `discardable` in `attributes` holds, reading a conditional one's folded verdict from
+    // the call's own instantiation when it targets a generic
+    [[nodiscard]] auto discardable_holds(const mod::module&                       home,
+                                         ast::node_id                             owner,
+                                         const stdx::option<ast::attribute_list>& attributes,
+                                         ast::node_id call_id) const -> stdx::option<bool>;
     // Errors on a non-`void` call result dropped in statement position
     auto check_unused_result(ast::node_id stmt_id, const ast::expr_stmt& stmt) -> void;
 
@@ -642,6 +706,14 @@ class type_resolver {
     bool in_for_iterable_{false};
     bool resolving_callee_{false};
     bool in_expr_branch_{false};
+    // The runtime `if` / `match` arms enclosing the node being resolved, innermost last
+    struct enclosing_arm {
+        stdx::option<ast::expr_handle>       condition{}; // an `if` arm
+        bool                                 consequence{false};
+        stdx::option<const ast::match_expr&> match{}; // a `match` arm
+        usize                                arm_idx{0};
+    };
+    std::vector<enclosing_arm> enclosing_arms_;
     // Skips `if`/`match constexpr` folding and the throwaway `Ctor(<dummy>)` cache insert
     bool building_param_template_{false};
     bool in_constexpr_loop_{false};
@@ -652,6 +724,9 @@ class type_resolver {
     stdx::opt_size            reresolve_floor_{};
     stdx::opt_size            pending_impl_method_owner_;
     stdx::option<std::string> pending_param_impl_target_;
+
+    // Nonzero while resolving a `@[deprecated]` item, whose own uses of deprecated names stay quiet
+    u32 deprecated_scope_depth_{0};
 
     // Set by `instantiate_generic` to that inst's mangled name for the duration of body resolution
     std::string typing_scope_prefix_{};

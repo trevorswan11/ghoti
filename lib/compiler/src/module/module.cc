@@ -109,6 +109,18 @@ auto module_manager::add_library_module(std::string_view name, const std::filesy
     return {};
 }
 
+auto module::print_warnings(std::ostream& os) const -> void {
+    for (const auto& warning : warnings) {
+        format_module_diagnostic(
+            os, warning.to_formattable(), *this, warnings.get_terminal_status())
+            << "\n";
+    }
+}
+
+auto module_manager::print_all_warnings(std::ostream& os) const -> void {
+    for (const auto& [path, mod] : modules_) { mod->print_warnings(os); }
+}
+
 auto module_manager::print_all_diagnostics(std::ostream& os) const -> void {
     for (const auto& [path, mod] : modules_) {
         if (mod->is_poisoned() || mod->is_errored()) { mod->print_diagnostics(os); }
@@ -179,6 +191,24 @@ auto module::record_node_write(usize idx) noexcept -> void {
 
 auto module::record_explicit_write(usize idx) noexcept -> void {
     if (active_write_log) { active_write_log->explicit_idxs.emplace_back(idx); }
+}
+
+auto module::attributes_of(ast::node_id id) const noexcept
+    -> stdx::option<const sema::resolved_attributes&> {
+    if (active_body_diff) {
+        if (const auto resolved{active_body_diff->find_attributes(id.get_index())}) {
+            return resolved;
+        }
+    }
+    const auto it{node_attributes.find(id.get_index())};
+    if (it == node_attributes.end()) { return stdx::none; }
+    return it->second;
+}
+
+auto module::set_node_attributes(ast::node_id id, const sema::resolved_attributes& resolved)
+    -> void {
+    node_attributes.insert_or_assign(id.get_index(), resolved);
+    if (active_write_log) { active_write_log->attribute_idxs.emplace_back(id.get_index()); }
 }
 
 auto module::get_overlay_call_target(usize idx) const noexcept

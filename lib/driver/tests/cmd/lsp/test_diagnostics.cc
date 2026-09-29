@@ -5,6 +5,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
+#include <nlohmann/json.hpp>
 #include <stdx/memory.hh>
 #include <stdx/utility.hh>
 
@@ -42,6 +43,29 @@ TEST_CASE("to_lsp_diagnostics reports a syntax error with a code, message, and r
     CHECK(diag.at("code") == "MISSING_PREFIX_PARSER");
     CHECK_FALSE(diag.at("message").get<std::string>().empty());
     CHECK(diag.at("range").at("start").at("line") == 0);
+}
+
+TEST_CASE("to_lsp_diagnostics reports a deprecated use as a tagged warning") {
+    mod::overlay_loader         loader;
+    const std::filesystem::path path{"test_diagnostics_deprecated.gh"};
+    CHECK(loader.add(path, R"(
+@[deprecated("use `newer`")]
+const older := fn(): i32 { return 1; };
+pub const x := older();
+)"));
+
+    auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
+    const auto module{UNWRAP(session->analyze(path))};
+    CHECK(module->is_ok());
+
+    const auto diagnostics = lsp::to_lsp_diagnostics(*module);
+    REQUIRE(diagnostics.size() == 1);
+    const auto& diag{diagnostics.at(0)};
+    CHECK(diag.at("severity") == 2);
+    CHECK(diag.at("code") == "DEPRECATED_USE");
+    CHECK(diag.at("tags") == nlohmann::json::array({2}));
+    CHECK(diag.at("message") == "'older' is deprecated: use `newer`");
+    CHECK(diag.at("range").at("start").at("line") == 3);
 }
 
 TEST_CASE("a shared session that analyzes two impls of one interface keeps inherited defaults") {

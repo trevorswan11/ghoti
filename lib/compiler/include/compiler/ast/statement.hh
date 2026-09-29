@@ -11,6 +11,7 @@
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
@@ -73,7 +74,6 @@ enum class decl_modifiers : u16 {
     EXPORT      = 1 << 5,
     THREADLOCAL = 1 << 6,
     WEAK        = 1 << 7,
-    DISCARDABLE = 1 << 8,
 };
 
 MAKE_ENUM_OPERATORS(decl_modifiers)
@@ -85,7 +85,7 @@ struct decl_stmt {
     decl_modifiers                 modifiers;
     stdx::option<string_handle>    extern_target;
     stdx::option<string_handle>    link_name;
-    stdx::option<expr_handle>      discardable_condition; // unset for a bare `@discardable`
+    stdx::option<attribute_list>   attributes;
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<stmt_handle, syntax::diagnostic>;

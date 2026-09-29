@@ -51,6 +51,11 @@ auto to_lsp_diagnostics(const mod::module& module) -> nlohmann::json {
     if (const auto sema_diags{module.diagnostics.as_opt<sema::diagnostics>()}) {
         for (const auto& d : *sema_diags) { push_diagnostic(out, d); }
     }
+    for (const auto& warning : module.warnings) {
+        push_diagnostic(out, warning);
+        // LSP DiagnosticTag 2 = Deprecated, which clients render as a strikethrough
+        if (warning.get_error() == sema::error::DEPRECATED_USE) { out.back()["tags"] = {2}; }
+    }
 
     return out;
 }

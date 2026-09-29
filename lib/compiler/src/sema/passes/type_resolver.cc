@@ -6,6 +6,7 @@
 #include <cctype>
 #include <concepts>
 #include <filesystem>
+#include <limits>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -1230,6 +1231,18 @@ template <ast::IndexableID ID>
     }
     case token_type_t::BUILTIN_TYPE_INFO: {
         DISCARD(get_resolved_call_arg_type(call.arguments[0]));
+        if (const auto arg{call.arguments[0].as_opt<ast::expr_handle>()}) {
+            gir::const_eval evaluator{ctx_, resolving_};
+            const auto      declared{evaluator.declared_fn_attributes(*arg)};
+            if (const auto dependent{declared ? declared->dependent : stdx::none}) {
+                return make_sema_err(
+                    fmt::format("Attribute '{}' depends on the function's parameters, so it has "
+                                "a value only within an instantiation",
+                                ast::attribute_spec_of(*dependent).name),
+                    error::ILLEGAL_ATTRIBUTE,
+                    get_call_arg_location(call.arguments[0]));
+            }
+        }
         return_type = &denoted_type(ctx_.get_builtin_type("TypeInfo"));
         break;
     }
@@ -1516,10 +1529,68 @@ template <ast::IndexableID ID>
         return_type = meta;
         break;
     }
-    case token_type_t::BUILTIN_TARGET_OS:       return_type = &ctx_.get_builtin_type("Os"); break;
-    case token_type_t::BUILTIN_TARGET_ARCH:     return_type = &ctx_.get_builtin_type("Arch"); break;
-    case token_type_t::BUILTIN_TARGET_ABI:      return_type = &ctx_.get_builtin_type("Abi"); break;
-    case token_type_t::BUILTIN_TARGET_FAMILY:   return_type = &ctx_.get_builtin_type("Family"); break;
+    case token_type_t::BUILTIN_TARGET_OS:     return_type = &ctx_.get_builtin_type("Os"); break;
+    case token_type_t::BUILTIN_TARGET_ARCH:   return_type = &ctx_.get_builtin_type("Arch"); break;
+    case token_type_t::BUILTIN_TARGET_ABI:    return_type = &ctx_.get_builtin_type("Abi"); break;
+    case token_type_t::BUILTIN_TARGET_FAMILY: return_type = &ctx_.get_builtin_type("Family"); break;
+    case token_type_t::BUILTIN_OPTIMIZE_MODE:
+        return_type = &ctx_.get_builtin_type("OptimizeMode");
+        break;
+    case token_type_t::BUILTIN_RUNTIME_SAFETY:
+        ASSERT(builtin.return_type.get_kind() == type_kind::BOOL);
+        resolving_.scoped_runtime_safety.insert_or_assign(id.get_index(), scoped_runtime_safety());
+        return_type = &builtin.return_type;
+        break;
+    case token_type_t::BUILTIN_BRANCH_HINT: {
+        const auto      arg{*call.arguments[0].as_opt<ast::expr_handle>()};
+        gir::const_eval evaluator{ctx_, resolving_};
+        const auto      cv{evaluator.try_eval(arg)};
+        const auto      variant{cv ? cv->as_opt<gir::const_enum>() : stdx::none};
+        if (!variant) {
+            return make_sema_err("@branchHint requires a compile-time 'builtin.BranchHint'",
+                                 error::TYPE_MISMATCH,
+                                 resolving_.ast.location_of(arg));
+        }
+
+        const auto site{active_blocks_.empty() || active_blocks_.back().current_stmt_idx != 0
+                            ? stdx::none
+                            : hint_site_of(*active_blocks_.back().block)};
+        if (!site) {
+            return make_sema_err("@branchHint must be the first statement of an 'if'/'else' "
+                                 "branch, a 'match' arm, or a function body",
+                                 error::TYPE_MISMATCH,
+                                 resolving_.ast.location_of(call.function));
+        }
+        const auto hint{ast::branch_hint_from_name(variant->name)};
+        const bool fits_fn_body{hint == ast::branch_hint::COLD || hint == ast::branch_hint::NONE};
+        if (*site == hint_site::FN_BODY && !fits_fn_body) {
+            return make_sema_err("A function body only accepts '@branchHint(.cold)'",
+                                 error::TYPE_MISMATCH,
+                                 resolving_.ast.location_of(arg));
+        }
+        return_type = &ctx_.get_builtin_resolved_type(type_kind::VOID_);
+        break;
+    }
+    case token_type_t::BUILTIN_SET_RUNTIME_SAFETY: {
+        if (active_blocks_.empty() || return_trackers_.empty()) {
+            return make_sema_err("@setRuntimeSafety can only be used within a function body",
+                                 error::TYPE_MISMATCH,
+                                 resolving_.ast.location_of(call.function));
+        }
+        const auto      arg{*call.arguments[0].as_opt<ast::expr_handle>()};
+        gir::const_eval evaluator{ctx_, resolving_};
+        const auto      cv{evaluator.try_eval(arg)};
+        const auto      enabled{cv ? cv->as_opt<bool>() : stdx::none};
+        if (!enabled) {
+            return make_sema_err("@setRuntimeSafety requires a compile-time 'bool'",
+                                 error::TYPE_MISMATCH,
+                                 resolving_.ast.location_of(arg));
+        }
+        active_blocks_.back().runtime_safety  = *enabled;
+        active_blocks_.back().safety_fn_depth = function_boundaries_.size();
+        return_type                           = &ctx_.get_builtin_resolved_type(type_kind::VOID_);
+        break;
+    }
     case token_type_t::BUILTIN_TARGET_ENDIAN:   return_type = &ctx_.get_builtin_type("Endian"); break;
     case token_type_t::BUILTIN_TARGET_PTR_BITS: {
         ASSERT(builtin.return_type.get_kind() == type_kind::USIZE);
@@ -2150,7 +2221,8 @@ template <ast::IndexableID ID>
                 } else if (cv->is<gir::nullptr_val>()) {
                     is_false = true;
                 }
-                if (is_false) {
+                // An arm a folded condition rules out never runs
+                if (is_false && !in_dead_arm()) {
                     ctx_.diags.emplace_back(
                         fmt::format("{} failed at compile time{}",
                                     name,
@@ -2499,6 +2571,7 @@ auto type_resolver::synthesize_struct(source_location loc, const gir::const_stru
     const auto n{fields_arr->elements.size()};
     auto       ast_fields{make_uninit_span<ast::struct_expr::field>(ctx_.arena, n)};
     auto       field_types{ctx_.pool.get_many_unsafe(n)};
+    auto       field_alignments{ctx_.arena.make_span<u64>(n)};
     const auto scope_idx{ctx_.registry.create()};
     for (usize i{0}; i < n; ++i) {
         const auto fs{fields_arr->elements[i].as_opt<gir::const_struct>()};
@@ -2542,16 +2615,27 @@ auto type_resolver::synthesize_struct(source_location loc, const gir::const_stru
             default_value.emplace(*lit);
         }
 
+        field_alignments[i] = 0;
+        if (const auto align_field{fs->get_field_opt("alignment")}) {
+            const auto requested{align_field->as_uint_opt().value_or(0)};
+            if (requested != 0 && (requested & (requested - 1)) != 0) {
+                return field_err(fmt::format("field '{}' alignment {} is not a power of two",
+                                             *name_v,
+                                             static_cast<u64>(requested)));
+            }
+            field_alignments[i] = static_cast<u64>(requested);
+        }
+
         const auto name_ident{synthesize_ident(*name_v, true)};
         const auto ty_ident{synthesize_ident(ctx_.type_display_name(*type_v), false)};
         new (&ast_fields[i]) ast::struct_expr::field{
-            .name               = name_ident,
-            .explicit_type      = ast::explicit_type_id{ast::explicit_type_kind::IDENT,
+            .name          = name_ident,
+            .explicit_type = ast::explicit_type_id{ast::explicit_type_kind::IDENT,
                                                    ast::type_modifier{},
                                                    syntax::token_type_t::IDENT,
                                                    static_cast<u64>((*ty_ident).get_index())},
-            .default_value      = default_value,
-            .explicit_alignment = stdx::none,
+            .default_value = default_value,
+            .attributes    = stdx::none,
         };
 
         // The key must be the stable,  arena-backed name, not `*name_v`
@@ -2574,7 +2658,7 @@ auto type_resolver::synthesize_struct(source_location loc, const gir::const_stru
                                             resolving_,
                                             *is_extern_v,
                                             *is_packed_v,
-                                            gsl::span<u64>{});
+                                            field_alignments);
     struct_type.set_symbol_table_idx(scope_idx);
     return gsl::not_null{&struct_type};
 }
@@ -2613,12 +2697,12 @@ auto type_resolver::synthesize_union(source_location loc, const gir::const_struc
         const auto name_ident{synthesize_ident(*name_v, true)};
         const auto ty_ident{synthesize_ident(ctx_.type_display_name(*type_v), false)};
         new (&ast_fields[i]) ast::union_expr::field{
-            .name               = name_ident,
-            .explicit_type      = ast::explicit_type_id{ast::explicit_type_kind::IDENT,
+            .name          = name_ident,
+            .explicit_type = ast::explicit_type_id{ast::explicit_type_kind::IDENT,
                                                    ast::type_modifier{},
                                                    syntax::token_type_t::IDENT,
                                                    static_cast<u64>((*ty_ident).get_index())},
-            .explicit_alignment = stdx::none,
+            .attributes    = stdx::none,
         };
 
         const auto stable_name{resolving_.ast.get_as<ast::identifier_expr>(name_ident).name};
@@ -3595,6 +3679,9 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
         case token_type_t::BUILTIN_ENUM:
             descriptor_hint.emplace(ctx_.get_builtin_type("EnumInfo"));
             break;
+        case token_type_t::BUILTIN_BRANCH_HINT:
+            descriptor_hint.emplace(ctx_.get_builtin_type("BranchHint"));
+            break;
         default: break;
         }
 
@@ -4226,6 +4313,8 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
                              error::FUNCTION_DECLARATION_MISSING_BODY,
                              resolving_.ast.location_of(id)));
     }
+
+    resolve_fn_literal_attributes(id, fn, declares_generic_params(fn));
 
     if (!target_supports_callconv(fn.conv)) {
         return last_type_.emplace(
@@ -4900,6 +4989,9 @@ auto type_resolver::record_member_owner(ast::node_id           ref_id,
     const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(member)};
     if (const auto sym{ctx_.registry.get_from_opt(table_idx, member_ident.name)}) {
         record_symbol_owner(ref_id, table_idx, *enclosing, *sym);
+        // Covers `.field = v` initializers and `.member` implicit access, which record no
+        // declaration reference of their own
+        report_deprecated_use(ast::node_id{member}, *enclosing, *sym);
     }
 }
 
@@ -5161,12 +5253,39 @@ auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void 
     resolve_if_arms(id, if_expr);
 }
 
+auto type_resolver::in_dead_arm() -> bool {
+    gir::const_eval evaluator{ctx_, resolving_};
+    return std::ranges::any_of(enclosing_arms_, [&](const enclosing_arm& arm) {
+        if (arm.match) {
+            const auto selected{evaluator.selected_match_arm(*arm.match)};
+            return selected && *selected != arm.arm_idx;
+        }
+        const auto cv{evaluator.try_eval(*arm.condition)};
+        const auto taken{cv ? cv->as_opt<bool>() : stdx::none};
+        return taken && *taken != arm.consequence;
+    });
+}
+
 auto type_resolver::resolve_if_arms(ast::node_id id, const ast::if_expr& if_expr) -> void {
     const mutating_context_guard branch_g{in_expr_branch_, true};
-    TRY_RESOLVE(if_expr.consequence);
+    // `if constexpr { } else { }` has no condition and keeps both arms live
+    const bool track_arms{if_expr.condition.has_value()};
+    {
+        stdx::option<scope_guard<std::vector<enclosing_arm>>> arm_g;
+        if (track_arms) {
+            arm_g.emplace(enclosing_arms_,
+                          enclosing_arm{.condition = if_expr.condition, .consequence = true});
+        }
+        TRY_RESOLVE(if_expr.consequence);
+    }
 
     auto* branch_type{last_type_.take()};
     if (if_expr.alternate) {
+        stdx::option<scope_guard<std::vector<enclosing_arm>>> arm_g;
+        if (track_arms) {
+            arm_g.emplace(enclosing_arms_,
+                          enclosing_arm{.condition = if_expr.condition, .consequence = false});
+        }
         TRY_RESOLVE(*if_expr.alternate);
         if (const auto cons_expr{resolving_.ast.get_as_opt<ast::expr_stmt>(if_expr.consequence)}) {
             if (const auto alt_expr{
@@ -7419,6 +7538,10 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
         }
         {
             const mutating_context_guard branch_g{in_expr_branch_, true};
+            const scope_guard            arm_g{
+                enclosing_arms_,
+                enclosing_arm{.match   = match,
+                                         .arm_idx = static_cast<usize>(&arm - match.arms.data())}};
             TRY_RESOLVE(arm.dispatch);
         }
 
@@ -7633,6 +7756,7 @@ auto type_resolver::record_declaration(ID id, const mod::module& owner, const sy
         },
         [](const auto&) -> stdx::option<declaration_ref> { return stdx::none; })};
     if (ref) { resolving_.set_identifier_declaration(id, *ref); }
+    report_deprecated_use(id, owner, sym);
 }
 
 auto type_resolver::thin_if_constexpr(const ast::function_expr::parameter& param, type& param_type)
@@ -8459,11 +8583,11 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
                 error::ILLEGAL_PACKED_FIELD,
                 resolving_.ast.location_of(field.explicit_type)));
         }
-        if (struct_expr.is_packed && !struct_expr.is_extern && field.explicit_alignment) {
+        if (struct_expr.is_packed && !struct_expr.is_extern && field.explicit_alignment()) {
             return last_type_.emplace(ctx_.poison_node(
                 resolving_,
                 id,
-                fmt::format("a 'packed struct' field cannot specify 'alignas' (field '{}')",
+                fmt::format("a 'packed struct' field cannot specify 'align' (field '{}')",
                             ident.name),
                 error::ILLEGAL_PACKED_FIELD,
                 resolving_.ast.location_of(field.explicit_type)));
@@ -8502,19 +8626,7 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
     auto member_types{ctx_.pool.get_many_unsafe(struct_expr.members.size())};
     auto field_alignments{ctx_.arena.make_span<u64>(struct_expr.fields.size())};
     for (usize i{0}; const auto& field : struct_expr.fields) {
-        u64 align_val{0};
-        if (field.explicit_alignment) {
-            gir::const_eval ce{ctx_, resolving_};
-            const auto      cv{ce.try_eval(*field.explicit_alignment)};
-            if (cv) {
-                if (const auto val{cv->as_opt<u64>()}) {
-                    align_val = *val;
-                } else if (const auto sval{cv->as_opt<i64>()}) {
-                    if (*sval > 0) { align_val = static_cast<u64>(*sval); }
-                }
-            }
-        }
-        field_alignments[i++] = align_val;
+        field_alignments[i++] = resolve_field_attributes(field.attributes).value_or(0);
     }
 
     if (struct_expr.is_packed && !struct_expr.is_extern) {
@@ -8640,11 +8752,16 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
                 error::ILLEGAL_PACKED_FIELD,
                 resolving_.ast.location_of(field.explicit_type)));
         }
-        if (union_expr.is_packed && !union_expr.is_extern && field.explicit_alignment) {
+        if (resolve_field_attributes(field.attributes)) {
+            ctx_.diags.emplace_back("Attribute 'align' is not supported on union fields",
+                                    error::ILLEGAL_ATTRIBUTE,
+                                    resolving_.ast.location_of(field.name));
+        }
+        if (union_expr.is_packed && !union_expr.is_extern && field.explicit_alignment()) {
             return last_type_.emplace(ctx_.poison_node(
                 resolving_,
                 id,
-                fmt::format("a 'packed union' field cannot specify 'alignas' (field '{}')",
+                fmt::format("a 'packed union' field cannot specify 'align' (field '{}')",
                             ident.name),
                 error::ILLEGAL_PACKED_FIELD,
                 resolving_.ast.location_of(field.explicit_type)));
@@ -8779,7 +8896,17 @@ auto type_resolver::visit(ID id, const ast::interface_expr& iface) -> void {
                 const auto& fn{resolving_.ast.get_as<ast::function_expr>(*m.signature)};
                 if (fn.is_type_expr != want_required) { continue; }
 
-                method_sigs[out]   = &resolve_required_method_type(fn, iface_type);
+                method_sigs[out] = &resolve_required_method_type(fn, iface_type);
+                if (m.attributes) {
+                    attribute_refs items;
+                    for (const auto& item : m.attributes->items) { items.emplace_back(&item); }
+                    const auto fn_data{method_sigs[out]->get_data().as_opt<types::function>()};
+                    const bool returns_void{fn_data &&
+                                            fn_data->return_type.get_kind() == type_kind::VOID_};
+                    resolving_.set_node_attributes(
+                        *m.signature,
+                        resolve_attributes(items, ast::attribute_target::FN_DECL, returns_void));
+                }
                 method_src[out]    = src;
                 method_names[out]  = resolving_.ast.get_as<ast::identifier_expr>(*m.name).name;
                 method_is_pub[out] = m.is_public();
@@ -8962,11 +9089,33 @@ auto type_resolver::declares_generic_params(const ast::function_expr& fn_expr) c
     });
 }
 
+namespace {
+
+// The return kind of a callable declaration's type; `AUTO` when a builtin's return is unknown
+[[nodiscard]] auto callable_return_kind(const type::data_t& data) -> stdx::option<type_kind> {
+    if (data.is<types::builtin_function>()) { return type_kind::AUTO; }
+    if (const auto fn{data.as_opt<types::function>()}) { return fn->return_type.get_kind(); }
+    if (const auto closure{data.as_opt<types::closure_t>()}) {
+        if (const auto sig{closure->signature.get_data().as_opt<types::function>()}) {
+            return sig->return_type.get_kind();
+        }
+    }
+    return stdx::none;
+}
+
+} // namespace
+
 auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
     PROFILE_FUNCTION();
     const auto& ident{resolving_.ast.get_as<ast::identifier_expr>(*decl.name)};
     auto        symbol_opt{ctx_.registry.lookup(table_stack_, ident.name)};
     ASSERT(symbol_opt, "Somehow the declaration was lost in the symbol table");
+    const bool is_deprecated{decl.attributes &&
+                             decl.attributes->find(ast::attribute_kind::DEPRECATED)};
+    if (is_deprecated) { ++deprecated_scope_depth_; }
+    const auto                       deprecated_scope_restore{gsl::finally([&] {
+        if (is_deprecated) { --deprecated_scope_depth_; }
+    })};
     const constexpr_evaluation_scope cx_scope{ctx_,
                                               decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
     auto&                            sym{*symbol_opt};
@@ -9181,53 +9330,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             }
         }
 
-        [&] {
-            if (!decl.has_modifier(ast::decl_modifiers::DISCARDABLE)) { return; }
-            if (type_data.is<types::builtin_function>()) { return; }
-            if (const auto fn_d{type_data.as_opt<types::function>()}) {
-                if (fn_d->return_type.get_kind() == type_kind::VOID_) {
-                    ctx_.diags.emplace_back(
-                        "'@discardable' has no effect on a function that returns 'void'",
-                        error::ILLEGAL_DISCARDABLE,
-                        resolving_.ast.location_of(id));
-                }
-                return;
-            }
-
-            if (const auto closure_d{type_data.as_opt<types::closure_t>()}) {
-                const auto sig_data{
-                    closure_d->signature.get_data().as_opt<sema::types::function>()};
-                if (!sig_data) {
-                    ctx_.diags.emplace_back("closure signature was somehow not a function",
-                                            error::TYPE_MISMATCH,
-                                            resolving_.ast.location_of(id));
-                } else if (sig_data->return_type.get_kind() == type_kind::VOID_) {
-                    ctx_.diags.emplace_back(
-                        "'@discardable' has no effect on a closure that returns 'void'",
-                        error::ILLEGAL_DISCARDABLE,
-                        resolving_.ast.location_of(id));
-                }
-                return;
-            }
-
-            ctx_.diags.emplace_back("'@discardable' may only be applied to functions",
-                                    error::ILLEGAL_DISCARDABLE,
-                                    resolving_.ast.location_of(id));
-        }();
-
-        // `@discardable(<cond>)`: fold `<cond>` and record whether the attribute is active
-        if (decl.discardable_condition) {
-            gir::const_eval evaluator{ctx_, resolving_};
-            const auto      cv{evaluator.try_eval(*decl.discardable_condition)};
-            if (const auto folded{cv ? cv->as_opt<bool>() : stdx::none}) {
-                resolving_.discardable_conditions.insert_or_assign(id.get_index(), *folded);
-            } else {
-                ctx_.diags.emplace_back(
-                    "'@discardable(...)' requires a compile-time boolean condition",
-                    error::ILLEGAL_DISCARDABLE,
-                    resolving_.ast.location_of(*decl.discardable_condition));
-            }
-        }
+        resolve_decl_attributes(id, decl, type_data);
 
         const bool literal_type_anno{decl.explicit_type && decl.explicit_type->get_token_type() ==
                                                                syntax::token_type_t::TYPE_TYPE};
@@ -9811,7 +9914,416 @@ auto type_resolver::visit(ast::node_id id, const ast::discard_stmt& discard) -> 
     last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
 }
 
-auto type_resolver::callee_is_discardable(const ast::call_expr& call) const -> bool {
+auto type_resolver::fold_attribute_bool(const ast::attribute& item) -> stdx::option<bool> {
+    if (item.args.empty()) { return true; }
+    const auto arg{item.args.front()};
+    resolve(arg);
+    gir::const_eval evaluator{ctx_, resolving_};
+    const auto      cv{evaluator.try_eval(arg)};
+    if (const auto folded{cv ? cv->as_opt<bool>() : stdx::none}) { return *folded; }
+    ctx_.diags.emplace_back(fmt::format("Attribute '{}' requires a compile-time 'bool' argument",
+                                        ast::attribute_spec_of(item.kind).name),
+                            error::ILLEGAL_ATTRIBUTE,
+                            resolving_.ast.location_of(arg));
+    return stdx::none;
+}
+
+auto type_resolver::hint_site_of(const ast::block_stmt& block) -> stdx::option<hint_site> {
+    if (!hint_sites_built_) {
+        hint_sites_built_ = true;
+        const auto& tree{resolving_.ast};
+        const auto  add_branch{[&](ast::stmt_handle stmt) {
+            if (const auto branch{tree.get_as_opt<ast::block_stmt>(*stmt)}) {
+                hint_sites_.try_emplace(branch.get(), hint_site::BRANCH);
+            }
+        }};
+        for (const auto id : tree.nodes_of<ast::if_expr>()) {
+            const auto& if_expr{tree.get_as<ast::if_expr>(id)};
+            add_branch(if_expr.consequence);
+            if (if_expr.alternate) { add_branch(*if_expr.alternate); }
+        }
+        for (const auto id : tree.nodes_of<ast::match_expr>()) {
+            for (const auto& arm : tree.get_as<ast::match_expr>(id).arms) {
+                add_branch(arm.dispatch);
+            }
+        }
+        for (const auto id : tree.nodes_of<ast::function_expr>()) {
+            const auto& fn{tree.get_as<ast::function_expr>(id)};
+            if (fn.body.is_valid()) {
+                hint_sites_.try_emplace(&tree.get_as<ast::block_stmt>(*fn.body),
+                                        hint_site::FN_BODY);
+            }
+        }
+    }
+    const auto it{hint_sites_.find(&block)};
+    if (it == hint_sites_.end()) { return stdx::none; }
+    return it->second;
+}
+
+auto type_resolver::scoped_runtime_safety() const -> bool {
+    for (const auto& frame : active_blocks_ | std::views::reverse) {
+        if (!frame.runtime_safety) { continue; }
+        // A setting in an enclosing function's body does not reach into this one
+        if (frame.safety_fn_depth != function_boundaries_.size()) { break; }
+        return *frame.runtime_safety;
+    }
+    return ctx_.runtime_safety;
+}
+
+auto type_resolver::check_deprecation_message(const ast::attribute& item) -> void {
+    if (item.args.empty() || resolving_.ast.get_as_opt<ast::string_expr>(item.args.front())) {
+        return;
+    }
+    ctx_.diags.emplace_back("Attribute 'deprecated' takes a string literal message",
+                            error::ILLEGAL_ATTRIBUTE,
+                            resolving_.ast.location_of(item.args.front()));
+}
+
+namespace {
+
+// The `deprecated` entry of whatever `sym` declares, with the module whose AST holds it
+[[nodiscard]] auto deprecation_of(const mod::module& owner, const symbol& sym)
+    -> stdx::option<const ast::attribute&> {
+    const auto find{[](const stdx::option<ast::attribute_list>& attributes)
+                        -> stdx::option<const ast::attribute&> {
+        return attributes ? attributes->find(ast::attribute_kind::DEPRECATED) : stdx::none;
+    }};
+    return sym.get_data().visit(
+        [&](const symbols::node_t& node) -> stdx::option<const ast::attribute&> {
+            const auto decl{owner.ast.get_as_opt<ast::decl_stmt>(node)};
+            return decl ? find(decl->attributes) : stdx::none;
+        },
+        [&](const symbols::struct_field& field) { return find(field.attributes); },
+        [&](const symbols::union_field& field) { return find(field.attributes); },
+        [](const auto&) -> stdx::option<const ast::attribute&> { return stdx::none; });
+}
+
+} // namespace
+
+template <ast::IndexableID ID>
+auto type_resolver::report_deprecated_use(ID id, const mod::module& owner, const symbol& sym)
+    -> void {
+    if (deprecated_scope_depth_ > 0 || ctx_.deprecated_policy == deprecation_policy::ALLOW) {
+        return;
+    }
+    const auto deprecation{deprecation_of(owner, sym)};
+    if (!deprecation) { return; }
+
+    const auto& loc{resolving_.ast.location_of(id)};
+    const auto  site{fmt::format("{}:{}:{}", resolving_.path.string(), loc.line, loc.column)};
+    if (!ctx_.reported_deprecations.insert(site).second) { return; }
+
+    std::string message{fmt::format("'{}' is deprecated", sym.get_name())};
+    if (!deprecation->args.empty()) {
+        message += fmt::format(": {}",
+                               owner.ast.get_as<ast::string_expr>(deprecation->args.front()).value);
+    }
+    if (ctx_.deprecated_policy == deprecation_policy::DENY) {
+        ctx_.diags.emplace_back(std::move(message), error::DEPRECATED_USE, loc);
+        return;
+    }
+    diagnostic warning{std::move(message), error::DEPRECATED_USE, loc};
+    warning.set_level(diagnostic_level::WARNING);
+    resolving_.warnings.push_back(warning);
+}
+
+auto type_resolver::fold_alignment(ast::expr_handle arg) -> stdx::option<u64> {
+    resolve(arg);
+    gir::const_eval evaluator{ctx_, resolving_};
+    const auto      cv{evaluator.try_eval(arg)};
+    const auto      value{cv ? cv->as_uint_opt() : stdx::none};
+    const auto      is_power_of_two{value && *value > 0 && (*value & (*value - 1)) == 0};
+    if (is_power_of_two && *value <= std::numeric_limits<u32>::max()) {
+        return static_cast<u64>(*value);
+    }
+    ctx_.diags.emplace_back("Attribute 'align' requires a compile-time power-of-two integer",
+                            error::ILLEGAL_ATTRIBUTE,
+                            resolving_.ast.location_of(arg));
+    return stdx::none;
+}
+
+auto type_resolver::resolve_field_attributes(const stdx::option<ast::attribute_list>& attributes)
+    -> stdx::option<u64> {
+    if (!attributes) { return stdx::none; }
+    stdx::option<u64> alignment;
+    for (const auto& item : attributes->items) {
+        const auto& spec{ast::attribute_spec_of(item.kind)};
+        if (!static_cast<bool>(spec.targets & ast::attribute_target::FIELD)) {
+            ctx_.diags.emplace_back(
+                fmt::format("Attribute '{}' cannot be applied to a field", spec.name),
+                error::ILLEGAL_ATTRIBUTE,
+                resolving_.ast.location_of(item.name));
+            continue;
+        }
+        if (item.kind == ast::attribute_kind::ALIGN) {
+            alignment = fold_alignment(item.args.front());
+        } else if (item.kind == ast::attribute_kind::DEPRECATED) {
+            check_deprecation_message(item);
+        }
+    }
+    return alignment;
+}
+
+auto type_resolver::fold_attribute_enum(const ast::attribute& item, std::string_view enum_name)
+    -> stdx::option<std::string> {
+    const auto arg{item.args.front()};
+    auto&      enum_type{ctx_.get_builtin_type(enum_name)};
+    {
+        const structural_guard g{implicit_type_stack_, enum_type};
+        resolve(arg);
+    }
+
+    const auto arg_type{resolving_.get_sema_type_opt(arg)};
+    if (arg_type && arg_type.get() == &enum_type) {
+        gir::const_eval evaluator{ctx_, resolving_};
+        const auto      cv{evaluator.try_eval(arg)};
+        if (const auto variant{cv ? cv->as_opt<gir::const_enum>() : stdx::none}) {
+            return variant->name;
+        }
+    }
+    ctx_.diags.emplace_back(fmt::format("Attribute '{}' requires a compile-time 'builtin.{}' value",
+                                        ast::attribute_spec_of(item.kind).name,
+                                        enum_name),
+                            error::ILLEGAL_ATTRIBUTE,
+                            resolving_.ast.location_of(arg));
+    return stdx::none;
+}
+
+auto type_resolver::check_attribute_conflicts(const attribute_refs&      items,
+                                              const resolved_attributes& resolved) -> void {
+    if (!resolved.naked || resolved.inlining != ast::inline_mode::ALWAYS) { return; }
+    const auto inline_item{std::ranges::find_if(
+        items, [](const auto item) { return item->kind == ast::attribute_kind::INLINE; })};
+    ctx_.diags.emplace_back("A 'naked' function cannot be 'inline(.always)'",
+                            error::ILLEGAL_ATTRIBUTE,
+                            resolving_.ast.location_of((*inline_item)->name));
+}
+
+auto type_resolver::resolve_attributes(const attribute_refs& items,
+                                       ast::attribute_target site,
+                                       bool                  returns_void) -> resolved_attributes {
+    resolved_attributes resolved;
+    for (const auto item : items) {
+        const auto& spec{ast::attribute_spec_of(item->kind)};
+        if (!static_cast<bool>(spec.targets & site)) {
+            const auto* what{ast::routes_to_fn_literal(item->kind)
+                                 ? "a declaration whose initializer is not a function literal"
+                                 : "a non-function declaration"};
+            ctx_.diags.emplace_back(
+                fmt::format("Attribute '{}' cannot be applied to {}", spec.name, what),
+                error::ILLEGAL_ATTRIBUTE,
+                resolving_.ast.location_of(item->name));
+            continue;
+        }
+
+        switch (item->kind) {
+        case ast::attribute_kind::DISCARDABLE:
+            if (returns_void) {
+                ctx_.diags.emplace_back(
+                    "Attribute 'discardable' has no effect on a function that returns 'void'",
+                    error::ILLEGAL_ATTRIBUTE,
+                    resolving_.ast.location_of(item->name));
+            }
+            resolved.discardable = fold_attribute_bool(*item).value_or(false);
+            break;
+        case ast::attribute_kind::INLINE:
+            if (const auto variant{fold_attribute_enum(*item, "Inline")}) {
+                const auto mode{ast::inline_mode_from_name(*variant)};
+                if (mode != ast::inline_mode::DEFAULT) { resolved.inlining = mode; }
+            }
+            break;
+        case ast::attribute_kind::NAKED:
+            resolved.naked = fold_attribute_bool(*item).value_or(false);
+            break;
+        case ast::attribute_kind::ALIGN:
+            resolved.alignment = fold_alignment(item->args.front());
+            break;
+        case ast::attribute_kind::DEPRECATED: check_deprecation_message(*item); break;
+        }
+    }
+
+    check_attribute_conflicts(items, resolved);
+    if (resolved.naked && !resolved.inlining) { resolved.inlining = ast::inline_mode::NEVER; }
+    return resolved;
+}
+
+auto type_resolver::resolve_decl_attributes(ast::node_id          id,
+                                            const ast::decl_stmt& decl,
+                                            const type::data_t&   type_data) -> void {
+    if (!decl.attributes) { return; }
+    const bool initializes_fn_literal{decl.value && decl.value->is<ast::function_expr>()};
+
+    // Function-only attributes belong to the literal and resolve with it instead
+    attribute_refs own;
+    for (const auto& item : decl.attributes->items) {
+        if (initializes_fn_literal && ast::routes_to_fn_literal(item.kind)) { continue; }
+        own.emplace_back(&item);
+    }
+
+    const auto return_kind{callable_return_kind(type_data)};
+    resolving_.set_node_attributes(id,
+                                   resolve_attributes(own,
+                                                      return_kind ? ast::attribute_target::FN_DECL
+                                                                  : ast::attribute_target::DECL,
+                                                      return_kind == type_kind::VOID_));
+
+    const auto align_item{decl.attributes->find(ast::attribute_kind::ALIGN)};
+    if (align_item && !initializes_fn_literal &&
+        decl.has_modifier(ast::decl_modifiers::CONSTEXPR)) {
+        ctx_.diags.emplace_back("Attribute 'align' needs storage; a 'constexpr' declaration has "
+                                "none",
+                                error::ILLEGAL_ATTRIBUTE,
+                                resolving_.ast.location_of(align_item->name));
+    }
+}
+
+auto type_resolver::mentions_fn_param(const ast::attribute&     item,
+                                      const ast::function_expr& fn) const -> bool {
+    const auto&                   tree{resolving_.ast};
+    std::vector<std::string_view> params;
+    for (const auto& p : fn.parameters) {
+        if (const auto name{tree.get_as_opt<ast::identifier_expr>(p.name)}) {
+            params.emplace_back(name->name);
+        }
+    }
+    if (params.empty()) { return false; }
+
+    // Any identifier spelled inside an argument's span, so a member named like a parameter counts
+    const auto position{[](const source_location& loc) { return std::pair{loc.line, loc.column}; }};
+    for (const auto arg : item.args) {
+        const auto start{position(tree.location_of(arg))};
+        const auto end{position(tree.end_location_of(arg))};
+        for (const auto id : tree.nodes_of<ast::identifier_expr>()) {
+            const auto at{position(tree.location_of(id))};
+            if (at < start || at >= end) { continue; }
+            if (std::ranges::contains(params, tree.get_as<ast::identifier_expr>(id).name)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+auto type_resolver::resolve_fn_literal_attributes(ast::node_id              id,
+                                                  const ast::function_expr& fn,
+                                                  bool                      is_template) -> void {
+    // Inside a monomorph every visit refolds, since the arguments may depend on its parameters
+    if (!for_generic_instantiation_ && resolving_.attributes_of(id)) { return; }
+
+    attribute_refs items;
+    if (fn.attributes) {
+        for (const auto& item : fn.attributes->items) { items.emplace_back(&item); }
+    }
+    if (fn.declaring_decl) {
+        const auto& decl{resolving_.ast.get_as<ast::decl_stmt>(*fn.declaring_decl)};
+        if (decl.attributes) {
+            for (const auto& item : decl.attributes->items) {
+                if (!ast::routes_to_fn_literal(item.kind)) { continue; }
+                if (fn.attributes && fn.attributes->find(item.kind)) {
+                    ctx_.diags.emplace_back(
+                        fmt::format("Attribute '{}' is applied to both the declaration and its "
+                                    "function literal",
+                                    ast::attribute_spec_of(item.kind).name),
+                        error::ILLEGAL_ATTRIBUTE,
+                        resolving_.ast.location_of(item.name));
+                    continue;
+                }
+                items.emplace_back(&item);
+            }
+        }
+    }
+    if (items.empty()) { return; }
+
+    stdx::option<ast::attribute_kind> dependent;
+    if (is_template) {
+        std::erase_if(items, [&](const auto item) {
+            if (!mentions_fn_param(*item, fn)) { return false; }
+            if (!dependent) { dependent = item->kind; }
+            return true;
+        });
+    }
+
+    const bool returns_void{fn.explicit_return_type.get_token_type() ==
+                            syntax::token_type_t::VOID_TYPE};
+    auto       resolved{resolve_attributes(items, ast::attribute_target::FN, returns_void)};
+    resolved.dependent = dependent;
+    resolving_.set_node_attributes(id, resolved);
+}
+
+auto type_resolver::discardable_holds(const mod::module&                       home,
+                                      ast::node_id                             owner,
+                                      const stdx::option<ast::attribute_list>& attributes,
+                                      ast::node_id call_id) const -> stdx::option<bool> {
+    if (!attributes) { return stdx::none; }
+    const auto item{attributes->find(ast::attribute_kind::DISCARDABLE)};
+    if (!item) { return stdx::none; }
+    if (item->args.empty()) { return true; }
+
+    if (const auto target{resolving_.get_generic_call_target_opt(call_id)}) {
+        if (const auto diff{ctx_.instantiation_cache.get_body_type_diff(*target)}) {
+            if (const auto resolved{diff->find_attributes(owner.get_index())}) {
+                return resolved->discardable;
+            }
+        }
+    }
+    const auto resolved{home.attributes_of(owner)};
+    return resolved && resolved->discardable;
+}
+
+auto type_resolver::interface_member_discardable(const type&      interface_type,
+                                                 std::string_view name,
+                                                 ast::node_id call_id) const -> stdx::option<bool> {
+    const auto iface{interface_type.get_data().as_opt<types::interface_t>()};
+    if (!iface) { return stdx::none; }
+    for (const auto& method : iface->ast_methods) {
+        if (iface->enclosing.ast.get_as<ast::identifier_expr>(*method.name).name != name) {
+            continue;
+        }
+        return discardable_holds(iface->enclosing, *method.signature, method.attributes, call_id);
+    }
+    return stdx::none;
+}
+
+auto type_resolver::impl_method_discardable(const type&      target,
+                                            std::string_view name,
+                                            ast::node_id     call_id) const -> bool {
+    const auto same_target{[&](const impl_record& r) {
+        return r.target_type && r.target_type->has_symbol_table_idx() &&
+               r.target_type->get_symbol_table_idx() == target.get_symbol_table_idx();
+    }};
+    for (const auto* record : ctx_.impls.records()) {
+        if (!same_target(*record)) { continue; }
+        const auto method{record->find_method(name)};
+        if (!method) { continue; }
+
+        const auto defining{method->defining_mod ? method->defining_mod : record->enclosing};
+        if (defining && !method->inherited) {
+            if (const auto decl{defining->ast.get_as_opt<ast::decl_stmt>(method->decl)}) {
+                const auto owner{defining->fn_literal_node(method->decl)};
+                const auto literal{defining->ast.get_as_opt<ast::function_expr>(owner)};
+                if (const auto holds{
+                        discardable_holds(*defining, owner, decl->attributes, call_id)}) {
+                    return *holds;
+                }
+                if (literal) {
+                    if (const auto holds{
+                            discardable_holds(*defining, owner, literal->attributes, call_id)}) {
+                        return *holds;
+                    }
+                }
+            }
+        }
+        if (record->interface_type) {
+            return interface_member_discardable(*record->interface_type, name, call_id)
+                .value_or(false);
+        }
+        return false;
+    }
+    return false;
+}
+
+auto type_resolver::callee_is_discardable(ast::node_id call_id, const ast::call_expr& call) const
+    -> bool {
     stdx::option<const mod::module&> home{resolving_};
     ast::node_id                     fn_node{*call.function};
 
@@ -9847,7 +10359,12 @@ auto type_resolver::callee_is_discardable(const ast::call_expr& call) const -> b
                     return *curr;
                 };
                 const auto& target{unwrap_ref(*outer_type)};
-                const auto  enclosing{target.get_data().visit(
+                const auto& member_name{home->ast.get_as<ast::identifier_expr>(dot->member).name};
+                if (const auto dyn{target.get_data().as_opt<types::dyn_t>()}) {
+                    return interface_member_discardable(dyn->interface, member_name, call_id)
+                        .value_or(false);
+                }
+                const auto enclosing{target.get_data().visit(
                     [](const types::struct_t& s) -> stdx::option<const mod::module&> {
                         return s.enclosing;
                     },
@@ -9859,8 +10376,8 @@ auto type_resolver::callee_is_discardable(const ast::call_expr& call) const -> b
                     },
                     [](const auto&) -> stdx::option<const mod::module&> { return stdx::none; })};
                 if (!enclosing || !target.has_symbol_table_idx()) { return false; }
-                const auto& inner_ident{home->ast.get_as<ast::identifier_expr>(dot->member)};
-                sym  = ctx_.registry.get_from_opt(target.get_symbol_table_idx(), inner_ident.name);
+                sym = ctx_.registry.get_from_opt(target.get_symbol_table_idx(), member_name);
+                if (!sym) { return impl_method_discardable(target, member_name, call_id); }
                 home = enclosing;
             }
         } else {
@@ -9872,10 +10389,15 @@ auto type_resolver::callee_is_discardable(const ast::call_expr& call) const -> b
         if (!node) { return false; }
         const auto decl{home->ast.get_as_opt<ast::decl_stmt>(*node)};
         if (!decl) { return false; }
-        if (decl->has_modifier(ast::decl_modifiers::DISCARDABLE)) {
-            if (!decl->discardable_condition) { return true; }
-            const auto it{home->discardable_conditions.find(node->get_index())};
-            return it != home->discardable_conditions.end() && it->second;
+        const auto fn_literal{decl->value ? home->ast.get_as_opt<ast::function_expr>(*decl->value)
+                                          : stdx::none};
+        // A literal's list and its declaration's both fold onto the literal
+        const auto owner{fn_literal ? ast::node_id{*decl->value} : ast::node_id{*node}};
+        if (const auto holds{discardable_holds(*home, owner, decl->attributes, call_id)}) {
+            return *holds;
+        }
+        if (fn_literal) {
+            return discardable_holds(*home, owner, fn_literal->attributes, call_id).value_or(false);
         }
 
         // Follow a direct `const g := f` / `const g := m.f` re-export to the real declaration.
@@ -9909,12 +10431,12 @@ auto type_resolver::check_unused_result(ast::node_id stmt_id, const ast::expr_st
             fn_ty && fn_ty->get_data().is<types::builtin_function>()) {
             return;
         }
-        if (callee_is_discardable(*call)) { return; }
+        if (callee_is_discardable(*stmt.expression, *call)) { return; }
     }
 
     ctx_.diags.emplace_back(
         "result of this call is unused; bind it, pass it on, `_ =` it, or mark the callee "
-        "'@discardable'",
+        "'@[discardable]'",
         error::UNUSED_RESULT,
         resolving_.ast.location_of(stmt_id));
 }
@@ -11925,6 +12447,19 @@ auto type_resolver::concrete_array_type(type& maybe_deferred) -> type& {
     return evaluator.force_deferred_array(maybe_deferred);
 }
 
+namespace {
+
+// A generic whose declaration is `@[deprecated]`, so its monomorphs' bodies stay quiet too
+[[nodiscard]] auto declares_deprecated_fn(const mod::module& owner, ast::node_id node) -> bool {
+    auto decl{owner.ast.get_as_opt<ast::decl_stmt>(node)};
+    if (const auto fn{owner.ast.get_as_opt<ast::function_expr>(node)}; fn && fn->declaring_decl) {
+        decl = owner.ast.get_as_opt<ast::decl_stmt>(*fn->declaring_decl);
+    }
+    return decl && decl->attributes && decl->attributes->find(ast::attribute_kind::DEPRECATED);
+}
+
+} // namespace
+
 auto type_resolver::instantiate_generic(type&                             callee_type,
                                         const generic_function_info&      fn_info,
                                         gsl::span<type*>                  concrete_args,
@@ -12182,6 +12717,8 @@ auto type_resolver::instantiate_generic(type&                             callee
     // Re-type body-local decls this instantiation reaches even if a prior monomorphization of the
     // same generic already resolved them
     inst_resolver.reresolve_floor_.emplace(fn_table_idx);
+    inst_resolver.deprecated_scope_depth_ =
+        deprecated_scope_depth_ + (declares_deprecated_fn(fn_mod, fn_info.node_id) ? 1U : 0U);
 
     // This freestanding resolver has no enclosing-type context, so @This() needs it restored.
     stdx::option<structural_guard> this_type_guard;
@@ -12284,6 +12821,8 @@ auto type_resolver::instantiate_generic(type&                             callee
     // isn't mistaken for a `fn(...): type` type constructor.
     auto& return_type{
         inst_resolver.concrete_array_type(denoted_type(*inst_resolver.last_type_.take()))};
+    // Taken after the return type since folding the arguments overwrites `last_type_`
+    inst_resolver.resolve_fn_literal_attributes(fn_mod.fn_literal_node(fn_info.node_id), fn_expr);
     const auto is_auto_return{return_type.get_kind() == type_kind::AUTO};
     inst_resolver.return_trackers_.emplace_back(return_tracker{
         .return_types   = {},
@@ -12318,6 +12857,13 @@ auto type_resolver::instantiate_generic(type&                             callee
     // this instantiation's body/signature typing, to be replayed at emit time.
     body_type_diff typing;
     snap.diff_into(ctx_, fn_mod, typing, &write_log);
+    // Outside the overlay the literal reads as its template again, not the last instantiation
+    const auto literal_idx{fn_mod.fn_literal_node(fn_info.node_id).get_index()};
+    if (const auto templ{snap.attributes.find(literal_idx)}; templ != snap.attributes.end()) {
+        fn_mod.node_attributes.insert_or_assign(literal_idx, templ->second);
+    } else {
+        fn_mod.node_attributes.erase(literal_idx);
+    }
 
     // The per-inst typing lives in `typing` and must not leak into `fn_mod`'s shared side tables
     const auto rollback_poisoned{[](auto& live, const auto& snapshot, const auto& changed) {

@@ -303,6 +303,11 @@ struct struct_t {
         return is_packed && !is_c_abi;
     }
 
+    // The `@[align(n)]` requested for field `idx`, or 0 when it keeps its natural alignment
+    [[nodiscard]] constexpr auto explicit_field_alignment(usize idx) const noexcept -> u64 {
+        return idx < field_alignments.size() ? field_alignments[idx] : 0;
+    }
+
     // The index location entirely depends on the number of fields which always come first
     [[nodiscard]] auto type_at(usize idx) const noexcept -> type& {
         ASSERT(idx < fields.size() + members.size(), "Index exceeds struct's types");

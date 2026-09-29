@@ -23,6 +23,7 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/MDBuilder.h>
 #include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Value.h>
@@ -61,6 +62,20 @@
 namespace ghoti::codegen {
 
 namespace {
+
+auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attributes& attributes)
+    -> void {
+    if (attributes.naked) { llvm_fn.addFnAttr(llvm::Attribute::Naked); }
+    if (attributes.cold) { llvm_fn.addFnAttr(llvm::Attribute::Cold); }
+    if (attributes.alignment) { llvm_fn.setAlignment(llvm::Align{*attributes.alignment}); }
+    if (!attributes.inlining) { return; }
+    switch (*attributes.inlining) {
+    case ast::inline_mode::ALWAYS:  llvm_fn.addFnAttr(llvm::Attribute::AlwaysInline); break;
+    case ast::inline_mode::NEVER:   llvm_fn.addFnAttr(llvm::Attribute::NoInline); break;
+    case ast::inline_mode::HINT:    llvm_fn.addFnAttr(llvm::Attribute::InlineHint); break;
+    case ast::inline_mode::DEFAULT: break;
+    }
+}
 
 // A `constexpr_float` materializes as `f64`; a `constexpr_int` as `i32`.
 [[nodiscard]] auto materialized_is_float(sema::type_kind k) noexcept -> bool {
@@ -1316,15 +1331,17 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
         const auto sd{sema_ty ? sema_ty->get_data().as_opt<sema::types::struct_t>() : stdx::none};
         if (!llvm_st || !sd) { return llvm::Constant::getNullValue(ty); }
         std::vector<llvm::Constant*> elems;
-        elems.reserve(sd->fields.size());
-        for (usize i{0}; i < sd->fields.size() && i < llvm_st->getNumElements(); ++i) {
+        elems.reserve(llvm_st->getNumElements());
+        for (auto* elem_ty : llvm_st->elements()) {
+            elems.emplace_back(llvm::Constant::getNullValue(elem_ty));
+        }
+        for (usize i{0}; i < sd->fields.size(); ++i) {
+            const auto elem_idx{types_.struct_field_index(llvm_st, static_cast<u32>(i))};
+            if (elem_idx >= elems.size()) { break; }
             const auto& fname{
                 sd->enclosing.ast.get_as<ast::identifier_expr>(sd->ast_fields[i].name).name};
-            auto* felem_ty{llvm_st->getElementType(static_cast<u32>(i))};
             if (const auto fv{st->get_field_opt(fname)}) {
-                elems.emplace_back(const_to_llvm(*fv, felem_ty));
-            } else {
-                elems.emplace_back(llvm::Constant::getNullValue(felem_ty));
+                elems[elem_idx] = const_to_llvm(*fv, llvm_st->getElementType(elem_idx));
             }
         }
         return llvm::ConstantStruct::get(llvm_st, elems);
@@ -1375,6 +1392,12 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
     if (g.is_thread_local) {
         gvar->setThreadLocalMode(is_executable_ ? llvm::GlobalValue::LocalExecTLSModel
                                                 : llvm::GlobalValue::GeneralDynamicTLSModel);
+    }
+    const auto wanted_alignment{
+        std::max(g.alignment.value_or(0), types_.explicit_alignment_of(g.type).value_or(0))};
+    if (wanted_alignment > 0) {
+        const auto natural{llvm_module_->getDataLayout().getPrefTypeAlign(g_type)};
+        gvar->setAlignment(std::max(natural, llvm::Align{wanted_alignment}));
     }
     globals_[g.name] = gvar;
 
@@ -1487,10 +1510,7 @@ auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function*
     if (fn.get_calling_conv() != ast::calling_convention::C) {
         llvm_fn->setCallingConv(to_llvm_callconv(fn.get_calling_conv()));
     }
-    if (fn.get_is_naked()) {
-        llvm_fn->addFnAttr(llvm::Attribute::Naked);
-        llvm_fn->addFnAttr(llvm::Attribute::NoInline);
-    }
+    apply_fn_attributes(*llvm_fn, fn.get_attributes());
     for (usize arg_idx{0}; const auto& param : fn.get_params()) {
         auto* p_ty{types_.translate(param->type)};
         if (p_ty->isVoidTy()) { continue; }
@@ -1768,7 +1788,10 @@ auto llvm_lowering::emit_alloca(const gir::instruction& inst) -> llvm::Value* {
         return dummy;
     }
 
-    auto* slot{builder_.CreateAlloca(elem_ty, nullptr, "slot")};
+    auto*      slot{builder_.CreateAlloca(elem_ty, nullptr, "slot")};
+    const auto wanted{
+        std::max(inst.alignment.value_or(0), types_.explicit_alignment_of(*inst.type).value_or(0))};
+    if (wanted > slot->getAlign().value()) { slot->setAlignment(llvm::Align{wanted}); }
     if (inst.result) { set_local(*inst.result, slot); }
     return slot;
 }
@@ -1836,6 +1859,11 @@ auto llvm_lowering::emit_get_element_ptr(const gir::instruction& inst) -> llvm::
                 extract_indices.emplace_back(static_cast<u32>(ci->getZExtValue()));
             }
         }
+        if (!extract_indices.empty() && inst.operands[0].type &&
+            inst.operands[0].type->get_kind() == sema::type_kind::STRUCT) {
+            extract_indices.front() =
+                types_.struct_field_index(base_ptr->getType(), extract_indices.front());
+        }
         auto* extracted{builder_.CreateExtractValue(base_ptr, extract_indices, "extval")};
         if (inst.result) { set_local(*inst.result, extracted); }
         return extracted;
@@ -1856,6 +1884,13 @@ auto llvm_lowering::emit_get_element_ptr(const gir::instruction& inst) -> llvm::
                 auto* idx{lower_value(operand)};
                 if (idx && idx->getType()->isIntegerTy(64)) {
                     idx = builder_.CreateIntCast(idx, types_.get_int32_ty(), false);
+                }
+                const bool is_field_index{indices.size() == 1 &&
+                                          base_type.get_kind() == sema::type_kind::STRUCT};
+                if (auto* ci{llvm::dyn_cast_or_null<llvm::ConstantInt>(idx)};
+                    ci && is_field_index) {
+                    const auto field{static_cast<u32>(ci->getZExtValue())};
+                    idx = builder_.getInt32(types_.struct_field_index(source_elem_ty, field));
                 }
                 indices.emplace_back(idx);
             }
@@ -2739,8 +2774,9 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (!idx_const) { return nullptr; }
             const auto  field_idx{idx_const->getZExtValue()};
             const auto& layout{llvm_module_->getDataLayout()};
+            const auto  elem_idx{types_.struct_field_index(struct_ty, static_cast<u32>(field_idx))};
             const auto  offset{layout.getStructLayout(llvm::cast<llvm::StructType>(struct_ty))
-                                  ->getElementOffset(static_cast<u32>(field_idx))};
+                                  ->getElementOffset(elem_idx)};
 
             auto* field_int{builder_.CreatePtrToInt(field_ptr, types_.get_usize_ty(), "fpp.i")};
             auto* parent_int{builder_.CreateSub(field_int, usize_const(offset), "fpp.base")};
@@ -3038,7 +3074,15 @@ auto llvm_lowering::emit_cond_goto(const gir::instruction& inst) -> void {
     const auto false_it{segment_blocks_.find(*inst.false_segment)};
     ASSERT(true_it != segment_blocks_.end() && false_it != segment_blocks_.end(),
            "COND_GOTO branch target blocks not found");
-    builder_.CreateCondBr(cond_val, true_it->second, false_it->second);
+    auto*           branch{builder_.CreateCondBr(cond_val, true_it->second, false_it->second)};
+    llvm::MDBuilder md{context_};
+    if (inst.branch_weights) {
+        const auto [on_true, on_false]{*inst.branch_weights};
+        branch->setMetadata(llvm::LLVMContext::MD_prof, md.createBranchWeights(on_true, on_false));
+    }
+    if (inst.unpredictable) {
+        branch->setMetadata(llvm::LLVMContext::MD_unpredictable, md.createUnpredictable());
+    }
 }
 
 auto llvm_lowering::emit_unreachable() -> void { builder_.CreateUnreachable(); }

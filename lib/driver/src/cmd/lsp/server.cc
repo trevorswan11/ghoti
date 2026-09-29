@@ -19,6 +19,7 @@
 
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
+#include "compiler/ast/statement.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/declaration.hh"
 #include "compiler/sema/type.hh"
@@ -111,6 +112,20 @@ auto doc_comment_for(const mod::module_manager& manager,
         }
     }
     return stdx::none;
+}
+
+// `**Deprecated**: <message>` when `id` refers to a `@[deprecated]` declaration
+auto deprecation_note_for(const mod::module& entry, ast::node_id id) -> stdx::option<std::string> {
+    const auto declaration{entry.get_identifier_declaration(id)};
+    if (!declaration || !declaration->owner || !declaration->decl) { return stdx::none; }
+    const auto& owner{*declaration->owner};
+    const auto  decl{owner.ast.get_as_opt<ast::decl_stmt>(*declaration->decl)};
+    if (!decl || !decl->attributes) { return stdx::none; }
+    const auto deprecation{decl->attributes->find(ast::attribute_kind::DEPRECATED)};
+    if (!deprecation) { return stdx::none; }
+    if (deprecation->args.empty()) { return std::string{"**Deprecated**"}; }
+    const auto message{owner.ast.get_as_opt<ast::string_expr>(deprecation->args.front())};
+    return fmt::format("**Deprecated**: {}", message ? message->value : std::string_view{});
 }
 
 // The declared parameter names of the callable `id` refers to (or declares)
@@ -334,7 +349,10 @@ auto lsp_server::handle_hover(const nlohmann::json& message, lsp::document_store
     const auto type{entry_module.get_sema_type_opt(*id)};
     if (!type) { return write_null_id(message); }
 
-    const auto doc{doc_comment_for(store.manager(), entry_module, *id, type)};
+    auto doc{doc_comment_for(store.manager(), entry_module, *id, type)};
+    if (const auto note{deprecation_note_for(entry_module, *id)}) {
+        doc = doc ? fmt::format("{}\n\n{}", *note, *doc) : *note;
+    }
     const auto rendered{render_hover_type(*type, callable_param_names_for(entry_module, *id))};
 
     std::string signature{rendered};

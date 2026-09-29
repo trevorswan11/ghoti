@@ -26,6 +26,7 @@
 #include "compiler/ast/ast.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
+#include "compiler/ast/statement.hh"
 #include "compiler/ast/traits.hh"
 #include "compiler/module/error.hh"
 #include "compiler/module/source_loader.hh"
@@ -117,14 +118,44 @@ struct module {
     stdx::option<const sema::body_type_diff&> active_body_diff;
     stdx::option<sema::body_write_log&>       active_write_log{};
 
-    auto record_node_write(usize idx) noexcept -> void;
-    auto record_explicit_write(usize idx) noexcept -> void;
+    // `@runtimeSafety()` call node index -> the lexically scoped safety it observed
+    ankerl::unordered_dense::map<usize, bool> scoped_runtime_safety;
 
-    // Cond discardable `decl_stmt` node index -> the folded truth of the condition
-    ankerl::unordered_dense::map<usize, bool> discardable_conditions;
+    // Attributed `decl_stmt` / `function_expr` node index -> its folded `@[...]` list
+    ankerl::unordered_dense::map<usize, sema::resolved_attributes> node_attributes;
 
     // `decl_stmt` node index -> whether (and why) it has no runtime storage
     ankerl::unordered_dense::map<usize, stdx::option<storageless_kind>> storageless_decls;
+
+    // Every identifier_expr references and uses encountered during symbol collection/resolution
+    std::vector<ast::node_id> identifier_positions;
+
+    // Every `import` node in this module, at any nesting depth
+    std::vector<ast::node_id> import_nodes;
+
+    diagnotic_list_variant diagnostics{stdx::monostate{}};
+
+    // A permanent copy of the syntax diagnostics found at parse time, if any
+    std::vector<diagnostic_snapshot> parse_diagnostics;
+
+    // Reported alongside `diagnostics` but never errors the module out
+    sema::diagnostics warnings;
+
+    auto record_node_write(usize idx) noexcept -> void;
+    auto record_explicit_write(usize idx) noexcept -> void;
+
+    // Overlay-aware, so a monomorph's emit sees the attributes its own instantiation folded
+    [[nodiscard]] auto attributes_of(ast::node_id id) const noexcept
+        -> stdx::option<const sema::resolved_attributes&>;
+    auto set_node_attributes(ast::node_id id, const sema::resolved_attributes& resolved) -> void;
+
+    // A declaration's function literal initializer, or `node` itself when it already is one
+    [[nodiscard]] auto fn_literal_node(ast::node_id node) const -> ast::node_id {
+        if (const auto decl{ast.get_as_opt<ast::decl_stmt>(node)}; decl && decl->value) {
+            return *decl->value;
+        }
+        return node;
+    }
 
     [[nodiscard]] auto get_storageless_kind(ast::node_id id) const noexcept
         -> stdx::option<storageless_kind> {
@@ -141,24 +172,13 @@ struct module {
         return get_storageless_kind(id) == storageless_kind::CONSTEXPR_VALUE;
     }
 
-    // Every identifier_expr references and uses encountered during symbol collection/resolution
-    std::vector<ast::node_id> identifier_positions;
-
-    // Every `import` node in this module, at any nesting depth
-    std::vector<ast::node_id> import_nodes;
-
-    diagnotic_list_variant diagnostics{stdx::monostate{}};
-
-    // A permanent copy of the syntax diagnostics found at parse time, if any
-    std::vector<diagnostic_snapshot> parse_diagnostics;
-
     module(std::filesystem::path path,
            std::filesystem::path parent_path,
            source_file           source) noexcept :path{std::move(path)},
         parent_path{std::move(parent_path)}, source{std::move(source)} {}
 
     ~module() = default;
-    MAKE_MOVE_ONLY(module)
+    MAKE_MOVE_ONLY(module);
 
     // Errors out the module regardless of previous state and emplaces the diagnostics
     template <typename DiagList>
@@ -184,6 +204,7 @@ struct module {
 
     // Prints the modules diagnostics to the stream, doing nothing if an error state is not present
     auto print_diagnostics(std::ostream& os) const -> void;
+    auto print_warnings(std::ostream& os) const -> void;
 
     // Errored modules cannot be used in any future compilation step
     [[nodiscard]] auto is_errored() const noexcept -> bool {
@@ -464,6 +485,7 @@ class module_manager {
 
     // Prints every poisoned/errored module's diagnostics
     auto print_all_diagnostics(std::ostream& os = std::cerr) const -> void;
+    auto print_all_warnings(std::ostream& os = std::cerr) const -> void;
 
     // True if any module ever loaded through this manager is poisoned or errored
     [[nodiscard]] auto any_errored() const noexcept -> bool;

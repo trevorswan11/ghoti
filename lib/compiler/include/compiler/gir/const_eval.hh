@@ -20,6 +20,7 @@
 #include "compiler/gir/symbol_scoping.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
+#include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/token_type.hh"
@@ -129,6 +130,9 @@ class const_eval {
     [[nodiscard]] auto force_deferred_call(sema::type& maybe_deferred) -> sema::type&;
 
     [[nodiscard]] static auto type_align_of(const sema::type& type, usize ptr_size) -> usize;
+    // A struct field's alignment: its type's, raised by any `@[align(n)]` on the field
+    [[nodiscard]] static auto
+    struct_field_align(const sema::types::struct_t& st, usize idx, usize ptr_size) -> usize;
     [[nodiscard]] static auto type_size_of(const sema::type& type, usize ptr_size) -> usize;
     // The type an unannotated type-alias decl (`const X := T;`) names, read off its own node so a
     // generic instantiation's body overlay stays per-instantiation
@@ -155,6 +159,14 @@ class const_eval {
     }
 
     auto set_constexpr_context(bool enabled) noexcept -> void { constexpr_context_ = enabled; }
+
+    // The arm a folded matcher selects; none when the matcher does not fold or nothing matches
+    [[nodiscard]] auto selected_match_arm(const ast::match_expr& match) -> stdx::opt_size;
+
+    // The folded attributes of the function declaration `arg` names, as `f` or as `T.f`, seen
+    // through the instantiation that produced `T` when a type constructor did
+    [[nodiscard]] auto declared_fn_attributes(ast::expr_handle arg)
+        -> stdx::option<sema::resolved_attributes>;
 
   private:
     struct defer_entry {
@@ -264,7 +276,12 @@ class const_eval {
 
     // `@typeInfo(T)`: builds the `builtin::TypeInfo` tagged union for `denoted` (already
     // unwrapped past any `TYPE`/`deferred_call` wrapper) by switching on its `type_kind`.
-    [[nodiscard]] auto eval_type_info(sema::type& denoted) -> const_value;
+    [[nodiscard]] auto member_fn_attributes(const ast::dot_expr& dot)
+        -> stdx::option<sema::resolved_attributes>;
+    [[nodiscard]] auto
+    eval_type_info(sema::type&                                    denoted,
+                   stdx::option<const sema::resolved_attributes&> declared = stdx::none)
+        -> const_value;
     // An `if`'s folded condition; `if constexpr { ... }` is true only in a constexpr context
     auto eval_if_condition(const ast::if_expr& if_expr) -> stdx::option<const_value>;
     // Folds a declaration's initializer; a `constexpr` one is always compile-time evaluation

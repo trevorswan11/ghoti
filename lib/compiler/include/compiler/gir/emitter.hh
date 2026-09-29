@@ -14,6 +14,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
@@ -100,7 +101,13 @@ class emitter {
     struct scope_frame {
         ankerl::unordered_dense::map<std::string_view, local_binding> bindings;
         std::vector<deferred_entry>                                   defers;
+        stdx::option<bool>           runtime_safety{}; // set by `@setRuntimeSafety`
+        stdx::option<gir::function&> safety_owner{};   // the function that called setRuntimeSafety
     };
+
+    // Whether runtime safety checks are emitted here: the innermost `@setRuntimeSafety` of the
+    // current function's enclosing blocks, else the build's setting
+    [[nodiscard]] auto safety_enabled() const -> bool;
 
     using scope_guard           = ghoti::scope_guard<std::vector<scope_frame>>;
     using loop_context_guard    = ghoti::scope_guard<std::vector<loop_context>>;
@@ -154,9 +161,30 @@ class emitter {
     // Emits a capturing function_expr's implementation (once, idempotently) and constructs its
     // environment value at the current (definition-site) insertion point
     auto emit_closure(ast::node_id id, const ast::function_expr& fn_expr) -> value;
-    auto emit_closure_function(const ast::function_expr&     fn_expr,
+    auto emit_closure_function(ast::node_id                  id,
+                               const ast::function_expr&     fn_expr,
                                const sema::types::closure_t& cl,
                                sema::type&                   closure_type) -> void;
+
+    // Copies the resolved `@[...]` attributes of `owner`'s function literal `fn_node` onto `fn`
+    auto apply_fn_attributes(gir::function& fn, const mod::module& owner, ast::node_id fn_node)
+        -> void;
+
+    // The `@branchHint` opening `stmt`, if it is a block that starts with one
+    [[nodiscard]] auto branch_hint_of(const mod::module& owner, ast::node_id stmt)
+        -> stdx::option<ast::branch_hint>;
+    // Weights a two-way branch from the hints on its true and false sides
+    static auto apply_branch_hints(gir::instruction&              branch,
+                                   stdx::option<ast::branch_hint> on_true,
+                                   stdx::option<ast::branch_hint> on_false) -> void;
+
+    // The `@[align(n)]` of a declaration's own storage
+    [[nodiscard]] static auto decl_alignment(const mod::module& owner, ast::node_id decl)
+        -> stdx::option<u64> {
+        const auto resolved{owner.attributes_of(decl)};
+        return resolved ? resolved->alignment : stdx::none;
+    }
+
     auto emit_closure_env(const sema::types::closure_t& cl, sema::type& closure_type) -> value;
 
     // Emits as a plain non-capturing fn with its captures baked in as constants
