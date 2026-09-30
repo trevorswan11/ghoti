@@ -7,6 +7,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <gsl/span>
 #include <stdx/fixed/enum_map.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
@@ -82,7 +83,8 @@ constexpr std::array ALL_ATTRIBUTES{
         .max_args  = 1,
         .targets   = attribute_target::DECL | attribute_target::FN_DECL | attribute_target::FIELD,
         .signature = "deprecated([]u8 = none)",
-        .doc = "Uses warn, or fail with `--deprecated=error`; the optional message explains why",
+        .doc =
+            "Uses warn, or fail with `--deprecated=error` with an optional message explaining why",
     },
     attribute_spec{
         .name      = "visibility",
@@ -164,13 +166,13 @@ auto attribute_spec_of(std::string_view name) noexcept -> stdx::option<const att
     return *it;
 }
 
-auto all_attribute_specs() noexcept -> std::span<const attribute_spec> { return ALL_ATTRIBUTES; }
+auto all_attribute_specs() noexcept -> gsl::span<const attribute_spec> { return ALL_ATTRIBUTES; }
 
-auto attribute_enum_variants(attribute_kind kind) noexcept -> std::span<const std::string_view> {
-    static constexpr std::array<std::string_view, 4> inline_variants{
-        "always", "never", "hint", "default"};
-    static constexpr std::array<std::string_view, 3> visibility_variants{
-        "default", "hidden", "protected"};
+auto attribute_enum_variants(attribute_kind kind) noexcept -> gsl::span<const std::string_view> {
+    using namespace std::string_view_literals;
+    static constexpr std::array inline_variants{"always"sv, "never"sv, "hint"sv, "default"sv};
+    static constexpr std::array visibility_variants{"default"sv, "hidden"sv, "protected"sv};
+
     switch (kind) {
     case attribute_kind::INLINE:     return inline_variants;
     case attribute_kind::VISIBILITY: return visibility_variants;

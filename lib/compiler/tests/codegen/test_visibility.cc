@@ -1,10 +1,13 @@
 #include <algorithm>
+#include <iostream>
 #include <string>
 #include <string_view>
 #include <utility>
 
+#include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
+#include <fmt/ostream.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/TargetParser/Triple.h>
@@ -129,7 +132,7 @@ TEST_CASE("A hidden symbol stays out of a shared library's exports") {
         llvm::LLVMContext context;
         const tempfile    library{"visibility_library"};
         const auto emitted{helpers::emit_dynamic_lib(*ctx, context, library.path, target_opts)};
-        if (!emitted) { fmt::println("{}", emitted.error()); }
+        if (!emitted) { fmt::println(std::cerr, "{}", emitted.error()); }
         REQUIRE(emitted);
 
         const auto exports{helpers::exported_symbols(library.path, target_opts)};

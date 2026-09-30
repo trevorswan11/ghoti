@@ -52,6 +52,7 @@
 #include "compiler/gir/layout.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/gir/segment.hh"
+#include "compiler/sema/side_tables.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
@@ -407,12 +408,11 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
     return main_fn;
 }
 
-// Windows starts x86 threads with the x87 precision control at 53 bits, which rounds every `f80`
-// operation like `f64`. `fninit` restores the full 64-bit significand other targets start with.
 auto llvm_lowering::emit_x87_precision_init() -> void {
     const llvm::Triple triple{llvm_module_->getTargetTriple()};
     if (!triple.isOSWindows() || !triple.isX86()) { return; }
     auto* asm_ty{llvm::FunctionType::get(types_.get_void_ty(), false)};
+    // `fninit` restores the full 64-bit significand other targets start with
     builder_.CreateCall(llvm::InlineAsm::get(asm_ty, "fninit", "~{fpsr},~{fpcr},~{dirflag}", true));
 }
 
@@ -1081,9 +1081,9 @@ auto llvm_lowering::emit_division_guards(const gir::instruction& inst,
                                          llvm::Value*            lhs,
                                          llvm::Value*            rhs,
                                          bool                    is_signed) -> void {
-    auto*          int_ty{llvm::cast<llvm::IntegerType>(lhs->getType())};
-    const unsigned width{int_ty->getBitWidth()};
-    auto*          zero{llvm::ConstantInt::get(int_ty, 0)};
+    auto*      int_ty{llvm::cast<llvm::IntegerType>(lhs->getType())};
+    const auto width{int_ty->getBitWidth()};
+    auto*      zero{llvm::ConstantInt::get(int_ty, 0)};
     emit_arith_guard(builder_.CreateICmpEQ(rhs, zero), "integer division by zero", inst);
     if (!is_signed) { return; }
     auto* int_min{llvm::ConstantInt::get(int_ty, llvm::APInt::getSignedMinValue(width))};
@@ -1100,7 +1100,7 @@ auto llvm_lowering::emit_checked_arith(const gir::instruction& inst,
     PROFILE_FUNCTION();
     auto* int_ty{llvm::dyn_cast<llvm::IntegerType>(lhs->getType())};
     if (!int_ty) { return nullptr; }
-    const unsigned width{int_ty->getBitWidth()};
+    const auto width{int_ty->getBitWidth()};
 
     switch (inst.kind) {
     case gir::instruction_kind::ADD:
@@ -1146,9 +1146,9 @@ auto llvm_lowering::emit_float_to_int_guard(const gir::instruction& inst,
                                             bool                    is_signed) -> void {
     // Truncation fits iff MIN - 1 < val < MAX + 1. The upper bound is a power of two (exact or
     // infinite); the lower one rounds down, which admits no extra float. NaN fails both checks.
-    const unsigned width{int_ty->getIntegerBitWidth()};
-    const auto&    semantics{val->getType()->getFltSemantics()};
-    const auto     to_float = [&](const llvm::APInt& bound, llvm::APFloat::roundingMode mode) {
+    const auto  width{int_ty->getIntegerBitWidth()};
+    const auto& semantics{val->getType()->getFltSemantics()};
+    const auto  to_float = [&](const llvm::APInt& bound, llvm::APFloat::roundingMode mode) {
         llvm::APFloat f{semantics};
         DISCARD(f.convertFromAPInt(bound, true, mode));
         return llvm::ConstantFP::get(val->getType(), f);
@@ -1187,11 +1187,11 @@ auto llvm_lowering::emit_saturating_arith(const gir::instruction& inst,
     }
     case gir::instruction_kind::SHL: {
         // `shl.sat` is poison once the amount reaches the width, where any non-zero lhs saturates
-        const unsigned width{int_ty->getBitWidth()};
-        auto*          zero{llvm::ConstantInt::get(int_ty, 0)};
-        auto*          in_range{builder_.CreateICmpULT(rhs, llvm::ConstantInt::get(int_ty, width))};
-        auto*          amount{builder_.CreateSelect(in_range, rhs, zero)};
-        auto*          shifted{builder_.CreateBinaryIntrinsic(
+        const auto width{int_ty->getBitWidth()};
+        auto*      zero{llvm::ConstantInt::get(int_ty, 0)};
+        auto*      in_range{builder_.CreateICmpULT(rhs, llvm::ConstantInt::get(int_ty, width))};
+        auto*      amount{builder_.CreateSelect(in_range, rhs, zero)};
+        auto*      shifted{builder_.CreateBinaryIntrinsic(
             is_signed ? llvm::Intrinsic::sshl_sat : llvm::Intrinsic::ushl_sat, lhs, amount)};
 
         llvm::Value* limit{llvm::ConstantInt::get(int_ty, llvm::APInt::getMaxValue(width))};
@@ -1604,7 +1604,7 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
     }
 
     // Lower each segment; dead code after a diverging expression was never type checked
-    const auto reachable{gir::reachable_segments(fn)};
+    const auto reachable{fn.reachable_segments()};
     for (const auto* seg : fn.get_segments()) {
         auto* bb{segment_blocks_[seg->get_id()]};
         builder_.SetInsertPoint(bb);
@@ -1638,7 +1638,7 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
         for (auto& bb : *llvm_fn) {
             if (auto* ret{llvm::dyn_cast<llvm::ReturnInst>(bb.getTerminator())}) {
                 if (auto* rv{ret->getReturnValue()}; rv && rv->getType()->isIntegerTy(1)) {
-                    rets.push_back(ret);
+                    rets.emplace_back(ret);
                 }
             }
         }
@@ -2860,7 +2860,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
                 auto* a_wins{is_max ? builder_.CreateFCmpOGT(a, b) : builder_.CreateFCmpOLT(a, b)};
                 auto* equal{builder_.CreateFCmpOEQ(a, b)};
                 auto* bits_ty{builder_.getIntNTy(
-                    static_cast<unsigned>(a->getType()->getPrimitiveSizeInBits().getFixedValue()))};
+                    static_cast<u32>(a->getType()->getPrimitiveSizeInBits().getFixedValue()))};
                 auto* a_negative{builder_.CreateICmpSLT(builder_.CreateBitCast(a, bits_ty),
                                                         llvm::ConstantInt::get(bits_ty, 0))};
                 auto* zero_pick{builder_.CreateSelect(

@@ -3746,9 +3746,6 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                     gsl::span<const ast::call_expr::argument>{call.arguments}.first(1));
             }
             // A cast's operand is typed by the cast, never by the context the cast sits in
-            // (`@bitCast(f32, @as(u32, 5)) < x` must not make `5` a float). `@as` passes its
-            // target on (`@as(T, .{...})`, `@as(i32, @intCast(x))`), except to a numeric literal,
-            // which `@as` range-checks by value in whatever context it had.
             const bool as_literal{tok == token_type_t::BUILTIN_AS &&
                                   is_numeric_literal(call.arguments[1])};
             if (args_result == resolve_result::OK && as_literal) {
@@ -10159,7 +10156,7 @@ auto type_resolver::report_deprecated_use(ID id, const mod::module& owner, const
     }
     diagnostic warning{std::move(message), error::DEPRECATED_USE, loc};
     warning.set_level(diagnostic_level::WARNING);
-    resolving_.warnings.push_back(warning);
+    resolving_.warnings.emplace_back(warning);
 }
 
 auto type_resolver::fold_alignment(ast::expr_handle arg) -> stdx::option<u64> {
@@ -10501,7 +10498,7 @@ auto type_resolver::callee_is_discardable(ast::node_id call_id, const ast::call_
     stdx::option<const mod::module&> home{resolving_};
     ast::node_id                     fn_node{*call.function};
 
-    for (int hops{0}; hops < 16; ++hops) {
+    for (i32 hops{0}; hops < 16; ++hops) {
         stdx::option<symbol&> sym;
         if (const auto ident{home->ast.get_as_opt<ast::identifier_expr>(fn_node)}) {
             sym = (home == &resolving_) ? ctx_.registry.lookup(table_stack_, ident->name)
@@ -11555,7 +11552,7 @@ auto type_resolver::build_param_impl_template(const ast::impl_stmt& impl, ast::n
     }};
     for (usize idx{0}; const auto& diag : static_cast<gsl::span<const diagnostic>>(discarded)) {
         if (diag.get_error() == error::UNDECLARED_IDENTIFIER || kept_for_poisoned_member(idx)) {
-            ctx_.diags.push_back(diag);
+            ctx_.diags.emplace_back(diag);
         }
         idx += 1;
     }

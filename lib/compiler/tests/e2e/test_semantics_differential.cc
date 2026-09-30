@@ -6,17 +6,20 @@
 #include <random>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
+#include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/base.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
+#include <stdx/option.hh>
+#include <stdx/types.hh>
 
 #include "helpers/differential.hh"
 #include "support/env.hh"
 
-// Permanent tripwire: every operation folded at compile time must agree with the same operation
-// computed at runtime, bit for bit, and every compile-time error must be a runtime panic.
 namespace ghoti::tests {
 
 namespace {
@@ -30,10 +33,10 @@ auto expect_agreement(const std::vector<diff::expr_template>& templates,
     for (usize i{0}; i < templates.size(); ++i) {
         const auto& rep{reports[i]};
         if (!rep.waiting_on.empty()) {
-            waiting.push_back(fmt::format("{} -> {} ({})",
-                                          templates[i].text,
-                                          templates[i].result.name,
-                                          fmt::join(rep.waiting_on, ", ")));
+            waiting.emplace_back(fmt::format("{} -> {} ({})",
+                                             templates[i].text,
+                                             templates[i].result.name,
+                                             fmt::join(rep.waiting_on, ", ")));
         }
         if (rep.mismatches.empty() && rep.not_foldable.empty()) { continue; }
         INFO(diff::describe(templates[i], rep));
@@ -48,33 +51,41 @@ auto expect_agreement(const std::vector<diff::expr_template>& templates,
 
 auto binary(std::string_view op, const diff::scalar_type& type, std::string unchecked = {})
     -> diff::expr_template {
-    return {.text                 = fmt::format("{{0}} {} {{1}}", op),
-            .operands             = {type, type},
-            .result               = type,
-            .unchecked_equivalent = std::move(unchecked)};
+    return {
+        .text                 = fmt::format("{{0}} {} {{1}}", op),
+        .operands             = {type, type},
+        .result               = type,
+        .unchecked_equivalent = std::move(unchecked),
+    };
 }
 
 auto comparison(std::string_view op, const diff::scalar_type& type) -> diff::expr_template {
-    return {.text     = fmt::format("{{0}} {} {{1}}", op),
-            .operands = {type, type},
-            .result   = diff::bool_type()};
+    return {
+        .text     = fmt::format("{{0}} {} {{1}}", op),
+        .operands = {type, type},
+        .result   = diff::bool_type(),
+    };
 }
 
 auto unary(std::string_view op, const diff::scalar_type& type, std::string unchecked = {})
     -> diff::expr_template {
-    return {.text                 = fmt::format("{}{{0}}", op),
-            .operands             = {type},
-            .result               = type,
-            .unchecked_equivalent = std::move(unchecked)};
+    return {
+        .text                 = fmt::format("{}{{0}}", op),
+        .operands             = {type},
+        .result               = type,
+        .unchecked_equivalent = std::move(unchecked),
+    };
 }
 
 auto call(std::string_view builtin, const diff::scalar_type& type, usize arity)
     -> diff::expr_template {
     std::vector<std::string> args;
-    for (usize i{0}; i < arity; ++i) { args.push_back(fmt::format("{{{}}}", i)); }
-    return {.text     = fmt::format("{}({})", builtin, fmt::join(args, ", ")),
-            .operands = std::vector<diff::scalar_type>(arity, type),
-            .result   = type};
+    for (usize i{0}; i < arity; ++i) { args.emplace_back(fmt::format("{{{}}}", i)); }
+    return {
+        .text     = fmt::format("{}({})", builtin, fmt::join(args, ", ")),
+        .operands = std::vector<diff::scalar_type>(arity, type),
+        .result   = type,
+    };
 }
 
 // Families whose operations never call compiler_rt cover the wide types by default too
@@ -91,9 +102,9 @@ auto checked_arithmetic() -> std::vector<diff::expr_template> {
     std::vector<diff::expr_template> templates;
     for (const auto& type : diff::int_types()) {
         for (const std::string_view op : {"+", "-", "*"}) {
-            templates.push_back(binary(op, type, fmt::format("{{0}} {}% {{1}}", op)));
+            templates.emplace_back(binary(op, type, fmt::format("{{0}} {}% {{1}}", op)));
         }
-        for (const std::string_view op : {"/", "%"}) { templates.push_back(binary(op, type)); }
+        for (const std::string_view op : {"/", "%"}) { templates.emplace_back(binary(op, type)); }
     }
     return templates;
 }
@@ -102,7 +113,7 @@ auto wrapping_saturating() -> std::vector<diff::expr_template> {
     std::vector<diff::expr_template> templates;
     for (const auto& type : int_types_with_wide()) {
         for (const std::string_view op : {"+%", "-%", "*%", "+|", "-|", "*|"}) {
-            templates.push_back(binary(op, type));
+            templates.emplace_back(binary(op, type));
         }
     }
     return templates;
@@ -112,9 +123,9 @@ auto bitwise_shifts() -> std::vector<diff::expr_template> {
     std::vector<diff::expr_template> templates;
     for (const auto& type : int_types_with_wide()) {
         for (const std::string_view op : {"&", "|", "^", "<<", ">>", "<<%", "<<|"}) {
-            templates.push_back(binary(op, type));
+            templates.emplace_back(binary(op, type));
         }
-        templates.push_back(unary("~", type));
+        templates.emplace_back(unary("~", type));
     }
     return templates;
 }
@@ -123,7 +134,7 @@ auto int_comparisons() -> std::vector<diff::expr_template> {
     std::vector<diff::expr_template> templates;
     for (const auto& type : int_types_with_wide()) {
         for (const std::string_view op : {"==", "!=", "<", "<=", ">", ">="}) {
-            templates.push_back(comparison(op, type));
+            templates.emplace_back(comparison(op, type));
         }
     }
     return templates;
@@ -133,8 +144,8 @@ auto int_negation() -> std::vector<diff::expr_template> {
     std::vector<diff::expr_template> templates;
     for (const auto& type : int_types_with_wide()) {
         if (type.kind != diff::scalar_kind::SIGNED) { continue; }
-        templates.push_back(unary("-", type, "-%{0}"));
-        templates.push_back(unary("-%", type));
+        templates.emplace_back(unary("-", type, "-%{0}"));
+        templates.emplace_back(unary("-%", type));
     }
     return templates;
 }
@@ -146,12 +157,17 @@ auto int_builtins() -> std::vector<diff::expr_template> {
         const auto count{diff::int_type(fmt::format("u{}", std::bit_width(type.bits)))};
         for (const std::string_view builtin :
              {"@min", "@max", "@divTrunc", "@divFloor", "@rem", "@mod"}) {
-            templates.push_back(call(builtin, type, 2));
+            templates.emplace_back(call(builtin, type, 2));
         }
-        if (type.kind == diff::scalar_kind::SIGNED) { templates.push_back(call("@abs", type, 1)); }
+        if (type.kind == diff::scalar_kind::SIGNED) {
+            templates.emplace_back(call("@abs", type, 1));
+        }
         for (const std::string_view builtin : {"@clz", "@ctz", "@popCount"}) {
-            templates.push_back(
-                {.text = fmt::format("{}({{0}})", builtin), .operands = {type}, .result = count});
+            templates.emplace_back<diff::expr_template>({
+                .text     = fmt::format("{}({{0}})", builtin),
+                .operands = {type},
+                .result   = count,
+            });
         }
     }
     return templates;
@@ -162,14 +178,18 @@ auto int_casts() -> std::vector<diff::expr_template> {
     const auto                       types{int_types_with_wide()};
     for (const auto& from : types) {
         for (const auto& to : types) {
-            templates.push_back({.text     = fmt::format("@intCast({}, {{0}})", to.name),
-                                 .operands = {from},
-                                 .result   = to});
+            templates.emplace_back<diff::expr_template>({
+                .text     = fmt::format("@intCast({}, {{0}})", to.name),
+                .operands = {from},
+                .result   = to,
+            });
             // Same-width `@truncate` is rejected in favor of `@bitCast`/`@intCast`
             if (to.bits < from.bits) {
-                templates.push_back({.text     = fmt::format("@truncate({}, {{0}})", to.name),
-                                     .operands = {from},
-                                     .result   = to});
+                templates.emplace_back<diff::expr_template>({
+                    .text     = fmt::format("@truncate({}, {{0}})", to.name),
+                    .operands = {from},
+                    .result   = to,
+                });
             }
         }
     }
@@ -180,16 +200,16 @@ auto float_arithmetic() -> std::vector<diff::expr_template> {
     std::vector<diff::expr_template> templates;
     for (const auto& type : diff::host_float_types()) {
         for (const std::string_view op : {"+", "-", "*", "/", "%"}) {
-            templates.push_back(binary(op, type));
+            templates.emplace_back(binary(op, type));
         }
         for (const std::string_view op : {"==", "!=", "<", "<=", ">", ">="}) {
-            templates.push_back(comparison(op, type));
+            templates.emplace_back(comparison(op, type));
         }
-        templates.push_back(unary("-", type));
+        templates.emplace_back(unary("-", type));
         for (const std::string_view builtin : {"@min", "@max"}) {
-            templates.push_back(call(builtin, type, 2));
+            templates.emplace_back(call(builtin, type, 2));
         }
-        templates.push_back(call("@abs", type, 1));
+        templates.emplace_back(call("@abs", type, 1));
     }
     return templates;
 }
@@ -197,9 +217,11 @@ auto float_arithmetic() -> std::vector<diff::expr_template> {
 auto fused_multiply_add() -> std::vector<diff::expr_template> {
     std::vector<diff::expr_template> templates;
     for (const auto& type : diff::host_float_types()) {
-        templates.push_back({.text     = fmt::format("@mulAdd({}, {{0}}, {{1}}, {{2}})", type.name),
-                             .operands = {type, type, type},
-                             .result   = type});
+        templates.emplace_back<diff::expr_template>({
+            .text     = fmt::format("@mulAdd({}, {{0}}, {{1}}, {{2}})", type.name),
+            .operands = {type, type, type},
+            .result   = type,
+        });
     }
     return templates;
 }
@@ -208,12 +230,15 @@ auto float_int_conversions() -> std::vector<diff::expr_template> {
     std::vector<diff::expr_template> templates;
     for (const auto& f : diff::host_float_types()) {
         for (const auto& i : diff::int_types()) {
-            templates.push_back({.text     = fmt::format("@floatFromInt({}, {{0}})", f.name),
-                                 .operands = {i},
-                                 .result   = f});
-            templates.push_back({.text     = fmt::format("@intFromFloat({}, {{0}})", i.name),
-                                 .operands = {f},
-                                 .result   = i});
+            templates.emplace_back<diff::expr_template>(
+                {.text     = fmt::format("@floatFromInt({}, {{0}})", f.name),
+                 .operands = {i},
+                 .result   = f});
+            templates.emplace_back<diff::expr_template>({
+                .text     = fmt::format("@intFromFloat({}, {{0}})", i.name),
+                .operands = {f},
+                .result   = i,
+            });
         }
     }
     return templates;
@@ -241,9 +266,6 @@ TEST_CASE("Integer casts fold like they run") { expect_agreement(int_casts()); }
 
 TEST_CASE("Float arithmetic folds like it runs") { expect_agreement(float_arithmetic()); }
 
-// `@mulAdd` folds fused. Runtime lowers to `llvm.fmuladd`, which may round twice, until
-// lib/compiler_rt defines `fma`/`fmaf` and lowering switches to `llvm.fma` (the one allowed
-// divergence in the plan's semantics inventory), so only the fold is checked here.
 TEST_CASE("Fused multiply-add folds with a single rounding") {
     expect_agreement(fused_multiply_add(), {.run = false});
 }
@@ -267,8 +289,8 @@ TEST_CASE("Every operation folds on the other tier-1 targets") {
         const bool  has_f80{triple.starts_with("x86_64")};
         std::vector families{checked_arithmetic(), int_builtins(), float_arithmetic()};
         if (get_env("GHOTI_DIFF_FULL")) {
-            families.push_back(int_casts());
-            families.push_back(float_int_conversions());
+            families.emplace_back(int_casts());
+            families.emplace_back(float_int_conversions());
         }
         for (auto templates : families) {
             if (!has_f80) { std::erase_if(templates, uses_f80); }
@@ -281,7 +303,6 @@ TEST_CASE("Every operation folds on the other tier-1 targets") {
 // `zig build fuzz-semantics`: every family again with fresh random seeds until
 // `GHOTI_DIFF_FUZZ_MINUTES` runs out. Each round's seed is in its failure message.
 TEST_CASE("Semantics fuzz", "[.fuzz-semantics]") {
-    // A `[#file]` filter selects hidden tests too, so the budget must be asked for explicitly
     const auto budget{get_env("GHOTI_DIFF_FUZZ_MINUTES")};
     const auto replay_seed{get_env("GHOTI_DIFF_FUZZ_SEED")};
     if (!budget && !replay_seed) { SKIP("set GHOTI_DIFF_FUZZ_MINUTES or GHOTI_DIFF_FUZZ_SEED"); }

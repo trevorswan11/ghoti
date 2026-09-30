@@ -148,7 +148,7 @@ auto module_manager::try_get(const std::filesystem::path& path)
 
     mod->sema_side_tables.resize(mod->ast.get_pool_sizes());
     mod->parse_diagnostics.reserve(diagnostics.size());
-    for (const auto& d : diagnostics) { mod->parse_diagnostics.push_back(d.snapshot()); }
+    for (const auto& d : diagnostics) { mod->parse_diagnostics.emplace_back(d.snapshot()); }
     mod->state       = diagnostics.empty() ? module_state::PARSED : module_state::ERRORED;
     mod->diagnostics = std::move(diagnostics);
 

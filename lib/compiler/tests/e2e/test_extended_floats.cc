@@ -2,10 +2,9 @@
 #include <string_view>
 #include <utility>
 
+#include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
-
-#include <catch2/catch_test_macros.hpp>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
@@ -47,8 +46,6 @@ TEST_CASE("f16 and f128 type-check, widen, and lower to the expected LLVM types"
     CHECK(ir.find("fp128") != std::string::npos);
 }
 
-// Runs once lib/compiler_rt defines every soft-float routine the program calls; until then it's
-// skipped, naming what's missing
 auto run_with_builtins(std::string_view source) -> void {
     if (const auto missing{helpers::missing_builtins(source)}; !missing.empty()) {
         SKIP(fmt::format("needs compiler_rt: {}", fmt::join(missing, ", ")));

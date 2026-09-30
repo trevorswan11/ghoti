@@ -4,6 +4,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -263,7 +264,6 @@ TEST_CASE("--no-compiler-rt is accepted by every linking subcommand") {
     }};
 
     for (const std::string sub : {"build-exe", "build-lib", "run", "test"}) {
-        INFO(sub);
         CHECK(compiler_rt_of({"ghoti", sub, "main.gh"}));
         CHECK_FALSE(compiler_rt_of({"ghoti", sub, "--no-compiler-rt", "main.gh"}));
     }

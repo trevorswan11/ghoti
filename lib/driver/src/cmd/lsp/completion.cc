@@ -10,6 +10,7 @@
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/module/module.hh"
@@ -79,7 +80,7 @@ auto local_scope_completions(const mod::module& module, source_location target) 
 }
 
 [[nodiscard]] auto is_word_char(char c) -> bool {
-    return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
+    return std::isalnum(static_cast<u8>(c)) != 0 || c == '_';
 }
 
 // Byte offset of a zero-based line and column, clamped to the end of that line
@@ -130,9 +131,7 @@ auto attribute_context_at(std::string_view source, source_location target)
     if (open == std::string_view::npos) { return stdx::none; }
 
     // Replay the list up to the word, skipping strings, to see what is still open
-    usize                             depth{0};
-    usize                             last_name_start{0};
-    usize                             last_name_end{0};
+    usize                             depth{0}, last_name_start{0}, last_name_end{0};
     stdx::option<ast::attribute_kind> in_args_of;
     for (usize i{open + 2}; i < word_start; ++i) {
         const auto c{source[i]};

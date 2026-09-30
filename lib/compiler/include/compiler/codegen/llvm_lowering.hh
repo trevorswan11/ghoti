@@ -134,6 +134,9 @@ class llvm_lowering {
 
     // Emits a freestanding ELF `_start` (Linux, no crt/libc)
     auto emit_freestanding_start(llvm::Function* main_fn) -> void;
+
+    // Windows starts x86 threads with the x87 precision control at 53 bits, which rounds every
+    // `f80` operation like `f64`
     auto emit_x87_precision_init() -> void;
 
     // The `__chkstk` / `___chkstk_ms` symbol name the x86 backend probes with on this

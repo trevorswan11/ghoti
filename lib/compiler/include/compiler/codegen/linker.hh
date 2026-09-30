@@ -15,8 +15,7 @@ namespace ghoti::codegen {
 
 // How the compiler builtins archive is located and built when `builtins` isn't given
 struct compiler_rt_options {
-    // The root `compiler_rt.gh`; defaults to `GHOTI_COMPILER_RT`, then the shipped
-    // `lib/compiler_rt`
+    // The root `compiler_rt.gh`; `GHOTI_COMPILER_RT` default, then `lib/compiler_rt`
     stdx::option<std::filesystem::path> root{};
 };
 

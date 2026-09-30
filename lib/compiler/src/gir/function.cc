@@ -2,6 +2,7 @@
 
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <stdx/arena.hh>
 
@@ -21,15 +22,15 @@ auto function::add_segment() -> segment& {
     return *segments_.emplace_back(arena_.make<segment>(arena_, new_id));
 }
 
-auto reachable_segments(const function& fn) -> std::vector<bool> {
-    const auto&       segments{fn.get_segments()};
+auto function::reachable_segments() const -> std::vector<bool> {
+    const auto&       segments{get_segments()};
     std::vector<bool> reachable(segments.size(), false);
     if (segments.empty()) { return reachable; }
 
     std::vector<segment_id> worklist{segments[0]->get_id()};
     reachable[0] = true;
     while (!worklist.empty()) {
-        const auto current{fn.get_segment_opt(worklist.back())};
+        const auto current{get_segment_opt(worklist.back())};
         worklist.pop_back();
         if (!current) { continue; }
         for (const auto* inst : (*current)->get_instructions()) {
@@ -39,7 +40,7 @@ auto reachable_segments(const function& fn) -> std::vector<bool> {
                 const auto target{std::to_underlying(*successor)};
                 if (target < segments.size() && !reachable[target]) {
                     reachable[target] = true;
-                    worklist.push_back(*successor);
+                    worklist.emplace_back(*successor);
                 }
             }
         }

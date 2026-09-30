@@ -7,6 +7,7 @@
 #include <nlohmann/json.hpp>
 #include <stdx/memory.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/module/overlay_loader.hh"
 #include "driver/cmd/lsp/completion.hh"
 #include "driver/cmd/lsp/rpc.hh"

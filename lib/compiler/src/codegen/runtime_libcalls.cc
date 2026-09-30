@@ -6,6 +6,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include <ankerl/unordered_dense.h>
 #include <llvm/IR/RuntimeLibcalls.h>

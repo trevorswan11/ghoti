@@ -1,10 +1,10 @@
 #pragma once
 
 #include <algorithm>
-#include <span>
 #include <string_view>
 #include <vector>
 
+#include <gsl/span>
 #include <stdx/enum.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
@@ -100,12 +100,14 @@ struct attribute_spec {
 
 [[nodiscard]] auto attribute_spec_of(std::string_view name) noexcept
     -> stdx::option<const attribute_spec&>;
+
+// Assumes the kind is a valid enumeration
 [[nodiscard]] auto attribute_spec_of(attribute_kind kind) noexcept -> const attribute_spec&;
-[[nodiscard]] auto all_attribute_specs() noexcept -> std::span<const attribute_spec>;
+[[nodiscard]] auto all_attribute_specs() noexcept -> gsl::span<const attribute_spec>;
 
 // The variant names an enum-valued attribute accepts, empty for any other attribute
 [[nodiscard]] auto attribute_enum_variants(attribute_kind kind) noexcept
-    -> std::span<const std::string_view>;
+    -> gsl::span<const std::string_view>;
 
 // Applies to a function definition, so on a declaration initialized by a function literal it
 // reaches through to that literal (and sees the literal's parameters)

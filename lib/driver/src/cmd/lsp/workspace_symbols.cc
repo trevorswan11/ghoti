@@ -19,7 +19,7 @@ auto module_workspace_symbols(const mod::module& module) -> std::vector<workspac
         const auto name_ident{module.ast.get_as_opt<ast::identifier_expr>(decl->name)};
         if (!name_ident) { continue; }
 
-        out.push_back({
+        out.emplace_back<workspace_symbol_entry>({
             .name  = std::string{name_ident->name},
             .kind  = symbol_kind_of(module, *decl),
             .range = {module.ast.location_of(decl->name), module.ast.end_location_of(decl->name)},

@@ -207,7 +207,7 @@ auto add_darwin_args(std::vector<std::string>&   args,
     static const auto sdk{[] -> stdx::option<sdk_path> {
         auto        vfs{llvm::vfs::getRealFileSystem()};
         std::string path, include_version, lib_version;
-        int         major{0};
+        i32         major{0};
         if (!llvm::getWindowsSDKDir(*vfs,
                                     stdx::none,
                                     stdx::none,

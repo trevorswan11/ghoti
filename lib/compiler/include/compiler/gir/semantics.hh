@@ -12,10 +12,6 @@
 #include "support/float128.hh"
 #include "support/int128.hh"
 
-// The meaning of every integer operation, shared by compile-time folding (`gir::const_eval`) and
-// code generation (`codegen::llvm_lowering`). A fold computes exactly what the generated code
-// computes, and every case the fold rejects is one the generated code checks for under runtime
-// safety. `test_semantics_differential.cc` holds the two to that.
 namespace ghoti::gir::semantics {
 
 // A concrete integer type's shape. Values travel as two's-complement bits in the low `bits`.
@@ -68,8 +64,7 @@ enum class int_compare_op : u8 {
     GE,
 };
 
-// The integer operation an operator or builtin token denotes; `@divTrunc` and `@rem` are `/` and
-// `%`
+// The integer operation an operator or builtin token denotes; `@divTrunc` = `/` `@rem` = `%`
 [[nodiscard]] auto int_op_of(syntax::token_type_t token) noexcept -> stdx::option<int_op>;
 [[nodiscard]] auto int_compare_op_of(syntax::token_type_t token) noexcept
     -> stdx::option<int_compare_op>;

@@ -3,19 +3,24 @@
 #include <algorithm>
 #include <charconv>
 #include <chrono>
+#include <cstdio>
 #include <fstream>
 #include <iterator>
 #include <random>
-#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/base.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
+#include <gsl/span>
 #include <llvm/IR/LLVMContext.h>
 #include <stdx/harness/hooks.hh>
+#include <stdx/option.hh>
+#include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/codegen/target.hh"
 #include "compiler/sema/error.hh"
@@ -24,6 +29,7 @@
 #include "helpers/sema.hh"
 #include "support/diagnostic.hh"
 #include "support/env.hh"
+#include "support/int128.hh"
 #include "support/subprocess.hh"
 #include "support/tempfile.hh"
 
@@ -95,8 +101,7 @@ class phase_timer {
         const std::chrono::duration<double> elapsed{std::chrono::steady_clock::now() - start_};
         fmt::println(stderr, "[diff] {:8.3f}s  {}", elapsed.count(), label_);
     }
-    phase_timer(const phase_timer&)                    = delete;
-    auto operator=(const phase_timer&) -> phase_timer& = delete;
+    MAKE_PINNED(phase_timer);
 
   private:
     std::string                           label_;
@@ -161,19 +166,19 @@ struct float_layout {
                 float_bits(type, false, max_exponent, quiet_bit)};
     }
     for (const bool negative : {false, true}) {
-        values.push_back(float_bits(type, negative, 0, 0));                   // zero
-        values.push_back(float_bits(type, negative, 0, 1));                   // min subnormal
-        values.push_back(float_bits(type, negative, 0, all_fraction));        // max subnormal
-        values.push_back(float_bits(type, negative, 1, 0));                   // min normal
-        values.push_back(float_bits(type, negative, bias, 0));                // 1.0
-        values.push_back(float_bits(type, negative, bias, 1));                // 1 + ulp
-        values.push_back(float_bits(type, negative, bias - 1, all_fraction)); // 1 - ulp/2
-        values.push_back(float_bits(type, negative, bias, quiet_bit));        // 1.5
-        values.push_back(float_bits(type, negative, bias + 1, 0));            // 2.0
-        values.push_back(float_bits(type, negative, max_exponent - 1, all_fraction)); // max
-        values.push_back(float_bits(type, negative, max_exponent, 0));                // inf
+        values.emplace_back(float_bits(type, negative, 0, 0));                   // zero
+        values.emplace_back(float_bits(type, negative, 0, 1));                   // min subnormal
+        values.emplace_back(float_bits(type, negative, 0, all_fraction));        // max subnormal
+        values.emplace_back(float_bits(type, negative, 1, 0));                   // min normal
+        values.emplace_back(float_bits(type, negative, bias, 0));                // 1.0
+        values.emplace_back(float_bits(type, negative, bias, 1));                // 1 + ulp
+        values.emplace_back(float_bits(type, negative, bias - 1, all_fraction)); // 1 - ulp/2
+        values.emplace_back(float_bits(type, negative, bias, quiet_bit));        // 1.5
+        values.emplace_back(float_bits(type, negative, bias + 1, 0));            // 2.0
+        values.emplace_back(float_bits(type, negative, max_exponent - 1, all_fraction)); // max
+        values.emplace_back(float_bits(type, negative, max_exponent, 0));                // inf
     }
-    values.push_back(float_bits(type, false, max_exponent, quiet_bit)); // quiet NaN
+    values.emplace_back(float_bits(type, false, max_exponent, quiet_bit)); // quiet NaN
     return values;
 }
 
@@ -190,7 +195,7 @@ struct float_layout {
             values.insert(values.end(), {p, p - 1, (~p + 1) & m, (p + 1) & m});
         }
     } else {
-        values.push_back(u128{1} << (w / 2));
+        values.emplace_back(u128{1} << (w / 2));
     }
     for (auto& v : values) { v &= m; }
     std::ranges::sort(values);
@@ -258,7 +263,7 @@ struct float_layout {
                                const case_operands& operands) -> std::string {
     std::vector<std::string> texts;
     for (usize i{0}; i < operands.size(); ++i) {
-        texts.push_back(literal(tmpl.operands[i], operands[i]));
+        texts.emplace_back(literal(tmpl.operands[i], operands[i]));
     }
     return instantiate(text, texts);
 }
@@ -268,7 +273,7 @@ struct float_layout {
                                 std::string_view     index) -> std::string {
     std::vector<std::string> texts;
     for (usize j{0}; j < tmpl.operands.size(); ++j) {
-        texts.push_back(
+        texts.emplace_back(
             runtime_operand(tmpl.operands[j], fmt::format("{}{}[{}]", prefix, j, index)));
     }
     return instantiate(tmpl.text, texts);
@@ -278,19 +283,19 @@ struct float_layout {
     -> std::string {
     std::vector<std::string> parts;
     for (usize i{0}; i < operands.size(); ++i) {
-        parts.push_back(fmt::format("{}={}", tmpl.operands[i].name, hex(operands[i])));
+        parts.emplace_back(fmt::format("{}={}", tmpl.operands[i].name, hex(operands[i])));
     }
     return fmt::format("{}", fmt::join(parts, ", "));
 }
 
 // `const <prefix>{j}: [N]U = .{...};` for every operand of the given cases
 [[nodiscard]] auto operand_arrays(const expr_template&             tmpl,
-                                  std::span<const classified_case> cases,
+                                  gsl::span<const classified_case> cases,
                                   std::string_view                 prefix) -> std::string {
     std::string out;
     for (usize j{0}; j < tmpl.operands.size(); ++j) {
         std::vector<std::string> values;
-        for (const auto& c : cases) { values.push_back(u128_text(c.operands[j])); }
+        for (const auto& c : cases) { values.emplace_back(u128_text(c.operands[j])); }
         out += fmt::format("var {}{}: [{}]{} = .{{ {} }};\n",
                            prefix,
                            j,
@@ -305,10 +310,10 @@ struct float_layout {
 [[nodiscard]] auto want_array(std::string_view                 name,
                               std::string_view                 text,
                               const expr_template&             tmpl,
-                              std::span<const classified_case> cases) -> std::string {
+                              gsl::span<const classified_case> cases) -> std::string {
     std::vector<std::string> wants;
     for (const auto& c : cases) {
-        wants.push_back(as_result_bits(tmpl.result, folded_expr(text, tmpl, c.operands)));
+        wants.emplace_back(as_result_bits(tmpl.result, folded_expr(text, tmpl, c.operands)));
     }
     return fmt::format("const {}: [{}]{} = .{{\n    {}\n}};\n",
                        name,
@@ -363,7 +368,7 @@ struct run_result {
         for (usize pos{message.find(marker)}; pos != std::string::npos;
              pos = message.find(marker, pos + marker.size())) {
             const auto start{pos + marker.size()};
-            result.missing_builtins.push_back(
+            result.missing_builtins.emplace_back(
                 message.substr(start, message.find_first_of(" \r\n", start) - start));
         }
         return result;
@@ -373,8 +378,7 @@ struct run_result {
 }
 
 // Folds every case of every template as a module constant and reads back which ones reported a
-// diagnostic. A sema error stops GIR from running, hiding the fold errors only GIR reports, so the
-// cases still folding cleanly are folded again until a round reports nothing new.
+// diagnostic.
 auto classify_all(const std::vector<expr_template>&              templates,
                   const std::vector<std::vector<case_operands>>& cases,
                   const options& opts) -> std::vector<std::vector<classified_case>> {
@@ -382,7 +386,7 @@ auto classify_all(const std::vector<expr_template>&              templates,
     std::vector<std::pair<usize, usize>>      pending;
     for (usize t{0}; t < templates.size(); ++t) {
         for (usize k{0}; k < cases[t].size(); ++k) {
-            classified[t].push_back({.operands = cases[t][k]});
+            classified[t].emplace_back<classified_case>({.operands = cases[t][k]});
             pending.emplace_back(t, k);
         }
     }
@@ -477,7 +481,7 @@ auto classify_all(const std::vector<expr_template>&              templates,
 }
 
 // Runs one template's cases: 0 when all agree, the failing case + 1, or the panic code
-[[nodiscard]] auto run_cases(const expr_template& tmpl, std::span<const classified_case> cases)
+[[nodiscard]] auto run_cases(const expr_template& tmpl, gsl::span<const classified_case> cases)
     -> u32 {
     return helpers::compile_and_run(
         fmt::format("{}{}{}pub const main := fn(): i32 {{\n"
@@ -498,7 +502,7 @@ auto classify_all(const std::vector<expr_template>&              templates,
 
 // The first mismatching case of one template; a panicking chunk is split until the case is found
 [[nodiscard]] auto locate_mismatch(const expr_template&             tmpl,
-                                   std::span<const classified_case> cases)
+                                   gsl::span<const classified_case> cases)
     -> stdx::option<mismatch> {
     for (usize start{0}; start < cases.size(); start += max_cases_per_program) {
         const auto chunk{
@@ -519,7 +523,7 @@ auto classify_all(const std::vector<expr_template>&              templates,
 // One program checks every template of a batch: none when all agree, the index of the first that
 // disagrees, or the batch size when something panicked. Missing builtins come back separately.
 [[nodiscard]] auto run_batch(const std::vector<const expr_template*>&             templates,
-                             const std::vector<std::span<const classified_case>>& foldable,
+                             const std::vector<gsl::span<const classified_case>>& foldable,
                              std::vector<std::string>& missing) -> stdx::option<usize> {
     std::string source{panic_prelude()};
     std::string main_body;
@@ -559,7 +563,7 @@ auto classify_all(const std::vector<expr_template>&              templates,
 // The compiler builtins one template's runtime evaluation needs that compiler_rt lacks
 [[nodiscard]] auto template_needs(const expr_template& tmpl, const classified_case& sample)
     -> std::vector<std::string> {
-    const std::span one{&sample, 1};
+    const gsl::span one{&sample, 1};
     // The result must be used: instruction selection drops a dead `frem` and its `fmod` call
     return helpers::missing_builtins(fmt::format("{}pub const main := fn(): i32 {{\n"
                                                  "    const got := {};\n"
@@ -593,7 +597,7 @@ auto check_errors(const std::vector<expr_template>& templates,
     std::string dispatch;
     for (usize s{0}; s < samples.size(); ++s) {
         const auto&     tmpl{templates[samples[s].template_index]};
-        const std::span one{&samples[s].sample, 1};
+        const gsl::span one{&samples[s].sample, 1};
         const auto      prefix{fmt::format("e{}_op", s)};
         source += operand_arrays(tmpl, one, prefix);
         const auto expr{runtime_expr(tmpl, prefix, "0")};
@@ -645,7 +649,7 @@ auto check_errors(const std::vector<expr_template>& templates,
         const auto panicked{spawn_child(mock_argv{exe.path.string(), std::string{"0"}, which})
                                 .transform(helpers::portable_exit_code)};
         if (panicked != panic_exit_code) {
-            rep.mismatches.push_back({fmt::format(
+            rep.mismatches.emplace_back<mismatch>({fmt::format(
                 "{} [{}]: folding reports \"{}\" but runtime with safety on exited {} instead of "
                 "panicking",
                 tmpl.text,
@@ -657,7 +661,7 @@ auto check_errors(const std::vector<expr_template>& templates,
         const auto unchecked{spawn_child(mock_argv{exe.path.string(), std::string{"1"}, which})
                                  .transform(helpers::portable_exit_code)};
         if (unchecked != 0U) {
-            rep.mismatches.push_back(
+            rep.mismatches.emplace_back<mismatch>(
                 {fmt::format("{} [{}]: with safety off the result isn't the unchecked `{}`",
                              tmpl.text,
                              describe_operands(tmpl, sample.operands),
@@ -698,7 +702,7 @@ auto int_types() -> std::vector<scalar_type> {
     // Both signednesses, every power-of-two width, pointer width, and odd widths either side of 32
     std::vector<std::string_view> names{"i8", "u8", "i16", "u32", "i64", "usize", "i7", "i33"};
     if (full_depth()) { names.insert(names.end(), {"u16", "i32", "u64", "isize", "u13"}); }
-    for (const auto name : names) { types.push_back(int_type(name)); }
+    for (const auto name : names) { types.emplace_back(int_type(name)); }
     if (full_depth()) { std::ranges::copy(wide_int_types(), std::back_inserter(types)); }
     return types;
 }
@@ -707,7 +711,6 @@ auto wide_int_types() -> std::vector<scalar_type> {
     return {int_type("i128"), int_type("u128"), int_type("u65")};
 }
 
-// f80 only exists on x86
 auto host_float_types() -> std::vector<scalar_type> {
 #if GHOTI_ASM_HOST_X86_64
     return {float_type("f32"), float_type("f64"), float_type("f80")};
@@ -755,7 +758,7 @@ auto make_cases(const expr_template& tmpl, std::mt19937_64& rng, bool random_onl
     -> std::vector<case_operands> {
     std::vector<case_operands>     cases;
     std::vector<std::vector<u128>> boundaries;
-    for (const auto& type : tmpl.operands) { boundaries.push_back(boundary_values(type)); }
+    for (const auto& type : tmpl.operands) { boundaries.emplace_back(boundary_values(type)); }
 
     // The full boundary product for one or two operands; random picks beyond that, and in fuzz
     // rounds, which have already checked the product once
@@ -766,8 +769,8 @@ auto make_cases(const expr_template& tmpl, std::mt19937_64& rng, bool random_onl
             for (const auto& partial : cases) {
                 for (const auto v : set) {
                     auto grown{partial};
-                    grown.push_back(v);
-                    next.push_back(std::move(grown));
+                    grown.emplace_back(v);
+                    next.emplace_back(std::move(grown));
                 }
             }
             cases = std::move(next);
@@ -775,14 +778,14 @@ auto make_cases(const expr_template& tmpl, std::mt19937_64& rng, bool random_onl
     } else {
         for (usize n{0}; n < 64; ++n) {
             case_operands c;
-            for (const auto& set : boundaries) { c.push_back(set[rng() % set.size()]); }
-            cases.push_back(std::move(c));
+            for (const auto& set : boundaries) { c.emplace_back(set[rng() % set.size()]); }
+            cases.emplace_back(std::move(c));
         }
     }
     for (usize n{0}; n < random_iterations(); ++n) {
         case_operands c;
-        for (const auto& type : tmpl.operands) { c.push_back(random_value(type, rng)); }
-        cases.push_back(std::move(c));
+        for (const auto& type : tmpl.operands) { c.emplace_back(random_value(type, rng)); }
+        cases.emplace_back(std::move(c));
     }
     return cases;
 }
@@ -793,7 +796,9 @@ auto check_all(const std::vector<expr_template>& templates, const options& opts)
     stdx::untracked_scope untracked_guard;
     auto                  rng{opts.seed ? std::mt19937_64{*opts.seed} : make_rng()};
     std::vector<std::vector<case_operands>> cases;
-    for (const auto& tmpl : templates) { cases.push_back(make_cases(tmpl, rng, opts.random_only)); }
+    for (const auto& tmpl : templates) {
+        cases.emplace_back(make_cases(tmpl, rng, opts.random_only));
+    }
     const auto classified{classify_all(templates, cases, opts)};
 
     std::vector<report>                       reports(templates.size());
@@ -803,10 +808,10 @@ auto check_all(const std::vector<expr_template>& templates, const options& opts)
         std::vector<classified_case> errors;
         for (const auto& c : classified[t]) {
             switch (c.outcome) {
-            case fold_outcome::VALUE:         foldable[t].push_back(c); break;
-            case fold_outcome::COMPILE_ERROR: errors.push_back(c); break;
+            case fold_outcome::VALUE:         foldable[t].emplace_back(c); break;
+            case fold_outcome::COMPILE_ERROR: errors.emplace_back(c); break;
             case fold_outcome::NOT_FOLDABLE:
-                reports[t].not_foldable.push_back(
+                reports[t].not_foldable.emplace_back(
                     fmt::format("{} [{}]: {}",
                                 templates[t].text,
                                 describe_operands(templates[t], c.operands),
@@ -818,7 +823,7 @@ auto check_all(const std::vector<expr_template>& templates, const options& opts)
         // Spread the sampled error cases over the whole set
         const auto count{std::min(opts.panic_samples, errors.size())};
         for (usize s{0}; s < count; ++s) {
-            samples.push_back({t, errors[s * errors.size() / count]});
+            samples.emplace_back<error_sample>({t, errors[s * errors.size() / count]});
         }
     }
     if (!opts.run || !opts.triple.empty()) { return reports; }
@@ -839,7 +844,7 @@ auto check_all(const std::vector<expr_template>& templates, const options& opts)
     std::vector<usize> pending;
     for (usize t{0}; t < templates.size(); ++t) {
         reports[t].compared = foldable[t].size();
-        if (!foldable[t].empty()) { pending.push_back(t); }
+        if (!foldable[t].empty()) { pending.emplace_back(t); }
     }
     while (!pending.empty()) {
         std::vector<usize> batch;
@@ -847,14 +852,14 @@ auto check_all(const std::vector<expr_template>& templates, const options& opts)
         while (!pending.empty() && batch.size() < max_cases_per_program &&
                (batch.empty() || total + foldable[pending.front()].size() <= max_batch_cases)) {
             total += foldable[pending.front()].size();
-            batch.push_back(pending.front());
+            batch.emplace_back(pending.front());
             pending.erase(pending.begin());
         }
         while (!batch.empty()) {
             std::vector<const expr_template*>             tmpls;
-            std::vector<std::span<const classified_case>> spans;
+            std::vector<gsl::span<const classified_case>> spans;
             for (const auto t : batch) {
-                tmpls.push_back(&templates[t]);
+                tmpls.emplace_back(&templates[t]);
                 spans.emplace_back(foldable[t]);
             }
             std::vector<std::string> missing;
@@ -894,16 +899,16 @@ auto check_all(const std::vector<expr_template>& templates, const options& opts)
                     fmt::format("locate a panic among {} templates", batch.size())};
                 for (const auto t : batch) {
                     if (auto found{locate_mismatch(templates[t], foldable[t])}) {
-                        reports[t].mismatches.push_back(std::move(*found));
+                        reports[t].mismatches.emplace_back(std::move(*found));
                     }
                 }
                 break;
             }
             const auto t{batch[*bad]};
             if (auto found{locate_mismatch(templates[t], foldable[t])}) {
-                reports[t].mismatches.push_back(std::move(*found));
+                reports[t].mismatches.emplace_back(std::move(*found));
             }
-            batch.erase(batch.begin(), batch.begin() + static_cast<std::ptrdiff_t>(*bad) + 1);
+            batch.erase(batch.begin(), batch.begin() + static_cast<idiff>(*bad) + 1);
         }
     }
 

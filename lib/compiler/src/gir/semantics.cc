@@ -8,8 +8,11 @@
 #include <fmt/format.h>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
+#include <stdx/types.hh>
 
+#include "compiler/gir/instruction.hh"
 #include "compiler/syntax/token_type.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 
 namespace ghoti::gir::semantics {

@@ -19,6 +19,7 @@
 #include "compiler/module/file_loader.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/analyzer.hh"
+#include "compiler/sema/context.hh"
 #include "driver/clap/error.hh"
 
 namespace CLI { class App; } // namespace CLI

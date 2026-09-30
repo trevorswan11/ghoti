@@ -21,6 +21,7 @@
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
 #include "support/diagnostic.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 
 namespace ghoti::sema {
@@ -208,7 +209,7 @@ auto type_checker::check_function(gir::function& fn) -> void {
     }
 
     const auto& segments{fn.get_segments()};
-    const auto  reachable{gir::reachable_segments(fn)};
+    const auto  reachable{fn.reachable_segments()};
     for (const auto& seg : segments) {
         const auto idx{std::to_underlying(seg->get_id())};
         if (idx < reachable.size() && !reachable[idx]) { continue; }

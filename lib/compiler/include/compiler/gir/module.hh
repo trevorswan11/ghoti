@@ -13,6 +13,7 @@
 #include <stdx/utility.hh>
 
 #include "compiler/arena.hh"
+#include "compiler/ast/attributes.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
@@ -32,8 +33,8 @@ struct global_decl {
     bool                                 is_constant{false};
     bool                                 is_thread_local{false};
     bool                                 is_weak{false};
-    stdx::option<u64>                    alignment{};
     stdx::option<ast::symbol_visibility> visibility{};
+    stdx::option<u64>                    alignment{};
 };
 
 struct type_decl {

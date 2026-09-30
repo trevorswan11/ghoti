@@ -255,7 +255,7 @@ saturate_exact(syntax::token_type_t plain_op, i128 l, i128 r, u16 bits, bool is_
     case syntax::token_type_t::SHL: {
         if (l == 0) { return 0; }
         if (r < 0 || r >= bits) { return saturated_toward(l < 0); }
-        const auto amount{static_cast<int>(r)};
+        const auto amount{static_cast<i32>(r)};
         if (l > 0 ? l > (hi >> amount) : l < (lo >> amount)) { return saturated_toward(l < 0); }
         return l * (i128{1} << amount);
     }
@@ -4699,7 +4699,7 @@ auto const_eval::eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_v
         },
         [&](const ast::defer_stmt& data) -> stdx::option<const_value> {
             if (!call_stack_.empty()) {
-                call_stack_.back().defers.push_back(defer_entry{
+                call_stack_.back().defers.emplace_back<defer_entry>({
                     .stmt        = data.deferred,
                     .is_errdefer = false,
                     .capture     = stdx::none,
@@ -4710,7 +4710,7 @@ auto const_eval::eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_v
         },
         [&](const ast::errdefer_stmt& data) -> stdx::option<const_value> {
             if (!call_stack_.empty()) {
-                call_stack_.back().defers.push_back(defer_entry{
+                call_stack_.back().defers.emplace_back<defer_entry>({
                     .stmt        = data.deferred,
                     .is_errdefer = true,
                     .capture     = data.capture,
@@ -5166,7 +5166,7 @@ auto const_eval::simulate_stmt(const ast::stmt_handle& stmt) -> void {
         [&](const ast::block_stmt& block) { simulate_block(block); },
         [&](const ast::defer_stmt& data) {
             if (!call_stack_.empty()) {
-                call_stack_.back().defers.push_back(defer_entry{
+                call_stack_.back().defers.emplace_back<defer_entry>({
                     .stmt        = data.deferred,
                     .is_errdefer = false,
                     .capture     = stdx::none,
@@ -5176,7 +5176,7 @@ auto const_eval::simulate_stmt(const ast::stmt_handle& stmt) -> void {
         },
         [&](const ast::errdefer_stmt& data) {
             if (!call_stack_.empty()) {
-                call_stack_.back().defers.push_back(defer_entry{
+                call_stack_.back().defers.emplace_back<defer_entry>({
                     .stmt        = data.deferred,
                     .is_errdefer = true,
                     .capture     = data.capture,

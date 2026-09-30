@@ -10,10 +10,6 @@
 
 #include "support/int128.hh"
 
-// Differential testing of compile-time folding against runtime evaluation. Every case is written
-// twice: once with literal operands inside a `constexpr` (folded by `gir::const_eval`), and once
-// with the same bit patterns loaded from `var` globals (computed by the emitted code). Operands and
-// results cross the boundary as raw bit patterns so no literal parsing or formatting is involved.
 namespace ghoti::tests::differential {
 
 enum class scalar_kind : u8 {

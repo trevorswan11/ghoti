@@ -58,15 +58,14 @@ struct capture_info {
 
 // The folded result of an `@[...]` list on a declaration or function literal
 struct resolved_attributes {
-    bool                                 discardable{false};
-    stdx::option<ast::inline_mode>       inlining{};
-    bool                                 naked{false};
-    stdx::option<u64>                    alignment{};
+    bool                           discardable{false};
+    stdx::option<ast::inline_mode> inlining{};
+    bool                           naked{false};
+    bool                           cold{false}; // `@branchHint(.cold)` opens the body
+    // An attribute whose argument names a parameter so only folds per instantiation
+    stdx::option<ast::attribute_kind>    dependent{};
     stdx::option<ast::symbol_visibility> visibility{};
-    bool                                 cold{false}; // `@branchHint(.cold)` opens the body
-    // On a generic template, an attribute whose argument names a parameter so only folds per
-    // instantiation
-    stdx::option<ast::attribute_kind> dependent{};
+    stdx::option<u64>                    alignment{};
 
     [[nodiscard]] auto operator==(const resolved_attributes&) const noexcept -> bool = default;
 };

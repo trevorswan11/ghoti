@@ -9,7 +9,9 @@
 #include <fmt/format.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/TargetParser/Triple.h>
+#include <stdx/result.hh>
 
+#include "catch2/catch_message.hpp"
 #include "compiler/codegen/error.hh"
 #include "compiler/codegen/linker.hh"
 #include "compiler/codegen/runtime_libcalls.hh"

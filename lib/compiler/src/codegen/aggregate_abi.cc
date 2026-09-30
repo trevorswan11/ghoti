@@ -170,7 +170,9 @@ class aggregate_lowering {
         PROFILE_FUNCTION();
         std::vector<llvm::Function*> candidates;
         for (auto& fn : module_) {
-            if (!fn.isIntrinsic() && shape_of(fn.getFunctionType())) { candidates.push_back(&fn); }
+            if (!fn.isIntrinsic() && shape_of(fn.getFunctionType())) {
+                candidates.emplace_back(&fn);
+            }
         }
 
         for (auto* old_fn : candidates) {
@@ -184,7 +186,7 @@ class aggregate_lowering {
                 context_, old_fn->getAttributes().getFnAttrs(), llvm::AttributeSet{}, {}));
             new_fn->takeName(old_fn);
 
-            const unsigned first_param{shape.sret_type ? 1U : 0U};
+            const u32 first_param{shape.sret_type ? 1U : 0U};
             if (shape.sret_type) {
                 new_fn->addParamAttr(
                     0, llvm::Attribute::getWithStructRetType(context_, shape.sret_type));
@@ -254,7 +256,7 @@ class aggregate_lowering {
                     callee && callee->isIntrinsic()) {
                     continue;
                 }
-                if (shape_of(call->getFunctionType())) { calls.push_back(call); }
+                if (shape_of(call->getFunctionType())) { calls.emplace_back(call); }
             }
         }
 
@@ -266,21 +268,21 @@ class aggregate_lowering {
             llvm::Value*              sret_slot{nullptr};
             if (shape.sret_type) {
                 sret_slot = entry_alloca(caller, shape.sret_type);
-                args.push_back(sret_slot);
+                args.emplace_back(sret_slot);
             }
             std::vector<llvm::Value*> copied_from;
-            for (unsigned idx{0}; idx < call->arg_size(); ++idx) {
+            for (u32 idx{0}; idx < call->arg_size(); ++idx) {
                 auto* arg{call->getArgOperand(idx)};
                 auto* aggregate{idx < shape.indirect_params.size() ? shape.indirect_params[idx]
                                                                    : nullptr};
                 if (!aggregate) {
-                    args.push_back(arg);
+                    args.emplace_back(arg);
                     continue;
                 }
                 auto* slot{entry_alloca(caller, aggregate)};
                 materialize_argument(arg, slot, aggregate, *call);
-                args.push_back(slot);
-                copied_from.push_back(arg);
+                args.emplace_back(slot);
+                copied_from.emplace_back(arg);
             }
 
             llvm::IRBuilder<> builder{call};
@@ -310,7 +312,7 @@ class aggregate_lowering {
                 auto* store{llvm::dyn_cast<llvm::StoreInst>(&inst)};
                 if (store && !store->isVolatile() &&
                     is_large(store->getValueOperand()->getType())) {
-                    stores.push_back(store);
+                    stores.emplace_back(store);
                 }
             }
         }

@@ -106,6 +106,11 @@ class function {
 
     [[nodiscard]] auto local_count() const noexcept -> usize { return next_local_index_; }
 
+    // Which segments control can reach from the entry, indexed by segment id.
+    //
+    // Code after a diverging expression is still emitted into a segment nothing branches to.
+    [[nodiscard]] auto reachable_segments() const -> std::vector<bool>;
+
   private:
     ghoti::arena&              arena_;
     std::string                name_;
@@ -128,9 +133,5 @@ class function {
     u32                        test_column_{1};
     stdx::option<mod::module&> source_module_;
 };
-
-// Which segments control can reach from the entry, indexed by segment id. Code after a diverging
-// expression is still emitted into a segment nothing branches to.
-[[nodiscard]] auto reachable_segments(const function& fn) -> std::vector<bool>;
 
 } // namespace ghoti::gir

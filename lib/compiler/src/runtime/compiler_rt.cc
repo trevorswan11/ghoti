@@ -1,26 +1,31 @@
 #include "compiler/runtime/compiler_rt.hh"
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
+#include <functional>
 #include <map>
-#include <memory>
 #include <mutex>
 #include <ranges>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #include <fmt/format.h>
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Support/Error.h>
 #include <llvm/TargetParser/Triple.h>
+#include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
+#include <stdx/types.hh>
 
 #include "compiler/codegen/error.hh"
+#include "compiler/codegen/linker.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/runtime_libcalls.hh"
 #include "compiler/codegen/target.hh"
@@ -28,6 +33,7 @@
 #include "compiler/module/module.hh"
 #include "compiler/module/stdlib.hh"
 #include "compiler/sema/analyzer.hh"
+#include "compiler/sema/context.hh"
 #include "support/env.hh"
 #include "support/tempfile.hh"
 
@@ -44,7 +50,7 @@ struct archive_entry {
 
 struct archive_memo {
     std::mutex                                        mutex;
-    std::unique_ptr<tempdir>                          dir;
+    stdx::nullable_box<tempdir>                       dir;
     std::map<std::string, archive_entry, std::less<>> entries;
     usize                                             builds{0};
 };
@@ -57,8 +63,8 @@ struct archive_memo {
 [[nodiscard]] auto memo_key(const codegen::target_options& target_opts,
                             const llvm::Triple&            triple,
                             const std::filesystem::path&   root) -> std::string {
-    const auto reloc{target_opts.reloc ? static_cast<int>(*target_opts.reloc) : -1};
-    const auto code{target_opts.code ? static_cast<int>(*target_opts.code) : -1};
+    const auto reloc{target_opts.reloc ? static_cast<i32>(*target_opts.reloc) : -1};
+    const auto code{target_opts.code ? static_cast<i32>(*target_opts.code) : -1};
     return fmt::format("{}|{}|{}|{}|{}|{}",
                        triple.str(),
                        target_opts.cpu,
@@ -76,7 +82,7 @@ struct archive_memo {
 }
 
 [[nodiscard]] auto is_identifier_char(char c) -> bool {
-    return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_' || c == '$' || c == '.';
+    return std::isalnum(static_cast<u8>(c)) != 0 || c == '_' || c == '$' || c == '.';
 }
 
 // Local labels (`.LBB0_1`, Mach-O `Ltmp0`, `$` temporaries) don't start a new function
@@ -110,6 +116,7 @@ struct archive_memo {
     if (!module || (*module)->is_poisoned() || (*module)->is_errored()) {
         return stdx::err{build_failed(triple, diagnostics.str())};
     }
+
     // A module compiler_rt imports is parsed lazily and may fail on its own
     if (manager.any_errored()) {
         manager.print_all_diagnostics(diagnostics);
@@ -196,7 +203,7 @@ auto find_self_calling_libcalls(std::string_view               asm_text,
         if (line.empty()) { continue; }
 
         // A label at column zero starts a function unless it's a local label
-        if (!std::isspace(static_cast<unsigned char>(line.front()))) {
+        if (!std::isspace(static_cast<u8>(line.front()))) {
             const auto colon{line.find(':')};
             if (colon == std::string_view::npos) { continue; }
             auto label{line.substr(0, colon)};
@@ -230,7 +237,7 @@ auto find_self_calling_libcalls(std::string_view               asm_text,
             while (end < body.size() && is_identifier_char(body[end])) { ++end; }
             const auto token{codegen::strip_global_prefix(triple, body.substr(i, end - i))};
             if (token == current && !std::ranges::contains(found, current)) {
-                found.push_back(current);
+                found.emplace_back(current);
             }
             i = end;
         }
@@ -257,7 +264,7 @@ auto resolve_compiler_rt(const codegen::target_options&      target_opts,
         return it->second.archive;
     }
 
-    if (!state.dir) { state.dir = std::make_unique<tempdir>("compiler_rt"); }
+    if (!state.dir) { state.dir = stdx::make_nullable_box<tempdir>("compiler_rt"); }
     const auto archive{state.dir->path / fmt::format("compiler_rt_{}.a", state.entries.size())};
 
     ++state.builds;
