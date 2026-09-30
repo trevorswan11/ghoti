@@ -565,7 +565,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - **Breaking:** `-M, --mode debug|release_safe|release_fast|release_small` replaces `-O`, `--release`, and `--unsafe` on `build-*`, `run`, and `test`
     - `debug` (the default) is `-O0` with runtime safety, `release_safe` is `-O2` with safety, `release_fast` is `-O3` without, and `release_small` is `-Oz` without
     - The LSP analyzes as `debug`
-- Releases ship a `lib/compiler_rt` directory of ghoti sources for the routines LLVM calls on its own (`__addtf3`, `__divti3`, `fmodf`, ...); nothing is written in it yet
+- Releases ship a `lib/compiler_rt` directory of ghoti sources for the routines LLVM calls on its own (`__addtf3`, `__divti3`, `fmodf`, ...)
     - A link whose object needs one builds `lib/compiler_rt` for the target (at most once per process) and links it last; `GHOTI_COMPILER_RT=<file>` points at another root
     - `--no-compiler-rt` on `build-exe`, `build-lib`, `run`, and `test` skips it
     - A routine that fails to compile, or that compiles into a call to itself, is a build error naming its file
@@ -577,6 +577,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - LSP hover names a callable's parameters: `fn(lhs: i32, rhs: i32): i32` instead of `fn(i32, i32): i32` (#305)
     - Covers function declarations, `fn`-typed parameters and fields, `dyn Fn` aliases, and aliases like `f: Callback`, `f: mod.Callback`, or `const g := mod.f;`, including across modules
 - Building from source: editing any header or `.inc` now always rebuilds the objects that include it
-    - Zig 0.16 drops a cached object's headers from the library's cache manifest, so edits to them were silently ignored; `zig build verify-deps` checks this against a fixture
+    - Zig 0.16 drops a cached object's headers from the library's cache manifest, so edits to them were silently ignored; the header stamp now comes from stdx, whose `zig build verify-deps` checks it against a fixture
     - `zig build -Dinstall-tests-only=true` now installs the test binaries instead of doing nothing
-    - `zig build prune` deletes superseded `.zig-cache` generations and stale `zig-out` files, never LLVM (`-Dprune-dry-run=true` to preview)
+    - `zig build prune` deletes superseded `.zig-cache` generations and stale `zig-out` files, never LLVM unless `-Dprune-protected=true` (`-Dprune-dry-run=true` to preview)
+        - Paths compare case-insensitively only on Windows and macOS, and either separator is accepted on every host

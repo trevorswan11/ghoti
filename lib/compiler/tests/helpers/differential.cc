@@ -19,6 +19,7 @@
 
 #include "compiler/codegen/target.hh"
 #include "compiler/sema/error.hh"
+#include "ghoti/config.h"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
 #include "support/diagnostic.hh"
@@ -36,14 +37,44 @@ constexpr usize max_cases_per_program{250};
 constexpr usize max_batch_cases{4'000};
 // Above every case index an exit code can carry
 constexpr u32 panic_exit_code{253};
+static_assert(max_cases_per_program < panic_exit_code,
+              "a case index must fit in a POSIX exit code");
 
-// Turns a runtime panic into `panic_exit_code` instead of a slow trap
+// Turns a runtime panic into `panic_exit_code` instead of a slow trap. Linux has no libc to call,
+// so it exits with a raw `exit_group` syscall.
 [[nodiscard]] auto panic_prelude() -> std::string {
-    return fmt::format(
-        "extern(\"kernel32\") const ExitProcess: fn(code: u32): noreturn;\n"
-        "pub const panic_handler := fn(_: []u8, _: builtin.SourceLocation): noreturn {{ "
-        "ExitProcess({}); }};\n",
-        panic_exit_code);
+    return fmt::format(R"(@cfg(os == .windows) {{
+    extern("kernel32") const ExitProcess: fn(code: u32): noreturn;
+    const diff_exit := fn(code: u32): noreturn {{ ExitProcess(code); }};
+}} else @cfg(os == .macos) {{
+    extern("System", "exit") const sys_exit: fn(code: i32): noreturn;
+    const diff_exit := fn(code: u32): noreturn {{ sys_exit(@bitCast(i32, code)); }};
+}} else @cfg(arch == .x86_64) {{
+    const diff_exit := fn(code: u32): noreturn {{
+        _ = asm usize {{
+            template: "syscall",
+            outputs: ("={{rax}}" = _),
+            inputs: ("{{rax}}" = 231uz, "{{rdi}}" = @as(usize, code)),
+            clobbers: ("rcx", "r11", "memory"),
+            options: (volatile),
+        }};
+        @trap();
+    }};
+}} else @cfg(arch == .aarch64) {{
+    const diff_exit := fn(code: u32): noreturn {{
+        _ = asm usize {{
+            template: "svc #0",
+            outputs: ("={{x0}}" = _),
+            inputs: ("{{x8}}" = 94uz, "{{x0}}" = @as(usize, code)),
+            clobbers: ("memory"),
+            options: (volatile),
+        }};
+        @trap();
+    }};
+}}
+pub const panic_handler := fn(_: []u8, _: builtin.SourceLocation): noreturn {{ diff_exit({}); }};
+)",
+                       panic_exit_code);
 }
 
 // `GHOTI_DIFF_FULL=1` checks every boundary value and more random cases; the default subset
@@ -337,7 +368,8 @@ struct run_result {
         }
         return result;
     }
-    return {.exit_code = spawn_child(mock_argv{exe.path.string()})};
+    return {.exit_code =
+                spawn_child(mock_argv{exe.path.string()}).transform(helpers::portable_exit_code)};
 }
 
 // Folds every case of every template as a module constant and reads back which ones reported a
@@ -610,7 +642,8 @@ auto check_errors(const std::vector<expr_template>& templates,
         const auto  which{std::to_string(s)};
 
         ++rep.panics_checked;
-        const auto panicked{spawn_child(mock_argv{exe.path.string(), std::string{"0"}, which})};
+        const auto panicked{spawn_child(mock_argv{exe.path.string(), std::string{"0"}, which})
+                                .transform(helpers::portable_exit_code)};
         if (panicked != panic_exit_code) {
             rep.mismatches.push_back({fmt::format(
                 "{} [{}]: folding reports \"{}\" but runtime with safety on exited {} instead of "
@@ -621,7 +654,8 @@ auto check_errors(const std::vector<expr_template>& templates,
                 panicked ? static_cast<i64>(*panicked) : -1)});
         }
         if (tmpl.unchecked_equivalent.empty()) { continue; }
-        const auto unchecked{spawn_child(mock_argv{exe.path.string(), std::string{"1"}, which})};
+        const auto unchecked{spawn_child(mock_argv{exe.path.string(), std::string{"1"}, which})
+                                 .transform(helpers::portable_exit_code)};
         if (unchecked != 0U) {
             rep.mismatches.push_back(
                 {fmt::format("{} [{}]: with safety off the result isn't the unchecked `{}`",
@@ -673,8 +707,13 @@ auto wide_int_types() -> std::vector<scalar_type> {
     return {int_type("i128"), int_type("u128"), int_type("u65")};
 }
 
+// f80 only exists on x86
 auto host_float_types() -> std::vector<scalar_type> {
+#if GHOTI_ASM_HOST_X86_64
     return {float_type("f32"), float_type("f64"), float_type("f80")};
+#else
+    return {float_type("f32"), float_type("f64")};
+#endif
 }
 
 auto boundary_values(const scalar_type& type) -> std::vector<u128> {

@@ -42,6 +42,7 @@
 #include "compiler/gir/module.hh"
 #include "compiler/runtime/compiler_rt.hh"
 #include "compiler/sema/analyzer.hh"
+#include "ghoti/config.h"
 #include "helpers/sema.hh"
 #include "support/string_utils.hh"
 #include "support/subprocess.hh"
@@ -193,6 +194,18 @@ auto exported_symbols(const std::filesystem::path&   library,
     return names;
 }
 
+auto portable_exit_code(u32 code) -> u32 {
+#if GHOTI_WINDOWS
+    const bool exception_status{(code & 0xF0000000U) == 0xC0000000U || code == 0x80000003U};
+    if (code > 0xFFU && !exception_status) {
+        FAIL(fmt::format("exit code {} isn't portable: POSIX only sees its low 8 bits ({})",
+                         code,
+                         code & 0xFFU));
+    }
+#endif
+    return code;
+}
+
 auto compile_and_run(std::string_view                     source,
                      const std::vector<mock_file>&        imports,
                      const codegen::extra_linker_options& linker_opts) -> u32 {
@@ -209,7 +222,7 @@ auto compile_and_run(std::string_view                     source,
     REQUIRE(emitted);
 
     const mock_argv args{exe_file.path.string()};
-    return UNWRAP(spawn_child(args));
+    return portable_exit_code(UNWRAP(spawn_child(args)));
 }
 
 auto missing_builtins(std::string_view source, const codegen::target_options& target_opts)
@@ -261,7 +274,7 @@ auto compile_and_run_captured(std::string_view source, const std::vector<mock_fi
 
     piped_process proc{mock_argv{exe_file.path.string()}};
     return run_output{
-        .exit_code = UNWRAP(proc.close_stdin_and_wait()),
+        .exit_code = portable_exit_code(UNWRAP(proc.close_stdin_and_wait())),
         .out       = string_utils::read_stream(proc.stdout_stream()),
         .err       = string_utils::read_stream(proc.stderr_stream()),
     };
@@ -284,7 +297,7 @@ auto compile_and_run_tests(std::string_view                source,
 
     std::vector<std::string> child_argv{exe_file.path.string()};
     child_argv.insert(child_argv.end(), extra_args.begin(), extra_args.end());
-    return UNWRAP(spawn_child(mock_argv{std::move(child_argv)}));
+    return portable_exit_code(UNWRAP(spawn_child(mock_argv{std::move(child_argv)})));
 }
 
 } // namespace ghoti::tests::helpers

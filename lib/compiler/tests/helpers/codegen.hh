@@ -78,6 +78,11 @@ auto emit_dynamic_lib(helpers::sema_test_context&       test_ctx,
                                     const codegen::target_options& target_opts = {})
     -> std::vector<std::string>;
 
+// A child's exit code, failing the test when POSIX would see a different one. Only the low 8 bits
+// survive there, so an expectation above 255 (or a negative `main` result) passes on Windows alone.
+// Windows exception statuses (a trap, an access violation) are crashes and pass through.
+[[nodiscard]] auto portable_exit_code(u32 code) -> u32;
+
 [[nodiscard]] auto
 compile_and_run(std::string_view                     source,
                 const std::vector<mock_file>&        imports     = {},

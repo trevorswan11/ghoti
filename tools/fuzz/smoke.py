@@ -1,4 +1,5 @@
 """Mutation fuzzing for a time budget: python smoke.py [minutes] (default 20)."""
+
 import random
 import sys
 import time
@@ -12,15 +13,15 @@ seed = random.randrange(1000, 1000000)
 total = 0
 groups = {}
 while time.time() - start < budget:
-    cases = [(f's{seed}_{n}', s) for n, s in corpus.mutated_cases(seed, 3)]
+    cases = [(f"s{seed}_{n}", s) for n, s in corpus.mutated_cases(seed, 3)]
     random.shuffle(cases)
     for i in range(0, len(cases), 64):
         if time.time() - start >= budget:
             break
-        batch = cases[i:i + 64]
+        batch = cases[i : i + 64]
         total += len(batch)
         for n, c, t in harness.run_many(batch):
             groups.setdefault(harness.signature(c, t), []).append((n, c))
     seed += 1
 harness.report(groups)
-print('%d bad groups, %d cases, %.1f min' % (len(groups), total, (time.time() - start) / 60))
+print(f"{len(groups)} bad groups, {total} cases, {(time.time() - start) / 60:.1f} min")

@@ -15,7 +15,6 @@ const LLVMBuilder = @import("third-party/llvm/LLVMBuilder.zig");
 const ClangBuilder = @import("third-party/llvm/ClangBuilder.zig");
 const LLDBuilder = @import("third-party/llvm/LLDBuilder.zig");
 const SiteBuilder = @import("third-party/go/SiteBuilder.zig");
-const DepStamp = @import("build/DepStamp.zig");
 
 pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{
@@ -73,8 +72,6 @@ pub fn build(b: *std.Build) !void {
     });
     for (cdb_steps.wrapped.items) |cdb_step| cdb_gen.step.dependOn(cdb_step);
 
-    try addDepTracking(b);
-
     clang.build();
     const cppcheck = stdx_dep.artifact("cppcheck");
     try addTooling(b, .{
@@ -90,8 +87,12 @@ pub fn build(b: *std.Build) !void {
         .compressor = stdx_dep.artifact("compressor"),
     });
 
-    // Last, so the keep-list sees every install step
-    try addPrune(b);
+    // Last, so the keep-list sees every install step. LLVM, LLD and Clang are protected.
+    const llvm_root = b.dependency("llvm", .{}).builder.build_root.path orelse "";
+    _ = try stdx.steps.addPrune(b, .{
+        .runner = stdx_dep.artifact("prune"),
+        .protected_roots = if (llvm_root.len > 0) &.{llvm_root} else &.{},
+    });
 
     if (stdx.KcovBuilder.allowedTarget(b.graph.host)) {
         if (artifacts.tests) |tests| try stdx.steps.addCoverage(b, .{
@@ -160,9 +161,6 @@ pub const ProjectPaths = struct {
             .zig = &.{
                 "build.zig",
                 "build.zig.zon",
-                "build/DepStamp.zig",
-                "build/VerifyDeps.zig",
-                "build/Prune.zig",
                 site ++ "rebuild.zig",
                 third_party ++ "go/SiteBuilder.zig",
             },
@@ -170,7 +168,7 @@ pub const ProjectPaths = struct {
         };
     }
 
-    // Header roots each artifact can see, hashed into its dependency stamp (see build/DepStamp.zig)
+    // Header roots each artifact can see, hashed into its dependency stamp
     const support_deps = [_][]const u8{ support.inc, support.src };
     const compiler_deps = support_deps ++ [_][]const u8{ compiler.inc, compiler.src };
     const driver_deps = compiler_deps ++ [_][]const u8{ driver.inc, driver.src };
@@ -324,7 +322,7 @@ fn addArtifacts(b: *std.Build, config: struct {
         }),
     });
     if (config.auto_install) b.installArtifact(libsupport);
-    try DepStamp.add(b, libsupport, &ProjectPaths.support_deps);
+    try stdx.DepStamp.add(b, libsupport, &ProjectPaths.support_deps);
     if (config.cdb_steps) |cdb_steps| cdb_steps.append(&libsupport.step);
 
     // LLVM is compiled from source because I like burning compute or something
@@ -372,7 +370,7 @@ fn addArtifacts(b: *std.Build, config: struct {
         }),
     });
     libcompiler.root_module.linkLibrary(libstdx);
-    try DepStamp.add(b, libcompiler, &ProjectPaths.compiler_deps);
+    try stdx.DepStamp.add(b, libcompiler, &ProjectPaths.compiler_deps);
     if (config.auto_install) b.installArtifact(libcompiler);
     if (config.cdb_steps) |cdb_steps| cdb_steps.append(&libcompiler.step);
 
@@ -397,7 +395,7 @@ fn addArtifacts(b: *std.Build, config: struct {
         }),
     });
     if (config.auto_install) b.installArtifact(libdriver);
-    try DepStamp.add(b, libdriver, &ProjectPaths.driver_deps);
+    try stdx.DepStamp.add(b, libdriver, &ProjectPaths.driver_deps);
     if (config.cdb_steps) |cdb_steps| cdb_steps.append(&libdriver.step);
 
     // The shippable executable
@@ -426,7 +424,7 @@ fn addArtifacts(b: *std.Build, config: struct {
     });
     // Deeply nested (or recursively instantiated) source recurses deeply through every pass
     ghoti.stack_size = 64 * 1024 * 1024;
-    try DepStamp.add(b, ghoti, &(ProjectPaths.driver_deps ++ .{ProjectPaths.ghoti_dir}));
+    try stdx.DepStamp.add(b, ghoti, &(ProjectPaths.driver_deps ++ .{ProjectPaths.ghoti_dir}));
     if (config.auto_install) b.installArtifact(ghoti);
     if (config.cdb_steps) |cdb_steps| cdb_steps.append(&ghoti.step);
 
@@ -491,8 +489,8 @@ fn addArtifacts(b: *std.Build, config: struct {
             },
         });
         compiler_tests.root_module.linkLibrary(libcompiler);
-        try DepStamp.add(b, support_tests, &(ProjectPaths.support_deps ++ .{ProjectPaths.support.tests}));
-        try DepStamp.add(b, compiler_tests, &(ProjectPaths.compiler_deps ++ .{ProjectPaths.compiler.tests}));
+        try stdx.DepStamp.add(b, support_tests, &(ProjectPaths.support_deps ++ .{ProjectPaths.support.tests}));
+        try stdx.DepStamp.add(b, compiler_tests, &(ProjectPaths.compiler_deps ++ .{ProjectPaths.compiler.tests}));
 
         const driver_tests = stdx.builders.strappedTest(b, .{
             .target = target,
@@ -528,7 +526,7 @@ fn addArtifacts(b: *std.Build, config: struct {
             },
         });
 
-        try DepStamp.add(b, driver_tests, &(ProjectPaths.driver_deps ++ .{ProjectPaths.driver.tests}));
+        try stdx.DepStamp.add(b, driver_tests, &(ProjectPaths.driver_deps ++ .{ProjectPaths.driver.tests}));
 
         tests = .{
             .support_tests = support_tests,
@@ -545,130 +543,6 @@ fn addArtifacts(b: *std.Build, config: struct {
         .ghoti = ghoti,
         .tests = tests,
     };
-}
-
-/// `verify-deps` rebuilds a fixture project after editing each kind of dependency, with and
-/// without the header stamp. `deptrack-fixture` is the fixture build it drives.
-fn addDepTracking(b: *std.Build) !void {
-    const fixture_dir = "build/fixtures/deptrack/";
-    if (b.option([]const u8, "deptrack-root", "Fixture copy for verify-deps (internal)")) |root| {
-        const stamp = b.option(bool, "deptrack-stamp", "Add the header stamp to the fixture (internal)") orelse true;
-        const mod = b.createModule(.{
-            .target = b.graph.host,
-            .optimize = .Debug,
-            .link_libc = true,
-            .link_libcpp = true,
-        });
-        mod.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ root, "include" }) });
-        mod.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ root, "include2" }) });
-        mod.addCSourceFiles(.{
-            .root = .{ .cwd_relative = root },
-            .files = &.{ "src/header_user.cc", "src/inc_user.cc", "src/plain.cc" },
-            .flags = &.{"-std=c++20"},
-            .language = .cpp,
-        });
-        const lib = b.addLibrary(.{ .name = "deptrack", .root_module = mod });
-        if (stamp) try DepStamp.add(b, lib, &.{
-            b.pathJoin(&.{ root, "include" }),
-            b.pathJoin(&.{ root, "include2" }),
-            b.pathJoin(&.{ root, "src" }),
-        });
-
-        const exe_mod = b.createModule(.{
-            .target = b.graph.host,
-            .optimize = .Debug,
-            .link_libc = true,
-            .link_libcpp = true,
-        });
-        exe_mod.addCSourceFile(.{ .file = .{ .cwd_relative = b.pathJoin(&.{ root, "main.cc" }) }, .flags = &.{"-std=c++20"} });
-        exe_mod.linkLibrary(lib);
-        const exe = b.addExecutable(.{ .name = "deptrack", .root_module = exe_mod });
-        const step = b.step("deptrack-fixture", "Build the dependency-tracking fixture (internal)");
-        step.dependOn(&b.addInstallArtifact(exe, .{}).step);
-    }
-
-    const runner = b.addExecutable(.{
-        .name = "verify-deps",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("build/VerifyDeps.zig"),
-            .target = b.graph.host,
-            .optimize = .Debug,
-        }),
-    });
-    const run = b.addRunArtifact(runner);
-    run.has_side_effects = true;
-    run.addArgs(&.{
-        b.graph.zig_exe,
-        b.pathFromRoot("."),
-        b.pathFromRoot(fixture_dir),
-        b.pathJoin(&.{ b.cache_root.path orelse ".zig-cache", "tmp", "verify-deps" }),
-    });
-    const step = b.step("verify-deps", "Check that editing each kind of C++ dependency triggers a rebuild");
-    step.dependOn(&run.step);
-}
-
-/// `prune` reclaims `.zig-cache` and `zig-out` space; see build/Prune.zig for the policy
-fn addPrune(b: *std.Build) !void {
-    const dry_run = b.option(bool, "prune-dry-run", "Print what prune would delete (default: false)") orelse false;
-    const keep = b.option(u32, "prune-keep", "Generations kept per linked artifact (default: 2)") orelse 2;
-    const age_days = b.option(u32, "prune-age-days", "Age for tmp/, cppcheck/ and args/ entries (default: 14)") orelse 14;
-    const prune_llvm = b.option(bool, "prune-llvm", "Let prune evict old LLVM/LLD/Clang generations (default: false)") orelse false;
-
-    const prune_module = b.createModule(.{
-        .root_source_file = b.path("build/Prune.zig"),
-        .target = b.graph.host,
-        .optimize = .Debug,
-    });
-    const runner = b.addExecutable(.{ .name = "prune", .root_module = prune_module });
-    const run = b.addRunArtifact(runner);
-    run.has_side_effects = true;
-
-    const cache_root = b.cache_root.path orelse ".";
-    run.addArg(if (std.fs.path.isAbsolute(cache_root)) cache_root else b.pathFromRoot(cache_root));
-    run.addArg(b.install_prefix);
-    run.addFileArg(b.addWriteFiles().add("prune-keep.txt", try installKeepList(b)));
-    run.addArg(b.pathFromRoot("."));
-    run.addArg(b.dependency("llvm", .{}).builder.build_root.path orelse "");
-    run.addArgs(&.{ "--keep", b.fmt("{d}", .{keep}), "--age-days", b.fmt("{d}", .{age_days}) });
-    if (dry_run) run.addArg("--dry-run");
-    if (prune_llvm) run.addArg("--prune-llvm");
-
-    const step = b.step("prune", "Delete superseded .zig-cache generations and stale zig-out files");
-    step.dependOn(&run.step);
-
-    const tests = b.addTest(.{ .root_module = prune_module });
-    const test_step = b.step("test-build", "Run the build tooling's unit tests");
-    test_step.dependOn(&b.addRunArtifact(tests).step);
-}
-
-/// Every path the install graph writes, as rules for build/Prune.zig
-fn installKeepList(b: *std.Build) ![]const u8 {
-    var rules: std.ArrayList(u8) = .empty;
-    var visited: std.AutoHashMapUnmanaged(*std.Build.Step, void) = .empty;
-    var pending: std.ArrayList(*std.Build.Step) = .empty;
-    for (b.top_level_steps.values()) |top| try pending.append(b.allocator, &top.step);
-
-    while (pending.pop()) |step| {
-        if ((try visited.getOrPut(b.allocator, step)).found_existing) continue;
-        try pending.appendSlice(b.allocator, step.dependencies.items);
-
-        const owner = step.owner;
-        if (step.cast(std.Build.Step.InstallArtifact)) |install| {
-            const name = install.artifact.name;
-            if (install.dest_dir) |dir| {
-                try rules.print(b.allocator, "F {s}\n", .{owner.getInstallPath(dir, install.dest_sub_path)});
-                try rules.print(b.allocator, "S {s}|lib{s}\n", .{ owner.getInstallPath(dir, ""), name });
-            }
-            for ([_]?std.Build.InstallDir{ install.pdb_dir, install.implib_dir, install.h_dir }) |maybe_dir| {
-                if (maybe_dir) |dir| try rules.print(b.allocator, "S {s}|{s}\n", .{ owner.getInstallPath(dir, ""), name });
-            }
-        } else if (step.cast(std.Build.Step.InstallDir)) |install| {
-            try rules.print(b.allocator, "D {s}\n", .{owner.getInstallPath(install.options.install_dir, install.options.install_subdir)});
-        } else if (step.cast(std.Build.Step.InstallFile)) |install| {
-            try rules.print(b.allocator, "F {s}\n", .{owner.getInstallPath(install.dir, install.dest_rel_path)});
-        }
-    }
-    return rules.items;
 }
 
 const counted_extensions = [_][]const u8{
