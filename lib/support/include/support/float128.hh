@@ -38,8 +38,16 @@ enum class float_parse_status : u8 {
     MALFORMED,
 };
 
+class big_uint;
 class binary128;
 struct float_parse_result;
+
+// A finite value as `significand * 2^exponent`
+struct float_parts {
+    bool negative{false};
+    u128 significand{};
+    i64  exponent{0};
+};
 using f128 = binary128;
 
 // An IEEE-754 binary128 value. Operations compute the exact result and round it once, to nearest
@@ -76,6 +84,9 @@ class binary128 {
     // The shortest decimal that reads back as this value once rounded to `format`
     [[nodiscard]] auto to_string(float_format format = float_format::QUAD) const -> std::string;
 
+    // Meaningful for finite values only
+    [[nodiscard]] auto parts() const -> float_parts;
+
     [[nodiscard]] auto is_nan() const noexcept -> bool;
     [[nodiscard]] auto is_infinite() const noexcept -> bool;
     [[nodiscard]] auto is_finite() const noexcept -> bool;
@@ -107,6 +118,11 @@ struct float_parse_result {
 fused_multiply_add(f128 a, f128 b, f128 c, float_format format = float_format::QUAD) -> f128;
 // C's `fmod`: `lhs - trunc(lhs / rhs) * rhs`, which is always exact, with `lhs`'s sign
 [[nodiscard]] auto remainder_trunc(f128 lhs, f128 rhs, float_format format = float_format::QUAD)
+    -> f128;
+
+// Rounds `significand * 2^exponent` (plus a nonzero tail below it when `sticky`) into `format`
+[[nodiscard]] auto
+round_scaled(bool negative, big_uint significand, i64 exponent, bool sticky, float_format format)
     -> f128;
 
 [[nodiscard]] inline auto operator+(f128 lhs, f128 rhs) -> f128 { return add(lhs, rhs); }
